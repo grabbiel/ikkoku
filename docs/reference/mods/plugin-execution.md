@@ -317,10 +317,12 @@ and commit use the current document after verifying that the user has not edited
 the scene or left Studio. Cancellation, invalid bindings, missing revisions and
 failed installation leave the previous session, document and native adapters
 intact. Unload is disabled outside Studio. Installation callbacks operate on an
-isolated document; source-character attachment reads during installation are
-explicitly unsupported because their live resolver can allocate previews. Those
-reads use the existing resolver after commit. No package resolution, filesystem
-reads or hashing occur in frame ticks or runtime snapshots.
+isolated document. Explicit initial-library mounts prepare source-character
+attachment reads in a request-owned transaction, then publish matching previews
+before document refresh. Failed preparation restores borrowed warm state and drops
+staged resources; committed callbacks use the live resolver. Detached callers
+without that context retain the attachment-read gate. No package resolution,
+filesystem reads or hashing occur in frame ticks or runtime snapshots.
 
 Library-backed `SourceStudioPluginState` stores `libraryConfigurationSHA256` and
 omits the external-profile fields. Its exact package identities, runtime fields,
@@ -336,8 +338,9 @@ restoration during native open or undo/redo still resolves files synchronously;
 this slice does not move scene loading off the UI thread. Library and legacy-profile
 native open and history restoration use candidate-owned read-only attachment
 preparation (the library acceptance is recorded under [#250](#candidate-owned-library-attachment-restoration-250)).
-Initial library installation and detached restoration retain the attachment-read
-gate; fresh profile loading uses its separate installation transaction. Plugin-library
+Initial library installation explicitly reuses fresh-profile preparation
+([#262](#initial-library-attachment-preparation-262)); detached restoration retains
+the attachment-read gate. Plugin-library
 root relocation is not supported by the asset-library relocation system; keep
 the recorded root or explicitly mount a selection from its new location.
 
@@ -675,9 +678,10 @@ transfers candidate previews before refresh; failure drops only staged leases.
 Repeated reads reuse the candidate preview. Package/configuration identity and
 saved topology checks retain their existing precedence.
 
-The opt-in requires an explicit native/history restoration context. Initial
-library installation and detached restoration retain the named attachment-read
-gate. After an actual attachment read, initialization must leave the normalized
+The restore opt-in requires an explicit native/history context. Initial mounts
+use their separate [current-scene preparation](#initial-library-attachment-preparation-262);
+detached restoration retains the named attachment-read gate. After an actual
+attachment read, initialization must leave the normalized
 candidate document, clone serial and pending destruction unchanged. Visibility
 changes, cloning and scheduled destruction are rejected before commit; saved
 fields and clocks retain their existing restoration order.
@@ -707,19 +711,20 @@ event-path ownership check, with no per-frame I/O or additional sampling. Native
 open uses clock zero and history uses the held clock (0.7 in this fixture); the
 candidate matrices happen to match at both times, so this does not establish a
 phase-dependent pose difference. No allocation, GUI, original-player parity or
-comparative performance claim follows. Initial library installation remains a
-separate reproduction and acceptance task.
+comparative performance claim follows. Initial library installation has separate
+reproduction and acceptance evidence below.
 
 
 ### Initial library attachment installation boundary (#257)
 
-The diagnostic at `cf1626c` reproduces the separate initial-installation policy
-with identical manifest/program bytes, GUID/type, source binding and fixed clock
-for immutable-library and legacy-profile entry points. Cold and warm asynchronous
-library mounts reject reader and late-poison initializers at the named attachment
-read gate. The same legacy reader succeeds; its late-poison counterpart reaches
-the arithmetic error after two successful reads. This records existing unsupported
-behavior and does not enable initial library attachment reads.
+The historical diagnostic at `cf1626c` records the initial-installation policy
+before [#262](#initial-library-attachment-preparation-262) enabled explicit mounts.
+It uses identical manifest/program bytes, GUID/type, source binding and fixed
+clock for immutable-library and legacy-profile entry points. At that checkpoint,
+cold and warm asynchronous library mounts rejected reader and late-poison
+initializers at the named attachment-read gate. The same legacy reader succeeded;
+its late-poison counterpart reached the arithmetic error after two successful
+reads. This records the prior unsupported behavior.
 
 The corrected Release binary `37536243…` passes **81 checks**, retaining 67 raw
 artifacts. Nine public-session controls independently verify read order and the
@@ -739,7 +744,50 @@ raw document before checking it. Both successful compiles initially returned a
 lifecycle-wrapper failure for an owned `ibtoold`; unchanged raw results and separate
 release/product proofs retain that distinction. Private evidence under
 `library-attachment-install/` keeps all attempts, complete app archives and the
-accepted state/frame review. Broader installation support remains a separate task.
+accepted state/frame review. This diagnostic remains a record of the pre-fix
+boundary; it is not the acceptance scenario for the implementation below.
+
+### Initial library attachment preparation (#262)
+
+Explicit asynchronous library mounts now let supported initializers read source
+character attachments after immutable package resolution and request validation.
+The mount reuses fresh-profile preparation: cold previews and appearance leases
+belong to the request, and warm previews are checkpointed on first use. Failure
+aborts that preparation. After all fallible session and saved-state validation,
+commit transfers matching previews before document refresh. Subsequent callbacks
+use the ordinary live resolver; native/history restoration keeps its separate
+candidate-owned, read-only policy. Detached preparation still rejects reads.
+
+At source `f1f3592`, Release binary
+`dff4583a86e0c1d5ac268b4400bc110dad3ee7f5e8451e4c5db34f3e031c41f1`
+passes **76 save and 20 fresh-process reopen checks**. The immutable reader and
+late-poison packages match their legacy-profile controls byte for byte. Cold and
+warm readers produce equal stored fields, retain prepared preview identity on the
+first step, and save actual native scenes. Fresh reopen preserves package/configuration
+identity, fields and clocks; continuation advances the saved Float32 0.04 clock by
+Float32 0.02 while preserving restored fields. Zero-read and identical-selection
+controls retain their expected resource and session behavior.
+
+Root review rehashes 126 raw observations and three generated fixtures and compares
+24 state/frame pairs. Repeated late failures restore sessions, native adapters,
+histories, previews, resources and warm poses; only the expected asynchronous mount
+generation increment is normalized. Entry cancellation and held resolver
+caller/mode/document cancellation release or discard the request, preserve the
+post-boundary state and permit a retry. Cancelling an already completed mount keeps
+its committed state. There is no suspension between returned-resolution checks and
+synchronous commit; this does not claim an injected cancellation inside that span.
+
+The first compile failed on argument order in the scenario's native-scene decode
+call. The one-line correction and raw failure remain recorded. The successful
+compile's raw lifecycle result 126 is also retained: a separate bounded receipt
+releases only its verified owned `ibtoold`, then verifies the freshly linked binary
+and full 208-entry archive. Private `library-initial-attachments/` evidence retains
+both attempts, helper dispositions, source pins and semantic reviews.
+
+No frame-tick resolver, graph validation or queue behavior changes. Adapter-only
+mounts avoid creating attachment preparation. These are functional ownership and
+resource-reuse checks, not timing or allocation improvements, GUI acceptance,
+original-player parity or general plugin compatibility.
 
 ## Execution and persistence
 

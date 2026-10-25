@@ -16,6 +16,8 @@ struct PluginLibraryScenario: Decodable {
     let requestFile: String
     /// Diagnostic only: actual async initial installation versus fresh profiles.
     let libraryAttachmentInstall: LibraryAttachmentInstall?
+    /// Supported initial-mount transaction and real native save/fresh reopen.
+    let initialLibraryAttachments: InitialLibraryAttachments?
     /// Reproduction only: real library save/reopen across the attachment-read gate.
     let libraryAttachmentRestore: LibraryAttachmentRestore?
     /// Separate supported-path matrix; preserves the original policy reproduction.
@@ -72,6 +74,7 @@ struct PluginLibraryScenario: Decodable {
     }
 
     @MainActor func run(app: AppState, studio: StudioModel) async -> StudioScenario.Report {
+        if let initialLibraryAttachments { return await verifyInitialLibraryAttachments(initialLibraryAttachments, app: app, studio: studio) }
         if let libraryAttachmentInstall { return await reproduceLibraryAttachmentInstall(libraryAttachmentInstall, app: app, studio: studio) }
         if let libraryAttachmentAcceptance { return await verifyLibraryAttachmentRestore(libraryAttachmentAcceptance, app: app, studio: studio) }
         if let libraryAttachmentRestore { return await reproduceLibraryAttachmentRestore(libraryAttachmentRestore, app: app, studio: studio) }
@@ -512,6 +515,263 @@ struct PluginLibraryScenario: Decodable {
         let session = try SourceStudioPluginSession(profileURL: profile, document: candidate,
             attachment: { _, _ in (matrix_identity_float4x4, simd_quatf(angle: 0, axis: SIMD3(0, 1, 0))) })
         return try session.savedDocument()
+    }
+}
+
+extension PluginLibraryScenario {
+    struct InitialLibraryAttachments: Decodable {
+        let phase: NativeProfileRestore.Phase
+        let directory: String, outputDirectory: String
+        let requests: [String: String], profiles: [String: String]
+    }
+
+    @MainActor private func verifyInitialLibraryAttachments(_ configuration: InitialLibraryAttachments,
+                                                            app: AppState, studio: StudioModel) async -> StudioScenario.Report {
+        let output = URL(fileURLWithPath: configuration.outputDirectory)
+        let directory = URL(fileURLWithPath: configuration.directory)
+        let encoder = JSONEncoder(); encoder.outputFormatting = [.sortedKeys]
+        let gate = "Source-character attachment reads during plugin installation are unsupported; no live preview was changed."
+        let arithmetic = "Unsupported arithmetic operator or Int32 arithmetic."
+        var rows: [StudioScenario.Report.StepResult] = []
+        func check(_ name: String, _ condition: Bool, _ detail: String = "") throws {
+            rows.append(.init(op: name, ok: condition, detail: detail))
+            if !condition { throw SourcePluginError.runtime("Initial attachment acceptance failed: " + name) }
+        }
+        func persist<T: Encodable>(_ value: T, _ name: String) throws {
+            try encoder.encode(value).write(to: output.appendingPathComponent(name + ".json"), options: .withoutOverwriting)
+        }
+        func snapshot() throws -> NativeGraphObservation {
+            .init(graph: try directGraphSnapshot(studio: studio),
+                previewOwners: studio.renderedSourceCharacterPreviews.map { String(describing: ObjectIdentifier($0)) }.sorted())
+        }
+        func generation(_ value: NativeGraphObservation, _ expected: UInt64) -> NativeGraphObservation {
+            let g = value.graph, s = g.state
+            let state = InitializerObservation(document: s.document, world: s.world, runtimeDocument: s.runtimeDocument,
+                pending: s.pending, callbacks: s.callbacks, resources: s.resources, undo: s.undo, redo: s.redo,
+                status: s.status, sceneURL: s.sceneURL, generation: expected, animationTime: s.animationTime,
+                blocked: s.blocked, diagnostics: s.diagnostics)
+            return .init(graph: .init(state: state, focus: g.focus, hideAdapterVisible: g.hideAdapterVisible,
+                interfaceVisible: g.interfaceVisible, accessoryNames: g.accessoryNames, showGizmos: g.showGizmos,
+                effectiveShowGizmos: g.effectiveShowGizmos, showTimeline: g.showTimeline, pending: g.pending, request: g.request),
+                previewOwners: value.previewOwners)
+        }
+        func capture(_ name: String) throws -> (state: NativeGraphObservation, frame: Data) {
+            let state = try snapshot(), frame = try directGraphFrameBytes(studio.host.renderer.currentFrame())
+            try persist(state, name)
+            try frame.write(to: output.appendingPathComponent(name + "-frame.json"), options: .withoutOverwriting)
+            return (state, frame)
+        }
+        func warmObservation(_ preview: SourceStudioCharacterPreview?) throws -> InstallWarmObservation? {
+            guard let preview else { return nil }
+            let body = preview.sourceBodyValues, face = preview.sourceFaceValues, diagnostics = preview.diagnostics
+            let pose = try preview.editedPose(faceValues: face, bodyValues: body, animationElapsed: 0.7)
+            let matrices = pose.localMatrices.map { m in (0..<4).flatMap { c in (0..<4).map { r in m[c][r].bitPattern } } }
+            return .init(body: body, face: face, diagnostics: diagnostics, matrices: matrices)
+        }
+        func reject(_ name: String, expected: String, mount: Bool, operation: () async throws -> Void) async throws {
+            let before = try capture(name + "-before")
+            var reason: String?
+            do { try await operation() }
+            catch SourcePluginError.invalid(let error) { reason = error }
+            catch SourcePluginError.runtime(let error) { reason = error }
+            catch { reason = "UNEXPECTED: \(error)" }
+            let after = try capture(name + "-after")
+            try check(name + "Error", reason == expected, reason ?? "No rejection")
+            try check(name + "State", after.state == (mount ? generation(before.state, before.state.graph.state.generation &+ 1) : before.state))
+            try check(name + "Frame", after.frame == before.frame)
+        }
+        func scene(_ name: String) -> URL { directory.appendingPathComponent(name + ".png") }
+        func decoded(_ name: String) throws -> StudioDocument {
+            try CardIO.decode(StudioDocument.self, keyword: CardIO.sceneKeyword, from: Data(contentsOf: scene(name)))
+        }
+        do {
+            guard !FileManager.default.fileExists(atPath: output.path) else { throw SourcePluginError.invalid("Initial attachment acceptance requires fresh output.") }
+            try FileManager.default.createDirectory(at: output, withIntermediateDirectories: true)
+            studio.stopBenchmarkTimer(); studio.liveAnimation = false; app.maker?.liveAnimation = false; app.mode = .studio
+            studio.sourceAutomaticBlink = false; studio.showGizmos = false; studio.showTimeline = false
+            let names = ["reader", "poison", "plain"]
+            guard Set(configuration.requests.keys) == Set(names), Set(configuration.profiles.keys) == Set(names),
+                  let template = studio.doc.objects.first(where: { $0.sourceCharacter != nil }),
+                  template.sourceCharacter?.attachmentCatalogFile != nil else { throw SourcePluginError.invalid("Missing initial attachment acceptance inputs.") }
+            try check("sourceFixture", !studio.host.renderer.currentFrame().items.isEmpty
+                && studio.host.renderer.currentFrame().items.allSatisfy { $0.sourceShader == nil })
+            var requests: [String: StudioPluginLibraryRequest] = [:], profiles: [String: URL] = [:]
+            for name in names {
+                let request = try StudioPluginLibraryRequest.load(url: URL(fileURLWithPath: configuration.requests[name]!))
+                let resolution = try request.selection.resolve(), profile = URL(fileURLWithPath: configuration.profiles[name]!)
+                let raw = try JSONSerialization.jsonObject(with: Data(contentsOf: profile)) as? [String: Any]
+                guard let packages = raw?["packages"] as? [[String: Any]], packages.count == 1,
+                      let path = packages[0]["manifest"] as? String, path.hasPrefix("/"),
+                      resolution.translated.count == 1, resolution.nativeAdapters.isEmpty else { throw SourcePluginError.invalid("Expected paired immutable IR package.") }
+                let source = try SourcePluginPackage.load(url: URL(fileURLWithPath: path)), selected = resolution.translated[0]
+                guard source.manifest.components.count == 1, selected.manifest.components.count == 1 else { throw SourcePluginError.invalid("Expected paired IR program.") }
+                let sourceProgram = source.manifestURL.deletingLastPathComponent().appendingPathComponent(source.manifest.components[0].program.file)
+                let selectedProgram = selected.manifestURL.deletingLastPathComponent().appendingPathComponent(selected.manifest.components[0].program.file)
+                let bytesEqual = try Data(contentsOf: sourceProgram) == Data(contentsOf: selectedProgram)
+                try check(name + "ExactPackage", source.manifestData == selected.manifestData && bytesEqual
+                    && request.configuration.bindings.count == 1 && request.configuration.bindings[0].sourceObjectKey == 12)
+                requests[name] = request; profiles[name] = profile
+            }
+            let reader = requests["reader"]!, poison = requests["poison"]!, plain = requests["plain"]!
+            var parent = template; parent.id = UUID(); parent.parent = nil; parent.transform = StudioTransform()
+            var child = StudioObject(name: "Initial library attachment", kind: .folder)
+            child.sourceObjectKey = 12; child.parent = parent.id; child.sourceAttachmentPoint = 17
+            var target = StudioObject(name: "Retained plugin target", kind: .folder); target.sourceObjectKey = 11
+            var base = StudioDocument(); base.sourceSceneFile = studio.doc.sourceSceneFile; base.sourceSceneSHA256 = studio.doc.sourceSceneSHA256
+            base.objects = [parent, child, target]
+            let retained = try StudioPluginLibraryRequest.load(url: URL(fileURLWithPath: requestFile))
+            guard let binding = retained.configuration.bindings.first, retained.configuration.bindings.count == 1 else { throw SourcePluginError.invalid("Missing retained mixed binding.") }
+            func seed(_ warm: Bool) async throws {
+                studio.newScene(); var document = base; document.objects[0].visible = warm; studio.doc = document
+                try await studio.mountSourcePluginLibrary(selection: retained.selection, configuration: .init(fixedDeltaTime: retained.configuration.fixedDeltaTime,
+                    bindings: [.init(guid: binding.guid, type: binding.type, sourceObjectKey: 11)]))
+                studio.sourcePluginsRunning = false; studio.receiveSourceApplicationFocus(true)
+                try studio.stepSourcePlugins(deltaTime: 0.04); try studio.setSourceAnimationTime(0.7); studio.refresh()
+                if warm, let preview = studio.sourceShapePreview(for: parent.id) {
+                    var body = preview.savedBodyValues, face = preview.savedFaceValues
+                    body[0] = body[0] < 0.5 ? 0.8 : 0.2; face[33] = face[33] < 0.5 ? 0.8 : 0.2
+                    _ = try preview.editedPose(faceValues: face, bodyValues: body, animationElapsed: 0.7)
+                }
+            }
+            switch configuration.phase {
+            case .save:
+                guard !FileManager.default.fileExists(atPath: directory.path) else { throw SourcePluginError.invalid("Initial attachment save needs fresh scene directory.") }
+                try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+                try String(ProcessInfo.processInfo.processIdentifier).write(to: directory.appendingPathComponent("save-pid.txt"), atomically: false, encoding: .utf8)
+                for isWarm in [false, true] {
+                    let mode = isWarm ? "warm" : "cold"
+                    try await seed(isWarm)
+                    let initial = studio.sourceShapePreview(for: parent.id)
+                    try check(mode + "Retained", studio.sourcePluginSession != nil && studio.sourceFocus.adapter != nil
+                        && studio.sourceAccessoryNamesEnabled && (initial != nil) == isWarm && !studio.sourcePluginsRunning)
+                    let warmBefore = try warmObservation(initial); try persist(warmBefore, mode + "-warm-before")
+                    for suffix in ["Poison", "PoisonRepeat"] {
+                        try await reject(mode + suffix, expected: arithmetic, mount: true) {
+                            try await studio.mountSourcePluginLibrary(selection: poison.selection, configuration: poison.configuration)
+                        }
+                    }
+                    let warmAfter = try warmObservation(studio.sourceShapePreview(for: parent.id)); try persist(warmAfter, mode + "-warm-after")
+                    try check(mode + "WarmRollback", warmBefore == warmAfter && studio.sourceShapePreview(for: parent.id) === initial)
+                    // The generic preparation entry still needs an explicit
+                    // initial context; callers do not gain reads by accident.
+                    try await reject(mode + "Detached", expected: gate, mount: false) {
+                        let prepared = try studio.prepareSourcePluginLibrary(selection: reader.selection, resolution: reader.selection.resolve(),
+                            configuration: reader.configuration, document: studio.doc)
+                        prepared.abort()
+                    }
+                    try studio.loadSourcePluginProfileInteractively(profileURL: profiles["reader"]!, expectedGeneration: studio.sourcePluginMountGeneration)
+                    studio.sourcePluginsRunning = false
+                    let legacy = try studio.sourcePluginSession!.savedDocument()
+                    try persist(legacy, mode + "-legacy-reader")
+                    let legacyFields = legacy.sourcePluginState!.bindings[0].fields
+                    try check(mode + "LegacyControl", legacyFields["position"] == legacyFields["positionAgain"] && legacyFields["position"] != .vector([0, 0, 0]))
+                    try await seed(isWarm)
+                    let current = studio.sourceShapePreview(for: parent.id), previousSession = studio.sourcePluginSession
+                    let mounted = Task { try await studio.mountSourcePluginLibrary(selection: reader.selection, configuration: reader.configuration) }
+                    try await mounted.value; studio.sourcePluginsRunning = false
+                    let preview = studio.sourceShapePreview(for: parent.id), saved = try studio.sourcePluginSession!.savedDocument()
+                    try persist(saved, mode + "-mounted")
+                    try check(mode + "ReaderMounted", studio.sourcePluginSession !== previousSession && studio.doc.sourcePluginLibrary == reader.selection
+                        && preview != nil && (!isWarm || preview === current) && studio.sourceFocus.adapter == nil)
+                    try check(mode + "ReaderFields", saved.sourcePluginState?.bindings[0].fields == legacyFields)
+                    let committed = try capture(mode + "-committed")
+                    mounted.cancel(); try await mounted.value
+                    let afterCancel = try capture(mode + "-postcommit-cancel")
+                    try check(mode + "PostCommitCancellation", afterCancel.state == committed.state && afterCancel.frame == committed.frame)
+                    let counts = try snapshot().graph.state.resources
+                    try studio.stepSourcePlugins(deltaTime: 0.04)
+                    try check(mode + "FirstStepReuse", studio.sourceShapePreview(for: parent.id) === preview && snapshot().graph.state.resources == counts)
+                    try studio.saveScene(to: scene(mode))
+                    let actual = try decoded(mode), runtime = try studio.sourcePluginSession!.savedDocument()
+                    try persist(actual, mode + "-saved")
+                    try check(mode + "ActualNativeSave", actual.sourcePluginLibrary == reader.selection && actual.sourcePluginState == runtime.sourcePluginState
+                        && actual.sourcePluginState?.clock.elapsedTime == Double(Float(0.04)))
+                    let noOp = studio.sourcePluginSession, noOpGeneration = studio.sourcePluginMountGeneration, noOpCounts = try snapshot().graph.state.resources
+                    try await studio.mountSourcePluginLibrary(selection: reader.selection, configuration: reader.configuration)
+                    try check(mode + "ReaderNoop", studio.sourcePluginSession === noOp && studio.sourcePluginMountGeneration == noOpGeneration
+                        && studio.sourceShapePreview(for: parent.id) === preview && snapshot().graph.state.resources == noOpCounts)
+                    try await seed(isWarm)
+                    let plainPreview = studio.sourceShapePreview(for: parent.id), plainCounts = try snapshot().graph.state.resources
+                    try await studio.mountSourcePluginLibrary(selection: plain.selection, configuration: plain.configuration)
+                    studio.sourcePluginsRunning = false
+                    try check(mode + "PlainMounted", studio.doc.sourcePluginLibrary == plain.selection
+                        && studio.doc.sourcePluginState?.bindings[0].fields["position"] == .vector([0, 0, 0])
+                        && studio.doc.sourcePluginState?.bindings[0].fields["positionAgain"] == .vector([0, 0, 0]))
+                    try check(mode + "PlainNoPreviewWork", studio.sourceShapePreview(for: parent.id) === plainPreview && snapshot().graph.state.resources == plainCounts)
+                    try await seed(isWarm)
+                    let entryBefore = try capture(mode + "-entry-before")
+                    let cancelledEntry = Task { try await studio.mountSourcePluginLibrary(selection: reader.selection, configuration: reader.configuration) }
+                    cancelledEntry.cancel(); var entryCancelled = false
+                    do { try await cancelledEntry.value } catch is CancellationError { entryCancelled = true }
+                    let entryAfter = try capture(mode + "-entry-after")
+                    try check(mode + "EntryCancelled", entryCancelled && entryAfter.state == entryBefore.state && entryAfter.frame == entryBefore.frame)
+                    // This real worker hook precedes resolution. Returned-result
+                    // validation through commit has no suspension or test seam;
+                    // post-commit cancellation is checked separately above.
+                    for boundary in ["Caller", "Mode", "Document"] {
+                        try await seed(isWarm)
+                        let prefix = mode + boundary
+                        let before = try capture(prefix + "-before")
+                        let barrier = Barrier(); studio.sourcePluginPreparationHook = { barrier.hold() }
+                        let pending = Task { try await studio.mountSourcePluginLibrary(selection: reader.selection, configuration: reader.configuration) }
+                        defer { pending.cancel(); barrier.finish(); studio.sourcePluginPreparationHook = nil }
+                        await barrier.wait()
+                        let held = try capture(prefix + "-held")
+                        try check(prefix + "Held", held.state.graph.pending && held.state.graph.request != nil && studio.sourcePluginLibraryPreparationQueue.isRunning)
+                        if boundary == "Mode" { app.mode = .maker }
+                        if boundary == "Document" { studio.newScene() }
+                        let transition = try capture(prefix + "-transition")
+                        pending.cancel(); var cancelled = false
+                        do { try await pending.value } catch is CancellationError { cancelled = true }
+                        let after = try capture(prefix + "-cancelled")
+                        try check(prefix + "CancelledBeforeRelease", cancelled && studio.sourcePluginLibraryPreparationQueue.isRunning)
+                        if boundary == "Caller" {
+                            try check(prefix + "Retained", after.state == generation(before.state, before.state.graph.state.generation &+ 1)
+                                && after.frame == before.frame)
+                        } else { try check(prefix + "Retained", after.state == transition.state && after.frame == transition.frame) }
+                        barrier.finish(); studio.sourcePluginPreparationHook = nil
+                        await studio.sourcePluginLibraryPreparationQueue.drain()
+                        let drained = try capture(prefix + "-drained")
+                        try check(prefix + "Drained", drained.state == after.state && drained.frame == after.frame)
+                        app.mode = .studio
+                        try await seed(isWarm)
+                        try await studio.mountSourcePluginLibrary(selection: reader.selection, configuration: reader.configuration)
+                        studio.sourcePluginsRunning = false
+                        try check(prefix + "RetryMounted", studio.doc.sourcePluginLibrary == reader.selection
+                            && studio.sourceShapePreview(for: parent.id) != nil && !studio.sourcePluginLibraryPending)
+                    }
+                }
+            case .reopen:
+                for mode in ["cold", "warm"] {
+                    let saved = try decoded(mode)
+                    guard let object = saved.objects.first(where: { $0.sourceCharacter != nil }) else { throw SourcePluginError.invalid("Saved initial reader lacks source parent.") }
+                    try check(mode + "SavedReader", saved.sourcePluginLibrary == reader.selection && saved.sourcePluginState?.profileFile == nil
+                        && saved.sourcePluginState?.clock.elapsedTime == Double(Float(0.04)))
+                    try await seed(false)
+                    try await reject(mode + "DetachedRestore", expected: gate, mount: false) {
+                        let prepared = try studio.prepareSourcePlugins(document: saved)
+                        prepared.abort()
+                    }
+                    try studio.loadScene(from: scene(mode))
+                    let restored = try studio.sourcePluginSession!.savedDocument(), preview = studio.sourceShapePreview(for: object.id)
+                    try persist(restored, mode + "-reopened")
+                    try check(mode + "FreshReopen", restored.sourcePluginState == saved.sourcePluginState && restored.sourcePluginLibrary == reader.selection
+                        && preview != nil && !studio.sourcePluginsRunning)
+                    try check(mode + "SavedVisibility", studio.doc.object(object.id)?.visible == object.visible && object.visible == (mode == "warm"))
+                    let counts = try snapshot().graph.state.resources
+                    try studio.stepSourcePlugins(deltaTime: 0.02)
+                    try check(mode + "RestoredFirstStepReuse", studio.sourceShapePreview(for: object.id) === preview && snapshot().graph.state.resources == counts)
+                    let continued = try studio.sourcePluginSession!.savedDocument()
+                    try persist(continued, mode + "-continued")
+                    try check(mode + "ContinuedFieldsClock", continued.sourcePluginState?.bindings[0].fields == saved.sourcePluginState?.bindings[0].fields
+                        && continued.sourcePluginState?.clock.elapsedTime == Double(Float(0.04)) + Double(Float(0.02)))
+                    _ = try capture(mode + "-reopened-final")
+                }
+            }
+        } catch { rows.append(.init(op: "initialLibraryAttachmentsFailure", ok: false, detail: String(describing: error))) }
+        studio.sourcePluginPreparationHook = nil; studio.cancelSourcePluginLibraryMount()
+        await studio.sourcePluginLibraryPreparationQueue.drain()
+        return .init(steps: rows, passed: rows.filter(\.ok).count, failed: rows.filter { !$0.ok }.count)
     }
 }
 
