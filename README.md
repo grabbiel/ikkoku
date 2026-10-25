@@ -65,6 +65,10 @@ Pose, Face and Clothes inspectors are reachable; broader interactive acceptance,
 mixed scene objects, maps, lights and effects remain open. Gameplay has bounded
 cycle, event and ADV kernels and a headless host, with no complete playable mode.
 
+[Reader-local verified RGBA digests](docs/reference/character/maker-assets.md#reader-local-verified-rgba-digest-reuse-192)
+remove 29 MiB of repeated hashing per measured selection, reducing average API
+latency by 7–11 ms in the bounded comparison; owner-thread stalls remain.
+
 Performance is part of every component's acceptance. Record responsiveness, total
 latency, memory and GPU work separately. Prepared head-selection inputs reduce
 owner-thread stalls at a total-latency and retained-input cost. Fallback reuse and
