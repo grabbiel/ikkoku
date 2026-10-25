@@ -70,11 +70,14 @@ class ModelComparisonTests(unittest.TestCase):
                                          loadedHeadName='ct_head', loadedHeadCatalog=copy.deepcopy(model.HEAD201_CATALOG))
         self.native['identity']['headID']=201;self.write()
 
-    def bone1(self, sex=1):
-        self.frame['neutralModel'].update(variant='female00-bone1' if sex else 'male00-bone1',
-            sex=sex,requestedSex=sex,boneType=1,requestedBoneType=1,
-            exType=0,requestedExType=0,loadedHeadName='ct_head',loadedHeadCatalog=copy.deepcopy(model.HEAD00_CATALOG))
-        self.native['identity']['sex']=sex
+    def bone1(self, sex=1, head_id=0):
+        assert head_id in (0, 201) and (head_id == 0 or sex == 1)
+        variant = 'female201-bone1' if head_id == 201 else ('female00-bone1' if sex else 'male00-bone1')
+        catalog = model.HEAD201_CATALOG if head_id == 201 else model.HEAD00_CATALOG
+        self.frame['neutralModel'].update(variant=variant, sex=sex,requestedSex=sex,boneType=1,requestedBoneType=1,
+            headID=head_id,requestedHeadID=head_id,loadedHeadCatalogID=head_id,
+            exType=0,requestedExType=0,loadedHeadName='ct_head',loadedHeadCatalog=copy.deepcopy(catalog))
+        self.native['identity'].update(sex=sex,headID=head_id)
         if sex == 0:
             self.frame['neutralModel']['actualBodyValues'][0]=.6
             self.native['bodyValues'][0]=.6
@@ -89,6 +92,70 @@ class ModelComparisonTests(unittest.TestCase):
         self.native['nodeNames'].append('cf_hit_head');self.native['nodeParents'].append(0)
         self.native['nodeWorldMatrices'].append(local);self.native['nodeLocalMatrices']=[self.identity,local]
         self.write()
+
+    def test_corrected_head201_requires_table_and_non_skin_collider(self):
+        self.bone1(head_id=201);result=model.compare(self.folder,self.native)
+        self.assertTrue(result['gatePassed']);self.assertEqual(result['shapeCoercions'],[])
+        self.assertEqual(result['bodyCorrection']['sha256'],self.native['inputs']['bodyCorrectionSHA256'])
+        self.assertTrue(result['headColliderScale']['gatePassed'])
+        self.native['nodeLocalMatrices'][1][0]=1.2
+        result=model.compare(self.folder,self.native)
+        self.assertFalse(result['gatePassed']);self.assertEqual(result['parts'][0]['vertices']['maximum'],0)
+        self.native['nodeLocalMatrices'][1][0]=1.08
+        self.native['inputs']['bodyCorrectionSHA256']='0'*64
+        with self.assertRaisesRegex(ValueError,'table identity'):model.compare(self.folder,self.native)
+        self.native['inputs']['bodyCorrectionSHA256']=self.frame['neutralModel']['bodyCorrection']['sha256']
+        valid=copy.deepcopy(self.frame)
+        for key in ('sourceBodyType','sourceFaceType'):
+            self.frame=copy.deepcopy(valid);self.frame['neutralModel']['bodyCorrection'][key]=0;self.write()
+            with self.subTest(controller=key),self.assertRaisesRegex(ValueError,'table metadata'):
+                model.compare(self.folder,self.native)
+        self.frame=valid;del self.frame['neutralModel']['bodyCorrection'];self.write()
+        with self.assertRaisesRegex(ValueError,'table metadata'):model.compare(self.folder,self.native)
+
+    def test_corrected_head201_rejects_typed_source_native_and_catalog_mismatches(self):
+        self.bone1(head_id=201);valid=copy.deepcopy(self.frame);native=copy.deepcopy(self.native)
+        for key,wrong in [('sex',0),('requestedSex',0),('headID',0),('requestedHeadID',0),
+                          ('boneType',0),('requestedBoneType',0),('exType',1),('requestedExType',1),
+                          ('loadedHeadCatalogID',0)]:
+            for value in (False,True,None,wrong):
+                self.frame=copy.deepcopy(valid);self.frame['neutralModel'][key]=value;self.write()
+                with self.subTest(source=key,value=value),self.assertRaises(ValueError):model.compare(self.folder,self.native)
+        for key,value in [('variant','female201'),('variant','female00-bone1'),
+                          ('loadedHeadName','p_cf_head_03'),('loadedHeadCatalog',None)]:
+            self.frame=copy.deepcopy(valid);self.frame['neutralModel'][key]=value;self.write()
+            with self.subTest(source=key),self.assertRaises(ValueError):model.compare(self.folder,self.native)
+        for field in model.HEAD201_CATALOG:
+            self.frame=copy.deepcopy(valid);self.frame['neutralModel']['loadedHeadCatalog'][field]='wrong';self.write()
+            with self.subTest(catalog=field),self.assertRaisesRegex(ValueError,'exact source prefab'):
+                model.compare(self.folder,self.native)
+        self.frame=valid;self.write()
+        for key,wrong in [('sex',0),('headID',0),('boneType',0),('exType',1)]:
+            for value in (False,True,None,wrong):
+                self.native=copy.deepcopy(native);self.native['identity'][key]=value
+                with self.subTest(native=key,value=value),self.assertRaisesRegex(ValueError,'Native corrected model identity'):
+                    model.compare(self.folder,self.native)
+
+    def test_corrected_head201_repeat_requires_independent_run_and_exact_catalog_table(self):
+        self.bone1(head_id=201)
+        with self.assertRaises(ValueError):model.compare_repeat(self.folder,self.folder)
+        with tempfile.TemporaryDirectory() as tmp:
+            other=Path(tmp)
+            for path in self.folder.iterdir():(other/path.name).write_bytes(path.read_bytes())
+            with self.assertRaisesRegex(ValueError,'same producer'):model.compare_repeat(self.folder,other)
+            run=copy.deepcopy(self.run);run.update(processID=101,root='C:\\Temp\\IkkokuShaderProbe-'+'c'*32)
+            (other/'run.json').write_text(json.dumps(run))
+            self.assertTrue(model.compare_repeat(self.folder,other)['gatePassed'])
+            valid=copy.deepcopy(self.frame)
+            self.frame['neutralModel']['loadedHeadCatalog']['MainData']='p_cf_head_wrong';self.write()
+            (other/'frame.json').write_text(json.dumps(self.frame))
+            with self.assertRaisesRegex(ValueError,'exact source prefab'):model.compare_repeat(self.folder,other)
+            self.frame=valid;self.write();(other/'frame.json').write_text(json.dumps(valid))
+            data=bytearray((other/'body-correction.bytes').read_bytes());struct.pack_into('<f',data,4,-.5)
+            (other/'body-correction.bytes').write_bytes(data)
+            changed=copy.deepcopy(valid);changed['neutralModel']['bodyCorrection']['sha256']=hashlib.sha256(data).hexdigest()
+            (other/'frame.json').write_text(json.dumps(changed))
+            with self.assertRaisesRegex(ValueError,'Repeated corrected body table differs'):model.compare_repeat(self.folder,other)
 
     def test_corrected_male_requires_table_and_collider_with_only_height_coercion(self):
         self.bone1(sex=0);result=model.compare(self.folder,self.native)
