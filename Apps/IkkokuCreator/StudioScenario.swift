@@ -420,7 +420,7 @@ struct StudioScenario: Decodable {
                  group, category, no, speed, on, bone, rotation, animation, fk, position,
                  seconds, dx, dy, eyeLook, blink, handPattern, mode, axis, pixels,
                  render, exportIdenticalToSource, errorContains, outfit, accessoryLabels, pluginMount, state, clothes, expression,
-                 sex, character, chain, delta, ik, edit, parent, children, absent
+                 sex, character, chain, delta, ik, edit, parent, children, absent, copy, added, activeCopyOf
         }
 
         init(from decoder: Decoder) throws {
@@ -522,6 +522,9 @@ struct StudioScenario: Decodable {
             }
             children = try c.decodeIfPresent(ChildrenValue.self, forKey: .children)
             absent = try c.decodeIfPresent([Int32].self, forKey: .absent)
+            copy = try c.decodeIfPresent(Int.self, forKey: .copy)
+            added = try c.decodeIfPresent(String.self, forKey: .added)
+            activeCopyOf = try c.decodeIfPresent(Int32.self, forKey: .activeCopyOf)
         }
     }
 
@@ -1998,7 +2001,7 @@ struct StudioScenario: Decodable {
                                         : "delete: source key \(step.key!) is still in the document")
             case "setParent":
                 // The inspector's Parent picker (`StudioModel.setParent`).
-                guard let id = object(step) else { record(step, false, "setParent: no object with source key \(step.key ?? -1)"); continue }
+                guard let id = object(step) else { record(step, false, "setParent: no object \(describe(step))"); continue }
                 guard let target = step.parent else { record(step, false, "setParent: parent (a source key or null for the root) is required"); continue }
                 var parentID: UUID?
                 if let target {
@@ -2009,8 +2012,8 @@ struct StudioScenario: Decodable {
                 }
                 studio.setParent(id, to: parentID)
                 let placed = studio.doc.object(id)?.parent == parentID
-                record(step, placed, placed ? "source key \(step.key!) now under \(target.map { "source key \($0)" } ?? "the root"): \(studio.status)"
-                                            : "setParent: source key \(step.key!) was not moved: \(studio.status)")
+                record(step, placed, placed ? "\(describe(step)) now under \(target.map { "source key \($0)" } ?? "the root"): \(studio.status)"
+                                            : "setParent: \(describe(step)) was not moved: \(studio.status)")
             case "duplicate":
                 // The workspace's Duplicate button: select, then duplicate the
                 // selection (a source object duplicates with its subtree).
