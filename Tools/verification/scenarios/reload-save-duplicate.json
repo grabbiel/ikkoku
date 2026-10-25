@@ -1,0 +1,15 @@
+{
+  "steps": [
+    {"op": "assert", "activeCamera": 2},
+    {"op": "duplicate", "key": 2},
+    {"op": "assert", "children": {"parent": 1, "labels": ["2", "copy:2"]}, "activeCopyOf": 2},
+    {"op": "assert", "key": 2, "copy": 0, "treeLabel": "IKKOKU-B (copy of camera 2)"},
+    {"op": "undo"},
+    {"op": "assert", "children": {"parent": 1, "keys": [2]}, "activeCamera": 2},
+    {"op": "redo"},
+    {"op": "assert", "children": {"parent": 1, "labels": ["2", "copy:2"]}},
+    {"op": "addFolder", "name": "Saved folder"},
+    {"op": "saveDocument", "path": ".local/verification/scenario-exports/reload-save-duplicate.png"},
+    {"op": "assert", "children": {"labels": ["0", "1", "native:Saved folder"]}}
+  ]
+}

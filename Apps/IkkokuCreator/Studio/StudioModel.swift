@@ -318,6 +318,10 @@ final class StudioModel: ViewportInputHandler {
     /// draws `keyDetail` ("camera 2") under the name.
     func workspaceLabel(of object: StudioObject, sceneSHA256: String?) -> (title: String, keyDetail: String?, sourceCamera: Bool) {
         guard let entry = sourceCameras[object.id], entry.sceneSHA256 == sceneSHA256 else { return (object.name, nil, false) }
+        // A copy has no record key until export; it names the camera it copies.
+        if object.sourceObjectKey == nil, object.sourceDuplicateOf != nil {
+            return ("\(object.name) (copy of camera \(entry.objectKey))", "copy of camera \(entry.objectKey)", true)
+        }
         return (SourceStudioCameraLabel.title(name: object.name, key: entry.objectKey),
                 SourceStudioCameraLabel.keyDetail(name: object.name, key: entry.objectKey), true)
     }
@@ -375,7 +379,7 @@ final class StudioModel: ViewportInputHandler {
     private func solvedSourceCamera(_ id: UUID, previews: [UUID: SourceStudioCharacterPreview]) throws -> OrbitCamera {
         let (object, parentFrame) = try sourceParentFrame(of: id, document: doc, previews: previews, visited: [])
         // Same composition as `sourceWorldMatrix`, whose native branch has no Studio rule.
-        return try object.sourceObjectKey == nil
+        return try object.sourceRecordKey == nil
             ? SourceStudioCameraObjects.viewCamera(world: parentFrame * object.transform.matrix, base: doc.camera)
             : SourceStudioCameraObjects.viewCamera(parentFrame: parentFrame, localPosition: object.transform.position,
                                                    localRotation: object.transform.quaternion, base: doc.camera)
@@ -1482,7 +1486,14 @@ final class StudioModel: ViewportInputHandler {
     private func applyHistoryDocument(_ next: StudioDocument, plugins: PreparedSourcePlugins,
                                       resources: StudioResourceResolution?) {
         sourceInstances.removeAll(); lastSourceRouteDiagnostic = nil
-        if let id = activeSourceCamera, next.object(id) == nil { activeSourceCamera = nil }
+        if let id = activeSourceCamera, next.object(id) == nil {
+            // A copy that took the view from its original (Studio.Duplicate
+            // of the looked-through camera) gives it back when it is undone.
+            let original = doc.object(id)?.sourceDuplicateOf.flatMap { key in
+                next.objects.first { $0.sourceObjectKey == key && sourceCameras[$0.id] != nil }?.id
+            }
+            activeSourceCamera = original
+        }
         if let resources { applyResourceCheck(resources) }
         plugins.restoredAttachments?.commit(document: next)
         doc = next; rehydrateSourceRuntime()
@@ -1492,7 +1503,10 @@ final class StudioModel: ViewportInputHandler {
     func add(_ object: StudioObject, select: Bool = true) {
         pushUndo(force: true)
         var o = object
-        if let sel = selectedObject, sel.kind == .folder { o.parent = sel.id }
+        // CharaStudio adds every new object at the root (AddObjectFolder.Add
+        // and friends load with no parent); an imported scene follows it, so
+        // the new record's transform is its world placement.
+        if doc.sourceSceneSHA256 == nil, let sel = selectedObject, sel.kind == .folder { o.parent = sel.id }
         doc.objects.append(o)
         if select { selection = o.id }
         status = "Added \(o.name)"
@@ -1527,6 +1541,16 @@ final class StudioModel: ViewportInputHandler {
         var o = StudioObject(name: "Camera \(doc.objects.filter { $0.kind == .camera }.count + 1)", kind: .camera)
         o.savedCamera = doc.camera
         o.transform.position = doc.camera.position
+        if doc.sourceSceneSHA256 != nil {
+            // A CharaStudio camera object looks through its own transform, so
+            // in an imported scene the new camera also takes the view's
+            // orientation: the record it exports shows this view.
+            let camera = doc.camera
+            let view = camera.orientationOverride.map { simd_quatf(vector: $0) }
+                ?? simd_quatf(angle: camera.yaw, axis: Float3(0, 1, 0)) * simd_quatf(angle: -camera.pitch, axis: Float3(1, 0, 0))
+            o.transform.rotation = view.eulerXYZ.radiansToDegrees
+            o.transform.rotationOverride = view.vector
+        }
         add(o)
     }
 
@@ -1542,6 +1566,7 @@ final class StudioModel: ViewportInputHandler {
 
     func duplicateSelection() {
         guard var o = selectedObject else { return }
+        if o.sourceRecordKey != nil, doc.sourceSceneSHA256 != nil { duplicateSourceSubtree(o.id); return }
         pushUndo(force: true)
         o.id = UUID()
         o.name += " copy"
@@ -1550,11 +1575,68 @@ final class StudioModel: ViewportInputHandler {
         selection = o.id
     }
 
+    /// ST-T03 / ST-S09: CharaStudio's Duplicate (`Studio.Duplicate`) of a
+    /// source object: the object and its whole subtree are copied with their
+    /// names, local placements, attachment points and edits, and the copy is
+    /// appended after its original's last sibling (`OnLoadAttach`). Each copy
+    /// records the source record it shows (`sourceDuplicateOf`) and never
+    /// reuses its `sourceObjectKey`; export writes it as a new record under a
+    /// key CharaStudio's `GetNewIndex` would allocate. A copy of the camera
+    /// the view looks through takes the view, as the copied `active` flag
+    /// does in CharaStudio. Routes and route children are not duplicated yet.
+    func duplicateSourceSubtree(_ id: UUID) {
+        guard let top = doc.object(id) else { return }
+        var ancestor: UUID? = top.parent, steps = 0
+        while let current = ancestor, steps <= doc.objects.count {
+            if doc.object(current)?.sourceRecordKind == .route || sourceRouteRuntime(id: current, document: doc) != nil {
+                status = "Duplicating route children is not supported yet."
+                return
+            }
+            ancestor = doc.object(current)?.parent; steps += 1
+        }
+        let children = Dictionary(grouping: doc.objects, by: \.parent)
+        var subtree: [StudioObject] = [], stack = [top]
+        while let object = stack.popLast() {
+            subtree.append(object)
+            stack += (children[object.id] ?? []).reversed()
+        }
+        if subtree.contains(where: { $0.sourceRecordKind == .route || sourceRouteRuntime(id: $0.id, document: doc) != nil }) {
+            status = "Duplicating routes is not supported yet."
+            return
+        }
+        pushUndo(force: true)
+        var remap: [UUID: UUID] = [:]
+        for object in subtree { remap[object.id] = UUID() }
+        var copies: [StudioObject] = []
+        copies.reserveCapacity(subtree.count)
+        for object in subtree {
+            var copy = object
+            copy.id = remap[object.id]!
+            if object.id != id { copy.parent = object.parent.flatMap { remap[$0] } }
+            if let key = object.sourceRecordKey { copy.sourceObjectKey = nil; copy.sourceDuplicateOf = key }
+            copies.append(copy)
+            // The runtime entries the copy renders from are its original's.
+            if let entry = sourceCameras[object.id] { sourceCameras[copy.id] = entry }
+            if let entry = sourceItemAssets[object.id] { sourceItemAssets[copy.id] = entry }
+            if resourceBlockedObjects.contains(object.id) { resourceBlockedObjects.insert(copy.id) }
+        }
+        if var coverage = sourceRuntimeCoverage, coverage.sceneSHA256 == doc.sourceSceneSHA256 {
+            coverage.objectIDs.formUnion(copies.filter { $0.sourceRecordKey != nil }.map(\.id))
+            sourceRuntimeCoverage = coverage
+        }
+        doc.objects += copies
+        if let active = activeSourceCamera, let copy = remap[active] { activeSourceCamera = copy }
+        selection = remap[id]
+        status = subtree.count == 1 ? "Duplicated \(top.name)" : "Duplicated \(top.name) with \(subtree.count - 1) child objects"
+    }
+
     func setParent(_ id: UUID, to parent: UUID?) {
         guard let i = doc.index(of: id), doc.objects[i].parent != parent else { return }
         if let p = parent, p == id || doc.isDescendant(p, of: id) { return }
         let object = doc.objects[i]
-        if object.sourceObjectKey != nil {
+        // Source records and copies, and in an imported scene every object,
+        // place through the Studio walk, so the move keeps that placement.
+        if object.sourceRecordKey != nil || doc.sourceSceneSHA256 != nil {
             // Source records place through the Studio rule, so world
             // placement must be kept with the exact inverse of that rule
             // (`SourceStudioWorldTransform.reparented`), not the native walk:
@@ -1937,7 +2019,13 @@ final class StudioModel: ViewportInputHandler {
             throw RigError.invalid("The original scene changed; reimport before exporting edits.")
         }
         let source = try KoikatsuSceneReader.decodeDocument(bytes)
-        try SourceSceneExportValidation.validate(doc, against: source.snapshot)
+        // ST-T03 / ST-S09 / ST-D03: copies and new folders, cameras and
+        // lights are written first under the keys CharaStudio would allocate
+        // (`SourceSceneExportValidation.stage`); every edit below addresses
+        // the staged scene, where a copy's record is its original's bytes.
+        let staged = try SourceSceneExportValidation.stage(doc, source: source)
+        let stage = staged.stage.document
+        try SourceSceneExportValidation.validate(doc, against: stage.snapshot, keys: staged.keys)
         guard doc.effects == SceneEffects(), doc.mainLight == MainLight(), doc.timeline.keyframes.isEmpty else {
             throw RigError.invalid("Original-scene export does not yet serialize native lighting, effects or timeline edits.")
         }
@@ -1947,17 +2035,19 @@ final class StudioModel: ViewportInputHandler {
             for child in record.children { index(child) }
             for children in (record.character?.accessoryChildren ?? [:]).values { for child in children { index(child) } }
         }
-        for root in source.snapshot.roots { index(root) }
+        for root in stage.snapshot.roots { index(root) }
         // ST-T03: records missing from the document are deleted with their
         // subtree and records under another parent (or re-appended after a
         // sibling) are moved; each moved record's re-authored local
         // placement is written by the transform edit below.
-        let topology = try SourceSceneExportValidation.topologyEdits(doc, against: source.snapshot)
+        let topology = try SourceSceneExportValidation.topologyEdits(doc, against: stage.snapshot, keys: staged.keys)
         var edits = SourceSceneEdits(deletions: topology.deletions, reparents: topology.reparents)
         for object in doc.objects {
-            guard let key = object.sourceObjectKey, let original = records[key] else {
+            guard let key = staged.keys[object.id], let original = records[key] else {
                 throw RigError.invalid("Original-scene export contains an unknown source object.")
             }
+            // A new folder, camera or light was written whole from the object.
+            guard object.sourceRecordKey != nil else { continue }
             if object.visible != original.visible { edits.visibility[key] = object.visible }
             // Only folder, camera and route records serialize a name; the
             // validator already rejects renames for every other kind. The
@@ -2111,12 +2201,12 @@ final class StudioModel: ViewportInputHandler {
             guard i < source.settings.cameraSlots.count, let camera else { throw RigError.invalid("Original scene export cannot remove a camera slot.") }
             if camera != (try source.settings.cameraSlots[i].nativeCamera()) { edits.cameraSlots[i] = camera.sourceCameraRecord() }
         }
-        if !edits.transforms.isEmpty || !edits.kinematics.isEmpty || !edits.animations.isEmpty || !edits.voices.isEmpty || !edits.cards.isEmpty || !edits.mouth.isEmpty || edits.currentCamera != nil || !edits.cameraSlots.isEmpty || !edits.deletions.isEmpty {
+        if !edits.transforms.isEmpty || !edits.kinematics.isEmpty || !edits.animations.isEmpty || !edits.voices.isEmpty || !edits.cards.isEmpty || !edits.mouth.isEmpty || edits.currentCamera != nil || !edits.cameraSlots.isEmpty || !edits.deletions.isEmpty || !staged.stage.keys.isEmpty {
             var thumbnailFrame = frame; thumbnailFrame.gizmos = []; thumbnailFrame.effects.showGrid = false
             guard let image = host.renderer.capture(frame: thumbnailFrame, width: 640, height: 360) else { throw RigError.invalid("Could not render the edited Studio thumbnail.") }
             edits.thumbnailData = try CaptureOutput.pngData(image)
         }
-        try source.editedData(edits).write(to: url, options: .atomic)
+        try staged.stage.editedData(edits).write(to: url, options: .atomic)
         status = "Exported edited original scene to \(url.lastPathComponent)"
     }
 
@@ -2410,7 +2500,7 @@ final class StudioModel: ViewportInputHandler {
         let routeIDsBeforePrune = Set(sourceRoutes.keys)
         sourceRoutes = sourceRoutes.filter { id, runtime in
             doc.sourceSceneSHA256 == runtime.sceneSHA256
-                && doc.objects.contains(where: { $0.id == id && $0.sourceObjectKey == runtime.objectKey })
+                && doc.objects.contains(where: { $0.id == id && $0.sourceRecordKey == runtime.objectKey })
         }
         sourceRouteClocks = sourceRouteClocks.filter { sourceRoutes[$0.key] != nil }
         sourceRoutePlayState = sourceRoutePlayState.filter { sourceRoutes[$0.key] != nil }
@@ -2420,7 +2510,7 @@ final class StudioModel: ViewportInputHandler {
         let previewIDsBeforePrune = Set(sourceRouteCharacterPreviews.keys)
         sourceRouteCharacterPreviews = sourceRouteCharacterPreviews.filter { id, preview in
             doc.sourceSceneSHA256 == preview.reference.sceneSHA256
-                && doc.objects.contains(where: { $0.id == id && $0.sourceObjectKey == preview.reference.objectKey })
+                && doc.objects.contains(where: { $0.id == id && $0.sourceRecordKey == preview.reference.objectKey })
         }
         if var coverage = sourceRuntimeCoverage {
             coverage.objectIDs.subtract(routeIDsBeforePrune.subtracting(sourceRoutes.keys))
@@ -2696,7 +2786,7 @@ final class StudioModel: ViewportInputHandler {
         // Native objects (no source key) keep the native full-TRS composition
         // of `StudioDocument.worldMatrix(of:)`, which setParent and native
         // gizmo edits also use; only source records follow the Studio rule.
-        guard object.sourceObjectKey != nil else { return parentFrame * object.transform.matrix }
+        guard object.sourceRecordKey != nil else { return parentFrame * object.transform.matrix }
         // Documents saved before `sourceRecordKind` was recorded carry no
         // record kind; their import made every non-character placeholder a
         // `.folder`, so those fall back to the non-scalable rule (an item's
@@ -2977,7 +3067,7 @@ final class StudioModel: ViewportInputHandler {
     func sourceCacheNeedsRehydration() -> Bool {
         guard let hash = doc.sourceSceneSHA256 else { return false }
         guard let coverage = sourceRuntimeCoverage, coverage.sceneSHA256 == hash else { return true }
-        return doc.objects.contains { $0.sourceObjectKey != nil && !coverage.objectIDs.contains($0.id) }
+        return doc.objects.contains { $0.sourceRecordKey != nil && !coverage.objectIDs.contains($0.id) }
     }
 
     /// The scene identity and source object ids the runtime caches were last
@@ -2994,7 +3084,7 @@ final class StudioModel: ViewportInputHandler {
 
     func coverSourceRuntime(_ document: StudioDocument) {
         sourceRuntimeCoverage = document.sourceSceneSHA256.map { hash in
-            (hash, Set(document.objects.filter { $0.sourceObjectKey != nil }.map(\.id)))
+            (hash, Set(document.objects.filter { $0.sourceRecordKey != nil }.map(\.id)))
         }
     }
 

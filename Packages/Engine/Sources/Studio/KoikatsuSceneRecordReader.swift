@@ -3,6 +3,7 @@ import Character
 
 extension KoikatsuBinaryReader {
     mutating func bone(destination: SourceSceneEdits.Destination? = nil) throws -> KoikatsuBoneRecord {
+        lastBoneKeyOffset = offset
         let key = try int32(), start = offset, transform = try changeAmount()
         if let destination { editSpans.transforms[destination] = start..<offset }
         return KoikatsuBoneRecord(sourceKey: key, transform: transform)
@@ -49,14 +50,16 @@ extension KoikatsuBinaryReader {
         guard sex == 0 || sex == 1 else { throw invalid("unsupported character sex") }
         let cardStart = offset, card = try embeddedCard()
         editSpans.cards[objectKey] = cardStart..<offset
-        var bones: [Int32: KoikatsuBoneRecord] = [:], ik: [Int32: KoikatsuBoneRecord] = [:]
+        var bones: [Int32: KoikatsuBoneRecord] = [:], ik: [Int32: KoikatsuBoneRecord] = [:], subKeys: [Int] = []
         for _ in 0..<(try count()) {
             let key = try int32(); guard bones[key] == nil else { throw invalid("duplicate character FK bone ID") }
             bones[key] = try bone(destination: .characterFK(object: objectKey, bone: key))
+            subKeys.append(lastBoneKeyOffset)
         }
         for _ in 0..<(try count()) {
             let key = try int32(); guard ik[key] == nil else { throw invalid("duplicate character IK target ID") }
             ik[key] = try bone(destination: .characterIK(object: objectKey, target: key))
+            subKeys.append(lastBoneKeyOffset)
         }
         var children: [Int32: [KoikatsuObjectRecord]] = [:], slots: [SourceSceneEditSpans.Topology.Slot] = []
         for _ in 0..<(try count()) {
@@ -72,6 +75,9 @@ extension KoikatsuBinaryReader {
         let nipple = try float(), fluids = try take(5), mouthStart = offset, mouth = try float(), lip = try bool()
         editSpans.mouth[objectKey] = .init(mouthOpen: mouthStart..<(mouthStart + 4), lipSync: (mouthStart + 4)..<(mouthStart + 5))
         let look = try bone(destination: .lookAt(object: objectKey))
+        // OICharInfo.Load allocates bones, IK targets, then the accessory
+        // children, then the look-at target (see SourceSceneInsertion).
+        editSpans.topology.subKeys[objectKey] = .init(before: subKeys, after: [lastBoneKeyOffset])
         let kinematicStart = offset
         let enabledIK = try bool(), activeIK = try flags(5), enabledFK = try bool(), activeFK = try flags(7)
         editSpans.kinematics[objectKey] = .init(enableIK: kinematicStart..<(kinematicStart + 1),
@@ -101,11 +107,16 @@ extension KoikatsuBinaryReader {
             accessoryGroupStates: groupStates, accessoryStates: states)
     }
     mutating func route(objectKey: Int32? = nil) throws -> KoikatsuRouteRecord {
-        var points: [KoikatsuRoutePointRecord] = []
+        var points: [KoikatsuRoutePointRecord] = [], subKeys: [Int] = []
         for _ in 0..<(try count()) {
-            points.append(KoikatsuRoutePointRecord(bone: try bone(), speed: try float(), easeType: try int32(),
-                connection: try int32(), aid: try bone(), aidInitialized: try bool(), linked: try bool()))
+            let point = try bone(); subKeys.append(lastBoneKeyOffset)
+            let speed = try float(), easeType = try int32(), connection = try int32()
+            let aid = try bone(); subKeys.append(lastBoneKeyOffset)
+            points.append(KoikatsuRoutePointRecord(bone: point, speed: speed, easeType: easeType,
+                connection: connection, aid: aid, aidInitialized: try bool(), linked: try bool()))
         }
+        // Route points and their aids load after the route's children.
+        if let objectKey { editSpans.topology.subKeys[objectKey] = .init(before: [], after: subKeys) }
         // `active` is read into a local first so its one-byte span can be
         // recorded; the remaining fields still read in initializer order.
         let activeStart = offset, active = try bool()

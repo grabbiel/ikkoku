@@ -1,0 +1,19 @@
+{
+  "steps": [
+    {"op": "addCharacter", "sex": "female"},
+    {"op": "exportRejected", "path": ".local/verification/scenario-exports/topology-insert-refused.png", "errorContains": "does not add new characters or items"},
+    {"op": "undo"},
+    {"op": "addFolder", "name": "Under item"},
+    {"op": "setParent", "added": "Under item", "parent": 1},
+    {"op": "exportRejected", "path": ".local/verification/scenario-exports/topology-insert-refused.png", "errorContains": "under items"},
+    {"op": "undo"}, {"op": "undo"},
+    {"op": "assert", "children": {"keys": [0, 1]}},
+    {"op": "captureObject", "key": 2, "name": "camera-2"},
+    {"op": "duplicate", "key": 2},
+    {"op": "assert", "children": {"parent": 0, "labels": ["2", "copy:2"]}, "activeCopyOf": 2},
+    {"op": "export", "path": ".local/verification/scenario-exports/topology-insert-refused.png"},
+    {"op": "reimport", "path": ".local/verification/scenario-exports/topology-insert-refused.png"},
+    {"op": "assert", "children": {"parent": 0, "keys": [2, 4]}, "activeCamera": 4},
+    {"op": "assert", "children": {"parent": 1, "keys": [3]}}
+  ]
+}

@@ -237,9 +237,10 @@ def compare_expression(trace,expected,scene_hashes=None):
                 scope='All serialized face fields of all characters from independent Python scene/card decoding versus original CharaStudio afterLoad and settled snapshots; no rendered-image or transition parity claim')
 
 
-# ST-T03 topology: each of our deletion/reparenting exports beside the unedited load of its source.
+# ST-T03 topology: each of our deletion/reparenting/duplicate/insert exports beside the unedited load of its source.
 TOPOLOGY_PAIRS=(('topology-delete','topology-delete-source'),('topology-moved','topology-delete-source'),
-                ('topology-reparent','topology-reparent-source'),('topology-item-delete','topology-item-source'))
+                ('topology-reparent','topology-reparent-source'),('topology-item-delete','topology-item-source'),
+                ('topology-duplicate','topology-reparent-source'),('topology-camera-copy','topology-item-source'))
 TOPOLOGY_LABELS=tuple(dict.fromkeys(label for pair in TOPOLOGY_PAIRS for label in pair))
 # The tree each scenario left (Tools/verification/scenarios/topology-*.json and reload-*-topology.json),
 # parent key (None = the root dictionary) -> children in order, and the camera it must look through.
@@ -248,8 +249,21 @@ TOPOLOGY_INTENT={
     'topology-moved':{None:[0,2]},
     'topology-reparent':{None:[622,962,626,1130,794,1540,1129],962:[963,1127,1128,623],626:[627,791,792,793,65],622:[0,624,625]},
     'topology-item-delete':{None:[0,1],0:[2],1:[]},
+    # topology-duplicate.json: Duplicate folder 962 (its copy 113 holds copies of 963 and 1127-1129), item 1540
+    # and item 1127 (whose copy 335 joins 962), then add a folder, a camera and a point light at the root.
+    'topology-duplicate':{None:[622,65,962,626,1130,794,1298,1540,113,334,336,337,338],
+                          962:[963,1127,1128,1129,335],113:[114,331,332,333]},
+    # topology-insert-refused.json: Duplicate camera 2 inside item 0; the copy takes the view.
+    'topology-camera-copy':{None:[0,1],0:[2,4],1:[3]},
 }
-TOPOLOGY_VIEW={'topology-delete':None,'topology-moved':2,'topology-reparent':None,'topology-item-delete':2}
+TOPOLOGY_VIEW={'topology-delete':None,'topology-moved':2,'topology-reparent':None,'topology-item-delete':2,
+               'topology-duplicate':None,'topology-camera-copy':4}
+# Each copy's key -> the source record it copies, from the scenario's own GetNewIndex walk (the smallest free key,
+# record first, then a character's FK and IK keys, its children, its look-at key; an item's bone keys, then its
+# children), and the records the scenario added (AddObjectFolder, AddObjectCamera, AddObjectLight).
+TOPOLOGY_COPIES={'topology-duplicate':{113:962,114:963,331:1127,332:1128,333:1129,334:1540,335:1127},
+                 'topology-camera-copy':{4:2}}
+TOPOLOGY_NEW={'topology-duplicate':(336,337,338)}
 POSITION_TOLERANCE=1e-3 # metres: a wrong reparent rule (parent frame ignored or applied twice) is off by decimetres
 ROTATION_TOLERANCE=0.1  # degrees
 CHANGE_TOLERANCE=1e-5   # the loaded change amount against the float the record stores
@@ -261,9 +275,15 @@ def file_tree(data):
     selects (ChangeCamera per record in depth-first order; the last active record wins)."""
     from analysis.studio_scene_contract import inspect_scene
     scene=inspect_scene(data)
-    roots=[int(key) for key in scene['roots']];children={};groups={};records={};winner=[None]
+    roots=[int(key) for key in scene['roots']];children={};groups={};records={};winner=[None];keys=[]
     def visit(obj):
         key=obj['key'];records[key]=obj
+        # Every key the record names: its own, a character's FK, IK and look-at keys, an item's bone keys, and
+        # a route's point and aid keys (each one SceneInfo.SetNewIndex registers at load).
+        keys.append(key)
+        keys.extend(bone['key'] for bone in list((obj.get('bones') or {}).values())+list((obj.get('ik') or {}).values()))
+        if obj['kind']==0:keys.append(obj['lookAt']['key'])
+        for point in obj.get('points') or []:keys.extend((point['bone']['key'],point['aid']['key']))
         if obj['kind']==5 and obj.get('active'):winner[0]=key
         if 'children' in obj:children[key]=[child['key'] for child in obj['children']]
         for child in obj.get('children',[]):visit(child)
@@ -273,7 +293,7 @@ def file_tree(data):
             for item in items:visit(item)
     for key in scene['roots']:visit(scene['roots'][key])
     return dict(roots=roots,rootKeys=[int(key) for key in scene['roots']],children=children,groups=groups,records=records,
-                viewCamera=winner[0],sunCaster=scene['settings']['sunCaster'])
+                viewCamera=winner[0],sunCaster=scene['settings']['sunCaster'],keys=sorted(keys))
 
 
 def loaded_tree(snapshot):
@@ -295,12 +315,15 @@ def _degrees(a,b):
     return math.degrees(2*math.atan2(math.sqrt(x*x+y*y+z*z),abs(w)))
 
 
-def _pose_kept(edited,source):
-    """Every object of the edited load at its world pose in the unedited source load (settled)."""
+def _pose_kept(edited,source,copies=None,new=()):
+    """Every object of the edited load at its world pose in the unedited source load (settled); a copy at
+    the pose of the record it copies, which Studio.Duplicate places beside it with the same local change
+    amount. Records the edit added have no source pose and are checked against their own record instead."""
     worst=dict(distance=0.0,degrees=0.0,distanceKey=None,degreesKey=None,missing=[])
-    before=_objects(source)
+    before=_objects(source);copies=copies or {}
     for key,obj in _objects(edited).items():
-        base=before.get(key)
+        if key in new:continue
+        base=before.get(copies.get(key,key))
         if base is None or obj.get('worldPosition') is None or base.get('worldPosition') is None or obj.get('worldRotation') is None:
             worst['missing'].append(key);continue
         distance=math.dist(obj['worldPosition'],base['worldPosition']);degrees=_degrees(obj['worldRotation'],base['worldRotation'])
@@ -358,7 +381,82 @@ def _topology_claims(label,case,source_case,expected,source_expected):
         gone=sorted(set(_objects(source_case['afterLoad']))-set(loaded['objects']))
         claims.append((label+'/deleted-records-absent',_exact(json.dumps(deleted)),json.dumps(gone)))
         claims.append((label+'/world-pose-kept-from-source',_pose_matcher(),
-                       _pose_kept(case.get('settled') or snapshot,source_case.get('settled') or source_case['afterLoad'])))
+                       _pose_kept(case.get('settled') or snapshot,source_case.get('settled') or source_case['afterLoad'],
+                                  TOPOLOGY_COPIES.get(label),TOPOLOGY_NEW.get(label,()))))
+    if 'indexKeys' in snapshot or label in TOPOLOGY_COPIES or label in TOPOLOGY_NEW:
+        # Studio.SetNewIndex hands a key the index already holds a fresh one, so a repeated key in the record
+        # shows as an index that is not the record's key list.
+        claims.append((label+'/index-keys-match-record',_exact(json.dumps(expected['keys'])),json.dumps(snapshot.get('indexKeys'))))
+    if label in TOPOLOGY_COPIES or label in TOPOLOGY_NEW:
+        claims.extend(_insert_claims(label,case,source_case,expected,loaded))
+    return claims
+
+
+def _shown(obj):
+    """What the player shows of one loaded object besides its placement."""
+    return None if obj is None else dict(kind=obj.get('kind'),name=obj.get('name'),content=obj.get('content'))
+
+
+def _unity_euler(degrees):
+    """Quaternion.Euler(x, y, z) as [x, y, z, w]: Z first, then X, then Y (Unity's ZXY order)."""
+    def axis(index,angle):
+        half=math.radians(angle)/2;q=[0.0,0.0,0.0,math.cos(half)];q[index]=math.sin(half);return q
+    def mul(a,b):
+        ax,ay,az,aw=a;bx,by,bz,bw=b
+        return [aw*bx+ax*bw+ay*bz-az*by,aw*by-ax*bz+ay*bw+az*bx,aw*bz+ax*by-ay*bx+az*bw,aw*bw-ax*bx-ay*by-az*bz]
+    x,y,z=degrees
+    return mul(mul(axis(1,y),axis(0,x)),axis(2,z))
+
+
+def _copies_match(actual):
+    if not actual:return False
+    for entry in actual.values():
+        copy,source=entry['copy'],entry['source']
+        if copy is None or source is None or copy!=source:return False
+        if copy['kind'] in (0,1,2) and not copy['content']:return False
+        if copy['kind']==1 and (not copy['content'].get('loaded') or not (copy['content'].get('meshes') or {}).get('renderers')):return False
+    return True
+_copies_match.claim='every copy loaded with the kind, name and catalog content (item catalog IDs, a loaded prefab with renderers, its renderer and vertex counts; a character\'s card name, sex, renderer and vertex counts) of the record it copies in the source load'
+
+
+def _insert_claims(label,case,source_case,expected,loaded):
+    snapshot=case['afterLoad'];settled=_objects(case.get('settled') or snapshot);claims=[]
+    if source_case is not None:
+        before=_objects(source_case.get('settled') or source_case['afterLoad'])
+        claims.append((label+'/copies-show-their-source-content',_copies_match,
+                       {str(key):dict(copy=_shown(settled.get(key)),source=_shown(before.get(template)))
+                        for key,template in sorted(TOPOLOGY_COPIES.get(label,{}).items())}))
+    names={str(key):[record.get('name'),(loaded['objects'].get(key) or {}).get('name')]
+           for key,record in sorted(expected['records'].items()) if record['kind'] in (3,4,5)}
+    claims.append((label+'/names-match-record',_exact(json.dumps({k:[v[0],v[0]] for k,v in names.items()},ensure_ascii=False,sort_keys=True)),
+                   json.dumps(names,ensure_ascii=False,sort_keys=True)))
+    states={str(key):[record['treeState'],record['visible']] for key,record in sorted(expected['records'].items())}
+    claims.append((label+'/tree-states-and-visibility-match-record',_exact(json.dumps(states,sort_keys=True)),
+                   json.dumps({str(key):[(loaded['objects'].get(key) or {}).get('objectInfoTreeState'),(loaded['objects'].get(key) or {}).get('objectInfoVisible')]
+                               for key in sorted(expected['records'])},sort_keys=True)))
+    lights={}
+    for key,record in sorted(expected['records'].items()):
+        if record['kind']!=2:continue
+        content=(loaded['objects'].get(key) or {}).get('content') or {}
+        want=[record['number'],[_float32(v) for v in record['color']],_float32(record['intensity']),_float32(record['range']),
+              _float32(record['spotAngle']),record['shadow'],record['enabled'],record['drawTarget']]
+        got=[content.get('no'),[_float32(v) for v in content.get('color') or []],*(None if content.get(f) is None else _float32(content[f]) for f in ('intensity','range','spotAngle')),
+             content.get('shadow'),content.get('enable'),content.get('drawTarget')]
+        lights[str(key)]=dict(record=want,loaded=got,light=dict(type=content.get('lightType'),enabled=content.get('lightEnabled'),
+                                                                 intensity=content.get('lightIntensity'),range=content.get('lightRange'),spotAngle=content.get('lightSpotAngle')))
+    def lights_match(actual):return all(entry['record']==entry['loaded'] for entry in actual.values())
+    lights_match.claim='every light loaded with its record\'s number, color, intensity, range, spot angle, shadow, enable and draw-target values'
+    claims.append((label+'/light-values-match-record',lights_match,lights))
+    placed=dict(distance=0.0,degrees=0.0,missing=[])
+    for key in TOPOLOGY_NEW.get(label,()):
+        obj=settled.get(key);record=expected['records'].get(key)
+        if obj is None or record is None or obj.get('worldPosition') is None or obj.get('worldRotation') is None or key not in expected['roots']:
+            placed['missing'].append(key);continue
+        placed['distance']=max(placed['distance'],math.dist(obj['worldPosition'],record['transform']['position']))
+        placed['degrees']=max(placed['degrees'],_degrees(obj['worldRotation'],_unity_euler(record['transform']['rotation'])))
+    def placed_match(actual):return not actual['missing'] and actual['distance']<=POSITION_TOLERANCE and actual['degrees']<=ROTATION_TOLERANCE
+    placed_match.claim='every added root record at its record\'s position within %g m and rotation within %g degrees'%(POSITION_TOLERANCE,ROTATION_TOLERANCE)
+    if label in TOPOLOGY_NEW:claims.append((label+'/added-records-at-record-placement',placed_match,placed))
     return claims
 
 
@@ -401,10 +499,13 @@ def compare_topology(trace,trees,scene_hashes=None):
                 claims.append(dict(claim=label+'/source-load',expected='the unedited load of '+source,actual='missing from the trace',passed=False))
         reports[label]=dict(claims=claims,passed=all(c['passed'] is not False for c in claims),sceneSHA256=(scene_hashes or {}).get(label))
     return dict(schemaVersion=1,framesPerPhase=trace.get('framesPerPhase'),cases=reports,passed=bool(reports) and all(c['passed'] for c in reports.values()),
-                scope='ST-T03 deletion and reparenting: the original CharaStudio player\'s loaded tree (sceneInfo.dicObject order, '
-                      'every OI*Info child list), dicKeys, change amounts, view camera and sun caster against each record\'s own bytes '
-                      'read by the independent Python reader and against the scenario\'s intended tree; each export\'s settled world '
-                      'poses against the unedited load of its source scene; no rendered-image claim')
+                scope='ST-T03 deletion, reparenting, duplicates and added records: the original CharaStudio player\'s loaded tree '
+                      '(sceneInfo.dicObject order, every OI*Info child list), dicKeys, change amounts, view camera and sun caster '
+                      'against each record\'s own bytes read by the independent Python reader and against the scenario\'s intended '
+                      'tree; each export\'s settled world poses against the unedited load of its source scene, a copy against the '
+                      'record it copies; for duplicate and insert exports also the loaded key index, names, tree states, light '
+                      'values, added-record placement and each copy\'s loaded catalog content against its source record\'s load; '
+                      'no rendered-image claim')
 
 
 def main():

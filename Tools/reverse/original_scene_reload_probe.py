@@ -38,8 +38,10 @@ ROOT=Path(__file__).resolve().parents[2]
 LABELS=('hide-rename','camera-switch','route-stop','route-rename')
 EXPRESSION_LABELS=('expression-edit','expression-source') # ST-C04 face-state export and its source
 FK_LABELS=('charastudio-fk-edit','charastudio-fk-source') # ST-T01: our FK export and the unedited load of its source scene
-# ST-T03 topology: our deletion and reparenting exports, and the unedited loads of their source scenes.
+# ST-T03 topology: our deletion, reparenting, duplicate and insert exports, and the unedited loads of their
+# source scenes (topology-duplicate edits the topology-reparent source, topology-camera-copy the item one).
 TOPOLOGY_LABELS=('topology-delete','topology-moved','topology-reparent','topology-item-delete',
+                 'topology-duplicate','topology-camera-copy',
                  'topology-delete-source','topology-reparent-source','topology-item-source')
 SOURCE=Path(__file__).with_name('fixtures')/'OriginalSceneReloadProbe.cs'
 AUTHORED={'char':'scene-char.png','route-children':'scene-route-children.png','neck-target':'scene-neck-target.png',

@@ -66,3 +66,28 @@ func sourceSceneTopologyPerformanceReparent() throws {
     #expect(reread.roots.map(\.sourceKey) == [622, 962, 626, 1130, 794, 1540, 1129])
     try topologyPerfMedian("editedData reparent scenario (3 moves, 1 subtree deletion)") { _ = try document.editedData(edits) }
 }
+
+/// ST-T03 duplicate/insert slice: the `topology-duplicate` scenario's
+/// insertions (folder 962 copied with its character and three items, item
+/// 1540 copied at the root, item 1127 copied beside itself in 962, and a new
+/// folder, camera and point light at the root), alone and with a transform
+/// edit on the folder copy, which re-decodes the staged scene once more.
+@Test(.enabled(if: topologyPerfEnabled, "Opt-in timing probe: IKKOKU_TOPOLOGY_PERF=1 plus IKKOKU_STUDIO_SCENARIO_SCENE"))
+func sourceSceneTopologyPerformanceDuplicate() throws {
+    let (_, document) = try topologyPerfScene()
+    let insertions: [SourceSceneInsertion] = [
+        .init(.duplicate(of: 962)),
+        .init(.duplicate(of: 963), parent: .inserted(0)), .init(.duplicate(of: 1127), parent: .inserted(0)),
+        .init(.duplicate(of: 1128), parent: .inserted(0)), .init(.duplicate(of: 1129), parent: .inserted(0)),
+        .init(.duplicate(of: 1540)), .init(.duplicate(of: 1127), parent: .source(962)),
+        .init(.folder(name: "New folder")), .init(.camera(name: "Camera 1")), .init(.light(SourceSceneNewLight(no: 1))),
+    ]
+    let stage = try document.inserting(insertions)
+    #expect(stage.keys == [113, 114, 331, 332, 333, 334, 335, 336, 337, 338])
+    let reread = try KoikatsuSceneReader.decode(try document.editedData(SourceSceneEdits(insertions: insertions)))
+    #expect(reread.roots.map(\.sourceKey) == [622, 65, 962, 626, 1130, 794, 1298, 1540, 113, 334, 336, 337, 338])
+    let folder = try #require(stage.document.snapshot.roots.first { $0.sourceKey == 113 })
+    let moved = SourceSceneEdits(transforms: [.init(.object(113), transform: topologyPerfMoved(folder.transform))], insertions: insertions)
+    try topologyPerfMedian("editedData duplicate scenario (7 copies, 3 new records)") { _ = try document.editedData(SourceSceneEdits(insertions: insertions)) }
+    try topologyPerfMedian("editedData duplicate scenario plus one transform on a copy") { _ = try document.editedData(moved) }
+}
