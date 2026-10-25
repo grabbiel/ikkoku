@@ -1620,8 +1620,14 @@ final class StudioModel: ViewportInputHandler, LivePacedHandler {
         }
         if let resources { applyResourceCheck(resources) }
         plugins.restoredAttachments?.commit(document: next)
+        let rehydrations = sourceRehydrationCount
         doc = next; rehydrateSourceRuntime()
         commitSourcePlugins(plugins, running: false, replaceDocument: false)
+        // As after a load: the document's didSet rendered before the
+        // rehydrated route previews, cameras and props existed, so the redo
+        // of a route Duplicate drew the copy without its character until
+        // something else refreshed.
+        if sourceRehydrationCount != rehydrations { refresh() }
     }
 
     func add(_ object: StudioObject, select: Bool = true) {
