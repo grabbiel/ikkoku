@@ -388,7 +388,6 @@ final class MakerModel: ViewportInputHandler {
 
     private func openSourceRig(url: URL, importing imported: SourceCharacterCard?, cardURL: URL?) throws {
         cancelSourceSelection()
-        sourceRigReuse.reset()
         let manifest = try? JSONDecoder().decode(SourceAvatarManifest.self, from: Data(contentsOf: url))
         let sex = manifest?.sex ?? (manifest?.kind == "koikatsu-male-avatar" ? 0 : 1)
         let identity = try imported?.customization()
@@ -467,6 +466,7 @@ final class MakerModel: ViewportInputHandler {
         applySourceCustomization = false
         sourceBoneModifiers = nil
         importedSourceCard = imported
+        sourceRigReuse.reset()
         sourceMakerLibrary = makerLibrary; sourcePreparedAssets = prepared
         sourceAssetSelections = prepared?.selections ?? []
         sourceSelectionRows = selectionRows(card: imported, library: makerLibrary, coordinate: 0,
@@ -512,7 +512,6 @@ final class MakerModel: ViewportInputHandler {
     func setModLibrary(_ library: SourceModLibrary?, catalog: SourceModCatalog? = nil,
                        contract: SourceModCatalogContract? = nil) throws {
         cancelSourceSelection()
-        sourceRigReuse.reset()
         let replacement: SourceRigPreview?
         var cardApplication: SourcePreviewAppearance.CardApplication?
         if let current = sourceRigPreview, let url = sourceRigURL {
@@ -545,6 +544,7 @@ final class MakerModel: ViewportInputHandler {
                 sourceAppliedColors = Dictionary(uniqueKeysWithValues: (sourceAppearanceDraft?.colors ?? []).map { ($0.id, $0.rgba) })
             }
         }
+        sourceRigReuse.reset()
         sourceModLibrary = library
         sourceModCatalog = catalog
         sourceModCatalogContract = contract

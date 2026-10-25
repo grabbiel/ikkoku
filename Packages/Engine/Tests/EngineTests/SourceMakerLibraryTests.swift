@@ -291,6 +291,7 @@ private func expectReusedSourceMatches(_ actual: SourceRig, _ expected: SourceRi
         #expect(a.mesh.name == e.mesh.name && a.mesh.positions == e.mesh.positions && a.mesh.normals == e.mesh.normals)
         #expect(a.mesh.tangents == e.mesh.tangents && a.mesh.uvs == e.mesh.uvs && a.mesh.uvs1 == e.mesh.uvs1 && a.mesh.uvs2 == e.mesh.uvs2)
         #expect(a.mesh.indices == e.mesh.indices && a.mesh.joints == e.mesh.joints && a.mesh.weights == e.mesh.weights)
+        #expect(a.mesh.colors == e.mesh.colors && a.mesh.regions == e.mesh.regions && a.mesh.materialIndex == e.mesh.materialIndex)
         try #require(a.mesh.morphTargets.count == e.mesh.morphTargets.count)
         for (am, em) in zip(a.mesh.morphTargets, e.mesh.morphTargets) {
             #expect(am.name == em.name && am.positionDeltas == em.positionDeltas && am.normalDeltas == em.normalDeltas)
