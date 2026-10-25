@@ -1,6 +1,6 @@
 {
-  "reviewed": "2026-10-24",
-  "revision": "0033403697ddf9ea07fc01c3635daa4847c7239f",
+  "reviewed": "2026-10-25",
+  "revision": "2c33e6e3c7fb989a820e10fdc4917cb9f4f8faaf",
   "components": [
     {
       "id": "character-maker",
@@ -184,9 +184,9 @@
       "group": "Priority",
       "stage": "Infancy",
       "summary": "A useful bounded execution subset exists; general compatibility is early.",
-      "available": "Translated profiles and three exact-revision native adapters: Mute, StudioAccessoryNames and HideAllUI. Selected mount, cancellation, failure isolation and save/restore workflows are exercised. Native save/reopen now retains queued destruction roots without replaying Awake. Rejected frames restore exact route history, including irregular time steps and lazy-clock ownership. Direct translated-profile/native loading and saved scene open, undo and redo reject incompatible candidate pairs before changing the live session.",
+      "available": "Translated profiles and three exact-revision native adapters: Mute, StudioAccessoryNames and HideAllUI. Selected mount, cancellation, failure isolation and save/restore workflows are exercised. Native save/reopen now retains queued destruction roots without replaying Awake. Rejected frames restore exact route history, including irregular time steps and lazy-clock ownership. Direct translated-profile/native loading and saved scene open, undo and redo reject incompatible candidate pairs before changing the live session. Disposing a temporary Studio model now releases its focus observers.",
       "remaining": "General DLL, Harmony, coroutine and Unity compatibility, original save adapters, and broader lifecycle coverage. Initialization that changes candidate topology is rejected; library installation retains a separate attachment-read boundary.",
-      "evidence": "Metadata inventory does not establish loadability. Direct mixed-graph rejection passed 13 Engine and 38 final Release app checks. Saved candidate restoration passes 16 focused Engine and 71 integrated app checks, preserving state and frames on rejection except the expected history error status. Original tampered-file errors retain precedence. Route-only checkpoint costs have a bounded quiet measurement; graph validation cost was not timed.",
+      "evidence": "Metadata inventory does not establish loadability. Direct mixed-graph rejection passed 13 Engine and 38 final Release app checks. Saved candidate restoration passes 16 focused Engine and 71 integrated app checks, preserving state and frames on rejection except the expected history error status. Original tampered-file errors retain precedence. Route-only checkpoint costs have a bounded quiet measurement; graph validation cost was not timed. Temporary-owner disposal passes 59 focused and 132 lifecycle app checks; the two retained focus tokens per disposed owner are released. This does not establish an RSS or timing improvement.",
       "docs": [
         [
           "Execution and persistence",
@@ -207,6 +207,10 @@
         [
           "Saved candidate graph restoration",
           "docs/reference/mods/plugin-execution.md#saved-profile-and-native-graph-restoration-242"
+        ],
+        [
+          "Temporary owner disposal",
+          "docs/reference/mods/native-adapters.md#temporary-studio-owner-disposal-247"
         ]
       ]
     },
