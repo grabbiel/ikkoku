@@ -3360,7 +3360,7 @@ extension PluginLibraryScenario {
                 try rejection("undoAttachment", expected: gate, history: true) { studio.undo() }
                 studio.undoStack = []; studio.redoStack = [candidate]
                 try rejection("redoAttachment", expected: gate, history: true) { studio.redo() }
-                try rejection("nativePoison", expected: arithmetic) { try studio.loadScene(from: scene("poison")) }
+                try rejection("nativePoison", expected: gate) { try studio.loadScene(from: scene("poison")) }
                 try rejection("nativeTopology", expected: topology) { try studio.loadScene(from: scene("topology")) }
 
                 // Failed open must not steal or cancel another current request.

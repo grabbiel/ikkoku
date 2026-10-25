@@ -1113,11 +1113,25 @@ private enum LibraryAttachmentRestoreFixture {
     do {
         _ = try SourceStudioPluginSession(selection: f.selection, resolution: f.resolution,
             configuration: f.configuration, document: saved, restoring: state, attachment: attachment)
-    } catch SourcePluginError.invalid(let reason) where !poison { message = reason }
-      catch SourcePluginError.runtime(let reason) where poison { message = reason }
-    #expect(reads == 2)
-    #expect(message == (poison ? "Unsupported arithmetic operator or Int32 arithmetic." : "Synthetic installation attachment gate"))
+    } catch SourcePluginError.invalid(let reason) { message = reason }
+    // Each API expression checks the recorded host fault immediately. The
+    // second read and the later poison initializer are never evaluated here.
+    #expect(reads == 1)
+    #expect(message == "Synthetic installation attachment gate")
     #expect(try fresh.savedDocument() == saved)
+    if poison {
+        reads = 0; message = nil
+        let successful: SourceStudioPluginWorld.AttachmentResolver = { _, _ in
+            reads += 1; return (matrix_identity_float4x4, simd_quatf(angle: 0, axis: SIMD3<Float>(0, 1, 0)))
+        }
+        do {
+            _ = try SourceStudioPluginSession(selection: f.selection, resolution: f.resolution,
+                configuration: f.configuration, document: saved, restoring: state, attachment: successful)
+        } catch SourcePluginError.runtime(let reason) { message = reason }
+        #expect(reads == 2)
+        #expect(message == "Unsupported arithmetic operator or Int32 arithmetic.")
+        #expect(try fresh.savedDocument() == saved)
+    }
 }
 
 @Test func sourceStudioLibraryRestoreChangedBindingsRejectBeforeInitializerReads() throws {
