@@ -2120,6 +2120,56 @@
       "timeout": 900
     },
     {
+      "id": "studio-scenario-background-build",
+      "argv": [
+        ".local/build/Build/Products/Debug/Ikkoku.app/Contents/MacOS/Ikkoku"
+      ],
+      "fixtures": [
+        {
+          "env": "IKKOKU_SOURCE_SCENE",
+          "kind": "file",
+          "from": "IKKOKU_STUDIO_SCENARIO_SCENE"
+        },
+        {
+          "env": "IKKOKU_SOURCE_AVATAR",
+          "kind": "file"
+        },
+        {
+          "env": "IKKOKU_MAKER_LIBRARY",
+          "kind": "file"
+        },
+        {
+          "env": "IKKOKU_STUDIO_ANIMATION_CATALOG",
+          "kind": "file"
+        },
+        {
+          "env": "IKKOKU_STUDIO_LOOK_SETTINGS",
+          "kind": "file"
+        },
+        {
+          "env": "IKKOKU_STUDIO_ITEM_CATALOG",
+          "kind": "file"
+        }
+      ],
+      "env": {
+        "IKKOKU_STUDIO_SCENARIO": "Tools/verification/scenarios/background-build.json",
+        "IKKOKU_STUDIO_SCENARIO_REPORT": ".local/verification/reports/studio-scenario-background-build.json"
+      },
+      "referenceTier": "app-smoke",
+      "tolerance": "R7 phase 2, item 6: on the 7-character scenario scene with its converted items, each backgroundBuild step runs one operation with synchronous character builds and then with the interactive app's background builds (StudioModel.asyncSourceBuilds), waits on the main run loop until every build is installed, and requires the document summary (tree labels, kinds, names, parents, visibility, import diagnostics, status, built and retained characters, runtime cache counts) and a 512x512 render to be byte-identical: a scene import; New Scene during an import (no completion runs and the document stays empty); a second import started while the first is in flight (only the second completes); and Duplicate of character 65 and its undo (the copy and the rebuilt characters build in the background). Live animation is paused during each step so no clock moves while it waits. The scene is then exported and reimported, and character 65 must be visible.",
+      "artifacts": [
+        {
+          "path": ".local/verification/reports/studio-scenario-background-build.json",
+          "kind": "scenario-report"
+        },
+        {
+          "path": ".local/verification/scenario-exports/background-build.png",
+          "kind": "exported-scene"
+        }
+      ],
+      "timeout": 1200
+    },
+    {
       "id": "studio-scenario-reload-save-accessory-labels",
       "argv": [
         ".local/build/Build/Products/Debug/Ikkoku.app/Contents/MacOS/Ikkoku"

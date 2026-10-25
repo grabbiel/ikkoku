@@ -389,6 +389,9 @@ final class AppState {
             PerfTrace.mark("makerReady")
             created.isActiveMode = mode == .maker
             maker = created
+            // The Maker's first frame replaced the Studio's on the shared
+            // renderer; the Studio draws again unless the Maker is shown.
+            if mode != .maker { studio?.refresh() }
         }
         return maker
     }
@@ -1108,7 +1111,7 @@ final class AppState {
             if let card = try? CardIO.decode(CharacterCard.self, keyword: CardIO.cardKeyword, from: data) {
                 if mode == .studio { studio?.addCharacter(card) } else { maker?.load(card: card) }
             } else {
-                try maker?.importSourceCardSettings(url: url)
+                try ensureMaker()?.importSourceCardSettings(url: url)
                 mode = .maker
             }
         } catch { errorMessage = "Could not open card: \(error)" }

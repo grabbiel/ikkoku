@@ -1,0 +1,11 @@
+{
+  "steps": [
+    {"op": "backgroundBuild", "build": "import"},
+    {"op": "backgroundBuild", "build": "importThenNewScene"},
+    {"op": "backgroundBuild", "build": "importTwice"},
+    {"op": "backgroundBuild", "build": "duplicate", "key": 65},
+    {"op": "export", "path": ".local/verification/scenario-exports/background-build.png"},
+    {"op": "reimport", "path": ".local/verification/scenario-exports/background-build.png"},
+    {"op": "assert", "key": 65, "visible": true}
+  ]
+}
