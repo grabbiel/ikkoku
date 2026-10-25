@@ -113,11 +113,6 @@ extension StudioModel {
             sourceMapAsset = asset
             if sourceMapRequest?.converted?.file == asset.url {
                 applySourceMapAsset(asset)
-                // Startup accounting (docs/reference/performance.md): the
-                // first map drawn; later loads do not move the mark.
-                PerfTrace.mark("sourceMapReady")
-                print(String(format: "[ikkoku] source map: %d draws, %d triangles, %d texture bytes; loaded in %.1f ms on a worker, placed in %.2f ms on the main thread",
-                             sourceMapItems?.count ?? 0, asset.triangles, asset.textureBytes, asset.loadSeconds * 1000, sourceMapInstallSeconds * 1000))
                 return
             }
         case .failure(let error):
@@ -140,6 +135,15 @@ extension StudioModel {
             sourceMapFailure = error
         }
         sourceMapInstallSeconds = Double(DispatchTime.now().uptimeNanoseconds - start) / 1e9
+        if let items = sourceMapItems {
+            // Startup accounting (docs/reference/performance.md): the map
+            // placed for drawing. An import's load usually finishes before
+            // the import commits, so this runs at the commit; the report
+            // keeps the first mark.
+            PerfTrace.mark("sourceMapReady")
+            print(String(format: "[ikkoku] source map: %d draws, %d triangles, %d texture bytes; loaded in %.1f ms on a worker, placed in %.2f ms on the main thread",
+                         items.count, asset.triangles, asset.textureBytes, asset.loadSeconds * 1000, sourceMapInstallSeconds * 1000))
+        }
         publishSourceMapLine()
         refresh()
     }

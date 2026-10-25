@@ -59,6 +59,7 @@ Map 33's conversion has 8 merged draws for every sun type. Its 7 base textures a
   - A finished load nobody took is released.
 - **Textures.** Textures are registered privately (`cacheNew: false`). `release()` retires meshes and textures through `ResourceStore.retire(meshes:)` and the new `retire(textures:)`, so a frame already in flight keeps them until a later frame is prepared.
 - **Placement.** `SourceStudioMapPlacement.mapRootMatrix` computes `T(pos) · R(UnityCoordinates.eulerDegrees(rot))` in the engine basis, which is B · M_unity · B with B = diag(1, 1, -1, 1). A non-finite component is refused by name. `mapRoot` parts are drawn at `root × local`, and `scene` parts at their authored matrix.
+- **Timing.** Each placement sets the `sourceMapReady` startup mark (the perf report keeps the first) and prints `[ikkoku] source map: <draws>, <triangles>, <texture bytes>; loaded in <ms> on a worker, placed in <ms> on the main thread`. An import's load usually ends before the import commits, so the map is placed at the commit.
 - **Sun type.** `sunTypeKey` maps 0–2 to themselves and any other value to -1, and parts not visible for that key are skipped.
 - **Draws and picks.** Every map draw has `objectID` 0, `pickOccluder` (new on `RenderItem`), no shadow casting, no outline, and `order` 100, which puts it after the characters. The pick pass draws pick occluders with id 0. A pick or hover over map pixels therefore selects and highlights nothing, while a character in front of a wall still picks. Gizmos still draw on top.
 - **Status line.** `sourceMapLine` sits under the Studio status line (`studio.status.map`). Its forms:
@@ -172,7 +173,22 @@ Phase A wrote its copies under `.local/sta11a-maps/fetch-a/source/`. They were t
 
 ## Performance
 
-PERF-PENDING
+Release, on the reference machine, in one quiet window. The full tables are in [performance: ST-A11](../performance.md#st-a11-original-studio-maps).
+
+- **Import.** The map takes 73–83 ms on a GCD worker beside the character builds. On the main thread it costs only the 24 KB catalog read at import and 0.01 ms of placement at the commit.
+  - The showoff scene is ready at 1.45 s against 1.47 s without the map.
+  - The main thread is busy 674 against 708 ms until then.
+  - So no import time is added, in wall time or on the main thread.
+- **First draw.** The map draws in the first frame after the import's commit (`sourceSceneReady`). The window's first frame is unchanged at 0.45 s.
+- **GPU memory.** Metal grows by 52.5 MB, and the peak footprint by 50–62 MB.
+- **Steady state.**
+  - `studio-idle`: GPU +0.10 ms per frame; `refresh()` +0.07 ms at 30 per second.
+  - `studio-orbit-bursts`: the main thread and draw CPU are unchanged.
+  - With the room fully in view, offscreen at 1996×1824, the room costs 0.40 ms of GPU per frame alone, and 0.07 ms behind the 7 characters.
+- **Base M1 (estimate).**
+  - About 0.1 s of worker load;
+  - about 1.9 ms of GPU per frame for the room filling the window, and 0.35 ms behind characters;
+  - +52 MB of Metal memory.
 
 ## What remains
 
