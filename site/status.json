@@ -1,6 +1,6 @@
 {
   "reviewed": "2026-10-25",
-  "revision": "4d6af99f16c4f2ace4f85e624c73c74a7cec24ab",
+  "revision": "d9944f9221fedb58d89a8285f2b07c0249b7fc86",
   "components": [
     {
       "id": "character-maker",
@@ -192,9 +192,9 @@
       "group": "Priority",
       "stage": "Infancy",
       "summary": "A useful bounded execution subset exists; general compatibility is early.",
-      "available": "Translated profiles and three exact-revision native adapters: Mute, StudioAccessoryNames and HideAllUI. Selected mount, cancellation, failure isolation and save/restore workflows are exercised. Native save/reopen now retains queued destruction roots without replaying Awake. Rejected frames restore exact route history, including irregular time steps and lazy-clock ownership. Direct translated-profile/native loading and saved scene open, undo and redo reject incompatible candidate pairs before changing the live session. Disposing a temporary Studio model now releases its focus observers.",
-      "remaining": "General DLL, Harmony, coroutine and Unity compatibility, original save adapters, and broader lifecycle coverage. Initialization that changes candidate topology is rejected; library installation retains a separate attachment-read boundary.",
-      "evidence": "Metadata inventory does not establish loadability. Direct mixed-graph rejection passed 13 Engine and 38 final Release app checks. Saved candidate restoration passes 16 focused Engine and 71 integrated app checks, preserving state and frames on rejection except the expected history error status. Original tampered-file errors retain precedence. Route-only checkpoint costs have a bounded quiet measurement; graph validation cost was not timed. Temporary-owner disposal passes 59 focused and 132 lifecycle app checks; the two retained focus tokens per disposed owner are released. This does not establish an RSS or timing improvement.",
+      "available": "Translated profiles and three exact-revision native adapters: Mute, StudioAccessoryNames and HideAllUI. Selected mount, cancellation, failure isolation and save/restore workflows are exercised. Native save/reopen now retains queued destruction roots without replaying Awake. Rejected frames restore exact route history, including irregular time steps and lazy-clock ownership. Direct translated-profile/native loading and saved scene open, undo and redo reject incompatible candidate pairs before changing the live session. Disposing a temporary Studio model now releases its focus observers. Native library-backed scene open, undo and redo can now read attachments during read-only initialization using the candidate scene; the prepared session is reused after acceptance.",
+      "remaining": "General DLL, Harmony, coroutine and Unity compatibility, original save adapters, and broader lifecycle coverage. Initialization that changes candidate state is rejected; initial library installation retains a separate attachment-read boundary.",
+      "evidence": "Metadata inventory does not establish loadability. Direct mixed-graph rejection passed 13 Engine and 38 final Release app checks. Saved candidate restoration passes 16 focused Engine and 71 integrated app checks, preserving state and frames on rejection except the expected history error status. Original tampered-file errors retain precedence. Route-only checkpoint costs have a bounded quiet measurement; graph validation cost was not timed. Temporary-owner disposal passes 59 focused and 132 lifecycle app checks; the two retained focus tokens per disposed owner are released. This does not establish an RSS or timing improvement. Library-backed attachment restoration passes 9 focused Engine invocations and 105 save/reopen app checks, including cold candidates, warm-scene isolation, repeated read failures, exact rollback and cancellation. No timing or allocation improvement is claimed.",
       "docs": [
         [
           "Execution and persistence",
@@ -219,6 +219,10 @@
         [
           "Temporary owner disposal",
           "docs/reference/mods/native-adapters.md#temporary-studio-owner-disposal-247"
+        ],
+        [
+          "Candidate attachment restoration",
+          "docs/reference/mods/plugin-execution.md#candidate-owned-library-attachment-restoration-250"
         ]
       ]
     },
