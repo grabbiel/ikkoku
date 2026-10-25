@@ -127,7 +127,11 @@ private let cameraA = TopologyNode.camera(0, active: true)
 private func folderH(_ children: [TopologyNode] = [.item(7, [])]) -> TopologyNode { .folder(6, children) }
 private let routeR = TopologyNode.route(8, [.folder(9, [])])
 private func characterC(_ attached: [TopologyNode] = [.folder(11, [])]) -> TopologyNode {
-    .character(10, [(0, []), (7, attached)])
+    // Explicit Int32 points: older compilers do not infer literals through
+    // an unlabeled-to-labeled tuple conversion.
+    let groups: [(point: Int32, children: [TopologyNode])] = [(point: Int32(0), children: [TopologyNode]()),
+                                                             (point: Int32(7), children: attached)]
+    return .character(10, groups)
 }
 private let itemK = TopologyNode.item(12, [])
 private func base(sunCaster: Int32 = -1, trailer: Data = Data()) -> TopologyScene {
@@ -247,6 +251,38 @@ private func refusal(_ body: () throws -> Any) -> String {
     let back = try away.editedData(.init(transforms: [.init(.object(7), transform: change(TopologyScene.transform(7)))],
                                          reparents: [.init(object: 7, parent: 6)]))
     #expect(back == scene.data)
+}
+
+@Test func sourceSceneTopologyDeletesInsideARecordMovedOutOfADeletedFolder() throws {
+    // CharaStudio: move folder B (22) out of folder A (20) to the root, delete
+    // B's child item C (23, with its folder 24), then delete A. C leaves A
+    // with B, so it is deleted on its own, not "with its parent".
+    let folderB = TopologyNode.folder(22, [.item(23, [.folder(24, [])]), .light(25)])
+    let scene = TopologyScene(roots: [cameraA, .folder(20, [folderB, .light(21)]), itemK])
+    let original = try document(scene)
+    let deletions: Set<Int32> = [20, 23]
+    let reparents: [SourceSceneEdits.Reparent] = [.init(object: 22, parent: nil)]
+    let plan = try SourceSceneTopology.plan(original.snapshot, deletions: deletions, reparents: reparents)
+    #expect(plan.deleted == Set<Int32>([20, 21, 23, 24]) && plan.moved == Set<Int32>([22]))
+    let moved: [Float] = [1, 2, 3, 0, 45, 0, 1, 1, 1]
+    let result = try original.editedData(.init(transforms: [.init(.object(22), transform: change(moved))],
+                                               deletions: deletions, reparents: reparents))
+    // Independent serialization of the final tree: A is gone, B is the last
+    // root with its own key and the re-authored transform, without C.
+    var expected = TopologyScene(roots: [cameraA, itemK, .folder(22, [.light(25)])])
+    expected.transforms[22] = moved
+    #expect(result == expected.data)
+    let reloaded = try KoikatsuSceneReader.decodeDocument(result).snapshot
+    #expect(reloaded.roots.map(\.sourceKey) == [Int32(0), 12, 22])
+    #expect(reloaded.roots.allSatisfy { $0.rootDictionaryKey == $0.sourceKey })
+    #expect(reloaded.roots.last?.children.map(\.sourceKey) == [Int32(25)])
+    // The app derivation from that final tree gives the same edits.
+    let survivors: [SourceSceneTopology.Placement] = [.init(key: 0, parent: nil), .init(key: 12, parent: nil),
+                                                      .init(key: 22, parent: nil), .init(key: 25, parent: 22)]
+    let derived = try SourceSceneTopology.edits(from: original.snapshot, survivors: survivors)
+    #expect(derived.deletions == deletions && derived.reparents == reparents)
+    // Without the move, C is still inside the deleted A: listing it is refused.
+    #expect(refusal { try original.editedData(.init(deletions: deletions)) }.contains("already deleted with its parent"))
 }
 
 @Test func sourceSceneTopologyDerivesEditsFromTheFinalTree() throws {

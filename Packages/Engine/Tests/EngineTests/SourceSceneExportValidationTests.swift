@@ -102,7 +102,7 @@ private func exportValidationDocument(_ source: KoikatsuSceneDocument, rendered:
     // are not.
     var missing = baseline; missing.objects.removeLast()
     try SourceSceneExportValidation.validate(missing, against: source.snapshot)
-    #expect(try SourceSceneExportValidation.topologyEdits(missing, against: source.snapshot).deletions == [21])
+    #expect(try SourceSceneExportValidation.topologyEdits(missing, against: source.snapshot).deletions == Set<Int32>([21]))
     var detached = baseline; detached.objects.removeAll { $0.sourceObjectKey == 11 }
     #expect(throws: SourceSceneTopologyError.self) { try SourceSceneExportValidation.validate(detached, against: source.snapshot) }
     var added = baseline; added.objects.append(StudioObject(name: "Folder", kind: .folder))

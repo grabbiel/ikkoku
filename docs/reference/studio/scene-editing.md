@@ -92,7 +92,7 @@ The rules come from the recovered CharaStudio `Assembly-CSharp.dll` (SHA-256 `90
 - **Deletion** drops the record's bytes, subtree included, from the list that owns it. It rewrites that list's Int32 count: the root count, a folder, item or route child count, or a character's accessory group count. All other records keep their bytes and keys.
 - **A move** cuts the record's bytes, subtree unchanged, and appends them to the end of the new parent's list: a folder's child list, or the root dictionary under the record's own key. A record that was already a root keeps its original root-key bytes. Both affected counts are rewritten.
 
-  The caller pairs each move with an ordinary `.object` transform edit holding the re-authored local placement (`SourceStudioWorldTransform.reparented`: world position and rotation kept, scale unchanged), matching what `OnAttach`/`OnDetach` author. A record moved out of a folder that the same export deletes survives, like moving it out and then deleting the folder in CharaStudio.
+  The caller pairs each move with an ordinary `.object` transform edit holding the re-authored local placement (`SourceStudioWorldTransform.reparented`: world position and rotation kept, scale unchanged), matching what `OnAttach`/`OnDetach` author. A record moved out of a folder that the same export deletes survives, like moving it out and then deleting the folder in CharaStudio. Records inside that moved subtree can still be deleted on their own: moving folder B out of folder A, deleting B's child C, then deleting A is the deletions {A, C} plus the move of B, and C is not "already deleted" with A.
 - **Sun caster.** `sunCaster` is written as −1 when its record was deleted.
 - **Looked-through camera.** If an export has topology edits and no explicit camera-active edit, the saved winner must stay the camera that was active at import. If that camera was deleted, there must be no winner, as `Studio.DeleteCamera` leaves it. When the edited file's load-order winner differs, the writer flips exactly the camera flags that differ.
 - **Other edits.** All other destinations still apply, and their byte patches travel with the moved bytes. An edit to a deleted record is refused.
@@ -108,7 +108,7 @@ The rules come from the recovered CharaStudio `Assembly-CSharp.dll` (SHA-256 `90
 | Case | Reason |
 | --- | --- |
 | Deleting an object attached to a character's accessory point on its own | CharaStudio allows it (OCIChar.cs:577 removes it from the group), but no such file has been reloaded in the original player yet. Deleting the character removes it with its subtree. |
-| Listing a record whose ancestor is also deleted | Only the top of a deleted subtree is listed. |
+| Listing a record whose ancestor is also deleted | Only the top of a deleted subtree is listed. The ancestor walk stops at the first moved ancestor, which takes the record out of the deleted subtree. |
 | Deleting, or moving off the root, a root whose dictionary key differs from its `dicKey` | `DeleteInfo` removes roots by `dicKey`. |
 | Any deletion when the scene carries plug-in (ExtendedSave) data | Plug-ins key their data by `dicKey` and rewrite it from live objects when CharaStudio saves. Deletion is allowed only with no trailer, or with one KKEx block holding a nil or empty map. |
 | A scene edit targeting a deleted record | The record is gone. |

@@ -101,15 +101,23 @@ public enum SourceSceneTopology {
         let tree = Tree(snapshot)
         func fail(_ reason: String) -> SourceSceneTopologyError { .unsupported(reason) }
         func kind(_ key: Int32) -> KoikatsuObjectKind { tree.records[key]!.kind }
-        func ancestors(_ key: Int32) -> [Int32] {
-            var result: [Int32] = [], current = tree.parent[key] ?? nil
-            while let parent = current { result.append(parent); current = tree.parent[parent] ?? nil }
-            return result
-        }
         // Reparenting: non-route records between the root and folders. A
         // moved record leaves with its subtree, so it survives the deletion
         // of its old parent (CharaStudio: move it out, then delete).
         let movedKeys = Set(reparents.map(\.object))
+        /// The original ancestors a record still has after the moves: the
+        /// walk stops at the first moved ancestor, which takes the record
+        /// with it (move B out of folder A, delete B's child C, delete A:
+        /// C is not deleted with A).
+        func ancestors(_ key: Int32) -> [Int32] {
+            var result: [Int32] = [], current = tree.parent[key] ?? nil
+            while let parent = current {
+                result.append(parent)
+                if movedKeys.contains(parent) { break }
+                current = tree.parent[parent] ?? nil
+            }
+            return result
+        }
         // Deletion: the top of each subtree, never an accessory child alone.
         var deleted = Set<Int32>()
         for key in deletions.sorted() {

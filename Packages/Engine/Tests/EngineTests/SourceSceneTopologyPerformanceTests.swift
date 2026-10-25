@@ -30,7 +30,7 @@ private func topologyPerfScene() throws -> (data: Data, document: KoikatsuSceneD
 }
 
 private func topologyPerfMoved(_ transform: KoikatsuChangeAmount) -> KoikatsuChangeAmount {
-    KoikatsuChangeAmount(position: transform.position + SIMD3(0.125, 0, 0), rotationDegrees: transform.rotationDegrees, scale: transform.scale)
+    KoikatsuChangeAmount(position: transform.position + SIMD3<Float>(0.125, 0, 0), rotationDegrees: transform.rotationDegrees, scale: transform.scale)
 }
 
 @Test(.enabled(if: topologyPerfEnabled, "Opt-in timing probe: IKKOKU_TOPOLOGY_PERF=1 plus IKKOKU_STUDIO_SCENARIO_SCENE"))
@@ -55,7 +55,10 @@ func sourceSceneTopologyPerformanceReparent() throws {
     }
     walk(document.snapshot.roots)
     let moved: [Int32] = [623, 65, 1129]
-    let edits = SourceSceneEdits(transforms: try moved.map { .init(.object($0), transform: topologyPerfMoved(try #require(transforms[$0]))) },
+    let transformEdits: [SourceSceneEdits.TransformEdit] = try moved.map { key in
+        SourceSceneEdits.TransformEdit(.object(key), transform: topologyPerfMoved(try #require(transforms[key])))
+    }
+    let edits = SourceSceneEdits(transforms: transformEdits,
                                  deletions: [1298],
                                  reparents: [.init(object: 623, parent: 962), .init(object: 65, parent: 626), .init(object: 1129, parent: nil)])
     let output = try document.editedData(edits)
