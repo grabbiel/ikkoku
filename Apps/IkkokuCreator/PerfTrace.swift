@@ -192,6 +192,8 @@ final class PerfTrace {
     /// The main run-loop busy periods recorded so far (the action workloads
     /// attribute them to their actions).
     var busyIntervals: [(start: CFTimeInterval, end: CFTimeInterval)] { busy }
+    /// When the busy period still running began (nil while the run loop waits).
+    var openBusyStart: CFTimeInterval? { busyStart }
     /// Startup main-thread accounting (R7 phase 2, item 6): every busy period
     /// from `appStateInit` until the source scene is ready, recorded before
     /// any recording window. The launch work before the main run loop first
@@ -660,11 +662,13 @@ final class PerfTrace {
     /// how many exceeded 50 and 100 ms. `ready` is false without a startup scene.
     private func startupMainThread() -> [String: Any] {
         guard let ready = startupReady else { return ["ready": false] }
-        let lengths = startupBusy.filter { $0.start <= ready }.map { ($0.end - $0.start) * 1000 }
+        let periods = startupBusy.filter { $0.start <= ready }
+        let lengths = periods.map { ($0.end - $0.start) * 1000 }
         return [
             "ready": true,
             "readySeconds": PerfTrace.round(secondsSinceProcessStart(media: ready)),
-            "windowMs": PerfTrace.round((ready - originMedia) * 1000),
+            // From appStateInit to the end of the last counted period.
+            "windowMs": PerfTrace.round((max(ready, periods.map(\.end).max() ?? ready) - originMedia) * 1000),
             "busyMs": PerfTrace.round(lengths.reduce(0, +)),
             "longestStallMs": PerfTrace.round(lengths.max() ?? 0),
             "periods": lengths.count,

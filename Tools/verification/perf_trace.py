@@ -310,9 +310,11 @@ def uncomposited(report):
 INPUTLESS_WORKLOADS = {"studio-idle", "maker-idle", "studio-native", "viewport-lifecycle", "startup", "studio-static",
                       "studio-duplicate", "studio-undo-delete"}
 
-# Workloads whose window is minimized on purpose: their drawables are not all
-# shown, so the composited check does not apply and their frame rates are not cited.
-PRESENTATION_EXEMPT = {"viewport-lifecycle"}
+# Workloads whose window is minimized on purpose, or whose main thread may
+# stall for seconds on purpose (the history workloads time a blocking action
+# before R7 phase 2, item 6): their drawables are not all shown, so the
+# composited check does not apply and their frame rates are not cited.
+PRESENTATION_EXEMPT = {"viewport-lifecycle", "studio-duplicate", "studio-undo-delete"}
 
 
 def lifecycle_problem(report):

@@ -452,7 +452,9 @@ final class PerfWorkloadDriver {
     /// before the call counts from the call; one that is still running when
     /// the action is ready counts whole.
     private func finishActions() {
-        let busy = trace.busyIntervals
+        // The period still running (the stop timer may fire in the same
+        // run-loop pass as a long action) counts until now.
+        let busy = trace.busyIntervals + (trace.openBusyStart.map { [($0, CACurrentMediaTime())] } ?? [])
         trace.details["actions"] = finishedActions.map { action -> [String: Any] in
             let overlapping = busy.filter { $0.end > action.start && $0.start <= action.ready }
             let lengths = overlapping.map { ($0.end - max($0.start, action.start)) * 1000 }
