@@ -191,6 +191,7 @@ public sealed class OriginalCharacterProbe : BaseUnityPlugin
         Finish(error!=null?error:lookError); // a look failure must not be reported as a clean run
     }
     void Finish(string error) {
+        RestoreFaceInputRetention();
         File.WriteAllText(Path.Combine(folder,"status.json"),J(new Dictionary<string,object>{{"error",error},{"unity",Application.unityVersion},{"device",SystemInfo.graphicsDeviceName},{"graphicsAPI",SystemInfo.graphicsDeviceVersion},{"colorSpace",QualitySettings.activeColorSpace.ToString()}}));
         // ST-T07i: written only in look mode (also when a phase failed, so the
         // partial trace reaches --collect); absent otherwise.
@@ -318,6 +319,15 @@ public sealed class OriginalCharacterProbe : BaseUnityPlugin
         }
         character=modelSex==0 ? Manager.Character.Instance.CreateMale(0,null,1,file,true)
             : Manager.Character.Instance.CreateFemale(null,1,file,true);
+        if(captureFaceCompositeInputs) {
+            // CreateFaceTexture normally clears creator input references after
+            // composing. Retain them for exact bound-object observation only.
+            // This also temporarily retains other creators' inputs; it is not
+            // evidence of the default input lifetime or source runtime cost.
+            faceOriginalReleaseCustomInputTexture=character.releaseCustomInputTexture;
+            if(!faceOriginalReleaseCustomInputTexture.Value)throw new Exception("Unexpected original input-retention policy");
+            character.releaseCustomInputTexture=false;
+        }
         // Moment (a): right after CreateFemale returns, before LoadAsync starts.
         RecordFingers("afterCreateFemale");
         character.name="IkkokuControlledClothedFixture";
@@ -577,7 +587,16 @@ public sealed class OriginalCharacterProbe : BaseUnityPlugin
         }
         return new Dictionary<string,object>{{"name",material.name},{"shader",material.shader.name},{"supported",material.shader.isSupported},{"queue",material.renderQueue},{"keywords",material.shaderKeywords},{"properties",properties}};
     }
+    bool? faceOriginalReleaseCustomInputTexture;
+    void RestoreFaceInputRetention() {
+        if(character!=null && faceOriginalReleaseCustomInputTexture.HasValue)
+            character.releaseCustomInputTexture=faceOriginalReleaseCustomInputTexture.Value;
+    }
     object ExportFaceCompositeInputs() {
+        Dictionary<string,object> result=null;
+        try {
+        if(!faceOriginalReleaseCustomInputTexture.HasValue || !faceOriginalReleaseCustomInputTexture.Value || character.releaseCustomInputTexture)
+            throw new Exception("Face input observation requires the explicitly retained source inputs");
         var control=character.customTexCtrlFace;
         var renderer=character.rendFace;
         var component=character.objHead.GetComponent<ListInfoComponent>();
@@ -604,7 +623,9 @@ public sealed class OriginalCharacterProbe : BaseUnityPlugin
             || renderer.sharedMaterials[0].GetTexture("_MainTex")!=target || draw.GetTexture("_MainTex")!=target
             || target.width!=1024 || target.height!=1024 || target.format!=RenderTextureFormat.ARGB32 || !target.useMipMap)
             throw new Exception("Face composite creator/draw/target chain differs");
-        var result=new Dictionary<string,object>{{"sex",character.sex},{"exType",character.exType},{"hiPoly",character.hiPoly},
+        result=new Dictionary<string,object>{{"sex",character.sex},{"exType",character.exType},{"hiPoly",character.hiPoly},
+            {"originalReleaseCustomInputTexture",faceOriginalReleaseCustomInputTexture.Value},{"observedReleaseCustomInputTexture",character.releaseCustomInputTexture},
+            {"observationScope","Creator inputs retained before LoadAsync; other creators temporarily retained too; no default-lifetime or runtime-cost claim"},
             {"savedHeadID",character.fileFace.headId},{"loadedHeadID",character.infoHead.Id},{"componentHeadID",info.Id},
             {"loadedHeadName",character.objHead.name},{"loadedHeadCatalog",catalog},{"renderer",renderer.name},{"rendererPath",RelativePath(renderer.transform)},
             {"enabled",renderer.enabled},{"active",renderer.gameObject.activeInHierarchy},{"materialSlot",0},
@@ -616,14 +637,23 @@ public sealed class OriginalCharacterProbe : BaseUnityPlugin
             {"creatorBundle","chara/mm_base.unity3d"},{"creatorBundleSHA256",SourceBundleHash("chara/mm_base.unity3d")},
             {"assemblySHA256",Sha256File(typeof(ChaControl).Assembly.Location)}};
         var inputs=new Dictionary<string,object>();
+        result["inputs"]=inputs;
         foreach(var property in new[]{"_MainTex","_ColorMask","_paintmask"}) {
-            var texture=property=="_MainTex"?main:creator.GetTexture(property) as Texture2D;
+            var bound=property=="_MainTex"?(Texture)main:creator.GetTexture(property);
+            var texture=bound as Texture2D;
             string bundle=property=="_paintmask"?"chara/mm_base.unity3d":info.GetInfo(property=="_MainTex"?ChaListDefine.KeyType.MainTexAB:ChaListDefine.KeyType.ColorMaskAB);
             string name=property=="_paintmask"?"cf_face_00_mp":info.GetInfo(property=="_MainTex"?ChaListDefine.KeyType.MainTex:ChaListDefine.KeyType.ColorMaskTex);
             var loaded=CommonLib.LoadAsset<Texture2D>(bundle,name,false,property=="_paintmask"?"abdata":info.GetInfo(ChaListDefine.KeyType.MainManifest));
+            // Persist actual metadata even when a strict identity check fails.
+            inputs[property]=new Dictionary<string,object>{{"expectedBundle",bundle},{"expectedName",name},
+                {"actualNull",bound==null},{"actualName",bound==null?null:bound.name},{"actualType",bound==null?null:bound.GetType().Name},
+                {"actualInstanceID",bound==null?0:bound.GetInstanceID()},{"catalogInstanceID",loaded==null?0:loaded.GetInstanceID()},
+                {"sameCatalogObject",texture!=null && loaded!=null && texture==loaded}};
+            File.WriteAllText(Path.Combine(folder,"face-input-observation.json"),J(result));
             if(texture==null || loaded==null || texture!=loaded)throw new Exception("Face composite bound input differs from source asset: "+property);
             inputs[property]=new Dictionary<string,object>{{"bundle",bundle},{"bundleSHA256",SourceBundleHash(bundle)},{"name",name},
-                {"instanceID",texture.GetInstanceID()},{"width",texture.width},{"height",texture.height},{"format",texture.format.ToString()},
+                {"instanceID",texture.GetInstanceID()},{"catalogInstanceID",loaded.GetInstanceID()},{"sameCatalogObject",true},
+                {"width",texture.width},{"height",texture.height},{"format",texture.format.ToString()},
                 {"mipLevels",texture.mipmapCount},{"file",ExportTexture(texture)},
                 {"scale",V(creator.GetTextureScale(property))},{"offset",V(creator.GetTextureOffset(property))}};
         }
@@ -642,7 +672,38 @@ public sealed class OriginalCharacterProbe : BaseUnityPlugin
         result["selection"]=new Dictionary<string,object>{{"coordinateType",character.fileStatus.coordinateType},{"enableMakeup",character.nowCoordinate.enableMakeup},
             {"paintId",makeup.paintId},{"cheekId",makeup.cheekId},{"lipLineId",character.fileFace.lipLineId},{"moleId",character.fileFace.moleId},
             {"skinMainColor",V(character.fileBody.skinMainColor)},{"skinSubColor",V(character.fileBody.skinSubColor)}};
+        // Release using the original method, then bypass ExportTexture's object
+        // deduplication for an independent second read of the same completed RT.
+        string before=(string)result["targetFile"];
+        if(!character.ReleaseFaceCustomTexture())throw new Exception("Original face input release failed");
+        var cleared=new Dictionary<string,object>();
+        foreach(var property in new[]{"_MainTex","_ColorMask","_Texture3","_Texture4","_Texture5","_Texture6","_Texture7"}) {
+            bool isNull=creator.GetTexture(property)==null;cleared[property]=isNull;
+            if(!isNull)throw new Exception("Original face input release did not clear "+property);
+        }
+        if(control.GetCreateTexture()!=target || control.matDraw!=draw || renderer.sharedMaterials[0]!=draw || draw.GetTexture("_MainTex")!=target)
+            throw new Exception("Face release changed the target/draw identity");
+        string after=ExportTextureAgain(target);
+        string beforeHash=Sha256File(Path.Combine(folder,before)),afterHash=Sha256File(Path.Combine(folder,after));
+        result["releaseObservation"]=new Dictionary<string,object>{{"method","ReleaseFaceCustomTexture"},{"cleared",cleared},
+            {"beforeFile",before},{"afterFile",after},{"beforeSHA256",beforeHash},{"afterSHA256",afterHash},
+            {"targetInstanceID",target.GetInstanceID()},{"drawMaterialInstanceID",draw.GetInstanceID()},{"sameTargetAndDraw",true}};
+        if(beforeHash!=afterHash)throw new Exception("Original face target changed after releasing input references");
         return result;
+        } finally {
+            RestoreFaceInputRetention();
+            if(result!=null) {
+                result["restoredReleaseCustomInputTexture"]=character.releaseCustomInputTexture;
+                File.WriteAllText(Path.Combine(folder,"face-input-observation.json"),J(result));
+            }
+        }
+    }
+    string ExportTextureAgain(Texture texture) {
+        int id=texture.GetInstanceID();string previous;
+        if(!textureFiles.TryGetValue(id,out previous))throw new Exception("Fresh repeat requires an earlier target readback");
+        textureFiles.Remove(id);
+        try { return ExportTexture(texture); }
+        finally { textureFiles[id]=previous; }
     }
     string SourceBundleHash(string bundle) { return Sha256File(Path.Combine(Path.Combine(Path.GetDirectoryName(Application.dataPath),"abdata"),bundle)); }
     static Color ParseOpaqueSkinColor(string value) {
