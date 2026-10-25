@@ -44,9 +44,9 @@ import Renderer
 /// model's fixed-rate step. A render-thread callback that `LiveStepPacer`
 /// says is due asks the main thread for one step (`pacedStep`, in the main
 /// run loop's default mode, like the timer it replaces), before it draws; the
-/// answer goes back to the pacer. One request is in flight at a time. The
-/// step's submit wakes the link like any other, so playback keeps the full
-/// rate. `IKKOKU_PERF_LIVE_PACING=timer` (no `pacedStep`) is a measurement
+/// answer goes back to the pacer. One request is in flight at a time. After
+/// an `.idle` answer the pacer is parked until `resumePacing`. The step's
+/// submit wakes the link like any other, so playback keeps the full rate. `IKKOKU_PERF_LIVE_PACING=timer` (no `pacedStep`) is a measurement
 /// control. See docs/reference/renderer.md, "Live pacing".
 ///
 /// Sendable invariant: `renderer`, `log`, `link`, `fullRate`, `adaptive`,
@@ -214,6 +214,16 @@ nonisolated final class ViewportRenderThread: NSObject, CAMetalDisplayLinkDelega
             control.unlock()
         }
         CFRunLoopWakeUp(main)
+    }
+
+    /// The model has something to step again: a pacer parked by an `.idle`
+    /// answer asks at the next callback, and the link returns to full rate
+    /// so that callback comes within a vsync. Safe from any thread.
+    func resumePacing() {
+        control.lock()
+        let resumed = pacer.resume()
+        control.unlock()
+        if resumed { wake() }
     }
 
     // MARK: Adaptive link rate (R7 phase 2, item 4, P2)

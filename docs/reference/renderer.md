@@ -1183,8 +1183,8 @@ Studio's 1/30 s step: the live animation, a playing timeline, playing routes
 and the plugin session. Before, a 30 Hz `Timer` on the main run loop started
 it, at a phase that drifted against the display. A step submitted just after
 a callback waited for the next one, so frames 4 vsyncs apart at 120 Hz came
-3 and 5 apart, 6–13 times a second (performance.md, "Phase 2: live
-pacing"). The parts:
+3 and 5 apart, 6–13 times a second ([performance](performance.md#phase-2-live-pacing)).
+The parts:
 
 - `LiveStepPacer` (Renderer, plain data) decides which callbacks ask for a
   step. A step is due 1/30 s after the previous one, in target-presentation
@@ -1216,21 +1216,29 @@ pacing"). The parts:
     callback, so a slow scene's animation slows down exactly as before;
   - `.idle` when there is nothing to step. That covers live animation off
     (without a playing route, as #274's guard has it), a drag, another
-    mode, a hidden Studio and `stopBenchmarkTimer`. The pacer asks again an
-    interval later, so Play or Live waits at most 1/30 s for its first step.
+    mode, a hidden Studio and `stopBenchmarkTimer`. The pacer then parks:
+    no callback asks, so an idle Studio gets no requests. The 30 Hz timer
+    still polls the status line, and when `hasLiveStepWork` (a playing
+    timeline, a running plugin session, or the live animation with a
+    character or a playing route) says there is something to step, it
+    resumes the pacer through `LivePacingOwner.resumeLiveSteps`. The render
+    thread's `resumePacing` returns the link to full rate if it was
+    parked, so the next callback asks within a vsync. Play or Live waits
+    at most about 1/30 s for its first step, as with the timer.
 
 **Attach and detach.** `ViewportNSView` paces only a handler that is a
 `LivePacedHandler`; the Maker's is not, so its link sends no requests and
 its own timer is unchanged. When the render thread starts, the view calls
 `attachLivePacing(self)`, and from then on `StudioModel.tick` only polls the
-status line. `stopRendering` and a handler change call `detachLivePacing`,
+status line and resumes a parked pacer. `stopRendering` and a handler change call `detachLivePacing`,
 and the timer steps again. The model holds the view weakly, so a view
 released without detaching also hands the step back to the timer.
 
 **Hidden, minimized, another mode.** `setVisible(false)` also tells the
 pacer, and no callback asks while the window is hidden. On visible again, the
-next callback asks at once. A Studio that is not the active mode answers
-`.idle`.
+next callback asks at once, unless the pacer is parked. A Studio that is not
+the active mode answers `.idle`, and its timer resumes nothing until it is
+active again.
 
 **What does not change.**
 
@@ -1273,12 +1281,13 @@ native scene, and `IKKOKU_PERF_BURST_LIVE=on` plays the live animation during
 - 144 Hz;
 - rate changes, including a slower link whose callbacks fall between the
   steps' vsyncs;
-- busy skips, idle polling and one request in flight;
+- busy skips, parking after an idle answer, `resume` and one request in
+  flight;
 - stale answers;
 - a hidden window and a long gap.
 
 The same tests pass under ThreadSanitizer. The app ran under
-ThreadSanitizer with 0 warnings (performance.md).
+ThreadSanitizer with 0 warnings ([performance](performance.md#correctness-of-live-pacing)).
 
 ### Picks (R7 phase 2, item 5)
 

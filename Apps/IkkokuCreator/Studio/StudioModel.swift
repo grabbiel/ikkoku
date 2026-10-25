@@ -559,15 +559,20 @@ final class StudioModel: ViewportInputHandler, LivePacedHandler {
 
     /// The 30 Hz timer: the status line, and the step when no display link
     /// paces it. While a viewport's display link paces the step
-    /// (`attachLivePacing`, R7 phase 2, live pacing), the timer only polls the
-    /// status line; the link starts each step through `displayStep`.
+    /// (`attachLivePacing`, R7 phase 2, live pacing), the link starts each
+    /// step through `displayStep`; the timer polls the status line and, when
+    /// there is something to step, resumes a link parked by an `.idle` answer.
     private func tick() {
         guard isActiveMode else { return }
         if let text = renderStatus.status(current: status, error: host.renderer.lastFrameError,
                                           statistics: host.renderer.lastFrameStatistics, now: CFAbsoluteTimeGetCurrent()) {
             status = text
         }
-        guard livePacer == nil, drag == nil else { return }
+        guard drag == nil else { return }
+        if let livePacer {
+            if hasLiveStepWork { livePacer.resumeLiveSteps() }
+            return
+        }
         PerfTrace.measure(.studioTick, "StudioTick") { _ = stepLive() }
     }
 
@@ -577,26 +582,40 @@ final class StudioModel: ViewportInputHandler, LivePacedHandler {
     /// one is attached, the timer does not step; while its window is hidden
     /// the link asks for no step, so none runs. Weak, so a viewport released
     /// without detaching hands the step back to the timer.
-    @ObservationIgnored private weak var livePacer: AnyObject?
+    @ObservationIgnored private weak var livePacer: (any LivePacingOwner)?
     /// Set by `stopBenchmarkTimer`: neither the timer nor a display link steps.
     @ObservationIgnored private var liveStepsStopped = false
 
     /// A viewport's display link starts paced steps from now on (`owner`
     /// identifies it); the timer stops stepping.
-    func attachLivePacing(_ owner: AnyObject) { livePacer = owner }
+    func attachLivePacing(_ owner: any LivePacingOwner) { livePacer = owner }
 
     /// The viewport `owner` no longer paces the step; unless another one took
     /// over, the timer steps again.
-    func detachLivePacing(_ owner: AnyObject) { if livePacer === owner { livePacer = nil } }
+    func detachLivePacing(_ owner: any LivePacingOwner) { if livePacer === owner { livePacer = nil } }
 
     /// One step asked for by the display link of the viewport that paces it:
     /// what the timer's tick did, minus the status line. `.ran` when a
     /// timeline, plugin or live step started, `.busy` when the previous live
     /// step is still running or not yet refreshed, `.idle` when there is
-    /// nothing to step.
+    /// nothing to step (the link then asks nothing until `tick` resumes it).
     func displayStep() -> LiveStepPacer.Result {
         guard livePacer != nil, !liveStepsStopped, isActiveMode, drag == nil else { return .idle }
         return PerfTrace.measure(.studioTick, "StudioTick") { stepLive() }
+    }
+
+    /// Whether a paced step has something to do: outside a drag, in the
+    /// active mode, `displayStep` answers `.idle` exactly when this is false.
+    private var hasLiveStepWork: Bool {
+        !liveStepsStopped && (timelinePlaying || (sourcePluginsRunning && sourcePluginSession != nil) || liveSourceAnimates)
+    }
+
+    /// Whether the live source animation steps. A playing route moves its
+    /// children with or without a character in the scene (a character riding
+    /// a route keeps a folder-kind entry).
+    private var liveSourceAnimates: Bool {
+        liveAnimation && (doc.objects.contains(where: { $0.kind == .character })
+                          || sourceRoutePlayState.values.contains(where: \.playing))
     }
 
     /// The step outside a drag: the timeline, the plugin session or the live
@@ -613,10 +632,7 @@ final class StudioModel: ViewportInputHandler, LivePacedHandler {
             catch { status = "Plugin execution: \(error)" }
             return .ran
         }
-        // A playing route moves its children with or without a character in
-        // the scene (a character riding a route keeps a folder-kind entry).
-        guard liveAnimation, doc.objects.contains(where: { $0.kind == .character })
-                || sourceRoutePlayState.values.contains(where: \.playing) else { return .idle }
+        guard liveSourceAnimates else { return .idle }
         // A live step still running, or settled but not yet refreshed, when
         // the timer fires (or the display link asks) is not overlapped: this
         // step is skipped and the clock does not move, as when a main-thread

@@ -25,11 +25,19 @@ protocol ViewportInputHandler: AnyObject {
 @MainActor
 protocol LivePacedHandler: AnyObject {
     /// The viewport `owner`'s display link starts the steps from now on.
-    func attachLivePacing(_ owner: AnyObject)
+    func attachLivePacing(_ owner: any LivePacingOwner)
     /// It no longer does (its thread stopped, or the handler changed).
-    func detachLivePacing(_ owner: AnyObject)
+    func detachLivePacing(_ owner: any LivePacingOwner)
     /// One step the link asked for; how it ended (`LiveStepPacer.Result`).
     func displayStep() -> LiveStepPacer.Result
+}
+
+/// The viewport whose display link starts a `LivePacedHandler`'s steps.
+@MainActor
+protocol LivePacingOwner: AnyObject {
+    /// The model has something to step again after answering `.idle`: the
+    /// link, parked since, asks at its next callback.
+    func resumeLiveSteps()
 }
 
 /// The Metal viewport. Its display link runs on its own render thread
@@ -269,4 +277,10 @@ struct ViewportView: NSViewRepresentable {
     }
     func updateNSView(_ view: ViewportNSView, context: Context) { view.handler = handler }
     static func dismantleNSView(_ view: ViewportNSView, coordinator: ()) { view.stopRendering() }
+}
+
+extension ViewportNSView: LivePacingOwner {
+    func resumeLiveSteps() {
+        if threadPaces { renderThread?.resumePacing() }
+    }
 }

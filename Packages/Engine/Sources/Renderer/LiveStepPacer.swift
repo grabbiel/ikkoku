@@ -35,9 +35,10 @@ import Foundation
 ///   the step is skipped, not retried: steps never overlap or queue, and the
 ///   next one is due an interval later, on the same grid.
 /// - `.idle`: there was nothing to step (live animation off, a drag, another
-///   mode, steps stopped). The pacer asks again an interval later, so
-///   playback that starts (live animation on, the timeline's Play) waits at
-///   most one interval for its first step, as with the timer.
+///   mode, steps stopped). The pacer parks: no callback asks until the owner
+///   calls `resume()`, which the model does once it has something to step
+///   again. An idle model is then sent no requests, and the first step after
+///   `resume()` is asked for at the next callback.
 ///
 /// While the viewport's window is not visible, no callback asks; when it is
 /// visible again the next callback asks at once. A gap of more than
@@ -65,6 +66,8 @@ public struct LiveStepPacer: Sendable, Equatable {
     /// The target of the callback whose request is still unanswered.
     public private(set) var pending: Double?
     public private(set) var visible = true
+    /// Set by an `.idle` answer: no callback asks until `resume()`.
+    public private(set) var parked = false
     private var lastTarget: Double?
 
     public init(interval: Double = LiveStepPacer.standardInterval) {
@@ -78,7 +81,7 @@ public struct LiveStepPacer: Sendable, Equatable {
     public mutating func callback(target: Double) -> Bool {
         let gap = lastTarget.map { target - $0 }
         lastTarget = target
-        guard visible, pending == nil else { return false }
+        guard visible, pending == nil, !parked else { return false }
         if let due, let gap, gap > 0, gap <= Self.resumeGap, target + gap / 2 < due { return false }
         pending = target
         return true
@@ -93,6 +96,7 @@ public struct LiveStepPacer: Sendable, Equatable {
         switch result {
         case .idle:
             due = target + interval
+            parked = true
         case .ran, .busy:
             if let due, abs(target - due) <= Self.snapTolerance {
                 // On the vsync grid: count from this callback.
@@ -115,10 +119,22 @@ public struct LiveStepPacer: Sendable, Equatable {
         due = nil
     }
 
-    /// Forgets the schedule and any unanswered request; the next callback asks.
+    /// The owner has something to step again after an `.idle` answer: the
+    /// next callback asks at once (its step is past due). Returns whether the
+    /// pacer was parked.
+    @discardableResult
+    public mutating func resume() -> Bool {
+        guard parked else { return false }
+        parked = false
+        return true
+    }
+
+    /// Forgets the schedule, any unanswered request and an `.idle` answer;
+    /// the next callback asks.
     public mutating func reset() {
         due = nil
         pending = nil
+        parked = false
         lastTarget = nil
     }
 }

@@ -9,6 +9,7 @@ private final class Pacer {
     func callback(target: Double) -> Bool { value.callback(target: target) }
     func finished(_ result: LiveStepPacer.Result, target: Double) { value.finished(result, target: target) }
     func setVisible(_ visible: Bool) { value.setVisible(visible) }
+    func resume() -> Bool { value.resume() }
 
     /// Runs `count` callbacks `period` apart from `start`, answering every
     /// request with `answer(index)` at once. Returns the asking callbacks' indices.
@@ -107,14 +108,21 @@ struct LiveStepPacerTests {
         #expect(asked.filter { results[$0] == .ran }.count == 8)
     }
 
-    /// Nothing to step (live animation off, a drag, another mode): asked again
-    /// an interval later; the first step that runs then counts from its own
-    /// callback.
-    @Test func anIdleAnswerAsksAgainAnIntervalLater() {
+    /// Nothing to step (live animation off, a drag, another mode): the pacer
+    /// parks and no callback asks until the model resumes it. The next
+    /// callback then asks at once, and the steps count from it.
+    @Test func anIdleAnswerParksUntilResumed() {
         let pacer = Pacer()
-        var answers: [LiveStepPacer.Result] = Array(repeating: .idle, count: 3) + Array(repeating: .ran, count: 10)
-        let asked = pacer.run(period: 1.0 / 120, count: 40) { _ in answers.removeFirst() }
-        #expect(asked == Array(stride(from: 0, to: 40, by: 4)))
+        #expect(pacer.run(period: 1.0 / 120, count: 40) { _ in .idle } == [0])
+        #expect(pacer.value.parked)
+        #expect(pacer.resume())
+        #expect(!pacer.resume())
+        #expect(pacer.run(period: 1.0 / 120, count: 20, start: 1000 + 40.0 / 120) == [0, 4, 8, 12, 16])
+        // A reset forgets the idle answer as well.
+        _ = pacer.run(period: 1.0 / 120, count: 1, start: 1001) { _ in .idle }
+        #expect(pacer.value.parked)
+        pacer.value.reset()
+        #expect(!pacer.value.parked && pacer.callback(target: 1002))
     }
 
     /// One request at a time: while one is unanswered no callback asks, and
