@@ -94,10 +94,31 @@ final class SourceMaterialCompositor {
         self.device = device
         let options = MTLCompileOptions(); options.fastMathEnabled = false
         let library = try device.makeLibrary(source: Self.msl, options: options)
-        guard let function = library.makeFunction(name: "source_material_compose"), let queue = device.makeCommandQueue() else {
+        guard let function = library.makeFunction(name: "source_material_compose"), let queue = Self.sharedQueue(for: device) else {
             throw SourceCharacterCardError.invalid("Metal material compositor is unavailable.")
         }
         self.pipeline = try device.makeComputePipelineState(function: function); self.queue = queue
+    }
+
+    /// R7 phase 2 item 6 follow-up: every compositor of a device submits on
+    /// one command queue. A compositor is made per composition, and the first
+    /// command buffer of a new queue waited about 8 ms before the GPU started
+    /// it (`kernelStartTime` to `gpuStartTime`): the 21 compositions of the
+    /// 7-character scenario scene waited 173 ms for 1.6 ms of GPU work, on the
+    /// Studio's build queue. The queue only orders submissions; each batch
+    /// still encodes the same kernel on the same inputs and waits for its own
+    /// command buffer, so every output texel is unchanged. A command queue is
+    /// thread-safe; the Studio's builds and the Maker's may share it.
+    private static let queueLock = NSLock()
+    nonisolated(unsafe) private static var queues: [UInt64: any MTLCommandQueue] = [:]
+
+    static func sharedQueue(for device: any MTLDevice) -> (any MTLCommandQueue)? {
+        queueLock.lock(); defer { queueLock.unlock() }
+        if let queue = queues[device.registryID] { return queue }
+        guard let queue = device.makeCommandQueue() else { return nil }
+        queue.label = "Source material composition"
+        queues[device.registryID] = queue
+        return queue
     }
 
     func makeBatch(maximumLogicalInputBytes: Int, timings: SourceAppearanceTimings?) throws -> SourceMaterialMetalBatch {
