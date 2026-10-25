@@ -2024,6 +2024,28 @@ struct StudioScenario: Decodable {
                 let added = studio.doc.objects.count - before
                 record(step, added > 0, added > 0 ? "duplicated \(describe(step)): \(added) objects added; \(studio.status)"
                                                   : "duplicate: nothing was added: \(studio.status)")
+            case "timeDuplicate":
+                // Release timing probe (not a lane check): `index` rounds of
+                // Duplicate then Undo on one object. Each round times the
+                // whole command on the main thread, the document refreshes
+                // and a copied character's preview build included; GPU
+                // uploads on the render thread are not in it.
+                guard let id = object(step) else { record(step, false, "timeDuplicate: no object \(describe(step))"); continue }
+                let rounds = max(1, min(step.index ?? 20, 200))
+                var samples: [Double] = [], added = 0
+                for _ in 0..<rounds {
+                    studio.selection = id
+                    let before = studio.doc.objects.count
+                    let start = ProcessInfo.processInfo.systemUptime
+                    studio.duplicateSelection()
+                    samples.append((ProcessInfo.processInfo.systemUptime - start) * 1_000)
+                    added = studio.doc.objects.count - before
+                    studio.undo()
+                }
+                let sorted = samples.sorted()
+                let summary = String(format: "median %.2f ms, p90 %.2f ms, max %.2f ms", sorted[sorted.count / 2],
+                                     sorted[min(sorted.count - 1, sorted.count * 9 / 10)], sorted.last!)
+                record(step, added > 0, "timeDuplicate \(describe(step)): \(rounds) rounds, \(added) objects per copy; \(summary)")
             case "addFolder", "addCamera", "addLight":
                 // The workspace's add menu; `name` renames the new object.
                 let before = studio.doc.objects.count

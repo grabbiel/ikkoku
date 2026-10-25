@@ -160,9 +160,26 @@ under `.local/reverse/managed-recovery/902b9a23…/77473a43…/project/Studio/`.
 - **Load order.** Records load depth-first in file order. A camera record's
   load calls `ChangeCamera(ocic, active)` (AddObjectCamera.cs:82), so the last
   saved active camera in that order is the one looked through.
+- **Sub-info keys.** The key index holds more than object records. While a
+  record loads, each FK bone, IK target and the look-at target of a
+  character (OICharInfo.cs:246–288), each FK bone of an item
+  (OIItemInfo.cs:117–173), and each route point and its aid
+  (OIRouteInfo.cs:73–83, OIRoutePointInfo.cs:57–82) registers its own saved
+  key. All of them share one key space with the object records.
+- **Import keys.** `SceneInfo.Import` (SceneInfo.cs:463), which `Studio.Duplicate`
+  (Studio.cs:440) runs on the selection's saved bytes, discards every saved
+  key and takes `GetNewIndex()` (SceneInfo.cs:194), the smallest free key, for
+  the record and then for each sub-info in byte order. Route points load
+  with `_import: false`, so each one finds its saved key taken and gets a
+  fresh key from `SetNewIndex` in the same order.
+- **Lights.** The `OILightInfo` constructor counts lights
+  (OILightInfo.cs:27–39), and both import paths drop a light record once two
+  exist (`isLightCheck`, SceneInfo.cs:109, :483; ObjectInfoAssist.cs:32).
 
 The deletion and reparenting rules, and how the writer uses these facts, are in
 [Topology edits](scene-editing.md#topology-edits-deletion-and-reparenting-st-t03-st-s09).
+Duplicating and adding records is in
+[Duplicates and added records](scene-editing.md#duplicates-and-added-records-st-t03-st-s09-st-d03).
 The original player's reload of edited trees (2026-10-25) loaded every root
 key, child list and change amount exactly as written.
 

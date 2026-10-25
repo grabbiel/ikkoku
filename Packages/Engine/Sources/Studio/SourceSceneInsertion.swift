@@ -2,7 +2,7 @@ import Foundation
 
 /// ST-T03 / ST-S09 / ST-D03: one record added to an exported original
 /// CharaStudio 1.0.4.2 scene, following the recovered operations
-/// (docs/reference/studio/scene-editing.md, "Duplicate and add"):
+/// (docs/reference/studio/scene-editing.md, "Duplicates and added records"):
 ///
 /// - `Studio.Duplicate` saves the selected record with `SceneInfo.Save` and
 ///   reads it back with `SceneInfo.Import`, so the copy has the original's
