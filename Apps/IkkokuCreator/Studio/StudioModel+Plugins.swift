@@ -6,7 +6,7 @@ import Gameplay
 import Character
 
 extension StudioModel {
-    /// The default/library gate blocks callbacks from lazily constructing live
+    /// The default installation gate blocks callbacks from constructing live
     /// previews until commit. Native/history restore opts into a separate cold,
     /// request-owned resolver; fresh profile loading has its own preparation.
     final class PluginAttachmentAccess { var committed = false }
@@ -67,7 +67,7 @@ extension StudioModel {
                 throw SourcePluginError.invalid("Saved plugin library has no scene binding configuration.")
             }
             return try prepareSourcePluginLibrary(selection: selection, resolution: selection.resolve(),
-                configuration: configuration, document: document, restoring: true)
+                configuration: configuration, document: document, restoring: true, attachmentRestore: attachmentRestore)
         }
         guard document.sourcePluginLibraryConfiguration == nil else { throw SourcePluginError.invalid("Saved plugin bindings have no library selection.") }
         let native = restoreNativeAdapters ? try prepareSourceNativePlugins(document.sourceNativePlugins ?? [])
@@ -117,7 +117,8 @@ extension StudioModel {
 
     func prepareSourcePluginLibrary(selection: SourcePluginLibrarySelection, resolution: SourcePluginLibraryResolution,
                                     configuration: SourceStudioPluginConfiguration, document: StudioDocument,
-                                    restoring: Bool = false) throws -> PreparedSourcePlugins {
+                                    restoring: Bool = false,
+                                    attachmentRestore: PluginAttachmentRestoreInputs? = nil) throws -> PreparedSourcePlugins {
         let encoder = JSONEncoder(); encoder.outputFormatting = [.sortedKeys]
         guard SourcePluginGraph.targets([selection.process], process: "CharaStudio") else {
             throw SourcePluginError.invalid("The selected plugin process is not Studio.")
@@ -138,6 +139,9 @@ extension StudioModel {
         if !restoring { candidate.sourcePluginState = nil }
         let session: SourceStudioPluginSession?
         let access = PluginAttachmentAccess()
+        var attachments: PluginAttachmentRestorePreparation?
+        var prepared = false
+        defer { if !prepared { attachments?.abort() } }
         if resolution.translated.isEmpty {
             guard configuration.bindings.isEmpty, candidate.sourcePluginState == nil,
                   configuration.fixedDeltaTime.isFinite, configuration.fixedDeltaTime > 0 else {
@@ -148,12 +152,34 @@ extension StudioModel {
             guard !restoring || candidate.sourcePluginState != nil else {
                 throw SourcePluginError.invalid("Saved library selection is missing its converted-plugin state.")
             }
+            // Only native open/history supplies resolved candidate policy. An
+            // ordinary mount or detached restore keeps the installation gate.
+            let baseline = candidate
+            let resolver: SourceStudioPluginWorld.AttachmentResolver
+            if restoring, let attachmentRestore {
+                let context = try PluginAttachmentRestorePreparation(studio: self, document: baseline,
+                    blockedObjects: attachmentRestore.blockedObjects, animationElapsed: attachmentRestore.animationElapsed)
+                attachments = context
+                resolver = { child, parent in
+                    try MainActor.assumeIsolated { try context.frame(child: child, parent: parent) }
+                }
+            } else { resolver = pluginAttachmentResolver(access: access) }
             session = try SourceStudioPluginSession(selection: selection, resolution: resolution, configuration: configuration,
                 document: candidate, restoring: restoring ? candidate.sourcePluginState : nil,
-                attachment: pluginAttachmentResolver(access: access))
+                attachment: resolver)
             candidate = try session!.savedDocument()
+            // Match the legacy restoring-read boundary. Compare the normalized
+            // input, before savedDocument replaces its persisted session state.
+            if attachments?.didReadAttachment == true, let session {
+                guard session.world.document == baseline,
+                      session.world.cloneSerial == baseline.sourcePluginState?.cloneSerial,
+                      session.world.pendingSourceDestruction().isEmpty else {
+                    throw SourcePluginError.invalid("Attachment-reading restoration cannot mutate the candidate scene, clone objects, or schedule destruction during initialization.")
+                }
+            }
         }
-        return .init(document: candidate, session: session, native: native, attachmentAccess: access)
+        prepared = true
+        return .init(document: candidate, session: session, native: native, attachmentAccess: access, restoredAttachments: attachments)
     }
 
     /// One CPU preparation at a time. The UI retains its current mounted session

@@ -1024,3 +1024,134 @@ func sourcePluginPendingDestructionRejectsMalformedRootsBeforeCallbacks(fromLibr
         Issue.record("Invalid roots escaped validation before constructor replay")
     } catch SourcePluginError.invalid(let reason) { #expect(reason == "Invalid saved pending destruction roots.") }
 }
+
+// Synthetic library restore oracle. The app's source-backed diagnostic uses the
+// same supported IR shape, but the host here independently counts every read.
+private enum LibraryAttachmentRestoreFixture {
+    static func make(_ root: URL, poison: Bool = false, attachmentRead: Bool = true) throws
+        -> (selection: SourcePluginLibrarySelection, resolution: SourcePluginLibraryResolution,
+            configuration: SourceStudioPluginConfiguration, document: StudioDocument, parent: UUID, child: UUID) {
+        let guid = "Ikkoku.Validation.LibraryAttachmentRestore"
+        var program = try JSONSerialization.jsonObject(with: PluginLibraryFixture.program(guid: guid, salt: "attachment-restore")) as! [String: Any]
+        let positive: [String: Any] = ["kind": "binary", "type": "Bool", "name": ">", "children": [
+            ["kind": "api", "type": "Float", "name": "deltaTime", "children": []],
+            ["kind": "literal", "type": "Float", "value": 0]]]
+        let zero: [String: Any] = ["kind": "api", "type": "Vector3", "name": "vector.zero", "children": []]
+        let read: [String: Any] = ["kind": "api", "type": "Vector3", "name": "position", "children": [
+            ["kind": "api", "type": "Transform", "name": "transform", "children": []]]]
+        let gated: [String: Any] = ["kind": "conditional", "type": "Vector3", "children": [positive, attachmentRead ? read : zero, zero]]
+        var fields: [[String: Any]] = [
+            ["name": "position", "type": "Vector3", "serialized": true, "initializer": gated],
+            ["name": "positionAgain", "type": "Vector3", "serialized": false, "initializer": gated]]
+        if poison {
+            let arithmetic: [String: Any] = ["kind": "binary", "type": "Int32", "name": "+", "children": [
+                ["kind": "literal", "type": "Int32", "value": 1], ["kind": "literal", "type": "Int32", "value": 1]]]
+            fields.append(["name": "trip", "type": "Int32", "serialized": false, "initializer":
+                ["kind": "conditional", "type": "Int32", "children": [positive, arithmetic,
+                    ["kind": "literal", "type": "Int32", "value": 0]]]])
+        }
+        program["fields"] = fields
+        let bytes = try JSONSerialization.data(withJSONObject: program, options: [.sortedKeys])
+        _ = try SourceIRProgram.decode(bytes)
+        let revision = try PluginLibraryFixture.translated(root, guid: guid, programData: bytes)
+        try PluginLibraryFixture.publish(root, revisions: [revision])
+        let index = try SourcePluginLibraryIndex.load(libraryURL: root.appendingPathComponent("library.json"))
+        let selection = try index.select(guids: [guid]), resolution = try selection.resolve()
+        let parent = StudioObject(name: "Independent parent", kind: .folder)
+        var child = StudioObject(name: "Independent attached child", kind: .folder)
+        child.parent = parent.id; child.sourceAttachmentPoint = 17
+        let configuration = SourceStudioPluginConfiguration(bindings: [.init(guid: guid, type: "Fixture", objectID: child.id)])
+        var document = StudioDocument(); document.objects = [parent, child]
+        document.sourcePluginLibrary = selection; document.sourcePluginLibraryConfiguration = configuration
+        return (selection, resolution, configuration, document, parent.id, child.id)
+    }
+}
+
+@Test(arguments: [true, false]) func sourceStudioLibraryRestoreReadsUseSavedClockBeforeAllFieldsRestore(attachmentRead: Bool) throws {
+    let root = try PluginLibraryFixture.directory("attachment-restore-clock")
+    defer { try? FileManager.default.removeItem(at: root) }
+    let f = try LibraryAttachmentRestoreFixture.make(root, attachmentRead: attachmentRead)
+    var reads: [(UUID, UUID)] = []
+    var matrix = matrix_identity_float4x4; matrix.columns.3 = SIMD4<Float>(7, 11, 13, 1)
+    let attachment: SourceStudioPluginWorld.AttachmentResolver = { child, parent in
+        reads.append((child.id, parent.id)); return (matrix, simd_quatf(angle: 0, axis: SIMD3<Float>(0, 1, 0)))
+    }
+    let fresh = try SourceStudioPluginSession(selection: f.selection, resolution: f.resolution,
+        configuration: f.configuration, document: f.document, attachment: attachment)
+    let zero = try fresh.savedDocument(), zeroState = try #require(zero.sourcePluginState)
+    #expect(reads.isEmpty && zeroState.clock.deltaTime == 0)
+    _ = try SourceStudioPluginSession(selection: f.selection, resolution: f.resolution,
+        configuration: f.configuration, document: zero, restoring: zeroState, attachment: attachment)
+    #expect(reads.isEmpty)
+    let saved = try fresh.step(document: zero, deltaTime: 0.04), state = try #require(saved.sourcePluginState)
+    #expect(state.clock.deltaTime == Float(0.04) && state.clock.elapsedTime == Double(Float(0.04)))
+    #expect(reads.isEmpty)
+    let restored = try SourceStudioPluginSession(selection: f.selection, resolution: f.resolution,
+        configuration: f.configuration, document: saved, restoring: state, attachment: attachment)
+    #expect(reads.count == (attachmentRead ? 2 : 0))
+    #expect(reads.allSatisfy { $0.0 == f.child && $0.1 == f.parent })
+    let restoredState = try #require(restored.savedDocument().sourcePluginState)
+    #expect(restoredState == state)
+    // Native persistence restores *all* fields, unlike clone serialization.
+    #expect(restoredState.bindings[0].fields["position"] == .vector([0, 0, 0]))
+    #expect(restoredState.bindings[0].fields["positionAgain"] == .vector([0, 0, 0]))
+}
+
+@Test(arguments: [true, false]) func sourceStudioLibraryRestorePreservesAttachmentFaultAndLaterThrowOrdering(poison: Bool) throws {
+    let root = try PluginLibraryFixture.directory("attachment-restore-error-order")
+    defer { try? FileManager.default.removeItem(at: root) }
+    let f = try LibraryAttachmentRestoreFixture.make(root, poison: poison)
+    var reads = 0
+    let attachment: SourceStudioPluginWorld.AttachmentResolver = { _, _ in
+        reads += 1; throw SourcePluginError.invalid("Synthetic installation attachment gate")
+    }
+    let fresh = try SourceStudioPluginSession(selection: f.selection, resolution: f.resolution,
+        configuration: f.configuration, document: f.document, attachment: attachment)
+    let saved = try fresh.step(document: f.document, deltaTime: 0.04), state = try #require(saved.sourcePluginState)
+    #expect(reads == 0)
+    var message: String?
+    do {
+        _ = try SourceStudioPluginSession(selection: f.selection, resolution: f.resolution,
+            configuration: f.configuration, document: saved, restoring: state, attachment: attachment)
+    } catch SourcePluginError.invalid(let reason) { message = reason }
+    // Each API expression checks the recorded host fault immediately. The
+    // second read and the later poison initializer are never evaluated here.
+    #expect(reads == 1)
+    #expect(message == "Synthetic installation attachment gate")
+    #expect(try fresh.savedDocument() == saved)
+    if poison {
+        reads = 0; message = nil
+        let successful: SourceStudioPluginWorld.AttachmentResolver = { _, _ in
+            reads += 1; return (matrix_identity_float4x4, simd_quatf(angle: 0, axis: SIMD3<Float>(0, 1, 0)))
+        }
+        do {
+            _ = try SourceStudioPluginSession(selection: f.selection, resolution: f.resolution,
+                configuration: f.configuration, document: saved, restoring: state, attachment: successful)
+        } catch SourcePluginError.runtime(let reason) { message = reason }
+        #expect(reads == 2)
+        #expect(message == "Unsupported arithmetic operator or Int32 arithmetic.")
+        #expect(try fresh.savedDocument() == saved)
+    }
+}
+
+@Test func sourceStudioLibraryRestoreChangedBindingsRejectBeforeInitializerReads() throws {
+    let root = try PluginLibraryFixture.directory("attachment-restore-identity")
+    defer { try? FileManager.default.removeItem(at: root) }
+    let f = try LibraryAttachmentRestoreFixture.make(root)
+    var reads = 0
+    let attachment: SourceStudioPluginWorld.AttachmentResolver = { _, _ in
+        reads += 1; return (matrix_identity_float4x4, simd_quatf(angle: 0, axis: SIMD3<Float>(0, 1, 0)))
+    }
+    let fresh = try SourceStudioPluginSession(selection: f.selection, resolution: f.resolution,
+        configuration: f.configuration, document: f.document, attachment: attachment)
+    let saved = try fresh.step(document: f.document, deltaTime: 0.04), state = try #require(saved.sourcePluginState)
+    let changed = SourceStudioPluginConfiguration(fixedDeltaTime: 0.03, bindings: f.configuration.bindings)
+    var reason: String?
+    do {
+        _ = try SourceStudioPluginSession(selection: f.selection, resolution: f.resolution,
+            configuration: changed, document: saved, restoring: state, attachment: attachment)
+    } catch SourcePluginError.invalid(let message) { reason = message }
+    #expect(reason == "Saved plugin profile or library bindings changed; explicit reinstallation is required.")
+    #expect(reads == 0)
+    #expect(try fresh.savedDocument() == saved)
+}
