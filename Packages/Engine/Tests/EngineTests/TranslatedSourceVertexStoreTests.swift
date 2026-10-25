@@ -74,11 +74,13 @@ private struct QuadMergeGrid {
             let interior = row > 0 && row < Self.cells && column > 0 && column < Self.cells
             let jx = interior ? Double((column * 7 + row * 3) % 5 - 2) * 0.4375 : 0
             let jy = interior ? Double((column * 5 + row * 11) % 7 - 3) * 0.3125 : 0
-            let p = SIMD2(origin + Double(column) * cell + jx + 0.0625, origin + Double(row) * cell + jy + 0.1875)
+            let x: Double = origin + Double(column) * cell + jx + 0.0625
+            let y: Double = origin + Double(row) * cell + jy + 0.1875
+            let p = SIMD2<Double>(x, y)
             window.append(p)
             u.append(Double((column &* 73_856_093 ^ row &* 19_349_663) & 63) / 64)
-            inputs.append(SIMD4(Float(p.x / 64 - 1), Float(1 - p.y / 64), 0.5, 1))
-            inputs.append(SIMD4(Float(u.last!), 0, 0, 0))
+            inputs.append(SIMD4<Float>(Float(p.x / 64 - 1), Float(1 - p.y / 64), 0.5, 1))
+            inputs.append(SIMD4<Float>(Float(u.last!), 0, 0, 0))
         } }
         for row in 0..<Self.cells { for column in 0..<Self.cells {
             let a = UInt32(row * (Self.cells + 1) + column), b = a + 1, c = a + UInt32(Self.cells + 1), d = c + 1
@@ -87,9 +89,11 @@ private struct QuadMergeGrid {
         for t in stride(from: 0, to: indices.count, by: 3) {
             let i = indices[t..<t + 3].map(Int.init)
             let p = window[i[1]] - window[i[0]], q = window[i[2]] - window[i[0]]
-            let du = SIMD2(u[i[1]] - u[i[0]], u[i[2]] - u[i[0]])
+            let du = SIMD2<Double>(u[i[1]] - u[i[0]], u[i[2]] - u[i[0]])
             let determinant = p.x * q.y - p.y * q.x
-            gradients.append(SIMD2((du.x * q.y - du.y * p.y) / determinant, (du.y * p.x - du.x * q.x) / determinant))
+            let gx: Double = (du.x * q.y - du.y * p.y) / determinant
+            let gy: Double = (du.y * p.x - du.x * q.x) / determinant
+            gradients.append(SIMD2<Double>(gx, gy))
         }
     }
 }
@@ -153,9 +157,21 @@ private func drawGrid(_ grid: QuadMergeGrid, pipeline: any MTLRenderPipelineStat
         let id = Int(first[pixel * 4 + 2]) - 1
         try #require(grid.gradients.indices.contains(id))
         let expected = grid.gradients[id]
-        if abs(Double(first[pixel * 4]) - expected.x) > 1e-4 || abs(Double(first[pixel * 4 + 1]) - expected.y) > 1e-4 { otherPrimitive += 1 }
+        let errorX: Double = abs(Double(first[pixel * 4]) - expected.x)
+        let errorY: Double = abs(Double(first[pixel * 4 + 1]) - expected.y)
+        if errorX > 1e-4 || errorY > 1e-4 { otherPrimitive += 1 }
     }
     return (readbacks, covered, otherPrimitive)
+}
+
+/// RGBA pixels of `readback` that differ from `reference` in any channel.
+private func changedPixels(_ readback: [Float], from reference: [Float]) -> Int {
+    var changed = 0
+    for pixel in 0..<(readback.count / 4) {
+        let base = pixel * 4
+        if readback[base..<(base + 4)] != reference[base..<(base + 4)] { changed += 1 }
+    }
+    return changed
 }
 
 @Test(.enabled(if: MTLCreateSystemDefaultDevice() != nil))
@@ -189,8 +205,8 @@ func translatedDrawsKeepDerivativeQuadsWithinOnePrimitive() throws {
         descriptor.colorAttachments[0].sourceRGBBlendFactor = program.state.sourceRGB; descriptor.colorAttachments[0].sourceAlphaBlendFactor = program.state.sourceAlpha
         descriptor.colorAttachments[0].destinationRGBBlendFactor = program.state.destinationRGB; descriptor.colorAttachments[0].destinationAlphaBlendFactor = program.state.destinationAlpha
         let control = try drawGrid(grid, pipeline: try device.makeRenderPipelineState(descriptor: descriptor), entry: entry, device: device, repeats: 4)
-        let changed = control.readbacks.dropFirst().map { readback in (0..<(readback.count / 4)).filter { pixel in
-            (0..<4).contains { readback[pixel * 4 + $0] != control.readbacks[0][pixel * 4 + $0] } }.count }
+        let changed: [Int] = control.readbacks.dropFirst().map { (readback: [Float]) -> Int in
+            changedPixels(readback, from: control.readbacks[0]) }
         print("[#188 quad merge] \(device.name) discard \(discard): with the vertex store 0 of \(drawn.covered) px take another triangle's "
               + "derivatives; without it \(control.otherPrimitive) px, repeat changes \(changed)")
     }
