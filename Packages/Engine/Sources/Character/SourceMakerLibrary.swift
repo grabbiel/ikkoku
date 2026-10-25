@@ -217,6 +217,7 @@ public struct SourceMakerLibrary: Sendable {
     }
     fileprivate struct MaterialComponent: Sendable, Equatable {
         let appearance: URL, bindings: URL?, meshNames: Set<String>, prefix: String, accessorySlot: Int?
+        let clothingSlot: Int?
         /// The indoor-shoe copy of a category 112 entry, whose recipes bind
         /// the outdoor slot (8) and are rebound to slot 7.
         var indoorShoes = false
@@ -262,8 +263,10 @@ public struct SourceMakerLibrary: Sendable {
                     throw RigError.invalid("Prepared appearance inputs belong to a different base assembly.")
                 }
                 guard let base else { return nil }
-                return try appearance.applying(card, bindings: base.value, directory: base.url.deletingLastPathComponent(),
-                    resources: resources, timings: timings, preparedInputs: base.pixels)
+                return try SourceAppearanceTimings.scoped(timings, .base) {
+                    try appearance.applying(card, bindings: base.value, directory: base.url.deletingLastPathComponent(),
+                        resources: resources, timings: timings, preparedInputs: base.pixels)
+                }
             }
         }
 
@@ -303,42 +306,79 @@ public struct SourceMakerLibrary: Sendable {
 
         public func appearance(base: SourcePreviewAppearance?, card: SourceCardAppearance, resources: ResourceStore,
                                modLibrary: SourceModLibrary?, transaction: SourceAppearanceLoadTransaction? = nil,
-                               timings: SourceAppearanceTimings? = nil, inputs: AppearanceInputs? = nil) throws -> SourcePreviewAppearance.CardApplication? {
+                               timings: SourceAppearanceTimings? = nil, inputs: AppearanceInputs? = nil,
+                               batchClothes: Bool = false) throws -> SourcePreviewAppearance.CardApplication? {
             guard inputs == nil || (inputs?.components == components && inputs?.componentBindings.count == components.count) else {
                 throw RigError.invalid("Prepared appearance inputs belong to different selected components.")
             }
             var combined = base, fields = Set<String>(), messages = diagnostics
-            for (index, component) in components.enumerated() {
-                var appearance = try SourceAppearanceTimings.measure(timings, .componentLoad) {
-                    try SourcePreviewAppearance.load(url: component.appearance, resources: resources, modLibrary: modLibrary,
-                        transaction: transaction)
-                }
-                if let url = component.bindings {
-                    let bindings = try SourceAppearanceTimings.measure(timings, .bindingPreparation) {
-                        if let inputs {
-                            guard let prepared = inputs.componentBindings[index], prepared.url == url else {
-                                throw RigError.invalid("Prepared component appearance binding is missing or mismatched.")
-                            }
-                            return prepared.value
-                        }
-                        var value = try SourceAppearanceBindings.load(url: url)
-                        if let slot = component.accessorySlot { value = try value.contextualized(accessorySlot: slot) }
-                        if component.indoorShoes { value = try value.contextualizedIndoorShoes() }
-                        return value
-                    }
-                    let applied = try appearance.applying(card, bindings: bindings, directory: url.deletingLastPathComponent(), resources: resources,
-                        timings: timings, preparedInputs: inputs?.componentBindings[index]?.pixels)
-                    appearance = applied.appearance; fields.formUnion(applied.appliedFields); messages += applied.diagnostics
-                }
-                appearance = appearance.renaming(component.meshNames, prefix: component.prefix)
-                combined = combined.map { $0.merging(appearance) } ?? appearance
+            let group = batchClothes ? SourceClothesMaterialGroup(resources: resources, timings: timings) : nil
+            func merge(_ appearance: SourcePreviewAppearance, component: MaterialComponent) {
+                let renamed = appearance.renaming(component.meshNames, prefix: component.prefix)
+                combined = combined.map { $0.merging(renamed) } ?? renamed
             }
+            func merge(_ completed: [SourceClothesMaterialGroup.Completed]) {
+                for item in completed {
+                    fields.formUnion(item.application.appliedFields); messages += item.application.diagnostics
+                    merge(item.application.appearance, component: components[item.identity.index])
+                }
+            }
+            for (index, component) in components.enumerated() {
+                let grouped = group != nil && component.clothingSlot != nil
+                if !grouped { merge(try group?.finish() ?? []) }
+                func prepareComponent() throws -> SourcePreparedMetalCardApplication? {
+                    try SourceAppearanceTimings.scoped(timings, .component(index: index, prefix: component.prefix,
+                        accessorySlot: component.accessorySlot, indoorShoes: component.indoorShoes)) {
+                        var appearance = try SourceAppearanceTimings.measure(timings, .componentLoad) {
+                            try SourcePreviewAppearance.load(url: component.appearance, resources: resources, modLibrary: modLibrary,
+                                transaction: transaction)
+                        }
+                        if let url = component.bindings {
+                            let bindings = try SourceAppearanceTimings.measure(timings, .bindingPreparation) {
+                                if let inputs {
+                                    guard let prepared = inputs.componentBindings[index], prepared.url == url else {
+                                        throw RigError.invalid("Prepared component appearance binding is missing or mismatched.")
+                                    }
+                                    return prepared.value
+                                }
+                                var value = try SourceAppearanceBindings.load(url: url)
+                                if let slot = component.accessorySlot { value = try value.contextualized(accessorySlot: slot) }
+                                if component.indoorShoes { value = try value.contextualizedIndoorShoes() }
+                                return value
+                            }
+                            if grouped {
+                                return try appearance.prepareMetalApplication(card, bindings: bindings, directory: url.deletingLastPathComponent(),
+                                    timings: timings, preparedInputs: inputs?.componentBindings[index]?.pixels)
+                            }
+                            let applied = try appearance.applying(card, bindings: bindings, directory: url.deletingLastPathComponent(), resources: resources,
+                                timings: timings, preparedInputs: inputs?.componentBindings[index]?.pixels)
+                            appearance = applied.appearance; fields.formUnion(applied.appliedFields); messages += applied.diagnostics
+                        }
+                        if grouped {
+                            // A garment without bindings must still preserve merge order.
+                            return .init(source: appearance, recipes: [], replays: [], diagnostics: [],
+                                maximumLogicalInputBytes: SourceMaterialMetalInputBudget.defaultMaximumBytes)
+                        }
+                        merge(appearance, component: component)
+                        return nil
+                    }
+                }
+                let plan: SourcePreparedMetalCardApplication?
+                if let group { plan = try group.preparing(prepareComponent) }
+                else { plan = try prepareComponent() }
+                if let plan, let group, let slot = component.clothingSlot {
+                    merge(try group.append(plan, identity: .init(index: index, slot: slot, prefix: component.prefix)))
+                }
+            }
+            merge(try group?.finish() ?? [])
             if let mask = bodyMask, let current = combined {
-                combined = try SourceAppearanceTimings.measure(timings, .bodyMaskLoad) {
-                    try current.replacingBodyMask(data: Data(contentsOf: mask), resources: resources)
+                combined = try SourceAppearanceTimings.scoped(timings, .bodyMaskLoad) {
+                    try SourceAppearanceTimings.measure(timings, .bodyMaskLoad) {
+                        try current.replacingBodyMask(data: Data(contentsOf: mask), resources: resources)
+                    }
                 }
             } else if clearBodyMask, let current = combined {
-                combined = current.removingBodyMask()
+                combined = SourceAppearanceTimings.scoped(timings, .bodyMaskRemove) { current.removingBodyMask() }
             }
             guard let combined else { return nil }
             return .init(appearance: combined, appliedFields: fields, diagnostics: messages)
@@ -407,7 +447,7 @@ public struct SourceMakerLibrary: Sendable {
             return value
         }
         func selected(_ category: Int, _ id: Int, _ property: String, _ prefix: String, accessorySlot: Int? = nil,
-                      indoorShoes: Bool = false) throws -> (SourceRig, [String]?)? {
+                      indoorShoes: Bool = false, clothingSlot: Int? = nil) throws -> (SourceRig, [String]?)? {
             let resolution = selection(category: category, savedID: id, property: property, references: references); selections.append(resolution)
             guard let entry = resolution.entry else {
                 diagnostics.append("\(property): \(resolution.status), source ID \(resolution.sourceID). Card identity preserved; reference geometry retained where available."); return nil
@@ -424,7 +464,8 @@ public struct SourceMakerLibrary: Sendable {
                 let bindings = halfStates ? entry.wearCardBindings ?? entry.cardBindings : entry.cardBindings
                 materials.append(.init(appearance: try verified(file, maximumBytes: 1024 * 1024, timings: timings),
                     bindings: try bindings.map { try verified($0, maximumBytes: 1024 * 1024, timings: timings) },
-                    meshNames: Set(rig.parts.map { $0.mesh.name }), prefix: prefix, accessorySlot: accessorySlot, indoorShoes: indoorShoes))
+                    meshNames: Set(rig.parts.map { $0.mesh.name }), prefix: prefix, accessorySlot: accessorySlot,
+                    clothingSlot: clothingSlot, indoorShoes: indoorShoes))
             } else { diagnostics.append("\(property): converted geometry has a neutral material; shader conversion is missing.") }
             return (rig.namespacingMeshes(prefix), halfStates ? entry.meshNames.map { $0 + entry.alternates!.map(\.meshName) } : entry.meshNames)
         }
@@ -441,7 +482,7 @@ public struct SourceMakerLibrary: Sendable {
         for (slot, part) in parts.enumerated() where slot != 7 || wear {
             let id = try integer(part.stringKeyedMap(), "id")
             let property = "outfit\(coordinate).ChaFileClothes.Clothes" + ["Top", "Bot", "Bra", "Shorts", "Gloves", "Pants", "Socks", "ShoesInner", "ShoesOuter"][slot]
-            let value = try selected(min(105 + slot, 112), id, property, "clothes-\(slot)/", indoorShoes: slot == 7)
+            let value = try selected(min(105 + slot, 112), id, property, "clothes-\(slot)/", indoorShoes: slot == 7, clothingSlot: slot)
             if selections.last?.entry != nil { clothesBySlot[slot] = value; referenceClothes[slot] = nil }
             if slot == 0, selections.last?.entry?.empty == true { clearBodyMask = true }
             if slot == 7, let entry = selections.last?.entry { indoorShoes = entry.empty == true ? .empty : .assembled }

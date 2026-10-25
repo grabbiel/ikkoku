@@ -920,3 +920,129 @@ The app cache grows through 10, 11 and 12 entries, then retains 12; female/male 
 Warm candidate worker execution remains 78.665–89.667 ms and owner commit 75.877–87.006 ms. Owner outcomes are mixed; this optimization does not move or remove synchronous owner work. Warm card-appearance work costs 61.982–72.595 ms, including compositor wait/view intervals of 46.003–52.053 ms and allocation/upload of 6.904–8.232 ms; nested intervals are not additional to their parent. Shape decode remains 21.447–23.846 ms and appearance-input preparation 31.148–36.947 ms across all candidate selections. These remaining costs guide further work under #192.
 
 First/second cycle labels do not imply filesystem-cache eviction, and only the first process selection has an empty decoded-rig cache. Read/hash volumes are API bytes, not disk traffic. No FPS, heap/RSS, fresh original-player accuracy or broad hardware claim follows from this small pair. Immutable sources, binaries, original failed attempts, fixture/input proofs, all raw reports and offline analyses are retained under `.local/codex-continue-2026-10-24/rolling/maker-rig-cache/`.
+
+### Per-component appearance attribution (#192)
+
+The optional owner-local collector now labels the existing base, ordered component
+and body-mask operations. Component identity includes ordinal, mesh prefix,
+accessory slot and indoor-shoe context. Each scope records its inclusive duration,
+success or partial failure, and deltas of the existing phase/composition counters.
+These deltas partition the aggregates; neither scopes nor nested allocation,
+encode and wait intervals are additional costs to add to their parent. Nil
+collectors construct no labels or snapshots and read no additional clocks.
+Execution order, validation, candidate resource ownership and publication remain
+unchanged. Diagnostic collection does add snapshots, possible dictionary copies
+and clock reads; the measurements below do not isolate that overhead.
+
+At `581dda8`, 12 focused Engine cases pass without skips, covering lazy nil
+collection, ordered labels, thrown partial scopes, real prepared inputs and
+composition/resource failure paths. The original test-macro compile failure is
+retained; its repair only moves the same Boolean predicate outside the macro.
+Four functional app processes pass 124 checks, with four exports byte-identical
+to accepted `ec76ab5`, matching selected resources/cache counters and eight
+unchanged selections without a new successful sample.
+
+A separate quiet collection compares `ec76ab5` / binary `e7144898` with
+`581dda8` / `5c3bd5e8`. Of 559 pinned build inputs, only the three production and
+three test files in this diagnostic differ. Female A/B/B/A and male B/A/A/B
+ordering gives two observations per sex, arm, head and cycle. All eight processes
+pass 152 checks in 40.051 seconds; root verifies 27 artifact hashes, 48 raw
+observations, identical exports per sex, resource/cache vectors and scope
+partitions. The existing VM remains open (7.7% CPU at the pre-run snapshot),
+without an owned probe; its background activity is uncontrolled.
+
+Repeat-cycle median scope times, six candidate observations per sex combining
+heads 200, 201 and 0 (milliseconds):
+
+| Scope | Female inclusive | Male inclusive | Female wait/view | Male wait/view |
+| --- | ---: | ---: | ---: | ---: |
+| Base composite | 11.940 | 11.353 | 8.657 | 8.488 |
+| Back hair | 13.428 | 13.581 | 9.141 | 9.241 |
+| Front hair | 12.648 | 12.804 | 9.034 | 9.092 |
+| Top | 11.097 | 11.540 | 8.428 | 8.798 |
+| Bottom | 10.265 | 10.646 | 8.270 | 8.385 |
+| Outer shoes | 9.667 | 10.311 | 8.004 | 8.328 |
+| Accessory slot 0 | 0.092 | 0.157 | 0 | 0 |
+| Body-mask load | 1.740 | 1.926 | 0 | 0 |
+
+The repeat-cycle mean total card-appearance interval is 71.157 ms female and
+72.489 ms male. Its six compositor completions account for 52.420/52.424 ms in
+wait/view, while allocation/upload accounts for 7.742/8.010 ms. Base/hair batches
+dispatch 4/5/4 recipes; the three clothing batches dispatch one each. Accessory
+and body-mask scopes perform no composite dispatch in these fixtures. These
+observations motivate reviewing batching across components, with explicit
+transient-memory and failure-ownership limits before changing execution.
+
+Candidate-minus-control mean API differences range from −6.645 to +8.752 ms
+across the twelve sex/head/cycle cells; owner differences range from −3.471 to
++7.165 ms. This is diagnostic attribution, not a speedup, isolated observation
+cost, FPS or original-player fidelity claim. First-cycle labels include one
+empty rig-cache selection and two partial-hit selections. Full private evidence
+is retained under `.local/codex-continue-2026-10-24/rolling/maker-component-appearance-attribution/`.
+
+### Bounded Maker clothes composition groups (#234)
+
+Maker now explicitly groups consecutive clothing applications into one Metal
+completion. Base and hair applications keep their separate completions; default
+prepared-appearance callers, Studio and CPU composition remain sequential.
+Each group has separate 32 MiB logical uploaded-input and output limits, with
+checked arithmetic. Repeated uploads and each application's default textures
+count toward the input limit. An oversized application flushes the group and
+uses the existing standalone path and 128 MiB per-call limits; the grouping
+policy does not newly reject previously valid inputs.
+
+Each application retains its compositor, defaults and input leases. All output
+views validate in order before registration, and candidate resources stay private
+until the existing Maker commit. A later preparation failure first flushes prior
+staged work. A combined GPU failure rejects the entire group with ordered
+component identities and its underlying error; it cannot recover the former
+per-call GPU failure precedence. There is no execution retry or silent fallback.
+The previous preview and card survive failed candidate construction. Optional
+diagnostics use a disjoint `clothesCompositionGroup` scope, including standalone
+oversized work, and avoid labels and clock reads when collection is disabled.
+
+At `bc795c7` (Release binary `2773e233`), 19 distinct focused cases pass across
+two retained runs: 18 passed before a new fixture test attempted CPU readback
+from a private Metal texture and crashed; the corrected test uses an aligned
+shared blit buffer and passes for both sexes. Production code is identical
+between those runs. Cases cover caps, overflow, oversized admission, exact CPU
+pixels, leases, ordered failures, atomic GPU/view failures, unchanged default
+callers and actual prepared fixtures. The Release compiler succeeded, but its
+strict runner returned 126 for two lingering owned compiler daemons. Their
+exact identities were checked and released separately; the original failure
+record and supplemental product acceptance remain retained.
+
+Four fresh functional processes pass 124 checks with zero skips. Exported cards
+are byte-identical to the accepted sequential control, with identical selected
+resource/cache counts and eight unchanged or rejected selections. Work remains
+20 real uploads, eight fallback allocations, 316 fallback bindings, 16 dispatches
+and six pipelines; completions fall from six to four. The three-clothes group
+performs three dispatches and one completion. Changed aggregate call grouping
+makes per-call duration averages incomparable; scope deltas still partition the
+aggregate without adding nested costs twice.
+
+A separate quiet comparison uses control `015cd647` / binary `3ec9d665` and
+candidate `bc795c7` / `2773e233`. Eight fresh processes in female A/B/B/A and
+male B/A/A/B order pass 152 checks, with 27 retained artifact hashes, 48 raw
+observations, identical exports and 12 four-way resource/cache comparisons.
+There are two process repetitions per arm and sex; each cell below combines
+three correlated head transitions from each repetition. Cycle one includes
+mixed first-use behavior rather than uniformly cold selections.
+
+| Sex / cycle | Selection API, ms | Owner commit, ms | Clothes inclusive, ms |
+| --- | ---: | ---: | ---: |
+| Female / 1 | 539.305 → 519.156 | 103.321 → 84.686 | 29.373 → 11.395 |
+| Female / 2 | 164.438 → 149.238 | 80.237 → 64.620 | 29.694 → 12.109 |
+| Male / 1 | 559.179 → 538.105 | 106.797 → 88.283 | 29.608 → 11.325 |
+| Male / 2 | 162.648 → 144.794 | 77.977 → 60.809 | 28.615 → 11.485 |
+
+The observed API benefit is 15.2–21.1 ms and owner benefit 15.6–18.6 ms in
+these cells. Nested clothes wait/view time falls 15.4–16.5 ms. The existing
+unmanaged VM remained open (3.4% CPU at the prelaunch snapshot), with no owned
+probe; background activity is uncontrolled. The exact texture inventory estimates
+an additional 5,242,884 bytes of logical peak texture payload. This excludes
+metadata, CPU snapshots, the prior live preview, alignment and driver allocation;
+RSS was not measured. These results establish a bounded selection improvement,
+not FPS, universal latency, source appearance parity or elimination of owner
+stalls. Private evidence is retained under
+`.local/codex-continue-2026-10-24/rolling/maker-clothes-composition-groups/`.

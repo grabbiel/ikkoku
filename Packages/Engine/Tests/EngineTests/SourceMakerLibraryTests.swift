@@ -214,6 +214,151 @@ private struct MakerSelectionCases: Decodable {
     }
 }
 
+@Test(.enabled(if: SourceFixtureSupport.shouldRun(["IKKOKU_MAKER_SELECTION_FIXTURES"]) && MTLCreateSystemDefaultDevice() != nil,
+    "Requires IKKOKU_MAKER_SELECTION_FIXTURES and a Metal device"))
+func sourceMakerPreparedAppearanceScopesFollowSelectedComponentsWithoutChangingResults() async throws {
+    let checks = try await liveTickOffPool {
+        let (fixtures, directory) = try MakerSelectionCases.load()
+        let library = try SourceMakerLibrary.load(url: URL(fileURLWithPath: fixtures.library))
+        let baseURL = URL(fileURLWithPath: fixtures.femaleBase)
+        let card = try SourceCharacterCard.load(url: directory.appendingPathComponent("female-head0-bone0.png"))
+        let cardAppearance = try SourceCardAppearance(card: card)
+        let prepared = try library.prepare(card: card, coordinate: 0, baseURL: baseURL)
+        let inputs = try prepared.prepareAppearanceInputs(card: cardAppearance, baseURL: baseURL)
+        guard let device = MTLCreateSystemDefaultDevice() else { throw RigError.invalid("Metal device unavailable.") }
+        let resources = ResourceStore(device: device)
+        let base = try SourcePreviewAppearance.load(url: baseURL.deletingPathExtension().appendingPathExtension("appearance.json"), resources: resources)
+        let timings = SourceAppearanceTimings()
+        let appliedBase = try inputs.applyingBase(to: base, card: cardAppearance, baseURL: baseURL, resources: resources, timings: timings)
+        guard let observed = try prepared.appearance(base: appliedBase?.appearance ?? base, card: cardAppearance,
+            resources: resources, modLibrary: nil, timings: timings, inputs: inputs),
+              let ordinary = try prepared.appearance(base: appliedBase?.appearance ?? base, card: cardAppearance,
+            resources: resources, modLibrary: nil, inputs: inputs) else { throw RigError.invalid("Fixture appearance is absent.") }
+        let sample = timings.sample, scopes = sample.scopes
+        let components = scopes.filter { $0.identity.role == .component }
+        let expected = ["hair-0/", "hair-1/", "clothes-0/", "clothes-1/", "clothes-8/", "accessory-0/"]
+        var checks: [(String, Bool)] = [
+            ("Base, six selected components and body mask retain execution order", scopes.map(\.identity.role) == [.base] + Array(repeating: .component, count: 6) + [.bodyMaskLoad]),
+            ("Component labels retain the original selected slots", components.map(\.identity.prefix) == expected.map(Optional.some)),
+            ("Component ordinals follow the prepared order", components.map(\.identity.componentIndex) == (0..<6).map(Optional.some)),
+            ("Accessory and indoor-shoe context remain explicit", components.map(\.identity.accessorySlot) == [nil, nil, nil, nil, nil, 0] && components.allSatisfy { $0.identity.indoorShoes == false }),
+            ("Each completed component loads once", components.allSatisfy { $0.succeeded && $0.calls["componentLoad"] == 1 }),
+            ("Body mask is a separate completed operation", scopes.last?.succeeded == true && scopes.last?.calls["bodyMaskLoad"] == 1),
+            ("Nil diagnostics preserve applied fields and diagnostics", observed.appliedFields == ordinary.appliedFields && observed.diagnostics == ordinary.diagnostics),
+            ("Nil diagnostics preserve material targets", Set(observed.appearance.materials.keys) == Set(ordinary.appearance.materials.keys)),
+        ]
+        for (phase, count) in sample.calls {
+            checks.append(("Scope call deltas partition aggregate \(phase)", scopes.reduce(0) { $0 + $1.calls[phase, default: 0] } == count))
+        }
+        if let aggregate = sample.composition {
+            checks.append(("Dispatch deltas partition aggregate", scopes.reduce(0) { $0 + ($1.composition?.metalEncodeDispatches ?? 0) } == aggregate.metalEncodeDispatches))
+            checks.append(("Completion deltas partition aggregate", scopes.reduce(0) { $0 + ($1.composition?.metalBatchCompletions ?? 0) } == aggregate.metalBatchCompletions))
+            checks.append(("Real-input allocation deltas partition aggregate", scopes.reduce(0) { $0 + ($1.composition?.realInputAllocations ?? 0) } == aggregate.realInputAllocations))
+            checks.append(("Fallback allocation deltas partition aggregate", scopes.reduce(0) { $0 + ($1.composition?.fallbackAllocations ?? 0) } == aggregate.fallbackAllocations))
+            checks.append(("Fallback binding deltas partition aggregate", scopes.reduce(0) { $0 + ($1.composition?.fallbackBindings ?? 0) } == aggregate.fallbackBindings))
+        }
+        return checks
+    }
+    for (name, passed) in checks { #expect(passed, "\(name)") }
+}
+
+@Test(.enabled(if: SourceFixtureSupport.shouldRun(["IKKOKU_MAKER_SELECTION_FIXTURES"]) && MTLCreateSystemDefaultDevice() != nil,
+    "Requires IKKOKU_MAKER_SELECTION_FIXTURES and a Metal device"))
+func sourceMakerClothesGroupOptInKeepsSelectedMaterialPixelsAndDefaultPath() async throws {
+    let checks = try await liveTickOffPool {
+        let (fixtures, directory) = try MakerSelectionCases.load()
+        let library = try SourceMakerLibrary.load(url: URL(fileURLWithPath: fixtures.library))
+        guard let device = MTLCreateSystemDefaultDevice() else { throw RigError.invalid("Metal device unavailable.") }
+        let resources = ResourceStore(device: device)
+        let textureFields: [WritableKeyPath<MaterialState, TextureHandle?>] = [\.base, \.colorMask, \.detail, \.line,
+            \.normal, \.overlay0, \.overlay1, \.overlay2, \.pattern, \.hairGloss, \.bodyMask]
+        guard let readbackQueue = device.makeCommandQueue() else { throw RigError.invalid("Fixture readback queue is unavailable.") }
+        func digest(_ handle: TextureHandle) throws -> String {
+            guard let texture = resources.texture(handle) else { throw RigError.invalid("Fixture texture is absent.") }
+            let stride: Int
+            switch texture.pixelFormat {
+            case .r8Unorm: stride = 1
+            case .rgba8Unorm, .rgba8Unorm_srgb, .bgra8Unorm, .bgra8Unorm_srgb: stride = 4
+            default: throw RigError.invalid("Unexpected fixture texture readback format.")
+            }
+            // Loaded fixture images use private storage. Read both private and
+            // composed textures through a blit, preserving exact mip-zero bytes.
+            let activeRow = texture.width.multipliedReportingOverflow(by: stride)
+            let paddedRow = activeRow.partialValue.addingReportingOverflow(255)
+            guard texture.width > 0, texture.height > 0, !activeRow.overflow, !paddedRow.overflow else {
+                throw RigError.invalid("Fixture readback dimensions overflow.")
+            }
+            let activeRowBytes = activeRow.partialValue
+            let rowBytes = (paddedRow.partialValue / 256) * 256
+            let storage = rowBytes.multipliedReportingOverflow(by: texture.height)
+            let activeBytes = activeRowBytes.multipliedReportingOverflow(by: texture.height)
+            guard !storage.overflow, !activeBytes.overflow else { throw RigError.invalid("Fixture readback byte count overflows.") }
+            guard let buffer = device.makeBuffer(length: storage.partialValue, options: .storageModeShared),
+                  let command = readbackQueue.makeCommandBuffer(),
+                  let encoder = command.makeBlitCommandEncoder() else { throw RigError.invalid("Fixture readback allocation failed.") }
+            encoder.copy(from: texture, sourceSlice: 0, sourceLevel: 0, sourceOrigin: MTLOrigin(x: 0, y: 0, z: 0),
+                sourceSize: MTLSize(width: texture.width, height: texture.height, depth: 1), to: buffer, destinationOffset: 0,
+                destinationBytesPerRow: rowBytes, destinationBytesPerImage: storage.partialValue)
+            encoder.endEncoding()
+            command.commit(); command.waitUntilCompleted()
+            guard command.status == .completed, command.error == nil else { throw RigError.invalid("Fixture readback failed: \(String(describing: command.error)).") }
+            var bytes = Data(capacity: activeBytes.partialValue)
+            for row in 0..<texture.height {
+                bytes.append(buffer.contents().advanced(by: row * rowBytes).assumingMemoryBound(to: UInt8.self), count: activeRowBytes)
+            }
+            return "\(texture.pixelFormat.rawValue):\(texture.width)x\(texture.height):\(texture.mipmapLevelCount):" + SHA256.hash(data: bytes).map { String(format: "%02x", $0) }.joined()
+        }
+        var checks: [(String, Bool)] = []
+        for sex in ["female", "male"] {
+            let baseURL = URL(fileURLWithPath: sex == "female" ? fixtures.femaleBase : fixtures.maleBase)
+            let card = try SourceCharacterCard.load(url: directory.appendingPathComponent("\(sex)-head0-bone0.png"))
+            let draft = try SourceCardAppearance(card: card)
+            let prepared = try library.prepare(card: card, coordinate: 0, baseURL: baseURL)
+            let inputs = try prepared.prepareAppearanceInputs(card: draft, baseURL: baseURL)
+            let base = try SourcePreviewAppearance.load(url: baseURL.deletingPathExtension().appendingPathExtension("appearance.json"), resources: resources)
+            let appliedBase = try inputs.applyingBase(to: base, card: draft, baseURL: baseURL, resources: resources)?.appearance ?? base
+            let sequentialTimings = SourceAppearanceTimings(), groupedTimings = SourceAppearanceTimings()
+            guard let sequential = try prepared.appearance(base: appliedBase, card: draft, resources: resources, modLibrary: nil,
+                timings: sequentialTimings, inputs: inputs),
+                  let grouped = try prepared.appearance(base: appliedBase, card: draft, resources: resources, modLibrary: nil,
+                timings: groupedTimings, inputs: inputs, batchClothes: true) else { throw RigError.invalid("Fixture appearance is absent.") }
+            checks.append(("\(sex) fields/diagnostics", sequential.appliedFields == grouped.appliedFields && sequential.diagnostics == grouped.diagnostics))
+            checks.append(("\(sex) material targets", Set(sequential.appearance.materials.keys) == Set(grouped.appearance.materials.keys)))
+            var digests: [TextureHandle: String] = [:]
+            for name in sequential.appearance.materials.keys.sorted() {
+                let old = sequential.appearance.materials[name]!, new = grouped.appearance.materials[name] ?? []
+                checks.append(("\(sex) \(name) passes", old.count == new.count))
+                for (a, b) in zip(old, new) {
+                    var normalized = b
+                    for field in textureFields {
+                        let left = a[keyPath: field], right = b[keyPath: field]
+                        checks.append(("\(sex) \(name) texture presence", (left == nil) == (right == nil)))
+                        if let left, let right, left != right {
+                            if digests[left] == nil { digests[left] = try digest(left) }
+                            if digests[right] == nil { digests[right] = try digest(right) }
+                            checks.append(("\(sex) \(name) exact texture pixels", digests[left] == digests[right]))
+                        }
+                        normalized[keyPath: field] = left
+                    }
+                    checks.append(("\(sex) \(name) material uniforms and flags", a == normalized))
+                }
+            }
+            let old = sequentialTimings.sample.composition, new = groupedTimings.sample.composition
+            checks.append(("\(sex) default stays sequential", old?.metalBatchCompletions == 5))
+            checks.append(("\(sex) only clothes share completion", new?.metalBatchCompletions == 3))
+            checks.append(("\(sex) uploads/dispatch/fallback unchanged", old?.metalEncodeDispatches == new?.metalEncodeDispatches &&
+                old?.realInputAllocations == new?.realInputAllocations && old?.fallbackAllocations == new?.fallbackAllocations && old?.fallbackBindings == new?.fallbackBindings))
+            let scopes = groupedTimings.sample.scopes
+            checks.append(("\(sex) group identities", scopes.filter { $0.identity.role == .clothesCompositionGroup }.map(\.identity.componentIndices) == [Optional.some([2, 3, 4])]))
+            for (phase, count) in groupedTimings.sample.calls {
+                checks.append(("\(sex) disjoint \(phase) scopes", scopes.reduce(0) { $0 + $1.calls[phase, default: 0] } == count))
+            }
+        }
+        return checks
+    }
+    for (name, passed) in checks { #expect(passed, "\(name)") }
+}
+
 @Test(.enabled(if: SourceFixtureSupport.shouldRun(["IKKOKU_MAKER_SELECTION_FIXTURES"]), "Requires IKKOKU_MAKER_SELECTION_FIXTURES"))
 @MainActor func sourceMakerHeadPreparationRebindsEachNormalAssemblyWithoutEditingInput() throws {
     let (fixtures, directory) = try MakerSelectionCases.load()

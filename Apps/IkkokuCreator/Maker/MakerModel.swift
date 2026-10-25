@@ -626,17 +626,19 @@ final class MakerModel: ViewportInputHandler {
                 current = applied.appearance; fields.formUnion(applied.appliedFields); diagnostics += applied.diagnostics
             }
         } else if FileManager.default.fileExists(atPath: bindingsURL.path) {
-            let bindings = try SourceAppearanceTimings.measure(timings, .bindingPreparation) {
-                var value = try SourceAppearanceBindings.load(url: bindingsURL)
-                if let prepared { value = value.restricted(to: Set(prepared.source.parts.map { $0.mesh.name })) }
-                return value
+            let applied = try SourceAppearanceTimings.scoped(timings, .base) {
+                let bindings = try SourceAppearanceTimings.measure(timings, .bindingPreparation) {
+                    var value = try SourceAppearanceBindings.load(url: bindingsURL)
+                    if let prepared { value = value.restricted(to: Set(prepared.source.parts.map { $0.mesh.name })) }
+                    return value
+                }
+                return try current.applying(draft, bindings: bindings, directory: url.deletingLastPathComponent(), resources: host.renderer.resources,
+                    timings: timings)
             }
-            let applied = try current.applying(draft, bindings: bindings, directory: url.deletingLastPathComponent(), resources: host.renderer.resources,
-                timings: timings)
             current = applied.appearance; fields.formUnion(applied.appliedFields); diagnostics += applied.diagnostics
         }
         if let prepared, let applied = try prepared.appearance(base: current, card: draft, resources: host.renderer.resources,
-            modLibrary: modLibrary, transaction: transaction, timings: timings, inputs: inputs) {
+            modLibrary: modLibrary, transaction: transaction, timings: timings, inputs: inputs, batchClothes: true) {
             current = applied.appearance; fields.formUnion(applied.appliedFields); diagnostics += applied.diagnostics
         }
         return .init(appearance: current, appliedFields: fields, diagnostics: diagnostics)

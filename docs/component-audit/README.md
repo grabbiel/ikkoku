@@ -101,6 +101,9 @@ acceptance boundary; their old “next” steps are historical, not a live queue
   selection falls from 667–701 ms to 159–161 ms; the first selection costs
   16–25 ms more, retains about 39 MB of logical rig payload and leaves owner
   stalls. See the [reuse evidence and limits](../reference/character/maker-assets.md#bounded-decoded-rig-reuse-192).
+  Per-component diagnostics now place about 52 ms of the tested repeat-cycle
+  card-appearance work in six compositor wait/view intervals; batching across
+  components remains a proposal. See the [attribution evidence](../reference/character/maker-assets.md#per-component-appearance-attribution-192).
 - **Materials / Renderer / Visual Fidelity:** the controlled inner-shoe fixture
   reaches 19 live slots with one explicit body fallback after the bounded female
   head-0 face composite. Independent base/distinct targets stay within one byte;
@@ -129,9 +132,18 @@ acceptance boundary; their old “next” steps are historical, not a live queue
   clean retries with real warm and cloned character previews, exact poses and
   resources. Exact route checkpoints now also preserve irregular-step history
   after rejected frames ([#226](https://github.com/grabbiel/ikkoku/issues/226)).
+  A separate quiet probe bounds checkpoint cost for one route with no ordinary
+  character checkpoints; it supplies no evidence for a new optimization. See the
+  [scope and raw timing distinctions](../reference/mods/plugin-execution.md#deterministic-verification).
   Eleven Engine tests and 88 Release app checks pass, including independent
-  retry and lazy-clock ownership. Checkpoint costs remain unmeasured; general
-  plugin compatibility remains outside the supported subset.
+  retry and lazy-clock ownership. Mute acceptance also checks the requested
+  configuration against an independent original-reader oracle across six fresh
+  run/reload/continue processes; this adds no runtime work or adapter coverage.
+  A separate 132-check Release regression exercises actual focus notifications
+  across replacement, rejected loads and repeated unload/remount, with exact
+  state/resource retention and explicit unload changes. Real OS focus and
+  multiple-window ownership still need separate acceptance.
+  General plugin compatibility remains outside the supported subset.
 
 Use the linked issue/PR state for work in review, and the owning reference for
 exact commands, commits, costs, failed attempts and exclusions. Public CI checks

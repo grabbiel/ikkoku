@@ -53,6 +53,38 @@ struct SourceMaterialLayer {
     let layout: Float4?, transform: [Float]?, mask: SourceMaterialImage?
 }
 
+struct SourceMaterialCompositionRecipe {
+    let kind: SourceColorComposition.Kind
+    let width: Int, height: Int
+    let main: SourceMaterialImage?, mask: SourceMaterialImage?
+    let colors: [Float4], blend: Float, encodeSRGB: Bool
+    let patterns: [SourceMaterialPattern], layers: [SourceMaterialLayer]
+
+    var inputImages: [SourceMaterialImage?] {
+        var images = [SourceMaterialImage?](repeating: nil, count: 21)
+        images[0] = main; images[1] = mask
+        for pattern in patterns { images[2 + pattern.channel] = pattern.image }
+        for (index, layer) in layers.enumerated() {
+            images[5 + index] = layer.image; images[13 + index] = layer.mask
+        }
+        return images
+    }
+}
+
+/// Fault seams remain internal and absent in production. Tests exercise the
+/// real allocation/encoding/lease path while failing exactly one API boundary.
+struct SourceMaterialMetalCompletionHooks {
+    var commandBuffer: ((any MTLCommandQueue) -> (any MTLCommandBuffer)?)?
+    var encoder: ((any MTLCommandBuffer) -> (any MTLComputeCommandEncoder)?)?
+    var completionError: ((any MTLCommandBuffer) -> (any Error)?)?
+    var view: ((any MTLTexture, Int) -> (any MTLTexture)?)?
+}
+
+struct SourceMaterialMetalCompletionError: Error, LocalizedError {
+    let underlying: any Error
+    var errorDescription: String? { "Source material Metal dispatch failed: \(underlying.localizedDescription)." }
+}
+
 final class SourceMaterialCompositor {
     let device: any MTLDevice, pipeline: any MTLComputePipelineState, queue: any MTLCommandQueue
     // Written only at creation, then bound read-only for this compositor's recipes.
@@ -182,20 +214,25 @@ final class SourceMaterialMetalBatch {
     func prepare(kind: SourceColorComposition.Kind, width: Int, height: Int,
                 main: SourceMaterialImage?, mask: SourceMaterialImage?, colors: [Float4], blend: Float, encodeSRGB: Bool,
                 patterns: [SourceMaterialPattern], layers: [SourceMaterialLayer]) throws {
+        try prepare(.init(kind: kind, width: width, height: height, main: main, mask: mask, colors: colors,
+            blend: blend, encodeSRGB: encodeSRGB, patterns: patterns, layers: layers))
+    }
+
+    func prepare(_ recipe: SourceMaterialCompositionRecipe) throws {
+        let kind = recipe.kind, width = recipe.width, height = recipe.height
+        let colors = recipe.colors, blend = recipe.blend, encodeSRGB = recipe.encodeSRGB
+        let patterns = recipe.patterns, layers = recipe.layers
         let allocStart = timings.map { _ in ProcessInfo.processInfo.systemUptime }
         let kinds: [SourceColorComposition.Kind] = [.head, .eye, .eyeWhite, .clothes, .hair]
         var parameters = [Float4](repeating: .zero, count: 1 + 3 + 3 * 2 + 8 * 4)
         parameters[0] = Float4(Float(kinds.firstIndex(of: kind)!), Float(layers.count), blend, encodeSRGB ? 1 : 0)
         for (index, color) in colors.enumerated() { parameters[1 + index] = color }
-        var inputImages = [SourceMaterialImage?](repeating: nil, count: 21)
-        inputImages[0] = main; inputImages[1] = mask
+        let inputImages = recipe.inputImages
         for pattern in patterns {
-            inputImages[2 + pattern.channel] = pattern.image
             parameters[4 + pattern.channel * 2] = pattern.color
             parameters[5 + pattern.channel * 2] = Float4(pattern.tiling.x, pattern.tiling.y, pattern.image.repeating ? 1 : 0, 1)
         }
         for (index, layer) in layers.enumerated() {
-            inputImages[5 + index] = layer.image; inputImages[13 + index] = layer.mask
             let start = 10 + index * 4
             parameters[start] = layer.color
             parameters[start + 1] = Float4(layer.image.repeating ? 1 : 0, layer.mask == nil ? 0 : 1,
@@ -241,46 +278,75 @@ final class SourceMaterialMetalBatch {
     }
 
     func complete() throws -> [any MTLTexture] {
-        guard !prepared.isEmpty else { return [] }
+        do { return try Self.complete([self], timings: timings).first ?? [] }
+        catch let error as SourceMaterialMetalCompletionError {
+            // Retain the established singleton error type and message.
+            throw SourceCharacterCardError.invalid(error.localizedDescription)
+        }
+    }
+
+    /// A group retains its separate per-call compositors, fallback textures and
+    /// prepared inputs. Only submission/completion is shared. Views are checked
+    /// in original call/recipe order before the caller registers any handle.
+    static func complete(_ batches: [SourceMaterialMetalBatch], timings: SourceAppearanceTimings?,
+                         hooks: SourceMaterialMetalCompletionHooks? = nil) throws -> [[any MTLTexture]] {
+        guard let first = batches.first(where: { !$0.prepared.isEmpty }) else { return batches.map { _ in [] } }
         let encodeStart = timings.map { _ in ProcessInfo.processInfo.systemUptime }
-        guard let buffer = compositor.queue.makeCommandBuffer(),
-              let encoder = buffer.makeComputeCommandEncoder() else {
+        let optionalBuffer: (any MTLCommandBuffer)?
+        if let makeBuffer = hooks?.commandBuffer { optionalBuffer = makeBuffer(first.compositor.queue) }
+        else { optionalBuffer = first.compositor.queue.makeCommandBuffer() }
+        guard let buffer = optionalBuffer else {
             throw SourceCharacterCardError.invalid("Unable to allocate source material output.")
         }
-        encoder.setComputePipelineState(compositor.pipeline)
-        let groupWidth = compositor.pipeline.threadExecutionWidth
-        for recipe in prepared {
-            recipe.parameters.withUnsafeBytes { encoder.setBytes($0.baseAddress!, length: $0.count, index: 0) }
-            for (index, texture) in recipe.inputs.enumerated() { encoder.setTexture(texture, index: index) }
-            encoder.setTexture(recipe.output, index: 21)
-            encoder.dispatchThreads(MTLSize(width: recipe.width, height: recipe.height, depth: 1),
-                threadsPerThreadgroup: MTLSize(width: groupWidth,
-                    height: max(1, min(8, compositor.pipeline.maxTotalThreadsPerThreadgroup / groupWidth)), depth: 1))
-            timings?.recordMetalEncodeDispatch()
+        let optionalEncoder: (any MTLComputeCommandEncoder)?
+        if let makeEncoder = hooks?.encoder { optionalEncoder = makeEncoder(buffer) }
+        else { optionalEncoder = buffer.makeComputeCommandEncoder() }
+        guard let encoder = optionalEncoder else {
+            throw SourceCharacterCardError.invalid("Unable to allocate source material output.")
+        }
+        for batch in batches {
+            encoder.setComputePipelineState(batch.compositor.pipeline)
+            let groupWidth = batch.compositor.pipeline.threadExecutionWidth
+            for recipe in batch.prepared {
+                recipe.parameters.withUnsafeBytes { encoder.setBytes($0.baseAddress!, length: $0.count, index: 0) }
+                for (index, texture) in recipe.inputs.enumerated() { encoder.setTexture(texture, index: index) }
+                encoder.setTexture(recipe.output, index: 21)
+                encoder.dispatchThreads(MTLSize(width: recipe.width, height: recipe.height, depth: 1),
+                    threadsPerThreadgroup: MTLSize(width: groupWidth,
+                        height: max(1, min(8, batch.compositor.pipeline.maxTotalThreadsPerThreadgroup / groupWidth)), depth: 1))
+                timings?.recordMetalEncodeDispatch()
+            }
         }
         encoder.endEncoding()
         buffer.commit()
         if let encodeStart {
-            let now = ProcessInfo.processInfo.systemUptime
-            timings?.recordComposition(.encodeSubmit, milliseconds: (now - encodeStart) * 1000)
+            timings?.recordComposition(.encodeSubmit, milliseconds: (ProcessInfo.processInfo.systemUptime - encodeStart) * 1000)
         }
         let waitStart = timings.map { _ in ProcessInfo.processInfo.systemUptime }
         buffer.waitUntilCompleted()
         timings?.recordMetalBatchCompletion()
+        if let error = hooks?.completionError?(buffer) { throw SourceMaterialMetalCompletionError(underlying: error) }
         guard buffer.status == .completed else {
-            throw SourceCharacterCardError.invalid(
-                "Source material Metal dispatch failed: \(buffer.error?.localizedDescription ?? "command buffer failed").")
+            throw SourceMaterialMetalCompletionError(underlying: buffer.error ?? NSError(domain: "SourceMaterialMetal", code: 1,
+                userInfo: [NSLocalizedDescriptionKey: "command buffer failed"]))
         }
-        var views: [any MTLTexture] = []
-        for recipe in prepared {
-            guard let display = recipe.output.makeTextureView(pixelFormat: .rgba8Unorm_srgb) else {
-                throw SourceCharacterCardError.invalid("Source material Metal dispatch failed: texture view unavailable.")
+        var result: [[any MTLTexture]] = [], viewIndex = 0
+        for batch in batches {
+            var views: [any MTLTexture] = []
+            for recipe in batch.prepared {
+                let optionalView: (any MTLTexture)?
+                if let makeView = hooks?.view { optionalView = makeView(recipe.output, viewIndex) }
+                else { optionalView = recipe.output.makeTextureView(pixelFormat: .rgba8Unorm_srgb) }
+                guard let display = optionalView else {
+                    throw SourceCharacterCardError.invalid("Source material Metal dispatch failed: texture view unavailable.")
+                }
+                views.append(display); viewIndex += 1
             }
-            views.append(display)
+            result.append(views)
         }
         if let waitStart {
             timings?.recordComposition(.waitAndView, milliseconds: (ProcessInfo.processInfo.systemUptime - waitStart) * 1000)
         }
-        return views
+        return result
     }
 }

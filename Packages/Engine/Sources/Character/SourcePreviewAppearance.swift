@@ -60,6 +60,28 @@ public final class SourceBaseAppearanceTimings {
 public final class SourceAppearanceTimings {
     public enum Phase: String { case bindingPreparation, pixelReadHash, pipelineCreation, composeEncodeWait, componentLoad, bodyMaskLoad }
     enum CompositionPhase: String { case allocationUpload, encodeSubmit, waitAndView }
+    /// Labels describe the existing synchronous call boundary, not reusable
+    /// material identity. Construct them only when a collector is present.
+    public struct ScopeIdentity: Encodable, Equatable, Sendable {
+        public enum Role: String, Encodable, Sendable { case base, component, clothesCompositionGroup, bodyMaskLoad, bodyMaskRemove }
+        public let role: Role
+        public let componentIndex: Int?, prefix: String?, accessorySlot: Int?, indoorShoes: Bool?
+        public let componentIndices: [Int]?
+        public static let base = Self(role: .base)
+        public static let bodyMaskLoad = Self(role: .bodyMaskLoad)
+        public static let bodyMaskRemove = Self(role: .bodyMaskRemove)
+        public static func component(index: Int, prefix: String, accessorySlot: Int?, indoorShoes: Bool) -> Self {
+            Self(role: .component, componentIndex: index, prefix: prefix, accessorySlot: accessorySlot, indoorShoes: indoorShoes)
+        }
+        public static func clothesCompositionGroup(indices: [Int]) -> Self {
+            Self(role: .clothesCompositionGroup, componentIndices: indices)
+        }
+        private init(role: Role, componentIndex: Int? = nil, prefix: String? = nil,
+                     accessorySlot: Int? = nil, indoorShoes: Bool? = nil, componentIndices: [Int]? = nil) {
+            self.role = role; self.componentIndex = componentIndex; self.prefix = prefix
+            self.accessorySlot = accessorySlot; self.indoorShoes = indoorShoes; self.componentIndices = componentIndices
+        }
+    }
     public struct CompositionSample: Encodable {
         public let milliseconds: [String: Double], calls: [String: Int]
         /// These transient input textures are not registered in ResourceStore.
@@ -71,19 +93,85 @@ public final class SourceAppearanceTimings {
         public let milliseconds: [String: Double]
         public let calls: [String: Int]
         public let composition: CompositionSample?
+        public let scopes: [ScopeSample]
+    }
+    /// Ordered, disjoint scopes used by the Maker candidate path. Their phase
+    /// deltas reuse aggregate observations; do not add scopes to the aggregate.
+    /// A failed scope is a partial observation, never a successful application.
+    public struct ScopeSample: Encodable {
+        public let identity: ScopeIdentity, succeeded: Bool, inclusiveMilliseconds: Double
+        public let milliseconds: [String: Double], calls: [String: Int]
+        public let composition: CompositionSample?
     }
     private var milliseconds: [String: Double] = [:]
     private var calls: [String: Int] = [:]
     private var compositionMilliseconds: [String: Double] = [:], compositionCalls: [String: Int] = [:]
     private var realInputAllocations = 0, fallbackAllocations = 0, fallbackBindings = 0
     private var metalEncodeDispatches = 0, metalBatchCompletions = 0
+    private var scopes: [ScopeSample] = []
     public init() {}
     public var sample: Sample {
         Sample(milliseconds: milliseconds, calls: calls,
             composition: compositionCalls.isEmpty && realInputAllocations == 0 && fallbackAllocations == 0 && fallbackBindings == 0 ? nil :
             CompositionSample(milliseconds: compositionMilliseconds, calls: compositionCalls,
                 realInputAllocations: realInputAllocations, fallbackAllocations: fallbackAllocations, fallbackBindings: fallbackBindings,
-                metalEncodeDispatches: metalEncodeDispatches, metalBatchCompletions: metalBatchCompletions))
+                metalEncodeDispatches: metalEncodeDispatches, metalBatchCompletions: metalBatchCompletions), scopes: scopes)
+    }
+
+    private struct Counters {
+        let milliseconds: [String: Double], calls: [String: Int]
+        let compositionMilliseconds: [String: Double], compositionCalls: [String: Int]
+        let realInputAllocations: Int, fallbackAllocations: Int, fallbackBindings: Int
+        let metalEncodeDispatches: Int, metalBatchCompletions: Int
+    }
+    private var counters: Counters {
+        Counters(milliseconds: milliseconds, calls: calls,
+            compositionMilliseconds: compositionMilliseconds, compositionCalls: compositionCalls,
+            realInputAllocations: realInputAllocations, fallbackAllocations: fallbackAllocations, fallbackBindings: fallbackBindings,
+            metalEncodeDispatches: metalEncodeDispatches, metalBatchCompletions: metalBatchCompletions)
+    }
+    private static func intervalDelta(milliseconds: [String: Double], calls: [String: Int],
+                                      previousMilliseconds: [String: Double], previousCalls: [String: Int])
+        -> (milliseconds: [String: Double], calls: [String: Int]) {
+        var elapsed: [String: Double] = [:], counts: [String: Int] = [:]
+        for (phase, count) in calls {
+            let delta = count - (previousCalls[phase] ?? 0)
+            if delta > 0 {
+                counts[phase] = delta
+                elapsed[phase] = milliseconds[phase, default: 0] - previousMilliseconds[phase, default: 0]
+            }
+        }
+        return (elapsed, counts)
+    }
+    /// No identity construction, snapshots or additional clocks for nil callers.
+    /// The candidate's collector is local to its synchronous owner operation;
+    /// nothing is observed across a queue or actor boundary.
+    public static func scoped<T>(_ timings: SourceAppearanceTimings?, _ identity: @autoclosure () -> ScopeIdentity,
+                                 _ body: () throws -> T) rethrows -> T {
+        guard let timings else { return try body() }
+        let identity = identity(), before = timings.counters
+        let start = ProcessInfo.processInfo.systemUptime
+        var succeeded = false
+        defer {
+            let elapsed = (ProcessInfo.processInfo.systemUptime - start) * 1000
+            let after = timings.counters
+            let phases = intervalDelta(milliseconds: after.milliseconds, calls: after.calls,
+                previousMilliseconds: before.milliseconds, previousCalls: before.calls)
+            let composition = intervalDelta(milliseconds: after.compositionMilliseconds, calls: after.compositionCalls,
+                previousMilliseconds: before.compositionMilliseconds, previousCalls: before.compositionCalls)
+            let real = after.realInputAllocations - before.realInputAllocations
+            let fallback = after.fallbackAllocations - before.fallbackAllocations
+            let bindings = after.fallbackBindings - before.fallbackBindings
+            let dispatches = after.metalEncodeDispatches - before.metalEncodeDispatches
+            let completions = after.metalBatchCompletions - before.metalBatchCompletions
+            let hasComposition = !composition.calls.isEmpty || real != 0 || fallback != 0 || bindings != 0 || dispatches != 0 || completions != 0
+            timings.scopes.append(ScopeSample(identity: identity, succeeded: succeeded, inclusiveMilliseconds: elapsed,
+                milliseconds: phases.milliseconds, calls: phases.calls,
+                composition: hasComposition ? CompositionSample(milliseconds: composition.milliseconds, calls: composition.calls,
+                    realInputAllocations: real, fallbackAllocations: fallback, fallbackBindings: bindings,
+                    metalEncodeDispatches: dispatches, metalBatchCompletions: completions) : nil))
+        }
+        let value = try body(); succeeded = true; return value
     }
 
     func recordComposition(_ phase: CompositionPhase, milliseconds: Double) {
