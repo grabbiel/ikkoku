@@ -21,7 +21,8 @@ protocol ViewportInputHandler: AnyObject {
 
 /// A viewport model whose fixed-rate step the viewport's display link starts
 /// (R7 phase 2, live pacing; docs/reference/renderer.md, "Live pacing"). The
-/// Studio is one; the Maker keeps its own timer.
+/// Studio and the Maker are; each owns its viewport, so a mode switch hands
+/// the steps to the other model's new viewport.
 @MainActor
 protocol LivePacedHandler: AnyObject {
     /// The viewport `owner`'s display link starts the steps from now on.
@@ -57,8 +58,7 @@ final class ViewportNSView: NSView {
     /// under `IKKOKU_PERF_LIVE_PACING=timer`, a measurement control).
     private let pacesSteps = PerfTrace.active?.configuration.livePacing != "timer"
     /// Whether the running render thread starts the steps: decided when it
-    /// starts, from `pacesSteps` and whether the handler is a `LivePacedHandler`
-    /// (the Maker's is not, so its link sends no requests).
+    /// starts, from `pacesSteps` and whether the handler is a `LivePacedHandler`.
     private var threadPaces = false
     private var lastPoint = SIMD2<Float>(0, 0)
     private var tracking: NSTrackingArea?
