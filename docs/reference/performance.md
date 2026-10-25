@@ -2080,7 +2080,27 @@ recording:
   deform pass.
 - **Native Studio, Maker idle and the slider.** These change every
   deformation in every frame, so they reuse nothing and are unchanged.
-- **Deform passes.** AFTER-PASSES
+- **Deform passes.** On base, every rendered frame and every pick runs a
+  deform pass with every deformation. The counts below are from the final
+  build `d940390`: unmeasured 10 s runs outside the windows, and the third
+  window for FK drag and the slider. Picks are not in them; the pick's GPU
+  time above shows that it reuses.
+
+| Workload | Rendered frames | Frames with a deform pass | Dispatches | Reused | Untracked dispatches |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| Studio orbit | 1,193 | 1 | 3 | 137,192 | 0 |
+| Studio FK drag | 1,197–1,199 | 1,197–1,199 | 4,803–4,811 | 132,852–133,074 | 0 |
+| Studio hover | 300 | 27 | 71 | 34,429 | 0 |
+| Studio idle | 300 | 300 | 700 | 33,800 | 0 |
+| Native Studio idle | 300 | 300 | 18,900 | 0 | 17,136 |
+| Maker idle | 300 | 300 | 6,000 | 0 | 5,400 |
+| Maker slider | 1,199–1,200 | 1,199–1,200 | 23,980–24,000 | 0 | 21,700–21,720 |
+
+Per second, deform passes went from 120 to 0.1 in orbit (the first frame
+only), from 30 plus 126–150 picks to 2.7 in hover, and stayed at 30 in idle
+and 120 in FK drag, with 2.3 and 4 dispatches per pass instead of 115. The
+native scene, Maker idle and the slider still dispatch every deformation;
+about 90% of those dispatches ran untracked.
 
 #### Render-thread CPU per frame, in one window
 
@@ -2164,7 +2184,49 @@ reuses every deformation.
 
 ### Correctness
 
-AFTER-CORRECTNESS
+- **Captures.** The six `IKKOKU_AUTOCAPTURE` renders of
+  [G3](#phase-2-item-4-unchanged-interactive-frames-g3) (source Studio,
+  native Studio and Maker, each with the live opt-in off and on), each its
+  own launch under the app lock with the shared fixture map. All 6 PNGs and
+  the 3 live reports of the final Release build are byte-identical to base
+  `aee4287` (`.local/r7f-frame-skip/captures`, hashes in `summary.json`).
+  Captures dispatch every deformation, so they are the references.
+- **Reuse.** `InteractiveFrameTests` compares every reused draw byte for byte
+  with a draw that dispatched
+  ([tests](renderer.md#renderer-threads-r7-phase-2-item-2)):
+  - the palette: a moved bone, one bit of one matrix, and back;
+  - the morphs: a weight, entries below the threshold, and none;
+  - the mesh: another mesh on the key, and back;
+  - released, regrown and transient buffers, and keys a frame doesn't use;
+  - captures, benchmarks, and synchronous and asynchronous picks between
+    draws, in queue order;
+  - live source-shader draws, which read the reused vertices;
+  - the bypass: 2 tracked and 29 untracked draws with exact pixels, a pick
+    in between, no stale record afterwards, and the end of a bypass after a
+    0.1 s pause.
+
+  `swift test --package-path Packages/Engine --filter
+  'InteractiveFrameTests|DisplayLinkRatePolicy|PickTests|renderThreadDraws|presentationCadence|presentationLateness|CharacterLifetime'`:
+  32 tests pass.
+- **ThreadSanitizer.** The same filter with `--sanitize=thread`: 32 tests
+  pass with 0 warnings.
+- **Lifecycle.** `perf_trace.py run --workloads viewport-lifecycle` on the
+  final Release build passed with no warning: 0 keep-alive refreshes while
+  the window was minimized (6 callbacks), one render thread before every
+  step and at the end, and 82 presented frames after the restore.
+- **Engine suite** on `802fa4d` with every fixture of the shared map
+  exported: 930 tests, 15 named skips and 2 failures, plus 21 in the second
+  target. Both failures are environmental:
+  - `liveSourceShadersMeetTheControlledOriginalFrameGates` expects 62 store
+    entries and finds 52. It fails on `main` `d6b61a2` too: pre-existing.
+  - `sourceDynamicsOriginalHairMatchesIndependentOracleWhenRequested`
+    resolves `body-skeleton.json` relative to the worktree, which has no
+    `.local/reverse`.
+- **Python.** `test_perf_trace.py` (21), `test_run.py` (85),
+  `test_doctor.py` (29) and `test_inspect_app_bundle.py` (61) pass.
+- **Lanes**, Debug, `--strict` under the app lock, 0 skipped:
+  `studio-scenarios` 64/64 (1,515 s), including the three accessory-label
+  checks, and `maker-scenarios` 10/10 (190 s).
 
 ### Limits
 

@@ -985,6 +985,15 @@ offset.
     benchmarks and synchronous picks of other content between draws, picks
     that reuse, the same pick ids with reuse off, and twelve asynchronous
     picks interleaved with draws, each draw byte-identical.
+  - `framesDropTheRecordsOfKeysTheyDoNotUse`: a frame without a key releases
+    the buffer its record held, and the key's next frame dispatches, then
+    reuses.
+  - `interactiveDrawsStopTrackingWhileEveryDeformationChanges`: a morph
+    weight that changes in every draw gives 2 tracked draws, then 29
+    untracked ones, each with the pixels of a draw that dispatched. A pick
+    in between still tracks, and the 30th draw, which tracks again,
+    dispatches the pick's content: no record survived the untracked writes.
+    A 0.1 s pause ends a bypass, and with reuse off nothing is untracked.
   - `liveDrawsReadReusedDeformedVertices`: a live source-shader draw reuses
     its deformation on every continuous callback, with identical pixels and
     no fallback.
