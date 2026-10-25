@@ -524,12 +524,31 @@ func sourceMakerPreparedAppearanceEnforcesAggregateBudgetAndExactComponentContex
         "head": ["file": "missing-head.json"], "clothes": [], "hair": []]
     try JSONSerialization.data(withJSONObject: manifest).write(to: url)
     let malformed = Data("malformed rig".utf8); try malformed.write(to: first)
-    func failure(_ action: () throws -> Void) -> String {
-        do { try action(); Issue.record("Invalid rig unexpectedly loaded"); return "no failure" }
-        catch { return String(reflecting: error) }
+    func failure(_ action: () throws -> Void) -> [String: String] {
+        do { try action(); Issue.record("Invalid rig unexpectedly loaded"); return [:] }
+        catch DecodingError.dataCorrupted(let context) {
+            // NSError descriptions contain dictionary order and object addresses.
+            // Compare the actual decoding case/context and underlying error identity.
+            var value = ["kind": "dataCorrupted", "context": context.debugDescription,
+                "codingPath": context.codingPath.map(\.stringValue).joined(separator: "/")]
+            if let error = context.underlyingError as NSError? {
+                value["underlyingDomain"] = error.domain; value["underlyingCode"] = String(error.code)
+                value["underlyingPath"] = error.userInfo[NSFilePathErrorKey] as? String ?? ""
+            }
+            return value
+        } catch {
+            let error = error as NSError
+            var value = ["kind": "error", "domain": error.domain, "code": String(error.code),
+                "path": error.userInfo[NSFilePathErrorKey] as? String ?? ""]
+            if let underlying = error.userInfo[NSUnderlyingErrorKey] as? NSError {
+                value["underlyingDomain"] = underlying.domain; value["underlyingCode"] = String(underlying.code)
+                value["underlyingPath"] = underlying.userInfo[NSFilePathErrorKey] as? String ?? ""
+            }
+            return value
+        }
     }
     let reference = failure { _ = try SourceRig.load(url: first) }
-    #expect(reference.contains("DecodingError"))
+    #expect(reference["kind"] == "dataCorrupted")
     #expect(failure { _ = try library.prepare(card: card, coordinate: 0, baseURL: url) } == reference)
     let timings = SourceMakerPreparationTimings()
     #expect(failure { _ = try library.prepare(card: card, coordinate: 0, baseURL: url, timings: timings) } == reference)
