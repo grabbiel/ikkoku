@@ -63,6 +63,17 @@ public struct SourceSceneEdits: Sendable {
     /// play state, true when the route was playing at save time; loading a
     /// true record resumes playback. Keys are route record source IDs.
     public var routeActive: [Int32: Bool]
+    /// ST-T11: route records' points (moved, added and deleted, with their
+    /// aids and settings) and route settings (loop, line visibility, orient,
+    /// line colour), keyed by route record ID (a copy's staged key). The
+    /// state is checked against the record (`SourceStudioRouteState.validate`)
+    /// for edits CharaStudio cannot make. Kept points keep their keys; each
+    /// added point takes the smallest free key, then its aid the next one
+    /// (`AddObjectRoute.AddPoint`/`InitAid` -> `GetNewIndex`), in ascending
+    /// route key order, after every insertion and without reusing a key of
+    /// this export's deleted points or records. The colour string is
+    /// rewritten only when the colour changes.
+    public var routes: [Int32: SourceStudioRouteState]
     /// Keys are source object IDs, including nested accessory children.
     /// The existing card editor preserves asset and saved resolver identities.
     public var cards: [Int32: SourceCharacterCard.Edits]
@@ -112,8 +123,8 @@ public struct SourceSceneEdits: Sendable {
                 visibility: [Int32: Bool] = [:], names: [Int32: String] = [:],
                 cameraActive: [Int32: Bool] = [:], routeActive: [Int32: Bool] = [:],
                 mouth: [Int32: MouthEdit] = [:], deletions: Set<Int32> = [], reparents: [Reparent] = [],
-                insertions: [SourceSceneInsertion] = []) {
-        self.deletions = deletions; self.reparents = reparents; self.insertions = insertions
+                insertions: [SourceSceneInsertion] = [], routes: [Int32: SourceStudioRouteState] = [:]) {
+        self.deletions = deletions; self.reparents = reparents; self.insertions = insertions; self.routes = routes
         self.transforms = transforms; self.cards = cards; self.kinematics = kinematics; self.thumbnailData = thumbnailData
         self.visibility = visibility; self.names = names
         self.cameraActive = cameraActive; self.routeActive = routeActive
@@ -136,6 +147,11 @@ struct SourceSceneEditSpans {
     var names: [Int32: Range<Int>] = [:]
     var cameraActive: [Int32: Range<Int>] = [:]
     var routeActive: [Int32: Range<Int>] = [:]
+    /// A route record's point list (its Int32 count through the last
+    /// point, up to `active`), its loop and visibleLine bytes, its orient
+    /// Int32 and its colour string.
+    struct Route { let points: Range<Int>, flags: Range<Int>, orientation: Range<Int>, color: Range<Int> }
+    var routes: [Int32: Route] = [:]
     var cards: [Int32: Range<Int>] = [:]
     var kinematics: [Int32: Kinematics] = [:]
     var animations: [Int32: Animation] = [:]
@@ -178,8 +194,8 @@ public extension KoikatsuSceneDocument {
             var rest = edits; rest.insertions = []
             return try inserting(edits.insertions).editedData(rest)
         }
-        guard !edits.transforms.isEmpty || !edits.cards.isEmpty || !edits.kinematics.isEmpty || !edits.animations.isEmpty || !edits.voices.isEmpty || edits.currentCamera != nil || !edits.cameraSlots.isEmpty || edits.thumbnailData != nil || !edits.visibility.isEmpty || !edits.names.isEmpty || !edits.cameraActive.isEmpty || !edits.routeActive.isEmpty || !edits.mouth.isEmpty || !edits.deletions.isEmpty || !edits.reparents.isEmpty else { return preservedData }
-        guard edits.transforms.count <= 100_000, edits.cards.count <= 10_000, edits.kinematics.count <= 10_000, edits.animations.count <= 10_000, edits.voices.count <= 10_000, edits.visibility.count <= 100_000, edits.names.count <= 100_000, edits.cameraActive.count <= 100_000, edits.routeActive.count <= 100_000, edits.mouth.count <= 10_000, edits.deletions.count <= 100_000, edits.reparents.count <= 100_000 else { throw KoikatsuReadError.limitExceeded("too many scene edits") }
+        guard !edits.transforms.isEmpty || !edits.cards.isEmpty || !edits.kinematics.isEmpty || !edits.animations.isEmpty || !edits.voices.isEmpty || edits.currentCamera != nil || !edits.cameraSlots.isEmpty || edits.thumbnailData != nil || !edits.visibility.isEmpty || !edits.names.isEmpty || !edits.cameraActive.isEmpty || !edits.routeActive.isEmpty || !edits.mouth.isEmpty || !edits.deletions.isEmpty || !edits.reparents.isEmpty || !edits.routes.isEmpty else { return preservedData }
+        guard edits.transforms.count <= 100_000, edits.cards.count <= 10_000, edits.kinematics.count <= 10_000, edits.animations.count <= 10_000, edits.voices.count <= 10_000, edits.visibility.count <= 100_000, edits.names.count <= 100_000, edits.cameraActive.count <= 100_000, edits.routeActive.count <= 100_000, edits.mouth.count <= 10_000, edits.deletions.count <= 100_000, edits.reparents.count <= 100_000, edits.routes.count <= 100_000 else { throw KoikatsuReadError.limitExceeded("too many scene edits") }
         var reader = try KoikatsuBinaryReader(preservedData)
         try reader.skipPNG()
         let thumbnailRange = 0..<reader.offset
@@ -215,6 +231,7 @@ public extension KoikatsuSceneDocument {
             targets += Array(edits.visibility.keys) + Array(edits.names.keys) + Array(edits.cameraActive.keys)
             targets += Array(edits.routeActive.keys) + Array(edits.cards.keys) + Array(edits.kinematics.keys)
             targets += Array(edits.animations.keys) + Array(edits.voices.keys) + Array(edits.mouth.keys)
+            targets += Array(edits.routes.keys)
             if let key = targets.filter(topology.deleted.contains).min() {
                 throw SourceSceneTopologyError.unsupported("A scene edit targets deleted source object \(key).")
             }
@@ -260,6 +277,7 @@ public extension KoikatsuSceneDocument {
             }
             add(range, Data([edits.routeActive[key]! ? 1 : 0]))
         }
+        let routes = try routePatches(edits, objects: objects, spans: reader.editSpans.routes, add: add)
         for key in edits.names.keys.sorted() {
             guard let span = reader.editSpans.names[key] else { throw reader.invalid("unavailable scene name destination") }
             add(span, try KoikatsuBinaryReader.dotNetString(edits.names[key]!))
@@ -379,7 +397,9 @@ public extension KoikatsuSceneDocument {
             }
             let result = try topology.emit(preservedData, spans: reader.editSpans.topology, rootCount: rootCountOffset,
                                            objectEnd: snapshot.objectSectionEndOffset, patches: patches)
-            try topology.verify(KoikatsuSceneReader.decodeDocument(result).snapshot)
+            let decoded = try KoikatsuSceneReader.decodeDocument(result)
+            try topology.verify(decoded.snapshot)
+            try Self.verify(routes, in: decoded)
             return result
         }
         patches.sort { $0.0.lowerBound < $1.0.lowerBound }
@@ -394,8 +414,95 @@ public extension KoikatsuSceneDocument {
         guard result.count <= 256 * 1024 * 1024 else { throw KoikatsuReadError.limitExceeded("edited scene exceeds 256 MiB") }
         // Parsing the complete result catches any shifted embedded-card boundary
         // before an invalid export can leave this pure writer.
-        _ = try KoikatsuSceneReader.decodeDocument(result)
+        try Self.verify(routes, in: KoikatsuSceneReader.decodeDocument(result))
         return result
+    }
+
+    /// ST-T11: the patches of every route edit (see `SourceSceneEdits.routes`)
+    /// and the route record each edited route must read back as.
+    private func routePatches(_ edits: SourceSceneEdits, objects: [Int32: KoikatsuObjectRecord],
+                              spans: [Int32: SourceSceneEditSpans.Route],
+                              add: (Range<Int>, Data) -> Void) throws -> [Int32: KoikatsuRouteRecord] {
+        guard !edits.routes.isEmpty else { return [:] }
+        var used = Set(SourceSceneInsertionPlan.usedKeys(snapshot)), cursor: Int32 = 0
+        func next() throws -> Int32 {
+            while used.contains(cursor) {
+                guard cursor < Int32.max else { throw KoikatsuReadError.limitExceeded("no free scene key") }
+                cursor += 1
+            }
+            used.insert(cursor); return cursor
+        }
+        func integer(_ value: Int32, _ data: inout Data) { var bits = value.littleEndian; withUnsafeBytes(of: &bits) { data.append(contentsOf: $0) } }
+        func float(_ value: Float, _ data: inout Data) { integer(Int32(bitPattern: value.bitPattern), &data) }
+        func amount(_ value: KoikatsuChangeAmount, _ data: inout Data) {
+            for vector in [value.position, value.rotationDegrees, value.scale] { for index in 0..<3 { float(vector[index], &data) } }
+        }
+        var expected: [Int32: KoikatsuRouteRecord] = [:]
+        for key in edits.routes.keys.sorted() {
+            let state = edits.routes[key]!
+            guard let record = objects[key]?.route, let span = spans[key], span.flags.count == 2, span.orientation.count == 4 else {
+                throw SourceSceneTopologyError.unsupported("Original-scene export cannot edit route \(key): no such route record.")
+            }
+            try state.validate(against: record)
+            // Route points are keyed Studio objects (`Studio.AddCtrlInfo` in
+            // `AddObjectRoute.LoadPoint`): adding or deleting one follows the
+            // duplicate and delete rule for plug-in data.
+            let kept = state.points.filter { $0.sourceIndex != nil }.count
+            if kept != state.points.count || kept != record.points.count {
+                try refuseObjectKeyedExtensions("Original-scene export does not add or delete route points in a scene that carries plug-in (ExtendedSave) data: plug-ins key that data by object, route points included, and rewrite it when CharaStudio saves. Save in native format instead.")
+            }
+            var points: [KoikatsuRoutePointRecord] = []
+            for point in state.points {
+                if let index = point.sourceIndex {
+                    points.append(point.record(pointKey: record.points[index].bone.sourceKey, aidKey: record.points[index].aid.sourceKey))
+                } else {
+                    let pointKey = try next(), aidKey = try next()
+                    points.append(point.record(pointKey: pointKey, aidKey: aidKey))
+                }
+            }
+            // OIRouteInfo.Save: the count, then OIRoutePointInfo.Save each
+            // (dicKey, changeAmount, speed, easeType, connection, the aid's
+            // dicKey/changeAmount/isInit, link).
+            var bytes = Data(); bytes.reserveCapacity(4 + points.count * 94)
+            integer(Int32(points.count), &bytes)
+            for point in points {
+                integer(point.bone.sourceKey, &bytes); amount(point.bone.transform, &bytes)
+                float(point.speed, &bytes); integer(point.easeType, &bytes); integer(point.connection, &bytes)
+                integer(point.aid.sourceKey, &bytes); amount(point.aid.transform, &bytes)
+                bytes.append(point.aidInitialized ? 1 : 0); bytes.append(point.linked ? 1 : 0)
+            }
+            add(span.points, bytes)
+            add(span.flags, Data([state.loop ? 1 : 0, state.visibleLine ? 1 : 0]))
+            var orientation = Data(); integer(state.orientation, &orientation)
+            add(span.orientation, orientation)
+            let colorChanged = (0..<4).contains { state.color[$0].bitPattern != record.color[$0].bitPattern }
+            if colorChanged {
+                // JsonUtility.ToJson(Color): the four fields as JSON numbers;
+                // each reads back as the same float.
+                let c = state.color
+                add(span.color, try KoikatsuBinaryReader.dotNetString(
+                    "{\"r\":\(Double(c.x)),\"g\":\(Double(c.y)),\"b\":\(Double(c.z)),\"a\":\(Double(c.w))}"))
+            }
+            expected[key] = KoikatsuRouteRecord(points: points, active: edits.routeActive[key] ?? record.active,
+                                                loop: state.loop, visibleLine: state.visibleLine,
+                                                orientation: state.orientation, color: colorChanged ? state.color : record.color)
+        }
+        return expected
+    }
+
+    /// Each edited route reads back exactly as planned, and no key repeats
+    /// (records, sub-infos, route points and aids).
+    private static func verify(_ routes: [Int32: KoikatsuRouteRecord], in document: KoikatsuSceneDocument) throws {
+        guard !routes.isEmpty else { return }
+        var found: [Int32: KoikatsuRouteRecord] = [:]
+        for record in SourceSceneInsertionPlan.records(document.snapshot) where routes[record.sourceKey] != nil {
+            found[record.sourceKey] = record.route
+        }
+        for (key, route) in routes where found[key] != route {
+            throw SourceSceneTopologyError.unsupported("The edited scene's route \(key) differs from the planned route edit.")
+        }
+        let used = SourceSceneInsertionPlan.usedKeys(document.snapshot)
+        guard Set(used).count == used.count else { throw SourceSceneTopologyError.unsupported("The edited scene uses a key twice.") }
     }
 }
 

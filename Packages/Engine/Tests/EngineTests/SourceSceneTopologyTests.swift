@@ -23,6 +23,14 @@ indirect enum TopologyNode {
     }
 }
 
+/// One `OIRoutePointInfo` record (ST-T11): the point's key and change
+/// amount, its settings, then its aid's key, change amount and `isInit`.
+struct TopologyRoutePoint {
+    var key: Int32, position: SIMD3<Float>, rotation = SIMD3<Float>.zero, scale = SIMD3<Float>.one
+    var speed: Float = 2, ease: Int32 = 21, connection: Int32 = 0
+    var aidKey: Int32, aid = SIMD3<Float>(1, 1, 1), aidInitialized = false, linked = false
+}
+
 struct TopologyScene {
     static let card = OriginalCardFixture.card()
     var roots: [TopologyNode]
@@ -49,6 +57,14 @@ struct TopologyScene {
     /// Headers that are not closed (tree state 1) and visible.
     var treeStates: [Int32: Int32] = [:]
     var hidden: Set<Int32> = []
+    /// Route points (none by default) and settings: `active`, `loop`,
+    /// `visibleLine`, `orient` and the colour JSON written verbatim.
+    var routePoints: [Int32: [TopologyRoutePoint]] = [:]
+    var routeActive: [Int32: Bool] = [:]
+    var routeLoop: [Int32: Bool] = [:]
+    var routeLine: [Int32: Bool] = [:]
+    var routeOrientation: [Int32: Int32] = [:]
+    var routeColor: [Int32: String] = [:]
 
     static func transform(_ key: Int32) -> [Float] {
         [Float(key), Float(key) + 0.5, -Float(key), 0, Float(key) * 3, 0, 1, 1, 1]
@@ -101,8 +117,20 @@ struct TopologyScene {
             out.b(false); out.f(0)
             list(children, &out)
         case let .route(key, children):
-            header(4, key, &out); out.s("Route \(key)"); list(children, &out)
-            out.i(0); out.b(false); out.b(true); out.b(true); out.i(0); out.color()
+            header(4, key, &out); out.s(name("Route", key)); list(children, &out)
+            let points = routePoints[key] ?? []
+            out.i(Int32(points.count))
+            for point in points {
+                out.i(point.key)
+                for vector in [point.position, point.rotation, point.scale] { for index in 0..<3 { out.f(vector[index]) } }
+                out.f(point.speed); out.i(point.ease); out.i(point.connection)
+                out.i(point.aidKey)
+                for vector in [point.aid, SIMD3<Float>.zero, SIMD3<Float>.one] { for index in 0..<3 { out.f(vector[index]) } }
+                out.b(point.aidInitialized); out.b(point.linked)
+            }
+            out.b(routeActive[key] ?? false); out.b(routeLoop[key] ?? true); out.b(routeLine[key] ?? true)
+            out.i(routeOrientation[key] ?? 0)
+            if let color = routeColor[key] { out.s(color) } else { out.color() }
         case let .character(key, groups):
             header(0, key, &out); out.i(1); out.data += Self.card
             for bones in [fk[key] ?? [], ik[key] ?? []] {
