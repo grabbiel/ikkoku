@@ -95,12 +95,17 @@ private final class RigReuseBarrier: Sendable {
 
 @Test func sourceRigLogicalChargeOverflowDoesNotAllocateOrWrap() {
     var sum = SourceRigLogicalCharge()
-    #expect(sum.add(Int.max))
-    #expect(!sum.add(1)); #expect(sum.bytes == Int.max)
+    let maximumAdded = sum.add(Int.max)
+    #expect(maximumAdded)
+    let overflowAdded = sum.add(1)
+    #expect(!overflowAdded); #expect(sum.bytes == Int.max)
     var product = SourceRigLogicalCharge()
-    #expect(!product.product(Int.max, 2)); #expect(product.bytes == 0)
-    #expect(!product.add(-1)); #expect(!product.product(-1, 8))
-    #expect(product.product(0, Int.max)); #expect(product.bytes == 0)
+    let overflowMultiplied = product.product(Int.max, 2)
+    #expect(!overflowMultiplied); #expect(product.bytes == 0)
+    let negativeAdded = product.add(-1), negativeMultiplied = product.product(-1, 8)
+    #expect(!negativeAdded); #expect(!negativeMultiplied)
+    let zeroMultiplied = product.product(0, Int.max)
+    #expect(zeroMultiplied); #expect(product.bytes == 0)
 }
 
 @Test func sourceRigReuseRejectsInvalidKeysAndCrossLedgerOrEpochSnapshots() throws {
@@ -126,10 +131,12 @@ private final class RigReuseBarrier: Sendable {
     var owner: SourceRigReuseAdmission? = .init(maximumEntries: 1, maximumSnapshots: 1)
     weak var observedOwner = owner
     let epoch = SourceRigReuseEpoch()
-    var entry = try #require(SourceRigReuseEntry(rig: reuseRig(), key: reuseKey(), epoch: epoch, admission: owner!)) as SourceRigReuseEntry?
+    var entry = SourceRigReuseEntry(rig: try reuseRig(), key: reuseKey(), epoch: epoch, admission: owner!)
+    try #require(entry != nil)
     weak var observedEntry = entry
     let charge = entry!.logicalCharge
-    var first = try #require(SourceRigReuseSnapshot(entries: [entry!], epoch: epoch, admission: owner!)) as SourceRigReuseSnapshot?
+    var first = SourceRigReuseSnapshot(entries: [entry!], epoch: epoch, admission: owner!)
+    try #require(first != nil)
     weak var observedSnapshot = first
     var copy = first
     entry = nil; first = nil
@@ -194,6 +201,17 @@ private final class RigReuseBarrier: Sendable {
         + MemoryLayout<Int>.stride + 3 * MemoryLayout<AnyObject>.stride // permit field, permit owner, one entry reference
     #expect(snapshot.logicalReferenceBytes == expected)
     #expect(admission.counts.logicalBytes == entry.logicalCharge)
+    let rigBytes = try #require(entry.rig.decodedCacheLogicalByteCount)
+    let entryFields = MemoryLayout<SourceRigReuseKey>.stride + 64 + MemoryLayout<SourceRigReuseEpoch>.stride
+        + 2 * MemoryLayout<Int>.stride + 2 * MemoryLayout<AnyObject>.stride
+    #expect(entry.logicalCharge == rigBytes + entryFields)
+    let nativeBytes = ["syntheticRig": rigBytes, "entryIncludingKeyAndPermit": entry.logicalCharge,
+        "oneEntrySnapshot": expected, "sixteenEntrySnapshot": expected + 15 * MemoryLayout<AnyObject>.stride,
+        "sourceRigStride": MemoryLayout<SourceRig>.stride, "partStride": MemoryLayout<SourceRig.Part>.stride,
+        "nodeStride": MemoryLayout<RigDefinition.Node>.stride, "skinStride": MemoryLayout<RigDefinition.Skin>.stride,
+        "morphStride": MemoryLayout<MeshData.MorphTarget>.stride, "float3Stride": MemoryLayout<Float3>.stride]
+    let encoded = try JSONSerialization.data(withJSONObject: nativeBytes, options: .sortedKeys)
+    print("sourceRigReuseNativeLogicalBytes " + String(decoding: encoded, as: UTF8.self))
 }
 
 @MainActor @Test func sourceRigReuseCancelledWorkerRetainsOldEpochCreditsUntilDrain() async throws {
