@@ -63,19 +63,23 @@ public final class SourceAppearanceTimings {
     /// Labels describe the existing synchronous call boundary, not reusable
     /// material identity. Construct them only when a collector is present.
     public struct ScopeIdentity: Encodable, Equatable, Sendable {
-        public enum Role: String, Encodable, Sendable { case base, component, bodyMaskLoad, bodyMaskRemove }
+        public enum Role: String, Encodable, Sendable { case base, component, clothesCompositionGroup, bodyMaskLoad, bodyMaskRemove }
         public let role: Role
         public let componentIndex: Int?, prefix: String?, accessorySlot: Int?, indoorShoes: Bool?
+        public let componentIndices: [Int]?
         public static let base = Self(role: .base)
         public static let bodyMaskLoad = Self(role: .bodyMaskLoad)
         public static let bodyMaskRemove = Self(role: .bodyMaskRemove)
         public static func component(index: Int, prefix: String, accessorySlot: Int?, indoorShoes: Bool) -> Self {
             Self(role: .component, componentIndex: index, prefix: prefix, accessorySlot: accessorySlot, indoorShoes: indoorShoes)
         }
+        public static func clothesCompositionGroup(indices: [Int]) -> Self {
+            Self(role: .clothesCompositionGroup, componentIndices: indices)
+        }
         private init(role: Role, componentIndex: Int? = nil, prefix: String? = nil,
-                     accessorySlot: Int? = nil, indoorShoes: Bool? = nil) {
+                     accessorySlot: Int? = nil, indoorShoes: Bool? = nil, componentIndices: [Int]? = nil) {
             self.role = role; self.componentIndex = componentIndex; self.prefix = prefix
-            self.accessorySlot = accessorySlot; self.indoorShoes = indoorShoes
+            self.accessorySlot = accessorySlot; self.indoorShoes = indoorShoes; self.componentIndices = componentIndices
         }
     }
     public struct CompositionSample: Encodable {
