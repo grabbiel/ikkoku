@@ -548,7 +548,7 @@ private struct PluginRestoreFixture {
         case "Instantiate", "AwakeInstantiate": operationNode = clone
         case "InstantiateDestroy": operationNode = node("api", "Void", "world.Destroy", [clone])
         case "SetActive": operationNode = node("api", "Void", "setActive", [object, falseValue])
-        case "Destroy": operationNode = node("api", "Void", "world.Destroy", [object])
+        case "Destroy", "AwakeDestroy": operationNode = node("api", "Void", "world.Destroy", [object])
         default: operationNode = nil
         }
         var program = try #require(JSONSerialization.jsonObject(with: PluginLibraryFixture.program(guid: "Creator.Motion", salt: operation)) as? [String: Any])
@@ -564,6 +564,13 @@ private struct PluginRestoreFixture {
                 node("expression", nil, nil, [clone])]), node("empty")])
             methods = [["name": "Awake", "symbol": "M:Fixture.Awake", "static": false, "returnType": "Void", "parameters": [],
                         "body": node("block", nil, nil, [body]), "lifecycle": "Awake"]]
+        } else if operation == "AwakeDestroy" {
+            fields = []
+            methods = ["Awake", "OnEnable", "Start", "OnDisable", "OnDestroy"].map { event in
+                ["name": event, "symbol": "M:Fixture.\(event)", "static": false, "returnType": "Void", "parameters": [],
+                 "body": node("block", nil, nil, event == "Awake" ? [node("expression", nil, nil, [operationNode!])] : []),
+                 "lifecycle": event]
+            }
         } else {
             fields = [["name": "value", "type": "Float", "serialized": true,
                        "initializer": node("call", "Float", "Initialize")]]
@@ -601,6 +608,11 @@ private struct PluginRestoreFixture {
             _ = try session(document, fromLibrary: fromLibrary, restoring: #require(document.sourcePluginState))
             Issue.record("Restoring constructor escaped with changed scene topology")
         } catch SourcePluginError.invalid(let reason) { #expect(reason == Self.topologyError) }
+    }
+    static func pendingState(_ state: SourceStudioPluginState, roots: Any?) throws -> SourceStudioPluginState {
+        var json = try #require(JSONSerialization.jsonObject(with: JSONEncoder().encode(state)) as? [String: Any])
+        json["pendingDestructionRoots"] = roots // nil removes the key, NSNull keeps explicit null.
+        return try JSONDecoder().decode(SourceStudioPluginState.self, from: JSONSerialization.data(withJSONObject: json))
     }
 }
 
@@ -672,4 +684,131 @@ func sourcePluginRestorePreservesSameTopologyVisibilityAndPendingDestruction(fro
         #expect(actual == expected)
         #expect(restored.runtime.savedClock() == fresh.runtime.savedClock())
     }
+}
+
+@Test(arguments: [false, true])
+func sourcePluginPendingDestructionRestoresAwakeAndSurvivesFailedStep(fromLibrary: Bool) throws {
+    let root = try PluginLibraryFixture.directory("pending-awake")
+    defer { try? FileManager.default.removeItem(at: root) }
+    let fixture = try PluginRestoreFixture(root: root, operation: "AwakeDestroy")
+    let fresh = try fixture.session(PluginRestoreFixture.document(), fromLibrary: fromLibrary)
+    let saved = try JSONDecoder().decode(StudioDocument.self, from: JSONEncoder().encode(fresh.savedDocument()))
+    let state = try #require(saved.sourcePluginState)
+    #expect(state.pendingDestructionRoots == saved.objects.map(\.id))
+    #expect(state.bindings.first?.awake == true && state.bindings.first?.started == false)
+    #expect(fresh.runtime.callbackTrace.count == 1 && fresh.runtime.callbackTrace[0].hasSuffix(":Awake"))
+    let restored = try fixture.session(saved, fromLibrary: fromLibrary, restoring: state)
+    #expect(restored.runtime.callbackTrace.isEmpty)
+    #expect(!restored.world.isSourceActive(try restored.world.object(id: saved.objects[0].id)))
+    let before = try restored.savedDocument()
+    #expect(throws: SourcePluginError.self) {
+        _ = try restored.step(document: saved, deltaTime: 0.02, afterUpdate: {
+            throw SourcePluginError.runtime("Intentional failed first frame")
+        })
+    }
+    #expect(try restored.savedDocument() == before)
+    #expect(restored.runtime.callbackTrace.isEmpty)
+    let expected = try fresh.step(document: saved, deltaTime: 0.02)
+    let actual = try restored.step(document: saved, deltaTime: 0.02)
+    #expect(actual == expected && actual.objects.isEmpty)
+    #expect(actual.sourcePluginState?.pendingDestructionRoots == [])
+    #expect(actual.sourcePluginState?.bindings.first?.started == false && actual.sourcePluginState?.bindings.first?.destroyed == true)
+    #expect(restored.runtime.callbackTrace == Array(fresh.runtime.callbackTrace.dropFirst()))
+    #expect(restored.runtime.callbackTrace.count == 1 && restored.runtime.callbackTrace[0].hasSuffix(":OnDestroy"))
+    _ = try restored.step(document: actual, deltaTime: 0.02)
+    #expect(restored.runtime.callbackTrace.count == 1)
+}
+
+@Test(arguments: [false, true])
+func sourcePluginPendingDestructionPreservesExactOverlappingAndUnboundRoots(fromLibrary: Bool) throws {
+    let root = try PluginLibraryFixture.directory("pending-subtree")
+    defer { try? FileManager.default.removeItem(at: root) }
+    let fixture = try PluginRestoreFixture(root: root, operation: "noop")
+    var document = PluginRestoreFixture.document()
+    let target = document.objects[0]
+    var child = StudioObject(name: "Unbound child", kind: .folder); child.parent = target.id
+    var grandchild = StudioObject(name: "Unbound grandchild", kind: .folder); grandchild.parent = child.id
+    let other = StudioObject(name: "Unbound independent root", kind: .folder)
+    document.objects += [child, grandchild, other]
+    let fresh = try fixture.session(document, fromLibrary: fromLibrary)
+    for id in [other.id, child.id, target.id] { fresh.world.destroy(try fresh.world.object(id: id)) }
+    let saved = try fresh.savedDocument(), state = try #require(saved.sourcePluginState)
+    let roots = [target.id, child.id, other.id].sorted { $0.uuidString < $1.uuidString }
+    #expect(state.pendingDestructionRoots == roots)
+    #expect(fresh.world.pendingSourceDestruction().count == 4)
+    #expect(!roots.contains(grandchild.id))
+    let restored = try fixture.session(saved, fromLibrary: fromLibrary, restoring: state)
+    #expect(restored.world.pendingSourceDestructionRoots() == roots)
+    #expect(try restored.savedDocument() == saved)
+    #expect(try restored.step(document: saved, deltaTime: 0.02) == fresh.step(document: saved, deltaTime: 0.02))
+
+    // A live unbound input added after the snapshot uses normal candidate
+    // identity normalization before its persisted root is validated.
+    let added = StudioObject(name: "New normalized unbound root", kind: .folder)
+    var extended = saved; extended.objects.append(added)
+    let extendedState = try PluginRestoreFixture.pendingState(state, roots: (roots + [added.id]).map(\.uuidString))
+    #expect(extendedState.objectIdentities[added.id] == nil)
+    let normalized = try fixture.session(extended, fromLibrary: fromLibrary, restoring: extendedState)
+    #expect(normalized.world.identities[added.id] == "native:\(added.id.uuidString)")
+    #expect(Set(normalized.world.pendingSourceDestructionRoots()) == Set(roots + [added.id]))
+}
+
+@Test(arguments: [false, true])
+func sourcePluginPendingDestructionLegacyNullAndEmptyKeepConstructorPolicy(fromLibrary: Bool) throws {
+    let root = try PluginLibraryFixture.directory("pending-legacy")
+    defer { try? FileManager.default.removeItem(at: root) }
+    let forms: [(String, Any?)] = [("missing", nil), ("null", NSNull()), ("empty", [String]())]
+    for operation in ["noop", "Destroy", "AwakeDestroy"] {
+        let fixture = try PluginRestoreFixture(root: root.appendingPathComponent(operation), operation: operation)
+        let fresh = try fixture.session(PluginRestoreFixture.document(), fromLibrary: fromLibrary)
+        let saved = try fresh.savedDocument()
+        for (name, roots) in forms {
+            let state = try PluginRestoreFixture.pendingState(#require(saved.sourcePluginState), roots: roots)
+            #expect(name == "empty" ? state.pendingDestructionRoots == [] : state.pendingDestructionRoots == nil)
+            let restored = try fixture.session(saved, fromLibrary: fromLibrary, restoring: state)
+            // Constructor Destroy still executes; completed Awake cannot be
+            // inferred/replayed from old or explicitly empty persisted state.
+            #expect(restored.world.pendingSourceDestructionRoots().count == (operation == "Destroy" ? 1 : 0))
+            let continued = try restored.step(document: saved, deltaTime: 0.02)
+            #expect(continued.objects.count == (operation == "Destroy" ? 0 : 1))
+            #expect(continued.sourcePluginState?.pendingDestructionRoots == [])
+            #expect(!restored.runtime.callbackTrace.contains(where: { $0.hasSuffix(":Awake") }))
+        }
+    }
+}
+
+@Test(arguments: [false, true])
+func sourcePluginPendingDestructionRejectsMalformedRootsBeforeCallbacks(fromLibrary: Bool) throws {
+    let root = try PluginLibraryFixture.directory("pending-invalid")
+    defer { try? FileManager.default.removeItem(at: root) }
+    let fixture = try PluginRestoreFixture(root: root, operation: "noop")
+    var document = PluginRestoreFixture.document()
+    let tombstone = StudioObject(name: "Removed unbound object", kind: .folder)
+    document.objects.append(tombstone)
+    let fresh = try fixture.session(document, fromLibrary: fromLibrary)
+    fresh.world.destroy(try fresh.world.object(id: tombstone.id))
+    let saved = try fresh.step(document: fresh.savedDocument(), deltaTime: 0.02)
+    let target = saved.objects[0].id, state = try #require(saved.sourcePluginState)
+    #expect(state.objectIdentities[tombstone.id] != nil && saved.object(tombstone.id) == nil)
+    let invalid = [[target.uuidString, target.uuidString.lowercased()], [UUID().uuidString], [tombstone.id.uuidString],
+                   Array(repeating: target.uuidString, count: 10001)]
+    for roots in invalid {
+        let changed = try PluginRestoreFixture.pendingState(state, roots: roots)
+        do {
+            _ = try fixture.session(saved, fromLibrary: fromLibrary, restoring: changed)
+            Issue.record("Invalid saved roots reached a restored session")
+        } catch SourcePluginError.invalid(let reason) {
+            #expect(reason == "Invalid saved pending destruction roots.")
+        }
+    }
+    #expect(try fresh.savedDocument() == saved)
+    // If validation came after callbacks, this constructor would create another
+    // clone and the existing topology guard would report a different error.
+    let cloning = try PluginRestoreFixture(root: root.appendingPathComponent("cloning"), operation: "Instantiate")
+    let cloned = try cloning.session(PluginRestoreFixture.document(), fromLibrary: fromLibrary).savedDocument()
+    let malformed = try PluginRestoreFixture.pendingState(#require(cloned.sourcePluginState), roots: [UUID().uuidString])
+    do {
+        _ = try cloning.session(cloned, fromLibrary: fromLibrary, restoring: malformed)
+        Issue.record("Invalid roots escaped validation before constructor replay")
+    } catch SourcePluginError.invalid(let reason) { #expect(reason == "Invalid saved pending destruction roots.") }
 }

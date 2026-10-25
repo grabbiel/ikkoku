@@ -76,8 +76,11 @@ have not been established. Current catalog counts state their actual denominator
 
 Overview reconciled **2026-10-24**; the task entries below name their acceptance
 scope and distinguish local checkpoints from merged work. The
-[README's eight-component table](../../README.md#current-scope) is the concise
-support summary. The dated handoffs below retain each producer, fixture and
+[README's eight-component table](../../README.md#current-scope) and
+[public component status website](https://ikkoku-status.felipearceo.chatgpt.site)
+provide concise support summaries. The website also covers the remaining app
+areas and links back to these references; its review date and accepted source
+commit identify the snapshot. The dated handoffs below retain each producer, fixture and
 acceptance boundary; their old “next” steps are historical, not a live queue.
 
 - **Models / Maker / Shapes:** six normal male/female head 0/200/201 assemblies
@@ -113,7 +116,13 @@ acceptance boundary; their old “next” steps are historical, not a live queue
   retains its separate attachment-read gate.
   Saved profile and library restoration also reject initialization that changes
   object topology, identities or clone state before committing the candidate.
-  General plugin compatibility remains outside the supported subset.
+  Locally validated pending-destruction persistence carries queued roots across
+  native save/reopen; older snapshots cannot recover requests they never stored.
+  A retained 44-check Release regression verifies repeated frame failures and
+  clean retries with real warm and cloned character previews, exact poses and
+  resources. It changes no production behavior; route rollback and checkpoint
+  cost still need separate acceptance. General plugin compatibility remains
+  outside the supported subset.
 
 Use the linked issue/PR state for work in review, and the owning reference for
 exact commands, commits, costs, failed attempts and exclusions. Public CI checks
@@ -674,6 +683,25 @@ attachment/profile/library checks. Root independently verifies all six app
 reports and their executable/source provenance. The first Engine attempt's
 missing fixture is retained separately from the corrected run. These checks
 establish functional behavior, without a timing, GUI or general compatibility claim.
+
+**Local acceptance — queued destruction across native restore, [#221](https://github.com/grabbiel/ikkoku/issues/221):**
+A scene saved after `Awake` queued destruction previously reopened without that
+request: its next step kept the object alive instead of calling `OnDestroy` and
+removing it. At `e9e6198`, native snapshots preserve exact pending root UUIDs,
+including overlapping and unbound roots, and validate them before any restoring
+callback. The next ordinary step completes destruction; save/open does not force
+a tick or replay `Awake`. Missing/null fields retain legacy behavior. Restoring
+pending roots with an initializer that serves attachment reads remains explicitly
+unsupported under the existing atomic restoration guard.
+
+All 34 focused Engine tests and 222 app checks pass. The original 15-save/29-reopen
+reproduction now passes unchanged, alongside malformed native/undo/redo rejection,
+failed-step retry, topology and attachment/profile/library controls. Root verifies
+all nine app reports and released process groups. Snapshotting sorts only the
+pending roots, with no descendant expansion or new file access; no timing or
+general compatibility benefit is claimed. The
+[plugin reference](../reference/mods/plugin-execution.md#saved-scenes-and-migration)
+records schema compatibility, exact producer hashes and the preserved failing pair.
 
 **Completed before this wave:** ST-T02/A-T04 passed local acceptance at PR #2
 (head `93e6b06`, merge `aa4bcb9`). Both configurations retained identities and

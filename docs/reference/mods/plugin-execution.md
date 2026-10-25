@@ -379,6 +379,53 @@ The first strict Engine attempt's missing HideUI fixture failure remains recorde
 the corrected run supplies the pinned original package. This is functional
 acceptance without a GUI, original-player parity or measured performance claim.
 
+Deferred lifecycle destruction has a separate native persistence boundary
+([#221](https://github.com/grabbiel/ikkoku/issues/221)). At `5447fc20`, a synthetic
+profile called Destroy from Awake and saved while paused before its first step.
+The save process passed 15 checks; fresh reopen passed 25 and retained four real
+failures: the pending request disappeared, the object survived the first step,
+its lifecycle state differed, and OnDestroy did not run. The original session's
+continuation removed the object and emitted OnDestroy at the same clock. No-op
+and constructor-Destroy controls passed. The original reports, snapshots and
+binary remain separate under private `pending-destruction-restore` evidence.
+
+Native plugin snapshots now include optional `pendingDestructionRoots`: exact
+root UUIDs in deterministic order, including independently queued descendants.
+They do not serialize expanded descendant handles. New snapshots write an
+explicit empty array when there are no requests. Missing/null state retains the
+legacy empty seed; it cannot recover a request that an older writer omitted and
+does not rerun completed Awake callbacks. Explicit empty also seeds no requests,
+while existing constructor callbacks can still schedule new destruction.
+
+The shared profile/library session constructor validates roots against the live,
+normalized candidate world before creating the runtime or components. Duplicate
+decoded UUIDs, unknown roots, identity tombstones and more than 10,000 roots
+reject before callbacks. Pending subtrees are therefore inactive when saved
+binding flags are restored. Destruction still occurs at the ordinary next frame
+barrier; save/open never forces a tick. Snapshotting only sorts the pending root
+set, with no scene/descendant traversal, file work or new tick scheduling.
+
+The topology/identity/clone guard remains unchanged. The candidate-owned
+attachment-read guard also remains unchanged: a restore that actually reads an
+attachment and has pending destruction rejects explicitly before commit, even
+when those roots came from saved state. This combination remains unsupported.
+Older readers that ignore the new field do not gain queue persistence.
+
+Release `e9e6198` (binary SHA-256
+`31fa829571ecc2eb18461e40f6777e6526725dcd62944f3495b7bac893fb1ff7`)
+passes all 222 checks across nine fresh processes: the unchanged 15+29 save/reopen
+assertions, 15 malformed-root native/undo/redo checks, the prior 18+26 topology
+controls and 119 attachment/fresh/library checks. The two new attachment-policy
+checks reach the exact unsupported error after a successful read and retain the
+prior scene, session, history, previews, frame and active resources. All 34
+focused Engine tests pass with zero skips, including four new parameterized tests
+through profile and immutable-library constructors. They cover exact overlapping
+roots/unbound identity normalization, missing/null/empty state, malformed roots
+and failed-step rollback/retry without duplicate destruction. The original red
+binary/reports remain separate; no assertions were relaxed and no corrective
+rerun was needed. These are native functional results, without a GUI,
+original-player parity or comparative performance claim.
+
 For automated captures, `IKKOKU_STUDIO_PLUGIN_SELECTION` names a JSON object with
 `selection` and `configuration`, the same typed values the UI passes to Studio.
 It cannot be combined with a legacy profile or separate adapter manifests. This
@@ -629,6 +676,30 @@ compiled locally. The suite covers:
 
 IEEE results such as infinity remain bit-exact field values. Float literals
 outside Float range and nonfinite transform writes are rejected.
+
+The `PluginLibraryScenario.frameRollback` reproduction extends this boundary to
+the app's real source previews. Its independent control process writes successful
+warm and subtree-clone continuations; separate warm and cold processes inject a
+named `LateUpdate` failure after `advanceAnimation: true`, repeat it, then retry.
+The cloned child's initializer reads its new parent's attachment through the
+ordinary resolver. Failed-step comparisons retain exact documents, runtime state,
+clocks, preview ownership, resources and current frame. Successful cross-process
+comparisons remap only UUIDs through validated source identities and retain all
+typed document/state fields, callback order and bit-exact pose matrices.
+
+The retained 2026-10-24 Release run at `e984432` passed **44/44 checks** in three
+fresh processes: 12 clean controls, 16 warm checks and 16 cold checks. Both
+injected failures repeated the intended arithmetic error, restored exact state
+and matched the independent control on retry. The input was the retained clothed
+animation fixture (SHA-256 `b180727854178212f988b2c010044a14233c1dca379f9d279d03be01ed435d95`),
+whose saved `0/4/0` animation resolves through the configured catalog. The earlier
+compile failure, missing outer scenario `steps` startup failure and 0/2 control
+failure on an unconverted saved `2/3/4` animation remain separate evidence;
+neither failed app attempt ran injections. No rollback defect was reproduced and
+no production behavior changed. The cold clone shares the original converted
+assets, so this does not establish cleanup of every distinct cold texture input.
+Functional step timings are diagnostics; they do not establish checkpoint cost,
+source parity or a performance improvement.
 
 This implements an explicit Unity/BepInEx subset. Coroutines, Harmony interception,
 arbitrary engine components, reflection, serialized object fields and unrecognized
