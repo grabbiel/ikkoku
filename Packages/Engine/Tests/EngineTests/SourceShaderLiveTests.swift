@@ -855,7 +855,7 @@ func liveSourceShadersMeetTheControlledOriginalFrameGates() throws {
     request.textureProvider = "store"
     let store = try SourceShaderLiveFixtureProbe(request, renderer: renderer)
     #expect(Set(store.attach.live) == Set([
-        "cf_O_face slot 0 (main_skin)",
+        "cf_O_face slot 0 (main_skin); convention (capture fixture default, Unity's missing-channel value unverified): COLOR absent in the source mesh: white",
         "cf_O_noseline slot 0 (toon_nose_lod0)", "cf_O_mayuge slot 0 (toon_eyew_lod0)", "cf_O_tooth slot 0 (main_item)",
         "cf_O_eyeline slot 0 (toon_eyew_lod0)", "cf_O_eyeline slot 1 (toon_eyew_lod0)", "cf_O_eyeline_low slot 0 (toon_eyew_lod0)",
         "cf_Ohitomi_L slot 0 (toon_eyew_lod0)", "cf_Ohitomi_R slot 0 (toon_eyew_lod0)", "o_top_tsyats_a slot 0 (main_opaque)",
