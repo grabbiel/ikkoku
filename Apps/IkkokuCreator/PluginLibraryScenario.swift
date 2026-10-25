@@ -1541,14 +1541,14 @@ extension PluginLibraryScenario {
                         let diagnostics = preview.diagnostics, adapter = studio.sourceFocus.adapter
                         let gain = studio.sourceAudioBus.masterVolume, observers = studio.sourceFocusObservers.count
                         try persist(before, name + "-before-\(attempt)")
-                        var error: String?
+                        var rejection: String?
                         let start = ProcessInfo.processInfo.systemUptime
                         do { try studio.stepSourcePlugins(deltaTime: 0.02, advanceAnimation: true) }
-                        catch SourcePluginError.runtime(let reason) { error = reason }
-                        catch { error = "UNEXPECTED: \(error)" }
+                        catch SourcePluginError.runtime(let reason) { rejection = reason }
+                        catch { rejection = "UNEXPECTED: \(error)" }
                         let elapsed = (ProcessInfo.processInfo.systemUptime - start) * 1000
                         let after = try snapshot(); try persist(after, name + "-after-\(attempt)")
-                        record(name + "Failure\(attempt)ExactError", error == "Unsupported arithmetic operator or Int32 arithmetic.", error ?? "No failure")
+                        record(name + "Failure\(attempt)ExactError", rejection == "Unsupported arithmetic operator or Int32 arithmetic.", rejection ?? "No failure")
                         record(name + "Failure\(attempt)ExactState", before == after,
                             "No normalization; complete document/runtime/clock/history/resource snapshot; synchronous step \(elapsed) ms (functional diagnostic)")
                         record(name + "Failure\(attempt)OwnersAndFrame", studio.sourcePluginSession === session
@@ -1560,7 +1560,7 @@ extension PluginLibraryScenario {
                         record(name + "Failure\(attempt)Pose", try pose(currentParent) == baselinePose,
                             "Warm edited pose resumes at exact prior clock")
                     }
-                    var fields = try component.savedFields(); fields["trip"] = .bool(false); try component.restoreFields(fields)
+                    var retryFields = try component.savedFields(); retryFields["trip"] = .bool(false); try component.restoreFields(retryFields)
                 }
                 let clock = studio.sourceAnimationTime, start = ProcessInfo.processInfo.systemUptime
                 try studio.stepSourcePlugins(deltaTime: 0.02, advanceAnimation: true)
