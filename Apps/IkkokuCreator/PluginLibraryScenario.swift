@@ -15,6 +15,8 @@ struct PluginLibraryScenario: Decodable {
     let frameRollback: FrameRollback?
     /// Regression only: route-child placement across a rejected plugin frame.
     let routeRollback: RouteRollback?
+    /// Optional diagnostics only; no timing work in ordinary plugin frames.
+    let routeCheckpointCost: RouteCheckpointCost?
     /// Source-backed fresh-profile callback and failure-isolation checks.
     let reproduceFreshProfileFailure: Bool?
     /// Reproduction only: save and reopen run in separate owned processes.
@@ -53,6 +55,7 @@ struct PluginLibraryScenario: Decodable {
     }
 
     @MainActor func run(app: AppState, studio: StudioModel) async -> StudioScenario.Report {
+        if let routeCheckpointCost { return measureRouteCheckpointCost(routeCheckpointCost, app: app, studio: studio) }
         if let routeRollback { return await reproduceRouteRollback(routeRollback, app: app, studio: studio) }
         if let frameRollback { return await reproduceFrameRollback(frameRollback, app: app, studio: studio) }
         if let pendingDestructionRestore {
@@ -1374,6 +1377,275 @@ extension PluginLibraryScenario {
         try JSONSerialization.data(withJSONObject: ["schemaVersion": 1, "fixedDeltaTime": 0.02,
             "packages": [["manifest": manifestURL.path, "bindings": [["type": type, "sourceObjectKey": 12]]]]]).write(to: profile)
         return profile
+    }
+}
+
+// Optional model-boundary diagnostics. Timers and consumers never run in the
+// ordinary frame path; Release call-site inspection is a separate acceptance gate.
+extension PluginLibraryScenario {
+    struct RouteCheckpointCost: Decodable {
+        let directory: String
+        let routeKey: Int32, childKey: Int32
+        let captureFirst: Bool
+        let batches: Int, iterations: Int, frames: Int
+    }
+    private struct RouteCostBatch: Encodable {
+        let captureSeconds: Double, consumerSeconds: Double
+        let captureChecksum: UInt64, consumerChecksum: UInt64
+        let captureFirst: Bool
+    }
+    private struct RouteCostHistory: Encodable {
+        let prefixSteps: Int, prefixTime: Float
+        let ordinaryCharacterCheckpoints: Int, routeClocks: Int
+        let sourceCharacterRecords: Int, renderedCharacterObjects: Int, drawItems: Int
+        let routePoints: Int, routeSegments: Int
+        let routeAction: String
+        let batches: [RouteCostBatch]
+        let frameSeconds: [Double], frameBatchSecondsIncludingSampling: Double
+    }
+    private struct RouteCostReport: Encodable {
+        let scope: String, pid: Int32, sourceSceneSHA256: String
+        let iterations: Int, histories: [RouteCostHistory]
+    }
+
+    // Keep capture and consumption as distinct calls. The salt makes each
+    // consumer result observable; the accepted Release disassembly must also
+    // show capture inside the loop, rather than assuming attributes suffice.
+    @inline(never) @MainActor private func routeCostCapture(_ studio: StudioModel) -> StudioModel.PluginDynamicsCheckpoint {
+        studio.capturePluginDynamics()
+    }
+    @inline(never) @MainActor private func routeCostConsume(_ value: StudioModel.PluginDynamicsCheckpoint, salt: UInt64) -> UInt64 {
+        var result = salt &* 0x9e3779b97f4a7c15
+        result &+= UInt64(value.characters.count) &* 17
+        result &+= UInt64(value.routeFallbackReported.count) &* 31
+        result &+= UInt64(value.routes.count) &* 47
+        // Order-independent: mapValues may give snapshots different hash-table
+        // iteration orders. Owner hashes are only compared within this process.
+        for entry in value.routes.values {
+            result &+= UInt64(bitPattern: Int64(ObjectIdentifier(entry.clock).hashValue))
+                ^ UInt64(entry.clock.reachedTime.bitPattern)
+                ^ (UInt64(entry.clock.playStart.bitPattern) << 32)
+                ^ (entry.clock.playing ? 1 : 0)
+        }
+        return result
+    }
+    @inline(never) @MainActor private func routeCostCaptureBatch(_ studio: StudioModel, iterations: Int) -> (Double, UInt64) {
+        var checksum: UInt64 = 0
+        let start = ProcessInfo.processInfo.systemUptime
+        for index in 0..<iterations {
+            let value = routeCostCapture(studio)
+            checksum &+= routeCostConsume(value, salt: UInt64(index))
+        }
+        return (ProcessInfo.processInfo.systemUptime - start, checksum)
+    }
+    @inline(never) @MainActor private func routeCostConsumerBatch(_ value: StudioModel.PluginDynamicsCheckpoint,
+                                                                iterations: Int) -> (Double, UInt64) {
+        var checksum: UInt64 = 0
+        let start = ProcessInfo.processInfo.systemUptime
+        for index in 0..<iterations { checksum &+= routeCostConsume(value, salt: UInt64(index)) }
+        return (ProcessInfo.processInfo.systemUptime - start, checksum)
+    }
+
+    @MainActor private func measureRouteCheckpointCost(_ configuration: RouteCheckpointCost,
+                                                       app: AppState, studio: StudioModel) -> StudioScenario.Report {
+        var rows: [StudioScenario.Report.StepResult] = []
+        func require(_ name: String, _ okay: Bool, _ detail: String = "") throws {
+            rows.append(.init(op: name, ok: okay, detail: detail))
+            if !okay { throw SourcePluginError.runtime("Route checkpoint cost assertion failed: " + name) }
+        }
+        let directory = URL(fileURLWithPath: configuration.directory, isDirectory: true)
+        let seed = directory.appendingPathComponent("route-seed.png")
+        let fixture = directory.appendingPathComponent("fixture", isDirectory: true)
+        let profile = fixture.appendingPathComponent("profile.json")
+        let encoder = JSONEncoder(); encoder.outputFormatting = [.sortedKeys]
+        func persist<T: Encodable>(_ value: T, _ name: String) throws {
+            try encoder.encode(value).write(to: directory.appendingPathComponent(name + ".json"), options: .withoutOverwriting)
+        }
+        func matrixBits(_ matrix: float4x4) -> [UInt32] {
+            (0..<4).flatMap { c in (0..<4).map { matrix[c][$0].bitPattern } }
+        }
+        func routeStates() -> [UUID: RoutePlayObservation] {
+            studio.sourceRoutePlayState.mapValues { .init(playing: $0.playing, start: $0.start) }
+        }
+        func snapshot() throws -> InitializerObservation {
+            let session = studio.sourcePluginSession, r = studio.host.renderer.resources.statistics()
+            return .init(document: studio.doc, world: session?.world.document,
+                runtimeDocument: try session?.savedDocument(),
+                pending: session?.world.pendingSourceDestruction().map(\.sourceIdentity).sorted() ?? [],
+                callbacks: session?.runtime.callbackTrace ?? [],
+                resources: [r.meshes, r.textures, r.deformBuffers, r.hiddenBuffers,
+                    r.meshBufferBytes, r.deformBufferBytes, r.hiddenBufferBytes, r.retiring],
+                undo: studio.undoStack, redo: studio.redoStack, status: studio.status, sceneURL: studio.sceneURL,
+                generation: studio.sourcePluginMountGeneration, animationTime: studio.sourceAnimationTime,
+                blocked: studio.resourceBlockedObjects, diagnostics: studio.resourceDiagnostics)
+        }
+        func continuation(child: UUID) throws -> RouteContinuation {
+            guard let session = studio.sourcePluginSession else { throw SourcePluginError.invalid("Route cost session is absent.") }
+            return .init(document: studio.doc, world: session.world.document, callbacks: session.runtime.callbackTrace,
+                animationTime: studio.sourceAnimationTime, routes: routeStates(),
+                childWorld: matrixBits(try studio.sourceObjectWorldMatrix(child)),
+                renderItems: studio.host.renderer.currentFrame().items.map { .init(objectID: $0.objectID, model: matrixBits($0.model)) })
+        }
+        func sameFrame(_ a: RenderFrame, _ b: RenderFrame) -> Bool {
+            a.camera == b.camera && a.mainLight == b.mainLight && a.effects == b.effects && a.lights == b.lights
+                && a.sceneBounds == b.sceneBounds && a.time == b.time && a.skinSets == b.skinSets
+                && a.gizmos.count == b.gizmos.count && a.items.count == b.items.count
+                && zip(a.items, b.items).allSatisfy { $0.mesh == $1.mesh && $0.model == $1.model && $0.objectID == $1.objectID }
+        }
+        func prepare(prefix: Int) throws -> (UUID, UUID, [UInt32]) {
+            try studio.loadScene(from: seed)
+            guard let route = studio.doc.objects.first(where: { $0.sourceObjectKey == configuration.routeKey }),
+                  let child = studio.doc.objects.first(where: { $0.sourceObjectKey == configuration.childKey }),
+                  child.parent == route.id else { throw SourcePluginError.invalid("Route cost seed lost its route/child binding.") }
+            try studio.setSourceAnimationTime(0)
+            studio.selection = route.id
+            if !studio.selectedRoutePlaying { studio.toggleSourceRoute(route.id) }
+            try studio.loadSourcePluginProfileInteractively(profileURL: profile, expectedGeneration: studio.sourcePluginMountGeneration)
+            studio.sourcePluginsRunning = false
+            let initial = matrixBits(try studio.sourceObjectWorldMatrix(child.id))
+            for _ in 0..<prefix { try studio.stepSourcePlugins(deltaTime: 0.02, advanceAnimation: true) }
+            return (route.id, child.id, initial)
+        }
+        do {
+            try require("CostBounds", (1...20).contains(configuration.batches)
+                && (1...20_000).contains(configuration.iterations) && (1...100).contains(configuration.frames))
+            guard !FileManager.default.fileExists(atPath: directory.path) else {
+                throw SourcePluginError.invalid("Route checkpoint cost needs a fresh directory.")
+            }
+            try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+            studio.liveAnimation = false; app.maker?.liveAnimation = false; app.mode = .studio
+            studio.sourceAutomaticBlink = false
+            guard let sceneFile = studio.doc.sourceSceneFile, let sceneHash = studio.doc.sourceSceneSHA256 else {
+                throw SourcePluginError.invalid("Route checkpoint cost needs an imported original scene.")
+            }
+            // Decode once outside every timed region, to report actual input
+            // geometry rather than an assumed route/character count.
+            let input = try FileHandle(forReadingFrom: URL(fileURLWithPath: sceneFile))
+            defer { try? input.close() }
+            let bytes = try input.read(upToCount: 256 * 1024 * 1024 + 1) ?? Data()
+            try require("CostSourceHash", bytes.count <= 256 * 1024 * 1024
+                && SHA256.hash(data: bytes).map { String(format: "%02x", $0) }.joined() == sceneHash)
+            var records = try KoikatsuSceneReader.decodeDocument(bytes).snapshot.roots
+            var sourceRoute: KoikatsuRouteRecord?
+            while let record = records.popLast() {
+                if record.sourceKey == configuration.routeKey { sourceRoute = record.route }
+                records += record.children
+            }
+            guard let sourceRoute else { throw SourcePluginError.invalid("Route checkpoint cost input has no requested route record.") }
+            let segments = try SourceStudioRoute(record: sourceRoute).segments().count
+            try require("CostInput", studio.hasSourceRoutes && sourceRoute.active && sourceRoute.points.count >= 2 && segments > 0)
+            try studio.setSourceAnimationTime(0)
+            try studio.saveScene(to: seed)
+            try routeRollbackFixture(directory: fixture, sourceObjectKey: configuration.childKey)
+            var histories: [RouteCostHistory] = []
+            for prefix in [3, 300] {
+                let name = "prefix\(prefix)"
+                let (route, child, initial) = try prepare(prefix: prefix)
+                guard let session = studio.sourcePluginSession else { throw SourcePluginError.invalid("Route cost fixture failed to install.") }
+                let pose = matrixBits(try studio.sourceObjectWorldMatrix(child))
+                let routeOwners = studio.capturePluginDynamics().routes.mapValues(\.clock)
+                let previewOwners = Set(studio.renderedSourceCharacterPreviews.map(ObjectIdentifier.init))
+                guard let clock = routeOwners[route] else { throw SourcePluginError.invalid("Route cost placement has no clock.") }
+                try require(name + "RealClock", routeOwners.count == 1 && clock.playing && clock.frame != nil
+                    && clock.reachedTime == studio.sourceAnimationTime && pose != initial && clock.lastAction == .stepped)
+                let before = try snapshot(), beforeRoutes = routeStates(), frame = studio.host.renderer.currentFrame()
+                let reached = clock.reachedTime, clockFrame = clock.frame, action = clock.lastAction
+                let playStart = clock.playStart, playing = clock.playing
+                try persist(before, name + "-before")
+                var batches: [RouteCostBatch] = []
+                let characterCount: Int
+                do {
+                    // The reused snapshot is only a loop/consumer control. Its
+                    // retained lifetime is deliberately excluded from frame timing.
+                    let reused = routeCostCapture(studio)
+                    characterCount = reused.characters.count
+                    let warmCapture = routeCostCaptureBatch(studio, iterations: 100)
+                    let warmConsumer = routeCostConsumerBatch(reused, iterations: 100)
+                    try require(name + "WarmChecksum", warmCapture.1 == warmConsumer.1)
+                    PerfTrace.mark("RouteCheckpointBatches-\(prefix)")
+                    for batch in 0..<configuration.batches {
+                        let first = configuration.captureFirst != (batch % 2 == 1)
+                        let captured: (Double, UInt64), consumed: (Double, UInt64)
+                        if first {
+                            captured = routeCostCaptureBatch(studio, iterations: configuration.iterations)
+                            consumed = routeCostConsumerBatch(reused, iterations: configuration.iterations)
+                        } else {
+                            consumed = routeCostConsumerBatch(reused, iterations: configuration.iterations)
+                            captured = routeCostCaptureBatch(studio, iterations: configuration.iterations)
+                        }
+                        batches.append(.init(captureSeconds: captured.0, consumerSeconds: consumed.0,
+                            captureChecksum: captured.1, consumerChecksum: consumed.1, captureFirst: first))
+                    }
+                    PerfTrace.mark("RouteCheckpointBatchesEnd-\(prefix)")
+                }
+                let afterCapture = try snapshot(), afterOwners = studio.capturePluginDynamics().routes.mapValues(\.clock)
+                try persist(batches, name + "-batches")
+                try persist(afterCapture, name + "-after-capture")
+                try require(name + "BatchChecksums", batches.allSatisfy { $0.captureChecksum == $0.consumerChecksum
+                    && $0.captureSeconds.isFinite && $0.captureSeconds > 0 && $0.consumerSeconds.isFinite && $0.consumerSeconds > 0 })
+                try require(name + "CaptureState", before == afterCapture && beforeRoutes == routeStates()
+                    && sameFrame(frame, studio.host.renderer.currentFrame()) && pose == matrixBits(try studio.sourceObjectWorldMatrix(child)))
+                try require(name + "CaptureOwners", studio.sourcePluginSession === session
+                    && afterOwners.count == routeOwners.count && routeOwners.allSatisfy { afterOwners[$0.key] === $0.value }
+                    && previewOwners == Set(studio.renderedSourceCharacterPreviews.map(ObjectIdentifier.init))
+                    && clock.reachedTime == reached && clock.frame == clockFrame && clock.lastAction == action
+                    && clock.playStart == playStart && clock.playing == playing)
+                var times: [Double] = []; times.reserveCapacity(configuration.frames)
+                var expectedTime = before.animationTime
+                for _ in 0..<configuration.frames { expectedTime += 0.02 }
+                PerfTrace.mark("RouteSuccessfulFrames-\(prefix)")
+                let frameStart = ProcessInfo.processInfo.systemUptime
+                do {
+                    for _ in 0..<configuration.frames {
+                        let start = ProcessInfo.processInfo.systemUptime
+                        try studio.stepSourcePlugins(deltaTime: 0.02, advanceAnimation: true)
+                        times.append(ProcessInfo.processInfo.systemUptime - start)
+                    }
+                } catch {
+                    try persist(times, name + "-partial-frame-seconds")
+                    throw error
+                }
+                let frameSeconds = ProcessInfo.processInfo.systemUptime - frameStart
+                PerfTrace.mark("RouteSuccessfulFramesEnd-\(prefix)")
+                try persist(times, name + "-frame-seconds")
+                let afterFrames = try snapshot(), success = try continuation(child: child)
+                try persist(afterFrames, name + "-after-frames")
+                try persist(success, name + "-success")
+                try require(name + "SuccessfulClocksAndCallbacks", studio.sourceAnimationTime.bitPattern == expectedTime.bitPattern
+                    && clock.reachedTime.bitPattern == expectedTime.bitPattern
+                    && session.runtime.callbackTrace.count == before.callbacks.count + configuration.frames
+                    && session.runtime.callbackTrace.suffix(configuration.frames).allSatisfy { $0.hasSuffix(":LateUpdate") }
+                    && times.allSatisfy { $0.isFinite && $0 > 0 })
+                try require(name + "SuccessfulOwnersAndResources", studio.sourcePluginSession === session
+                    && studio.capturePluginDynamics().routes[route]?.clock === clock
+                    && previewOwners == Set(studio.renderedSourceCharacterPreviews.map(ObjectIdentifier.init))
+                    && afterFrames.resources == before.resources && studio.doc.objects == before.document.objects
+                    && beforeRoutes == routeStates() && !studio.sourcePluginsRunning)
+                let renderedIDs = Set(frame.items.map(\.objectID))
+                let characterRecords = studio.doc.objects.enumerated().filter { $0.element.sourceRecordKind == .character }
+                histories.append(.init(prefixSteps: prefix, prefixTime: before.animationTime,
+                    ordinaryCharacterCheckpoints: characterCount, routeClocks: routeOwners.count,
+                    sourceCharacterRecords: characterRecords.count,
+                    renderedCharacterObjects: characterRecords.filter { renderedIDs.contains(UInt32($0.offset + 1)) }.count,
+                    drawItems: frame.items.count, routePoints: sourceRoute.points.count, routeSegments: segments,
+                    routeAction: String(describing: action), batches: batches, frameSeconds: times,
+                    frameBatchSecondsIncludingSampling: frameSeconds))
+                // Independently replay from the same native seed with no capture
+                // benchmark and no per-frame timers. Compare typed documents so
+                // UUID-keyed dictionary encoding order is not mistaken for state.
+                let (_, cleanChild, _) = try prepare(prefix: prefix)
+                for _ in 0..<configuration.frames { try studio.stepSourcePlugins(deltaTime: 0.02, advanceAnimation: true) }
+                let clean = try continuation(child: cleanChild)
+                try persist(clean, name + "-control")
+                try require(name + "UntimedContinuation", success == clean,
+                    "Exact documents, fields, bindings, clocks, callbacks, route child and ordered render-item matrices")
+            }
+            try persist(RouteCostReport(scope: "Synchronous model events; excludes deferred SwiftUI layout/display and GPU completion. Allocation traffic is not measured.",
+                pid: ProcessInfo.processInfo.processIdentifier, sourceSceneSHA256: sceneHash,
+                iterations: configuration.iterations, histories: histories), "cost")
+        } catch { rows.append(.init(op: "routeCheckpointCostFailure", ok: false, detail: String(describing: error))) }
+        studio.sourcePluginsRunning = false
+        return .init(steps: rows, passed: rows.filter(\.ok).count, failed: rows.filter { !$0.ok }.count)
     }
 }
 
