@@ -1,6 +1,6 @@
 {
   "reviewed": "2026-10-24",
-  "revision": "99a6bfb0e3b880c24e342754300e150bcd18d185",
+  "revision": "5c0674903128ce9d36eaf7e03748bde971c6c15d",
   "components": [
     {
       "id": "character-maker",
@@ -8,9 +8,9 @@
       "group": "Priority",
       "stage": "Mid-stage",
       "summary": "The core editing path works for selected normal characters.",
-      "available": "Normal male/female cards, asynchronous head 0/200/201 and converted asset selection, shape and color edits, static ABMX, and identity-preserving edited exports. Bounded decoded-rig reuse accelerates repeated normal-head selections while retaining actual byte verification. Maker-only bounded clothes groups reduce six GPU completions to four during the measured normal-head selection path.",
-      "remaining": "Wider catalogs, special and modded assemblies, complete original editing workflows, and remaining owner-thread stalls. First selections still decode and now pay hashing/accounting costs.",
-      "evidence": "Bounded rig reuse improved repeated normal-head selections in its retained comparison, with a first-selection cost. The later clothes-group comparison measures 15–21 ms lower selection latency across female/male first and repeat cycles, with exact exports/resources and about 5 MiB additional logical texture peak. Two process repetitions per arm/sex, correlated transitions and a background VM limit the claim; RSS and FPS were not measured.",
+      "available": "Normal male/female cards, asynchronous head 0/200/201 and converted asset selection, shape and color edits, static ABMX, and identity-preserving edited exports. Bounded decoded-rig reuse accelerates repeated normal-head selections while retaining actual byte verification. Maker-only bounded clothes groups reduce six GPU completions to four during the measured normal-head selection path. Reader-local verified RGBA digests remove repeated hashing within each head preparation without adding another pixel buffer.",
+      "remaining": "Wider catalogs, special and modded assemblies, complete original editing workflows, and remaining owner-thread stalls. First selections still decode and verify input bytes.",
+      "evidence": "Clothes grouping measured 15–21 ms lower selection latency with about 5 MiB additional logical texture peak. The later digest comparison hashes 29 MiB fewer bytes per selection and measures 7–11 ms lower average API latency across four sex/cycle groups, with exact exports/resources. Owner-thread means rose slightly and individual stalls remain 61–113 ms. Each comparison has two process repetitions per arm/sex, correlated transitions and a background VM; no RSS or FPS claim.",
       "docs": [
         [
           "Maker contract",
@@ -27,6 +27,10 @@
         [
           "Clothes-group measurements",
           "docs/reference/character/maker-assets.md#bounded-maker-clothes-composition-groups-234"
+        ],
+        [
+          "Digest reuse measurements",
+          "docs/reference/character/maker-assets.md#reader-local-verified-rgba-digest-reuse-192"
         ]
       ],
       "issue": [
@@ -104,12 +108,16 @@
       "group": "Priority",
       "stage": "Mid-stage",
       "summary": "Selected native composites pass independent image gates.",
-      "available": "The controlled fixture reaches 19 of 20 live material slots, including the verified female head-0 face composite with null selected layers. Independent base/distinct face targets pass the one-byte gate.",
-      "remaining": "Body remains an explicit fallback. Other heads, makeup layers, patterns, states and whole-character shading remain open.",
-      "evidence": "19/20 describes one controlled fixture. Added face coverage raises GPU work and memory; six default-OFF captures match the accepted controls. Full source-color parity is not established.",
+      "available": "The controlled ordinary female fixture reaches 20 of 20 live material slots, including head-0 face with null selected layers and the verified ordinary body composite. Independent base/distinct face and body targets pass the one-byte gate.",
+      "remaining": "Other heads and body identities, makeup and paint layers, patterns, states and whole-character shading remain open. Whole-frame source-color parity and repeated-frame variation remain unresolved.",
+      "evidence": "20/20 describes one controlled fixture. Adding body coverage registers eight more textures and raises measured Metal allocation by about 97.75 MiB; first body-composition events span 1.930–140.685 ms. Six default-OFF captures match accepted controls. These bounded runs establish neither FPS gains nor full source-color parity.",
       "docs": [
         [
-          "Composite gates and costs",
+          "Body gates and costs",
+          "docs/reference/renderer.md#native-ordinary-female-body-composite-r1cmt-04-231-2026-10-24"
+        ],
+        [
+          "Face gates and costs",
           "docs/reference/renderer.md#native-female-head-0-face-composite-r1cmt-04-219-2026-10-24"
         ],
         [
@@ -118,8 +126,8 @@
         ]
       ],
       "issue": [
-        "Face composition scope",
-        "219"
+        "Whole-frame repeatability",
+        "188"
       ]
     },
     {
@@ -176,9 +184,9 @@
       "group": "Priority",
       "stage": "Infancy",
       "summary": "A useful bounded execution subset exists; general compatibility is early.",
-      "available": "Translated profiles and three exact-revision native adapters: Mute, StudioAccessoryNames and HideAllUI. Selected mount, cancellation, failure isolation and save/restore workflows are exercised. Native save/reopen now retains queued destruction roots without replaying Awake. Rejected frames restore exact route history, including irregular time steps and lazy-clock ownership.",
-      "remaining": "General DLL, Harmony, coroutine and Unity compatibility, original save adapters, and broader lifecycle coverage. Initialization that changes candidate topology is rejected; library installation retains a separate attachment-read boundary.",
-      "evidence": "Saved-profile restoration permits candidate-owned attachment reads only when initialization leaves the candidate scene unchanged. Metadata inventory does not establish loadability. The queued-destruction change passed 34 Engine tests and 222 app checks in its recorded acceptance. Exact route rollback passes 11 Engine tests and 88 Release app checks; checkpoint timing cost remains unmeasured.",
+      "available": "Translated profiles and three exact-revision native adapters: Mute, StudioAccessoryNames and HideAllUI. Selected mount, cancellation, failure isolation and save/restore workflows are exercised. Native save/reopen now retains queued destruction roots without replaying Awake. Rejected frames restore exact route history, including irregular time steps and lazy-clock ownership. Direct translated-profile/native loading now rejects incompatible pairs in either order before changing the live session.",
+      "remaining": "General DLL, Harmony, coroutine and Unity compatibility, original save adapters, and broader lifecycle coverage. Saved scene open and undo/redo still need equivalent mixed-graph rejection. Initialization that changes candidate topology is rejected; library installation retains a separate attachment-read boundary.",
+      "evidence": "Metadata inventory does not establish loadability. Direct mixed-graph rejection passes 13 Engine tests and 38 final Release app checks, preserving state and frames on rejection. Prior queued-destruction and route rollback gates remain scoped to their recorded cases. Route-only checkpoint costs have a bounded quiet measurement; direct load-time validation was not timed.",
       "docs": [
         [
           "Execution and persistence",
@@ -191,7 +199,15 @@
         [
           "DLL inventory limits",
           "docs/reference/mods/plugin-inventory.md"
+        ],
+        [
+          "Direct loading coexistence",
+          "docs/reference/mods/plugin-execution.md#direct-profile-and-native-coexistence-236"
         ]
+      ],
+      "issue": [
+        "Saved mixed-graph rejection",
+        "242"
       ]
     },
     {
