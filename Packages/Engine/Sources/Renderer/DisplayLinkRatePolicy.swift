@@ -11,10 +11,11 @@ import Foundation
 /// a resize, a `Renderer.submit`), returns it to full rate at once. A failed
 /// callback counts as activity because the next callback retries it.
 ///
-/// While the viewport's window is not visible (occluded or minimized), nothing
-/// it presents is shown: the policy asks for its slowest tier at once, turns
-/// the keep-alive off (`refreshAfter`) and ignores activity. Once the window is
-/// visible again, the first activity returns the link to full rate.
+/// While the viewport's window is not visible (occluded, minimizing or
+/// minimized), nothing it presents is shown: the policy asks for its slowest
+/// tier at once, turns the keep-alive off (`refreshAfter`) and ignores
+/// activity. Once the window is visible again, the first activity returns the
+/// link to full rate.
 ///
 /// The slowest standard tier still calls back once per `keepAliveInterval`,
 /// so the keep-alive keeps its interval at every rate (a test pins it). See
@@ -44,7 +45,8 @@ public struct DisplayLinkRatePolicy: Sendable, Equatable {
     public let tiers: [Tier]
     /// Index of the tier in force; nil at the display's full rate.
     public private(set) var tier: Int?
-    /// Whether the viewport's window is visible (`NSWindow.occlusionState`).
+    /// Whether the viewport's window is visible (in the app: its occlusion
+    /// state, and not minimizing or minimized).
     public private(set) var visible = true
     private var lastActivity: Double?
 

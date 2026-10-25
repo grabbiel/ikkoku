@@ -35,8 +35,8 @@ import Renderer
 /// on the render thread's run loop and wakes it. Each callback passes the
 /// keep-alive interval to `Renderer.draw(refreshAfter:)`, so an idle viewport
 /// presents its image again every 1/15 s. `setVisible(false)` (the window is
-/// occluded or minimized) drops the link to 15 Hz and turns the keep-alive
-/// off until the window is visible again. `IKKOKU_PERF_LINK_RATE=fixed`
+/// occluded, minimizing or minimized) drops the link to 15 Hz and turns the
+/// keep-alive off until the window is visible again. `IKKOKU_PERF_LINK_RATE=fixed`
 /// keeps the full rate and `IKKOKU_PERF_KEEPALIVE_MS` overrides the interval
 /// (0 turns it off), measurement controls.
 ///
@@ -187,8 +187,8 @@ nonisolated final class ViewportRenderThread: NSObject, CAMetalDisplayLinkDelega
         if let loop { scheduleRate(on: loop) }
     }
 
-    /// The window's occlusion changed (`NSWindow.occlusionState`). Not
-    /// visible: the link idles at its slowest rate without the keep-alive,
+    /// The window's visibility changed (`ViewportNSView`: its occlusion state
+    /// and minimizing). Not visible: the link idles at its slowest rate without the keep-alive,
     /// ignoring submits and input. Visible again: the cached image is dropped
     /// so the next callback renders and presents the current frame, which
     /// returns the link to full rate. Safe from any thread.

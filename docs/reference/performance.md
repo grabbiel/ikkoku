@@ -1914,8 +1914,8 @@ reuse](renderer.md#renderer-threads-r7-phase-2-item-2).
 - **Idle keep-alive.** G3 left an idle viewport presenting nothing, and the
   first frames of a drag after a pause then never reached the screen. An idle
   viewport whose window is visible now presents its last image again every
-  1/15 s, with one blit and no frame encoded. While the window is occluded or
-  minimized, it presents nothing and its link idles at 15 Hz.
+  1/15 s, with one blit and no frame encoded. While the window is occluded,
+  minimizing or minimized, nothing is refreshed and the link idles at 15 Hz.
 - **Deformed-vertex reuse (G9).** Interactive draws and both picks skip the
   deform dispatch for a deformation whose buffer already holds the frame's
   inputs. Captures, benchmarks and the live captures still dispatch every one.
@@ -2037,6 +2037,9 @@ AFTER-CORRECTNESS
   Ultra, 120 Hz). The keep-alive interval leaves room for one dropped
   refresh, not for a different threshold elsewhere.
 - The keep-alive keeps a small GPU cost while a visible viewport is idle.
+- The harness calls the input handlers, not the view, so its drags wake the
+  link through the frame they submit. A real event wakes it before its
+  handler runs, slightly earlier.
 - A frame with a visible live source-shader material renders every callback,
   so its link stays at full rate.
 - The 4K full-screen drawable, an M1, many props and long-running memory

@@ -816,8 +816,11 @@ takes a keep-alive interval, 1/15 s from the render thread
   the cached image unless a newer draw replaced it.
 - The slowest tier calls back once per interval, so the keep-alive keeps its
   interval at every rate; a test pins that.
-- While the viewport's window is not visible (`NSWindow.occlusionState`
-  without `.visible`: occluded or minimized), nothing it presents is shown.
+- While the viewport's window is not visible, nothing it presents is shown.
+  Not visible means `NSWindow.occlusionState` without `.visible` (occluded or
+  minimized), or minimizing: from `willMiniaturize` until `didDeminiaturize`.
+  The occlusion state only changes when the minimize animation ends, about
+  0.7 s after it starts.
   The policy then asks for its slowest tier at once, turns the keep-alive off
   and ignores wakes and rendered callbacks. When the window is visible again,
   the thread invalidates the cached image, so the next callback renders the
@@ -872,8 +875,8 @@ inputs of the last committed dispatch into it (`DeformContent`).
   finish before the process exits.
 - When the window is minimized, the link stops calling. The thread waits in its
   run loop, which a mach port keeps alive. Since item 4 the view also follows
-  the window's occlusion changes and tells the thread, which idles without the
-  keep-alive while the window is not visible.
+  the window's occlusion changes and minimizing and tells the thread, which
+  idles without the keep-alive while the window is not visible.
 - A Studio/Maker switch replaces the viewport. Each switch stops one thread and
   starts another.
 - The app has one window (its New item is replaced), so at most one render

@@ -28,7 +28,7 @@ final class ViewportNSView: NSView {
     weak var handler: (any ViewportInputHandler)?
     private var lastPoint = SIMD2<Float>(0, 0)
     private var tracking: NSTrackingArea?
-    /// The window whose occlusion changes this view follows.
+    /// The window whose occlusion and minimizing this view follows.
     private weak var observedWindow: NSWindow?
 
     private var metalLayer: CAMetalLayer { layer as! CAMetalLayer }
@@ -67,30 +67,49 @@ final class ViewportNSView: NSView {
         updateDrawableSize()
         if renderThread == nil {
             let thread = ViewportRenderThread(layer: metalLayer, renderer: renderer, log: PerfTrace.active?.drawLog)
-            thread.setVisible(window.occlusionState.contains(.visible))
+            thread.setVisible(isVisible(window))
             thread.start()
             renderThread = thread
         }
         window.makeFirstResponder(self)
     }
 
-    /// An occluded or minimized window shows nothing the viewport presents:
-    /// its render thread idles without the keep-alive until it is visible
-    /// again (R7 phase 2, item 4).
+    /// The notifications that can change whether the window shows the viewport.
+    private static let visibilityNotifications = [NSWindow.didChangeOcclusionStateNotification,
+                                                  NSWindow.willMiniaturizeNotification,
+                                                  NSWindow.didDeminiaturizeNotification]
+
+    /// An occluded, minimizing or minimized window shows nothing the viewport
+    /// presents: its render thread idles without the keep-alive until the
+    /// window is visible again (R7 phase 2, item 4).
     private func observeOcclusion(of window: NSWindow?) {
         guard window !== observedWindow else { return }
         let center = NotificationCenter.default
-        if let observedWindow { center.removeObserver(self, name: NSWindow.didChangeOcclusionStateNotification, object: observedWindow) }
+        if let observedWindow {
+            for name in Self.visibilityNotifications { center.removeObserver(self, name: name, object: observedWindow) }
+        }
         observedWindow = window
+        minimizing = false
         if let window {
-            center.addObserver(self, selector: #selector(occlusionChanged(_:)),
-                               name: NSWindow.didChangeOcclusionStateNotification, object: window)
+            for name in Self.visibilityNotifications {
+                center.addObserver(self, selector: #selector(visibilityChanged(_:)), name: name, object: window)
+            }
         }
     }
 
-    @objc private func occlusionChanged(_ notification: Notification) {
+    /// From `willMiniaturize` to `didDeminiaturize`. The occlusion state only
+    /// loses `.visible` when the minimize animation ends, about 0.7 s later.
+    private var minimizing = false
+
+    private func isVisible(_ window: NSWindow) -> Bool {
+        window.occlusionState.contains(.visible) && !window.isMiniaturized && !minimizing
+    }
+
+    @objc private func visibilityChanged(_ notification: Notification) {
         guard let window = notification.object as? NSWindow, window === self.window else { return }
-        renderThread?.setVisible(window.occlusionState.contains(.visible))
+        if notification.name == NSWindow.willMiniaturizeNotification { minimizing = true }
+        if notification.name == NSWindow.didDeminiaturizeNotification { minimizing = false }
+        renderThread?.setVisible(isVisible(window))
     }
 
     /// Stops the render thread (it exits after any draw in progress).
