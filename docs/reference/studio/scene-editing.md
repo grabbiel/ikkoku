@@ -449,7 +449,7 @@ Citations are `file:line` under `.local/reverse/managed-recovery/902b9a23…/774
   - the path line;
   - the playing-route retarget: the stepper keeps the segment in progress, joins the next one with the `movetopath` leg, and replays the moved route at the next loop. A retarget that changes nothing is bit-identical, a queued setting is refused, and the clock keeps its frame and hands later rebuilds the moved route. Disabling the `movetopath` leg fails the first test (negative control).
 
-  `SourceSceneTopologyTests` and `SourceSceneInsertionTests` were updated for the route copy and route child rules. PERF-PENDING-ENGINE-SUITE
+  `SourceSceneTopologyTests` and `SourceSceneInsertionTests` were updated for the route copy and route child rules. With the shared fixture map, the Engine suite ran 955 tests: 941 passed and 13 were skipped (opt-in timing probes and absent fixtures). The 1 failure is `liveSourceShadersMeetTheControlledOriginalFrameGates`, a known store-fixture mismatch that is unrelated to routes.
 - **Lanes.** Four new `studio-scenarios` checks drive the same `StudioModel` methods the UI uses, with negative controls:
   - `route-edit-export.json` on the stt11c route scene:
     - a guide drag of point 2 while route 0 plays, and locked settings refused while it plays;
