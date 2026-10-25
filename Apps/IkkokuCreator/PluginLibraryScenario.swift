@@ -3356,9 +3356,21 @@ extension PluginLibraryScenario {
                     && studio.sourceShapePreview(for: parentID) != nil && !studio.host.renderer.currentFrame().items.isEmpty)
                 try rejection("nativeAttachment", expected: gate) { try studio.loadScene(from: scene("attachment")) }
                 try rejection("nativeAttachmentRepeat", expected: gate) { try studio.loadScene(from: scene("attachment")) }
-                studio.undoStack = [candidate]; studio.redoStack = []
+                // Seed through ordinary document/history operations, as the
+                // other native restore diagnostics do; never write the stacks.
+                let prior = studio.doc
+                studio.doc = candidate; studio.pushUndo(force: true); studio.doc = prior
+                guard studio.undoStack.last == candidate else {
+                    throw SourcePluginError.runtime("Unable to seed the real undo candidate.")
+                }
                 try rejection("undoAttachment", expected: gate, history: true) { studio.undo() }
-                studio.undoStack = []; studio.redoStack = [candidate]
+                studio.pushUndo(force: true); studio.doc = candidate; studio.undo()
+                guard studio.doc.objects == prior.objects && studio.doc.sourcePluginState == prior.sourcePluginState,
+                      studio.redoStack.last == candidate, studio.sourcePluginSession != nil,
+                      studio.sourceFocus.adapter != nil, studio.sourceShapePreview(for: parentID) != nil,
+                      !studio.host.renderer.currentFrame().items.isEmpty else {
+                    throw SourcePluginError.runtime("Unable to seed the real redo candidate.")
+                }
                 try rejection("redoAttachment", expected: gate, history: true) { studio.redo() }
                 try rejection("nativePoison", expected: gate) { try studio.loadScene(from: scene("poison")) }
                 try rejection("nativeTopology", expected: topology) { try studio.loadScene(from: scene("topology")) }
