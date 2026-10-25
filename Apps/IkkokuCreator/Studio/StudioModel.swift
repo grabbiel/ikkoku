@@ -1093,7 +1093,9 @@ final class StudioModel: ViewportInputHandler, LivePacedHandler {
             throw RigError.invalid("Reset the color edits of outfit \(current.coordinate) (\(scoped.map(\.label).joined(separator: ", "))) before selecting another outfit.")
         }
         let stored = coordinate == current.savedCoordinate ? nil : coordinate
-        let fresh = try SourceStudioCharacterPreview(reference: reference, resources: host.renderer.resources, coordinate: stored)
+        // Borrows the outfit's assembly when a preview shows it or one was
+        // kept (selecting an outfit back), else decodes with a prefetch.
+        let fresh = try makeSourceCharacterPreview(reference: reference, outfit: stored)
         fresh.automaticBlink = sourceAutomaticBlink
         if let edits = object.sourceColorEdits { try fresh.setColorEdits(edits) }
         _ = try fresh.editedPose(fkRotations: object.sourceFKRotations ?? [:], faceValues: object.sourceFaceValues, bodyValues: object.sourceBodyValues,
@@ -1444,8 +1446,8 @@ final class StudioModel: ViewportInputHandler, LivePacedHandler {
         guard !(blockedObjects ?? resourceBlockedObjects).contains(parent.id) else {
             throw RigError.invalid("Character '\(parent.name)' has an unresolved resource reference; see the source compatibility details.")
         }
-        let preview = try SourceStudioCharacterPreview(reference: reference, resources: host.renderer.resources,
-            coordinate: parent.sourceOutfit, appearanceTransaction: appearanceTransaction)
+        let preview = try makeSourceCharacterPreview(reference: reference, outfit: parent.sourceOutfit,
+                                                     appearanceTransaction: appearanceTransaction)
         preview.automaticBlink = sourceAutomaticBlink
         if let edits = parent.sourceColorEdits { try? preview.setColorEdits(edits, appearanceTransaction: appearanceTransaction) }
         return preview
@@ -2227,17 +2229,28 @@ final class StudioModel: ViewportInputHandler, LivePacedHandler {
     func sourceCharacterBatch(_ wanted: [(reference: SourceStudioCharacterReference, outfit: Int?)]) -> SourceStudioCharacterBatch {
         SourceStudioCharacterBatch(requests: wanted.map {
             .init(reference: $0.reference, coordinate: $0.outfit, donation: sourceDonation(for: $0.reference, outfit: $0.outfit))
-        }, resources: host.renderer.resources, rigs: SourceRigDecodeShare(prefetches: PerfTrace.active?.configuration.rigPrefetch ?? true))
+        }, resources: host.renderer.resources, rigs: sourceRigShare())
+    }
+
+    /// A decode share for one operation's builds, prefetching unless the
+    /// measurement control turns it off.
+    func sourceRigShare() -> SourceRigDecodeShare {
+        SourceRigDecodeShare(prefetches: PerfTrace.active?.configuration.rigPrefetch ?? true)
     }
 
     /// One source character preview built now on the calling (main) thread,
-    /// borrowing a loaded preview's converted assembly when one matches
-    /// (R7 phase 2 item 6), such as a copy of a route character.
-    func makeSourceCharacterPreview(reference: SourceStudioCharacterReference, outfit: Int? = nil) throws -> SourceStudioCharacterPreview {
+    /// borrowing a loaded or kept preview's converted assembly when one
+    /// matches (R7 phase 2 item 6), such as a copy of a route character.
+    /// Without one, its rig decodes run at once on workers (the prefetch of
+    /// `SourceRigDecodeShare`) while this thread waits for each in turn:
+    /// an outfit selection and a plugin attachment's parent.
+    func makeSourceCharacterPreview(reference: SourceStudioCharacterReference, outfit: Int? = nil,
+                                    appearanceTransaction: SourceAppearanceLoadTransaction? = nil) throws -> SourceStudioCharacterPreview {
         let donation = sourceDonation(for: reference, outfit: outfit)
         let assembly = try SourceStudioCharacterPreview.assemble(reference: reference, resources: host.renderer.resources,
-                                                                 coordinate: outfit, sharing: donation)
-        return try SourceStudioCharacterPreview(assembly: assembly, resources: host.renderer.resources)
+                                                                 coordinate: outfit, sharing: donation, rigs: sourceRigShare())
+        return try SourceStudioCharacterPreview(assembly: assembly, resources: host.renderer.resources,
+                                                appearanceTransaction: appearanceTransaction)
     }
 
     /// R7 phase 2 item 6: the document's drawn source characters without a
@@ -2599,7 +2612,10 @@ final class StudioModel: ViewportInputHandler, LivePacedHandler {
                     // Hidden characters are loaded lazily after a native reload.
                     // Reconstruct only this export's validation baseline; never
                     // populate the live render cache or advance its simulation.
-                    let fresh = try SourceStudioCharacterPreview(reference: reference, resources: host.renderer.resources, coordinate: object.sourceOutfit)
+                    // No donation: this preview is dropped after the export,
+                    // and taking a kept one would lose it.
+                    let fresh = try SourceStudioCharacterPreview(reference: reference, resources: host.renderer.resources,
+                                                                 coordinate: object.sourceOutfit, rigs: sourceRigShare())
                     try fresh.setShapeValues(face: object.sourceFaceValues, body: object.sourceBodyValues)
                     if let colors = object.sourceColorEdits { try fresh.setColorEdits(colors) }
                     try fresh.setWear(clothesState: object.sourceClothesState, showAccessory: object.sourceShowAccessory, shoesType: object.sourceShoesType)

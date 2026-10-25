@@ -137,6 +137,16 @@ Other options:
   `studio-duplicate` and `studio-undo-delete` act on, for example route 0 of
   `scene-route-children.png` with its folder and character. Without it they
   use source key 963 or the first source character.
+- Measurement controls for the
+  [item 6 follow-up](#phase-2-item-6-follow-up-route-copies-prefetch-and-kept-donations),
+  all defaulting to the shipped behavior:
+  - `IKKOKU_PERF_RIG_PREFETCH=off` leaves each rig decode where its
+    preparation asks for it, with no prefetch.
+  - `IKKOKU_PERF_DONATIONS=off` keeps no donation of a dropped preview, so
+    the undo of a delete builds from scratch.
+  - `IKKOKU_PERF_INSTALL_REFRESH=each` refreshes the frame at every
+    background install, as before, instead of leaving it to the next live
+    step (`step`, the default).
 
 ### What the report records
 
