@@ -49,6 +49,7 @@ public sealed class OriginalCharacterProbe : BaseUnityPlugin
     // capture keeps every garment on as before.
     Dictionary<string,object> wearRequest;
     bool captureTopCompositeInputs,captureBottomCompositeInputs,captureInnerShoeCompositeInputs,captureOuterShoeCompositeInputs,captureFaceCompositeInputs,captureBodyCompositeInputs;
+    string cheekCompositeCase;
     static int[] ParseBytes(string value,int count,int maximum) {
         var parts=value.Split(',');if(parts.Length!=count)throw new Exception("Expected "+count+" comma-separated values: "+value);
         var result=new int[count];
@@ -229,7 +230,9 @@ public sealed class OriginalCharacterProbe : BaseUnityPlugin
             }
         }
         var settingsFile=Path.Combine(folder,"character-settings.tsv");
+        int settingCount=0;
         if(File.Exists(settingsFile)) foreach(string line in File.ReadAllLines(settingsFile)) {
+            settingCount++;
             var fields=line.Split('\t');
             if(fields.Length!=2) throw new Exception("Unparsable character-settings line: "+line);
             switch(fields[0]) {
@@ -273,6 +276,7 @@ public sealed class OriginalCharacterProbe : BaseUnityPlugin
                 // shadow. These two setters preserve alpha and all other fields.
                 case "captureFaceCompositeInputs": captureFaceCompositeInputs=Boolean.Parse(fields[1]);break;
                 case "captureBodyCompositeInputs": captureBodyCompositeInputs=Boolean.Parse(fields[1]);break;
+                case "cheekCompositeCase": cheekCompositeCase=fields[1];break;
                 case "skinMainColor": body.skinMainColor=ParseOpaqueSkinColor(fields[1]);break;
                 case "skinSubColor": body.skinSubColor=ParseOpaqueSkinColor(fields[1]);break;
                 case "nailColor": body.nailColor=ParseOpaqueSkinColor(fields[1]);break;
@@ -312,6 +316,20 @@ public sealed class OriginalCharacterProbe : BaseUnityPlugin
                 }
                 default: throw new Exception("Unknown character-settings key: "+fields[0]);
             }
+        }
+        if(cheekCompositeCase!=null) {
+            // Two fixed source-only oracle cases. No other settings or capture
+            // mode may silently broaden their audited card delta.
+            if(settingCount!=1 || (cheekCompositeCase!="base" && cheekCompositeCase!="coordinate")
+                || modelVariant!=null || handPatterns!=null || lookPhases.Count!=0 || (int)file.status.coordinateType!=0)
+                throw new Exception("Cheek oracle requires only cheekCompositeCase=base or coordinate and default outfit0");
+            var coordinate=file.coordinate[0];
+            coordinate.enableMakeup=cheekCompositeCase=="coordinate";
+            var active=coordinate.enableMakeup?coordinate.makeup:face.baseMakeup;
+            var inactive=coordinate.enableMakeup?face.baseMakeup:coordinate.makeup;
+            active.cheekId=1;active.cheekColor=CheekOracleActiveColor();
+            inactive.cheekId=2;inactive.cheekColor=new Color(.1f,.9f,.2f,.15f);
+            captureFaceCompositeInputs=true;
         }
         if(modelVariant!=null){
             if(body.shapeValueBody.Length!=44 || face.shapeValueFace.Length!=52)throw new Exception("Unexpected model shape array counts");
@@ -693,8 +711,10 @@ public sealed class OriginalCharacterProbe : BaseUnityPlugin
                 {"scale",V(creator.GetTextureScale(property))},{"offset",V(creator.GetTextureOffset(property))}};
         }
         result["inputs"]=inputs;
+        if(cheekCompositeCase!=null)ExportCheekInput(creator,inputs,result);
         var layers=new Dictionary<string,object>();
         foreach(var property in new[]{"_Texture3","_Texture7","_Texture4","_Texture5","_Texture6"}) {
+            if(cheekCompositeCase!=null && property=="_Texture4")continue;
             if(!creator.HasProperty(property) || creator.GetTexture(property)!=null)throw new Exception("Face composite requires null makeup input "+property);
             layers[property]=new Dictionary<string,object>{{"isNull",true},{"scale",V(creator.GetTextureScale(property))},{"offset",V(creator.GetTextureOffset(property))}};
         }
@@ -707,6 +727,7 @@ public sealed class OriginalCharacterProbe : BaseUnityPlugin
         result["selection"]=new Dictionary<string,object>{{"coordinateType",character.fileStatus.coordinateType},{"enableMakeup",character.nowCoordinate.enableMakeup},
             {"paintId",makeup.paintId},{"cheekId",makeup.cheekId},{"lipLineId",character.fileFace.lipLineId},{"moleId",character.fileFace.moleId},
             {"skinMainColor",V(character.fileBody.skinMainColor)},{"skinSubColor",V(character.fileBody.skinSubColor)}};
+        if(cheekCompositeCase!=null)ObserveInactiveCheekRebuild(creator,target,draw,result);
         // Release using the original method, then bypass ExportTexture's object
         // deduplication for an independent second read of the same completed RT.
         string before=(string)result["targetFile"];
@@ -732,6 +753,92 @@ public sealed class OriginalCharacterProbe : BaseUnityPlugin
                 File.WriteAllText(Path.Combine(folder,"face-input-observation.json"),J(result));
             }
         }
+    }
+    Color CheekOracleActiveColor() {
+        return cheekCompositeCase=="base"?new Color(.95f,.2f,.3f,.4f):new Color(.2f,.65f,.9f,.75f);
+    }
+    static uint[] FloatBits(float[] values) { return Array.ConvertAll(values,v=>BitConverter.ToUInt32(BitConverter.GetBytes(v),0)); }
+    void ExportCheekInput(Material creator,Dictionary<string,object> inputs,Dictionary<string,object> result) {
+        const string bundle="chara/mt_cheek_00.unity3d",name="cw_t_cheek_000";
+        const string hash="d21eeb93b6737b897f916a46fb12fa9c56642986d9c886ab2b5b1123d7e9e6b7";
+        var info=character.lstCtrl.GetListInfo(ChaListDefine.CategoryNo.mt_cheek,1);
+        var texture=creator.GetTexture("_Texture4") as Texture2D;
+        var loaded=CommonLib.LoadAsset<Texture2D>(bundle,name,false,string.Empty);
+        result["cheekCatalog"]=new Dictionary<string,object>{{"category",402},{"id",info==null?-1:info.Id},
+            {"MainAB",info==null?null:info.GetInfo(ChaListDefine.KeyType.MainAB)},
+            {"CheekTex",info==null?null:info.GetInfo(ChaListDefine.KeyType.CheekTex)}};
+        inputs["_Texture4"]=new Dictionary<string,object>{{"expectedBundle",bundle},{"expectedName",name},
+            {"actualNull",texture==null},{"actualName",texture==null?null:texture.name},
+            {"actualInstanceID",texture==null?0:texture.GetInstanceID()},{"sourceInstanceID",loaded==null?0:loaded.GetInstanceID()}};
+        File.WriteAllText(Path.Combine(folder,"face-input-observation.json"),J(result));
+        if(info==null || info.Id!=1 || info.GetInfo(ChaListDefine.KeyType.MainAB)!=bundle
+            || info.GetInfo(ChaListDefine.KeyType.CheekTex)!=name || SourceBundleHash(bundle)!=hash
+            || texture==null || loaded==null || texture!=loaded || texture.name!=name
+            || texture.width!=832 || texture.height!=312 || texture.format!=TextureFormat.RGBA32 || texture.mipmapCount!=1
+            || texture.filterMode!=FilterMode.Bilinear || texture.wrapMode!=TextureWrapMode.Clamp || texture.anisoLevel!=1)
+            throw new Exception("Cheek bound input differs from exact catalog402 ID1 asset");
+        inputs["_Texture4"]=new Dictionary<string,object>{{"bundle",bundle},{"bundleSHA256",hash},{"name",name},
+            {"instanceID",texture.GetInstanceID()},{"sourceInstanceID",loaded.GetInstanceID()},{"sameSourceObject",true},
+            {"lookup",new Dictionary<string,object>{{"kind","catalog-texture"},{"bundle",bundle},{"assetName",name},{"manifest",""},{"clone",false}}},
+            {"width",texture.width},{"height",texture.height},{"format",texture.format.ToString()},{"mipLevels",texture.mipmapCount},
+            {"file",ExportTexture(texture)},{"scale",V(creator.GetTextureScale("_Texture4"))},{"offset",V(creator.GetTextureOffset("_Texture4"))}};
+    }
+    void ObserveInactiveCheekRebuild(Material creator,RenderTexture target,Material draw,Dictionary<string,object> result) {
+        bool coordinate=cheekCompositeCase=="coordinate";
+        var active=coordinate?character.nowCoordinate.makeup:character.fileFace.baseMakeup;
+        var inactive=coordinate?character.fileFace.baseMakeup:character.nowCoordinate.makeup;
+        var expected=CheekOracleActiveColor();var beforeColor=new Color(.1f,.9f,.2f,.15f);
+        if(character.nowCoordinate.enableMakeup!=coordinate || (int)character.fileStatus.coordinateType!=0
+            || active.cheekId!=1 || inactive.cheekId!=2 || active.paintId[0]!=0 || active.paintId[1]!=0
+            || character.fileFace.lipLineId!=0 || character.fileFace.moleId!=0)
+            throw new Exception("Cheek oracle active/inactive selection differs");
+        for(int lane=0;lane<4;lane++)if(V(active.cheekColor)[lane]!=V(expected)[lane] || V(inactive.cheekColor)[lane]!=V(beforeColor)[lane])
+            throw new Exception("Cheek oracle card color differs");
+        var control=character.customTexCtrlFace;var renderer=character.rendFace;
+        var names=new[]{"_MainTex","_ColorMask","_paintmask","_Texture3","_Texture4","_Texture5","_Texture6","_Texture7"};
+        var bound=new Dictionary<string,Texture>();foreach(string name in names)bound[name]=creator.GetTexture(name);
+        var inputIDs=new Dictionary<string,object>();foreach(string name in names)inputIDs[name]=bound[name]==null?0:bound[name].GetInstanceID();
+        var vectors=(Dictionary<string,object>)result["vectors"];
+        const string beforeCoordinate="cheek-now-coordinate-before.bin",afterCoordinate="cheek-now-coordinate-after.bin",afterCard="cheek-inactive-card.png";
+        File.WriteAllBytes(Path.Combine(folder,beforeCoordinate),character.nowCoordinate.SaveBytes());
+        var observation=new Dictionary<string,object>{{"case",cheekCompositeCase},{"activeSource",coordinate?"coordinate.makeup":"face.baseMakeup"},
+            {"activeCheekId",active.cheekId},{"activeCheekColor",V(active.cheekColor)},
+            {"activeCheekColorBits",FloatBits(V(active.cheekColor))},{"boundCheekColorBits",FloatBits(V(creator.GetVector("_Color4")))},
+            {"inactiveBeforeId",inactive.cheekId},{"inactiveBeforeColor",V(inactive.cheekColor)},
+            {"beforeFile",result["targetFile"]},{"beforeCoordinateFile",beforeCoordinate},{"inputIDsBefore",inputIDs}};
+        result["inactiveControl"]=observation;
+        File.WriteAllText(Path.Combine(folder,"face-input-observation.json"),J(result));
+        inactive.cheekId=3;inactive.cheekColor=new Color(.7f,.1f,.8f,.9f);
+        // nowCoordinate is a loaded copy. Preserve every unrelated saved field
+        // while making the same inactive-coordinate edit visible in the card.
+        if(!coordinate) {
+            character.chaFile.coordinate[0].makeup.cheekId=inactive.cheekId;
+            character.chaFile.coordinate[0].makeup.cheekColor=inactive.cheekColor;
+        }
+        character.AddUpdateCMFaceTexFlags(true,true,true,true,true,true,true);
+        character.AddUpdateCMFaceColorFlags(true,true,true,true,true,true,true);
+        character.AddUpdateCMFaceLayoutFlags(true,true,true);
+        bool rebuilt=character.CreateFaceTexture();observation["originalCreateFaceTextureReturned"]=rebuilt;
+        var afterIDs=new Dictionary<string,object>();foreach(string name in names)afterIDs[name]=creator.GetTexture(name)==null?0:creator.GetTexture(name).GetInstanceID();
+        var afterVectors=new Dictionary<string,object>();foreach(string name in vectors.Keys)afterVectors[name]=V(creator.GetVector(name));
+        observation["inputIDsAfter"]=afterIDs;observation["vectorsAfter"]=afterVectors;
+        observation["boundCheekColorBitsAfter"]=FloatBits(V(creator.GetVector("_Color4")));
+        if(!rebuilt || character.releaseCustomInputTexture || control.GetCreateTexture()!=target || control.matDraw!=draw
+            || renderer.sharedMaterials[0]!=draw || draw.GetTexture("_MainTex")!=target)
+            throw new Exception("Inactive cheek rebuild changed target/draw/retention identity");
+        foreach(string name in names)if(creator.GetTexture(name)!=bound[name])throw new Exception("Inactive cheek rebuild changed input "+name);
+        foreach(var pair in vectors) {
+            var previous=(float[])pair.Value;var current=V(creator.GetVector(pair.Key));
+            for(int lane=0;lane<4;lane++)if(previous[lane]!=current[lane])throw new Exception("Inactive cheek rebuild changed vector "+pair.Key);
+        }
+        string after=ExportTextureAgain(target),before=(string)result["targetFile"];
+        observation["afterFile"]=after;observation["beforeSHA256"]=Sha256File(Path.Combine(folder,before));observation["afterSHA256"]=Sha256File(Path.Combine(folder,after));
+        observation["sameTargetDrawInputsAndVectors"]=true;observation["targetInstanceID"]=target.GetInstanceID();observation["drawMaterialInstanceID"]=draw.GetInstanceID();
+        observation["inactiveAfterId"]=inactive.cheekId;observation["inactiveAfterColor"]=V(inactive.cheekColor);
+        observation["afterCoordinateFile"]=afterCoordinate;observation["afterCardFile"]=afterCard;
+        File.WriteAllBytes(Path.Combine(folder,afterCoordinate),character.nowCoordinate.SaveBytes());
+        if(!character.chaFile.SaveCharaFile(Path.Combine(folder,afterCard),(byte)modelSex))throw new Exception("Inactive cheek card save failed");
+        if((string)observation["beforeSHA256"]!=(string)observation["afterSHA256"])throw new Exception("Inactive cheek edit changed source target pixels");
     }
     bool? bodyOriginalReleaseCustomInputTexture;
     void RestoreBodyInputRetention() {

@@ -363,6 +363,8 @@ private enum FaceCompositeFixture {
     static let baseSHA = "3944a1d7a9e446f15714bcca0b2faebd7b760fdc010139fad677ce24c422175e"
     static let headSHA = "e6ded0a39b1ca521648597d31d9f868fe354963279a8ccf4140212598289cf7e"
     static let programHash = "9ec842e7b29577b0fd4ddb8ffcfc25c288471210b90ab7a312c3e7a9225df72c"
+    static let cheekSHA = "d21eeb93b6737b897f916a46fb12fa9c56642986d9c886ab2b5b1123d7e9e6b7"
+    static let tableSHA = "5fe4e6811dc6d2e6edd0153cd73f989991c18573c654e1cbeafec821744a0ded"
     static func vector(_ values: [Double]) -> F.Value { .array(values.map(F.Value.float)) }
     static func record(_ defaults: Fields, _ overrides: Fields) -> F.Value {
         let keys = Set(overrides.map(\.0))
@@ -381,7 +383,8 @@ private enum FaceCompositeFixture {
         return record(fields, overrides)
     }
     static func card(coordinate: Bool = false, baseOverrides: Fields = [], coordinateOverrides: Fields = [],
-                     faceOverrides: Fields = [], bodyOverrides: Fields = [], sex: Int64 = 1, exType: Int64 = 0, modProperty: String? = nil) throws -> SourceCharacterCard {
+                     faceOverrides: Fields = [], bodyOverrides: Fields = [], sex: Int64 = 1, exType: Int64 = 0,
+                     modProperty: String? = nil, coordinateFlag: UInt8? = nil) throws -> SourceCharacterCard {
         let faceFields: Fields = [("version", .string("0.0.2")), ("headId", .integer(0)),
             ("shapeValueFace", .array(F.faceValues)), ("baseMakeup", makeup(coordinate: false, overrides: baseOverrides)),
             ("lipLineId", .integer(0)), ("lipLineColor", vector([0.4, 0.5, 0.6, 0.7])),
@@ -393,7 +396,7 @@ private enum FaceCompositeFixture {
             + F.lengthData(F.pack(record(bodyFields, bodyOverrides))) + F.lengthData(hair)
         let clothes = F.pack(F.map([("version", .string("0.0.1")), ("parts", .array([]))]))
         let accessory = F.pack(F.map([("version", .string("0.0.2")), ("parts", .array([]))]))
-        let outfit = F.lengthData(clothes) + F.lengthData(accessory) + Data([coordinate ? 1 : 0])
+        let outfit = F.lengthData(clothes) + F.lengthData(accessory) + Data([coordinateFlag ?? (coordinate ? 1 : 0)])
             + F.lengthData(F.pack(makeup(coordinate: true, overrides: coordinateOverrides)))
         var blocks = F.blocks(custom: custom, sex: .integer(sex))
         let parameter = F.map([("version", .string("0.0.5")), ("sex", .integer(sex)), ("exType", .integer(exType))])
@@ -425,7 +428,8 @@ private enum FaceCompositeFixture {
         var creator = draw
         creator["name"] = "cf_m_face_create"; creator["shader"] = "Shader Forge/create_head"
         creator["serializedFile"] = "CAB-0d1f3d8317188244dde38c81a889d1d4"; creator["pathID"] = "4119387422725910578"; creator["textures"] = environments
-        creator["colors"] = ["_Color": [1, 1, 1, 1], "_UnusedAuthored": [0.1, 0.2, 0.3, 0.4]]
+        creator["colors"] = ["_Color": [1, 1, 1, 1], "_UnusedAuthored": [0.1, 0.2, 0.3, 0.4],
+                             "_tex4uv": [0.5, 0.6399999856948853, -0.33000001311302185, -4]]
         let textures: [Row] = [("cf_face_00_t", bundle, "CAB-b45f3dc6094104fda1eb384293a73f74", "4156981771398184683"), ("cf_face_00_mc", bundle, "CAB-b45f3dc6094104fda1eb384293a73f74", "5632470389437020241"),
                                ("cf_face_00_mp", base, "CAB-0d1f3d8317188244dde38c81a889d1d4", "4688923211121552405")].map { name, bundle, file, id in
             ["name": name, "bundle": bundle, "serializedFile": file, "pathID": id, "width": 1024, "height": 1024]
@@ -436,7 +440,27 @@ private enum FaceCompositeFixture {
             "catalogRows": rows, "textures": textures, "drawMaterials": [draw], "renderers": [renderer], "createMaterials": [creator],
             "verifiedCreateShaders": [["shader": "Shader Forge/create_head", "programSHA256": programHash]]]
     }
-    static func derive(directory: URL, card: SourceCharacterCard? = nil, head: Row? = nil, hiPoly: Bool = true) throws -> SourceShaderBindingSet.TextureIdentity? {
+    static func cheekHead() -> Row {
+        var result = head()
+        var rows = result["catalogRows"] as! [Row]
+        rows.append(["table": "mt_cheek_00", "category": 402, "selectedID": 1,
+                     "serializedFile": "CAB-f743f6c65c10409f82c314d690dc0d13", "pathID": "-3938298771551138771",
+                     "row": ["MainAB": "chara/mt_cheek_00.unity3d", "CheekTex": "cw_t_cheek_000"]])
+        result["catalogRows"] = rows
+        var textures = result["textures"] as! [Row]
+        textures.append(["name": "cw_t_cheek_000", "bundle": "chara/mt_cheek_00.unity3d",
+                         "serializedFile": "CAB-649019955dc8e0979dde865205c4d875", "pathID": "163309903755191522",
+                         "width": 832, "height": 312, "format": 4, "serializedColorSpace": 1, "mipLevels": 1,
+                         "filter": "Bilinear", "wrap": "Clamp", "aniso": 1])
+        result["textures"] = textures
+        var sources = result["sources"] as! [Row]
+        sources.append(["path": "/abdata/chara/mt_cheek_00.unity3d", "sha256": cheekSHA])
+        sources.append(["path": "/abdata/list/characustom/00.unity3d", "sha256": tableSHA])
+        result["sources"] = sources
+        return result
+    }
+    static func derive(directory: URL, card: SourceCharacterCard? = nil, head: Row? = nil, hiPoly: Bool = true,
+                       supplement: Row? = nil) throws -> SourceShaderBindingSet.TextureIdentity? {
         let url = directory.appendingPathComponent("empty-library.json")
         try JSONSerialization.data(withJSONObject: ["schemaVersion": 1, "entries": []]).write(to: url)
         let descriptor = try ShaderBindingFixture.program(shader: "Shader Forge/main_skin", pass: "FORWARD",
@@ -444,7 +468,8 @@ private enum FaceCompositeFixture {
         let contract = try SourceShaderProgramContract.decode(descriptor, program: "main_skin")
         let bindings = try SourceShaderBindingDerivation.derive(card: card ?? self.card(), library: .load(url: url),
             headContract: JSONSerialization.data(withJSONObject: head ?? self.head()),
-            catalog: .init(programs: ["Shader Forge/main_skin": [contract]]), hiPoly: hiPoly)
+            catalog: .init(programs: ["Shader Forge/main_skin": [contract]]),
+            supplement: try supplement.map { try JSONSerialization.data(withJSONObject: $0) }, hiPoly: hiPoly)
         return bindings.renderers.first { $0.mesh == "cf_O_face" }?.material.textures["_MainTex"]?.identity
     }
 }
@@ -579,6 +604,119 @@ private enum FaceCompositeFixture {
     // UAR's ChaFileMakeup destinations address baseMakeup, not coordinate makeup.
     let recipe = try #require(try F.derive(directory: directory, card: F.card(coordinate: true, modProperty: "ChaFileMakeup.PaintID1"))?.composite)
     #expect(recipe.unresolved == nil)
+}
+
+@Test func sourceShaderCheekCompositeKeepsZeroDefaultAndSelectedRowSeparate() throws {
+    typealias F = FaceCompositeFixture
+    let directory = try AppearanceTestFixture.directory(); defer { try? FileManager.default.removeItem(at: directory) }
+    let old = try F.derive(directory: directory)
+    #expect(try F.derive(directory: directory, head: F.cheekHead()) == old)
+    let card = try F.card(baseOverrides: [("cheekId", .integer(1))])
+    let recipe = try #require(try F.derive(directory: directory, card: card, head: F.cheekHead())?.composite)
+    let input = try #require(recipe.textures["_Texture4"]?.identity)
+    #expect(recipe.unresolved == nil && input.bundleSHA256 == F.cheekSHA)
+    #expect(input.name == "cw_t_cheek_000" && input.pathID == "163309903755191522")
+    #expect(input.width == 832 && input.height == 312 && input.mipLevels == 1)
+    #expect(input.filter == "Bilinear" && input.wrap == "Clamp" && input.aniso == 1)
+    #expect(recipe.vectors["_Color4"]?.values == [0.3, 0.4, 0.5, 0.6])
+    #expect(recipe.vectors["_tex4uv"]?.values == [0.5, 0.64, -0.33, -4])
+    // SetTexture changes only the binding: authored UV transforms survive.
+    #expect(recipe.textures["_Texture4"]?.scale == [2, 3] && recipe.textures["_Texture4"]?.offset == [0.125, 0.25])
+    for id: Int64 in [2, 3] {
+        #expect(try F.derive(directory: directory, card: F.card(baseOverrides: [("cheekId", .integer(id))]), head: F.cheekHead())?.composite?.unresolved != nil)
+    }
+    // Existing first matching category/ID wins, including additive rows.
+    var head = F.cheekHead()
+    var rows = try #require(head["catalogRows"] as? [F.Row])
+    var duplicate = try #require(rows.last)
+    duplicate["row"] = ["MainAB": "unverified", "CheekTex": "unverified"]
+    rows.append(duplicate); head["catalogRows"] = rows
+    #expect(try F.derive(directory: directory, card: card, head: head)?.composite == recipe)
+    rows.insert(duplicate, at: 0); head["catalogRows"] = rows
+    #expect(try F.derive(directory: directory, card: card, head: head)?.composite?.unresolved != nil)
+}
+
+@Test func sourceShaderCheekCompositeIgnoresInactiveRecordAndUsesRawEnableByte() throws {
+    typealias F = FaceCompositeFixture
+    let directory = try AppearanceTestFixture.directory(); defer { try? FileManager.default.removeItem(at: directory) }
+    let active: F.Fields = [("cheekId", .integer(1)), ("cheekColor", F.vector([0.2, 0.65, 0.9, 0.75]))]
+    let inactive: F.Fields = [("cheekId", .integer(3)), ("cheekColor", F.vector([0.7, 0.1, 0.8, 0.9])), ("version", .string("unsupported"))]
+    for flag: UInt8 in [0, 1, 2, 255] {
+        let base = flag == 0 ? active : [], coordinate = flag == 0 ? [] : active
+        let initial = try F.card(baseOverrides: base, coordinateOverrides: coordinate, coordinateFlag: flag)
+        let edited = try F.card(baseOverrides: flag == 0 ? active : inactive,
+                                coordinateOverrides: flag == 0 ? inactive : active, coordinateFlag: flag)
+        let expected = try #require(try F.derive(directory: directory, card: initial, head: F.cheekHead())?.composite)
+        #expect(expected.unresolved == nil && expected.vectors["_Color4"]?.values == [0.2, 0.65, 0.9, 0.75])
+        #expect(try F.derive(directory: directory, card: edited, head: F.cheekHead())?.composite == expected)
+    }
+    let resolver = "ChaFileMakeup.cheekId"
+    let activeResolver = try F.card(baseOverrides: active, modProperty: resolver)
+    #expect(try F.derive(directory: directory, card: activeResolver, head: F.cheekHead())?.composite?.unresolved?.contains("resolver-backed") == true)
+    let inactiveResolver = try F.card(coordinate: true, baseOverrides: inactive, coordinateOverrides: active, modProperty: resolver)
+    #expect(try F.derive(directory: directory, card: inactiveResolver, head: F.cheekHead())?.composite?.unresolved == nil)
+}
+
+@Test func sourceShaderCheekCompositeRequiresExactMetadataAndSourceRevision() throws {
+    typealias F = FaceCompositeFixture
+    let directory = try AppearanceTestFixture.directory(); defer { try? FileManager.default.removeItem(at: directory) }
+    let card = try F.card(baseOverrides: [("cheekId", .integer(1))])
+    var cases: [F.Row] = [F.head()]
+    let replacements: [(String, Any)] = [("name", "other"), ("bundle", "other"), ("serializedFile", "other"),
+        ("pathID", "other"), ("width", 1024), ("height", 1024), ("mipLevels", 2), ("format", 3),
+        ("serializedColorSpace", 0), ("filter", "Point"), ("wrap", "Repeat"), ("aniso", 2)]
+    for (key, value) in replacements {
+        var head = F.cheekHead(), textures = try #require(head["textures"] as? [F.Row])
+        textures[textures.count - 1][key] = value; head["textures"] = textures; cases.append(head)
+        textures[textures.count - 1].removeValue(forKey: key)
+        // Only optional fields can be absent without failing JSON decoding.
+        if ["mipLevels", "format", "serializedColorSpace", "filter", "wrap", "aniso"].contains(key) {
+            head["textures"] = textures; cases.append(head)
+        }
+    }
+    for key in ["table", "serializedFile", "pathID"] {
+        var head = F.cheekHead(), rows = try #require(head["catalogRows"] as? [F.Row])
+        rows[rows.count - 1][key] = "other"; head["catalogRows"] = rows; cases.append(head)
+    }
+    for suffix in ["chara/mt_cheek_00.unity3d", "list/characustom/00.unity3d"] {
+        var head = F.cheekHead(), sources = try #require(head["sources"] as? [F.Row])
+        let index = try #require(sources.firstIndex { ($0["path"] as? String)?.hasSuffix(suffix) == true })
+        sources[index]["sha256"] = String(repeating: "a", count: 64); head["sources"] = sources; cases.append(head)
+    }
+    for head in cases { #expect(try F.derive(directory: directory, card: card, head: head)?.composite?.unresolved != nil) }
+}
+
+@Test func sourceShaderCheekMetadataDoesNotChangeOlderInputsOrOverrideSupplement() throws {
+    typealias F = FaceCompositeFixture
+    let directory = try AppearanceTestFixture.directory(); defer { try? FileManager.default.removeItem(at: directory) }
+    var head = F.cheekHead(), textures = try #require(head["textures"] as? [F.Row])
+    for index in 0..<3 {
+        textures[index]["mipLevels"] = 8; textures[index]["filter"] = "Point"
+        textures[index]["wrap"] = "Mirror"; textures[index]["aniso"] = 3
+    }
+    head["textures"] = textures
+    let oldInput = try #require(textures.first)
+    let oldRow: F.Row = ["bundle": oldInput["bundle"]!, "bundleSHA256": F.headSHA,
+        "serializedFile": oldInput["serializedFile"]!, "pathID": oldInput["pathID"]!, "name": oldInput["name"]!,
+        "width": 1024, "height": 1024, "filter": "Bilinear", "wrap": "Clamp", "aniso": 1, "mipLevels": 11]
+    let partial: F.Row = ["materials": [], "textures": [oldRow], "drawMaterials": [], "catalogRows": []]
+    for supplement: F.Row? in [nil, partial] {
+        // Neither direct authored _paintmask nor catalog main/mask identities
+        // adopt newly decoded optional metadata outside the cheek branch.
+        let expected = try F.derive(directory: directory, head: F.cheekHead(), supplement: supplement)
+        #expect(try F.derive(directory: directory, head: head, supplement: supplement) == expected)
+    }
+    let card = try F.card(baseOverrides: [("cheekId", .integer(1))])
+    let expected = try F.derive(directory: directory, card: card, head: F.cheekHead())
+    let cheekInput = try #require(textures.last)
+    var cheekRow = cheekInput
+    cheekRow["bundleSHA256"] = F.cheekSHA
+    var supplement: F.Row = ["materials": [], "textures": [cheekRow], "drawMaterials": [], "catalogRows": []]
+    #expect(try F.derive(directory: directory, card: card, head: F.cheekHead(), supplement: supplement) == expected)
+    for (key, value): (String, Any) in [("filter", "Point"), ("wrap", "Repeat"), ("aniso", 2), ("mipLevels", 2)] {
+        var conflicting = cheekRow; conflicting[key] = value; supplement["textures"] = [conflicting]
+        #expect(try F.derive(directory: directory, card: card, head: F.cheekHead(), supplement: supplement)?.composite?.unresolved != nil)
+    }
 }
 
 // Synthetic card/material metadata. The source identity constants gate one

@@ -97,8 +97,16 @@ public enum SourceShaderBindingDerivation {
 
     struct HeadContract: Decodable {
         struct Source: Decodable { let path: String; let sha256: String }
-        struct CatalogRow: Decodable { let table: String; let category: Int; let selectedID: Int; let row: [String: String] }
-        struct Texture: Decodable { let name: String; let bundle: String; let serializedFile: String; let pathID: String; let width: Int; let height: Int }
+        struct CatalogRow: Decodable {
+            let table: String; let category: Int; let selectedID: Int; let row: [String: String]
+            let serializedFile: String?, pathID: String?
+        }
+        struct Texture: Decodable {
+            let name: String; let bundle: String; let serializedFile: String; let pathID: String; let width: Int; let height: Int
+            // Optional additive metadata: older ID0 contracts remain valid.
+            let format: Int?, serializedColorSpace: Int?, mipLevels: Int?, aniso: Int?
+            let filter: String?, wrap: String?
+        }
         struct Slot: Decodable { let name: String; let pathID: String }
         struct Draw: Decodable { let materialSlot: Int; let submesh: Int }
         struct Renderer: Decodable { let nodeName: String; let activeSelf: Bool; let enabled: Bool; let materialSlots: [Slot]; let draws: [Draw] }
@@ -364,7 +372,7 @@ public enum SourceShaderBindingDerivation {
         result.provenance["sceneGlobals"] = scene.source
         if let eyeLook { result.provenance["eyeLook"] = eyeLook.source }
         if let supplementData { result.provenance["supplementSHA256"] = SHA256.hash(data: supplementData).map { String(format: "%02x", $0) }.joined() }
-        else { result.diagnostics.append("No source binding supplement: keywords, sampler state, the body draw material and non-ID0 catalog rows stay unresolved.") }
+        else { result.diagnostics.append("No source binding supplement: keywords, the body draw material, and sampler/catalog metadata absent from the head contract stay unresolved.") }
         result.provenance["hiPoly"] = String(hiPoly)
         result.provenance["coordinate"] = String(coordinate)
         result.diagnostics += card.appearance.diagnostics
@@ -389,11 +397,16 @@ public enum SourceShaderBindingDerivation {
         }
         for row in supplement?.materials ?? [] { headIndex.keywords[row.serializedFile + ":" + row.pathID] = row.shaderKeywords }
         let catalogRows = Dictionary(head.catalogRows.map { ($0.category, $0) }, uniquingKeysWith: { first, _ in first })
+        var headRowsByID: [Int: [Int: HeadContract.CatalogRow]] = [:]
+        for row in head.catalogRows where headRowsByID[row.category]?[row.selectedID] == nil {
+            headRowsByID[row.category, default: [:]][row.selectedID] = row
+        }
         var supplementRows: [Int: [Int: [String: String]]] = [:]
         for row in supplement?.catalogRows ?? [] { supplementRows[row.category, default: [:]][row.id] = row.row }
-        /// A catalog row: the head contract's ID0 rows, else the supplement's.
+        /// A catalog row: first matching head-contract category/ID, else the
+        /// supplement's. Additive rows must not hide the existing ID0 default.
         func catalogRow(_ category: Int, _ id: Int) -> [String: String]? {
-            if let row = catalogRows[category], row.selectedID == id { return row.row }
+            if let row = headRowsByID[category]?[id] { return row.row }
             return supplementRows[category]?[id]
         }
         let materialsByName = Dictionary(head.drawMaterials.map { ($0.name, $0) }, uniquingKeysWith: { first, _ in first })
@@ -549,7 +562,8 @@ public enum SourceShaderBindingDerivation {
         }
         /// The verified high-detail female head-0 `CustomTextureControl` uses
         /// the same create pass as `CustomTextureCreate`, then binds its target
-        /// to `matDraw._MainTex`. Nonzero makeup layers need their own gate.
+        /// to `matDraw._MainTex`. Only the independently gated stock cheek
+        /// layer may be nonzero; the other makeup layers remain null.
         func faceComposite(materialSlot: Int, drawMaterial: String) -> Set_.TextureIdentity {
             var identity = composite(hiPoly ? 1024 : 512,
                 creator: "CustomTextureControl face: cf_m_face_create (chara/mm_base.unity3d) over head MainTex, skin and selected makeup inputs")
@@ -620,6 +634,40 @@ public enum SourceShaderBindingDerivation {
                 ("_Texture5", "face.lipLineId", 404, "mt_lipline", "LiplineTex"),
                 ("_Texture6", "face.moleId", 415, "mt_mole", "MoleTex")]
             for layer in layers {
+                if layer.property == "_Texture4", card.number(layer.path) == 1 {
+                    guard let selected = headRowsByID[402]?[1], selected.table == "mt_cheek_00",
+                          selected.serializedFile == "CAB-f743f6c65c10409f82c314d690dc0d13",
+                          selected.pathID == "-3938298771551138771",
+                          bundleSHA["list/characustom/00.unity3d"] == "5fe4e6811dc6d2e6edd0153cd73f989991c18573c654e1cbeafec821744a0ded",
+                          selected.row["MainAB"] == "chara/mt_cheek_00.unity3d", selected.row["CheekTex"] == "cw_t_cheek_000",
+                          let metadata = head.textures.first(where: { $0.bundle == "chara/mt_cheek_00.unity3d" && $0.name == "cw_t_cheek_000" }),
+                          metadata.format == 4, metadata.serializedColorSpace == 1, metadata.mipLevels == 1,
+                          metadata.filter == "Bilinear", metadata.wrap == "Clamp", metadata.aniso == 1 else {
+                        return unsupported("face composite cheek ID1 catalog or texture metadata is not verified")
+                    }
+                    setCreateTexture(&recipe, layer.property, main: false,
+                        catalogTexture(402, table: "mt_cheek", id: 1, key: "CheekTex"),
+                        source: "mt_cheek[1] MainAB/CheekTex via CreateFaceTexture → SetTexture(_Texture4)")
+                    guard var input = recipe.textures[layer.property]?.identity else {
+                        return unsupported("face composite cheek ID1 source texture is not converted")
+                    }
+                    // Only this verified additive input adopts head-contract
+                    // sampler metadata. Older inputs retain their existing
+                    // supplement/default behavior and therefore their keys.
+                    // A conflicting supplement must fail, not be overwritten.
+                    input.mipLevels = input.mipLevels ?? metadata.mipLevels
+                    input.filter = input.filter ?? metadata.filter
+                    input.wrap = input.wrap ?? metadata.wrap
+                    input.aniso = input.aniso ?? metadata.aniso
+                    guard input.bundleSHA256 == "d21eeb93b6737b897f916a46fb12fa9c56642986d9c886ab2b5b1123d7e9e6b7",
+                          input.serializedFile == "CAB-649019955dc8e0979dde865205c4d875", input.pathID == "163309903755191522",
+                          input.width == 832, input.height == 312, input.mipLevels == 1,
+                          input.filter == "Bilinear", input.wrap == "Clamp", input.aniso == 1 else {
+                        return unsupported("face composite cheek ID1 source texture identity or sampler is not verified")
+                    }
+                    recipe.textures[layer.property]?.identity = input
+                    continue
+                }
                 guard card.number(layer.path) == 0, let row = catalogRow(layer.category, 0),
                       row["MainAB"] == "0", row[layer.key] == "0" else {
                     return unsupported("face composite requires the verified \(layer.table) ID0 no-texture row for \(layer.path)")

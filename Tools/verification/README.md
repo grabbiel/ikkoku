@@ -1291,6 +1291,31 @@ The isolated native store needs the three body inputs and `create_body` program;
 original readback pixels are comparison data only. Live-slot resolution,
 Release costs and default-off output remain separate acceptance checks.
 
+`IKKOKU_CHEEK_COMPOSITE_BASE_PROBE` and `IKKOKU_CHEEK_COMPOSITE_PROBE`
+name the two fresh original stock cheek 402/1 cases for female head 0,
+exType 0, high detail, with all other makeup layers absent. The first case
+selects base makeup; the second selects coordinate makeup with distinct RGBA.
+Each folder contains `fixture-card.png`, `cheek-inactive-card.png`, `frame.json`,
+four input readbacks, and separate target readbacks before/after an inactive
+record edit with a forced original rebuild, then after original input release.
+The probe's temporary input retention does not establish default input lifetime
+or original cost. Exact requested card bits and exact bound-before/after bits
+are separate invariants; the existing observed-colour tolerance is 1e-6, because
+the source colour API does not promise bit-preserving readback.
+
+The gated `liveSourceHeadZeroCheekCompositeMatchesOriginalAndInactiveControls`
+requires both target base levels within one byte after colour-space conversion,
+alpha 255, exact creator/input identities, unchanged no-op and inactive-edit
+cache hits, recolour/revert, and bounded released-target residency. It preserves
+the observed `ForceEnable` policy. The sRGB RGBA32 cheek is 832 by 312 with one
+authored mip; the other three inputs retain their existing 11-level identities.
+Only level 0 has an independent original GPU oracle; 11 generated target levels
+have structural coverage. Bound-input decode differences remain separate from
+the target gate. The isolated native store adds the exact cheek asset using the
+existing `create_head` program; original pixels are comparison data only. This
+does not add a live material slot: live resolution, default-off output and
+Release costs remain separate acceptance checks.
+
 ### Selected skirt dynamics fixtures
 
 The private Engine suite additionally accepts `IKKOKU_SKIRT_DYNAMICS_FIXTURE`,
