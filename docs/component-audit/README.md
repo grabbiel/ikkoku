@@ -126,6 +126,9 @@ acceptance boundary; their old “next” steps are historical, not a live queue
   clean retries with real warm and cloned character previews, exact poses and
   resources. Exact route checkpoints now also preserve irregular-step history
   after rejected frames ([#226](https://github.com/grabbiel/ikkoku/issues/226)).
+  A separate quiet probe bounds checkpoint cost for one route with no ordinary
+  character checkpoints; it supplies no evidence for a new optimization. See the
+  [scope and raw timing distinctions](../reference/mods/plugin-execution.md#deterministic-verification).
   Eleven Engine tests and 88 Release app checks pass, including independent
   retry and lazy-clock ownership. Checkpoint costs remain unmeasured; general
   plugin compatibility remains outside the supported subset.
