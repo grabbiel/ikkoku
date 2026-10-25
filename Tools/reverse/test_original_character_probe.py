@@ -128,6 +128,9 @@ class ArgumentTests(unittest.TestCase):
                        dict(model_variant='male200',hand_patterns=Path('h')),dict(model_variant='female200',look_patterns=Path('l')),
                        dict(model_variant='female201',settings=Path('s')),dict(model_variant='female201',hand_patterns=Path('h')),
                        dict(model_variant='female201',look_patterns=Path('l')),
+                       dict(model_variant='male200-bone1',settings=Path('s')),
+                       dict(model_variant='male200-bone1',hand_patterns=Path('h')),
+                       dict(model_variant='male200-bone1',look_patterns=Path('l')),
                        dict(model_variant='female200-bone1',settings=Path('s')),
                        dict(model_variant='female200-bone1',hand_patterns=Path('h')),
                        dict(model_variant='female200-bone1',look_patterns=Path('l')),
@@ -189,7 +192,7 @@ class ArgumentTests(unittest.TestCase):
         self.assertIn('character-settings.tsv',text);self.assertIn('docs/reference/character/material-expansion.md',text)
 
     def test_head201_cli_uploads_variant_and_canonical_shapes_before_launch(self):
-        for variant in ('female200-bone1','female201','female201-bone1','male201','male201-bone1','female00-bone1','male00','male00-bone1'):
+        for variant in ('male200-bone1','female200-bone1','female201','female201-bone1','male201','male201-bone1','female00-bone1','male00','male00-bone1'):
             events=[]
             def guest(vm, script, *args):
                 events.append(('guest',script))
