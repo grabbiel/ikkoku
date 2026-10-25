@@ -1,0 +1,7 @@
+{
+  "steps": [
+    {"op": "assert", "sourceMap": {"none": true}},
+    {"op": "export", "path": ".local/verification/scenario-exports/source-map-none.png"},
+    {"op": "assert", "exportIdenticalToSource": ".local/verification/scenario-exports/source-map-none.png"}
+  ]
+}
