@@ -1,0 +1,9 @@
+{
+  "steps": [
+    {"op": "setParent", "key": 2, "parent": null},
+    {"op": "delete", "key": 1},
+    {"op": "assert", "children": {"keys": [0, 2]}, "absent": [1]},
+    {"op": "saveDocument", "path": ".local/verification/scenario-exports/reload-save-topology.png"},
+    {"op": "assert", "children": {"keys": [0, 2]}, "absent": [1]}
+  ]
+}
