@@ -653,6 +653,108 @@ public enum SourceShaderBindingDerivation {
             identity.composite = recipe
             return identity
         }
+        /// Ordinary female body: `CreateBodyTexture` loads fixed base/mask
+        /// assets, then applies body-record colours and catalog-based layouts.
+        /// These inputs are independent of face/coordinate makeup.
+        func bodyComposite(draw: Supplement.Draw?) -> Set_.TextureIdentity {
+            var identity = composite(hiPoly ? 2048 : 512,
+                creator: "CustomTextureControl body: cf_m_body_create (chara/mm_base.unity3d) over body base, skin, paint and nail inputs")
+            var recipe = createRecipe(material: "cf_m_body_create", method: "ChaControl.InitBaseCustomTextureBody → CreateBodyTexture")
+            func unsupported(_ reason: String) -> Set_.TextureIdentity {
+                if recipe.unresolved == nil { recipe.unresolved = reason }
+                identity.composite = recipe
+                return identity
+            }
+            guard hiPoly, characterIdentity?.sex == 1, characterIdentity?.exType == 0,
+                  card.appearance.value("body.version")?.stringValue == "0.0.2" else {
+                return unsupported("body composite requires the verified ordinary female high-detail body record 0.0.2")
+            }
+            let resolverProperties: Set<String> = ["ChaFileBody.PaintID1", "ChaFileBody.PaintID2",
+                "ChaFileBody.PaintLayoutID1", "ChaFileBody.PaintLayoutID2", "ChaFileBody.sunburnId"]
+            guard card.appearance.modProperties.isDisjoint(with: resolverProperties) else {
+                return unsupported("body composite resolver-backed paint, layout or sunburn inputs are not verified")
+            }
+            let baseBundle = "chara/mm_base.unity3d", bodyBundle = "chara/oo_base.unity3d"
+            let baseSHA = "3944a1d7a9e446f15714bcca0b2faebd7b760fdc010139fad677ce24c422175e"
+            let bodySHA = "2bb9017d29b12352a859f54623728e4dea587392d3677a0a7158a7f9784fba67"
+            let baseFile = "CAB-0d1f3d8317188244dde38c81a889d1d4", bodyFile = "CAB-e7b38e3d86248bd1d2c54a91cd5fca51"
+            guard draw?.bundle == baseBundle, draw?.bundleSHA256 == baseSHA,
+                  draw?.material.name == "cf_m_body", draw?.material.shader == "Shader Forge/main_skin",
+                  draw?.material.serializedFile == baseFile, draw?.material.pathID == "-8704185815755846451" else {
+                return unsupported("body composite draw material identity is not verified")
+            }
+            guard recipe.bundleSHA256 == baseSHA, recipe.serializedFile == baseFile,
+                  recipe.pathID == "-8385327033008235336", recipe.shader == "Shader Forge/create_body",
+                  recipe.programSHA256 == "6dec09eabb8464f6b79b6a97e978631187ca77d992a99de1a6d0fd9ffc43e1c5" else {
+                return unsupported("body composite creator identity or create_body program is not verified")
+            }
+            guard let paintMask = recipe.textures["_paintmask"]?.identity,
+                  paintMask.kind == .asset, paintMask.name == "cf_body_01_mp",
+                  paintMask.bundle == baseBundle, paintMask.bundleSHA256 == baseSHA,
+                  paintMask.serializedFile == baseFile, paintMask.pathID == "7680453631034146393",
+                  paintMask.width == 1024, paintMask.height == 1024 else {
+                return unsupported("body composite authored _paintmask source identity is not verified")
+            }
+            // Unlike the head, ordinary-body base textures are hardcoded by
+            // CreateBodyTexture. skinId is not consulted on this source path.
+            for (property, name, pathID, size) in [("_MainTex", "cf_body_00_t", "5340205562146712601", 2048),
+                                                  ("_ColorMask", "cf_body_00_mc", "-3685019629691781346", 1024)] {
+                let input = headIndex.catalogIdentity(bundle: bodyBundle, name: name, head: head.textures, bundleSHA: bundleSHA)
+                guard input.bundleSHA256 == bodySHA, input.serializedFile == bodyFile,
+                      input.pathID == pathID, input.width == size, input.height == size else {
+                    return unsupported("body composite \(property) source texture identity is not verified")
+                }
+                setCreateTexture(&recipe, property, main: property == "_MainTex", .success(input),
+                    source: "CreateBodyTexture ordinary female hardcoded \(bodyBundle)/\(name)")
+            }
+            let layers: [(property: String, path: String, category: Int, table: String, key: String)] = [
+                ("_Texture3", "body.paintId.0", 421, "mt_body_paint", "PaintTex"),
+                ("_Texture6", "body.paintId.1", 421, "mt_body_paint", "PaintTex"),
+                ("_Texture4", "body.sunburnId", 422, "mt_sunburn", "SunburnTex")]
+            for layer in layers {
+                guard card.number(layer.path) == 0, let row = catalogRow(layer.category, 0),
+                      row["MainAB"] == "0", row[layer.key] == "0" else {
+                    return unsupported("body composite requires the verified \(layer.table) ID0 no-texture row for \(layer.path)")
+                }
+                // Preserve each property's own default: absent body paint is
+                // black, but absent sunburn (_Texture4) is white in create_body.
+                setCreateTexture(&recipe, layer.property, main: false, .success(nil),
+                    source: "\(layer.table)[0] MainAB/\(layer.key) = 0/0 via CreateBodyTexture → SetTexture(null)")
+            }
+            for (property, path) in [("_Color", "body.skinMainColor"), ("_Color2", "body.skinSubColor"),
+                                     ("_Color3", "body.paintColor.0"), ("_Color6", "body.paintColor.1"),
+                                     ("_Color4", "body.sunburnColor"), ("_Color5", "body.nailColor")] {
+                if let value = card.color(path), value.allSatisfy(\.isFinite) {
+                    recipe.vectors[property] = .init(value, source: "card \(path) via CreateBodyTexture → SetColor(\(property))")
+                } else {
+                    recipe.vectors[property] = .init(unresolved: "body composite requires finite RGBA at \(path)")
+                }
+            }
+            guard card.number("body.paintLayoutId.0") == 0, card.number("body.paintLayoutId.1") == 0,
+                  let row = catalogRow(3, 0) else {
+                return unsupported("body composite requires the verified bodypaint_layout ID0 row for both layouts")
+            }
+            let fields: [(String, Float)] = [("CenterX", 0.345), ("MoveX", 0.085), ("CenterY", -0.365),
+                                             ("MoveY", 0.105), ("CenterScale", -5.5), ("AddScale", 4.5)]
+            let layoutValues: [Float] = fields.compactMap { row[$0.0].flatMap(Float.init) }
+            guard layoutValues.count == 6, zip(layoutValues, fields).allSatisfy({ $0.isFinite && $0 == $1.1 }) else {
+                return unsupported("body composite bodypaint_layout ID0 values are missing or not verified")
+            }
+            let cx = layoutValues[0], mx = layoutValues[1], cy = layoutValues[2], my = layoutValues[3]
+            let cs = layoutValues[4], ds = layoutValues[5]
+            for index in 0..<2 {
+                let path = "body.paintLayout.\(index)", property = "_paint\(index + 1)"
+                guard let layout = card.color(path), layout.allSatisfy(\.isFinite) else {
+                    recipe.vectors[property] = .init(unresolved: "body composite requires a finite four-component layout at \(path)")
+                    continue
+                }
+                let value: [Float] = [lerp(cx + mx, cx - mx, layout[0]), lerp(cy + my, cy - my, layout[1]),
+                                     lerp(-1, 1, layout[2]), lerp(cs - ds, cs + ds, layout[3])]
+                recipe.vectors[property] = .init(value, source: "card \(path) and bodypaint_layout[0] via CreateBodyTexture → SetVector4(\(property))")
+            }
+            identity.composite = recipe
+            return identity
+        }
         /// Normal top/bottom targets: InitBaseCustomTextureClothes(main: true,
         /// parts: slot), then ChangeCustomClothes's three colour setters. Other
         /// garment roles and nonzero patterns retain an explicit unresolved
@@ -982,7 +1084,7 @@ public enum SourceShaderBindingDerivation {
             // Without the converted material the shader is unknown, so no program
             // property list is assumed: only setter values are known.
             var builder = Builder(evidence: draw?.material, missingReason: reason, catalog: catalog, index: bodyIndex)
-            builder.setTexture("_MainTex", composite(hiPoly ? 2048 : 512, creator: "CustomTextureControl body: cf_m_body_create (chara/mm_base.unity3d) over body base, skin and paint inputs"),
+            builder.setTexture("_MainTex", bodyComposite(draw: draw),
                                source: "ChaControl.CreateBodyTexture → customTexCtrlBody")
             apply(&builder, texture: "_overtex1", catalogTexture(423, table: "mt_nip", id: "body.nipId", key: "NipTex"), source: "ChaControl.ChangeSettingNip")
             applyNumber(&builder, "_nipsize", "body.areolaSize", method: "ChangeSettingAreolaSize")
