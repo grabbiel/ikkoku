@@ -52,7 +52,7 @@
     {"op": "assert", "route": {"key": 0, "from": "route0", "edited": false, "points": 5, "keys": [1, 6, 10, 14, 18], "aidKeys": [2, 7, 11, 15, 19]}},
     {"op": "assert", "route": {"key": 3, "from": "route3", "edited": false, "points": 3, "keys": [4, 8, 12], "aidKeys": [5, 9, 13]}},
     {"op": "assert", "routePlaying": {"key": 0, "playing": true}},
-    {"op": "assert", "routePlaying": {"key": 3, "playing": false}, "key": 3, "name": "IKKOKU-B2", "routeLines": 1},
-    {"op": "assertRejected", "route": {"key": 3, "from": "route0"}, "errorContains": "points, \"route0\" has 5"}
+    {"op": "assertRejected", "route": {"key": 3, "from": "route0"}, "errorContains": "points, \"route0\" has 5"},
+    {"op": "assert", "routePlaying": {"key": 3, "playing": false}, "key": 3, "name": "IKKOKU-B2", "routeLines": 1}
   ]
 }

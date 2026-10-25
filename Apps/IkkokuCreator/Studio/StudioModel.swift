@@ -544,7 +544,10 @@ final class StudioModel: ViewportInputHandler {
             catch { status = "Plugin execution: \(error)" }
             return
         }
-        guard liveAnimation, doc.objects.contains(where: { $0.kind == .character }) else { return }
+        // A playing route moves its children with or without a character in
+        // the scene (a character riding a route keeps a folder-kind entry).
+        guard liveAnimation, doc.objects.contains(where: { $0.kind == .character })
+                || sourceRoutePlayState.values.contains(where: \.playing) else { return }
         // A live step still running, or settled but not yet refreshed, when
         // the timer fires is not overlapped: this fire is skipped and the
         // clock does not move, as when a main-thread step longer than the

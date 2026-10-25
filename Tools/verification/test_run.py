@@ -636,7 +636,12 @@ SCENARIO_OPS = {"select", "setVisible", "rename", "toggleCamera", "toggleRoute",
                 "advance", "orbit", "setAutomaticBlink", "editDuringAdvance",
                 "addCharacter", "setIKEnabled", "setIKTarget", "captureIKPose",
                 "export", "reimport", "assert", "assertRejected", "loadNativePlugin", "unloadPlugins", "measureAccessoryLabels",
-                "delete", "setParent", "exportRejected", "duplicate", "addFolder", "addCamera", "addLight"}
+                "delete", "setParent", "exportRejected", "duplicate", "addFolder", "addCamera", "addLight",
+                "focus", "selectRoutePoint", "dragRoutePoint", "captureRoute", "editRoute"}
+
+# ST-T11 `editRoute` settings: point edits name the point, route edits do not.
+ROUTE_POINT_SETTINGS = ("delete", "move", "speed", "ease", "connection", "link")
+ROUTE_SETTINGS = ROUTE_POINT_SETTINGS + ("add", "rotateStart", "loop", "line", "orientation", "color")
 
 IK_CHAINS = ("hand_L", "hand_R", "foot_L", "foot_R")
 
@@ -816,7 +821,7 @@ class StudioScenarioLaneTests(unittest.TestCase):
                       and not name.startswith(("maker-", "gameplay-")))
 
     def test_lane_validates_and_covers_every_scenario(self):
-        self.assertEqual(len(self.checks), 68)
+        self.assertEqual(len(self.checks), 72)
         referenced = set()
         for check in self.checks:
             scenario = check["env"]["IKKOKU_STUDIO_SCENARIO"]
@@ -1000,6 +1005,31 @@ class StudioScenarioLaneTests(unittest.TestCase):
                     self.assertIn(type(step["parent"]), (int, type(None)))
                 if op == "exportRejected":
                     self.assertTrue(step["errorContains"], "a refused export needs a specific diagnostic")
+                if op == "focus":
+                    self.assertIs(type(step["key"]), int)
+                    if "dy" in step:
+                        self.assertIsInstance(step["dy"], (int, float))
+                if op in ("selectRoutePoint", "dragRoutePoint", "captureRoute", "editRoute"):
+                    self.assertIs(type(step["key"]), int)
+                if op == "selectRoutePoint":
+                    self.assertIs(type(step["index"]), int)
+                    if "aid" in step:
+                        self.assertIs(type(step["aid"]), bool)
+                if op == "dragRoutePoint":
+                    self.assertIn(step["axis"], ("x", "y", "z"))
+                    self.assertEqual(len(step["pixels"]), 2)
+                    self.assertTrue(all(isinstance(c, (int, float)) for c in step["pixels"]))
+                if op == "captureRoute":
+                    self.assertTrue(step["name"], "a captured route needs a label to compare against: %s" % path)
+                if op == "editRoute":
+                    edit = step["routeEdit"]
+                    self.assertIn(edit["setting"], ROUTE_SETTINGS)
+                    if edit["setting"] in ROUTE_POINT_SETTINGS:
+                        self.assertIs(type(edit["index"]), int)
+                    if edit["setting"] == "move":
+                        self.assertEqual(len(edit["position"]), 3)
+                    if "refused" in edit:
+                        self.assertTrue(edit["refused"], "a refused route edit needs a specific diagnostic")
                 if op in ("export", "reimport", "saveDocument", "loadDocument", "exportRejected"):
                     self.assertTrue(step["path"].startswith(".local/"),
                                     "scene writes must stay under .local/: %s" % step["path"])
@@ -1011,7 +1041,7 @@ class StudioScenarioLaneTests(unittest.TestCase):
                                             "diagnosticContains", "statusContains", "indicatorContains",
                                             "treeLabel", "view", "render",
                                             "exportIdenticalToSource", "outfit", "clothes", "ik", "expression", "accessoryLabels", "pluginMount",
-                                            "children", "absent", "activeCopyOf") if k in step]
+                                            "children", "absent", "activeCopyOf", "route", "routeLines") if k in step]
                     self.assertTrue(declared, "assert declares nothing: %s" % path)
                     if op == "assertRejected":
                         self.assertTrue(step["errorContains"], "negative control needs a specific diagnostic")
@@ -1160,6 +1190,27 @@ class StudioScenarioLaneTests(unittest.TestCase):
                 exported, imported = ops.index("export"), ops.index("reimport")
                 self.assertLess(exported, imported)
                 self.assertEqual(steps[exported]["path"], steps[imported]["path"])
+            elif check["id"] == "studio-scenario-route-children-edit":
+                # ST-T11 route children: the save side reloads its native
+                # document in the same process, then exports and reimports the
+                # reloaded scene, so one check shows that save → load keeps
+                # what original export writes. Its fresh-process load half is
+                # the lane's next check, as for the reload pairs.
+                self.assertEqual((ops.count("saveDocument"), ops.count("loadDocument")), (1, 1))
+                self.assertEqual((ops.count("export"), ops.count("reimport")), (1, 1))
+                saved, loaded = ops.index("saveDocument"), ops.index("loadDocument")
+                exported, imported = ops.index("export"), ops.index("reimport")
+                self.assertLess(saved, loaded)
+                self.assertLess(loaded, exported)
+                self.assertLess(exported, imported)
+                self.assertEqual(steps[saved]["path"], steps[loaded]["path"])
+                self.assertEqual(steps[exported]["path"], steps[imported]["path"])
+                index = [c["id"] for c in self.checks].index(check["id"])
+                partner = self.checks[index + 1]
+                with open(os.path.join(run.REPO_ROOT, partner["env"]["IKKOKU_STUDIO_SCENARIO"]), encoding="utf-8") as handle:
+                    first = json.load(handle)["steps"][0]
+                self.assertEqual((first["op"], first["path"]), ("loadDocument", steps[saved]["path"]),
+                                 "the check after %s must load what it saved" % check["id"])
             elif "saveDocument" in ops or "loadDocument" in ops:
                 self.assertNotIn("export", ops,
                                  "a save/load scenario must not mix in the "
