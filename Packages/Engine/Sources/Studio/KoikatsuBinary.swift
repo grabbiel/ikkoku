@@ -330,7 +330,7 @@ struct KoikatsuBinaryReader {
         guard depth <= 64 else { throw KoikatsuReadError.limitExceeded("hierarchy depth exceeds 64") }
         objectCount += 1
         guard objectCount <= Self.maximumCount else { throw KoikatsuReadError.limitExceeded("scene exceeds \(Self.maximumCount) objects") }
-        let rawKind = try int32()
+        let recordStart = offset, rawKind = try int32()
         guard let kind = KoikatsuObjectKind(rawValue: rawKind) else { throw KoikatsuReadError.unsupportedObjectKind(rawKind) }
         let key = try int32()
         guard sourceKeys.insert(key).inserted else { throw invalid("duplicate object key") }
@@ -350,7 +350,9 @@ struct KoikatsuBinaryReader {
         case .character: characterRecord = try character(depth: depth, objectKey: key)
         case .route:
             name = try nameString(objectKey: key)
+            let countStart = offset
             for _ in 0..<(try count()) { children.append(try object(depth: depth + 1, rootKey: nil)) }
+            editSpans.topology.slots[key] = [.init(count: countStart, end: offset, children: children.map(\.sourceKey), point: nil)]
             routeRecord = try route(objectKey: key)
         case .item: itemRecord = try item(objectKey: key)
         case .light:
@@ -359,9 +361,11 @@ struct KoikatsuBinaryReader {
                                                enable: try bool(), drawTarget: try bool())
         }
         if kind == .folder || kind == .item {
-            let count = try count()
+            let countStart = offset, count = try count()
             for _ in 0..<count { children.append(try object(depth: depth + 1, rootKey: nil)) }
+            editSpans.topology.slots[key] = [.init(count: countStart, end: offset, children: children.map(\.sourceKey), point: nil)]
         }
+        editSpans.topology.records[key] = recordStart..<offset
         return KoikatsuObjectRecord(kind: kind, rootDictionaryKey: rootKey, sourceKey: key,
                                     transform: transform, treeState: treeState, visible: visible,
                                     name: name, cameraActive: active, item: itemRecord, light: lightRecord, children: children,

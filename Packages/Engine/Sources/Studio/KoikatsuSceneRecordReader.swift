@@ -58,13 +58,16 @@ extension KoikatsuBinaryReader {
             let key = try int32(); guard ik[key] == nil else { throw invalid("duplicate character IK target ID") }
             ik[key] = try bone(destination: .characterIK(object: objectKey, target: key))
         }
-        var children: [Int32: [KoikatsuObjectRecord]] = [:]
+        var children: [Int32: [KoikatsuObjectRecord]] = [:], slots: [SourceSceneEditSpans.Topology.Slot] = []
         for _ in 0..<(try count()) {
             let key = try int32(); guard children[key] == nil else { throw invalid("duplicate accessory point ID") }
             var entries: [KoikatsuObjectRecord] = []
+            let countStart = offset
             for _ in 0..<(try count()) { entries.append(try object(depth: depth + 1, rootKey: nil)) }
             children[key] = entries
+            slots.append(.init(count: countStart, end: offset, children: entries.map(\.sourceKey), point: key))
         }
+        editSpans.topology.slots[objectKey] = slots
         let mode = try int32(), animationStart = offset, anime = try animation(), hands = [try int32(), try int32()]
         let nipple = try float(), fluids = try take(5), mouthStart = offset, mouth = try float(), lip = try bool()
         editSpans.mouth[objectKey] = .init(mouthOpen: mouthStart..<(mouthStart + 4), lipSync: (mouthStart + 4)..<(mouthStart + 5))
@@ -139,7 +142,8 @@ extension KoikatsuBinaryReader {
         c["fogColor"] = try jsonVector(["r", "g", "b", "a"])
         f["fogHeight"] = try float(); f["fogStartDistance"] = try float(); b["enableSunShafts"] = try bool()
         c["sunThresholdColor"] = try jsonVector(["r", "g", "b", "a"]); c["sunColor"] = try jsonVector(["r", "g", "b", "a"])
-        let caster = try int32()
+        let casterStart = offset, caster = try int32()
+        editSpans.sunCaster = casterStart..<offset
         for key in ["enableShadow", "faceNormal", "faceShadow"] { b[key] = try bool() }
         f["lineColorG"] = try float(); c["ambientShadow"] = try jsonVector(["r", "g", "b", "a"]); f["lineWidthG"] = try float()
         let ramp = try int32(); f["ambientShadowG"] = try float()

@@ -26,7 +26,8 @@ struct StudioScenario: Decodable {
         /// `"setFK"`, `"setPoseMode"`, `"selectBone"`, `"dragGizmo"`, `"hoverGizmo"`,
         /// `"captureBone"`, `"captureObject"`, `"captureRender"`, `"advance"`, `"orbit"`,
         /// `"setAutomaticBlink"`, `"addCharacter"`, `"setIKEnabled"`, `"setIKTarget"`,
-        /// `"captureIKPose"`, `"editDuringAdvance"`, `"export"`, `"reimport"`, `"assert"`, `"assertRejected"`.
+        /// `"captureIKPose"`, `"editDuringAdvance"`, `"delete"`, `"setParent"`, `"export"`,
+        /// `"exportRejected"`, `"reimport"`, `"assert"`, `"assertRejected"`.
         let op: String
         let key: Int32?
         let visible: Bool?
@@ -156,6 +157,20 @@ struct StudioScenario: Decodable {
         let accessoryLabels: AccessoryLabelsValue?
         /// Exact resident metadata consumed by the plugin panel, not AX evidence.
         let pluginMount: [PluginMountSummary.Section]?
+        /// setParent only (ST-T03): the new parent's source key, `null` for
+        /// the root — `.some(nil)` — and `nil` when the key is absent, which
+        /// the op refuses, like the hand-decoded `activeCamera` check.
+        let parent: Int32??
+        /// assert only: one parent's children in tree order, by source key.
+        let children: ChildrenValue?
+        /// assert only: source keys no document object may carry (deleted).
+        let absent: [Int32]?
+
+        struct ChildrenValue: Decodable {
+            /// the parent's source key; absent or null is the root.
+            let parent: Int32?
+            let keys: [Int32]
+        }
 
         struct AccessoryLabelsValue: Decodable {
             let key: Int32
@@ -366,6 +381,10 @@ struct StudioScenario: Decodable {
             /// flips the check to "it is still within that bound", like `fk`.
             let from: String
             let within: Float?
+            /// with `within`: the world rotation must also be held within this
+            /// many degrees of the capture (the angle between the two
+            /// rotations), so a reparent proves the whole world pose stayed.
+            let rotationWithin: Float?
         }
         struct SourceRuntimeValue: Decodable {
             let cameras: Int?
@@ -382,7 +401,7 @@ struct StudioScenario: Decodable {
                  group, category, no, speed, on, bone, rotation, animation, fk, position,
                  seconds, dx, dy, eyeLook, blink, handPattern, mode, axis, pixels,
                  render, exportIdenticalToSource, errorContains, outfit, accessoryLabels, pluginMount, state, clothes, expression,
-                 sex, character, chain, delta, ik, edit
+                 sex, character, chain, delta, ik, edit, parent, children, absent
         }
 
         init(from decoder: Decoder) throws {
@@ -477,6 +496,13 @@ struct StudioScenario: Decodable {
             } else {
                 activeCamera = nil
             }
+            if c.contains(.parent) {
+                parent = try c.decodeIfPresent(Int32.self, forKey: .parent)
+            } else {
+                parent = nil
+            }
+            children = try c.decodeIfPresent(ChildrenValue.self, forKey: .children)
+            absent = try c.decodeIfPresent([Int32].self, forKey: .absent)
         }
     }
 
@@ -597,6 +623,8 @@ struct StudioScenario: Decodable {
         var capturedIKPoses: [String: IKPoseCapture] = [:]
         /// World positions recorded by `captureObject` steps, keyed by step name.
         var capturedObjectPositions: [String: Float3] = [:]
+        /// World rotations recorded by the same `captureObject` steps.
+        var capturedObjectRotations: [String: simd_quatf] = [:]
         /// Pixels recorded by `captureRender` steps (raw RGBA8), keyed by label.
         var capturedRenders: [String: (width: Int, height: Int, bytes: [UInt8])] = [:]
         /// The single headless render size every `captureRender` uses, so a
@@ -924,14 +952,27 @@ struct StudioScenario: Decodable {
             guard let base = capturedObjectPositions[check.from] else {
                 return "assert position: no captureObject position recorded under \"\(check.from)\""
             }
-            let now: Float3
-            do { now = try studio.sourceObjectWorldMatrix(id).translation }
+            let now: Float3, world: float4x4
+            do { world = try studio.sourceObjectWorldMatrix(id); now = world.translation }
             catch { return "assert position: object \(check.key) world position unavailable: \(error)" }
             let dx = now.x - base.x, dy = now.y - base.y, dz = now.z - base.z
             let moved = (dx * dx + dy * dy + dz * dz).squareRoot()
             if let bound = check.within {
                 guard moved <= bound else {
                     return "assert position: object \(check.key) sits \(moved) from \"\(check.from)\" at (\(now.x), \(now.y), \(now.z)), expected it held within \(bound)"
+                }
+                if let degrees = check.rotationWithin {
+                    guard let base = capturedObjectRotations[check.from] else {
+                        return "assert position: no captureObject rotation recorded under \"\(check.from)\""
+                    }
+                    // The angle of the difference rotation from atan2, which
+                    // stays exact near zero where acos of a float dot product
+                    // rounds one ulp below 1 to about 0.06 degrees.
+                    let delta = simd_normalize(base).inverse * simd_normalize(world.rotationQuaternion)
+                    let angle = 2 * atan2(simd_length(delta.imag), abs(delta.real)) * 180 / .pi
+                    guard angle <= degrees else {
+                        return "assert position: object \(check.key) turned \(angle)° from \"\(check.from)\", expected it held within \(degrees)°"
+                    }
                 }
             } else {
                 guard moved > tolerance else {
@@ -1774,8 +1815,9 @@ struct StudioScenario: Decodable {
                     record(step, false, "captureObject: name (the capture label) is required"); continue
                 }
                 do {
-                    let position = try studio.sourceObjectWorldMatrix(id).translation
+                    let world = try studio.sourceObjectWorldMatrix(id), position = world.translation
                     capturedObjectPositions[label] = position
+                    capturedObjectRotations[label] = world.rotationQuaternion
                     record(step, true, "captured object \(step.key!) world position (\(position.x), \(position.y), \(position.z)) as \"\(label)\"")
                 } catch { record(step, false, "captureObject: \(error)") }
             case "captureRender":
@@ -1906,6 +1948,47 @@ struct StudioScenario: Decodable {
                 // every rendered character's preview.
                 studio.sourceAutomaticBlink = on
                 record(step, true, "source automatic blink \(on)")
+            case "delete":
+                // The workspace's Delete button / key: select, then delete
+                // the selection with its subtree.
+                guard let id = object(step) else { record(step, false, "delete: no object with source key \(step.key ?? -1)"); continue }
+                studio.selection = id
+                studio.deleteSelection()
+                let gone = studio.doc.object(id) == nil
+                record(step, gone, gone ? "deleted source key \(step.key!) and its subtree (\(studio.doc.objects.count) objects left)"
+                                        : "delete: source key \(step.key!) is still in the document")
+            case "setParent":
+                // The inspector's Parent picker (`StudioModel.setParent`).
+                guard let id = object(step) else { record(step, false, "setParent: no object with source key \(step.key ?? -1)"); continue }
+                guard let target = step.parent else { record(step, false, "setParent: parent (a source key or null for the root) is required"); continue }
+                var parentID: UUID?
+                if let target {
+                    guard let found = studio.doc.objects.first(where: { $0.sourceObjectKey == target })?.id else {
+                        record(step, false, "setParent: no parent with source key \(target)"); continue
+                    }
+                    parentID = found
+                }
+                studio.setParent(id, to: parentID)
+                let placed = studio.doc.object(id)?.parent == parentID
+                record(step, placed, placed ? "source key \(step.key!) now under \(target.map { "source key \($0)" } ?? "the root"): \(studio.status)"
+                                            : "setParent: source key \(step.key!) was not moved: \(studio.status)")
+            case "exportRejected":
+                // Export must refuse with this fragment and write no file.
+                guard let path = step.path, let url = insideLocal(path), !isSourcePath(url) else {
+                    record(step, false, "exportRejected: path must stay under .local/ and differ from the source: \(step.path ?? "<missing>")"); continue
+                }
+                guard let expected = step.errorContains, !expected.isEmpty else {
+                    record(step, false, "exportRejected: errorContains must be nonempty"); continue
+                }
+                if FileManager.default.fileExists(atPath: url.path) { try? FileManager.default.removeItem(at: url) }
+                do {
+                    try studio.exportSourceScene(to: url)
+                    record(step, false, "exportRejected: export succeeded, expected a refusal containing \"\(expected)\"")
+                } catch {
+                    let text = (error as? LocalizedError)?.errorDescription ?? "\(error)"
+                    let refused = text.contains(expected) && !FileManager.default.fileExists(atPath: url.path)
+                    record(step, refused, refused ? "export refused as expected: \(text)" : "exportRejected: expected \"\(expected)\" and no file; received \(text)")
+                }
             case "export":
                 guard let path = step.path, let url = insideLocal(path) else {
                     record(step, false, "export: path must stay under .local/: \(step.path ?? "<missing>")")
@@ -2042,6 +2125,27 @@ struct StudioScenario: Decodable {
                 // own character by the source key inside the check value,
                 // like `animation`/`fk`.
                 if let problem = assertPosition(step) { problems.append(problem) }
+                if let check = step.children {
+                    var parentID: UUID?, found = true
+                    if let key = check.parent {
+                        parentID = studio.doc.objects.first(where: { $0.sourceObjectKey == key })?.id
+                        found = parentID != nil
+                    }
+                    let keys = studio.doc.children(of: parentID).map { $0.sourceObjectKey.map(String.init) ?? "native" }
+                    let label = check.parent.map { "source key \($0)" } ?? "the root"
+                    if !found {
+                        problems.append("assert children: no parent with source key \(check.parent!)")
+                    } else if keys != check.keys.map(String.init) {
+                        problems.append("assert children: \(label) holds [\(keys.joined(separator: ", "))], expected [\(check.keys.map(String.init).joined(separator: ", "))]")
+                    } else {
+                        details.append("\(label) holds [\(keys.joined(separator: ", "))]")
+                    }
+                }
+                if let keys = step.absent {
+                    let present = keys.filter { key in studio.doc.objects.contains { $0.sourceObjectKey == key } }
+                    if !present.isEmpty { problems.append("assert absent: source keys \(present) are still in the document") }
+                    else { details.append("source keys \(keys) absent") }
+                }
                 if let problem = assertEyeLook(step) { problems.append(problem) }
                 if let problem = assertBlink(step) { problems.append(problem) }
                 if let problem = assertHandPattern(step) { problems.append(problem) }

@@ -5,6 +5,32 @@ import Scene
 /// Reject native workspace overrides that the original-scene writer cannot
 /// represent. This checks values only and never reads assets or mutates a scene.
 public enum SourceSceneExportValidation {
+    /// ST-T03: the deletions and moves that turn the imported tree into the
+    /// document's tree. Every document object must be a distinct source
+    /// record (adding or duplicating objects is not serialized); a missing
+    /// record is deleted, and a record under another parent, or after a
+    /// sibling it originally preceded, is moved (`SourceSceneTopology.edits`,
+    /// which also refuses every unsupported case with its reason). Sibling
+    /// order is the document's object order.
+    public static func topologyEdits(_ document: StudioDocument, against snapshot: KoikatsuSceneSnapshot) throws
+        -> (deletions: Set<Int32>, reparents: [SourceSceneEdits.Reparent]) {
+        var keys: [UUID: Int32] = [:], seen = Set<Int32>()
+        for object in document.objects {
+            guard let key = object.sourceObjectKey, seen.insert(key).inserted else {
+                throw RigError.invalid("Original-scene export does not yet support adding or duplicating objects.")
+            }
+            keys[object.id] = key
+        }
+        let placements = try document.objects.map { object -> SourceSceneTopology.Placement in
+            let parent = try object.parent.map { id -> Int32 in
+                guard let key = keys[id] else { throw RigError.invalid("Original-scene export contains an object under a missing parent.") }
+                return key
+            }
+            return .init(key: keys[object.id]!, parent: parent, attachment: object.sourceAttachmentPoint)
+        }
+        return try SourceSceneTopology.edits(from: snapshot, survivors: placements)
+    }
+
     public static func validate(_ document: StudioDocument, against snapshot: KoikatsuSceneSnapshot) throws {
         guard let sceneFile = document.sourceSceneFile, let sceneHash = document.sourceSceneSHA256 else {
             throw RigError.invalid("Import an original Studio scene first.")
@@ -22,10 +48,9 @@ public enum SourceSceneExportValidation {
             }
         }
         for root in snapshot.roots { visit(root, routeChild: false) }
-        guard document.objects.count == records.count,
-              Set(document.objects.compactMap(\.sourceObjectKey)).count == records.count else {
-            throw RigError.invalid("Original-scene export does not yet support adding, duplicating or deleting objects.")
-        }
+        // Deleted and moved source records become topology edits; the
+        // supported cases are exactly those `SourceSceneTopology` accepts.
+        _ = try topologyEdits(document, against: snapshot)
         for object in document.objects {
             try SourceStudioIKEditing.validate(object.sourceIKOverrides ?? [:])
             try object.sourceKinematics?.validate()

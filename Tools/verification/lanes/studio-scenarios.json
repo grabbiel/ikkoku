@@ -2237,6 +2237,171 @@
         }
       ],
       "timeout": 600
+    },
+    {
+      "id": "studio-scenario-topology-delete",
+      "argv": [
+        ".local/build/Build/Products/Debug/Ikkoku.app/Contents/MacOS/Ikkoku"
+      ],
+      "fixtures": [
+        {
+          "env": "IKKOKU_SOURCE_SCENE",
+          "kind": "file",
+          "from": "IKKOKU_CAMERA_OBJECT_PROBE_SCENE"
+        },
+        {
+          "env": "IKKOKU_SOURCE_AVATAR",
+          "kind": "file"
+        }
+      ],
+      "env": {
+        "IKKOKU_STUDIO_SCENARIO": "Tools/verification/scenarios/topology-delete.json",
+        "IKKOKU_STUDIO_SCENARIO_REPORT": ".local/verification/reports/studio-scenario-topology-delete.json"
+      },
+      "referenceTier": "app-smoke",
+      "tolerance": "ST-T03/ST-S09 deletion: on scene-x delete folder key 1 with its camera child key 2 (the load-winner camera) through the workspace Delete path; undo and redo must restore and repeat the subtree delete; the exported original scene must reimport with root [0], keys 1 and 2 absent and no looked-through camera, because the writer clears camera 0's stale saved active flag as a CharaStudio save would (Studio.DeleteCamera). Two assertRejected negative controls prove the camera and tree checks fail on the wrong values. The same PNG is reloaded in the original CharaStudio by Tools/reverse/original_scene_reload_probe.py; see docs/reference/studio/scene-editing.md.",
+      "artifacts": [
+        {
+          "path": ".local/verification/reports/studio-scenario-topology-delete.json",
+          "kind": "scenario-report"
+        },
+        {
+          "path": ".local/verification/scenario-exports/topology-delete.png",
+          "kind": "exported-scene"
+        }
+      ],
+      "timeout": 600
+    },
+    {
+      "id": "studio-scenario-topology-reparent",
+      "argv": [
+        ".local/build/Build/Products/Debug/Ikkoku.app/Contents/MacOS/Ikkoku"
+      ],
+      "fixtures": [
+        {
+          "env": "IKKOKU_SOURCE_SCENE",
+          "kind": "file",
+          "from": "IKKOKU_STUDIO_SCENARIO_SCENE"
+        },
+        {
+          "env": "IKKOKU_SOURCE_AVATAR",
+          "kind": "file"
+        }
+      ],
+      "env": {
+        "IKKOKU_STUDIO_SCENARIO": "Tools/verification/scenarios/topology-reparent.json",
+        "IKKOKU_STUDIO_SCENARIO_REPORT": ".local/verification/reports/studio-scenario-topology-reparent.json"
+      },
+      "referenceTier": "app-smoke",
+      "tolerance": "ST-T03/ST-S09 reparenting on koikatu_cs0002591: move item 623 into folder 962, character 65 into folder 626 and item 1129 to the root through the inspector's Parent path, and delete folder 1298 with its character and three items. Each moved record must be appended after its new siblings and keep its world position within 1e-4 m and rotation within 0.01 degrees in session; four undos restore the original tree and four redos repeat it; after export and reimport the tree must match and every moved object (plus an unmoved neighbour) must hold its world pose within 5e-4 m and 0.05 degrees. Negative controls prove the position check fails on a moved capture and on the wrong capture.",
+      "artifacts": [
+        {
+          "path": ".local/verification/reports/studio-scenario-topology-reparent.json",
+          "kind": "scenario-report"
+        },
+        {
+          "path": ".local/verification/scenario-exports/topology-reparent.png",
+          "kind": "exported-scene"
+        }
+      ],
+      "timeout": 600
+    },
+    {
+      "id": "studio-scenario-reload-save-topology",
+      "argv": [
+        ".local/build/Build/Products/Debug/Ikkoku.app/Contents/MacOS/Ikkoku"
+      ],
+      "fixtures": [
+        {
+          "env": "IKKOKU_SOURCE_SCENE",
+          "kind": "file",
+          "from": "IKKOKU_CAMERA_OBJECT_PROBE_SCENE"
+        },
+        {
+          "env": "IKKOKU_SOURCE_AVATAR",
+          "kind": "file"
+        }
+      ],
+      "env": {
+        "IKKOKU_STUDIO_SCENARIO": "Tools/verification/scenarios/reload-save-topology.json",
+        "IKKOKU_STUDIO_SCENARIO_REPORT": ".local/verification/reports/studio-scenario-reload-save-topology.json"
+      },
+      "referenceTier": "app-smoke",
+      "tolerance": "Saves scene-x natively after moving camera key 2 out of folder key 1 to the root and deleting the folder: the pending topology (root [0, 2], key 1 absent) must hold before and after the save. The reload half is the next, ordered check. ST-T03.",
+      "artifacts": [
+        {
+          "path": ".local/verification/reports/studio-scenario-reload-save-topology.json",
+          "kind": "scenario-report"
+        },
+        {
+          "path": ".local/verification/scenario-exports/reload-save-topology.png",
+          "kind": "saved-document"
+        }
+      ],
+      "timeout": 600
+    },
+    {
+      "id": "studio-scenario-reload-load-topology",
+      "argv": [
+        ".local/build/Build/Products/Debug/Ikkoku.app/Contents/MacOS/Ikkoku"
+      ],
+      "fixtures": [
+        {
+          "env": "IKKOKU_SOURCE_AVATAR",
+          "kind": "file"
+        }
+      ],
+      "env": {
+        "IKKOKU_STUDIO_SCENARIO": "Tools/verification/scenarios/reload-load-topology.json",
+        "IKKOKU_STUDIO_SCENARIO_REPORT": ".local/verification/reports/studio-scenario-reload-load-topology.json"
+      },
+      "referenceTier": "app-smoke",
+      "tolerance": "Loads the saved scene-x card in a fresh process with no import: the tree must still be root [0, 2] with key 1 absent and camera 2 the look-through winner; exporting it must write the deletion and the move, and the reimport must keep the tree and camera 2's world pose within 5e-4 m and 0.05 degrees. ST-T03.",
+      "artifacts": [
+        {
+          "path": ".local/verification/reports/studio-scenario-reload-load-topology.json",
+          "kind": "scenario-report"
+        },
+        {
+          "path": ".local/verification/scenario-exports/reload-load-topology.png",
+          "kind": "exported-scene"
+        }
+      ],
+      "timeout": 600
+    },
+    {
+      "id": "studio-scenario-topology-refused",
+      "argv": [
+        ".local/build/Build/Products/Debug/Ikkoku.app/Contents/MacOS/Ikkoku"
+      ],
+      "fixtures": [
+        {
+          "env": "IKKOKU_SOURCE_SCENE",
+          "kind": "file",
+          "from": "IKKOKU_MIRRORED_CAMERA_SCENE"
+        },
+        {
+          "env": "IKKOKU_SOURCE_AVATAR",
+          "kind": "file"
+        }
+      ],
+      "env": {
+        "IKKOKU_STUDIO_SCENARIO": "Tools/verification/scenarios/topology-refused.json",
+        "IKKOKU_STUDIO_SCENARIO_REPORT": ".local/verification/reports/studio-scenario-topology-refused.json"
+      },
+      "referenceTier": "app-smoke",
+      "tolerance": "ST-T03 refusals on the mirrored-camera scene: moving camera 2 out of item 0 and moving item 1 into item 0 must each be refused by original export with the item-child reason and write no file (an item's child root may be a named prefab transform the converted catalog does not record); after undo, deleting camera 3 (an item child) is supported and must reimport with item 1 empty and camera 2 still the looked-through camera.",
+      "artifacts": [
+        {
+          "path": ".local/verification/reports/studio-scenario-topology-refused.json",
+          "kind": "scenario-report"
+        },
+        {
+          "path": ".local/verification/scenario-exports/topology-refused.png",
+          "kind": "exported-scene"
+        }
+      ],
+      "timeout": 600
     }
   ]
 }

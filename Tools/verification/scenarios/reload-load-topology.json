@@ -1,0 +1,11 @@
+{
+  "steps": [
+    {"op": "loadDocument", "path": ".local/verification/scenario-exports/reload-save-topology.png"},
+    {"op": "assert", "children": {"keys": [0, 2]}, "absent": [1], "activeCamera": 2},
+    {"op": "captureObject", "key": 2, "name": "camera-2"},
+    {"op": "export", "path": ".local/verification/scenario-exports/reload-load-topology.png"},
+    {"op": "reimport", "path": ".local/verification/scenario-exports/reload-load-topology.png"},
+    {"op": "assert", "children": {"keys": [0, 2]}, "absent": [1], "activeCamera": 2},
+    {"op": "assert", "position": {"key": 2, "from": "camera-2", "within": 0.0005, "rotationWithin": 0.05}}
+  ]
+}
