@@ -455,11 +455,12 @@ def link_line(label, report):
     deform = summary.get("deform", {})
     return ("[perf] %s: link %s, %d callbacks (%.1f/s; by requested rate: %s), %.2f s at a lowered rate, "
             "%d lowerings, %d restores, %d deliberate target skips; keep-alive refreshes %d (%d presented, "
-            "GPU %.2f ms/s); deform dispatches %d, reuses %d" % (
+            "GPU %.2f ms/s); deform dispatches %d (%d untracked), reuses %d, deform passes %d" % (
                 label, link.get("policy", "?"), callbacks, callbacks / seconds if seconds else 0, rates or "-",
                 link.get("reducedRateSeconds", 0), link.get("lowerings", 0), link.get("restores", 0),
                 summary.get("displayLinkDeliberateTargetSkips", 0), summary.get("refreshedCallbacks", 0),
-                summary.get("refreshedPresented", 0), refresh_gpu, deform.get("dispatches", 0), deform.get("reuses", 0)))
+                summary.get("refreshedPresented", 0), refresh_gpu, deform.get("dispatches", 0), deform.get("untracked", 0),
+                deform.get("reuses", 0), deform.get("passes", 0)))
 
 
 def burst_latencies(report):

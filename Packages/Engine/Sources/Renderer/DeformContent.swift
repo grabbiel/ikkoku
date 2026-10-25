@@ -48,22 +48,21 @@ struct DeformContent {
 /// buffer is held strongly, so it cannot be freed and another buffer take its
 /// address while the record names it. The renderer drops the records of keys
 /// that the frame it prepares does not use, which releases a removed
-/// character's buffers with its first frame.
-final class DeformBufferRecord {
+/// character's buffers with its first frame. A value, stored in place: setting
+/// a key's record allocates nothing.
+struct DeformBufferRecord {
     let buffer: any MTLBuffer
     let content: DeformContent
     let serial: UInt64
-    init(buffer: any MTLBuffer, content: DeformContent, serial: UInt64) {
-        self.buffer = buffer; self.content = content; self.serial = serial
-    }
 }
 
-/// One deform dispatch encoded into a command buffer that has not been
-/// committed yet; recorded once it is (`Renderer.commit(_:writes:)`).
-struct DeformWrite {
-    let key: UInt64
-    let buffer: any MTLBuffer
-    let content: DeformContent
+/// The deformations of one prepared frame, after `Renderer.encodeDeform`
+/// encoded those with `dispatch` set into a command buffer that has not been
+/// committed yet; `Renderer.commit(_:writes:)` records those once it is. It
+/// shares the frame's array, so handing it on copies nothing.
+struct DeformWrites {
+    let deforms: [Renderer.DeformRecord]
+    static var none: DeformWrites { DeformWrites(deforms: []) }
 }
 
 /// Whether a frame's preparation may skip deform dispatches whose buffers
@@ -71,8 +70,26 @@ struct DeformWrite {
 enum DeformMode {
     /// Dispatch every deformation, as before R7 phase 2, item 4: captures,
     /// benchmarks and live validation captures, the byte-identity references.
+    /// What they write is recorded.
     case always
-    /// Skip a dispatch when its buffer's committed content matches
-    /// (interactive draws and picks).
+    /// Skip a dispatch when its buffer's committed content matches (picks).
     case reuse
+    /// As `reuse`, for interactive draws, except while every deformation
+    /// changes from draw to draw: after `Renderer.deformMissesBeforeBypass`
+    /// tracked draws that compared records and reused none, the next draws
+    /// dispatch everything without comparing or recording content, until the
+    /// `Renderer.deformBypassDraws`-th or a pause of
+    /// `Renderer.deformBypassPause`.
+    case interactive
+}
+
+/// How one frame's preparation treats its deformations' content.
+struct DeformTracking {
+    /// Build each deformation's content, compare it with its key's record,
+    /// and record what its dispatch writes.
+    let track: Bool
+    /// Skip a dispatch whose key's record matches.
+    let reuse: Bool
+    /// Deformations whose key had a record to compare (set by preparation).
+    var compared = 0
 }

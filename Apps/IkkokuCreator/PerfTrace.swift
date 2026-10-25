@@ -494,10 +494,14 @@ final class PerfTrace {
                 "restores": restores,
             ] as [String: Any],
             // R7 phase 2, item 4: deformations rendered callbacks dispatched or
-            // found already in their buffers.
+            // found already in their buffers, the dispatches made without
+            // tracking content, and the rendered callbacks that encoded a
+            // deform pass at all.
             "deform": [
                 "dispatches": rendered.reduce(0) { $0 + $1.deformDispatches },
                 "reuses": rendered.reduce(0) { $0 + $1.deformReuses },
+                "untracked": rendered.reduce(0) { $0 + $1.deformUntracked },
+                "passes": rendered.filter { $0.deformDispatches > 0 }.count,
             ] as [String: Any],
             "presentedFrames": presentedTimes.count,
             "presentedFPS": Double(max(presentedTimes.count - 1, 0)) / max((presentedTimes.last ?? 0) - (presentedTimes.first ?? 0), 1e-9),
@@ -795,6 +799,7 @@ nonisolated final class PerfDrawLog: Sendable {
         /// Deform dispatches this draw encoded and deformations it reused (R7 phase 2, item 4).
         var deformDispatches = 0
         var deformReuses = 0
+        var deformUntracked = 0
         /// The display-link rate requested for the interval after this
         /// callback, in Hz; 0 for the display's full rate (R7 P2).
         var linkHz: Float = 0
@@ -832,7 +837,8 @@ nonisolated final class PerfDrawLog: Sendable {
                             outcome: result.outcome, presentLogIndex: presentIndex,
                             onMainThread: pthread_main_np() != 0, ring: statistics.uniforms,
                             skinPalettes: statistics.skinPalettes, deformDispatches: statistics.deformDispatches,
-                            deformReuses: statistics.deformReuses, linkHz: linkHz)
+                            deformReuses: statistics.deformReuses, deformUntracked: statistics.deformUntracked,
+                            linkHz: linkHz)
         return state.withLock { state in
             let first = result.outcome == .rendered && state.snapshot.firstDraw == nil
             if first { state.snapshot.firstDraw = end }

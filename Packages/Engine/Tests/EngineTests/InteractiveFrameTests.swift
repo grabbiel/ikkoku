@@ -308,12 +308,16 @@ extension InteractiveFrameTests {
 /// record of "the previous frame" instead of "the buffer's last write" would get wrong.
 extension InteractiveFrameTests {
     /// Redraws the pending submission (no new submit) and returns the draw.
+    /// Each step here is a separate edit after a pause, so the interactive
+    /// bypass never starts (`interactiveDrawsStopTrackingWhileEveryDeformationChanges`).
     private func redraw(_ f: InteractiveFixture) throws -> (RenderDrawResult, Data) {
+        f.time += Renderer.deformBypassPause
         f.renderer.invalidateInteractiveFrame()
         return try f.draw()
     }
 
     private func submitAndDraw(_ f: InteractiveFixture) throws -> (RenderDrawResult, Data) {
+        f.time += Renderer.deformBypassPause
         f.renderer.submit(f.frame)
         return try f.draw()
     }
@@ -461,6 +465,64 @@ extension InteractiveFrameTests {
         f.frame = original
         expectDispatched(try submitAndDraw(f), a.1, "key used again")
         expectReused(try redraw(f), a.1, "recorded again")
+    }
+
+    /// While every deformation changes from draw to draw (a Maker slider drag),
+    /// interactive draws stop comparing and recording content: after two
+    /// tracked draws that reuse nothing, the next ones dispatch untracked until
+    /// the 30th or a pause. Their pixels stay exact, and nothing recorded before
+    /// them survives their writes.
+    @Test func interactiveDrawsStopTrackingWhileEveryDeformationChanges() throws {
+        let f = try InteractiveFixture()
+        let weights: [Float] = [0.25, 0.5, 0.75, 1]
+        var reference: [Data] = []
+        for w in weights {
+            f.frame.items[0].morphWeights = [(index: 0, weight: w)]
+            reference.append(try dispatchedPixels(f))
+        }
+        // A drag: a new weight in every draw, 1/120 s apart. The record holds weight 1.
+        func drag(_ i: Int) throws -> (RenderDrawResult, Data) {
+            f.frame.items[0].morphWeights = [(index: 0, weight: weights[i % 4])]
+            f.renderer.submit(f.frame)
+            return try f.draw()
+        }
+        for i in 0..<2 {
+            let d = try drag(i)
+            #expect(d.0.statistics.deformDispatches == 1 && d.0.statistics.deformUntracked == 0, "tracked \(i)")
+            #expect(d.1 == reference[i % 4], "tracked \(i)")
+        }
+        let pixel = Float2(32, 40), size = (64, 64)
+        for i in 2..<(1 + Renderer.deformBypassDraws) {
+            let d = try drag(i)
+            #expect(d.0.outcome == .rendered && d.0.statistics.deformDispatches == 1 && d.0.statistics.deformUntracked == 1,
+                    "untracked \(i)")
+            #expect(d.1 == reference[i % 4], "untracked \(i)")
+            if i == 10 {
+                // A pick still tracks: it records its content, which the next untracked draw writes over.
+                _ = f.renderer.pick(frame: f.frame, pixel: pixel, size: size)
+                #expect(f.renderer.lastFrameStatistics.deformUntracked == 0 && f.renderer.lastFrameStatistics.deformDispatches == 1)
+            }
+        }
+        // The 30th draw tracks again. No record survived the untracked writes,
+        // not even the pick's, so the pick's content dispatches.
+        f.frame.items[0].morphWeights = [(index: 0, weight: weights[2])]
+        f.renderer.submit(f.frame)
+        let probe = try f.draw()
+        #expect(probe.0.statistics.deformDispatches == 1 && probe.0.statistics.deformUntracked == 0 && probe.1 == reference[2])
+        // It recorded what it wrote: the same content is reused.
+        f.renderer.invalidateInteractiveFrame()
+        let again = try f.draw()
+        #expect(again.0.statistics.deformReuses == 1 && again.1 == reference[2])
+        // Two changing draws start another bypass; a pause of 0.1 s ends it.
+        for i in 0..<2 { #expect(try drag(i).0.statistics.deformUntracked == 0) }
+        #expect(try drag(2).0.statistics.deformUntracked == 1)
+        f.time += Renderer.deformBypassPause
+        let paused = try drag(3)
+        #expect(paused.0.statistics.deformDispatches == 1 && paused.0.statistics.deformUntracked == 0 && paused.1 == reference[3])
+        // With reuse off (a measurement control), draws track and dispatch everything.
+        f.renderer.reusesDeformedVertices = false
+        for i in 0..<4 { #expect(try drag(i).0.statistics.deformUntracked == 0) }
+        f.renderer.reusesDeformedVertices = true
     }
 
     /// Captures, benchmarks and picks write the same buffers. Every writer
