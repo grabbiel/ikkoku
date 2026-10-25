@@ -7,7 +7,7 @@ bounded selected-model comparison, not whole-character or whole-game parity.
 
 ## Reference and capture context
 
-`Tools/reverse/original_character_probe.py --model-variant female00|female00-bone1|female200|female201|female201-bone1|male00|male00-bone1|male200|male201`
+`Tools/reverse/original_character_probe.py --model-variant female00|female00-bone1|female200|female201|female201-bone1|male00|male00-bone1|male200|male201|male201-bone1`
 creates a new fully clothed card in an isolated CharaStudio player. It waits for
 the Studio scene, loads the requested normal model, drives exactly one original
 `Studio.HandAnimeCtrl` per side with `Init(actualSex)` and pattern 0, disables
@@ -676,3 +676,54 @@ build. Private records and helper-review dispositions are indexed under
 This adds one corrected combination and one coupled input. Other corrected
 heads/types, arbitrary shapes, animation, complete hierarchy and source shading
 remain open. No performance benchmark or whole-character parity is claimed.
+
+## Corrected male head201 skeleton (#253)
+
+The explicit `male201-bone1` probe covers normal sex 0, head 201, bone type 1
+and exType 0. Requested, loaded, saved-card and native identities are typed and
+checked separately. The loaded category-100 row remains `add50`,
+`chara/bo_head_50.unity3d`, `p_cf_head_03`, `cf_anmShapeHead_03` and `ct_head`.
+This is a tooling and evidence addition; no native pose formula, converted asset
+or per-frame work changes.
+
+Three independent original-player/native cases pass the unchanged `2e-5`
+world-matrix/vertex and `1e-4` morph gates:
+
+| State | Selected vertices | Skin bindings / unique joints | Max world matrix error | Max native/source vertex error |
+| --- | ---: | ---: | ---: | ---: |
+| Neutral, two independent runs | 35,645 | 994 / 224 | 7.17e-7 | 9.54e-7 |
+| Canonical eleven-row coupled body/face input | 35,645 | 994 / 224 | 7.19e-7 | 5.97e-7 |
+
+Morph error is zero. Normal male height is the sole source coercion: neutral
+request 0.5 and mixed request 0.25 both become saved Float32(0.6). The other
+requested/actual/saved/native shape values agree, and mixed-card unrelated
+blocks, tokens and framing remain exact (thumbnails excluded). Independent
+neutral runs have identical saved cards, 817 bone records and all 20 source
+mesh streams/topologies/morph weights; native neutral JSON is also byte-identical.
+The selected native geometry uses the existing inactive-canine and exact
+shadow-only exclusions. CPU silhouette IoU 1.0 is diagnostic geometry evidence.
+
+Both source controllers use the independently serialized 32-entry type-1 table,
+SHA-256 `a4c048d96181991c3696ab508ed176a751af0447fb5cbeeacdaef2b3191c1ace`,
+identical to the native input. The unique `cf_hit_head` local scale differs from
+1.08 by at most `4.29e-8`; the head correction passes its existing Float32 check.
+
+Tested source `8cd7b220` uses original probe SHA-256
+`329da589a938a0c062e877b465013606bb020de3ddefde91f21440f18a1fd600` against
+Studio assembly `902b9a…`. The accepted inspector `b2b9a74b…` is reused after
+verifying all 178 compiled-source files. Its 103-file native input closure
+contains the converted male avatar/card/contracts, never source-evaluated poses
+or vertices. All 69 focused Python checks, 25 retained comparisons and eight
+retained repeats pass; 4,173 historical inputs and 502 new manifested capture
+files remain unchanged. Integration with the accepted cheek tooling passes 79
+related Python tests. All owned source/compiler/native processes are released.
+
+The sealed private summary under
+`.local/codex-continue-2026-10-24/rolling/models-male201-bone1/` binds 102
+artifacts, helper dispositions, source audits and raw comparisons. The reused
+inspector's earlier output-path-wrapper failure remains preserved with its
+separate accepted provenance; it is not claimed as a new build. Current source
+and native cases passed on their first invocation. Other corrected heads/types,
+arbitrary shapes, complete local hierarchy, animation and appearance remain
+open. This establishes neither a performance improvement nor full-character
+source parity.

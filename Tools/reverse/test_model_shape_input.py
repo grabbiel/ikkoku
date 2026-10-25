@@ -240,6 +240,47 @@ class ShapeCaptureTests(unittest.TestCase):
                 model.shape_request_gate(self.folder,self.frame,self.baseline)
             payload.assert_not_called()
 
+    def test_corrected_male_head201_card_baseline_preserves_only_expected_shape_changes(self):
+        authored.ModelComparisonTests.bone1(self,sex=0,head_id=201)
+        path=self.baseline/'frame.json';base=json.loads(path.read_text())
+        for key in ('variant','sex','requestedSex','headID','requestedHeadID','loadedHeadCatalogID',
+                    'boneType','requestedBoneType','exType','requestedExType','loadedHeadName',
+                    'loadedHeadCatalog','bodyCorrection'):
+            base['neutralModel'][key]=copy.deepcopy(self.frame['neutralModel'][key])
+        base['neutralModel']['actualBodyValues'][0]=.6
+        data=(self.folder/'body-correction.bytes').read_bytes()
+        (self.baseline/'body-correction.bytes').write_bytes(data);path.write_text(json.dumps(base))
+        # Both independently saved male cards contain the source-coerced height,
+        # while the requested neutral/mixed rates remain unchanged in metadata.
+        for folder in (self.folder,self.baseline):
+            card=folder/'card.png'
+            card.write_bytes(edited_shapes(card.read_bytes(),[dict(domain='body',index=0,value=.6)]))
+        self.native['inputs']['cardSHA256']=hashlib.sha256((self.folder/'card.png').read_bytes()).hexdigest()
+        result=model.compare(self.folder,self.native,shape_baseline=self.baseline)
+        self.assertTrue(result['gatePassed']);self.assertEqual(result['shapeRequest']['overrides'],self.rows)
+        self.assertEqual([(r['domain'],r['index']) for r in result['shapeCoercions']],[('body',0)])
+        for other in (dict(variant='female201-bone1',sex=1,requestedSex=1),
+                      dict(variant='male201',boneType=0,requestedBoneType=0),
+                      dict(variant='male00-bone1',headID=0,requestedHeadID=0,loadedHeadCatalogID=0,
+                           loadedHeadCatalog=copy.deepcopy(model.HEAD00_CATALOG))):
+            changed=copy.deepcopy(base);changed['neutralModel'].update(other);path.write_text(json.dumps(changed))
+            with patch.object(model,'shape_card_payload') as payload:
+                with self.subTest(other=other['variant']),self.assertRaisesRegex(ValueError,'context differs'):
+                    model.shape_request_gate(self.folder,self.frame,self.baseline)
+                payload.assert_not_called()
+        path.write_text(json.dumps(base));(self.baseline/'body-correction.bytes').unlink()
+        with patch.object(model,'shape_card_payload') as payload:
+            with self.assertRaisesRegex(ValueError,'Missing corrected body table'):
+                model.shape_request_gate(self.folder,self.frame,self.baseline)
+            payload.assert_not_called()
+        changed=bytearray(data);struct.pack_into('<f',changed,4,-.5)
+        (self.baseline/'body-correction.bytes').write_bytes(changed)
+        base['neutralModel']['bodyCorrection']['sha256']=hashlib.sha256(changed).hexdigest();path.write_text(json.dumps(base))
+        with patch.object(model,'shape_card_payload') as payload:
+            with self.assertRaisesRegex(ValueError,'Shape baseline corrected body table differs'):
+                model.shape_request_gate(self.folder,self.frame,self.baseline)
+            payload.assert_not_called()
+
     def test_corrected_male_baseline_rejects_other_sex_type_or_table_before_card_payload(self):
         authored.ModelComparisonTests.bone1(self, sex=0)
         path=self.baseline/'frame.json';base=json.loads(path.read_text())
