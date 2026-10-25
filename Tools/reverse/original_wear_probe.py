@@ -107,9 +107,10 @@ def bootstrap(base):
 
 
 class Endpoint:
-    """Serves the named inputs and accepts one bounded character.zip PUT, under a random token."""
-    def __init__(self, address, files):
-        self.token = uuid.uuid4().hex; self.files = files; self.upload = None
+    """Serves the named inputs and accepts one bounded PUT of `upload` (character.zip by
+    default), under a random token."""
+    def __init__(self, address, files, upload='character.zip'):
+        self.token = uuid.uuid4().hex; self.files = files; self.upload = None; self.upload_name = upload
         endpoint = self
         class Handler(http.server.BaseHTTPRequestHandler):
             def name(self):
@@ -122,7 +123,7 @@ class Endpoint:
                 self.send_response(200); self.send_header('Content-Type', 'text/plain; charset=utf-8')
                 self.send_header('Content-Length', str(len(data))); self.end_headers(); self.wfile.write(data)
             def do_PUT(self):
-                if self.name() != 'character.zip' or endpoint.upload is not None: self.send_error(403); return
+                if self.name() != endpoint.upload_name or endpoint.upload is not None: self.send_error(403); return
                 if self.headers.get('Transfer-Encoding', '').lower() == 'chunked':
                     data = bytearray()
                     while True:
