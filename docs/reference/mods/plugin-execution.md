@@ -729,6 +729,27 @@ fixed-`1/30` rebuild contract. Focused Engine continuation/ownership cases and a
 separate app lazy-clock ownership phase accompany the unchanged 16+56 assertions;
 their execution is pending. No comparative checkpoint-cost claim is made.
 
+The optional `PluginLibraryScenario.routeCheckpointCost` diagnostic uses the
+real moving-route fixture and an attachment-free successful callback. From one
+native seed it measures histories of 3 and 300 successful `0.02` steps. Capture
+and release batches call the production checkpoint method through a non-inlined
+wrapper; a separate reused-snapshot consumer control retains its own raw timings
+and observable checksums. Release call-site inspection is required before those
+timings are accepted. The diagnostic reports ordinary character checkpoints,
+route clocks, rendered source-character objects, draw items and route geometry
+separately; a route-child preview is not an ordinary character checkpoint.
+
+The same scenario measures at most 100 complete synchronous successful plugin
+steps per history, checks capture-only state/resource/owner invariance, and
+compares the resulting typed state and route matrices with an untimed replay
+from the same native seed. Timed steps include synchronous model refresh and
+submission; deferred SwiftUI layout/display and GPU completion are excluded.
+The outer frame-batch duration additionally includes sampling/array overhead.
+No allocation counts, whole-app responsiveness, or speedup over the former
+incorrect rollback are inferred. This diagnostic is pending a Release build,
+functional acceptance and coordinated quiet measurements; it changes no normal
+plugin-frame behavior.
+
 This implements an explicit Unity/BepInEx subset. Coroutines, Harmony interception,
 arbitrary engine components, reflection, serialized object fields and unrecognized
 APIs still require recovery and adapters. Sheared/reflected unparented clone
