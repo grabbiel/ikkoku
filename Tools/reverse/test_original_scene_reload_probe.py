@@ -234,6 +234,14 @@ class OnceTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError,'Unexpected scene upload names'):
                 probe.once_script(ROOT_A,'http://h/t/',60,bad)
 
+    def test_once_refuses_an_output_that_already_holds_a_run_before_any_vm_call(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            record=Path(tmp)/'delete.png';record.write_bytes(b'png');(Path(tmp)/'run.json').write_text('{}')
+            with patch('original_scene_reload_probe.guarded') as guard,patch('original_scene_reload_probe.subprocess.run') as vm,\
+                 self.assertRaisesRegex(RuntimeError,'run.json exists'):
+                probe.run_once('vm',Path(tmp),{'topology-delete':record},0)
+            guard.assert_not_called();vm.assert_not_called()
+
     def test_topology_labels_upload_under_their_own_names(self):
         items=probe.upload_items({label:Path(label) for label in probe.TOPOLOGY_LABELS})
         self.assertEqual(items,[(label,'reload-'+label+'.png') for label in probe.TOPOLOGY_LABELS])

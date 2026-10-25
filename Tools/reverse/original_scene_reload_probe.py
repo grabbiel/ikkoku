@@ -31,9 +31,9 @@ from pathlib import Path
 from original_character_probe import retry, player_root
 from original_shader_probe import write_small, stop_probe, fetch, dump, digest
 from vm_source import powershell, ps_quote
-import re, subprocess, uuid
+import re, subprocess
 from original_character_probe import PLAYER_SETUP, PLAYER_ROOT
-from original_wear_probe import Endpoint, bootstrap, extract, errno_count, guarded
+from original_wear_probe import Endpoint, bootstrap, extract, errno_count, guarded, fresh_root
 ROOT=Path(__file__).resolve().parents[2]
 LABELS=('hide-rename','camera-switch','route-stop','route-rename')
 EXPRESSION_LABELS=('expression-edit','expression-source') # ST-C04 face-state export and its source
@@ -122,7 +122,7 @@ def run_once(vm,output,scenes,errno_baseline,host_address='10.211.55.2',wait_sec
     source=(source or SOURCE).read_bytes()
     uploads=dict((uploaded,scenes[label].read_bytes()) for label,uploaded in upload_items(scenes))
     if not uploads:raise ValueError('--once needs at least one scene record')
-    root=r'C:\Temp\IkkokuShaderProbe-'+uuid.uuid4().hex
+    root=fresh_root()
     record=dict(vm=vm,root=root,processID=0,sourceSHA256=digest(source),currentUser=True,stopped=False,
                 sceneSHA256={label:digest(scenes[label].read_bytes()) for label,_ in upload_items(scenes)},
                 errnoBaseline=errno_baseline,errnoBefore=guarded(errno_baseline),
