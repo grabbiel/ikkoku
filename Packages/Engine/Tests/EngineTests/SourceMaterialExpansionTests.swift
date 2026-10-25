@@ -62,7 +62,8 @@ func sourceMaterialFallbackReusePreservesPixelsAndIndependentOutputLeases() thro
     #expect(timings.sample.composition?.fallbackAllocations == 4) // a fresh compositor per applying call
     let scopes = timings.sample.scopes
     #expect(scopes.map(\.identity.role) == [.base, .component])
-    #expect(scopes.allSatisfy(\.succeeded))
+    let allScopesSucceeded = scopes.allSatisfy(\.succeeded)
+    #expect(allScopesSucceeded)
     #expect(scopes[1].identity.componentIndex == 0 && scopes[1].identity.prefix == "synthetic/")
     // Each delta contains this call's three recipes, not the cumulative total.
     for scope in scopes {
