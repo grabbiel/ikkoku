@@ -68,5 +68,7 @@
   "IKKOKU_BOTTOM_COMPOSITE_PROBE": "/absolute/path/to/r1-bottom/original-colour",
   "IKKOKU_INNER_SHOE_COMPOSITE_PROBE": "/absolute/path/to/r1-inner-shoe/original-inner-colour",
   "IKKOKU_FACE_COMPOSITE_BASE_PROBE": "/absolute/path/to/r1-face/original-base",
-  "IKKOKU_FACE_COMPOSITE_PROBE": "/absolute/path/to/r1-face/original-colour"
+  "IKKOKU_FACE_COMPOSITE_PROBE": "/absolute/path/to/r1-face/original-colour",
+  "IKKOKU_BODY_COMPOSITE_BASE_PROBE": "/absolute/path/to/r1-body/original-base",
+  "IKKOKU_BODY_COMPOSITE_PROBE": "/absolute/path/to/r1-body/original-distinct"
 }

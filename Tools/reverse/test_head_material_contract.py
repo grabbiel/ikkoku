@@ -1,8 +1,10 @@
 #!/usr/bin/env python3
 """Numerical invariants for the recovered base-color shader equations."""
 import unittest
+from pathlib import Path
+from types import SimpleNamespace
 import numpy as np
-from head_material_contract import create_head_base, create_eye_base, create_eye_white
+from head_material_contract import BODY_TEXTURES, body_texture_metadata, create_head_base, create_eye_base, create_eye_white
 
 
 class ShaderBaseTests(unittest.TestCase):
@@ -34,6 +36,56 @@ class ShaderBaseTests(unittest.TestCase):
         white = create_eye_white(main, np.array([1, .8, .6, 1]), np.array([.2, .4, .6, 1]))
         np.testing.assert_allclose(white[0, 0], [.4, .5, .6, 1])
         np.testing.assert_allclose(white[0, 1], [.8, .7, .6, 1])
+
+
+class BodyMetadataTests(unittest.TestCase):
+    def fixture(self):
+        class Texture:
+            def __init__(self, size, fmt, color_space):
+                self.m_Width = self.m_Height = size
+                self.m_TextureFormat = fmt
+                self.m_ColorSpace = color_space
+
+            @property
+            def image(self):
+                raise AssertionError("The body metadata extension must not decode pixels")
+
+        class Reader:
+            type = SimpleNamespace(name="Texture2D")
+            def __init__(self, name, path_id):
+                self.name = name
+                self.path_id = path_id
+                self.assets_file = SimpleNamespace(name="CAB-test")
+            def peek_name(self): return self.name
+            def read(self):
+                return Texture(2048 if self.name.endswith("_t") else 1024,
+                               4 if self.name.endswith("_t") else 10 if self.name.endswith("_mp") else 3,
+                               1 if self.name.endswith("_mp") else 0)
+
+        root = Path("/synthetic")
+        bundles = {root / bundle: SimpleNamespace(objects=[Reader(name, i + 1) for i, name in enumerate(names)])
+                   for bundle, names in BODY_TEXTURES.items()}
+        return root, bundles
+
+    def test_body_extension_preserves_distinct_size_format_and_color_space_without_pixels(self):
+        root, bundles = self.fixture()
+        records = body_texture_metadata(bundles, root)
+        self.assertEqual([(r["name"], r["width"], r["height"], r["format"], r["serializedColorSpace"]) for r in records],
+                         [("cf_body_00_t", 2048, 2048, 4, 0), ("cf_body_00_mc", 1024, 1024, 3, 0),
+                          ("cf_body_01_mp", 1024, 1024, 10, 1)])
+        self.assertTrue(all(r["metadataOnly"] and "file" not in r and "pngSHA256" not in r for r in records))
+
+    def test_missing_or_ambiguous_texture_is_not_substituted_from_another_bundle(self):
+        for ambiguous in [False, True]:
+            root, bundles = self.fixture()
+            objects = bundles[root / "chara/oo_base.unity3d"].objects
+            main = objects[0]
+            if ambiguous: objects.append(main)
+            else:
+                objects.remove(main)
+                bundles[root / "chara/mm_base.unity3d"].objects.append(main)
+            with self.subTest(ambiguous=ambiguous), self.assertRaisesRegex(ValueError, "Expected one cf_body_00_t"):
+                body_texture_metadata(bundles, root)
 
 
 if __name__ == "__main__":
