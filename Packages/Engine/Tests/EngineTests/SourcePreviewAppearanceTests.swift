@@ -32,6 +32,52 @@ private struct AppearanceLoadFixture {
 
 private struct AppearanceLoadFailure: Error { let reason: String }
 
+@Test func sourceAppearanceScopesKeepNilLabelsLazyAndPreserveBodyResultsAndErrors() throws {
+    var labels = 0, bodies = 0
+    func identity() -> SourceAppearanceTimings.ScopeIdentity { labels += 1; return .base }
+    let value = SourceAppearanceTimings.scoped(nil, identity()) { bodies += 1; return 17 }
+    #expect(value == 17 && bodies == 1 && labels == 0)
+    do {
+        try SourceAppearanceTimings.scoped(nil, identity()) { () throws -> Void in
+            bodies += 1; throw AppearanceLoadFailure(reason: "same error")
+        }
+        Issue.record("Nil diagnostics swallowed the body's error.")
+    } catch let error as AppearanceLoadFailure { #expect(error.reason == "same error") }
+    #expect(bodies == 2 && labels == 0)
+}
+
+@Test func sourceAppearanceScopesSeparatePartialDeltasFromUnscopedAggregateWork() throws {
+    let timings = SourceAppearanceTimings()
+    _ = SourceAppearanceTimings.measure(timings, .bindingPreparation) { 1 }
+    let result = SourceAppearanceTimings.scoped(timings, .base) {
+        SourceAppearanceTimings.measure(timings, .pixelReadHash) { 2 }
+    }
+    #expect(result == 2)
+    _ = SourceAppearanceTimings.measure(timings, .pixelReadHash) { 3 }
+    do {
+        try SourceAppearanceTimings.scoped(timings,
+            .component(index: 4, prefix: "accessory-2/", accessorySlot: 2, indoorShoes: false)) {
+            _ = SourceAppearanceTimings.measure(timings, .pixelReadHash) { 4 }
+            try SourceAppearanceTimings.measure(timings, .pixelReadHash) { () throws -> Void in
+                throw AppearanceLoadFailure(reason: "partial")
+            }
+        }
+        Issue.record("Scoped diagnostics swallowed the body's error.")
+    } catch let error as AppearanceLoadFailure { #expect(error.reason == "partial") }
+    let empty = SourceAppearanceTimings.scoped(timings, .bodyMaskRemove) { true }
+    #expect(empty)
+    let sample = timings.sample
+    #expect(sample.calls == ["bindingPreparation": 1, "pixelReadHash": 4])
+    #expect(sample.scopes.count == 3)
+    let first = try #require(sample.scopes.first), last = try #require(sample.scopes.last)
+    #expect(first.identity == .base && first.succeeded && first.calls == ["pixelReadHash": 1])
+    let failed = try #require(sample.scopes.first { !$0.succeeded })
+    #expect(failed.identity == .component(index: 4, prefix: "accessory-2/", accessorySlot: 2, indoorShoes: false))
+    #expect(failed.calls == ["pixelReadHash": 2] && failed.milliseconds.keys.sorted() == ["pixelReadHash"])
+    #expect(last.identity == .bodyMaskRemove && last.succeeded && last.calls.isEmpty && last.milliseconds.isEmpty)
+    #expect(sample.composition == nil && sample.scopes.allSatisfy { $0.composition == nil })
+}
+
 private func appearanceValue<T>(_ value: T?, _ reason: String) throws -> T {
     guard let value else { throw AppearanceLoadFailure(reason: reason) }
     return value
