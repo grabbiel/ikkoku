@@ -291,7 +291,8 @@ toggle's property; its didSet forwards to every rendered preview),
 `{character,chain,axis,delta|value}` (the Pose tab's IK toggle and Target row:
 `delta` is one Stepper click, `advanced(by:)`, and `value` types the component;
 both call the same `StudioModel` setter as the row), `captureIKPose`
-`{character,chain,name}` (memorizes the rendered chain under a label). The
+`{character,chain,name}` (memorizes the rendered chain under a label),
+`setShowSourceMap` `{on}` (View ▸ Show Source Map, ST-A11; runtime only). The
 native IK ops address a NATIVE character by its object name, because an added
 character has no source key; `chain` is an `IKChain` raw value such as
 `hand_L`. `export`/`reimport`
@@ -340,7 +341,13 @@ a closing since the last `advance`; a toggle-off leg pairs a `true` window
 with a following `false` one, and a card whose saved `eyesBlink` flag is off
 renders the fixed sentinel and can never set it), `handPattern`
 `{key,left?,right?}` (the saved `handPatterns` pair the loader replays;
-absent hands are not asserted),
+absent hands are not asserted), `sourceMap`
+`{none?,map?,draws?,loading?,lineContains?,lineAbsent?,pickNothingAt?,pickSomethingAt?}`
+(ST-A11: the imported scene's map as the render path sees it,
+`StudioModel.sourceMapCensus()`; `none` asserts no map request, draws or
+line; each `pickNothingAt`/`pickSomethingAt` point is two viewport
+fractions, origin top-left, and must pick id 0 / a nonzero id — see
+[source maps](#source-maps-st-a11)),
 `sourceRuntime`
 `{cameras,items,routes,sceneLight,rehydrations}` (each sub-key optional;
 `rehydrations` is how many times the scene file was re-read; the others count the
@@ -1003,6 +1010,35 @@ parallel and serial call orders bit for bit. As a mutation control,
 `FrameRequest.matches` was changed to ignore the world matrix. The `move` step
 then failed: 39,828 pixels differed (max channel delta 182), and the refresh
 reused 7 of 7 frames instead of 6.
+
+### Source maps (ST-A11)
+
+Three checks cover the map an imported scene names
+([maps](../../docs/reference/studio/maps.md)). Each declares
+`IKKOKU_STUDIO_MAP_CATALOG`, the converted map catalog; no other check
+declares it, so the runner gives no other check a map.
+
+- `source-map` (`IKKOKU_SOURCE_SCENE` from `IKKOKU_STUDIO_MAP_SHOWOFF_SCENE`,
+  the showoff characters with Map 33 added by the original player; 17 steps).
+  It runs these steps in order:
+  1. Before the first step the map is already drawn: 8 draws, not loading. The
+     status line holds the exact label `Map 33 空き部室 (bushitu): approximated:
+     no baked lightmaps, map lights, sun-type lighting, fog or ambient`. Two
+     map-only points pick nothing, and a character in front of the wall picks.
+  2. `setShowSourceMap` off draws 0 parts and the line says `hidden (View ▸
+     Show Source Map)`. On restores 8.
+  3. The original-format export is byte-identical to the source.
+  4. Reimporting that export, New Scene (no map, no line) and undo restore the
+     map, and a map pixel still picks nothing.
+  5. A native save, a New Scene and an in-process load show the map again with
+     no scene-file rehydration (`rehydrations: 0`; the runtime caches still
+     cover the scene).
+- `source-map-reload` (only the avatar and the catalog) loads that native save
+  in a fresh process. One rehydration rebuilds the map request, and the map
+  draws again with the same line and picks. It must run after `source-map`.
+- `source-map-none` (`IKKOKU_STUDIO_SCENARIO_SCENE`, `koikatu_cs0002591.png`,
+  which names no map) supplies the catalog. It asserts there is no map request
+  or line and that the export is byte-identical.
 
 ## Maker scenario hook (T-T04)
 

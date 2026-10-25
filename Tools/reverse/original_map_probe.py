@@ -52,9 +52,10 @@ def private(path):
 
 
 def checked_relative(value):
-    """A game-relative path with forward slashes, no drive, root or '..' segment."""
+    """A game-relative path with forward slashes, no drive, root or '..' segment, and only
+    characters that need no quoting inside the PowerShell single-quoted lists."""
     path = PurePosixPath(value)
-    if not value or '\\' in value or ':' in value or path.is_absolute() or any(p in ('', '.', '..') for p in path.parts):
+    if not re.fullmatch(r'[A-Za-z0-9_./ -]+', value or '') or path.is_absolute() or any(p in ('', '.', '..') for p in value.split('/')):
         raise ValueError(f'Not a plain game-relative path: {value!r}')
     return path.as_posix()
 
