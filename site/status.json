@@ -1,6 +1,6 @@
 {
   "reviewed": "2026-10-24",
-  "revision": "b9c50604e4cb7a7b3f019654d6d853d9c7ad94d9",
+  "revision": "99a6bfb0e3b880c24e342754300e150bcd18d185",
   "components": [
     {
       "id": "character-maker",
@@ -8,9 +8,9 @@
       "group": "Priority",
       "stage": "Mid-stage",
       "summary": "The core editing path works for selected normal characters.",
-      "available": "Normal male/female cards, asynchronous head 0/200/201 and converted asset selection, shape and color edits, static ABMX, and identity-preserving edited exports. Bounded decoded-rig reuse accelerates repeated normal-head selections while retaining actual byte verification.",
+      "available": "Normal male/female cards, asynchronous head 0/200/201 and converted asset selection, shape and color edits, static ABMX, and identity-preserving edited exports. Bounded decoded-rig reuse accelerates repeated normal-head selections while retaining actual byte verification. Maker-only bounded clothes groups reduce six GPU completions to four during the measured normal-head selection path.",
       "remaining": "Wider catalogs, special and modded assemblies, complete original editing workflows, and remaining owner-thread stalls. First selections still decode and now pay hashing/accounting costs.",
-      "evidence": "In a small Release pair, median warm normal-head selection fell from 667\u2013701 ms to 159\u2013161 ms. First selections cost 16\u201325 ms more. Logical retained rig payload reached about 39 MB; this is not total RAM or a whole-app benchmark.",
+      "evidence": "Bounded rig reuse improved repeated normal-head selections in its retained comparison, with a first-selection cost. The later clothes-group comparison measures 15–21 ms lower selection latency across female/male first and repeat cycles, with exact exports/resources and about 5 MiB additional logical texture peak. Two process repetitions per arm/sex, correlated transitions and a background VM limit the claim; RSS and FPS were not measured.",
       "docs": [
         [
           "Maker contract",
@@ -23,6 +23,10 @@
         [
           "Selection reuse evidence",
           "docs/reference/character/maker-assets.md#bounded-decoded-rig-reuse-192"
+        ],
+        [
+          "Clothes-group measurements",
+          "docs/reference/character/maker-assets.md#bounded-maker-clothes-composition-groups-234"
         ]
       ],
       "issue": [
