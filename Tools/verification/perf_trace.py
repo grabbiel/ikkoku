@@ -322,8 +322,9 @@ def pacing_handover_problems(lifecycle, policy):
     viewports (R7 phase 2), from the state recorded before each lifecycle
     step and at the end: with display pacing, exactly the active mode's model
     is paced (none with the timer control); a model that is not active runs
-    no paced step; and the Maker runs paced steps after each switch to it
-    while its live animation is on."""
+    no paced step; and a model runs paced steps after each switch to it while
+    it has live work (`live`: the Maker's live animation, the Studio's live
+    steps)."""
     records = [s for s in lifecycle.get("steps", []) if "livePaced" in s]
     if "livePaced" in lifecycle.get("end", {}):
         records.append(dict(lifecycle["end"], step="the end"))
@@ -340,9 +341,9 @@ def pacing_handover_problems(lifecycle, policy):
             if model != mode and count > previous["pacedSteps"].get(model, 0):
                 problems.append("the %s ran %d paced steps while the %s was active, before %s" % (
                     model, count - previous["pacedSteps"].get(model, 0), mode, current["step"]))
-        if (policy != "timer" and previous["step"] == "maker" and mode == "maker" and current.get("makerLive")
-                and current["pacedSteps"]["maker"] == previous["pacedSteps"]["maker"]):
-            problems.append("the Maker ran no paced step between its switch and %s" % current["step"])
+        if (policy != "timer" and previous["step"] == mode and current.get("live", {}).get(mode)
+                and current["pacedSteps"][mode] == previous["pacedSteps"][mode]):
+            problems.append("the %s ran no paced step after the switch to it, before %s" % (mode, current["step"]))
     return problems
 
 

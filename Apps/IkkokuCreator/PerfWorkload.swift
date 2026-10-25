@@ -503,11 +503,15 @@ final class PerfWorkloadDriver {
     /// restores it, all while the display link draws, then quits through
     /// `NSApp.terminate`. The report's `details.lifecycle` records, before
     /// each step and at the end, the viewport render threads alive and the
-    /// live-pacing hand-over: the mode, which models a display link paces,
-    /// and how many paced steps each has run. It also records the frames
-    /// drawn and presented after the restore.
+    /// live-pacing hand-over: the mode, which models have live steps, which
+    /// models a display link paces, and how many paced steps each has run.
+    /// It also records the frames drawn and presented after the restore. The
+    /// Studio holds `studio-native`'s scene, and both models' live animation
+    /// is on.
     private func prepareViewportLifecycle() throws {
         guard app.ensureMaker() != nil, app.studio != nil else { throw RigError.invalid("needs the Maker and the Studio") }
+        // Both models have live steps, so the hand-over is checked both ways.
+        try prepareStudioNative()
         app.mode = .maker
         guard let window = NSApp.windows.first(where: { $0.isVisible && $0.contentView != nil }) else {
             throw RigError.invalid("no visible editor window")
@@ -549,11 +553,12 @@ final class PerfWorkloadDriver {
         action()
     }
 
-    /// The live-pacing hand-over (R7 phase 2): the active mode, which models a
-    /// display link paces, and the paced steps each has run.
+    /// The live-pacing hand-over (R7 phase 2): the active mode, which models
+    /// have live steps to run when active, which models a display link paces,
+    /// and the paced steps each has run.
     private func pacingState() -> [String: Any] {
         ["mode": app.mode == .maker ? "maker" : "studio",
-         "makerLive": app.maker?.liveAnimation ?? false,
+         "live": ["maker": app.maker?.liveAnimation ?? false, "studio": app.studio?.hasLiveStepWork ?? false],
          "livePaced": ["maker": app.maker?.isLivePaced ?? false, "studio": app.studio?.isLivePaced ?? false],
          "pacedSteps": ["maker": app.maker?.pacedSteps ?? 0, "studio": app.studio?.pacedSteps ?? 0]]
     }

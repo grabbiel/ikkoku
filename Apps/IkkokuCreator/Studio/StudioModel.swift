@@ -613,7 +613,8 @@ final class StudioModel: ViewportInputHandler, LivePacedHandler {
 
     /// Whether a paced step has something to do: outside a drag, in the
     /// active mode, `displayStep` answers `.idle` exactly when this is false.
-    private var hasLiveStepWork: Bool {
+    /// `viewport-lifecycle` records it for its hand-over check.
+    var hasLiveStepWork: Bool {
         !liveStepsStopped && (timelinePlaying || (sourcePluginsRunning && sourcePluginSession != nil) || liveSourceAnimates)
     }
 

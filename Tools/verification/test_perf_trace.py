@@ -282,9 +282,9 @@ class PerfTraceTests(unittest.TestCase):
         self.assertIn("WARNING %s/leaky: render threads 1 before, 2 at most, 2 at the end" % os.path.basename(folder), text)
 
     def test_lifecycle_run_checks_the_live_pacing_hand_over_between_studio_and_maker(self):
-        def state(step, mode, paced, steps, live=True):
-            return {"step": step, "mode": mode, "makerLive": live, "renderThreadsBefore": 1,
-                    "livePaced": {"maker": "maker" in paced, "studio": "studio" in paced},
+        def state(step, mode, paced, steps, live=("maker", "studio")):
+            return {"step": step, "mode": mode, "live": {"maker": "maker" in live, "studio": "studio" in live},
+                    "renderThreadsBefore": 1, "livePaced": {"maker": "maker" in paced, "studio": "studio" in paced},
                     "pacedSteps": {"maker": steps[0], "studio": steps[1]}}
 
         def lifecycle(records, end, policy="display"):
@@ -296,30 +296,33 @@ class PerfTraceTests(unittest.TestCase):
             return run
         # Maker, then Studio, then Maker again: each mode's model is paced
         # in turn, and only the active one steps.
-        good = [state("studio", "maker", ["maker"], (10, 0)), state("maker", "studio", ["studio"], (10, 0)),
-                state("resize", "maker", ["maker"], (25, 0))]
-        self.assertIsNone(perf_trace.lifecycle_problem(lifecycle(good, state("end", "maker", ["maker"], (40, 0)))))
-        leaky = good[:2] + [state("resize", "maker", ["maker"], (25, 15))]
+        good = [state("studio", "maker", ["maker"], (10, 0)), state("maker", "studio", ["studio"], (10, 12)),
+                state("resize", "maker", ["maker"], (25, 12))]
+        end = state("end", "maker", ["maker"], (40, 12))
+        self.assertIsNone(perf_trace.lifecycle_problem(lifecycle(good, end)))
+        leaky = good[:2] + [state("resize", "maker", ["maker"], (25, 27))]
         self.assertIn("the studio ran 15 paced steps while the maker was active, before resize",
-                      perf_trace.lifecycle_problem(lifecycle(leaky, state("end", "maker", ["maker"], (40, 15)))))
-        late = [good[0], state("maker", "studio", ["studio"], (14, 0))]
+                      perf_trace.lifecycle_problem(lifecycle(leaky, state("end", "maker", ["maker"], (40, 27)))))
+        late = [good[0], state("maker", "studio", ["studio"], (14, 12))]
         self.assertIn("the maker ran 4 paced steps while the studio was active, before maker",
-                      perf_trace.lifecycle_problem(lifecycle(late, state("end", "studio", ["studio"], (14, 0)))))
-        both = lifecycle(good[:2], state("end", "studio", ["maker", "studio"], (10, 0)))
+                      perf_trace.lifecycle_problem(lifecycle(late, state("end", "studio", ["studio"], (14, 20)))))
+        both = lifecycle(good[:2], state("end", "studio", ["maker", "studio"], (10, 20)))
         self.assertIn("before the end, in studio mode, the link paced maker and studio", perf_trace.lifecycle_problem(both))
-        stalled = lifecycle(good[:2] + [state("resize", "maker", ["maker"], (10, 0))], state("end", "maker", ["maker"], (20, 0)))
-        self.assertIn("the Maker ran no paced step between its switch and resize", perf_trace.lifecycle_problem(stalled))
-        # Live animation off: the Maker is not expected to step.
-        still = [state("studio", "maker", ["maker"], (0, 0), live=False), state("maker", "studio", ["studio"], (0, 0), live=False),
-                 state("resize", "maker", ["maker"], (0, 0), live=False)]
-        self.assertIsNone(perf_trace.lifecycle_problem(lifecycle(still, state("end", "maker", ["maker"], (0, 0), live=False))))
+        stalled = lifecycle(good[:2] + [state("resize", "maker", ["maker"], (10, 12))], state("end", "maker", ["maker"], (20, 12)))
+        self.assertIn("the maker ran no paced step after the switch to it, before resize", perf_trace.lifecycle_problem(stalled))
+        studio_stalled = lifecycle([good[0], state("maker", "studio", ["studio"], (10, 0))], state("end", "studio", ["studio"], (10, 5)))
+        self.assertIn("the studio ran no paced step after the switch to it, before maker", perf_trace.lifecycle_problem(studio_stalled))
+        # Without live work a model is not expected to step.
+        still = [state("studio", "maker", ["maker"], (0, 0), live=()), state("maker", "studio", ["studio"], (0, 0), live=()),
+                 state("resize", "maker", ["maker"], (0, 0), live=())]
+        self.assertIsNone(perf_trace.lifecycle_problem(lifecycle(still, state("end", "maker", ["maker"], (0, 0), live=()))))
         # The timer control paces no model.
         timer = [state("studio", "maker", [], (0, 0)), state("maker", "studio", [], (0, 0))]
         self.assertIsNone(perf_trace.lifecycle_problem(lifecycle(timer, state("end", "maker", [], (0, 0)), policy="timer")))
         self.assertIn("in maker mode, the link paced maker",
                       perf_trace.lifecycle_problem(lifecycle(timer, state("end", "maker", ["maker"], (0, 0)), policy="timer")))
-        self.assertIn("paced steps: Maker 40, Studio 0; paced before each step ['maker', 'studio', 'maker']",
-                      perf_trace.lifecycle_line("run", lifecycle(good, state("end", "maker", ["maker"], (40, 0)))))
+        self.assertIn("paced steps: Maker 40, Studio 12; paced before each step ['maker', 'studio', 'maker']",
+                      perf_trace.lifecycle_line("run", lifecycle(good, end)))
 
     def test_link_line_reports_rates_refreshes_and_deform_reuse_only_for_schema_6(self):
         data = report()
