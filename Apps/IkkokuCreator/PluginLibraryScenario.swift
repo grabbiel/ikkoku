@@ -3625,7 +3625,7 @@ extension PluginLibraryScenario {
                     (try preview.attachmentMatrix(pointID: 17, fkRotations: object.sourceFKRotations ?? [:],
                         faceValues: object.sourceFaceValues, bodyValues: object.sourceBodyValues, ikTargets: object.sourceIKOverrides ?? [:],
                         kinematics: object.sourceKinematics, animationState: object.sourceAnimation, animationElapsed: time),
-                     preview.attachmentRotation(pointID: 17, fkRotations: object.sourceFKRotations ?? [:],
+                     try preview.attachmentRotation(pointID: 17, fkRotations: object.sourceFKRotations ?? [:],
                         faceValues: object.sourceFaceValues, bodyValues: object.sourceBodyValues, ikTargets: object.sourceIKOverrides ?? [:],
                         kinematics: object.sourceKinematics, animationState: object.sourceAnimation, animationElapsed: time))
                 }
