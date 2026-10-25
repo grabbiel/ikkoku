@@ -468,10 +468,10 @@ public enum TranslatedSourceDepth24 {
 /// own-triangle finite difference and repeats are bit-identical.
 ///
 /// The added store is guarded by `vid == 0xffffffff`. Every translated draw
-/// is a 32-bit indexed draw without a base vertex, and Metal reserves that
-/// index for primitive restart, so no vertex runs the store: it writes
-/// nothing, and sampling, alpha testing, outputs and bindings stay the source
-/// program's. The only other change is that buffer(0) is declared `device`
+/// is a 32-bit indexed draw without a base vertex whose indices address its
+/// own vertex buffer, and that value is Metal's 32-bit primitive-restart
+/// index, so no vertex runs the store: it writes nothing, and sampling, alpha
+/// testing, outputs and bindings stay the source program's. The only other change is that buffer(0) is declared `device`
 /// instead of `device const`; the bound buffer is the same. The source is
 /// rewritten once per pipeline compile, with no per-frame work, binding or
 /// upload; the cost is the GPU's per-index vertex shading for such a function.

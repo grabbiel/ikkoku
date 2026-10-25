@@ -4890,10 +4890,11 @@ Four private observations on the held shoe frame establish it, all on
   all 836–863 others match the difference to *another* triangle of the same
   draw at the partner pixel (771–801 that triangle's own fragment, 62–65 its
   helper lane), with none unexplained.
-- **A vertex-stage store restores own-triangle quads.** Adding any device-memory
-  store to the forward vertex function, even one that never executes, makes all
-  2,604 derivatives own-triangle and every repeat bit-identical in all MRT
-  planes, for both texture providers. A store in the outline pass alone does not.
+- **A vertex-stage store restores own-triangle quads.** Each of four tested
+  device-memory stores in the forward vertex function (an output dump, a store
+  of the position, and two never-executed conditional stores) makes all 2,604
+  derivatives own-triangle and every repeat bit-identical in all MRT planes, for
+  both texture providers. A store in the outline pass alone does not.
 - **A minimal shader on the exported geometry reproduces it.** The forward
   pass's 3,054 vertices and 3,852 triangles drawn with one implicit sample, a
   discard on the sampled alpha and blending: 953 of 2,846 pixels take another
@@ -4928,8 +4929,9 @@ translated draw program through `TranslatedSourceVertexStore.rewrite`
 ([`TranslatedSourceProgram.swift`](../../Packages/Engine/Sources/Renderer/TranslatedSourceProgram.swift)).
 It declares buffer(0) `device` instead of `device const` and adds
 `if (vid == 0xffffffffu) { input[0].v0 = float4(0.0f); }` before the vertex
-output. Every translated draw is 32-bit indexed without a base vertex, and Metal
-reserves that index for primitive restart, so the store never runs: inputs,
+output. Every translated draw is 32-bit indexed without a base vertex, its
+indices address its own vertex buffer (far fewer than 2^32 − 1 vertices), and
+0xffffffff is Metal's 32-bit primitive-restart index, so the store never runs: inputs,
 outputs, samplers, alpha tests and bindings are the source program's. The
 rewrite runs once per pipeline compile and throws on any vertex stage that is
 not the translation emitter's shape. The frozen probe and the live path share
@@ -4940,7 +4942,10 @@ repeats in both providers (it varied at 103–114 native-store and 22–42
 captured-texture pixels, maximum 27, on `74cee1c`). It equals the never-run-store
 diagnostic draw byte for byte and differs from the unrewritten draw at 427/432
 pixels (maximum 87): the own-triangle derivatives change the MainTex LOD at
-primitive edges. Every source gate keeps its tolerance and passes; values
+primitive edges. The whole controlled character (21 items, 98,917 visible
+pixels, retained gate store) also repeats bit for bit over six captures per
+provider; before, consecutive captures differed at 11–29 native-store and
+17–38 captured-texture pixels (maximum 14). Every source gate keeps its tolerance and passes; values
 below are three processes each (before: `51dff596…` on `74cee1c`; after:
 `2072d607…` on `cf7919e`, identical in all three):
 
