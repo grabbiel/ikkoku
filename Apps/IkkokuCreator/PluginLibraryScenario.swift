@@ -14,6 +14,8 @@ import simd
 /// mode. The barrier wraps the real immutable preparation; no result is faked.
 struct PluginLibraryScenario: Decodable {
     let requestFile: String
+    /// Reproduction only: real library save/reopen across the attachment-read gate.
+    let libraryAttachmentRestore: LibraryAttachmentRestore?
     /// Reproduction only: direct profile/native loads versus the mixed graph.
     let directPluginGraph: DirectPluginGraph?
     /// Regression only: saved mixed graph identity across native open/history.
@@ -66,6 +68,7 @@ struct PluginLibraryScenario: Decodable {
     }
 
     @MainActor func run(app: AppState, studio: StudioModel) async -> StudioScenario.Report {
+        if let libraryAttachmentRestore { return await reproduceLibraryAttachmentRestore(libraryAttachmentRestore, app: app, studio: studio) }
         if let nativeGraphRestore { return reproduceNativeGraphRestore(nativeGraphRestore, app: app, studio: studio) }
         if let directPluginGraph { return reproduceDirectPluginGraph(directPluginGraph, app: app, studio: studio) }
         if let focusObserverLifecycle { return verifyFocusObserverLifecycle(focusObserverLifecycle, app: app, studio: studio) }
@@ -3171,5 +3174,236 @@ extension PluginLibraryScenario {
             "packages": [["manifest": manifestURL.path, "bindings": [["type": "FrameChild", "sourceObjectKey": 12],
                 ["type": "FrameParent", "sourceObjectKey": 11]]]]], options: [.sortedKeys])
             .write(to: directory.appendingPathComponent("profile.json"))
+    }
+}
+
+// This diagnostic observes a documented library installation policy. It does
+// not enable source attachment reads or change package/runtime behavior.
+extension PluginLibraryScenario {
+    struct LibraryAttachmentRestore: Decodable {
+        let phase: NativeProfileRestore.Phase
+        let directory: String
+        let outputDirectory: String
+        let requests: [String: String]
+    }
+
+    @MainActor private func reproduceLibraryAttachmentRestore(_ configuration: LibraryAttachmentRestore,
+                                                               app: AppState, studio: StudioModel) async -> StudioScenario.Report {
+        let directory = URL(fileURLWithPath: configuration.directory)
+        let output = URL(fileURLWithPath: configuration.outputDirectory)
+        let encoder = JSONEncoder(); encoder.outputFormatting = [.sortedKeys]
+        let gate = "Source-character attachment reads during plugin installation are unsupported; no live preview was changed."
+        let arithmetic = "Unsupported arithmetic operator or Int32 arithmetic."
+        let topology = "Restoring plugin initialization changed scene object topology, identities, or clone state."
+        var rows: [StudioScenario.Report.StepResult] = []
+        func check(_ name: String, _ okay: Bool, _ detail: String = "") throws {
+            rows.append(.init(op: name, ok: okay, detail: detail))
+            if !okay { throw SourcePluginError.runtime("Library attachment reproduction failed: " + name) }
+        }
+        func persist<T: Encodable>(_ value: T, _ name: String) throws {
+            try encoder.encode(value).write(to: output.appendingPathComponent(name + ".json"), options: .withoutOverwriting)
+        }
+        func scene(_ name: String) -> URL { directory.appendingPathComponent(name + ".png") }
+        func decoded(_ name: String) throws -> StudioDocument {
+            try CardIO.decode(StudioDocument.self, keyword: CardIO.sceneKeyword, from: Data(contentsOf: scene(name)))
+        }
+        func snapshot(status: String? = nil) throws -> NativeGraphObservation {
+            .init(graph: try directGraphSnapshot(studio: studio, expectedStatus: status),
+                previewOwners: studio.renderedSourceCharacterPreviews.map { String(describing: ObjectIdentifier($0)) }.sorted())
+        }
+        func frame(_ name: String) throws -> Data {
+            let bytes = try directGraphFrameBytes(studio.host.renderer.currentFrame())
+            try bytes.write(to: output.appendingPathComponent(name + "-frame.json"), options: .withoutOverwriting)
+            return bytes
+        }
+        func rejection(_ name: String, expected: String, history: Bool = false, operation: () throws -> Void) throws {
+            let before = try snapshot(), beforeFrame = try frame(name + "-before")
+            try persist(before, name + "-before")
+            var error: String?
+            do { try operation() }
+            catch SourcePluginError.invalid(let reason) { error = reason }
+            catch SourcePluginError.runtime(let reason) { error = reason }
+            catch let unexpected { error = "UNEXPECTED: \(unexpected)" }
+            if history { error = studio.status }
+            try persist(try snapshot(), name + "-after")
+            let afterFrame = try frame(name + "-after")
+            let wanted = history ? "Plugin restore: \(SourcePluginError.invalid(expected))" : expected
+            try check(name + "Error", error == wanted, error ?? "No rejection")
+            let after = try snapshot(status: history ? before.graph.state.status : nil)
+            try check(name + "State", after == before, "Only the verified history error status is normalized")
+            try check(name + "Frame", afterFrame == beforeFrame)
+        }
+        do {
+            guard !FileManager.default.fileExists(atPath: output.path) else {
+                throw SourcePluginError.invalid("Library attachment observations require a fresh output directory.")
+            }
+            try FileManager.default.createDirectory(at: output, withIntermediateDirectories: true)
+            studio.stopBenchmarkTimer(); studio.liveAnimation = false; app.maker?.liveAnimation = false; app.mode = .studio
+            studio.sourceAutomaticBlink = false; studio.showGizmos = false; studio.showTimeline = false
+            guard let template = studio.doc.objects.first(where: { $0.sourceObjectKey == 10 && $0.sourceCharacter != nil }),
+                  template.sourceCharacter?.attachmentCatalogFile != nil else {
+                throw SourcePluginError.invalid("Library attachment fixture needs source character10 and an attachment catalog.")
+            }
+            try check("sourceFixture", !studio.host.renderer.currentFrame().items.isEmpty
+                && studio.host.renderer.currentFrame().items.allSatisfy { $0.sourceShader == nil })
+            let names = ["attachment", "plain", "poison", "topology"]
+            guard Set(configuration.requests.keys) == Set(names) else { throw SourcePluginError.invalid("Library attachment fixture requests differ.") }
+            var requests: [String: StudioPluginLibraryRequest] = [:]
+            var resolutions: [String: SourcePluginLibraryResolution] = [:]
+            for name in names {
+                let request = try StudioPluginLibraryRequest.load(url: URL(fileURLWithPath: configuration.requests[name]!))
+                let resolution = try request.selection.resolve()
+                guard request.configuration.bindings.count == 1, resolution.translated.count == 1,
+                      resolution.nativeAdapters.isEmpty else { throw SourcePluginError.invalid("Expected one controlled IR package per fixture.") }
+                requests[name] = request; resolutions[name] = resolution
+            }
+            try persist(requests.mapValues(\.selection), "exact-selections")
+            try check("immutableInputs", Set(requests.values.flatMap { $0.selection.revisions.map(\.manifestSHA256) }).count == 4)
+            switch configuration.phase {
+            case .save:
+                guard !FileManager.default.fileExists(atPath: directory.path) else {
+                    throw SourcePluginError.invalid("Library attachment save requires a fresh scene directory.")
+                }
+                try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+                let sourceFile = studio.doc.sourceSceneFile, sourceSHA = studio.doc.sourceSceneSHA256
+                var parent = template; parent.id = UUID(); parent.parent = nil; parent.visible = false
+                var child = StudioObject(name: "Controlled library attachment", kind: .folder)
+                child.sourceObjectKey = 12; child.parent = parent.id; child.sourceAttachmentPoint = 17
+                var target = StudioObject(name: "Unattached topology control", kind: .folder); target.sourceObjectKey = 13
+                for name in names {
+                    studio.newScene()
+                    var document = studio.doc; document.sourceSceneFile = sourceFile; document.sourceSceneSHA256 = sourceSHA
+                    document.objects = [parent, child, target]; studio.doc = document
+                    let request = requests[name]!
+                    try await studio.mountSourcePluginLibrary(selection: request.selection, configuration: request.configuration)
+                    studio.sourcePluginsRunning = false
+                    let zero = try studio.sourcePluginSession!.savedDocument().sourcePluginState
+                    try check(name + "RealMount", zero?.clock.deltaTime == 0 && zero?.clock.elapsedTime == 0
+                        && studio.doc.sourcePluginLibrary == request.selection
+                        && studio.sourceShapePreview(for: parent.id) == nil)
+                    if name == "attachment" {
+                        try studio.saveScene(to: scene("zero"))
+                        try check("zeroRealSave", try decoded("zero").sourcePluginState == zero)
+                    }
+                    try studio.stepSourcePlugins(deltaTime: 0.04)
+                    let state = try studio.sourcePluginSession!.savedDocument().sourcePluginState
+                    try check(name + "RealStep", state?.clock.deltaTime == Float(0.04)
+                        && state?.clock.elapsedTime == Double(Float(0.04)) && studio.sourceShapePreview(for: parent.id) == nil)
+                    try studio.saveScene(to: scene(name))
+                    let saved = try decoded(name)
+                    try persist(saved, name + "-saved")
+                    try check(name + "RealSave", saved.sourcePluginState == state
+                        && saved.sourcePluginLibrary == request.selection
+                        && saved.sourcePluginLibraryConfiguration == request.configuration
+                        && saved.object(child.id)?.parent == parent.id && saved.object(child.id)?.sourceAttachmentPoint == 17)
+                }
+                try String(ProcessInfo.processInfo.processIdentifier).write(to: directory.appendingPathComponent("save-pid.txt"), atomically: true, encoding: .utf8)
+            case .reopen:
+                let savePID = try String(contentsOf: directory.appendingPathComponent("save-pid.txt"), encoding: .utf8)
+                try check("freshProcess", savePID != String(ProcessInfo.processInfo.processIdentifier))
+                // A fixed independent host matrix proves reads occurred before
+                // *all* saved fields overwrite initializer results. It creates
+                // no source preview and is not an original-geometry oracle.
+                for name in ["zero", "attachment", "plain", "poison"] {
+                    let saved = try decoded(name), kind = name == "zero" ? "attachment" : name
+                    let request = requests[kind]!, resolution = resolutions[kind]!
+                    var calls: [[String: String]] = []
+                    var matrix = matrix_identity_float4x4; matrix.columns.3 = SIMD4<Float>(7, 11, 13, 1)
+                    let resolver: SourceStudioPluginWorld.AttachmentResolver = { child, parent in
+                        calls.append(["child": child.id.uuidString, "parent": parent.id.uuidString])
+                        return (matrix, simd_quatf(angle: 0, axis: SIMD3<Float>(0, 1, 0)))
+                    }
+                    var restored: SourceStudioPluginState?, error: String?
+                    do {
+                        let session = try SourceStudioPluginSession(selection: request.selection, resolution: resolution,
+                            configuration: request.configuration, document: saved, restoring: saved.sourcePluginState, attachment: resolver)
+                        restored = try session.savedDocument().sourcePluginState
+                    } catch SourcePluginError.runtime(let reason) { error = reason }
+                    try persist(calls, name + "-oracle-calls")
+                    let expectedReads = name == "attachment" || name == "poison" ? 2 : 0
+                    let child = saved.objects.first { $0.sourceObjectKey == 12 }!
+                    try check(name + "ReadOracle", calls.count == expectedReads && calls.allSatisfy {
+                        $0["child"] == child.id.uuidString && $0["parent"] == child.parent?.uuidString
+                    })
+                    try check(name + "RestoreOracle", name == "poison" ? error == arithmetic : error == nil && restored == saved.sourcePluginState)
+                }
+                for name in ["zero", "plain"] {
+                    let saved = try decoded(name)
+                    try studio.loadScene(from: scene(name))
+                    try check(name + "OpenControl", studio.doc.sourcePluginState == saved.sourcePluginState
+                        && studio.doc.sourcePluginLibrary == saved.sourcePluginLibrary
+                        && studio.doc.sourcePluginLibraryConfiguration == saved.sourcePluginLibraryConfiguration
+                        && !studio.sourcePluginsRunning && studio.sourceAnimationTime == 0)
+                }
+                let candidate = try decoded("attachment")
+                var live = candidate
+                live.sourcePluginState = nil; live.sourcePluginLibrary = nil; live.sourcePluginLibraryConfiguration = nil
+                live.sourceNativePlugins = nil
+                let parentID = live.objects.first { $0.sourceCharacter != nil }!.id
+                let targetID = live.objects.first { $0.sourceObjectKey == 13 }!.id
+                live.objects[live.index(of: parentID)!].visible = true
+                studio.newScene(); studio.doc = live
+                let retained = try StudioPluginLibraryRequest.load(url: URL(fileURLWithPath: requestFile))
+                guard let binding = retained.configuration.bindings.first, retained.configuration.bindings.count == 1 else {
+                    throw SourcePluginError.invalid("Retained library needs one controlled component binding.")
+                }
+                let retainedConfiguration = SourceStudioPluginConfiguration(fixedDeltaTime: retained.configuration.fixedDeltaTime,
+                    bindings: [.init(guid: binding.guid, type: binding.type, objectID: targetID)])
+                try await studio.mountSourcePluginLibrary(selection: retained.selection, configuration: retainedConfiguration)
+                studio.sourcePluginsRunning = false; studio.receiveSourceApplicationFocus(true)
+                try studio.stepSourcePlugins(deltaTime: 0.06); try studio.advancePluginAnimation(by: 0.25); studio.refresh()
+                try check("retainedLiveOwner", studio.sourceFocus.adapter != nil && studio.sourcePluginSession != nil
+                    && studio.sourceShapePreview(for: parentID) != nil && !studio.host.renderer.currentFrame().items.isEmpty)
+                try rejection("nativeAttachment", expected: gate) { try studio.loadScene(from: scene("attachment")) }
+                try rejection("nativeAttachmentRepeat", expected: gate) { try studio.loadScene(from: scene("attachment")) }
+                studio.undoStack = [candidate]; studio.redoStack = []
+                try rejection("undoAttachment", expected: gate, history: true) { studio.undo() }
+                studio.undoStack = []; studio.redoStack = [candidate]
+                try rejection("redoAttachment", expected: gate, history: true) { studio.redo() }
+                try rejection("nativePoison", expected: arithmetic) { try studio.loadScene(from: scene("poison")) }
+                try rejection("nativeTopology", expected: topology) { try studio.loadScene(from: scene("topology")) }
+
+                // Failed open must not steal or cancel another current request.
+                // Caller cancellation releases its waiter while the real worker
+                // is held; release/drain then proves no stale commit follows.
+                let barrier = Barrier()
+                studio.sourcePluginPreparationHook = { barrier.hold() }
+                defer { barrier.finish(); studio.sourcePluginPreparationHook = nil }
+                let pending = Task { try await studio.mountSourcePluginLibrary(selection: requests["plain"]!.selection,
+                    configuration: requests["plain"]!.configuration) }
+                await barrier.wait()
+                try check("pendingEntered", studio.sourcePluginLibraryPending && studio.sourcePluginMountRequest != nil)
+                try rejection("pendingNativeAttachment", expected: gate) { try studio.loadScene(from: scene("attachment")) }
+                let held = try snapshot(), heldFrame = try frame("pending-held")
+                pending.cancel()
+                var cancelled = false
+                do { try await pending.value } catch is CancellationError { cancelled = true }
+                let released = try snapshot()
+                let h = held.graph
+                let expected = DirectGraphObservation(state: h.state, focus: h.focus,
+                    hideAdapterVisible: h.hideAdapterVisible, interfaceVisible: h.interfaceVisible, accessoryNames: h.accessoryNames,
+                    showGizmos: h.showGizmos, effectiveShowGizmos: h.effectiveShowGizmos, showTimeline: h.showTimeline,
+                    pending: false, request: nil)
+                try persist(held, "pending-held"); try persist(released, "pending-cancelled")
+                let cancelledFrame = try frame("pending-cancelled")
+                try check("callerCancelledBeforeWorkerRelease", cancelled && released.graph == expected
+                    && released.previewOwners == held.previewOwners && cancelledFrame == heldFrame)
+                barrier.finish(); studio.sourcePluginPreparationHook = nil
+                await studio.sourcePluginLibraryPreparationQueue.drain()
+                let drained = try snapshot(), drainedFrame = try frame("pending-drained")
+                try persist(drained, "pending-drained")
+                try check("noStaleCommitAfterDrain", drained == released && drainedFrame == heldFrame)
+            }
+            // Verify the originally selected revision bytes remain resolvable.
+            for name in names {
+                let again = try requests[name]!.selection.resolve()
+                try check(name + "PinnedRevisionRetained", again.translated.map(\.manifestData) == resolutions[name]!.translated.map(\.manifestData))
+            }
+        } catch {
+            rows.append(.init(op: "libraryAttachmentReproductionFailure", ok: false, detail: String(describing: error)))
+        }
+        studio.sourcePluginPreparationHook = nil; studio.cancelSourcePluginLibraryMount()
+        await studio.sourcePluginLibraryPreparationQueue.drain()
+        return .init(steps: rows, passed: rows.filter(\.ok).count, failed: rows.filter { !$0.ok }.count)
     }
 }
