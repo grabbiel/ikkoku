@@ -708,9 +708,16 @@ successful-prefix continuations: moving at `1/30`, moving at `0.02`, and stopped
 at `0.02`. The second process repeats the prefix, rejects two `LateUpdate`
 callbacks after animation advancement, and retries. It compares exact route-child
 matrices before and after a real refresh as well as document/runtime state,
-resources, ownership and submitted frames. This is a regression-only checkpoint
-pending execution: the rollback path's fixed-step route reconstruction is a
-source observation, not yet an observed defect or a production behavior change.
+resources, ownership and submitted frames. At `2d9dfc4`, the 2026-10-24 Release
+control passed 16/16; the injected process passed 50/56. All six failures belong
+to the moving `0.02` case: both rejected attempts changed only the child matrix's
+x translation from `0.02666666545` to `0.02222222276`, including after refresh,
+and retry reached `0.04444444552` instead of the clean `0.03999999911` at the same
+`0.08` clock. Exact document/runtime/history/resource and ownership checks passed;
+the `1/30` and stopped-route controls passed. This records the route-cache
+reconstruction defect in [#226](https://github.com/grabbiel/ikkoku/issues/226).
+The original red reports and binary remain retained. It establishes neither a
+general callback failure nor an original-player parity or performance result.
 
 This implements an explicit Unity/BepInEx subset. Coroutines, Harmony interception,
 arbitrary engine components, reflection, serialized object fields and unrecognized
