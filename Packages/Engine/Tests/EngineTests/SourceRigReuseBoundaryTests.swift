@@ -362,7 +362,8 @@ private final class RigReuseBarrier: Sendable {
         return blocked.finish().0
     }
     try withExtendedLifetime(oldCheck) {
-        #expect(session.commit(try releasedCandidate()))
+        let candidate = try releasedCandidate()
+        #expect(session.commit(candidate))
         #expect(ledger.counts.entries == 1)
     }
 }
