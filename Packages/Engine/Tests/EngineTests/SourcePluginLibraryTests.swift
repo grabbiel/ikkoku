@@ -245,6 +245,98 @@ private enum DirectPluginGraphFixture {
     #expect(try mixed.savedDocument() == ordinary.savedDocument())
 }
 
+@Test func sourceStudioSavedNativeGraphRejectsBeforeInitializerAndRestoresCompatibleContext() throws {
+    let root = try PluginLibraryFixture.directory("saved-graph-callbacks")
+    defer { try? FileManager.default.removeItem(at: root) }
+    let fixture = try DirectPluginGraphFixture.profile(root)
+    var reads = 0
+    let attachment: SourceStudioPluginWorld.AttachmentResolver = { _, _ in
+        reads += 1
+        return (matrix_identity_float4x4, simd_quatf(angle: 0, axis: SIMD3(0, 1, 0)))
+    }
+    let original = try SourceStudioPluginSession(profileURL: fixture.url, document: fixture.document, attachment: attachment)
+    let savedDocument = try original.step(document: fixture.document, deltaTime: 0.03)
+    let saved = try #require(savedDocument.sourcePluginState)
+    #expect(reads == 1)
+    reads = 0
+    let conflict = try DirectPluginGraphFixture.native()
+    let graphError = SourcePluginLibraryError.incompatible(guid: "Native.Graph.Context", other: "Creator.Mixed")
+    do {
+        _ = try SourceStudioPluginSession(profileURL: fixture.url, document: savedDocument,
+            restoring: saved, nativeContext: [conflict], attachment: attachment)
+        Issue.record("A conflicting saved context reached session construction")
+    } catch SourcePluginError.invalid(let reason) { #expect(reason == graphError.description) }
+    #expect(reads == 0)
+    #expect(try original.savedDocument() == savedDocument)
+
+    let compatible = try DirectPluginGraphFixture.native(incompatibilities: ["Other.Plugin"])
+    let restored = try SourceStudioPluginSession(profileURL: fixture.url, document: savedDocument,
+        restoring: saved, nativeContext: [compatible], attachment: attachment)
+    #expect(reads == 1)
+    #expect(restored.runtime.callbackTrace.isEmpty)
+    #expect(try restored.savedDocument() == savedDocument)
+    reads = 0
+    let ordinary = try SourceStudioPluginSession(profileURL: fixture.url, document: savedDocument,
+        restoring: saved, attachment: attachment)
+    #expect(reads == 1 && ordinary.runtime.callbackTrace.isEmpty)
+    #expect(try ordinary.savedDocument() == savedDocument)
+}
+
+@Test func sourceStudioSavedNativeGraphPreservesProfileIdentityErrorBeforeContext() throws {
+    let root = try PluginLibraryFixture.directory("saved-graph-profile-identity")
+    defer { try? FileManager.default.removeItem(at: root) }
+    let fixture = try DirectPluginGraphFixture.profile(root)
+    var reads = 0
+    let attachment: SourceStudioPluginWorld.AttachmentResolver = { _, _ in
+        reads += 1
+        return (matrix_identity_float4x4, simd_quatf(angle: 0, axis: SIMD3(0, 1, 0)))
+    }
+    let original = try SourceStudioPluginSession(profileURL: fixture.url, document: fixture.document, attachment: attachment)
+    let savedDocument = try original.savedDocument(), saved = try #require(savedDocument.sourcePluginState)
+    let bytes = try Data(contentsOf: fixture.url)
+    try (bytes + Data([32, 10])).write(to: fixture.url)
+    _ = try JSONSerialization.jsonObject(with: Data(contentsOf: fixture.url))
+    reads = 0
+    let conflict = try DirectPluginGraphFixture.native()
+    do {
+        _ = try SourceStudioPluginSession(profileURL: fixture.url, document: savedDocument,
+            restoring: saved, nativeContext: [conflict], attachment: attachment)
+        Issue.record("Changed saved profile reached mixed graph construction")
+    } catch SourcePluginError.invalid(let reason) {
+        #expect(reason == "Saved plugin profile or library bindings changed; explicit reinstallation is required.")
+    }
+    #expect(reads == 0)
+    #expect(try original.savedDocument() == savedDocument)
+}
+
+@Test func sourceStudioSavedNativeGraphPreservesPackageIdentityErrorBeforeContext() throws {
+    let root = try PluginLibraryFixture.directory("saved-graph-package-identity")
+    defer { try? FileManager.default.removeItem(at: root) }
+    let fixture = try DirectPluginGraphFixture.profile(root)
+    var reads = 0
+    let attachment: SourceStudioPluginWorld.AttachmentResolver = { _, _ in
+        reads += 1
+        return (matrix_identity_float4x4, simd_quatf(angle: 0, axis: SIMD3(0, 1, 0)))
+    }
+    let original = try SourceStudioPluginSession(profileURL: fixture.url, document: fixture.document, attachment: attachment)
+    let savedDocument = try original.savedDocument(), saved = try #require(savedDocument.sourcePluginState)
+    let manifest = fixture.program.deletingLastPathComponent().deletingLastPathComponent().appendingPathComponent("manifest.json")
+    let bytes = try Data(contentsOf: manifest)
+    try (bytes + Data([32, 10])).write(to: manifest)
+    _ = try JSONSerialization.jsonObject(with: Data(contentsOf: manifest))
+    reads = 0
+    let conflict = try DirectPluginGraphFixture.native()
+    do {
+        _ = try SourceStudioPluginSession(profileURL: fixture.url, document: savedDocument,
+            restoring: saved, nativeContext: [conflict], attachment: attachment)
+        Issue.record("Changed saved package reached mixed graph construction")
+    } catch SourcePluginError.invalid(let reason) {
+        #expect(reason == "Saved plugin package identity or version changed.")
+    }
+    #expect(reads == 0)
+    #expect(try original.savedDocument() == savedDocument)
+}
+
 @Test func sourcePluginGraphOrdersTranslatedAndNativeAdapterNodesTogether() throws {
     typealias Node = SourcePluginGraph.Node
     let mute = Node(kind: .nativeAdapter, guid: "BepInEx.MuteInBackground", version: "1.1")

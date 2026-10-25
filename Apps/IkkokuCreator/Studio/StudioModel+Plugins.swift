@@ -91,7 +91,7 @@ extension StudioModel {
                 }
             } else { resolver = pluginAttachmentResolver(access: access) }
             session = try SourceStudioPluginSession(profileURL: URL(fileURLWithPath: path), document: document,
-                restoring: saved, attachment: resolver)
+                restoring: saved, nativeContext: native.packages, attachment: resolver)
             // Validate callback-produced field state before any owner mutates
             // its document/history or publishes candidate resources.
             if attachments != nil { _ = try session?.savedDocument() }
