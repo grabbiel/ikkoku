@@ -44,7 +44,7 @@ fixtures and otherwise return without exercising source behavior.
 ## Current scope
 
 Overview refreshed **2026-10-24**, with scoped updates through
-[#241](https://github.com/grabbiel/ikkoku/pull/241). The public status site tracks
+[#245](https://github.com/grabbiel/ikkoku/pull/245). The public status site tracks
 the same accepted component scope. Each linked reference retains
 its own measured commit, inputs and exclusions; this refresh is not a new
 all-project acceptance run. All eight priority components remain incomplete.

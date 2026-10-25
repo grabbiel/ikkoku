@@ -1,6 +1,6 @@
 {
   "reviewed": "2026-10-24",
-  "revision": "5c0674903128ce9d36eaf7e03748bde971c6c15d",
+  "revision": "0033403697ddf9ea07fc01c3635daa4847c7239f",
   "components": [
     {
       "id": "character-maker",
@@ -184,9 +184,9 @@
       "group": "Priority",
       "stage": "Infancy",
       "summary": "A useful bounded execution subset exists; general compatibility is early.",
-      "available": "Translated profiles and three exact-revision native adapters: Mute, StudioAccessoryNames and HideAllUI. Selected mount, cancellation, failure isolation and save/restore workflows are exercised. Native save/reopen now retains queued destruction roots without replaying Awake. Rejected frames restore exact route history, including irregular time steps and lazy-clock ownership. Direct translated-profile/native loading now rejects incompatible pairs in either order before changing the live session.",
-      "remaining": "General DLL, Harmony, coroutine and Unity compatibility, original save adapters, and broader lifecycle coverage. Saved scene open and undo/redo still need equivalent mixed-graph rejection. Initialization that changes candidate topology is rejected; library installation retains a separate attachment-read boundary.",
-      "evidence": "Metadata inventory does not establish loadability. Direct mixed-graph rejection passes 13 Engine tests and 38 final Release app checks, preserving state and frames on rejection. Prior queued-destruction and route rollback gates remain scoped to their recorded cases. Route-only checkpoint costs have a bounded quiet measurement; direct load-time validation was not timed.",
+      "available": "Translated profiles and three exact-revision native adapters: Mute, StudioAccessoryNames and HideAllUI. Selected mount, cancellation, failure isolation and save/restore workflows are exercised. Native save/reopen now retains queued destruction roots without replaying Awake. Rejected frames restore exact route history, including irregular time steps and lazy-clock ownership. Direct translated-profile/native loading and saved scene open, undo and redo reject incompatible candidate pairs before changing the live session.",
+      "remaining": "General DLL, Harmony, coroutine and Unity compatibility, original save adapters, and broader lifecycle coverage. Initialization that changes candidate topology is rejected; library installation retains a separate attachment-read boundary.",
+      "evidence": "Metadata inventory does not establish loadability. Direct mixed-graph rejection passed 13 Engine and 38 final Release app checks. Saved candidate restoration passes 16 focused Engine and 71 integrated app checks, preserving state and frames on rejection except the expected history error status. Original tampered-file errors retain precedence. Route-only checkpoint costs have a bounded quiet measurement; graph validation cost was not timed.",
       "docs": [
         [
           "Execution and persistence",
@@ -203,11 +203,11 @@
         [
           "Direct loading coexistence",
           "docs/reference/mods/plugin-execution.md#direct-profile-and-native-coexistence-236"
+        ],
+        [
+          "Saved candidate graph restoration",
+          "docs/reference/mods/plugin-execution.md#saved-profile-and-native-graph-restoration-242"
         ]
-      ],
-      "issue": [
-        "Saved mixed-graph rejection",
-        "242"
       ]
     },
     {
