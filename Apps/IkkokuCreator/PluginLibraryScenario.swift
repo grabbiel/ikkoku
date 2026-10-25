@@ -14,6 +14,8 @@ import simd
 /// mode. The barrier wraps the real immutable preparation; no result is faked.
 struct PluginLibraryScenario: Decodable {
     let requestFile: String
+    /// Diagnostic only: actual async initial installation versus fresh profiles.
+    let libraryAttachmentInstall: LibraryAttachmentInstall?
     /// Reproduction only: real library save/reopen across the attachment-read gate.
     let libraryAttachmentRestore: LibraryAttachmentRestore?
     /// Separate supported-path matrix; preserves the original policy reproduction.
@@ -70,6 +72,7 @@ struct PluginLibraryScenario: Decodable {
     }
 
     @MainActor func run(app: AppState, studio: StudioModel) async -> StudioScenario.Report {
+        if let libraryAttachmentInstall { return await reproduceLibraryAttachmentInstall(libraryAttachmentInstall, app: app, studio: studio) }
         if let libraryAttachmentAcceptance { return await verifyLibraryAttachmentRestore(libraryAttachmentAcceptance, app: app, studio: studio) }
         if let libraryAttachmentRestore { return await reproduceLibraryAttachmentRestore(libraryAttachmentRestore, app: app, studio: studio) }
         if let nativeGraphRestore { return reproduceNativeGraphRestore(nativeGraphRestore, app: app, studio: studio) }
@@ -509,6 +512,254 @@ struct PluginLibraryScenario: Decodable {
         let session = try SourceStudioPluginSession(profileURL: profile, document: candidate,
             attachment: { _, _ in (matrix_identity_float4x4, simd_quatf(angle: 0, axis: SIMD3(0, 1, 0))) })
         return try session.savedDocument()
+    }
+}
+
+extension PluginLibraryScenario {
+    struct LibraryAttachmentInstall: Decodable {
+        let outputDirectory: String
+        let requests: [String: String]
+        let profiles: [String: String]
+    }
+    private struct InstallWarmObservation: Codable, Equatable {
+        let body: [Float]?, face: [Float]?, diagnostics: [String], matrices: [[UInt32]]
+    }
+
+    @MainActor private func reproduceLibraryAttachmentInstall(_ configuration: LibraryAttachmentInstall,
+                                                               app: AppState, studio: StudioModel) async -> StudioScenario.Report {
+        let output = URL(fileURLWithPath: configuration.outputDirectory)
+        let encoder = JSONEncoder(); encoder.outputFormatting = [.sortedKeys]
+        let gate = "Source-character attachment reads during plugin installation are unsupported; no live preview was changed."
+        let arithmetic = "Unsupported arithmetic operator or Int32 arithmetic."
+        var rows: [StudioScenario.Report.StepResult] = []
+        func check(_ name: String, _ value: Bool, _ detail: String = "") throws {
+            rows.append(.init(op: name, ok: value, detail: detail))
+            if !value { throw SourcePluginError.runtime("Initial library attachment diagnostic failed: " + name) }
+        }
+        func persist<T: Encodable>(_ value: T, _ name: String) throws {
+            try encoder.encode(value).write(to: output.appendingPathComponent(name + ".json"), options: .withoutOverwriting)
+        }
+        func snapshot() throws -> NativeGraphObservation {
+            .init(graph: try directGraphSnapshot(studio: studio),
+                previewOwners: studio.renderedSourceCharacterPreviews.map { String(describing: ObjectIdentifier($0)) }.sorted())
+        }
+        // A real async attempt advances its generation once even on rejection.
+        // Project only that verified lifecycle delta; retain every other field.
+        func generation(_ value: NativeGraphObservation, _ expected: UInt64) -> NativeGraphObservation {
+            let g = value.graph, s = g.state
+            let state = InitializerObservation(document: s.document, world: s.world, runtimeDocument: s.runtimeDocument,
+                pending: s.pending, callbacks: s.callbacks, resources: s.resources, undo: s.undo, redo: s.redo,
+                status: s.status, sceneURL: s.sceneURL, generation: expected, animationTime: s.animationTime,
+                blocked: s.blocked, diagnostics: s.diagnostics)
+            return .init(graph: .init(state: state, focus: g.focus, hideAdapterVisible: g.hideAdapterVisible,
+                interfaceVisible: g.interfaceVisible, accessoryNames: g.accessoryNames, showGizmos: g.showGizmos,
+                effectiveShowGizmos: g.effectiveShowGizmos, showTimeline: g.showTimeline, pending: g.pending, request: g.request),
+                previewOwners: value.previewOwners)
+        }
+        func frame(_ name: String) throws -> Data {
+            let data = try directGraphFrameBytes(studio.host.renderer.currentFrame())
+            try data.write(to: output.appendingPathComponent(name + "-frame.json"), options: .withoutOverwriting)
+            return data
+        }
+        func warmObservation(_ preview: SourceStudioCharacterPreview?) throws -> InstallWarmObservation? {
+            guard let preview else { return nil }
+            let body = preview.sourceBodyValues, face = preview.sourceFaceValues, diagnostics = preview.diagnostics
+            let pose = try preview.editedPose(faceValues: face, bodyValues: body, animationElapsed: 0.7)
+            let matrices = pose.localMatrices.map { m in (0..<4).flatMap { c in (0..<4).map { r in m[c][r].bitPattern } } }
+            return .init(body: body, face: face, diagnostics: diagnostics, matrices: matrices)
+        }
+        func reject(_ name: String, expected: String, asyncAttempt: Bool,
+                    operation: () async throws -> Void) async throws {
+            let before = try snapshot(), beforeFrame = try frame(name + "-before")
+            try persist(before, name + "-before")
+            var error: String?
+            do { try await operation() }
+            catch SourcePluginError.invalid(let reason) { error = reason }
+            catch SourcePluginError.runtime(let reason) { error = reason }
+            catch let other { error = "UNEXPECTED: \(other)" }
+            let after = try snapshot(), afterFrame = try frame(name + "-after")
+            try persist(after, name + "-after")
+            try check(name + "Error", error == expected, error ?? "No rejection")
+            let wanted = asyncAttempt ? generation(before, before.graph.state.generation &+ 1) : before
+            try check(name + "State", after == wanted)
+            try check(name + "Frame", beforeFrame == afterFrame)
+        }
+        do {
+            guard !FileManager.default.fileExists(atPath: output.path) else { throw SourcePluginError.invalid("Initial-install diagnostic requires fresh output.") }
+            try FileManager.default.createDirectory(at: output, withIntermediateDirectories: true)
+            studio.stopBenchmarkTimer(); studio.liveAnimation = false; app.maker?.liveAnimation = false; app.mode = .studio
+            studio.sourceAutomaticBlink = false; studio.showGizmos = false; studio.showTimeline = false
+            let names = ["reader", "poison", "plain"]
+            guard Set(configuration.requests.keys) == Set(names), Set(configuration.profiles.keys) == Set(names),
+                  let template = studio.doc.objects.first(where: { $0.sourceCharacter != nil }),
+                  template.sourceCharacter?.attachmentCatalogFile != nil else { throw SourcePluginError.invalid("Missing initial-install inputs.") }
+            let sourceFile = studio.doc.sourceSceneFile, sourceSHA = studio.doc.sourceSceneSHA256
+            try check("sourceFixture", !studio.host.renderer.currentFrame().items.isEmpty
+                && studio.host.renderer.currentFrame().items.allSatisfy { $0.sourceShader == nil })
+            var requests: [String: StudioPluginLibraryRequest] = [:]
+            var resolutions: [String: SourcePluginLibraryResolution] = [:]
+            var profiles: [String: URL] = [:]
+            var parent = template; parent.id = UUID(); parent.parent = nil; parent.visible = false; parent.transform = StudioTransform()
+            var child = StudioObject(name: "Initial attachment diagnostic", kind: .folder)
+            child.sourceObjectKey = 12; child.parent = parent.id; child.sourceAttachmentPoint = 17
+            var target = StudioObject(name: "Retained plugin target", kind: .folder); target.sourceObjectKey = 11
+            var oracleDocument = StudioDocument(); oracleDocument.sourceSceneFile = sourceFile; oracleDocument.sourceSceneSHA256 = sourceSHA
+            oracleDocument.objects = [parent, child, target]
+            let marker = SIMD3<Float>(1.25, 2.5, 3.75)
+            for name in names {
+                let request = try StudioPluginLibraryRequest.load(url: URL(fileURLWithPath: configuration.requests[name]!))
+                let resolution = try request.selection.resolve(), profile = URL(fileURLWithPath: configuration.profiles[name]!)
+                let raw = try JSONSerialization.jsonObject(with: Data(contentsOf: profile)) as? [String: Any]
+                guard let packages = raw?["packages"] as? [[String: Any]], packages.count == 1,
+                      let manifestPath = packages[0]["manifest"] as? String, manifestPath.hasPrefix("/"),
+                      let bindings = packages[0]["bindings"] as? [[String: Any]], bindings.count == 1,
+                      resolution.translated.count == 1, resolution.nativeAdapters.isEmpty else { throw SourcePluginError.invalid("Expected one paired IR package.") }
+                let package = try SourcePluginPackage.load(url: URL(fileURLWithPath: manifestPath)), selected = resolution.translated[0]
+                guard package.manifest.components.count == 1, selected.manifest.components.count == 1 else { throw SourcePluginError.invalid("Expected one paired program.") }
+                let sourceProgram = package.manifestURL.deletingLastPathComponent().appendingPathComponent(package.manifest.components[0].program.file)
+                let selectedProgram = selected.manifestURL.deletingLastPathComponent().appendingPathComponent(selected.manifest.components[0].program.file)
+                let programBytesMatch = try Data(contentsOf: sourceProgram) == Data(contentsOf: selectedProgram)
+                let bindingMatches = request.configuration.bindings.count == 1
+                    && request.configuration.bindings[0].sourceObjectKey == 12
+                    && request.configuration.bindings[0].guid.utf8.elementsEqual(package.manifest.identity.guid.utf8)
+                    && request.configuration.bindings[0].type == (bindings[0]["type"] as? String)
+                    && (bindings[0]["sourceObjectKey"] as? NSNumber)?.int32Value == 12
+                let clockMatches = (raw?["fixedDeltaTime"] as? NSNumber)?.floatValue == request.configuration.fixedDeltaTime
+                try check(name + "ExactIdentity", package.manifestData == selected.manifestData && programBytesMatch && bindingMatches && clockMatches)
+                requests[name] = request; resolutions[name] = resolution; profiles[name] = profile
+                for origin in ["profile", "library", "gate"] {
+                    var calls: [[String: String]] = [], error: String?, session: SourceStudioPluginSession?
+                    let resolver: SourceStudioPluginWorld.AttachmentResolver = { child, parent in
+                        calls.append(["child": child.id.uuidString, "parent": parent.id.uuidString])
+                        if origin == "gate" { throw SourcePluginError.invalid(gate) }
+                        var matrix = matrix_identity_float4x4; matrix.columns.3 = SIMD4<Float>(marker, 1)
+                        return (matrix, simd_quatf(angle: 0, axis: SIMD3<Float>(0, 1, 0)))
+                    }
+                    do {
+                        if origin == "profile" { session = try SourceStudioPluginSession(profileURL: profile, document: oracleDocument, attachment: resolver) }
+                        else { session = try SourceStudioPluginSession(selection: request.selection, resolution: resolution,
+                            configuration: request.configuration, document: oracleDocument, attachment: resolver) }
+                    } catch SourcePluginError.invalid(let reason) { error = reason }
+                    catch SourcePluginError.runtime(let reason) { error = reason }
+                    let prefix = name + origin.capitalized + "Oracle"
+                    try persist(calls, prefix + "-calls")
+                    let count = name == "plain" ? 0 : origin == "gate" ? 1 : 2
+                    try check(prefix + "ReadOrder", calls == Array(repeating: ["child": child.id.uuidString, "parent": parent.id.uuidString], count: count))
+                    let wantedError: String? = name == "plain" ? nil : origin == "gate" ? gate : name == "poison" ? arithmetic : nil
+                    let fields = try session?.savedDocument().sourcePluginState?.bindings.first?.fields
+                    // The resolver returns native-basis matrices; the public
+                    // source position API reflects Z back into Unity's basis.
+                    let value: SourceIRStoredValue = .vector(name == "plain" ? [0, 0, 0] : [Float(1.25).bitPattern, Float(2.5).bitPattern, Float(-3.75).bitPattern])
+                    if let session { try persist(try session.savedDocument(), prefix + "-document") }
+                    try check(prefix + "Outcome", error == wantedError && (wantedError != nil || (fields?["position"] == value && fields?["positionAgain"] == value)), error ?? "Success")
+                }
+            }
+            try persist(requests.mapValues(\.selection), "exact-selections")
+            let retained = try StudioPluginLibraryRequest.load(url: URL(fileURLWithPath: requestFile))
+            guard let binding = retained.configuration.bindings.first, retained.configuration.bindings.count == 1 else { throw SourcePluginError.invalid("Missing retained mixed binding.") }
+            func seed(_ warm: Bool) async throws {
+                studio.newScene()
+                var document = oracleDocument; document.objects[0].visible = warm
+                studio.doc = document
+                try await studio.mountSourcePluginLibrary(selection: retained.selection, configuration: .init(fixedDeltaTime: retained.configuration.fixedDeltaTime,
+                    bindings: [.init(guid: binding.guid, type: binding.type, sourceObjectKey: 11)]))
+                studio.sourcePluginsRunning = false; studio.receiveSourceApplicationFocus(true)
+                try studio.stepSourcePlugins(deltaTime: 0.04); try studio.setSourceAnimationTime(0.7); studio.refresh()
+                if warm, let preview = studio.sourceShapePreview(for: parent.id) {
+                    var body = preview.savedBodyValues, face = preview.savedFaceValues
+                    body[0] = body[0] < 0.5 ? 0.8 : 0.2; face[33] = face[33] < 0.5 ? 0.8 : 0.2
+                    _ = try preview.editedPose(faceValues: face, bodyValues: body, animationElapsed: 0.7)
+                }
+            }
+            for isWarm in [false, true] {
+                let mode = isWarm ? "warm" : "cold"
+                try await seed(isWarm)
+                let initialPreview = studio.sourceShapePreview(for: parent.id)
+                try check(mode + "RetainedPrecondition", studio.sourcePluginSession != nil && studio.sourceFocus.adapter != nil
+                    && studio.sourceAccessoryNamesEnabled && (initialPreview != nil) == isWarm && !studio.sourcePluginsRunning)
+                for name in ["reader", "poison"] {
+                    let request = requests[name]!
+                    try check(mode + name + "NoopPrecondition", studio.doc.sourcePluginLibrary != request.selection)
+                    try await reject(mode + name, expected: gate, asyncAttempt: true) {
+                        try await studio.mountSourcePluginLibrary(selection: request.selection, configuration: request.configuration)
+                    }
+                }
+                let beforeWarm = try warmObservation(initialPreview)
+                try persist(beforeWarm, mode + "-warm-before")
+                try await reject(mode + "LegacyPoison", expected: arithmetic, asyncAttempt: false) {
+                    try studio.loadSourcePluginProfileInteractively(profileURL: profiles["poison"]!, expectedGeneration: studio.sourcePluginMountGeneration)
+                }
+                let afterWarm = try warmObservation(studio.sourceShapePreview(for: parent.id))
+                try persist(afterWarm, mode + "-warm-after")
+                try check(mode + "LegacyWarmRollback", beforeWarm == afterWarm && studio.sourceShapePreview(for: parent.id) === initialPreview)
+                try await reject(mode + "LegacyPoisonRepeat", expected: arithmetic, asyncAttempt: false) {
+                    try studio.loadSourcePluginProfileInteractively(profileURL: profiles["poison"]!, expectedGeneration: studio.sourcePluginMountGeneration)
+                }
+                try studio.loadSourcePluginProfileInteractively(profileURL: profiles["reader"]!, expectedGeneration: studio.sourcePluginMountGeneration)
+                studio.sourcePluginsRunning = false
+                let committed = studio.sourceShapePreview(for: parent.id), document = try studio.sourcePluginSession!.savedDocument()
+                try persist(document, mode + "-legacy-reader")
+                try check(mode + "LegacyReaderMounted", committed != nil && (!isWarm || committed === initialPreview)
+                    && studio.doc.sourcePluginLibrary == nil && studio.sourceFocus.adapter != nil)
+                let fields = document.sourcePluginState!.bindings[0].fields
+                try check(mode + "LegacyReaderFields", fields["position"] == fields["positionAgain"] && fields["position"] != .vector([0, 0, 0]))
+                let committedCounts = try snapshot().graph.state.resources
+                try studio.stepSourcePlugins(deltaTime: 0.02)
+                try check(mode + "LegacyReaderFirstStepReuse", studio.sourceShapePreview(for: parent.id) === committed
+                    && snapshot().graph.state.resources == committedCounts)
+
+                try await seed(isWarm)
+                let plainPreview = studio.sourceShapePreview(for: parent.id), plainCounts = try snapshot().graph.state.resources
+                try studio.loadSourcePluginProfileInteractively(profileURL: profiles["plain"]!, expectedGeneration: studio.sourcePluginMountGeneration)
+                studio.sourcePluginsRunning = false
+                try check(mode + "PlainLegacyMounted", studio.doc.sourcePluginLibrary == nil
+                    && studio.doc.sourcePluginState?.bindings.first?.fields["position"] == .vector([0, 0, 0]))
+                try check(mode + "PlainLegacyPreviewResources", studio.sourceShapePreview(for: parent.id) === plainPreview
+                    && snapshot().graph.state.resources == plainCounts)
+                let plain = requests["plain"]!
+                try await studio.mountSourcePluginLibrary(selection: plain.selection, configuration: plain.configuration)
+                studio.sourcePluginsRunning = false
+                try check(mode + "PlainLibraryMounted", studio.doc.sourcePluginLibrary == plain.selection
+                    && studio.doc.sourcePluginState?.bindings.first?.fields["position"] == .vector([0, 0, 0]) && studio.sourceFocus.adapter == nil)
+                try check(mode + "PlainLibraryPreviewResources", studio.sourceShapePreview(for: parent.id) === plainPreview
+                    && snapshot().graph.state.resources == plainCounts)
+                let plainSession = studio.sourcePluginSession, plainGeneration = studio.sourcePluginMountGeneration
+                try await studio.mountSourcePluginLibrary(selection: plain.selection, configuration: plain.configuration)
+                try check(mode + "PlainNoop", studio.sourcePluginSession === plainSession
+                    && studio.sourcePluginMountGeneration == plainGeneration && studio.status == "This plugin selection is already mounted")
+
+                try await seed(isWarm)
+                let before = try snapshot(), beforeFrame = try frame(mode + "Pending-before")
+                try persist(before, mode + "Pending-before")
+                let barrier = Barrier(); studio.sourcePluginPreparationHook = { barrier.hold() }
+                let reader = requests["reader"]!
+                let pending = Task { try await studio.mountSourcePluginLibrary(selection: reader.selection, configuration: reader.configuration) }
+                defer { pending.cancel(); barrier.finish(); studio.sourcePluginPreparationHook = nil }
+                await barrier.wait()
+                let held = try snapshot(); try persist(held, mode + "Pending-held")
+                try check(mode + "PendingEntered", held.graph.pending && held.graph.request != nil
+                    && held.graph.state.generation == before.graph.state.generation &+ 1
+                    && studio.sourcePluginLibraryPreparationQueue.isRunning)
+                pending.cancel(); var cancelled = false
+                do { try await pending.value } catch is CancellationError { cancelled = true }
+                let after = try snapshot(), afterFrame = try frame(mode + "Pending-cancelled")
+                try persist(after, mode + "Pending-cancelled")
+                try check(mode + "CallerCancelledBeforeRelease", cancelled && studio.sourcePluginLibraryPreparationQueue.isRunning)
+                try check(mode + "CancelledState", after == generation(before, before.graph.state.generation &+ 1) && afterFrame == beforeFrame)
+                barrier.finish(); studio.sourcePluginPreparationHook = nil
+                await studio.sourcePluginLibraryPreparationQueue.drain()
+                let drained = try snapshot(), drainedFrame = try frame(mode + "Pending-drained")
+                try persist(drained, mode + "Pending-drained")
+                try check(mode + "DrainExact", drained == after && drainedFrame == afterFrame)
+            }
+            for name in names {
+                let again = try requests[name]!.selection.resolve()
+                try check(name + "RevisionUnchanged", again.translated.map(\.manifestData) == resolutions[name]!.translated.map(\.manifestData))
+            }
+        } catch { rows.append(.init(op: "libraryAttachmentInstallFailure", ok: false, detail: String(describing: error))) }
+        studio.sourcePluginPreparationHook = nil; studio.cancelSourcePluginLibraryMount()
+        await studio.sourcePluginLibraryPreparationQueue.drain()
+        return .init(steps: rows, passed: rows.filter(\.ok).count, failed: rows.filter { !$0.ok }.count)
     }
 }
 
