@@ -79,8 +79,8 @@ separately mounted adapter cannot satisfy a missing profile dependency. Combined
 validation uses the existing ordinal GUID, version, process and incompatibility
 rules, including selected disabled native references. It adds no hashing, file
 reads or graph traversal to frame ticks. Load-time validation cost was not timed.
-Saved-scene open and undo/redo use separate restoration entry points; this change
-does not establish mixed-graph rejection on those paths.
+Saved-scene open and undo/redo use separate restoration entry points; their
+later candidate-graph acceptance is recorded below.
 
 The retained regression uses the exact registered HideAllUI package and two
 explicitly synthetic, empty-Awake translated packages: the conflicting
@@ -101,6 +101,43 @@ order. The fixed executable SHA-256 is
 This is app-model acceptance, not an OS-menu, audio, arbitrary-plugin or timing
 claim. Original red runs and the corrected diagnostic import failure are retained
 separately from the successful run.
+
+## Saved profile and native graph restoration (#242)
+
+Scene open and undo/redo validate the saved candidate's combined translated and
+native package graph before constructing its world, runtime or components. The
+native packages are already verified while preparing that candidate. Restoration
+uses those packages, including selected disabled references, rather than the
+opposing live session's graph. A compatible candidate with the same document UUID
+as the live scene remains valid.
+
+Saved profile identity and saved package identity checks still precede mixed
+graph validation, preserving the original changed-file errors. Profile dependency
+validation and translated execution order remain unchanged. Detached restoration
+with native adapters disabled retains its empty context and adds no file reads.
+The fix adds no work to frame ticks; restoration cost was not measured.
+
+The original reproduction passed 11 save checks but only 40 of 60 fresh-process
+open/history checks. Incompatible open, undo, redo and disabled-reference open each
+admitted a pair rejected by the independent graph oracle. The 20 resulting failed
+assertions and their raw state/frame artifacts remain retained. The compatible
+scene was written through the real `saveScene` path; conflicting historical cards
+were constructed deliberately. Undo/redo use production history operations.
+
+At integrated `a6baf7f`, the unchanged 11 save and 60 fresh-process checks all pass.
+Eight rejection/control pairs retain exact projected state and named frame fields;
+history failures change only the expected error status. Callback and preview
+owners, resources, clocks and history remain intact. Profile and native-file
+tamper controls retain their original errors. The 16 focused Engine tests include
+constructor isolation, compatible restored state without replaying `Awake`, and
+profile/package identity-error precedence. None skipped.
+
+The Release executable SHA-256 is
+`37bb45bb62fdd563af814228548704a74919a5984f9aeba200718087ef8f031e`.
+The full app archive and source equivalence to the focused tests were checked.
+App runs overlapped unrelated compilation, so they establish correctness only.
+This does not establish OS-menu/audio behavior, arbitrary plugin compatibility,
+original-player parity or general save-adapter support.
 
 ## Plugin library
 
