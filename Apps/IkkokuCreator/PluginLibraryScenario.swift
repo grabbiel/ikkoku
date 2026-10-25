@@ -17,6 +17,8 @@ struct PluginLibraryScenario: Decodable {
     let nativeProfileRestore: NativeProfileRestore?
     /// Regression only: attachment-free constructor replay across native save/open.
     let initializerProfileRestore: NativeProfileRestore?
+    /// Reproduction only: queued Awake destruction across paused native save/open.
+    let pendingDestructionRestore: NativeProfileRestore?
     struct NativeProfileRestore: Decodable {
         enum Phase: String, Decodable { case save, reopen }
         let phase: Phase
@@ -45,6 +47,9 @@ struct PluginLibraryScenario: Decodable {
     }
 
     @MainActor func run(app: AppState, studio: StudioModel) async -> StudioScenario.Report {
+        if let pendingDestructionRestore {
+            return await reproduceInitializerRestore(pendingDestructionRestore, app: app, studio: studio, pendingDestruction: true)
+        }
         if let initializerProfileRestore { return await reproduceInitializerRestore(initializerProfileRestore, app: app, studio: studio) }
         if let nativeProfileRestore { return await reproduceNativeRestore(nativeProfileRestore, app: app, studio: studio) }
         if reproduceFreshProfileFailure == true { return await reproduceFreshLoad(app: app, studio: studio) }
@@ -491,7 +496,8 @@ extension PluginLibraryScenario {
     }
 
     @MainActor private func reproduceInitializerRestore(_ configuration: NativeProfileRestore,
-                                                        app: AppState, studio: StudioModel) async -> StudioScenario.Report {
+                                                        app: AppState, studio: StudioModel,
+                                                        pendingDestruction: Bool = false) async -> StudioScenario.Report {
         var rows: [StudioScenario.Report.StepResult] = []
         func record(_ name: String, _ okay: Bool, _ detail: String = "") {
             rows.append(.init(op: name, ok: okay, detail: detail))
@@ -556,7 +562,7 @@ extension PluginLibraryScenario {
                 && sameFrame(frame, studio.host.renderer.currentFrame()),
                 "Only the explicit history error status changes; target stack, scene, session, clocks, resources and frame stay intact")
         }
-        let names = ["noop", "Instantiate", "SetActive", "Destroy", "changed"]
+        let names = pendingDestruction ? ["noop", "Destroy", "AwakeDestroy"] : ["noop", "Instantiate", "SetActive", "Destroy", "changed"]
         do {
             studio.liveAnimation = false; app.maker?.liveAnimation = false; app.mode = .studio
             switch configuration.phase {
@@ -573,7 +579,8 @@ extension PluginLibraryScenario {
                     document.sourceSceneSHA256 = String(repeating: "c", count: 64); studio.doc = document
                     let mutation = ["Instantiate", "SetActive", "Destroy"].contains(name) ? name : nil
                     let profile = try freshProfileFixture(directory: directory.appendingPathComponent(name),
-                        phase: "initializer", fail: false, attachmentRead: false, mutation: mutation)
+                        phase: name == "AwakeDestroy" ? "Awake" : "initializer", fail: false, attachmentRead: false,
+                        mutation: mutation, destroyOnAwake: name == "AwakeDestroy")
                     try studio.loadSourcePluginProfileInteractively(profileURL: profile,
                         expectedGeneration: studio.sourcePluginMountGeneration)
                     studio.sourcePluginsRunning = false
@@ -587,10 +594,16 @@ extension PluginLibraryScenario {
                         // saved input differ from replayed SetActive(false).
                         studio.update(target.id) { $0.visible = true }
                     }
-                    if name == "Destroy" {
-                        try require("DestroyPendingBeforeSave", mounted.pending.count == 1
+                    if name == "Destroy" || name == "AwakeDestroy" {
+                        try require(name + "PendingBeforeSave", mounted.pending.count == 1
                             && mounted.document.object(target.id) != nil,
                             "Save before any runtime step; pending destruction is still live")
+                    }
+                    if name == "AwakeDestroy" {
+                        let binding = mounted.runtimeDocument?.sourcePluginState?.bindings.first
+                        try require("AwakeDestroyLifecycleBeforeSave", binding?.awake == true && binding?.started == false
+                            && binding?.destroyed == false && mounted.callbacks.map { $0.components(separatedBy: ":").last! } == ["Awake"],
+                            "Awake ran once; destruction remains queued before any frame barrier")
                     }
                     // No runtime step here: it would erase the pending-Destroy
                     // case and change initializer/Start ordering under study.
@@ -607,6 +620,12 @@ extension PluginLibraryScenario {
                     let continued = try snapshot(); try persist(continued, name + "-fresh-stepped")
                     try require(name + "FreshFirstStepSucceeds", continued.runtimeDocument?.sourcePluginState?.clock.elapsedTime
                         == Double(Float(0.02)), summary(continued))
+                    if pendingDestruction {
+                        let destroyed = name != "noop"
+                        try require(name + "OriginalContinuation", continued.document.objects.count == (destroyed ? 0 : 1)
+                            && continued.pending.isEmpty && continued.runtimeDocument?.sourcePluginState?.bindings.first?.destroyed == destroyed,
+                            summary(continued))
+                    }
                     if name == "changed" {
                         var bytes = try Data(contentsOf: profile); bytes.append(contentsOf: [0x20, 0x0a])
                         _ = try JSONSerialization.jsonObject(with: bytes); try bytes.write(to: profile)
@@ -621,7 +640,7 @@ extension PluginLibraryScenario {
                     "save PID=\(savePID), reopen PID=\(ProcessInfo.processInfo.processIdentifier)")
                 // Seed a real retained session before every candidate, including
                 // changed-identity rejection. No source-character cache exists.
-                for name in ["changed", "noop", "Instantiate", "SetActive", "Destroy"] {
+                for name in pendingDestruction ? names : ["changed", "noop", "Instantiate", "SetActive", "Destroy"] {
                     try studio.loadScene(from: path("noop", ".png"))
                     try studio.stepSourcePlugins(deltaTime: 0.06)
                     let before = try snapshot(), oldSession = studio.sourcePluginSession
@@ -659,6 +678,11 @@ extension PluginLibraryScenario {
                     record(name + "LoadOutcome", expectedLoadError == nil, "Loaded; " + summary(loaded))
                     record(name + "InputSceneCommitted", studio.doc.objects == saved.objects
                         && studio.doc.sourcePluginState == saved.sourcePluginState)
+                    if pendingDestruction {
+                        let original = try JSONDecoder().decode(InitializerObservation.self, from: Data(contentsOf: path(name + "-saved", ".json")))
+                        record(name + "PendingQueueRestored", loaded.pending == original.pending,
+                            "original pending=\(original.pending); restored pending=\(loaded.pending)")
+                    }
                     let stepFrame = studio.host.renderer.currentFrame(), stepSession = studio.sourcePluginSession
                     var stepError: String?
                     do { try studio.stepSourcePlugins(deltaTime: 0.02) }
@@ -676,12 +700,25 @@ extension PluginLibraryScenario {
                             == (saved.sourcePluginState?.clock.elapsedTime ?? 0) + Double(Float(0.02)))
                         let freshSaved = try JSONDecoder().decode(InitializerObservation.self, from: Data(contentsOf: path(name + "-saved", ".json")))
                         let freshStepped = try JSONDecoder().decode(InitializerObservation.self, from: Data(contentsOf: path(name + "-fresh-stepped", ".json")))
-                        record(name + "MatchesFreshContinuation", stepped.document.objects == freshStepped.document.objects
-                            && stepped.runtimeDocument?.sourcePluginState == freshStepped.runtimeDocument?.sourcePluginState
-                            && stepped.pending == freshStepped.pending
-                            && Array(stepped.callbacks.dropFirst(loaded.callbacks.count))
-                                == Array(freshStepped.callbacks.dropFirst(freshSaved.callbacks.count)),
-                            "Compare original-session continuation after the same saved clock/state; callback suffixes exclude earlier installation events")
+                        if pendingDestruction {
+                            record(name + "ObjectsMatchFresh", stepped.document.objects == freshStepped.document.objects,
+                                "original objects=\(freshStepped.document.objects.map(\.id)); reopened objects=\(stepped.document.objects.map(\.id))")
+                            record(name + "StateMatchesFresh", stepped.runtimeDocument?.sourcePluginState == freshStepped.runtimeDocument?.sourcePluginState,
+                                "Exact saved fields, lifecycle flags, clocks, identities and clone serial")
+                            record(name + "PendingMatchesFresh", stepped.pending == freshStepped.pending,
+                                "original pending=\(freshStepped.pending); reopened pending=\(stepped.pending)")
+                            let expected = Array(freshStepped.callbacks.dropFirst(freshSaved.callbacks.count))
+                            let actual = Array(stepped.callbacks.dropFirst(loaded.callbacks.count))
+                            record(name + "CallbacksMatchFresh", actual == expected,
+                                "original callback suffix=\(expected); reopened suffix=\(actual)")
+                        } else {
+                            record(name + "MatchesFreshContinuation", stepped.document.objects == freshStepped.document.objects
+                                && stepped.runtimeDocument?.sourcePluginState == freshStepped.runtimeDocument?.sourcePluginState
+                                && stepped.pending == freshStepped.pending
+                                && Array(stepped.callbacks.dropFirst(loaded.callbacks.count))
+                                    == Array(freshStepped.callbacks.dropFirst(freshSaved.callbacks.count)),
+                                "Compare original-session continuation after the same saved clock/state; callback suffixes exclude earlier installation events")
+                        }
                     }
                     if name == "noop" {
                         record("NoopExactRestoredState", loaded.runtimeDocument?.sourcePluginState == saved.sourcePluginState
@@ -1209,7 +1246,7 @@ extension PluginLibraryScenario {
     }
 
     private func freshProfileFixture(directory: URL, phase: String, fail: Bool, attachmentRead: Bool = true,
-                                     mutation: String? = nil) throws -> URL {
+                                     mutation: String? = nil, destroyOnAwake: Bool = false) throws -> URL {
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         let type = "FreshAttachmentProbe", guid = "Ikkoku.Validation.FreshAttachmentProbe"
         let hash = String(repeating: "a", count: 64)
@@ -1225,13 +1262,25 @@ extension PluginLibraryScenario {
             fields.append(["name": "positionAgain", "type": "Vector3", "serialized": true, "initializer": attachmentRead ? read : zero])
             if fail { fields.append(["name": "trip", "type": "Int32", "serialized": false, "initializer": poison]) }
         } else {
-            body.append(["kind": "assign", "name": "=", "children": [["kind": "field", "type": "Vector3", "name": "position"], read]])
+            if attachmentRead {
+                body.append(["kind": "assign", "name": "=", "children": [["kind": "field", "type": "Vector3", "name": "position"], read]])
+            }
+            if destroyOnAwake {
+                precondition(phase == "Awake" && !fail && mutation == nil && !attachmentRead)
+                body.append(["kind": "expression", "children": [["kind": "api", "type": "Void", "name": "world.Destroy", "children": [
+                    ["kind": "api", "type": "Object", "name": "gameObject", "children": []]]]]])
+            }
             if fail { body.append(["kind": "expression", "children": [poison]]) }
         }
         let lifecycle = phase == "initializer" ? "Awake" : phase
         var methods: [[String: Any]] = [["name": lifecycle, "symbol": "M:\(type).\(lifecycle)", "static": false,
             "returnType": "Void", "parameters": [], "body": ["kind": "block", "children": body], "lifecycle": lifecycle]]
         var symbols = ["M:\(type).\(lifecycle)"]
+        if destroyOnAwake {
+            symbols.append("M:\(type).OnDestroy")
+            methods.append(["name": "OnDestroy", "symbol": "M:\(type).OnDestroy", "static": false,
+                "returnType": "Void", "parameters": [], "body": ["kind": "block", "children": []], "lifecycle": "OnDestroy"])
+        }
         if let mutation {
             precondition(phase == "initializer" && !fail)
             let object: [String: Any] = ["kind": "api", "type": "Object", "name": "gameObject", "children": []]
