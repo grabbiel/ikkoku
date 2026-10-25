@@ -638,7 +638,7 @@ final class MakerModel: ViewportInputHandler {
             current = applied.appearance; fields.formUnion(applied.appliedFields); diagnostics += applied.diagnostics
         }
         if let prepared, let applied = try prepared.appearance(base: current, card: draft, resources: host.renderer.resources,
-            modLibrary: modLibrary, transaction: transaction, timings: timings, inputs: inputs) {
+            modLibrary: modLibrary, transaction: transaction, timings: timings, inputs: inputs, batchClothes: true) {
             current = applied.appearance; fields.formUnion(applied.appliedFields); diagnostics += applied.diagnostics
         }
         return .init(appearance: current, appliedFields: fields, diagnostics: diagnostics)
