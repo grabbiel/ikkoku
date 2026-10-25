@@ -1131,14 +1131,26 @@ final class StudioModel: ViewportInputHandler {
         for preview in sourceInstances.values { try preview.setDynamicsStep(elapsed: sourceAnimationTime, deltaTime: delta) }
         stepSourceRouteClocks(delta: delta)
     }
-    func capturePluginDynamics() -> [UUID: SourceStudioCharacterPreview.DynamicsCheckpoint] {
-        sourceInstances.mapValues { $0.captureDynamicsCheckpoint() }
+    struct PluginDynamicsCheckpoint {
+        let characters: [UUID: SourceStudioCharacterPreview.DynamicsCheckpoint]
+        let routes: [UUID: (clock: SourceStudioRouteClock, state: SourceStudioRouteClock.Checkpoint)]
+        let routeFallbackReported: Set<UUID>
     }
-    func restorePluginDynamics(time: Float, checkpoints: [UUID: SourceStudioCharacterPreview.DynamicsCheckpoint]) throws {
+    func capturePluginDynamics() -> PluginDynamicsCheckpoint {
+        .init(characters: sourceInstances.mapValues { $0.captureDynamicsCheckpoint() },
+              routes: sourceRouteClocks.mapValues { ($0, $0.captureCheckpoint()) },
+              routeFallbackReported: sourceRouteFallbackReported)
+    }
+    func restorePluginDynamics(time: Float, checkpoints: PluginDynamicsCheckpoint) throws {
         sourceAnimationTime = time
-        sourceInstances = sourceInstances.filter { checkpoints[$0.key] != nil }
-        for (id, checkpoint) in checkpoints { try sourceInstances[id]?.restoreDynamicsCheckpoint(checkpoint) }
-        jumpSourceRouteClocks(to: time)
+        sourceInstances = sourceInstances.filter { checkpoints.characters[$0.key] != nil }
+        for (id, checkpoint) in checkpoints.characters { try sourceInstances[id]?.restoreDynamicsCheckpoint(checkpoint) }
+        // Keep the exact owners and histories from before this request. A fixed
+        // 1/30 jump cannot reconstruct a prefix stepped with irregular deltas.
+        // Replacing the map also drops clocks lazily created by rejected work.
+        for entry in checkpoints.routes.values { try entry.clock.restoreCheckpoint(entry.state) }
+        sourceRouteClocks = checkpoints.routes.mapValues(\.clock)
+        sourceRouteFallbackReported = checkpoints.routeFallbackReported
     }
     func stopBenchmarkTimer() { timer?.invalidate(); timer = nil }
 
