@@ -449,7 +449,7 @@ Citations are `file:line` under `.local/reverse/managed-recovery/902b9a23…/774
   - the playing-route retarget: the stepper keeps the segment in progress, joins the next one with the `movetopath` leg, and replays the moved route at the next loop. A retarget that changes nothing is bit-identical, a queued setting is refused, and the clock keeps its frame and hands later rebuilds the moved route. Disabling the `movetopath` leg fails the first test (negative control).
 
   `SourceSceneTopologyTests` and `SourceSceneInsertionTests` were updated for the route copy and route child rules. PERF-PENDING-ENGINE-SUITE
-- **Lanes.** Five new `studio-scenarios` checks drive the same `StudioModel` methods the UI uses, with negative controls:
+- **Lanes.** Four new `studio-scenarios` checks drive the same `StudioModel` methods the UI uses, with negative controls:
   - `route-edit-export.json` on the stt11c route scene:
     - a guide drag of point 2 while route 0 plays, and locked settings refused while it plays;
     - after Stop: Add Point at the CharaStudio defaults, moves, speed, ease, curve connections, link, loop, orient, colour and the line, with undo and redo;
