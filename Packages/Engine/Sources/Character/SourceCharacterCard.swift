@@ -25,6 +25,9 @@ public struct SourceCharacterCard: Sendable {
         /// The MessagePack bytes `plugins` were decoded from (the selected
         /// block or legacy trailer), for readers that need wire encodings.
         public var payload: Data? = nil
+        /// Where `payload` lies in the card's bytes when the current block
+        /// is selected (`format` "block-v3"), for same-length patches.
+        public var payloadRange: Range<Int>? = nil
     }
     public struct PreviewSettings: Sendable {
         public let faceValues: [Float], bodyValues: [Float]
@@ -98,6 +101,7 @@ public struct SourceCharacterCard: Sendable {
     /// precedence, matching the installed plugin's load postfix.
     public func extensions() throws -> Extensions {
         var format: String?, diagnostics: [String] = [], plugins: [String: PluginData] = [:], selected: Data?
+        var selectedRange: Range<Int>?
         if let current = block(named: "KKEx") {
             if current.version == "3" {
                 // The installed hook computes its base from the payload end and
@@ -112,6 +116,7 @@ public struct SourceCharacterCard: Sendable {
                     let bytes = preservedData.subdata(in: start..<(start + count))
                     let decoded = try Self.pluginData(bytes)
                     plugins = decoded.plugins; diagnostics += decoded.diagnostics; format = "block-v3"; selected = bytes
+                    selectedRange = start..<(start + count)
                 } catch { diagnostics.append("Current Extended Save could not be read: \(error). Its bytes remain preserved.") }
             } else { diagnostics.append("Extended Save block version \(current.version) is preserved but unsupported.") }
         }
@@ -127,12 +132,13 @@ public struct SourceCharacterCard: Sendable {
                         let payload = try legacy.take(min(declaredCount, legacy.remaining))
                         let decoded = try Self.pluginData(payload)
                         plugins = decoded.plugins; diagnostics += decoded.diagnostics; format = "trailer-v2"; selected = payload
+                        selectedRange = nil
                         if legacy.remaining > 0 { diagnostics.append("Bytes after legacy Extended Save remain preserved and uninterpreted.") }
                     } else { diagnostics.append("Legacy Extended Save version \(version) is preserved but unsupported.") }
                 } catch { diagnostics.append("Legacy Extended Save could not be read; current block data remains selected: \(error).") }
             } else { diagnostics.append("Unknown source-card trailer remains preserved and uninterpreted.") }
         }
-        return Extensions(format: format, plugins: plugins, diagnostics: diagnostics, payload: selected)
+        return Extensions(format: format, plugins: plugins, diagnostics: diagnostics, payload: selected, payloadRange: selectedRange)
     }
 
     private static func pluginData(_ bytes: Data) throws -> (plugins: [String: PluginData], diagnostics: [String]) {
