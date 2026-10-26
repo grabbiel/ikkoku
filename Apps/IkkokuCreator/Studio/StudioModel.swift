@@ -2955,7 +2955,7 @@ final class StudioModel: ViewportInputHandler, LivePacedHandler {
                 var groups = character.activeFK
                 for (id, degrees) in rotations {
                     guard let boneID = Int32(exactly: id), let bone = character.bones[boneID],
-                          let target = preview.controller.targets.first(where: { $0.bone.id == id }) else { throw RigError.invalid("Export cannot add a previously absent FK record.") }
+                          let target = preview.controller.targets.first(where: { $0.bone.id == id }) else { throw RigError.invalid("Export cannot save FK bone \(id) of \"\(object.name)\" (key \(key)): the scene does not save that bone, and an export cannot add an FK record.") }
                     edits.transforms.append(.init(.characterFK(object: key, bone: boneID), transform: .init(
                         position: bone.transform.position, rotationDegrees: degrees, scale: bone.transform.scale)))
                     for (i, group) in SourceStudioPose.Group.fkParts.enumerated() where !group.intersection(target.bone.fkGroup).isEmpty { groups[i] = true }

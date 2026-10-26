@@ -954,23 +954,35 @@ them changes the export.
    field before it (`enableDynamicBone`) or after it (the child count) is
    caught.
 2. **FK bones a legacy character lacks.** CharaStudio's load gives a character
-   each catalog FK bone its record lacks, with a fresh key and
-   `new ChangeAmount()` (`AddObjectAssist.InitBone` :38–46, `InitHairBone`
-   :103–113). It saves them after the saved bones (the 0.0.7 fixture's
-   character gains 10). This difference is specific to legacy scenes. In
-   Ikkoku:
+   each catalog FK bone that its record lacks and its body or hair has, with a
+   fresh key and `new ChangeAmount()` (`AddObjectAssist.InitBone` :38–46,
+   `InitHairBone` :103–113). It saves them after the saved bones. The 0.0.7
+   fixture's character gains 10, the bones of its own back hair (145–149,
+   152–156). Records that lack bones occur only in legacy scenes. In Ikkoku:
    - The record and our export keep the saved bones only. CharaStudio's next
      save of our export adds the same bones, as it does for the legacy file.
-   - The FK pose binds the same catalog bones (`SourceStudioPose`) and gives
-     each unsaved one the zero rotation of CharaStudio's new record. The FK
-     view therefore shows those bones at that default, and editing one poses
-     without error.
-   - Exporting such an edit is refused ("Export cannot add a previously absent
-     FK record."). The scene writer has no span for that bone ("unavailable
-     scene transform destination").
-   - `legacyCharacterFKBindsTheBonesCharaStudioAdds` checks on the 0.0.7
-     fixture that the bones we bind without a record are exactly the bones
-     CharaStudio added, each at zero.
+   - The FK pose binds each catalog bone it finds in the rig it draws
+     (`SourceStudioPose.swift` :143–149): body bones under the body, hair
+     bones under `cf_J_FaceUp_ty`. An unsaved bone it binds is shown at the
+     zero rotation of CharaStudio's new record, and editing it poses without
+     error. Which hair bones appear depends on the hair that is drawn.
+   - On the 0.0.7 fixture the character's hair is not converted in the maker
+     library, so the avatar's hair is drawn. The FK view therefore shows 9 of
+     that hair's front bones (112–118, 124, 131), which the record does not
+     save, at zero. It shows none of the 10 back-hair bones CharaStudio adds.
+     Every body bone the view shows is saved.
+   - Exporting an edit of any bone the record does not save, shown or not, is
+     refused, naming the bone. The app says "Export cannot save FK bone *id*
+     of "*character*" (key *k*): the scene does not save that bone, and an
+     export cannot add an FK record." The scene writer refuses it too:
+     "character *k* FK bone *id* is not saved in the scene, so there is no
+     record to write".
+   - `legacyCharacterFKShowsUnsavedBonesAtZeroAndRefusesTheirExport` checks
+     this on the 0.0.7 fixture: every bone either side adds is a hair bone,
+     each unsaved bone shown is at zero, editing all of them evaluates, and
+     both the legacy document and its upgrade refuse an export of each. The
+     lane check `studio-scenario-legacy-scene` poses one of them in the app
+     and checks the refusal and the undo.
 3. **Map-dependent sun colour (every version).** When a map with a
    `SunLightInfo` loads, `Map.sunType`'s setter (Map.cs:30–46) calls
    `SystemButtonCtrl.MapDependent` (:1394–1402). That call sets

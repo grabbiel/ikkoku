@@ -267,7 +267,14 @@ extension KoikatsuSceneDocument {
         }
         for edit in edits.transforms {
             guard destinations.insert(edit.destination).inserted,
-                  let range = reader.editSpans.transforms[edit.destination] else { throw reader.invalid("duplicate or unavailable scene transform destination") }
+                  let range = reader.editSpans.transforms[edit.destination] else {
+                // ST-T05a: a legacy character lacks the FK bones CharaStudio
+                // adds at load; the writer only rewrites saved records.
+                if case let .characterFK(object, bone) = edit.destination, reader.editSpans.transforms[edit.destination] == nil {
+                    throw reader.invalid("character \(object) FK bone \(bone) is not saved in the scene, so there is no record to write")
+                }
+                throw reader.invalid("duplicate or unavailable scene transform destination")
+            }
             let vectors = [edit.transform.position, edit.transform.rotationDegrees, edit.transform.scale]
             var bytes = Data()
             for vector in vectors { for index in 0..<3 {

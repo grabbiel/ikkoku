@@ -480,7 +480,10 @@ func legacyCharacterFKShowsUnsavedBonesAtZeroAndRefusesTheirExport() throws {
                 transform: KoikatsuChangeAmount(position: .zero, rotationDegrees: .init(11, 23, 7), scale: .one))])
             for scene in [upgraded, document] {
                 do { _ = try scene.editedData(edits); Issue.record("character \(key): unsaved FK bone \(bone) was exported") }
-                catch { #expect(error.localizedDescription.contains("unavailable scene transform destination"), "\(error.localizedDescription)") }
+                catch {
+                    #expect(error.localizedDescription.contains("character \(key) FK bone \(bone) is not saved in the scene, so there is no record to write"),
+                            "\(error.localizedDescription)")
+                }
             }
         }
     }

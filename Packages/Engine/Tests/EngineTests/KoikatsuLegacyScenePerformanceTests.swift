@@ -39,6 +39,9 @@ func koikatsuLegacyScenePerformance() throws {
     try legacyPerfMedian("showoff decodeDocument") { _ = try KoikatsuSceneReader.decodeDocument(showoff) }
     // The same scene as 1.0.4.2: what a current scene of this content costs.
     try legacyPerfMedian("legacy as 1.0.4.2 decodeDocument") { _ = try KoikatsuSceneReader.decodeDocument(upgradedData) }
+    // IKKOKU_LEGACY_SCENE_PERF_CURRENT_ONLY=1: only these two 1.0.4.2
+    // decodes, for repeated rounds of the comparison with the base build.
+    if legacyPerfEnvironment["IKKOKU_LEGACY_SCENE_PERF_CURRENT_ONLY"] == "1" { return }
     let document: KoikatsuSceneDocument
     do { document = try KoikatsuSceneReader.decodeDocument(legacy) } catch {
         print("[legacy-perf] legacy decodeDocument refused: \(error.localizedDescription.prefix(80))")
