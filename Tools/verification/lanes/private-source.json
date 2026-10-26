@@ -374,6 +374,21 @@
           "env": "IKKOKU_CHEEK_COMPOSITE_PROBE",
           "kind": "directory",
           "optional": true
+        },
+        {
+          "env": "IKKOKU_LIPLINE_COMPOSITE_BASE_PROBE",
+          "kind": "directory",
+          "optional": true
+        },
+        {
+          "env": "IKKOKU_LIPLINE_COMPOSITE_PROBE",
+          "kind": "directory",
+          "optional": true
+        },
+        {
+          "env": "IKKOKU_LIPLINE_COMPOSITE_NONE_PROBE",
+          "kind": "directory",
+          "optional": true
         }
       ],
       "env": {},
