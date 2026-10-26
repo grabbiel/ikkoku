@@ -1,6 +1,6 @@
-"""ST-A11 map probe driver: path checks, the read-only fetch script, placing fetched files, and
+"""ST-A11 map probe driver: path checks, the read-only batched fetch, placing fetched files per set, and
 the one-exec capture framing. VM calls and the endpoint are mocked: no VM or private data."""
-import gzip, hashlib, io, json, os, tempfile, unittest, zipfile
+import gzip, hashlib, io, json, os, shutil, tempfile, unittest, urllib.error, urllib.request, zipfile
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
@@ -63,42 +63,229 @@ class FetchScriptTests(unittest.TestCase):
         self.assertIn('Copy hash differs', script)
         self.assertNotIn('Remove-Item -LiteralPath $full', script)
         self.assertNotIn('Copy-Item -LiteralPath $root', script)  # nothing is copied back into the game
+        self.assertNotIn('Copy-Item -LiteralPath $dir', script)
+        for write in ('Set-Content', 'Out-File', 'Junction', 'mklink', 'Move-Item', 'Rename-Item'):
+            self.assertNotIn(write, script)
+        self.assertIn("player='none: no player run, no player root, no junctions'", script)
         cleanup = script[script.index('finally{'):]
-        self.assertIn('Remove-Item -LiteralPath $p -Recurse -Force', cleanup)
+        self.assertIn('Remove-Item -LiteralPath $root -Recurse -Force', cleanup)
         self.assertIn('remainingGameProcesses', cleanup)
+        self.assertIn('$r.scanAfter=Scan', cleanup)
+        self.assertLess(script.index('$r.scanBefore=Scan'), script.index('Copy-Item'))
 
-    def test_script_refuses_unknown_roots_and_unsafe_paths(self):
+    def test_the_listing_comes_first_and_any_bound_stops_every_copy(self):
+        script = probe.fetch_script(FETCH_ROOT, 'http://h/t/', [], ['abdata/map/scene/*.unity3d'],
+                                    [('scenes', 'UserData/studio/scene', '*.png')], tree_max=4 * 1024 ** 3)
+        self.assertIn(r"$trees=@(@('scenes','UserData\studio\scene','*.png'))", script)
+        self.assertIn('$treeMax=4294967296', script)
+        self.assertIn('-File -Recurse -Force', script)
+        for reason in ('exceed the per-file bound', 'exceeds the total bound', 'exceeds $treeMax'):
+            self.assertIn(reason, script)
+        listing, copying = script.index('$r.listedFiles='), script.index('Copy-Item')
+        self.assertLess(listing, copying)
+        self.assertIn('while(-not $r.stopped', script[listing:copying])
+        # Paths travel in the UTF-8 record, never as zip entry names: entries are index names.
+        self.assertIn("$name='f{0:d5}' -f $i", script)
+        self.assertIn('New-Object Text.UTF8Encoding $false', script)
+        self.assertIn('NoCompression', script)
+        self.assertIn('AllowWriteStreamBuffering=$false', script)
+        self.assertIn('listingSHA256', script)
+        self.assertIn(r"@('scenes','UserData\studio\scene')", script)
+
+    def test_script_refuses_unknown_roots_unsafe_paths_and_batches_beyond_one_upload(self):
         with self.assertRaisesRegex(ValueError, 'Unknown private fetch root'):
             probe.fetch_script(r'C:\Illusion\Koikatsu', 'http://h/t/', [], [])
         with self.assertRaisesRegex(ValueError, 'game-relative'):
             probe.fetch_script(FETCH_ROOT, 'http://h/t/', ["abdata/x';rm"], [])
         with self.assertRaisesRegex(ValueError, 'game-relative'):
             probe.fetch_script(FETCH_ROOT, 'http://h/t/', [], ['../*.unity3d'])
+        with self.assertRaisesRegex(ValueError, '--tree wants'):
+            probe.fetch_script(FETCH_ROOT, 'http://h/t/', [], [], [('scenes', 'UserData', "*.png';rm")])
+        with self.assertRaisesRegex(ValueError, 'fit one upload'):
+            probe.fetch_script(FETCH_ROOT, 'http://h/t/', [], [], batch=probe.UPLOAD_BOUND)
+        with self.assertRaisesRegex(ValueError, 'fit one upload'):
+            probe.fetch_script(FETCH_ROOT, 'http://h/t/', [], [], batch=probe.MAX_FETCH_BYTES - 1)
+
+    def test_tree_arguments_and_found_paths(self):
+        self.assertEqual(probe.checked_tree('scenes:UserData/studio/scene/*.png'), ('scenes', 'UserData/studio/scene', '*.png'))
+        for bad in ('UserData/studio/scene/*.png', 'Scenes:UserData/*.png', 'source:UserData/*.png', 'scenes:../x/*.png',
+                    'scenes:UserData/a b/*.png;x', 'scenes:*.png'):
+            with self.subTest(bad), self.assertRaises(ValueError):
+                probe.checked_tree(bad)
+        found = 'UserData/studio/scene/Pack 1/\u30b7\u30fc\u30f3/a (2).PNG'
+        self.assertEqual(probe.checked_found(found, 'UserData/studio/scene', '*.png', recursive=True),
+                         found[len('UserData/studio/scene/'):])
+        for bad in ('UserData/studio/scene/../x.png', 'UserData/studio/scene//x.png', 'UserData/studio/scene/x.txt',
+                    'UserData/studio/sceneX/x.png', 'UserData/studio/scene/a\\b.png', 'UserData/studio/scene/C:x.png',
+                    'UserData/studio/scene/a\nb.png', 'UserData/studio/scene/'):
+            with self.subTest(bad), self.assertRaisesRegex(ValueError, 'Unexpected fetched path'):
+                probe.checked_found(bad, 'UserData/studio/scene', '*.png', recursive=True)
+        with self.assertRaisesRegex(ValueError, 'Unexpected fetched path'):
+            probe.checked_found('abdata/map/scene/sub/x.unity3d', 'abdata/map/scene', '*.unity3d', recursive=False)
 
 
-class PlaceTests(unittest.TestCase):
-    def guest(self, files):
-        return dict(files=[dict(path=path, name=path.replace('/', '__'), bytes=len(data), sha256=sha(data)) for path, data in files.items()])
+class FakeFetchEndpoint:
+    """FetchEndpoint's surface: on entry, `next_uploads` arrive in `incoming` as the guest would PUT them."""
+    instances, next_uploads = [], {}
 
-    def test_files_land_under_source_with_both_hashes(self):
-        files = {'abdata/abdata': b'manifest', 'abdata/studio/info/00.unity3d': b'info'}
-        upload = archive({p.replace('/', '__'): d for p, d in files.items()})
+    def __init__(self, address, files, incoming, total):
+        self.files, self.incoming, self.uploads = files, incoming, {}
+        self.base = 'http://10.211.55.2:1/' + 'c' * 32 + '/'
+        FakeFetchEndpoint.instances.append(self)
+
+    def __enter__(self):
+        for name, data in FakeFetchEndpoint.next_uploads.items():
+            path = self.incoming / name
+            path.write_bytes(data)
+            self.uploads[name] = dict(path=path, bytes=len(data), sha256=sha(data))
+        return self
+
+    def __exit__(self, *exc): return False
+
+
+class FetchEndpointTests(unittest.TestCase):
+    """The real endpoint on the loopback: each allowed upload once, streamed to disk with its hash; anything else refused."""
+    def put(self, endpoint, name, data):
+        request = urllib.request.Request(endpoint.base + name, data=data, method='PUT', headers={'Content-Length': str(len(data))})
+        try:
+            with urllib.request.urlopen(request, timeout=10) as response:
+                return response.status
+        except urllib.error.HTTPError as error:
+            return error.code
+
+    def test_uploads_are_streamed_once_each_within_the_bounds(self):
         with tempfile.TemporaryDirectory() as tmp:
-            placed = probe.place(upload, self.guest(files), Path(tmp))
-            self.assertEqual((Path(tmp) / 'source/abdata/studio/info/00.unity3d').read_bytes(), b'info')
-        self.assertEqual([r['path'] for r in placed], sorted(files))
-        self.assertTrue(all(r['localSHA256'] == r['sha256'] for r in placed))
+            incoming = Path(tmp)
+            with probe.FetchEndpoint('127.0.0.1', {'run.ps1': b'script'}, incoming, total=64) as endpoint:
+                with urllib.request.urlopen(endpoint.base + 'run.ps1', timeout=10) as response:
+                    self.assertEqual(response.read(), b'script')
+                self.assertEqual(self.put(endpoint, 'fetch-1.zip', b'zip-one'), 200)
+                self.assertEqual(self.put(endpoint, 'fetch-1.zip', b'again'), 403)
+                self.assertEqual(self.put(endpoint, 'fetch-record.json', b'{}'), 200)
+                for name in ('fetch-0.zip', 'other.zip', '../fetch-2.zip', 'fetch-2.zip/x'):
+                    self.assertEqual(self.put(endpoint, name, b'x'), 403, name)
+                self.assertEqual(self.put(endpoint, 'fetch-2.zip', b'x' * 64), 403)  # over the total bound
+                uploads = dict(endpoint.uploads)
+            self.assertEqual(sorted(uploads), ['fetch-1.zip', 'fetch-record.json'])
+            self.assertEqual(uploads['fetch-1.zip']['sha256'], sha(b'zip-one'))
+            self.assertEqual((incoming / 'fetch-1.zip').read_bytes(), b'zip-one')
+            self.assertEqual(sorted(p.name for p in incoming.iterdir()), ['fetch-1.zip', 'fetch-record.json'])
 
-    def test_a_changed_missing_or_extra_file_is_refused(self):
-        files = {'abdata/abdata': b'manifest'}
-        with tempfile.TemporaryDirectory() as tmp:
-            with self.assertRaisesRegex(ValueError, 'differs from the guest record'):
-                probe.place(archive({'abdata__abdata': b'changed!'}), self.guest(files), Path(tmp))
-            with self.assertRaisesRegex(ValueError, 'exactly the recorded files'):
-                probe.place(archive({'abdata__abdata': b'manifest', 'extra': b''}), self.guest(files), Path(tmp))
-            guest = self.guest(files); guest['files'][0]['path'] = '../escape'
-            with self.assertRaisesRegex(ValueError, 'game-relative'):
-                probe.place(archive({'abdata__abdata': b'manifest'}), guest, Path(tmp))
+
+class FetchTests(unittest.TestCase):
+    """The batched fetch: one exec, the record and the batch zips checked, files placed per set."""
+    BUNDLE, LIST, SCENE = b'bundle-bytes', b'list', b'\x89PNG scene'
+    SCENE_PATH = 'UserData/studio/scene/Pack/\u30b7\u30fc\u30f3.png'
+    GLOBS = ['abdata/map/scene/*.unity3d', 'abdata/h/list/*.unity3d']
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory(); self.dir = Path(self.tmp.name)
+        FakeFetchEndpoint.instances = []
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def guest_files(self):
+        return [dict(path='abdata/map/scene/1f.unity3d', set=self.GLOBS[0], name='f00000', batch=1,
+                     bytes=len(self.BUNDLE), sha256=sha(self.BUNDLE)),
+                dict(path='abdata/h/list/00.unity3d', set=self.GLOBS[1], name='f00001', batch=1, bytes=len(self.LIST), sha256=sha(self.LIST)),
+                dict(path=self.SCENE_PATH, set='scenes', name='f00002', batch=2, bytes=len(self.SCENE), sha256=sha(self.SCENE))]
+
+    def run_fetch(self, files=None, zips=None, guest_change=None, returncode=0, trees=None, stopped=None):
+        files = self.guest_files() if files is None else files
+        data = {'f00000': self.BUNDLE, 'f00001': self.LIST, 'f00002': self.SCENE}
+        if zips is None:
+            zips = {}
+            for f in files:
+                zips.setdefault(f['batch'], {})[f['name']] = data[f['name']]
+        uploads = {f'fetch-{k}.zip': archive(v) for k, v in zips.items()}
+        sets = {self.GLOBS[0]: dict(files=1, bytes=len(self.BUNDLE), largest=len(self.BUNDLE))}
+        uploads['fetch-record.json'] = json.dumps(dict(files=files, missing=[], sets=sets), ensure_ascii=False).encode('utf-8')
+        scan = {'abdata': dict(files=4565, dirs=443, bytes=1, listingSHA256='0' * 64)}
+        guest = dict(root='r', sets=sets, listedFiles=len(files), missing=0, removed=True, remainingGameProcesses=[],
+                     scanBefore=scan, scanAfter=scan, recordSHA256=sha(uploads['fetch-record.json']),
+                     recordBytes=len(uploads['fetch-record.json']),
+                     batches=[dict(batch=int(n[6:-4]), zipSHA256=sha(d), zipBytes=len(d)) for n, d in uploads.items() if n.endswith('.zip')])
+        if stopped:
+            guest['stopped'] = stopped
+        guest.update(guest_change or {})
+        FakeFetchEndpoint.next_uploads = uploads
+        completed = SimpleNamespace(returncode=returncode, stdout='\ufeff' + json.dumps(guest), stderr='boom' if returncode else '')
+        args = SimpleNamespace(vm='vm', output=self.dir / 'fetch', file=None, glob=list(self.GLOBS),
+                               tree=trees or ['scenes:UserData/studio/scene/*.png'], batch_bytes=probe.BATCH_BYTES,
+                               max_total_bytes=probe.MAX_TOTAL_BYTES, tree_max_bytes=probe.TREE_MAX_BYTES, errno_baseline=0,
+                               host_address='10.211.55.2', timeout=60)
+        with patch.object(probe, 'private', side_effect=lambda p: Path(p).resolve()), \
+             patch.object(probe, 'guarded', return_value=0) as guard, \
+             patch.object(probe, 'errno_count', return_value=0), \
+             patch.object(probe, 'FetchEndpoint', FakeFetchEndpoint), \
+             patch.object(probe.subprocess, 'run', return_value=completed) as vm:
+            try:
+                return probe.fetch(args)
+            finally:
+                self.guard, self.vm = guard, vm
+
+    def test_one_exec_places_bundles_under_source_and_the_tree_under_its_label(self):
+        result = self.run_fetch()
+        out = self.dir / 'fetch'
+        self.assertEqual(self.vm.call_count, 1); self.guard.assert_called_once_with(0)
+        self.assertEqual((out / 'source/abdata/map/scene/1f.unity3d').read_bytes(), self.BUNDLE)
+        self.assertEqual((out / 'source/abdata/h/list/00.unity3d').read_bytes(), self.LIST)
+        self.assertEqual((out / 'scenes' / self.SCENE_PATH[len('UserData/studio/scene/'):]).read_bytes(), self.SCENE)
+        self.assertFalse((out / 'incoming').exists())  # the zips and the record are deleted once placed
+        endpoint = FakeFetchEndpoint.instances[0]
+        self.assertIn(r"@('scenes','UserData\studio\scene','*.png')", endpoint.files['run.ps1'].decode())
+        self.assertIn('<endpoint>/', (out / 'run.ps1').read_text())
+        self.assertNotIn(endpoint.base, (out / 'run.ps1').read_text())
+        record = json.loads((out / 'fetch.json').read_text())
+        self.assertEqual(record['requestedFiles'], [])  # named sets replace the defaults
+        self.assertEqual(record['listing']['sets'], {self.GLOBS[0]: dict(files=1, bytes=12, largest=12)})
+        self.assertTrue(all(f['localSHA256'] == f['sha256'] for f in record['files']))
+        self.assertEqual(record['player'], 'none (no player root, no junctions)')
+        self.assertEqual((result['files'], result['batches'], result['errno'], result['scansEqual']), (3, 2, [0, 0], True))
+
+    def test_a_stopped_listing_copies_nothing_and_keeps_the_numbers(self):
+        result = self.run_fetch(files=[], zips={}, stopped='tree scenes (5 bytes) exceeds 4')
+        self.assertEqual((result['files'], result['stopped']), (0, 'tree scenes (5 bytes) exceeds 4'))
+        record = json.loads((self.dir / 'fetch' / 'fetch.json').read_text())
+        self.assertEqual(record['guest']['stopped'], 'tree scenes (5 bytes) exceeds 4')
+        self.assertIn(self.GLOBS[0], record['listing']['sets'])
+
+    def test_changed_extra_or_misplaced_files_are_refused(self):
+        def changed(index, **values):
+            files = self.guest_files(); files[index].update(values); return files
+        cases = [
+            (dict(files=changed(0, sha256='0' * 64)), 'differs from the guest record'),
+            (dict(zips={1: {'f00000': self.BUNDLE, 'f00001': self.LIST, 'extra': b''}, 2: {'f00002': self.SCENE}}),
+             'exactly the recorded files'),
+            (dict(guest_change={'batches': [dict(batch=1, zipSHA256='0' * 64, zipBytes=1), dict(batch=2, zipSHA256='0' * 64, zipBytes=1)]}),
+             'different from the guest zip'),
+            (dict(guest_change={'batches': []}), 'different batches'),
+            (dict(guest_change={'recordSHA256': '0' * 64}), 'record differs'),
+            (dict(guest_change={'error': 'boom'}), 'Guest fetch failed: boom'),
+            (dict(files=changed(2, path='UserData/studio/scene/../../../x.png')), 'Unexpected fetched path'),
+            (dict(files=changed(0, set='abdata/other/*.unity3d')), 'not requested'),
+            (dict(files=changed(0, path='abdata/map/scene/sub/1f.unity3d')), 'Unexpected fetched path'),
+        ]
+        for kwargs, message in cases:
+            with self.subTest(message), self.assertRaisesRegex((ValueError, RuntimeError), message):
+                self.run_fetch(**kwargs)
+            shutil.rmtree(self.dir / 'fetch')
+
+    def test_a_failed_exec_is_recorded_and_an_existing_fetch_refused(self):
+        with self.assertRaisesRegex(RuntimeError, 'VM exec failed: boom'):
+            self.run_fetch(returncode=1)
+        self.assertEqual(json.loads((self.dir / 'fetch' / 'fetch.json').read_text())['execError'], 'boom')
+        with self.assertRaisesRegex(RuntimeError, 'fetch.json exists'):
+            self.run_fetch()
+        self.vm.assert_not_called()
+
+    def test_bad_trees_are_refused_before_any_vm_call(self):
+        for trees, message in ((['scenes:UserData/studio/scene/*.png', 'scenes:UserData/x/*.png'], 'labels must differ'),
+                               (['UserData/studio/scene/*.png'], '--tree wants')):
+            with self.subTest(message), self.assertRaisesRegex(ValueError, message):
+                self.run_fetch(trees=trees)
+            self.vm.assert_not_called(); self.guard.assert_not_called()
 
 
 class CaptureTests(unittest.TestCase):
