@@ -408,3 +408,112 @@ private func batchDeletedCharacterDonation() throws -> [BatchCheck] {
     checks.append(("the restored character renders like a fresh build", try render(restored) == render(fresh)))
     return checks
 }
+
+// MARK: - Keyed background builds (R7 phase 2 item 6, third part)
+
+/// Blocks the calling thread (the main actor, in the tests below) until
+/// `semaphore` is signalled or `seconds` pass. Synchronous, because a wait
+/// is unavailable from an async context.
+private func backgroundBuildsBlock(_ semaphore: DispatchSemaphore, seconds: Double) -> DispatchTimeoutResult {
+    semaphore.wait(timeout: .now() + seconds)
+}
+
+/// What the completions of `SourceStudioBackgroundBuilds` handed the main
+/// actor, by name, in order.
+@MainActor private final class BackgroundOutcomeLog {
+    var landed: [(name: String, outcomes: [Result<SourceStudioCharacterPreview, Error>])] = []
+}
+
+/// An outfit selection and an export's baselines through
+/// `SourceStudioBackgroundBuilds`, as the Studio runs them with background
+/// builds. The tests run on the main actor, where the builds deliver; the
+/// builds themselves run on GCD threads, and no test-pool thread blocks in a
+/// texture load.
+@Suite(.serialized) struct SourceStudioBackgroundBuildsFixtureTests {
+    /// A superseded outfit selection never completes. The newer one hands the
+    /// main actor the preview a synchronous build of that outfit gives (the
+    /// same diagnostics and a byte-identical render). An export's two
+    /// baselines arrive together, in request order, each like a synchronous
+    /// build.
+    @MainActor @Test(.enabled(if: SourceFixtureSupport.shouldRun(batchVariables) && MTLCreateSystemDefaultDevice() != nil,
+                              "Requires the Studio scenario scene and its import fixtures (\(batchVariables.joined(separator: ", "))) and a Metal device"))
+    func sourceStudioBackgroundSelectionSupersedesAndMatchesASynchronousBuildWhenSupplied() async throws {
+        let references = try batchFixtureReferences()
+        try #require(references.count > 1, "the scenario scene must hold two characters")
+        let renderer = try makeSourceShaderRenderer(), resources = renderer.resources
+        let shown = try SourceStudioCharacterPreview(reference: references[0], resources: resources)
+        try #require(shown.outfitCount > 2, "the first character's card must save three outfits")
+        let first = (shown.coordinate + 1) % shown.outfitCount, second = (shown.coordinate + 2) % shown.outfitCount
+        let builds = SourceStudioBackgroundBuilds<String>(queue: DispatchQueue(label: "test.source-builds"))
+        let log = BackgroundOutcomeLog()
+        func outfit(_ coordinate: Int) -> SourceStudioCharacterBatch {
+            SourceStudioCharacterBatch(requests: [.init(reference: references[0], coordinate: coordinate)], resources: resources)
+        }
+        let superseded = outfit(first)
+        builds.start("outfit", batch: superseded) { log.landed.append(("first", $0)) }
+        #expect(builds.start("outfit", batch: outfit(second)) { log.landed.append(("second", $0)) } === superseded)
+        #expect(superseded.isCancelled)
+        try await backgroundBuildsWait("the second selection") { !log.landed.isEmpty }
+        try await backgroundBuildsSettle()
+        #expect(log.landed.map(\.name) == ["second"])
+        let selected = try #require(log.landed.first?.outcomes.first).get()
+        let fresh = try SourceStudioCharacterPreview(reference: references[0], resources: resources, coordinate: second)
+        func render(_ preview: SourceStudioCharacterPreview) throws -> [UInt8] {
+            let frame = try preview.frame(camera: OrbitCamera(), mainLight: MainLight(), effects: SceneEffects(),
+                                          world: matrix_identity_float4x4, objectID: 1)
+            return try batchPixels(try batchUnwrap(renderer.capture(frame: frame, width: 256, height: 256), "the capture failed"))
+        }
+        #expect(selected.coordinate == second && !selected.sharedAssembly)
+        #expect(selected.diagnostics == fresh.diagnostics)
+        #expect(try render(selected) == (try render(fresh)))
+
+        // An export's baselines: every outcome at once, in request order.
+        let wanted = Array(references.prefix(2))
+        builds.start("export", batch: SourceStudioCharacterBatch(requests: wanted.map { .init(reference: $0) }, resources: resources)) {
+            log.landed.append(("export", $0))
+        }
+        try await backgroundBuildsWait("the export's baselines") { log.landed.count == 2 }
+        let baselines = try #require(log.landed.last?.outcomes).map { try $0.get() }
+        #expect(log.landed.last?.name == "export" && baselines.count == 2 && builds.isEmpty)
+        for (reference, baseline) in zip(wanted, baselines) {
+            let sequential = try SourceStudioCharacterPreview(reference: reference, resources: resources)
+            #expect(baseline.reference == reference && baseline.diagnostics == sequential.diagnostics)
+            #expect(try render(baseline) == (try render(sequential)))
+        }
+    }
+
+    /// An undo during a build: the second half has registered its meshes on
+    /// the queue and its delivery waits for the main actor when the cancel
+    /// runs. Nothing completes, and once that delivery is dropped the store
+    /// holds what it held before.
+    @MainActor @Test(.enabled(if: SourceFixtureSupport.shouldRun(batchVariables) && MTLCreateSystemDefaultDevice() != nil,
+                              "Requires the Studio scenario scene and its import fixtures (\(batchVariables.joined(separator: ", "))) and a Metal device"))
+    func sourceStudioBackgroundBuildCancelledBeforeItsDeliveryLeavesNothingWhenSupplied() async throws {
+        let reference = try #require(try batchFixtureReferences().first)
+        let resources = ResourceStore(device: try #require(MTLCreateSystemDefaultDevice()))
+        // Warm the shared texture cache, as the batch cancellation test does.
+        let warm = try SourceStudioCharacterPreview(reference: reference, resources: resources)
+        let before = resources.statistics()
+        let queue = DispatchQueue(label: "test.source-builds")
+        let builds = SourceStudioBackgroundBuilds<Int>(queue: queue)
+        let log = BackgroundOutcomeLog()
+        let batch = SourceStudioCharacterBatch(requests: [.init(reference: reference)], resources: resources)
+        builds.start(1, batch: batch) { log.landed.append(("landed", $0)) }
+        // Hold the main actor until the run has finished on the queue, so its
+        // delivery is queued behind this test. The run has no main-thread step.
+        let ran = DispatchSemaphore(value: 0)
+        queue.async { ran.signal() }
+        #expect(backgroundBuildsBlock(ran, seconds: 300) == .success)
+        let during = resources.statistics()
+        #expect(during.meshes > before.meshes, "the second half registered its meshes before the cancel")
+        builds.cancelAll()
+        try await backgroundBuildsSettle(0.5)
+        try await backgroundBuildsWait("the first half") { batch.runningCount == 0 }
+        #expect(log.landed.isEmpty && builds.isEmpty && batch.isCancelled)
+        let after = resources.statistics()
+        #expect(before.meshes == after.meshes && before.textures == after.textures
+            && before.deformBuffers == after.deformBuffers && before.meshBufferBytes == after.meshBufferBytes
+            && before.hiddenBuffers == after.hiddenBuffers && before.retiring == after.retiring)
+        #expect(warm.reference == reference)
+    }
+}

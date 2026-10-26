@@ -49,7 +49,12 @@ import sys
 
 WORKLOADS = ["studio-idle", "studio-orbit", "studio-fk-drag", "studio-hover",
              "maker-slider", "maker-idle", "studio-native", "viewport-lifecycle", "startup",
-             "studio-static", "studio-orbit-bursts", "studio-duplicate", "studio-undo-delete", "studio-timeline"]
+             "studio-static", "studio-orbit-bursts", "studio-duplicate", "studio-undo-delete", "studio-timeline",
+             "studio-outfit", "studio-export", "studio-redo", "studio-load"]
+
+# The workloads that time Studio commands until their background work is done
+# (`details.actions`, R7 phase 2, item 6).
+ACTION_WORKLOADS = {"studio-duplicate", "studio-undo-delete", "studio-redo", "studio-outfit", "studio-export", "studio-load"}
 
 # Fixture variables each workload family reads, by their environment.json
 # names. `IKKOKU_SOURCE_SCENE` comes from the scenario scene, the Maker card
@@ -308,13 +313,13 @@ def uncomposited(report):
 
 # Workloads that send no viewport input, so any input call came from a person.
 INPUTLESS_WORKLOADS = {"studio-idle", "maker-idle", "studio-native", "viewport-lifecycle", "startup", "studio-static",
-                      "studio-duplicate", "studio-undo-delete", "studio-timeline"}
+                      "studio-timeline"} | ACTION_WORKLOADS
 
 # Workloads whose window is minimized on purpose, or whose main thread may
 # stall for seconds on purpose (the history workloads time a blocking action
 # before R7 phase 2, item 6): their drawables are not all shown, so the
 # composited check does not apply and their frame rates are not cited.
-PRESENTATION_EXEMPT = {"viewport-lifecycle", "studio-duplicate", "studio-undo-delete"}
+PRESENTATION_EXEMPT = {"viewport-lifecycle"} | ACTION_WORKLOADS
 
 
 def pacing_handover_settled(record):
@@ -606,9 +611,19 @@ def startup_line(label, report):
                 block.get("stallsOver50Ms", 0), block.get("stallsOver100Ms", 0)))
 
 
+def action_problem(report):
+    """Why an action workload's run did not do what it timed, or None: an
+    action left an error alert (`details.actions[].error`)."""
+    if report.get("workload") not in ACTION_WORKLOADS:
+        return None
+    failed = [a for a in report.get("details", {}).get("actions") or [] if a.get("error")]
+    if failed:
+        return "%d actions left an error, the first %s: %s" % (len(failed), failed[0]["name"], failed[0]["error"])
+    return None
+
+
 def action_stats(report):
-    """`studio-duplicate`/`studio-undo-delete` (R7 phase 2, item 6): per
-    measured action name, the medians of its call, ready, busy and longest
+    """The action workloads (R7 phase 2, item 6): per measured action name, the medians of its call, ready, busy and longest
     stall times in ms, with the sample count; {} for other reports."""
     actions = [a for a in report.get("details", {}).get("actions") or [] if a.get("measured")]
     result = {}
@@ -696,6 +711,9 @@ def summarize(directories):
             stray = stray_input(report)
             if stray:
                 warnings.append("%s: %s" % (label, stray))
+            failed = action_problem(report)
+            if failed:
+                warnings.append("%s: %s" % (label, failed))
     if attributed:
         print()
         print("| report | input events/s | model events | view bodies (most evaluated first) |")

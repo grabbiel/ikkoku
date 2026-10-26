@@ -14,9 +14,9 @@
 //   original-<case>-color.png             Camera.main rendered into a Width x Height target (what the player
 //                                         draws, without UI canvases);
 //   original-<case>-map-geometry.png      the map scene's renderers only, white on black, from a probe camera
-//                                         with Camera.main's pose, field of view and near plane, far = DepthFar;
+//                                         with Camera.main's pose, field of view and near plane, far = DepthFar33 (map 33) or DepthFar34;
 //   original-<case>-map-depth-normals.png the same renderers through Hidden/Internal-DepthNormalsTexture
-//                                         (Unity's EncodeDepthNormal, linear depth over DepthFar).
+//                                         (Unity's EncodeDepthNormal, linear depth over the same far plane).
 // map-trace.json records the map root pose, every map renderer (world matrix and bounds, lightmap index and
 // scale/offset, materials and shaders), all lights, lightmaps, RenderSettings, the SunLightInfo entries and
 // both cameras' matrices. Nothing outside this plug-in's folder is written; no installed cards, saves or
@@ -36,6 +36,31 @@
 //   oracle-<case>-irradiance-lit.f32    the same with the lights at their authored intensities (adds the
 //                                       realtime lights' diffuse term with its shadows).
 // The irradiance pair is rendered twice; oracle-trace.json records the repeat's largest difference.
+//
+// Map 34 (ST-A11 slice 3), when reload-map34-showoff.png is uploaded: one run authors, reads back, captures
+// and measures four cases (no separate oracle phase). "map34-day": an emptied scene, Studio.AddMap(34) with
+// caMap = MapPos/MapRot through MapCtrl.Reflect and Map.sunType = DayTime; "map34-evening" and "map34-night":
+// the reset map transform with Map.sunType = Evening or Night (the sun-type button's path, MapCtrl
+// .OnClickSunLightType); each with a saved camera inside the classroom facing its window wall (map-local
+// -X). "map34-showoff": the uploaded character scene with map 34 added at the reset transform and its own
+// camera. Each case gets the phase B images and, from the same loaded scene, the phase C oracle, both in
+// map-trace.json. Map 34's far plane is DepthFar34: its outside geometry (hills, buildings) reaches about
+// 800 m through the windows, so the 25 m of map 33 would clip it in the probe camera and not in ours.
+//
+// The map-only passes (phase B geometry and depth-normals, phase C irradiance) draw the map's solid
+// renderers: every material RenderType=Opaque (Material.GetTag with fallbacks, the tag the depth-normals
+// replacement selects by). Sky (Skybox/Cubemap), particle (Particles/Alpha Blended) and other non-opaque
+// renderers (Standard Fade/Transparent/Cutout) are disabled for those passes and listed by class; map 33 has
+// none. The oracle also records the runtime fog and draws its measurement passes with RenderSettings.fog off,
+// and adds, rows top-down, at Width x Height:
+//   oracle-<case>-classes.png        the solid renderers in Unlit/Color by class: white = Standard on a baked
+//                                    lightmap, red = Standard without one (light-probe lit), green = any
+//                                    other shader; black = none (the irradiance gate's lightmapped pixels);
+//   oracle-<case>-sky.rgba.f32       only the active sky renderers, their own materials, into a cleared
+//                                    (0,0,0,0) linear ARGBFloat target, far plane SkyFar: Unity's sky radiance
+//                                    and coverage (alpha), float32 RGBA;
+//   oracle-<case>-particles.rgba.f32 only the active particle renderers, the same way (ColorMask RGB leaves
+//                                    alpha 0; RGB is the blended radiance over black).
 using System;
 using System.Collections;
 using System.Collections.Generic;
@@ -49,12 +74,25 @@ using UnityEngine;
 using UnityEngine.SceneManagement;
 [BepInPlugin("org.ikkoku.validation.mapprobe", "Ikkoku map probe", "1.0.0")]
 public sealed class OriginalMapProbe:BaseUnityPlugin {
-    const int MapNo=33,Width=960,Height=720,SettleFrames=30,LoadFrames=3600;
-    const float DepthFar=25f;
+    const int Width=960,Height=720,SettleFrames=30,LoadFrames=3600;
+    const float DepthFar33=25f,DepthFar34=1000f,SkyFar=10000f;
+    const string Map34Upload="reload-map34-showoff.png";
     static readonly Vector3 MapPos=new Vector3(0.3f,-0.05f,-0.5f),MapRot=new Vector3(4f,25f,-3f);
     // A mapRoot-local point near the middle of map 33's room (the converted geometry spans x -2.17..1.46,
     // y 0..3.44, Unity z -1.64..4.19): the saved camera's pivot, so the camera stays inside the room.
     static readonly Vector3 RoomPivot=new Vector3(-0.35f,1.2f,1.27f);
+    // Map 34's classroom spans x -4..4, y 0..3.48, Unity z -4.64..4.77 (map-local); its windows are the -X
+    // wall. Per case: sun type, transformed (MapPos/MapRot) or reset, pivot, pitch, yaw relative to the map,
+    // camera distance behind the pivot.
+    sealed class Map34Case {
+        public string label;public int sunType;public bool transformed;public Vector3 pivot;public float pitch,yaw,distance;
+        public Map34Case(string l,int s,bool t,Vector3 p,float pitchDegrees,float yawDegrees,float d){label=l;sunType=s;transformed=t;pivot=p;pitch=pitchDegrees;yaw=yawDegrees;distance=d;}
+    }
+    static readonly Map34Case[] Map34Cases={
+        new Map34Case("map34-day",0,true,new Vector3(0.5f,1.3f,0.2f),-4f,-70f,2.5f),
+        new Map34Case("map34-evening",1,false,new Vector3(0.5f,1.3f,-0.8f),-6f,-105f,2.5f),
+        new Map34Case("map34-night",2,false,new Vector3(0.3f,1.4f,0.6f),-8f,-80f,2f)};
+    int mapNo=33;float depthFar=DepthFar33;bool withOracle;
     string folder,voiceRepair;
     Studio.Studio studio;
     Map map;
@@ -72,24 +110,31 @@ public sealed class OriginalMapProbe:BaseUnityPlugin {
             try{voiceRepair=RepairVoice();}catch(Exception e){errors.Add("voice repair: "+e);}
         }
         var oracles=Directory.GetFiles(dir,"reload-oracle-*.png");Array.Sort(oracles,StringComparer.Ordinal);
+        var map34=Path.Combine(dir,Map34Upload);
         if(oracles.Length>0) {
             foreach(var scene in oracles) {
                 if(errors.Count!=0)break;
                 var label=Path.GetFileNameWithoutExtension(scene).Substring("reload-oracle-".Length);
+                UseMap(label.StartsWith("map34")?34:33);
                 yield return StartCoroutine(Guard(label,LoadAndOracle(scene,label)));
             }
+        } else if(File.Exists(map34)) {
+            UseMap(34);withOracle=true;
+            foreach(var c in Map34Cases)if(errors.Count==0)yield return StartCoroutine(Guard(c.label,AuthorMap34(c)));
+            if(errors.Count==0)yield return StartCoroutine(Guard("map34-showoff",AuthorShowoff(map34,"map34-showoff")));
         } else {
+            UseMap(33);
             if(errors.Count==0)yield return StartCoroutine(Guard("map33",AuthorMapOnly()));
             var showoff=Path.Combine(dir,"reload-showoff.png");
-            if(errors.Count==0&&File.Exists(showoff))yield return StartCoroutine(Guard("map33-showoff",AuthorShowoff(showoff)));
+            if(errors.Count==0&&File.Exists(showoff))yield return StartCoroutine(Guard("map33-showoff",AuthorShowoff(showoff,"map33-showoff")));
         }
-        try{File.WriteAllText(Path.Combine(folder,oracles.Length>0?"oracle-trace.json":"map-trace.json"),J(K("schemaVersion",1,"mapNo",MapNo,"width",Width,"height",Height,"depthFar",DepthFar,"cases",cases)));}
+        try{File.WriteAllText(Path.Combine(folder,oracles.Length>0?"oracle-trace.json":"map-trace.json"),J(K("schemaVersion",1,"mapNo",mapNo,"width",Width,"height",Height,"depthFar",depthFar,"cases",cases)));}
         catch(Exception e){errors.Add("trace write: "+e);}
         File.WriteAllText(Path.Combine(folder,"status.json"),J(K("error",errors.Count==0?null:String.Join(" | ",errors.ToArray()),"errors",errors,
             "unity",Application.unityVersion,"device",SystemInfo.graphicsDeviceName,"colorSpace",QualitySettings.activeColorSpace.ToString(),
             "voiceRepair",voiceRepair,"cases",new List<string>(cases.Keys),
-            "scope","Original CharaStudio 1.0.4.2 map "+MapNo+" fixtures authored with the player's own writer (Studio.AddMap, caMap through MapCtrl.Reflect, Studio.sceneInfo.Save) and read back through Studio.LoadSceneCoroutine; per case the player's Camera.main colour image, the map scene's renderers as a white silhouette and as Unity depth-normals (linear depth over "+DepthFar+" m) from Camera.main's pose and field of view, and a trace of the map root, renderers, lights, lightmaps, RenderSettings, SunLightInfo and cameras; no installed cards, saves or media"+
-            (oracles.Length>0?". Oracle mode: the uploaded records read back, then a clean colour frame and Unity's decoded lightmap irradiance per pixel (white minus black albedo over 0.96, lights at 0 and as authored)":""))));
+            "scope","Original CharaStudio 1.0.4.2 map "+mapNo+" fixtures authored with the player's own writer (Studio.AddMap, caMap through MapCtrl.Reflect, Studio.sceneInfo.Save) and read back through Studio.LoadSceneCoroutine; per case the player's Camera.main colour image, the map scene's renderers as a white silhouette and as Unity depth-normals (linear depth over "+depthFar+" m) from Camera.main's pose and field of view, and a trace of the map root, renderers, lights, lightmaps, RenderSettings, SunLightInfo and cameras; no installed cards, saves or media"+
+            (oracles.Length>0||withOracle?". Oracle"+(withOracle?" (in the same run, per case)":" mode: the uploaded records read back")+": a clean colour frame, Unity's decoded lightmap irradiance per pixel (white minus black albedo over 0.96, lights at 0 and as authored), the solid renderers' lightmap classes, and the sky and particle renderers alone as linear float radiance":""))));
         Application.Quit();
         for(int i=0;i<3600;i++){yield return null;if(i%30==29)Application.Quit();}
     }
@@ -108,7 +153,8 @@ public sealed class OriginalMapProbe:BaseUnityPlugin {
         var s=Singleton<Studio.Studio>.Instance;var scene=Singleton<Manager.Scene>.Instance;
         return scene.commonSpace!=null&&s.sceneInfo!=null&&s.cameraCtrl!=null&&Camera.main!=null&&scene.AddSceneName==string.Empty&&!scene.IsNowLoadingFade;
     }
-    bool Loaded(){return map.no==MapNo&&!map.isLoading&&map.mapRoot!=null&&studio.sceneInfo.map==MapNo;}
+    void UseMap(int no){mapNo=no;depthFar=no==34?DepthFar34:DepthFar33;}
+    bool Loaded(){return map.no==mapNo&&!map.isLoading&&map.mapRoot!=null&&studio.sceneInfo.map==mapNo;}
     // The reload probe's environment repair: this player copy's Manager.Voice.Awake() threw during start-up,
     // so a character load's range check throws on the null voice table unless it is replaced by an empty one.
     static string RepairVoice() {
@@ -126,9 +172,9 @@ public sealed class OriginalMapProbe:BaseUnityPlugin {
         for(int i=0;i<3;i++)yield return null;
         if(studio.dicObjectCtrl.Count!=0)throw new Exception("map33 expects an empty scene after InitScene(false), found "+studio.dicObjectCtrl.Count+" objects");
         float start=Time.realtimeSinceStartup;int frames=0;
-        studio.AddMap(MapNo,false,false,true);
+        studio.AddMap(mapNo,false,false,true);
         for(;frames<LoadFrames&&!Loaded();frames++)yield return null;
-        if(!Loaded())throw new Exception("map "+MapNo+" did not load within "+LoadFrames+" frames (no "+map.no+", isLoading "+map.isLoading+")");
+        if(!Loaded())throw new Exception("map "+mapNo+" did not load within "+LoadFrames+" frames (no "+map.no+", isLoading "+map.isLoading+")");
         var added=MapRecord();
         var ca=studio.sceneInfo.caMap;ca.pos=MapPos;ca.rot=MapRot;Singleton<MapCtrl>.Instance.Reflect();
         var root=map.mapRoot.transform;
@@ -143,7 +189,32 @@ public sealed class OriginalMapProbe:BaseUnityPlugin {
         var reload=ReloadAndCapture(scene,"map33",authored);
         while(reload.MoveNext())yield return reload.Current;
     }
-    IEnumerator AuthorShowoff(string source) {
+    // Map 34: one sun-type case (see the header).
+    IEnumerator AuthorMap34(Map34Case c) {
+        studio.InitScene(false);
+        for(int i=0;i<3;i++)yield return null;
+        if(studio.dicObjectCtrl.Count!=0)throw new Exception(c.label+" expects an empty scene after InitScene(false), found "+studio.dicObjectCtrl.Count+" objects");
+        float start=Time.realtimeSinceStartup;int frames=0;
+        studio.AddMap(mapNo,false,false,true);
+        for(;frames<LoadFrames&&!Loaded();frames++)yield return null;
+        if(!Loaded())throw new Exception("map "+mapNo+" did not load within "+LoadFrames+" frames (no "+map.no+", isLoading "+map.isLoading+")");
+        var added=MapRecord();
+        if(c.transformed){var ca=studio.sceneInfo.caMap;ca.pos=MapPos;ca.rot=MapRot;Singleton<MapCtrl>.Instance.Reflect();}
+        map.sunType=(SunLightInfo.Info.Type)c.sunType;
+        var root=map.mapRoot.transform;
+        var view=new Studio.CameraControl.CameraData();
+        view.pos=root.TransformPoint(c.pivot);view.rotate=new Vector3(c.pitch,(c.transformed?MapRot.y:0f)+c.yaw,0f);view.distance=new Vector3(0f,0f,-c.distance);view.parse=45f;
+        studio.cameraCtrl.Import(view);
+        for(int i=0;i<2;i++)yield return new WaitForEndOfFrame();
+        var authored=K("addMapFrames",frames,"addMapSeconds",Time.realtimeSinceStartup-start,"afterAddMap",added,"reflected",MapRecord(),
+            "requestedPosition",c.transformed?V(MapPos):V(Vector3.zero),"requestedRotation",c.transformed?V(MapRot):V(Vector3.zero),
+            "requestedSunType",c.sunType,"activeSkies",ActivePaths("sky"),
+            "savedCameraData",K("pos",V(view.pos),"rotate",V(view.rotate),"distance",V(view.distance),"parse",view.parse));
+        var scene=SaveScene("scene-"+c.label+".png");
+        var reload=ReloadAndCapture(scene,c.label,authored);
+        while(reload.MoveNext())yield return reload.Current;
+    }
+    IEnumerator AuthorShowoff(string source,string label) {
         studio.InitScene(false);
         for(int i=0;i<3;i++)yield return null;
         var done=new bool[1];int frames=0;
@@ -153,15 +224,15 @@ public sealed class OriginalMapProbe:BaseUnityPlugin {
         int sourceMap=studio.sceneInfo.map,objects=studio.dicObjectCtrl.Count;
         for(int i=0;i<SettleFrames;i++)yield return null;
         float start=Time.realtimeSinceStartup;int mapFrames=0;
-        studio.AddMap(MapNo,false,false,true); // SetupMap resets caMap: a newly added map sits at the origin
+        studio.AddMap(mapNo,false,false,true); // SetupMap resets caMap: a newly added map sits at the origin
         for(;mapFrames<LoadFrames&&!Loaded();mapFrames++)yield return null;
-        if(!Loaded())throw new Exception("map "+MapNo+" did not load into the showoff scene within "+LoadFrames+" frames");
+        if(!Loaded())throw new Exception("map "+mapNo+" did not load into the showoff scene within "+LoadFrames+" frames");
         for(int i=0;i<2;i++)yield return new WaitForEndOfFrame();
         var authored=K("source",Path.GetFileName(source),"sourceSHA256",Sha256File(source),"sourceMap",sourceMap,"sourceLoadFrames",frames,
             "objects",objects,"addMapFrames",mapFrames,"addMapSeconds",Time.realtimeSinceStartup-start,"afterAddMap",MapRecord(),
             "savedCameraData",CameraData(studio.cameraCtrl.Export()));
-        var scene=SaveScene("scene-map33-showoff.png");
-        var reload=ReloadAndCapture(scene,"map33-showoff",authored);
+        var scene=SaveScene("scene-"+label+".png");
+        var reload=ReloadAndCapture(scene,label,authored);
         while(reload.MoveNext())yield return reload.Current;
     }
     // The reload probe's save rule: every object's save preprocessing, and the view belongs to the record.
@@ -179,15 +250,17 @@ public sealed class OriginalMapProbe:BaseUnityPlugin {
         var done=new bool[1];int frames=0;float start=Time.realtimeSinceStartup;
         StartCoroutine(Track(this,studio.LoadSceneCoroutine(scene),done));
         for(;frames<LoadFrames&&!(done[0]&&Loaded());frames++)yield return null;
-        if(!(done[0]&&Loaded()))throw new Exception(label+": the saved scene did not load map "+MapNo+" within "+LoadFrames+" frames (done "+done[0]+", no "+map.no+")");
+        if(!(done[0]&&Loaded()))throw new Exception(label+": the saved scene did not load map "+mapNo+" within "+LoadFrames+" frames (done "+done[0]+", no "+map.no+")");
         float seconds=Time.realtimeSinceStartup-start;
         var afterLoad=MapRecord();
         for(int i=0;i<SettleFrames;i++)yield return null;
         yield return new WaitForEndOfFrame();
         var capture=Capture(label);
-        cases[label]=K("label",label,"scene",Path.GetFileName(scene),"sceneSHA256",Sha256File(scene),"authored",authored,"released",released,
+        var record=K("label",label,"scene",Path.GetFileName(scene),"sceneSHA256",Sha256File(scene),"authored",authored,"released",released,
             "loadFrames",frames,"loadSeconds",seconds,"afterLoad",afterLoad,"settled",MapRecord(),"objects",studio.dicObjectCtrl.Count,
             "loadedCameraData",CameraData(studio.cameraCtrl.Export()),"capture",capture);
+        if(withOracle)record["oracle"]=Oracle(label);
+        cases[label]=record;
     }
     Dictionary<string,object> Capture(string label) {
         var main=Camera.main;if(main==null)throw new Exception("no Camera.main to capture");
@@ -204,21 +277,24 @@ public sealed class OriginalMapProbe:BaseUnityPlugin {
         var effects=new List<object>();
         foreach(var b in main.GetComponents<Behaviour>())effects.Add(K("type",b.GetType().FullName,"enabled",b.enabled));
         var mapScene=map.mapRoot.scene;
-        var mapRenderers=new List<Renderer>();var hidden=new List<Renderer>();
+        var mapRenderers=new List<Renderer>();var hidden=new List<Renderer>();var excluded=new List<Renderer>();
+        var mapRecords=new List<object>();
         foreach(var r in FindObjectsOfType<Renderer>()) {
-            if(r.gameObject.scene==mapScene){if(r.enabled&&r.gameObject.activeInHierarchy)mapRenderers.Add(r);}
+            if(r.gameObject.scene==mapScene) {
+                if(!(r.enabled&&r.gameObject.activeInHierarchy))continue;
+                var kind=RendererClass(r);mapRecords.Add(RendererRecord(r,kind));
+                if(kind=="solid")mapRenderers.Add(r);else{r.enabled=false;excluded.Add(r);}
+            }
             else if(r.enabled){r.enabled=false;hidden.Add(r);}
         }
         var probeObject=new GameObject("IkkokuMapProbeCamera");var cam=probeObject.AddComponent<Camera>();cam.enabled=false;
         cam.transform.position=main.transform.position;cam.transform.rotation=main.transform.rotation;
-        cam.fieldOfView=main.fieldOfView;cam.nearClipPlane=main.nearClipPlane;cam.farClipPlane=DepthFar;cam.aspect=(float)Width/Height;
+        cam.fieldOfView=main.fieldOfView;cam.nearClipPlane=main.nearClipPlane;cam.farClipPlane=depthFar;cam.aspect=(float)Width/Height;
         cam.clearFlags=CameraClearFlags.SolidColor;cam.backgroundColor=Color.black;cam.allowHDR=false;cam.allowMSAA=false;cam.cullingMask=~0;
         cam.renderingPath=RenderingPath.Forward;cam.useOcclusionCulling=false;cam.targetTexture=target;
         var probeRecord=CameraRecord(cam);
         var saved=new Dictionary<Renderer,Material[]>();
         string whiteShader;var white=WhiteMaterial(out whiteShader);
-        var mapRecords=new List<object>();
-        foreach(var r in mapRenderers)mapRecords.Add(RendererRecord(r));
         try {
             foreach(var r in mapRenderers){saved[r]=r.sharedMaterials;var m=new Material[r.sharedMaterials.Length];for(int i=0;i<m.Length;i++)m[i]=white;r.sharedMaterials=m;}
             cam.Render();SaveTarget(target,"original-"+label+"-map-geometry.png");
@@ -231,10 +307,12 @@ public sealed class OriginalMapProbe:BaseUnityPlugin {
         } finally {
             foreach(var pair in saved)pair.Key.sharedMaterials=pair.Value;
             foreach(var r in hidden)r.enabled=true;
+            foreach(var r in excluded)r.enabled=true;
             cam.targetTexture=null;Destroy(probeObject);target.Release();Destroy(target);Destroy(white);
         }
         return K("main",mainRecord,"mainRenderMilliseconds",timer.Elapsed.TotalMilliseconds,"cameras",cameras,"mainBehaviours",effects,
             "probe",probeRecord,"whiteShader",whiteShader,"hiddenRenderers",hidden.Count,"mapRenderers",mapRecords,
+            "solidRenderers",mapRenderers.Count,"excludedRenderers",ClassCounts(excluded),
             "mapScene",K("name",mapScene.name,"path",mapScene.path,"isActive",SceneManager.GetActiveScene()==mapScene,"roots",Roots(mapScene)),
             "lights",Lights(),"lightmaps",Lightmaps(),"renderSettings",RenderSettingsRecord(),"sunLightInfo",SunRecord(),
             "quality",K("pixelLightCount",QualitySettings.pixelLightCount,"shadows",QualitySettings.shadows.ToString(),"antiAliasing",QualitySettings.antiAliasing,
@@ -248,7 +326,7 @@ public sealed class OriginalMapProbe:BaseUnityPlugin {
         var done=new bool[1];int frames=0;float start=Time.realtimeSinceStartup;
         StartCoroutine(Track(this,studio.LoadSceneCoroutine(scene),done));
         for(;frames<LoadFrames&&!(done[0]&&Loaded());frames++)yield return null;
-        if(!(done[0]&&Loaded()))throw new Exception(label+": the record did not load map "+MapNo+" within "+LoadFrames+" frames (done "+done[0]+", no "+map.no+")");
+        if(!(done[0]&&Loaded()))throw new Exception(label+": the record did not load map "+mapNo+" within "+LoadFrames+" frames (done "+done[0]+", no "+map.no+")");
         float seconds=Time.realtimeSinceStartup-start;
         for(int i=0;i<SettleFrames;i++)yield return null;
         yield return new WaitForEndOfFrame();
@@ -263,16 +341,27 @@ public sealed class OriginalMapProbe:BaseUnityPlugin {
         var hdr=new RenderTexture(Width,Height,24,RenderTextureFormat.ARGBFloat,RenderTextureReadWrite.Linear);hdr.antiAliasing=1;hdr.Create();
         var mapScene=map.mapRoot.scene;
         var mapRenderers=new List<Renderer>();var hidden=new List<Renderer>();
+        var skies=new List<Renderer>();var particles=new List<Renderer>();var others=new List<Renderer>();
         var saved=new Dictionary<Renderer,Material[]>();
         var lights=FindObjectsOfType<Light>();var intensities=new float[lights.Length];for(int i=0;i<lights.Length;i++)intensities[i]=lights[i].intensity;
-        Material white=null,black=null;
+        bool runtimeFog=RenderSettings.fog;
+        var fogRecord=K("fog",RenderSettings.fog,"fogMode",RenderSettings.fogMode.ToString(),"fogColor",C(RenderSettings.fogColor),
+            "fogStartDistance",RenderSettings.fogStartDistance,"fogEndDistance",RenderSettings.fogEndDistance,"fogDensity",RenderSettings.fogDensity);
+        Material white=null,black=null;var classMaterials=new List<Material>();
         try {
             // The clean colour frame: Camera.main's settings, none of its image-effect components.
             cam.CopyFrom(main);cam.enabled=false;cam.aspect=(float)Width/Height;cam.targetTexture=ldr;
             var cleanRecord=CameraRecord(cam);
             cam.Render();cam.targetTexture=null;SaveTarget(ldr,"oracle-"+label+"-clean-color.png");
+            // The measurement passes: fog off, the map's renderers only, the solid ones unless a pass says otherwise.
+            RenderSettings.fog=false;
             foreach(var r in FindObjectsOfType<Renderer>()) {
-                if(r.gameObject.scene==mapScene){if(r.enabled&&r.gameObject.activeInHierarchy)mapRenderers.Add(r);}
+                if(r.gameObject.scene==mapScene) {
+                    if(!(r.enabled&&r.gameObject.activeInHierarchy))continue;
+                    var kind=RendererClass(r);
+                    if(kind=="solid")mapRenderers.Add(r);
+                    else{r.enabled=false;(kind=="sky"?skies:kind=="particle"?particles:others).Add(r);}
+                }
                 else if(r.enabled){r.enabled=false;hidden.Add(r);}
             }
             // The first (by name) keyword-free opaque Standard material the map draws with.
@@ -297,6 +386,38 @@ public sealed class OriginalMapProbe:BaseUnityPlugin {
             var litStats=new Dictionary<string,object>();
             var lit=Difference(cam,hdr,mapRenderers,white,black,litStats);
             WriteFloats(lit,"oracle-"+label+"-irradiance-lit.f32");
+            // Which solid pixels the irradiance gate may compare: Standard on a baked lightmap.
+            var lightmapped=ClassMaterial(Color.white,classMaterials);var probeLit=ClassMaterial(Color.red,classMaterials);var other=ClassMaterial(Color.green,classMaterials);
+            int lightmapCount=LightmapSettings.lightmaps==null?0:LightmapSettings.lightmaps.Length;
+            var classCounts=new Dictionary<string,object>();int lightmappedRenderers=0,probeLitRenderers=0,otherSlots=0;
+            foreach(var r in mapRenderers) {
+                bool baked=r.lightmapIndex>=0&&r.lightmapIndex<lightmapCount;
+                var m=new Material[r.sharedMaterials.Length];
+                for(int i=0;i<m.Length;i++){var source=saved[r][i];bool standard=source!=null&&source.shader!=null&&source.shader.name=="Standard";
+                    m[i]=standard?(baked?lightmapped:probeLit):other;if(!standard)otherSlots++;}
+                if(baked)lightmappedRenderers++;else probeLitRenderers++;
+                r.sharedMaterials=m;
+            }
+            classCounts["lightmappedRenderers"]=lightmappedRenderers;classCounts["probeLitRenderers"]=probeLitRenderers;classCounts["otherShaderSlots"]=otherSlots;
+            cam.allowHDR=false;cam.targetTexture=ldr;cam.Render();cam.targetTexture=null;cam.allowHDR=true;
+            SaveTarget(ldr,"oracle-"+label+"-classes.png");
+            foreach(var pair in saved)pair.Key.sharedMaterials=pair.Value;
+            // The sky and the particles, each alone with its own materials, over (0,0,0,0).
+            var groups=new Dictionary<string,object>();
+            cam.backgroundColor=new Color(0f,0f,0f,0f);cam.farClipPlane=SkyFar;
+            foreach(var r in mapRenderers)r.enabled=false;
+            foreach(var pass in new[]{"sky","particles"}) {
+                var set=pass=="sky"?skies:particles;
+                if(set.Count==0){groups[pass]=K("written",false);continue;}
+                foreach(var r in set)r.enabled=true;
+                var rgba=RenderAlone(cam,hdr);
+                foreach(var r in set)r.enabled=false;
+                var file="oracle-"+label+"-"+pass+".rgba.f32";WriteFloats(rgba,file);
+                var materials=new List<object>();foreach(var r in set)materials.Add(K("path",TPath(r.transform),"materials",GroupMaterials(r)));
+                groups[pass]=K("written",true,"file",file,"layout","float32 little-endian RGBA, rows top-down","renderers",materials,"farClipPlane",SkyFar,
+                    "background","(0,0,0,0)","coveredPixels",Covered(rgba,pass=="sky"));
+            }
+            foreach(var r in mapRenderers)r.enabled=true;
             var lightmapTextures=new List<object>();
             foreach(var d in LightmapSettings.lightmaps)foreach(var t in new[]{d.lightmapColor,d.lightmapDir})
                 if(t!=null)lightmapTextures.Add(K("name",t.name,"filterMode",t.filterMode.ToString(),"anisoLevel",t.anisoLevel,"wrapMode",t.wrapMode.ToString(),
@@ -305,10 +426,17 @@ public sealed class OriginalMapProbe:BaseUnityPlugin {
                 "probe",probeRecord,"template",K("name",template.name,"shader",template.shader.name,"keywords",template.shaderKeywords,"renderQueue",template.renderQueue),
                 "overrides",K("albedo","_Color and _MainTex white or black","metallic",0,"glossiness",0,"keywords",white.shaderKeywords),
                 "mapRenderers",mapRenderers.Count,"hiddenRenderers",hidden.Count,
+                "excludedRenderers",K("sky",skies.Count,"particle",particles.Count,"nonOpaque",others.Count),
+                "runtimeFog",fogRecord,"measurementFog",false,
                 "lights",Lights(),"lightIntensities",intensities,
                 "irradiance",K("file","oracle-"+label+"-irradiance.f32","layout","float32 little-endian RGB, rows top-down","width",Width,"height",Height,
                     "lights","all at intensity 0","divisor",OneMinusDielectricSpec,"stats",unlitStats,"repeatMaximumDifference",repeatMax),
                 "irradianceLit",K("file","oracle-"+label+"-irradiance-lit.f32","lights","as authored","stats",litStats),
+                "classes",K("image","oracle-"+label+"-classes.png","white","Standard on a baked lightmap","red","Standard without a lightmap (light probes)",
+                    "green","another shader","lightmaps",lightmapCount,"counts",classCounts),
+                "sky",groups["sky"],"particles",groups["particles"],
+                "quality",K("softParticles",QualitySettings.softParticles,"anisotropicFiltering",QualitySettings.anisotropicFiltering.ToString()),
+                "mainDepthTextureMode",main.depthTextureMode.ToString(),"mainFarClipPlane",main.farClipPlane,
                 "unity_Lightmap_HDR",V4(Shader.GetGlobalVector("unity_Lightmap_HDR")),
                 "colorSpace",QualitySettings.activeColorSpace.ToString(),"lightmapsMode",LightmapSettings.lightmapsMode.ToString(),
                 "lightmapTextures",lightmapTextures,"anisotropicFiltering",QualitySettings.anisotropicFiltering.ToString(),
@@ -316,10 +444,70 @@ public sealed class OriginalMapProbe:BaseUnityPlugin {
         } finally {
             foreach(var pair in saved)pair.Key.sharedMaterials=pair.Value;
             for(int i=0;i<lights.Length;i++)if(lights[i]!=null)lights[i].intensity=intensities[i];
-            foreach(var r in hidden)r.enabled=true;
+            RenderSettings.fog=runtimeFog;
+            foreach(var r in mapRenderers)if(r!=null)r.enabled=true;
+            foreach(var set in new[]{hidden,skies,particles,others})foreach(var r in set)if(r!=null)r.enabled=true;
             cam.targetTexture=null;Destroy(probeObject);ldr.Release();Destroy(ldr);hdr.Release();Destroy(hdr);
             if(white!=null)Destroy(white);if(black!=null)Destroy(black);
+            foreach(var m in classMaterials)Destroy(m);
         }
+    }
+    // A renderer's class for the map-only passes (see the header): "sky", "particle", "solid" (every material
+    // RenderType=Opaque) or "nonOpaque".
+    static string RendererClass(Renderer r) {
+        bool sky=false,particle=false,opaque=r.sharedMaterials.Length>0;
+        foreach(var m in r.sharedMaterials) {
+            if(m==null||m.shader==null){opaque=false;continue;}
+            if(m.shader.name=="Skybox/Cubemap")sky=true;else if(m.shader.name=="Particles/Alpha Blended")particle=true;
+            if(m.GetTag("RenderType",true)!="Opaque")opaque=false;
+        }
+        return sky?"sky":particle?"particle":opaque?"solid":"nonOpaque";
+    }
+    static Dictionary<string,object> ClassCounts(List<Renderer> renderers) {
+        var d=new Dictionary<string,object>();
+        foreach(var r in renderers){var k=RendererClass(r);d[k]=(d.ContainsKey(k)?(int)d[k]:0)+1;}
+        return d;
+    }
+    List<object> ActivePaths(string kind) {
+        var paths=new List<object>();
+        foreach(var r in FindObjectsOfType<Renderer>())if(r.gameObject.scene==map.mapRoot.scene&&r.enabled&&r.gameObject.activeInHierarchy&&RendererClass(r)==kind)paths.Add(TPath(r.transform));
+        return paths;
+    }
+    // The material inputs the sky and particle formulas read, as the player holds them.
+    static List<object> GroupMaterials(Renderer r) {
+        var list=new List<object>();
+        foreach(var m in r.sharedMaterials) {
+            if(m==null){list.Add(null);continue;}
+            var d=K("name",m.name,"shader",m.shader==null?null:m.shader.name,"renderQueue",m.renderQueue,"keywords",m.shaderKeywords,"renderType",m.GetTag("RenderType",true));
+            foreach(var p in new[]{"_Tint","_TintColor","_Color"})if(m.HasProperty(p))d[p]=C(m.GetColor(p));
+            foreach(var p in new[]{"_Exposure","_Rotation","_InvFade"})if(m.HasProperty(p))d[p]=m.GetFloat(p);
+            d["_Tex_HDR"]=V4(m.GetVector("_Tex_HDR"));
+            foreach(var p in new[]{"_Tex","_MainTex"})if(m.HasProperty(p)){var t=m.GetTexture(p);d[p]=t==null?null:K("name",t.name,"dimension",t.dimension.ToString(),"width",t.width,"height",t.height,
+                "filterMode",t.filterMode.ToString(),"anisoLevel",t.anisoLevel,"wrapMode",t.wrapMode.ToString(),"mipMapBias",t.mipMapBias,
+                "format",t is Cubemap?((Cubemap)t).format.ToString():t is Texture2D?((Texture2D)t).format.ToString():null,
+                "mipmapCount",t is Cubemap?((Cubemap)t).mipmapCount:t is Texture2D?((Texture2D)t).mipmapCount:0);}
+            list.Add(d);
+        }
+        return list;
+    }
+    static Material ClassMaterial(Color color,List<Material> owned) {
+        string name;var m=WhiteMaterial(out name);m.color=color;owned.Add(m);return m;
+    }
+    float[] RenderAlone(Camera cam,RenderTexture target) {
+        cam.targetTexture=target;cam.Render();cam.targetTexture=null;
+        var previous=RenderTexture.active;RenderTexture.active=target;
+        var read=new Texture2D(Width,Height,TextureFormat.RGBAFloat,false,true);read.ReadPixels(new Rect(0,0,Width,Height),0,0);read.Apply(false,false);
+        RenderTexture.active=previous;
+        var pixels=read.GetPixels();Destroy(read);
+        var rgba=new float[Width*Height*4];
+        for(int y=0;y<Height;y++)for(int x=0;x<Width;x++){var c=pixels[(Height-1-y)*Width+x];int o=(y*Width+x)*4;rgba[o]=c.r;rgba[o+1]=c.g;rgba[o+2]=c.b;rgba[o+3]=c.a;}
+        return rgba;
+    }
+    // Sky coverage is its alpha (the fragment writes 1); a particle pixel is covered when its RGB is not 0.
+    static int Covered(float[] rgba,bool byAlpha) {
+        int n=0;
+        for(int i=0;i<rgba.Length;i+=4)if(byAlpha?rgba[i+3]>0.5f:(rgba[i]!=0f||rgba[i+1]!=0f||rgba[i+2]!=0f))n++;
+        return n;
     }
     static bool NoKeywords(Material m){foreach(var k in m.shaderKeywords)if(!String.IsNullOrEmpty(k))return false;return true;}
     // A copy of the map's keyword-free Standard material (so its compiled lightmapped variants exist in this
@@ -374,11 +562,11 @@ public sealed class OriginalMapProbe:BaseUnityPlugin {
             "caMap",K("pos",V(ca.pos),"rot",V(ca.rot),"scale",V(ca.scale)),"expectedRotation",Q(Quaternion.Euler(ca.rot)),"mapRoot",rootRecord,
             "activeScene",SceneManager.GetActiveScene().name);
     }
-    static Dictionary<string,object> RendererRecord(Renderer r) {
+    static Dictionary<string,object> RendererRecord(Renderer r,string kind) {
         var filter=r.GetComponent<MeshFilter>();var mesh=filter==null?null:filter.sharedMesh;
         var materials=new List<object>();
         foreach(var m in r.sharedMaterials)materials.Add(m==null?null:K("name",m.name,"shader",m.shader==null?null:m.shader.name,"renderQueue",m.renderQueue));
-        return K("path",TPath(r.transform),"type",r.GetType().Name,"layer",r.gameObject.layer,"localToWorld",M(r.localToWorldMatrix),
+        return K("path",TPath(r.transform),"class",kind,"type",r.GetType().Name,"layer",r.gameObject.layer,"localToWorld",M(r.localToWorldMatrix),
             "boundsMin",V(r.bounds.min),"boundsMax",V(r.bounds.max),"lightmapIndex",r.lightmapIndex,"lightmapScaleOffset",V4(r.lightmapScaleOffset),
             "isPartOfStaticBatch",r.isPartOfStaticBatch,"shadowCasting",r.shadowCastingMode.ToString(),"receiveShadows",r.receiveShadows,"materials",materials,
             "mesh",mesh==null?null:mesh.name,"vertexCount",mesh==null?0:mesh.vertexCount,"subMeshCount",mesh==null?0:mesh.subMeshCount,

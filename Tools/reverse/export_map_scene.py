@@ -33,6 +33,19 @@ material colours), OneMinusReflectivityFromMetallic of `_Metallic` (or of the
 `_MetallicGlossMap` red channel's mean under `_METALLICGLOSSMAP`) and the `_EmissionMap` image.
 provenance.json also records the lights, RenderSettings and SunLightInfo entries.
 
+Block images and the sky (slice 3): a DXT1/DXT5 base or emission texture is also written as
+its serialized blocks (`<n>_<name>.bc1|bc3`, every mip level) with the block rows and each
+block's pixel rows reversed, so the file is top-down like the PNG; that is lossless, and the
+top level is checked to decode to exactly the PNG. The glTF's top-level extras
+`ikkokuBlockImages` list them (the PNG stays each image's uri) and the cubes. Each
+Skybox/Cubemap renderer (the built-in Sphere, read from the player's "unity default resources"
+given by --builtin-resources) becomes its own mesh in object space under a node with its
+matrix; its material is BLEND with a zero base colour and `ikkokuSkybox` extras (cube, _Tint
+and _Exposure as a Linear player uploads them, _Rotation, unity_ColorSpaceDouble); the cube's
+six faces are written verbatim (`cube-<k>-<name>.<format>`, D3D/Metal face order and rows,
+checked by the face seams). Particles/Alpha Blended materials carry `ikkokuParticle` (the
+linearized _TintColor) for the app's particle draw.
+
 Proprietary output belongs in .local, never in the repository.
 """
 from __future__ import annotations
@@ -73,18 +86,35 @@ MAP_SHADER_RULES = {
     },
     "Particles/Alpha Blended": {
         "parity": "approximated",
-        # Unity built-in: 2 * _TintColor * vertex color * _MainTex, Blend SrcAlpha OneMinusSrcAlpha,
-        # Cull Off, ZWrite Off, no lighting.
-        "dropped": ["soft particles", "ZWrite Off ordering"],
+        # Unity built-in (Particle Alpha Blend.shader v5.6.2f1): 2 * vertex color * _TintColor * _MainTex,
+        # Blend SrcAlpha OneMinusSrcAlpha, ColorMask RGB, Cull Off, ZWrite Off, no lighting, fog.
+        # The app draws that formula (map_fragment's particle flag, ST-A11 slice 3); the merged mesh
+        # sorts as one draw instead of per renderer.
+        "dropped": ["soft particles", "fog", "per-renderer transparency sorting"],
     },
 }
-# Shaders the map scene references that draw nothing in Studio's map path.
+# Shaders the map scene references that draw nothing as merged map geometry. Skybox/Cubemap
+# renderers are exported separately as the sky (`MapExporter.sky`, slice 3); Skybox/Procedural
+# is only RenderSettings.skybox, which Studio's colour-cleared camera never draws.
 NON_GEOMETRY_SHADERS = {"Skybox/Procedural", "Skybox/Cubemap"}
+SKYBOX_CUBEMAP = "Skybox/Cubemap"
+# Shaders the app draws by their recovered formula (the catalog does not list them as approximated).
+DRAWN_SHADERS = {"Standard", "Skybox/Cubemap", "Particles/Alpha Blended"}
+# What the app's sky pass leaves out of Skybox/Cubemap: nothing in the fragment (the shader has
+# no fog or lighting); the sky gate compares its radiance with the original player's.
+SKY_DROPPED = []
+# unity_ColorSpaceDouble.rgb in a Linear player (UnityCG.cginc L26, v5.6.2f1).
+COLOR_SPACE_DOUBLE_LINEAR = 4.59479380
+# _Tex_HDR (DecodeHDR's decodeInstructions) for an LDR texture: multiplier 1, exponent 1, and
+# w 0, so the texel alpha does not scale RGB (UnityCG.cginc L497-L512). The sky gate checks it.
+LDR_DECODE_INSTRUCTIONS = [1.0, 1.0, 0.0, 0.0]
 # The original player's QualitySettings.activeColorSpace (Unity 5.6.2f1, D3D11), which the
 # phase-B probe recorded in its status.json; it selects the Linear RGBM decode.
 PLAYER_COLOR_SPACE = "Linear"
 # Unity TextureFormat values whose serialized data the app uploads as block textures.
 BLOCK_FORMATS = {10: ("BC1", 8), 12: ("BC3", 16)}  # DXT1, DXT5
+# Cubemaps are uploaded as serialized (never row-flipped), so BC7 is fine there too.
+CUBE_FORMATS = {10: ("BC1", 8), 12: ("BC3", 16), 25: ("BC7", 16)}
 # LightmapSettings.m_LightmapsMode values the app draws.
 LIGHTMAPS_MODES = {0: "NonDirectional", 1: "CombinedDirectional"}
 # Texture2D.m_LightmapFormat (TextureUsageMode) 2: an RGBM-encoded lightmap.
@@ -295,6 +325,106 @@ def lightmaps_extras(mode, entries):
             "colorSpace": PLAYER_COLOR_SPACE, "rows": "bottomUp", "maps": maps}
 
 
+# ---------------------------------------------------------------- block images and the sky (slice 3)
+
+def flip_block_rows(data, width, height, mip_count, format_name):
+    """BC1/BC3 blocks of every mip level with the image's rows reversed, losslessly.
+
+    Unity serializes a 2D texture's rows bottom-up; the PNG and every TEXCOORD_0 the converter
+    writes are top-down. A block's endpoints stay; its pixel rows reverse: BC1/BC3 colour indices
+    are one byte per row (bytes 4-7 of the colour block), BC3 alpha indices 12 bits per row
+    (48 bits little-endian after the two alpha endpoints). Each level's block rows reverse too.
+    A level under four pixels high is one block row: only its valid rows reverse. Every texel
+    therefore decodes to the same value at its mirrored position (checked against the PNG)."""
+    import numpy as np
+    block_bytes = {"BC1": 8, "BC3": 16}[format_name]
+    parts, offset, w, h = [], 0, width, height
+    for _ in range(mip_count):
+        bw, bh = max(1, (w + 3) // 4), max(1, (h + 3) // 4)
+        size = bw * bh * block_bytes
+        if offset + size > len(data):
+            raise ValueError(f"{len(data)} bytes are too few for {format_name} {width}x{height} with {mip_count} mips")
+        if h > 4 and h % 4:
+            raise ValueError(f"a {w}x{h} level is not a whole number of block rows")
+        rows = min(h, 4)
+        level = np.frombuffer(data, np.uint8, size, offset).reshape(bh, bw, block_bytes)[::-1].copy()
+        color = level[..., block_bytes - 8:]
+        color[..., 4:4 + rows] = color[..., 4:4 + rows][..., ::-1].copy()
+        if format_name == "BC3":
+            bits = np.zeros((bh, bw), np.uint64)
+            for i in range(6):
+                bits |= level[..., 2 + i].astype(np.uint64) << np.uint64(8 * i)
+            groups = [(bits >> np.uint64(12 * r)) & np.uint64(0xFFF) for r in range(4)]
+            groups[:rows] = groups[:rows][::-1]
+            bits = np.zeros((bh, bw), np.uint64)
+            for r, group in enumerate(groups):
+                bits |= group << np.uint64(12 * r)
+            for i in range(6):
+                level[..., 2 + i] = ((bits >> np.uint64(8 * i)) & np.uint64(0xFF)).astype(np.uint8)
+        parts.append(level.tobytes())
+        offset += size
+        w, h = max(1, w // 2), max(1, h // 2)
+    if offset != len(data):
+        raise ValueError(f"{len(data)} bytes, {format_name} {width}x{height} with {mip_count} mips needs {offset}")
+    return b"".join(parts)
+
+
+def decode_blocks(data, width, height, format_name):
+    """The top level of serialized blocks as BGRA bytes, rows in stored order (texture2ddecoder,
+    the decoder UnityPy's PNG export uses)."""
+    import texture2ddecoder
+    block_bytes = {"BC1": 8, "BC3": 16, "BC7": 16}[format_name]
+    size = max(1, (width + 3) // 4) * max(1, (height + 3) // 4) * block_bytes
+    decode = {"BC1": texture2ddecoder.decode_bc1, "BC3": texture2ddecoder.decode_bc3, "BC7": texture2ddecoder.decode_bc7}[format_name]
+    return decode(bytes(data[:size]), width, height)
+
+
+def cube_seam_errors(faces):
+    """Mean absolute RGB difference along five shared cube edges, for faces stored with row 0 at
+    the top (D3D/Metal: +X samples u = -z, v = -y; +Y u = x, v = z; +Z u = x, v = -y; -Z u = -x,
+    v = -y) and for the same faces with their rows reversed. faces: six HxWx3 float arrays in
+    the order +X, -X, +Y, -Y, +Z, -Z. A cube the GPU samples correctly as stored has near-zero
+    seams as stored."""
+    import numpy as np
+
+    def seams(px, _nx, py, _ny, pz, nz):
+        n = px.shape[0] - 1
+        pairs = [(px[0, :], py[::-1, n]), (pz[0, :], py[n, :]), (nz[0, :], py[0, ::-1]),
+                 (px[:, n], nz[:, 0]), (pz[:, n], px[:, 0])]
+        return float(np.mean([np.abs(a - b).mean() for a, b in pairs]))
+
+    return {"asStored": seams(*faces), "rowsFlipped": seams(*[f[::-1] for f in faces])}
+
+
+def engine_matrix(m):
+    """A row-major Unity-space 4x4 as the engine-basis glTF node matrix (column-major):
+    B * M * B with B = diag(1, 1, -1, 1), the same Z reflection `reflect` applies to points."""
+    sign = [1, 1, -1, 1]
+    return [m[row][column] * sign[row] * sign[column] for column in range(4) for row in range(4)]
+
+
+def sky_extras(colors, floats, cube_index):
+    """`ikkokuSkybox` for a Skybox/Cubemap material (Skybox-Cubed.shader v5.6.2f1): the fragment is
+    DecodeHDR(texCUBE(_Tex, v)) * _Tint.rgb * unity_ColorSpaceDouble.rgb * _Exposure, with the
+    sphere's vertices rotated by _Rotation degrees about Y and the cube sampled at the unrotated
+    object-space vertex. A Linear player uploads _Tint linearized (GammaToLinearSpaceExact) and
+    the [Gamma] float _Exposure converted the same way."""
+    tint = colors.get("_Tint", [0.5, 0.5, 0.5, 0.5])
+    exposure = floats.get("_Exposure", 1.0)
+    return {"kind": "ikkoku.unitySkyboxCubemap", "version": 1, "cube": cube_index,
+            "tintLinear": [gamma_to_linear_exact(c) for c in tint[:3]], "exposure": gamma_to_linear_exact(exposure),
+            "exposureSerialized": exposure, "rotationDegrees": floats.get("_Rotation", 0.0),
+            "colorSpaceDouble": COLOR_SPACE_DOUBLE_LINEAR, "decodeInstructions": list(LDR_DECODE_INSTRUCTIONS)}
+
+
+def particle_extras(colors):
+    """`ikkokuParticle` for Particles/Alpha Blended: _TintColor as a Linear player uploads it (rgb
+    linearized, alpha unchanged). Vertex colours, when the mesh has them, pass through unconverted
+    as COLOR_0; a mesh without them is drawn with white (the oracle's particle image checks it)."""
+    tint = colors.get("_TintColor", [0.5, 0.5, 0.5, 0.5])
+    return {"tintLinear": [gamma_to_linear_exact(c) for c in tint[:3]] + [tint[3]]}
+
+
 def standard_contract(colors, floats, keywords):
     """Base color and alpha subset of Unity 5.6's built-in Standard shader."""
     color = colors.get("_Color", [1, 1, 1, 1])
@@ -369,15 +499,20 @@ def read_tables(info_bundles):
 class MapScene:
     """The scene file of a map bundle, read without instantiating anything."""
 
-    def __init__(self, bundles, scene):
+    def __init__(self, bundles, scene, builtin_resources=None):
         import UnityPy
         self.bundles = [Path(p).resolve() for p in bundles]
-        self.environment = UnityPy.load(*(str(p) for p in self.bundles))
+        # The player's "unity default resources" (built-in meshes such as the sky Sphere): loaded
+        # beside the bundles so a pointer into it resolves; recorded apart from the sources.
+        self.builtin_resources = Path(builtin_resources).resolve() if builtin_resources else None
+        extra = [str(self.builtin_resources)] if self.builtin_resources else []
+        self.environment = UnityPy.load(*(str(p) for p in self.bundles), *extra)
         wanted = "buildplayer-" + scene.casefold()
         files = {}
         for bundle in self.environment.files.values():
             for name, file in getattr(bundle, "files", {}).items():
-                if hasattr(file, "objects"):
+                # A raw SerializedFile (the player's default resources) lists int-keyed entries.
+                if isinstance(name, str) and hasattr(file, "objects"):
                     files[name] = file
         matches = [file for name, file in files.items() if name.casefold() == wanted]
         if len(matches) != 1:
@@ -546,10 +681,10 @@ def shader_name(material):
 
 # ---------------------------------------------------------------- inventory
 
-def inventory(bundles, scene):
+def inventory(bundles, scene, builtin_resources=None):
     """Metadata only: counts, triangles, texture memory, lightmaps, shaders, lights."""
     from UnityPy.helpers.MeshHelper import MeshHandler
-    map_scene = MapScene(bundles, scene)
+    map_scene = MapScene(bundles, scene, builtin_resources)
     sun_tree, infos = map_scene.sun_light_info()
     active = sun_type_active(map_scene.authored_active(), infos)
     renderers, materials, textures, meshes, unsupported = [], {}, {}, {}, {}
@@ -738,7 +873,104 @@ class MapExporter(Exporter):
         super().__init__(environment, output, stem)
         self.max_texture = max_texture
         self.gltf["generator"] = "Ikkoku CharaStudio map-scene exporter"
-        self.source = {"materials": [], "textures": [], "groups": []}
+        self.source = {"materials": [], "textures": [], "groups": [], "cubes": []}
+        self.block_images, self.cubes, self.cube_cache = [], [], {}
+
+    def block_image(self, texture, image_index, png_name, image, reduction):
+        """Writes a BC1/BC3 texture's serialized blocks, every mip, rows reversed to top-down
+        (`flip_block_rows`), next to its PNG and records the `ikkokuBlockImages` entry. The top
+        level must decode to exactly the PNG's pixels. Other formats and reduced images stay
+        PNG-only; the reason is returned."""
+        fmt = BLOCK_FORMATS.get(int(texture.m_TextureFormat))
+        if fmt is None:
+            return {"skipped": f"TextureFormat {int(texture.m_TextureFormat)} is not BC1/BC3"}
+        if reduction != 1:
+            return {"skipped": "reduced by --max-texture"}
+        import numpy as np
+        width, height, mips = texture.m_Width, texture.m_Height, texture.m_MipCount
+        raw = bytes(texture.image_data)
+        try:
+            flipped = flip_block_rows(raw, width, height, mips, fmt[0])
+        except ValueError as error:
+            return {"skipped": str(error)}
+        decoded = np.frombuffer(decode_blocks(flipped, width, height, fmt[0]), np.uint8).reshape(height, width, 4)[..., [2, 1, 0, 3]]
+        png = np.asarray(image.convert("RGBA"))
+        if decoded.shape != png.shape or not np.array_equal(decoded, png):
+            raise ValueError(f"{texture.m_Name}: the row-flipped {fmt[0]} blocks do not decode to the PNG's pixels")
+        file = Path(png_name).stem + "." + fmt[0].lower()
+        (self.output / file).write_bytes(flipped)
+        entry = {"image": image_index, "name": texture.m_Name, "file": file, "format": fmt[0], "width": width, "height": height,
+                 "mipCount": mips, "srgb": texture.m_ColorSpace == 1, "bytes": len(flipped),
+                 "sha256": hashlib.sha256(flipped).hexdigest(), "serializedSHA256": hashlib.sha256(raw).hexdigest()}
+        self.block_images.append(entry)
+        return {"file": file, "format": fmt[0], "sha256": entry["sha256"]}
+
+    def cubemap(self, pointer):
+        """Writes a Cubemap's serialized blocks verbatim (`cube-<k>-<name>.<format>`): six faces
+        +X, -X, +Y, -Y, +Z, -Z, each with its own mip chain, rows top-down as D3D and Metal
+        sample them. The seam check refuses data the GPU would sample wrongly as stored."""
+        identity = key(pointer)
+        if identity in self.cube_cache:
+            return self.cube_cache[identity]
+        if pointer.type.name != "Cubemap":
+            raise ValueError(f"Skybox _Tex is a {pointer.type.name}, not a Cubemap")
+        import numpy as np
+        texture = pointer.read()
+        name = texture.m_Name
+        fmt = CUBE_FORMATS.get(int(texture.m_TextureFormat))
+        if fmt is None:
+            raise ValueError(f"{name}: cube TextureFormat {int(texture.m_TextureFormat)} is not BC1/BC3/BC7")
+        if getattr(texture, "m_LightmapFormat", 0):
+            raise ValueError(f"{name}: m_LightmapFormat {texture.m_LightmapFormat} (an HDR/RGBM cube) is not drawn")
+        width, height, mips = texture.m_Width, texture.m_Height, texture.m_MipCount
+        if width != height:
+            raise ValueError(f"{name}: a {width}x{height} cube face is not square")
+        raw = bytes(texture.image_data)
+        face = sum(block_level_bytes(width, height, mips, fmt[1]))
+        if len(raw) != 6 * face:
+            raise ValueError(f"{name}: {len(raw)} serialized bytes, six {fmt[0]} faces with {mips} mips need {6 * face}")
+        faces = [np.frombuffer(decode_blocks(raw[i * face:(i + 1) * face], width, height, fmt[0]), np.uint8)
+                 .reshape(height, width, 4)[..., [2, 1, 0]].astype(np.float64) for i in range(6)]
+        seams = cube_seam_errors(faces)
+        if seams["asStored"] > seams["rowsFlipped"]:
+            raise ValueError(f"{name}: the faces' seams match better with rows reversed ({seams}); the face orientation is not verified")
+        index = len(self.cubes)
+        file = f"cube-{index}-{safe_name(name)}.{fmt[0].lower()}"
+        (self.output / file).write_bytes(raw)
+        digest = hashlib.sha256(raw).hexdigest()
+        entry = {"cube": index, "name": name, "file": file, "format": fmt[0], "width": width, "height": height, "mipCount": mips,
+                 "faces": 6, "srgb": texture.m_ColorSpace == 1, "bytes": len(raw), "sha256": digest, "serializedSHA256": digest,
+                 "rows": "topDown", "faceOrder": ["+X", "-X", "+Y", "-Y", "+Z", "-Z"],
+                 "seamError": {k: round(v, 4) for k, v in seams.items()}}
+        self.cubes.append(entry)
+        self.source["cubes"].append({"pathID": str(identity[1]), **entry, "textureSettings": texture_settings(texture)})
+        self.cube_cache[identity] = index
+        return index
+
+    def sky_material(self, pointer):
+        """The glTF material of a Skybox/Cubemap renderer: BLEND with a zero base colour, so a
+        reader that does not draw `ikkokuSkybox` shows nothing, and the extras the app's sky
+        pass draws."""
+        identity = key(pointer)
+        if identity in self.material_cache:
+            return self.material_cache[identity]
+        material = pointer.read()
+        floats, envs = dict(material.m_SavedProperties.m_Floats), dict(material.m_SavedProperties.m_TexEnvs)
+        cube = envs.get("_Tex")
+        if cube is None or not cube.m_Texture.path_id:
+            raise ValueError(f"{material.m_Name}: Skybox/Cubemap without a _Tex cube")
+        extras = sky_extras(colors_of(material), floats, self.cubemap(cube.m_Texture))
+        result = {"name": material.m_Name,
+                  "pbrMetallicRoughness": {"baseColorFactor": [0, 0, 0, 0], "metallicFactor": 0, "roughnessFactor": 1},
+                  "alphaMode": "BLEND", "doubleSided": True,
+                  "extras": {"unityShader": SKYBOX_CUBEMAP, "unityPathID": str(identity[1]), "shaderParity": "approximated",
+                             "droppedTerms": list(SKY_DROPPED), "ikkokuSkybox": extras}}
+        index = len(self.gltf["materials"])
+        self.material_cache[identity] = (index, ([1.0, 1.0], [0.0, 0.0]), False)
+        self.gltf["materials"].append(result)
+        self.source["materials"].append({"pathID": str(identity[1]), "name": material.m_Name, "shaderName": SKYBOX_CUBEMAP,
+                                         "keywords": keywords_of(material), "serialized": pointer.read_typetree()})
+        return self.material_cache[identity]
 
     def texture(self, pointer, normal_scale=None):
         identity = (*key(pointer), normal_scale)
@@ -762,7 +994,8 @@ class MapExporter(Exporter):
         self.texture_cache[identity] = index
         record = texture_record(texture, pointer, decode=False)
         record.update(output=name, reduction=reduction, outputWidth=image.width, outputHeight=image.height,
-                      outputSHA256=hashlib.sha256((self.output / name).read_bytes()).hexdigest())
+                      outputSHA256=hashlib.sha256((self.output / name).read_bytes()).hexdigest(),
+                      blockImage=self.block_image(texture, len(self.gltf["images"]) - 1, name, image, reduction))
         self.source["textures"].append(record)
         return index
 
@@ -786,6 +1019,10 @@ class MapExporter(Exporter):
         if contract.get("unlit"):
             result["extensions"] = {"KHR_materials_unlit": {}}
             result["extras"]["unlit"] = True
+        if name == "Particles/Alpha Blended":
+            # baseColorFactor stays the clamped 2 * _TintColor an item draw uses; the app's
+            # particle draw takes the tint from here and doubles it in the shader instead.
+            result["extras"]["ikkokuParticle"] = particle_extras(colors_of(material))
         tiling = ([1.0, 1.0], [0.0, 0.0])
         if main and main.m_Texture.path_id:
             result["pbrMetallicRoughness"]["baseColorTexture"] = {"index": self.texture(main.m_Texture)}
@@ -811,10 +1048,10 @@ class MapExporter(Exporter):
         return self.material_cache[identity]
 
 
-def export(bundles, scene, map_no, output, max_texture=None):
+def export(bundles, scene, map_no, output, max_texture=None, builtin_resources=None):
     import UnityPy
     from UnityPy.helpers.MeshHelper import MeshHandler
-    map_scene = MapScene(bundles, scene)
+    map_scene = MapScene(bundles, scene, builtin_resources)
     sun_tree, infos = map_scene.sun_light_info()
     active = sun_type_active(map_scene.authored_active(), infos)
     prefab_lightmaps = map_scene.lightmap_prefab_parameters()
@@ -822,7 +1059,7 @@ def export(bundles, scene, map_no, output, max_texture=None):
     output.mkdir(parents=True, exist_ok=True)
     exporter = MapExporter(map_scene.environment, output, stem, max_texture)
     map_root_world_inverse = inverse_affine(map_scene.world[map_scene.map_root])
-    groups, skipped = {}, []
+    groups, skipped, skies = {}, [], []
     lightmap_sources = {"renderer": 0, "LightmapPrefab": 0}
     handlers = {}
     for pid, reader in sorted(map_scene.of_type("MeshRenderer")):
@@ -840,7 +1077,13 @@ def export(bundles, scene, map_no, output, max_texture=None):
         if "MeshFilter" not in components:
             raise ValueError(f"{path}: MeshRenderer lacks MeshFilter")
         mesh_pointer = components["MeshFilter"].read().m_Mesh
-        mesh = mesh_pointer.read()
+        try:
+            mesh = mesh_pointer.read()
+        except FileNotFoundError:
+            if map_scene.builtin_mesh(mesh_pointer) is None:
+                raise
+            raise ValueError(f"{path}: its {map_scene.builtin_mesh(mesh_pointer)} mesh is in the player's "
+                             "'unity default resources'; pass --builtin-resources") from None
         if mesh.m_BindPose or (mesh.m_Shapes and mesh.m_Shapes.channels):
             raise ValueError(f"{path}: skinned or morph mesh on a MeshRenderer")
         identity = key(mesh_pointer)
@@ -863,6 +1106,11 @@ def export(bundles, scene, map_no, output, max_texture=None):
         for submesh, pointer in enumerate(renderer.m_Materials):
             if not pointer.path_id:
                 skipped.append({"path": path, "submesh": submesh, "reason": "no material"})
+                continue
+            if shader_name(pointer.read()) == SKYBOX_CUBEMAP:
+                # Drawn by the app's sky pass: its own mesh in object space, placed by its node.
+                skies.append({"path": path, "submesh": submesh, "role": role, "keys": list(keys), "matrix": matrix,
+                              "mesh": identity, "pointer": pointer, "mirrored": mirrored})
                 continue
             if shader_name(pointer.read()) in NON_GEOMETRY_SHADERS:
                 skipped.append({"path": path, "submesh": submesh, "reason": "skybox shader on a mesh"})
@@ -928,6 +1176,7 @@ def export(bundles, scene, map_no, output, max_texture=None):
         totals["triangles"] += len(group["indices"]) // 3
         exporter.source["groups"].append({"mesh": mesh_index, "role": role, "material": material_index, "visibleFor": list(keys),
                                           "lightmapIndex": lm_index, "renderers": group["renderers"]})
+    sky_records = export_skies(exporter, skies, handlers)
     if not exporter.gltf["meshes"]:
         raise ValueError("The map scene has no drawable static meshes")
     if any(m.get("extensions", {}).get("KHR_materials_unlit") is not None for m in exporter.gltf["materials"]):
@@ -935,9 +1184,15 @@ def export(bundles, scene, map_no, output, max_texture=None):
     lightmaps, lightmap_mode, lightmap_export = export_lightmaps(map_scene, output)
     lightmap_extras = lightmap_export.pop("extras", None)
     lightmap_export["drawn"] = lightmap_extras is not None
+    extras = {}
     if lightmap_extras:
-        exporter.gltf["extras"] = {"ikkokuLightmaps": lightmap_extras}
+        extras["ikkokuLightmaps"] = lightmap_extras
         lightmapped_dropped_terms(exporter.gltf)
+    if exporter.block_images or exporter.cubes:
+        extras["ikkokuBlockImages"] = {"kind": "ikkoku.unityBlockImages", "version": 1, "rows": "topDown",
+                                       "images": exporter.block_images, "cubes": exporter.cubes}
+    if extras:
+        exporter.gltf["extras"] = extras
     exporter.gltf["buffers"] = [{"uri": stem + ".bin", "byteLength": len(exporter.blob)}]
     (output / (stem + ".bin")).write_bytes(exporter.blob)
     (output / (stem + ".gltf")).write_text(json.dumps(exporter.gltf, indent=2) + "\n")
@@ -951,9 +1206,13 @@ def export(bundles, scene, map_no, output, max_texture=None):
                        "tangent": "x,y,-z,w (w negated again under a mirroring transform)",
                        "merge": "per (role, material, visibility class, lightmap index); role mapRoot in mapRoot's local frame, role scene in world space",
                        "lightmaps": "serialized image_data written verbatim (BC blocks, all mips, rows bottom-up); sampled at (u, 1 - v) of TEXCOORD_1",
-                       "images": "UnityPy PNG (top-down)" + (f"; reduced by powers of two to <= {max_texture} px" if max_texture else "")},
+                       "images": "UnityPy PNG (top-down)" + (f"; reduced by powers of two to <= {max_texture} px" if max_texture else ""),
+                       "blockImages": "BC1/BC3 images also as their serialized blocks, every mip, block and pixel rows reversed to "
+                                      "top-down (lossless; the top level decodes to the PNG exactly); the PNG stays the image uri",
+                       "sky": "each Skybox/Cubemap renderer: its own mesh in object space (Z reflected) under a node whose matrix "
+                              "is B*M*B (B = diag(1,1,-1,1)); the cube's serialized faces written verbatim (D3D/Metal rows)"},
         "transformRule": "mapRoot.localPosition = caMap.pos; mapRoot.localRotation = Quaternion.Euler(caMap.rot); scale never written (MapCtrl.Reflect)",
-        "sources": [{"path": str(p), "sha256": hashlib.sha256(p.read_bytes()).hexdigest(), "bytes": p.stat().st_size} for p in map_scene.bundles],
+        "sources": [file_record(p) for p in map_scene.bundles],
         "outputs": {p.name: hashlib.sha256(p.read_bytes()).hexdigest() for p in sorted(output.iterdir()) if p.is_file() and p.name != "provenance.json"},
         "meshes": len(exporter.gltf["meshes"]), "materials": len(exporter.gltf["materials"]), "textures": len(exporter.gltf["textures"]),
         "vertices": totals["vertices"], "triangles": totals["triangles"],
@@ -962,9 +1221,71 @@ def export(bundles, scene, map_no, output, max_texture=None):
         "lightmapsMode": lightmap_mode if lightmaps else None, "lightmaps": lightmaps, "lightmapExport": lightmap_export,
         "sunLightInfo": summarize_sun(map_scene, sun_tree, infos), "lights": lights_of(map_scene, active),
         "renderSettings": render_settings_of(map_scene),
+        "builtinResources": file_record(map_scene.builtin_resources) if map_scene.builtin_resources else None,
+        "blockImages": {"images": len(exporter.block_images), "bytes": sum(e["bytes"] for e in exporter.block_images),
+                        "pngOnly": [{"name": t["name"], "reason": t["blockImage"]["skipped"]} for t in exporter.source["textures"]
+                                    if "skipped" in t["blockImage"]]},
+        "cubes": exporter.cubes, "sky": sky_records, "lightmapCoverage": lightmap_coverage(exporter),
     }
     (output / "provenance.json").write_text(json.dumps(provenance, indent=2, ensure_ascii=False) + "\n")
     return provenance
+
+
+def file_record(path):
+    return {"path": str(path), "sha256": hashlib.sha256(path.read_bytes()).hexdigest(), "bytes": path.stat().st_size}
+
+
+def export_skies(exporter, skies, handlers):
+    """One glTF mesh and node per Skybox/Cubemap renderer (`skies` from the renderer loop):
+    POSITION/NORMAL/TEXCOORD_0 in the mesh's object space, Z reflected; the node's matrix places
+    it (role mapRoot under node 0, scene under node 1). The app's sky shader un-reflects the
+    object-space position for the cube direction and the _Rotation, as Skybox-Cubed.shader
+    reads v.vertex."""
+    records = []
+    for sky in sorted(skies, key=lambda s: (s["path"], s["submesh"])):
+        handler, triangles = handlers[sky["mesh"]]
+        material_index = exporter.sky_material(sky["pointer"])[0]
+        used = sorted({i for triangle in triangles[sky["submesh"]] for i in triangle})
+        remap = {old: new for new, old in enumerate(used)}
+        attributes = {"POSITION": exporter.accessor([reflect(handler.m_Vertices[i]) for i in used], "VEC3", bounds=True)}
+        if handler.m_Normals:
+            attributes["NORMAL"] = exporter.accessor([reflect(normalized(handler.m_Normals[i])) for i in used], "VEC3")
+        if handler.m_UV0:
+            attributes["TEXCOORD_0"] = exporter.accessor([convert_uv(handler.m_UV0[i]) for i in used], "VEC2")
+        indices = convert_triangles([[remap[i] for i in t] for t in triangles[sky["submesh"]]], len(used))
+        name = f"sky_{sky['role']}_{material_index}_{'_'.join(map(str, sky['keys']))}"
+        mesh_index = len(exporter.gltf["meshes"])
+        exporter.gltf["meshes"].append({"name": name, "primitives": [{"attributes": attributes, "mode": 4, "material": material_index,
+                                                                        "indices": exporter.accessor(indices, "SCALAR", integer=True)}],
+                                        "extras": {"ikkokuMap": {"role": sky["role"], "visibleFor": sky["keys"],
+                                                                 "lightmapIndex": NO_LIGHTMAP, "renderers": 1, "sky": True}}})
+        node_index = len(exporter.gltf["nodes"])
+        exporter.gltf["nodes"].append({"name": name, "mesh": mesh_index, "matrix": engine_matrix(sky["matrix"])})
+        exporter.gltf["nodes"][0 if sky["role"] == "mapRoot" else 1]["children"].append(node_index)
+        skybox = exporter.gltf["materials"][material_index]["extras"]["ikkokuSkybox"]
+        records.append({"path": sky["path"], "mesh": mesh_index, "material": material_index, "role": sky["role"],
+                        "visibleFor": sky["keys"], "cube": skybox["cube"], "rotationDegrees": skybox["rotationDegrees"],
+                        "vertices": len(used), "triangles": len(indices) // 3, "mirrored": sky["mirrored"]})
+        exporter.source["groups"].append({"mesh": mesh_index, "role": sky["role"], "material": material_index,
+                                          "visibleFor": sky["keys"], "lightmapIndex": NO_LIGHTMAP, "sky": True,
+                                          "renderers": [{"path": sky["path"], "submesh": sky["submesh"], "vertices": len(used),
+                                                         "triangles": len(indices) // 3, "mirrored": sky["mirrored"]}]})
+    return records
+
+
+def lightmap_coverage(exporter):
+    """Standard renderers (by path) and their triangles drawn with and without a baked lightmap."""
+    paths = {"lightmapped": set(), "unlightmappedStandard": set()}
+    triangles = {"lightmapped": 0, "unlightmappedStandard": 0}
+    for group in exporter.source["groups"]:
+        material = exporter.gltf["materials"][group["material"]]
+        if material["extras"]["unityShader"] != "Standard":
+            continue
+        prefix = "lightmapped" if group["lightmapIndex"] != NO_LIGHTMAP else "unlightmappedStandard"
+        paths[prefix].update(r["path"] for r in group["renderers"])
+        triangles[prefix] += sum(r["triangles"] for r in group["renderers"])
+    return {f"{prefix}{kind}": value for prefix in paths
+            for kind, value in (("Renderers", len(paths[prefix])), ("Triangles", triangles[prefix]))}
 
 
 def lightmapped_dropped_terms(gltf):
@@ -1056,17 +1377,22 @@ LIGHTMAPPED_OMISSIONS = ["realtime sun and its shadows", "specular and reflectio
 
 def approximations(provenance):
     """The catalog's list of what the converted map does not reproduce. With lightmaps, the
-    Standard terms the app leaves out are named one by one; any other shader is still listed
-    as approximated."""
+    Standard terms the app leaves out are named one by one, Standard renderers lit by light
+    probes (drawn as items) are counted, and a shader the app does not draw by its formula
+    (DRAWN_SHADERS) is listed as approximated."""
     if (provenance.get("lightmapExport") or {}).get("drawn"):
         notes = list(LIGHTMAPPED_OMISSIONS)
-        others = [shader for shader in provenance.get("shaders", []) if shader != "Standard"]
+        unlit = (provenance.get("lightmapCoverage") or {}).get("unlightmappedStandardRenderers", 0)
+        if unlit:
+            notes.append(f"light probes ({unlit} Standard renderers without a lightmap drawn as items)")
+        others = [shader for shader in provenance.get("shaders", []) if shader not in DRAWN_SHADERS]
         if others:
             notes.append("shaders approximated (" + ", ".join(others) + ")")
         return notes
     notes = ["no baked lightmaps", "map lights", "sun-type lighting", "fog", "ambient"]
     if provenance.get("droppedTerms"):
-        notes.append("shaders approximated (" + ", ".join(provenance["shaders"]) + ")")
+        shaders = [shader for shader in provenance["shaders"] if shader != SKYBOX_CUBEMAP]
+        notes.append("shaders approximated (" + ", ".join(shaders) + ")")
     return notes
 
 
@@ -1120,25 +1446,28 @@ def main():
     inv.add_argument("--bundle", type=Path, action="append", required=True)
     inv.add_argument("--scene", required=True)
     inv.add_argument("--output", type=Path, required=True)
+    inv.add_argument("--builtin-resources", type=Path, help="the player's 'unity default resources' file")
     exp = commands.add_parser("export", help="convert one map scene bundle to glTF")
     exp.add_argument("--bundle", type=Path, action="append", required=True)
     exp.add_argument("--scene", required=True)
     exp.add_argument("--map-no", type=int, required=True, help="the original Map_ number (catalog key)")
     exp.add_argument("--output", type=Path, required=True)
     exp.add_argument("--max-texture", type=int, help="reduce base textures by powers of two to at most this size")
+    exp.add_argument("--builtin-resources", type=Path,
+                     help="the player's 'unity default resources' file (built-in meshes such as a sky Sphere)")
     cat = commands.add_parser("catalog", help="write the runtime map catalog")
     cat.add_argument("--info-bundle", type=Path, action="append", required=True)
     cat.add_argument("--converted", type=Path, action="append", default=[], help="an export directory (repeatable)")
     cat.add_argument("--output", type=Path, required=True)
     args = parser.parse_args()
     if args.command == "inventory":
-        result = inventory(args.bundle, args.scene)
+        result = inventory(args.bundle, args.scene, args.builtin_resources)
         private(args.output).parent.mkdir(parents=True, exist_ok=True)
         args.output.write_text(json.dumps(result, indent=2, ensure_ascii=False) + "\n")
         print(json.dumps({k: result[k] for k in ("scene", "rendererCount", "drawnRendererCount", "triangles", "meshes",
                                                  "materialCount", "textureCount", "baseTextureGPUBytes", "shaders")}, indent=2))
     elif args.command == "export":
-        result = export(args.bundle, args.scene, args.map_no, private(args.output), args.max_texture)
+        result = export(args.bundle, args.scene, args.map_no, private(args.output), args.max_texture, args.builtin_resources)
         print(json.dumps({k: result[k] for k in ("mapNo", "scene", "meshes", "materials", "textures", "vertices", "triangles",
                                                  "textureGPUBytesRGBA8Mips", "shaders", "droppedTerms")}, indent=2, ensure_ascii=False))
     else:
