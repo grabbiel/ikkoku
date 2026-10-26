@@ -33,13 +33,24 @@ extension SourceRigDecodeShare: SourceRigDecoding {}
 /// The share keeps every decoded rig until it is released. The batch owner
 /// drops it when the batch ends, so nothing outlives the batch. That is why
 /// it has no admission budget, unlike the Maker's long-lived reuse boundary.
+///
+/// Prefetch (R7 phase 2 item 6 follow-up): each preparation decodes its
+/// files one after another, and every character asks for the shared base
+/// files in the same order, so without a prefetch a batch's distinct
+/// decodes run nearly in sequence. `prefetch` starts the decodes a
+/// character's card selects at once, as soon as the card is read; the
+/// preparation then finds each one finished or in flight. A prefetched
+/// decode is an ordinary request here, keyed by the bytes it read, so it
+/// never decides what a preparation receives.
 public final class SourceRigDecodeShare: @unchecked Sendable {
     public struct Counts: Sendable, Equatable {
         /// Decodes run (successful or not), requests answered from a finished
-        /// decode, requests that waited for one in flight, and failed decodes.
-        public var decodes = 0, hits = 0, waits = 0, failures = 0
-        public init(decodes: Int = 0, hits: Int = 0, waits: Int = 0, failures: Int = 0) {
+        /// decode, requests that waited for one in flight, failed decodes,
+        /// and files `prefetch` started (read and decoded or found).
+        public var decodes = 0, hits = 0, waits = 0, failures = 0, prefetches = 0
+        public init(decodes: Int = 0, hits: Int = 0, waits: Int = 0, failures: Int = 0, prefetches: Int = 0) {
             self.decodes = decodes; self.hits = hits; self.waits = waits; self.failures = failures
+            self.prefetches = prefetches
         }
     }
     /// One key's decode: written once under `condition`, read under it.
@@ -49,8 +60,15 @@ public final class SourceRigDecodeShare: @unchecked Sendable {
     private let condition = NSCondition()
     private var slots: [SourceRigReuseKey: Slot] = [:]
     private var tally = Counts()
+    /// Files `prefetch` was given, and whether it stopped (guarded by `condition`).
+    private var prefetched = Set<URL>()
+    private var prefetchStopped = false
+    private let prefetchGroup = DispatchGroup()
+    /// Whether `prefetch` starts decodes (default on; off is a measurement
+    /// control that keeps the decodes where the preparations ask for them).
+    public let prefetches: Bool
 
-    public init() {}
+    public init(prefetches: Bool = true) { self.prefetches = prefetches }
 
     public var counts: Counts {
         condition.lock(); defer { condition.unlock() }
@@ -65,6 +83,37 @@ public final class SourceRigDecodeShare: @unchecked Sendable {
 
     /// `SourceRig.decode(data)`, shared by content.
     public func decode(_ data: Data) throws -> SourceRig { try decode(data, timings: nil) }
+
+    /// Starts reading and decoding each of `urls` that no earlier call named,
+    /// all at once on GCD worker threads (`qos`), and returns. A later
+    /// `decode` of the same bytes waits for that decode or answers from it;
+    /// bytes that differ (the file changed in between) decode on their own.
+    /// A file that cannot be read is skipped, and a failed decode is not
+    /// retained (see the type), so a wrong or stale list costs time only.
+    public func prefetch(_ urls: [URL], qos: DispatchQoS.QoSClass = .userInitiated) {
+        guard prefetches, !urls.isEmpty else { return }
+        condition.lock()
+        let fresh = prefetchStopped ? [] : urls.filter { prefetched.insert($0).inserted }
+        tally.prefetches += fresh.count
+        condition.unlock()
+        for url in fresh {
+            DispatchQueue.global(qos: qos).async(group: prefetchGroup) { [self] in
+                condition.lock(); let stopped = prefetchStopped; condition.unlock()
+                guard !stopped, let data = try? Data(contentsOf: url) else { return }
+                _ = try? decode(data, timings: nil)
+            }
+        }
+    }
+
+    /// Starts no further prefetched decode (the batch was cancelled); one
+    /// already running finishes.
+    public func stopPrefetching() {
+        condition.lock(); prefetchStopped = true; condition.unlock()
+    }
+
+    /// Waits until every prefetched decode started so far has finished or
+    /// been skipped (tests).
+    func waitForPrefetches() { prefetchGroup.wait() }
 
     func decode(_ data: Data, timings: SourceMakerPreparationTimings?) throws -> SourceRig {
         let hash = SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()

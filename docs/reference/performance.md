@@ -106,7 +106,7 @@ the run.
 | `startup` | as `studio-idle` | no workload; the report's `startupSeconds` marks are the result |
 | `studio-static` | as `studio-idle` | the source scene with live animation off and no input: nothing changes, so it measures what an idle viewport costs ([phase 2, item 4](#phase-2-item-4-adaptive-link-rate-idle-keep-alive-and-deformed-vertex-reuse)) |
 | `studio-orbit-bursts` | as `studio-idle` | live animation off (on with `IKKOKU_PERF_BURST_LIVE=on`, so each drag starts during playback); repeatedly `IKKOKU_PERF_BURST_IDLE_MS` (default 1000) without input, then a 0.5 s right-button orbit drag. `details.burstInputEnds` records when each burst's first `mouseDragged` returned, so the summary measures every drag start after a pause |
-| `studio-duplicate` | as `studio-idle` | live animation on; selects source key 963 (or the first source character), then repeats Duplicate and Undo. Each action starts 0.5 s after the previous one was ready, and is timed from its call until no character build is pending and every preview it started is installed (`details.actions`, [phase 2, item 6](#phase-2-item-6-source-character-builds-off-the-main-thread)). Its frame rates are not cited: a build on the main thread stalls it for seconds |
+| `studio-duplicate` | as `studio-idle` | live animation on; selects the source object `IKKOKU_PERF_ACTION_KEY` names (any kind, such as a route with its children), else source key 963 (or the first source character), then repeats Duplicate and Undo. Each action starts 0.5 s after the previous one was ready, and is timed from its call until no character build is pending and every preview it started is installed (`details.actions`, [phase 2, item 6](#phase-2-item-6-source-character-builds-off-the-main-thread)). Its frame rates are not cited: a build on the main thread stalls it for seconds |
 | `studio-undo-delete` | as `studio-idle` | the same with Delete and Undo; the undo restores the character |
 | `studio-timeline` | avatar, Maker library | `studio-native`'s scene with live animation on. The first character is keyed at 0 s and, moved 1 unit along x, at 2.5 s; then nothing is selected and the timeline plays from 0. It measures the timeline's step, which runs on the main thread ([live pacing](#phase-2-live-pacing)) |
 
@@ -133,6 +133,20 @@ Other options:
 - `IKKOKU_PERF_LIVE_PACING=timer` starts the Studio's step from its 30 Hz
   timer instead of the display link, a measurement control for
   [live pacing](#phase-2-live-pacing); the default is `display`.
+- `IKKOKU_PERF_ACTION_KEY` (a source key, 0 or more): the object
+  `studio-duplicate` and `studio-undo-delete` act on, for example route 0 of
+  `scene-route-children.png` with its folder and character. Without it they
+  use source key 963 or the first source character.
+- Measurement controls for the
+  [item 6 follow-up](#phase-2-item-6-follow-up-route-copies-prefetch-and-kept-donations),
+  all defaulting to the shipped behavior:
+  - `IKKOKU_PERF_RIG_PREFETCH=off` leaves each rig decode where its
+    preparation asks for it, with no prefetch.
+  - `IKKOKU_PERF_DONATIONS=off` keeps no donation of a dropped preview, so
+    the undo of a delete builds from scratch.
+  - `IKKOKU_PERF_INSTALL_REFRESH=each` refreshes the frame at every
+    background install, as before, instead of leaving it to the next live
+    step (`step`, the default).
 
 ### What the report records
 
@@ -801,7 +815,7 @@ loaded machine, so only the shares are used).
 | C5 | Source expression weights are recomputed and revalidated per frame | `SourceRigPreview.expressionWeights` | measured; **done** | 0.45 ms/tick | cache per expression input. **Done** in [phase 2, item 3](#phase-2-item-3-live-tick-off-the-main-thread): `expressionWeights` 95 ms → no sample over the digest run | Low |
 | C6 | `refresh()` rebuilds every character's `RenderFrame` (items, skin sets, bounds) for camera-only changes | `StudioModel.refresh` | measured; **done** for drags | 0.89 ms per orbit event | see M3; orbit and pan drags now take 0.04 ms (`refreshCamera`, [phase 2, item 1](#phase-2-item-1-narrow-swiftui-invalidation)); scroll and pinch dolly still rebuild | Medium |
 | C7 | Maker's live step evaluates the rig only to validate the pose, then the refresh evaluates it again | `MakerModel.advanceSourceMotion` | hypothesis | `makerTick` 2.0 ms p50 in `maker-idle` | reuse the validated evaluation in the refresh | Low |
-| C8 | Studio scene/character load decodes the same rig JSON once per character and component | `SourceMakerLibrary.prepare` → `SourceRig.load` | measured; **done** | probe load 6.1 s for 6 characters, 74% in `SourceRig.decode` (JSONDecoder) | cache decoded rigs by path, size and modification time; or a binary rig format. **Done** in [phase 2, item 6](#phase-2-item-6-source-character-builds-off-the-main-thread): `SourceRigDecodeShare` decodes each distinct file once per operation, keyed by its content (SHA-256 and byte count); the startup import's decodes went from 3.62 to 0.54 s of CPU | Low for the cache |
+| C8 | Studio scene/character load decodes the same rig JSON once per character and component | `SourceMakerLibrary.prepare` → `SourceRig.load` | measured; **done** | probe load 6.1 s for 6 characters, 74% in `SourceRig.decode` (JSONDecoder) | cache decoded rigs by path, size and modification time; or a binary rig format. **Done** in [phase 2, item 6](#phase-2-item-6-source-character-builds-off-the-main-thread): `SourceRigDecodeShare` decodes each distinct file once per operation, keyed by its content (SHA-256 and byte count); the startup import's decodes went from 3.62 to 0.54 s of CPU. The [follow-up](#phase-2-item-6-follow-up-route-copies-prefetch-and-kept-donations) starts a batch's distinct decodes at once from the cards (first halves 690–726 → 464–515 ms, the showoff scene ready 0.23 s sooner) | Low for the cache |
 | L1 | With the live source-shader opt-in ON, every `refresh()` maps each frame item back to its source renderer again (mesh-name parsing, a filter over all binding-set renderers per item, shader-name splits, report strings); the materials themselves are cached | `StudioModel+SourceShaderLive.swift` → `SourceShaderLiveAssembly.attach` | measured | 0.39 ms per refresh (11.6 ms/s at 30 Hz), 39% in `SourceShaderLiveMaterial.family(of:)` ([live opt-in](#the-live-source-shader-opt-in-127)) | cache the item-to-slot mapping per character while its meshes, visibility and wear are unchanged, and index the renderers by (mesh, submesh); most of the 0.39 ms (hypothesis until measured) | Low; the opt-in is OFF by default and its report must stay the same |
 
 ### Metal
@@ -831,9 +845,9 @@ loaded machine, so only the shares are used).
 
 | # | Item | Where | Status | Evidence | Fix and expected gain | Risk |
 | --- | --- | --- | --- | --- | --- | --- |
-| S1 | Source scene import is synchronous on the main thread | `AppState.importSourceScenePreview` → `StudioModel.importSourceScenePreview` | measured; **done** | Release: 4.7 s import, first frame at 6.3 s; Debug 11.7 s / 20.0 s | load the characters concurrently off the main thread with a progress state; ~1–1.5 s on the reference machine. **Done** in [phase 2, item 6](#phase-2-item-6-source-character-builds-off-the-main-thread): first halves on workers, second halves in order on a build queue, one commit on the main actor; scene ready 5.65 → 1.41 s, first draw 5.93 → 0.43 s. Duplicates and undo/redo rebuild in the background too | Medium: model mutations must stay on the main actor |
+| S1 | Source scene import is synchronous on the main thread | `AppState.importSourceScenePreview` → `StudioModel.importSourceScenePreview` | measured; **done** | Release: 4.7 s import, first frame at 6.3 s; Debug 11.7 s / 20.0 s | load the characters concurrently off the main thread with a progress state; ~1–1.5 s on the reference machine. **Done** in [phase 2, item 6](#phase-2-item-6-source-character-builds-off-the-main-thread): first halves on workers, second halves in order on a build queue, one commit on the main actor; scene ready 5.65 → 1.41 s, first draw 5.93 → 0.43 s. Duplicates and undo/redo rebuild in the background too. The [follow-up](#phase-2-item-6-follow-up-route-copies-prefetch-and-kept-donations) adds route character copies (159 ms on the main thread → 2.4 ms call, 41 ms of main-thread work) and kept donations for the undo of a delete (992 → 351 ms); the showoff scene is ready at 1.04 s | Medium: model mutations must stay on the main actor |
 | S2 | Repeated rig JSON decoding | see C8 | measured; **done** | 74% of the probe load | cache; ~3 s of the 4.7 s. **Done** with C8: 3.62 → 0.54 s of decode CPU in the startup import | Low |
-| S3 | Texture loading through `MTKTextureLoader` with runtime mips | `ResourceStore.texture` | hypothesis | (another task investigates a loader stall) | asynchronous loading with placeholder textures | Medium |
+| S3 | Texture loading through `MTKTextureLoader` with runtime mips | `ResourceStore.texture` | measured; **GPU wait done**, uploads open | 7-character import, second halves (on the build queue): 51 ms over 19 texture loads; the material compositors' new command queues waited 173 ms for 1.6 ms of GPU work | asynchronous loading with placeholder textures. **The larger wait is done** in the [item 6 follow-up](#phase-2-item-6-follow-up-route-copies-prefetch-and-kept-donations): one compositor queue per device, 173 → 12 ms, second halves 520 → 342 ms, the showoff scene ready about 0.15 s sooner. The uploads stay synchronous; making them asynchronous saves at most 51 ms there and needs `ResourceStore` API changes | Medium |
 | S4 | Maker library preparation at startup | `makerReady` mark | measured; **done** | ~0.9 s Release, ~4.1 s Debug | defer until first Maker use or load in the background. **Done** in [phase 2, item 6](#phase-2-item-6-source-character-builds-off-the-main-thread): a launch straight into a source scene creates the Maker on first use; `studioReady` 1.09 → 0.19 s | Low |
 | S5 | An imported scene's original map loads with the scene (ST-A11) | `SourceStudioMapLoad` (`Packages/Engine/Sources/Studio/SourceStudioMap.swift`) | measured; **done** | Map 33: 73–83 ms of glTF reads, PNG decodes and MetalKit loads with mips; 0.01 ms placement and a 24 KB catalog read on the main thread | loaded on a GCD worker beside the character builds from the start, with private textures retired through `retire(textures:)`. Scene ready 1.47 → 1.45 s and main-thread time until ready unchanged ([ST-A11](#st-a11-original-studio-maps)) | Low |
 
@@ -2744,6 +2758,15 @@ Other costs:
   window's first frame: AppKit and SwiftUI window setup. This item does not
   address it.
 
+The [follow-up](#phase-2-item-6-follow-up-route-copies-prefetch-and-kept-donations)
+measured these hypotheses:
+
+- the prefetch of distinct decodes saves 0.23 s, not 0.4 s;
+- kept donations save 0.31 s of the undo of a delete, not 0.45 s;
+- the shared install refresh saves 11 ms of main-thread work per undo.
+
+It also moved route character copies off the main thread.
+
 ### Behavior notes
 
 - **The Studio shows before its characters.** On a launch into a source
@@ -3351,6 +3374,329 @@ negative controls are listed in [maps](studio/maps.md#evidence).
   per `refresh()` and per draw. Live pacing changes when the 30 Hz step
   starts, not those costs, so the runs were not repeated.
 - **No M1 run.**
+
+## Phase 2, item 6 follow-up: route copies, prefetch and kept donations
+
+Done 2026-10-25 (the follow-ups of inventory C8, S1 and S3, and ST-T11's
+route-copy build). The changes:
+
+- route character copies build in the background;
+- the rig decodes of a batch start at once;
+- the material compositors share one command queue;
+- dropped previews lend their assemblies to the builds that bring them
+  back;
+- the installs of one action share a frame refresh.
+
+On the reference machine, the showoff scene is ready 1.04 s after launch
+instead of 1.42 s, and the 2-character fixture scene 0.78 s instead of
+1.08 s. A Duplicate of route 0 with its character no longer holds the main
+thread for 159 ms. Its command returns in 2.4 ms, and the copy's character
+is drawn 97 ms later, with 41 ms of main-thread work. The undo of a delete
+is ready in 351 ms instead of 992 ms, next to the 341 ms of the undo of a
+duplicate (531 ms before). Captures, scenario reports and the order of
+registrations are unchanged; only time, threads and memory change.
+
+### What changed
+
+The contract is in
+[source character builds](renderer.md#source-character-builds-r7-phase-2-item-6).
+In short:
+
+- **Route character copies in the background (ST-T11).** A Duplicate of a
+  route with its character built the copy's route preview inside the
+  command, on the main thread, in every mode. With background builds, the
+  copy now builds through `SourceStudioCharacterBatch` like a duplicated
+  character: it borrows the original's assembly, its second half runs on the
+  build queue, and it installs on the main actor while its placeholder still
+  shows the same record. An undo before it lands drops the build. Captures
+  and scenarios build it in the command, as before.
+- **Rig decode prefetch.** A first half without a donation names every rig
+  file its card selects and starts all their decodes at once on workers, as
+  soon as the card is read (`SourceRigDecodeShare.prefetch`). The decodes of
+  a batch no longer queue behind each other in the order every preparation
+  asks for them.
+- **One command queue for the material compositors.** A compositor is made
+  per composition, and each made its own Metal command queue. The first
+  command buffer on a new queue waited about 8 ms before the GPU started it,
+  so the second halves of the 7-character scene waited 173 ms for 1.6 ms of
+  GPU work. All compositors of a device now share one queue.
+- **Kept donations.** The assemblies of previews the Studio dropped with no
+  rebuild waiting (a deleted character, a replaced outfit or scene, the copy
+  an undone Duplicate removed) stay borrowable in `SourceStudioDonationCache`,
+  bounded at 8 entries and 128 MiB of charge and emptied on memory pressure.
+  The undo of a delete borrows its character's assembly instead of reading
+  and decoding its files again.
+- **The frame after an install.** While the live step runs, an install
+  leaves the frame to the next step's refresh (within one 30 Hz period, 0.1 s
+  at most), so the installs of one undo share a refresh, and the new
+  character's pose is evaluated on the step's workers. Without live steps, or
+  in a drag, it refreshes at once, as before.
+- **Single-character builds.** An outfit selection and a plugin attachment's
+  parent borrow a loaded or kept assembly of that outfit when one exists, and
+  otherwise decode with the prefetch, still on the main thread. The export
+  validation baseline decodes with the prefetch and borrows nothing, since it
+  drops its preview after the export.
+- **History fix.** An undo or redo that rehydrates the source runtime now
+  refreshes once more after the rehydration. Before, the redo of a route
+  Duplicate drew the copy without its character until something else
+  refreshed (30,501 differing pixels in the hidden step of the new scenario).
+- **Harness and scenario.** Three measurement controls,
+  `IKKOKU_PERF_RIG_PREFETCH=off`, `IKKOKU_PERF_DONATIONS=off` and
+  `IKKOKU_PERF_INSTALL_REFRESH=each`
+  ([harness](#harness)), and the `studioInstallRefreshDeferred` event.
+  `IKKOKU_PERF_ACTION_KEY` points `studio-duplicate` at route 0. The strict
+  Studio lane's new `studio-scenario-background-build-route` check runs the
+  `duplicateRoute` builds of the `backgroundBuild` op.
+
+### Measurement
+
+The commands follow [measuring a change](#measuring-a-change). Release builds,
+arm64:
+
+| Label | Commit | Executable SHA-256 |
+| --- | --- | --- |
+| base | `3baee04`: `main` `6502803` (#275) with this change's harness commit | `d082b8c4…e5a7d944` |
+| after | `cd1c5a8` (this change before merging `main` `b4c59e7`, which adds the map and translated-vertex code these workloads never reach) | `aa6ce6d9…0696104f` |
+
+Conditions:
+
+- **Window.** All runs were in one quiet window the orchestrator granted on
+  2026-10-25 (19:13–19:21). Base and after alternated, every launch was
+  under the app lock, and the load average was 3.0–6.0.
+- **Display.** A 120 Hz display; a `studio-idle` smoke run per build
+  confirmed 120 Hz first.
+- **Runs.** Each build ran `startup` three times, for the showoff scene and
+  for the fixture scene (`IKKOKU_STUDIO_HALF_STATE_SCENE`). The action
+  workloads recorded 30 s each, with live animation on:
+  - `studio-duplicate` and `studio-undo-delete` on source key 963;
+  - `studio-duplicate` on route 0 of `scene-route-children.png`
+    (`IKKOKU_PERF_ACTION_KEY=0`).
+- **Controls.** These ran on the after build with one change turned off:
+  - `IKKOKU_PERF_RIG_PREFETCH=off`: showoff twice, fixture once;
+  - `IKKOKU_PERF_DONATIONS=off`: `studio-undo-delete`;
+  - `IKKOKU_PERF_INSTALL_REFRESH=each`: both `studio-duplicate` runs.
+- **Single builds.** One character's synchronous build was timed in a
+  release `swift test` probe in the same window, with no app running: 3
+  characters of the scenario scene, 4 rounds, alternating order.
+- **Flags.** `summarize` flagged no run.
+- **Evidence.** Reports and analysis are in `.local/r7i-builds/window2`.
+
+Startup, seconds since process start, median (range) of three runs:
+
+| Scene | Build | Scene ready | First draw | Main thread until ready: busy of window ms | Longest busy period ms | Peak footprint MB |
+| --- | --- | --- | --- | --- | --- | --- |
+| showoff | base | 1.42 (1.41–1.42) | 0.42 (0.41–0.45) | 704 of 1,482 | 470 | 870 |
+| showoff | after | 1.04 (1.04–1.05) | 0.47 (0.42–0.47) | 685 of 1,097 | 472 | 920 |
+| showoff | after, prefetch off (2 runs) | 1.27 (1.26–1.27) | 0.42 | 683 of 1,329 | 458 | 870 |
+| fixture | base | 1.08 (1.07–1.09) | 0.42 (0.40–0.44) | 618 of 1,125 | 457 | 544 |
+| fixture | after | 0.78 (0.74–0.78) | 0.44 (0.43–0.48) | 623 of 814 | 283 (283–474) | 597 |
+| fixture | after, prefetch off (1 run) | 1.00 | 0.41 | 557 of 989 | 441 | 543 |
+
+- **Where the startup time went.** Of the showoff scene's 0.38 s, the
+  prefetch gives 0.23 s (1.27 → 1.04 s with it off). The rest, about
+  0.15 s, is the shared compositor queue. A release probe of the
+  7-character batch agrees:
+  - with the prefetch, the first halves took 464–515 ms instead of
+    690–726 ms;
+  - with the shared queue, the second halves took 342 ms instead of
+    520 ms, and their compositor wait fell from 173 ms to 12 ms.
+- **The main thread** does the same work until the scene is ready (about
+  0.6–0.7 s, most of it the launch's window setup). It is busy for a larger
+  share of a shorter window.
+- **Peak footprint** grows by about 50 MB at startup, from the prefetch
+  (870 MB with it off). More decodes are in flight at once, and their
+  transient allocations overlap. Peak Metal memory is unchanged.
+
+Actions, in ms: medians, with the range for the time until ready. In base,
+the route copy's build runs inside the call, so its call is its time until
+ready.
+
+| Action (base and after counts) | Base: ready | Base: main busy | After: call | After: ready | After: main busy | After: longest busy period |
+| --- | --- | ---: | ---: | --- | ---: | ---: |
+| Duplicate (16 and 18) | 111 (101–115) | 44 | 3.1 | 84 (75–88) | 43 | 38 |
+| Undo of the duplicate (16 and 18) | 531 (513–540) | 93 | 14.0 | 341 (329–362) | 80 | 59 |
+| Duplicate of route 0 with its character (22 and 23) | 159 (153–165) | 182 | 2.4 | 97 (88–101) | 41 | 34 |
+| Undo of the route duplicate (21 and 22) | 1.6 | 47 | 1.9 | 1.9 | 48 | 48 |
+| Delete (14 and 19) | 4.2 | 42 | 3.7 | 3.7 | 43 | 43 |
+| Undo of the delete (13 and 19) | 992 (977–1,014) | 78 | 13.5 | 351 (328–363) | 60 | 36 |
+
+Controls on the after build:
+
+| Control | Action | Ready | Main busy | Against after |
+| --- | --- | --- | ---: | --- |
+| `IKKOKU_PERF_DONATIONS=off` | undo of the delete | 663 (640–682) | 64 | kept donations save 312 ms |
+| `IKKOKU_PERF_INSTALL_REFRESH=each` | undo of the duplicate | 345 (329–362) | 91 (83–95) | the deferred refresh saves 11 ms of main-thread work per undo, at the same ready time |
+| `IKKOKU_PERF_INSTALL_REFRESH=each` | duplicate | 84 (80–91) | 45 | 2 ms |
+| `IKKOKU_PERF_INSTALL_REFRESH=each` | route duplicate | 101 (91–105) | 43 | 2 ms |
+
+With the refresh deferred, all 144 installs of the `studio-duplicate` run
+(18 duplicates of one character, 18 undos of 7) left their frame to the
+next live step (`studioInstallRefreshDeferred`).
+
+Peak footprint over the action runs: duplicate 960 → 1,013 MB, route
+592 → 641 MB, undo of delete 898 → 983 MB (956 MB with donations off). The
+kept donations' charge is 13.0 MB per character.
+
+One character's synchronous build, as an outfit selection, a plugin
+attachment's parent or the export baseline runs it on the main thread (12
+builds each):
+
+| Build | Median ms | Range |
+| --- | ---: | --- |
+| From the files, without a share (base) | 627 | 612–635 |
+| From the files, with the prefetching share (after, no donation) | 414 | 388–439 |
+| From a donation (an outfit selected back, or a parent another preview shows) | 72 | 62–74 |
+
+### What remains
+
+- **Texture uploads (S3).** The second halves still load their textures
+  synchronously, through `ResourceStore` and `MTKTextureLoader`: 51 ms over
+  19 loads for the 7-character scene. They run on the build queue, not the
+  main thread, one character at a time. An asynchronous load would save at
+  most those 51 ms of the import's wall time and needs `ResourceStore` API
+  changes, which this change does not make. The rest of the second halves'
+  342 ms is CPU:
+  - card bindings, about 113 ms;
+  - the prepared appearance, about 180 ms;
+  - the rig preview, about 80 ms;
+  - 154 mesh registrations, about 66 ms.
+
+  These overlap, since they are nested phases.
+- **The launch's window setup** keeps the main thread busy for 457–475 ms
+  until the window's first frame, in every build. This change does not
+  address it. See [the launch window](#the-launch-window-setup) for its
+  profile.
+- **The first draw** came 0.02–0.05 s later with the prefetch in two of
+  three runs per scene. The ranges overlap; the decodes running on workers
+  during the window setup are the likely cause. Lowering the prefetch's QoS
+  during the launch is a **hypothesis**.
+- **Single-character builds still run on the main thread:**
+  - an outfit selection: 414 ms, or 72 ms when the outfit was shown before
+    and its assembly was kept;
+  - a plugin attachment's parent: 414 ms, or 72 ms with a donation;
+  - the export validation baseline of a hidden character with face edits:
+    414 ms.
+
+  Moving them off the main thread needs asynchronous callers: the outfit
+  selection is a synchronous, throwing model call, and the baseline runs
+  inside the export.
+- **Route characters of a rehydration** (a scene load, or the redo of a
+  route Duplicate) still build in one batch on the main thread.
+
+### The launch window setup
+
+Each build's system-wide Time Profiler recording was started before the
+launch. It was cut from the process's first main-thread sample to the
+app's `firstDraw` signpost, 0.42 s (base) and 0.43 s (after). The main
+thread holds 277 and 270 ms of samples in that span; for the rest it was
+not running (blocked in a call or waiting). The split is the same in both
+builds:
+
+| Inside | Base ms | After ms |
+| --- | ---: | ---: |
+| SwiftUI's attribute graph updates (`AG::Graph::UpdateStack::update`), the first view tree | 155 | 158 |
+| `NSWindow` work, including its layout | 119 | 89 |
+| `NSHostingView` | 55 | 51 |
+| `AppState.init` | 34 | 35 |
+| — `StudioModel.init` | 14 | 14 |
+| — `SourceStudioAudioBus.init` | 13 | 12 |
+| — `EngineHost.init` | 9 | 12 |
+| — `GPUContext.init` | 6 | 9 |
+| dyld (loading and binding) | 23 | 25 |
+| `NSImage` | 11 | 11 |
+| The import's prepare (`beginSourceSceneImport`) | 9 | 9 |
+
+These overlap, since they are nested frames. Most of the window setup is
+SwiftUI building and laying out the first view tree. The app's own
+initializers take 35 ms, and the audio bus could be created on first use
+(about 12 ms, a **hypothesis**). Reducing the rest means building less of
+the view tree before the first frame, which is UI work outside this item.
+
+### Correctness
+
+After merging `main` `b4c59e7` (#276 maps, #277 translated vertex store),
+on the merged head:
+
+- **Captures.** Release builds of `main` `b4c59e7` and the merged head, each
+  capture its own launch under the app lock, run from the same working
+  directory (`.local/r7i-builds/captures`):
+  - eight `IKKOKU_AUTOCAPTURE` renders: the Studio scenario scene, the
+    fixture scene and the route-children scene, the native Studio, and the
+    Maker. The scenario scene, the fixture and the Maker are also captured
+    with the live source-shader opt-in ON;
+  - two `IKKOKU_CAPTURE_UI` windows, Studio and Maker;
+  - seven scenario reports: `topology-duplicate`, `undo-props`,
+    `undo-route`, `reload-save-route`, `reload-save-duplicate`,
+    `route-children-edit` and `reload-save-outfit`.
+
+  All 10 PNGs and the 3 live opt-in reports are byte-identical. Six of the
+  seven scenario reports are byte-identical. In `route-children-edit`, only
+  one step's detail differs: the drag events' median and max time (1.37
+  against 1.33 ms).
+- **Engine tests.** These are new:
+  - the prefetch without fixtures;
+  - the prefetch's decode count in the 7-character batch;
+  - the kept donation of a deleted character, rendered against a fresh
+    build;
+  - the donation cache's budget and eviction;
+  - `rigFiles` against the decodes a preparation runs;
+  - the shared compositor queue's bytes.
+
+  See the [renderer reference](renderer.md#source-character-builds-r7-phase-2-item-6).
+  The 12 tests of the decode share, the batch, the donation cache, the
+  compositor queue and `rigFiles` pass under ThreadSanitizer with 0
+  warnings, before and after the merge. No app TSan session was run: the
+  app's new code runs only on the main actor, and its new concurrency is in
+  these Engine types.
+- **Scenario.** `studio-scenario-background-build-route` passes. Before the
+  history fix, its hidden Redo differed from the synchronous one by 30,501
+  pixels.
+- **Lanes**, Debug, `--strict` under the app lock, 0 skipped:
+  - `studio-scenarios` 78/78 (1,183.3 s), with the new check;
+  - `maker-scenarios` 10/10 (196.7 s).
+- **Engine suite** with the fixture map, in parallel: 986 tests. The only
+  failure is the known `liveSourceShadersMeetTheControlledOriginalFrameGates`,
+  with 13 named skips. The 21 tests of the second target pass.
+- **Python.** All pass:
+  - runner self-tests, 199;
+  - `Tools/reverse`, 573 (6 skipped);
+  - `Tools/reverse/analysis`, 279;
+  - the site check and `doctor.py --require public`.
+- **`viewport-lifecycle`** (after build) is clean. There was one render
+  thread before each of the 12 steps and at the end, 85 frames were
+  presented after the restore, and there were no keep-alive refreshes while
+  minimized.
+
+### Limits
+
+- **Few runs.** Three startup runs per build and scene, one run per build
+  of each action workload, and one to two runs per control.
+- **The deferred refresh is not in the equality checks.** Scenarios pause
+  live animation for byte-identical renders, so the deferral never applies
+  there. It changes only when the frame is refreshed, never what is
+  drawn, and a timer refreshes after 0.1 s at most.
+- **The memory-pressure eviction** was not triggered in a run.
+- **No M1 run** (estimate below).
+
+### Scaling to a base M1 (estimate)
+
+This uses the method of [scaling to the low end](#scaling-to-the-low-end-base-m1-8-gb):
+serial CPU × 1.25, and parallel CPU spread over an M1's 6 workers (4
+performance and 4 efficiency cores, less two).
+
+- **Startup.** The prefetch runs the 10 distinct decodes across those 6
+  workers instead of nearly in sequence, so it should save about as much
+  as here, about 0.25–0.3 s. The shared queue's 0.16 s of start latency
+  per batch does not depend on the CPU. The showoff scene should be ready
+  about 1.5 s after launch, against the earlier estimate of 2 s.
+- **Actions.** The estimates are:
+  - a route Duplicate holds the main thread about 0.05 s instead of 0.2 s;
+  - the undo of a delete is ready after about 0.45 s instead of 1.25 s;
+  - an outfit selection takes about 0.55 s instead of 0.8 s.
+- **Memory.** The kept donations hold at most 8 entries and 128 MiB of
+  charge, about 104 MB for the reference scene's characters, and the
+  memory-pressure warning empties them. The prefetch adds about 50 MB of
+  transient peak at startup. Both fit in 8 GB, beside the scene's 0.9 GB.
 
 ## Validation of this change
 

@@ -1470,6 +1470,25 @@ converted rig file once per batch of builds.
   `SourceRigReuseWorker` is unchanged. `SourceMakerLibrary.prepare` now
   takes either one through an internal `SourceRigDecoding` protocol, and the
   Maker's call passes its worker as before.
+- **Prefetch.** Each preparation decodes its files one after another, and
+  every character asks for the shared base files in the same order, so the
+  distinct decodes of a batch used to run nearly in sequence. A first half
+  that builds without a donation now names every rig file its card selects
+  (`SourceMakerLibrary.rigFiles(card:coordinate:baseURL:wear:)`, the files
+  `prepare` decodes, in its order) and hands them to
+  `SourceRigDecodeShare.prefetch` as soon as the card is read. The share
+  reads and decodes each file no earlier call named, all at once on GCD
+  workers (QoS user-initiated), and returns. The preparation then finds each
+  decode finished or in flight.
+  - A prefetched decode is an ordinary request, keyed by the bytes it read,
+    so it never decides what a preparation receives. A file that changed in
+    between decodes again under its new key; a file that cannot be read is
+    skipped; a failed decode is not kept. A wrong list costs time only.
+  - `SourceStudioCharacterBatch.cancel()` stops the prefetch: no further
+    prefetched decode starts, and one already running finishes.
+  - A prefetch task holds the share until it ends, so a cancelled batch's
+    share can outlive the batch by one decode.
+  - `IKKOKU_PERF_RIG_PREFETCH=off` turns it off (measurement control).
 
 **Borrowed assemblies (donations).** A loaded preview lends its converted
 assembly to a new build of the same character: the prepared Maker assembly,
@@ -1484,7 +1503,38 @@ its `sharedAssembly` is true. Donations serve:
   dropped previews' donations until the next refresh has built from them);
 - a re-import of a scene that is loaded;
 - route characters, which borrow from a loaded preview of the same
-  character.
+  character, and the route character copies of a Duplicate;
+- the build that brings back a preview the Studio dropped with no rebuild
+  waiting for it, such as the undo of a delete (below).
+
+**Kept donations.** `SourceStudioDonationCache` keeps the donations of
+previews the Studio dropped with no rebuild waiting for them:
+
+- a deleted character (the frame's prune of `sourceInstances`);
+- the outfit an outfit selection replaced;
+- the characters of a scene an import replaced;
+- what an undo or redo dropped that none of the next refresh's builds took,
+  such as the copy an undone Duplicate removed.
+
+A build looks for a donation in the loaded previews first, then in the
+history step's donations, then in this cache, and `take` removes what it
+returns. The cache is bounded:
+
+- at most 8 donations (`defaultMaximumEntries`) and 128 MiB of charge
+  (`defaultMaximumBytes`). A donation's charge is its assembled rig's
+  logical payload (`SourceRig.decodedCacheLogicalByteCount`): 13.0 MB for a
+  character of the reference scene, so there the entry limit binds first,
+  at about 104 MB;
+- keeping one evicts the oldest entries until it fits. A donation that
+  cannot be charged, or is larger than the whole budget, is refused, and a
+  newer donation of the same character and outfit replaces the older one;
+- the system's memory-pressure warnings (`DispatchSource` warning or
+  critical) empty it.
+
+A donation holds immutable CPU values only, never a store resource, so a
+kept donation keeps no mesh, texture or buffer alive. The cache is not
+thread-safe; the Studio's main actor owns it. `IKKOKU_PERF_DONATIONS=off`
+keeps nothing (measurement control).
 
 **Batches.** `SourceStudioCharacterBatch` runs the builds of one operation:
 
@@ -1500,6 +1550,28 @@ its `sharedAssembly` is true. Donations serve:
 - Meshes therefore register in the same order as a sequential build, and
   get the same store IDs relative to each other.
 
+**The material compositors' command queue.** A second half composes each
+material's textures on the GPU (`SourceMaterialCompositor`), and a
+compositor is made per composition. Each used to make its own command queue,
+and the first command buffer on a new queue waited about 8 ms between
+`kernelStartTime` and `gpuStartTime` before the GPU started it. The 21
+compositions of the 7-character scenario scene waited 173 ms for 1.6 ms of
+GPU work. Every compositor of a device now submits on one command queue
+(`SourceMaterialCompositor.sharedQueue(for:)`, labelled "Source material
+composition"), made on first use and kept for the process:
+
+- the queue only orders submissions. Each batch encodes the same kernel on
+  the same inputs and waits for its own command buffer, so every output
+  texel is unchanged (`sourceMaterialCompositorsShareOneQueueAndComposeTheSameBytes`);
+- a command queue is thread-safe, so the Studio's builds and the Maker's
+  may share it. An `NSLock` guards the registry, keyed by the device's
+  `registryID`.
+
+The texture uploads themselves (S3) are unchanged: a second half still loads
+its textures through `ResourceStore` and MetalKit synchronously, about 51 ms
+over 19 loads for that scene. The `ResourceStore` texture API and its cache
+keys are untouched.
+
 **Where each build runs.** `StudioModel.asyncSourceBuilds` is set by the
 app for interactive runs without a window capture and for performance-trace
 runs. Captures and scenarios leave it off.
@@ -1508,12 +1580,17 @@ runs. Captures and scenarios leave it off.
 | --- | --- | --- |
 | Scene import (startup `IKKOKU_SOURCE_SCENE`, File menu) | `beginSourceSceneImport`: see below | `importSourceScenePreview`: one batch; each second half runs on the main thread where the import's walk reaches it |
 | Previews a refresh finds missing: after undo or redo, a duplicate, a scene load or a restored outfit | `startMissingSourceBuilds` starts one batch in document order; the second halves run on `com.grabbiel.Ikkoku.source-builds`, and each preview installs itself on the main actor (`installSourceBuild`) | the same batch; `refreshFrame` builds each preview where its loop reaches it, as before |
+| Route character copies of a Duplicate | `startSourceRouteCharacterBuilds`: one batch in subtree order, borrowing the original's assembly; the second halves run on the build queue, and each copy installs itself on the main actor (`installSourceRouteCharacterBuild`) | `copySourceRouteRuntime` builds each copy on the main thread, as before |
 | Route characters of a rehydration (scene load, undo or redo) | one batch, built on the main thread in walk order | the same |
-| One character: outfit selection, a plugin attachment's parent, an export validation baseline | unchanged: the full initializer on the main thread | the same |
+| One character: outfit selection, a plugin attachment's parent, an export validation baseline | both halves on the main thread, with a prefetching decode share (`sourceRigShare()`); an outfit selection and an attachment parent borrow a donation when one matches | the same |
 
-`makeSourceCharacterPreview(reference:outfit:)` builds one preview on the
-main thread with a donation when one matches, for a caller that needs a
-single route character.
+`makeSourceCharacterPreview(reference:outfit:appearanceTransaction:)`
+builds one preview on the main thread. It borrows a loaded or kept
+donation when one matches, and otherwise decodes with a prefetching share.
+It serves a synchronous route character copy, an outfit selection and a
+plugin attachment's parent. The export validation baseline uses the share
+but no donation: its preview is dropped after the export, and taking a kept
+donation would lose it.
 
 **Background import.** `beginSourceSceneImport` runs in three parts:
 
@@ -1551,7 +1628,33 @@ Otherwise it is dropped. A failed build is kept per object, and the frame
 reports its error on the status line, like the synchronous build, without
 retrying it every frame. A later change of that object's reference or
 outfit builds again. `pendingSourceCharacterBuilds` counts the builds in
+flight, route character copies included.
+
+**Route character copies in the background.** A Duplicate of a route with
+its character registers the copy's build before the copies enter the
+document, so the first refresh already leaves out the copy's character and
+anything attached to it. The copy installs only while its placeholder is
+still in the document showing the same record of the same scene, the prune
+rule the frame applies to route previews. A failure shows the synchronous
+copy's message ("Route character copy: …"). An undo that removes the copy
+before its build lands drops the build, cancels its batch once no other
+object waits on it, and takes the copy out of the runtime coverage, so a
+redo rehydrates it like an installed copy. An import's commit, a
+rehydration's install and `cancelSourceBuilds()` cancel the copies in
 flight.
+
+**The frame after an install.** Each install used to refresh the whole
+frame on the main thread, seven times for an undo that rebuilds seven
+characters. Now, while the live step runs (live animation, a playing
+timeline or running plugins) and no drag holds the frame, an install leaves
+the frame to the next live step's refresh, at most one 30 Hz period later,
+which evaluates the new character's pose on the step's workers with the
+others. Several installs before that step share one refresh. If no refresh
+came within 0.1 s, the install refreshes then. Without live steps, or
+during a drag, an install refreshes at once, as before. Each deferral emits
+the `studioInstallRefreshDeferred` trace event.
+`IKKOKU_PERF_INSTALL_REFRESH=each` restores a refresh per install
+(measurement control).
 
 **Cancellation.** `cancelSourceBuilds()` runs on the main actor for a new
 import (synchronous or background), New Scene and a scene load. It cancels
@@ -1603,20 +1706,29 @@ distance and item order when transparent).
 **Concurrency checking.** Three new `@unchecked Sendable` types, each with
 its invariant written on the type:
 
-- `SourceRigDecodeShare`: an `NSCondition` guards its slots and counts;
+- `SourceRigDecodeShare`: an `NSCondition` guards its slots and counts,
+  and the prefetch's file set and stop flag;
 - `SourceStudioCharacterBatch`: an `NSCondition` guards the assemblies, the
   next index, the cancel flag and the counts; the requests, the store and
   the share are immutable;
 - `SourceStudioCharacterBatch.Delivery`: a preview crossing to the main
   actor that has no other owner.
 
-`Assembly` and `Donation` are plain `Sendable` values.
+`Assembly` and `Donation` are plain `Sendable` values. The compositors'
+queue registry is a `nonisolated(unsafe)` static dictionary under an
+`NSLock`. `SourceStudioDonationCache` is not `Sendable`: only the main actor
+touches it.
 
 **Tests** (`SourceStudioCharacterBatchTests.swift`):
 
 - Without fixtures, the decode share decodes each distinct file once, and
   every result equals a plain decode. It keeps no failed decode and decodes
   it again later. Sixteen concurrent requests for one file run one decode.
+- Without fixtures, a prefetch reads and decodes each named file once: two
+  files and a copy of the first decode twice, a missing file is skipped, a
+  file named again is not read again, and the later requests answer from
+  the prefetched decodes with results equal to plain decodes. A stopped
+  share and one made with `prefetches: false` start nothing.
 - With the Studio scenario fixtures:
   - A 7-character batch equals 7 sequential builds: the same diagnostics,
     the same source rig, the same store mesh IDs and byte-identical pixels
@@ -1629,8 +1741,15 @@ its invariant written on the type:
   - A preview built from a donation renders byte-identical to a fresh build,
     and an edit of the copy leaves the original's render unchanged. A
     donation is not used for another store or another outfit.
+  - The 7-character batch, with its prefetch, runs the same decodes as
+    first halves without it (10 and 10, from 10 prefetched files).
+  - Three deleted characters' donations kept in a cache with room for two
+    keep the two newest. Once their previews are gone, the store holds what
+    it held before them. The evicted character has no donation, and the
+    character restored from its kept donation borrows it, with a fresh
+    build's diagnostics and byte-identical pixels.
 
-  These three run one at a time, each on a thread of its own
+  These four run one at a time, each on a thread of its own
   (`liveTickOffPool`), and the test's task reports their checks. A build
   blocks its thread in MetalKit's synchronous texture load. On the test
   pool, they were among the tests holding all 24 pool threads blocked there
@@ -1646,6 +1765,36 @@ import and a duplicate also run with the Studio hidden while their builds
 land, and the frame standing in for the Maker's must stay current. The
 op is described in `Tools/verification/README.md`. When the op skipped its
 wait for the builds, three of its four steps failed.
+
+Other tests of the follow-up:
+
+- `SourceStudioDonationCacheTests.swift`, without fixtures: the cache evicts
+  the oldest donations to stay within its bytes and its entries, refuses a
+  donation larger than the whole budget, replaces an older donation of the
+  same character, outfit and store, keeps nothing with no entries allowed,
+  and `take` removes what it returns.
+- `sourceMakerLibraryRigFilesNameEveryDecodeOfThePreparationInItsOrder`
+  (`SourceMakerLibraryTests.swift`): a recording decoder sees exactly the
+  files `rigFiles` names, in its order.
+- `sourceMaterialCompositorsShareOneQueueAndComposeTheSameBytes`
+  (`SourceMaterialGroupTests.swift`): two compositors of one device share a
+  queue, and a composition through either gives the same bytes. Byte
+  identity with the per-compositor queues is shown by the captures.
+
+The strict Studio lane's `studio-scenario-background-build-route` check runs
+`Tools/verification/scenarios/background-build-route.json` on the
+route-children scene. Its `duplicateRoute` and `duplicateRouteWhileHidden`
+builds duplicate route 0 with its folder and character. The synchronous
+Duplicate, Undo and Redo are the reference for the background ones, after
+each of which the document summary and a 512² render must be byte-identical.
+The background Duplicate must build no route character preview on the main
+thread, and a Duplicate undone before its copy's build lands must leave no
+build pending. Before this change's history fix, the hidden Redo differed
+from the synchronous one by 30,501 pixels: an undo or redo that rehydrated
+the source runtime drew the frame before the rehydrated route previews
+existed, so a redone route copy showed without its character until
+something else refreshed. `applyHistoryDocument` now refreshes once more
+after a rehydration.
 
 ## Checked math, legacy skeletons and cameras (R4)
 

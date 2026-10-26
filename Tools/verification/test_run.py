@@ -821,7 +821,7 @@ class StudioScenarioLaneTests(unittest.TestCase):
                       and not name.startswith(("maker-", "gameplay-")))
 
     def test_lane_validates_and_covers_every_scenario(self):
-        self.assertEqual(len(self.checks), 77)
+        self.assertEqual(len(self.checks), 78)
         referenced = set()
         for check in self.checks:
             scenario = check["env"]["IKKOKU_STUDIO_SCENARIO"]
@@ -872,7 +872,8 @@ class StudioScenarioLaneTests(unittest.TestCase):
                 self.assertIn(op, SCENARIO_OPS, "unknown op in %s" % path)
                 if op == "backgroundBuild":
                     self.assertIn(step["build"], ("import", "importTwice", "importThenNewScene", "importWhileHidden",
-                                                  "duplicate", "duplicateWhileHidden"))
+                                                  "duplicate", "duplicateWhileHidden",
+                                                  "duplicateRoute", "duplicateRouteWhileHidden"))
                     if step["build"].startswith("duplicate"):
                         self.assertIs(type(step["key"]), int)
                 if op == "measureAccessoryLabels":

@@ -84,6 +84,38 @@ private func sameRig(_ a: SourceRig, _ b: SourceRig) -> Bool {
     #expect(counts.decodes == 1 && counts.hits + counts.waits == 15 && counts.failures == 0)
 }
 
+/// R7 phase 2 item 6 follow-up: a prefetch reads and decodes each named file
+/// once, keyed by its bytes like every other request, so the preparation's
+/// own request answers from it. Missing files are skipped, files with equal
+/// bytes decode once, and a stopped share starts nothing.
+@Test func sourceRigDecodeSharePrefetchDecodesEachFileOnceForTheLaterRequest() throws {
+    let folder = FileManager.default.temporaryDirectory.appendingPathComponent("r7i-prefetch-\(UUID().uuidString)")
+    try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: folder) }
+    let a = try batchEncodedRig("a"), b = try batchEncodedRig("b", offset: 0.5)
+    let fileA = folder.appendingPathComponent("a.json"), fileB = folder.appendingPathComponent("b.json")
+    let copyA = folder.appendingPathComponent("copy-of-a.json"), missing = folder.appendingPathComponent("missing.json")
+    try a.write(to: fileA); try b.write(to: fileB); try a.write(to: copyA)
+    let share = SourceRigDecodeShare()
+    share.prefetch([fileA, fileB, copyA, missing, fileA])
+    share.waitForPrefetches()
+    // The copy's equal bytes find a's decode finished or in flight.
+    let prefetched = share.counts
+    #expect(prefetched.decodes == 2 && prefetched.hits + prefetched.waits == 1 && prefetched.prefetches == 4 && prefetched.failures == 0)
+    let sharedA = try share.decode(a), sharedB = try share.decode(b)
+    #expect(try sameRig(sharedA, SourceRig.decode(a)) && sameRig(sharedB, SourceRig.decode(b)))
+    #expect(share.counts.decodes == 2 && share.counts.hits == prefetched.hits + 2)
+    // A file named again is not read again.
+    share.prefetch([fileA, fileB])
+    share.waitForPrefetches()
+    #expect(share.counts.prefetches == 4 && share.counts.hits == prefetched.hits + 2)
+    let stopped = SourceRigDecodeShare(), off = SourceRigDecodeShare(prefetches: false)
+    stopped.stopPrefetching()
+    stopped.prefetch([fileA]); off.prefetch([fileA])
+    stopped.waitForPrefetches(); off.waitForPrefetches()
+    #expect(stopped.counts == .init() && off.counts == .init())
+}
+
 /// Results written from concurrent iterations.
 private final class OSAllocatedResults: @unchecked Sendable {
     private let lock = NSLock()
@@ -215,6 +247,16 @@ private func batchScene(_ previews: [SourceStudioCharacterPreview], renderer: Re
     func sourceStudioCharacterDonationRendersLikeAFreshBuildWhenSupplied() async throws {
         for check in try await liveTickOffPool(batchDonationRendersLikeAFreshBuild) { #expect(check.passed, "\(check.name)") }
     }
+
+    /// R7 phase 2 item 6 follow-up: a deleted character's donation, kept in
+    /// the bounded cache after its preview is gone, holds no store resource,
+    /// and the build that restores the character borrows it and renders
+    /// byte-identical to a fresh build. The budget evicts the oldest.
+    @Test(.enabled(if: SourceFixtureSupport.shouldRun(batchVariables) && MTLCreateSystemDefaultDevice() != nil,
+                   "Requires the Studio scenario scene and its import fixtures (\(batchVariables.joined(separator: ", "))) and a Metal device"))
+    func sourceStudioDeletedCharacterDonationRendersLikeAFreshBuildWhenSupplied() async throws {
+        for check in try await liveTickOffPool(batchDeletedCharacterDonation) { #expect(check.passed, "\(check.name)") }
+    }
 }
 
 private func batchMatchesSequentialBuilds() throws -> [BatchCheck] {
@@ -228,6 +270,16 @@ private func batchMatchesSequentialBuilds() throws -> [BatchCheck] {
     print("[r7g-batch] \(references.count) characters, rig decodes \(counts.decodes), shared \(counts.hits + counts.waits)")
     var checks: [BatchCheck] = [("rig files decode and are shared without failures",
                                  counts.decodes > 0 && counts.hits + counts.waits > 0 && counts.failures == 0)]
+    // The prefetch (on by default) starts no decode the preparations do not
+    // need: the same distinct decodes as first halves without it.
+    batch.rigs.waitForPrefetches()
+    let plain = SourceRigDecodeShare(prefetches: false)
+    for reference in references {
+        _ = try SourceStudioCharacterPreview.assemble(reference: reference, resources: batchRenderer.resources, rigs: plain)
+    }
+    print("[r7i-prefetch] prefetched files \(batch.rigs.counts.prefetches), decodes \(batch.rigs.counts.decodes), without prefetch \(plain.counts.decodes)")
+    checks.append(("the prefetch adds no decode", batch.rigs.counts.prefetches > 0 && plain.counts.prefetches == 0
+        && batch.rigs.counts.decodes == plain.counts.decodes && batch.rigs.counts.failures == 0))
     for (index, (a, b)) in zip(sequential, built).enumerated() {
         checks.append(("character \(index): the same diagnostics", a.diagnostics == b.diagnostics))
         checks.append(("character \(index): the same selections and clothes state",
@@ -315,5 +367,43 @@ private func batchDonationRendersLikeAFreshBuild() throws -> [BatchCheck] {
     checks.append(("the edit must change the copy's render", bent != base))
     checks.append(("the same edit renders the same on a fresh build", try render(fresh, fk: [bone: Float3(35, -20, 10)]) == bent))
     checks.append(("editing the copy leaves the original's render", try render(original) == base))
+    return checks
+}
+
+private func batchDeletedCharacterDonation() throws -> [BatchCheck] {
+    let references = Array(try batchFixtureReferences().prefix(3))
+    try batchRequire(references.count == 3, "the scenario scene must hold three characters")
+    let renderer = try makeSourceShaderRenderer(), resources = renderer.resources
+    // Warm the shared texture cache, as the cancellation test does.
+    _ = try references.map { try SourceStudioCharacterPreview(reference: $0, resources: resources) }
+    let before = resources.statistics()
+    var previews = try references.map { try SourceStudioCharacterPreview(reference: $0, resources: resources) }
+    let charges = try previews.map { try batchUnwrap(SourceStudioDonationCache.charge($0.donation), "a donation has no charge") }
+    print("[r7i-donation] logical charge per character (bytes): \(charges)")
+    // Room for the last two: keeping all three evicts the first.
+    let cache = SourceStudioDonationCache(maximumBytes: charges[1] + charges[2], maximumEntries: 8)
+    for preview in previews { cache.keep(preview.donation) }
+    var checks: [BatchCheck] = [
+        ("the budget keeps the two newest", cache.count == 2 && cache.bytes == charges[1] + charges[2] && cache.counts.evicted == 1),
+    ]
+    // The characters are deleted: their previews go, the donations stay.
+    previews.removeAll()
+    let after = resources.statistics()
+    checks.append(("kept donations hold no store resource", before.meshes == after.meshes && before.textures == after.textures
+        && before.meshBufferBytes == after.meshBufferBytes && before.hiddenBuffers == after.hiddenBuffers))
+    checks.append(("the evicted character has no donation", cache.take { $0.reference == references[0] } == nil))
+    let donation = cache.take { $0.reference == references[1] }
+    checks.append(("the deleted character's donation is kept", donation != nil && cache.count == 1))
+    let batch = SourceStudioCharacterBatch(requests: [.init(reference: references[1], donation: donation)], resources: resources)
+    let restored = try batch.build(0)
+    let fresh = try SourceStudioCharacterPreview(reference: references[1], resources: resources)
+    checks.append(("the restored character borrows the kept assembly", restored.sharedAssembly && !fresh.sharedAssembly))
+    checks.append(("the restored character has a fresh build's diagnostics", restored.diagnostics == fresh.diagnostics))
+    func render(_ preview: SourceStudioCharacterPreview) throws -> [UInt8] {
+        let frame = try preview.frame(camera: OrbitCamera(), mainLight: MainLight(), effects: SceneEffects(),
+                                      world: matrix_identity_float4x4, objectID: 1)
+        return try batchPixels(try batchUnwrap(renderer.capture(frame: frame, width: 256, height: 256), "the capture failed"))
+    }
+    checks.append(("the restored character renders like a fresh build", try render(restored) == render(fresh)))
     return checks
 }

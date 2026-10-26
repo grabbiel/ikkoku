@@ -2297,6 +2297,40 @@
       "timeout": 1200
     },
     {
+      "id": "studio-scenario-background-build-route",
+      "argv": [
+        ".local/build/Build/Products/Debug/Ikkoku.app/Contents/MacOS/Ikkoku"
+      ],
+      "fixtures": [
+        {
+          "env": "IKKOKU_SOURCE_SCENE",
+          "kind": "file",
+          "from": "IKKOKU_ROUTE_CHILDREN_SCENE"
+        },
+        {
+          "env": "IKKOKU_SOURCE_AVATAR",
+          "kind": "file"
+        },
+        {
+          "env": "IKKOKU_MAKER_LIBRARY",
+          "kind": "file"
+        }
+      ],
+      "env": {
+        "IKKOKU_STUDIO_SCENARIO": "Tools/verification/scenarios/background-build-route.json",
+        "IKKOKU_STUDIO_SCENARIO_REPORT": ".local/verification/reports/studio-scenario-background-build-route.json"
+      },
+      "referenceTier": "app-smoke",
+      "tolerance": "R7 phase 2, item 6 follow-up (ST-T11): on the CharaStudio-authored scene-route-children.png (route key 0 playing, children folder 9 and the fixture female 10), each backgroundBuild step duplicates route 0 with its folder and character. The synchronous Duplicate, Undo and Redo are the reference; with the interactive app's background builds (StudioModel.asyncSourceBuilds) the Duplicate must build no route character preview on the main thread, start the copy's build, and after the main run loop has installed it the document summary (tree labels, kinds, names, parents, visibility, import diagnostics, status, built and retained characters, runtime cache counts) and a 512x512 render must be byte-identical to the synchronous Duplicate; the Undo and the Redo (which rehydrates the copy) must match theirs too. A Duplicate undone before its copy's build lands must leave no build pending and match the synchronous Undo. The WhileHidden step hides the Studio as a switch to the Maker does while the builds land, and the stand-in frame must stay current. Live animation is paused during each step. A final synchronous Duplicate must give route 0 a copy with its 4 points, and the export of that scene must reimport with route 0 playing on its 4 points.",
+      "artifacts": [
+        {
+          "path": ".local/verification/reports/studio-scenario-background-build-route.json",
+          "kind": "scenario-report"
+        }
+      ],
+      "timeout": 900
+    },
+    {
       "id": "studio-scenario-reload-save-accessory-labels",
       "argv": [
         ".local/build/Build/Products/Debug/Ikkoku.app/Contents/MacOS/Ikkoku"
