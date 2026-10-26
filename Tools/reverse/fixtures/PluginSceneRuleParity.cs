@@ -8,6 +8,9 @@
 //   card <character key> <steps or !>       a character whose card names KKAnimationController data: the object
 //                                           keys NodesConstraints' card fallback attaches to, in order, up to its
 //                                           first certain abort ("!": the card does not decode)
+//   kkpeids <ids>                           every uniqueId and poseControllerId value in the scene file (KKPEPlan.ids)
+//   kkpecard <character key> <id> <current> a character whose card holds KKPE data: its controller ID and 1 when
+//                                           that data is in the current Extended Save block ("!": unreadable)
 //   case <scene> <delete|duplicate|add|routeAdd|routeDelete> <key> <object kind> <accepted|refused> <ids>
 using System;
 using System.Collections.Generic;
@@ -24,6 +27,8 @@ public static class PluginSceneRuleParity {
             case "object":scene.Keys.Add(Int(f[1]));scene.Kinds.Add(Int(f[2]));scene.Parents.Add(Int(f[3]));break;
             case "used":foreach(var k in List(f[1]))scene.Used.Add(Int(k));break;
             case "card":{List<int> steps=null;if(f[2]!="!"){steps=new List<int>();foreach(var k in List(f[2]))steps.Add(Int(k));}scene.Cards[Int(f[1])]=steps;break;}
+            case "kkpeids":foreach(var k in List(f[1]))scene.KkpeIds.Add(Int(k));break;
+            case "kkpecard":scene.KkpeCards[Int(f[1])]=f[2]=="!"?null:new[]{Int(f[2]),Int(f[3])};break;
             case "case":cases.Add(f);break;
             default:throw new FormatException("unknown corpus line "+f[0]);
             }

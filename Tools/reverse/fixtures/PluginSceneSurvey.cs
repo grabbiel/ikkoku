@@ -1,9 +1,9 @@
-// Survey 2 of original_plugin_scene_probe.py phase B: which single-target edits of the installed CharaStudio scenes
-// the original-scene writer accepts before and after ST-T03i, judged by PluginSceneRules (the parity-gated C# port
-// of the Swift rules). Runs inside the original player, last, after PluginSceneRuleParity has agreed with the Swift
-// corpus under the player's own compiler. Read-only: each scene is read into memory with sharing read, write and
-// delete; nothing is written but the counts the probe puts in survey2.json. No file name, path, hash, object name or
-// data value is kept.
+// Survey 3 of original_plugin_scene_probe.py phase C (survey 2 was phase B's): which single-target edits of the
+// installed CharaStudio scenes the original-scene writer accepts before ST-T03i and with the rewrites of ST-T03j,
+// judged by PluginSceneRules (the parity-gated C# port of the Swift rules). Runs inside the original player, last,
+// after PluginSceneRuleParity has agreed with the Swift corpus under the player's own compiler. Read-only: each scene
+// is read into memory with sharing read, write and delete; nothing is written but the counts the probe puts in
+// survey3.json. No file name, path, hash, object name or data value is kept.
 //
 // A scene whose KKEx block holds at least one entry has its object section read the way SceneInfo.Load reads it
 // (PngFile.SkipPng, the version string, then key, kind and ObjectInfo.Load for each root record), but without
@@ -26,6 +26,16 @@
 // before. In every scene the card counts say how many name links at all (any encoding), how many the fallback
 // would attach (Int32 values, "cardStepScenes"), how many reach an object of the scene ("cardLiveScenes"), and in
 // how many a single-target delete or copy hits one ("cardRefusedScenesByEditKind").
+//
+// KKPE's rewrite reads two more inputs (PluginSceneModel.KkpeIds and KkpeCards, as the Swift corpus model does):
+// every uniqueId and poseControllerId value in the scene file's bytes, and for each character whose card holds KKPE
+// data (ExtendedSave's "kkpe" entry, as the player loaded it) the characterInfo uniqueId and whether the card keeps
+// it in its current Extended Save block. A card keeps it there unless a legacy trailer ("KKEx", version 2, a
+// non-empty payload) follows the card's payload, which SourceCharacterCard.extensions selects instead (as the
+// installed plug-in's load postfix does). The survey finds each card by its "【KoiKatuChara" marker string in the
+// object section and reads the card's header lengths from there; when the markers do not pair one to one with the
+// characters of the walk, every KKPE card of that scene counts as legacy (a character copy is then refused) and
+// "kkpeCardMarkerMismatch" counts the scene.
 using System;
 using System.Collections;
 using System.Collections.Generic;
@@ -40,6 +50,7 @@ public sealed class PluginSceneSurvey {
     static readonly byte[] KKEx={0x04,0x4B,0x4B,0x45,0x78};
     public static readonly string[] EditKinds={"delete","duplicate","addFolder","addLight","addCamera","routeAdd","routeDelete"};
     const string CardController="com.deathweasel.bepinex.animationcontroller";
+    static readonly byte[] CardMarker=System.Text.Encoding.UTF8.GetBytes("【KoiKatuChara");
     sealed class Stats {
         public long Scenes;public bool Known,Orphan;
         public readonly SortedDictionary<string,long> Forms=new SortedDictionary<string,long>(StringComparer.Ordinal);
@@ -65,6 +76,8 @@ public sealed class PluginSceneSurvey {
     readonly List<long> objectCounts=new List<long>();
     // The current scene's routes in walk order: key and point count (points are sub-infos, not objects).
     readonly List<KeyValuePair<int,int>> routes=new List<KeyValuePair<int,int>>();
+    // The current scene's cards in file order: whether each has a legacy Extended Save trailer; null on a mismatch.
+    List<bool> legacyCards;int cardIndex;
 
     public PluginSceneSurvey(Studio.Studio studio,double seconds,long bound) {
         this.studio=studio;this.seconds=seconds;this.bound=bound;
@@ -78,7 +91,8 @@ public sealed class PluginSceneSurvey {
         foreach(var name in new[]{"files","oversize","unreadable","noEndMarker","noTrailer","otherTrailer","unreadableTrailer","emptyMap","entries",
                                   "loaded","loadError","remappedRoots","judgedEdits",
                                   "cardLinkScenes","cardLinkCharacters","cardStepScenes","cardLiveScenes","cardRefusedEdits",
-                                  "withoutEntriesLoaded","withoutEntriesLoadError","withoutEntriesWithSteps"})counts[name]=0;
+                                  "withoutEntriesLoaded","withoutEntriesLoadError","withoutEntriesWithSteps",
+                                  "kkpeCardCharacters","kkpeLegacyCards","kkpeUnreadableCards","kkpeCardMarkerMismatch"})counts[name]=0;
         foreach(var kind in EditKinds){after[kind]=Outcomes();before[kind]=Outcomes();unknownOnly[kind]=0;}
         withoutEntries["delete"]=Outcomes();withoutEntries["duplicate"]=Outcomes();
         cardHits["delete"]=0;cardHits["duplicate"]=0;
@@ -166,9 +180,11 @@ public sealed class PluginSceneSurvey {
     PluginSceneModel Model(byte[] data,byte[] trailer) {
         hashIndex.Clear();studio.dicChangeAmount.Clear();routes.Clear();namedLinks=0;
         var roots=new List<KeyValuePair<int,ObjectInfo>>();
+        int objectsStart,objectsEnd;
         using(var stream=new MemoryStream(data,false))
         using(var reader=new BinaryReader(stream)) {
             PngFile.SkipPng(reader);
+            objectsStart=(int)stream.Position;
             var version=new Version(reader.ReadString());
             int count=reader.ReadInt32();
             for(int i=0;i<count;i++) {
@@ -188,10 +204,18 @@ public sealed class PluginSceneSurvey {
                 if(info.dicKey!=key)counts["remappedRoots"]++;
                 roots.Add(new KeyValuePair<int,ObjectInfo>(key,info));
             }
+            objectsEnd=(int)stream.Position;
         }
         var scene=new PluginSceneModel();scene.Trailer=trailer;
+        legacyCards=LegacyCards(data,objectsStart,objectsEnd);cardIndex=0;
         foreach(var root in roots)Visit(scene,root.Value,root.Key,-1);
+        if(cardIndex>0&&(legacyCards==null||cardIndex!=legacyCards.Count)){
+            counts["kkpeCardMarkerMismatch"]++;
+            foreach(var card in scene.KkpeCards.Values)if(card!=null)card[1]=0;
+        }
+        foreach(var card in scene.KkpeCards.Values)if(card!=null&&card[1]==0)counts["kkpeLegacyCards"]++;
         foreach(var key in hashIndex)scene.Used.Add(key);
+        PluginSceneRules.KkpeIdsIn(data,scene.KkpeIds);
         return scene;
     }
 
@@ -201,6 +225,8 @@ public sealed class PluginSceneSurvey {
         if(chara!=null) {
             var steps=CardSteps(chara);
             if(steps!=null)scene.Cards[key]=steps;
+            bool legacy=legacyCards==null||cardIndex>=legacyCards.Count||legacyCards[cardIndex];cardIndex++;
+            KkpeCard(scene,chara,key,legacy);
             var points=new List<int>(chara.child.Keys);points.Sort();
             foreach(var point in points)foreach(var child in chara.child[point])Visit(scene,child,child.dicKey,key);
             return;
@@ -233,6 +259,56 @@ public sealed class PluginSceneSurvey {
         }
         if(eyes!=null){if(!(eyes is int))return steps;steps.Add((int)eyes);}
         return steps;
+    }
+
+    // KKPEPlan.card on the card ExtendedSave loaded: KKPE's characterInfo uniqueId, and 1 when the card keeps it in
+    // its current block (0 for a legacy trailer); null when the "kkpe" entry is not KKPE's form; no entry when the card
+    // has no KKPE data.
+    void KkpeCard(PluginSceneModel scene,OICharInfo chara,int key,bool legacy) {
+        if(chara.charFile==null)return;
+        var data=cardData.Invoke(null,new object[]{chara.charFile,"kkpe"});
+        if(data==null)return;
+        counts["kkpeCardCharacters"]++;
+        var map=data.GetType().GetField("data").GetValue(data) as IDictionary;
+        object xml=map!=null&&map.Contains("characterInfo")?map["characterInfo"]:null;
+        int id;
+        if(!(xml is string)||!PluginSceneRules.KkpeCardId((string)xml,out id)){counts["kkpeUnreadableCards"]++;scene.KkpeCards[key]=null;return;}
+        scene.KkpeCards[key]=new[]{id,legacy?0:1};
+    }
+
+    // Each card between start and end, in file order: whether a legacy Extended Save trailer ("KKEx", version 2, a
+    // non-empty payload) follows its payload, read the way SourceCharacterCard.decode reads the card from its marker
+    // string (version, face PNG, block header, payload size); null when a card's lengths run past the object section.
+    static List<bool> LegacyCards(byte[] data,int start,int end) {
+        var result=new List<bool>();
+        for(int at=start;;) {
+            int found=Find(data,CardMarker,at,end);
+            if(found<0)return result;
+            if(found<1)return null;
+            at=found+CardMarker.Length;
+            using(var stream=new MemoryStream(data,found-1,end-(found-1),false))
+            using(var reader=new BinaryReader(stream)) {
+                try {
+                    reader.ReadString();reader.ReadString();
+                    stream.Seek(reader.ReadInt32(),SeekOrigin.Current);
+                    stream.Seek(reader.ReadInt32(),SeekOrigin.Current);
+                    stream.Seek(reader.ReadInt64(),SeekOrigin.Current);
+                    if(stream.Position>stream.Length)return null;
+                } catch(Exception){return null;}
+                bool legacy=false;
+                try{legacy=reader.ReadString()=="KKEx"&&reader.ReadInt32()==2&&reader.ReadInt32()>0;}catch(Exception){}
+                result.Add(legacy);
+            }
+        }
+    }
+
+    static int Find(byte[] data,byte[] marker,int from,int end) {
+        for(int i=from;i+marker.Length<=end;i++) {
+            bool match=true;
+            for(int j=0;j<marker.Length&&match;j++)if(data[i+j]!=marker[j])match=false;
+            if(match)return i;
+        }
+        return -1;
     }
 
     void Judge(PluginSceneModel scene) {
