@@ -1,6 +1,4 @@
-// Internal: Accelerate stays out of the modules that import Renderer, whose
-// type checking its overloads would otherwise change (Swift 6.3 on CI).
-internal import Accelerate
+import Accelerate
 import CoreGraphics
 import Foundation
 import ImageIO
