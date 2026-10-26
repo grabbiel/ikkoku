@@ -63,13 +63,35 @@ private var dynamicsRepositoryURL: URL {
         .deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
 }
 
-private func checkDynamicsReference(_ fixture: DynamicsReferenceFixture, original: Bool) throws {
+/// The checkout that owns a private reference: the parent of the nearest
+/// `.local` directory above it, as the path was given (not symlink-resolved).
+/// Older generated references store `.local/...` evidence relative to that
+/// checkout, which is not this source tree when the tests run in a worktree.
+private func dynamicsFixtureRoot(of reference: URL) -> URL? {
+    var directory = reference.deletingLastPathComponent()
+    while directory.path != "/" {
+        if directory.lastPathComponent == ".local" { return directory.deletingLastPathComponent() }
+        directory = directory.deletingLastPathComponent()
+    }
+    return nil
+}
+
+private func checkDynamicsReference(_ fixture: DynamicsReferenceFixture, original: Bool, reference: URL? = nil) throws {
     #expect(fixture.schemaVersion == 1)
     if original {
         let evidence = try #require(fixture.evidence)
         let sourceEvidence = try #require(fixture.managedAndBundleEvidence)
         for entry in evidence + sourceEvidence {
-            let url = entry.path.hasPrefix("/") ? URL(fileURLWithPath: entry.path) : dynamicsRepositoryURL.appendingPathComponent(entry.path)
+            let url: URL
+            if entry.path.hasPrefix("/") {
+                url = URL(fileURLWithPath: entry.path)
+            } else {
+                // Relative entries name the reference's own checkout; the
+                // hash check below still pins every byte they resolve to.
+                let root = try #require(reference.flatMap(dynamicsFixtureRoot),
+                                        "Relative dynamics evidence \(entry.path) needs a reference under a .local directory")
+                url = root.appendingPathComponent(entry.path)
+            }
             let hash = SHA256.hash(data: try Data(contentsOf: url)).map { String(format: "%02x", $0) }.joined()
             try #require(hash == entry.sha256, "Stale dynamics reference input: \(entry.path)")
         }
@@ -121,6 +143,27 @@ private func checkDynamicsReference(_ fixture: DynamicsReferenceFixture, origina
     print("Dynamics oracle \(original ? "original" : "synthetic"): max state \(maximumStateError), world \(maximumWorldError), collision \(maximumCollisionError)")
 }
 
+/// A generated reference may name `.local/...` evidence relative to the checkout
+/// that owns it. That root is found from the reference's own path, so a test
+/// run from another worktree checks the same pinned bytes.
+@Test func sourceDynamicsRelativeEvidenceResolvesAgainstTheReferencesOwnCheckout() throws {
+    let checkout = FileManager.default.temporaryDirectory.appendingPathComponent("dynamics-root-\(UUID().uuidString)")
+    defer { try? FileManager.default.removeItem(at: checkout) }
+    let local = checkout.appendingPathComponent(".local"), folder = local.appendingPathComponent("reverse/dynamics/run")
+    try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+    let evidence = Data("pinned evidence".utf8)
+    try evidence.write(to: local.appendingPathComponent("reverse/evidence.json"))
+    let hash = SHA256.hash(data: evidence).map { String(format: "%02x", $0) }.joined()
+    let document = "{\"schemaVersion\": 1, \"scenarios\": [], \"collisions\": [], \"evidence\": [], "
+        + "\"managedAndBundleEvidence\": [{\"path\": \".local/reverse/evidence.json\", \"sha256\": \"\(hash)\"}]}"
+    let reference = folder.appendingPathComponent("reference.json")
+    try Data(document.utf8).write(to: reference)
+    #expect(dynamicsFixtureRoot(of: reference)?.standardizedFileURL == checkout.standardizedFileURL)
+    #expect(dynamicsFixtureRoot(of: checkout.appendingPathComponent("reference.json")) == nil)
+    let fixture = try JSONDecoder().decode(DynamicsReferenceFixture.self, from: Data(contentsOf: reference))
+    try checkDynamicsReference(fixture, original: true, reference: reference)
+}
+
 @Test func sourceDynamicsMatchesIndependentFloat32Oracle() throws {
     let url = dynamicsRepositoryURL.appendingPathComponent("Tools/reverse/fixtures/dynamics-reference.json")
     let fixture = try JSONDecoder().decode(DynamicsReferenceFixture.self, from: Data(contentsOf: url))
@@ -131,12 +174,12 @@ private func checkDynamicsReference(_ fixture: DynamicsReferenceFixture, origina
 @Test(.enabled(if: SourceFixtureSupport.shouldRun(["IKKOKU_SOURCE_DYNAMICS_REFERENCE"]),
                "Requires IKKOKU_SOURCE_DYNAMICS_REFERENCE"))
 func sourceDynamicsOriginalHairMatchesIndependentOracleWhenRequested() throws {
-    let path = try SourceFixtureSupport.require("IKKOKU_SOURCE_DYNAMICS_REFERENCE")
-    let fixture = try JSONDecoder().decode(DynamicsReferenceFixture.self, from: Data(contentsOf: URL(fileURLWithPath: path)))
+    let reference = URL(fileURLWithPath: try SourceFixtureSupport.require("IKKOKU_SOURCE_DYNAMICS_REFERENCE"))
+    let fixture = try JSONDecoder().decode(DynamicsReferenceFixture.self, from: Data(contentsOf: reference))
     #expect(fixture.sourceAvatar != nil && fixture.scenarios.count == 5)
     #expect(fixture.scenarios.reduce(0) { $0 + $1.definition.particles.count } == 20)
     #expect(fixture.scenarios.allSatisfy { $0.definition.colliders.count == 24 && $0.frames.count == 20 })
-    try checkDynamicsReference(fixture, original: true)
+    try checkDynamicsReference(fixture, original: true, reference: reference)
 }
 
 @Test func sourceDynamicsCapsuleAxisDoesNotAcquireReassociatedRadialOffset() throws {
@@ -189,9 +232,9 @@ func sourceStudioDynamicsOriginalPostPoseMatchesIndependentOracleWhenRequested()
 @Test(.enabled(if: SourceFixtureSupport.shouldRun(["IKKOKU_SKIRT_DYNAMICS_REFERENCE"]),
                "Requires IKKOKU_SKIRT_DYNAMICS_REFERENCE"))
 func sourceDynamicsOriginalSkirtMatchesIndependentOracleWhenRequested() throws {
-    let path = try SourceFixtureSupport.require("IKKOKU_SKIRT_DYNAMICS_REFERENCE")
-    let fixture = try JSONDecoder().decode(DynamicsReferenceFixture.self, from: Data(contentsOf: URL(fileURLWithPath: path)))
+    let reference = URL(fileURLWithPath: try SourceFixtureSupport.require("IKKOKU_SKIRT_DYNAMICS_REFERENCE"))
+    let fixture = try JSONDecoder().decode(DynamicsReferenceFixture.self, from: Data(contentsOf: reference))
     #expect(fixture.scenarios.count == 16)
     #expect(fixture.scenarios.allSatisfy { $0.frames.count == 60 && $0.definition.group == .skirt })
-    try checkDynamicsReference(fixture, original: true)
+    try checkDynamicsReference(fixture, original: true, reference: reference)
 }

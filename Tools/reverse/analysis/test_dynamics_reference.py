@@ -4,7 +4,7 @@ import unittest
 
 import numpy as np
 
-from dynamics_reference import REPO, ParticleReference, collider, collide, node, synthetic_document, v
+from dynamics_reference import REPO, ParticleReference, checkout_evidence, collider, collide, node, synthetic_document, v
 
 
 class DynamicsReferenceTests(unittest.TestCase):
@@ -64,6 +64,17 @@ class DynamicsReferenceTests(unittest.TestCase):
     def test_checked_in_fixture_matches_generator(self):
         fixture = json.loads((REPO / 'Tools/reverse/fixtures/dynamics-reference.json').read_text())
         self.assertEqual(fixture, synthetic_document())
+
+    def test_contract_evidence_is_recorded_with_absolute_checkout_paths(self):
+        # Both original documents copy contract evidence; a relative entry
+        # must not depend on the directory a later test runs from.
+        relative = {'path': 'Tools/reverse/fixtures/dynamics-reference.json', 'sha256': 'kept'}
+        absolute = {'path': str(REPO.resolve() / 'Tools'), 'sha256': 'also kept'}
+        resolved = checkout_evidence([relative, absolute])
+        self.assertEqual(resolved, [{'path': str((REPO / relative['path']).resolve()), 'sha256': 'kept'},
+                                    {'path': absolute['path'], 'sha256': 'also kept'}])
+        self.assertTrue(all(entry['path'].startswith('/') for entry in resolved))
+        self.assertEqual(relative['path'], 'Tools/reverse/fixtures/dynamics-reference.json')
 
 
 if __name__ == '__main__':
