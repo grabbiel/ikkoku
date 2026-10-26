@@ -96,6 +96,95 @@ plugin execution is limited to the accepted IR subset and two exact behavior
 adapters. General patchers, Harmony behavior and native helper executables have
 no native host.
 
+## Scene plug-in data in edited original scenes
+
+Reviewed 2026-10-25. An edited original scene that deletes, copies or adds
+records, or adds or deletes route points, keeps or rewrites each ExtendedSave
+entry, or the export is refused and the reason names the plug-in. The contract
+is [scene editing, plug-in data](../studio/scene-editing.md#plug-in-data-st-t03i).
+This section records what the installed plug-ins do when CharaStudio saves such
+an edit, where that differs from a clean rewrite, and what the writer does
+instead. Citations name the DLL by SHA-256 prefix, then `file:line` in its
+project under `.local/stt03i-plugin-data/recovered/<SHA-256>/project/`.
+
+ExtendedSave (`7b1c7f04…`, ExtensibleSaveFormat/ExtendedSave.cs:846–871) keeps
+every loaded entry that no plug-in replaces during the save, and it drops nil
+entries. KKAPI catches each scene controller's exception and logs it
+(`7f4f50e1…`, KKAPI.Studio.SaveLoad/StudioSaveLoadApi.cs:279–286), so a
+controller whose save throws also keeps its loaded entry.
+
+- **ItemLayerEdit leaves a stale entry.** `keelhauled.itemlayeredit`
+  (`bcf52291…`, ItemLayerEdit.Koikatu/SceneDataController.cs:32–54) calls
+  `SetExtendedData` only when some item still has a changed layer.
+  - **Stale data.** After the last layered item is deleted, CharaStudio's save
+    carries the old `SavedLayers` list, whose `ObjectId` keys no longer exist.
+  - **Wrong item.** The load applies each record to whatever item holds that key
+    (:15–29). An item that later takes a freed key loads with the stored layer.
+  - **What we do instead.** We refuse a delete of any item the entry names, and
+    a copy of one, because the plug-in gives the copy its template's layer
+    (:56).
+  - LightManager (`20ff6c3c…`, `keelhauled.lightmanager`,
+    LightManager.Koikatu/SceneDataController.cs:47–73) saves the same way. No
+    installed scene carries its ID and it has no rule, so its entry would refuse
+    every export that adds, deletes or copies objects or edits route points.
+- **SaveCameraObjectFov throws on a copied camera.**
+  `com.rikkibalboa.bepinex.savecameraobjectfov` (`6d51babb…`) keeps a field
+  of view per camera.
+  - **Fill.** The table gains a camera only when the camera is viewed
+    (Plugins/SaveCameraObjectFov.cs:64–90) or loaded with the entry
+    (Plugins/SceneController.cs:40–).
+  - **Throw.** The save reads the table for every live camera (:24). A copied or
+    new camera that was never viewed throws, so CharaStudio keeps the loaded
+    entry.
+  - **Positions.** `cameraIndex` and `previousCameraIndex` are positions in the
+    camera selector, where 0 is the main camera.
+  - **What we do instead.**
+    - We keep the entry when cameras are added or copied, which is what that
+      save produces when the new camera is not viewed first.
+    - We refuse a delete of a camera the entry names.
+    - We refuse any camera add, copy or delete when either index is not 0.
+- **StudioItemIK stores world-space poses.** `org.njaecha.plugins.StudioItemIK`
+  (`c70ff74d…`) saves each chain's bones as world-space positions and rotations
+  (StudioItemIK/FabrikIK.cs:265–289) and restores them in world space
+  (:296–310).
+  - **Load.** It indexes the loaded objects without a check
+    (StudioItemIK/SceneController.cs:36–70), so a missing IK item, target or
+    pole throws inside the load.
+  - **What we do.** We refuse deleting or copying any item the entry names.
+  - **Limit.** A move keeps the entry as before. The chain then loads from its
+    pre-move world pose, where CharaStudio would save the pose the chain has
+    after the move. This is not checked in the original player.
+- **Sideloader stops at a missing object.**
+  `com.bepis.sideloader.universalautoresolver` (`dc3b1c3d…`) indexes the scene
+  dictionary by each record's `SceneDicKey` without a check
+  (Sideloader.AutoResolver/UniversalAutoResolver.cs:1334, :1342). A record for an
+  object the scene lacks throws inside `SceneBeingLoaded`, and every later
+  record stays unresolved.
+  - CharaStudio never writes such a record, because its save rebuilds the list
+    from the live objects (:560–775).
+  - **What we do.** We drop the records of deleted objects. We refuse a scene
+    whose records name an object it does not have, or one of the wrong kind.
+- **NodesConstraints adopts card links on every load.** No installed DLL
+  declares KK_AnimationController, so `NodesConstraints.OnSceneLoad`
+  (`817fd940…`, NodesConstraints/NodesConstraints.cs:2061–2068) runs
+  `LoadDataFromKKAnimationController` (:2259) on each load.
+  - **Effect.** It turns the KKAnimationController links on character cards into
+    constraints by object key, and CharaStudio's next save writes them as
+    `nodesConstraints` data. A scene `AnimationInfo` list, even an empty one,
+    turns the cards off.
+  - **Aborts.** Each link is cast and looked up before it attaches (:2296–2306).
+    A failed cast or a missing object ends that character's remaining links
+    (catch at :2309).
+  - **Int32 only.** The game's MessagePack boxes an `int` only for Int32 (`0xd2`)
+    values (PrimitiveObjectFormatter.cs:161–187), and MessagePack-CSharp writes
+    non-negative ints in shorter forms, so links written that way are inert.
+  - **What we do.** We read each card's links up to the first abort. We refuse
+    a delete of an object a reached link names, a copy of a linked character
+    together with such an object (NodesConstraints' duplicate patch, :648–734,
+    would constrain the copy to the copy), and a delete with a copy when a
+    card has links (#278). A copied character alone, a copied target alone and
+    every other edit carry the card and the trailer as before.
+
 ## Archive importer
 
 `Tools/mods/zipmod.py` produces a new package directory atomically. The standard-library path preserves and indexes files; `--textures` uses the existing UnityPy environment for optional Texture2D conversion. Existing output directories are rejected, so regeneration uses a new destination rather than replacing a package in use.
