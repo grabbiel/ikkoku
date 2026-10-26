@@ -563,7 +563,7 @@ public enum SourceShaderBindingDerivation {
         /// The verified high-detail female head-0 `CustomTextureControl` uses
         /// the same create pass as `CustomTextureCreate`, then binds its target
         /// to `matDraw._MainTex`. Only the independently gated stock cheek
-        /// layer may be nonzero; the other makeup layers remain null.
+        /// and lipline layers may be nonzero; the other layers remain null.
         func faceComposite(materialSlot: Int, drawMaterial: String) -> Set_.TextureIdentity {
             var identity = composite(hiPoly ? 1024 : 512,
                 creator: "CustomTextureControl face: cf_m_face_create (chara/mm_base.unity3d) over head MainTex, skin and selected makeup inputs")
@@ -664,6 +664,42 @@ public enum SourceShaderBindingDerivation {
                           input.width == 832, input.height == 312, input.mipLevels == 1,
                           input.filter == "Bilinear", input.wrap == "Clamp", input.aniso == 1 else {
                         return unsupported("face composite cheek ID1 source texture identity or sampler is not verified")
+                    }
+                    recipe.textures[layer.property]?.identity = input
+                    continue
+                }
+                if layer.property == "_Texture5", card.number(layer.path) == 1 {
+                    guard let selected = headRowsByID[404]?[1], selected.table == "mt_lipline_00",
+                          selected.serializedFile == "CAB-f743f6c65c10409f82c314d690dc0d13",
+                          selected.pathID == "3157866646249929324",
+                          bundleSHA["list/characustom/00.unity3d"] == "5fe4e6811dc6d2e6edd0153cd73f989991c18573c654e1cbeafec821744a0ded",
+                          bundleSHA["chara/mt_lipline_00.unity3d"] == "f919dc7780b5fbf7fa31dde421b64d78a5a7232c38aa50d467322103225d07f6",
+                          selected.row["MainAB"] == "chara/mt_lipline_00.unity3d", selected.row["LiplineTex"] == "cw_t_lip_line_000",
+                          let metadata = head.textures.first(where: { $0.bundle == "chara/mt_lipline_00.unity3d" && $0.name == "cw_t_lip_line_000" }),
+                          metadata.serializedFile == "CAB-fc3dc8dbf92f3b888b30c838dd3623fe", metadata.pathID == "-7938000018075691814",
+                          metadata.width == 80, metadata.height == 36,
+                          metadata.format == 4, metadata.serializedColorSpace == 1, metadata.mipLevels == 1,
+                          metadata.filter == "Bilinear", metadata.wrap == "Clamp", metadata.aniso == 1 else {
+                        return unsupported("face composite lipline ID1 catalog or texture metadata is not verified")
+                    }
+                    setCreateTexture(&recipe, layer.property, main: false,
+                        catalogTexture(404, table: "mt_lipline", id: 1, key: "LiplineTex"),
+                        source: "mt_lipline[1] MainAB/LiplineTex via CreateFaceTexture → SetTexture(_Texture5)")
+                    guard var input = recipe.textures[layer.property]?.identity else {
+                        return unsupported("face composite lipline ID1 source texture is not converted")
+                    }
+                    // Keep the existing generic identity/default rules. Only
+                    // this verified additive input may fill absent fields;
+                    // conflicting supplement values must remain rejectable.
+                    input.mipLevels = input.mipLevels ?? metadata.mipLevels
+                    input.filter = input.filter ?? metadata.filter
+                    input.wrap = input.wrap ?? metadata.wrap
+                    input.aniso = input.aniso ?? metadata.aniso
+                    guard input.bundleSHA256 == "f919dc7780b5fbf7fa31dde421b64d78a5a7232c38aa50d467322103225d07f6",
+                          input.serializedFile == "CAB-fc3dc8dbf92f3b888b30c838dd3623fe", input.pathID == "-7938000018075691814",
+                          input.width == 80, input.height == 36, input.mipLevels == 1,
+                          input.filter == "Bilinear", input.wrap == "Clamp", input.aniso == 1 else {
+                        return unsupported("face composite lipline ID1 source texture identity or sampler is not verified")
                     }
                     recipe.textures[layer.property]?.identity = input
                     continue

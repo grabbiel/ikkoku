@@ -49,7 +49,7 @@ public sealed class OriginalCharacterProbe : BaseUnityPlugin
     // capture keeps every garment on as before.
     Dictionary<string,object> wearRequest;
     bool captureTopCompositeInputs,captureBottomCompositeInputs,captureInnerShoeCompositeInputs,captureOuterShoeCompositeInputs,captureFaceCompositeInputs,captureBodyCompositeInputs;
-    string cheekCompositeCase;
+    string cheekCompositeCase,liplineCompositeCase;
     static int[] ParseBytes(string value,int count,int maximum) {
         var parts=value.Split(',');if(parts.Length!=count)throw new Exception("Expected "+count+" comma-separated values: "+value);
         var result=new int[count];
@@ -280,6 +280,7 @@ public sealed class OriginalCharacterProbe : BaseUnityPlugin
                 case "captureFaceCompositeInputs": captureFaceCompositeInputs=Boolean.Parse(fields[1]);break;
                 case "captureBodyCompositeInputs": captureBodyCompositeInputs=Boolean.Parse(fields[1]);break;
                 case "cheekCompositeCase": cheekCompositeCase=fields[1];break;
+                case "liplineCompositeCase": liplineCompositeCase=fields[1];break;
                 case "skinMainColor": body.skinMainColor=ParseOpaqueSkinColor(fields[1]);break;
                 case "skinSubColor": body.skinSubColor=ParseOpaqueSkinColor(fields[1]);break;
                 case "nailColor": body.nailColor=ParseOpaqueSkinColor(fields[1]);break;
@@ -332,6 +333,17 @@ public sealed class OriginalCharacterProbe : BaseUnityPlugin
             var inactive=coordinate.enableMakeup?face.baseMakeup:coordinate.makeup;
             active.cheekId=1;active.cheekColor=CheekOracleActiveColor();
             inactive.cheekId=2;inactive.cheekColor=new Color(.1f,.9f,.2f,.15f);
+            captureFaceCompositeInputs=true;
+        }
+        if(liplineCompositeCase!=null) {
+            if(settingCount!=1 || (liplineCompositeCase!="base" && liplineCompositeCase!="distinct" && liplineCompositeCase!="none")
+                || modelVariant!=null || handPatterns!=null || lookPhases.Count!=0 || (int)file.status.coordinateType!=0)
+                throw new Exception("Lipline oracle requires only liplineCompositeCase=base, distinct or none and default outfit0");
+            file.coordinate[0].enableMakeup=false;
+            // "none" is the no-layer control: the distinct card with only lipLineId changed to 0.
+            face.lipLineId=LiplineOracleId();face.lipLineColor=LiplineOracleColor();
+            face.baseMakeup.cheekId=0;face.baseMakeup.cheekColor=Color.white;
+            file.coordinate[0].makeup.cheekId=0;file.coordinate[0].makeup.cheekColor=Color.white;
             captureFaceCompositeInputs=true;
         }
         if(modelVariant!=null){
@@ -715,9 +727,11 @@ public sealed class OriginalCharacterProbe : BaseUnityPlugin
         }
         result["inputs"]=inputs;
         if(cheekCompositeCase!=null)ExportCheekInput(creator,inputs,result);
+        if(liplineCompositeCase!=null)ExportLiplineInput(creator,inputs,result);
         var layers=new Dictionary<string,object>();
         foreach(var property in new[]{"_Texture3","_Texture7","_Texture4","_Texture5","_Texture6"}) {
             if(cheekCompositeCase!=null && property=="_Texture4")continue;
+            if(liplineCompositeCase!=null && liplineCompositeCase!="none" && property=="_Texture5")continue;
             if(!creator.HasProperty(property) || creator.GetTexture(property)!=null)throw new Exception("Face composite requires null makeup input "+property);
             layers[property]=new Dictionary<string,object>{{"isNull",true},{"scale",V(creator.GetTextureScale(property))},{"offset",V(creator.GetTextureOffset(property))}};
         }
@@ -731,9 +745,11 @@ public sealed class OriginalCharacterProbe : BaseUnityPlugin
             {"paintId",makeup.paintId},{"cheekId",makeup.cheekId},{"lipLineId",character.fileFace.lipLineId},{"moleId",character.fileFace.moleId},
             {"skinMainColor",V(character.fileBody.skinMainColor)},{"skinSubColor",V(character.fileBody.skinSubColor)}};
         if(cheekCompositeCase!=null)ObserveInactiveCheekRebuild(creator,target,draw,result);
+        if(liplineCompositeCase!=null)ObserveLiplineCheekRebuild(creator,target,draw,result);
         // Release using the original method, then bypass ExportTexture's object
         // deduplication for an independent second read of the same completed RT.
-        string before=(string)result["targetFile"];
+        string before=liplineCompositeCase==null?(string)result["targetFile"]
+            :(string)((Dictionary<string,object>)result["liplineControl"])["afterFile"];
         if(!character.ReleaseFaceCustomTexture())throw new Exception("Original face input release failed");
         var cleared=new Dictionary<string,object>();
         foreach(var property in new[]{"_MainTex","_ColorMask","_Texture3","_Texture4","_Texture5","_Texture6","_Texture7"}) {
@@ -756,6 +772,115 @@ public sealed class OriginalCharacterProbe : BaseUnityPlugin
                 File.WriteAllText(Path.Combine(folder,"face-input-observation.json"),J(result));
             }
         }
+    }
+    int LiplineOracleId() { return liplineCompositeCase=="none"?0:1; }
+    Color LiplineOracleColor() {
+        return liplineCompositeCase=="base"?new Color(.85f,.15f,.25f,.4f):new Color(.2f,.7f,.9f,.75f);
+    }
+    void ExportLiplineInput(Material creator,Dictionary<string,object> inputs,Dictionary<string,object> result) {
+        const string bundle="chara/mt_lipline_00.unity3d",name="cw_t_lip_line_000";
+        const string hash="f919dc7780b5fbf7fa31dde421b64d78a5a7232c38aa50d467322103225d07f6";
+        var info=character.lstCtrl.GetListInfo(ChaListDefine.CategoryNo.mt_lipline,1);
+        var texture=creator.GetTexture("_Texture5") as Texture2D;
+        if(liplineCompositeCase=="none") {
+            // Catalog row 0 is the "none" entry (MainAB/LiplineTex "0"); the original binds no texture.
+            var none=character.lstCtrl.GetListInfo(ChaListDefine.CategoryNo.mt_lipline,0);
+            result["liplineCatalog"]=new Dictionary<string,object>{{"category",404},{"id",none==null?-1:none.Id},
+                {"MainAB",none==null?null:none.GetInfo(ChaListDefine.KeyType.MainAB)},
+                {"LiplineTex",none==null?null:none.GetInfo(ChaListDefine.KeyType.LiplineTex)},
+                {"boundTexture5Null",texture==null},{"boundTexture5Exists",creator.HasProperty("_Texture5")}};
+            File.WriteAllText(Path.Combine(folder,"face-input-observation.json"),J(result));
+            if(none==null || none.Id!=0 || none.GetInfo(ChaListDefine.KeyType.MainAB)!="0" || none.GetInfo(ChaListDefine.KeyType.LiplineTex)!="0"
+                || !creator.HasProperty("_Texture5") || texture!=null)
+                throw new Exception("Lipline no-layer control differs from catalog404 ID0 with a null _Texture5");
+            return;
+        }
+        var loaded=CommonLib.LoadAsset<Texture2D>(bundle,name,false,string.Empty);
+        result["liplineCatalog"]=new Dictionary<string,object>{{"category",404},{"id",info==null?-1:info.Id},
+            {"MainAB",info==null?null:info.GetInfo(ChaListDefine.KeyType.MainAB)},
+            {"LiplineTex",info==null?null:info.GetInfo(ChaListDefine.KeyType.LiplineTex)}};
+        inputs["_Texture5"]=new Dictionary<string,object>{{"expectedBundle",bundle},{"expectedName",name},
+            {"actualNull",texture==null},{"actualName",texture==null?null:texture.name},
+            {"actualInstanceID",texture==null?0:texture.GetInstanceID()},{"sourceInstanceID",loaded==null?0:loaded.GetInstanceID()}};
+        File.WriteAllText(Path.Combine(folder,"face-input-observation.json"),J(result));
+        if(info==null || info.Id!=1 || info.GetInfo(ChaListDefine.KeyType.MainAB)!=bundle
+            || info.GetInfo(ChaListDefine.KeyType.LiplineTex)!=name || SourceBundleHash(bundle)!=hash
+            || texture==null || loaded==null || texture!=loaded || texture.name!=name
+            || texture.width!=80 || texture.height!=36 || texture.format!=TextureFormat.RGBA32 || texture.mipmapCount!=1
+            || texture.filterMode!=FilterMode.Bilinear || texture.wrapMode!=TextureWrapMode.Clamp || texture.anisoLevel!=1)
+            throw new Exception("Lipline bound input differs from exact catalog404 ID1 asset");
+        inputs["_Texture5"]=new Dictionary<string,object>{{"bundle",bundle},{"bundleSHA256",hash},{"name",name},
+            {"instanceID",texture.GetInstanceID()},{"sourceInstanceID",loaded.GetInstanceID()},{"sameSourceObject",true},
+            {"lookup",new Dictionary<string,object>{{"kind","catalog-texture"},{"bundle",bundle},{"assetName",name},{"manifest",""},{"clone",false}}},
+            {"width",texture.width},{"height",texture.height},{"format",texture.format.ToString()},{"mipLevels",texture.mipmapCount},
+            {"file",ExportTexture(texture)},{"scale",V(creator.GetTextureScale("_Texture5"))},{"offset",V(creator.GetTextureOffset("_Texture5"))}};
+    }
+    void ObserveLiplineCheekRebuild(Material creator,RenderTexture target,Material draw,Dictionary<string,object> result) {
+        var face=character.fileFace;var makeup=face.baseMakeup;var expected=LiplineOracleColor();
+        if(character.nowCoordinate.enableMakeup || character.chaFile.coordinate[0].enableMakeup || (int)character.fileStatus.coordinateType!=0
+            || face.lipLineId!=LiplineOracleId() || face.moleId!=0 || makeup.cheekId!=0 || makeup.paintId[0]!=0 || makeup.paintId[1]!=0)
+            throw new Exception("Lipline oracle initial face/makeup selection differs");
+        for(int lane=0;lane<4;lane++)if(V(face.lipLineColor)[lane]!=V(expected)[lane] || V(makeup.cheekColor)[lane]!=1)
+            throw new Exception("Lipline oracle requested color differs");
+        // CustomTextureCreate owns texMain separately from matCreate._MainTex.
+        // Observe the actual source object, not a copied input metadata record.
+        var mainBefore=Required(character.customTexCtrlFace,"texMain") as Texture2D;
+        if(mainBefore==null || mainBefore.GetInstanceID()!=(int)((Dictionary<string,object>)((Dictionary<string,object>)result["inputs"])["_MainTex"])["instanceID"])
+            throw new Exception("Lipline interaction initial main source identity differs");
+        var names=new[]{"_MainTex","_ColorMask","_paintmask","_Texture3","_Texture4","_Texture5","_Texture6","_Texture7"};
+        var bound=new Dictionary<string,Texture>();var beforeIDs=new Dictionary<string,object>();
+        foreach(string name in names){bound[name]=creator.GetTexture(name);beforeIDs[name]=bound[name]==null?0:bound[name].GetInstanceID();}
+        var vectors=(Dictionary<string,object>)result["vectors"];
+        const string beforeCoordinate="lipline-now-coordinate-before.bin",afterCoordinate="lipline-now-coordinate-after.bin",afterCard="lipline-cheek-card.png";
+        File.WriteAllBytes(Path.Combine(folder,beforeCoordinate),character.nowCoordinate.SaveBytes());
+        var observation=new Dictionary<string,object>{{"case",liplineCompositeCase},{"faceOwned",true},{"lipLineId",face.lipLineId},
+            {"requestedLiplineColor",V(face.lipLineColor)},{"requestedLiplineColorBits",FloatBits(V(face.lipLineColor))},
+            {"mainInputBeforeID",mainBefore.GetInstanceID()},
+            {"boundLiplineColorBits",FloatBits(V(creator.GetVector("_Color5")))},{"cheekBeforeId",makeup.cheekId},{"cheekBeforeColor",V(makeup.cheekColor)},
+            {"beforeFile",result["targetFile"]},{"beforeCoordinateFile",beforeCoordinate},{"inputIDsBefore",beforeIDs}};
+        result["liplineControl"]=observation;
+        File.WriteAllText(Path.Combine(folder,"face-input-observation.json"),J(result));
+        makeup.cheekId=1;makeup.cheekColor=new Color(.95f,.2f,.3f,.4f);
+        character.AddUpdateCMFaceTexFlags(true,true,true,true,true,true,true);
+        character.AddUpdateCMFaceColorFlags(true,true,true,true,true,true,true);
+        character.AddUpdateCMFaceLayoutFlags(true,true,true);
+        bool rebuilt=character.CreateFaceTexture();observation["originalCreateFaceTextureReturned"]=rebuilt;
+        var afterIDs=new Dictionary<string,object>();foreach(string name in names)afterIDs[name]=creator.GetTexture(name)==null?0:creator.GetTexture(name).GetInstanceID();
+        var afterVectors=new Dictionary<string,object>();foreach(string name in vectors.Keys)afterVectors[name]=V(creator.GetVector(name));
+        observation["inputIDsAfter"]=afterIDs;observation["vectorsAfter"]=afterVectors;
+        observation["boundLiplineColorBitsAfter"]=FloatBits(V(creator.GetVector("_Color5")));
+        var mainAfter=Required(character.customTexCtrlFace,"texMain") as Texture2D;
+        observation["mainInputAfterID"]=mainAfter==null?0:mainAfter.GetInstanceID();
+        if(mainAfter!=mainBefore)throw new Exception("Lipline interaction changed actual main source object");
+        if(!rebuilt || character.releaseCustomInputTexture || character.nowCoordinate.enableMakeup
+            || character.customTexCtrlFace.GetCreateTexture()!=target || character.customTexCtrlFace.matDraw!=draw
+            || character.rendFace.sharedMaterials[0]!=draw || draw.GetTexture("_MainTex")!=target)
+            throw new Exception("Lipline interaction changed target/draw/retention identity");
+        foreach(string name in names)if(name!="_Texture4" && creator.GetTexture(name)!=bound[name])throw new Exception("Lipline interaction changed input "+name);
+        foreach(var pair in vectors)if(pair.Key!="_Color4") {
+            var previous=(float[])pair.Value;var current=V(creator.GetVector(pair.Key));
+            for(int lane=0;lane<4;lane++)if(previous[lane]!=current[lane])throw new Exception("Lipline interaction changed vector "+pair.Key);
+        }
+        var afterInputs=new Dictionary<string,object>();observation["inputsAfter"]=afterInputs;
+        foreach(var pair in (Dictionary<string,object>)result["inputs"]) {
+            var previous=(Dictionary<string,object>)pair.Value;var current=new Dictionary<string,object>(previous);
+            var scale=V(creator.GetTextureScale(pair.Key));var offset=V(creator.GetTextureOffset(pair.Key));
+            for(int lane=0;lane<2;lane++)if(scale[lane]!=((float[])previous["scale"])[lane] || offset[lane]!=((float[])previous["offset"])[lane])
+                throw new Exception("Lipline interaction changed texture transform "+pair.Key);
+            string fresh=ExportTextureAgain(pair.Key=="_MainTex"?(Texture)mainAfter:creator.GetTexture(pair.Key));
+            current["file"]=fresh;afterInputs[pair.Key]=current;
+            if(Sha256File(Path.Combine(folder,fresh))!=Sha256File(Path.Combine(folder,(string)previous["file"])))
+                throw new Exception("Lipline interaction changed bound input pixels "+pair.Key);
+        }
+        ExportCheekInput(creator,afterInputs,observation);
+        string after=ExportTextureAgain(target),before=(string)result["targetFile"];
+        observation["afterFile"]=after;observation["beforeSHA256"]=Sha256File(Path.Combine(folder,before));observation["afterSHA256"]=Sha256File(Path.Combine(folder,after));
+        observation["sameTargetDrawOtherInputsAndVectors"]=true;observation["targetInstanceID"]=target.GetInstanceID();observation["drawMaterialInstanceID"]=draw.GetInstanceID();
+        observation["cheekAfterId"]=makeup.cheekId;observation["cheekAfterColor"]=V(makeup.cheekColor);
+        observation["afterCoordinateFile"]=afterCoordinate;observation["afterCardFile"]=afterCard;
+        File.WriteAllBytes(Path.Combine(folder,afterCoordinate),character.nowCoordinate.SaveBytes());
+        if(!character.chaFile.SaveCharaFile(Path.Combine(folder,afterCard),(byte)modelSex))throw new Exception("Lipline interaction card save failed");
+        if((string)observation["beforeSHA256"]==(string)observation["afterSHA256"])throw new Exception("Lipline cheek interaction did not change source target pixels");
     }
     Color CheekOracleActiveColor() {
         return cheekCompositeCase=="base"?new Color(.95f,.2f,.3f,.4f):new Color(.2f,.65f,.9f,.75f);

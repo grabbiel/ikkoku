@@ -4,8 +4,9 @@ import unittest
 from pathlib import Path
 from types import SimpleNamespace
 import numpy as np
-from head_material_contract import (BODY_TEXTURES, CHEEK_BUNDLE, CHEEK_NAME, body_texture_metadata,
+from head_material_contract import (BODY_TEXTURES, CHEEK_BUNDLE, CHEEK_NAME, LIPLINE_BUNDLE, LIPLINE_NAME, body_texture_metadata,
                                     cheek_catalog_row, cheek_texture_metadata,
+                                    lipline_catalog_row, lipline_texture_metadata,
                                     create_head_base, create_eye_base, create_eye_white)
 
 
@@ -132,6 +133,67 @@ class CheekMetadataTests(unittest.TestCase):
         objects.clear()
         with self.assertRaisesRegex(ValueError, "Expected one cw_t_cheek_000"):
             cheek_texture_metadata(bundles, root)
+
+
+class LiplineMetadataTests(unittest.TestCase):
+    def test_additive_row_preserves_defaults_and_rejects_other_catalog_inputs(self):
+        table = {"mark": "【ChaListData】", "categoryNo": 404,
+                 "lstKey": ["MainAB", "LiplineTex"],
+                 "dictList": {0: ["0", "0"], 1: [LIPLINE_BUNDLE, LIPLINE_NAME], 2: ["other", "other"]}}
+        reader = SimpleNamespace(assets_file=SimpleNamespace(name="CAB-table"), path_id=4)
+        row = lipline_catalog_row(table, reader)
+        self.assertEqual((row["table"], row["category"], row["selectedID"], row["row"]),
+                         ("mt_lipline_00", 404, 1, {"MainAB": LIPLINE_BUNDLE, "LiplineTex": LIPLINE_NAME}))
+        self.assertEqual(table["dictList"], {0: ["0", "0"], 1: [LIPLINE_BUNDLE, LIPLINE_NAME], 2: ["other", "other"]})
+        for invalid in [dict(table, categoryNo=402), dict(table, mark="other"),
+                        dict(table, dictList={0: ["0", "0"]}),
+                        dict(table, dictList={1: ["other", LIPLINE_NAME]}),
+                        dict(table, dictList={1: [LIPLINE_BUNDLE, "other"]})]:
+            with self.subTest(invalid=invalid), self.assertRaises(ValueError):
+                lipline_catalog_row(invalid, reader)
+
+    def fixture(self):
+        class Reader:
+            type = SimpleNamespace(name="Texture2D")
+            assets_file = SimpleNamespace(name="CAB-lipline")
+            path_id = 123
+            def __init__(self):
+                self.tree = {"m_Width": 80, "m_Height": 36, "m_MipCount": 1,
+                             "m_TextureFormat": 4, "m_ColorSpace": 1,
+                             "m_TextureSettings": {"m_FilterMode": 1, "m_WrapMode": 1, "m_Aniso": 1}}
+            def peek_name(self): return LIPLINE_NAME
+            def read(self): raise AssertionError("The lipline extension must not decode pixels")
+            def read_typetree(self): return self.tree
+        root, reader = Path("/synthetic"), Reader()
+        return root, reader, {root / LIPLINE_BUNDLE: SimpleNamespace(objects=[reader])}
+
+    def test_exact_non_square_metadata_without_decoding_or_cross_bundle_substitution(self):
+        root, reader, bundles = self.fixture()
+        row = lipline_texture_metadata(bundles, root)
+        self.assertEqual({key: row[key] for key in ["width", "height", "mipLevels", "format", "serializedColorSpace", "filter", "wrap", "aniso"]},
+                         {"width": 80, "height": 36, "mipLevels": 1, "format": 4, "serializedColorSpace": 1,
+                          "filter": "Bilinear", "wrap": "Clamp", "aniso": 1})
+        self.assertTrue(row["metadataOnly"] and "file" not in row and "pngSHA256" not in row)
+        bundles[root / LIPLINE_BUNDLE].objects.append(reader)
+        with self.assertRaisesRegex(ValueError, "Expected one cw_t_lip_line_000"):
+            lipline_texture_metadata(bundles, root)
+        bundles[root / LIPLINE_BUNDLE].objects.clear()
+        bundles[root / "unrelated.unity3d"] = SimpleNamespace(objects=[reader])
+        with self.assertRaisesRegex(ValueError, "Expected one cw_t_lip_line_000"):
+            lipline_texture_metadata(bundles, root)
+
+    def test_rejects_unverified_dimensions_format_color_space_mips_and_sampler(self):
+        for field, value in [("m_Width", 81), ("m_Height", 37), ("m_MipCount", 2),
+                             ("m_TextureFormat", 10), ("m_ColorSpace", 0)]:
+            root, reader, bundles = self.fixture()
+            reader.tree[field] = value
+            with self.subTest(field=field), self.assertRaisesRegex(ValueError, "Unverified lipline"):
+                lipline_texture_metadata(bundles, root)
+        for field, value in [("m_FilterMode", 0), ("m_WrapMode", 0), ("m_Aniso", 2)]:
+            root, reader, bundles = self.fixture()
+            reader.tree["m_TextureSettings"][field] = value
+            with self.subTest(field=field), self.assertRaisesRegex(ValueError, "Unverified lipline"):
+                lipline_texture_metadata(bundles, root)
 
 
 if __name__ == "__main__":
