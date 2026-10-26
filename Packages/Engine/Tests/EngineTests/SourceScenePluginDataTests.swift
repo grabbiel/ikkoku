@@ -608,8 +608,9 @@ private let liveCard = controllerCard(links: .map([("f_t_hand_L", int32(4))]))
 /// must judge every single-target edit of these scenes as this writer does.
 /// IKKOKU_PLUGIN_RULE_CORPUS names the JSON file this writes: each scene's
 /// walk (key, kind, parent), used keys, each card's link steps
-/// (`cardLinkSteps`) and trailer, and per edit the verdict and the entry IDs
-/// a refusal names.
+/// (`cardLinkSteps`) and trailer, KKPE's inputs (`KKPEPlan.ids` of the file
+/// and each card's `KKPEPlan.card`), and per edit the verdict and the entry
+/// IDs a refusal names.
 @Test(.enabled(if: SourceFixtureSupport.shouldRun(["IKKOKU_PLUGIN_RULE_CORPUS"]), "Requires IKKOKU_PLUGIN_RULE_CORPUS (an output JSON path)"))
 func sourceScenePluginDataWritesTheRuleParityCorpus() throws {
     let output = URL(fileURLWithPath: try SourceFixtureSupport.require("IKKOKU_PLUGIN_RULE_CORPUS"))
@@ -653,7 +654,7 @@ func sourceScenePluginDataWritesTheRuleParityCorpus() throws {
             cases.append(row)
         }
     }
-    let json = try JSONSerialization.data(withJSONObject: ["schemaVersion": 1, "scenes": scenes, "cases": cases], options: [.sortedKeys])
+    let json = try JSONSerialization.data(withJSONObject: ["schemaVersion": 2, "scenes": scenes, "cases": cases], options: [.sortedKeys])
     try json.write(to: output)
     let counts = Dictionary(grouping: cases, by: { $0["verdict"] as! String }).mapValues(\.count)
     print("rule corpus: \(scenes.count) scenes, \(cases.count) cases \(counts.sorted { $0.key < $1.key })")
@@ -684,12 +685,22 @@ private func copyInsertions(_ record: KoikatsuObjectRecord, in snapshot: Koikats
 
 /// What the C# rules read: the walk, used keys, the card-link steps of each
 /// character whose card names KKAnimationController data (nil when it does
-/// not decode), trailer.
+/// not decode), trailer, every KKPE ID in the file and each character's KKPE
+/// card data (its controller ID and whether it is in the current block).
 private func ruleModel(_ document: KoikatsuSceneDocument) throws -> [String: Any] {
-    var objects: [[String: Any]] = [], cards: [[String: Any]] = []
+    var objects: [[String: Any]] = [], cards: [[String: Any]] = [], kkpeCards: [[String: Any]] = []
     let marker = Data(SourceScenePluginData.cardAnimationController.utf8)
     func visit(_ record: KoikatsuObjectRecord, _ parent: Int32?) throws {
         objects.append(["key": Int(record.sourceKey), "kind": Int(record.kind.rawValue), "parent": parent.map { Int($0) } ?? -1])
+        if let character = record.character {
+            do {
+                if let card = try KKPEPlan.card(character.cardData, key: record.sourceKey) {
+                    kkpeCards.append(["key": Int(record.sourceKey), "id": Int(card.id), "current": card.offset != nil])
+                }
+            } catch {
+                kkpeCards.append(["key": Int(record.sourceKey), "error": true])
+            }
+        }
         if let character = record.character, character.cardData.range(of: marker) != nil {
             if let payload = try? character.card().extensions().payload, let steps = try? SourceScenePluginData.cardLinkSteps(payload) {
                 cards.append(["key": Int(record.sourceKey), "steps": steps.map { Int($0) }])
@@ -705,7 +716,8 @@ private func ruleModel(_ document: KoikatsuSceneDocument) throws -> [String: Any
     for root in document.snapshot.roots { try visit(root, nil) }
     let used = SourceSceneInsertionPlan.usedKeys(document.snapshot).map { Int($0) }.sorted()
     let trailer = document.trailingData.map { String(format: "%02x", $0) }.joined()
-    return ["objects": objects, "used": used, "cards": cards, "trailer": trailer]
+    let kkpeIds = KKPEPlan.ids(in: document.preservedData).map { Int($0) }.sorted()
+    return ["objects": objects, "used": used, "cards": cards, "trailer": trailer, "kkpeIds": kkpeIds, "kkpeCards": kkpeCards]
 }
 
 /// Every entry form the tests above use, alone and in the combinations
@@ -783,6 +795,8 @@ private func ruleCorpusScenes() throws -> [TopologyScene] {
     scenes.append(pluginScene(forms.filter { $0.0 != "example.scene" && $0.0 != "kkpe" }.reduce(into: [(String, PluginMP)]()) { list, form in
         if !list.contains(where: { $0.0 == form.0 }) { list.append(form) }
     }))
+    // The rewrite rules' forms (KKPE, MaterialEditor, NodesConstraints).
+    scenes += pluginRewriteCorpusScenes()
     // No trailer, an empty map, and trailers that do not parse.
     scenes.append(pluginScene(nil)); scenes.append(pluginScene([]))
     var extra = Array(pluginTrailer([settings])); extra.append(0xc0); extra[9] = UInt8(truncatingIfNeeded: Int(extra[9]) + 1)

@@ -236,6 +236,29 @@ private let kkpePlain = kkpeRoot([kkpeItem1, kkpeItem2, kkpeItem(3, -41274), kkp
     #expect(try #require(document.snapshot.roots.first { $0.sourceKey == 12 }?.character).cardData == template)
 }
 
+@Test func sourceScenePluginRewritesProbeComparisonRenamesOnlyInstanceIDs() throws {
+    // The phase C/D comparison (pluginProbeComparable): CharaStudio's copy
+    // gets a fresh controller ID of any length, so our same-length ID must
+    // compare equal; the pattern of equal IDs and every other byte must not.
+    let scene = rwScene([kkpeEntry(kkpePlain), rwSettings], card: kkpeCard(-50000))
+    let ours = try rwEdited(scene, rwCopyCharacter)
+    func theirs(_ card: Data, extra: Bool = false) -> Data {
+        var expected = scene
+        expected.roots.append(.character(13, rwGroups))
+        if extra { expected.roots.append(.folder(15, [])) }
+        expected.copies[13] = 12; expected.lookAt[13] = 14
+        expected.cards[13] = card
+        return expected.data
+    }
+    #expect(try pluginProbeComparable(ours) == pluginProbeComparable(theirs(kkpeCard(-7))))
+    #expect(try pluginProbeComparable(ours) == pluginProbeComparable(theirs(kkpeCard(-50001))))
+    #expect(try pluginProbeComparable(ours) != pluginProbeComparable(theirs(kkpeCard(-50000))))
+    var changed = kkpeCard(-7)
+    changed.replaceSubrange(try #require(changed.range(of: Data(#"enabled="true""#.utf8))), with: Data(#"enabled="tru_""#.utf8))
+    #expect(try pluginProbeComparable(ours) != pluginProbeComparable(theirs(changed)))
+    #expect(try pluginProbeComparable(ours) != pluginProbeComparable(theirs(kkpeCard(-7), extra: true)))
+}
+
 @Test func sourceScenePluginRewritesNoCardWithoutAKKPEEntry() throws {
     // (c) Without a kkpe scene entry nothing reads controller IDs: the copy's
     // card is its template's, byte for byte.
@@ -561,4 +584,61 @@ private let constraintsSource = constraintsEntry([constraint(1, 4, 0, "a"), cons
         expectRefused(form, rwCopyItem, reason)
         for edits in [rwAddFolder, rwMoveItem] { #expect(rwOutcome(form, edits) == "kept", "\(xml)") }
     }
+}
+
+// MARK: - Rule parity corpus
+
+private func rwTimeline(_ xml: String) -> (String, PluginMP) { ("timeline", rwPlugin(0, .map([("sceneInfo", .str(xml))]))) }
+
+/// The rewrite rules' entry forms for the rule parity corpus
+/// (SourceScenePluginDataTests `ruleCorpusScenes`), each with the card its
+/// KKPE rule reads: alone, and with a settings entry in the scene whose
+/// character sits above a free key.
+func pluginRewriteCorpusScenes() -> [TopologyScene] {
+    let card = kkpeCard(-50000)
+    // KKPE data whose characterInfo is not KKPE's form (a non-canonical ID).
+    let info = #"<characterInfo version="2.21.4" uniqueId="-050000" />"#
+    let ext = PluginMP.map([("kkpe", rwPlugin(0, .map([("characterInfo", .str(info))])))])
+    let broken = OriginalCardFixture.card(blocks: OriginalCardFixture.blocks() + [OriginalCardFixture.Block(name: "KKEx", version: "3", data: Data(ext.bytes))])
+    let filler = (5...9).map { #"<id uniqueId="-\#($0)" />"# }.joined()
+    let full = kkpeRoot([kkpeItem(1, -1, filler), kkpeItem(2, -2), kkpeItem(3, -3), kkpeItem(4, -4)])
+    let shared = kkpeRoot([kkpeItem1, kkpeItem(2, -41286, kkpeBones), kkpeCollider([kkpeBoneReference(-41286)]), kkpeItem4])
+    let kkpeForms = [#"<root version="2.21.4"> </root>"#, kkpeRoot([kkpeItem1, kkpeItem2, kkpeItem(3, -41274)]),
+                     "<root>" + [kkpeItem1, kkpeItem2, kkpeItem(3, -41274), kkpeItem4].joined() + "</root>",
+                     kkpeRoot([kkpeItem1, kkpeItem2, kkpeItem4, kkpeItem(3, -41274)]),
+                     kkpeRoot([kkpeItem1, kkpeItem2, kkpeCollider([#"<dynamicBoneData root="Bone" />"#]), kkpeItem4])]
+    let stale = materialEntry(floats: [materialFloat(1), materialFloat(13)], colors: [], textures: [], dictionary: [])
+    let extraKey = materialEntry(floats: [.map([("ID", .int(4)), ("Extra", .int(1))])], colors: [], textures: [], dictionary: [])
+    let deduped = (materialID, rwPlugin(1, .map([("TextureDictionary", rwPacked(.map([("hash", .bin([1]))])))])))
+    let textureTrack = rwTimeline(#"<root><interpolable id="textureProperty" /></root>"#)
+    let constraintTrack = rwTimeline(#"<root><interpolable owner="NodesConstraints" id="constraint" /></root>"#)
+    func nodes(_ xml: String) -> (String, PluginMP) { ("nodesConstraints", rwPlugin(0, .map([("constraints", .str(xml))]))) }
+    let constraintForms = [#"<constraints version="1"><constraint parentObjectIndex="0" childObjectIndex="3" /></constraints>"#,
+                           #"<constraints version="1">"# + constraint(1, 20, 0, "a") + "</constraints>",
+                           #"<constraints version="1"><other /></constraints>"#,
+                           #"<constraints version="1">"# + constraint(1, 4, 0, "a").replacingOccurrences(of: " />", with: "/>") + "</constraints>"]
+    let staleOld = materialEntry(floats: [materialFloat(1), materialFloat(13)], colors: [], textures: [], dictionary: [], version: 0)
+    var lists: [([(String, PluginMP)], Data?)] = [
+        ([kkpeEntry(kkpeLinked)], card), ([kkpeEntry(kkpePlain)], card), ([kkpeEntry(kkpePlain)], kkpeCard(-50000, legacy: true)),
+        ([kkpeEntry(kkpePlain)], kkpeCard(-41285)), ([kkpeEntry(kkpeLinked)], broken), ([kkpeEntry(kkpePlain)], broken),
+        ([kkpeEntry(full)], nil), ([kkpeEntry(shared)], card), ([kkpeEntry(kkpeRoot([]))], card),
+        ([("kkpe", rwPlugin(0, .map([("sceneInfo", .str(kkpePlain)), ("future", .int(1))])))], card),
+        ([materialSource()], nil), ([materialSource(version: 0)], nil), ([stale], nil), ([materialSource(), textureTrack], nil),
+        ([materialSource(extra: [("FutureList", .null)])], nil), ([extraKey], nil), ([deduped], nil),
+        ([constraintsSource], nil), ([constraintsSource, constraintTrack], nil),
+        ([constraintsEntry([constraint(1, 4, 0, "a"), constraint(4, 1, 1, "x")])], nil),
+        ([constraintsEntry([constraint(1, 4, 0, "a"), constraint(4, 3, 1, "x")])], nil), ([staleOld], nil),
+        // Item 1 and its child 2: a copy of either copies both ends, unless a
+        // camera-parented constraint comes first.
+        ([constraintsEntry([constraint(1, 2, 0, "a")])], nil), ([constraintsEntry([constraint(-2, 8, 0, "b"), constraint(1, 2, 1, "a")])], nil),
+        ([kkpeEntry(kkpeLinked), materialSource(), constraintsSource, rwTimeline(#"<root><interpolable id="camera" /></root>"#)], card),
+    ]
+    for xml in kkpeForms { lists.append(([kkpeEntry(xml)], card)) }
+    for xml in constraintForms { lists.append(([nodes(xml)], nil)) }
+    var scenes: [TopologyScene] = []
+    for (entries, card) in lists {
+        scenes.append(rwScene(entries, card: card))
+        scenes.append(rwScene(entries + [rwSettings], hole: true, card: card))
+    }
+    return scenes
 }
