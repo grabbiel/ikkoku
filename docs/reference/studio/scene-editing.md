@@ -646,6 +646,8 @@ The refusal is the engine's message, which names each plug-in and its reason. Th
 - Keys freed by a delete in the same export are not reused, so a delete with a duplicate gives the copy a different key than CharaStudio after the same interactive edit (#278). The scene loads the same way, and the Sideloader records follow the key.
 - KKPE data, and non-empty NodesConstraints and MaterialEditor data, are kept only when what they read is unchanged. Otherwise they are refused, not rewritten.
 - Entry IDs with no recovered rule refuse every export that adds, deletes or copies objects or edits route points, and so do unknown versions.
+- Entries kept under a rule keep their loaded bytes. CharaStudio's save rebuilds them from its live state, which decodes to the same data when nothing they name changed. Byte identity with CharaStudio is shown only for the entries the original-player runs loaded.
+- A move keeps every entry as before. StudioItemIK stores world-space bone poses, so a moved IK chain loads from its old pose ([mods overview](../mods/overview.md#scene-plug-in-data-in-edited-original-scenes)).
 - The orphan rule holds for the pinned install only.
 
 ## Shape and color reset contract
