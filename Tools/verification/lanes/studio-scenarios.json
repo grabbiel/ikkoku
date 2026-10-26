@@ -2744,6 +2744,153 @@
         }
       ],
       "timeout": 600
+    },
+    {
+      "id": "studio-scenario-source-map",
+      "argv": [
+        ".local/build/Build/Products/Debug/Ikkoku.app/Contents/MacOS/Ikkoku"
+      ],
+      "fixtures": [
+        {
+          "env": "IKKOKU_SOURCE_SCENE",
+          "kind": "file",
+          "from": "IKKOKU_STUDIO_MAP_SHOWOFF_SCENE"
+        },
+        {
+          "env": "IKKOKU_SOURCE_AVATAR",
+          "kind": "file"
+        },
+        {
+          "env": "IKKOKU_STUDIO_MAP_CATALOG",
+          "kind": "file"
+        }
+      ],
+      "env": {
+        "IKKOKU_STUDIO_SCENARIO": "Tools/verification/scenarios/source-map.json",
+        "IKKOKU_STUDIO_SCENARIO_REPORT": ".local/verification/reports/studio-scenario-source-map.json"
+      },
+      "referenceTier": "app-smoke",
+      "tolerance": "ST-A11/ST-B03/ST-T04 on scene-map33-showoff.png (the showoff characters with Map 33, added by the original player): the converted map is drawn before the first step (8 draws, not loading) with the exact approximation label in the status line; two map-only points pick nothing (id 0) while a character in front of the wall still picks; View > Show Source Map off draws 0 map parts and says so, on restores 8; the original-format export is byte-identical to the source with the map hidden and shown; reimport, New Scene (no map, no line) and undo restore the map. Lighting and colour are not checked (see docs/reference/studio/maps.md).",
+      "artifacts": [
+        {
+          "path": ".local/verification/reports/studio-scenario-source-map.json",
+          "kind": "scenario-report"
+        },
+        {
+          "path": ".local/verification/scenario-exports/source-map-hidden.png",
+          "kind": "exported-scene"
+        },
+        {
+          "path": ".local/verification/scenario-exports/source-map.png",
+          "kind": "exported-scene"
+        }
+      ],
+      "timeout": 600
+    },
+    {
+      "id": "studio-scenario-reload-save-source-map",
+      "argv": [
+        ".local/build/Build/Products/Debug/Ikkoku.app/Contents/MacOS/Ikkoku"
+      ],
+      "fixtures": [
+        {
+          "env": "IKKOKU_SOURCE_SCENE",
+          "kind": "file",
+          "from": "IKKOKU_STUDIO_MAP_SHOWOFF_SCENE"
+        },
+        {
+          "env": "IKKOKU_SOURCE_AVATAR",
+          "kind": "file"
+        },
+        {
+          "env": "IKKOKU_STUDIO_MAP_CATALOG",
+          "kind": "file"
+        }
+      ],
+      "env": {
+        "IKKOKU_STUDIO_SCENARIO": "Tools/verification/scenarios/reload-save-source-map.json",
+        "IKKOKU_STUDIO_SCENARIO_REPORT": ".local/verification/reports/studio-scenario-reload-save-source-map.json"
+      },
+      "referenceTier": "app-smoke",
+      "tolerance": "Saves the map scene natively: the map stays drawn and the save needs no scene-file rehydration. The fresh-process load is the next, ordered check. ST-A11.",
+      "artifacts": [
+        {
+          "path": ".local/verification/reports/studio-scenario-reload-save-source-map.json",
+          "kind": "scenario-report"
+        },
+        {
+          "path": ".local/verification/scenario-exports/reload-save-source-map.png",
+          "kind": "saved-document"
+        }
+      ],
+      "timeout": 600
+    },
+    {
+      "id": "studio-scenario-reload-load-source-map",
+      "argv": [
+        ".local/build/Build/Products/Debug/Ikkoku.app/Contents/MacOS/Ikkoku"
+      ],
+      "fixtures": [
+        {
+          "env": "IKKOKU_SOURCE_AVATAR",
+          "kind": "file"
+        },
+        {
+          "env": "IKKOKU_STUDIO_MAP_CATALOG",
+          "kind": "file"
+        }
+      ],
+      "env": {
+        "IKKOKU_STUDIO_SCENARIO": "Tools/verification/scenarios/reload-load-source-map.json",
+        "IKKOKU_STUDIO_SCENARIO_REPORT": ".local/verification/reports/studio-scenario-reload-load-source-map.json"
+      },
+      "referenceTier": "app-smoke",
+      "tolerance": "Loads the saved map scene in a fresh process with no import: one scene-file rehydration rebuilds the map request from the scene record, and the map draws again (8 parts) with the same status line while map pixels still pick nothing. ST-A11.",
+      "artifacts": [
+        {
+          "path": ".local/verification/reports/studio-scenario-reload-load-source-map.json",
+          "kind": "scenario-report"
+        }
+      ],
+      "timeout": 600
+    },
+    {
+      "id": "studio-scenario-source-map-none",
+      "argv": [
+        ".local/build/Build/Products/Debug/Ikkoku.app/Contents/MacOS/Ikkoku"
+      ],
+      "fixtures": [
+        {
+          "env": "IKKOKU_SOURCE_SCENE",
+          "kind": "file",
+          "from": "IKKOKU_STUDIO_SCENARIO_SCENE"
+        },
+        {
+          "env": "IKKOKU_SOURCE_AVATAR",
+          "kind": "file"
+        },
+        {
+          "env": "IKKOKU_STUDIO_MAP_CATALOG",
+          "kind": "file"
+        }
+      ],
+      "env": {
+        "IKKOKU_STUDIO_SCENARIO": "Tools/verification/scenarios/source-map-none.json",
+        "IKKOKU_STUDIO_SCENARIO_REPORT": ".local/verification/reports/studio-scenario-source-map-none.json"
+      },
+      "referenceTier": "app-smoke",
+      "tolerance": "koikatu_cs0002591.png names no map (-1): with the map catalog supplied there is no map request, no draws and no status line before and after an original-format round trip, and the export is byte-identical to the source. ST-A11.",
+      "artifacts": [
+        {
+          "path": ".local/verification/reports/studio-scenario-source-map-none.json",
+          "kind": "scenario-report"
+        },
+        {
+          "path": ".local/verification/scenario-exports/source-map-none.png",
+          "kind": "exported-scene"
+        }
+      ],
+      "timeout": 600
     }
   ]
 }

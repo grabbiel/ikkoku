@@ -4185,7 +4185,8 @@ pixels, maximum 5, between its duplicate captures. Its input hashes match the
 current captured-provider run. This establishes that a draw repeatability gap
 predates the new compositor; it does not equate the magnitudes or prove their
 complete cause. Whole-frame repeat equality and full source-color parity are
-not claimed.
+not claimed. The cause was later found and corrected (#188,
+[cause and correction](#cause-and-correction-cross-primitive-derivative-quads-2026-10-25)).
 
 Private diagnostics read all ten target mip levels before/after repeated draws
 and recompose base/distinct targets under three fresh owners: every level is
@@ -4505,8 +4506,10 @@ separate draw-fidelity limitations.
 ### Translated sampling repeatability investigation (#188)
 
 [Issue #188](https://github.com/grabbiel/ikkoku/issues/188) tracks the separate
-held-frame draw variation above. Production sampling, source tolerances and
-composite coverage are unchanged. The following are private numerical
+held-frame draw variation above. Its cause and the production correction are in
+[cause and correction](#cause-and-correction-cross-primitive-derivative-quads-2026-10-25)
+at the end of this section; until then, production sampling, source tolerances
+and composite coverage were unchanged. The following are private numerical
 diagnostics on the same Apple M2 Ultra / macOS 27.0.1 host, with fast math
 disabled; none is a performance measurement or a proposed quality-reducing
 workaround. The earlier MSL 4.1 value came from a separate options-query process,
@@ -5004,6 +5007,141 @@ Commands, hashes, helper reviews, immutable proxies and raw readbacks are under
 correlation is not itself proof of a boundary defect: 2,596 of 2,604 visible
 forward pixels already lie on primitive boundaries in this small on-screen
 shoe. The investigation remains open, with no new FPS or source-parity claim.
+
+#### Cause and correction: cross-primitive derivative quads (2026-10-25)
+
+**Cause.** On this M2 Ultra / macOS 27.0.1 host, an indexed draw whose vertex
+function writes no device memory can build a fragment's 2×2 derivative quad
+from lanes of a *neighbouring* triangle that shares its vertices. `dfdx`/`dfdy`,
+and so implicit-LOD samples, then come from the neighbour's attribute plane.
+Which neighbour lands in a quad can change between identical submissions; the
+shoe's alpha-tested forward pass shows exactly that. Direct3D 11, which the
+translated programs come from, shades each primitive in its own quads with
+helper lanes, so these derivatives are not the source program's.
+
+Four private observations on the held shoe frame establish it, all on
+`main` `74cee1c` (Release test bundle `51dff596…`, MSL 4.0, fast math off):
+
+- **Inputs and outputs of the vertex stage are fixed.** Converted vertex inputs
+  and every forward/outline vertex output (all six output registers, dumped
+  from the vertex function) are bit-identical across repeats, as are visible
+  UVs and primitive IDs. Separate compute command buffers, frozen inputs,
+  disabled stencil, `preserveInvariance` and `[[invariant]]` positions still vary.
+- **The recorded derivatives belong to other triangles.** From the dumped
+  clip positions and UVs (window positions snapped to the rasterizer's 8-bit
+  subpixel grid reproduce every recorded UV, median error 4e-8), each visible
+  forward pixel's own-triangle finite difference is computed. In the
+  observed-prefix MRT program, 1,740–1,767 of 2,604 pixels per repeat match it;
+  all 836–863 others match the difference to *another* triangle of the same
+  draw at the partner pixel (771–801 that triangle's own fragment, 62–65 its
+  helper lane), with none unexplained.
+- **A vertex-stage store restores own-triangle quads.** Each of four tested
+  device-memory stores in the forward vertex function (an output dump, a store
+  of the position, and two never-executed conditional stores) makes all 2,604
+  derivatives own-triangle and every repeat bit-identical in all MRT planes, for
+  both texture providers. A store in the outline pass alone does not.
+- **A minimal shader on the exported geometry reproduces it.** The forward
+  pass's 3,054 vertices and 3,852 triangles drawn with one implicit sample, a
+  discard on the sampled alpha and blending: 953 of 2,846 pixels take another
+  triangle's derivatives and 1–5 color pixels change between repeats. Every
+  such partner triangle shares a vertex with the pixel's own (median
+  primitive-index distance 1). With the never-run store, or drawn non-indexed,
+  or indexed with one index per corner (no shared vertices), all 2,846 are
+  own-triangle and repeats are identical. Without the discard, 950 pixels still
+  take another triangle's derivatives, but repeatably.
+
+**Asset-free reproducer.** [`metal_quad_merge_repro.swift`](../../Tools/verification/metal_quad_merge_repro.swift)
+([instructions](../../Tools/verification/README.md#standalone-metal-quad-merge-reproducer))
+draws two shared-vertex grids with a per-vertex hashed attribute. Six repeats on
+this host (MSL 4.1, fast math off), covered pixels taking another triangle's
+`dfdx`/`dfdy` of `u`:
+
+| Grid | Draw | Blend | No discard | Discard on attribute | Discard on sample | With the vertex store |
+| --- | --- | --- | ---: | ---: | ---: | ---: |
+| 6 px cells, 9,216 px | indexed | off | 2,521 | 0 | 0 | 0 |
+| 6 px cells | indexed | on | 2,521 | 2,500 | 2,500 | 0 |
+| 0.75 px cells, 5,184 px | indexed | off | 376 (4 px vary) | 0 | 0 | 0 |
+| 0.75 px cells | indexed | on | 380 | 372 | 372 | 0 |
+| both | non-indexed | either | 0 | 0 | 0 | 0 |
+
+So the mechanism needs shared vertices and no vertex-stage store; with
+blending off, a discard happens to avoid it. Every translated pipeline enables
+blending. The earlier [`metal_derivative_repro.swift`](../../Tools/verification/metal_derivative_repro.swift)
+draws non-indexed triangles, which is why all of its cases were stable.
+
+**Correction.** `TranslatedSourcePipelineCache.entry` now compiles every
+translated draw program through `TranslatedSourceVertexStore.rewrite`
+([`TranslatedSourceProgram.swift`](../../Packages/Engine/Sources/Renderer/TranslatedSourceProgram.swift)).
+It declares buffer(0) `device` instead of `device const` and adds
+`if (vid == 0xffffffffu) { input[0].v0 = float4(0.0f); }` before the vertex
+output. Every translated draw is 32-bit indexed without a base vertex, its
+indices address its own vertex buffer (far fewer than 2^32 − 1 vertices), and
+0xffffffff is Metal's 32-bit primitive-restart index, so the store never runs: inputs,
+outputs, samplers, alpha tests and bindings are the source program's. The
+rewrite runs once per pipeline compile and throws on any vertex stage that is
+not the translation emitter's shape. The frozen probe and the live path share
+the cache. Fixed LOD, anisotropy and explicit gradients are unchanged.
+
+**Output effect.** The live shoe capture is now bit-identical over eight
+repeats in both providers (it varied at 103–114 native-store and 22–42
+captured-texture pixels, maximum 27, on `74cee1c`). It equals the never-run-store
+diagnostic draw byte for byte and differs from the unrewritten draw at 427/432
+pixels (maximum 87): the own-triangle derivatives change the MainTex LOD at
+primitive edges. The whole controlled character (21 items, 98,917 visible
+pixels, retained gate store) also repeats bit for bit over six captures per
+provider; before, consecutive captures differed at 11–29 native-store and
+17–38 captured-texture pixels (maximum 14). Every source gate keeps its tolerance and passes; values
+below are three processes each (before: `51dff596…` on `74cee1c`; after:
+`2072d607…` on `cf7919e`, identical in all three):
+
+| Gate (bound) | Before, three runs | After |
+| --- | --- | --- |
+| Silhouette IoU (≥ 0.999) | 0.99998 | 0.99998 |
+| Character colour mean / p99 (≤ 1 / 4) | 0.1911–0.1913 / 4 | 0.1875 / 4 |
+| `main_opaque` mean / p99 (≤ 1 / 4) | 0.1126–0.1143 / 1 | 0.1184 / 2 |
+| `main_skin` mean / p99 | 0.0543 / 1 | 0.0544 / 1 |
+| `toon_eye_lod0` mean / p99 | 0.0091 / 0 | 0.0091 / 0 |
+| `toon_eyew_lod0` mean / p99 | 0.6137 / 1 | 0.6302 / 1 |
+| `main_hair` mean / p99 (≤ 1.1 / 26) | 0.9963–1.0023 / 24 | 0.9681 / 23 |
+| `main_hair_front` mean / p99 (≤ 1.1 / 24) | 0.8480–0.8481 / 22 | 0.8204 / 22 |
+| Native store `main_opaque` mean / p99 | 0.1068–0.1077 / 1 | 0.1174 / 2 |
+| Native store `toon_eyew_lod0` mean / p99 | 0.6035 / 0 | 0.6201 / 1 |
+| Native store `main_hair` / `main_hair_front` mean | 0.988–0.990 / 0.667 | 0.958 / 0.645 |
+
+Families move in both directions inside unchanged bounds; this is not a new
+parity claim. The gate ran with the retained 62-entry store and head contract
+under `.local/codex-continue-2026-10-24/rolling/materials-body/retained-native-inputs/`.
+
+**Cost (measured, Release, quiet machine).** A private timing mode encodes the
+controlled frame's deform and live-input compute in one command buffer and its
+20 live translated records in a second, and reads the second's GPU start/end
+times: 10 warm-up and 60 timed frames per provider, three processes per binary,
+interleaved before/after. Before is `6633479d…` (Engine sources identical to
+`main` `6502803`); after is `e9707fd2…` (this change). Per-process medians:
+
+| Live translated draws, GPU ms | Before p50 (3 processes) | After p50 (3 processes) | Pooled p50 / p95 before → after |
+| --- | --- | --- | --- |
+| Native store | 0.286 / 0.278 / 0.279 | 0.344 / 0.344 / 0.345 | 0.280 / 0.334 → 0.344 / 0.371 |
+| Captured textures | 0.292 / 0.296 / 0.289 | 0.339 / 0.347 / 0.351 | 0.292 / 0.338 → 0.344 / 0.394 |
+
+The correction adds about 0.06 ms of GPU time per frame (+18–23%) to these 20
+draws. It is the price of shading each primitive in its own quads; whether it
+comes from extra helper lanes or from lost vertex reuse was not attributed. The
+live path is an opt-in that is off by default, so default Studio and Maker
+frames, which draw no translated pipeline, are unaffected. CPU encode, bindings,
+buffers and uploads are unchanged; the rewrite is one string edit per pipeline
+compile.
+
+**Limits.** The behaviour is the GPU driver's, observed on one host; Metal does
+not specify derivative quads across primitives, and other GPUs or OS versions
+may differ. The correction relies on a device store changing how this driver
+shades indexed draws. The synthetic Engine regression
+`translatedDrawsKeepDerivativeQuadsWithinOnePrimitive` asserts own-triangle
+derivatives and identical repeats through the cache, and records (without
+asserting) the unrewritten control under the same blend state: 2,489 (alpha-tested) and 2,510 (plain) of 9,216 pixels on this host.
+Fragment-only create composites and the native renderer do not use this path.
+Private evidence, harness, configs and analysis scripts are under
+`.local/r188-sampling/`.
 
 ### Native pose gate
 
