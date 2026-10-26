@@ -18,7 +18,7 @@ Supported edits are:
 - Current camera and ten saved camera slots, preserving position, all three Euler angles, all three distance components and field of view. Only the 40-byte version-2 payload changes.
 - A replacement scene PNG only when explicitly supplied. It must be one complete CRC-valid PNG; an embedded card cannot acquire a PNG prefix.
 
-Transforms are expressed in the original Unity coordinate basis and Euler degrees. The native app must convert edited transforms back before export. Duplicate or unavailable destinations, invalid group counts, nonfinite values, invalid camera FOV and invalid PNGs reject the entire edit. Object IDs, root dictionary keys, unedited catalog choices/settings and trailing plug-in bytes are preserved, and so is record order except where a [topology edit](#topology-edits-deletion-and-reparenting-st-t03-st-s09) deletes or moves a record. Deleting records and moving them between the root and folders follow that section, and duplicating records and adding folders, cameras and lights follow [duplicates and added records](#duplicates-and-added-records-st-t03-st-s09-st-d03), and route point and setting edits and route copies follow [route points and settings](#route-points-and-settings-st-t11-st-t03); adding characters or items, other moves, object type, item identity and plug-in behavior are outside this writer.
+Transforms are expressed in the original Unity coordinate basis and Euler degrees. The native app must convert edited transforms back before export. Duplicate or unavailable destinations, invalid group counts, nonfinite values, invalid camera FOV and invalid PNGs reject the entire edit. Object IDs, root dictionary keys, unedited catalog choices/settings and trailing plug-in bytes are preserved, and so is record order except where a [topology edit](#topology-edits-deletion-and-reparenting-st-t03-st-s09) deletes or moves a record. Deleting records and moving them between the root and folders follow that section, and duplicating records and adding folders, cameras and lights follow [duplicates and added records](#duplicates-and-added-records-st-t03-st-s09-st-d03), and route point and setting edits and route copies follow [route points and settings](#route-points-and-settings-st-t11-st-t03). In those exports, [plug-in data](#plug-in-data-st-t03i) keeps, rewrites or refuses each ExtendedSave entry. Adding characters or items, other moves, object type, item identity and running plug-in code are outside this writer.
 
 The writer validates complete output framing after applying patches in source byte order. Variable-length embedded card, voice-list and thumbnail edits therefore shift following records without reconstructing their bytes. Tests cover modifications both before and after a resized card, nested objects, ordinal Unicode bone identities, unknown trailers and source `Data` slices with nonzero start indices. Reversing transform, visibility, name, camera- and route-active, flag and camera edits restores every original byte.
 
@@ -60,7 +60,7 @@ remains separate.
 
 The app exports supported existing transforms, per-object visibility, folder/camera/route renames, camera active flags (only after the user switches the looked-through camera, then for every camera record), route play-state `active` flags, FK/IK and activation flags, animation, voice and cameras to a **new file** after checking the source SHA. It renders an explicit edited thumbnail. The app populates `edits.cards` with source face/body shape values and edited card colors that differ from the embedded card's saved values (ST-T06); shape and color edits on one character merge into a single `Edits`, and a value edited back to the saved rate or rgba writes nothing and the file stays byte-identical. Only colors that actually bound a material on the assembled character are exported; an edited color whose ID binds nothing still renders as saved. Its inspector diagnostic says it remains in the native document but is skipped by original-scene export. A selected outfit other than the card's saved one is merged into the same `Edits` as `coordinateType` (ST-C03); choosing the saved outfit again writes nothing. Clothes states, accessory flags and the shoes type that differ from the card's saved `Status` are merged the same way; a state edited back to the saved bytes writes nothing. Thumbnail and other card destinations remain unpopulated, and a native `object.card` override is rejected. Deleted objects and objects moved between the root and folders are exported as [topology edits](#topology-edits-deletion-and-reparenting-st-t03-st-s09), and copies of source records and new folders, cameras and lights as [inserted records](#duplicates-and-added-records-st-t03-st-s09-st-d03). Route point and setting edits, and route copies, are exported as [route edits](#route-points-and-settings-st-t11-st-t03).
 
-The export validator rejects new characters and items, the topology and insertion cases those sections list as refused, type changes, and name edits for any record kind other than folder, camera or route (a renamed character keeps its name in its card), plus native assets/materials/cards/hand/appearance overrides, light/effect/timeline changes and live typed plugin state. A retained source file is not serialization for those edits.
+The export validator rejects new characters and items, the topology and insertion cases those sections list as refused, type changes, and name edits for any record kind other than folder, camera or route (a renamed character keeps its name in its card), plus native assets/materials/cards/hand/appearance overrides, light/effect/timeline changes, live typed plugin state, and the plug-in data cases [plug-in data](#plug-in-data-st-t03i) refuses. A retained source file is not serialization for those edits.
 
 Implement the missing field writers, new characters and items and the refused topology cases under `ST-T03`, a real source-card edit workflow under `ST-T06`, and GUID-specific plugin serialization under `ST-T13`. Each writer must preserve unknown siblings, verify a no-op byte match, reverse supported changes exactly where possible, and validate an edited file in the original loader before widening its compatibility claim.
 
@@ -111,7 +111,7 @@ The rules come from the recovered CharaStudio `Assembly-CSharp.dll` (SHA-256 `90
 | Deleting an object attached to a character's accessory point on its own | CharaStudio allows it (OCIChar.cs:577 removes it from the group), but no such file has been reloaded in the original player yet. Deleting the character removes it with its subtree. |
 | Listing a record whose ancestor is also deleted | Only the top of a deleted subtree is listed. The ancestor walk stops at the first moved ancestor, which takes the record out of the deleted subtree. |
 | Deleting, or moving off the root, a root whose dictionary key differs from its `dicKey` | `DeleteInfo` removes roots by `dicKey`. |
-| Any deletion when the scene carries plug-in (ExtendedSave) data | Plug-ins key their data by `dicKey` and rewrite it from live objects when CharaStudio saves. Deletion is allowed only with no trailer, or with one KKEx block holding a nil or empty map. |
+| A deletion that the scene's plug-in data cannot follow | Plug-ins key their data by `dicKey` and rewrite it from live objects when CharaStudio saves. [Plug-in data](#plug-in-data-st-t03i) decides each KKEx entry, and refuses when a plug-in would lose or misplace data it reads, or when the entry has no recovered rule. With or without a trailer, it also refuses when NodesConstraints would turn a written character's card links into constraints. |
 | A scene edit targeting a deleted record | The record is gone. |
 | Moving a route | `enableChangeParent = false`. |
 | Moving a route child | Its saved local placement depends on the route's playback position at the moment of the move. |
@@ -193,7 +193,7 @@ Reproduce the VM run from the repository root (`.local/verification/scenario-exp
 **Not verified:**
 
 - Deleting an accessory child alone and the other refused cases (none of them is written).
-- Scenes carrying plug-in data, for deletion.
+- Deletion in scenes carrying plug-in data other than Sideloader and StudioSceneSettings entries, in the original player ([plug-in data](#plug-in-data-st-t03i)).
 - How the original orders the roots after an interactive remove and add (history-dependent; our order is documented above and loads as written).
 - Rendering the edited scenes in the original player. The capture records state, not pixels.
 
@@ -219,7 +219,7 @@ Citations are `file:line` under `.local/reverse/managed-recovery/902b9a23…/774
   - A folder is named `フォルダー` (OIFolderInfo.cs:18).
   - A camera is named `カメラ` plus the session's camera count, and it is inactive (OICameraInfo.cs:17).
   - The `OILightInfo` constructor makes a light white with intensity 1, range 10, spot angle 30, and shadow, enable and draw-target on (OILightInfo.cs:27–39). Its number is the `Light_00` catalog entry: 0 directional, 1 point, 2 spot.
-- **Plug-in data.** ExtendedSave and the plug-ins it serves key scene data by `dicKey`. What they do on a duplicate is their own code, which is not in the recovered assembly.
+- **Plug-in data.** ExtendedSave and the plug-ins it serves key scene data by `dicKey`. What they do on a duplicate is their own code, recovered from the installed DLLs under [plug-in data](#plug-in-data-st-t03i).
 
 ### Writer behavior
 
@@ -243,7 +243,7 @@ The writer works in two phases. `KoikatsuSceneDocument.inserting(_:)` writes the
 | Case | Reason |
 | --- | --- |
 | Duplicating a route without points, or placing a copy of a route child outside its route's list | See [route points and settings](#route-points-and-settings-st-t11-st-t03). |
-| Any duplicate when the scene carries plug-in (ExtendedSave) data | Plug-ins key that data by object, and what they do on a duplicate is not recovered. The rule matches deletion: a trailer with no data, or one KKEx block holding a nil or empty map, does not block. New records with no duplicate are allowed and keep the trailer bytes. |
+| A duplicate or new record that the scene's plug-in data cannot follow | Plug-ins key that data by object, and some list objects by position. [Plug-in data](#plug-in-data-st-t03i) decides each KKEx entry for copies and new records alike, and refuses a copy when NodesConstraints would turn a written character's card links into constraints, with or without a trailer. Before ST-T03i, new records kept the trailer bytes in every scene, which could shift positional data. |
 | Adding characters or items | A new character needs a card and an item needs catalog identity this writer does not author. Duplicating a source one is supported. |
 | More than two lights after the export | `isLightCheck` drops a third light at load. |
 | Adding under an item, onto accessory points, under a route, a camera or a light | The same rules as moves, except a copy beside its original. |
@@ -335,7 +335,7 @@ Reproduce the VM run from the repository root:
 
 **Not verified:**
 
-- Duplicates in scenes that carry plug-in data, and new characters or items (all refused). Route copies were reloaded later ([route points and settings](#route-points-and-settings-st-t11-st-t03)).
+- New characters or items (refused). Duplicates and new records in scenes carrying plug-in data other than Sideloader and StudioSceneSettings entries, in the original player ([plug-in data](#plug-in-data-st-t03i)). Route copies were reloaded later ([route points and settings](#route-points-and-settings-st-t11-st-t03)).
 - Lights: the reloaded scenes had one light, the new one. The two-light limit follows the recovered code and was not reloaded.
 - A new record inside a folder, and a copy inside a character's accessory group, are covered by the Engine tests only, without a reload in the original player.
 - Rendering in the original player. The capture records state and mesh counts, not pixels.
@@ -419,7 +419,7 @@ Citations are `file:line` under `.local/reverse/managed-recovery/902b9a23…/774
 | A speed outside 0.1–30, an ease outside the six-entry list, an unknown connection or orientation, a nonfinite value | The panels cannot produce it. A typed speed is clamped, as `OnEndEditSpeed` clamps it. |
 | A curve point whose aid was never placed; an aid reset after it was placed; a never-placed aid that moved | `InitAidPos` places the aid once, when the point becomes Curve. |
 | A colour alpha change, or a component outside 0–1 | The palette is opened with `_useAlpha: false`. |
-| Adding or deleting route points when the scene carries plug-in (ExtendedSave) data | Route points are keyed Studio objects (`Studio.AddCtrlInfo` in `LoadPoint`), and plug-ins key their data by object. The rule matches deletion and duplicates. |
+| Adding or deleting route points that the scene's plug-in data cannot follow | Points are not plug-in objects: `AddObjectRoute.LoadPoint` registers each with `Studio.AddCtrlInfo` (AddObjectRoute.cs:151), which fills `dicInfo` only (Studio.cs:780), while plug-ins read `dicObjectCtrl` (filled by `AddObjectCtrlInfo`, Studio.cs:745). Points take keys from the same `hashIndex`, so [plug-in data](#plug-in-data-st-t03i) judges the keys the export writes, and an entry with no recovered rule refuses. |
 | Duplicating a route that has no points | CharaStudio adds a start point when it loads such a route. |
 | A copy of a route child placed outside its route's list or the copy's | Its saved local placement follows the route's playback position. |
 | A new record under a route; moving a route or a route child | Unchanged from the sections above. |
@@ -524,10 +524,129 @@ Reproduce the VM run from the repository root:
 **Not verified:**
 
 - A point moved while the route plays: the segment-start rule follows the recovered `StudioTween` code and the Engine tests, but no original-player capture of a live edit exists.
-- Route edits in scenes that carry plug-in data, beyond the refusal of added and deleted points.
+- Route edits in scenes carrying plug-in data other than Sideloader and StudioSceneSettings entries, in the original player ([plug-in data](#plug-in-data-st-t03i)).
 - The `routePointLimit` option turned off. The app always keeps the default limit.
 - A route nested in a folder or an item. Every fixture route is a root.
 - Rendering in the original player. The capture records state and positions, not pixels, and the line's Vectrosity shape is not compared.
+
+## Plug-in data (ST-T03i)
+
+Reviewed 2026-10-25. This covers deleting, duplicating and adding records, and adding or deleting route points, in a scene that carries ExtendedSave plug-in data. `SourceScenePluginData` (`Packages/Engine/Sources/Studio/SourceScenePluginData.swift`) decides every entry of the scene's KKEx trailer for each such export, after the [topology edits](#topology-edits-deletion-and-reparenting-st-t03-st-s09), [insertions](#duplicates-and-added-records-st-t03-st-s09-st-d03) and [route edits](#route-points-and-settings-st-t11-st-t03) are planned. Each entry is kept byte for byte or rewritten as its plug-in would write it. Otherwise the whole export is refused before any byte is written, and the reason names the plug-in. Moves and leaf edits keep the trailer as before.
+
+### Recovered rules
+
+The plug-ins are the installed DLLs of the [installed inventory](../mods/plugin-inventory.md) (243 DLLs), recovered with ilspycmd into `.local/stt03i-plugin-data/recovered/<SHA-256>/project/`. Each citation names the DLL by its hash prefix, then `file:line` in its project. The Studio citations are under `.local/reverse/managed-recovery/902b9a23…/77473a43…/project/Studio/`, as in the sections above. [Mods overview, scene plug-in data](../mods/overview.md#scene-plug-in-data-in-edited-original-scenes) records the plug-ins' own quirks.
+
+- **ExtendedSave 21.1.2.1** (`7b1c7f04…`, ExtensibleSaveFormat/ExtendedSave.cs). `PluginData` is the MessagePack array `[version, data]`.
+  - **Load.** `SceneInfoLoadHook` (:738–760) clears the scene dictionary, replaces it from the trailer, then raises `SceneBeingLoaded`.
+  - **Save.** `SceneInfoSaveHook` (:846–871) raises `SceneBeingSaved`, removes nil entries and serializes the whole dictionary again. So an entry that no plug-in writes on save carries over verbatim, stale keys included, and a nil entry disappears.
+- **KKAPI 1.46.1** (`7f4f50e1…`, KKAPI.Studio.SaveLoad/StudioSaveLoadApi.cs).
+  - Scene controllers save from `SceneBeingSaved` (:250).
+  - At load, they see `dicObjectCtrl` by saved key (:427).
+  - A `Studio.Duplicate` postfix passes each original key and its copy's key to `OnObjectsCopied` (:45–63, :139–145, :423–436).
+  - `OnObjectDeleted` hooks the `OnDelete` of items, characters, folders, lights, cameras and routes (:158–168), not of route points.
+- **Route points are not plug-in objects.** `AddObjectRoute.LoadPoint` registers a point with `Studio.AddCtrlInfo` (AddObjectRoute.cs:151). That adds it to `dicInfo` only (Studio.cs:780); objects reach `dicObjectCtrl` through `AddObjectCtrlInfo` (Studio.cs:745).
+  - No plug-in names a point, and no positional list counts one.
+  - Points still take keys from the same `hashIndex`, so a point edit matters only through the keys it takes.
+- **Sideloader 21.1.2.1** (`dc3b1c3d…`, `com.bepis.sideloader.universalautoresolver`).
+  - **Save.** `SavePrefix` (Sideloader.AutoResolver/UniversalAutoResolver.cs:560–775) rebuilds the entry from the live objects, or writes nil when there is nothing. The entry holds:
+    - `itemInfo` and `patternInfo`, lists of MessagePack-encoded records with `SceneDicKey` and `SceneObjectOrder`;
+    - the scene-level map, filter, ramp and BGM GUIDs.
+  - **Order.** `SceneObjectOrder` is the record's depth-first pre-order index among records of its own kind (items, lights or characters), from the root dictionary through the child lists (StudioObjectSearch.cs:46–110). A copy gets its template's records.
+  - **Load.** It indexes the dictionary by `SceneDicKey` unchecked (:1334, :1342). A record for a deleted item throws inside `SceneBeingLoaded`, and every later record stays unresolved.
+- **Positional lists.**
+  - **KKPE 2.21.4** (`72d1b7b5…`, `kkpe`). `OnSceneSave` (HSPE/MainWindow.cs:1585–1608) writes one `itemInfo` element per item, in key order. `LoadSceneGeneric` (:1554) loads the i-th element onto the i-th item and ignores the saved `index`.
+  - **NodesConstraints 1.6.2.1** (`817fd940…`, `nodesConstraints`). The save (NodesConstraints/NodesConstraints.cs:2393–2428) writes `parentObjectIndex` and `childObjectIndex` as indices into the key-sorted `dicObjectCtrl`, and the load reads them the same way (:2108–2146).
+  - **Timeline** (`0d19f9cf…`, `timeline`). `SceneWrite` (Timeline/Timeline.cs:4361) gives each object interpolable an `objectIndex` into the same key-sorted list (:4622). Global interpolables carry none.
+- **NodesConstraints' card fallback.** No installed DLL declares KK_AnimationController (`com.deathweasel.bepinex.animationcontroller`). So `NodesConstraints.OnSceneLoad` (:2061–2068, flag at :1025) runs `LoadDataFromKKAnimationController` (:2259) on every load, whether or not the scene has a `nodesConstraints` entry or any plug-in data. When the scene's `KK_AnimationController` entry has no `AnimationInfo`, or the scene has no such entry, each character card's KKAnimationController links become constraints by object key, and the next save writes them. The load indexes the loaded objects by each link without a check.
+- **Lists keyed by object.** Each plug-in rebuilds its list from the live objects on save. Some also write data for copies.
+
+  | Plug-in (hash prefix, entry ID) | Data naming objects | On a copy |
+  | --- | --- | --- |
+  | MaterialEditor 4.0.2 (`dde57f4f…`, `com.deathweasel.bepinex.materialeditor`) | nine property lists and `TextureDictionary` by item (KK_Plugins.MaterialEditor/SceneController.cs:378–463); `OnObjectDeleted` (:1041) | clones per key (:725) |
+  | ItemLayerEdit (`bcf52291…`, `keelhauled.itemlayeredit`) | `SavedLayers[].ObjectId` (ItemLayerEdit.Koikatu/SceneDataController.cs:32) | copies (:56) |
+  | RealPOV (`60b11ab2…`, `keelhauled.realpov`) | `PovData.CharaId`, −1 for none (RealPOV.Koikatu/SceneDataController.cs:27) | nothing |
+  | MoarCamz (`71e3bfd2…`, `orange.spork.moarcamzplugin`) | each camera slot's `CenterTarget` (MoarCamz/MoarCamzStudioController.cs:69) | nothing |
+  | BetterScaling (`c5214827…`, `BetterScalingData`) | `scaledOCI` keys (BetterScaling/BetterScalingDataController.cs:109) | copies (:147) |
+  | LightSettings (`dc53863c…`, `LightSettingsData`) | one record per live light by `ObjectId`; −10 is the character light, −20 the map light (LightSettings.Koikatu/SceneDataController.cs:142) | a record for every light |
+  | StudioItemIK (`c70ff74d…`, `org.njaecha.plugins.StudioItemIK`) | `activeIKs` keys and `objectTargetPairs` keys and values (StudioItemIK/SceneController.cs:13); the load throws on a missing key (:36) | copies (:73) |
+  | ObjImport (`a823bb8b…`, `org.njaecha.plugins.objimport`) | `ids` (ObjImport/SceneController.cs:14); `OnObjectDeleted` (:116) | copies (:124) |
+  | StudioCustomMasking (`d207e864…`, `com.deathweasel.bepinex.studiocustommasking`) | `MaskingFolders` (KK_Plugins.StudioCustomMasking/SceneController.cs:16) | copies (:56) |
+  | SaveCameraObjectFov (`6d51babb…`, `com.rikkibalboa.bepinex.savecameraobjectfov`) | `cameras` (key to field of view), and `cameraIndex` and `previousCameraIndex`, positions in the camera selector where 0 is the main camera (Plugins/SceneController.cs:13, load :40) | nothing |
+
+- **Scene-global entries** name no object:
+  - StudioSceneSettings (`5ae7cd40…`, KK_Plugins.StudioSceneSettings/SceneController.cs:37);
+  - StudioImageEmbed (`69024b7c…`, KK_Plugins/ImageEmbed.cs:171);
+  - TwoLut (`87c58898…`, KK_Plugins/TwoLutPlugin.cs:61);
+  - StudioCharaLightLinkedToCamera (`26c4d1e6…`, KK_StudioCharaLightLinkedToCamera/Patches.cs:90–92). It writes and accepts only version 3 (:129, :136).
+- **Orphan IDs.** `KKVMDPlayExtSave`, `rendererEditor`, `com.rskoi.particleeditor`, `vnge_kfa` and `vnge_sss` occur in installed scenes. None of the 243 installed DLLs contains any of them as ASCII/UTF-8 or UTF-16LE, and no script host is installed. The scan is `.local/stt03i-plugin-data/inventory/orphan-scan.json` (coverage index SHA-256 `e146e45a…`, corpus digest `d81258cc…`). Nothing in this install reads or writes these entries, so CharaStudio's save carries them verbatim through any edit. **Parity holds for this pinned install only.** Once a plug-in that owns one is installed, its data may name objects the export changed.
+
+### Writer behavior
+
+- **When.** The rules run on the final written document: its records, their keys, kinds and parents, and each copy's template. A rule that depends on positions therefore sees exactly what CharaStudio would load. An export that only moves records or edits leaves keeps every entry, as before.
+- **Per entry.** Each row keeps or rewrites the entry, or refuses the export naming the plug-in:
+
+  | Entry | Rule |
+  | --- | --- |
+  | Nil | Inert. It is dropped when the trailer is rewritten, as ExtendedSave's save drops it, and kept otherwise. |
+  | An orphan ID | Kept verbatim. |
+  | Scene-global | Kept, for the recovered versions. |
+  | Sideloader | Rewritten in CharaStudio's order: kept records with their order recomputed, each copy's records cloned from its template's with the copy's key and order, deleted records dropped. Scene-level keys are kept. An empty result removes the entry. A record for an object the scene does not have, for one of the wrong kind, or a second record for the same object refuses. |
+  | KKPE | Kept when the written items are the source items. Otherwise refused: its rewrite is a later change. |
+  | MaterialEditor | Kept when every list is nil, or the items are unchanged. Otherwise refused. |
+  | NodesConstraints | The empty `<constraints …/>` form is kept. A non-empty one is kept when every existing object keeps its index in the key-sorted object list and nothing is copied. Otherwise it is refused. |
+  | Timeline | Kept when no interpolable has an `objectIndex`, or when positions hold as for NodesConstraints. |
+  | KK_AnimationController | `[0, {}]` and an empty `AnimationInfo` list are kept. Links are refused when the edit deletes or copies objects. |
+  | Lists keyed by object | Kept unless the edit deletes an object the data names, or copies one when the plug-in writes data for copies. LightSettings also refuses any added or copied light, because it writes a record per live light. SaveCameraObjectFov refuses a camera add, copy or delete when a camera index is not 0. An unknown field or an undecodable value refuses. |
+  | Anything else, or an unknown version or shape | Refused when objects or route points come or go, additions included. Unknown data is not assumed inert. |
+
+  **Card fallback.** This check reads the cards, not the trailer. So it also runs in a scene with no `nodesConstraints` entry, an empty map or no plug-in data at all. It applies when the edit deletes or copies objects and the scene's KK_AnimationController entry, if any, has no `AnimationInfo`. The export is then refused when a written character's card carries KKAnimationController `Links` or `Eyes`, or when such a card does not decode. The reason names NodesConstraints.
+- **Bytes.** Kept entries keep their bytes. The map header is written as MessagePack-CSharp 1.x writes it (shortest forms), and so are the rewritten Sideloader records. A trailer with nothing to change is returned as it was.
+- **Verification.** The written trailer is parsed again. It must have the source's framing and the planned entries in order with the planned bytes. The Sideloader records must decode to their planned keys and positions.
+- **Keys.** Insertions take the smallest free keys, then added route points take theirs. Keys freed in the same export are not reused, unlike CharaStudio after an interactive delete ([#278](https://github.com/grabbiel/ikkoku/issues/278)).
+
+**Before ST-T03i**, delete, duplicate and route point add and delete were refused in any scene whose KKEx map held an entry, nil entries included. Additions were accepted in every scene, with the trailer kept verbatim. That was a latent bug: a new folder below the highest key shifts NodesConstraints' and Timeline's indices. Additions now follow the rules above. In scenes without plug-in data, deletes and copies were accepted. Now the card fallback check refuses them when a written character's card carries links.
+
+### App translation
+
+The refusal is the engine's message, which names each plug-in and its reason. The app shows it in the export status. An export that carries an orphan entry says so in its status line, with the IDs.
+
+### Evidence
+
+- **Engine.** Three test files cover the rules:
+  - `SourceScenePluginDataTests` (10 tests) builds trailers with an independent canonical MessagePack encoder (`PluginMP`) on the `TopologyScene` builder. The tests cover:
+    - Sideloader records in CharaStudio's order, and records it cannot place;
+    - kept bytes with canonical framing;
+    - nil entries dropped only by a rewrite;
+    - unreadable trailers and unknown entries refused by name;
+    - positional data kept only while positions hold;
+    - route points and new objects judged on the written keys: a folder filling a key hole refuses NodesConstraints, and a folder above the keys does not;
+    - the object-keyed rules;
+    - the KK_AnimationController links and the card fallback;
+    - the writer's MessagePack-CSharp encodings.
+  - Disabling three of the rules fails 15 expectations (negative control).
+  - `SourceSceneTopologyTests`, `SourceSceneInsertionTests`, `SourceSceneRouteEditTests` and `SourceSceneExportValidationTests` carry the new refusal texts and the accepted cases.
+- **Survey port and parity gate.** The scene survey judges installed scenes with `Tools/reverse/fixtures/PluginSceneRules.cs`, a C# 5 port of these rules. `Tools/reverse/plugin_rule_parity.py` gates it:
+  - It runs `sourceScenePluginDataWritesTheRuleParityCorpus`: 94 synthetic scenes, with every entry form alone, with a key hole, with linked cards, all together, and as unreadable trailers.
+  - It requires the port to reach the same verdict and name the same entry IDs for all 2,162 single-target edits: 0 mismatches.
+  - Two rule mutations in the port give 56 mismatches.
+  - The player's run repeats the check with the player's own compiler before the survey counts anything.
+- **Original player, phase A.** One `prlctl exec` (`Tools/reverse/original_plugin_scene_probe.py`) set up a private player root (Unity 5.6.2f1). It copied in ExtendedSave, Sideloader (with SharpZipLib and XUnity.ResourceRedirector), KKAPI and StudioSceneSettings, each checked against the inventory's SHA-256, and one installed studio-item zipmod (`[E625] Nan Chakram v1.zipmod`, SHA-256 `3d79a6fe…`).
+  - **Fixture.** The probe authored a fixture: a folder, mod and vanilla items in and out of it, a route with three points, a camera, a light and StudioSceneSettings values.
+  - **Edits.** CharaStudio made each supported edit from a fresh load and saved it with `SceneInfo.Save`: delete, delete-folder, duplicate, delete-duplicate, move, route-add and route-delete.
+  - **Comparison.** `sourceScenePluginDataMatchesCharaStudioEdits` makes the same edits with our writer.
+    - With CharaStudio's thumbnail, six of the seven exports are byte-identical to CharaStudio's whole file.
+    - delete-duplicate is decoded-equal. CharaStudio's copy takes the key the delete freed, in that record's dictionary slot (#278). Ours takes a new key at the end, so the Sideloader records match field for field apart from key and position, and the trailers have the same length.
+  - **Pass-through.** A control entry under an ID no plug-in owns keeps its bytes through CharaStudio's delete. Our writer refuses that delete by name.
+  - **Coverage.** Phase A loaded only those four plug-ins, so its byte identity covers the Sideloader and StudioSceneSettings entries only.
+  - **VM hygiene.** The errno-24 count was 0 before and after. The root was removed, and no game process was left.
+
+**Limits:**
+
+- Keys freed by a delete in the same export are not reused, so a delete with a duplicate gives the copy a different key than CharaStudio after the same interactive edit (#278). The scene loads the same way, and the Sideloader records follow the key.
+- KKPE data, and non-empty NodesConstraints and MaterialEditor data, are kept only when what they read is unchanged. Otherwise they are refused, not rewritten.
+- Entry IDs with no recovered rule refuse every export that adds, deletes or copies objects or edits route points, and so do unknown versions.
+- The orphan rule holds for the pinned install only.
 
 ## Shape and color reset contract
 

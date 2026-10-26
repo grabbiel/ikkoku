@@ -16,13 +16,21 @@ import Assets
 ///   one record per mod item, light or animation in the order CharaStudio
 ///   saves them, with each object's key and its per-kind position.
 /// - Scene-global entries (no object reference) are kept.
-/// - KKPE, MaterialEditor, NodesConstraints, KK_AnimationController and
-///   StudioCustomMasking are kept when the part of the scene they read is
+/// - KKPE, MaterialEditor, NodesConstraints, Timeline and
+///   KK_AnimationController are kept when the part of the scene they read is
 ///   unchanged in the written document, or in their empty forms.
+/// - Lists keyed by object key (`KeyedForm`: StudioCustomMasking,
+///   ItemLayerEdit, RealPOV, MoarCamz, BetterScaling, LightSettings,
+///   StudioItemIK, ObjImport, SaveCameraObjectFov) are kept unless the edit
+///   deletes, or for plug-ins that copy their data, copies an object they
+///   name.
 /// - Entries no installed plug-in contains (`orphanIDs`) are kept verbatim.
 /// - A nil entry is inert; a rewritten trailer drops it as CharaStudio does.
+/// - NodesConstraints reads character cards on every load, with or without
+///   its entry or any plug-in data (`cardLinks`).
 ///
-/// Anything else refuses the whole export, naming the plug-in and the reason.
+/// Any other entry refuses an export that deletes, copies or adds objects or
+/// adds or deletes route points, naming the plug-in and the reason.
 /// Unchanged entries keep their bytes, and a trailer with nothing to change
 /// is returned as it was.
 enum SourceScenePluginData {
@@ -78,9 +86,13 @@ enum SourceScenePluginData {
     /// before insertions; `copies` maps each copy's key to its template's.
     static func rewrite(_ data: Data, final: KoikatsuSceneDocument, source: KoikatsuSceneDocument,
                         copies: [Int32: Int32], moved: Bool) throws -> Data {
-        guard !final.trailingData.isEmpty else { return data }
         let edit = Edit(source: source.snapshot, final: final.snapshot, copies: copies, moved: moved)
         guard edit.structural else { return data }
+        guard !final.trailingData.isEmpty else {
+            // No plug-in data, but NodesConstraints still reads the cards.
+            if let reason = cardLinks(edit, .empty) { throw edit.refusal([reason]) }
+            return data
+        }
         let trailer: SourceSceneKKEx
         do { trailer = try SourceSceneKKEx.parse(final.trailingData) } catch {
             // Moves keep an unreadable trailer, as before.
@@ -94,6 +106,34 @@ enum SourceScenePluginData {
         var result = data.subdata(in: data.startIndex..<(data.startIndex + final.baseSceneEndOffset))
         result.append(contentsOf: rewritten)
         return result
+    }
+
+    /// NodesConstraints.OnSceneLoad (NodesConstraints.cs:2061-2068): with
+    /// KK_AnimationController not installed, every load links each character
+    /// to the objects its card's KKAnimationController data names by key
+    /// (`LoadDataFromKKAnimationController`, :2259, indexing the loaded
+    /// objects unchecked), unless the scene's KK_AnimationController entry
+    /// has `AnimationInfo`; CharaStudio's next save writes those links as
+    /// `nodesConstraints` data. It reads the cards, so it applies with or
+    /// without a `nodesConstraints` entry or any plug-in data. Refused when
+    /// the edit deletes or copies objects and a written character's card
+    /// carries links or eyes, or cannot be read.
+    static func cardLinks(_ edit: Edit, _ controller: AnimationControllerForm) -> String? {
+        guard edit.rekeys, controller == .empty else { return nil }
+        let marker = Data(cardAnimationController.utf8)
+        for record in edit.finalRecords {
+            guard let character = record.character, character.cardData.range(of: marker) != nil else { continue }
+            let plugins: [String: SourceCharacterCard.PluginData]
+            do { plugins = try character.card().extensions().plugins } catch {
+                return "NodesConstraints ('\(nodesConstraints)') cannot check character \(record.sourceKey)'s card, which does not decode (\(error.localizedDescription))"
+            }
+            guard let data = plugins[cardAnimationController]?.data else { continue }
+            let links = [data["Links"], data["Eyes"]].contains { value in value.map { $0 != .null } ?? false }
+            if links {
+                return "NodesConstraints ('\(nodesConstraints)') turns character \(record.sourceKey)'s KKAnimationController card links into constraints by object key on every load, and this edit deletes or copies objects"
+            }
+        }
+        return nil
     }
 
     // MARK: Edit
@@ -213,7 +253,6 @@ enum SourceScenePluginData {
         }
 
         mutating func decide() throws {
-            var cardLinksChecked = false
             for entry in trailer.entries {
                 var decision = Decision.keep
                 if entry.isNil {
@@ -224,7 +263,7 @@ enum SourceScenePluginData {
                 } else {
                     var reason: String?
                     do {
-                        reason = try decide(entry, cardLinksChecked: &cardLinksChecked, decision: &decision)
+                        reason = try decide(entry, decision: &decision)
                     } catch {
                         // Data the rule cannot read is unknown data.
                         decision = .keep
@@ -234,6 +273,9 @@ enum SourceScenePluginData {
                 }
                 decisions.append(decision)
             }
+            // An unreadable KK_AnimationController entry is decided above.
+            let controller = (try? AnimationControllerForm.scene(trailer)) ?? .unknown
+            if let reason = SourceScenePluginData.cardLinks(edit, controller) { reasons.append(reason) }
             if !reasons.isEmpty { throw edit.refusal(reasons) }
             // Nothing but nil entries to drop: keep the trailer as it was.
             let rewrites = zip(trailer.entries, decisions).contains { entry, decision in
@@ -244,8 +286,7 @@ enum SourceScenePluginData {
         }
 
         /// The rule for one non-nil entry; a refusal reason, or nil.
-        private mutating func decide(_ entry: SourceSceneKKEx.Entry, cardLinksChecked: inout Bool,
-                                     decision: inout Decision) throws -> String? {
+        private mutating func decide(_ entry: SourceSceneKKEx.Entry, decision: inout Decision) throws -> String? {
             let unknown = edit.keysChange ? "has no rule in this writer for following object edits (its plug-in's save, copy and delete code is not recovered here)" : nil
             guard let version = entry.version else {
                 return edit.keysChange ? "is not a [version, data] PluginData value" : nil
@@ -290,19 +331,16 @@ enum SourceScenePluginData {
                 return "keys its material edits by item, and this edit deletes or copies items"
             case nodesConstraints:
                 guard version == 0 else { return unknownVersion() }
-                if try NodesConstraintsForm.isEmpty(trailer, entry) {
-                    return try cardLinks(&cardLinksChecked)
-                }
+                if try NodesConstraintsForm.isEmpty(trailer, entry) { return nil }
                 // Parent and child objects are indices in the key-sorted
-                // dicObjectCtrl. The card fallback below adds to them on
-                // load either way.
-                if edit.positionsKept { return try cardLinks(&cardLinksChecked) }
+                // dicObjectCtrl. The card fallback (`cardLinks`) adds to
+                // them on load either way.
+                if edit.positionsKept { return nil }
                 return "addresses objects by their index among all objects in key order, and this edit removes, copies or renumbers some"
             case animationController:
                 guard version == 0 else { return unknownVersion() }
                 switch try AnimationControllerForm(trailer, entry) {
-                case .empty: return try cardLinks(&cardLinksChecked)
-                case .emptyList: return nil
+                case .empty, .emptyList: return nil   // `cardLinks` reads the cards
                 case .links: return edit.rekeys ? "links characters to objects by key, and this edit deletes or copies objects" : nil
                 case .unknown: return unknown
                 }
@@ -322,34 +360,6 @@ enum SourceScenePluginData {
                 }
                 return nil
             }
-        }
-
-        /// NodesConstraints.OnSceneLoad: with no `AnimationInfo` in the
-        /// KK_AnimationController entry, every load also links each
-        /// character to the objects its card's KKAnimationController data
-        /// names by key (`LoadDataFromKKAnimationController`), and the next
-        /// save writes those links. Refused when a character carries them.
-        private func cardLinks(_ checked: inout Bool) throws -> String? {
-            guard edit.rekeys, !checked else { return nil }
-            checked = true
-            switch try AnimationControllerForm.scene(trailer) {
-            case .emptyList, .links, .unknown: return nil   // decided by its own entry
-            case .empty: break
-            }
-            let marker = Data(cardAnimationController.utf8)
-            for record in edit.finalRecords {
-                guard let character = record.character, character.cardData.range(of: marker) != nil else { continue }
-                let plugins: [String: SourceCharacterCard.PluginData]
-                do { plugins = try character.card().extensions().plugins } catch {
-                    return "cannot be checked: character \(record.sourceKey)'s card does not decode (\(error.localizedDescription))"
-                }
-                guard let data = plugins[cardAnimationController]?.data else { continue }
-                let links = [data["Links"], data["Eyes"]].contains { value in value.map { $0 != .null } ?? false }
-                if links {
-                    return "would gain constraints on load: character \(record.sourceKey)'s card carries KKAnimationController links, which NodesConstraints turns into constraints by object key"
-                }
-            }
-            return nil
         }
 
         /// The rewritten trailer: the source "KKEx" string and version, the

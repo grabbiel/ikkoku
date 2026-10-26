@@ -127,20 +127,31 @@ public static class PluginSceneRules {
 
     public static PluginSceneVerdict Judge(PluginSceneModel scene,PluginSceneEdit spec) {
         var verdict=new PluginSceneVerdict();
-        if(scene.Trailer==null||scene.Trailer.Length==0)return verdict;
         var edit=new Edit(scene,spec);
+        if(scene.Trailer==null||scene.Trailer.Length==0) {
+            // No plug-in data, but NodesConstraints still reads the cards.
+            string card=CardLinks(edit,scene,"empty");
+            if(card!=null){verdict.Refused=true;verdict.Reasons.Add(card);}
+            return verdict;
+        }
         string error;var trailer=Parsed(scene.Trailer,out error);
         if(trailer==null){if(edit.KeysChange){verdict.Refused=true;verdict.Reasons.Add("unreadable trailer: "+error);}return verdict;}
-        bool cardChecked=false;
         foreach(var entry in trailer.Entries) {
             if(entry.IsNil||Orphans.Contains(entry.Id))continue;
             string reason;
-            try{reason=Decide(trailer,entry,edit,scene,ref cardChecked);}
+            try{reason=Decide(trailer,entry,edit,scene);}
             catch(Exception e){reason=edit.KeysChange?"has data this writer cannot read ("+e.Message+")":null;}
             if(reason!=null){verdict.Ids.Add(entry.Id);verdict.Reasons.Add(entry.Id+" "+reason);}
         }
+        // The card check names nodesConstraints, an entry ID only when the scene has that entry.
+        string cardReason=CardLinks(edit,scene,SceneControllerForm(trailer));
+        if(cardReason!=null) {
+            verdict.Reasons.Add(NodesConstraints+" "+cardReason);
+            bool present=false;foreach(var entry in trailer.Entries)if(entry.Id==NodesConstraints)present=true;
+            if(present&&!verdict.Ids.Contains(NodesConstraints))verdict.Ids.Add(NodesConstraints);
+        }
         verdict.Ids.Sort(StringComparer.Ordinal);
-        verdict.Refused=verdict.Ids.Count>0;
+        verdict.Refused=verdict.Ids.Count>0||cardReason!=null;
         return verdict;
     }
 
@@ -204,7 +215,7 @@ public static class PluginSceneRules {
         }
     }
 
-    static string Decide(Trailer trailer,Entry entry,Edit edit,PluginSceneModel scene,ref bool cardChecked) {
+    static string Decide(Trailer trailer,Entry entry,Edit edit,PluginSceneModel scene) {
         string unknown=edit.KeysChange?"has no rule in this writer":null;
         if(!entry.HasVersion)return edit.KeysChange?"is not a [version, data] PluginData value":null;
         long version=entry.Version;
@@ -231,14 +242,13 @@ public static class PluginSceneRules {
         case NodesConstraints: {
             if(version!=0)return unknownVersion;
             string xml=SingleString(trailer,entry,"constraints");
-            if(xml!=null&&ConstraintsEmpty(xml))return CardLinks(trailer,edit,scene,ref cardChecked);
-            if(edit.PositionsKept)return CardLinks(trailer,edit,scene,ref cardChecked);
+            if(xml!=null&&ConstraintsEmpty(xml))return null;
+            if(edit.PositionsKept)return null;
             return "addresses objects by index";}
         case AnimationController:
             if(version!=0)return unknownVersion;
             switch(ControllerForm(trailer,entry)) {
-            case "empty":return CardLinks(trailer,edit,scene,ref cardChecked);
-            case "emptyList":return null;
+            case "empty":case "emptyList":return null; // CardLinks reads the cards
             case "links":return edit.Rekeys?"links characters to objects by key":null;
             default:return unknown;
             }
@@ -254,19 +264,26 @@ public static class PluginSceneRules {
         }
     }
 
-    // NodesConstraints.OnSceneLoad's card fallback, checked once per scene: with no AnimationInfo in the scene's
-    // KK_AnimationController entry, each character card's KKAnimationController links become constraints.
-    static string CardLinks(Trailer trailer,Edit edit,PluginSceneModel scene,ref bool cardChecked) {
-        if(!edit.Rekeys||cardChecked)return null;
-        cardChecked=true;
-        Entry controller=null;foreach(var e in trailer.Entries)if(e.Id==AnimationController)controller=e;
-        string form=controller==null?"empty":ControllerForm(trailer,controller);
-        if(form!="empty")return null;
+    // NodesConstraints.OnSceneLoad's card fallback (SourceScenePluginData.cardLinks): with no AnimationInfo in the
+    // scene's KK_AnimationController entry, each character card's KKAnimationController links become constraints on
+    // every load, with or without a nodesConstraints entry or any plug-in data.
+    static string CardLinks(Edit edit,PluginSceneModel scene,string controller) {
+        if(!edit.Rekeys||controller!="empty")return null;
         for(int i=0;i<edit.FinalKeys.Count;i++) {
             if(edit.FinalKinds[i]!=Character)continue;int origin;
             if(edit.Origins.TryGetValue(edit.FinalKeys[i],out origin)&&scene.Linked.Contains(origin))return "would gain constraints on load from character "+edit.FinalKeys[i]+"'s card";
         }
         return null;
+    }
+
+    // The scene's KK_AnimationController form: its first entry's, "empty" when absent, "unknown" when unreadable
+    // (that entry refuses on its own).
+    static string SceneControllerForm(Trailer trailer) {
+        foreach(var e in trailer.Entries) {
+            if(e.Id!=AnimationController)continue;
+            try{return ControllerForm(trailer,e);}catch(Exception){return "unknown";}
+        }
+        return "empty";
     }
 
     static string ControllerForm(Trailer trailer,Entry entry) {

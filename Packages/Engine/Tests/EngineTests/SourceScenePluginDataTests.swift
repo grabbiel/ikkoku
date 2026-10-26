@@ -479,20 +479,28 @@ private func sideloader(_ items: [Record], _ patterns: [Record] = [], map: Bool 
          OriginalCardFixture.plugin(0, data: OriginalCardFixture.map([("Links", .binary(Data([0x90]))), ("Eyes", .null)]))),
     ]))])
     let emptyNodes = ("nodesConstraints", plugin(0, .map([("constraints", .str(#"<constraints version="1" />"#))])))
-    let cardReason = "NodesConstraints data ('nodesConstraints') would gain constraints on load: character 12's card carries KKAnimationController links"
+    let cardReason = "NodesConstraints ('nodesConstraints') turns character 12's KKAnimationController card links into constraints by object key on every load"
     #expect(verdict(pluginScene([emptyNodes], card: linked), .init(deletions: [4])).contains(cardReason))
     #expect(verdict(pluginScene([emptyNodes], card: linked), copyItem).contains(cardReason))
+    // It reads the cards: no nodesConstraints entry, an empty map or no
+    // plug-in data at all is the same.
+    for entries in [[settings], [], nil] as [[(String, PluginMP)]?] {
+        #expect(verdict(pluginScene(entries, card: linked), .init(deletions: [4])).contains(cardReason))
+        #expect(verdict(pluginScene(entries, card: linked), copyItem).contains(cardReason))
+        #expect(verdict(pluginScene(entries, card: linked), addFolder) == "kept")
+        #expect(verdict(pluginScene(entries, card: linked), moveItem) == "kept")
+    }
     // A card without links, or an edit that deletes and copies nothing.
     #expect(verdict(pluginScene([emptyNodes]), .init(deletions: [4])) == "kept")
+    #expect(verdict(pluginScene(nil), .init(deletions: [4])) == "kept")
     #expect(verdict(pluginScene([emptyNodes], card: linked), addFolder) == "kept")
     // An `AnimationInfo` list, even empty, turns the card path off.
     let controller = "KK_AnimationController"
     let emptyList = (controller, plugin(0, .map([("AnimationInfo", .arr([]))])))
     #expect(verdict(pluginScene([emptyNodes, emptyList], card: linked), .init(deletions: [4])) == "kept")
-    // An empty entry is the card path too, and names itself.
+    // An empty entry is the card path too.
     let emptyEntry = (controller, plugin(0, .map([])))
-    #expect(verdict(pluginScene([emptyEntry], card: linked), .init(deletions: [4]))
-        .contains("KK_AnimationController data ('KK_AnimationController') would gain constraints on load"))
+    #expect(verdict(pluginScene([emptyEntry], card: linked), .init(deletions: [4])).contains(cardReason))
     // Links in the scene entry: character and object keys.
     let links = (controller, plugin(0, .map([("AnimationInfo", .arr([.map([("CharDicKey", .int(12)), ("ItemDicKey", .int(4))])]))])))
     #expect(verdict(pluginScene([links]), addFolder) == "kept")
@@ -680,10 +688,13 @@ private func ruleCorpusScenes() throws -> [TopologyScene] {
     let controllerEmpty = ("KK_AnimationController", plugin(0, .map([])))
     let controllerList = ("KK_AnimationController", plugin(0, .map([("AnimationInfo", .arr([]))])))
     for entries in [[("nodesConstraints", emptyNodes)], [("nodesConstraints", constraints)], [controllerEmpty],
-                    [("nodesConstraints", emptyNodes), controllerList], [("nodesConstraints", emptyNodes), controllerEmpty]] {
+                    [("nodesConstraints", emptyNodes), controllerList], [("nodesConstraints", emptyNodes), controllerEmpty],
+                    [controllerList], [settings], []] {
         scenes.append(pluginScene(entries, card: linked))
         scenes.append(pluginScene(entries))
     }
+    // The card check without plug-in data.
+    scenes.append(pluginScene(nil, card: linked))
     scenes.append(pluginScene(forms.filter { $0.0 != "example.scene" && $0.0 != "kkpe" }.reduce(into: [(String, PluginMP)]()) { list, form in
         if !list.contains(where: { $0.0 == form.0 }) { list.append(form) }
     }))

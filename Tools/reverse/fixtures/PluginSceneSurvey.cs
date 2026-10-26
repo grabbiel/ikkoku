@@ -18,6 +18,11 @@
 // adding a folder, a light and a camera, and adding and deleting a point of a route (when the scene has a route,
 // and one with two points or more). Before ST-T03i the writer refused delete, duplicate and route-point edits in
 // any scene whose KKEx map had an entry (nil entries included) and accepted additions in every scene.
+//
+// A scene with no trailer after its 【KStudio】 marker, or an empty KKEx map, has no entry to judge, but
+// NodesConstraints reads character cards on every load, so ST-T03i refuses a delete or a copy there when a written
+// character's card carries KKAnimationController links. Such scenes are read the same way and, when a character is
+// linked, every delete and duplicate is judged into "withoutEntries"; the writer accepted all of them before.
 using System;
 using System.Collections;
 using System.Collections.Generic;
@@ -48,6 +53,7 @@ public sealed class PluginSceneSurvey {
     readonly SortedDictionary<string,long> unknownOnly=new SortedDictionary<string,long>(StringComparer.Ordinal);
     readonly SortedDictionary<string,Stats> ids=new SortedDictionary<string,Stats>(StringComparer.Ordinal);
     readonly SortedDictionary<string,long> orphanShapes=new SortedDictionary<string,long>(StringComparer.Ordinal);
+    readonly SortedDictionary<string,SortedDictionary<string,long>> withoutEntries=new SortedDictionary<string,SortedDictionary<string,long>>(StringComparer.Ordinal);
     readonly List<long> objectCounts=new List<long>();
     // The current scene's routes in walk order: key and point count (points are sub-infos, not objects).
     readonly List<KeyValuePair<int,int>> routes=new List<KeyValuePair<int,int>>();
@@ -62,8 +68,10 @@ public sealed class PluginSceneSurvey {
         cardData=save.GetMethod("GetExtendedDataById",BindingFlags.Public|BindingFlags.Static,null,new[]{typeof(ChaFile),typeof(string)},null);
         if(cardData==null)throw new Exception("ExtendedSave.GetExtendedDataById(ChaFile, string) not found");
         foreach(var name in new[]{"files","oversize","unreadable","noEndMarker","noTrailer","otherTrailer","unreadableTrailer","emptyMap","entries",
-                                  "loaded","loadError","remappedRoots","linkedScenes","linkedCharacters","judgedEdits"})counts[name]=0;
+                                  "loaded","loadError","remappedRoots","linkedScenes","linkedCharacters","judgedEdits",
+                                  "withoutEntriesLoaded","withoutEntriesLoadError","withoutEntriesLinked"})counts[name]=0;
         foreach(var kind in EditKinds){after[kind]=Outcomes();before[kind]=Outcomes();unknownOnly[kind]=0;}
+        withoutEntries["delete"]=Outcomes();withoutEntries["duplicate"]=Outcomes();
     }
     static SortedDictionary<string,long> Outcomes(){var d=new SortedDictionary<string,long>(StringComparer.Ordinal);foreach(var o in new[]{"all","some","none","notApplicable"})d[o]=0;return d;}
     void Bump(SortedDictionary<string,long> d,string key){long n;d.TryGetValue(key,out n);d[key]=n+1;}
@@ -83,14 +91,17 @@ public sealed class PluginSceneSurvey {
         int marker=IndexOf(data,EndMarker,KKEx);
         if(marker<0) {
             int end=IndexOf(data,EndMarker,null);
-            if(end<0)counts["noEndMarker"]++;else if(end+EndMarker.Length==data.Length)counts["noTrailer"]++;else counts["otherTrailer"]++;
+            if(end<0){counts["noEndMarker"]++;return;}
+            if(end+EndMarker.Length!=data.Length){counts["otherTrailer"]++;return;}
+            counts["noTrailer"]++;
+            WithoutEntries(data,new byte[0]);
             return;
         }
         var trailer=new byte[data.Length-marker-EndMarker.Length];
         Buffer.BlockCopy(data,marker+EndMarker.Length,trailer,0,trailer.Length);
         List<string[]> forms;
         try{forms=PluginSceneRules.Forms(trailer);}catch(Exception){counts["unreadableTrailer"]++;return;}
-        if(forms.Count==0){counts["emptyMap"]++;return;}
+        if(forms.Count==0){counts["emptyMap"]++;WithoutEntries(data,trailer);return;}
         counts["entries"]++;
         PluginSceneModel scene;
         try{scene=Model(data,trailer);}catch(Exception){counts["loadError"]++;return;}
@@ -103,6 +114,23 @@ public sealed class PluginSceneSurvey {
             if(form[2].Length>0)Bump(orphanShapes,form[0]+" "+form[2]);
         }
         Judge(scene);
+    }
+
+    // A scene with no entry: only NodesConstraints' card check can refuse it, and only a delete or a copy.
+    void WithoutEntries(byte[] data,byte[] trailer) {
+        PluginSceneModel scene;
+        try{scene=Model(data,trailer);}catch(Exception){counts["withoutEntriesLoadError"]++;return;}
+        counts["withoutEntriesLoaded"]++;
+        if(scene.Linked.Count==0)return;
+        counts["withoutEntriesLinked"]++;
+        foreach(var kind in new[]{"delete","duplicate"}) {
+            int accepted=0;
+            for(int i=0;i<scene.Keys.Count;i++) {
+                var verdict=PluginSceneRules.Judge(scene,new PluginSceneEdit(kind,scene.Keys[i],-1));counts["judgedEdits"]++;
+                if(!verdict.Refused)accepted++;
+            }
+            Bump(withoutEntries[kind],scene.Keys.Count==0?"notApplicable":accepted==scene.Keys.Count?"all":accepted==0?"none":"some");
+        }
     }
 
     // The scene's walk, used keys and linked characters.
@@ -224,6 +252,6 @@ public sealed class PluginSceneSurvey {
             {"objects",new Dictionary<string,object>{{"total",total},{"max",objectCounts.Count==0?0:objectCounts[objectCounts.Count-1]},
                 {"median",objectCounts.Count==0?0:objectCounts[objectCounts.Count/2]}}},
             {"scenesByEditKindAfter",after},{"scenesByEditKindBefore",before},{"scenesRefusedOnlyByUnknownIDs",unknownOnly},
-            {"entryIDs",idList},{"orphanShapes",orphanShapes}};
+            {"entryIDs",idList},{"orphanShapes",orphanShapes},{"withoutEntriesLinkedByEditKind",withoutEntries}};
     }
 }

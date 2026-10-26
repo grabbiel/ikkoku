@@ -2752,7 +2752,11 @@ final class StudioModel: ViewportInputHandler, LivePacedHandler {
             edits.thumbnailData = try CaptureOutput.pngData(image)
         }
         try staged.stage.editedData(edits).write(to: url, options: .atomic)
+        // ST-T03i: entries no installed plug-in reads travel verbatim; that
+        // is CharaStudio's behavior only while no installed plug-in owns them.
+        let orphans = source.orphanPluginIDs
         status = "Exported edited original scene to \(url.lastPathComponent)"
+            + (orphans.isEmpty ? "" : ". It keeps plug-in data no installed plug-in reads, unchanged: \(orphans.joined(separator: ", "))")
     }
 
     /// Deterministic integration input using original object/bone IDs. This
