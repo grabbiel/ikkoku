@@ -336,11 +336,12 @@ public sealed class OriginalCharacterProbe : BaseUnityPlugin
             captureFaceCompositeInputs=true;
         }
         if(liplineCompositeCase!=null) {
-            if(settingCount!=1 || (liplineCompositeCase!="base" && liplineCompositeCase!="distinct")
+            if(settingCount!=1 || (liplineCompositeCase!="base" && liplineCompositeCase!="distinct" && liplineCompositeCase!="none")
                 || modelVariant!=null || handPatterns!=null || lookPhases.Count!=0 || (int)file.status.coordinateType!=0)
-                throw new Exception("Lipline oracle requires only liplineCompositeCase=base or distinct and default outfit0");
+                throw new Exception("Lipline oracle requires only liplineCompositeCase=base, distinct or none and default outfit0");
             file.coordinate[0].enableMakeup=false;
-            face.lipLineId=1;face.lipLineColor=LiplineOracleColor();
+            // "none" is the no-layer control: the distinct card with only lipLineId changed to 0.
+            face.lipLineId=LiplineOracleId();face.lipLineColor=LiplineOracleColor();
             face.baseMakeup.cheekId=0;face.baseMakeup.cheekColor=Color.white;
             file.coordinate[0].makeup.cheekId=0;file.coordinate[0].makeup.cheekColor=Color.white;
             captureFaceCompositeInputs=true;
@@ -730,7 +731,7 @@ public sealed class OriginalCharacterProbe : BaseUnityPlugin
         var layers=new Dictionary<string,object>();
         foreach(var property in new[]{"_Texture3","_Texture7","_Texture4","_Texture5","_Texture6"}) {
             if(cheekCompositeCase!=null && property=="_Texture4")continue;
-            if(liplineCompositeCase!=null && property=="_Texture5")continue;
+            if(liplineCompositeCase!=null && liplineCompositeCase!="none" && property=="_Texture5")continue;
             if(!creator.HasProperty(property) || creator.GetTexture(property)!=null)throw new Exception("Face composite requires null makeup input "+property);
             layers[property]=new Dictionary<string,object>{{"isNull",true},{"scale",V(creator.GetTextureScale(property))},{"offset",V(creator.GetTextureOffset(property))}};
         }
@@ -772,6 +773,7 @@ public sealed class OriginalCharacterProbe : BaseUnityPlugin
             }
         }
     }
+    int LiplineOracleId() { return liplineCompositeCase=="none"?0:1; }
     Color LiplineOracleColor() {
         return liplineCompositeCase=="base"?new Color(.85f,.15f,.25f,.4f):new Color(.2f,.7f,.9f,.75f);
     }
@@ -780,6 +782,19 @@ public sealed class OriginalCharacterProbe : BaseUnityPlugin
         const string hash="f919dc7780b5fbf7fa31dde421b64d78a5a7232c38aa50d467322103225d07f6";
         var info=character.lstCtrl.GetListInfo(ChaListDefine.CategoryNo.mt_lipline,1);
         var texture=creator.GetTexture("_Texture5") as Texture2D;
+        if(liplineCompositeCase=="none") {
+            // Catalog row 0 is the "none" entry (MainAB/LiplineTex "0"); the original binds no texture.
+            var none=character.lstCtrl.GetListInfo(ChaListDefine.CategoryNo.mt_lipline,0);
+            result["liplineCatalog"]=new Dictionary<string,object>{{"category",404},{"id",none==null?-1:none.Id},
+                {"MainAB",none==null?null:none.GetInfo(ChaListDefine.KeyType.MainAB)},
+                {"LiplineTex",none==null?null:none.GetInfo(ChaListDefine.KeyType.LiplineTex)},
+                {"boundTexture5Null",texture==null},{"boundTexture5Exists",creator.HasProperty("_Texture5")}};
+            File.WriteAllText(Path.Combine(folder,"face-input-observation.json"),J(result));
+            if(none==null || none.Id!=0 || none.GetInfo(ChaListDefine.KeyType.MainAB)!="0" || none.GetInfo(ChaListDefine.KeyType.LiplineTex)!="0"
+                || !creator.HasProperty("_Texture5") || texture!=null)
+                throw new Exception("Lipline no-layer control differs from catalog404 ID0 with a null _Texture5");
+            return;
+        }
         var loaded=CommonLib.LoadAsset<Texture2D>(bundle,name,false,string.Empty);
         result["liplineCatalog"]=new Dictionary<string,object>{{"category",404},{"id",info==null?-1:info.Id},
             {"MainAB",info==null?null:info.GetInfo(ChaListDefine.KeyType.MainAB)},
@@ -803,7 +818,7 @@ public sealed class OriginalCharacterProbe : BaseUnityPlugin
     void ObserveLiplineCheekRebuild(Material creator,RenderTexture target,Material draw,Dictionary<string,object> result) {
         var face=character.fileFace;var makeup=face.baseMakeup;var expected=LiplineOracleColor();
         if(character.nowCoordinate.enableMakeup || character.chaFile.coordinate[0].enableMakeup || (int)character.fileStatus.coordinateType!=0
-            || face.lipLineId!=1 || face.moleId!=0 || makeup.cheekId!=0 || makeup.paintId[0]!=0 || makeup.paintId[1]!=0)
+            || face.lipLineId!=LiplineOracleId() || face.moleId!=0 || makeup.cheekId!=0 || makeup.paintId[0]!=0 || makeup.paintId[1]!=0)
             throw new Exception("Lipline oracle initial face/makeup selection differs");
         for(int lane=0;lane<4;lane++)if(V(face.lipLineColor)[lane]!=V(expected)[lane] || V(makeup.cheekColor)[lane]!=1)
             throw new Exception("Lipline oracle requested color differs");
