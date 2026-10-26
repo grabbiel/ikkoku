@@ -563,16 +563,19 @@ final class PerfWorkloadDriver {
     }
 
     /// `studio-load`: File ▸ Open (`AppState.openScene(at:importing:)`) of the
-    /// source scene saved as an Ikkoku scene, repeated. Each load replaces the
-    /// document, so its characters build again, and the scene's route
-    /// runtime with its route characters is rehydrated from the scene file.
+    /// source scene saved as an Ikkoku scene, after File ▸ New Scene
+    /// (unmeasured), repeated. Each load replaces the empty document, so its
+    /// characters build again, and the scene's route runtime with its route
+    /// characters is rehydrated from the scene file. (A load over the same
+    /// scene keeps the runtime its ids already have, and rehydrates nothing.)
     /// Live animation stays on.
     private func prepareStudioLoad() throws {
         let studio = try prepareStudioSource(selectKey: nil)
         let scene = try makeScratchFolder().appendingPathComponent("scene.png")
         try studio.saveScene(to: scene)
-        actionSteps = [("load", true, { [weak self] in self?.app.openScene(at: scene, importing: false) })]
-        trace.details["gesture"] = "File ▸ Open of the source scene saved as an Ikkoku scene, repeated; live animation on"
+        actionSteps = [("new scene", false, { studio.newScene() }),
+                       ("load", true, { [weak self] in self?.app.openScene(at: scene, importing: false) })]
+        trace.details["gesture"] = "File ▸ New Scene, then File ▸ Open of the source scene saved as an Ikkoku scene, repeated; live animation on"
     }
 
     private func runNextAction() {

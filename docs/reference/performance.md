@@ -112,7 +112,7 @@ the run.
 | `studio-redo` | as `studio-idle` | as `studio-duplicate`, with Duplicate, Undo, Redo and Undo; the Redo of a route's Duplicate (`IKKOKU_PERF_ACTION_KEY`) rehydrates the scene's route runtime with its route characters |
 | `studio-outfit` | as `studio-idle` | the Clothes tab's outfit picker (`StudioModel.selectSourceOutfit`) on the `studio-duplicate` character: another saved outfit (`IKKOKU_PERF_OUTFIT`, else the first other one), then the shown one back, repeated, live animation on. After the first selection each one borrows the outfit's kept assembly; `IKKOKU_PERF_DONATIONS=off` builds every one from its files |
 | `studio-export` | as `studio-idle` | File ▸ Export Edited Original Scene (`AppState.exportSourceScene(to:)`), repeated, after a setup through the UI's calls: a cheek edit on the `studio-duplicate` character, Visible off, then Save Scene and Open of that file, so the hidden character has no preview and each export builds its validation baseline. Exports go to a temporary folder, removed at the end |
-| `studio-load` | as `studio-idle` | File ▸ Open (`AppState.openScene(at:importing:)`) of the source scene saved as an Ikkoku scene, repeated; each load builds the characters again and rehydrates the route characters |
+| `studio-load` | as `studio-idle` | File ▸ New Scene (unmeasured), then File ▸ Open (`AppState.openScene(at:importing:)`) of the source scene saved as an Ikkoku scene, repeated; each load builds the characters again and rehydrates the route characters (a load over the same scene would keep its runtime and rehydrate nothing) |
 
 Other options:
 
