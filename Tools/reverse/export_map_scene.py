@@ -65,6 +65,11 @@ MAP_SHADER_RULES = {
         # at _Cutoff; _ALPHABLEND_ON / _ALPHAPREMULTIPLY_ON blend; Cull Back (no cull property).
         "dropped": ["PBR lighting (metallic/smoothness)", "normal maps", "occlusion", "emission", "detail maps",
                     "reflection probes"],
+        # On a lightmapped mesh, when the map's lightmaps are written, the app draws the
+        # Standard baked-lightmap subset instead (map_fragment: diffColor * the decoded
+        # directional lightmap + emission), which leaves out only these.
+        "droppedLightmapped": ["realtime lights and their shadows", "specular and reflection probes", "normal maps",
+                               "per-texel metallic (the _MetallicGlossMap mean is used)", "occlusion maps", "detail maps"],
     },
     "Particles/Alpha Blended": {
         "parity": "approximated",
@@ -932,6 +937,7 @@ def export(bundles, scene, map_no, output, max_texture=None):
     lightmap_export["drawn"] = lightmap_extras is not None
     if lightmap_extras:
         exporter.gltf["extras"] = {"ikkokuLightmaps": lightmap_extras}
+        lightmapped_dropped_terms(exporter.gltf)
     exporter.gltf["buffers"] = [{"uri": stem + ".bin", "byteLength": len(exporter.blob)}]
     (output / (stem + ".bin")).write_bytes(exporter.blob)
     (output / (stem + ".gltf")).write_text(json.dumps(exporter.gltf, indent=2) + "\n")
@@ -959,6 +965,27 @@ def export(bundles, scene, map_no, output, max_texture=None):
     }
     (output / "provenance.json").write_text(json.dumps(provenance, indent=2, ensure_ascii=False) + "\n")
     return provenance
+
+
+def lightmapped_dropped_terms(gltf):
+    """With the lightmaps written, a Standard material drawn on a lightmapped mesh goes through
+    the app's baked-lightmap material, which leaves out fewer terms than the item material: its
+    droppedTerms become the rule's droppedLightmapped (plus the item terms when the material is
+    also drawn on a mesh without a lightmap)."""
+    rule = MAP_SHADER_RULES["Standard"]
+    lit = {}
+    for mesh in gltf["meshes"]:
+        lightmapped = mesh["extras"]["ikkokuMap"]["lightmapIndex"] >= 0
+        for primitive in mesh["primitives"]:
+            lit.setdefault(primitive["material"], set()).add(lightmapped)
+    for index, material in enumerate(gltf["materials"]):
+        extras = material["extras"]
+        if extras["unityShader"] != "Standard" or "ikkokuStandard" not in extras or True not in lit.get(index, ()):
+            continue
+        terms = list(rule["droppedLightmapped"])
+        if False in lit[index]:
+            terms += [term for term in rule["dropped"] if term not in terms]
+        extras["droppedTerms"] = terms
 
 
 def texture_settings(texture):

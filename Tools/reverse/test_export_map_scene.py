@@ -185,6 +185,27 @@ class LightmapFileTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "LightmapsMode 2 is not drawn"):
             maps.lightmaps_extras(2, [])
 
+    def test_lightmapped_standard_materials_list_only_what_the_lightmap_material_drops(self):
+        def material(shader, standard=True):
+            extras = {"unityShader": shader, "droppedTerms": ["item"]}
+            if standard:
+                extras["ikkokuStandard"] = {}
+            return {"extras": extras}
+        def mesh(material_index, lightmap_index):
+            return {"extras": {"ikkokuMap": {"lightmapIndex": lightmap_index}}, "primitives": [{"material": material_index}]}
+        gltf = {"materials": [material("Standard"), material("Standard"), material("Standard"),
+                              material("Particles/Alpha Blended", False)],
+                "meshes": [mesh(0, 0), mesh(1, -1), mesh(2, 0), mesh(2, -1), mesh(3, 0)]}
+        maps.lightmapped_dropped_terms(gltf)
+        rule = maps.MAP_SHADER_RULES["Standard"]
+        self.assertEqual(gltf["materials"][0]["extras"]["droppedTerms"], rule["droppedLightmapped"])
+        self.assertEqual(gltf["materials"][1]["extras"]["droppedTerms"], ["item"])
+        both = gltf["materials"][2]["extras"]["droppedTerms"]
+        self.assertEqual(both[:len(rule["droppedLightmapped"])], rule["droppedLightmapped"])
+        self.assertIn("emission", both)
+        self.assertNotIn("emission", rule["droppedLightmapped"])
+        self.assertEqual(gltf["materials"][3]["extras"]["droppedTerms"], ["item"])
+
 
 class CatalogTests(unittest.TestCase):
     HEADER = [['#no', 'name'], ['', '']]
