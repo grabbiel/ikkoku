@@ -24,15 +24,22 @@ enum StudioInspectorMounting: String, Sendable {
 extension View {
     /// Hides a kept inspector view in a `ZStack(alignment: .top)` of kept
     /// views. Its height is fixed, as a scroll view's content is, and framed
-    /// to zero while hidden, so it keeps its layout but takes no space. At
-    /// zero opacity SwiftUI does not draw it and leaves it out of the
-    /// accessibility tree; disabled, its controls leave the Tab key-view loop
-    /// and refuse focus. (`accessibilityHidden(false)` is not used for the
-    /// shown state: it exposes elements a view hides itself, such as the
-    /// placeholder's image.) Picker labels need `inspectorKeptLabel()` too.
+    /// to zero while hidden, so it keeps its layout but takes no space. Its
+    /// width is reported as at most the width proposed to it while hidden: a
+    /// hidden view wider than the inspector (a route section, say) would
+    /// otherwise widen the stack and move what is shown. At zero opacity
+    /// SwiftUI does not draw it and leaves it out of the accessibility tree;
+    /// disabled, its controls leave the Tab key-view loop and refuse focus.
+    /// (`accessibilityHidden(false)` is not used for the shown state: it
+    /// exposes elements a view hides itself, such as the placeholder's
+    /// image.) Picker labels need `inspectorKeptLabel()` too.
     func inspectorHidden(_ hidden: Bool) -> some View {
         fixedSize(horizontal: false, vertical: true)
             .frame(height: hidden ? 0 : nil, alignment: .top)
+            // A minimum alone makes the frame min(child, proposal) wide, with
+            // the child laid out at the proposal as before; with no minimum
+            // the frame takes the child's size.
+            .frame(minWidth: hidden ? 0 : nil, alignment: .topLeading)
             .opacity(hidden ? 0 : 1)
             .allowsHitTesting(!hidden)
             .disabled(hidden)
