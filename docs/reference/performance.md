@@ -3418,7 +3418,7 @@ Offscreen benchmark at 1996×1824, median (range) of three runs of 60 frames:
 | showoff without props | base | 130 | 0.425 | 1.381 (1.370–1.386) | 2.197 | 506.6 | 75.0 |
 | showoff without props | lightmap | 130 | 0.437 | 1.334 (1.333–1.346) | 2.178 | 510.9 | 77.7 |
 | showoff without props or catalog | base | 122 | 0.414 | 1.320 (1.312–1.330) | 2.186 | 454.1 | – |
-| showoff without props or catalog | branch | 122 | 0.420 | 1.325 (1.315–1.328) | 2.195 | 454.1 | – |
+| showoff without props or catalog | lightmap | 122 | 0.420 | 1.325 (1.315–1.328) | 2.195 | 454.1 | – |
 
 - **GPU, room alone:** +0.087 ms per frame (0.422 → 0.509). Each fragment
   takes two trilinear BC3 samples and the RGBM `pow`, in place of the item
