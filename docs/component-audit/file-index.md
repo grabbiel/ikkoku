@@ -23,14 +23,14 @@ branch was tested or every asset matches the original game. Feature status,
 specific comments and pending tasks are in the linked reports. Shared behavior
 may be discussed in more than one report; one primary owner is listed here.
 
-**1020 files indexed; 1020 assigned; 0 unassigned.**
+**1043 files indexed; 1043 assigned; 0 unassigned.**
 
 | Primary report | Files |
 | --- | ---: |
 | [App / gameplay / plugins](app-gameplay-and-plugins.md) | 110 |
 | [Character / Maker / mods](character-and-mods.md) | 128 |
 | [Studio / IK / animation](studio.md) | 235 |
-| [Renderer / foundation / assets](renderer-and-foundation.md) | 335 |
+| [Renderer / foundation / assets](renderer-and-foundation.md) | 358 |
 | [Toolchain / verification / historical docs](toolchain-and-verification.md) | 202 |
 
 | File role | Files |
@@ -39,10 +39,10 @@ may be discussed in more than one report; one primary owner is listed here.
 | Build / repository configuration | 9 |
 | Conversion / recovery / verification tool | 238 |
 | Documentation / historical evidence | 65 |
-| Generated asset / catalog / fixture | 205 |
+| Generated asset / catalog / fixture | 224 |
 | Reference host / controlled fixture | 36 |
-| Runtime / shared shader declaration | 226 |
-| Test / validation | 212 |
+| Runtime / shared shader declaration | 227 |
+| Test / validation | 215 |
 
 ## App / gameplay / plugins
 
@@ -380,25 +380,6 @@ Feature assessment: [studio.md](studio.md).
 | [Packages/Engine/Tests/EngineTests/Fixtures/neck-target-angle.json](../../Packages/Engine/Tests/EngineTests/Fixtures/neck-target-angle.json) | Reference host / controlled fixture |
 | [Packages/Engine/Tests/EngineTests/Fixtures/route-reference.json](../../Packages/Engine/Tests/EngineTests/Fixtures/route-reference.json) | Reference host / controlled fixture |
 | [Packages/Engine/Tests/EngineTests/Fixtures/route-stepping.json](../../Packages/Engine/Tests/EngineTests/Fixtures/route-stepping.json) | Reference host / controlled fixture |
-| [Packages/Engine/Tests/EngineTests/Fixtures/texture-identity/opaque-10.avif](../../Packages/Engine/Tests/EngineTests/Fixtures/texture-identity/opaque-10.avif) | Generated asset / catalog / fixture (synthetic texture-identity decoder input) |
-| [Packages/Engine/Tests/EngineTests/Fixtures/texture-identity/opaque-12.avif](../../Packages/Engine/Tests/EngineTests/Fixtures/texture-identity/opaque-12.avif) | Generated asset / catalog / fixture (synthetic texture-identity decoder input) |
-| [Packages/Engine/Tests/EngineTests/Fixtures/texture-identity/straight-10.avif](../../Packages/Engine/Tests/EngineTests/Fixtures/texture-identity/straight-10.avif) | Generated asset / catalog / fixture (synthetic texture-identity decoder input) |
-| [Packages/Engine/Tests/EngineTests/Fixtures/texture-identity/straight-16.jxl](../../Packages/Engine/Tests/EngineTests/Fixtures/texture-identity/straight-16.jxl) | Generated asset / catalog / fixture (synthetic texture-identity decoder input) |
-| [Packages/Engine/Tests/EngineTests/Fixtures/texture-identity/straight-assoc.tiff](../../Packages/Engine/Tests/EngineTests/Fixtures/texture-identity/straight-assoc.tiff) | Generated asset / catalog / fixture (synthetic texture-identity decoder input) |
-| [Packages/Engine/Tests/EngineTests/Fixtures/texture-identity/straight-avifenc.avif](../../Packages/Engine/Tests/EngineTests/Fixtures/texture-identity/straight-avifenc.avif) | Generated asset / catalog / fixture (synthetic texture-identity decoder input) |
-| [Packages/Engine/Tests/EngineTests/Fixtures/texture-identity/straight-branded.heif](../../Packages/Engine/Tests/EngineTests/Fixtures/texture-identity/straight-branded.heif) | Generated asset / catalog / fixture (synthetic texture-identity decoder input) |
-| [Packages/Engine/Tests/EngineTests/Fixtures/texture-identity/straight-lossless.jxl](../../Packages/Engine/Tests/EngineTests/Fixtures/texture-identity/straight-lossless.jxl) | Generated asset / catalog / fixture (synthetic texture-identity decoder input) |
-| [Packages/Engine/Tests/EngineTests/Fixtures/texture-identity/straight-lossless.webp](../../Packages/Engine/Tests/EngineTests/Fixtures/texture-identity/straight-lossless.webp) | Generated asset / catalog / fixture (synthetic texture-identity decoder input) |
-| [Packages/Engine/Tests/EngineTests/Fixtures/texture-identity/straight-lossy.jxl](../../Packages/Engine/Tests/EngineTests/Fixtures/texture-identity/straight-lossy.jxl) | Generated asset / catalog / fixture (synthetic texture-identity decoder input) |
-| [Packages/Engine/Tests/EngineTests/Fixtures/texture-identity/straight-lossy.webp](../../Packages/Engine/Tests/EngineTests/Fixtures/texture-identity/straight-lossy.webp) | Generated asset / catalog / fixture (synthetic texture-identity decoder input) |
-| [Packages/Engine/Tests/EngineTests/Fixtures/texture-identity/straight-magick.tga](../../Packages/Engine/Tests/EngineTests/Fixtures/texture-identity/straight-magick.tga) | Generated asset / catalog / fixture (synthetic texture-identity decoder input) |
-| [Packages/Engine/Tests/EngineTests/Fixtures/texture-identity/straight-seq.avifs](../../Packages/Engine/Tests/EngineTests/Fixtures/texture-identity/straight-seq.avifs) | Generated asset / catalog / fixture (synthetic texture-identity decoder input) |
-| [Packages/Engine/Tests/EngineTests/Fixtures/texture-identity/straight-unassoc.tiff](../../Packages/Engine/Tests/EngineTests/Fixtures/texture-identity/straight-unassoc.tiff) | Generated asset / catalog / fixture (synthetic texture-identity decoder input) |
-| [Packages/Engine/Tests/EngineTests/Fixtures/texture-identity/straight-v5.bmp](../../Packages/Engine/Tests/EngineTests/Fixtures/texture-identity/straight-v5.bmp) | Generated asset / catalog / fixture (synthetic texture-identity decoder input) |
-| [Packages/Engine/Tests/EngineTests/Fixtures/texture-identity/straight.cur](../../Packages/Engine/Tests/EngineTests/Fixtures/texture-identity/straight.cur) | Generated asset / catalog / fixture (synthetic texture-identity decoder input) |
-| [Packages/Engine/Tests/EngineTests/Fixtures/texture-identity/straight.icns](../../Packages/Engine/Tests/EngineTests/Fixtures/texture-identity/straight.icns) | Generated asset / catalog / fixture (synthetic texture-identity decoder input) |
-| [Packages/Engine/Tests/EngineTests/Fixtures/texture-identity/straight.psd](../../Packages/Engine/Tests/EngineTests/Fixtures/texture-identity/straight.psd) | Generated asset / catalog / fixture (synthetic texture-identity decoder input) |
-| [Packages/Engine/Tests/EngineTests/Fixtures/texture-identity/straight.sgi](../../Packages/Engine/Tests/EngineTests/Fixtures/texture-identity/straight.sgi) | Generated asset / catalog / fixture (synthetic texture-identity decoder input) |
 | [Packages/Engine/Tests/EngineTests/KoikatsuBinaryTests.swift](../../Packages/Engine/Tests/EngineTests/KoikatsuBinaryTests.swift) | Test / validation |
 | [Packages/Engine/Tests/EngineTests/KoikatsuLayoutTests.swift](../../Packages/Engine/Tests/EngineTests/KoikatsuLayoutTests.swift) | Test / validation |
 | [Packages/Engine/Tests/EngineTests/KoikatsuSceneDocumentTests.swift](../../Packages/Engine/Tests/EngineTests/KoikatsuSceneDocumentTests.swift) | Test / validation |
@@ -820,6 +801,25 @@ Feature assessment: [renderer-and-foundation.md](renderer-and-foundation.md).
 | [Packages/Engine/Tests/EngineTests/CharacterLifetimeTests.swift](../../Packages/Engine/Tests/EngineTests/CharacterLifetimeTests.swift) | Test / validation |
 | [Packages/Engine/Tests/EngineTests/DeformationSafetyTests.swift](../../Packages/Engine/Tests/EngineTests/DeformationSafetyTests.swift) | Test / validation |
 | [Packages/Engine/Tests/EngineTests/DisplayLinkRatePolicyTests.swift](../../Packages/Engine/Tests/EngineTests/DisplayLinkRatePolicyTests.swift) | Test / validation |
+| [Packages/Engine/Tests/EngineTests/Fixtures/texture-identity/opaque-10.avif](../../Packages/Engine/Tests/EngineTests/Fixtures/texture-identity/opaque-10.avif) | Generated asset / catalog / fixture (synthetic texture-identity decoder input) |
+| [Packages/Engine/Tests/EngineTests/Fixtures/texture-identity/opaque-12.avif](../../Packages/Engine/Tests/EngineTests/Fixtures/texture-identity/opaque-12.avif) | Generated asset / catalog / fixture (synthetic texture-identity decoder input) |
+| [Packages/Engine/Tests/EngineTests/Fixtures/texture-identity/straight-10.avif](../../Packages/Engine/Tests/EngineTests/Fixtures/texture-identity/straight-10.avif) | Generated asset / catalog / fixture (synthetic texture-identity decoder input) |
+| [Packages/Engine/Tests/EngineTests/Fixtures/texture-identity/straight-16.jxl](../../Packages/Engine/Tests/EngineTests/Fixtures/texture-identity/straight-16.jxl) | Generated asset / catalog / fixture (synthetic texture-identity decoder input) |
+| [Packages/Engine/Tests/EngineTests/Fixtures/texture-identity/straight-assoc.tiff](../../Packages/Engine/Tests/EngineTests/Fixtures/texture-identity/straight-assoc.tiff) | Generated asset / catalog / fixture (synthetic texture-identity decoder input) |
+| [Packages/Engine/Tests/EngineTests/Fixtures/texture-identity/straight-avifenc.avif](../../Packages/Engine/Tests/EngineTests/Fixtures/texture-identity/straight-avifenc.avif) | Generated asset / catalog / fixture (synthetic texture-identity decoder input) |
+| [Packages/Engine/Tests/EngineTests/Fixtures/texture-identity/straight-branded.heif](../../Packages/Engine/Tests/EngineTests/Fixtures/texture-identity/straight-branded.heif) | Generated asset / catalog / fixture (synthetic texture-identity decoder input) |
+| [Packages/Engine/Tests/EngineTests/Fixtures/texture-identity/straight-lossless.jxl](../../Packages/Engine/Tests/EngineTests/Fixtures/texture-identity/straight-lossless.jxl) | Generated asset / catalog / fixture (synthetic texture-identity decoder input) |
+| [Packages/Engine/Tests/EngineTests/Fixtures/texture-identity/straight-lossless.webp](../../Packages/Engine/Tests/EngineTests/Fixtures/texture-identity/straight-lossless.webp) | Generated asset / catalog / fixture (synthetic texture-identity decoder input) |
+| [Packages/Engine/Tests/EngineTests/Fixtures/texture-identity/straight-lossy.jxl](../../Packages/Engine/Tests/EngineTests/Fixtures/texture-identity/straight-lossy.jxl) | Generated asset / catalog / fixture (synthetic texture-identity decoder input) |
+| [Packages/Engine/Tests/EngineTests/Fixtures/texture-identity/straight-lossy.webp](../../Packages/Engine/Tests/EngineTests/Fixtures/texture-identity/straight-lossy.webp) | Generated asset / catalog / fixture (synthetic texture-identity decoder input) |
+| [Packages/Engine/Tests/EngineTests/Fixtures/texture-identity/straight-magick.tga](../../Packages/Engine/Tests/EngineTests/Fixtures/texture-identity/straight-magick.tga) | Generated asset / catalog / fixture (synthetic texture-identity decoder input) |
+| [Packages/Engine/Tests/EngineTests/Fixtures/texture-identity/straight-seq.avifs](../../Packages/Engine/Tests/EngineTests/Fixtures/texture-identity/straight-seq.avifs) | Generated asset / catalog / fixture (synthetic texture-identity decoder input) |
+| [Packages/Engine/Tests/EngineTests/Fixtures/texture-identity/straight-unassoc.tiff](../../Packages/Engine/Tests/EngineTests/Fixtures/texture-identity/straight-unassoc.tiff) | Generated asset / catalog / fixture (synthetic texture-identity decoder input) |
+| [Packages/Engine/Tests/EngineTests/Fixtures/texture-identity/straight-v5.bmp](../../Packages/Engine/Tests/EngineTests/Fixtures/texture-identity/straight-v5.bmp) | Generated asset / catalog / fixture (synthetic texture-identity decoder input) |
+| [Packages/Engine/Tests/EngineTests/Fixtures/texture-identity/straight.cur](../../Packages/Engine/Tests/EngineTests/Fixtures/texture-identity/straight.cur) | Generated asset / catalog / fixture (synthetic texture-identity decoder input) |
+| [Packages/Engine/Tests/EngineTests/Fixtures/texture-identity/straight.icns](../../Packages/Engine/Tests/EngineTests/Fixtures/texture-identity/straight.icns) | Generated asset / catalog / fixture (synthetic texture-identity decoder input) |
+| [Packages/Engine/Tests/EngineTests/Fixtures/texture-identity/straight.psd](../../Packages/Engine/Tests/EngineTests/Fixtures/texture-identity/straight.psd) | Generated asset / catalog / fixture (synthetic texture-identity decoder input) |
+| [Packages/Engine/Tests/EngineTests/Fixtures/texture-identity/straight.sgi](../../Packages/Engine/Tests/EngineTests/Fixtures/texture-identity/straight.sgi) | Generated asset / catalog / fixture (synthetic texture-identity decoder input) |
 | [Packages/Engine/Tests/EngineTests/LiveStepPacerTests.swift](../../Packages/Engine/Tests/EngineTests/LiveStepPacerTests.swift) | Test / validation |
 | [Packages/Engine/Tests/EngineTests/GLTFImportTests.swift](../../Packages/Engine/Tests/EngineTests/GLTFImportTests.swift) | Test / validation |
 | [Packages/Engine/Tests/EngineTests/GLTFPackageContainmentTests.swift](../../Packages/Engine/Tests/EngineTests/GLTFPackageContainmentTests.swift) | Test / validation |
