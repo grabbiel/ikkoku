@@ -448,6 +448,8 @@ extension CaptureRequest {
         ScopedOption("IKKOKU_PERF_DONATIONS", [.perfTrace]),
         ScopedOption("IKKOKU_PERF_INSTALL_REFRESH", [.perfTrace]),
         ScopedOption("IKKOKU_PERF_OUTFIT", [.perfTrace]),
+        ScopedOption("IKKOKU_PERF_SELECT_KEYS", [.perfTrace]),
+        ScopedOption("IKKOKU_PERF_INSPECTOR_TAB", [.perfTrace]),
     ]
 
     /// Options read only by the window capture.
@@ -582,6 +584,10 @@ extension CaptureRequest {
         ValueRule("IKKOKU_PERF_INSTALL_REFRESH", .oneOf(["step", "each"])),
         // The saved outfit `studio-outfit` selects (R7 phase 2, item 6, third part).
         ValueRule("IKKOKU_PERF_OUTFIT", .integer(0...6)),
+        // The source keys `studio-select` selects in turn, and the inspector
+        // tab it shows (R7 phase 2, item 7).
+        ValueRule("IKKOKU_PERF_SELECT_KEYS", .integerList(0...Int(Int32.max), maxCount: 64)),
+        ValueRule("IKKOKU_PERF_INSPECTOR_TAB", .oneOf(["object", "pose", "face", "clothes", "scene"])),
     ]
 
     /// `IKKOKU_PERF_WORKLOAD` values, in the order `docs/reference/performance.md` lists them.
@@ -589,7 +595,7 @@ extension CaptureRequest {
         "studio-idle", "studio-orbit", "studio-fk-drag", "studio-hover", "maker-slider", "maker-idle",
         "studio-native", "viewport-lifecycle", "startup", "studio-static", "studio-orbit-bursts",
         "studio-duplicate", "studio-undo-delete", "studio-timeline",
-        "studio-outfit", "studio-export", "studio-redo", "studio-load",
+        "studio-outfit", "studio-export", "studio-redo", "studio-load", "studio-select",
     ]
 }
 
@@ -601,6 +607,8 @@ enum ValueCheck: Sendable {
     case finiteNumber
     /// Comma-separated `key=value` pairs; `keys` lists the accepted keys, or nil for any.
     case pairs(keys: [String]?, integerValues: Bool)
+    /// One to `maxCount` comma-separated integers, each in `range`.
+    case integerList(ClosedRange<Int>, maxCount: Int)
     /// `IKKOKU_APPLICATION_FOCUS`: at most 64 comma-separated 0 (loss) or 1 (gain).
     case focusEvents
 
@@ -639,6 +647,10 @@ enum ValueCheck: Sendable {
                 }
             }
             return nil
+        case .integerList(let range, let maxCount):
+            let pieces = value.split(separator: ",", omittingEmptySubsequences: false)
+            if pieces.count <= maxCount, pieces.allSatisfy({ Int($0).map(range.contains) ?? false }) { return nil }
+            return "must list 1 to \(maxCount) comma-separated integers from \(range.lowerBound) to \(range.upperBound), got '\(value)'"
         case .focusEvents:
             let events = value.split(separator: ",", omittingEmptySubsequences: false)
             if events.count <= 64, events.allSatisfy({ $0 == "0" || $0 == "1" }) { return nil }

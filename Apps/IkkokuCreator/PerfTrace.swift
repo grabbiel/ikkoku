@@ -176,6 +176,14 @@ final class PerfTrace {
         /// selects before selecting the shown one back; nil takes the first
         /// other outfit the card saves.
         let outfit: Int?
+        /// `IKKOKU_PERF_SELECT_KEYS`: the source keys `studio-select` selects
+        /// in turn (R7 phase 2, item 7); nil takes the first object of each
+        /// kind the Object tab shows differently.
+        let selectKeys: [Int32]?
+        /// `IKKOKU_PERF_INSPECTOR_TAB`: the inspector tab `studio-select`
+        /// shows, lowercased ("object", the default, "pose", "face",
+        /// "clothes" or "scene").
+        let inspectorTab: String?
 
         /// Reads `IKKOKU_PERF_*`; `CaptureRequest.validate` already checked the values.
         static func from(_ env: [String: String]) -> Configuration? {
@@ -202,7 +210,9 @@ final class PerfTrace {
                 rigPrefetch: env["IKKOKU_PERF_RIG_PREFETCH"] != "off",
                 donations: env["IKKOKU_PERF_DONATIONS"] != "off",
                 installRefresh: env["IKKOKU_PERF_INSTALL_REFRESH"] ?? "step",
-                outfit: env["IKKOKU_PERF_OUTFIT"].flatMap { Int($0) })
+                outfit: env["IKKOKU_PERF_OUTFIT"].flatMap { Int($0) },
+                selectKeys: env["IKKOKU_PERF_SELECT_KEYS"].map { $0.split(separator: ",").compactMap { Int32($0) } },
+                inspectorTab: env["IKKOKU_PERF_INSPECTOR_TAB"])
         }
     }
 
@@ -719,6 +729,8 @@ final class PerfTrace {
                 "livePacing": configuration.livePacing,
                 "rigPrefetch": configuration.rigPrefetch, "donations": configuration.donations,
                 "installRefresh": configuration.installRefresh, "outfit": configuration.outfit ?? -1,
+                "selectKeys": configuration.selectKeys.map { $0.map { Int($0) } as Any } ?? NSNull(),
+                "inspectorTab": configuration.inspectorTab.map { $0 as Any } ?? NSNull(),
             ] as [String: Any],
             "build": PerfTrace.buildDescription(),
             "machine": PerfTrace.machineDescription(device: device),

@@ -423,10 +423,12 @@ class PerfTraceTests(unittest.TestCase):
         stats = perf_trace.action_stats(data)
         self.assertEqual(sorted(stats), ["duplicate", "undo"])
         self.assertEqual(stats["duplicate"], {"count": 3, "callMs": 12, "readyMs": 120, "busyMs": 30, "longestStallMs": 9,
-                                              "maxStallMs": 50})
+                                              "maxStallMs": 50, "frames120": 1, "maxFrames120": 6})
         self.assertEqual(stats["undo"]["readyMs"], 70)
         text = perf_trace.actions_line("dup", data)
-        self.assertIn("duplicate x3 call 12.0, ready 120.0, main busy 30.0, longest stall 9.0 (max 50.0)", text)
+        self.assertIn("duplicate x3 call 12.0, ready 120.0, main busy 30.0, longest stall 9.0 (max 50.0), "
+                      "120 Hz frames dropped 1 (max 6)", text)
+        self.assertEqual([perf_trace.frames_at_120(ms) for ms in (0, 8.3, 8.34, 100, 104)], [0, 0, 1, 12, 12])
 
     def test_action_problem_flags_an_action_that_left_an_error(self):
         data = report()
@@ -438,7 +440,7 @@ class PerfTraceTests(unittest.TestCase):
                          "1 actions left an error, the first export: Could not export original scene: x")
         data["workload"] = "studio-idle"
         self.assertIsNone(perf_trace.action_problem(data))
-        for workload in ("studio-outfit", "studio-export", "studio-redo", "studio-load"):
+        for workload in ("studio-outfit", "studio-export", "studio-redo", "studio-load", "studio-select"):
             self.assertIn(workload, perf_trace.WORKLOADS)
             self.assertIn(workload, perf_trace.INPUTLESS_WORKLOADS)
             self.assertIn(workload, perf_trace.PRESENTATION_EXEMPT)

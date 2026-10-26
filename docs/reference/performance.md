@@ -114,6 +114,7 @@ the run.
 | `studio-outfit` | as `studio-idle` | the Clothes tab's outfit picker (`StudioModel.selectSourceOutfit`) on the `studio-duplicate` character: another saved outfit (`IKKOKU_PERF_OUTFIT`, else the first other one), then the shown one back, repeated, live animation on. After the first selection each one borrows the outfit's kept assembly; `IKKOKU_PERF_DONATIONS=off` builds every one from its files |
 | `studio-export` | as `studio-idle` | File ▸ Export Edited Original Scene (`AppState.exportSourceScene(to:)`), repeated, after a setup through the UI's calls: a cheek edit on the `studio-duplicate` character, Visible off, then Save Scene and Open of that file, so the hidden character has no preview and each export builds its validation baseline. Exports go to a temporary folder, removed at the end |
 | `studio-load` | as `studio-idle` | File ▸ New Scene (unmeasured), then File ▸ Open (`AppState.openScene(at:importing:)`) of the source scene saved as an Ikkoku scene, repeated; each load builds the characters again and rehydrates the route characters (a load over the same scene would keep its runtime and rehydrate nothing) |
+| `studio-select` | as `studio-idle` | the selection a click makes (`StudioModel.selection`, which a workspace row's tap and a viewport click on an object set; a click on empty space clears it) through a fixed list, repeated, live animation on: nothing selected, then each listed object in turn. The list is `IKKOKU_PERF_SELECT_KEYS`, else the first object of each kind the Object tab shows differently (source character, route, source camera, item, light, camera, folder) in workspace order. The inspector shows `IKKOKU_PERF_INSPECTOR_TAB` (default `object`). The actions are named for what they select (`select route`, `select source character from nothing`, `deselect`); each one's main-thread time is the busy period it ran in, which holds SwiftUI's update of the panels ([phase 2, item 7](#phase-2-item-7-selection-and-the-inspector)) |
 
 Other options:
 
@@ -144,6 +145,10 @@ Other options:
   `scene-route-children.png` with its folder and character. Without it they
   use source key 963 or the first source character.
 - `IKKOKU_PERF_OUTFIT` (0–6): the saved outfit `studio-outfit` selects.
+- `IKKOKU_PERF_SELECT_KEYS` (1–64 comma-separated source keys): the objects
+  `studio-select` selects in turn, and `IKKOKU_PERF_INSPECTOR_TAB`
+  (`object`, `pose`, `face`, `clothes` or `scene`): the inspector tab it
+  shows.
 - Measurement controls for the
   [item 6 follow-up](#phase-2-item-6-follow-up-route-copies-prefetch-and-kept-donations),
   all defaulting to the shipped behavior:
@@ -224,13 +229,16 @@ locked `PerfDrawLog`. Everything else is recorded on the main thread.
   period. The block holds their total, the longest, and how many exceeded 50
   and 100 ms. `summarize` prints it as a startup line;
 - for the action workloads (`studio-duplicate`, `studio-undo-delete`,
-  `studio-redo`, `studio-outfit`, `studio-export`, `studio-load`), each
+  `studio-redo`, `studio-outfit`, `studio-export`, `studio-load`,
+  `studio-select`), each
   action (`details.actions`): its call time, the time until its builds were
   installed or its other background work finished
   (`PerfTrace.characterInstalled`, `backgroundWorkFinished`), the main
   thread's busy time and longest busy period from the call until then, and
   the status line and any error alert it left. `summarize` prints the
-  medians per action and warns about an action that left an error;
+  medians per action, with the 120 Hz refresh periods the median and the
+  longest stall cover (a 100 ms stall drops 12 frames), and warns about an
+  action that left an error;
 - the build: Debug/Release, the app's and the Engine package's own assert
   configuration (`EngineBuild.assertConfiguration`, so an Engine compiled `-O`
   inside a Debug app is visible).
