@@ -7,7 +7,7 @@ evaluator files, the ST-T11 second-slice route playback files, the ST-T11
 third-slice original route capture/comparison files, the ST-T11
 sixth-slice per-frame route stepping files, the ST-T11 ninth-slice route
 clock files, the ST-T11 character-light capture/mapping files, the ST-A11
-scene character-light preview override files, the ST-A11 first map slice files, the original-player probe
+scene character-light preview override files, the ST-A11 first and second (baked lightmap) map slice files, the original-player probe
 robustness test, the ST-A06 camera-object capture files, the ST-A06
 source camera-object look-through files, the ST-A06 source scale rule files,
 the ST-T07 eye look reference and solver-port files, the ST-T07s eye look
@@ -23,13 +23,13 @@ branch was tested or every asset matches the original game. Feature status,
 specific comments and pending tasks are in the linked reports. Shared behavior
 may be discussed in more than one report; one primary owner is listed here.
 
-**1007 files indexed; 1007 assigned; 0 unassigned.**
+**1009 files indexed; 1009 assigned; 0 unassigned.**
 
 | Primary report | Files |
 | --- | ---: |
 | [App / gameplay / plugins](app-gameplay-and-plugins.md) | 110 |
 | [Character / Maker / mods](character-and-mods.md) | 128 |
-| [Studio / IK / animation](studio.md) | 225 |
+| [Studio / IK / animation](studio.md) | 227 |
 | [Renderer / foundation / assets](renderer-and-foundation.md) | 335 |
 | [Toolchain / verification / historical docs](toolchain-and-verification.md) | 199 |
 
@@ -41,8 +41,8 @@ may be discussed in more than one report; one primary owner is listed here.
 | Documentation / historical evidence | 65 |
 | Generated asset / catalog / fixture | 205 |
 | Reference host / controlled fixture | 35 |
-| Runtime / shared shader declaration | 222 |
-| Test / validation | 207 |
+| Runtime / shared shader declaration | 223 |
+| Test / validation | 208 |
 
 ## App / gameplay / plugins
 
@@ -352,6 +352,7 @@ Feature assessment: [studio.md](studio.md).
 | [Packages/Engine/Sources/Studio/SourceStudioLiveTick.swift](../../Packages/Engine/Sources/Studio/SourceStudioLiveTick.swift) | Runtime / shared shader declaration |
 | [Packages/Engine/Sources/Studio/SourceStudioLookData.swift](../../Packages/Engine/Sources/Studio/SourceStudioLookData.swift) | Runtime / shared shader declaration |
 | [Packages/Engine/Sources/Studio/SourceStudioMap.swift](../../Packages/Engine/Sources/Studio/SourceStudioMap.swift) | Runtime / shared shader declaration |
+| [Packages/Engine/Sources/Studio/SourceStudioMapLightmaps.swift](../../Packages/Engine/Sources/Studio/SourceStudioMapLightmaps.swift) | Runtime / shared shader declaration |
 | [Packages/Engine/Sources/Studio/SourceStudioNeckLook.swift](../../Packages/Engine/Sources/Studio/SourceStudioNeckLook.swift) | Runtime / shared shader declaration |
 | [Packages/Engine/Sources/Studio/SourceStudioNeckLookRuntime.swift](../../Packages/Engine/Sources/Studio/SourceStudioNeckLookRuntime.swift) | Runtime / shared shader declaration |
 | [Packages/Engine/Sources/Studio/SourceStudioNeckTargetAngle.swift](../../Packages/Engine/Sources/Studio/SourceStudioNeckTargetAngle.swift) | Runtime / shared shader declaration |
@@ -413,6 +414,7 @@ Feature assessment: [studio.md](studio.md).
 | [Packages/Engine/Tests/EngineTests/SourceStudioItemColorTests.swift](../../Packages/Engine/Tests/EngineTests/SourceStudioItemColorTests.swift) | Test / validation |
 | [Packages/Engine/Tests/EngineTests/SourceStudioLiveTickTests.swift](../../Packages/Engine/Tests/EngineTests/SourceStudioLiveTickTests.swift) | Test / validation |
 | [Packages/Engine/Tests/EngineTests/SourceStudioLookDataTests.swift](../../Packages/Engine/Tests/EngineTests/SourceStudioLookDataTests.swift) | Test / validation |
+| [Packages/Engine/Tests/EngineTests/SourceStudioMapLightmapTests.swift](../../Packages/Engine/Tests/EngineTests/SourceStudioMapLightmapTests.swift) | Test / validation |
 | [Packages/Engine/Tests/EngineTests/SourceStudioMapTests.swift](../../Packages/Engine/Tests/EngineTests/SourceStudioMapTests.swift) | Test / validation |
 | [Packages/Engine/Tests/EngineTests/SourceStudioNeckLookRuntimeTests.swift](../../Packages/Engine/Tests/EngineTests/SourceStudioNeckLookRuntimeTests.swift) | Test / validation |
 | [Packages/Engine/Tests/EngineTests/SourceStudioNeckLookTests.swift](../../Packages/Engine/Tests/EngineTests/SourceStudioNeckLookTests.swift) | Test / validation |

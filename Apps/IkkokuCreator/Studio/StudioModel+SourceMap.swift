@@ -1,5 +1,6 @@
 import Foundation
 import Renderer
+import ShaderTypes
 import Studio
 
 /// The inputs of `StudioModel.sourceMapLine` that can change without the map
@@ -149,8 +150,9 @@ extension StudioModel {
             // the import commits, so this runs at the commit; the report
             // keeps the first mark.
             PerfTrace.mark("sourceMapReady")
-            print(String(format: "[ikkoku] source map: %d draws, %d triangles, %d texture bytes; loaded in %.1f ms on a worker, placed in %.2f ms on the main thread",
-                         items.count, asset.triangles, asset.textureBytes, asset.loadSeconds * 1000, sourceMapInstallSeconds * 1000))
+            print(String(format: "[ikkoku] source map: %d draws (%d lightmapped), %d triangles, %d texture bytes (%d in %d lightmaps); loaded in %.1f ms on a worker, placed in %.2f ms on the main thread",
+                         items.count, items.filter { $0.material.kind == MaterialKindMap }.count, asset.triangles, asset.textureBytes,
+                         asset.lightmapBytes, asset.lightmapTextures, asset.loadSeconds * 1000, sourceMapInstallSeconds * 1000))
         }
         publishSourceMapLine()
         refresh()
@@ -199,6 +201,9 @@ extension StudioModel {
     /// For the scenario lane: the map state the render path sees now.
     struct SourceMapCensus: Encodable {
         let map: Int32?, line: String?, draws: Int, triangles: Int, textureBytes: Int, loading: Bool
+        /// Draws with the baked-lightmap material (`MaterialKindMap`), and the
+        /// bytes of the lightmap textures they sample (ST-A11 slice 2).
+        let lightmappedDraws: Int, lightmapBytes: Int
         /// Worker wall time of the asset's load, and main-thread time of the
         /// last install (placing the draws), in milliseconds.
         let loadMilliseconds: Double?, installMilliseconds: Double?
@@ -206,8 +211,10 @@ extension StudioModel {
     func sourceMapCensus() -> SourceMapCensus {
         let request = sourceMapRequest.flatMap { $0.sceneSHA256 == doc.sourceSceneSHA256 ? $0 : nil }
         let asset = request?.converted.flatMap { target in sourceMapAsset.flatMap { $0.url == target.file ? $0 : nil } }
-        return SourceMapCensus(map: request?.map, line: sourceMapLine, draws: currentSourceMapItems.count,
+        let items = currentSourceMapItems
+        return SourceMapCensus(map: request?.map, line: sourceMapLine, draws: items.count,
             triangles: asset?.triangles ?? 0, textureBytes: asset?.textureBytes ?? 0, loading: isLoadingSourceMap,
+            lightmappedDraws: items.filter { $0.material.kind == MaterialKindMap }.count, lightmapBytes: asset?.lightmapBytes ?? 0,
             loadMilliseconds: asset.map { $0.loadSeconds * 1000 }, installMilliseconds: asset == nil ? nil : sourceMapInstallSeconds * 1000)
     }
 }

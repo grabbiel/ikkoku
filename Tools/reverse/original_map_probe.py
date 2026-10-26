@@ -23,9 +23,17 @@ Studio.LoadSceneCoroutine and writes original-<case>-color.png, -map-geometry.pn
 -map-depth-normals.png with map-trace.json and status.json. The zip of that folder plus unity.log
 and LogOutput.log lands in --output with run.json and a manifest.json of hashes. The player root
 is always removed and nothing in C:\\Illusion\\Koikatsu is written.
+
+`oracle` (phase C, ST-A11 slice 2) runs the same probe through the same transport with
+already-authored records (--scene <case>=<scene png>, uploaded as reload-oracle-<case>.png), so
+the player authors nothing: it reads each record back and writes oracle-<case>-clean-color.png
+(Camera.main without its image effects) and Unity's decoded lightmap irradiance per pixel,
+oracle-<case>-irradiance.f32 (lights at intensity 0) and -irradiance-lit.f32 (lights as authored),
+with oracle-trace.json. The float images are gzipped on arrival (<name>.f32.gz); manifest.json
+lists the received files, and run.json each raw image's SHA-256 and size.
 """
 from __future__ import annotations
-import argparse, hashlib, io, json, re, subprocess, uuid, zipfile
+import argparse, gzip, hashlib, io, json, re, subprocess, uuid, zipfile
 from pathlib import Path, PurePosixPath
 from original_wear_probe import Endpoint, bootstrap, errno_count, extract, fresh_root, guarded
 
@@ -204,6 +212,79 @@ def capture(args):
                 errno=[record['errnoBefore'], record['errnoAfter']], files=len(provenance), status=status)
 
 
+ORACLE_CASE = re.compile(r'[a-z0-9]+(-[a-z0-9]+)*')
+
+
+def oracle_scenes(items):
+    """--scene <case>=<png> pairs: distinct plain case labels, each a PNG scene record."""
+    scenes = {}
+    for item in items:
+        label, sep, path = item.partition('=')
+        if not sep or not ORACLE_CASE.fullmatch(label) or label in scenes: raise ValueError(f'--scene wants a new <case>=<scene png>: {item!r}')
+        data = Path(path).read_bytes()
+        if not data.startswith(b'\x89PNG\r\n\x1a\n'): raise ValueError(f'--scene {label} is not a PNG scene record: {path}')
+        scenes[label] = data
+    if not scenes: raise ValueError('oracle needs at least one --scene')
+    return scenes
+
+
+def gzip_floats(output, names):
+    """Replaces each received *.f32 image by <name>.gz; returns {name: raw sha256, bytes}."""
+    raw = {}
+    for name in sorted(n for n in names if n.endswith('.f32')):
+        data = (output / name).read_bytes()
+        if len(data) % 12: raise ValueError(f'{name} is not float32 RGB')
+        raw[name] = dict(sha256=digest(data), bytes=len(data), file=name + '.gz')
+        (output / (name + '.gz')).write_bytes(gzip.compress(data, compresslevel=9, mtime=0)); (output / name).unlink()
+    return raw
+
+
+def oracle(args):
+    """Phase C in one `prlctl exec` (see the module docstring)."""
+    from original_scene_reload_probe import once_script  # the reload probe's one-exec transport
+    output = private(args.output)
+    if (output / 'run.json').exists(): raise RuntimeError(f'{output}/run.json exists: run the oracle into a new output folder')
+    source = MAP_PROBE.read_bytes(); scenes = oracle_scenes(args.scene)
+    uploads = {f'reload-oracle-{label}.png': data for label, data in scenes.items()}
+    root = fresh_root()
+    record = dict(vm=args.vm, root=root, processID=0, sourceSHA256=digest(source), scenes={label: digest(data) for label, data in scenes.items()},
+                  errnoBaseline=args.errno_baseline, errnoBefore=guarded(args.errno_baseline),
+                  transport='one prlctl exec; run.ps1 over a host-only HTTP endpoint (original_scene_reload_probe.once_script)')
+    output.mkdir(parents=True, exist_ok=True); dump(output / 'run.json', record)
+    files = {MAP_PROBE_NAMES[0]: source, **uploads}
+    with Endpoint(args.host_address, files, upload='reload.zip') as endpoint:
+        script = once_script(root, endpoint.base, args.wait_seconds, list(uploads), *MAP_PROBE_NAMES)
+        files['run.ps1'] = script.encode()
+        (output / 'run.ps1').write_text(script.replace(endpoint.base, '<endpoint>/'))
+        result = subprocess.run(['prlctl', 'exec', args.vm, '--current-user', 'powershell.exe', '-NoProfile', '-NonInteractive',
+                                 '-Command', bootstrap(endpoint.base)], text=True, capture_output=True, timeout=args.wait_seconds + 900)
+        upload = endpoint.upload
+    record['errnoAfter'] = errno_count()
+    if result.returncode:
+        record['execError'] = (result.stderr or result.stdout)[-4000:]; dump(output / 'run.json', record)
+        raise RuntimeError('VM exec failed: ' + record['execError'])
+    guest = json.loads(result.stdout.lstrip('\ufeff').strip())
+    record.update(processID=int(guest.get('processID') or 0), guest=guest)
+    if guest.get('source') not in (None, digest(source)): raise ValueError('Guest probe source hash differs')
+    for name, data in uploads.items():
+        if (guest.get('scenes') or {}).get(name) not in (None, digest(data)): raise ValueError('Guest scene hash differs: ' + name)
+    names = []
+    if upload is not None:
+        if digest(upload) != guest.get('zipSHA256') or len(upload) != guest.get('zipBytes'): raise ValueError('Upload differs from the guest zip')
+        names = extract(upload, output)
+    record['floatImages'] = gzip_floats(output, names)
+    names = [record['floatImages'][n]['file'] if n in record['floatImages'] else n for n in names]
+    (output / 'probe-source.cs').write_bytes(source)
+    dump(output / 'run.json', record)
+    provenance = [dict(file=p.name, sha256=digest(p.read_bytes()), bytes=p.stat().st_size)
+                  for p in sorted(output / n for n in set(names + ['run.json', 'probe-source.cs'])) if p.is_file()]
+    dump(output / 'manifest.json', dict(schemaVersion=1, files=provenance))
+    status = json.loads((output / 'status.json').read_text()) if (output / 'status.json').is_file() else None
+    return dict(root=root, processID=record['processID'], exited=guest.get('exited'), error=guest.get('error'),
+                cleanupError=guest.get('cleanupError'), removed=guest.get('removed'), remainingGameProcesses=guest.get('remainingGameProcesses'),
+                errno=[record['errnoBefore'], record['errnoAfter']], files=len(provenance), status=status)
+
+
 def main():
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     commands = p.add_subparsers(dest='command', required=True)
@@ -220,8 +301,15 @@ def main():
     c.add_argument('--errno-baseline', type=int, required=True, help='Parallels errno-24 count that must hold before the exec')
     c.add_argument('--host-address', default='10.211.55.2', help="the Mac's address on the VM's host-only network")
     c.add_argument('--wait-seconds', type=int, default=900, help='bound on the player run')
+    o = commands.add_parser('oracle', help="read authored records back and measure Unity's lightmap irradiance (phase C)")
+    o.add_argument('--vm', default='Windows 11'); o.add_argument('--output', type=Path, required=True)
+    o.add_argument('--scene', action='append', required=True, help='<case>=<scene png> (repeatable), e.g. map33=scene-map33.png')
+    o.add_argument('--errno-baseline', type=int, required=True, help='Parallels errno-24 count that must hold before the exec')
+    o.add_argument('--host-address', default='10.211.55.2', help="the Mac's address on the VM's host-only network")
+    o.add_argument('--wait-seconds', type=int, default=900, help='bound on the player run')
     args = p.parse_args()
-    print(json.dumps(fetch(args) if args.command == 'fetch' else capture(args), indent=2))
+    run = dict(fetch=fetch, capture=capture, oracle=oracle)[args.command]
+    print(json.dumps(run(args), indent=2))
 
 
 if __name__ == '__main__': main()

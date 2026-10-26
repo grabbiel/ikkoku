@@ -62,6 +62,9 @@ typedef IK_ENUM(EnumBackingType, TextureIndex) {
     TextureIndexBloom      = 13,
     TextureIndexSceneDepth = 14,
     TextureIndexBodyMask   = 15,
+    TextureIndexLightmap   = 16,  // MaterialKindMap: Unity baked lightmap (RGBM, raw BC rows)
+    TextureIndexLightmapDirection = 17,  // MaterialKindMap: CombinedDirectional direction map
+    TextureIndexEmission   = 18,  // MaterialKindMap: Standard _EmissionMap
 };
 
 // MARK: - Material kinds / flags
@@ -74,6 +77,7 @@ typedef IK_ENUM(EnumBackingType, MaterialKind) {
     MaterialKindEyeWhite= 5,
     MaterialKindUnlit   = 6,
     MaterialKindEyelash = 7,  // alpha-tested strips drawn over hair
+    MaterialKindMap     = 8,  // ST-A11 source map surface: Unity 5.6 Standard baked-lightmap subset (map_fragment)
 };
 
 typedef IK_ENUM(IKUInt, MaterialFlags) {
@@ -96,6 +100,7 @@ typedef IK_ENUM(IKUInt, MaterialFlags) {
     MaterialFlagHasBodyMask     = 1u << 16,
     MaterialFlagSourceBodyMask  = 1u << 17, // RG source coverage; requires HasBodyMask
     MaterialFlagSourceIrisHighlights = 1u << 18, // overlay0/1 alpha at UV1/UV2; eye.w enables highlights
+    MaterialFlagMapDirectionalLightmap = 1u << 19, // MaterialKindMap: a CombinedDirectional direction map is bound
 };
 
 #define DrawFlagHasHiddenBuffer 0x80000000u
@@ -192,7 +197,18 @@ typedef struct {
     float         sourceAlphaA;   // source body-mask R control (1 = apply mask)
     float         sourceAlphaB;   // source body-mask G control (1 = apply mask)
     float         irisRotation;   // _rotation: base-iris UV rotation in turns about (0.5,0.5), applied before irisST0
+    // MaterialKindMap only (zero elsewhere). They fill the struct's tail padding, so the stride stays 352.
+    float         lightmapRange;        // unity_Lightmap_HDR.x: RGBM range in the project's colour space
+    float         lightmapExponent;     // unity_Lightmap_HDR.y: exponent on the RGBM multiplier (alpha)
+    float         oneMinusReflectivity; // Standard OneMinusReflectivityFromMetallic(_Metallic): diffColor = albedo * this
 } MaterialUniforms;
+
+// Swift and Metal share this layout; the map fields above live in what was tail padding.
+#if defined(__METAL_VERSION__) || defined(__cplusplus)
+static_assert(sizeof(MaterialUniforms) == 352, "MaterialUniforms must stay 352 bytes (shared with Swift)");
+#else
+_Static_assert(sizeof(MaterialUniforms) == 352, "MaterialUniforms must stay 352 bytes (shared with Swift)");
+#endif
 
 typedef IK_ENUM(EnumBackingType, LightType) {
     LightTypeDirectional = 0,

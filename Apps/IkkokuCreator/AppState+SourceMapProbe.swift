@@ -4,6 +4,7 @@ import CoreMath
 import Renderer
 import Studio
 import Scene
+import ShaderTypes
 
 extension AppState {
     /// The Unity depth-normals far plane both sides encode with: the original
@@ -20,6 +21,10 @@ extension AppState {
     /// `native-map-depth-normals.png` (Unity's depth-normals encoding over
     /// `sourceMapProbeDepthFar`), plus `native-map.json` (the map census, the
     /// camera matrices, the map root matrix and every draw's model matrix).
+    /// With baked lightmaps it also writes the lightmapped draws' irradiance
+    /// (`SourceStudioMapMaterial.irradiance`: the decoded lightmap alone, and
+    /// the two negative-control variants) from the linear HDR scene target,
+    /// `native-map-irradiance-<variant>.rgba16f.deflate`.
     /// A scene whose map is not drawn fails, naming the status line.
     static func writeSourceMapProbe(studio: StudioModel, renderer: Renderer, directory: URL, width: Int, height: Int) throws {
         let census = studio.sourceMapCensus()
@@ -36,6 +41,29 @@ extension AppState {
             try CaptureOutput.writePNG(renderer.captureSourceGeometry(frame: frame, width: width, height: height, depthNormals: depthNormals, far: far),
                                        to: directory.appendingPathComponent(name))
         }
+        var irradiance: [String: Any] = ["written": false]
+        let lightmapped = items.filter { $0.material.kind == MaterialKindMap }
+        if !lightmapped.isEmpty {
+            var files: [String: String] = [:]
+            for variant in SourceStudioMapMaterial.IrradianceVariant.allCases {
+                var probe = frame
+                probe.items = lightmapped.compactMap { item in
+                    guard let material = SourceStudioMapMaterial.irradiance(item.material, variant: variant) else { return nil }
+                    var copy = item
+                    copy.material = material
+                    return copy
+                }
+                guard let bits = renderer.captureSceneHDR(frame: probe, width: width, height: height) else {
+                    throw RigError.invalid("IKKOKU_SOURCE_MAP_PROBE: the \(variant.rawValue) irradiance capture failed.")
+                }
+                let name = "native-map-irradiance-\(variant.rawValue).rgba16f.deflate"
+                let packed = try (bits.withUnsafeBytes { Data($0) } as NSData).compressed(using: .zlib) as Data
+                try packed.write(to: directory.appendingPathComponent(name))
+                files[variant.rawValue] = name
+            }
+            irradiance = ["written": true, "files": files, "draws": lightmapped.count, "otherDraws": items.count - lightmapped.count,
+                          "format": "RGBA float16 little-endian, rows top-down, raw DEFLATE (RFC 1951): the linear HDR scene target after the MSAA resolve, before bloom, grading and the sRGB composite"]
+        }
         let camera = frame.camera
         func columns(_ m: float4x4) -> [Float] { (0..<4).flatMap { c in (0..<4).map { r in m[c][r] } } }
         let document: [String: Any] = [
@@ -44,6 +72,7 @@ extension AppState {
             "width": width, "height": height, "depthFar": far,
             "census": try JSONSerialization.jsonObject(with: JSONEncoder().encode(census)),
             "sceneSHA256": request.sceneSHA256,
+            "irradiance": irradiance,
             "map": request.map, "sunLightType": request.sunLightType,
             "transform": ["position": [request.transform.position.x, request.transform.position.y, request.transform.position.z],
                           "rotationDegrees": [request.transform.rotationDegrees.x, request.transform.rotationDegrees.y, request.transform.rotationDegrees.z]],
