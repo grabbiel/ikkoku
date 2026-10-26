@@ -20,9 +20,12 @@
 // any scene whose KKEx map had an entry (nil entries included) and accepted additions in every scene.
 //
 // A scene with no trailer after its 【KStudio】 marker, or an empty KKEx map, has no entry to judge, but
-// NodesConstraints reads character cards on every load, so ST-T03i refuses a delete or a copy there when a written
-// character's card carries KKAnimationController links. Such scenes are read the same way and, when a character is
-// linked, every delete and duplicate is judged into "withoutEntries"; the writer accepted all of them before.
+// NodesConstraints reads character cards on every load: ST-T03i refuses a delete of an object a card's live link
+// names, or a copy of a linked character together with such an object. Such scenes are read the same way and, when
+// a card has steps, every delete and duplicate is judged into "withoutEntries"; the writer accepted all of them
+// before. In every scene the card counts say how many name links at all (any encoding), how many the fallback
+// would attach (Int32 values, "cardStepScenes"), how many reach an object of the scene ("cardLiveScenes"), and in
+// how many a single-target delete or copy hits one ("cardRefusedScenesByEditKind").
 using System;
 using System.Collections;
 using System.Collections.Generic;
@@ -54,6 +57,8 @@ public sealed class PluginSceneSurvey {
     readonly SortedDictionary<string,Stats> ids=new SortedDictionary<string,Stats>(StringComparer.Ordinal);
     readonly SortedDictionary<string,long> orphanShapes=new SortedDictionary<string,long>(StringComparer.Ordinal);
     readonly SortedDictionary<string,SortedDictionary<string,long>> withoutEntries=new SortedDictionary<string,SortedDictionary<string,long>>(StringComparer.Ordinal);
+    readonly SortedDictionary<string,long> cardHits=new SortedDictionary<string,long>(StringComparer.Ordinal);
+    int namedLinks; // characters of the scene being modelled whose card names Links or Eyes
     readonly List<long> objectCounts=new List<long>();
     // The current scene's routes in walk order: key and point count (points are sub-infos, not objects).
     readonly List<KeyValuePair<int,int>> routes=new List<KeyValuePair<int,int>>();
@@ -68,10 +73,12 @@ public sealed class PluginSceneSurvey {
         cardData=save.GetMethod("GetExtendedDataById",BindingFlags.Public|BindingFlags.Static,null,new[]{typeof(ChaFile),typeof(string)},null);
         if(cardData==null)throw new Exception("ExtendedSave.GetExtendedDataById(ChaFile, string) not found");
         foreach(var name in new[]{"files","oversize","unreadable","noEndMarker","noTrailer","otherTrailer","unreadableTrailer","emptyMap","entries",
-                                  "loaded","loadError","remappedRoots","linkedScenes","linkedCharacters","judgedEdits",
-                                  "withoutEntriesLoaded","withoutEntriesLoadError","withoutEntriesLinked"})counts[name]=0;
+                                  "loaded","loadError","remappedRoots","judgedEdits",
+                                  "cardLinkScenes","cardLinkCharacters","cardStepScenes","cardLiveScenes","cardRefusedEdits",
+                                  "withoutEntriesLoaded","withoutEntriesLoadError","withoutEntriesWithSteps"})counts[name]=0;
         foreach(var kind in EditKinds){after[kind]=Outcomes();before[kind]=Outcomes();unknownOnly[kind]=0;}
         withoutEntries["delete"]=Outcomes();withoutEntries["duplicate"]=Outcomes();
+        cardHits["delete"]=0;cardHits["duplicate"]=0;
     }
     static SortedDictionary<string,long> Outcomes(){var d=new SortedDictionary<string,long>(StringComparer.Ordinal);foreach(var o in new[]{"all","some","none","notApplicable"})d[o]=0;return d;}
     void Bump(SortedDictionary<string,long> d,string key){long n;d.TryGetValue(key,out n);d[key]=n+1;}
@@ -107,7 +114,7 @@ public sealed class PluginSceneSurvey {
         try{scene=Model(data,trailer);}catch(Exception){counts["loadError"]++;return;}
         counts["loaded"]++;
         objectCounts.Add(scene.Keys.Count);
-        if(scene.Linked.Count>0){counts["linkedScenes"]++;counts["linkedCharacters"]+=scene.Linked.Count;}
+        CardCounts(scene);
         foreach(var form in forms) {
             Stats s;if(!ids.TryGetValue(form[0],out s)){s=new Stats();s.Known=PluginSceneRules.Known(form[0]);s.Orphan=PluginSceneRules.Orphans.Contains(form[0]);ids[form[0]]=s;}
             s.Scenes++;Bump(s.Forms,form[1]);
@@ -121,8 +128,10 @@ public sealed class PluginSceneSurvey {
         PluginSceneModel scene;
         try{scene=Model(data,trailer);}catch(Exception){counts["withoutEntriesLoadError"]++;return;}
         counts["withoutEntriesLoaded"]++;
-        if(scene.Linked.Count==0)return;
-        counts["withoutEntriesLinked"]++;
+        CardCounts(scene);
+        bool steps=false;foreach(var s in scene.Cards.Values)if(s==null||s.Count>0)steps=true;
+        if(!steps)return;
+        counts["withoutEntriesWithSteps"]++;
         foreach(var kind in new[]{"delete","duplicate"}) {
             int accepted=0;
             for(int i=0;i<scene.Keys.Count;i++) {
@@ -133,9 +142,26 @@ public sealed class PluginSceneSurvey {
         }
     }
 
-    // The scene's walk, used keys and linked characters.
+    // The card rule's reach in one scene: characters whose card names links (in any encoding), cards with steps the
+    // fallback attaches, cards with a live step (its first target is an object of the scene), and the single-target
+    // deletes and copies the card rule refuses (PluginSceneRules.CardReason), by edit kind.
+    void CardCounts(PluginSceneModel scene) {
+        if(namedLinks>0){counts["cardLinkScenes"]++;counts["cardLinkCharacters"]+=namedLinks;}
+        bool steps=false,live=false;var objects=new HashSet<int>(scene.Keys);
+        foreach(var s in scene.Cards.Values){if(s==null||s.Count==0)continue;steps=true;if(objects.Contains(s[0]))live=true;}
+        if(steps)counts["cardStepScenes"]++;
+        if(live)counts["cardLiveScenes"]++;
+        if(!steps)return;
+        foreach(var kind in new[]{"delete","duplicate"}) {
+            bool hit=false;
+            for(int i=0;i<scene.Keys.Count;i++)if(PluginSceneRules.CardReason(scene,new PluginSceneEdit(kind,scene.Keys[i],-1))!=null){hit=true;counts["cardRefusedEdits"]++;}
+            if(hit)cardHits[kind]++;
+        }
+    }
+
+    // The scene's walk, used keys and card-link steps.
     PluginSceneModel Model(byte[] data,byte[] trailer) {
-        hashIndex.Clear();studio.dicChangeAmount.Clear();routes.Clear();
+        hashIndex.Clear();studio.dicChangeAmount.Clear();routes.Clear();namedLinks=0;
         var roots=new List<KeyValuePair<int,ObjectInfo>>();
         using(var stream=new MemoryStream(data,false))
         using(var reader=new BinaryReader(stream)) {
@@ -170,7 +196,8 @@ public sealed class PluginSceneSurvey {
         scene.Keys.Add(key);scene.Kinds.Add(info.kind);scene.Parents.Add(parent);
         var chara=info as OICharInfo;
         if(chara!=null) {
-            if(Linked(chara))scene.Linked.Add(key);
+            var steps=CardSteps(chara);
+            if(steps!=null)scene.Cards[key]=steps;
             var points=new List<int>(chara.child.Keys);points.Sort();
             foreach(var point in points)foreach(var child in chara.child[point])Visit(scene,child,child.dicKey,key);
             return;
@@ -183,15 +210,26 @@ public sealed class PluginSceneSurvey {
         if(children!=null)foreach(var child in children)Visit(scene,child,child.dicKey,key);
     }
 
-    // The card's KKAnimationController data carries Links or Eyes (SourceScenePluginData.cardLinks).
-    bool Linked(OICharInfo chara) {
-        if(chara.charFile==null)return false;
+    // NodesConstraints.LoadDataFromKKAnimationController's card path (NodesConstraints.cs:2291-2306) on the card
+    // ExtendedSave loaded: the object keys it attaches to, in order, until its first certain throw (a cast that
+    // fails); null when the card has no KKAnimationController data. A missing target throws too; CardLinks judges
+    // that against the scene's objects, as SourceScenePluginData.cardLinkSteps does on the wire bytes.
+    List<int> CardSteps(OICharInfo chara) {
+        if(chara.charFile==null)return null;
         var data=cardData.Invoke(null,new object[]{chara.charFile,CardController});
-        if(data==null)return false;
+        if(data==null)return null;
         var map=data.GetType().GetField("data").GetValue(data) as IDictionary;
-        if(map==null)return false;
-        foreach(var name in new[]{"Links","Eyes"})if(map.Contains(name)&&map[name]!=null)return true;
-        return false;
+        if(map==null)return null;
+        var steps=new List<int>();
+        object links=map.Contains("Links")?map["Links"]:null,eyes=map.Contains("Eyes")?map["Eyes"]:null;
+        if(links!=null||eyes!=null)namedLinks++;
+        if(links!=null) {
+            var pairs=links as Dictionary<object,object>;
+            if(pairs==null)return steps;
+            foreach(var pair in pairs){if(!(pair.Key is string)||!(pair.Value is int))return steps;steps.Add((int)pair.Value);}
+        }
+        if(eyes!=null){if(!(eyes is int))return steps;steps.Add((int)eyes);}
+        return steps;
     }
 
     void Judge(PluginSceneModel scene) {
@@ -252,6 +290,7 @@ public sealed class PluginSceneSurvey {
             {"objects",new Dictionary<string,object>{{"total",total},{"max",objectCounts.Count==0?0:objectCounts[objectCounts.Count-1]},
                 {"median",objectCounts.Count==0?0:objectCounts[objectCounts.Count/2]}}},
             {"scenesByEditKindAfter",after},{"scenesByEditKindBefore",before},{"scenesRefusedOnlyByUnknownIDs",unknownOnly},
-            {"entryIDs",idList},{"orphanShapes",orphanShapes},{"withoutEntriesLinkedByEditKind",withoutEntries}};
+            {"entryIDs",idList},{"orphanShapes",orphanShapes},{"withoutEntriesWithStepsByEditKind",withoutEntries},
+            {"cardRefusedScenesByEditKind",cardHits}};
     }
 }

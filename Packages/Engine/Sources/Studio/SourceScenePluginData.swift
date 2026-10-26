@@ -109,31 +109,118 @@ enum SourceScenePluginData {
     }
 
     /// NodesConstraints.OnSceneLoad (NodesConstraints.cs:2061-2068): with
-    /// KK_AnimationController not installed, every load links each character
-    /// to the objects its card's KKAnimationController data names by key
-    /// (`LoadDataFromKKAnimationController`, :2259, indexing the loaded
-    /// objects unchecked), unless the scene's KK_AnimationController entry
-    /// has `AnimationInfo`; CharaStudio's next save writes those links as
-    /// `nodesConstraints` data. It reads the cards, so it applies with or
-    /// without a `nodesConstraints` entry or any plug-in data. Refused when
-    /// the edit deletes or copies objects and a written character's card
-    /// carries links or eyes, or cannot be read.
+    /// KK_AnimationController not installed, every load runs
+    /// `LoadDataFromKKAnimationController` (:2259), unless the scene's
+    /// KK_AnimationController entry has `AnimationInfo`. For each character
+    /// it links IK targets to objects named by key in its card's
+    /// KKAnimationController data (`cardLinkSteps`), and CharaStudio's next
+    /// save writes those constraints as `nodesConstraints` data. The card
+    /// data itself travels verbatim (no installed plug-in owns it), so a
+    /// written scene matches CharaStudio's unless the edit changes what the
+    /// fallback attaches:
+    ///
+    /// - A delete of an object a live link names: on reload the fallback
+    ///   throws there and drops that character's later links, which
+    ///   CharaStudio's export restores from its `nodesConstraints` data.
+    /// - A copy of a linked character together with an object a live link
+    ///   names: NodesConstraints' `Studio.Duplicate` patch (:648-734) copies
+    ///   the constraint to the copied object, and the copy's card still
+    ///   links the original.
+    /// - A delete and a copy in one export: the copies' keys differ from
+    ///   CharaStudio's (#278), and links name keys.
+    ///
+    /// A copied character alone keeps the original targets either way, a
+    /// copied target alone gets no constraint (both ends must be copied),
+    /// and a deleted target of a link the fallback never reaches changes
+    /// nothing. Steps are judged against the source objects, the scene
+    /// CharaStudio loaded before the edit: `loadedObjects` is `dicObjectCtrl`
+    /// (KKAPI StudioSaveLoadApi.cs:427), every record of the walk; route
+    /// points are only in `dicInfo` (AddObjectRoute.cs:151).
     static func cardLinks(_ edit: Edit, _ controller: AnimationControllerForm) -> String? {
         guard edit.rekeys, controller == .empty else { return nil }
         let marker = Data(cardAnimationController.utf8)
+        var objects: Set<Int32>?
         for record in edit.finalRecords {
             guard let character = record.character, character.cardData.range(of: marker) != nil else { continue }
-            let plugins: [String: SourceCharacterCard.PluginData]
-            do { plugins = try character.card().extensions().plugins } catch {
-                return "NodesConstraints ('\(nodesConstraints)') cannot check character \(record.sourceKey)'s card, which does not decode (\(error.localizedDescription))"
+            let steps: [Int32]
+            do {
+                // ExtendedSave drops a block it cannot read (ExtendedSave.cs:
+                // 181-188), but a decoder difference would hide live links:
+                // a card that names the data and does not decode here refuses.
+                guard let payload = try character.card().extensions().payload else {
+                    throw SourceSceneTopologyError.unsupported("its Extended Save data is not readable here")
+                }
+                steps = try cardLinkSteps(payload)
+            } catch {
+                return "NodesConstraints ('\(nodesConstraints)') cannot check character \(record.sourceKey)'s card links, which do not decode (\(error.localizedDescription))"
             }
-            guard let data = plugins[cardAnimationController]?.data else { continue }
-            let links = [data["Links"], data["Eyes"]].contains { value in value.map { $0 != .null } ?? false }
-            if links {
-                return "NodesConstraints ('\(nodesConstraints)') turns character \(record.sourceKey)'s KKAnimationController card links into constraints by object key on every load, and this edit deletes or copies objects"
+            guard !steps.isEmpty else { continue }
+            if edit.deleted && edit.copied {
+                return "NodesConstraints ('\(nodesConstraints)') links character \(record.sourceKey) to objects by key from its card on every load, and this edit both deletes and copies objects, so the copies' keys can differ from CharaStudio's"
+            }
+            if objects == nil { objects = Set(edit.keys(Array(edit.sourceRecords.values), nil)) }
+            var live: [Int32] = []
+            for key in steps { guard objects!.contains(key) else { break }; live.append(key) }
+            if let hit = live.first(where: edit.deletedKeys.contains) {
+                return "NodesConstraints ('\(nodesConstraints)') links character \(record.sourceKey) to object \(hit) from its card's KKAnimationController data on every load, and this edit deletes that object"
+            }
+            if let template = edit.origins[record.sourceKey], template != record.sourceKey,
+               let hit = live.first(where: edit.copiedKeys.contains) {
+                return "NodesConstraints ('\(nodesConstraints)') links character \(template) to object \(hit) from its card, and this edit copies both, so CharaStudio would also constrain the copy to the copy of \(hit)"
             }
         }
         return nil
+    }
+
+    /// The object keys `LoadDataFromKKAnimationController` would link from
+    /// one card's Extended Save bytes, in order: each `Links` entry, then
+    /// `Eyes`, up to the first that certainly throws. ExtendedSave
+    /// deserializes the card with MessagePack's default resolver, whose
+    /// `PrimitiveObjectFormatter` boxes an integer by its wire code, so the
+    /// fallback's `(int)` casts succeed only on Int32 (0xd2) values;
+    /// MessagePack-CSharp's own int writer never writes that code for a
+    /// non-negative key. A non-map `Links`, a non-string key or a non-Int32
+    /// value ends the steps, and so does a missing object when judged
+    /// against a key set. An unknown IK part name (`AddLink`'s
+    /// `First`) is not checked: the step counts as attached, which can only
+    /// add refusals. Empty: the card cannot link anything.
+    static func cardLinkSteps(_ payload: Data?) throws -> [Int32] {
+        guard let payload else { return [] }
+        let bytes = [UInt8](payload)
+        var cursor = SourceMessagePackSpans(bytes, range: 0..<bytes.count)
+        guard let entries = try cursor.fields(),
+              let entry = entries.first(where: { $0.key == cardAnimationController }) else { return [] }
+        var plugin = SourceMessagePackSpans(bytes, range: entry.value)
+        let head = try plugin.head()
+        if head == .null { return [] }
+        guard case .array(let count) = head else { throw SourceMessagePackError.invalid("PluginData is not an array") }
+        guard count >= 2 else { return [] }
+        try plugin.skip()
+        guard let fields = try plugin.fields() else { return [] }
+        func int32(_ range: Range<Int>) -> Int32? {
+            guard bytes[range.lowerBound] == 0xd2, range.count == 5 else { return nil }
+            var value: UInt32 = 0
+            for byte in bytes[(range.lowerBound + 1)..<range.upperBound] { value = value << 8 | UInt32(byte) }
+            return Int32(bitPattern: value)
+        }
+        var steps: [Int32] = []
+        if let links = fields.first(where: { $0.key == "Links" }), bytes[links.value.lowerBound] != 0xc0 {
+            var map = SourceMessagePackSpans(bytes, range: links.value)
+            guard case .map(let pairs) = try map.head() else { return steps }
+            for _ in 0..<pairs {
+                guard case .string(let length) = try map.head() else { return steps }
+                _ = try map.payload(length)
+                let start = map.offset
+                try map.skip()
+                guard let key = int32(start..<map.offset) else { return steps }
+                steps.append(key)
+            }
+        }
+        if let eyes = fields.first(where: { $0.key == "Eyes" }), bytes[eyes.value.lowerBound] != 0xc0 {
+            guard let key = int32(eyes.value) else { return steps }
+            steps.append(key)
+        }
+        return steps
     }
 
     // MARK: Edit

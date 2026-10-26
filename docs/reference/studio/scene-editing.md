@@ -558,7 +558,14 @@ The plug-ins are the installed DLLs of the [installed inventory](../mods/plugin-
   - **KKPE 2.21.4** (`72d1b7b5…`, `kkpe`). `OnSceneSave` (HSPE/MainWindow.cs:1585–1608) writes one `itemInfo` element per item, in key order. `LoadSceneGeneric` (:1554) loads the i-th element onto the i-th item and ignores the saved `index`.
   - **NodesConstraints 1.6.2.1** (`817fd940…`, `nodesConstraints`). The save (NodesConstraints/NodesConstraints.cs:2393–2428) writes `parentObjectIndex` and `childObjectIndex` as indices into the key-sorted `dicObjectCtrl`, and the load reads them the same way (:2108–2146).
   - **Timeline** (`0d19f9cf…`, `timeline`). `SceneWrite` (Timeline/Timeline.cs:4361) gives each object interpolable an `objectIndex` into the same key-sorted list (:4622). Global interpolables carry none.
-- **NodesConstraints' card fallback.** No installed DLL declares KK_AnimationController (`com.deathweasel.bepinex.animationcontroller`). So `NodesConstraints.OnSceneLoad` (:2061–2068, flag at :1025) runs `LoadDataFromKKAnimationController` (:2259) on every load, whether or not the scene has a `nodesConstraints` entry or any plug-in data. When the scene's `KK_AnimationController` entry has no `AnimationInfo`, or the scene has no such entry, each character card's KKAnimationController links become constraints by object key, and the next save writes them. The load indexes the loaded objects by each link without a check.
+- **NodesConstraints' card fallback.** No installed DLL declares KK_AnimationController (`com.deathweasel.bepinex.animationcontroller`). So `NodesConstraints.OnSceneLoad` (:2061–2068, flag at :1025) runs `LoadDataFromKKAnimationController` (:2259) on every load, whether or not the scene has a `nodesConstraints` entry or any plug-in data.
+  - **When.** A `KK_AnimationController` entry with an `AnimationInfo` list, even an empty one, is used instead and the cards are not read (:2263–2289). Without one, each character's card data is read (:2291–2306).
+  - **Steps.** For each `Links` pair, `(string)key`, `(int)value` and `loadedObjects[...]` are evaluated before `AddLink` (:2316). `Eyes` follows through `AddEyeLink` (:2335).
+  - **Aborts.** A failed cast or a missing key throws. The per-character `catch` (:2309) ends that character's remaining links and `Eyes`. Other characters still load.
+  - **Objects.** `loadedObjects` is `dicObjectCtrl` (KKAPI StudioSaveLoadApi.cs:427). It holds every object of the walk, attached items included (Studio.cs:705–711, :745–749). Route points are only in `dicInfo` (AddObjectRoute.cs:151, Studio.cs:780–785).
+  - **Int32 only.** The card's data is decoded by the game's MessagePack 1.x through `PrimitiveObjectFormatter` (Assembly-CSharp-firstpass, MessagePack.Formatters/PrimitiveObjectFormatter.cs:161–187). It boxes an `int` only for an Int32 (`0xd2`) value. Fixints and `0xcc`/`0xcd` box a `byte`/`ushort`, and `0xd0`/`0xd1` box an `sbyte`/`short`, so `(int)` throws on them. MessagePack-CSharp's own `int` writer never emits `0xd2` for a non-negative key (MessagePack/MessagePackBinary.cs:700–730). No installed DLL or game assembly replaces the default resolver. Links written that way are inert: the first one throws.
+  - **Unreadable data.** ExtendedSave replaces card data it cannot decode with an empty dictionary (ExtensibleSaveFormat/ExtendedSave.cs:181–188).
+  - **Copies.** `Studio.Duplicate` saves and imports the character (Studio.cs:440–485), so its card data travels verbatim. NodesConstraints' `Studio.Duplicate` patch (:648–734) copies a constraint only when both ends' objects are copied.
 - **Lists keyed by object.** Each plug-in rebuilds its list from the live objects on save. Some also write data for copies.
 
   | Plug-in (hash prefix, entry ID) | Data naming objects | On a copy |
@@ -600,12 +607,29 @@ The plug-ins are the installed DLLs of the [installed inventory](../mods/plugin-
   | Lists keyed by object | Kept unless the edit deletes an object the data names, or copies one when the plug-in writes data for copies. LightSettings also refuses any added or copied light, because it writes a record per live light. SaveCameraObjectFov refuses a camera add, copy or delete when a camera index is not 0. An unknown field or an undecodable value refuses. |
   | Anything else, or an unknown version or shape | Refused when objects or route points come or go, additions included. Unknown data is not assumed inert. |
 
-  **Card fallback.** This check reads the cards, not the trailer. So it also runs in a scene with no `nodesConstraints` entry, an empty map or no plug-in data at all. It applies when the edit deletes or copies objects and the scene's KK_AnimationController entry, if any, has no `AnimationInfo`. The export is then refused when a written character's card carries KKAnimationController `Links` or `Eyes`, or when such a card does not decode. The reason names NodesConstraints.
+  **Card fallback.** This check reads the cards, not the trailer. So it also runs in a scene with no `nodesConstraints` entry, an empty map or no plug-in data at all.
+  - **When it applies.** The edit deletes or copies objects, and the scene's KK_AnimationController entry, if any, has no `AnimationInfo`.
+  - **Steps.** For each written character whose card names KKAnimationController data, the writer reads the card's wire bytes (`cardLinkSteps`). The steps are the targets of its Int32 `Links` values in wire order, then an Int32 `Eyes`, up to the first certain abort: a non-map `Links`, a non-string key or a non-Int32 value.
+  - **Live steps.** A step is live while it and every earlier step name an object of the source scene (`dicObjectCtrl`). At the first missing object the fallback throws.
+  - **Refused when** the edit:
+    - deletes a live target. On reload the fallback throws there and drops the character's later links, which CharaStudio's export would restore from its `nodesConstraints` data;
+    - copies a linked character together with a live target. NodesConstraints' duplicate patch gives the copy a constraint to the copied target, while the copy's card still names the original;
+    - both deletes and copies, when any card has steps. The copies' keys can differ from CharaStudio's (#278), and links name keys;
+    - writes a character whose card names the data but does not decode here. A decoder difference must not hide live links.
+
+    The reason names NodesConstraints and the character and object.
+  - **Carried verbatim** in every other case, with the trailer as before:
+    - a copied linked character alone: its card names the same targets, which the reload attaches as CharaStudio's does;
+    - a copied target alone: no constraint is copied, because both ends must be;
+    - a delete of an object that no live step names;
+    - any edit of a scene whose cards are inert.
+
+    A scene whose links the edit does not touch exports byte-identical to the same edit without plug-in data.
 - **Bytes.** Kept entries keep their bytes. The map header is written as MessagePack-CSharp 1.x writes it (shortest forms), and so are the rewritten Sideloader records. A trailer with nothing to change is returned as it was.
 - **Verification.** The written trailer is parsed again. It must have the source's framing and the planned entries in order with the planned bytes. The Sideloader records must decode to their planned keys and positions.
 - **Keys.** Insertions take the smallest free keys, then added route points take theirs. Keys freed in the same export are not reused, unlike CharaStudio after an interactive delete ([#278](https://github.com/grabbiel/ikkoku/issues/278)).
 
-**Before ST-T03i**, delete, duplicate and route point add and delete were refused in any scene whose KKEx map held an entry, nil entries included. Additions were accepted in every scene, with the trailer kept verbatim. That was a latent bug: a new folder below the highest key shifts NodesConstraints' and Timeline's indices. Additions now follow the rules above. In scenes without plug-in data, deletes and copies were accepted. Now the card fallback check refuses them when a written character's card carries links.
+**Before ST-T03i**, delete, duplicate and route point add and delete were refused in any scene whose KKEx map held an entry, nil entries included. Additions were accepted in every scene, with the trailer kept verbatim. That was a latent bug: a new folder below the highest key shifts NodesConstraints' and Timeline's indices. Additions now follow the rules above. In scenes without plug-in data, deletes and copies were accepted. Now the card fallback check refuses only a delete of a live link's target, a copy of a linked character together with its target, or a delete with a copy when a card has steps.
 
 ### App translation
 
@@ -622,14 +646,14 @@ The refusal is the engine's message, which names each plug-in and its reason. Th
     - positional data kept only while positions hold;
     - route points and new objects judged on the written keys: a folder filling a key hole refuses NodesConstraints, and a folder above the keys does not;
     - the object-keyed rules;
-    - the KK_AnimationController links and the card fallback;
+    - the KK_AnimationController links and the card fallback. This covers Int32 versus compact link values, steps past a missing object or an aborted cast, `Eyes`, undecodable card data, and an `AnimationInfo` list switching the cards off. It also covers a trailer-less scene where deleting an object no link names gives exactly the `TopologyScene` bytes of the same deletion;
     - the writer's MessagePack-CSharp encodings.
-  - Disabling three of the rules fails 15 expectations (negative control).
+  - Disabling three of the rules fails 15 expectations (negative control). Disabling the card fallback fails 15. Letting steps continue past a missing object fails 2.
   - `SourceSceneTopologyTests`, `SourceSceneInsertionTests`, `SourceSceneRouteEditTests` and `SourceSceneExportValidationTests` carry the new refusal texts and the accepted cases.
 - **Survey port and parity gate.** The scene survey judges installed scenes with `Tools/reverse/fixtures/PluginSceneRules.cs`, a C# 5 port of these rules. `Tools/reverse/plugin_rule_parity.py` gates it:
-  - It runs `sourceScenePluginDataWritesTheRuleParityCorpus`: 94 synthetic scenes, with every entry form alone, with a key hole, with linked cards, all together, and as unreadable trailers.
-  - It requires the port to reach the same verdict and name the same entry IDs for all 2,162 single-target edits: 0 mismatches.
-  - Two rule mutations in the port give 56 mismatches.
+  - It runs `sourceScenePluginDataWritesTheRuleParityCorpus`: 107 synthetic scenes, with every entry form alone, with a key hole, with linked cards, all together, and as unreadable trailers. Six trailer-less scenes carry cards with live, cut-off, inert, `Eyes`-only and undecodable links, and one carries a character linked to its own attached item.
+  - It requires the port to reach the same verdict and name the same entry IDs for all 2,462 single-target edits: 0 mismatches.
+  - Two rule mutations in the port give 56 mismatches. Letting the port's card steps continue past a missing object gives 1.
   - The player's run repeats the check with the player's own compiler before the survey counts anything.
 - **Original player, phase A.** One `prlctl exec` (`Tools/reverse/original_plugin_scene_probe.py`) set up a private player root (Unity 5.6.2f1). It copied in ExtendedSave, Sideloader (with SharpZipLib and XUnity.ResourceRedirector), KKAPI and StudioSceneSettings, each checked against the inventory's SHA-256, and one installed studio-item zipmod (`[E625] Nan Chakram v1.zipmod`, SHA-256 `3d79a6fe…`).
   - **Fixture.** The probe authored a fixture: a folder, mod and vanilla items in and out of it, a route with three points, a camera, a light and StudioSceneSettings values.

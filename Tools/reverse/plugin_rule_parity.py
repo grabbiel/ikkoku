@@ -34,7 +34,7 @@ def corpus_text(corpus: dict) -> str:
         lines.append('scene ' + (scene['trailer'] or '-'))
         for o in scene['objects']: lines.append(f"object {o['key']} {o['kind']} {o['parent']}")
         lines.append('used ' + join(scene['used']))
-        lines.append('linked ' + join(scene['linked']))
+        for card in scene['cards']: lines.append(f"card {card['key']} {'!' if card.get('error') else join(card['steps'])}")
     for case in corpus['cases']:
         if case['verdict'] == 'other': continue   # a topology refusal, not plug-in data
         edit = case['edit']

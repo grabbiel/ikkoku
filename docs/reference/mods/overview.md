@@ -170,10 +170,20 @@ controller whose save throws also keeps its loaded entry.
   `LoadDataFromKKAnimationController` (:2259) on each load.
   - **Effect.** It turns the KKAnimationController links on character cards into
     constraints by object key, and CharaStudio's next save writes them as
-    `nodesConstraints` data.
-  - **What we do.** We refuse an edit that deletes or copies objects when a
-    written character's card carries such links, unless the scene's
-    `KK_AnimationController` entry has `AnimationInfo`.
+    `nodesConstraints` data. A scene `AnimationInfo` list, even an empty one,
+    turns the cards off.
+  - **Aborts.** Each link is cast and looked up before it attaches (:2296–2306).
+    A failed cast or a missing object ends that character's remaining links
+    (catch at :2309).
+  - **Int32 only.** The game's MessagePack boxes an `int` only for Int32 (`0xd2`)
+    values (PrimitiveObjectFormatter.cs:161–187), and MessagePack-CSharp writes
+    non-negative ints in shorter forms, so links written that way are inert.
+  - **What we do.** We read each card's links up to the first abort. We refuse
+    a delete of an object a reached link names, a copy of a linked character
+    together with such an object (NodesConstraints' duplicate patch, :648–734,
+    would constrain the copy to the copy), and a delete with a copy when a
+    card has links (#278). A copied character alone, a copied target alone and
+    every other edit carry the card and the trailer as before.
 
 ## Archive importer
 

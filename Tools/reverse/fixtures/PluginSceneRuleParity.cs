@@ -5,7 +5,9 @@
 //   scene <trailer hex>                     starts a scene
 //   object <key> <kind> <parent key or -1>  the scene's walk, in order
 //   used <keys>                             every key the scene's hashIndex holds
-//   linked <character keys>                 characters whose card carries KKAnimationController links
+//   card <character key> <steps or !>       a character whose card names KKAnimationController data: the object
+//                                           keys NodesConstraints' card fallback attaches to, in order, up to its
+//                                           first certain abort ("!": the card does not decode)
 //   case <scene> <delete|duplicate|add|routeAdd|routeDelete> <key> <object kind> <accepted|refused> <ids>
 using System;
 using System.Collections.Generic;
@@ -21,7 +23,7 @@ public static class PluginSceneRuleParity {
             case "scene":scene=new PluginSceneModel();scene.Trailer=f[1]=="-"?new byte[0]:Hex(f[1]);scenes.Add(scene);break;
             case "object":scene.Keys.Add(Int(f[1]));scene.Kinds.Add(Int(f[2]));scene.Parents.Add(Int(f[3]));break;
             case "used":foreach(var k in List(f[1]))scene.Used.Add(Int(k));break;
-            case "linked":foreach(var k in List(f[1]))scene.Linked.Add(Int(k));break;
+            case "card":{List<int> steps=null;if(f[2]!="!"){steps=new List<int>();foreach(var k in List(f[2]))steps.Add(Int(k));}scene.Cards[Int(f[1])]=steps;break;}
             case "case":cases.Add(f);break;
             default:throw new FormatException("unknown corpus line "+f[0]);
             }

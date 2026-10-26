@@ -11,11 +11,13 @@ using System.Text.RegularExpressions;
 
 // A scene as the rules read it: objects in CharaStudio's dicObject walk (each before its children, a character's
 // accessory groups in ascending point order) with kind and parent key (-1 at the root), every key the scene's
-// hashIndex holds (objects and sub-infos), the characters whose card carries KKAnimationController links or eyes,
+// hashIndex holds (objects and sub-infos), for each character whose card names KKAnimationController data the
+// object keys NodesConstraints' card fallback attaches to in order (CardSteps; null when the card does not decode),
 // and the bytes after the scene's 【KStudio】 marker.
 public sealed class PluginSceneModel {
     public readonly List<int> Keys=new List<int>(),Kinds=new List<int>(),Parents=new List<int>();
-    public readonly HashSet<int> Used=new HashSet<int>(),Linked=new HashSet<int>();
+    public readonly HashSet<int> Used=new HashSet<int>();
+    public readonly Dictionary<int,List<int>> Cards=new Dictionary<int,List<int>>();
     public byte[] Trailer=new byte[0];
 }
 
@@ -265,15 +267,37 @@ public static class PluginSceneRules {
     }
 
     // NodesConstraints.OnSceneLoad's card fallback (SourceScenePluginData.cardLinks): with no AnimationInfo in the
-    // scene's KK_AnimationController entry, each character card's KKAnimationController links become constraints on
-    // every load, with or without a nodesConstraints entry or any plug-in data.
+    // scene's KK_AnimationController entry, each card's KKAnimationController links attach on every load, with or
+    // without plug-in data, until the first throw. Steps are live while their keys are source objects. An edit
+    // refuses when it deletes a live target, copies a linked character together with a live target, or both deletes
+    // and copies (#278) in a scene with any steps; a card that does not decode refuses.
     static string CardLinks(Edit edit,PluginSceneModel scene,string controller) {
         if(!edit.Rekeys||controller!="empty")return null;
+        HashSet<int> objects=null;
         for(int i=0;i<edit.FinalKeys.Count;i++) {
-            if(edit.FinalKinds[i]!=Character)continue;int origin;
-            if(edit.Origins.TryGetValue(edit.FinalKeys[i],out origin)&&scene.Linked.Contains(origin))return "would gain constraints on load from character "+edit.FinalKeys[i]+"'s card";
+            if(edit.FinalKinds[i]!=Character)continue;
+            int key=edit.FinalKeys[i],origin;List<int> steps;
+            if(!edit.Origins.TryGetValue(key,out origin)||!scene.Cards.TryGetValue(origin,out steps))continue;
+            if(steps==null)return "cannot check character "+origin+"'s card links, which do not decode";
+            if(steps.Count==0)continue;
+            if(edit.Deleted.Count>0&&edit.Copied.Count>0)return "links character "+origin+" to objects by key from its card, and this edit both deletes and copies objects";
+            if(objects==null)objects=new HashSet<int>(scene.Keys);
+            var live=new List<int>();foreach(var s in steps){if(!objects.Contains(s))break;live.Add(s);}
+            foreach(var s in live)if(edit.Deleted.Contains(s))return "links character "+origin+" to object "+s+" from its card, and this edit deletes that object";
+            if(origin!=key)foreach(var s in live)if(edit.Copied.Contains(s))return "links character "+origin+" to object "+s+" from its card, and this edit copies both";
         }
         return null;
+    }
+
+    // The card rule alone, for the survey's counts: its reason, or null when it does not refuse the edit.
+    public static string CardReason(PluginSceneModel scene,PluginSceneEdit spec) {
+        string controller="empty";
+        if(scene.Trailer!=null&&scene.Trailer.Length>0) {
+            string error;var trailer=Parsed(scene.Trailer,out error);
+            if(trailer==null)return null;   // an unreadable trailer refuses on its own
+            controller=SceneControllerForm(trailer);
+        }
+        return CardLinks(new Edit(scene,spec),scene,controller);
     }
 
     // The scene's KK_AnimationController form: its first entry's, "empty" when absent, "unknown" when unreadable

@@ -470,37 +470,91 @@ private func sideloader(_ items: [Record], _ patterns: [Record] = [], map: Bool 
 
 // MARK: - KK_AnimationController links
 
+/// A character card whose Extended Save holds KKAnimationController data
+/// with these `Links` (IK part to object key) and `Eyes` values, written as
+/// given: `.int` as MessagePack-CSharp writes an int (the shortest code),
+/// `int32` as an Int32 (0xd2) value.
+private func controllerCard(links: PluginMP? = nil, eyes: PluginMP? = nil) -> Data {
+    var data: [(String, PluginMP)] = []
+    if let links { data.append(("Links", links)) }
+    if let eyes { data.append(("Eyes", eyes)) }
+    let ext = PluginMP.map([("com.deathweasel.bepinex.animationcontroller", plugin(0, .map(data)))])
+    return OriginalCardFixture.card(blocks: OriginalCardFixture.blocks() + [OriginalCardFixture.Block(name: "KKEx", version: "3", data: Data(ext.bytes))])
+}
+private func int32(_ value: Int32) -> PluginMP { .raw([0xd2] + PluginMP.bigEndian(UInt64(UInt32(bitPattern: value)), 4)) }
+/// A card linking character 12's hand to item 4 the way the fallback can attach it.
+private let liveCard = controllerCard(links: .map([("f_t_hand_L", int32(4))]))
+
 @Test func sourceScenePluginDataChecksAnimationControllerLinks() throws {
     // NodesConstraints.OnSceneLoad without KK_AnimationController installed:
-    // with no `AnimationInfo` in the scene entry, each character's card
-    // KKAnimationController links become constraints by object key.
-    let linked = OriginalCardFixture.card(blocks: OriginalCardFixture.blocks() + [OriginalCardFixture.extended(OriginalCardFixture.map([
-        ("com.deathweasel.bepinex.animationcontroller",
-         OriginalCardFixture.plugin(0, data: OriginalCardFixture.map([("Links", .binary(Data([0x90]))), ("Eyes", .null)]))),
-    ]))])
-    let emptyNodes = ("nodesConstraints", plugin(0, .map([("constraints", .str(#"<constraints version="1" />"#))])))
-    let cardReason = "NodesConstraints ('nodesConstraints') turns character 12's KKAnimationController card links into constraints by object key on every load"
-    #expect(verdict(pluginScene([emptyNodes], card: linked), .init(deletions: [4])).contains(cardReason))
-    #expect(verdict(pluginScene([emptyNodes], card: linked), copyItem).contains(cardReason))
-    // It reads the cards: no nodesConstraints entry, an empty map or no
-    // plug-in data at all is the same.
-    for entries in [[settings], [], nil] as [[(String, PluginMP)]?] {
-        #expect(verdict(pluginScene(entries, card: linked), .init(deletions: [4])).contains(cardReason))
-        #expect(verdict(pluginScene(entries, card: linked), copyItem).contains(cardReason))
-        #expect(verdict(pluginScene(entries, card: linked), addFolder) == "kept")
-        #expect(verdict(pluginScene(entries, card: linked), moveItem) == "kept")
+    // with no `AnimationInfo` in the scene entry, each card's links become
+    // constraints by object key; the `(int)` casts take only Int32 values.
+    #expect(try SourceScenePluginData.cardLinkSteps(nil) == [])
+    func steps(_ card: Data) throws -> [Int32] {
+        let document = try KoikatsuSceneReader.decodeDocument(pluginScene(nil, card: card).data)
+        let character = try #require(document.snapshot.roots.first { $0.sourceKey == 12 }?.character)
+        return try SourceScenePluginData.cardLinkSteps(character.card().extensions().payload)
     }
-    // A card without links, or an edit that deletes and copies nothing.
-    #expect(verdict(pluginScene([emptyNodes]), .init(deletions: [4])) == "kept")
-    #expect(verdict(pluginScene(nil), .init(deletions: [4])) == "kept")
-    #expect(verdict(pluginScene([emptyNodes], card: linked), addFolder) == "kept")
-    // An `AnimationInfo` list, even empty, turns the card path off.
+    #expect(try steps(liveCard) == [4])
+    #expect(try steps(controllerCard(links: .map([("a", int32(4)), ("b", int32(99))]), eyes: int32(3))) == [4, 99, 3])
+    // MessagePack-CSharp's int encoding throws at the first cast: inert.
+    #expect(try steps(controllerCard(links: .map([("a", .int(4)), ("b", int32(3))]), eyes: int32(3))) == [])
+    #expect(try steps(controllerCard(links: .map([("a", int32(4)), ("b", .int(3))]), eyes: int32(1))) == [4])
+    #expect(try steps(controllerCard(links: .bin([0x90]), eyes: int32(3))) == [])
+    #expect(try steps(controllerCard(links: .null, eyes: int32(3))) == [3])
+    #expect(try steps(controllerCard(eyes: .int(3))) == [])
+
+    let deleteLinked = SourceSceneEdits(deletions: [4]), deleteOther = SourceSceneEdits(deletions: [3])
+    let deleteReason = "NodesConstraints ('nodesConstraints') links character 12 to object 4 from its card's KKAnimationController data on every load, and this edit deletes that object"
+    let emptyNodes = ("nodesConstraints", plugin(0, .map([("constraints", .str(#"<constraints version="1" />"#))])))
+    // With or without plug-in data, only an edit that touches a live link refuses.
+    for entries in [[emptyNodes], [settings], [], nil] as [[(String, PluginMP)]?] {
+        let scene = pluginScene(entries, card: liveCard)
+        #expect(verdict(scene, deleteLinked).contains(deleteReason))
+        #expect(verdict(scene, .init(deletions: [0])) == "kept")   // folder 0 holds items 1-3, not 4
+        #expect(verdict(scene, deleteOther) == "kept")
+        #expect(verdict(scene, copyItem) == "kept")                 // a copied target gets no constraint
+        #expect(verdict(scene, .init(insertions: [.init(.duplicate(of: 12))])) == "kept")  // the copy keeps the original target
+        #expect(verdict(scene, .init(insertions: [.init(.duplicate(of: 12)), .init(.duplicate(of: 4))]))
+            .contains("links character 12 to object 4 from its card, and this edit copies both"))
+        #expect(verdict(scene, .init(deletions: [3], insertions: [.init(.duplicate(of: 5))]))
+            .contains("both deletes and copies objects"))
+        #expect(verdict(scene, addFolder) == "kept")
+        #expect(verdict(scene, moveItem) == "kept")
+        // Deleting the linked character takes its links with it.
+        #expect(verdict(scene, .init(deletions: [12])) == "kept")
+    }
+    // A trailer-less scene whose live link the edit does not touch exports
+    // exactly as the topology writer writes the deletion.
+    let groups: [(point: Int32, children: [TopologyNode])] = [(point: Int32(0), children: [TopologyNode]())]
+    var expected = TopologyScene(roots: [.folder(0, [.item(1, [.item(2, [])])]), .item(4, []), .light(5), .route(6, []),
+                                         .camera(11, active: false), .character(12, groups)])
+    expected.routePoints[6] = pluginScene(nil).routePoints[6]
+    expected.cards[12] = liveCard
+    #expect(try KoikatsuSceneReader.decodeDocument(pluginScene(nil, card: liveCard).data).editedData(deleteOther) == expected.data)
+    // Steps the fallback never reaches change nothing: after a missing
+    // object (99), after a non-Int32 value, or on an inert card.
+    for card in [controllerCard(links: .map([("a", int32(99)), ("b", int32(4))])),
+                 controllerCard(links: .map([("a", .int(4)), ("b", int32(4))])),
+                 controllerCard(links: .map([("a", .int(4))]), eyes: .int(4))] {
+        #expect(verdict(pluginScene(nil, card: card), deleteLinked) == "kept")
+        #expect(verdict(pluginScene(nil, card: card), .init(insertions: [.init(.duplicate(of: 12)), .init(.duplicate(of: 4))])) == "kept")
+    }
+    // Eyes are a step too, reached after every link.
+    #expect(verdict(pluginScene(nil, card: controllerCard(eyes: int32(4))), deleteLinked)
+        .contains("links character 12 to object 4"))
+    // A card that does not decode cannot be checked.
+    let ext = PluginMP.map([("com.deathweasel.bepinex.animationcontroller", plugin(0, .map([("Links", .map([("a", int32(4))]))])))])
+    let broken = OriginalCardFixture.card(blocks: OriginalCardFixture.blocks() + [
+        OriginalCardFixture.Block(name: "KKEx", version: "3", data: Data(ext.bytes.dropLast()))])
+    #expect(verdict(pluginScene(nil, card: broken), deleteOther).contains("cannot check character 12's card links"))
+    // An `AnimationInfo` list, even empty, turns the card path off; an empty
+    // entry is the card path.
     let controller = "KK_AnimationController"
     let emptyList = (controller, plugin(0, .map([("AnimationInfo", .arr([]))])))
-    #expect(verdict(pluginScene([emptyNodes, emptyList], card: linked), .init(deletions: [4])) == "kept")
-    // An empty entry is the card path too.
+    #expect(verdict(pluginScene([emptyNodes, emptyList], card: liveCard), deleteLinked) == "kept")
     let emptyEntry = (controller, plugin(0, .map([])))
-    #expect(verdict(pluginScene([emptyEntry], card: linked), .init(deletions: [4])).contains(cardReason))
+    #expect(verdict(pluginScene([emptyEntry], card: liveCard), deleteLinked).contains(deleteReason))
     // Links in the scene entry: character and object keys.
     let links = (controller, plugin(0, .map([("AnimationInfo", .arr([.map([("CharDicKey", .int(12)), ("ItemDicKey", .int(4))])]))])))
     #expect(verdict(pluginScene([links]), addFolder) == "kept")
@@ -537,9 +591,9 @@ private func sideloader(_ items: [Record], _ patterns: [Record] = [], map: Bool 
 /// The survey's C# port of these rules (Tools/reverse/fixtures/PluginSceneRules.cs)
 /// must judge every single-target edit of these scenes as this writer does.
 /// IKKOKU_PLUGIN_RULE_CORPUS names the JSON file this writes: each scene's
-/// walk (key, kind, parent), used keys, characters whose card carries
-/// KKAnimationController links and trailer, and per edit the verdict and
-/// the entry IDs a refusal names.
+/// walk (key, kind, parent), used keys, each card's link steps
+/// (`cardLinkSteps`) and trailer, and per edit the verdict and the entry IDs
+/// a refusal names.
 @Test(.enabled(if: SourceFixtureSupport.shouldRun(["IKKOKU_PLUGIN_RULE_CORPUS"]), "Requires IKKOKU_PLUGIN_RULE_CORPUS (an output JSON path)"))
 func sourceScenePluginDataWritesTheRuleParityCorpus() throws {
     let output = URL(fileURLWithPath: try SourceFixtureSupport.require("IKKOKU_PLUGIN_RULE_CORPUS"))
@@ -612,15 +666,19 @@ private func copyInsertions(_ record: KoikatsuObjectRecord, in snapshot: Koikats
     return result
 }
 
-/// What the C# rules read: the walk, used keys, linked characters, trailer.
+/// What the C# rules read: the walk, used keys, the card-link steps of each
+/// character whose card names KKAnimationController data (nil when it does
+/// not decode), trailer.
 private func ruleModel(_ document: KoikatsuSceneDocument) throws -> [String: Any] {
-    var objects: [[String: Any]] = [], linked: [Int] = []
+    var objects: [[String: Any]] = [], cards: [[String: Any]] = []
+    let marker = Data(SourceScenePluginData.cardAnimationController.utf8)
     func visit(_ record: KoikatsuObjectRecord, _ parent: Int32?) throws {
         objects.append(["key": Int(record.sourceKey), "kind": Int(record.kind.rawValue), "parent": parent.map { Int($0) } ?? -1])
-        if let character = record.character {
-            let data = try character.card().extensions().plugins[SourceScenePluginData.cardAnimationController]?.data
-            if [data?["Links"], data?["Eyes"]].contains(where: { value in value.map { $0 != .null } ?? false }) {
-                linked.append(Int(record.sourceKey))
+        if let character = record.character, character.cardData.range(of: marker) != nil {
+            if let payload = try? character.card().extensions().payload, let steps = try? SourceScenePluginData.cardLinkSteps(payload) {
+                cards.append(["key": Int(record.sourceKey), "steps": steps.map { Int($0) }])
+            } else {
+                cards.append(["key": Int(record.sourceKey), "error": true])
             }
         }
         for child in record.children { try visit(child, record.sourceKey) }
@@ -631,16 +689,13 @@ private func ruleModel(_ document: KoikatsuSceneDocument) throws -> [String: Any
     for root in document.snapshot.roots { try visit(root, nil) }
     let used = SourceSceneInsertionPlan.usedKeys(document.snapshot).map { Int($0) }.sorted()
     let trailer = document.trailingData.map { String(format: "%02x", $0) }.joined()
-    return ["objects": objects, "used": used, "linked": linked, "trailer": trailer]
+    return ["objects": objects, "used": used, "cards": cards, "trailer": trailer]
 }
 
 /// Every entry form the tests above use, alone and in the combinations
 /// whose rules interact, plus unreadable trailers.
 private func ruleCorpusScenes() throws -> [TopologyScene] {
-    let linked = OriginalCardFixture.card(blocks: OriginalCardFixture.blocks() + [OriginalCardFixture.extended(OriginalCardFixture.map([
-        ("com.deathweasel.bepinex.animationcontroller",
-         OriginalCardFixture.plugin(0, data: OriginalCardFixture.map([("Links", .binary(Data([0x90]))), ("Eyes", .null)]))),
-    ]))])
+    let linked = liveCard
     let items = [Record(1, 1, 0), Record(2, 2, 1), Record(3, 3, 2), Record(4, 4, 3), Record(5, 5, 0), Record(12, 12, 0)]
     let zero = PluginMP.raw([0xd2, 0, 0, 0, 0])
     let constraints = plugin(0, .map([("constraints", .str(#"<constraints version="1"><constraint parentObjectIndex="0" childObjectIndex="3" /></constraints>"#))]))
@@ -693,8 +748,22 @@ private func ruleCorpusScenes() throws -> [TopologyScene] {
         scenes.append(pluginScene(entries, card: linked))
         scenes.append(pluginScene(entries))
     }
-    // The card check without plug-in data.
-    scenes.append(pluginScene(nil, card: linked))
+    // The card check without plug-in data: live steps to items, the light
+    // and a missing key; a step past an abort; an inert card; Eyes; a card
+    // that does not decode.
+    let truncated = PluginMP.map([("com.deathweasel.bepinex.animationcontroller", plugin(0, .map([("Links", .map([("a", int32(4))]))])))])
+    for card in [linked, controllerCard(links: .map([("a", int32(3)), ("b", int32(5))]), eyes: int32(1)),
+                 controllerCard(links: .map([("a", int32(1)), ("b", int32(99)), ("c", int32(4))])),
+                 controllerCard(links: .map([("a", .int(4)), ("b", int32(4))])), controllerCard(eyes: int32(11)),
+                 OriginalCardFixture.card(blocks: OriginalCardFixture.blocks() + [
+                    OriginalCardFixture.Block(name: "KKEx", version: "3", data: Data(truncated.bytes.dropLast()))])] {
+        scenes.append(pluginScene(nil, card: card))
+    }
+    // A character linked to its own accessory item: copying the character
+    // copies both ends.
+    var accessory = pluginScene(nil, card: controllerCard(links: .map([("a", int32(14))])))
+    accessory.roots[5] = .character(12, [(point: Int32(0), children: [TopologyNode.item(14, [])])])
+    scenes.append(accessory)
     scenes.append(pluginScene(forms.filter { $0.0 != "example.scene" && $0.0 != "kkpe" }.reduce(into: [(String, PluginMP)]()) { list, form in
         if !list.contains(where: { $0.0 == form.0 }) { list.append(form) }
     }))
