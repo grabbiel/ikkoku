@@ -249,5 +249,170 @@ class OracleTests(CaseFixture):
         self.assertFalse(case['irradiance']['gated']); self.assertTrue(case['passes'])
         self.assertIn('item toon material', case['color']['reason'])
 
+
+class Slice3Tests(OracleTests):
+    """Map 34: the sun type, sky placement, the class-restricted irradiance, the sky gate and particles."""
+    def setUp(self):
+        super().setUp()
+        rows, cols = np.mgrid[0:H, 0:W]
+        self.sky = np.stack([0.2 + cols / W, 0.4 + rows / H, np.full((H, W), 0.9), np.ones((H, W))], axis=-1)
+        self.leaves = np.zeros((H, W, 4)); self.leaves[2:6, 3:9, :3] = [0.1, 0.3, 0.05]
+
+    def add_oracle(self, sky=True, particles=True, classes=None, combined=False):
+        trace = json.loads((self.oracle / 'oracle-trace.json').read_text())
+        measured = trace['cases']['c']['oracle']
+        if sky:
+            (self.oracle / 'oracle-c-sky.rgba.f32.gz').write_bytes(gzip.compress(self.sky.astype('<f4').tobytes()))
+            measured['sky'] = dict(written=True, file='oracle-c-sky.rgba.f32')
+        if particles:
+            (self.oracle / 'oracle-c-particles.rgba.f32.gz').write_bytes(gzip.compress(self.leaves.astype('<f4').tobytes()))
+            measured['particles'] = dict(written=True, file='oracle-c-particles.rgba.f32')
+        if classes is not None:
+            save(self.oracle / 'oracle-c-classes.png', classes)
+            measured['classes'] = dict(image='oracle-c-classes.png', counts=dict(lightmappedRenderers=1))
+        if combined:  # one map34 folder: the oracle sits in map-trace.json next to the phase B records
+            original = json.loads((self.original / 'map-trace.json').read_text())
+            original['cases']['c']['oracle'] = measured
+            (self.original / 'map-trace.json').write_text(json.dumps(original))
+            for f in self.oracle.iterdir(): f.rename(self.original / f.name)
+            (self.original / 'oracle-trace.json').unlink()
+            self.oracle = self.original
+        else:
+            (self.oracle / 'oracle-trace.json').write_text(json.dumps(trace))
+
+    def write_ours_groups(self, sky=None, rotation=291.0, particles=None, particle_controls=None):
+        native = json.loads((self.ours / 'native-map.json').read_text())
+        def deflate(image, name):
+            packer = zlib.compressobj(wbits=-15)
+            (self.ours / name).write_bytes(packer.compress(image.astype('<f2').tobytes()) + packer.flush())
+        if sky is not None:
+            files = {}
+            for variant, image in sky.items():
+                files[variant] = f'native-map-sky-{variant}.rgba16f.deflate'; deflate(image, files[variant])
+            native['sky'] = dict(written=True, files=files, rotationDegrees=[rotation])
+        if particles is not None:
+            controls = particle_controls or dict(noDoubling=particles * 0.5, gammaTint=particles * np.array([1.25, 1.4, 1.4, 1]))
+            files = {}
+            for variant, image in dict(decoded=particles, **controls).items():
+                files[variant] = f'native-map-particles-{variant}.rgba16f.deflate'; deflate(image, files[variant])
+            native['particles'] = dict(written=True, files=files)
+        (self.ours / 'native-map.json').write_text(json.dumps(native))
+
+    def sky_variants(self, decoded=None, flipped=None, unrotated=None, gamma=None):
+        base = self.sky if decoded is None else decoded
+        return dict(decoded=base, rowsFlipped=self.sky[::-1] if flipped is None else flipped,
+                    rotationIgnored=np.roll(self.sky, 5, axis=1) if unrotated is None else unrotated,
+                    gammaConstants=self.sky * np.array([0.435, 0.435, 0.435, 1]) if gamma is None else gamma)
+
+    def test_the_sky_and_particles_pass_and_every_applicable_sky_control_fails(self):
+        self.add_oracle()
+        self.write_ours_groups(self.sky_variants(), particles=self.leaves)
+        case = self.run_oracle()
+        self.assertTrue(case['passes'], json.dumps(case, indent=1, default=str))
+        sky = case['sky']
+        self.assertTrue(sky['gated'] and sky['passes'] and sky['coverageIoU'] == 1.0)
+        self.assertLess(sky['p99Relative'], 2 ** -10)
+        self.assertTrue(all(c['fails'] and c['applicable'] for c in sky['controls'].values()))
+        self.assertTrue(case['particles']['passes']); self.assertEqual(case['particles']['footprintIoU'], 1.0)
+        self.assertEqual(set(case['particles']['controls']), {'noDoubling', 'gammaTint'})
+        self.assertTrue(all(c['fails'] for c in case['particles']['controls'].values()))
+
+    def test_a_wrong_sky_a_passing_control_or_missing_coverage_fails(self):
+        self.add_oracle(particles=False)
+        self.write_ours_groups(self.sky_variants(decoded=self.sky * np.array([1.01, 1, 1, 1])))
+        self.assertFalse(self.run_oracle()['sky']['passes'])
+        self.write_ours_groups(self.sky_variants(flipped=self.sky))
+        case = self.run_oracle()
+        self.assertFalse(case['sky']['controls']['rowsFlipped']['fails']); self.assertFalse(case['passes'])
+        holed = self.sky.copy(); holed[:4, :, 3] = 0
+        self.write_ours_groups(self.sky_variants(decoded=holed))
+        case = self.run_oracle()
+        self.assertLess(case['sky']['coverageIoU'], 0.999); self.assertFalse(case['sky']['passes'])
+
+    def test_without_a_sky_rotation_the_rotation_control_is_inapplicable(self):
+        self.add_oracle(particles=False)
+        self.write_ours_groups(self.sky_variants(unrotated=self.sky), rotation=0.0)
+        case = self.run_oracle()
+        control = case['sky']['controls']['rotationIgnored']
+        self.assertFalse(control['applicable'] or control['fails']); self.assertTrue(case['passes'])
+
+    def test_a_sky_on_one_side_only_fails(self):
+        self.add_oracle(particles=False)
+        case = self.run_oracle()
+        self.assertTrue(case['sky']['gated']); self.assertFalse(case['sky']['passes']); self.assertFalse(case['passes'])
+
+    def test_particles_off_by_the_tint_or_in_another_place_fail(self):
+        self.add_oracle(sky=False)
+        self.write_ours_groups(particles=self.leaves * 0.6)
+        self.assertFalse(self.run_oracle()['particles']['passes'])
+        self.write_ours_groups(particles=np.roll(self.leaves, 2, axis=1))
+        case = self.run_oracle()
+        self.assertLess(case['particles']['footprintIoU'], 0.98); self.assertFalse(case['passes'])
+
+    def test_particles_out_of_view_on_both_sides_are_not_gated_and_on_one_side_fail(self):
+        self.leaves[:] = 0
+        self.add_oracle(sky=False)
+        self.write_ours_groups(particles=self.leaves)
+        case = self.run_oracle()
+        self.assertFalse(case['particles']['gated']); self.assertTrue(case['passes'])
+        shown = self.leaves.copy(); shown[2:6, 3:9, :3] = [0.1, 0.3, 0.05]
+        self.write_ours_groups(particles=shown)
+        case = self.run_oracle()
+        self.assertTrue(case['particles']['gated']); self.assertFalse(case['passes'])
+
+    def test_a_passing_particle_control_or_a_missing_control_image_fails(self):
+        self.add_oracle(sky=False)
+        self.write_ours_groups(particles=self.leaves, particle_controls=dict(noDoubling=self.leaves, gammaTint=self.leaves * 1.4))
+        case = self.run_oracle()
+        self.assertFalse(case['particles']['controls']['noDoubling']['fails']); self.assertFalse(case['particles']['passes'])
+        native = json.loads((self.ours / 'native-map.json').read_text())
+        del native['particles']['files']['gammaTint']
+        (self.ours / 'native-map.json').write_text(json.dumps(native))
+        case = self.run_oracle()
+        self.assertIn('gammaTint', case['particles']['reason']); self.assertFalse(case['passes'])
+
+    def test_the_irradiance_gate_keeps_only_the_lightmapped_class(self):
+        # Unity's right half is a light-probe-lit part: our lightmapped-only image differs there.
+        other = self.unity.copy(); other[:, 16:] *= 3
+        self.write_ours({'decoded': other, 'nonDirectional': other * 0.8, 'gammaConstants': other * 0.3})
+        self.assertFalse(self.run_oracle()['irradiance']['passes'])
+        classes = np.zeros((H, W, 4)); classes[..., 3] = 255; classes[:, :16, :3] = 255; classes[:, 16:, 0] = 255
+        self.add_oracle(sky=False, particles=False, classes=classes)
+        case = self.run_oracle()
+        self.assertTrue(case['irradiance']['passes'] and case['irradiance']['lightmappedClassOnly'])
+        self.assertEqual(case['classes']['pixels']['probeLit'], H * 16)
+        self.assertEqual(case['classes']['pixelsInBothSilhouettes']['lightmapped'], 16 * 10)
+        self.assertTrue(case['passes'])
+
+    def test_one_map34_folder_serves_as_original_and_oracle(self):
+        self.add_oracle(particles=False, combined=True)
+        self.write_ours_groups(self.sky_variants())
+        result = compare.compare(self.original, [('c', self.ours)], self.original)
+        self.assertTrue(result['cases'][0]['passes'], json.dumps(result['cases'][0], indent=1, default=str))
+        self.assertEqual(result['oracleTraceSHA256'], result['traceSHA256'])
+
+    def test_the_sun_type_and_the_sky_placement_are_checked(self):
+        trace = json.loads((self.original / 'map-trace.json').read_text())
+        trace['cases']['c']['settled']['sunLightType'] = 1
+        unity_sky = np.diag([900.0, 900.0, 900.0, 1.0]); unity_sky[:3, 3] = [-15, -1.5, 168]
+        trace['cases']['c']['capture']['mapRenderers'] = [dict(path='Map/sky', **{'class': 'sky'}, localToWorld=column_major(unity_sky))]
+        (self.original / 'map-trace.json').write_text(json.dumps(trace))
+        native = json.loads((self.ours / 'native-map.json').read_text())
+        native['sunLightType'] = 1
+        sky = dict(native['draws'][0], model=column_major(compare.BASIS @ unity_sky @ compare.BASIS), pickOccluder=False, draw='sky')
+        native['draws'] = native['draws'] + [sky]
+        (self.ours / 'native-map.json').write_text(json.dumps(native))
+        case = self.run_case()
+        self.assertTrue(case['passes'], json.dumps(case, indent=1, default=str))
+        self.assertEqual((case['placement']['skyDraws'], case['placement']['skyModelRelativeError']), (1, 0.0))
+        for change in (dict(sunLightType=2), dict(sky=dict(pickOccluder=True)), dict(sky=dict(shift=0.05))):
+            edited = copy.deepcopy(native)
+            if 'sunLightType' in change: edited['sunLightType'] = change['sunLightType']
+            elif 'pickOccluder' in change['sky']: edited['draws'][-1]['pickOccluder'] = True
+            else: edited['draws'][-1]['model'][12] += change['sky']['shift']
+            (self.ours / 'native-map.json').write_text(json.dumps(edited))
+            self.assertFalse(self.run_case()['passes'], change)
+
+
 if __name__ == '__main__':
     unittest.main()

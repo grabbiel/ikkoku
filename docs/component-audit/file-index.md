@@ -23,26 +23,26 @@ branch was tested or every asset matches the original game. Feature status,
 specific comments and pending tasks are in the linked reports. Shared behavior
 may be discussed in more than one report; one primary owner is listed here.
 
-**1015 files indexed; 1015 assigned; 0 unassigned.**
+**1020 files indexed; 1020 assigned; 0 unassigned.**
 
 | Primary report | Files |
 | --- | ---: |
 | [App / gameplay / plugins](app-gameplay-and-plugins.md) | 110 |
 | [Character / Maker / mods](character-and-mods.md) | 128 |
-| [Studio / IK / animation](studio.md) | 231 |
+| [Studio / IK / animation](studio.md) | 235 |
 | [Renderer / foundation / assets](renderer-and-foundation.md) | 335 |
-| [Toolchain / verification / historical docs](toolchain-and-verification.md) | 201 |
+| [Toolchain / verification / historical docs](toolchain-and-verification.md) | 202 |
 
 | File role | Files |
 | --- | ---: |
 | App resource metadata / icon | 16 |
 | Build / repository configuration | 9 |
-| Conversion / recovery / verification tool | 237 |
+| Conversion / recovery / verification tool | 238 |
 | Documentation / historical evidence | 65 |
 | Generated asset / catalog / fixture | 205 |
 | Reference host / controlled fixture | 36 |
-| Runtime / shared shader declaration | 224 |
-| Test / validation | 210 |
+| Runtime / shared shader declaration | 226 |
+| Test / validation | 212 |
 
 ## App / gameplay / plugins
 
@@ -340,6 +340,7 @@ Feature assessment: [studio.md](studio.md).
 | [Packages/Engine/Sources/Studio/SourceStudioCharacterPreview.swift](../../Packages/Engine/Sources/Studio/SourceStudioCharacterPreview.swift) | Runtime / shared shader declaration |
 | [Packages/Engine/Sources/Studio/SourceStudioCharacterBatch.swift](../../Packages/Engine/Sources/Studio/SourceStudioCharacterBatch.swift) | Runtime / shared shader declaration |
 | [Packages/Engine/Sources/Studio/SourceStudioDonationCache.swift](../../Packages/Engine/Sources/Studio/SourceStudioDonationCache.swift) | Runtime / shared shader declaration |
+| [Packages/Engine/Sources/Studio/SourceStudioBackgroundBuilds.swift](../../Packages/Engine/Sources/Studio/SourceStudioBackgroundBuilds.swift) | Runtime / shared shader declaration |
 | [Packages/Engine/Sources/Studio/SourceStudioDynamics.swift](../../Packages/Engine/Sources/Studio/SourceStudioDynamics.swift) | Runtime / shared shader declaration |
 | [Packages/Engine/Sources/Studio/SourceStudioExpression.swift](../../Packages/Engine/Sources/Studio/SourceStudioExpression.swift) | Runtime / shared shader declaration |
 | [Packages/Engine/Sources/Studio/SourceStudioEyeLook.swift](../../Packages/Engine/Sources/Studio/SourceStudioEyeLook.swift) | Runtime / shared shader declaration |
@@ -354,6 +355,7 @@ Feature assessment: [studio.md](studio.md).
 | [Packages/Engine/Sources/Studio/SourceStudioLookData.swift](../../Packages/Engine/Sources/Studio/SourceStudioLookData.swift) | Runtime / shared shader declaration |
 | [Packages/Engine/Sources/Studio/SourceStudioMap.swift](../../Packages/Engine/Sources/Studio/SourceStudioMap.swift) | Runtime / shared shader declaration |
 | [Packages/Engine/Sources/Studio/SourceStudioMapLightmaps.swift](../../Packages/Engine/Sources/Studio/SourceStudioMapLightmaps.swift) | Runtime / shared shader declaration |
+| [Packages/Engine/Sources/Studio/SourceStudioMapSky.swift](../../Packages/Engine/Sources/Studio/SourceStudioMapSky.swift) | Runtime / shared shader declaration |
 | [Packages/Engine/Sources/Studio/SourceStudioNeckLook.swift](../../Packages/Engine/Sources/Studio/SourceStudioNeckLook.swift) | Runtime / shared shader declaration |
 | [Packages/Engine/Sources/Studio/SourceStudioNeckLookRuntime.swift](../../Packages/Engine/Sources/Studio/SourceStudioNeckLookRuntime.swift) | Runtime / shared shader declaration |
 | [Packages/Engine/Sources/Studio/SourceStudioNeckTargetAngle.swift](../../Packages/Engine/Sources/Studio/SourceStudioNeckTargetAngle.swift) | Runtime / shared shader declaration |
@@ -403,6 +405,7 @@ Feature assessment: [studio.md](studio.md).
 | [Packages/Engine/Tests/EngineTests/SourceStudioCharacterPreviewTests.swift](../../Packages/Engine/Tests/EngineTests/SourceStudioCharacterPreviewTests.swift) | Test / validation |
 | [Packages/Engine/Tests/EngineTests/SourceStudioCharacterBatchTests.swift](../../Packages/Engine/Tests/EngineTests/SourceStudioCharacterBatchTests.swift) | Test / validation |
 | [Packages/Engine/Tests/EngineTests/SourceStudioDonationCacheTests.swift](../../Packages/Engine/Tests/EngineTests/SourceStudioDonationCacheTests.swift) | Test / validation |
+| [Packages/Engine/Tests/EngineTests/SourceStudioBackgroundBuildsTests.swift](../../Packages/Engine/Tests/EngineTests/SourceStudioBackgroundBuildsTests.swift) | Test / validation |
 | [Packages/Engine/Tests/EngineTests/SourceStudioDynamicsTests.swift](../../Packages/Engine/Tests/EngineTests/SourceStudioDynamicsTests.swift) | Test / validation |
 | [Packages/Engine/Tests/EngineTests/SourceStudioEyeLookRuntimeTests.swift](../../Packages/Engine/Tests/EngineTests/SourceStudioEyeLookRuntimeTests.swift) | Test / validation |
 | [Packages/Engine/Tests/EngineTests/SourceStudioEyeLookTests.swift](../../Packages/Engine/Tests/EngineTests/SourceStudioEyeLookTests.swift) | Test / validation |
@@ -418,6 +421,7 @@ Feature assessment: [studio.md](studio.md).
 | [Packages/Engine/Tests/EngineTests/SourceStudioLiveTickTests.swift](../../Packages/Engine/Tests/EngineTests/SourceStudioLiveTickTests.swift) | Test / validation |
 | [Packages/Engine/Tests/EngineTests/SourceStudioLookDataTests.swift](../../Packages/Engine/Tests/EngineTests/SourceStudioLookDataTests.swift) | Test / validation |
 | [Packages/Engine/Tests/EngineTests/SourceStudioMapLightmapTests.swift](../../Packages/Engine/Tests/EngineTests/SourceStudioMapLightmapTests.swift) | Test / validation |
+| [Packages/Engine/Tests/EngineTests/SourceStudioMapSkyTests.swift](../../Packages/Engine/Tests/EngineTests/SourceStudioMapSkyTests.swift) | Test / validation |
 | [Packages/Engine/Tests/EngineTests/SourceStudioMapTests.swift](../../Packages/Engine/Tests/EngineTests/SourceStudioMapTests.swift) | Test / validation |
 | [Packages/Engine/Tests/EngineTests/SourceStudioNeckLookRuntimeTests.swift](../../Packages/Engine/Tests/EngineTests/SourceStudioNeckLookRuntimeTests.swift) | Test / validation |
 | [Packages/Engine/Tests/EngineTests/SourceStudioNeckLookTests.swift](../../Packages/Engine/Tests/EngineTests/SourceStudioNeckLookTests.swift) | Test / validation |
@@ -1004,6 +1008,7 @@ Feature assessment: [toolchain-and-verification.md](toolchain-and-verification.m
 | [Tools/verification/scenarios/reload-load-skirt-dynamics.json](../../Tools/verification/scenarios/reload-load-skirt-dynamics.json) | Conversion / recovery / verification tool |
 | [Tools/verification/scenarios/source-map-none.json](../../Tools/verification/scenarios/source-map-none.json) | Conversion / recovery / verification tool |
 | [Tools/verification/scenarios/source-map.json](../../Tools/verification/scenarios/source-map.json) | Conversion / recovery / verification tool |
+| [Tools/verification/scenarios/source-map34.json](../../Tools/verification/scenarios/source-map34.json) | Conversion / recovery / verification tool |
 | [Tools/verification/scenarios/undo-camera.json](../../Tools/verification/scenarios/undo-camera.json) | Conversion / recovery / verification tool |
 | [Tools/verification/scenarios/undo-no-catalog.json](../../Tools/verification/scenarios/undo-no-catalog.json) | Conversion / recovery / verification tool |
 | [Tools/verification/scenarios/undo-props.json](../../Tools/verification/scenarios/undo-props.json) | Conversion / recovery / verification tool |

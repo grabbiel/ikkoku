@@ -150,9 +150,12 @@ extension StudioModel {
             // the import commits, so this runs at the commit; the report
             // keeps the first mark.
             PerfTrace.mark("sourceMapReady")
-            print(String(format: "[ikkoku] source map: %d draws (%d lightmapped), %d triangles, %d texture bytes (%d in %d lightmaps); loaded in %.1f ms on a worker, placed in %.2f ms on the main thread",
-                         items.count, items.filter { $0.material.kind == MaterialKindMap }.count, asset.triangles, asset.textureBytes,
-                         asset.lightmapBytes, asset.lightmapTextures, asset.loadSeconds * 1000, sourceMapInstallSeconds * 1000))
+            let draws = items.map { SourceStudioMapAsset.Draw($0.material) }
+            print(String(format: "[ikkoku] source map: %d draws (%d lightmapped, %d particle, %d sky), %d triangles, %d texture bytes (%d in %d lightmaps, %d in %d sky cubes; images: %d as BC blocks, %d decoded, source %@); loaded in %.1f ms on a worker, placed in %.2f ms on the main thread",
+                         items.count, draws.filter { $0 == .lightmapped }.count, draws.filter { $0 == .particle }.count,
+                         draws.filter { $0 == .sky }.count, asset.triangles, asset.textureBytes, asset.lightmapBytes, asset.lightmapTextures,
+                         asset.cubeBytes, asset.cubeTextures, asset.blockImages, asset.decodedImages, asset.imageSource.rawValue,
+                         asset.loadSeconds * 1000, sourceMapInstallSeconds * 1000))
         }
         publishSourceMapLine()
         refresh()
@@ -201,9 +204,13 @@ extension StudioModel {
     /// For the scenario lane: the map state the render path sees now.
     struct SourceMapCensus: Encodable {
         let map: Int32?, line: String?, draws: Int, triangles: Int, textureBytes: Int, loading: Bool
-        /// Draws with the baked-lightmap material (`MaterialKindMap`), and the
-        /// bytes of the lightmap textures they sample (ST-A11 slice 2).
+        /// Draws with the baked-lightmap material (`MaterialKindMap` without the
+        /// particle flag), and the bytes of the lightmap textures they sample
+        /// (ST-A11 slice 2).
         let lightmappedDraws: Int, lightmapBytes: Int
+        /// Particles/Alpha Blended and Skybox/Cubemap draws, the sky cubes'
+        /// bytes, and the images uploaded as BC blocks or decoded (slice 3).
+        let particleDraws: Int, skyDraws: Int, cubeBytes: Int, blockImages: Int, decodedImages: Int
         /// Worker wall time of the asset's load, and main-thread time of the
         /// last install (placing the draws), in milliseconds.
         let loadMilliseconds: Double?, installMilliseconds: Double?
@@ -212,9 +219,12 @@ extension StudioModel {
         let request = sourceMapRequest.flatMap { $0.sceneSHA256 == doc.sourceSceneSHA256 ? $0 : nil }
         let asset = request?.converted.flatMap { target in sourceMapAsset.flatMap { $0.url == target.file ? $0 : nil } }
         let items = currentSourceMapItems
+        let draws = items.map { SourceStudioMapAsset.Draw($0.material) }
         return SourceMapCensus(map: request?.map, line: sourceMapLine, draws: items.count,
             triangles: asset?.triangles ?? 0, textureBytes: asset?.textureBytes ?? 0, loading: isLoadingSourceMap,
-            lightmappedDraws: items.filter { $0.material.kind == MaterialKindMap }.count, lightmapBytes: asset?.lightmapBytes ?? 0,
+            lightmappedDraws: draws.filter { $0 == .lightmapped }.count, lightmapBytes: asset?.lightmapBytes ?? 0,
+            particleDraws: draws.filter { $0 == .particle }.count, skyDraws: draws.filter { $0 == .sky }.count,
+            cubeBytes: asset?.cubeBytes ?? 0, blockImages: asset?.blockImages ?? 0, decodedImages: asset?.decodedImages ?? 0,
             loadMilliseconds: asset.map { $0.loadSeconds * 1000 }, installMilliseconds: asset == nil ? nil : sourceMapInstallSeconds * 1000)
     }
 }

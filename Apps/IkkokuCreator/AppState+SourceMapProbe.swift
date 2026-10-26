@@ -8,24 +8,44 @@ import ShaderTypes
 
 extension AppState {
     /// The Unity depth-normals far plane both sides encode with: the original
-    /// probe (`Tools/reverse/fixtures/OriginalMapProbe.cs`, `DepthFar`) renders
-    /// its depth pass with this far plane, so equal encodings mean equal metres.
-    static let sourceMapProbeDepthFar: Float = 25
+    /// probe (`Tools/reverse/fixtures/OriginalMapProbe.cs`, `DepthFar33` /
+    /// `DepthFar34`) renders its depth pass with the same far plane, so equal
+    /// encodings mean equal metres. Map 34's outside geometry reaches about
+    /// 800 m through its windows: 25 m would clip it on the original side only.
+    static func sourceMapProbeDepthFar(map: Int) -> Float { map == 34 ? 1000 : 25 }
+
+    /// The map-only passes compare the map's solid draws, as the original probe
+    /// does (its renderers whose materials are all `RenderType=Opaque`, the tag
+    /// Unity's depth-normals replacement selects by): item and lightmapped draws
+    /// without alpha test or blending. Sky, particle, cutout and blended draws
+    /// are counted, not drawn.
+    static func isSolidSourceMapDraw(_ item: RenderItem) -> Bool {
+        let draw = SourceStudioMapAsset.Draw(item.material)
+        let alpha = MaterialFlagAlphaTest.rawValue | MaterialFlagAlphaBlend.rawValue
+        return (draw == .item || draw == .lightmapped) && !item.material.transparent && item.material.uniforms.flags & alpha == 0
+    }
 
     /// ST-A11 evidence, `IKKOKU_SOURCE_MAP_PROBE=<directory>` with
     /// `IKKOKU_SOURCE_SCENE` and `IKKOKU_AUTOCAPTURE`: after the source scene
-    /// capture frame is built, writes the map's draws alone, from the same
-    /// camera and at the same size, as the replacement passes
-    /// `compare_original_map.py` compares with the original player's:
-    /// `native-map-geometry.png` (white on black) and
+    /// capture frame is built, writes the map's solid draws alone
+    /// (`isSolidSourceMapDraw`), from the same camera and at the same size, as
+    /// the replacement passes `compare_original_map.py` compares with the
+    /// original player's: `native-map-geometry.png` (white on black) and
     /// `native-map-depth-normals.png` (Unity's depth-normals encoding over
-    /// `sourceMapProbeDepthFar`), plus `native-map.json` (the map census, the
-    /// camera matrices, the map root matrix and every draw's model matrix).
-    /// With baked lightmaps it also writes the lightmapped draws' irradiance
-    /// (`SourceStudioMapMaterial.irradiance`: the decoded lightmap alone, and
-    /// the two negative-control variants) from the linear HDR scene target,
-    /// `native-map-irradiance-<variant>.rgba16f.deflate`.
-    /// A scene whose map is not drawn fails, naming the status line.
+    /// `sourceMapProbeDepthFar(map:)`), plus `native-map.json` (the map census,
+    /// the camera matrices, the map root matrix and every draw's model matrix).
+    /// With baked lightmaps it also writes the solid lightmapped draws'
+    /// irradiance (`SourceStudioMapMaterial.irradiance`: the decoded lightmap
+    /// alone, and the two negative-control variants) from the linear HDR scene
+    /// target, `native-map-irradiance-<variant>.rgba16f.deflate`. With a cube
+    /// sky or particles (slice 3) it also writes each group alone over a
+    /// transparent black background, in the same format:
+    /// `native-map-sky-<variant>.rgba16f.deflate` (`SourceStudioSkyMaterial
+    /// .Variant`: the formula and its three negative controls) and
+    /// `native-map-particles-<variant>.rgba16f.deflate` (`SourceStudioParticleInputs
+    /// .Variant`: the formula and its two negative controls). None of these images
+    /// carries the editor grid. A scene whose map is not drawn fails, naming the
+    /// status line.
     static func writeSourceMapProbe(studio: StudioModel, renderer: Renderer, directory: URL, width: Int, height: Int) throws {
         let census = studio.sourceMapCensus()
         let items = studio.currentSourceMapItems
@@ -36,13 +56,26 @@ extension AppState {
         var frame = studio.frame
         frame.items = items
         frame.gizmos = []
-        let far = sourceMapProbeDepthFar
+        // The HDR images hold the map's draws alone: no editor grid over them.
+        frame.effects.showGrid = false
+        let far = sourceMapProbeDepthFar(map: Int(request.map))
+        let solid = items.filter(isSolidSourceMapDraw)
+        var solidFrame = frame
+        solidFrame.items = solid
         for (name, depthNormals) in [("native-map-geometry.png", false), ("native-map-depth-normals.png", true)] {
-            try CaptureOutput.writePNG(renderer.captureSourceGeometry(frame: frame, width: width, height: height, depthNormals: depthNormals, far: far),
+            try CaptureOutput.writePNG(renderer.captureSourceGeometry(frame: solidFrame, width: width, height: height, depthNormals: depthNormals, far: far),
                                        to: directory.appendingPathComponent(name))
         }
+        func writeHDR(_ probe: RenderFrame, _ name: String) throws {
+            guard let bits = renderer.captureSceneHDR(frame: probe, width: width, height: height) else {
+                throw RigError.invalid("IKKOKU_SOURCE_MAP_PROBE: the \(name) capture failed.")
+            }
+            let packed = try (bits.withUnsafeBytes { Data($0) } as NSData).compressed(using: .zlib) as Data
+            try packed.write(to: directory.appendingPathComponent(name))
+        }
+        let hdrFormat = "RGBA float16 little-endian, rows top-down, raw DEFLATE (RFC 1951): the linear HDR scene target after the MSAA resolve, before bloom, grading and the sRGB composite"
         var irradiance: [String: Any] = ["written": false]
-        let lightmapped = items.filter { $0.material.kind == MaterialKindMap }
+        let lightmapped = solid.filter { SourceStudioMapAsset.Draw($0.material) == .lightmapped }
         if !lightmapped.isEmpty {
             var files: [String: String] = [:]
             for variant in SourceStudioMapMaterial.IrradianceVariant.allCases {
@@ -53,16 +86,55 @@ extension AppState {
                     copy.material = material
                     return copy
                 }
-                guard let bits = renderer.captureSceneHDR(frame: probe, width: width, height: height) else {
-                    throw RigError.invalid("IKKOKU_SOURCE_MAP_PROBE: the \(variant.rawValue) irradiance capture failed.")
-                }
                 let name = "native-map-irradiance-\(variant.rawValue).rgba16f.deflate"
-                let packed = try (bits.withUnsafeBytes { Data($0) } as NSData).compressed(using: .zlib) as Data
-                try packed.write(to: directory.appendingPathComponent(name))
+                try writeHDR(probe, name)
                 files[variant.rawValue] = name
             }
             irradiance = ["written": true, "files": files, "draws": lightmapped.count, "otherDraws": items.count - lightmapped.count,
-                          "format": "RGBA float16 little-endian, rows top-down, raw DEFLATE (RFC 1951): the linear HDR scene target after the MSAA resolve, before bloom, grading and the sRGB composite"]
+                          "format": hdrFormat]
+        }
+        // Slice 3: the sky (the formula and its controls) and the particles, each group alone, over transparent black.
+        var groups: [String: Any] = [:]
+        let skies = items.filter { SourceStudioMapAsset.Draw($0.material) == .sky }
+        if skies.isEmpty {
+            groups["sky"] = ["written": false]
+        } else {
+            var files: [String: String] = [:]
+            for variant in SourceStudioSkyMaterial.Variant.allCases {
+                var probe = frame
+                probe.items = skies.compactMap { item in
+                    guard let material = SourceStudioSkyMaterial.variant(item.material, variant) else { return nil }
+                    var copy = item
+                    copy.material = material
+                    return copy
+                }
+                probe.effects.transparentBackground = true
+                let name = "native-map-sky-\(variant.rawValue).rgba16f.deflate"
+                try writeHDR(probe, name)
+                files[variant.rawValue] = name
+            }
+            groups["sky"] = ["written": true, "files": files, "draws": skies.count, "rotationDegrees": skies.map { $0.material.uniforms.params.x },
+                             "background": "transparent black", "format": hdrFormat]
+        }
+        let particles = items.filter { SourceStudioMapAsset.Draw($0.material) == .particle }
+        if particles.isEmpty {
+            groups["particles"] = ["written": false]
+        } else {
+            var files: [String: String] = [:]
+            for variant in SourceStudioParticleInputs.Variant.allCases {
+                var probe = frame
+                probe.items = particles.compactMap { item in
+                    guard let material = SourceStudioParticleInputs.variant(item.material, variant) else { return nil }
+                    var copy = item
+                    copy.material = material
+                    return copy
+                }
+                probe.effects.transparentBackground = true
+                let name = "native-map-particles-\(variant.rawValue).rgba16f.deflate"
+                try writeHDR(probe, name)
+                files[variant.rawValue] = name
+            }
+            groups["particles"] = ["written": true, "files": files, "draws": particles.count, "background": "transparent black", "format": hdrFormat]
         }
         let camera = frame.camera
         func columns(_ m: float4x4) -> [Float] { (0..<4).flatMap { c in (0..<4).map { r in m[c][r] } } }
@@ -72,7 +144,8 @@ extension AppState {
             "width": width, "height": height, "depthFar": far,
             "census": try JSONSerialization.jsonObject(with: JSONEncoder().encode(census)),
             "sceneSHA256": request.sceneSHA256,
-            "irradiance": irradiance,
+            "irradiance": irradiance, "sky": groups["sky"] as Any, "particles": groups["particles"] as Any,
+            "solidDraws": solid.count,
             "map": request.map, "sunLightType": request.sunLightType,
             "transform": ["position": [request.transform.position.x, request.transform.position.y, request.transform.position.z],
                           "rotationDegrees": [request.transform.rotationDegrees.x, request.transform.rotationDegrees.y, request.transform.rotationDegrees.z]],
@@ -80,7 +153,8 @@ extension AppState {
             "camera": ["view": columns(camera.viewMatrix()), "projection": columns(camera.projectionMatrix(aspect: Float(width) / Float(height))),
                        "fovDegrees": camera.fovDegrees, "near": camera.near],
             "draws": items.map { ["mesh": $0.mesh.id, "model": columns($0.model), "objectID": $0.objectID, "pickOccluder": $0.pickOccluder,
-                                  "castsShadow": $0.castsShadow, "outline": $0.outline] as [String: Any] },
+                                  "castsShadow": $0.castsShadow, "outline": $0.outline,
+                                  "draw": SourceStudioMapAsset.Draw($0.material).rawValue, "solid": isSolidSourceMapDraw($0)] as [String: Any] },
         ]
         try CaptureOutput.writeJSON(JSONSerialization.data(withJSONObject: document, options: [.prettyPrinted, .sortedKeys]),
                                     to: directory.appendingPathComponent("native-map.json"))

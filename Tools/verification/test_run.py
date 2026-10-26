@@ -821,7 +821,7 @@ class StudioScenarioLaneTests(unittest.TestCase):
                       and not name.startswith(("maker-", "gameplay-")))
 
     def test_lane_validates_and_covers_every_scenario(self):
-        self.assertEqual(len(self.checks), 78)
+        self.assertEqual(len(self.checks), 79)
         referenced = set()
         for check in self.checks:
             scenario = check["env"]["IKKOKU_STUDIO_SCENARIO"]
@@ -873,9 +873,12 @@ class StudioScenarioLaneTests(unittest.TestCase):
                 if op == "backgroundBuild":
                     self.assertIn(step["build"], ("import", "importTwice", "importThenNewScene", "importWhileHidden",
                                                   "duplicate", "duplicateWhileHidden",
-                                                  "duplicateRoute", "duplicateRouteWhileHidden"))
-                    if step["build"].startswith("duplicate"):
+                                                  "duplicateRoute", "duplicateRouteWhileHidden",
+                                                  "outfit", "outfitWhileHidden", "export", "loadRoute"))
+                    if step["build"].startswith(("duplicate", "outfit", "export")):
                         self.assertIs(type(step["key"]), int)
+                    if step["build"] in ("export", "loadRoute"):
+                        self.assertTrue(step["path"].startswith(".local/verification/scenario-exports/"))
                 if op == "measureAccessoryLabels":
                     self.assertIs(type(step["index"]), int)
                     self.assertIn(step["index"], range(100, 2001))
@@ -1054,12 +1057,13 @@ class StudioScenarioLaneTests(unittest.TestCase):
                     if "sourceMap" in step:
                         # ST-A11: `none`, or census fields; pick points are two viewport fractions.
                         source_map = step["sourceMap"]
-                        self.assertTrue(set(source_map) <= {"none", "map", "draws", "lightmappedDraws", "loading", "lineContains", "lineAbsent",
-                                                            "pickNothingAt", "pickSomethingAt"}, "unknown sourceMap field: %s" % path)
+                        self.assertTrue(set(source_map) <= {"none", "map", "draws", "lightmappedDraws", "particleDraws", "skyDraws", "blockImages",
+                                                            "loading", "lineContains", "lineAbsent", "pickNothingAt", "pickSomethingAt"},
+                                        "unknown sourceMap field: %s" % path)
                         self.assertTrue(source_map, "a sourceMap assert must name what it checks: %s" % path)
                         if source_map.get("none"):
                             self.assertEqual(set(source_map), {"none"}, "no map has no census to compare: %s" % path)
-                        for name in ("map", "draws", "lightmappedDraws"):
+                        for name in ("map", "draws", "lightmappedDraws", "particleDraws", "skyDraws", "blockImages"):
                             if name in source_map:
                                 self.assertIs(type(source_map[name]), int)
                         for name in ("pickNothingAt", "pickSomethingAt"):

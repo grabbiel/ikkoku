@@ -371,6 +371,70 @@ formula, with its citations and the oracle that checks it, is in
   (`rgba16Float`, before bloom, grading and the sRGB composite) as float16 bit
   patterns. The map probe writes its irradiance images with it.
 
+### Source map sky, particles and block images (ST-A11 slice 3, 2026-10-26)
+
+Slice 3 draws Map 34's `Skybox/Cubemap` sky and `Particles/Alpha Blended`
+trees, uploads every map image as BC blocks, and samples map textures the
+original player's way. The recovered formulas, the probe gates and the numbers
+are in [maps: slice 3](studio/maps.md#map-34-the-sky-and-block-images-slice-3).
+
+- **Sky kind.** `MaterialKindSky` draws `sky_vertex` / `sky_fragment` with
+  `Pipelines.sky`, which exists in both the depth-only and the depth+stencil
+  main-pass sets. `depthOnlyAndStencilMainPassesCarryTheSameGroups` checks that the two sets
+  list the same pipelines.
+  - **Vertex.** It turns the vertex by `_Rotation` about Y in Unity's object
+    space for the clip position, and passes the unrotated Unity direction on.
+  - **Fragment.** It samples the cube with `skySampler` (bilinear, clamp: the
+    cubes have one level) and writes `texel × DecodeHDR × scale`.
+  - **Uniforms.** `baseColor.rgb` is `_Tint × unity_ColorSpaceDouble ×
+    _Exposure`. `params` is (`_Rotation`, `_Tex_HDR.x`, `.y`, `.w`).
+    `MaterialUniforms` stays 352 bytes.
+  - **Probe flag.** `MaterialFlagSkyRowsFlipped` (bit 21) is set only by the
+    map probe's negative control, never by the loader.
+- **Sky pass.** `prepare` puts sky draws in their own list and drops one whose
+  cube does not resolve to a cube texture. The main pass draws them in a `Sky`
+  group right after the background, with `depthNone` and no culling: Unity's
+  Background queue, ZWrite Off. Later geometry covers them. Sky draws never
+  cast shadows, occlude picks or take live source shaders.
+- **Cube binding.** `bindTextures` returns early for a sky draw after binding
+  only `MaterialState.cubemap` at `TextureIndexSkyCube` (19), so a sky draw
+  binds one texture.
+- **Particles.** `MaterialFlagMapParticle` (bit 20) on `MaterialKindMap`
+  selects `map_fragment`'s particle branch, `2 × vertex colour × tint ×
+  texture`. It is alpha blended in the transparent pass with both faces drawn,
+  and reads no lightmap.
+- **Sampler state.** `map_fragment` samples the light map and direction map
+  (`lightmapSampler`) and the base, emission and particle textures
+  (`mapForcedAnisoRepeat`) with linear filtering, linear mips and
+  `max_anisotropy(9)`.
+  - **Why 9.** The original player runs `QualitySettings.anisotropicFiltering`
+    ForceEnable, which raises every texture to Unity's forced minimum of 9.
+    The phase-map34 trace (`.local/sta11c-map34/phase-map34/map-trace.json`)
+    records `anisotropicFiltering: "ForceEnable"` in every case's
+    `capture.quality` and `oracle.quality`, with the lightmaps'
+    `anisoLevel` 3 and the sky and particle textures' 1. No game assembly
+    changes the limits.
+  - **Cost.** Against the same build with trilinear map samplers, map 34
+    differs by +0.005–0.007 ms of GPU per frame at 1996×1824. That is inside
+    the offscreen benchmark's run-to-run range
+    ([performance: slice 3](performance.md#slice-3-map-34-the-sky-and-block-images)).
+  - **Characters and items** keep `linearRepeat` (no anisotropy).
+  - **Test.** `mapTexturesSampleWithThePlayersForcedAnisotropy` draws a
+    16:1 texture footprint over a texture whose levels 0–1 are white and the
+    rest black. Each map texture reads 1. `max_anisotropy` 1–4 reads 0 on
+    Apple GPUs.
+- **Block images.** `SourceStudioBlockImages` parses the glTF's
+  `ikkokuBlockImages`. `SourceStudioBlockTexture.make` (slice 2's lightmap
+  upload, generalised) uploads BC1 and BC3 images (`.bc1_rgba(_srgb)`,
+  `.bc3_rgba(_srgb)`) and six-face cubes (BC1, BC3 and BC7, `textureCube`),
+  every level, one `replace` per level and face, after checking each file's
+  size and SHA-256. It runs on the map's load worker, and the asset registers
+  the result with `register(texture:)`. `ResourceStore` is unchanged, and
+  every non-map texture still decodes to RGBA8 there.
+  `IKKOKU_SOURCE_MAP_DECODED_TEXTURES=1` loads the PNGs instead; it is a
+  measurement switch. Map 34's textures take 59.6 MB of Metal memory as BC
+  against 288.2 MB decoded.
+
 ### Deformation safety
 
 The renderer writes complete skin palettes into the frame ring's palette
@@ -1688,16 +1752,18 @@ runs. Captures and scenarios leave it off.
 | Scene import (startup `IKKOKU_SOURCE_SCENE`, File menu) | `beginSourceSceneImport`: see below | `importSourceScenePreview`: one batch; each second half runs on the main thread where the import's walk reaches it |
 | Previews a refresh finds missing: after undo or redo, a duplicate, a scene load or a restored outfit | `startMissingSourceBuilds` starts one batch in document order; the second halves run on `com.grabbiel.Ikkoku.source-builds`, and each preview installs itself on the main actor (`installSourceBuild`) | the same batch; `refreshFrame` builds each preview where its loop reaches it, as before |
 | Route character copies of a Duplicate | `startSourceRouteCharacterBuilds`: one batch in subtree order, borrowing the original's assembly; the second halves run on the build queue, and each copy installs itself on the main actor (`installSourceRouteCharacterBuild`) | `copySourceRouteRuntime` builds each copy on the main thread, as before |
-| Route characters of a rehydration (scene load, undo or redo) | one batch, built on the main thread in walk order | the same |
-| One character: outfit selection, a plugin attachment's parent, an export validation baseline | both halves on the main thread, with a prefetching decode share (`sourceRigShare()`); an outfit selection and an attachment parent borrow a donation when one matches | the same |
+| Route characters of a rehydration (scene load, undo or redo) | the walk lists them; after the install, `startSourceRouteCharacterBuilds(_:rehydration: true)` builds them like a Duplicate's copies (third part, below) | one batch, built on the main thread in walk order |
+| Outfit selection (the Clothes tab's picker, `selectSourceOutfit`) | `SourceStudioBackgroundBuilds` under the key `.outfit(id)`: both halves off the main thread, borrowing a donation when one matches; `finishSourceOutfit` applies the selection on the main actor (third part, below) | `setSourceOutfit`: both halves on the main thread |
+| Export validation baselines (File ▸ Export Edited Original Scene, `beginSourceSceneExport`) | `SourceStudioBackgroundBuilds` under the key `.export(n)`: one batch in document order with a prefetching decode share and no donation; the export then runs on the main actor with them (third part, below) | `exportSourceScene` builds each baseline on the main thread |
+| A plugin attachment's parent | both halves on the main thread, with a prefetching decode share (`sourceRigShare()`), borrowing a donation when one matches | the same |
 
 `makeSourceCharacterPreview(reference:outfit:appearanceTransaction:)`
 builds one preview on the main thread. It borrows a loaded or kept
 donation when one matches, and otherwise decodes with a prefetching share.
-It serves a synchronous route character copy, an outfit selection and a
-plugin attachment's parent. The export validation baseline uses the share
-but no donation: its preview is dropped after the export, and taking a kept
-donation would lose it.
+It serves a synchronous route character copy, a synchronous outfit
+selection and a plugin attachment's parent. The export validation baseline
+uses the share but no donation, in either mode: its preview is dropped
+after the export, and taking a kept donation would lose it.
 
 **Background import.** `beginSourceSceneImport` runs in three parts:
 
@@ -1748,7 +1814,58 @@ before its build lands drops the build, cancels its batch once no other
 object waits on it, and takes the copy out of the runtime coverage, so a
 redo rehydrates it like an installed copy. An import's commit, a
 rehydration's install and `cancelSourceBuilds()` cancel the copies in
-flight.
+flight. A copy cancelled before its first preview installed also leaves
+the runtime coverage (third part), so the next rehydration builds it: a
+load of the same scene while its builds ran would otherwise find its ids
+covered and leave it unbuilt.
+
+**Single-purpose builds in the background (third part).**
+`SourceStudioBackgroundBuilds<Key>` (Studio module, main-actor only) runs
+builds that each serve one purpose, keyed by it. `start` runs a batch's
+second halves in request order on the Studio's build queue with its other
+builds, then hands the main actor every outcome at once, in request order.
+A newer `start` for the same key cancels the older batch, whose completion
+never runs; `start` returns it so its borrowed donations can be kept.
+`cancel(_:)` and `cancelAll()` run on the main actor, and every callback
+checks them there.
+
+- **Outfit selection.** `selectSourceOutfit` makes the synchronous
+  selection's checks (a loaded character, no outfit-scoped color edit),
+  then builds the outfit under `.outfit(id)`. While it builds, the
+  character keeps its outfit, is drawn and stays editable; the picker shows
+  the outfit chosen (`pendingSourceOutfits`); the status area shows
+  "Building 1 source character". When the build lands,
+  `finishSourceOutfit` applies it only if the character still shows the
+  preview it was made on: it rechecks the color edits, applies the
+  document's edits as they are then, and installs it with one undo step,
+  as `setSourceOutfit` does. A failure leaves the character as it was and
+  shows the synchronous message ("Outfit: …"). A newer selection of the
+  character supersedes it; choosing the shown outfit again cancels it; an
+  undo or redo, an import, a load, New Scene or the character's deletion
+  drops it. An install that lands while the Maker is shown keeps the
+  Maker's frame (`holdsRefreshWhileHidden`, as for an import's commit).
+- **Export validation baselines.** A hidden character with face-state
+  edits and no preview needs a validation baseline. `beginSourceSceneExport`
+  builds all of them under `.export(n)`, then runs `exportSourceScene(to:baselines:)`
+  on the main actor. Meanwhile the scene stays editable, and the status
+  area shows "Exporting <file>". The file is the scene as it was when the
+  export was chosen, as with the synchronous export: the job keeps the
+  document, the camera looked through and the routes' play flags, and if
+  any of them changed before the baselines landed, the export fails ("the
+  scene changed while the hidden characters of <file> were built; export
+  it again") and writes nothing. An import, a load or New Scene cancels it
+  with an error ("the scene was replaced before …") and writes nothing.
+  Without baselines to build, or while plugins run (their steps write the
+  document), it exports at once on the main thread, as before.
+- **Route characters of a rehydration.** With background builds the
+  rehydration's walk lists the route characters instead of building them,
+  installs the runtime, then starts their builds in walk order
+  (`startSourceRouteCharacterBuilds(_:rehydration: true)`). A route
+  character already shown for the same record keeps its preview until its
+  rebuild lands; one not shown yet (after New Scene, a load, the redo of a
+  route Duplicate) draws nothing, and objects attached to it wait without a
+  message, as for a Duplicate's copy. A failed build leaves its placeholder
+  drawing nothing without a message, as the synchronous rehydration did.
 
 **The frame after an install.** Each install used to refresh the whole
 frame on the main thread, seven times for an undo that rebuilds seven
@@ -1765,7 +1882,8 @@ the `studioInstallRefreshDeferred` trace event.
 
 **Cancellation.** `cancelSourceBuilds()` runs on the main actor for a new
 import (synchronous or background), New Scene and a scene load. It cancels
-every batch in flight:
+every batch in flight, the outfit selections and the exports' baselines
+included (each export's completion gets its error):
 
 - queued first halves never start, a running one finishes and is dropped,
   and every later `build` throws `CancellationError`;
@@ -1824,7 +1942,8 @@ its invariant written on the type:
 `Assembly` and `Donation` are plain `Sendable` values. The compositors'
 queue registry is a `nonisolated(unsafe)` static dictionary under an
 `NSLock`. `SourceStudioDonationCache` is not `Sendable`: only the main actor
-touches it.
+touches it. `SourceStudioBackgroundBuilds` is `@MainActor`: its entries are
+touched only by the main actor and by `run`'s main-actor callbacks.
 
 **Tests** (`SourceStudioCharacterBatchTests.swift`):
 

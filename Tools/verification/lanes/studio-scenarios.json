@@ -2283,7 +2283,7 @@
         "IKKOKU_STUDIO_SCENARIO_REPORT": ".local/verification/reports/studio-scenario-background-build.json"
       },
       "referenceTier": "app-smoke",
-      "tolerance": "R7 phase 2, item 6: on the 7-character scenario scene with its converted items, each backgroundBuild step runs one operation with synchronous character builds and then with the interactive app's background builds (StudioModel.asyncSourceBuilds), waits on the main run loop until every build is installed, and requires the document summary (tree labels, kinds, names, parents, visibility, import diagnostics, status, built and retained characters, runtime cache counts) and a 512x512 render to be byte-identical: a scene import; New Scene during an import (no completion runs and the document stays empty); a second import started while the first is in flight (only the second completes); and Duplicate of character 65 and its undo (the copy and the rebuilt characters build in the background). Live animation is paused during each step so no clock moves while it waits. The scene is then exported and reimported, and character 65 must be visible.",
+      "tolerance": "R7 phase 2, item 6: on the 7-character scenario scene with its converted items, each backgroundBuild step runs one operation with synchronous character builds and then with the interactive app's background builds (StudioModel.asyncSourceBuilds), waits on the main run loop until every build is installed, and requires the document summary (tree labels, kinds, names, parents, visibility, import diagnostics, status, built and retained characters, runtime cache counts) and a 512x512 render to be byte-identical: a scene import; New Scene during an import (no completion runs and the document stays empty); a second import started while the first is in flight (only the second completes); and Duplicate of character 65 and its undo (the copy and the rebuilt characters build in the background). R7 phase 2 item 6, third part: the outfit picker of character 65 (outfit, and outfitWhileHidden with the Studio hidden) must leave the character and the document unchanged until the build lands, then match the synchronous selection and its Undo with one undo step; superseded selections install once, choosing the shown outfit again drops the build, and an Undo during a build drops it. With character 65 hidden after a mouth edit, the export step saves and reloads the scene natively so 65 has no preview: the background export must build its validation baseline in the background, leave the document and render unchanged and write the synchronous export's bytes, and an edit or a load during it must fail it with an error and write nothing. Live animation is paused during each step so no clock moves while it waits. Character 65 is shown again, the scene is exported and reimported, and character 65 must be visible.",
       "artifacts": [
         {
           "path": ".local/verification/reports/studio-scenario-background-build.json",
@@ -2321,7 +2321,7 @@
         "IKKOKU_STUDIO_SCENARIO_REPORT": ".local/verification/reports/studio-scenario-background-build-route.json"
       },
       "referenceTier": "app-smoke",
-      "tolerance": "R7 phase 2, item 6 follow-up (ST-T11): on the CharaStudio-authored scene-route-children.png (route key 0 playing, children folder 9 and the fixture female 10), each backgroundBuild step duplicates route 0 with its folder and character. The synchronous Duplicate, Undo and Redo are the reference; with the interactive app's background builds (StudioModel.asyncSourceBuilds) the Duplicate must build no route character preview on the main thread, start the copy's build, and after the main run loop has installed it the document summary (tree labels, kinds, names, parents, visibility, import diagnostics, status, built and retained characters, runtime cache counts) and a 512x512 render must be byte-identical to the synchronous Duplicate; the Undo and the Redo (which rehydrates the copy) must match theirs too. A Duplicate undone before its copy's build lands must leave no build pending and match the synchronous Undo. The WhileHidden step hides the Studio as a switch to the Maker does while the builds land, and the stand-in frame must stay current. Live animation is paused during each step. A final synchronous Duplicate must give route 0 a copy with its 4 points, and the export of that scene must reimport with route 0 playing on its 4 points.",
+      "tolerance": "R7 phase 2, item 6 follow-up (ST-T11): on the CharaStudio-authored scene-route-children.png (route key 0 playing, children folder 9 and the fixture female 10), each backgroundBuild step duplicates route 0 with its folder and character. The synchronous Duplicate, Undo and Redo are the reference; with the interactive app's background builds (StudioModel.asyncSourceBuilds) the Duplicate must build no route character preview on the main thread, start the copy's build, and after the main run loop has installed it the document summary (tree labels, kinds, names, parents, visibility, import diagnostics, status, built and retained characters, runtime cache counts) and a 512x512 render must be byte-identical to the synchronous Duplicate; the Undo and the Redo (which rehydrates the copy) must match theirs too. A Duplicate undone before its copy's build lands must leave no build pending and match the synchronous Undo, and the Redo must build no route character preview on the main thread either (third part). The WhileHidden step hides the Studio as a switch to the Maker does while the builds land, and the stand-in frame must stay current. Live animation is paused during each step. The loadRoute step (third part) saves the scene natively and loads it over New Scene: the synchronous Load, Undo and Redo are the reference, the background Load and Redo must build no route character preview on the main thread and match theirs, and an Undo or a second Load before the route character lands must match too with nothing pending. A final synchronous Duplicate must give route 0 a copy with its 4 points, and the export of that scene must reimport with route 0 playing on its 4 points.",
       "artifacts": [
         {
           "path": ".local/verification/reports/studio-scenario-background-build-route.json",
@@ -2854,6 +2854,48 @@
         },
         {
           "path": ".local/verification/scenario-exports/source-map.png",
+          "kind": "exported-scene"
+        }
+      ],
+      "timeout": 600
+    },
+    {
+      "id": "studio-scenario-source-map34",
+      "argv": [
+        ".local/build/Build/Products/Debug/Ikkoku.app/Contents/MacOS/Ikkoku"
+      ],
+      "fixtures": [
+        {
+          "env": "IKKOKU_SOURCE_SCENE",
+          "kind": "file",
+          "from": "IKKOKU_STUDIO_MAP34_SCENE"
+        },
+        {
+          "env": "IKKOKU_SOURCE_AVATAR",
+          "kind": "file"
+        },
+        {
+          "env": "IKKOKU_STUDIO_MAP_CATALOG",
+          "kind": "file"
+        }
+      ],
+      "env": {
+        "IKKOKU_STUDIO_SCENARIO": "Tools/verification/scenarios/source-map34.json",
+        "IKKOKU_STUDIO_SCENARIO_REPORT": ".local/verification/reports/studio-scenario-source-map34.json"
+      },
+      "referenceTier": "app-smoke",
+      "tolerance": "ST-A11 slice 3 on scene-map34-day.png (Map 34 空き教室 alone, moved, day sun, saved by the original player): the converted map is drawn before the first step (54 draws: 30 lightmapped, the particles, the day sky; 54 images as BC blocks, none decoded) with the exact approximation label in the status line; two map-only points pick nothing; View > Show Source Map off draws 0 map parts and says so, on restores 54 with the sky; the original-format export is byte-identical to the source with the map hidden and shown; reimport, New Scene (no map, no line) and undo restore the map. Lighting, sky and colour are not checked here (see docs/reference/studio/maps.md, the map probe gates).",
+      "artifacts": [
+        {
+          "path": ".local/verification/reports/studio-scenario-source-map34.json",
+          "kind": "scenario-report"
+        },
+        {
+          "path": ".local/verification/scenario-exports/source-map34-hidden.png",
+          "kind": "exported-scene"
+        },
+        {
+          "path": ".local/verification/scenario-exports/source-map34.png",
           "kind": "exported-scene"
         }
       ],
