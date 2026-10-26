@@ -2172,7 +2172,11 @@ MetalKit, then in line:
   each entry point.
 - `InlineTextureLoaderCorpusTests` (strict, `IKKOKU_TEXTURE_CORPUS_ROOT`)
   does the same for every texture the strict Engine suite and the strict
-  Studio and Maker lanes load, captured once by content hash.
+  Studio and Maker lanes load, captured once by content hash: 139 entries
+  (117 through `texture(data:)`, 22 through `texture(url:)`), 24 MiB. Every
+  entry matches. One is a test's deliberately corrupt input, which both
+  loaders reject. The container inputs of the rejection tests are left out,
+  because `ResourceStore` refuses them before any decode.
 - `ResourceStoreUploadTests`:
   - many threads get one queue for a device;
   - an upload has completed when its texture is handed out, and one
@@ -2189,6 +2193,12 @@ MetalKit, then in line:
   because Metal orders the readback after the upload by itself. Removing
   the main-thread bypass makes the main-thread test fail: its load waits
   until the holder gives up after 20 s.
+
+  The permit tests hold up in the unrestricted parallel suite, where a test
+  can queue for minutes before its body runs. Their holders are plain
+  threads, because GCD grants `concurrentPerform` no extra worker while the
+  pool is saturated. The main-thread test bounds itself instead of using a
+  time limit, which would also count its wait for the main actor.
 
 ## Checked math, legacy skeletons and cameras (R4)
 

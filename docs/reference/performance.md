@@ -4635,7 +4635,8 @@ not leaked.
 
 - **Identity with MetalKit:** 2,016 synthetic layouts, 281 encoded files
   and 19 decoder fixtures, every level and both colour flags:
-  0 mismatches.
+  0 mismatches. The strict corpus of every texture the Engine suite and the
+  Studio and Maker lanes load (139 entries, 24 MiB): 0 mismatches.
 - **Saturation** through `ResourceStore.texture(data:)` with PNG bytes,
   every load counted:
   - The old call (ImageIO, then MetalKit) from 64 cooperative tasks hung.
