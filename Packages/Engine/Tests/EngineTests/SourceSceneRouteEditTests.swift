@@ -280,14 +280,17 @@ private func state(_ document: KoikatsuSceneDocument, _ key: Int32 = 8) throws -
         let text = reason { try original.editedData(.init(insertions: list)) }
         #expect(text.contains(expected), "\(expected): \(text)")
     }
-    // Plug-ins key data by object: adding or deleting route points (keyed
-    // OCIRoutePoint objects) is refused with plug-in entries, moves are not.
+    // ST-T03i: route points are not objects plug-ins can name (they are not
+    // in dicObjectCtrl), but they take keys from the scene's counter: an
+    // entry without a rule refuses adding or deleting them; moves keep it.
     let plugins = try decoded(scene(trailer: TopologyScene.kkex(OriginalCardFixture.map([("example.scene", .integer(7))]))))
     var added = saved; _ = try added.addPoint()
     var deleted = saved; try deleted.deletePoint(1)
     var moved = saved; try moved.movePoint(1, to: SIMD3(0, 2, 0))
-    #expect(reason { try plugins.editedData(.init(routes: [8: added])) }.contains("plug-in (ExtendedSave) data"))
-    #expect(reason { try plugins.editedData(.init(routes: [8: deleted])) }.contains("plug-in (ExtendedSave) data"))
+    #expect(reason { try plugins.editedData(.init(routes: [8: added])) }
+        .contains("cannot add or delete route points in this scene: plug-in data 'example.scene'"))
+    #expect(reason { try plugins.editedData(.init(routes: [8: deleted])) }
+        .contains("cannot add or delete route points in this scene: plug-in data 'example.scene'"))
     #expect(reason { try plugins.editedData(.init(routes: [8: moved])) } == "accepted")
 }
 

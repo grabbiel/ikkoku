@@ -281,7 +281,7 @@ private func exportValidationDocument(_ source: KoikatsuSceneDocument, rendered:
     // ST-T03 / ST-D03: the app's duplicate of character 10 with its
     // accessory child 11, and a new folder holding a spot light, and a new
     // camera. The scene without its plug-in trailer, since a duplicate in a
-    // scene with plug-in data is refused.
+    // scene with plug-in data this writer has no rule for is refused.
     let bytes = SceneDocumentBytes.scene()
     let plain = try KoikatsuSceneReader.decodeDocument(Data(bytes.data.prefix(bytes.baseEnd)))
     var document = exportValidationDocument(plain)
@@ -336,10 +336,13 @@ private func exportValidationDocument(_ source: KoikatsuSceneDocument, rendered:
     #expect(refusal { $0.objects.append(.item(id: "chair", name: "Chair")) }.contains("does not add new characters or items"))
     #expect(refusal { $0.objects[index(copy.id)].sourceCharacter = nil }.contains("reference no longer matches"))
     #expect(refusal { $0.objects[index(folder.id)].parent = character.id }.contains("accessory points"))
-    // The plug-in scene: the duplicate is refused, a new folder is written.
+    // The plug-in scene ('example.scene', no rule in this writer): staging
+    // succeeds, and the export refuses the duplicate and the new folder.
     let plugins = try KoikatsuSceneReader.decodeDocument(bytes.data)
-    #expect(throws: SourceSceneTopologyError.self) { try SourceSceneExportValidation.stage(document, source: plugins) }
+    let pluginStage = try SourceSceneExportValidation.stage(document, source: plugins)
+    #expect(throws: SourceSceneTopologyError.self) { try pluginStage.stage.editedData(.init()) }
     var onlyNew = exportValidationDocument(plugins); onlyNew.objects.append(folder)
     let kept = try SourceSceneExportValidation.stage(onlyNew, source: plugins)
     #expect(kept.stage.document.trailingData == plugins.trailingData && kept.stage.keys == [0])
+    #expect(throws: SourceSceneTopologyError.self) { try kept.stage.editedData(.init()) }
 }

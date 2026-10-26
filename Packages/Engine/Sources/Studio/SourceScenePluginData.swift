@@ -286,8 +286,9 @@ enum SourceScenePluginData {
                     return try cardLinks(&cardLinksChecked)
                 }
                 // Parent and child objects are indices in the key-sorted
-                // dicObjectCtrl.
-                if edit.positionsKept { return nil }
+                // dicObjectCtrl. The card fallback below adds to them on
+                // load either way.
+                if edit.positionsKept { return try cardLinks(&cardLinksChecked) }
                 return "addresses objects by their index among all objects in key order, and this edit removes, copies or renumbers some"
             case animationController:
                 guard version == 0 else { return unknownVersion() }

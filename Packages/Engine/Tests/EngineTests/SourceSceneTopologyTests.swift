@@ -65,6 +65,8 @@ struct TopologyScene {
     var routeLine: [Int32: Bool] = [:]
     var routeOrientation: [Int32: Int32] = [:]
     var routeColor: [Int32: String] = [:]
+    /// Character cards other than `card` (ST-T03i: card plug-in data).
+    var cards: [Int32: Data] = [:]
 
     static func transform(_ key: Int32) -> [Float] {
         [Float(key), Float(key) + 0.5, -Float(key), 0, Float(key) * 3, 0, 1, 1, 1]
@@ -132,7 +134,7 @@ struct TopologyScene {
             out.i(routeOrientation[key] ?? 0)
             if let color = routeColor[key] { out.s(color) } else { out.color() }
         case let .character(key, groups):
-            header(0, key, &out); out.i(1); out.data += Self.card
+            header(0, key, &out); out.i(1); out.data += cards[key] ?? Self.card
             for bones in [fk[key] ?? [], ik[key] ?? []] {
                 out.i(Int32(bones.count)); for bone in bones { out.i(bone.id); out.bone(bone.key) }
             }
@@ -374,11 +376,20 @@ private func refusal(_ body: () throws -> Any) -> String {
 }
 
 @Test func sourceSceneTopologyPluginTrailerRules() throws {
-    let plugins = TopologyScene.kkex(OriginalCardFixture.map([("example.scene", .integer(7))]))
-    // Plug-in data is keyed by object; deleting would leave stale entries.
-    for trailer in [plugins, Data([0, 255, 3])] {
+    // ST-T03i: an entry this writer has no rule for (its plug-in may key
+    // data by object), one that is not PluginData, and a trailer that is not
+    // ExtendedSave data refuse a delete, naming the entry and the reason.
+    let unknown = TopologyScene.kkex(OriginalCardFixture.map([("example.scene", OriginalCardFixture.plugin(0, data: OriginalCardFixture.map([("k", .integer(12))])))]))
+    let shapeless = TopologyScene.kkex(OriginalCardFixture.map([("example.scene", .integer(7))]))
+    let cases: [(Data, String)] = [
+        (unknown, "Original-scene export cannot delete objects in this scene: plug-in data 'example.scene' has no rule in this writer"),
+        (shapeless, "plug-in data 'example.scene' is not a [version, data] PluginData value"),
+        (Data([0, 255, 3]), "is not readable ExtendedSave data"),
+    ]
+    for (trailer, reason) in cases {
         let original = try document(base(trailer: trailer))
-        #expect(refusal { try original.editedData(.init(deletions: [12])) }.contains("plug-in (ExtendedSave) data"))
+        let text = refusal { try original.editedData(.init(deletions: [12])) }
+        #expect(text.contains(reason) && text.hasSuffix("Save in native format instead."), "\(text)")
         // Reparenting keeps every key, so the trailer is kept byte for byte.
         let moved = try original.editedData(.init(reparents: [.init(object: 12, parent: 6)]))
         var expected = TopologyScene(roots: [cameraA, folderF(), folderH([.item(7, []), itemK]), routeR, characterC()])
