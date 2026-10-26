@@ -339,14 +339,15 @@ The realtime sun this slice leaves out adds light to 15,692 of map33's 691,200 p
 - **Map captures with the room in view:** they change only with the slice-2 export, as intended. `scene-map33.png` and the showoff scene without props differ from base, and identically OFF and ON for map33.
 - **This change with the first slice's export:** byte-identical to `main` on all 6 map captures. Its fallback path, the item material when an export has no lightmaps, is unchanged.
 - **After merging `main` (`3bfcc37`, #280):** all 14 captures were rerun on Release builds of both heads (`captures/merged-{base,branch,branch-old}/`). Every no-map capture and both showoff-with-props captures are identical to `3bfcc37`, OFF and ON. Each map capture is identical to this change's capture before the merge. With the first slice's export, this change still matches `main` on all 6 map captures. `3bfcc37` itself draws all 14 captures exactly as `b4c59e7` did.
+- **After merging `main` `0e6181a` (#281, #282):** the same 34 captures on new Release builds (`captures/m0e6-*`) give the same results, and every capture's hash is unchanged from the `3bfcc37` run on both sides.
 
 **Safe for `main` after the swap.** `main`'s binary with the slice-2 export is byte-identical to `main` with the first slice's export on all 6 map captures. Its log reports the same 52,248,576 texture bytes. `main`'s four map checks (`source-map`, `reload-save-source-map`, `reload-load-source-map`, `source-map-none`) passed 4/4 under `--strict` on its Debug build with the slice-2 export (`.local/sta11b-lightmaps/swap-proof/`). The one visible difference: `main`'s status line loses its `; shaders approximated (Standard)` suffix, because the new catalog row names the omitted terms instead. `main`'s checks assert the label prefix, which is unchanged.
 
 **Suites and lanes.**
 
-- **Engine, private source.** On the head merged with `main` (`3bfcc37`), the suite ran 1,014 tests: 992 passed and 21 were skipped. The 1 failure is the known `liveSourceShadersMeetTheControlledOriginalFrameGates`. Before that merge it ran 1,008 tests with the same single failure.
+- **Engine, private source.** On the head merged with `main` `0e6181a` (#281, #282), the suite ran 1,017 tests: 996 passed, 21 were skipped and none failed. The environment was the shared 98-key file with the slice-2 map. `liveSourceShadersMeetTheControlledOriginalFrameGates`, which failed before #282 supplied its inputs, now passes. On the earlier merges (`3bfcc37`, and before it `b4c59e7`), that test was the suite's only failure.
 - **Python.** `Tools/reverse` 589 (6 skipped), `Tools/reverse/analysis` 279 and `Tools/verification` 199 pass.
-- **Lanes.** On the merged head, with the slice-2 export and `--strict`, `studio-scenarios` passed 78 of 78, including the four map checks, and `maker-scenarios` passed 10 of 10 (`.local/sta11b-lightmaps/lanes/`).
+- **Lanes.** On the heads merged with `3bfcc37` and with `0e6181a`, with the slice-2 export and `--strict`, `studio-scenarios` passed 78 of 78, including the four map checks, and `maker-scenarios` passed 10 of 10 (`.local/sta11b-lightmaps/lanes/`).
 - **CI** passed on the PR.
 
 ### Installing the slice-2 export
