@@ -333,3 +333,64 @@ fragment float4 eye_fragment(
     col *= mix(mat.shadowColor.rgb, float3(1.0), lit);
     return float4(col, (mat.flags & MaterialFlagAlphaBlend) ? coverage : 1.0);
 }
+
+// ---- Source maps (ST-A11 slice 2) -------------------------------------------
+// The baked-lightmap subset of Unity 5.6.2f1's Standard shader, ForwardBase with
+// LIGHTMAP_ON and DIRLIGHTMAP_COMBINED, in the original's Linear colour space.
+// Built-in shader sources (tag v5.6.2f1):
+//   fragForwardBaseInternal, UnityStandardCore.cginc L407-L425:
+//     c = UNITY_BRDF_PBS(diffColor, specColor, ..., gi) + Emission(uv)
+//   BRDF1_Unity_PBS, UnityStandardBRDF.cginc L304-L306:
+//     diffColor * (gi.diffuse + light.color * diffuseTerm) + the two specular terms
+//   UnityGI_Base, UnityGlobalIllumination.cginc L88-L148: with LIGHTMAP_ON no SH
+//     ambient is sampled (UNITY_SHOULD_SAMPLE_SH, UnityCG.cginc L49), and
+//     gi.diffuse = DecodeDirectionalLightmap(DecodeLightmap(unity_Lightmap),
+//     unity_LightmapInd, normalWorld) * occlusion
+//   DecodeLightmapRGBM, UnityCG.cginc L517-L529 (linear):
+//     unity_Lightmap_HDR.x * pow(data.a, unity_Lightmap_HDR.y) * data.rgb
+//   DecodeDirectionalLightmap, UnityCG.cginc L570-L582:
+//     color * (dot(normalWorld, dir.xyz - 0.5) + 0.5) / max(1e-4, dir.w)
+//   DiffuseAndSpecularFromMetallic, UnityStandardUtils.cginc L35-L51:
+//     diffColor = albedo * oneMinusReflectivity
+//   Emission, UnityStandardInput.cginc L176-L183: tex2D(_EmissionMap).rgb * _EmissionColor.rgb
+// Drawn here: diffColor * gi.diffuse + Emission, with the geometric normal.
+// Occlusion is 1 (no map material has an _OcclusionMap). Not drawn: the
+// realtime light (light.color * diffuseTerm, its shadows) and both specular
+// terms. The light map is sampled as sRGB (m_ColorSpace 1), the direction map
+// as linear. Both hold the bundle's raw rows, bottom-up like Unity's texture
+// memory, while TEXCOORD_1 has the glTF top-left origin: sample (u, 1 - v).
+// The direction is baked in Unity's left-handed world; the engine basis
+// reflects Z, so dir.z flips (dot products are unchanged by the reflection).
+constexpr sampler lightmapSampler(mag_filter::linear, min_filter::linear, mip_filter::linear, address::clamp_to_edge);
+
+inline float3 decodeLightmapRGBM(float4 data, float range, float exponent) {
+    return (range * pow(data.a, exponent)) * data.rgb;
+}
+
+inline float3 decodeDirectionalLightmap(float3 color, float4 dirTex, float3 normalWorld) {
+    float3 dir = dirTex.xyz - 0.5;
+    dir.z = -dir.z;
+    float halfLambert = dot(normalWorld, dir) + 0.5;
+    return color * halfLambert / max(1e-4, dirTex.w);
+}
+
+fragment float4 map_fragment(
+    ToonVertexOut in [[stage_in]],
+    constant MaterialUniforms& mat [[buffer(BufferIndexMaterial)]],
+    texture2d<float> baseTex [[texture(TextureIndexBase)]],
+    texture2d<float> lightmap [[texture(TextureIndexLightmap)]],
+    texture2d<float> lightmapDirection [[texture(TextureIndexLightmapDirection)]],
+    texture2d<float> emissionTex [[texture(TextureIndexEmission)]])
+{
+    float4 albedo = mat.baseColor;
+    if (mat.flags & MaterialFlagHasBaseTexture) albedo *= baseTex.sample(linearRepeat, in.uv);
+    if ((mat.flags & MaterialFlagAlphaTest) && albedo.a < mat.params.w) discard_fragment();
+    float2 luv = float2(in.uv1.x, 1.0 - in.uv1.y);
+    float3 gi = decodeLightmapRGBM(lightmap.sample(lightmapSampler, luv), mat.lightmapRange, mat.lightmapExponent);
+    if (mat.flags & MaterialFlagMapDirectionalLightmap) {
+        gi = decodeDirectionalLightmap(gi, lightmapDirection.sample(lightmapSampler, luv), normalize(in.worldNormal));
+    }
+    float3 color = albedo.rgb * mat.oneMinusReflectivity * gi;
+    if (mat.emissive.a > 0.0) color += emissionTex.sample(linearRepeat, in.uv).rgb * mat.emissive.rgb * mat.emissive.a;
+    return float4(color, (mat.flags & MaterialFlagAlphaBlend) ? albedo.a : 1.0);
+}

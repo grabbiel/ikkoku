@@ -207,13 +207,22 @@ private let identity: [Float] = [0, 0, 0, 0, 0, 0, 1, 1, 1]
 }
 
 @Test func sourceSceneInsertionPluginTrailerRules() throws {
+    // ST-T03i: an entry without a rule refuses copies and new records alike
+    // (its plug-in may save data for every object, or address objects by
+    // position). Staging still succeeds: the export refuses.
     let plugins = TopologyScene.kkex(OriginalCardFixture.map([("example.scene", .integer(7))]))
     let original = try decoded(scene(trailer: plugins))
-    // Duplicates would need the plug-ins' own copy; new records carry no
-    // plug-in data and keep the trailer byte for byte.
-    #expect(reason { try original.inserting([.init(.duplicate(of: 12))]) }.contains("plug-in (ExtendedSave) data"))
-    let added = try original.editedData(.init(insertions: [.init(.folder(name: "New"))]))
-    var expected = scene([camera0, folder1(), folder6(), route8, character10(), item12, .folder(13, [])], trailer: plugins)
+    #expect(try original.inserting([.init(.duplicate(of: 12))]).keys == [13])
+    #expect(reason { try original.editedData(.init(insertions: [.init(.duplicate(of: 12))])) }
+        .contains("cannot duplicate objects in this scene: plug-in data 'example.scene'"))
+    #expect(reason { try original.editedData(.init(insertions: [.init(.folder(name: "New"))])) }
+        .contains("cannot add objects in this scene: plug-in data 'example.scene'"))
+    // Scene-global data names no object: a new folder keeps the trailer
+    // byte for byte.
+    let global = TopologyScene.kkex(OriginalCardFixture.map([("com.deathweasel.bepinex.studioscenesettings",
+                                                               OriginalCardFixture.plugin(0, data: OriginalCardFixture.map([("NearClipPlane", .float(0.1))])))]))
+    let added = try decoded(scene(trailer: global)).editedData(.init(insertions: [.init(.folder(name: "New"))]))
+    var expected = scene([camera0, folder1(), folder6(), route8, character10(), item12, .folder(13, [])], trailer: global)
     expected.names[13] = "New"; expected.transforms[13] = identity
     #expect(added == expected.data)
     // An empty KKEx block does not block duplicates.

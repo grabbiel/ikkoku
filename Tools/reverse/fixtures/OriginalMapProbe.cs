@@ -21,6 +21,21 @@
 // scale/offset, materials and shaders), all lights, lightmaps, RenderSettings, the SunLightInfo entries and
 // both cameras' matrices. Nothing outside this plug-in's folder is written; no installed cards, saves or
 // media are read.
+//
+// Phase C, the baked-lightmap oracle (original_map_probe.py oracle): when reload-oracle-<case>.png records are
+// uploaded, nothing is authored. Each record is read back the same way, settled, and rendered from a probe
+// camera with Camera.main's pose and field of view:
+//   oracle-<case>-clean-color.png       Camera.main's settings without its image-effect components;
+//   oracle-<case>-irradiance.f32        the map scene's renderers only, every map material replaced by a copy
+//                                       of the map's keyword-free Standard material (white or black _Color and
+//                                       _MainTex, _Metallic 0, _Glossiness 0), every light at intensity 0, into
+//                                       a linear ARGBFloat target: (white - black) / (1 - 0.04) per pixel, RGB
+//                                       float32, rows top-down. At metallic 0 the specular terms do not depend on
+//                                       the albedo and cancel, so this is Unity's own gi.indirect.diffuse: the
+//                                       decoded directional lightmap (UnityGI_Base, occlusion 1);
+//   oracle-<case>-irradiance-lit.f32    the same with the lights at their authored intensities (adds the
+//                                       realtime lights' diffuse term with its shadows).
+// The irradiance pair is rendered twice; oracle-trace.json records the repeat's largest difference.
 using System;
 using System.Collections;
 using System.Collections.Generic;
@@ -56,15 +71,25 @@ public sealed class OriginalMapProbe:BaseUnityPlugin {
             studio=Singleton<Studio.Studio>.Instance;map=Singleton<Map>.Instance;
             try{voiceRepair=RepairVoice();}catch(Exception e){errors.Add("voice repair: "+e);}
         }
-        if(errors.Count==0)yield return StartCoroutine(Guard("map33",AuthorMapOnly()));
-        var showoff=Path.Combine(dir,"reload-showoff.png");
-        if(errors.Count==0&&File.Exists(showoff))yield return StartCoroutine(Guard("map33-showoff",AuthorShowoff(showoff)));
-        try{File.WriteAllText(Path.Combine(folder,"map-trace.json"),J(K("schemaVersion",1,"mapNo",MapNo,"width",Width,"height",Height,"depthFar",DepthFar,"cases",cases)));}
+        var oracles=Directory.GetFiles(dir,"reload-oracle-*.png");Array.Sort(oracles,StringComparer.Ordinal);
+        if(oracles.Length>0) {
+            foreach(var scene in oracles) {
+                if(errors.Count!=0)break;
+                var label=Path.GetFileNameWithoutExtension(scene).Substring("reload-oracle-".Length);
+                yield return StartCoroutine(Guard(label,LoadAndOracle(scene,label)));
+            }
+        } else {
+            if(errors.Count==0)yield return StartCoroutine(Guard("map33",AuthorMapOnly()));
+            var showoff=Path.Combine(dir,"reload-showoff.png");
+            if(errors.Count==0&&File.Exists(showoff))yield return StartCoroutine(Guard("map33-showoff",AuthorShowoff(showoff)));
+        }
+        try{File.WriteAllText(Path.Combine(folder,oracles.Length>0?"oracle-trace.json":"map-trace.json"),J(K("schemaVersion",1,"mapNo",MapNo,"width",Width,"height",Height,"depthFar",DepthFar,"cases",cases)));}
         catch(Exception e){errors.Add("trace write: "+e);}
         File.WriteAllText(Path.Combine(folder,"status.json"),J(K("error",errors.Count==0?null:String.Join(" | ",errors.ToArray()),"errors",errors,
             "unity",Application.unityVersion,"device",SystemInfo.graphicsDeviceName,"colorSpace",QualitySettings.activeColorSpace.ToString(),
             "voiceRepair",voiceRepair,"cases",new List<string>(cases.Keys),
-            "scope","Original CharaStudio 1.0.4.2 map "+MapNo+" fixtures authored with the player's own writer (Studio.AddMap, caMap through MapCtrl.Reflect, Studio.sceneInfo.Save) and read back through Studio.LoadSceneCoroutine; per case the player's Camera.main colour image, the map scene's renderers as a white silhouette and as Unity depth-normals (linear depth over "+DepthFar+" m) from Camera.main's pose and field of view, and a trace of the map root, renderers, lights, lightmaps, RenderSettings, SunLightInfo and cameras; no installed cards, saves or media")));
+            "scope","Original CharaStudio 1.0.4.2 map "+MapNo+" fixtures authored with the player's own writer (Studio.AddMap, caMap through MapCtrl.Reflect, Studio.sceneInfo.Save) and read back through Studio.LoadSceneCoroutine; per case the player's Camera.main colour image, the map scene's renderers as a white silhouette and as Unity depth-normals (linear depth over "+DepthFar+" m) from Camera.main's pose and field of view, and a trace of the map root, renderers, lights, lightmaps, RenderSettings, SunLightInfo and cameras; no installed cards, saves or media"+
+            (oracles.Length>0?". Oracle mode: the uploaded records read back, then a clean colour frame and Unity's decoded lightmap irradiance per pixel (white minus black albedo over 0.96, lights at 0 and as authored)":""))));
         Application.Quit();
         for(int i=0;i<3600;i++){yield return null;if(i%30==29)Application.Quit();}
     }
@@ -215,6 +240,121 @@ public sealed class OriginalMapProbe:BaseUnityPlugin {
             "quality",K("pixelLightCount",QualitySettings.pixelLightCount,"shadows",QualitySettings.shadows.ToString(),"antiAliasing",QualitySettings.antiAliasing,
                 "masterTextureLimit",QualitySettings.masterTextureLimit,"anisotropicFiltering",QualitySettings.anisotropicFiltering.ToString()),
             "images",new[]{"original-"+label+"-color.png","original-"+label+"-map-geometry.png","original-"+label+"-map-depth-normals.png"});
+    }
+    // Phase C: one uploaded record read back and measured (see the header).
+    IEnumerator LoadAndOracle(string scene,string label) {
+        studio.InitScene(false);
+        for(int i=0;i<3;i++)yield return null;
+        var done=new bool[1];int frames=0;float start=Time.realtimeSinceStartup;
+        StartCoroutine(Track(this,studio.LoadSceneCoroutine(scene),done));
+        for(;frames<LoadFrames&&!(done[0]&&Loaded());frames++)yield return null;
+        if(!(done[0]&&Loaded()))throw new Exception(label+": the record did not load map "+MapNo+" within "+LoadFrames+" frames (done "+done[0]+", no "+map.no+")");
+        float seconds=Time.realtimeSinceStartup-start;
+        for(int i=0;i<SettleFrames;i++)yield return null;
+        yield return new WaitForEndOfFrame();
+        cases[label]=K("label",label,"scene",Path.GetFileName(scene),"sceneSHA256",Sha256File(scene),"loadFrames",frames,"loadSeconds",seconds,
+            "settled",MapRecord(),"objects",studio.dicObjectCtrl.Count,"loadedCameraData",CameraData(studio.cameraCtrl.Export()),"oracle",Oracle(label));
+    }
+    const float OneMinusDielectricSpec=1f-0.04f; // unity_ColorSpaceDielectricSpec.a in Linear (UnityCG.cginc)
+    Dictionary<string,object> Oracle(string label) {
+        var main=Camera.main;if(main==null)throw new Exception("no Camera.main to measure");
+        var probeObject=new GameObject("IkkokuMapOracleCamera");var cam=probeObject.AddComponent<Camera>();
+        var ldr=new RenderTexture(Width,Height,24,RenderTextureFormat.ARGB32,RenderTextureReadWrite.Default);ldr.antiAliasing=1;ldr.Create();
+        var hdr=new RenderTexture(Width,Height,24,RenderTextureFormat.ARGBFloat,RenderTextureReadWrite.Linear);hdr.antiAliasing=1;hdr.Create();
+        var mapScene=map.mapRoot.scene;
+        var mapRenderers=new List<Renderer>();var hidden=new List<Renderer>();
+        var saved=new Dictionary<Renderer,Material[]>();
+        var lights=FindObjectsOfType<Light>();var intensities=new float[lights.Length];for(int i=0;i<lights.Length;i++)intensities[i]=lights[i].intensity;
+        Material white=null,black=null;
+        try {
+            // The clean colour frame: Camera.main's settings, none of its image-effect components.
+            cam.CopyFrom(main);cam.enabled=false;cam.aspect=(float)Width/Height;cam.targetTexture=ldr;
+            var cleanRecord=CameraRecord(cam);
+            cam.Render();cam.targetTexture=null;SaveTarget(ldr,"oracle-"+label+"-clean-color.png");
+            foreach(var r in FindObjectsOfType<Renderer>()) {
+                if(r.gameObject.scene==mapScene){if(r.enabled&&r.gameObject.activeInHierarchy)mapRenderers.Add(r);}
+                else if(r.enabled){r.enabled=false;hidden.Add(r);}
+            }
+            // The first (by name) keyword-free opaque Standard material the map draws with.
+            Material template=null;
+            foreach(var r in mapRenderers)foreach(var m in r.sharedMaterials)
+                if(m!=null&&m.shader!=null&&m.shader.name=="Standard"&&NoKeywords(m)&&m.renderQueue<=2500&&m.HasProperty("_Mode")&&m.GetFloat("_Mode")==0f
+                   &&(template==null||String.CompareOrdinal(m.name,template.name)<0))template=m;
+            if(template==null)throw new Exception("no keyword-free opaque Standard material on the map's renderers to copy");
+            white=Albedo(template,Color.white);black=Albedo(template,Color.black);
+            foreach(var r in mapRenderers)saved[r]=r.sharedMaterials;
+            cam.CopyFrom(main);cam.enabled=false;cam.aspect=(float)Width/Height;
+            cam.clearFlags=CameraClearFlags.SolidColor;cam.backgroundColor=Color.black;cam.allowHDR=true;cam.allowMSAA=false;cam.cullingMask=~0;
+            cam.renderingPath=RenderingPath.Forward;cam.useOcclusionCulling=false;
+            var probeRecord=CameraRecord(cam);
+            for(int i=0;i<lights.Length;i++)lights[i].intensity=0f;
+            var unlitStats=new Dictionary<string,object>();
+            var gi=Difference(cam,hdr,mapRenderers,white,black,unlitStats);
+            var repeat=Difference(cam,hdr,mapRenderers,white,black,new Dictionary<string,object>());
+            double repeatMax=0;for(int i=0;i<gi.Length;i++)repeatMax=Math.Max(repeatMax,Math.Abs((double)gi[i]-repeat[i]));
+            WriteFloats(gi,"oracle-"+label+"-irradiance.f32");
+            for(int i=0;i<lights.Length;i++)lights[i].intensity=intensities[i];
+            var litStats=new Dictionary<string,object>();
+            var lit=Difference(cam,hdr,mapRenderers,white,black,litStats);
+            WriteFloats(lit,"oracle-"+label+"-irradiance-lit.f32");
+            var lightmapTextures=new List<object>();
+            foreach(var d in LightmapSettings.lightmaps)foreach(var t in new[]{d.lightmapColor,d.lightmapDir})
+                if(t!=null)lightmapTextures.Add(K("name",t.name,"filterMode",t.filterMode.ToString(),"anisoLevel",t.anisoLevel,"wrapMode",t.wrapMode.ToString(),
+                    "mipMapBias",t.mipMapBias,"mipmapCount",t.mipmapCount,"format",t.format.ToString()));
+            return K("clean",K("camera",cleanRecord,"image","oracle-"+label+"-clean-color.png"),
+                "probe",probeRecord,"template",K("name",template.name,"shader",template.shader.name,"keywords",template.shaderKeywords,"renderQueue",template.renderQueue),
+                "overrides",K("albedo","_Color and _MainTex white or black","metallic",0,"glossiness",0,"keywords",white.shaderKeywords),
+                "mapRenderers",mapRenderers.Count,"hiddenRenderers",hidden.Count,
+                "lights",Lights(),"lightIntensities",intensities,
+                "irradiance",K("file","oracle-"+label+"-irradiance.f32","layout","float32 little-endian RGB, rows top-down","width",Width,"height",Height,
+                    "lights","all at intensity 0","divisor",OneMinusDielectricSpec,"stats",unlitStats,"repeatMaximumDifference",repeatMax),
+                "irradianceLit",K("file","oracle-"+label+"-irradiance-lit.f32","lights","as authored","stats",litStats),
+                "unity_Lightmap_HDR",V4(Shader.GetGlobalVector("unity_Lightmap_HDR")),
+                "colorSpace",QualitySettings.activeColorSpace.ToString(),"lightmapsMode",LightmapSettings.lightmapsMode.ToString(),
+                "lightmapTextures",lightmapTextures,"anisotropicFiltering",QualitySettings.anisotropicFiltering.ToString(),
+                "renderSettings",RenderSettingsRecord());
+        } finally {
+            foreach(var pair in saved)pair.Key.sharedMaterials=pair.Value;
+            for(int i=0;i<lights.Length;i++)if(lights[i]!=null)lights[i].intensity=intensities[i];
+            foreach(var r in hidden)r.enabled=true;
+            cam.targetTexture=null;Destroy(probeObject);ldr.Release();Destroy(ldr);hdr.Release();Destroy(hdr);
+            if(white!=null)Destroy(white);if(black!=null)Destroy(black);
+        }
+    }
+    static bool NoKeywords(Material m){foreach(var k in m.shaderKeywords)if(!String.IsNullOrEmpty(k))return false;return true;}
+    // A copy of the map's keyword-free Standard material (so its compiled lightmapped variants exist in this
+    // player) with the albedo forced and no metallic or smoothness.
+    static Material Albedo(Material template,Color color) {
+        var m=new Material(template);m.shaderKeywords=new string[0];
+        m.SetColor("_Color",color);m.SetTexture("_MainTex",Texture2D.whiteTexture);
+        m.SetFloat("_Metallic",0f);m.SetFloat("_Glossiness",0f);m.SetColor("_EmissionColor",Color.black);
+        return m;
+    }
+    float[] Difference(Camera cam,RenderTexture target,List<Renderer> renderers,Material white,Material black,Dictionary<string,object> stats) {
+        var a=RenderWith(cam,target,renderers,white);var b=RenderWith(cam,target,renderers,black);
+        var d=new float[a.Length];int nonFinite=0,negative=0,positive=0;double max=0,sum=0;
+        for(int i=0;i<a.Length;i++) {
+            float v=(a[i]-b[i])/OneMinusDielectricSpec;d[i]=v;
+            if(float.IsNaN(v)||float.IsInfinity(v)){nonFinite++;continue;}
+            if(v<0)negative++;else if(v>0){positive++;sum+=v;if(v>max)max=v;}
+        }
+        stats["nonFinite"]=nonFinite;stats["negative"]=negative;stats["positive"]=positive;stats["maximum"]=max;stats["meanPositive"]=positive>0?sum/positive:0;
+        return d;
+    }
+    float[] RenderWith(Camera cam,RenderTexture target,List<Renderer> renderers,Material material) {
+        foreach(var r in renderers){var m=new Material[r.sharedMaterials.Length];for(int i=0;i<m.Length;i++)m[i]=material;r.sharedMaterials=m;}
+        cam.targetTexture=target;cam.Render();cam.targetTexture=null;
+        var previous=RenderTexture.active;RenderTexture.active=target;
+        var read=new Texture2D(Width,Height,TextureFormat.RGBAFloat,false,true);read.ReadPixels(new Rect(0,0,Width,Height),0,0);read.Apply(false,false);
+        RenderTexture.active=previous;
+        var pixels=read.GetPixels();Destroy(read);
+        var rgb=new float[Width*Height*3];
+        for(int y=0;y<Height;y++)for(int x=0;x<Width;x++){var c=pixels[(Height-1-y)*Width+x];int o=(y*Width+x)*3;rgb[o]=c.r;rgb[o+1]=c.g;rgb[o+2]=c.b;}
+        return rgb;
+    }
+    void WriteFloats(float[] values,string file) {
+        var bytes=new byte[values.Length*4];Buffer.BlockCopy(values,0,bytes,0,bytes.Length);
+        File.WriteAllBytes(Path.Combine(folder,file),bytes);
     }
     static Material WhiteMaterial(out string name) {
         var shader=Shader.Find("Unlit/Color");name="Unlit/Color";

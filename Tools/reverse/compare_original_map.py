@@ -21,13 +21,28 @@ Gates (all must pass; no registration, resizing, recolouring or camera fitting):
 - depth-normals: on pixels both silhouettes cover, depth p99 <= 2 quantization steps
   of Unity's EncodeFloatRG over the shared far plane and normal p99 <= 2 channel
   bytes (compare_original_frame.depth_metrics).
-Colour is reported, never gated: the converted map is drawn with the item toon
-material under the scene light and the catalog lists what it leaves out. Two
-controls must FAIL: our depth image shifted one pixel, and (for a case with a
-nonzero map rotation) that rotation composed in the wrong Euler order (X, Y, Z).
+Colour is reported, never gated: the in-app label lists what the map's material
+leaves out. Two controls must FAIL: our depth image shifted one pixel, and (for a
+case with a nonzero map rotation) that rotation composed in the wrong Euler order
+(X, Y, Z).
+
+With --oracle (an `original_map_probe.py oracle` folder, ST-A11 slice 2) each case
+also gets:
+- cleanColor: our colour against the original's Camera.main frame without its
+  image effects (reported, not gated);
+- irradiance (gated when our capture has baked lightmaps): our decoded lightmap
+  (native-map-irradiance-decoded) against Unity's own gi.indirect.diffuse from the
+  oracle, on interior pixels (both silhouettes, 3x3 neighbourhood on one smooth
+  surface of the original's depth-normals, so MSAA-resolved edges are left out).
+  The per-pixel error is the largest channel's |ours - Unity| / Unity. Gate:
+  mean <= IRRADIANCE_TOLERANCE["mean"] and p99 <= IRRADIANCE_TOLERANCE["p99"],
+  and the oracle's repeat render must have differed by 0. Both negative controls
+  (our nonDirectional and gammaConstants variants) must FAIL the same gate;
+- irradianceLit: how much Unity's realtime lights add to the oracle (lit over
+  unlit), the term the app leaves out (reported).
 """
 from __future__ import annotations
-import argparse, hashlib, json, math
+import argparse, gzip, hashlib, json, math, zlib
 from pathlib import Path
 import numpy as np
 from PIL import Image
@@ -75,7 +90,93 @@ def digest(path):
     return hashlib.sha256(Path(path).read_bytes()).hexdigest()
 
 
-def compare_case(trace, case, original, ours):
+# The irradiance gate (ST-A11 slice 2; docs/reference/studio/maps.md, "The irradiance gate"). Its controls
+# leave only our storage to allow for: the oracle's repeat render differs by 0, and the decode test
+# (SourceStudioMapLightmapTests) puts map_fragment within 1e-4 of the cited formula. Our image is the
+# float16 HDR target, so the gate allows one float16 step (2^-10 relative) for the mean and two for p99
+# (the depth gate's two-quantization-step rule).
+IRRADIANCE_TOLERANCE = dict(mean=2.0 ** -10, p99=2.0 ** -9)
+INTERIOR_DEPTH_FRACTION = 0.02   # neighbour depth within 2 % of the pixel's
+INTERIOR_NORMAL_BYTES = 6        # neighbour encoded view normal within 6 channel bytes
+IRRADIANCE_VARIANTS = ("decoded", "nonDirectional", "gammaConstants")
+
+
+def read_oracle_floats(path, width, height):
+    """original_map_probe.py oracle's float32 RGB image (gzipped on arrival), rows top-down."""
+    return np.frombuffer(gzip.decompress(Path(path).read_bytes()), dtype="<f4").reshape(height, width, 3).astype(np.float64)
+
+
+def read_native_irradiance(path, width, height):
+    """IKKOKU_SOURCE_MAP_PROBE's RGBA float16 image in raw DEFLATE, rows top-down."""
+    return np.frombuffer(zlib.decompress(Path(path).read_bytes(), -15), dtype="<f2").reshape(height, width, 4)[:, :, :3].astype(np.float64)
+
+
+def surface_interior(geometry, depth_normals, far):
+    """Silhouette pixels whose whole 3x3 neighbourhood lies on one smooth surface of a
+    Unity depth-normals image: no depth step over INTERIOR_DEPTH_FRACTION of the depth and
+    no normal step over INTERIOR_NORMAL_BYTES; the image border is left out."""
+    d = depth_normals.astype(np.float64)
+    depth = (d[:, :, 2] + d[:, :, 3] / 255) / 255 * far
+    normal = d[:, :, :2]
+    keep = geometry.copy()
+    for dy in (-1, 0, 1):
+        for dx in (-1, 0, 1):
+            if dy == 0 and dx == 0: continue
+            shift = lambda a: np.roll(np.roll(a, dy, axis=0), dx, axis=1)
+            keep &= shift(geometry) & (np.abs(shift(depth) - depth) <= INTERIOR_DEPTH_FRACTION * depth) \
+                & (np.abs(shift(normal) - normal).max(axis=-1) <= INTERIOR_NORMAL_BYTES)
+    keep[0, :] = keep[-1, :] = keep[:, 0] = keep[:, -1] = False
+    return keep
+
+
+def irradiance_metrics(unity, ours, mask):
+    """The largest channel's relative error per pixel on `mask`, against the gate."""
+    if unity.shape != ours.shape or unity.shape[:2] != mask.shape or not mask.any(): raise ValueError("Invalid irradiance comparison extent")
+    relative = (np.abs(ours - unity) / np.maximum(unity, 1e-3)).max(axis=-1)[mask]
+    mean, p99 = float(relative.mean()), float(np.percentile(relative, 99))
+    return dict(comparedPixels=int(mask.sum()), meanRelative=mean, p99Relative=p99, maximumRelative=float(relative.max()),
+                meanAbsolute=float(np.abs(ours - unity)[mask].mean()), unityMean=float(unity[mask].mean()), oursMean=float(ours[mask].mean()),
+                tolerance=dict(IRRADIANCE_TOLERANCE), passes=mean <= IRRADIANCE_TOLERANCE["mean"] and p99 <= IRRADIANCE_TOLERANCE["p99"])
+
+
+def color_error(a, b):
+    error = np.abs(a.astype(np.int16)[:, :, :3] - b.astype(np.int16)[:, :, :3])
+    return dict(meanAbsoluteChannelBytes=float(error.mean()), p99ChannelBytes=float(np.percentile(error, 99)))
+
+
+def oracle_case(oracle_trace, case, oracle, ours, native, geometry, depth_normals, nc, width, height, far):
+    """The --oracle sections for one case (see the module docstring)."""
+    record = oracle_trace["cases"][case]
+    measured = record["oracle"]
+    result = {}
+    clean = oracle / measured["clean"]["image"]
+    result["cleanColor"] = dict(gated=False, image=dict(file=str(clean), sha256=digest(clean)), **color_error(pixels(clean), nc))
+    unity = read_oracle_floats(oracle / (measured["irradiance"]["file"] + ".gz"), width, height)
+    lit = read_oracle_floats(oracle / (measured["irradianceLit"]["file"] + ".gz"), width, height)
+    added = (lit - unity).max(axis=-1)
+    result["irradianceLit"] = dict(gated=False, pixelsAddedOverOnePercent=int((added > 0.01 * unity.max(axis=-1)).sum()),
+                                   maximumAdded=float(added.max()), meanAdded=float(added.mean()))
+    files = native.get("irradiance", {}).get("files") if native.get("irradiance", {}).get("written") else None
+    if not files:
+        result["irradiance"] = dict(gated=False, reason="our capture has no baked-lightmap draws")
+        return result
+    mask = surface_interior(geometry, depth_normals, far)
+    section = irradiance_metrics(unity, read_native_irradiance(ours / files["decoded"], width, height), mask)
+    repeat = measured["irradiance"]["repeatMaximumDifference"]
+    section.update(gated=True, oracleSceneSHA256=record["sceneSHA256"], oracleRepeatMaximumDifference=repeat,
+                   interior=dict(depthFraction=INTERIOR_DEPTH_FRACTION, normalBytes=INTERIOR_NORMAL_BYTES, pixels=int(mask.sum()),
+                                 silhouettePixels=int(geometry.sum())))
+    controls = {}
+    for variant in IRRADIANCE_VARIANTS[1:]:
+        control = irradiance_metrics(unity, read_native_irradiance(ours / files[variant], width, height), mask)
+        controls[variant] = dict(meanRelative=control["meanRelative"], p99Relative=control["p99Relative"], fails=not control["passes"])
+    section["controls"] = controls
+    section["passes"] = section["passes"] and repeat == 0 and all(c["fails"] for c in controls.values())
+    result["irradiance"] = section
+    return result
+
+
+def compare_case(trace, case, original, ours, oracle=None, oracle_trace=None):
     record = trace["cases"][case]
     native = json.loads((ours / "native-map.json").read_text())
     after = record["settled"]
@@ -126,24 +227,35 @@ def compare_case(trace, case, original, ours):
     result["depthNormals"]["onePixelShiftControl"] = dict(p99Metres=control["p99Metres"], normalP99ChannelBytes=control["normalP99ChannelBytes"],
                                                           fails=not control["passes"])
     # Colour, reported only.
-    oc = pixels(names["originalColor"]).astype(np.int16)[:, :, :3]; nc = pixels(names["nativeColor"]).astype(np.int16)[:, :, :3]
-    error = np.abs(oc - nc)
-    result["color"] = dict(gated=False, meanAbsoluteChannelBytes=float(error.mean()), p99ChannelBytes=float(np.percentile(error, 99)),
-                           reason="approximated shading: the converted map draws with the item toon material under the scene light; "
-                                  "baked lightmaps, map lights, sun-type lighting, fog, ambient and the original image effects are not reproduced")
+    oc = pixels(names["originalColor"]); nc = pixels(names["nativeColor"])
+    lightmapped = (native.get("census", {}).get("lightmappedDraws") or 0) > 0
+    reason = ("approximated shading: the baked lightmaps are drawn; the realtime sun and its shadows, specular and reflections, "
+              "normal, metallic and detail maps, fog and the original image effects are not reproduced") if lightmapped else \
+             ("approximated shading: the converted map draws with the item toon material under the scene light; "
+              "baked lightmaps, map lights, sun-type lighting, fog, ambient and the original image effects are not reproduced")
+    result["color"] = dict(gated=False, lightmappedDraws=native.get("census", {}).get("lightmappedDraws"), reason=reason, **color_error(oc, nc))
+    gated = ["record", "rule", "placement", "camera", "geometry", "depthNormals"]
+    if oracle is not None:
+        result.update(oracle_case(oracle_trace, case, oracle, ours, native, a & b, od, nc, trace["width"], trace["height"], float(trace["depthFar"])))
+        if result["irradiance"].get("gated"): gated.append("irradiance")
     result["images"] = {k: dict(file=str(v), sha256=digest(v)) for k, v in names.items()}
-    result["passes"] = all(result[k]["passes"] for k in ("record", "rule", "placement", "camera", "geometry", "depthNormals")) \
+    result["passes"] = all(result[k]["passes"] for k in gated) \
         and (result["rule"]["wrongEulerOrderControl"]["fails"] or not result["rule"]["wrongEulerOrderControl"]["applicable"]) \
         and result["depthNormals"]["onePixelShiftControl"]["fails"]
     return result
 
 
-def compare(original, ours_by_case):
+def compare(original, ours_by_case, oracle=None):
     trace = json.loads((original / "map-trace.json").read_text())
-    cases = [compare_case(trace, case, original, ours) for case, ours in ours_by_case]
-    return dict(schemaVersion=1, scope=__doc__.strip().splitlines()[0], mapNo=trace["mapNo"], depthFar=trace["depthFar"],
-                width=trace["width"], height=trace["height"], traceSHA256=digest(original / "map-trace.json"),
-                cases=cases, passes=all(c["passes"] for c in cases))
+    oracle_trace = json.loads((oracle / "oracle-trace.json").read_text()) if oracle is not None else None
+    if oracle_trace is not None and (oracle_trace["width"], oracle_trace["height"]) != (trace["width"], trace["height"]):
+        raise ValueError("the oracle is not at the original captures' size")
+    cases = [compare_case(trace, case, original, ours, oracle, oracle_trace) for case, ours in ours_by_case]
+    result = dict(schemaVersion=1, scope=__doc__.strip().splitlines()[0], mapNo=trace["mapNo"], depthFar=trace["depthFar"],
+                  width=trace["width"], height=trace["height"], traceSHA256=digest(original / "map-trace.json"),
+                  cases=cases, passes=all(c["passes"] for c in cases))
+    if oracle is not None: result["oracleTraceSHA256"] = digest(oracle / "oracle-trace.json")
+    return result
 
 
 def main():
@@ -151,15 +263,20 @@ def main():
     p.add_argument("--original", type=Path, required=True, help="original_map_probe.py capture output folder")
     p.add_argument("--case", nargs=2, action="append", metavar=("CASE", "OURS"), required=True,
                    help="a trace case label and our IKKOKU_SOURCE_MAP_PROBE folder for its scene (repeatable)")
+    p.add_argument("--oracle", type=Path, help="original_map_probe.py oracle output folder (adds cleanColor and the irradiance gate)")
     p.add_argument("--output", type=Path, help="write the comparison JSON here")
     a = p.parse_args()
-    result = compare(a.original, [(case, Path(folder)) for case, folder in a.case])
+    result = compare(a.original, [(case, Path(folder)) for case, folder in a.case], a.oracle)
     text = json.dumps(result, indent=2) + "\n"
     if a.output: a.output.parent.mkdir(parents=True, exist_ok=True); a.output.write_text(text)
     for c in result["cases"]:
         print(f"{c['case']}: {'PASS' if c['passes'] else 'FAIL'} rule {c['rule']['rotationErrorDegrees']:.2e} deg, placement {c['placement']['mapRootError']:.1e}, "
               f"camera {c['camera']['viewError']:.1e}, IoU {c['geometry']['intersectionOverUnion']:.6f}, depth p99 {c['depthNormals']['p99Metres']:.2e} m "
-              f"(max {c['depthNormals']['maximumMetres']:.2e}), normal p99 {c['depthNormals']['normalP99ChannelBytes']}, colour MAE {c['color']['meanAbsoluteChannelBytes']:.1f} (not gated)")
+              f"(max {c['depthNormals']['maximumMetres']:.2e}), normal p99 {c['depthNormals']['normalP99ChannelBytes']}, colour MAE {c['color']['meanAbsoluteChannelBytes']:.1f} (not gated)"
+              + (f", clean-colour MAE {c['cleanColor']['meanAbsoluteChannelBytes']:.1f}" if "cleanColor" in c else "")
+              + (f", irradiance mean {c['irradiance']['meanRelative']:.4f} p99 {c['irradiance']['p99Relative']:.4f}"
+                 f" (controls {', '.join(f'{k} p99 {v['p99Relative']:.3f}' for k, v in c['irradiance']['controls'].items())})"
+                 if c.get("irradiance", {}).get("gated") else ""))
     raise SystemExit(0 if result["passes"] else 1)
 
 

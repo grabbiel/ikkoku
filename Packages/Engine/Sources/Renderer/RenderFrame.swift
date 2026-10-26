@@ -22,6 +22,12 @@ public struct MaterialState: Sendable, Equatable {
     public var pattern: TextureHandle?
     public var hairGloss: TextureHandle?
     public var bodyMask: TextureHandle?
+    /// `MaterialKindMap` only (ST-A11 source maps): the baked lightmap, its
+    /// CombinedDirectional direction map and the Standard emission map. The
+    /// main pass binds them for map draws alone.
+    public var lightmap: TextureHandle?
+    public var lightmapDirection: TextureHandle?
+    public var emission: TextureHandle?
     public var transparent: Bool = false     // draw in the transparent pass (blend)
     public var depthBias: Float = 0          // metres toward the camera (eyebrows over hair)
 
@@ -31,12 +37,15 @@ public struct MaterialState: Sendable, Equatable {
         withUnsafeBytes(of: a.uniforms) { ab in withUnsafeBytes(of: b.uniforms) { bb in ab.elementsEqual(bb) } }
         && a.base == b.base && a.colorMask == b.colorMask && a.detail == b.detail && a.line == b.line && a.normal == b.normal
         && a.overlay0 == b.overlay0 && a.overlay1 == b.overlay1 && a.overlay2 == b.overlay2 && a.pattern == b.pattern
-        && a.hairGloss == b.hairGloss && a.bodyMask == b.bodyMask && a.transparent == b.transparent && a.depthBias == b.depthBias
+        && a.hairGloss == b.hairGloss && a.bodyMask == b.bodyMask && a.lightmap == b.lightmap
+        && a.lightmapDirection == b.lightmapDirection && a.emission == b.emission
+        && a.transparent == b.transparent && a.depthBias == b.depthBias
     }
 
     /// All explicit texture references, without fallback textures.
     public var textureHandles: [TextureHandle] {
-        [base, colorMask, detail, line, normal, overlay0, overlay1, overlay2, pattern, hairGloss, bodyMask].compactMap { $0 }
+        [base, colorMask, detail, line, normal, overlay0, overlay1, overlay2, pattern, hairGloss, bodyMask,
+         lightmap, lightmapDirection, emission].compactMap { $0 }
     }
 
     public var kind: MaterialKind { MaterialKind(rawValue: Int32(uniforms.kind)) }

@@ -1,6 +1,6 @@
 """ST-A11 map comparison: the independent Quaternion.Euler, the basis and matrix layout, and
 every gate and control on small synthetic captures. No VM or private data is needed."""
-import copy, json, math, tempfile, unittest
+import copy, gzip, json, math, tempfile, unittest, zlib
 from pathlib import Path
 import numpy as np
 from PIL import Image
@@ -58,7 +58,8 @@ class EulerTests(unittest.TestCase):
         self.assertEqual(m[0, 1], 4); self.assertEqual(m[1, 0], 1); self.assertEqual(m[3, 2], 11)
 
 
-class CaseTests(unittest.TestCase):
+class CaseFixture(unittest.TestCase):
+    """A consistent original trace and our capture in temporary folders (no tests of its own)."""
     POS, ROT = [0.3, -0.05, -0.5], [4, 25, -3]
 
     def setUp(self):
@@ -105,6 +106,9 @@ class CaseTests(unittest.TestCase):
 
     def run_case(self):
         return compare.compare(self.original, [('c', self.ours)])['cases'][0]
+
+
+class CaseTests(CaseFixture):
 
     def test_a_consistent_capture_passes_every_gate_and_both_controls_fail(self):
         case = self.run_case()
@@ -159,6 +163,91 @@ class CaseTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, 'size and far plane'):
             self.run_case()
 
+
+
+class OracleTests(CaseFixture):
+    """The --oracle sections: cleanColor, the irradiance gate with its two negative controls, irradianceLit."""
+    def setUp(self):
+        super().setUp()
+        self.oracle = Path(self.tmp.name) / 'oracle'; self.oracle.mkdir()
+        # One wall whose depth rises three low-byte steps per column: smooth for the interior test,
+        # steep enough for the one-pixel-shift depth control to fail.
+        flat = self.wall()
+        save(self.original / 'original-c-map-depth-normals.png', flat); save(self.ours / 'native-map-depth-normals.png', flat)
+        rows, cols = np.mgrid[0:H, 0:W]
+        self.unity = np.stack([0.5 + cols / W, 1.0 + rows / H, np.full((H, W), 1.5)], axis=-1)
+        self.write_oracle(self.unity)
+        self.write_ours({'decoded': self.unity, 'nonDirectional': self.unity * 0.8, 'gammaConstants': self.unity * 0.3})
+
+    @staticmethod
+    def wall():
+        image = np.full((H, W, 4), 255.0); image[..., 0] = 128; image[..., 1] = 100; image[..., 2] = 40
+        image[..., 3] = np.arange(W)[None, :] * 3
+        return image
+
+    def write_oracle(self, unity, lit=None, repeat=0.0):
+        for name, image in (('oracle-c-irradiance.f32', unity), ('oracle-c-irradiance-lit.f32', unity if lit is None else lit)):
+            (self.oracle / (name + '.gz')).write_bytes(gzip.compress(image.astype('<f4').tobytes()))
+        save(self.oracle / 'oracle-c-clean-color.png', np.full((H, W, 4), 70))
+        trace = dict(width=W, height=H, cases={'c': dict(sceneSHA256='ab' * 32, oracle=dict(
+            clean=dict(image='oracle-c-clean-color.png'),
+            irradiance=dict(file='oracle-c-irradiance.f32', repeatMaximumDifference=repeat),
+            irradianceLit=dict(file='oracle-c-irradiance-lit.f32')))})
+        (self.oracle / 'oracle-trace.json').write_text(json.dumps(trace))
+
+    def write_ours(self, variants):
+        native = json.loads((self.ours / 'native-map.json').read_text())
+        files = {}
+        for variant, image in variants.items():
+            rgba = np.concatenate([image, np.ones((H, W, 1))], axis=-1).astype('<f2').tobytes()
+            packer = zlib.compressobj(wbits=-15); data = packer.compress(rgba) + packer.flush()
+            files[variant] = f'native-map-irradiance-{variant}.rgba16f.deflate'
+            (self.ours / files[variant]).write_bytes(data)
+        native['irradiance'] = dict(written=bool(variants), files=files)
+        native['census'] = dict(lightmappedDraws=2 if variants else 0)
+        (self.ours / 'native-map.json').write_text(json.dumps(native))
+
+    def run_oracle(self):
+        return compare.compare(self.original, [('c', self.ours)], self.oracle)['cases'][0]
+
+    def test_a_matching_irradiance_passes_and_both_controls_fail(self):
+        case = self.run_oracle()
+        self.assertTrue(case['passes'], json.dumps(case, indent=1, default=str))
+        irradiance = case['irradiance']
+        self.assertTrue(irradiance['gated'] and irradiance['passes'])
+        self.assertLess(irradiance['p99Relative'], 1e-3)  # float16 rounding only
+        self.assertEqual(irradiance['interior']['pixels'], 14 * 18)  # the silhouette eroded by one pixel
+        self.assertTrue(all(c['fails'] for c in irradiance['controls'].values()))
+        self.assertEqual(case['cleanColor']['meanAbsoluteChannelBytes'], 10.0)
+        self.assertEqual(case['irradianceLit']['pixelsAddedOverOnePercent'], 0)
+        self.assertIn('baked lightmaps are drawn', case['color']['reason'])
+
+    def test_a_wrong_decode_a_control_that_passes_or_an_unrepeatable_oracle_fails(self):
+        self.write_ours({'decoded': self.unity * 1.05, 'nonDirectional': self.unity * 0.8, 'gammaConstants': self.unity * 0.3})
+        case = self.run_oracle()
+        self.assertFalse(case['irradiance']['passes']); self.assertFalse(case['passes'])
+        self.write_ours({'decoded': self.unity, 'nonDirectional': self.unity, 'gammaConstants': self.unity * 0.3})
+        case = self.run_oracle()
+        self.assertFalse(case['irradiance']['controls']['nonDirectional']['fails']); self.assertFalse(case['passes'])
+        self.write_ours({'decoded': self.unity, 'nonDirectional': self.unity * 0.8, 'gammaConstants': self.unity * 0.3})
+        self.write_oracle(self.unity, repeat=1e-6)
+        self.assertFalse(self.run_oracle()['passes'])
+
+    def test_depth_steps_leave_the_interior_and_lit_pixels_are_counted(self):
+        step = self.wall(); step[:, 16:, 2] = 80  # a wall twice as far from column 16 on
+        save(self.original / 'original-c-map-depth-normals.png', step); save(self.ours / 'native-map-depth-normals.png', step)
+        lit = self.unity.copy(); lit[10, 10] += 0.5
+        self.write_oracle(self.unity, lit=lit)
+        case = self.run_oracle()
+        self.assertEqual(case['irradiance']['interior']['pixels'], 14 * 18 - 14 * 2)
+        self.assertEqual(case['irradianceLit']['pixelsAddedOverOnePercent'], 1)
+        self.assertAlmostEqual(case['irradianceLit']['maximumAdded'], 0.5, places=5)
+
+    def test_a_capture_without_lightmaps_reports_without_the_gate(self):
+        self.write_ours({})
+        case = self.run_oracle()
+        self.assertFalse(case['irradiance']['gated']); self.assertTrue(case['passes'])
+        self.assertIn('item toon material', case['color']['reason'])
 
 if __name__ == '__main__':
     unittest.main()

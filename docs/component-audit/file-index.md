@@ -7,14 +7,14 @@ evaluator files, the ST-T11 second-slice route playback files, the ST-T11
 third-slice original route capture/comparison files, the ST-T11
 sixth-slice per-frame route stepping files, the ST-T11 ninth-slice route
 clock files, the ST-T11 character-light capture/mapping files, the ST-A11
-scene character-light preview override files, the ST-A11 first map slice files, the original-player probe
+scene character-light preview override files, the ST-A11 first and second (baked lightmap) map slice files, the original-player probe
 robustness test, the ST-A06 camera-object capture files, the ST-A06
 source camera-object look-through files, the ST-A06 source scale rule files,
 the ST-T07 eye look reference and solver-port files, the ST-T07s eye look
 Studio preview runtime files, the ST-T07u iris rendering files and the ST-T04
 studio item shader contract and record color files and the ST-T08 first-slice
 original motion capture/replay files. The 2026-10-23 ST-T08e skirt slice updates runtime, exporter, fixture, test and reference files and adds its paired
-Studio save/load scenarios; it does not represent a new code audit. It lists every present Git-visible
+Studio save/load scenarios; it does not represent a new code audit. The 2026-10-25 ST-T03i plug-in data slice adds its rule, test, rule-parity, survey and original-player probe files. It lists every present Git-visible
 tracked/untracked non-ignored repository file outside
 `docs/component-audit/`. It excludes private `.local/`, dependency/build caches
 and ignored intermediate assets. Binary assets are inventoried, not reviewed as
@@ -23,13 +23,13 @@ branch was tested or every asset matches the original game. Feature status,
 specific comments and pending tasks are in the linked reports. Shared behavior
 may be discussed in more than one report; one primary owner is listed here.
 
-**995 files indexed; 995 assigned; 0 unassigned.**
+**1009 files indexed; 1009 assigned; 0 unassigned.**
 
 | Primary report | Files |
 | --- | ---: |
 | [App / gameplay / plugins](app-gameplay-and-plugins.md) | 110 |
 | [Character / Maker / mods](character-and-mods.md) | 128 |
-| [Studio / IK / animation](studio.md) | 213 |
+| [Studio / IK / animation](studio.md) | 227 |
 | [Renderer / foundation / assets](renderer-and-foundation.md) | 335 |
 | [Toolchain / verification / historical docs](toolchain-and-verification.md) | 199 |
 
@@ -37,12 +37,12 @@ may be discussed in more than one report; one primary owner is listed here.
 | --- | ---: |
 | App resource metadata / icon | 16 |
 | Build / repository configuration | 9 |
-| Conversion / recovery / verification tool | 233 |
+| Conversion / recovery / verification tool | 235 |
 | Documentation / historical evidence | 65 |
 | Generated asset / catalog / fixture | 205 |
-| Reference host / controlled fixture | 30 |
-| Runtime / shared shader declaration | 221 |
-| Test / validation | 203 |
+| Reference host / controlled fixture | 35 |
+| Runtime / shared shader declaration | 223 |
+| Test / validation | 208 |
 
 ## App / gameplay / plugins
 
@@ -327,6 +327,7 @@ Feature assessment: [studio.md](studio.md).
 | [Packages/Engine/Sources/Studio/SourceSceneEditing.swift](../../Packages/Engine/Sources/Studio/SourceSceneEditing.swift) | Runtime / shared shader declaration |
 | [Packages/Engine/Sources/Studio/SourceSceneExportValidation.swift](../../Packages/Engine/Sources/Studio/SourceSceneExportValidation.swift) | Runtime / shared shader declaration |
 | [Packages/Engine/Sources/Studio/SourceSceneInsertion.swift](../../Packages/Engine/Sources/Studio/SourceSceneInsertion.swift) | Runtime / shared shader declaration |
+| [Packages/Engine/Sources/Studio/SourceScenePluginData.swift](../../Packages/Engine/Sources/Studio/SourceScenePluginData.swift) | Runtime / shared shader declaration |
 | [Packages/Engine/Sources/Studio/SourceSceneTopology.swift](../../Packages/Engine/Sources/Studio/SourceSceneTopology.swift) | Runtime / shared shader declaration |
 | [Packages/Engine/Sources/Studio/SourceStudioAccessoryNamesPlugin.swift](../../Packages/Engine/Sources/Studio/SourceStudioAccessoryNamesPlugin.swift) | Runtime / shared shader declaration |
 | [Packages/Engine/Sources/Studio/SourceStudioAnimation.swift](../../Packages/Engine/Sources/Studio/SourceStudioAnimation.swift) | Runtime / shared shader declaration |
@@ -351,6 +352,7 @@ Feature assessment: [studio.md](studio.md).
 | [Packages/Engine/Sources/Studio/SourceStudioLiveTick.swift](../../Packages/Engine/Sources/Studio/SourceStudioLiveTick.swift) | Runtime / shared shader declaration |
 | [Packages/Engine/Sources/Studio/SourceStudioLookData.swift](../../Packages/Engine/Sources/Studio/SourceStudioLookData.swift) | Runtime / shared shader declaration |
 | [Packages/Engine/Sources/Studio/SourceStudioMap.swift](../../Packages/Engine/Sources/Studio/SourceStudioMap.swift) | Runtime / shared shader declaration |
+| [Packages/Engine/Sources/Studio/SourceStudioMapLightmaps.swift](../../Packages/Engine/Sources/Studio/SourceStudioMapLightmaps.swift) | Runtime / shared shader declaration |
 | [Packages/Engine/Sources/Studio/SourceStudioNeckLook.swift](../../Packages/Engine/Sources/Studio/SourceStudioNeckLook.swift) | Runtime / shared shader declaration |
 | [Packages/Engine/Sources/Studio/SourceStudioNeckLookRuntime.swift](../../Packages/Engine/Sources/Studio/SourceStudioNeckLookRuntime.swift) | Runtime / shared shader declaration |
 | [Packages/Engine/Sources/Studio/SourceStudioNeckTargetAngle.swift](../../Packages/Engine/Sources/Studio/SourceStudioNeckTargetAngle.swift) | Runtime / shared shader declaration |
@@ -385,6 +387,9 @@ Feature assessment: [studio.md](studio.md).
 | [Packages/Engine/Tests/EngineTests/SourceSceneEditingTests.swift](../../Packages/Engine/Tests/EngineTests/SourceSceneEditingTests.swift) | Test / validation |
 | [Packages/Engine/Tests/EngineTests/SourceSceneExportValidationTests.swift](../../Packages/Engine/Tests/EngineTests/SourceSceneExportValidationTests.swift) | Test / validation |
 | [Packages/Engine/Tests/EngineTests/SourceSceneInsertionTests.swift](../../Packages/Engine/Tests/EngineTests/SourceSceneInsertionTests.swift) | Test / validation |
+| [Packages/Engine/Tests/EngineTests/SourceScenePluginDataPerformanceTests.swift](../../Packages/Engine/Tests/EngineTests/SourceScenePluginDataPerformanceTests.swift) | Test / validation |
+| [Packages/Engine/Tests/EngineTests/SourceScenePluginDataProbeTests.swift](../../Packages/Engine/Tests/EngineTests/SourceScenePluginDataProbeTests.swift) | Test / validation |
+| [Packages/Engine/Tests/EngineTests/SourceScenePluginDataTests.swift](../../Packages/Engine/Tests/EngineTests/SourceScenePluginDataTests.swift) | Test / validation |
 | [Packages/Engine/Tests/EngineTests/SourceSceneRouteEditTests.swift](../../Packages/Engine/Tests/EngineTests/SourceSceneRouteEditTests.swift) | Test / validation |
 | [Packages/Engine/Tests/EngineTests/SourceSceneTopologyPerformanceTests.swift](../../Packages/Engine/Tests/EngineTests/SourceSceneTopologyPerformanceTests.swift) | Test / validation |
 | [Packages/Engine/Tests/EngineTests/SourceSceneTopologyTests.swift](../../Packages/Engine/Tests/EngineTests/SourceSceneTopologyTests.swift) | Test / validation |
@@ -409,6 +414,7 @@ Feature assessment: [studio.md](studio.md).
 | [Packages/Engine/Tests/EngineTests/SourceStudioItemColorTests.swift](../../Packages/Engine/Tests/EngineTests/SourceStudioItemColorTests.swift) | Test / validation |
 | [Packages/Engine/Tests/EngineTests/SourceStudioLiveTickTests.swift](../../Packages/Engine/Tests/EngineTests/SourceStudioLiveTickTests.swift) | Test / validation |
 | [Packages/Engine/Tests/EngineTests/SourceStudioLookDataTests.swift](../../Packages/Engine/Tests/EngineTests/SourceStudioLookDataTests.swift) | Test / validation |
+| [Packages/Engine/Tests/EngineTests/SourceStudioMapLightmapTests.swift](../../Packages/Engine/Tests/EngineTests/SourceStudioMapLightmapTests.swift) | Test / validation |
 | [Packages/Engine/Tests/EngineTests/SourceStudioMapTests.swift](../../Packages/Engine/Tests/EngineTests/SourceStudioMapTests.swift) | Test / validation |
 | [Packages/Engine/Tests/EngineTests/SourceStudioNeckLookRuntimeTests.swift](../../Packages/Engine/Tests/EngineTests/SourceStudioNeckLookRuntimeTests.swift) | Test / validation |
 | [Packages/Engine/Tests/EngineTests/SourceStudioNeckLookTests.swift](../../Packages/Engine/Tests/EngineTests/SourceStudioNeckLookTests.swift) | Test / validation |
@@ -471,13 +477,18 @@ Feature assessment: [studio.md](studio.md).
 | [Tools/reverse/fixtures/FinalIKOracle/Program.cs](../../Tools/reverse/fixtures/FinalIKOracle/Program.cs) | Reference host / controlled fixture |
 | [Tools/reverse/fixtures/FinalIKOracle/RecoverySurface.cs](../../Tools/reverse/fixtures/FinalIKOracle/RecoverySurface.cs) | Reference host / controlled fixture |
 | [Tools/reverse/fixtures/FinalIKOracle/UnityShim.cs](../../Tools/reverse/fixtures/FinalIKOracle/UnityShim.cs) | Reference host / controlled fixture |
+| [Tools/reverse/fixtures/KKExSceneSurvey.cs](../../Tools/reverse/fixtures/KKExSceneSurvey.cs) | Reference host / controlled fixture |
 | [Tools/reverse/fixtures/OriginalAnimationProbe.cs](../../Tools/reverse/fixtures/OriginalAnimationProbe.cs) | Reference host / controlled fixture |
 | [Tools/reverse/fixtures/OriginalCameraObjectProbe.cs](../../Tools/reverse/fixtures/OriginalCameraObjectProbe.cs) | Reference host / controlled fixture |
 | [Tools/reverse/fixtures/OriginalDynamicsProbe.cs](../../Tools/reverse/fixtures/OriginalDynamicsProbe.cs) | Reference host / controlled fixture |
 | [Tools/reverse/fixtures/OriginalLightProbe.cs](../../Tools/reverse/fixtures/OriginalLightProbe.cs) | Reference host / controlled fixture |
 | [Tools/reverse/fixtures/OriginalMapProbe.cs](../../Tools/reverse/fixtures/OriginalMapProbe.cs) | Reference host / controlled fixture |
+| [Tools/reverse/fixtures/OriginalPluginSceneProbe.cs](../../Tools/reverse/fixtures/OriginalPluginSceneProbe.cs) | Reference host / controlled fixture |
 | [Tools/reverse/fixtures/OriginalRouteProbe.cs](../../Tools/reverse/fixtures/OriginalRouteProbe.cs) | Reference host / controlled fixture |
 | [Tools/reverse/fixtures/OriginalSceneReloadProbe.cs](../../Tools/reverse/fixtures/OriginalSceneReloadProbe.cs) | Reference host / controlled fixture |
+| [Tools/reverse/fixtures/PluginSceneRuleParity.cs](../../Tools/reverse/fixtures/PluginSceneRuleParity.cs) | Reference host / controlled fixture |
+| [Tools/reverse/fixtures/PluginSceneRules.cs](../../Tools/reverse/fixtures/PluginSceneRules.cs) | Reference host / controlled fixture |
+| [Tools/reverse/fixtures/PluginSceneSurvey.cs](../../Tools/reverse/fixtures/PluginSceneSurvey.cs) | Reference host / controlled fixture |
 | [Tools/reverse/fixtures/camera-object-reference.json](../../Tools/reverse/fixtures/camera-object-reference.json) | Reference host / controlled fixture |
 | [Tools/reverse/fixtures/dynamics-reference.json](../../Tools/reverse/fixtures/dynamics-reference.json) | Reference host / controlled fixture |
 | [Tools/reverse/original_animation_probe.py](../../Tools/reverse/original_animation_probe.py) | Conversion / recovery / verification tool |
@@ -485,8 +496,10 @@ Feature assessment: [studio.md](studio.md).
 | [Tools/reverse/original_dynamics_probe.py](../../Tools/reverse/original_dynamics_probe.py) | Conversion / recovery / verification tool |
 | [Tools/reverse/original_light_probe.py](../../Tools/reverse/original_light_probe.py) | Conversion / recovery / verification tool |
 | [Tools/reverse/original_map_probe.py](../../Tools/reverse/original_map_probe.py) | Conversion / recovery / verification tool |
+| [Tools/reverse/original_plugin_scene_probe.py](../../Tools/reverse/original_plugin_scene_probe.py) | Conversion / recovery / verification tool |
 | [Tools/reverse/original_route_probe.py](../../Tools/reverse/original_route_probe.py) | Conversion / recovery / verification tool |
 | [Tools/reverse/original_scene_reload_probe.py](../../Tools/reverse/original_scene_reload_probe.py) | Conversion / recovery / verification tool |
+| [Tools/reverse/plugin_rule_parity.py](../../Tools/reverse/plugin_rule_parity.py) | Conversion / recovery / verification tool |
 | [Tools/reverse/studio_animation.py](../../Tools/reverse/studio_animation.py) | Conversion / recovery / verification tool |
 | [Tools/reverse/studio_attachments.py](../../Tools/reverse/studio_attachments.py) | Conversion / recovery / verification tool |
 | [Tools/reverse/studio_dynamics_fixture.py](../../Tools/reverse/studio_dynamics_fixture.py) | Conversion / recovery / verification tool |
@@ -507,6 +520,7 @@ Feature assessment: [studio.md](studio.md).
 | [Tools/reverse/test_original_camera_object_probe.py](../../Tools/reverse/test_original_camera_object_probe.py) | Test / validation |
 | [Tools/reverse/test_original_dynamics_probe.py](../../Tools/reverse/test_original_dynamics_probe.py) | Test / validation |
 | [Tools/reverse/test_original_map_probe.py](../../Tools/reverse/test_original_map_probe.py) | Test / validation |
+| [Tools/reverse/test_original_plugin_scene_probe.py](../../Tools/reverse/test_original_plugin_scene_probe.py) | Test / validation |
 | [Tools/reverse/test_original_scene_reload_probe.py](../../Tools/reverse/test_original_scene_reload_probe.py) | Test / validation |
 | [Tools/reverse/test_studio_animation.py](../../Tools/reverse/test_studio_animation.py) | Test / validation |
 | [Tools/reverse/test_studio_hand_animation.py](../../Tools/reverse/test_studio_hand_animation.py) | Test / validation |
