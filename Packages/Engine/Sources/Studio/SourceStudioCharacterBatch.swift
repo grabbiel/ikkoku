@@ -10,7 +10,8 @@ import Renderer
 /// decodes, the contracts) starts at once on GCD worker threads, at most
 /// `width` at a time, in request order. It registers nothing, so it may run
 /// concurrently. Characters that read the same converted rig file share one
-/// decode (`rigs`).
+/// decode (`rigs`), and each first half starts every decode its card selects
+/// at once (`SourceRigDecodeShare.prefetch`).
 ///
 /// The owner runs the second half (`build(_:)`: the resource registration
 /// and evaluation in `init(assembly:resources:)`) one request at a time, in
@@ -96,6 +97,7 @@ public final class SourceStudioCharacterBatch: @unchecked Sendable {
         assemblies = assemblies.map { _ in nil }
         condition.broadcast()
         condition.unlock()
+        rigs.stopPrefetching()
     }
 
     /// Waits for request `index`'s first half and returns it, or throws its

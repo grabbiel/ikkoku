@@ -102,6 +102,9 @@ final class PerfTrace {
         case hoverPickStarted
         /// A mouse move that waited because a hover pick was in flight.
         case hoverPickCoalesced
+        /// A Studio character build installed and left its frame to the next
+        /// live step's refresh (R7 phase 2 item 6 follow-up).
+        case studioInstallRefreshDeferred
     }
 
     /// SwiftUI bodies counted per recording. A count is one evaluation of that
@@ -153,6 +156,22 @@ final class PerfTrace {
         /// display link starts the Studio's step; "timer", its 30 Hz timer does,
         /// as before (R7 phase 2, live pacing; measurement control).
         let livePacing: String
+        /// `IKKOKU_PERF_ACTION_KEY`: the source key of the object the action
+        /// workloads (`studio-duplicate`, `studio-undo-delete`) act on, such
+        /// as a route; nil keeps their default character.
+        let actionKey: Int32?
+        /// `IKKOKU_PERF_RIG_PREFETCH`: "on" (default) or "off", which leaves a
+        /// Studio character build's rig decodes where its preparation asks for
+        /// them (R7 phase 2 item 6 follow-up measurement control).
+        let rigPrefetch: Bool
+        /// `IKKOKU_PERF_DONATIONS`: "on" (default) or "off", which keeps no
+        /// donation of a character preview the Studio dropped, such as a
+        /// deleted character (measurement control).
+        let donations: Bool
+        /// `IKKOKU_PERF_INSTALL_REFRESH`: "step" (default), an installed
+        /// Studio build's frame waits for the next live step; "each" refreshes
+        /// at every install, as before (measurement control).
+        let installRefresh: String
 
         /// Reads `IKKOKU_PERF_*`; `CaptureRequest.validate` already checked the values.
         static func from(_ env: [String: String]) -> Configuration? {
@@ -174,7 +193,11 @@ final class PerfTrace {
                 keepAliveMilliseconds: env["IKKOKU_PERF_KEEPALIVE_MS"].flatMap { Int($0) },
                 burstIdleMilliseconds: int("IKKOKU_PERF_BURST_IDLE_MS", 1000),
                 burstLive: env["IKKOKU_PERF_BURST_LIVE"] == "on",
-                livePacing: env["IKKOKU_PERF_LIVE_PACING"] ?? "display")
+                livePacing: env["IKKOKU_PERF_LIVE_PACING"] ?? "display",
+                actionKey: env["IKKOKU_PERF_ACTION_KEY"].flatMap { Int32($0) },
+                rigPrefetch: env["IKKOKU_PERF_RIG_PREFETCH"] != "off",
+                donations: env["IKKOKU_PERF_DONATIONS"] != "off",
+                installRefresh: env["IKKOKU_PERF_INSTALL_REFRESH"] ?? "step")
         }
     }
 
@@ -683,6 +706,8 @@ final class PerfTrace {
                 "burstIdleMs": configuration.burstIdleMilliseconds,
                 "burstLive": configuration.burstLive,
                 "livePacing": configuration.livePacing,
+                "rigPrefetch": configuration.rigPrefetch, "donations": configuration.donations,
+                "installRefresh": configuration.installRefresh,
             ] as [String: Any],
             "build": PerfTrace.buildDescription(),
             "machine": PerfTrace.machineDescription(device: device),

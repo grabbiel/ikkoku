@@ -1,0 +1,12 @@
+{
+  "steps": [
+    {"op": "assert", "routePlaying": {"key": 0, "playing": true}},
+    {"op": "backgroundBuild", "build": "duplicateRoute", "key": 0},
+    {"op": "backgroundBuild", "build": "duplicateRouteWhileHidden", "key": 0},
+    {"op": "duplicate", "key": 0},
+    {"op": "assert", "route": {"key": 0, "copy": 0, "points": 4}},
+    {"op": "export", "path": ".local/verification/scenario-exports/background-build-route.png"},
+    {"op": "reimport", "path": ".local/verification/scenario-exports/background-build-route.png"},
+    {"op": "assert", "route": {"key": 0, "points": 4}, "routePlaying": {"key": 0, "playing": true}}
+  ]
+}

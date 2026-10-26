@@ -782,3 +782,40 @@ func sourceMakerPreparedAppearanceEnforcesAggregateBudgetAndExactComponentContex
     #expect(reuseMissing.sample.intervals["rigRead"]?.failures == 1)
     #expect(reuseMissing.sample.intervals["rigReuseSHA"] == nil && reuseMissing.sample.intervals["rigDecode"] == nil)
 }
+
+/// Records the content of every rig file a preparation decodes, in order.
+private final class RecordingRigDecoder: SourceRigDecoding {
+    private(set) var digests: [String] = []
+    func decode(_ data: Data, timings: SourceMakerPreparationTimings?) throws -> SourceRig {
+        digests.append(OriginalCardFixture.hash(data))
+        return try SourceRig.decode(data)
+    }
+}
+
+/// R7 phase 2 item 6 follow-up: the prefetch hint (`rigFiles`) names exactly
+/// the converted rig files a preparation decodes, in its order, for the
+/// Studio (`wear`) and Maker assemblies of every selection fixture card.
+@Test(.enabled(if: SourceFixtureSupport.shouldRun(["IKKOKU_MAKER_SELECTION_FIXTURES"]), "Requires IKKOKU_MAKER_SELECTION_FIXTURES"))
+func sourceMakerLibraryRigFilesNameEveryDecodeOfThePreparationInItsOrder() throws {
+    let (fixtures, directory) = try MakerSelectionCases.load()
+    let library = try SourceMakerLibrary.load(url: URL(fileURLWithPath: fixtures.library))
+    func distinct(_ digests: [String]) -> [String] {
+        var seen = Set<String>()
+        return digests.filter { seen.insert($0).inserted }
+    }
+    var checked = 0
+    for sample in fixtures.fixtures {
+        let card = try SourceCharacterCard.decode(try Data(contentsOf: directory.appendingPathComponent(sample.file)))
+        let identity = try card.customization()
+        let base = try library.assemblyURL(for: identity) ?? URL(fileURLWithPath: sample.sex == 1 ? fixtures.femaleBase : fixtures.maleBase)
+        for wear in [true, false] {
+            let recorder = RecordingRigDecoder()
+            guard (try? library.prepare(card: card, coordinate: 0, baseURL: base, wear: wear, timings: nil, rigReuse: recorder)) != nil else { continue }
+            let hinted = try library.rigFiles(card: card, coordinate: 0, baseURL: base, wear: wear)
+                .map { OriginalCardFixture.hash(try Data(contentsOf: $0)) }
+            #expect(distinct(hinted) == distinct(recorder.digests), "\(sample.file) wear \(wear)")
+            checked += 1
+        }
+    }
+    #expect(checked > 0)
+}

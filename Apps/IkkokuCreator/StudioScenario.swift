@@ -2205,7 +2205,8 @@ struct StudioScenario: Decodable {
                 // meanwhile must leave in place; showing the Studio again
                 // refreshes it, as the mode switch does.
                 let build = step.build ?? ""
-                let builds = ["import", "importTwice", "importThenNewScene", "importWhileHidden", "duplicate", "duplicateWhileHidden"]
+                let builds = ["import", "importTwice", "importThenNewScene", "importWhileHidden", "duplicate", "duplicateWhileHidden",
+                              "duplicateRoute", "duplicateRouteWhileHidden"]
                 guard builds.contains(build) else {
                     record(step, false, "backgroundBuild: build must be one of \(builds.joined(separator: ", "))"); continue
                 }
@@ -2271,7 +2272,61 @@ struct StudioScenario: Decodable {
                         throw RigError.invalid("Export the original clothed avatar before previewing source scenes.")
                     }
                     let catalog = EngineHost.studioPoseContract(forRig: rig), url = URL(fileURLWithPath: scenePath)
-                    if build.hasPrefix("duplicate") {
+                    if build.hasPrefix("duplicateRoute") {
+                        // R7 phase 2 item 6 follow-up: a route duplicated
+                        // with its character builds the copy's route preview
+                        // in the background. The synchronous sequence
+                        // (Duplicate, Undo, Redo) is the reference; the
+                        // background one must match it after each step, the
+                        // Duplicate itself must build no route preview, and
+                        // an Undo that lands before the copy's build drops
+                        // the build: nothing installs, nothing stays pending.
+                        guard let id = object(step) else { record(step, false, "backgroundBuild: no object \(describe(step))"); continue }
+                        studio.selection = id
+                        studio.duplicateSelection()
+                        let syncCopy = state()
+                        studio.undo()
+                        let syncUndo = state()
+                        studio.redo()
+                        let syncRedo = state()
+                        studio.undo()
+                        studio.asyncSourceBuilds = true
+                        let routePreviews = studio.sourceRouteCharacterPreviews.count
+                        studio.selection = id
+                        studio.duplicateSelection()
+                        let copies = studio.pendingSourceCharacterBuilds
+                        if studio.sourceRouteCharacterPreviews.count != routePreviews {
+                            problems.append("the Duplicate built a route character preview on the main thread")
+                        }
+                        func settled(_ label: String, _ expected: (summary: [String], pixels: [UInt8]?)) -> Bool {
+                            if hidden { hide() }
+                            guard settle() else { return false }
+                            if hidden { show(label) }
+                            compare(label, expected, state())
+                            return true
+                        }
+                        guard settled("duplicate", syncCopy) else { record(step, false, "backgroundBuild: the route copy's build did not finish in 300 s"); continue }
+                        studio.undo()
+                        guard settled("undo", syncUndo) else { record(step, false, "backgroundBuild: the undo did not settle in 300 s"); continue }
+                        studio.redo()
+                        guard settled("redo", syncRedo) else { record(step, false, "backgroundBuild: the redo did not settle in 300 s"); continue }
+                        studio.undo()
+                        guard settle() else { record(step, false, "backgroundBuild: the second undo did not settle in 300 s"); continue }
+                        // Undo before the copy's build lands.
+                        studio.selection = id
+                        studio.duplicateSelection()
+                        let raced = studio.pendingSourceCharacterBuilds
+                        studio.undo()
+                        let left = studio.pendingSourceCharacterBuilds
+                        guard settle() else { record(step, false, "backgroundBuild: the dropped build did not settle in 300 s"); continue }
+                        // A callback the drop failed to stop would be queued by now.
+                        _ = RunLoop.main.run(mode: .default, before: Date().addingTimeInterval(0.5))
+                        compare("undo before the build landed", syncUndo, state())
+                        if copies == 0 { problems.append("the Duplicate started no route character build") }
+                        if raced == 0 { problems.append("the raced Duplicate started no route character build") }
+                        if left != 0 { problems.append("\(left) builds stayed pending after the Undo removed their copies") }
+                        detail = "the Duplicate built \(copies) route character\(copies == 1 ? "" : "s") in the background; an Undo before the build landed left \(left) pending"
+                    } else if build.hasPrefix("duplicate") {
                         guard let id = object(step) else { record(step, false, "backgroundBuild: no object \(describe(step))"); continue }
                         studio.selection = id
                         studio.duplicateSelection()

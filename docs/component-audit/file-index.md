@@ -23,26 +23,26 @@ branch was tested or every asset matches the original game. Feature status,
 specific comments and pending tasks are in the linked reports. Shared behavior
 may be discussed in more than one report; one primary owner is listed here.
 
-**994 files indexed; 994 assigned; 0 unassigned.**
+**997 files indexed; 997 assigned; 0 unassigned.**
 
 | Primary report | Files |
 | --- | ---: |
 | [App / gameplay / plugins](app-gameplay-and-plugins.md) | 110 |
 | [Character / Maker / mods](character-and-mods.md) | 128 |
-| [Studio / IK / animation](studio.md) | 213 |
+| [Studio / IK / animation](studio.md) | 215 |
 | [Renderer / foundation / assets](renderer-and-foundation.md) | 335 |
-| [Toolchain / verification / historical docs](toolchain-and-verification.md) | 198 |
+| [Toolchain / verification / historical docs](toolchain-and-verification.md) | 199 |
 
 | File role | Files |
 | --- | ---: |
 | App resource metadata / icon | 16 |
 | Build / repository configuration | 9 |
-| Conversion / recovery / verification tool | 232 |
+| Conversion / recovery / verification tool | 233 |
 | Documentation / historical evidence | 65 |
 | Generated asset / catalog / fixture | 205 |
 | Reference host / controlled fixture | 30 |
-| Runtime / shared shader declaration | 221 |
-| Test / validation | 203 |
+| Runtime / shared shader declaration | 222 |
+| Test / validation | 204 |
 
 ## App / gameplay / plugins
 
@@ -337,6 +337,7 @@ Feature assessment: [studio.md](studio.md).
 | [Packages/Engine/Sources/Studio/SourceStudioCameraObjects.swift](../../Packages/Engine/Sources/Studio/SourceStudioCameraObjects.swift) | Runtime / shared shader declaration |
 | [Packages/Engine/Sources/Studio/SourceStudioCharacterPreview.swift](../../Packages/Engine/Sources/Studio/SourceStudioCharacterPreview.swift) | Runtime / shared shader declaration |
 | [Packages/Engine/Sources/Studio/SourceStudioCharacterBatch.swift](../../Packages/Engine/Sources/Studio/SourceStudioCharacterBatch.swift) | Runtime / shared shader declaration |
+| [Packages/Engine/Sources/Studio/SourceStudioDonationCache.swift](../../Packages/Engine/Sources/Studio/SourceStudioDonationCache.swift) | Runtime / shared shader declaration |
 | [Packages/Engine/Sources/Studio/SourceStudioDynamics.swift](../../Packages/Engine/Sources/Studio/SourceStudioDynamics.swift) | Runtime / shared shader declaration |
 | [Packages/Engine/Sources/Studio/SourceStudioExpression.swift](../../Packages/Engine/Sources/Studio/SourceStudioExpression.swift) | Runtime / shared shader declaration |
 | [Packages/Engine/Sources/Studio/SourceStudioEyeLook.swift](../../Packages/Engine/Sources/Studio/SourceStudioEyeLook.swift) | Runtime / shared shader declaration |
@@ -394,6 +395,7 @@ Feature assessment: [studio.md](studio.md).
 | [Packages/Engine/Tests/EngineTests/SourceStudioCameraObjectsTests.swift](../../Packages/Engine/Tests/EngineTests/SourceStudioCameraObjectsTests.swift) | Test / validation |
 | [Packages/Engine/Tests/EngineTests/SourceStudioCharacterPreviewTests.swift](../../Packages/Engine/Tests/EngineTests/SourceStudioCharacterPreviewTests.swift) | Test / validation |
 | [Packages/Engine/Tests/EngineTests/SourceStudioCharacterBatchTests.swift](../../Packages/Engine/Tests/EngineTests/SourceStudioCharacterBatchTests.swift) | Test / validation |
+| [Packages/Engine/Tests/EngineTests/SourceStudioDonationCacheTests.swift](../../Packages/Engine/Tests/EngineTests/SourceStudioDonationCacheTests.swift) | Test / validation |
 | [Packages/Engine/Tests/EngineTests/SourceStudioDynamicsTests.swift](../../Packages/Engine/Tests/EngineTests/SourceStudioDynamicsTests.swift) | Test / validation |
 | [Packages/Engine/Tests/EngineTests/SourceStudioEyeLookRuntimeTests.swift](../../Packages/Engine/Tests/EngineTests/SourceStudioEyeLookRuntimeTests.swift) | Test / validation |
 | [Packages/Engine/Tests/EngineTests/SourceStudioEyeLookTests.swift](../../Packages/Engine/Tests/EngineTests/SourceStudioEyeLookTests.swift) | Test / validation |
@@ -921,6 +923,7 @@ Feature assessment: [toolchain-and-verification.md](toolchain-and-verification.m
 | [Tools/verification/scenarios/accessory-toggle.json](../../Tools/verification/scenarios/accessory-toggle.json) | Conversion / recovery / verification tool |
 | [Tools/verification/scenarios/animation-select.json](../../Tools/verification/scenarios/animation-select.json) | Conversion / recovery / verification tool |
 | [Tools/verification/scenarios/background-build.json](../../Tools/verification/scenarios/background-build.json) | Conversion / recovery / verification tool |
+| [Tools/verification/scenarios/background-build-route.json](../../Tools/verification/scenarios/background-build-route.json) | Conversion / recovery / verification tool |
 | [Tools/verification/scenarios/blink-toggle.json](../../Tools/verification/scenarios/blink-toggle.json) | Conversion / recovery / verification tool |
 | [Tools/verification/scenarios/camera-deactivate.json](../../Tools/verification/scenarios/camera-deactivate.json) | Conversion / recovery / verification tool |
 | [Tools/verification/scenarios/camera-load-winner.json](../../Tools/verification/scenarios/camera-load-winner.json) | Conversion / recovery / verification tool |
