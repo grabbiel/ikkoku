@@ -582,12 +582,12 @@ struct ObjectInspector: View {
         }
         let hidden = shown == nil
         let _ = shown.map { kept.state = $0 }
-        InspectorSwapLayout {
+        ZStack(alignment: .top) {
             if let state = shown ?? kept.state {
                 ObjectInspectorContent(model: model, state: state).equatable()
                     .background(InspectorAnchor(kept: kept))
                     .environment(\.inspectorSectionExpansion, kept.sections)
-                    .inspectorKeptHidden(hidden)
+                    .environment(\.inspectorKeptHidden, hidden)
                     .inspectorHidden(hidden)
             }
             Self.nothingSelected.inspectorHidden(!hidden)

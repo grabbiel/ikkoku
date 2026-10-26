@@ -21,50 +21,21 @@ enum StudioInspectorMounting: String, Sendable {
     var keepsSections: Bool { self == .on }
 }
 
-/// Lays out the one shown view of several kept ones. The container takes the
-/// shown view's size and spacing; every view is placed at the same origin
-/// with the proposal the container had, so a hidden view keeps the layout it
-/// had when it was last shown.
-struct InspectorSwapLayout: Layout {
-    private func shown(_ subviews: Subviews) -> LayoutSubview? {
-        subviews.first { !$0[InspectorHiddenKey.self] }
-    }
-
-    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
-        shown(subviews)?.sizeThatFits(proposal) ?? .zero
-    }
-
-    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
-        for subview in subviews { subview.place(at: bounds.origin, anchor: .topLeading, proposal: proposal) }
-    }
-
-    func spacing(subviews: Subviews, cache: inout ()) -> ViewSpacing {
-        shown(subviews)?.spacing ?? ViewSpacing()
-    }
-}
-
-struct InspectorHiddenKey: LayoutValueKey {
-    static let defaultValue = false
-}
-
 extension View {
-    /// Hides a kept inspector view inside an `InspectorSwapLayout`. At zero
-    /// opacity SwiftUI does not draw it and leaves it out of the accessibility
-    /// tree; disabled, its controls leave the Tab key-view loop and refuse
-    /// focus. (`accessibilityHidden(false)` is not used for the shown state:
-    /// it exposes elements a view hides itself, such as the placeholder's
-    /// image.) Picker labels need `inspectorKeptLabel()` as well.
+    /// Hides a kept inspector view in a `ZStack(alignment: .top)` of kept
+    /// views. Its height is fixed, as a scroll view's content is, and framed
+    /// to zero while hidden, so it keeps its layout but takes no space. At
+    /// zero opacity SwiftUI does not draw it and leaves it out of the
+    /// accessibility tree; disabled, its controls leave the Tab key-view loop
+    /// and refuse focus. (`accessibilityHidden(false)` is not used for the
+    /// shown state: it exposes elements a view hides itself, such as the
+    /// placeholder's image.) Picker labels need `inspectorKeptLabel()` too.
     func inspectorHidden(_ hidden: Bool) -> some View {
-        opacity(hidden ? 0 : 1)
+        fixedSize(horizontal: false, vertical: true)
+            .frame(height: hidden ? 0 : nil, alignment: .top)
+            .opacity(hidden ? 0 : 1)
             .allowsHitTesting(!hidden)
             .disabled(hidden)
-            .layoutValue(key: InspectorHiddenKey.self, value: hidden)
-    }
-
-    /// Sets whether the kept views below are hidden, for the labels that
-    /// read it; a view hidden by an outer kept view stays hidden.
-    func inspectorKeptHidden(_ hidden: Bool) -> some View {
-        transformEnvironment(\.inspectorKeptHidden) { $0 = $0 || hidden }
     }
 
     /// A Picker's label in kept inspector views. SwiftUI keeps a Picker's
@@ -74,8 +45,9 @@ extension View {
 }
 
 private struct InspectorKeptLabel: ViewModifier {
-    @Environment(\.inspectorKeptHidden) private var hidden
-    func body(content: Content) -> some View { content.accessibilityHidden(hidden) }
+    @Environment(\.inspectorKeptHidden) private var tabHidden
+    @Environment(\.inspectorSectionHidden) private var sectionHidden
+    func body(content: Content) -> some View { content.accessibilityHidden(tabHidden || sectionHidden) }
 }
 
 /// What a kept inspector view holds besides its views: the last state it
@@ -169,6 +141,10 @@ private struct InspectorKeptHiddenKey: EnvironmentKey {
     static let defaultValue = false
 }
 
+private struct InspectorSectionHiddenKey: EnvironmentKey {
+    static let defaultValue = false
+}
+
 extension EnvironmentValues {
     /// The kept inspector views a `SectionBox` belongs to (R7 item 7).
     var inspectorSectionExpansion: InspectorSectionExpansion? {
@@ -176,9 +152,15 @@ extension EnvironmentValues {
         set { self[InspectorSectionExpansionKey.self] = newValue }
     }
 
-    /// Whether the kept inspector views around are hidden (R7 item 7).
+    /// Whether the kept Object tab is hidden (R7 item 7).
     var inspectorKeptHidden: Bool {
         get { self[InspectorKeptHiddenKey.self] }
         set { self[InspectorKeptHiddenKey.self] = newValue }
+    }
+
+    /// Whether the kept kind section around is hidden (R7 item 7).
+    var inspectorSectionHidden: Bool {
+        get { self[InspectorSectionHiddenKey.self] }
+        set { self[InspectorSectionHiddenKey.self] = newValue }
     }
 }
