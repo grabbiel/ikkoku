@@ -2842,7 +2842,7 @@
         "IKKOKU_STUDIO_SCENARIO_REPORT": ".local/verification/reports/studio-scenario-source-map.json"
       },
       "referenceTier": "app-smoke",
-      "tolerance": "ST-A11/ST-B03/ST-T04 on scene-map33-showoff.png (the showoff characters with Map 33, added by the original player): the converted map is drawn before the first step (8 draws, not loading) with the exact approximation label in the status line; two map-only points pick nothing (id 0) while a character in front of the wall still picks; View > Show Source Map off draws 0 map parts and says so, on restores 8; the original-format export is byte-identical to the source with the map hidden and shown; reimport, New Scene (no map, no line) and undo restore the map. Lighting and colour are not checked (see docs/reference/studio/maps.md).",
+      "tolerance": "ST-A11/ST-B03/ST-T04 on scene-map33-showoff.png (the showoff characters with Map 33, added by the original player): the converted map is drawn before the first step (7 draws, not loading) with the exact approximation label in the status line; two map-only points pick nothing (id 0) while a character in front of the wall still picks; View > Show Source Map off draws 0 map parts and says so, on restores 7; the original-format export is byte-identical to the source with the map hidden and shown; reimport, New Scene (no map, no line) and undo restore the map. Lighting and colour are not checked (see docs/reference/studio/maps.md).",
       "artifacts": [
         {
           "path": ".local/verification/reports/studio-scenario-source-map.json",
@@ -2884,7 +2884,7 @@
         "IKKOKU_STUDIO_SCENARIO_REPORT": ".local/verification/reports/studio-scenario-source-map34.json"
       },
       "referenceTier": "app-smoke",
-      "tolerance": "ST-A11 slice 3 on scene-map34-day.png (Map 34 空き教室 alone, moved, day sun, saved by the original player): the converted map is drawn before the first step (54 draws: 30 lightmapped, the particles, the day sky; 54 images as BC blocks, none decoded) with the exact approximation label in the status line; two map-only points pick nothing; View > Show Source Map off draws 0 map parts and says so, on restores 54 with the sky; the original-format export is byte-identical to the source with the map hidden and shown; reimport, New Scene (no map, no line) and undo restore the map. Lighting, sky and colour are not checked here (see docs/reference/studio/maps.md, the map probe gates).",
+      "tolerance": "ST-A11 slice 3 on scene-map34-day.png (Map 34 空き教室 alone, moved, day sun, saved by the original player): the converted map is drawn before the first step (53 draws: 29 lightmapped, the particles, the day sky; 54 images as BC blocks, none decoded) with the exact approximation label in the status line; two map-only points pick nothing; View > Show Source Map off draws 0 map parts and says so, on restores 53 with the sky; the original-format export is byte-identical to the source with the map hidden and shown; reimport, New Scene (no map, no line) and undo restore the map. Lighting, sky and colour are not checked here (see docs/reference/studio/maps.md, the map probe gates).",
       "artifacts": [
         {
           "path": ".local/verification/reports/studio-scenario-source-map34.json",
@@ -2896,6 +2896,48 @@
         },
         {
           "path": ".local/verification/scenario-exports/source-map34.png",
+          "kind": "exported-scene"
+        }
+      ],
+      "timeout": 600
+    },
+    {
+      "id": "studio-scenario-source-map41",
+      "argv": [
+        ".local/build/Build/Products/Debug/Ikkoku.app/Contents/MacOS/Ikkoku"
+      ],
+      "fixtures": [
+        {
+          "env": "IKKOKU_SOURCE_SCENE",
+          "kind": "file",
+          "from": "IKKOKU_STUDIO_MAP41_SCENE"
+        },
+        {
+          "env": "IKKOKU_SOURCE_AVATAR",
+          "kind": "file"
+        },
+        {
+          "env": "IKKOKU_STUDIO_MAP_CATALOG",
+          "kind": "file"
+        }
+      ],
+      "env": {
+        "IKKOKU_STUDIO_SCENARIO": "Tools/verification/scenarios/source-map41.json",
+        "IKKOKU_STUDIO_SCENARIO_REPORT": ".local/verification/reports/studio-scenario-source-map41.json"
+      },
+      "referenceTier": "app-smoke",
+      "tolerance": "ST-A11 slice 4 on scene-map41.png (Map 41 備品倉庫 alone, moved, day sun, map option on, saved by the original player; the map the user's scenes name most): the converted map is drawn before the first step (29 draws: 27 lightmapped, no sky, particle, unlit, silhouette or option draws; 28 images as BC blocks with no PNG copies) with the exact approximation label in the status line; two map-only points pick nothing; View > Show Source Map off draws 0 map parts and says so, on restores 29; the original-format export is byte-identical to the source with the map hidden and shown; reimport, New Scene (no map, no line) and undo restore the map. Lighting and colour are not checked here (see docs/reference/studio/maps.md, the map probe gates).",
+      "artifacts": [
+        {
+          "path": ".local/verification/reports/studio-scenario-source-map41.json",
+          "kind": "scenario-report"
+        },
+        {
+          "path": ".local/verification/scenario-exports/source-map41-hidden.png",
+          "kind": "exported-scene"
+        },
+        {
+          "path": ".local/verification/scenario-exports/source-map41.png",
           "kind": "exported-scene"
         }
       ],
@@ -2959,7 +3001,7 @@
         "IKKOKU_STUDIO_SCENARIO_REPORT": ".local/verification/reports/studio-scenario-reload-load-source-map.json"
       },
       "referenceTier": "app-smoke",
-      "tolerance": "Loads the saved map scene in a fresh process with no import: one scene-file rehydration rebuilds the map request from the scene record, and the map draws again (8 parts) with the same status line while map pixels still pick nothing. ST-A11.",
+      "tolerance": "Loads the saved map scene in a fresh process with no import: one scene-file rehydration rebuilds the map request from the scene record, and the map draws again (7 parts) with the same status line while map pixels still pick nothing. ST-A11.",
       "artifacts": [
         {
           "path": ".local/verification/reports/studio-scenario-reload-load-source-map.json",

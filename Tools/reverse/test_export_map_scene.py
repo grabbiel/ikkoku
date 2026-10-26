@@ -133,6 +133,20 @@ class MaterialTests(unittest.TestCase):
         self.assertEqual(maps.legacy_diffuse_inputs({'_Color': [1.0, 0.5, 0.0, 0.5]}),
                          {'albedoLinear': [1.0, maps.gamma_to_linear_exact(0.5), 0.0, 0.5], 'oneMinusReflectivity': 1.0})
 
+    def test_only_what_studio_cameras_draw_is_converted(self):
+        renderer = lambda cast: SimpleNamespace(m_CastShadows=cast)
+        layer = lambda n: SimpleNamespace(m_Layer=n)
+        # Camera.main draws the Map and Water layers; the maps' helper layers 0 and 14 are drawn by no camera.
+        for n in (4, 11):
+            self.assertIsNone(maps.undrawn_reason(renderer(1), layer(n), 'Map/a'))
+        self.assertIsNone(maps.undrawn_reason(SimpleNamespace(), layer(11), 'Map/particles'))  # no shadow mode
+        for n in (0, 14):
+            self.assertEqual(maps.undrawn_reason(renderer(1), layer(n), 'Map/a'), f'layer {n} (no Studio camera draws it)')
+        self.assertEqual(maps.undrawn_reason(renderer(maps.SHADOWS_ONLY), layer(11), 'Map/kage'), 'shadows only (drawn only into shadow maps)')
+        for n in (27, 28, 30):  # the front camera's layers: refused by name
+            with self.assertRaisesRegex(ValueError, f'Map/front: on layer {n}'):
+                maps.undrawn_reason(renderer(1), layer(n), 'Map/front')
+
     def test_skipped_shaders_are_not_mapped_and_every_class_has_a_reason(self):
         self.assertFalse(set(maps.MAP_SKIPPED_SHADERS) & set(maps.MAP_SHADER_RULES))
         # Render-texture screens are skipped by their material's texture, whatever the shader.

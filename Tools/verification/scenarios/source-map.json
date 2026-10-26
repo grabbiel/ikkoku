@@ -1,21 +1,21 @@
 {
   "steps": [
-    {"op": "assert", "sourceMap": {"map": 33, "draws": 8, "loading": false,
-      "lightmappedDraws": 8, "blockImages": 8, "lineContains": "Map 33 空き部室 (bushitu): baked lightmaps; approximated: no realtime sun or its shadows, no specular or reflections, no normal, metallic or detail maps, no fog, no camera effects · 1492 triangles, 8 draws",
+    {"op": "assert", "sourceMap": {"map": 33, "draws": 7, "loading": false,
+      "lightmappedDraws": 7, "blockImages": 8, "lineContains": "Map 33 空き部室 (bushitu): baked lightmaps; approximated: no realtime sun or its shadows, no specular or reflections, no normal, metallic or detail maps, no fog, no camera effects · 1440 triangles, 7 draws",
       "pickNothingAt": [[0.5, 0.03], [0.25, 0.97]], "pickSomethingAt": [[0.08, 0.25]]}},
     {"op": "setShowSourceMap", "on": false},
     {"op": "assert", "sourceMap": {"map": 33, "draws": 0, "lineContains": "hidden (View ▸ Show Source Map)"}},
     {"op": "export", "path": ".local/verification/scenario-exports/source-map-hidden.png"},
     {"op": "assert", "exportIdenticalToSource": ".local/verification/scenario-exports/source-map-hidden.png"},
     {"op": "setShowSourceMap", "on": true},
-    {"op": "assert", "sourceMap": {"map": 33, "draws": 8, "lineAbsent": "hidden"}},
+    {"op": "assert", "sourceMap": {"map": 33, "draws": 7, "lineAbsent": "hidden"}},
     {"op": "export", "path": ".local/verification/scenario-exports/source-map.png"},
     {"op": "assert", "exportIdenticalToSource": ".local/verification/scenario-exports/source-map.png"},
     {"op": "reimport", "path": ".local/verification/scenario-exports/source-map.png"},
-    {"op": "assert", "sourceMap": {"map": 33, "draws": 8, "loading": false, "lightmappedDraws": 8, "lineContains": "Map 33 空き部室 (bushitu): baked lightmaps; approximated: no realtime sun or its shadows, no specular or reflections, no normal, metallic or detail maps, no fog, no camera effects · 1492 triangles, 8 draws"}},
+    {"op": "assert", "sourceMap": {"map": 33, "draws": 7, "loading": false, "lightmappedDraws": 7, "lineContains": "Map 33 空き部室 (bushitu): baked lightmaps; approximated: no realtime sun or its shadows, no specular or reflections, no normal, metallic or detail maps, no fog, no camera effects · 1440 triangles, 7 draws"}},
     {"op": "newScene"},
     {"op": "assert", "sourceMap": {"none": true}},
     {"op": "undo"},
-    {"op": "assert", "sourceMap": {"map": 33, "draws": 8, "loading": false, "pickNothingAt": [[0.5, 0.03]], "pickSomethingAt": [[0.08, 0.25]]}}
+    {"op": "assert", "sourceMap": {"map": 33, "draws": 7, "loading": false, "pickNothingAt": [[0.5, 0.03]], "pickSomethingAt": [[0.08, 0.25]]}}
   ]
 }

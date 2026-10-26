@@ -499,6 +499,20 @@ class Slice4Tests(Slice3Tests):
         self.assertTrue(case['passes'], json.dumps(case, indent=1, default=str))
         self.assertFalse(case['irradiance']['gated']); self.assertIn('no baked lightmaps', case['irradiance']['reason'])
 
+    def test_particles_leave_out_what_the_renderers_other_submeshes_drew(self):
+        # The oracle's particle pass draws whole renderers: a canopy submesh writes alpha 1 there, the
+        # particle shader none. Our particle image holds only the particle draw.
+        self.leaves[8:14, 3:12] = [0.2, 0.4, 0.1, 1.0]; self.leaves[8:10, 5:9, :3] += [0.05, 0.1, 0.02]
+        self.add_oracle(sky=False)
+        ours = self.leaves.copy(); ours[8:14, 3:12] = 0; ours[8:10, 5:9, :3] = [0.05, 0.1, 0.02]
+        self.write_ours_groups(particles=ours)
+        particles = self.run_oracle()['particles']
+        self.assertTrue(particles['passes'], json.dumps(particles, indent=1, default=str))
+        self.assertEqual((particles['otherSubmeshPixels'], particles['footprintIoU'], particles['comparedPixels']), (54, 1.0, 24))
+        # Off by the tint where only particles drew still fails.
+        self.write_ours_groups(particles=ours * np.array([1.1, 1.1, 1.1, 1]))
+        self.assertFalse(self.run_oracle()['particles']['passes'])
+
     def test_each_case_carries_its_map_and_far_plane(self):
         trace = json.loads((self.original / 'map-trace.json').read_text())
         trace.update(mapNo=None, depthFar=None, mode='maps'); trace['cases']['c'].update(mapNo=33, depthFar=FAR)

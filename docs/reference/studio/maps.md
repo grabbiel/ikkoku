@@ -12,6 +12,8 @@ A converted map without lightmaps (a first-slice export) still draws with the it
 
 The third slice adds Map 34 `空き教室` (`akikyoushitu`). It draws with its lightmaps, its cubemap sky for the scene's sun type and its particle trees. Its light-probe-lit parts are drawn as items, and the label says so. Every converted map's DXT1/DXT5 textures now upload as BC blocks, which cuts Map 34's texture memory from 288 MB to 60 MB. Map textures are sampled the way the player samples them, with its forced anisotropy. See [map 34, the sky and block images](#map-34-the-sky-and-block-images-slice-3).
 
+The fourth slice converts the other 40 maps, so all 42 installed `Map_XX` rows draw. It adds unlit textures, animated particles, Studio's mob silhouettes and map option, and RGBA32 lightmaps. What the app cannot draw is skipped by class and named on the status line. The new maps' images are BC blocks only, without PNG copies. See [all maps](#all-maps-slice-4).
+
 ## Recovered rules
 
 These rules come from the recovered managed code (`Studio.Map`, `Studio.MapCtrl`, `Studio.Info`, `SunLightInfo`, `LightmapPrefab`, `Manager.Scene`). The original player confirmed them in phase B (see [evidence](#evidence)).
@@ -32,7 +34,7 @@ These rules come from the recovered managed code (`Studio.Map`, `Studio.MapCtrl`
 - **`export`** writes one glTF with external `.bin` and PNG files, plus `provenance.json`. It runs through the same `.local` output guard as the other subcommands.
   - Geometry is merged per role, material, visibility class and lightmap index. Vertices under `mapRoot` (role `mapRoot`) stay in its local frame. Vertices under other roots (role `scene`) are written in scene world space.
   - The root node is named `Map`, carries only the authored scale, and has the extra `ikkokuMapRole: "mapRoot"`. Each mesh's `ikkokuMap` extras give its role, the sun-type keys it is visible for (0, 1, 2 and -1) and its lightmap index.
-  - Materials go through `MAP_SHADER_RULES`, which list the dropped terms. `Standard` keeps base colour, texture and alpha mode. `Particles/Alpha Blended` keeps 2 × tint × vertex colour. Any other shader fails the conversion by name. `Skybox/*` shaders draw nothing.
+  - Materials go through `MAP_SHADER_RULES`, which list the dropped terms. `Standard` keeps base colour, texture and alpha mode. `Particles/Alpha Blended` keeps 2 × tint × vertex colour. Any other shader fails the conversion by name, unless slice 4 lists it as skipped (see [the slice-4 converter](#converter-slice-4)). `Skybox/*` shaders draw nothing.
   - **Slice 3.** Each DXT1/DXT5 base or emission image is also written as its blocks, listed in `ikkokuBlockImages` (see [block images](#block-images)). `Skybox/Cubemap` renderers become sky meshes with `ikkokuSkybox` extras and their cubes. This needs `--builtin-resources` for the built-in `Sphere` (see [the sky](#the-sky)). `Particles/Alpha Blended` materials carry `ikkokuParticle`. `provenance.json` adds `builtinResources`, `blockImages`, `cubes`, `sky` and `lightmapCoverage` (lightmapped against probe-lit `Standard` renderers). The catalog row lists `light probes (<n> Standard renderers without a lightmap drawn as items)` when a map has them.
   - `_MainTex_ST` is baked into UV0. TEXCOORD_1 holds the lightmap UV: mesh UV1 (else UV0) × `lightmapScaleOffset`, using the `LightmapPrefab` value where it names the renderer, then V flipped like UV0.
   - **Lightmaps (slice 2).** Each `LightmapSettings` entry's light map and CombinedDirectional direction map are written as `lightmap-<index>-light.bc3` and `lightmap-<index>-dir.bc3`. Each file is the texture's serialized `image_data`, byte for byte: DXT5 blocks (BC3), all 11 mip levels largest first, rows bottom-up as in Unity's texture memory. Nothing is decoded or re-encoded, so each file's SHA-256 is the serialized data's. The glTF's top-level `ikkokuLightmaps` extras (`kind: ikkoku.unityLightmaps`, version 1) name the files with their format, size, mips, colour space (`m_ColorSpace` 1 is sRGB), byte count and SHA-256. They also record the lightmaps mode (`CombinedDirectional`), the encoding (`m_LightmapFormat` 2, RGBM), the row order and the player's colour space (Linear). The converter records any lightmap it cannot reproduce in `provenance.json`'s `lightmapExport.problems`, and then writes no `ikkokuLightmaps`, so the map draws with the item material and the first slice's label. That covers a lightmaps mode other than NonDirectional or CombinedDirectional, an encoding other than RGBM, a format that is not DXT1/DXT5, a byte count that does not match, or a shadow mask.
@@ -55,13 +57,14 @@ Outputs are refused outside the ignored `.local` directory. A symlink placed dir
 
 | Fixture | Location |
 | --- | --- |
-| Converted map 33 | `.local/reverse/exports/maps/33-bushitu/`: 8 meshes, 8 materials, 8 PNGs, 2 lightmap files, 2,526 vertices, 1,492 triangles. Until the slice-2 export is installed (see [installing the slice-2 export](#installing-the-slice-2-export)), this is the first slice's export (7 PNGs, no lightmaps), and the private copy is `.local/sta11b-lightmaps/exports/maps/` |
-| Converted map 34 | `33-bushitu/`'s sibling `34-akikyoushitu/`: 61 meshes, 56 materials, 54 PNGs with their 54 BC files, 4 lightmap files, 3 sky cubes; 27,530 vertices, 26,355 triangles. It is in the slice-3 export, private until it is installed (see [installing the slice-3 export](#installing-the-slice-3-export)): `.local/sta11c-map34/exports/maps/` |
-| Catalog | `.local/reverse/exports/maps/catalog.json`: 42 rows (0–41) from 23 info bundles; 33 converted, and 34 too in the slice-3 export |
+| Converted map 33 | `.local/reverse/exports/maps/33-bushitu/`: 8 meshes, 8 materials, 8 PNGs, 2 lightmap files, 2,526 vertices, 1,492 triangles. The slice-4 export drops its `ShadowsOnly` mesh: 7 meshes, 7 materials, 2,438 vertices, 1,440 triangles. Until the slice-2 export is installed (see [installing the slice-2 export](#installing-the-slice-2-export)), this is the first slice's export (7 PNGs, no lightmaps), and the private copy is `.local/sta11b-lightmaps/exports/maps/` |
+| Converted map 34 | `33-bushitu/`'s sibling `34-akikyoushitu/`: 61 meshes, 56 materials, 54 PNGs with their 54 BC files, 4 lightmap files, 3 sky cubes; 27,530 vertices, 26,355 triangles (slice 4, without its `ShadowsOnly` mesh: 60 meshes, 55 materials, 27,445 vertices, 26,293 triangles). It is in the slice-3 export, private until it is installed (see [installing the slice-3 export](#installing-the-slice-3-export)): `.local/sta11c-map34/exports/maps/` |
+| Converted maps 0–32 and 35–41 | The slice-4 export, private until it is installed (see [installing the slice-4 export](#installing-the-slice-4-export)): `.local/sta11d-map-coverage/exports/maps/`, one folder per map (`NN-<scene name>/`), maps 33 and 34 included. The 40 new maps' DXT1/DXT5 images are BC files only (see [block-only images](#block-only-images)) |
+| Catalog | `.local/reverse/exports/maps/catalog.json`: 42 rows (0–41) from 23 info bundles; 33 and 34 converted. The slice-4 catalog converts all 42 |
 | Source bundles | `.local/reverse/source/abdata/` (`studio/map/bushitu.unity3d`, `studio/map/akikyoushitu.unity3d`, `studio/info/*.unity3d`, `abdata`), each with a `.provenance.json`. To save disk space, `akikyoushitu.unity3d` (26.9 MB, used only for Map 34's inventory) is a symlink into the external archive (`/Volumes/My Book/ikkoku-archive/local/sta11a-maps/`), with the same SHA-256 |
-| Authored scenes | `.local/reverse/studio-scenes/maps/scene-map33.png` and `scene-map33-showoff.png`, with `provenance.json`. Map 34's four scenes are in `.local/sta11c-map34/phase-map34/` (`scene-map34-{day,evening,night,showoff}.png`) |
+| Authored scenes | `.local/reverse/studio-scenes/maps/scene-map33.png` and `scene-map33-showoff.png`, with `provenance.json`. Map 34's four scenes are in `.local/sta11c-map34/phase-map34/` (`scene-map34-{day,evening,night,showoff}.png`). Map 41's scene for its lane is `scene-map41.png` beside them (`IKKOKU_STUDIO_MAP41_SCENE`), and the slice-4 phase's 21 scenes are in `.local/sta11d-map-coverage/vm-maps/` |
 
-Map 33's conversion has 8 merged draws for every sun type, all 8 lightmapped with lightmap 0. Its 7 base textures are 512² to 2048² DXT1/DXT5 in the bundle. They need 51,729,740 bytes as RGBA8 with mips (Metal reports 52,248,576 allocated) against 7,165,376 bytes native. Slice 2 adds the 512² emission map of `mm_koi_stu_map49_denki00` (`4_mt_koi_stu_map49_denki00_em.png`, 1,398,100 bytes as RGBA8 with mips). Because it is inserted at image index 4, the glass, metal and roof images move to indices 5–7; their bytes are unchanged. `glass00`'s emission map is its base texture, so it adds no image. The two lightmaps take 1,398,128 bytes each as BC3. Altogether Metal allocates 56,492,032 texture bytes, 2,818,048 of them for the lightmaps.
+Map 33's conversion has 8 merged draws for every sun type, all 8 lightmapped with lightmap 0 (7 from slice 4 on, without the `ShadowsOnly` shell). Its 7 base textures are 512² to 2048² DXT1/DXT5 in the bundle. They need 51,729,740 bytes as RGBA8 with mips (Metal reports 52,248,576 allocated) against 7,165,376 bytes native. Slice 2 adds the 512² emission map of `mm_koi_stu_map49_denki00` (`4_mt_koi_stu_map49_denki00_em.png`, 1,398,100 bytes as RGBA8 with mips). Because it is inserted at image index 4, the glass, metal and roof images move to indices 5–7; their bytes are unchanged. `glass00`'s emission map is its base texture, so it adds no image. The two lightmaps take 1,398,128 bytes each as BC3. Altogether Metal allocates 56,492,032 texture bytes, 2,818,048 of them for the lightmaps.
 
 With the first slice's export, the map's only shader, `Standard`, made the catalog list `shaders approximated (Standard)`, and the status line appended it after the label. With lightmaps drawn, the catalog row's `approximations` instead name the omitted terms one by one. These are the label's terms: realtime sun and its shadows; specular and reflections; normal, metallic and detail maps; fog; camera effects. Only a shader other than `Standard` would still be listed as approximated.
 
@@ -272,7 +275,7 @@ Float images are stored gzipped. `run.json` records each one's raw SHA-256.
 
 `compare_original_map.py --oracle` adds a gated `irradiance` metric for a capture with lightmapped draws. It compares our `native-map-irradiance-decoded` image with Unity's `gi.indirect.diffuse`.
 
-- **Pixels.** Interior pixels only: both silhouettes cover them, and their 3×3 neighbourhood lies on one smooth surface of the original's depth-normals (depth steps of at most 2% of the depth, normal steps of at most 6 bytes). The image border is excluded. This leaves out the MSAA-resolved edges, where a pixel mixes two surfaces.
+- **Pixels.** Interior pixels only: both silhouettes cover them, and their 3×3 neighbourhood lies on one smooth surface of the original's depth-normals (depth steps of at most 2% of the depth, normal steps of at most 6 bytes). The image border is excluded. This leaves out the MSAA-resolved edges, where a pixel mixes two surfaces. Slice 4 found resolved pixels the mask keeps, and now captures these images single-sample (see [why the first pass failed](#why-the-first-pass-failed-the-irradiance-gate)).
 - **Error.** Per pixel, the largest channel's |ours − Unity| / Unity.
 - **Tolerance.** This is a new gate; no existing gate changed. The mean must be at most 2⁻¹⁰ (9.8e-4) and the p99 at most 2⁻⁹ (2.0e-3). The bounds come from the controls:
   - the oracle's repeat render differed by 0;
@@ -419,7 +422,7 @@ The conversion has 61 merged draws and 26,355 triangles, plus 768 for each of th
 | `Skybox/Cubemap` | 3 spheres: `mo_koi_sky_hiru00` (day, and -1), `_yu00` (evening, `_Rotation` 291), `_yo00` (night) | the sky draw for the sun type, see [the sky](#the-sky) |
 | Reflection probe | 1 | not drawn (specular and reflections are in the label) |
 
-The sun type selects what is visible: 54 draws for day, 53 for evening and 50 for night. The main camera in the original clears to black (`clearFlags` Color), so `RenderSettings.skybox` (`Skybox/Procedural`) is never drawn there. The converter skips it.
+The sun type selects what is visible: 54 draws for day, 53 for evening and 50 for night. Slice 4 exports map 34 again without `o_koi_map08_01`, a lightmapped `ShadowsOnly` renderer that Unity draws only into shadow maps: 60 draws, 29 of 56 lightmapped, 28,597 triangles; 53, 52 and 49 per sun type (see [maps 33 and 34 again](#maps-33-and-34-again-slice-4)). The main camera in the original clears to black (`clearFlags` Color), so `RenderSettings.skybox` (`Skybox/Procedural`) is never drawn there. The converter skips it.
 
 ### Block images
 
@@ -613,7 +616,7 @@ The image effects account for the gap to the frame with effects. The showoff inc
   - `test_compare_original_map.py`: the sky and particle gates and their controls, the class mask, particles out of view;
   - `test_original_map_probe.py`: the map34 subcommand and its scans.
 - **Scenarios.** `studio-scenario-source-map34` checks map 34 on the day scene:
-  - 54 draws (30 lightmapped, 1 particle, 1 sky), 54 BC images, and the exact label;
+  - 54 draws (30 lightmapped, 1 particle, 1 sky), 54 BC images, and the exact label (53 and 29 since slice 4);
   - map points pick nothing;
   - the View toggle;
   - byte-identical exports;
@@ -694,6 +697,209 @@ mv "$M/catalog.json" "$M/catalog.json.sta11c" && mv "$B/catalog.json" "$M/catalo
 
 **Storage.** The shared export grows from 5.7 MB to 88 MB (+82 MB). Map 34 takes 76 MB of that, of which its PNG copies take 17 MB. Map 33 grows from 5.7 to 13 MB with its BC files. The backup holds the old 5.7 MB, and the private copy is moved, not duplicated.
 
+## All maps (slice 4)
+
+Slice 4 converts the other 40 `Map_XX` rows, so every installed map now draws. Maps 33 and 34 are exported again: each loses one `ShadowsOnly` renderer that Unity never draws in a camera pass, and their pictures are unchanged. The new maps need six more shaders, RGBA32 lightmaps, Studio's map option and its mob silhouettes. To keep the export small, their images are written as BC blocks only, with no PNG copies.
+
+### What the 42 maps draw
+
+Scenes counts the user's installed scenes that name the map: 120 of their 182 scenes are readable (the reader refuses 62 older versions), 95 of those name no map, and two name rows 98 and 7403, which mods add. The parts are every merged draw the map has across its sun types; the status line counts those of the scene's sun type. The texture bytes are those the app allocates, lightmaps and sky cubes included. The export is the map's folder on disk. The not-reproduced column is the catalog's `notDrawn`, which the status line appends after `not reproduced:`.
+
+| No. | Map | Scenes | Triangles | Parts (lightmapped) | Also drawn | Not reproduced | Metal textures (MB) | Export (MB) |
+| ---: | --- | ---: | ---: | ---: | --- | --- | ---: | ---: |
+| 0 | 自室 (`MyRoom`) | 0 | 23,302 | 101 (79) | – | – | 56.8 | 70.7 |
+| 1 | 1F (`1F`) | 0 | 67,975 | 185 (106) | sky, 8 particle | – | 235.8 | 241.4 |
+| 2 | 2F (`2F`) | 0 | 62,477 | 180 (110) | sky, 8 particle | – | 110.0 | 116.0 |
+| 3 | 3F (`3F`) | 0 | 57,523 | 130 (46) | sky, 8 particle | – | 121.2 | 126.8 |
+| 4 | 教室1-1 (`1-1`) | 0 | 56,980 | 57 (29) | sky, 1 particle | – | 61.8 | 66.2 |
+| 5 | 教室2-1 (`2-1`) | 0 | 56,980 | 57 (26) | sky, 1 particle | – | 59.0 | 66.2 |
+| 6 | 教室2-2 (`2-2`) | 0 | 56,805 | 62 (29) | sky, 1 particle | – | 60.6 | 65.0 |
+| 7 | 教室3-1 (`3-1`) | 0 | 56,980 | 57 (26) | sky, 1 particle | – | 59.0 | 66.2 |
+| 8 | 1F女子トイレ (`1FToilet`) | 0 | 12,459 | 32 (25) | – | mirror (1 renderer); animated objects (drawn in their authored pose): 5 | 34.1 | 35.3 |
+| 9 | 2F女子トイレ (`2FToilet`) | 0 | 12,447 | 31 (25) | – | mirror (1 renderer); animated objects (drawn in their authored pose): 5 | 34.1 | 35.3 |
+| 10 | 3F女子トイレ (`3FToilet`) | 0 | 12,447 | 31 (25) | – | mirror (1 renderer); animated objects (drawn in their authored pose): 5 | 34.1 | 35.3 |
+| 11 | 職員室 (`StaffAdultRoom`) | 2 | 90,458 | 168 (72) | sky, 5 particle | – | 113.6 | 124.6 |
+| 12 | 職員トイレ(男) (`ToiletMale`) | 0 | 10,304 | 29 (22) | – | mirror (1 renderer); animated objects (drawn in their authored pose): 4 | 34.0 | 35.0 |
+| 13 | 保健室 (`HealthRoom`) | 0 | 34,895 | 125 (63) | sky, 5 particle | – | 90.6 | 94.0 |
+| 14 | 図書室 (`LibraryRoom`) | 0 | 48,928 | 105 (37) | sky, 5 particle | – | 78.0 | 83.2 |
+| 15 | 部室 (`StaffRoom`) | 1 | 36,655 | 136 (66) | sky, 5 particle | animated objects (drawn in their authored pose): 2 | 112.3 | 115.7 |
+| 16 | 漫研 (`StaffComicResearchRoom`) | 0 | 19,778 | 59 (46) | – | mirror (1 renderer) | 36.8 | 38.7 |
+| 17 | 和室 (`JapaneseStyleRoom`) | 0 | 3,879 | 11 (11) | – | animated objects (drawn in their authored pose): 2 | 13.9 | 14.3 |
+| 18 | 体育倉庫 (`GymnasiumWarehouse`) | 0 | 11,192 | 29 (21) | – | animated objects (drawn in their authored pose): 2 | 19.3 | 20.4 |
+| 19 | 体育館 (`Gymnasium`) | 2 | 11,608 | 59 (53) | – | – | 52.6 | 56.6 |
+| 20 | 中庭 (`Courtyard`) | 0 | 78,668 | 86 (none) | sky, 6 particle | – | 61.0 | 68.0 |
+| 21 | グラウンド (`Ground`) | 3 | 50,949 | 139 (52) | sky, 10 particle | – | 97.9 | 102.6 |
+| 22 | 屋上 (`Rooftop`) | 2 | 56,317 | 119 (none) | sky, 7 particle | – | 81.4 | 86.7 |
+| 23 | プール (`Pool`) | 0 | 14,846 | 70 (60) | – | heat distortion (1 renderer); animated objects (drawn in their authored pose): 8; particle systems: 8; skinned renderers: 4 | 57.6 | 61.8 |
+| 24 | 食堂 (`DiningRoom`) | 0 | 37,125 | 83 (66) | – | animated objects (drawn in their authored pose): 1 | 86.2 | 100.7 |
+| 25 | シャワールーム (`ShawerRoom`) | 1 | 11,530 | 24 (16) | – | animated objects (drawn in their authored pose): 7 | 19.6 | 20.8 |
+| 26 | ロッカールーム (`LockerRoom`) | 0 | 8,378 | 24 (18) | – | mirror (1 renderer); animated objects (drawn in their authored pose): 2 | 17.5 | 18.4 |
+| 27 | 裏庭 (`Backyard`) | 0 | 45,319 | 83 (none) | sky, 8 particle, Particles/Anim Alpha Blended | – | 60.4 | 64.6 |
+| 28 | ライブステージ (`LiveStage`) | 1 | 68,158 | 62 (none) | Custom/StandardDouble | render-texture screens (1 renderer); stage effects (189 renderers); animated objects (drawn in their authored pose): 61; particle systems: 1 | 17.0 | 24.2 |
+| 29 | 体育館ライブ (`GymnasiumLive`) | 2 | 13,642 | 50 (47) | – | – | 42.8 | 47.2 |
+| 30 | 女子トイレ個室 (`Toilet_nozoki`) | 0 | 2,593 | 16 (13) | – | animated objects (drawn in their authored pose): 1; legacy animations (drawn in their authored pose): 3 | 25.9 | 26.2 |
+| 31 | シャワールーム個室 (`ShawerRoom_nozoki`) | 0 | 2,599 | 13 (9) | – | animated objects (drawn in their authored pose): 1 | 27.1 | 27.3 |
+| 32 | ロッカールーム個室 (`LockerRoom_nozoki`) | 0 | 5,227 | 16 (12) | – | animated objects (drawn in their authored pose): 1 | 17.1 | 17.6 |
+| 33 | 空き部室 (`bushitu`) | 0 | 1,440 | 7 (7) | – | animated objects (drawn in their authored pose): 1 | 10.2 | 13.2 |
+| 34 | 空き教室 (`akikyoushitu`) | 1 | 26,293 | 60 (29) | sky, 1 particle | – | 59.6 | 79.2 |
+| 35 | ラブホテル (`LoveHotel`) | 0 | 28,058 | 78 (64) | Shader Forge/main_item | heat distortion (1 renderer); mirror (1 renderer) | 46.2 | 48.4 |
+| 36 | カラオケ (`Karaoke`) | 0 | 13,235 | 70 (59) | – | – | 59.8 | 60.8 |
+| 37 | 教会 (`Church`) | 0 | 50,800 | 66 (59) | – | – | 79.1 | 86.0 |
+| 38 | 満員電車 (`TrainCrowded`) | 2 | 563,355 | 104 (27) | 70 silhouette (option) | animated objects (drawn in their authored pose): 1 | 58.4 | 83.7 |
+| 39 | 電車 (`Train`) | 0 | 199,795 | 55 (27) | 21 silhouette (option) | animated objects (drawn in their authored pose): 1 | 58.4 | 68.5 |
+| 40 | 公園 (`Park`) | 2 | 67,741 | 21 (4) | 1 unlit | heat distortion (1 renderer) | 22.4 | 26.2 |
+| 41 | 備品倉庫 (`Warehouse`) | 4 | 24,308 | 29 (27) | – | – | 16.5 | 18.8 |
+
+All 42 maps load in the Engine fixture test (`everyConvertedMapLoadsItsBlockImagesByteForByte`, which prints this census). Every block image reads back byte for byte, and every block-only map is refused by the decoded switch by name. The 40 new folders take 2.57 GB, and the whole private export 2.66 GB. The largest is map 1, whose four RGBA32 lightmaps (light and direction, eight files) take 137 MB.
+
+### Converter (slice 4)
+
+`export_map_scene.py export --block-only-images` converted each map from its bundle in `.local/sta11d-map-coverage/fetch/source/abdata/`. Each new shader rule reads the pass state from the shader's serialized ShaderLab state (`pass_states`), not from assumptions:
+
+| Shader | Maps | Drawn as |
+| --- | --- | --- |
+| `Unlit/Transparent` | 40 | the texel alone, blended (`Unlit-Alpha.shader` v5.6.2f1; the bundle's DX11 fragment is one `sample`) |
+| `Custom/Silhouette` | 38, 39 | the mob colour in two passes: depth only, then blended at ZTest LEqual (the game's shader: pass 0 ColorMask 0 with ZWrite On, pass 1 SrcAlpha/OneMinusSrcAlpha with ZWrite Off; DX11 fragment `mov o0, _Color`). The converter writes `AdditionalFunctionsSystem.mobColor`'s default (0, 0, 1, 0.5): the user's setting is not read, and the label says so |
+| `Particles/Anim Alpha Blended` | 27 | `2 × colour × _TintColor × lerp(tex(uv0), tex(uv2), uv1.x)`, checked against the bundle's DX11 programs |
+| `Custom/StandardDouble` | 28 | Standard's formula with both faces drawn (its LOD 300 FORWARD pass is Cull Off). Its own programs are not compared, and the label lists them |
+| `Legacy Shaders/Diffuse` | none drawn (map 41's only one is a `ShadowsOnly` shell, below) | `_MainTex × _Color`; lightmapped, Lambert's `albedo × gi.indirect.diffuse` (the decoded lightmap without Standard's `oneMinusReflectivity`) |
+| `Shader Forge/main_item` | 35 | the item material with `_MainTex × _Color`; the colour masks, normal map, ramp, rim, specular and outline are listed as dropped |
+
+Renderers whose shader the app cannot draw are skipped by class, never silently: mirrors (`FX/MirrorReflection_Transparent`, 7 maps), heat distortion (`Xffect/heat_distortion`, 3), the live stage's Shader Forge light effects and mosaic screen (map 28, 193 renderers), vertex-lit particles (map 30) and render-texture screens (map 28). Components that draw something the converter does not read are counted: animated objects and legacy animations (drawn in their authored pose), sprites, particle systems and skinned renderers. Both lists go into the catalog row's `notDrawn` and the status line.
+
+- **What Studio's cameras draw.** The converter leaves out renderers that no Studio camera draws, and lists each in `provenance.json`'s `skipped` with the reason. The maps phase recorded the same cameras in all 21 cases: `Camera.main` draws layers 4, 10, 11 and 29 (`cullingMask` 536874000), a front camera layers 27, 28 and 30, and the background camera nothing.
+  - `ShadowsOnly` renderers (`m_CastShadows` 3) are drawn only into shadow maps: 43 renderers in 29 maps, one each in maps 33 and 34 (see [maps 33 and 34 again](#maps-33-and-34-again-slice-4)). They are the maps' `*_shadow` stand-ins for walls and pillars, and map 41's room box.
+  - Renderers on layer 0 are drawn by no camera: 104 renderers in 22 maps.
+  - A renderer on the front camera's layers would draw over the scene. No map has one, so the converter refuses one by name.
+  - Components the converter counts in `notDrawn` (particle systems, sprites, skinned renderers and the like) follow the same rule, so a map's count includes only those a Studio camera draws.
+- **RGBA32 lightmaps.** Maps 1, 24, 38 and 39 store their lightmaps as `TextureFormat` 4 (RGBA32), which slice 3 refused. They are written as stored (`lightmap-<i>-light.rgba8`, bottom-up, every mip) and uploaded uncompressed. Across the four maps they take 237.7 MB, 137.0 MB of it map 1's.
+- **Map option.** `Studio.Map.Reserve` collects the option objects (`lstOption`): map 23's `pool_mob` children, and the `MapMobGroup` node of maps 38 and 39, whose renderers get `_Color = mobColor` through a MaterialPropertyBlock. The converter marks their meshes `option: true`. The app hides option parts when the record's `mapOption` is off, and the line adds `map option off: <n> option draws hidden`. Map 23's option objects are skinned renderers, which are not drawn either way.
+- **Four maps have no baked lightmaps** in their bundles: 20, 22, 27 and 28. The player confirms it for 22 and 27, the two that have a case. They keep the item material and the first slice's label.
+
+### Block-only images
+
+For the 40 new maps, a DXT1/DXT5 image's glTF entry points at its block file: `uri` is `<n>_<name>.bc1` or `.bc3`, and `mimeType` is `image/x-ikkoku-bc1` or `image/x-ikkoku-bc3`. No PNG is written. BC7 and RGB24 images, which cannot be row-flipped losslessly or are not blocks, keep their PNG. **These exports are not viewable in generic glTF viewers**, which accept only PNG and JPEG images; only the app reads them. Maps 33 and 34 keep their PNG copies.
+
+Nothing hands block bytes to an image decoder:
+
+- `SourceStudioMapAsset.load` uploads a block-only image only through its `ikkokuBlockImages` entry, and the image's bytes must be exactly the listed file. A block-only image without a matching entry fails the load by name.
+- `IKKOKU_SOURCE_MAP_DECODED_TEXTURES=1` refuses a block-only map by name (`…image N is block-only (…, no PNG); IKKOKU_SOURCE_MAP_DECODED_TEXTURES=1 cannot decode it.`).
+- Every other image must start with the PNG or JPEG magic before it reaches the decoder (`…is not a PNG or JPEG; it is not decoded.`). The decoder is a parameter of the load, `ResourceStore` by default, and `ResourceStore` is unchanged.
+- An Engine test loads a block-only map with a counting decoder and asserts zero decoder calls for its images.
+- No Python reader under `Tools/` decodes a map's glTF images: the converter writes them, and the comparison and probe scripts read only the probe images.
+
+### Evidence (the maps phase)
+
+**One VM phase** (`original_map_probe.py maps`, `OriginalMapProbe.cs`'s maps mode) ran under main's grant, as one `prlctl exec` of 21 cases.
+
+- The errno-24 count was 0 before and after.
+- The junction targets were scanned before and after and are equal: `abdata` 4,565 files and 16,606,991,941 bytes, `CharaStudio_Data` 102 files and 150,249,360 bytes, both last written 2026-03-17.
+- The player root, with `-logFile` inside it, was removed, and no game process was left.
+- After the phase, one more `prlctl exec` ran by mistake: a PowerShell `1` that wrote nothing and started no game. The errno count stayed 0. The shared rules now forbid such check execs.
+
+The output is `.local/sta11d-map-coverage/vm-maps/` (163 MB, 192 files). The cases:
+
+| Cases | Maps | Sun type | Map transform | Camera |
+| --- | --- | --- | --- | --- |
+| 12 inside | 41, 21, 11, 19, 22, 29, 38, 40, 15, 25, 1, 27 | day, evening or night, each at least four times | MapPos/MapRot (as map33) for 41, 19, 40 and 25; zero otherwise | the map-local pivot (0, 1.1, 0), pitch 8°, 3 m, a yaw chosen offline from the converted geometry so the camera has room behind it |
+| 8 outside | 21, 11, 19, 22, 15, 25, 1, 27 | day (22: evening) | zero | through one of the map's vanish colliders (below) |
+| `map41-showoff` | 41 | day | zero (`AddMap`) | `koikatu_cs0002591.png`'s own camera |
+
+Every map but 33 now uses a far plane of 1000 m for the depth-normals images, on both sides (`UseMap`, `AppState.sourceMapProbeDepthFar`). Map 38's case keeps the map option on, so its 70 mob silhouettes draw. The player's `mobColor` was the default (0, 0, 1, 0.5). The oracle renders the silhouettes and the unlit draws alone, like the sky (`oracle-<case>-silhouettes.rgba.f32`, `-unlit.rgba.f32`). It skips the irradiance pair, recording why, for maps 22 and 27 (no baked lightmaps) and map 40, whose Standard materials all carry keywords, so there is no keyword-free template to copy. Map 40 draws with its three lightmaps on 8 renderers in the player too, so its irradiance is reported, not gated.
+
+GATES
+
+#### Why the first pass failed the irradiance gate
+
+The first comparison of the 21 cases failed the irradiance gate in maps 29, 38 and 41, with no tolerance changed. Main's checklist ruled out three causes, from the first-pass data:
+
+- **Lightmap scale and offset.** Our exported values match the runtime values the trace recorded for every lightmapped renderer in all 21 cases, to within 4.4e-8 (float32 rounding).
+- **RGBA32 lightmaps (map 38).** The light map's sRGB flag comes from the texture's `m_ColorSpace` for RGBA8 and BC3 alike, and the mips are Unity's stored ones. Map 1 uploads RGBA32 by the same path and passes.
+- **Vanish (map 29).** Its vanish record is empty. All 284 renderers the original traced as active are in our export.
+
+Two causes were found:
+
+- **The MSAA resolve.** Our HDR images were the 4x MSAA main pass after the resolve. The oracle renders into a single-sample `ARGBFloat` target. Where Unity's 3×3 neighbourhood has a step of 10% or more, we measured how far each of our pixels moves toward the neighbour across the step. That fraction peaks at exactly 1/4 and 1/2: in map 29, 116 and 39 pixels sit there, against 1–11 in the bins beside them, and maps 38, 41 and 15 show the same. That is partial sample coverage. The interior mask does not remove it where two near-coplanar surfaces meet, or at a lightmap UV seam inside one mesh, because the depth-normals stay smooth there. At a seam, the second triangle's fragment is shaded at the pixel centre, outside the triangle, so it extrapolates its lightmap UV. That explains 1,691 of map 38's 1,897 pixels over 0.1 that lie outside Unity's 3×3 range on flat regions.
+- **Undrawn shells.** The first export drew `ShadowsOnly` renderers, which Unity draws only into shadow maps. Map 41's lightmapped room box z-fought with the pillar and walls, and map 29 drew its shadow shell. The converter now skips them (`shadows only (drawn only into shadow maps)`), in maps 33 and 34 too.
+
+**The fix is a measurement change.** The probe now captures its HDR images with every MSAA sample at the pixel centre (`captureSceneHDR(pixelCentreSamples: true)`, [renderer](../renderer.md)), which is a single-sample render like the oracle's. Interactive frames and every other capture are unchanged: the 17-capture set and maps 33 and 34's colour captures are byte-identical to `main`'s (below). The sky, particle, silhouette and unlit images use the same capture.
+
+#### Maps 33 and 34 again (slice 4)
+
+The pixel-centre capture changes how slices 2 and 3 measure maps 33 and 34, so their gates were rerun with it (`.local/sta11d-map-coverage/s3/`). Against the 4x resolve, on the same Release build and export:
+
+| Case | Irradiance mean | Irradiance p99 | Pixels over 2⁻⁹ | Pixels over 0.1 | Particles mean / p99, IoU |
+| --- | --- | --- | ---: | ---: | --- |
+| map33 | 5.9e-4 → 4.9e-4 | 9.2e-4 → 9.1e-4 | 1,731 → 73 | 258 → 0 | – |
+| map33-showoff | 4.9e-4 → 4.9e-4 | 9.1e-4 → 9.1e-4 | 55 → 55 | 0 → 0 | – |
+| map34-day | 8.1e-4 → 5.1e-4 | 7.9e-4 → 7.9e-4 | 2,029 → 56 | 553 → 1 | 0.0012 / 0.0040, 0.9996 → 0.0009 / 0.0037, 1.0 |
+| map34-evening | 5.5e-4 → 3.0e-4 | 7.6e-4 → 7.3e-4 | 1,889 → 40 | 454 → 0 | 0.0011 / 0.0033, 0.9997 → 0.0008 / 0.0031, 1.0 |
+| map34-night | 6.2e-4 → 2.8e-4 | 8.0e-4 → 7.6e-4 | 2,418 → 69 | 672 → 0 | 0.0011 / 0.0038, 0.9997 → 0.0008 / 0.0035, 1.0 |
+| map34-showoff | 5.5e-4 → 3.8e-4 | 7.8e-4 → 7.6e-4 | 1,678 → 50 | 351 → 0 | not in view |
+
+Every number holds or improves. The sky holds (day 5.6e-4 / 8.3e-4, IoU 1.0), and every control still fails. A signed bias of about −0.03% to −0.04% remains in every case; our float16 target is the likely cause (a hypothesis, not tested). The re-exported 33 and 34 give the same gate numbers as their slice-3 export on the same build.
+
+**Their counts change.** Each had one `ShadowsOnly` renderer, which Unity's cameras never draw and which the slice-3 converter drew:
+
+- Map 33 (`Map/p_koi_stu_map49_00/mo_koi_stu_map49_shadow00`): 8 → 7 draws, all lightmapped; 1,492 → 1,440 triangles; 2,526 → 2,438 vertices. Its catalog row now also counts one animated object.
+- Map 34 (`Map/p_o_koi_map09_99/o_koi_map08_01`): 61 → 60 parts; 26,293 mesh triangles (was 26,355), 28,597 drawn across the sun types (was 28,659); 36 lightmapped renderers (was 37). The day view draws 53 (was 54, 29 lightmapped), evening 52, night 49, showoff 53. Its 54 images are unchanged.
+
+The shell sat inside or behind the visible surfaces: maps 33 and 34's colour captures are byte-identical before and after. The scenarios `studio-scenario-source-map`, `-source-map34` and the reload pair expect the new counts.
+
+**Vanish.** Each outside case looks at the pivot from twice the distance of the nearest live listed collider (`h/list`'s `map_col_XX` rows, layer `Map`), so the camera's view capsule crosses that collider whichever way the capsule's height is read. The trace confirms the capsule: `CameraUpdate` sets its height to `distance.z`, which is negative, and its bounds span the camera to the pivot. Even so, in all eight cases the player's `listCollider` was empty and no row hid a renderer, with `isConfigVanish` true. In this probe's timing the original never vanished anything, so the app does not vanish either. Vanish is the next change; it needs a small VM phase that records `Time.timeScale`, the camera's layer, the layer collision matrix and a few physics steps, and finds a case where the original does hide a wall.
+
+### Tests (slice 4)
+
+- **Engine** (`SourceStudioMapUnlitDrawTests.swift`):
+  - the unlit, animated-particle and silhouette branches of `map_fragment` against their formulas;
+  - two silhouette meshes through the renderer: one renderer blends once (blue 0.5), two overlapping renderers twice (0.75); without the depth pass the test fails;
+  - RGBA32 lightmaps upload uncompressed and parse;
+  - a block-only map loads with zero decoder calls, draws its new parts and prints the slice-4 status line; what the loader cannot draw (a silhouette outside an option root, an animated particle without its UVs, a block-only image without its file, a non-PNG image) is refused by name and registers nothing;
+  - the probe variants change only their own term.
+- **Engine fixture** (`everyConvertedMapLoadsItsBlockImagesByteForByte`): all 42 maps of the private catalog, as above.
+- **Python:**
+  - `test_export_map_scene.py`: the new rules, skips, options, RGBA32 lightmaps and block-only images;
+  - `test_compare_original_map.py`: the per-case map and far plane, the skipped irradiance, the silhouette and unlit gates and their controls;
+  - `test_original_map_probe.py`: the maps subcommand and its scans, and the probe's case table.
+- **Scenario.** `studio-scenario-source-map41` checks map 41 on `scene-map41.png` (`IKKOKU_STUDIO_MAP41_SCENE`).
+
+### Installing the slice-4 export
+
+The shared fixture (`.local/reverse/exports/maps/`) keeps the slice-3 export until this change merges. The slice-4 export is built privately in `.local/sta11d-map-coverage/exports/maps/`: all 42 maps and the catalog. Maps 33 and 34 were exported again too, since they lose their `ShadowsOnly` renderer (above), so the whole export moves. They keep their PNG copies. The hashes are in `.local/sta11d-map-coverage/new-export.sha256` (every file of the private export) and `old-export.sha256` (the slice-3 export). Both trees are on the same volume, so every `mv` below is an atomic rename.
+
+Install it from the main checkout, with no app run or lane using the map:
+
+```sh
+cd /Users/rumpology/code/repo/ikkoku
+M=$PWD/.local/reverse/exports/maps                 # the shared fixture (environment.json names $M/catalog.json)
+N=$PWD/.local/sta11d-map-coverage/exports/maps     # the slice-4 export
+B=$PWD/.local/sta11d-map-coverage/old-export       # the backup of the slice-3 export
+H=$PWD/.local/sta11d-map-coverage                  # the two hash manifests
+# 0. Both trees are what the manifests say.
+(cd "$M" && shasum -a 256 -q -c "$H/old-export.sha256")
+(cd "$N" && shasum -a 256 -q -c "$H/new-export.sha256")
+# 1. Back up the slice-3 export: maps 33 and 34 and the catalog.
+mkdir -p "$B" && mv "$M/33-bushitu" "$M/34-akikyoushitu" "$M/catalog.json" "$B/"
+# 2. Put the slice-4 export in its place.
+mv "$N"/[0-9][0-9]-* "$N/catalog.json" "$M/"
+# 3. Check the result.
+(cd "$M" && shasum -a 256 -q -c "$H/new-export.sha256")
+(cd "$B" && shasum -a 256 -q -c "$H/old-export.sha256")
+rmdir "$N" "$H/exports"
+```
+
+`IKKOKU_STUDIO_MAP41_SCENE` is already in `environment.json` (`.local/reverse/studio-scenes/maps/scene-map41.png`).
+
+To roll back, put the slice-3 export back. The 40 new folders can stay, since the slice-3 catalog does not name them:
+
+```sh
+mkdir -p "$H/slice4-33-34" && mv "$M/33-bushitu" "$M/34-akikyoushitu" "$M/catalog.json" "$H/slice4-33-34/" && mv "$B"/* "$M/"
+```
+
+Once the change has merged and the lanes pass on the shared fixture, `$B` (the slice-3 maps 33 and 34, 89 MB) can be deleted.
+
+MAINSAFE
+
 ## Performance
 
 Release, on the reference machine, in one quiet window. The full tables are in [performance: ST-A11](../performance.md#st-a11-original-studio-maps).
@@ -735,7 +941,7 @@ Slice 3 (map 34, the sky and block images), Release, in one quiet window ([perfo
 ## What remains
 
 - **Light-probe-lit parts.** Map 34's 32 `Standard` renderers without a lightmap (17,701 triangles) are drawn as items. Unity lights them with light probes and the realtime sun. They cover 77,159, 72,567 and 92,296 of the 691,200 pixels in the day, evening and night views (11–13%), and none in the showoff view. Drawing them needs the scene's light probes (spherical harmonics per probe, and the tetrahedral interpolation) and the sun term below.
-- **The realtime sun and its shadows.** Map 33's only map light, `Map/SunLight`, is realtime, and map 34's sun is too. Its term is `diffColor × light.color × diffuseTerm` with its soft shadows. Drawing it needs:
+- **The realtime sun and its shadows.** Map 33's only map light, `Map/SunLight`, is realtime, and map 34's sun is too. Across the 40 slice-4 maps, 879,090 of the 1,367,623 `Standard` and `Custom/StandardDouble` triangles that Studio draws (64.3%) have no lightmap: they are probe-lit, or the map has none (each map's `provenance.json` `lightmapCoverage`). In 20 of the 40 maps that share is 50% or more. All of them draw as items until the sun, the ambient and the light probes are drawn. Its term is `diffColor × light.color × diffuseTerm` with its soft shadows. Drawing it needs:
   - the sun as a scene light in the map's draws;
   - the `SunLightInfo` angle, colour and intensity per sun type;
   - a shadow map of the room.
@@ -745,8 +951,16 @@ Slice 3 (map 34, the sky and block images), Release, in one quiet window ([perfo
 - **Particles.** Soft particles (the fade where the cards meet geometry) and per-renderer sorting. Map 34's two particle renderers are one draw, so their blend order is the mesh's triangle order.
 - **The sky's far plane.** The player's main camera clips at 1000 m, inside parts of map 34's sky spheres (about 450–1,200 m). Our infinite projection draws the whole sphere, so the full frame differs where the player shows black.
 - **Fog and camera effects.** RenderSettings fog was off at runtime in every phase-C and map 34 scene. The per-sun-type fog of `SunLightInfo` and CharaStudio's camera image effects are not drawn.
-- **Dropping the PNG copies.** Every map image is in the export twice, as PNG and as BC blocks. The PNGs are what `IKKOKU_SOURCE_MAP_DECODED_TEXTURES` and readers without block support use. Map 34's PNGs take 17 MB of the 88 MB export. The eager PNG read on the worker measured 1.7–2.9 ms, so the loader still reads them.
+- **The PNG copies of maps 33 and 34.** The 40 slice-4 maps have no PNG copies of their block images. Maps 33 and 34 keep theirs, which `IKKOKU_SOURCE_MAP_DECODED_TEXTURES` decodes; map 34's take 17 MB of its export.
 - **Forced anisotropy for characters and items.** The original forces anisotropy on every texture, character and item textures included. Only map textures sample that way here. Matching it elsewhere is a separate fidelity item with its own gates.
-- **Maps beyond 33 and 34.** Every other `Map_XX` row stays `file: null` and is reported by name. A map whose lightmaps the converter cannot reproduce draws as items, with the reason recorded in `lightmapExport.problems`.
+- **Vanish.** `Studio.CameraControl` hides the walls the camera's view capsule crosses (`isConfigVanish`, on by default). In the slice-4 phase the player hid nothing from eight outside cameras, so the app does not either. The next change records what the trigger needs (the time scale, the camera's layer, the collision matrix, physics steps) and a case where the original does hide a wall.
+- **Map 40's irradiance.** Its Standard materials all carry keywords, so the oracle had no keyword-free template, and its lightmaps are not gated. The next VM phase builds the template from `Shader.Find("Standard")`.
+- **The oracle's culling mask.** The oracle's geometry, depth-normals, irradiance and class passes draw every layer (`cullingMask ~0`). So they draw layer-0 solids that no Studio camera draws: `mo_koi_mi_balckback` (a black backdrop, `Standard`, no lightmap) in maps 19, 25 and 29, and a pot in map 15's outside view. The slice-4 converter leaves them out, as Studio does. The next VM phase renders those passes with `Camera.main`'s mask (536874000).
+- **Particle submeshes alone.** The oracle's particle pass enables whole renderers, so the comparison leaves out the pixels their `Standard` submeshes cover. The next VM phase adds a pass that enables only the particle submeshes. It also adds a map 40 camera that sees the map's three `Unlit/Transparent` renderers, which no slice-4 view covers.
+- **What the converter skips.** Mirrors, heat distortion, the live stage's effects and screen, vertex-lit particles, and every particle system, sprite and skinned renderer (map 23's option objects among them). Animated objects draw in their authored pose. Each map's catalog row and status line name them.
+- **Shader programs not compared.** `Custom/StandardDouble` (map 28) is drawn with Standard's formula on both faces, and `Shader Forge/main_item` (map 35) as an item; their own programs are not compared, and the catalog lists the dropped terms. Neither map has a VM case.
+- **The user's mob colour.** Silhouettes draw `mobColor`'s default (0, 0, 1, 0.5); the user's config is not read.
+- **RGBA32 lightmap memory.** Maps 1, 24, 38 and 39 upload their lightmaps uncompressed, as stored: 137 MB for map 1. Compressing them would change the decoded values and needs its own gate.
+- **Map 38's mob cost.** Its 70 silhouette draws are 519,000 of its 563,000 triangles, drawn twice (depth, then colour). See [performance](#performance) for what they cost.
 - **Mods.** Rows that mods add are not evaluated.
 - **Character fidelity.** The showoff captures' character differences are the existing character-fidelity work, outside this slice.

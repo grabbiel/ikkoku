@@ -71,13 +71,18 @@ extension AppState {
                                        to: directory.appendingPathComponent(name))
         }
         func writeHDR(_ probe: RenderFrame, _ name: String) throws {
-            guard let bits = renderer.captureSceneHDR(frame: probe, width: width, height: height) else {
+            // Slice 4: every MSAA sample at the pixel centre, a single-sample render like the
+            // original's oracle target (OriginalMapProbe.cs renders into antiAliasing 1).
+            guard renderer.supportsPixelCentreSamples else {
+                throw RigError.invalid("IKKOKU_SOURCE_MAP_PROBE: this GPU has no programmable sample positions for the single-sample HDR images.")
+            }
+            guard let bits = renderer.captureSceneHDR(frame: probe, width: width, height: height, pixelCentreSamples: true) else {
                 throw RigError.invalid("IKKOKU_SOURCE_MAP_PROBE: the \(name) capture failed.")
             }
             let packed = try (bits.withUnsafeBytes { Data($0) } as NSData).compressed(using: .zlib) as Data
             try packed.write(to: directory.appendingPathComponent(name))
         }
-        let hdrFormat = "RGBA float16 little-endian, rows top-down, raw DEFLATE (RFC 1951): the linear HDR scene target after the MSAA resolve, before bloom, grading and the sRGB composite"
+        let hdrFormat = "RGBA float16 little-endian, rows top-down, raw DEFLATE (RFC 1951): the linear HDR scene target after the MSAA resolve with every sample at the pixel centre (a single-sample render), before bloom, grading and the sRGB composite"
         var irradiance: [String: Any] = ["written": false]
         let lightmapped = solid.filter { SourceStudioMapAsset.Draw($0.material) == .lightmapped }
         if !lightmapped.isEmpty {

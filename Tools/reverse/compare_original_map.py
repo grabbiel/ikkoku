@@ -63,6 +63,12 @@ map-trace.json holds each case's oracle).
 
 Slice 4 (`original_map_probe.py maps`: twelve maps in one folder; maps.md, "Slice 4"):
 - each case carries its own map number and far plane (every map but 33 uses 1000 m);
+- our HDR images (irradiance, sky, particles, silhouettes, unlit) are single-sample renders:
+  the probe puts every MSAA sample at the pixel centre, as the oracle renders into a target
+  with antiAliasing 1. The interior mask alone did not cover a 4x resolve: a boundary between
+  near-coplanar surfaces, or a lightmap UV seam inside one mesh, passes the depth-normals test,
+  and there the resolve mixed in 1/4 or 1/2 of the other surface (or of a fragment shaded
+  outside its triangle);
 - the irradiance pair is not gated where the oracle recorded why it skipped it (a map
   without baked lightmaps);
 - silhouettes (gated when either side draws them): Unity's mob silhouettes alone against
@@ -73,7 +79,12 @@ Slice 4 (`original_map_probe.py maps`: twelve maps in one folder; maps.md, "Slic
   SILHOUETTE_TOLERANCE["footprintIoU"]. Our alphaIgnored variant must FAIL;
 - unlit (gated when either side draws them and covers a pixel): Unlit/Transparent alone,
   RGB over black, against UNLIT_TOLERANCE (the particles' allowance: texture filtering and
-  blend order). Our doubled variant must FAIL.
+  blend order). Our doubled variant must FAIL;
+- particles leave out the pixels where the oracle's particle image has alpha above 0. The
+  oracle's particle pass enables whole renderers, and in slice 4 some of them also carry
+  Standard submeshes (trunks, canopies) that draw there with alpha 1, while the particle
+  shaders write no alpha (ColorMask RGB; map 34's particle images are alpha 0 throughout).
+  Both footprints and the error are taken on the other pixels; the count left out is reported.
 The tolerances were fixed before any slice 4 data was compared.
 """
 from __future__ import annotations
@@ -268,13 +279,18 @@ def particle_section(measured, oracle, ours, native, width, height):
     files = mine.get("files") or {}
     if any(v not in files for v in PARTICLE_VARIANTS):
         return dict(gated=True, passes=False, reason=f"our capture lacks particle images {[v for v in PARTICLE_VARIANTS if v not in files]}")
-    unity = read_oracle_rgba(oracle / (theirs["file"] + ".gz"), width, height)[..., :3]
+    unity_rgba = read_oracle_rgba(oracle / (theirs["file"] + ".gz"), width, height)
+    # Slice 4: where a particle renderer's other submeshes drew in the oracle (alpha 1; the particle
+    # shaders write no alpha), our particle image has nothing to compare (see the module docstring).
+    other = unity_rgba[..., 3] > 0
+    unity = unity_rgba[..., :3]
     image = read_native_rgba(ours / files["decoded"], width, height)[..., :3]
-    a, b = unity.max(axis=-1) > 1e-4, image.max(axis=-1) > 1e-4
+    a, b = (unity.max(axis=-1) > 1e-4) & ~other, (image.max(axis=-1) > 1e-4) & ~other
     both = a & b
     footprint = iou(a, b)
     if not a.any() and not b.any():  # both draw them, out of this camera's view
-        return dict(gated=False, coveredUnity=0, coveredOurs=0, reason="both sides draw particles; neither covers a pixel from this camera")
+        return dict(gated=False, coveredUnity=0, coveredOurs=0, otherSubmeshPixels=int(other.sum()),
+                    reason="both sides draw particles; neither covers a pixel from this camera")
     if not both.any(): return dict(gated=True, passes=False, footprintIoU=footprint, reason="no pixel both cover")
     def metrics(candidate):
         relative = relative_error(unity, candidate, both, PARTICLE_FLOOR)
@@ -286,7 +302,8 @@ def particle_section(measured, oracle, ours, native, width, height):
         _, c_mean, c_p99, c_within = metrics(read_native_rgba(ours / files[variant], width, height)[..., :3])
         controls[variant] = dict(meanRelative=c_mean, p99Relative=c_p99, fails=not c_within)
     absolute = np.abs(image - unity)[a | b]
-    return dict(gated=True, coveredUnity=int(a.sum()), coveredOurs=int(b.sum()), footprintIoU=footprint, comparedPixels=int(both.sum()),
+    return dict(gated=True, coveredUnity=int(a.sum()), coveredOurs=int(b.sum()), otherSubmeshPixels=int(other.sum()),
+                footprintIoU=footprint, comparedPixels=int(both.sum()),
                 meanRelative=mean, p99Relative=p99, maximumRelative=float(relative.max()), meanAbsolute=float(absolute.mean()),
                 p99Absolute=float(np.percentile(absolute, 99)), unityMean=float(unity[both].mean()), oursMean=float(image[both].mean()),
                 floor=PARTICLE_FLOOR, tolerance=dict(PARTICLE_TOLERANCE), controls=controls,

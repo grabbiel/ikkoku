@@ -687,14 +687,30 @@ public final class Renderer: @unchecked Sendable {
                        bitmapInfo: info, provider: provider, decode: nil, shouldInterpolate: false, intent: .defaultIntent)
     }
 
+    /// Whether `captureSceneHDR(pixelCentreSamples: true)` can run here: the GPU
+    /// has programmable sample positions.
+    public var supportsPixelCentreSamples: Bool { gpu.device.areProgrammableSamplePositionsSupported }
+
     /// `capture`'s pass graph, returning the resolved linear scene colour
     /// (`RenderTargets.hdr`: the main passes after their MSAA resolve, before
     /// bloom, grading and the sRGB composite) as RGBA float16 bit patterns,
     /// rows top-down. ST-A11 evidence (the map probe's irradiance image); nil
     /// when the capture fails.
-    public func captureSceneHDR(frame: RenderFrame, width: Int, height: Int) -> [UInt16]? {
+    ///
+    /// `pixelCentreSamples` puts all of the main pass's MSAA samples at the pixel
+    /// centre (programmable sample positions). Each pixel then holds the one
+    /// surface that covers its centre, shaded there, as a single-sample render
+    /// does: no partial coverage at edges and no fragment of a second triangle
+    /// shaded at a centre outside it. The original player's oracle renders into a
+    /// single-sample target (ST-A11 slice 4). Nil when the device has no
+    /// programmable sample positions.
+    public func captureSceneHDR(frame: RenderFrame, width: Int, height: Int, pixelCentreSamples: Bool = false) -> [UInt16]? {
+        if pixelCentreSamples && !supportsPixelCentreSamples { return nil }
         var hdr: (any MTLTexture)?
-        guard capture(frame: frame, width: width, height: height, configureTargets: { hdr = $0.hdr }) != nil, let hdr else { return nil }
+        guard capture(frame: frame, width: width, height: height, configureTargets: {
+            hdr = $0.hdr
+            $0.pixelCentreSamples = pixelCentreSamples
+        }) != nil, let hdr else { return nil }
         let bytesPerRow = width * 8
         guard let buffer = gpu.device.makeBuffer(length: bytesPerRow * height, options: .storageModeShared),
               let cb = gpu.commandQueue.makeCommandBuffer(), let blit = cb.makeBlitCommandEncoder() else { return nil }
@@ -1364,6 +1380,13 @@ public final class Renderer: @unchecked Sendable {
         pass.depthAttachment.loadAction = .clear
         pass.depthAttachment.storeAction = .dontCare
         pass.depthAttachment.clearDepth = 0
+        if targets.pixelCentreSamples {
+            // Every sample at the centre: coverage and depth are all or nothing per pixel, so the
+            // resolve equals a single-sample render (captureSceneHDR(pixelCentreSamples:)). The positions
+            // belong to this pass's own descriptor, so no later pass or frame inherits them.
+            let centre = [MTLSamplePosition](repeating: MTLSamplePosition(x: 0.5, y: 0.5), count: Pipelines.sampleCount)
+            pass.setSamplePositions(centre)
+        }
         // Live source-shader draws need stencil; frames without them keep the
         // depth-only attachment and pipelines unchanged.
         var main = pipelines.depthOnlyMainPass

@@ -1,0 +1,19 @@
+{
+  "steps": [
+    {"op": "assert", "sourceMap": {"map": 41, "draws": 29, "loading": false, "lightmappedDraws": 27, "particleDraws": 0, "skyDraws": 0, "unlitDraws": 0, "silhouetteDraws": 0, "optionDraws": 0, "blockImages": 28, "lineContains": "Map 41 備品倉庫 (Warehouse): baked lightmaps on 27 of 29 draws (the rest as items); approximated: no realtime sun or its shadows, no specular or reflections, no normal, metallic or detail maps, no fog, no camera effects · 24308 triangles, 29 draws", "pickNothingAt": [[0.5, 0.5], [0.15, 0.2]]}},
+    {"op": "setShowSourceMap", "on": false},
+    {"op": "assert", "sourceMap": {"map": 41, "draws": 0, "lineContains": "hidden (View ▸ Show Source Map)"}},
+    {"op": "export", "path": ".local/verification/scenario-exports/source-map41-hidden.png"},
+    {"op": "assert", "exportIdenticalToSource": ".local/verification/scenario-exports/source-map41-hidden.png"},
+    {"op": "setShowSourceMap", "on": true},
+    {"op": "assert", "sourceMap": {"map": 41, "draws": 29, "lineAbsent": "hidden"}},
+    {"op": "export", "path": ".local/verification/scenario-exports/source-map41.png"},
+    {"op": "assert", "exportIdenticalToSource": ".local/verification/scenario-exports/source-map41.png"},
+    {"op": "reimport", "path": ".local/verification/scenario-exports/source-map41.png"},
+    {"op": "assert", "sourceMap": {"map": 41, "draws": 29, "loading": false, "lightmappedDraws": 27, "particleDraws": 0, "skyDraws": 0, "unlitDraws": 0, "silhouetteDraws": 0, "optionDraws": 0, "blockImages": 28, "lineContains": "Map 41 備品倉庫 (Warehouse): baked lightmaps on 27 of 29 draws (the rest as items); approximated: no realtime sun or its shadows, no specular or reflections, no normal, metallic or detail maps, no fog, no camera effects · 24308 triangles, 29 draws"}},
+    {"op": "newScene"},
+    {"op": "assert", "sourceMap": {"none": true}},
+    {"op": "undo"},
+    {"op": "assert", "sourceMap": {"map": 41, "draws": 29, "loading": false, "pickNothingAt": [[0.5, 0.5]]}}
+  ]
+}

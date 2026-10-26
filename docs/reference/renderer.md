@@ -435,6 +435,61 @@ are in [maps: slice 3](studio/maps.md#map-34-the-sky-and-block-images-slice-3).
   measurement switch. Map 34's textures take 59.6 MB of Metal memory as BC
   against 288.2 MB decoded.
 
+### Source map unlit, silhouette and animated particle draws (ST-A11 slice 4, 2026-10-26)
+
+Slice 4 converts the remaining 40 CharaStudio maps. It adds three
+`map_fragment` branches, a two-pass transparent draw for Studio's mob
+silhouettes, RGBA32 lightmaps and a guard that keeps the converter's
+block-only images away from every image decoder. The recovered shaders, the
+probe gates and the numbers are in [maps: slice 4](studio/maps.md#all-maps-slice-4).
+
+- **Unlit.** `MaterialFlagMapUnlit` (bit 22) on `MaterialKindMap` returns
+  `texel × baseColor` (Unity's `Unlit/Transparent` is the texel alone; the
+  converter writes a white factor). It is blended as the glTF alpha mode says,
+  culled as `doubleSided` says, and reads no lightmap.
+- **Animated particles.** `MaterialFlagMapParticleAnim` (bit 23) adds
+  `Particles/Anim Alpha Blended`'s frame blend to the particle branch: the
+  texel is `mix(tex(uv0), tex(uv2), uv1.x)` before `2 × colour × tint`. The
+  loader refuses such a part without TEXCOORD_1 and TEXCOORD_2.
+- **Silhouettes.** `MaterialFlagMapSilhouette` (bit 24) returns `baseColor`
+  (the mob colour; `Custom/Silhouette`'s fragment is `mov o0, _Color`). In
+  the transparent pass each silhouette draw is two draws of the same mesh,
+  Cull Back: `MainPass.mapDepthOnly` (colour write mask empty) with
+  `depthWriteLEqual`, then `mapBlend` with `depthTestLEqual` (no depth write),
+  which is the shader's serialized pass state (ColorMask 0 with ZWrite On,
+  then SrcAlpha/OneMinusSrcAlpha with ZWrite Off, both ZTest LEqual). So each
+  renderer blends once per pixel, at its nearest surface. The loader checks
+  the material's recorded pass state against exactly this and refuses
+  anything else by name. Both the depth-only and the depth+stencil main-pass
+  sets carry `MapDepthOnly` (12 groups).
+- **RGBA32 lightmaps.** A lightmap file whose format is `RGBA8` (Unity's
+  `TextureFormat` 4, maps 1, 24, 38 and 39) uploads as stored with
+  `.rgba8Unorm(_srgb)`, every level, after the same size and SHA-256 check
+  as the BC3 files. Map 1's eight 2048² files take 137 MB of Metal this way.
+- **Block-only images.** For the new maps the converter writes no PNG copy:
+  the glTF image's `uri` is the `.bc1`/`.bc3` file with the mime type
+  `image/x-ikkoku-bc1|bc3`. `GLBLoader` reads such an image's bytes like any
+  other. `SourceStudioMapAsset.load` uploads it only through its block entry
+  (the bytes must be the listed file's). It refuses the image by name when no
+  block entry matches, and refuses the map under
+  `IKKOKU_SOURCE_MAP_DECODED_TEXTURES=1`. Any other image must start with the
+  PNG or JPEG magic before it reaches the decoder, which is now a parameter
+  of the load (`ImageDecoder`, `ResourceStore` by default). An Engine test
+  loads a block-only map with a counting decoder and asserts zero decoder
+  calls for its images. `ResourceStore` is unchanged.
+- **Single-sample probe images.** `captureSceneHDR(frame:width:height:pixelCentreSamples:)`
+  can put all four MSAA samples of the main pass at the pixel centre
+  (`MTLRenderPassDescriptor.setSamplePositions`). Each pixel then takes the one
+  surface that covers its centre, shaded there, which is a single-sample render.
+  The original player's oracle renders into a single-sample target. Only the map probe passes
+  `true`. The flag lives on the capture's own `RenderTargets` and sets the
+  positions on that main pass's own descriptor. Interactive frames and every
+  other capture keep the default sample positions, and pay one Bool check per
+  frame. On a GPU without programmable sample positions the call returns nil
+  and the probe stops with that reason. An Engine test checks both behaviours on
+  a slanted edge: partial coverage without the flag (before and after a flagged
+  capture), and none with it.
+
 ### Deformation safety
 
 The renderer writes complete skin palettes into the frame ring's palette

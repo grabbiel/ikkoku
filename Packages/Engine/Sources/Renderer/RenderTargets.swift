@@ -14,6 +14,10 @@ final class RenderTargets: @unchecked Sendable {
     let bloom: [any MTLTexture]
     let pick: any MTLTexture
     let pickDepth: any MTLTexture
+    /// ST-A11 evidence only (`Renderer.captureSceneHDR(pixelCentreSamples:)`): the main
+    /// pass puts every MSAA sample at the pixel centre. Set before encoding, on a
+    /// capture's own targets; interactive frames leave it false.
+    var pixelCentreSamples = false
     private let device: any MTLDevice
     private let lock = NSLock()
     private var depthStencil: (any MTLTexture)?

@@ -1,19 +1,19 @@
 {
   "steps": [
-    {"op": "assert", "sourceMap": {"map": 34, "draws": 54, "loading": false, "lightmappedDraws": 30, "particleDraws": 1, "skyDraws": 1, "blockImages": 54, "lineContains": "Map 34 空き教室 (akikyoushitu): baked lightmaps on 30 of 57 draws (the rest as items), cubemap sky, particles (no soft-particle fade or per-renderer sorting); approximated: no realtime sun or its shadows, no specular or reflections, no normal, metallic or detail maps, no fog, no camera effects · 28659 triangles, 61 draws", "pickNothingAt": [[0.5, 0.5], [0.15, 0.2]]}},
+    {"op": "assert", "sourceMap": {"map": 34, "draws": 53, "loading": false, "lightmappedDraws": 29, "particleDraws": 1, "skyDraws": 1, "blockImages": 54, "lineContains": "Map 34 空き教室 (akikyoushitu): baked lightmaps on 29 of 56 draws (the rest as items), cubemap sky, particles (no soft-particle fade or per-renderer sorting); approximated: no realtime sun or its shadows, no specular or reflections, no normal, metallic or detail maps, no fog, no camera effects · 28597 triangles, 60 draws", "pickNothingAt": [[0.5, 0.5], [0.15, 0.2]]}},
     {"op": "setShowSourceMap", "on": false},
     {"op": "assert", "sourceMap": {"map": 34, "draws": 0, "lineContains": "hidden (View ▸ Show Source Map)"}},
     {"op": "export", "path": ".local/verification/scenario-exports/source-map34-hidden.png"},
     {"op": "assert", "exportIdenticalToSource": ".local/verification/scenario-exports/source-map34-hidden.png"},
     {"op": "setShowSourceMap", "on": true},
-    {"op": "assert", "sourceMap": {"map": 34, "draws": 54, "skyDraws": 1, "lineAbsent": "hidden"}},
+    {"op": "assert", "sourceMap": {"map": 34, "draws": 53, "skyDraws": 1, "lineAbsent": "hidden"}},
     {"op": "export", "path": ".local/verification/scenario-exports/source-map34.png"},
     {"op": "assert", "exportIdenticalToSource": ".local/verification/scenario-exports/source-map34.png"},
     {"op": "reimport", "path": ".local/verification/scenario-exports/source-map34.png"},
-    {"op": "assert", "sourceMap": {"map": 34, "draws": 54, "loading": false, "lightmappedDraws": 30, "particleDraws": 1, "skyDraws": 1, "blockImages": 54, "lineContains": "Map 34 空き教室 (akikyoushitu): baked lightmaps on 30 of 57 draws (the rest as items), cubemap sky, particles (no soft-particle fade or per-renderer sorting); approximated: no realtime sun or its shadows, no specular or reflections, no normal, metallic or detail maps, no fog, no camera effects · 28659 triangles, 61 draws"}},
+    {"op": "assert", "sourceMap": {"map": 34, "draws": 53, "loading": false, "lightmappedDraws": 29, "particleDraws": 1, "skyDraws": 1, "blockImages": 54, "lineContains": "Map 34 空き教室 (akikyoushitu): baked lightmaps on 29 of 56 draws (the rest as items), cubemap sky, particles (no soft-particle fade or per-renderer sorting); approximated: no realtime sun or its shadows, no specular or reflections, no normal, metallic or detail maps, no fog, no camera effects · 28597 triangles, 60 draws"}},
     {"op": "newScene"},
     {"op": "assert", "sourceMap": {"none": true}},
     {"op": "undo"},
-    {"op": "assert", "sourceMap": {"map": 34, "draws": 54, "loading": false, "skyDraws": 1, "pickNothingAt": [[0.5, 0.5]]}}
+    {"op": "assert", "sourceMap": {"map": 34, "draws": 53, "loading": false, "skyDraws": 1, "pickNothingAt": [[0.5, 0.5]]}}
   ]
 }

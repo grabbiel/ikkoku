@@ -164,6 +164,29 @@ MAP_SKIPPED_REASONS = {
 # (GetComponentsInChildren) get _Color = Config.AddData.mobColor through a MaterialPropertyBlock.
 MAP_OPTIONS = {23: ("pool_mob", "children"), 38: ("MapMobGroup", "node"), 39: ("MapMobGroup", "node")}
 MOB_COLOR_MAPS = {38, 39}
+# What Studio's cameras draw (slice 4; the maps phase recorded the same cameras in all 21 cases):
+# Camera.main (`Studio.CameraControl`) has cullingMask 536874000 (layers 4, 10, 11 and 29), a
+# depth-0 camera that clears only depth has 1476395008 (layers 27, 28 and 30), and the background
+# camera 0. A map renderer on another layer (the maps put helpers on 0 and 14) is drawn by no
+# camera. One on the front camera's layers would draw over everything; no map has one, so it is
+# refused by name.
+STUDIO_MAIN_CAMERA_MASK = 536874000
+STUDIO_FRONT_CAMERA_MASK = 1476395008
+# Renderer.shadowCastingMode ShadowsOnly (m_CastShadows 3): drawn only into shadow maps, never
+# by a camera (the maps' `*_shadow`/`*_kage` stand-ins for walls and pillars).
+SHADOWS_ONLY = 3
+
+
+def undrawn_reason(renderer, game_object, path):
+    """Why no Studio camera draws this renderer, or None when Camera.main draws it."""
+    if getattr(renderer, "m_CastShadows", 1) == SHADOWS_ONLY:
+        return "shadows only (drawn only into shadow maps)"
+    layer = game_object.m_Layer
+    if (STUDIO_FRONT_CAMERA_MASK >> layer) & 1:
+        raise ValueError(f"{path}: on layer {layer}, which Studio's front camera draws over the scene; no verified map has one")
+    if not (STUDIO_MAIN_CAMERA_MASK >> layer) & 1:
+        return f"layer {layer} (no Studio camera draws it)"
+    return None
 # AdditionalFunctionsSystem.mobColor's default (Config/AdditionalFunctionsSystem.cs); 0 and 1
 # are unchanged by a Linear player's conversion.
 DEFAULT_MOB_COLOR = [0.0, 0.0, 1.0, 0.5]
@@ -1079,11 +1102,12 @@ def inventory(bundles, scene, builtin_resources=None):
         static_batch = renderer.m_StaticBatchInfo
         keys = visibility_keys(host, map_scene.parents, active)
         lm_index, _, lm_source = effective_lightmap(renderer.m_LightmapIndex, [0, 0, 0, 0], prefab_lightmaps.get(pid))
-        if renderer.m_Enabled and keys:
+        undrawn = undrawn_reason(renderer, renderer.m_GameObject.read(), map_scene.path(host))
+        if renderer.m_Enabled and keys and not undrawn:
             for pointer in renderer.m_Materials:
                 if pointer.path_id and materials[key(pointer)]["shader"] not in NON_GEOMETRY_SHADERS:
                     draw_groups.add((map_scene.under_map_root(host), key(pointer), tuple(keys), lm_index))
-        renderers.append({"path": map_scene.path(host), "enabled": bool(renderer.m_Enabled), "materials": names,
+        renderers.append({"path": map_scene.path(host), "enabled": bool(renderer.m_Enabled), "undrawn": undrawn, "materials": names,
                           "triangles": triangles, "builtinMesh": builtin, "underMapRoot": map_scene.under_map_root(host),
                           "visibleFor": keys, "lightmapIndex": renderer.m_LightmapIndex,
                           "effectiveLightmapIndex": lm_index, "lightmapSource": lm_source,
@@ -1501,9 +1525,16 @@ def under_any(map_scene, transform_id, roots):
     return False
 
 
+# The NOT_DRAWN_COMPONENTS a camera draws by their own object's layer (and, for a renderer, its
+# shadow-casting mode): one that no Studio camera draws is not counted (`undrawn_reason`).
+CAMERA_DRAWN_COMPONENTS = {"SkinnedMeshRenderer", "ParticleSystem", "SpriteRenderer", "LineRenderer", "TrailRenderer",
+                           "BillboardRenderer", "Terrain", "LensFlare", "Halo"}
+
+
 def not_drawn_components(map_scene, active):
     """{label: count} of the scene's components that draw something the converter does not
-    (NOT_DRAWN_COMPONENTS), counting enabled ones on objects active for some sun type."""
+    (NOT_DRAWN_COMPONENTS), counting enabled ones on objects active for some sun type that a
+    Studio camera draws."""
     counts = {}
     for type_name, label in NOT_DRAWN_COMPONENTS.items():
         for _, reader in map_scene.of_type(type_name):
@@ -1512,6 +1543,8 @@ def not_drawn_components(map_scene, active):
                 continue
             host = map_scene.transform_of_object.get(component.m_GameObject.path_id)
             if host is None or not visibility_keys(host, map_scene.parents, active):
+                continue
+            if type_name in CAMERA_DRAWN_COMPONENTS and undrawn_reason(component, component.m_GameObject.read(), map_scene.path(host)):
                 continue
             counts[label] = counts.get(label, 0) + 1
     return counts
@@ -1560,6 +1593,10 @@ def export(bundles, scene, map_no, output, max_texture=None, builtin_resources=N
         option = bool(option_roots) and under_any(map_scene, host, option_roots)
         if not renderer.m_Enabled or not keys:
             skipped.append({"path": path, "reason": "disabled renderer" if not renderer.m_Enabled else "never active"})
+            continue
+        undrawn = undrawn_reason(renderer, renderer.m_GameObject.read(), path)
+        if undrawn:
+            skipped.append({"path": path, "reason": undrawn})
             continue
         batch = renderer.m_StaticBatchInfo
         if batch is not None and batch.subMeshCount > 0:
@@ -2049,7 +2086,7 @@ def survey_summary(inventory_result, rules=None):
     materials = {}
     for material in inventory_result["materials"]:
         materials.setdefault(material["name"], material)
-    drawn = [r for r in inventory_result["renderers"] if r["enabled"] and r["visibleFor"]]
+    drawn = [r for r in inventory_result["renderers"] if r["enabled"] and r["visibleFor"] and not r.get("undrawn")]
     shaders, refusals, notes = {}, [], []
     batched = 0
     for renderer in drawn:

@@ -243,6 +243,52 @@ func silhouettesBlendOncePerRendererAndCoverTheirDepthPass() throws {
     #expect(twice.allSatisfy { abs($0.z - 0.75) < 2e-3 }, "\(twice.prefix(4))")
 }
 
+// MARK: - The probe's pixel-centre samples
+
+/// The map probe's HDR images are measured against an oracle that renders into a
+/// single-sample target. With `pixelCentreSamples` every MSAA sample sits at the
+/// pixel centre, so a triangle's slanted edge leaves each pixel all covered or not
+/// at all; without it (every other capture, and interactive frames) the edge keeps
+/// the 4x resolve's partial coverage, before and after a pixel-centre capture.
+@Test(.enabled(if: MTLCreateSystemDefaultDevice() != nil))
+func pixelCentreSamplesResolveLikeASingleSampleRenderAndStayOffByDefault() throws {
+    let renderer = try makeSourceShaderRenderer()
+    let resources = renderer.resources
+    #expect(try RenderTargets(device: renderer.gpu.device, width: 8, height: 8).pixelCentreSamples == false)
+    var camera = OrbitCamera(); camera.pitch = 0; camera.yaw = 0
+    // One large triangle, both windings, whose long edge crosses the 8x8 view on a
+    // slant, just off the target (the view's centre).
+    let t = camera.target
+    let c = Float3(t.x + 0.13, t.y + 0.07, t.z), along = Float3(40, -54.8, 0)
+    let positions: [Float3] = [c + along, c - along, Float3(t.x - 50, t.y - 50, t.z)]
+    let mesh = MeshData(name: "edge", positions: positions, normals: Array(repeating: Float3(0, 0, 1), count: 3), indices: [0, 1, 2, 0, 2, 1])
+    let handle = try resources.register(mesh: mesh)
+    defer { resources.unregister(mesh: handle) }
+    let material = try #require(try SourceStudioSilhouetteInputs.parse(try json(["ikkokuSilhouette": silhouetteState()]))).material()
+    var item = RenderItem(mesh: handle, material: material, model: matrix_identity_float4x4, objectID: 0)
+    item.castsShadow = false; item.outline = false; item.order = 100
+    var effects = SceneEffects(); effects.transparentBackground = true; effects.showGrid = false
+    let frame = RenderFrame(camera: camera, items: [item], effects: effects)
+    // The silhouette's colour pass blends its blue at alpha 0.5 over transparent black.
+    func blue(_ centre: Bool) -> [Float]? {
+        renderer.captureSceneHDR(frame: frame, width: 8, height: 8, pixelCentreSamples: centre).map { bits in (0..<64).map { float16(bits[$0 * 4 + 2]) } }
+    }
+    func partial(_ values: [Float]) -> Int { values.filter { $0 > 2e-3 && $0 < 0.5 - 2e-3 }.count }
+    let before = try #require(blue(false))
+    #expect(partial(before) > 0, "\(before)")
+    #expect(renderer.supportsPixelCentreSamples == renderer.gpu.device.areProgrammableSamplePositionsSupported)
+    guard renderer.supportsPixelCentreSamples else {
+        #expect(blue(true) == nil)
+        return
+    }
+    let centre = try #require(blue(true))
+    #expect(partial(centre) == 0, "\(centre)")
+    let covered = centre.filter { abs($0 - 0.5) < 2e-3 }.count
+    #expect(covered > 8 && covered < 56, "\(centre)")
+    // Nothing carries over into the next default capture.
+    #expect(try #require(blue(false)) == before)
+}
+
 // MARK: - RGBA32 lightmaps
 
 @Test(.enabled(if: MTLCreateSystemDefaultDevice() != nil))
