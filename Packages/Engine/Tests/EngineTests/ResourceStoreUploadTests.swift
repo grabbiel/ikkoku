@@ -77,6 +77,37 @@ private func patternPNG(width: Int, height: Int) throws -> Data {
         }
     }
 
+    @Test("Upload permits never let more holders in than their limit")
+    func uploadPermitsBoundTheirHolders() async {
+        let permits = UploadPermits(limit: 2)
+        await onOwnThread {
+            DispatchQueue.concurrentPerform(iterations: 16) { _ in
+                permits.acquire()
+                usleep(5_000)
+                permits.release()
+            }
+        }
+        #expect(permits.resetMost() == 2)
+    }
+
+    @Test("Concurrent loads hold at most the shared limit of upload permits")
+    func concurrentLoadsStayWithinTheUploadPermits() async throws {
+        let device = try #require(MTLCreateSystemDefaultDevice())
+        let resources = ResourceStore(device: device)
+        let png = try patternPNG(width: 256, height: 256)
+        _ = UploadPermits.shared.resetMost()
+        let failures = await withTaskGroup(of: Bool.self) { group -> Int in
+            for index in 0..<64 {
+                group.addTask { (try? resources.texture(data: png, key: "permits-\(index)")) == nil }
+            }
+            var failures = 0
+            for await failed in group where failed { failures += 1 }
+            return failures
+        }
+        #expect(failures == 0)
+        #expect(UploadPermits.shared.resetMost() <= UploadPermits.limit)
+    }
+
     /// With a command queue per store, 256 stores loading at once failed about
     /// 100 uploads with `IOGPUCommandQueueErrorDomain` 518 (the driver's queue
     /// limit). Hundreds of cooperative tasks also block every cooperative

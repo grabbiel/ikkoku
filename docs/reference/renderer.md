@@ -2127,6 +2127,25 @@ and waits for it before returning, so a texture is never handed out while
 the GPU still writes it, and one caller's loads complete in call order. Each
 staging buffer is released as soon as its copy completes.
 
+**At most eight loads at once.** A plain counting semaphore
+(`UploadPermits`, 8 permits) bounds how many loads hold decoded pixels and a
+staging buffer at the same time. A holder decodes, stages and waits for its
+own command buffer, never for a pool, so a caller waiting for a permit
+cannot deadlock. Without the bound, every load in flight left its freed
+4 MB decode buffer (for 1024²) in malloc's cache: 116–128 MB after 64
+concurrent loads, against none for MetalKit. Malloc's bytes in use did not
+grow over repeated batches, so this was a cache, not a leak. MetalKit
+allowed three loads per loader, and the app has one store, so eight does
+not slow any app path. Measured for 64 concurrent 1024² loads, first
+MetalKit, then in line:
+- staging at the peak (Metal allocations above the textures): 226–297 MB
+  against 24–32 MB;
+- process footprint at the peak: 675–681 MB against 691–703 MB. The
+  in-line excess is at most 60 MB of cached decode buffers (eight
+  permits' worth);
+- after four such batches: 1,675 MB against 1,724–1,728 MB of footprint,
+  with malloc bytes in use 10.0 MB against 4.9–5.0 MB.
+
 **Tests.**
 - `InlineTextureLoaderIdentityTests` compares the in-line loader with
   MetalKit (kept in the tests only) at every level and with both colour
@@ -2150,7 +2169,12 @@ staging buffer is released as soon as its copy completes.
   - an upload has completed when its texture is handed out, and one
     store's uploads run in call order;
   - a texture reads back whole from another queue right away;
-  - 256 stores load at once from the cooperative pool, every load counted.
+  - 256 stores load at once from the cooperative pool, every load counted;
+  - the permits never admit more holders than their limit.
+
+  Removing the upload's wait makes the handout test fail (status not
+  completed, and the call order broken); the readback test still passes,
+  because Metal orders the readback after the upload by itself.
 
 ## Checked math, legacy skeletons and cameras (R4)
 

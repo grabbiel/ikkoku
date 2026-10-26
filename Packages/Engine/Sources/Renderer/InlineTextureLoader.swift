@@ -4,6 +4,39 @@ import Foundation
 import ImageIO
 import Metal
 
+/// Bounds how many texture loads hold decoded pixels and a staging buffer at
+/// once. Unbounded, every load in flight leaves its freed decode buffer in
+/// malloc's cache for reuse: 4 MB after one 1024² load, 32 MB after 8 at
+/// once, 116–128 MB after 64, with 256 MB of staging at that peak. MetalKit
+/// allowed three loads per loader. A holder decodes,
+/// stages and waits only for its own command buffer, never for a pool, so a
+/// caller waiting for a permit cannot deadlock (`docs/reference/performance.md`,
+/// the pool rule).
+final class UploadPermits: @unchecked Sendable {
+    static let limit = 8
+    static let shared = UploadPermits(limit: limit)
+
+    private let semaphore: DispatchSemaphore
+    private let lock = NSLock()
+    private var holders = 0
+    private var mostHolders = 0
+
+    init(limit: Int) { semaphore = DispatchSemaphore(value: limit) }
+
+    func acquire() {
+        semaphore.wait()
+        lock.lock(); holders += 1; mostHolders = max(mostHolders, holders); lock.unlock()
+    }
+
+    func release() {
+        lock.lock(); holders -= 1; lock.unlock()
+        semaphore.signal()
+    }
+
+    /// The most permits held at once since the last reset (tests only).
+    func resetMost() -> Int { lock.lock(); defer { mostHolders = holders; lock.unlock() }; return mostHolders }
+}
+
 /// Creates shader-read textures from images on the calling thread.
 ///
 /// `MTKTextureLoader`'s synchronous calls hand the decode and upload to
@@ -263,7 +296,10 @@ enum InlineTextureLoader {
         descriptor.usage = .shaderRead
         descriptor.storageMode = .private
         guard let texture = device.makeTexture(descriptor: descriptor) else { throw Failure.gpu("texture \(describe(image))") }
-        // The staging buffer lives only until the copy has completed.
+        // The staging buffer lives only until the copy has completed. At most
+        // `UploadPermits.limit` loads hold decoded pixels and staging at once.
+        UploadPermits.shared.acquire()
+        defer { UploadPermits.shared.release() }
         try autoreleasepool {
             let staging = try stage(image, layout: layout, device: device)
             guard let command = queue.makeCommandBuffer(), let blit = command.makeBlitCommandEncoder() else {

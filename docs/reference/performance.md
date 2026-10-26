@@ -4476,10 +4476,31 @@ so it never starves other tasks.
 - Uploads use one command queue per device, shared by every store, never
   the frame queue. A queue per store ran the driver out of command queues
   at 256 stores.
+- At most eight loads hold decoded pixels and staging at once
+  (`UploadPermits`, a plain counting semaphore whose holders never wait on
+  a pool).
 - GPU texture containers (KTX, KTX2, PVR, ASTC, DDS, ATX) are rejected by
   name on every entry point.
 - The off-pool test helpers (`liveTickOffPool`) and the GCD workers in the
   app stay. They follow the pool rule for reasons beyond texture loads.
+
+### Memory
+
+64 concurrent 1024² loads with 64 textures kept, two fresh processes per
+path (`ResourceStore.texture(data:)` with PNG bytes; MetalKit from 64
+threads, since from the cooperative pool it hangs):
+
+| | MetalKit | In line, unbounded | In line, 8 permits |
+| --- | --- | --- | --- |
+| Metal allocations above the textures at the peak | 167–297 MB | 252–256 MB (threads), 64–67 MB (tasks) | 24–32 MB |
+| Footprint at the peak | 663–681 MB | 829–833 MB (threads), 766–770 MB (tasks) | 691–703 MB |
+| Freed decode buffers kept by malloc | none | 116–128 MB | 60 MB |
+
+With one load at a time, the in-line path keeps one 4 MB decode buffer
+(26 against 31 MB of footprint); with eight at once, 32 MB. Four batches in
+a row add the textures' 345 MB each. Malloc's bytes in use stay at
+4.9–5.0 MB, against 10.0 MB for MetalKit, so the kept buffers are reused,
+not leaked.
 
 ### Correctness
 
@@ -4492,6 +4513,12 @@ so it never starves other tasks.
   - The in-line loads completed in every run: 64, 256 and 512 cooperative
     tasks, 256 tasks at 1024², and stores shared or one per task (3 runs
     each).
+  - JPEG, HEIC, AVIF and PNG bytes from 256 cooperative tasks, one store
+    each: every load completed (2 runs each).
+  - With the eight permits: 64, 256 and 512 cooperative tasks, 256 GCD
+    workers and 256 threads, shared or per-task stores, 3 runs each: every
+    load completed (512 loads of 512² in 0.11 s, 256 of 1024² in
+    0.14–0.17 s).
 
 ### Limits
 
