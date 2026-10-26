@@ -98,7 +98,7 @@ the run.
 | --- | --- | --- |
 | `studio-idle` (default) | `IKKOKU_SOURCE_SCENE` | Studio, live animation on, nothing selected; blink, neck/eye look, hair dynamics and route clocks tick at 30 Hz. The scene needs one converted source character; a character riding a route counts (`details.sourceRouteCharacters`), so a route scene such as the route-children fixture measures a playing route |
 | `studio-orbit` | same | `studio-idle` plus a right-button orbit drag: one `mouseDragged` per input tick |
-| `studio-fk-drag` | same | selects source key 65, FK mode, bone 19 (the `fk-mouse-drag` scenario's grab), grabs the z ring found by `pickID` and drags it around a 40 px circle, one turn per 2 s; checks that the grab pushed exactly one undo snapshot |
+| `studio-fk-drag` | same | selects source key 65 (or `IKKOKU_PERF_ACTION_KEY`), FK mode, bone 19 (the `fk-mouse-drag` scenario's grab), grabs the z ring found by `pickID` and drags it around a 40 px circle, one turn per 2 s; checks that the grab pushed exactly one undo snapshot |
 | `studio-hover` | same | character selected, mouse moves over the viewport (`mouseMoved`, gizmo hover pick) |
 | `maker-idle` | `IKKOKU_SOURCE_CARD` | Maker with the source card, idle animation, blink and hair |
 | `maker-slider` | same | source customization on, the first bound body slider oscillates ±0.3 (one binding write per input tick) |
@@ -143,12 +143,22 @@ Other options:
   action workloads (`studio-duplicate`, `studio-undo-delete`, `studio-redo`,
   `studio-outfit`, `studio-export`) act on, for example route 0 of
   `scene-route-children.png` with its folder and character. Without it they
-  use source key 963 or the first source character.
+  use source key 963 or the first source character. `studio-fk-drag` drags
+  bone 19 of the character it names instead of source key 65.
 - `IKKOKU_PERF_OUTFIT` (0–6): the saved outfit `studio-outfit` selects.
 - `IKKOKU_PERF_SELECT_KEYS` (1–64 comma-separated source keys): the objects
   `studio-select` selects in turn, and `IKKOKU_PERF_INSPECTOR_TAB`
   (`object`, `pose`, `face`, `clothes` or `scene`): the inspector tab it
-  shows.
+  shows. Any other workload selects the listed objects in turn, 0.3 s
+  apart, in the Studio, before it starts, so the inspector has shown their
+  sections (and, with [item 7](#phase-2-item-7-selection-and-the-inspector),
+  keeps them hidden). `details.preselectedSourceKeys` records them.
+- `IKKOKU_PERF_KEEP_MOUNTED` (`off`, `tab` or `on`, the default), a
+  measurement control for
+  [item 7](#phase-2-item-7-selection-and-the-inspector): `off` builds and
+  drops the inspector's Object tab and its sections as before item 7, `tab`
+  keeps the Object tab mounted while nothing is selected, and `on` also
+  keeps each kind's section once shown. The app reads it once at launch.
 - Measurement controls for the
   [item 6 follow-up](#phase-2-item-6-follow-up-route-copies-prefetch-and-kept-donations),
   all defaulting to the shipped behavior:

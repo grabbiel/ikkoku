@@ -114,7 +114,7 @@ final class PerfTrace {
     enum ViewBody: Int, CaseIterable {
         case appCommands, contentView
         case studioWindow, studioWorkspace, studioWorkspaceRow, studioToolbar, studioTimeline, studioInspector, studioStatus
-        case objectInspector, poseInspector, sourcePoseInspector, sourceAnimationInspector, faceInspector, clothesInspector, sceneInspector
+        case objectInspector, objectInspectorContent, objectInspectorSection, poseInspector, sourcePoseInspector, sourceAnimationInspector, faceInspector, clothesInspector, sceneInspector
         case makerWindow, makerRigPanel, makerShapeRow
 
         var name: String { String(describing: self) }
@@ -158,7 +158,8 @@ final class PerfTrace {
         let livePacing: String
         /// `IKKOKU_PERF_ACTION_KEY`: the source key of the object the action
         /// workloads (`studio-duplicate`, `studio-undo-delete`) act on, such
-        /// as a route; nil keeps their default character.
+        /// as a route, and the character `studio-fk-drag` drags; nil keeps
+        /// their default character.
         let actionKey: Int32?
         /// `IKKOKU_PERF_RIG_PREFETCH`: "on" (default) or "off", which leaves a
         /// Studio character build's rig decodes where its preparation asks for
@@ -178,7 +179,8 @@ final class PerfTrace {
         let outfit: Int?
         /// `IKKOKU_PERF_SELECT_KEYS`: the source keys `studio-select` selects
         /// in turn (R7 phase 2, item 7); nil takes the first object of each
-        /// kind the Object tab shows differently.
+        /// kind the Object tab shows differently. Any other workload selects
+        /// them in turn before it prepares.
         let selectKeys: [Int32]?
         /// `IKKOKU_PERF_INSPECTOR_TAB`: the inspector tab `studio-select`
         /// shows, lowercased ("object", the default, "pose", "face",

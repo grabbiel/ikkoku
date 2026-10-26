@@ -88,9 +88,37 @@ final class PerfWorkloadDriver {
         app.host?.renderer.skipsUnchangedFrames = configuration.frameSkip
         configureWindow()
         whenSourceSceneReady {
-            do { try self.prepare() } catch { self.fail("\(self.configuration.workload): \(error)") }
-            DispatchQueue.main.asyncAfter(deadline: .now() + self.configuration.warmupSeconds) { self.record() }
+            self.preselect {
+                do { try self.prepare() } catch { self.fail("\(self.configuration.workload): \(error)") }
+                DispatchQueue.main.asyncAfter(deadline: .now() + self.configuration.warmupSeconds) { self.record() }
+            }
         }
+    }
+
+    /// `IKKOKU_PERF_SELECT_KEYS` for a workload other than `studio-select`
+    /// (R7 phase 2, item 7): those objects are selected in turn, 0.3 s apart,
+    /// before the workload prepares, so the inspector has built what they
+    /// show (its kept sections, for example) when the workload's own
+    /// selection replaces them.
+    private func preselect(then body: @escaping () -> Void) {
+        guard configuration.workload != "studio-select", let keys = configuration.selectKeys, !keys.isEmpty,
+              let studio = app.studio else { body(); return }
+        app.mode = .studio
+        let tree = studio.doc.flattened().map(\.object)
+        var ids: [UUID] = []
+        for key in keys {
+            guard let object = tree.first(where: { $0.sourceObjectKey == key }) else {
+                fail("IKKOKU_PERF_SELECT_KEYS: no source object with key \(key)")
+            }
+            ids.append(object.id)
+        }
+        trace.details["preselectedSourceKeys"] = keys.map { Int($0) }
+        func step(_ index: Int) {
+            guard index < ids.count else { body(); return }
+            studio.selection = ids[index]
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { step(index + 1) }
+        }
+        step(0)
     }
 
     /// Runs `body` once the Studio's source scene import has installed its
@@ -317,7 +345,7 @@ final class PerfWorkloadDriver {
     /// The `fk-mouse-drag` scenario's grab (source key 65, bone 19, z ring),
     /// then a continuous circular drag of the ring for the whole recording.
     private func prepareStudioFKDrag() throws {
-        let key: Int32 = 65, boneID = 19
+        let key: Int32 = configuration.actionKey ?? 65, boneID = 19
         let studio = try prepareStudioSource(selectKey: key)
         guard let id = studio.selection, let preview = studio.sourceShapePreview(for: id),
               let target = preview.controller.targets.first(where: { $0.bone.id == boneID && $0.hasGuide }) else {
