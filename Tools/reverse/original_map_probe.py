@@ -31,6 +31,13 @@ the player authors nothing: it reads each record back and writes oracle-<case>-c
 oracle-<case>-irradiance.f32 (lights at intensity 0) and -irradiance-lit.f32 (lights as authored),
 with oracle-trace.json. The float images are gzipped on arrival (<name>.f32.gz); manifest.json
 lists the received files, and run.json each raw image's SHA-256 and size.
+
+`map34` (ST-A11 slice 3) is phases B and C for map 34 in the same single exec: --showoff is uploaded
+as reload-map34-showoff.png, which selects the probe's map 34 mode. The player authors
+scene-map34-day.png (map transform nonzero, sun type day), scene-map34-evening.png and
+scene-map34-night.png (reset transform) and scene-map34-showoff.png (map 34 added to the character
+scene), reads each back, and writes per case the phase B images and the oracle images, including
+oracle-<case>-classes.png, -sky.rgba.f32 and -particles.rgba.f32, all traced in map-trace.json.
 """
 from __future__ import annotations
 import argparse, gzip, hashlib, io, json, re, subprocess, uuid, zipfile
@@ -169,85 +176,27 @@ MAP_PROBE_NAMES = ('MapProbe.cs', 'IkkokuMapProbe.dll')
 SHOWOFF_UPLOAD = 'reload-showoff.png'
 
 
-def capture(args):
-    """The whole VM phase B in one `prlctl exec` (see the module docstring)."""
+MAP34_UPLOAD = 'reload-map34-showoff.png'
+
+
+def scene_record(path, what):
+    """A scene record's bytes; refused unless it is a PNG."""
+    data = Path(path).read_bytes()
+    if not data.startswith(b'\x89PNG\r\n\x1a\n'): raise ValueError(f'{what} is not a PNG scene record: {path}')
+    return data
+
+
+def run_probe(args, uploads, record, floats):
+    """One `prlctl exec` of fixtures/OriginalMapProbe.cs with `uploads` ({reload-*.png name: bytes})
+    placed next to the plug-in (original_scene_reload_probe.once_script). `record` adds to run.json;
+    with `floats`, the received *.f32 images are gzipped (gzip_floats). Every guest hash is checked;
+    manifest.json lists what arrived."""
     from original_scene_reload_probe import once_script  # the reload probe's one-exec transport
     output = private(args.output)
-    if (output / 'run.json').exists(): raise RuntimeError(f'{output}/run.json exists: capture into a new output folder')
-    source = MAP_PROBE.read_bytes(); showoff = args.showoff.read_bytes()
-    if not showoff.startswith(b'\x89PNG\r\n\x1a\n'): raise ValueError(f'--showoff is not a PNG scene record: {args.showoff}')
+    if (output / 'run.json').exists(): raise RuntimeError(f'{output}/run.json exists: run the probe into a new output folder')
+    source = MAP_PROBE.read_bytes()
     root = fresh_root()
-    record = dict(vm=args.vm, root=root, processID=0, sourceSHA256=digest(source), showoff=str(args.showoff), showoffSHA256=digest(showoff),
-                  errnoBaseline=args.errno_baseline, errnoBefore=guarded(args.errno_baseline),
-                  transport='one prlctl exec; run.ps1 over a host-only HTTP endpoint (original_scene_reload_probe.once_script)')
-    output.mkdir(parents=True, exist_ok=True); dump(output / 'run.json', record)
-    files = {MAP_PROBE_NAMES[0]: source, SHOWOFF_UPLOAD: showoff}
-    with Endpoint(args.host_address, files, upload='reload.zip') as endpoint:
-        script = once_script(root, endpoint.base, args.wait_seconds, [SHOWOFF_UPLOAD], *MAP_PROBE_NAMES)
-        files['run.ps1'] = script.encode()
-        (output / 'run.ps1').write_text(script.replace(endpoint.base, '<endpoint>/'))
-        result = subprocess.run(['prlctl', 'exec', args.vm, '--current-user', 'powershell.exe', '-NoProfile', '-NonInteractive',
-                                 '-Command', bootstrap(endpoint.base)], text=True, capture_output=True, timeout=args.wait_seconds + 900)
-        upload = endpoint.upload
-    record['errnoAfter'] = errno_count()
-    if result.returncode:
-        record['execError'] = (result.stderr or result.stdout)[-4000:]; dump(output / 'run.json', record)
-        raise RuntimeError('VM exec failed: ' + record['execError'])
-    guest = json.loads(result.stdout.lstrip('\ufeff').strip())
-    record.update(processID=int(guest.get('processID') or 0), guest=guest)
-    if guest.get('source') not in (None, digest(source)): raise ValueError('Guest probe source hash differs')
-    if (guest.get('scenes') or {}).get(SHOWOFF_UPLOAD) not in (None, digest(showoff)): raise ValueError('Guest showoff hash differs')
-    names = []
-    if upload is not None:
-        if digest(upload) != guest.get('zipSHA256') or len(upload) != guest.get('zipBytes'): raise ValueError('Upload differs from the guest zip')
-        names = extract(upload, output)
-    (output / 'probe-source.cs').write_bytes(source)
-    dump(output / 'run.json', record)
-    provenance = [dict(file=p.name, sha256=digest(p.read_bytes()), bytes=p.stat().st_size)
-                  for p in sorted(output / n for n in set(names + ['run.json', 'probe-source.cs'])) if p.is_file()]
-    dump(output / 'manifest.json', dict(schemaVersion=1, files=provenance))
-    status = json.loads((output / 'status.json').read_text()) if (output / 'status.json').is_file() else None
-    return dict(root=root, processID=record['processID'], exited=guest.get('exited'), error=guest.get('error'),
-                cleanupError=guest.get('cleanupError'), removed=guest.get('removed'), remainingGameProcesses=guest.get('remainingGameProcesses'),
-                errno=[record['errnoBefore'], record['errnoAfter']], files=len(provenance), status=status)
-
-
-ORACLE_CASE = re.compile(r'[a-z0-9]+(-[a-z0-9]+)*')
-
-
-def oracle_scenes(items):
-    """--scene <case>=<png> pairs: distinct plain case labels, each a PNG scene record."""
-    scenes = {}
-    for item in items:
-        label, sep, path = item.partition('=')
-        if not sep or not ORACLE_CASE.fullmatch(label) or label in scenes: raise ValueError(f'--scene wants a new <case>=<scene png>: {item!r}')
-        data = Path(path).read_bytes()
-        if not data.startswith(b'\x89PNG\r\n\x1a\n'): raise ValueError(f'--scene {label} is not a PNG scene record: {path}')
-        scenes[label] = data
-    if not scenes: raise ValueError('oracle needs at least one --scene')
-    return scenes
-
-
-def gzip_floats(output, names):
-    """Replaces each received *.f32 image by <name>.gz; returns {name: raw sha256, bytes}."""
-    raw = {}
-    for name in sorted(n for n in names if n.endswith('.f32')):
-        data = (output / name).read_bytes()
-        if len(data) % 12: raise ValueError(f'{name} is not float32 RGB')
-        raw[name] = dict(sha256=digest(data), bytes=len(data), file=name + '.gz')
-        (output / (name + '.gz')).write_bytes(gzip.compress(data, compresslevel=9, mtime=0)); (output / name).unlink()
-    return raw
-
-
-def oracle(args):
-    """Phase C in one `prlctl exec` (see the module docstring)."""
-    from original_scene_reload_probe import once_script  # the reload probe's one-exec transport
-    output = private(args.output)
-    if (output / 'run.json').exists(): raise RuntimeError(f'{output}/run.json exists: run the oracle into a new output folder')
-    source = MAP_PROBE.read_bytes(); scenes = oracle_scenes(args.scene)
-    uploads = {f'reload-oracle-{label}.png': data for label, data in scenes.items()}
-    root = fresh_root()
-    record = dict(vm=args.vm, root=root, processID=0, sourceSHA256=digest(source), scenes={label: digest(data) for label, data in scenes.items()},
+    record = dict(vm=args.vm, root=root, processID=0, sourceSHA256=digest(source), **record,
                   errnoBaseline=args.errno_baseline, errnoBefore=guarded(args.errno_baseline),
                   transport='one prlctl exec; run.ps1 over a host-only HTTP endpoint (original_scene_reload_probe.once_script)')
     output.mkdir(parents=True, exist_ok=True); dump(output / 'run.json', record)
@@ -267,13 +216,15 @@ def oracle(args):
     record.update(processID=int(guest.get('processID') or 0), guest=guest)
     if guest.get('source') not in (None, digest(source)): raise ValueError('Guest probe source hash differs')
     for name, data in uploads.items():
-        if (guest.get('scenes') or {}).get(name) not in (None, digest(data)): raise ValueError('Guest scene hash differs: ' + name)
+        if (guest.get('scenes') or {}).get(name) not in (None, digest(data)):
+            raise ValueError('Guest showoff hash differs' if name == SHOWOFF_UPLOAD else 'Guest scene hash differs: ' + name)
     names = []
     if upload is not None:
         if digest(upload) != guest.get('zipSHA256') or len(upload) != guest.get('zipBytes'): raise ValueError('Upload differs from the guest zip')
         names = extract(upload, output)
-    record['floatImages'] = gzip_floats(output, names)
-    names = [record['floatImages'][n]['file'] if n in record['floatImages'] else n for n in names]
+    if floats:
+        record['floatImages'] = gzip_floats(output, names)
+        names = [record['floatImages'][n]['file'] if n in record['floatImages'] else n for n in names]
     (output / 'probe-source.cs').write_bytes(source)
     dump(output / 'run.json', record)
     provenance = [dict(file=p.name, sha256=digest(p.read_bytes()), bytes=p.stat().st_size)
@@ -283,6 +234,57 @@ def oracle(args):
     return dict(root=root, processID=record['processID'], exited=guest.get('exited'), error=guest.get('error'),
                 cleanupError=guest.get('cleanupError'), removed=guest.get('removed'), remainingGameProcesses=guest.get('remainingGameProcesses'),
                 errno=[record['errnoBefore'], record['errnoAfter']], files=len(provenance), status=status)
+
+
+def capture(args):
+    """The whole VM phase B in one `prlctl exec` (see the module docstring)."""
+    if (private(args.output) / 'run.json').exists(): raise RuntimeError(f'{args.output}/run.json exists: capture into a new output folder')
+    showoff = scene_record(args.showoff, '--showoff')
+    return run_probe(args, {SHOWOFF_UPLOAD: showoff}, dict(showoff=str(args.showoff), showoffSHA256=digest(showoff)), floats=False)
+
+
+def map34(args):
+    """Map 34's phases B and C in one `prlctl exec` (see the module docstring)."""
+    if (private(args.output) / 'run.json').exists(): raise RuntimeError(f'{args.output}/run.json exists: run map34 into a new output folder')
+    showoff = scene_record(args.showoff, '--showoff')
+    return run_probe(args, {MAP34_UPLOAD: showoff}, dict(mode='map34', showoff=str(args.showoff), showoffSHA256=digest(showoff)), floats=True)
+
+
+ORACLE_CASE = re.compile(r'[a-z0-9]+(-[a-z0-9]+)*')
+
+
+def oracle_scenes(items):
+    """--scene <case>=<png> pairs: distinct plain case labels, each a PNG scene record."""
+    scenes = {}
+    for item in items:
+        label, sep, path = item.partition('=')
+        if not sep or not ORACLE_CASE.fullmatch(label) or label in scenes: raise ValueError(f'--scene wants a new <case>=<scene png>: {item!r}')
+        data = Path(path).read_bytes()
+        if not data.startswith(b'\x89PNG\r\n\x1a\n'): raise ValueError(f'--scene {label} is not a PNG scene record: {path}')
+        scenes[label] = data
+    if not scenes: raise ValueError('oracle needs at least one --scene')
+    return scenes
+
+
+def gzip_floats(output, names):
+    """Replaces each received *.f32 image (float32 RGB, or RGBA for *.rgba.f32) by <name>.gz;
+    returns {name: raw sha256, bytes}."""
+    raw = {}
+    for name in sorted(n for n in names if n.endswith('.f32')):
+        data = (output / name).read_bytes()
+        rgba = name.endswith('.rgba.f32')
+        if len(data) % (16 if rgba else 12): raise ValueError(f'{name} is not float32 {"RGBA" if rgba else "RGB"}')
+        raw[name] = dict(sha256=digest(data), bytes=len(data), file=name + '.gz')
+        (output / (name + '.gz')).write_bytes(gzip.compress(data, compresslevel=9, mtime=0)); (output / name).unlink()
+    return raw
+
+
+def oracle(args):
+    """Phase C in one `prlctl exec` (see the module docstring)."""
+    if (private(args.output) / 'run.json').exists(): raise RuntimeError(f'{args.output}/run.json exists: run the oracle into a new output folder')
+    scenes = oracle_scenes(args.scene)
+    uploads = {f'reload-oracle-{label}.png': data for label, data in scenes.items()}
+    return run_probe(args, uploads, dict(scenes={label: digest(data) for label, data in scenes.items()}), floats=True)
 
 
 def main():
@@ -307,8 +309,14 @@ def main():
     o.add_argument('--errno-baseline', type=int, required=True, help='Parallels errno-24 count that must hold before the exec')
     o.add_argument('--host-address', default='10.211.55.2', help="the Mac's address on the VM's host-only network")
     o.add_argument('--wait-seconds', type=int, default=900, help='bound on the player run')
+    m = commands.add_parser('map34', help='author, capture and measure the map 34 cases in the original player (phases B and C, slice 3)')
+    m.add_argument('--vm', default='Windows 11'); m.add_argument('--output', type=Path, required=True)
+    m.add_argument('--showoff', type=Path, required=True, help='a character scene record without a map; the player adds map 34 to it')
+    m.add_argument('--errno-baseline', type=int, required=True, help='Parallels errno-24 count that must hold before the exec')
+    m.add_argument('--host-address', default='10.211.55.2', help="the Mac's address on the VM's host-only network")
+    m.add_argument('--wait-seconds', type=int, default=1800, help='bound on the player run')
     args = p.parse_args()
-    run = dict(fetch=fetch, capture=capture, oracle=oracle)[args.command]
+    run = dict(fetch=fetch, capture=capture, oracle=oracle, map34=map34)[args.command]
     print(json.dumps(run(args), indent=2))
 
 

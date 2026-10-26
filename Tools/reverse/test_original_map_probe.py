@@ -251,5 +251,80 @@ class OracleTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, 'Guest scene hash differs'):
             self.run_oracle(guest_change={'scenes': {'reload-oracle-map33.png': '0' * 64}})
 
+
+class Map34Tests(unittest.TestCase):
+    """Slice 3: map 34's phases B and C in one exec, selected by the reload-map34-showoff.png upload."""
+    STATUS = {'cases': ['map34-day', 'map34-evening', 'map34-night', 'map34-showoff']}
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory(); self.dir = Path(self.tmp.name)
+        self.showoff = self.dir / 'showoff.png'; self.showoff.write_bytes(b'\x89PNG\r\n\x1a\nscene')
+        self.rgb, self.rgba = bytes(range(24)), bytes(range(32))  # two float32 RGB / RGBA pixels
+        FakeEndpoint.instances = []
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def run_map34(self, entries=None):
+        entries = entries or {'status.json': json.dumps(self.STATUS).encode(), 'map-trace.json': b'{}',
+                              'original-map34-day-color.png': b'png', 'oracle-map34-day-irradiance.f32': self.rgb,
+                              'oracle-map34-day-sky.rgba.f32': self.rgba, 'oracle-map34-day-classes.png': b'png'}
+        upload = archive(entries)
+        guest = dict(processID=79, source=sha(probe.MAP_PROBE.read_bytes()), scenes={probe.MAP34_UPLOAD: sha(self.showoff.read_bytes())},
+                     zipSHA256=sha(upload), zipBytes=len(upload), exited=True, removed=True, remainingGameProcesses=[])
+        FakeEndpoint.next_upload = upload
+        completed = SimpleNamespace(returncode=0, stdout=json.dumps(guest), stderr='')
+        args = SimpleNamespace(vm='vm', output=self.dir / 'out', showoff=self.showoff, errno_baseline=0, host_address='10.211.55.2', wait_seconds=60)
+        with patch.object(probe, 'private', side_effect=lambda p: Path(p).resolve()), \
+             patch.object(probe, 'fresh_root', return_value=PLAYER_ROOT), \
+             patch.object(probe, 'guarded', return_value=0) as guard, \
+             patch.object(probe, 'errno_count', return_value=0), \
+             patch.object(probe, 'Endpoint', FakeEndpoint), \
+             patch.object(probe.subprocess, 'run', return_value=completed) as vm:
+            try:
+                return probe.map34(args)
+            finally:
+                self.guard, self.vm = guard, vm
+
+    def test_one_exec_uploads_the_showoff_under_the_map34_name_and_gzips_rgb_and_rgba_floats(self):
+        result = self.run_map34()
+        out = self.dir / 'out'
+        endpoint = FakeEndpoint.instances[0]
+        self.assertEqual(endpoint.files['reload-map34-showoff.png'], self.showoff.read_bytes())
+        self.assertNotIn('reload-showoff.png', endpoint.files)
+        self.assertIn("@('reload-map34-showoff.png')", endpoint.files['run.ps1'].decode())
+        self.assertEqual(self.vm.call_count, 1); self.guard.assert_called_once_with(0)
+        self.assertEqual(gzip.decompress((out / 'oracle-map34-day-sky.rgba.f32.gz').read_bytes()), self.rgba)
+        self.assertEqual(gzip.decompress((out / 'oracle-map34-day-irradiance.f32.gz').read_bytes()), self.rgb)
+        run = json.loads((out / 'run.json').read_text())
+        self.assertEqual((run['mode'], run['showoffSHA256']), ('map34', sha(self.showoff.read_bytes())))
+        self.assertEqual(run['floatImages']['oracle-map34-day-sky.rgba.f32'], dict(sha256=sha(self.rgba), bytes=32, file='oracle-map34-day-sky.rgba.f32.gz'))
+        manifest = sorted(f['file'] for f in json.loads((out / 'manifest.json').read_text())['files'])
+        self.assertEqual(manifest, ['map-trace.json', 'oracle-map34-day-classes.png', 'oracle-map34-day-irradiance.f32.gz',
+                                    'oracle-map34-day-sky.rgba.f32.gz', 'original-map34-day-color.png', 'probe-source.cs', 'run.json', 'status.json'])
+        self.assertEqual((result['errno'], result['status']), ([0, 0], self.STATUS))
+
+    def test_an_rgba_image_whose_size_is_not_whole_pixels_is_refused(self):
+        with self.assertRaisesRegex(ValueError, 'not float32 RGBA'):
+            self.run_map34({'status.json': b'{}', 'oracle-map34-day-sky.rgba.f32': bytes(24)})
+
+    def test_a_non_png_showoff_or_an_existing_run_is_refused_before_any_vm_call(self):
+        self.showoff.write_bytes(b'not a png')
+        with self.assertRaisesRegex(ValueError, 'not a PNG'):
+            self.run_map34()
+        self.vm.assert_not_called(); self.guard.assert_not_called()
+        self.showoff.write_bytes(b'\x89PNG\r\n\x1a\nscene'); (self.dir / 'out').mkdir(); (self.dir / 'out' / 'run.json').write_text('{}')
+        with self.assertRaisesRegex(RuntimeError, 'run.json exists'):
+            self.run_map34()
+        self.vm.assert_not_called()
+
+    def test_the_probe_source_selects_map34_by_that_upload_and_keeps_map33_names(self):
+        source = probe.MAP_PROBE.read_text()
+        self.assertIn('Map34Upload="reload-map34-showoff.png"', source)
+        for label in ('map34-day', 'map34-evening', 'map34-night', 'map34-showoff', '"map33"', '"map33-showoff"'):
+            self.assertIn(label, source)
+        self.assertIn('DepthFar33=25f', source); self.assertIn('DepthFar34=1000f', source)
+
+
 if __name__ == '__main__':
     unittest.main()

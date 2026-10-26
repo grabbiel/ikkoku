@@ -40,6 +40,25 @@ also gets:
   (our nonDirectional and gammaConstants variants) must FAIL the same gate;
 - irradianceLit: how much Unity's realtime lights add to the oracle (lit over
   unlit), the term the app leaves out (reported).
+
+Slice 3 (map 34; docs/reference/studio/maps.md, "The sky gate" and "Particles"):
+- the map-only images on both sides hold the solid map (every material
+  RenderType=Opaque); sky, particle, cutout and blended draws are counted only;
+- record also checks the sun type; placement checks each sky draw against the
+  original sky renderer's own world matrix (relative 1e-5) and that sky draws are
+  not pick occluders;
+- with the oracle's classes image the irradiance gate keeps only pixels Unity
+  draws with a baked lightmap; the classes' pixel counts are reported;
+- sky (gated when either side draws one): our sky image against Unity's sky-only
+  radiance on pixels both cover (alpha), the largest channel's relative error,
+  mean <= SKY_TOLERANCE["mean"] and p99 <= SKY_TOLERANCE["p99"], coverage IoU >=
+  SKY_TOLERANCE["coverageIoU"]. Our rowsFlipped and gammaConstants variants must
+  FAIL, and rotationIgnored too when the sky has a nonzero _Rotation;
+- particles (gated when either side draws them): RGB over black, footprint IoU and
+  the relative error on pixels both cover, against PARTICLE_TOLERANCE (fixed
+  before any map 34 data was compared).
+A single `original_map_probe.py map34` folder is both --original and --oracle (its
+map-trace.json holds each case's oracle).
 """
 from __future__ import annotations
 import argparse, gzip, hashlib, json, math, zlib
@@ -99,6 +118,17 @@ IRRADIANCE_TOLERANCE = dict(mean=2.0 ** -10, p99=2.0 ** -9)
 INTERIOR_DEPTH_FRACTION = 0.02   # neighbour depth within 2 % of the pixel's
 INTERIOR_NORMAL_BYTES = 6        # neighbour encoded view normal within 6 channel bytes
 IRRADIANCE_VARIANTS = ("decoded", "nonDirectional", "gammaConstants")
+# The sky gate (slice 3): the same float16 storage allowance as the irradiance gate. Both sides sample the
+# same cube faces at the same direction (the camera gate holds the matrices to 1e-5), so what is left is our
+# float16 target. Coverage is alpha on both sides (the fragment writes 1).
+SKY_TOLERANCE = dict(mean=2.0 ** -10, p99=2.0 ** -9, coverageIoU=0.999)
+SKY_VARIANTS = ("decoded", "rowsFlipped", "rotationIgnored", "gammaConstants")
+# Particles (slice 3): minified, alpha-blended leaf cards whose texture filtering (mip and anisotropy
+# selection) and per-renderer blend order are not the same on both sides, so the gate is far looser than
+# the sky's and still far tighter than any term of the formula (the 2x factor alone is 75 %, the tint about
+# 55 %). Relative errors use PARTICLE_FLOOR as the smallest denominator (blended edges are near black).
+PARTICLE_TOLERANCE = dict(mean=2.0 ** -6, p99=2.0 ** -3, footprintIoU=0.98)
+PARTICLE_FLOOR = 2.0 ** -6
 
 
 def read_oracle_floats(path, width, height):
@@ -108,7 +138,34 @@ def read_oracle_floats(path, width, height):
 
 def read_native_irradiance(path, width, height):
     """IKKOKU_SOURCE_MAP_PROBE's RGBA float16 image in raw DEFLATE, rows top-down."""
-    return np.frombuffer(zlib.decompress(Path(path).read_bytes(), -15), dtype="<f2").reshape(height, width, 4)[:, :, :3].astype(np.float64)
+    return read_native_rgba(path, width, height)[:, :, :3]
+
+
+def read_native_rgba(path, width, height):
+    return np.frombuffer(zlib.decompress(Path(path).read_bytes(), -15), dtype="<f2").reshape(height, width, 4).astype(np.float64)
+
+
+def read_oracle_rgba(path, width, height):
+    """original_map_probe.py's float32 RGBA image (*.rgba.f32, gzipped on arrival), rows top-down."""
+    return np.frombuffer(gzip.decompress(Path(path).read_bytes()), dtype="<f4").reshape(height, width, 4).astype(np.float64)
+
+
+def iou(a, b):
+    union = int((a | b).sum())
+    return 1.0 if union == 0 else int((a & b).sum()) / union
+
+
+def relative_error(unity, ours, mask, floor):
+    """The largest channel's |ours - Unity| / max(Unity, floor) on `mask`."""
+    return (np.abs(ours - unity) / np.maximum(unity, floor)).max(axis=-1)[mask]
+
+
+def class_masks(path):
+    """oracle-<case>-classes.png: white = Standard on a baked lightmap, red = Standard without one,
+    green = another shader, black = no solid map renderer."""
+    c = pixels(path)[:, :, :3] > 127
+    return dict(lightmapped=c.all(axis=-1), probeLit=c[..., 0] & ~c[..., 1] & ~c[..., 2],
+                otherShader=~c[..., 0] & c[..., 1] & ~c[..., 2], none=~c.any(axis=-1))
 
 
 def surface_interior(geometry, depth_normals, far):
@@ -144,11 +201,75 @@ def color_error(a, b):
     return dict(meanAbsoluteChannelBytes=float(error.mean()), p99ChannelBytes=float(np.percentile(error, 99)))
 
 
+def sky_section(measured, oracle, ours, native, width, height):
+    """The sky gate (see the module docstring)."""
+    theirs, mine = measured.get("sky") or {}, native.get("sky") or {}
+    if not theirs.get("written") and not mine.get("written"):
+        return dict(gated=False, reason="neither side draws a sky")
+    if not (theirs.get("written") and mine.get("written")):
+        return dict(gated=True, passes=False, reason=f"only {'the original' if theirs.get('written') else 'our capture'} draws a sky")
+    unity = read_oracle_rgba(oracle / (theirs["file"] + ".gz"), width, height)
+    variants = {v: read_native_rgba(ours / mine["files"][v], width, height) for v in SKY_VARIANTS}
+    covered = unity[..., 3] > 0.5
+    decoded = variants["decoded"]
+    mask = covered & (decoded[..., 3] > 0.5)
+    if not mask.any(): return dict(gated=True, passes=False, reason="no pixel both skies cover")
+    def metrics(image):
+        relative = relative_error(unity[..., :3], image[..., :3], mask, 1e-3)
+        return float(relative.mean()), float(np.percentile(relative, 99)), float(relative.max())
+    mean, p99, maximum = metrics(decoded)
+    coverage = iou(covered, decoded[..., 3] > 0.5)
+    rotated = any(abs(r) > 0 for r in mine.get("rotationDegrees") or [])
+    controls = {}
+    for variant in SKY_VARIANTS[1:]:
+        c_mean, c_p99, _ = metrics(variants[variant])
+        fails = not (c_mean <= SKY_TOLERANCE["mean"] and c_p99 <= SKY_TOLERANCE["p99"])
+        controls[variant] = dict(meanRelative=c_mean, p99Relative=c_p99, fails=fails, applicable=variant != "rotationIgnored" or rotated)
+    passes = mean <= SKY_TOLERANCE["mean"] and p99 <= SKY_TOLERANCE["p99"] and coverage >= SKY_TOLERANCE["coverageIoU"]
+    return dict(gated=True, comparedPixels=int(mask.sum()), coveredUnity=int(covered.sum()), coverageIoU=coverage,
+                meanRelative=mean, p99Relative=p99, maximumRelative=maximum, unityMean=float(unity[..., :3][mask].mean()),
+                oursMean=float(decoded[..., :3][mask].mean()), tolerance=dict(SKY_TOLERANCE), controls=controls,
+                passes=passes and all(c["fails"] for c in controls.values() if c["applicable"]))
+
+
+def particle_section(measured, oracle, ours, native, width, height):
+    """The particles comparison (see the module docstring); RGB only."""
+    theirs, mine = measured.get("particles") or {}, native.get("particles") or {}
+    if not theirs.get("written") and not mine.get("written"):
+        return dict(gated=False, reason="neither side draws particles")
+    if not (theirs.get("written") and mine.get("written")):
+        return dict(gated=True, passes=False, reason=f"only {'the original' if theirs.get('written') else 'our capture'} draws particles")
+    unity = read_oracle_rgba(oracle / (theirs["file"] + ".gz"), width, height)[..., :3]
+    image = read_native_rgba(ours / mine["file"], width, height)[..., :3]
+    a, b = unity.max(axis=-1) > 1e-4, image.max(axis=-1) > 1e-4
+    both = a & b
+    footprint = iou(a, b)
+    if not both.any(): return dict(gated=True, passes=False, footprintIoU=footprint, reason="no pixel both cover")
+    relative = relative_error(unity, image, both, PARTICLE_FLOOR)
+    mean, p99 = float(relative.mean()), float(np.percentile(relative, 99))
+    absolute = np.abs(image - unity)[a | b]
+    return dict(gated=True, coveredUnity=int(a.sum()), coveredOurs=int(b.sum()), footprintIoU=footprint, comparedPixels=int(both.sum()),
+                meanRelative=mean, p99Relative=p99, maximumRelative=float(relative.max()), meanAbsolute=float(absolute.mean()),
+                p99Absolute=float(np.percentile(absolute, 99)), unityMean=float(unity[both].mean()), oursMean=float(image[both].mean()),
+                floor=PARTICLE_FLOOR, tolerance=dict(PARTICLE_TOLERANCE),
+                passes=mean <= PARTICLE_TOLERANCE["mean"] and p99 <= PARTICLE_TOLERANCE["p99"] and footprint >= PARTICLE_TOLERANCE["footprintIoU"])
+
+
 def oracle_case(oracle_trace, case, oracle, ours, native, geometry, depth_normals, nc, width, height, far):
     """The --oracle sections for one case (see the module docstring)."""
     record = oracle_trace["cases"][case]
     measured = record["oracle"]
     result = {}
+    result["sky"] = sky_section(measured, oracle, ours, native, width, height)
+    result["particles"] = particle_section(measured, oracle, ours, native, width, height)
+    classes = None
+    if measured.get("classes"):
+        path = oracle / measured["classes"]["image"]
+        classes = class_masks(path)
+        result["classes"] = dict(gated=False, image=dict(file=str(path), sha256=digest(path)),
+                                 pixels={k: int(v.sum()) for k, v in classes.items()},
+                                 pixelsInBothSilhouettes={k: int((v & geometry).sum()) for k, v in classes.items()},
+                                 counts=measured["classes"].get("counts"))
     clean = oracle / measured["clean"]["image"]
     result["cleanColor"] = dict(gated=False, image=dict(file=str(clean), sha256=digest(clean)), **color_error(pixels(clean), nc))
     unity = read_oracle_floats(oracle / (measured["irradiance"]["file"] + ".gz"), width, height)
@@ -160,12 +281,14 @@ def oracle_case(oracle_trace, case, oracle, ours, native, geometry, depth_normal
     if not files:
         result["irradiance"] = dict(gated=False, reason="our capture has no baked-lightmap draws")
         return result
-    mask = surface_interior(geometry, depth_normals, far)
+    interior = surface_interior(geometry, depth_normals, far)
+    mask = interior & classes["lightmapped"] if classes is not None else interior
     section = irradiance_metrics(unity, read_native_irradiance(ours / files["decoded"], width, height), mask)
     repeat = measured["irradiance"]["repeatMaximumDifference"]
     section.update(gated=True, oracleSceneSHA256=record["sceneSHA256"], oracleRepeatMaximumDifference=repeat,
-                   interior=dict(depthFraction=INTERIOR_DEPTH_FRACTION, normalBytes=INTERIOR_NORMAL_BYTES, pixels=int(mask.sum()),
-                                 silhouettePixels=int(geometry.sum())))
+                   interior=dict(depthFraction=INTERIOR_DEPTH_FRACTION, normalBytes=INTERIOR_NORMAL_BYTES, pixels=int(interior.sum()),
+                                 silhouettePixels=int(geometry.sum())),
+                   lightmappedClassOnly=classes is not None)
     controls = {}
     for variant in IRRADIANCE_VARIANTS[1:]:
         control = irradiance_metrics(unity, read_native_irradiance(ours / files[variant], width, height), mask)
@@ -188,8 +311,10 @@ def compare_case(trace, case, original, ours, oracle=None, oracle_trace=None):
     result = dict(case=case, scene=record["scene"], sceneSHA256=record["sceneSHA256"], ourSceneSHA256=native["sceneSHA256"])
     # The record our parser read.
     record_error = max(abs(a - b) for a, b in zip(native["transform"]["position"] + native["transform"]["rotationDegrees"], ca["pos"] + ca["rot"]))
-    record_ok = native["map"] == after["sceneInfoMap"] == trace["mapNo"] and record_error <= 1e-6 and native["sceneSHA256"] == record["sceneSHA256"]
-    result["record"] = dict(map=native["map"], originalMap=after["sceneInfoMap"], maximumError=record_error, passes=record_ok)
+    sun_ok = "sunLightType" not in after or native.get("sunLightType") == after["sunLightType"]
+    record_ok = native["map"] == after["sceneInfoMap"] == trace["mapNo"] and record_error <= 1e-6 and native["sceneSHA256"] == record["sceneSHA256"] and sun_ok
+    result["record"] = dict(map=native["map"], originalMap=after["sceneInfoMap"], sunLightType=native.get("sunLightType"),
+                            originalSunLightType=after.get("sunLightType"), maximumError=record_error, passes=record_ok)
     # MapCtrl.Reflect, computed independently.
     expected = unity_euler(ca["rot"])
     position_error = float(np.abs(np.array(root["localPosition"]) - np.array(ca["pos"])).max())
@@ -203,11 +328,26 @@ def compare_case(trace, case, original, ours, oracle=None, oracle_trace=None):
     # Our placement against the original's.
     ours_root = BASIS @ matrix(native["mapRoot"]) @ BASIS
     placement_error = float(np.abs(ours_root - matrix(root["localToWorld"])).max())
-    draw_error = max(float(np.abs(matrix(d["model"]) - matrix(native["mapRoot"])).max()) for d in native["draws"])
-    flags_ok = all(d["objectID"] == 0 and d["pickOccluder"] and not d["castsShadow"] and not d["outline"] for d in native["draws"])
+    skies = [d for d in native["draws"] if d.get("draw") == "sky"]
+    draws = [d for d in native["draws"] if d.get("draw") != "sky"]
+    draw_error = max(float(np.abs(matrix(d["model"]) - matrix(native["mapRoot"])).max()) for d in draws)
+    flags_ok = all(d["objectID"] == 0 and not d["castsShadow"] and not d["outline"] for d in native["draws"]) \
+        and all(d["pickOccluder"] for d in draws) and not any(d["pickOccluder"] for d in skies)
     result["placement"] = dict(mapRootError=placement_error, drawModelError=draw_error, draws=len(native["draws"]),
                                drawsArePickOccludersWithoutShadowOrOutline=flags_ok, tolerance=1e-5,
                                passes=placement_error <= 1e-5 and draw_error <= 1e-5 and flags_ok)
+    original_skies = [r for r in record.get("capture", {}).get("mapRenderers", []) if r.get("class") == "sky"]
+    if skies or original_skies:
+        sky_ok, sky_error = len(skies) == len(original_skies), math.inf
+        if sky_ok:
+            def relative(ours_model, theirs):
+                a, b = BASIS @ matrix(ours_model) @ BASIS, matrix(theirs)
+                return float((np.abs(a - b) / np.maximum(1.0, np.abs(b))).max())
+            # Each of our sky draws against its nearest original sky renderer (one per sun type in practice).
+            sky_error = max(min(relative(d["model"], r["localToWorld"]) for r in original_skies) for d in skies)
+            sky_ok = sky_error <= 1e-5
+        result["placement"].update(skyDraws=len(skies), originalSkyRenderers=len(original_skies), skyModelRelativeError=sky_error)
+        result["placement"]["passes"] = result["placement"]["passes"] and sky_ok
     # The camera.
     main = record["capture"]["main"]
     view_error = float(np.abs(matrix(native["camera"]["view"]) - matrix(main["worldToCamera"]) @ BASIS).max())
@@ -228,16 +368,19 @@ def compare_case(trace, case, original, ours, oracle=None, oracle_trace=None):
                                                           fails=not control["passes"])
     # Colour, reported only.
     oc = pixels(names["originalColor"]); nc = pixels(names["nativeColor"])
-    lightmapped = (native.get("census", {}).get("lightmappedDraws") or 0) > 0
+    census = native.get("census", {})
+    lightmapped = (census.get("lightmappedDraws") or 0) > 0
     reason = ("approximated shading: the baked lightmaps are drawn; the realtime sun and its shadows, specular and reflections, "
               "normal, metallic and detail maps, fog and the original image effects are not reproduced") if lightmapped else \
              ("approximated shading: the converted map draws with the item toon material under the scene light; "
               "baked lightmaps, map lights, sun-type lighting, fog, ambient and the original image effects are not reproduced")
-    result["color"] = dict(gated=False, lightmappedDraws=native.get("census", {}).get("lightmappedDraws"), reason=reason, **color_error(oc, nc))
+    if census.get("skyDraws") or census.get("particleDraws"):
+        reason += "; the cube sky and particles are drawn (no soft-particle fade or per-renderer sorting), light-probe-lit parts as items"
+    result["color"] = dict(gated=False, lightmappedDraws=census.get("lightmappedDraws"), reason=reason, **color_error(oc, nc))
     gated = ["record", "rule", "placement", "camera", "geometry", "depthNormals"]
     if oracle is not None:
         result.update(oracle_case(oracle_trace, case, oracle, ours, native, a & b, od, nc, trace["width"], trace["height"], float(trace["depthFar"])))
-        if result["irradiance"].get("gated"): gated.append("irradiance")
+        gated += [k for k in ("irradiance", "sky", "particles") if result[k].get("gated")]
     result["images"] = {k: dict(file=str(v), sha256=digest(v)) for k, v in names.items()}
     result["passes"] = all(result[k]["passes"] for k in gated) \
         and (result["rule"]["wrongEulerOrderControl"]["fails"] or not result["rule"]["wrongEulerOrderControl"]["applicable"]) \
@@ -247,14 +390,15 @@ def compare_case(trace, case, original, ours, oracle=None, oracle_trace=None):
 
 def compare(original, ours_by_case, oracle=None):
     trace = json.loads((original / "map-trace.json").read_text())
-    oracle_trace = json.loads((oracle / "oracle-trace.json").read_text()) if oracle is not None else None
+    oracle_file = None if oracle is None else oracle / "oracle-trace.json" if (oracle / "oracle-trace.json").is_file() else oracle / "map-trace.json"
+    oracle_trace = json.loads(oracle_file.read_text()) if oracle_file is not None else None
     if oracle_trace is not None and (oracle_trace["width"], oracle_trace["height"]) != (trace["width"], trace["height"]):
         raise ValueError("the oracle is not at the original captures' size")
     cases = [compare_case(trace, case, original, ours, oracle, oracle_trace) for case, ours in ours_by_case]
     result = dict(schemaVersion=1, scope=__doc__.strip().splitlines()[0], mapNo=trace["mapNo"], depthFar=trace["depthFar"],
                   width=trace["width"], height=trace["height"], traceSHA256=digest(original / "map-trace.json"),
                   cases=cases, passes=all(c["passes"] for c in cases))
-    if oracle is not None: result["oracleTraceSHA256"] = digest(oracle / "oracle-trace.json")
+    if oracle is not None: result["oracleTraceSHA256"] = digest(oracle_file)
     return result
 
 
@@ -276,7 +420,12 @@ def main():
               + (f", clean-colour MAE {c['cleanColor']['meanAbsoluteChannelBytes']:.1f}" if "cleanColor" in c else "")
               + (f", irradiance mean {c['irradiance']['meanRelative']:.4f} p99 {c['irradiance']['p99Relative']:.4f}"
                  f" (controls {', '.join(f'{k} p99 {v['p99Relative']:.3f}' for k, v in c['irradiance']['controls'].items())})"
-                 if c.get("irradiance", {}).get("gated") else ""))
+                 if c.get("irradiance", {}).get("gated") else "")
+              + (f", sky mean {c['sky']['meanRelative']:.2e} p99 {c['sky']['p99Relative']:.2e}"
+                 f" (controls {', '.join(f'{k} p99 {v['p99Relative']:.3f}' for k, v in c['sky']['controls'].items())})"
+                 if c.get("sky", {}).get("controls") else "")
+              + (f", particles IoU {c['particles']['footprintIoU']:.4f} mean {c['particles']['meanRelative']:.4f} p99 {c['particles']['p99Relative']:.4f}"
+                 if c.get("particles", {}).get("comparedPixels") else ""))
     raise SystemExit(0 if result["passes"] else 1)
 
 

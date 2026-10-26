@@ -443,7 +443,15 @@ fragment float4 sky_fragment(
     constant MaterialUniforms& mat [[buffer(BufferIndexMaterial)]],
     texturecube<float> cube [[texture(TextureIndexSkyCube)]])
 {
-    float4 texel = cube.sample(skySampler, in.direction);
+    float3 direction = in.direction;
+    // The map probe's negative control only: each face's rows flipped. A face's rows run
+    // along -y on the side faces and along z on the top and bottom faces.
+    if (mat.flags & MaterialFlagSkyRowsFlipped) {
+        float3 a = abs(direction);
+        direction = (a.y >= a.x && a.y >= a.z) ? float3(direction.x, direction.y, -direction.z)
+                                                : float3(direction.x, -direction.y, direction.z);
+    }
+    float4 texel = cube.sample(skySampler, direction);
     float alpha = mat.params.w * (texel.a - 1.0) + 1.0;
     float3 decoded = (mat.params.y * pow(alpha, mat.params.z)) * texel.rgb;
     return float4(decoded * mat.baseColor.rgb, 1.0);

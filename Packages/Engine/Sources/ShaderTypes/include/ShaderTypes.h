@@ -106,6 +106,7 @@ typedef IK_ENUM(IKUInt, MaterialFlags) {
     MaterialFlagSourceIrisHighlights = 1u << 18, // overlay0/1 alpha at UV1/UV2; eye.w enables highlights
     MaterialFlagMapDirectionalLightmap = 1u << 19, // MaterialKindMap: a CombinedDirectional direction map is bound
     MaterialFlagMapParticle     = 1u << 20, // MaterialKindMap: Particles/Alpha Blended (2 * vertex colour * baseColor * base texture)
+    MaterialFlagSkyRowsFlipped  = 1u << 21, // MaterialKindSky: the map probe's negative control only (every cube face sampled with its rows flipped); the loader never sets it
 };
 
 #define DrawFlagHasHiddenBuffer 0x80000000u

@@ -139,6 +139,40 @@ public enum SourceStudioSkyMaterial {
         m.cubemap = cube
         return m
     }
+
+    /// The map probe's sky images (ST-A11 evidence, `compare_original_map.py`'s sky gate).
+    public enum Variant: String, CaseIterable, Sendable {
+        /// The recovered formula.
+        case decoded
+        /// Negative control: every cube face sampled with its rows flipped
+        /// (`MaterialFlagSkyRowsFlipped`).
+        case rowsFlipped
+        /// Negative control: `_Rotation` ignored.
+        case rotationIgnored
+        /// Negative control: a Gamma player's `unity_ColorSpaceDouble` (2.0) in
+        /// place of the Linear one.
+        case gammaConstants
+    }
+
+    /// `material` (a `MaterialKindSky` material from `make`) drawn as `variant`;
+    /// nil for any other kind.
+    public static func variant(_ material: MaterialState, _ variant: Variant) -> MaterialState? {
+        guard material.kind == MaterialKindSky else { return nil }
+        var m = material
+        switch variant {
+        case .decoded:
+            break
+        case .rowsFlipped:
+            m.setFlag(MaterialFlagSkyRowsFlipped, true)
+        case .rotationIgnored:
+            m.uniforms.params.x = 0
+        case .gammaConstants:
+            let k: Float = 2 / SourceStudioSkyMath.colorSpaceDoubleLinear
+            let b = m.uniforms.baseColor
+            m.uniforms.baseColor = Float4(b.x * k, b.y * k, b.z * k, b.w)
+        }
+        return m
+    }
 }
 
 /// A Particles/Alpha Blended material (`ikkokuParticle`): _TintColor as a

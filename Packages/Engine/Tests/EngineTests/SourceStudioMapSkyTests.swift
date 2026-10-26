@@ -31,6 +31,14 @@ private func bc1Block(red: UInt16, green: UInt16, blue: UInt16) -> [UInt8] {
 private let faceColors: [(UInt16, UInt16, UInt16)] = [(31, 0, 0), (0, 63, 0), (0, 0, 31), (31, 63, 0), (31, 0, 31), (0, 63, 31)]
 private let faceLinear: [SIMD3<Float>] = [SIMD3(1, 0, 0), SIMD3(0, 1, 0), SIMD3(0, 0, 1), SIMD3(1, 1, 0), SIMD3(1, 0, 1), SIMD3(0, 1, 1)]
 private func solidCube() -> Data { Data(faceColors.flatMap { bc1Block(red: $0.0, green: $0.1, blue: $0.2) }) }
+/// Six 8x8 BC1 faces whose top block row is face f's colour and bottom block row face f+1's.
+private func twoToneCube() -> Data {
+    Data((0..<6).flatMap { f -> [UInt8] in
+        let (top, bottom) = (faceColors[f], faceColors[(f + 1) % 6])
+        let t = bc1Block(red: top.0, green: top.1, blue: top.2), b = bc1Block(red: bottom.0, green: bottom.1, blue: bottom.2)
+        return t + t + b + b
+    })
+}
 
 private func sha256(_ data: Data) -> String { SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined() }
 
@@ -167,12 +175,14 @@ func skyShadersSampleTheUnrotatedUnityDirectionTimesTintColorSpaceDoubleAndExpos
     /// Draws one triangle in the plane `axis` = `depth` (engine object space)
     /// and returns the pixel at the clip-space origin. `point` is where on the
     /// plane, after the vertex rotation, the pixel lands.
-    func render(_ sky: SourceStudioSkyInputs, positions: [Float3], at clip: Float2) throws -> SIMD3<Float> {
+    func render(_ sky: SourceStudioSkyInputs, positions: [Float3], at clip: Float2,
+                variant: SourceStudioSkyMaterial.Variant = .decoded, texture: (any MTLTexture)? = nil) throws -> SIMD3<Float> {
         let data = MeshData(name: "sky", positions: positions, normals: Array(repeating: Float3(0, 0, 1), count: 3), indices: [0, 1, 2])
         let handle = try resources.register(mesh: data)
         defer { resources.unregister(mesh: handle) }
         let mesh = try #require(resources.mesh(handle))
-        var material = SourceStudioSkyMaterial.make(sky, cube: TextureHandle(id: 1)).uniforms
+        let made = SourceStudioSkyMaterial.make(sky, cube: TextureHandle(id: 1))
+        var material = try #require(SourceStudioSkyMaterial.variant(made, variant)).uniforms
         // Clip = (x - clip.x, y - clip.y, 0.5 z + 0.5): the chosen point lands on the pixel.
         var frame = FrameUniforms()
         frame.viewProjection = float4x4(columns: (SIMD4(1, 0, 0, 0), SIMD4(0, 1, 0, 0), SIMD4(0, 0, 0.5, 0),
@@ -187,7 +197,7 @@ func skyShadersSampleTheUnrotatedUnityDirectionTimesTintColorSpaceDoubleAndExpos
         encoder.setVertexBytes(&draw, length: MemoryLayout<DrawUniforms>.stride, index: Int(BufferIndexDrawUniforms.rawValue))
         encoder.setVertexBytes(&material, length: MemoryLayout<MaterialUniforms>.stride, index: Int(BufferIndexMaterial.rawValue))
         encoder.setFragmentBytes(&material, length: MemoryLayout<MaterialUniforms>.stride, index: Int(BufferIndexMaterial.rawValue))
-        encoder.setFragmentTexture(cube, index: Int(TextureIndexSkyCube.rawValue))
+        encoder.setFragmentTexture(texture ?? cube, index: Int(TextureIndexSkyCube.rawValue))
         encoder.drawIndexedPrimitives(type: .triangle, indexCount: mesh.indexCount, indexType: .uint32, indexBuffer: mesh.indices, indexBufferOffset: 0)
         encoder.endEncoding(); command.commit(); command.waitUntilCompleted()
         try #require(command.status == .completed, "sky draw failed: \(String(describing: command.error))")
@@ -223,6 +233,39 @@ func skyShadersSampleTheUnrotatedUnityDirectionTimesTintColorSpaceDoubleAndExpos
                                         colorSpaceDouble: sky.colorSpaceDouble, decodeInstructions: SIMD4(2, 2.2, 0, 1))
     let twice = try render(doubled, positions: plane(z: 0.9), at: Float2(0, 0))
     #expect(simd_length(twice - 2 * faceLinear[5] * sky.scale) < 1e-4)
+    // The rows-flipped control: each face read upside down. Unity (0, 0.45, -0.9) is the -Z
+    // face's upper half (tc = -y / |z|, v 0.25); flipped, its lower half.
+    let toned = try SourceStudioBlockTexture.make(device: device, data: twoToneCube(), width: 8, height: 8, mipCount: 1,
+                                                  format: .bc1, srgb: true, faces: 6, label: "two-tone")
+    check(try render(sky, positions: plane(z: 0.9), at: Float2(0, 0.45), texture: toned), face: 5, sky, "-Z upper half")
+    check(try render(sky, positions: plane(z: 0.9), at: Float2(0, 0.45), variant: .rowsFlipped, texture: toned), face: 0, sky, "-Z flipped")
+    // +Y: a model that swaps y and z draws the object plane y = 0.9 facing the camera; the
+    // pixel at clip (0, -0.45) samples Unity (0, 0.9, 0.45): tc = z / |y|, v 0.75, the lower
+    // half (face 3's colour); flipped, z is negated and the upper half (face 2's) is read.
+    draw.model = float4x4(columns: (SIMD4(1, 0, 0, 0), SIMD4(0, 0, 1, 0), SIMD4(0, 1, 0, 0), SIMD4(0, 0, 0, 1)))
+    let top = [Float3(-4, 0.9, -4), Float3(8, 0.9, -4), Float3(-4, 0.9, 8)]
+    check(try render(sky, positions: top, at: Float2(0, -0.45), texture: toned), face: 3, sky, "+Y lower half")
+    check(try render(sky, positions: top, at: Float2(0, -0.45), variant: .rowsFlipped, texture: toned), face: 2, sky, "+Y flipped")
+}
+
+/// The probe's sky variants change only their own term.
+@Test func skyProbeVariantsChangeOnlyTheirTerm() throws {
+    let sky = SourceStudioSkyInputs(cube: 0, tint: SIMD3(0.4, 0.3, 0.2), exposure: 1.5, rotationDegrees: 291,
+                                    colorSpaceDouble: SourceStudioSkyMath.colorSpaceDoubleLinear, decodeInstructions: SIMD4(1, 1, 0, 0))
+    let base = SourceStudioSkyMaterial.make(sky, cube: TextureHandle(id: 3))
+    func made(_ v: SourceStudioSkyMaterial.Variant) throws -> MaterialState { try #require(SourceStudioSkyMaterial.variant(base, v)) }
+    #expect(try made(.decoded) == base)
+    let flipped = try made(.rowsFlipped)
+    #expect(flipped.uniforms.flags == base.uniforms.flags | MaterialFlagSkyRowsFlipped.rawValue && flipped.cubemap == base.cubemap)
+    let unturned = try made(.rotationIgnored)
+    #expect(unturned.uniforms.params == Float4(0, 1, 1, 0) && base.uniforms.params.x == 291)
+    let gamma = try made(.gammaConstants)
+    let expected = sky.tint * 2 * sky.exposure
+    #expect(simd_length(SIMD3(gamma.uniforms.baseColor.x, gamma.uniforms.baseColor.y, gamma.uniforms.baseColor.z) - expected) < 1e-5)
+    #expect(gamma.uniforms.baseColor.w == 1 && gamma.uniforms.params == base.uniforms.params)
+    // Not a sky material: no variant.
+    #expect(SourceStudioSkyMaterial.variant(MaterialState(uniforms: .make(kind: MaterialKindMap)), .rowsFlipped) == nil)
+    #expect(MaterialFlagSkyRowsFlipped.rawValue == 1 << 21 && MaterialFlagSkyRowsFlipped.rawValue & MaterialFlagMapParticle.rawValue == 0)
 }
 
 // MARK: - Particles
