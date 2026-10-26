@@ -23,26 +23,26 @@ branch was tested or every asset matches the original game. Feature status,
 specific comments and pending tasks are in the linked reports. Shared behavior
 may be discussed in more than one report; one primary owner is listed here.
 
-**1014 files indexed; 1014 assigned; 0 unassigned.**
+**1020 files indexed; 1020 assigned; 0 unassigned.**
 
 | Primary report | Files |
 | --- | ---: |
 | [App / gameplay / plugins](app-gameplay-and-plugins.md) | 110 |
 | [Character / Maker / mods](character-and-mods.md) | 128 |
-| [Studio / IK / animation](studio.md) | 231 |
+| [Studio / IK / animation](studio.md) | 235 |
 | [Renderer / foundation / assets](renderer-and-foundation.md) | 335 |
-| [Toolchain / verification / historical docs](toolchain-and-verification.md) | 200 |
+| [Toolchain / verification / historical docs](toolchain-and-verification.md) | 202 |
 
 | File role | Files |
 | --- | ---: |
 | App resource metadata / icon | 16 |
 | Build / repository configuration | 9 |
-| Conversion / recovery / verification tool | 236 |
+| Conversion / recovery / verification tool | 238 |
 | Documentation / historical evidence | 65 |
 | Generated asset / catalog / fixture | 205 |
-| Reference host / controlled fixture | 35 |
-| Runtime / shared shader declaration | 225 |
-| Test / validation | 210 |
+| Reference host / controlled fixture | 36 |
+| Runtime / shared shader declaration | 226 |
+| Test / validation | 212 |
 
 ## App / gameplay / plugins
 
@@ -328,6 +328,7 @@ Feature assessment: [studio.md](studio.md).
 | [Packages/Engine/Sources/Studio/SourceSceneExportValidation.swift](../../Packages/Engine/Sources/Studio/SourceSceneExportValidation.swift) | Runtime / shared shader declaration |
 | [Packages/Engine/Sources/Studio/SourceSceneInsertion.swift](../../Packages/Engine/Sources/Studio/SourceSceneInsertion.swift) | Runtime / shared shader declaration |
 | [Packages/Engine/Sources/Studio/SourceScenePluginData.swift](../../Packages/Engine/Sources/Studio/SourceScenePluginData.swift) | Runtime / shared shader declaration |
+| [Packages/Engine/Sources/Studio/SourceScenePluginRewrites.swift](../../Packages/Engine/Sources/Studio/SourceScenePluginRewrites.swift) | Runtime / shared shader declaration |
 | [Packages/Engine/Sources/Studio/SourceSceneTopology.swift](../../Packages/Engine/Sources/Studio/SourceSceneTopology.swift) | Runtime / shared shader declaration |
 | [Packages/Engine/Sources/Studio/SourceStudioAccessoryNamesPlugin.swift](../../Packages/Engine/Sources/Studio/SourceStudioAccessoryNamesPlugin.swift) | Runtime / shared shader declaration |
 | [Packages/Engine/Sources/Studio/SourceStudioAnimation.swift](../../Packages/Engine/Sources/Studio/SourceStudioAnimation.swift) | Runtime / shared shader declaration |
@@ -411,6 +412,8 @@ Feature assessment: [studio.md](studio.md).
 | [Packages/Engine/Tests/EngineTests/SourceScenePluginDataPerformanceTests.swift](../../Packages/Engine/Tests/EngineTests/SourceScenePluginDataPerformanceTests.swift) | Test / validation |
 | [Packages/Engine/Tests/EngineTests/SourceScenePluginDataProbeTests.swift](../../Packages/Engine/Tests/EngineTests/SourceScenePluginDataProbeTests.swift) | Test / validation |
 | [Packages/Engine/Tests/EngineTests/SourceScenePluginDataTests.swift](../../Packages/Engine/Tests/EngineTests/SourceScenePluginDataTests.swift) | Test / validation |
+| [Packages/Engine/Tests/EngineTests/SourceScenePluginRewriteProbeTests.swift](../../Packages/Engine/Tests/EngineTests/SourceScenePluginRewriteProbeTests.swift) | Test / validation |
+| [Packages/Engine/Tests/EngineTests/SourceScenePluginRewriteTests.swift](../../Packages/Engine/Tests/EngineTests/SourceScenePluginRewriteTests.swift) | Test / validation |
 | [Packages/Engine/Tests/EngineTests/SourceSceneRouteEditTests.swift](../../Packages/Engine/Tests/EngineTests/SourceSceneRouteEditTests.swift) | Test / validation |
 | [Packages/Engine/Tests/EngineTests/SourceSceneTopologyPerformanceTests.swift](../../Packages/Engine/Tests/EngineTests/SourceSceneTopologyPerformanceTests.swift) | Test / validation |
 | [Packages/Engine/Tests/EngineTests/SourceSceneTopologyTests.swift](../../Packages/Engine/Tests/EngineTests/SourceSceneTopologyTests.swift) | Test / validation |
@@ -506,6 +509,7 @@ Feature assessment: [studio.md](studio.md).
 | [Tools/reverse/fixtures/OriginalDynamicsProbe.cs](../../Tools/reverse/fixtures/OriginalDynamicsProbe.cs) | Reference host / controlled fixture |
 | [Tools/reverse/fixtures/OriginalLightProbe.cs](../../Tools/reverse/fixtures/OriginalLightProbe.cs) | Reference host / controlled fixture |
 | [Tools/reverse/fixtures/OriginalMapProbe.cs](../../Tools/reverse/fixtures/OriginalMapProbe.cs) | Reference host / controlled fixture |
+| [Tools/reverse/fixtures/OriginalPluginRewriteProbe.cs](../../Tools/reverse/fixtures/OriginalPluginRewriteProbe.cs) | Reference host / controlled fixture |
 | [Tools/reverse/fixtures/OriginalPluginSceneProbe.cs](../../Tools/reverse/fixtures/OriginalPluginSceneProbe.cs) | Reference host / controlled fixture |
 | [Tools/reverse/fixtures/OriginalRouteProbe.cs](../../Tools/reverse/fixtures/OriginalRouteProbe.cs) | Reference host / controlled fixture |
 | [Tools/reverse/fixtures/OriginalSceneReloadProbe.cs](../../Tools/reverse/fixtures/OriginalSceneReloadProbe.cs) | Reference host / controlled fixture |
@@ -1102,6 +1106,8 @@ Feature assessment: [toolchain-and-verification.md](toolchain-and-verification.m
 | [Tools/verification/scenarios/reload-load-duplicate.json](../../Tools/verification/scenarios/reload-load-duplicate.json) | Conversion / recovery / verification tool |
 | [Tools/verification/scenarios/reload-save-duplicate.json](../../Tools/verification/scenarios/reload-save-duplicate.json) | Conversion / recovery / verification tool |
 | [Tools/verification/scenarios/topology-duplicate.json](../../Tools/verification/scenarios/topology-duplicate.json) | Conversion / recovery / verification tool |
+| [Tools/verification/scenarios/plugin-rewrite-delete.json](../../Tools/verification/scenarios/plugin-rewrite-delete.json) | Conversion / recovery / verification tool |
+| [Tools/verification/scenarios/plugin-rewrite-duplicate.json](../../Tools/verification/scenarios/plugin-rewrite-duplicate.json) | Conversion / recovery / verification tool |
 | [Tools/verification/scenarios/topology-insert-refused.json](../../Tools/verification/scenarios/topology-insert-refused.json) | Conversion / recovery / verification tool |
 | [Packages/Engine/Sources/IkkokuInspect/SourceCardModelInspection.swift](../../Packages/Engine/Sources/IkkokuInspect/SourceCardModelInspection.swift) | Runtime / shared shader declaration |
 | [docs/reference/character/neutral-model-parity.md](../../docs/reference/character/neutral-model-parity.md) | Documentation / historical evidence |

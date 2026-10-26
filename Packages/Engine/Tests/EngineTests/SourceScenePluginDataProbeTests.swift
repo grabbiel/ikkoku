@@ -144,9 +144,11 @@ func sourceScenePluginDataMatchesCharaStudioWithEveryPlugin() throws {
     let at = try #require(fixture.range(of: flag, options: .backwards))
     var mutated = fixture; mutated.replaceSubrange(at, with: changed)
     #expect(try withoutInstanceIDs(mutated) != withoutInstanceIDs(fixture))
-    // Our export of each edit of this fixture: refused where an item is
-    // added or removed (KKPE's per-item list is positional; its rewrite is
-    // PR 2), otherwise CharaStudio's file.
+    // Our export of each edit of this fixture: CharaStudio's file, with
+    // KKPE, MaterialEditor and NodesConstraints rewritten through deletes
+    // and copies (SourceScenePluginRewrites.swift), except an edit that both
+    // deletes objects and copies items, whose copies' keys can differ from
+    // CharaStudio's (#278).
     var refused: [String] = []
     for label in phaseAEdits + ["delete-light", "add-folder"] {
         let saved = try load("edit-\(label).png")
@@ -168,7 +170,7 @@ func sourceScenePluginDataMatchesCharaStudioWithEveryPlugin() throws {
             lines.append("\(label): refused (\(reason))")
         }
     }
-    #expect(refused == ["delete", "delete-folder", "duplicate", "delete-duplicate"])
+    #expect(refused == ["delete-duplicate"])
     // CharaStudio's load-then-save is a fixed point of its own saves, up to
     // KKPE's instance IDs.
     for name in ["fixture.png"] + (phaseAEdits + ["delete-light", "add-folder"]).map({ "edit-\($0).png" }) {

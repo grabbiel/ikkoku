@@ -16,9 +16,15 @@ import Assets
 ///   one record per mod item, light or animation in the order CharaStudio
 ///   saves them, with each object's key and its per-kind position.
 /// - Scene-global entries (no object reference) are kept.
-/// - KKPE, MaterialEditor, NodesConstraints, Timeline and
-///   KK_AnimationController are kept when the part of the scene they read is
-///   unchanged in the written document, or in their empty forms.
+/// - KKPE, MaterialEditor and NodesConstraints are rewritten
+///   (SourceScenePluginRewrites.swift): pose entries per item in key order
+///   with copied controllers under fresh IDs (and a copied character's card
+///   ID patched in place), material records per item key with copies'
+///   clones and unused textures purged, constraints re-indexed with those of
+///   deleted objects removed. What their rules do not cover is refused.
+/// - Timeline and KK_AnimationController are kept when the part of the
+///   scene they read is unchanged in the written document, or in their
+///   empty forms.
 /// - Lists keyed by object key (`KeyedForm`: StudioCustomMasking,
 ///   ItemLayerEdit, RealPOV, MoarCamz, BetterScaling, LightSettings,
 ///   StudioItemIK, ObjImport, SaveCameraObjectFov) are kept unless the edit
@@ -104,12 +110,15 @@ enum SourceScenePluginData {
             guard edit.keysChange else { return data }
             throw edit.refusal(["the scene's data after 【KStudio】 is not readable ExtendedSave data (\(error.localizedDescription))"])
         }
-        var plan = Plan(trailer: trailer, edit: edit)
+        var plan = Plan(trailer: trailer, edit: edit, scene: source.preservedData)
         try plan.decide()
-        guard plan.changes else { return data }
-        let rewritten = try plan.emit()
-        var result = data.subdata(in: data.startIndex..<(data.startIndex + final.baseSceneEndOffset))
-        result.append(contentsOf: rewritten)
+        let cards = plan.cardPatches
+        guard plan.changes || !cards.isEmpty else { return data }
+        let end = data.startIndex + final.baseSceneEndOffset
+        var result = data.subdata(in: data.startIndex..<end)
+        // KKPE's copied characters: their cards' controller IDs, in place.
+        try patchCards(&result, cards)
+        if plan.changes { result.append(contentsOf: try plan.emit()) } else { result.append(data.subdata(in: end..<data.endIndex)) }
         return result
     }
 
@@ -333,11 +342,29 @@ enum SourceScenePluginData {
         var reasons: [String] = []
         /// Sideloader records expected after the rewrite, for the verifier.
         var sideloaderPlan: SideloaderPlan?
+        /// The rewrites of KKPE, MaterialEditor and NodesConstraints data,
+        /// for the verifier and KKPE's card patches.
+        var kkpePlan: KKPEPlan?, materialPlan: MaterialEditorPlan?, constraintsPlan: NodesConstraintsPlan?
+        /// The source scene's bytes (its plug-in data and every card), for
+        /// the KKPE IDs a copy's new ID avoids.
+        let scene: Data
 
-        init(trailer: SourceSceneKKEx, edit: Edit) { self.trailer = trailer; self.edit = edit }
+        init(trailer: SourceSceneKKEx, edit: Edit, scene: Data = Data()) {
+            self.trailer = trailer; self.edit = edit; self.scene = scene
+        }
 
         var changes: Bool {
             decisions.contains { if case .keep = $0 { return false } else { return true } }
+        }
+
+        var cardPatches: [KKPEPlan.CardPatch] { kkpePlan?.cardPatches ?? [] }
+
+        /// Whether the scene's Timeline data may name `word`: its XML
+        /// contains it, or it is there but not readable.
+        func timelineMentions(_ word: String) -> Bool {
+            guard let entry = trailer.entries.first(where: { $0.id == timeline && !$0.isNil }) else { return false }
+            guard let xml = try? TimelineForm.sceneInfo(trailer, entry) else { return true }
+            return xml.contains(word)
         }
 
         private func label(_ id: String) -> String {
@@ -421,24 +448,40 @@ enum SourceScenePluginData {
             case kkpe:
                 // KKPE (HSPE/MainWindow.cs OnSceneSave, LoadSceneGeneric)
                 // writes one element per item in key order and loads the
-                // i-th element onto the i-th item: positional.
+                // i-th element onto the i-th item: positional (`KKPEPlan`).
                 guard version == 0 else { return unknownVersion() }
-                if edit.unchanged([.item]) { return nil }
-                return "matches its pose data to items by their position in key order, and this edit adds or removes items, so poses would load onto the wrong items"
+                // Items keep their positions and no character's controller
+                // goes or is copied: nothing to read.
+                let characters = Set(edit.sourceRecords.compactMap { $0.value.kind == .character ? $0.key : nil })
+                if edit.unchanged([.item]), !edit.touches(characters, copies: true) { return nil }
+                do {
+                    let plan = try KKPEPlan(trailer: trailer, entry: entry, edit: edit, scene: scene)
+                    kkpePlan = plan; decision = plan.decision
+                    return nil
+                } catch let failure as RuleFailure { return edit.keysChange ? failure.reason : nil }
             case materialEditor:
                 // MaterialEditor SceneController: edits keyed by item key;
-                // only an item's delete or copy changes them.
+                // only an item's delete or copy changes them
+                // (`MaterialEditorPlan`).
                 guard version == 0 || version == 1 else { return unknownVersion() }
                 if try trailer.allNil(entry, keys: MaterialEditorForm.keys) || edit.unchanged([.item]) { return nil }
-                return "keys its material edits by item, and this edit deletes or copies items"
+                do {
+                    let plan = try MaterialEditorPlan(trailer: trailer, entry: entry, edit: edit, timelineMentions: timelineMentions)
+                    materialPlan = plan; decision = plan.decision
+                    return nil
+                } catch let failure as RuleFailure { return failure.reason }
             case nodesConstraints:
                 guard version == 0 else { return unknownVersion() }
                 if try NodesConstraintsForm.isEmpty(trailer, entry) { return nil }
                 // Parent and child objects are indices in the key-sorted
-                // dicObjectCtrl. The card fallback (`cardLinks`) adds to
-                // them on load either way.
+                // dicObjectCtrl (`NodesConstraintsPlan`). The card fallback
+                // (`cardLinks`) adds to them on load either way.
                 if edit.positionsKept { return nil }
-                return shifted("its constraints")
+                do {
+                    let plan = try NodesConstraintsPlan(trailer: trailer, entry: entry, edit: edit, timelineMentions: timelineMentions)
+                    constraintsPlan = plan; decision = plan.decision
+                    return nil
+                } catch let failure as RuleFailure { return failure.reason }
             case animationController:
                 guard version == 0 else { return unknownVersion() }
                 switch try AnimationControllerForm(trailer, entry) {
@@ -503,7 +546,15 @@ enum SourceScenePluginData {
             guard check.dataVersion == trailer.dataVersion, check.entries.count == expected.count else { throw mismatch("entries") }
             for (entry, planned) in zip(check.entries, expected) {
                 guard entry.id == planned.id, result[entry.span].elementsEqual(planned.bytes) else { throw mismatch("entry '\(planned.id)'") }
-                if entry.id == sideloader, let plan = sideloaderPlan { try plan.verify(check, entry) }
+                do {
+                    switch entry.id {
+                    case sideloader: try sideloaderPlan?.verify(check, entry)
+                    case kkpe: try kkpePlan?.verify(check, entry)
+                    case materialEditor: try materialPlan?.verify(check, entry)
+                    case nodesConstraints: try constraintsPlan?.verify(check, entry)
+                    default: break
+                    }
+                } catch let failure as RuleFailure { throw mismatch("entry '\(planned.id)': \(failure.reason)") }
             }
         }
     }
