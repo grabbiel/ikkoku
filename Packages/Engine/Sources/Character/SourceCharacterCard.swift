@@ -34,7 +34,11 @@ public struct SourceCharacterCard: Sendable {
         public let boneModifiers: SourceBoneModifiers?
         public let diagnostics: [String]
     }
-    public let product: Int, version: String, sourceSHA256: String
+    public let product: Int, version: String
+    /// SHA-256 of `preservedData`, lowercase hex. Computed when read, not at
+    /// decode: a scene decode reads every embedded card, and few readers
+    /// (inspection reports, binding provenance, the Maker save) need it.
+    public var sourceSHA256: String { SHA256.hash(data: preservedData).map { String(format: "%02x", $0) }.joined() }
     public let thumbnailData: Data, faceThumbnailData: Data, headerData: Data
     public let blocks: [Block], trailingData: Data, payloadSize: Int
     /// Byte-identical source, including thumbnail, unknown blocks, gaps and trailers.
@@ -89,7 +93,6 @@ public struct SourceCharacterCard: Sendable {
             blocks.append(Block(name: name, version: version, position: position, data: payload.subdata(in: range)))
         }
         return Self(product: product, version: version,
-            sourceSHA256: SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined(),
             thumbnailData: thumbnail, faceThumbnailData: face, headerData: header, blocks: blocks,
             trailingData: try reader.take(reader.remaining), payloadSize: payloadSize, preservedData: data,
             payloadOffset: payloadOffset)
