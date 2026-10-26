@@ -2,7 +2,7 @@
 
 Reviewed 2026-09-25 against the working tree. The [Studio audit](../../component-audit/studio.md) is the feature-status and actionable-backlog index; this page records the narrower source contract and its evidence.
 
-`KoikatsuSceneDocument.editedData(SourceSceneEdits)` produces a new original-format 1.0.4.2 scene by replacing bounded byte spans recorded by the source reader. An empty edit returns the exact original bytes. The writer performs no file I/O.
+`KoikatsuSceneDocument.editedData(SourceSceneEdits)` produces a new original-format 1.0.4.2 scene by replacing bounded byte spans recorded by the source reader. For a 1.0.4.2 scene an empty edit returns the exact original bytes; a scene from an older CharaStudio is saved as 1.0.4.2, as CharaStudio does, so even its empty edit changes bytes ([older scene versions](#older-scene-versions-saved-as-1042)). The writer performs no file I/O.
 
 Supported edits are:
 
@@ -845,6 +845,161 @@ The refusal is the engine's message, which names each plug-in and its reason. Th
 - A KKPE lone collider was not added on the player: the install's only collider item names an asset bundle manifest the install does not have. Its rules rest on the Engine tests and the parity gate.
 - 52 installed characters carry KKPE card data without a controller ID. They are all in scenes without a `kkpe` entry, where no card is read. In a scene with one, a copy of such a character is refused.
 - What survey 3 still refuses: MaterialEditor version 0 data (23 scenes), stale Sideloader records (8), Timeline object indices (3), LightSettings on an added or copied light (3), ItemLayerEdit deletes and copies (2), a KKPE pose entry without a controller ID (1) and a NodesConstraints constraint copy (1).
+
+## Older scene versions: saved as 1.0.4.2
+
+CharaStudio's save always writes `SceneInfo.m_Version` (1.0.4.2) and every
+current field, whatever version the scene was loaded from. Our export does the
+same with a scene from an older CharaStudio (0.0.5 through 1.0.4.1; see
+[scene records](scene-records.md#older-scene-versions-st-t05a)). As a result,
+**an unedited export of a legacy scene changes its bytes**: the scene is saved
+as 1.0.4.2, as CharaStudio does. The app's status line then reads "…, saved as
+1.0.4.2 from CharaStudio *version*, as CharaStudio does".
+
+### Writer behavior
+
+The legacy reader records a patch at each branch it takes.
+`KoikatsuSceneDocument.upgraded()` applies those patches and decodes the result.
+It returns `self` for a 1.0.4.2 scene. The patches are:
+
+- the version string becomes 1.0.4.2;
+- each field the version lacks is written with the value its load gave it
+  (the table in scene records);
+- eye data older than 0.0.8 gets the four zero angles after its two
+  quaternions (`EyeLookCalc.SaveAngle`), growing from 32 to 48 bytes;
+- a version-1 camera becomes version 2, with the zero distance its load keeps;
+- the 1.0.3 route point's dropped bool is removed.
+
+Every other byte is kept, including the PNG, the embedded cards and the
+plug-in trailer. The result must read back with the same settings, trailer and
+object tree, or the upgrade refuses.
+
+Every writer starts from the upgrade, computed once per export:
+
+- `editedData(_:)` upgrades a legacy scene, then applies the edit to the
+  1.0.4.2 document;
+- `inserting(_:)` stages on the upgrade. The app's export stages first, so
+  the rest of the export reads the 1.0.4.2 document;
+- `editedBody` refuses a legacy document, since the byte writers emit 1.0.4.2
+  records.
+
+A 1.0.4.2 scene takes none of these paths, and its empty edit still returns the
+exact input bytes.
+
+The upgrade refuses, with the reason, in two cases:
+
+1. A route point saves no aid (versions before 1.0.4.1). CharaStudio allocates
+   the aid's key at load (`AddObjectRoute.InitAid`) from runtime state that
+   this reader does not model: the lowest free index after the bones and IK
+   targets its load adds. The message is "This CharaStudio *v* scene cannot be
+   saved as 1.0.4.2: route *k* point *n* saves no aid, and CharaStudio
+   allocates its key at load (AddObjectRoute.InitAid) from state this reader
+   does not model". No scene in the user's corpus has a route older than
+   1.0.4.1.
+2. Eye data in a scene older than 0.0.8 is not 32 bytes. `LoadAngle` reads
+   exactly two quaternions there, so other lengths would not load in
+   CharaStudio.
+
+### Evidence
+
+`KoikatsuLegacySceneTests` builds each branch twice: in the older layout, and as
+1.0.4.2 with the loaded values. The upgrade of the first must equal the second
+byte for byte. The branches covered are:
+
+- items at 0.0.5, 0.0.6, 0.0.7, 1.0, 1.0.0 and 1.0.1;
+- version-1 cameras;
+- characters at 0.0.5, 0.0.7, 0.0.8 and 0.0.9;
+- 1.0.4.1 routes.
+
+Negative controls:
+
+- a record relabelled with another version does not read;
+- 1.0.3.0 does not take the 1.0.3 branch;
+- version-1 cameras are refused in a 1.0.4.2 scene;
+- both refusals fire, also through `editedData` and `inserting`.
+
+A 1.0.4.2 scene's empty edit stays byte-identical.
+
+The VM phase in [scene records](scene-records.md#original-player-one-vm-phase)
+compared our export with CharaStudio's own saves:
+
+- **CharaStudio's writer on its parse of a legacy record is our upgrade.** The
+  exceptions are the embedded cards (finding 4) and, below 0.0.8, the eye bytes
+  its parse keeps unchanged. For the card-free records the files match byte for
+  byte after the PNG.
+- **CharaStudio's load-then-save of the legacy record equals its
+  load-then-save of our upgrade.** CharaStudio treats our file exactly as it
+  treats the legacy one. Three things are masked:
+  - each character's neck bytes, eye bytes and animator time, which #287
+    masks;
+  - the eye bytes' length below 0.0.8;
+  - each item's animator time (finding 1).
+- **Our upgrade against CharaStudio's save of the legacy record** is equal
+  apart from findings 2 and 3.
+
+The records with no saved aid (1.0.0, 1.0.3, 1.0.4) are refused. CharaStudio's
+own save of them gives each point a fresh aid key at (1, 1, 1), not initialized.
+
+### Known differences from CharaStudio's save
+
+These hold for every scene version unless the item says otherwise. None of
+them changes the export.
+
+1. **Item animator time.** CharaStudio's save writes each animated item's
+   running `normalizedTime` (`OCIItem.OnSavePreprocessing`,
+   OCIItem.cs:289–297). Two of its saves of one scene differ there, as they do
+   in a character's animator time. Our export keeps the loaded value. The
+   comparison masks only the four bytes of each item's time. Controls show the
+   mask stays narrow: a change inside the span is masked, while a change to the
+   field before it (`enableDynamicBone`) or after it (the child count) is
+   caught.
+2. **FK bones a legacy character lacks.** CharaStudio's load gives a character
+   each catalog FK bone that its record lacks and its body or hair has, with a
+   fresh key and `new ChangeAmount()` (`AddObjectAssist.InitBone` :38–46,
+   `InitHairBone` :103–113). It saves them after the saved bones. The 0.0.7
+   fixture's character gains 10, the bones of its own back hair (145–149,
+   152–156). Records that lack bones occur only in legacy scenes. In Ikkoku:
+   - The record and our export keep the saved bones only. CharaStudio's next
+     save of our export adds the same bones, as it does for the legacy file.
+   - The FK pose binds each catalog bone it finds in the rig it draws
+     (`SourceStudioPose.swift` :143–149): body bones under the body, hair
+     bones under `cf_J_FaceUp_ty`. An unsaved bone it binds is shown at the
+     zero rotation of CharaStudio's new record, and editing it poses without
+     error. Which hair bones appear depends on the hair that is drawn.
+   - On the 0.0.7 fixture the character's hair is not converted in the maker
+     library, so the avatar's hair is drawn. The FK view therefore shows 9 of
+     that hair's front bones (112–118, 124, 131), which the record does not
+     save, at zero. It shows none of the 10 back-hair bones CharaStudio adds.
+     Every body bone the view shows is saved.
+   - Exporting an edit of any bone the record does not save, shown or not, is
+     refused, naming the bone. The app says "Export cannot save FK bone *id*
+     of "*character*" (key *k*): the scene does not save that bone, and an
+     export cannot add an FK record." The scene writer refuses it too:
+     "character *k* FK bone *id* is not saved in the scene, so there is no
+     record to write".
+   - `legacyCharacterFKShowsUnsavedBonesAtZeroAndRefusesTheirExport` checks
+     this on the 0.0.7 fixture: every bone either side adds is a hair bone,
+     each unsaved bone shown is at zero, editing all of them evaluates, and
+     both the legacy document and its upgrade refuse an export of each. The
+     lane check `studio-scenario-legacy-scene` poses one of them in the app
+     and checks the refusal and the undo.
+3. **Map-dependent sun colour (every version).** When a map with a
+   `SunLightInfo` loads, `Map.sunType`'s setter (Map.cs:30–46) calls
+   `SystemButtonCtrl.MapDependent` (:1394–1402). That call sets
+   `sceneInfo.sunColor` from the map after `LoadScene` returns. CharaStudio's
+   save of any scene on such a map therefore writes the map's sun-shafts
+   colour, while our export keeps the loaded value. In the VM comparison it is
+   the only settings difference (map 17), and the trace shows it changing after
+   the load. Controls show the allowance stays narrow: another colour differing
+   is caught, and so is the sun colour without a map or without the trace
+   change. This difference is tracked for the maps work.
+4. **Embedded cards.** CharaStudio's card writer rewrites an old embedded
+   card: the Custom, Coordinate, Parameter and Status blocks grow while their
+   block versions stay the same (the 0.0.7 fixture's card: Custom 3,472 →
+   3,518 B, Coordinate 60,784 → 64,312 B, Parameter 494 → 513 B, Status 749 →
+   820 B). Our export keeps the card's bytes. CharaStudio loads both forms
+   identically: its load-then-save of the legacy record and of our upgrade are
+   equal, and all four of its saves hold the same rewrite of each card.
 
 ## Shape and color reset contract
 

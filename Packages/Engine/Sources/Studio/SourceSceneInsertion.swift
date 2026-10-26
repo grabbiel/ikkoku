@@ -128,6 +128,9 @@ public extension KoikatsuSceneDocument {
     /// each changed child list gets its new count. Refuses, with the reason,
     /// anything it cannot place exactly as CharaStudio would.
     func inserting(_ insertions: [SourceSceneInsertion]) throws -> SourceSceneStage {
+        // Every export stages first: a legacy scene is upgraded here, once,
+        // and every later stage reads the 1.0.4.2 document.
+        if isLegacy { return try upgraded().inserting(insertions) }
         guard !insertions.isEmpty else { return SourceSceneStage(document: self, keys: [], addsLights: false, source: self, copies: [:]) }
         guard insertions.count <= 100_000 else { throw KoikatsuReadError.limitExceeded("too many scene insertions") }
         let plan = try SourceSceneInsertionPlan(self, insertions)
@@ -188,7 +191,7 @@ struct SourceSceneInsertionPlan {
                 keys.append(character.lookAtTarget.sourceKey)
             }
             keys += (record.item?.bones.values.map(\.sourceKey) ?? [])
-            for point in record.route?.points ?? [] { keys += [point.bone.sourceKey, point.aid.sourceKey] }
+            for point in record.route?.points ?? [] { keys.append(point.bone.sourceKey); if let aid = point.aidKey { keys.append(aid) } }
         }
         return keys
     }
@@ -198,7 +201,7 @@ struct SourceSceneInsertionPlan {
         tree = SourceSceneTopology.Tree(source.snapshot)
         var reader = try KoikatsuBinaryReader(source.preservedData)
         try reader.skipPNG()
-        guard try reader.string() == source.snapshot.version else { throw reader.invalid("scene version differs from its decoded document") }
+        guard try reader.sceneVersion() == source.snapshot.version else { throw reader.invalid("scene version differs from its decoded document") }
         rootCount = reader.offset
         for _ in 0..<(try reader.count()) { _ = try reader.object(depth: 0, rootKey: try reader.int32()) }
         guard reader.offset == source.snapshot.objectSectionEndOffset else { throw reader.invalid("scene object byte spans differ from the decoded document") }
@@ -568,14 +571,15 @@ struct SourceSceneInsertionPlan {
                           route.active == from.active, route.loop == from.loop, route.visibleLine == from.visibleLine,
                           route.orientation == from.orientation, route.color == from.color,
                           zip(route.points, from.points).allSatisfy({ a, b in
-                              a.bone.transform == b.bone.transform && a.aid.transform == b.aid.transform && a.speed == b.speed
+                              a.bone.transform == b.bone.transform && a.aidTransform == b.aidTransform && a.speed == b.speed
                                   && a.easeType == b.easeType && a.connection == b.connection
                                   && a.aidInitialized == b.aidInitialized && a.linked == b.linked
                           }) else { throw mismatch("copy of source object \(template)") }
-                    guard route.points.flatMap({ [$0.bone.sourceKey, $0.aid.sourceKey] }) == (allocatedSubKeys[index] ?? []) else {
+                    let pointKeys = route.points.flatMap { [$0.bone.sourceKey] + ($0.aidKey.map { [$0] } ?? []) }
+                    guard pointKeys == (allocatedSubKeys[index] ?? []) else {
                         throw mismatch("sub-info keys of the copy of source object \(template)")
                     }
-                    sub = route.points.flatMap { [$0.bone.sourceKey, $0.aid.sourceKey] }
+                    sub = pointKeys
                 }
                 guard Set(sub) == Set(allocatedSubKeys[index] ?? []) else { throw mismatch("sub-info keys of the copy of source object \(template)") }
             case let .folder(name, header), let .camera(name, header):

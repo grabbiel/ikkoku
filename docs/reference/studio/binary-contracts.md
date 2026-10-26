@@ -83,8 +83,11 @@ Item kind 1 follows its common header with:
 4. bool FK enabled; i32 bone count; each bone is a string name plus a Bone record.
 5. bool dynamic bone enabled, float32 normalized animation time, then a child list.
 
-This item order is specific to the observed 1.0.4.2 writer. Its loader includes
-older-version branches that this native reader deliberately does not support.
+This item order is the observed 1.0.4.2 writer's. Its loader also reads older
+versions: an item before 0.0.7 has no emission fields, one before 0.0.6 has no
+panel either, and one before 1.0.1 has no dynamic bone flag. The native reader
+takes the same branches for scene versions 0.0.5 through 1.0.4.1; see
+[older scene versions](scene-records.md#older-scene-versions-st-t05a).
 Light `no` and item `(group, category, no)` identify catalog entries; they are
 not native mesh IDs or Unity LightType values. Resolving those catalogs is a
 separate asset-pipeline step.
@@ -129,7 +132,7 @@ remain separate and are not substitutes for those source adapters.
   root dictionary keys, object keys, hierarchy, names, transforms, materials,
   item bone records, lights, and camera-object active state.
 - Isolated 36-byte ChangeAmount and 44-byte CameraData v2 decoders.
-- Explicit rejection of unsupported versions, unknown kinds, invalid UTF-8/lengths,
+- Explicit rejection, by name, of scene versions outside 0.0.5–1.0.4.2, unknown kinds, invalid UTF-8/lengths,
   negative counts, duplicate object keys, nonfinite floats and truncated records.
   Character (kind 0) and route (kind 4) parsing now resides in the companion
   `KoikatsuSceneRecordReader.swift`; all six observed kinds are supported.
@@ -155,7 +158,9 @@ bad counts and lengths, depth limits, and rejection at every truncated byte pref
 The observed binary framing is fully implemented within its version bounds. Next
 work belongs to the mixed runtime importer and broader edited writer (`ST-T03`,
 `ST-T04`), not re-decoding characters/routes already supported by this reader.
-Historical format versions remain explicit exclusions until independently tested.
+Scene versions 0.0.5 through 1.0.4.1 are read with CharaStudio 1.0.4.2's branches
+and checked against the original player (ST-T05a); older and newer versions are
+refused by name.
 
 ```sh
 swift test --package-path Packages/Engine --filter Koikatsu

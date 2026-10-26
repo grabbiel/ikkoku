@@ -553,7 +553,7 @@ extension SourceScenePluginData {
         }
         var reader = try KoikatsuBinaryReader(scene)
         try reader.skipPNG()
-        _ = try reader.string()
+        _ = try reader.sceneVersion()
         for _ in 0..<(try reader.count()) {
             let key = try reader.int32()
             _ = try reader.object(depth: 0, rootKey: key)

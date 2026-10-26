@@ -88,7 +88,7 @@ struct SceneDocumentBytes {
     #expect(try record.card().customization().faceValues.count == 52)
     let route = try #require(document.snapshot.roots[1].route)
     #expect(route.points.count == 2 && route.points[1].speed == 3.5 && route.points[1].connection == 1)
-    #expect(route.points[1].aid.sourceKey == 212 && route.points[1].linked && route.loop)
+    #expect(route.points[1].aidKey == 212 && route.points[1].linked && route.loop)
     #expect(document.snapshot.roots[1].children.first?.sourceKey == 21)
     let settings = document.settings
     #expect(settings.map == -1 && settings.colorCorrection == 3 && settings.ramp == 2)

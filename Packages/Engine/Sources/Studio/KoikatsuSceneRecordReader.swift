@@ -83,7 +83,14 @@ extension KoikatsuBinaryReader {
         editSpans.kinematics[objectKey] = .init(enableIK: kinematicStart..<(kinematicStart + 1),
             activeIK: (kinematicStart + 1)..<(kinematicStart + 6), enableFK: (kinematicStart + 6)..<(kinematicStart + 7),
             activeFK: (kinematicStart + 7)..<offset)
-        let expressions = try flags(8), speedStart = offset, speed = try float(), pattern = try float(), option = try bool(), loop = try bool()
+        // OICharInfo.Load :299: 4 expression flags before 0.0.9; the other
+        // four keep `new bool[8]`'s false.
+        var expressions = try flags(layout.characterExpressions)
+        if expressions.count < 8 {
+            upgradeInsert(Data(repeating: 0, count: 8 - expressions.count))
+            expressions += Array(repeating: false, count: 8 - expressions.count)
+        }
+        let speedStart = offset, speed = try float(), pattern = try float(), option = try bool(), loop = try bool()
         let voicesStart = offset
         var voices: [KoikatsuAnimationRecord] = []
         for _ in 0..<(try count()) { voices.append(try animation()) }
@@ -91,7 +98,19 @@ extension KoikatsuBinaryReader {
         editSpans.voices[objectKey] = voicesStart..<offset
         let visibleSon = try bool(), sonLength = try float(), simple = try bool()
         let simpleColor = try jsonVector(["r", "g", "b", "a"]), optionsStart = offset, option1 = try float(), option2 = try float()
-        let neck = try take(byteCount()), eyes = try take(byteCount()), timeStart = offset, time = try float()
+        let neck = try take(byteCount()), eyesStart = offset, eyes = try take(byteCount()), eyesEnd = offset
+        if !layout.eyeAngles {
+            // EyeLookCalc.LoadAngle reads only the two quaternions before
+            // 0.0.8; 1.0.4.2 reads the four angles too, which start at the
+            // calculator's Init (zero). Other lengths would not load there.
+            if eyes.count == 32 {
+                upgrade.append(.init(range: eyesStart..<eyesEnd,
+                                     bytes: KoikatsuLegacyDefaults.int32(48) + eyes + Data(repeating: 0, count: 16)))
+            } else {
+                upgradeRefusals.append("object \(objectKey)'s eye look data is \(eyes.count) bytes, not the two quaternions a scene older than 0.0.8 saves")
+            }
+        }
+        let timeStart = offset, time = try float()
         editSpans.animations[objectKey] = .init(identity: animationStart..<(animationStart + 12),
             speedPattern: speedStart..<(speedStart + 8), forceLoop: (speedStart + 9)..<(speedStart + 10),
             options: optionsStart..<(optionsStart + 8), normalizedTime: timeStart..<(timeStart + 4))
@@ -111,20 +130,51 @@ extension KoikatsuBinaryReader {
         let pointsStart = offset
         for _ in 0..<(try count()) {
             let point = try bone(); subKeys.append(lastBoneKeyOffset)
-            let speed = try float(), easeType = try int32(), connection = try int32()
-            let aid = try bone(); subKeys.append(lastBoneKeyOffset)
-            points.append(KoikatsuRoutePointRecord(bone: point, speed: speed, easeType: easeType,
-                connection: connection, aid: aid, aidInitialized: try bool(), linked: try bool()))
+            let speed = try float(), easeType = try int32()
+            // OIRoutePointInfo.Load: 1.0.3 alone saves one more bool (:62).
+            if layout.pointDiscardedFlag {
+                let start = offset; _ = try bool()
+                upgrade.append(.init(range: start..<offset, bytes: Data()))
+            }
+            if layout.pointAid {
+                let connection = try int32(), aid = try bone(); subKeys.append(lastBoneKeyOffset)
+                let initialized = try bool()
+                let linked: Bool
+                if layout.pointLink { linked = try bool() } else { linked = false; upgradeInsert(Data([0])) }
+                points.append(KoikatsuRoutePointRecord(bone: point, speed: speed, easeType: easeType,
+                    connection: connection, aid: aid, aidInitialized: initialized, linked: linked))
+            } else {
+                // Before 1.0.4.1 (:66–77) the point keeps connection Line and
+                // no aid; AddObjectRoute.InitAid (:174–200) creates one at
+                // load under a key GetNewIndex allocates from runtime state
+                // (missing FK bones and IK targets take keys first).
+                upgradeRefusals.append("route \(objectKey.map(String.init) ?? "?") point \(points.count) saves no aid, and CharaStudio allocates its key at load (AddObjectRoute.InitAid) from state this reader does not model")
+                points.append(KoikatsuRoutePointRecord(bone: point, speed: speed, easeType: easeType, connection: 0,
+                    aidKey: nil, aidTransform: KoikatsuLegacyDefaults.aidTransform, aidInitialized: false, linked: false))
+            }
         }
         // Route points and their aids load after the route's children.
         if let objectKey { editSpans.topology.subKeys[objectKey] = .init(before: [], after: subKeys) }
         // `active` is read into a local first so its one-byte span can be
         // recorded; the remaining fields still read in initializer order.
-        let activeStart = offset, active = try bool()
-        if let objectKey { editSpans.routeActive[objectKey] = activeStart..<offset }
-        let flagsStart = offset, loop = try bool(), visibleLine = try bool()
-        let orientationStart = offset, orientation = try int32()
-        let colorStart = offset, color = try jsonVector(["r", "g", "b", "a"])
+        // OIRouteInfo.Load: before 1.0.3 (:85) active, loop and visibleLine
+        // keep false, true, true (:25–29); before 1.0.4 (:91) orient keeps
+        // None; before 1.0.4.1 (:95) the colour keeps Color.blue (:33).
+        let activeStart = offset, active: Bool, loop: Bool, visibleLine: Bool, flagsStart: Int
+        if layout.routeFlags {
+            active = try bool()
+            flagsStart = offset; loop = try bool(); visibleLine = try bool()
+        } else {
+            active = false; loop = true; visibleLine = true; flagsStart = offset
+            upgradeInsert(Data([0, 1, 1]))
+        }
+        if let objectKey { editSpans.routeActive[objectKey] = activeStart..<(layout.routeFlags ? activeStart + 1 : activeStart) }
+        let orientationStart = offset, orientation: Int32
+        if layout.routeOrientation { orientation = try int32() } else { orientation = 0; upgradeInsert(KoikatsuLegacyDefaults.int32(0)) }
+        let colorStart = offset, color: SIMD4<Float>
+        if layout.routeColor { color = try jsonVector(["r", "g", "b", "a"]) } else {
+            color = KoikatsuLegacyDefaults.blue; upgradeInsert(KoikatsuLegacyDefaults.string(KoikatsuLegacyDefaults.blueJSON))
+        }
         if let objectKey {
             editSpans.routes[objectKey] = .init(points: pointsStart..<activeStart, flags: flagsStart..<orientationStart,
                                                 orientation: orientationStart..<colorStart, color: colorStart..<offset)
@@ -133,7 +183,23 @@ extension KoikatsuBinaryReader {
                                   orientation: orientation, color: color)
     }
     mutating func camera(slot: Int? = nil) throws -> KoikatsuCameraRecord {
-        let version = try int32()
+        let versionStart = offset, version = try int32()
+        // CameraData.Load (CameraControl.cs:62–82) reads one float in place
+        // of the distance for version 1, keeping distance zero. Only the
+        // older writers produced it; a 1.0.4.2 scene still needs version 2.
+        if version == 1 && layout.legacy {
+            let position = try vector3(), rotation = try vector3()
+            _ = try float()
+            let result = KoikatsuCameraRecord(position: position, rotationDegrees: rotation, distance: .zero, fieldOfView: try float())
+            var bytes = KoikatsuLegacyDefaults.int32(2)
+            let values: [Float] = [result.position.x, result.position.y, result.position.z, result.rotationDegrees.x,
+                                   result.rotationDegrees.y, result.rotationDegrees.z, 0, 0, 0, result.fieldOfView]
+            for value in values {
+                bytes += KoikatsuLegacyDefaults.float(value)
+            }
+            upgrade.append(.init(range: versionStart..<offset, bytes: bytes))
+            return result
+        }
         guard version == 2 else { throw KoikatsuReadError.unsupportedVersion("camera:\(version)") }
         let start = offset
         let result = KoikatsuCameraRecord(position: try vector3(), rotationDegrees: try vector3(), distance: try vector3(), fieldOfView: try float())
@@ -178,12 +244,13 @@ extension KoikatsuBinaryReader {
 }
 
 public extension KoikatsuSceneReader {
-    /// Complete installed 1.0.4.2 writer framing; keeps all bytes, including
-    /// unsupported plug-in trailers. It does not instantiate runtime objects.
+    /// Complete installed 1.0.4.2 writer framing, or an older scene with
+    /// the values CharaStudio 1.0.4.2's load gives the fields it lacks; keeps
+    /// all bytes, including unsupported plug-in trailers. It does not
+    /// instantiate runtime objects.
     static func decodeDocument(_ data: Data) throws -> KoikatsuSceneDocument {
-        let snapshot = try decode(data)
         var reader = try KoikatsuBinaryReader(data)
-        reader.offset = snapshot.objectSectionEndOffset
+        let snapshot = try reader.snapshot()
         let settings = try reader.sceneSettings()
         guard try reader.string() == "【KStudio】" else { throw reader.invalid("missing original Studio writer marker") }
         let end = reader.offset

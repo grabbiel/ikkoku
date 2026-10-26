@@ -5,7 +5,10 @@ Reviewed 2026-09-25 against the working tree. The [Studio audit](../../component
 `KoikatsuSceneReader.decodeDocument` reads the full installed **1.0.4.2**
 writer layout: all six object kinds, embedded character cards, character bones
 and IK targets, accessory attachment groups, routes and control points, and the
-complete scene-settings tail. Original bytes and trailing plug-in data are kept.
+complete scene-settings tail. It also reads scenes saved by the older versions
+0.0.5 through 1.0.4.1, as CharaStudio 1.0.4.2 loads them (see
+[older scene versions](#older-scene-versions-st-t05a)). Original bytes and
+trailing plug-in data are kept.
 This establishes scene record loading; it does not recreate all runtime systems
 needed to render or play an arbitrary original scene correctly.
 
@@ -285,6 +288,160 @@ rule (`SourceStudioWorldTransform.reparented`): position and the imported
 quaternion are re-authored under the new parent frame, the object's own
 scale is kept and a stale attachment point is cleared, instead of the native
 walk's scale-compounding Euler decomposition.
+
+## Older scene versions (ST-T05a)
+
+CharaStudio 1.0.4.2 also loads scenes that its older versions saved.
+`SceneInfo.Load` reads the version string into a .NET `System.Version`, and
+each record's `Load` takes the branches for that version. A field an older
+version does not save keeps the value the record's constructor gives it.
+`decodeDocument` now reads versions 0.0.5 through 1.0.4.1 the same way
+(`KoikatsuLegacyScenes.swift`). It reads the version once, and
+`KoikatsuSceneLayout` holds that version's branches. Each record reader tests
+one flag, and the document holds what CharaStudio holds after the load. A
+1.0.4.2 scene takes the same path as before, so its decode is unchanged.
+
+**Versions.** `KoikatsuSceneVersion(parsing:)` accepts two to four parts of
+ASCII digits, without leading zeros, each fitting an Int32. Versions compare as
+`System.Version` does: an absent build or revision is -1, so 1.0.4 sorts
+before 1.0.4.1, and 1.0.3.0 is not 1.0.3. The reader refuses these by name
+(`KoikatsuReadError.unsupportedVersion`, whose message gives the version and
+the reason):
+
+- a version newer than 1.0.4.2;
+- a version older than 0.0.5. For those, `SceneInfo.Load` leaves the line
+  width, ramp and shadow depth (the 0.0.5 branch, SceneInfo.cs:422) to
+  `SceneInfo.Init`, which takes them from the player's own
+  `Manager.Config.EtcData` (:162–166);
+- text that is not canonical. .NET also accepts signs, spaces and leading
+  zeros, but no CharaStudio writer produces them.
+
+| Record | What CharaStudio 1.0.4.2 reads | Before that version, the field holds |
+| --- | --- | --- |
+| Item | panel Pattern from 0.0.6 (OIItemInfo.cs:156) | `new PatternInfo()`: key 0, empty path, clamp, uv (0, 0, 1, 1), rotation 0 (PatternInfo :17) |
+| Item | emission colour, emission power and light cancel from 0.0.7 (:150) | white (:67), 0, 0 |
+| Item | `enableDynamicBone` from 1.0.1 (:168) | true (:34) |
+| Character | 8 expression flags from 0.0.9, 4 before (OICharInfo.cs:299) | the other four false (`new bool[8]`) |
+| Character | eye look: the two quaternions, then from 0.0.8 the four angles (`EyeLookCalc.LoadAngle`) | the angles keep the calculator's Init value, zero |
+| Route | `active`, `loop`, `visibleLine` from 1.0.3 (OIRouteInfo.cs:85) | false, true, true (:25–29) |
+| Route | `orient` from 1.0.4 (:91) | None (0) |
+| Route | line colour from 1.0.4.1 (:95) | `Color.blue` (:33) |
+| Route point | one bool, read and dropped, when the version equals 1.0.3 (OIRoutePointInfo.cs:62) | — |
+| Route point | `connection` and the aid record from 1.0.4.1 (:66–77) | Line (0) and no aid: `AddObjectRoute.InitAid` (:174–200) creates one at load, under a key `GetNewIndex` allocates, at the `p_RoutePoint` prefab's (1, 1, 1), not initialized |
+| Route point | `link` from 1.0.4.2 (:78) | false |
+| CameraData | version 1 holds one float where version 2 holds the distance (CameraControl.cs:62–82) | distance (0, 0, 0) |
+
+Records with no version branch keep the 1.0.4.2 layout in every version from
+0.0.5 on. These are the common object header, folders, camera objects,
+lights, ChangeAmount and bone or IK target records. So does the settings tail:
+its branches stop at 0.0.5. An embedded character card carries its own block
+versions, and the card reader reads them unchanged. Every card in the legacy
+corpus uses block versions it already reads.
+
+Two fields keep the bytes as saved:
+
+- `KoikatsuCharacterRecord.eyesData` keeps the saved eye bytes, which are 32
+  for a scene older than 0.0.8. `SourceStudioEyeLookData(bytes:sceneVersion:)`
+  reads them by the scene's version; its rule is
+  `KoikatsuSceneVersion >= 0.0.8`, which gives the same answer as the earlier
+  rule for every version a scene can carry.
+- `KoikatsuRoutePointRecord.aidKey` is nil when the scene saves no aid. Its
+  `aidTransform` is then the prefab's value, and `aid` is nil.
+
+These consumers changed to the optional key:
+
+- the route writer (`SourceSceneEditing`), which refuses a point without one;
+- insertion's key allocation and copy check (`SourceSceneInsertion`);
+- the route evaluator (`SourceStudioRoute`);
+- route editing (`SourceStudioRouteEditing`);
+- route playback (`SourceStudioRoutePlayback`);
+- the inspect tool, which now prints `aidKey` and `aidTransform`;
+- the app's route scenario check (`StudioScenario`).
+
+How a legacy scene is exported is in
+[scene editing](scene-editing.md#older-scene-versions-saved-as-1042).
+
+**CharaStudio's merge.** `ImportScene` merges a scene into the open one, but
+`LoadAngle` there reads by the open scene's version. Merging a scene older than
+0.0.8 into a 1.0.4.2 scene therefore stops with an EndOfStream exception in
+CharaStudio itself. Ikkoku has no merge path.
+
+### Corpus
+
+Two opt-in checks read the user's 182 installed scenes in place
+(`IKKOKU_SCENE_CORPUS`). The files hold 175 distinct scenes, since 7 are
+copies. `koikatsuSceneCorpusDigest` prints, per scene, a digest of every
+decoded field and whether an empty edit exports the input bytes. It ran in
+the base build (`890b1468`) and in this change (`48b48017`, Debug).
+`legacyCorpusScenesUpgradeAndReadBack` checks that each legacy scene's upgrade
+reads back as the same scene.
+
+| Version | Files | Base | This change |
+| --- | --- | --- | --- |
+| 0.0.7 | 6 | refused | opens; saved as 1.0.4.2; the upgrade reads back |
+| 0.0.8 | 13 | refused | as above |
+| 0.0.9 | 1 | refused | as above |
+| 1.0.0 | 5 | refused | as above |
+| 1.0.1 | 29 | refused | as above |
+| 1.0.3 | 8 | refused | as above |
+| 1.0.4.2 | 120 | opens | unchanged |
+
+- **The 120 current files are unchanged.** Every decoded field has the same
+  digest in both builds, and every empty edit still exports the input bytes.
+- **Every legacy scene opens and upgrades.** The upgrade reads back with every
+  decoded field equal. The only exception is the eye bytes below 0.0.8, which
+  gain the four zero angles.
+- **Neither refusal fires on the corpus.** No legacy scene has a route, a
+  version-1 camera or a plug-in trailer, and all their pre-0.0.8 eye data is
+  32 bytes.
+- **The app writes the Engine's upgrade.** The lane check
+  `studio-scenario-legacy-scene` exports the 0.0.7 fixture without an edit,
+  and its file is byte-identical to the Engine's upgrade (SHA-256 begins
+  `413ab7b0`).
+
+### Original player (one VM phase)
+
+`Tools/reverse/original_legacy_scene_probe.py` runs the phase:
+
+- `fixtures` writes six synthetic records with no user data:
+  - items at 0.0.5 (with version-1 cameras) and at 0.0.6;
+  - routes at 1.0.0, 1.0.3 (the dropped point flag set on one point), 1.0.4
+    and 1.0.4.1.
+- `run` uploads those records, 8 legacy scenes from the corpus (one or two per
+  version) and our 1.0.4.2 export of each record that is not refused.
+
+The phase is one `prlctl exec` into an isolated player root with BepInEx core
+only. `OriginalLegacySceneProbe` reads each upload twice in CharaStudio
+1.0.4.2:
+
+1. `SceneInfo.Load` alone (*parse*), saved by its own writer;
+2. `Studio.LoadScene` (*load*), then 30 frames, then saved the way the
+   scene-save button saves.
+
+It writes both dumps to `legacy-trace.json`.
+
+Results:
+
+- The errno-24 count was 0 before and after.
+- The junction scans were equal.
+- The root was removed, and no game process was left.
+- All 25 uploads ran.
+
+`KoikatsuLegacySceneProbeTests` (`IKKOKU_LEGACY_SCENE_PROBE`,
+`IKKOKU_LEGACY_SCENE_UPLOADS`) compares the phase with our reader:
+
+- What `SceneInfo.Load` read from every legacy record equals our decode,
+  field by field. After `LoadScene`, CharaStudio holds our document. The only
+  exceptions are each character's neck and eye bytes, which the load hands to
+  the look controllers, and the FK bones its load adds (below).
+- CharaStudio's writer on its own parse of a record writes our 1.0.4.2 export
+  of that record. The card bytes are the one exception: its card writer
+  rewrites every card. Below 0.0.8 the eye bytes are also excepted, because the
+  parse saves them unchanged.
+- The routes without saved aids (1.0.0, 1.0.3, 1.0.4) load with fresh aid keys
+  at (1, 1, 1), not initialized. Every other field is as decoded.
+
+The export comparisons are in [scene editing](scene-editing.md#older-scene-versions-saved-as-1042).
 
 ## Native APIs and integration
 
@@ -1009,8 +1166,9 @@ is not used as a substitute for known scene framing.
 
 ## Bounds and deliberate strictness
 
-The reader accepts the observed scene version and camera record version 2.
-Other historical layouts fail explicitly. Limits are 256 MiB total input,
+The reader accepts scene versions 0.0.5 through 1.0.4.2 and camera record
+version 2, plus version 1 in scenes older than 1.0.4.2. Other versions fail
+explicitly, by name. Limits are 256 MiB total input,
 100,000 objects/collection entries, 64 hierarchy levels, 1 MiB UTF-8 strings,
 64 MiB individual binary fields and embedded card payloads, and 1 MiB card block
 headers. Counts/ranges, finite floats and duplicate dictionary/object keys are

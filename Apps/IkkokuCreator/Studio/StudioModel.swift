@@ -2955,7 +2955,7 @@ final class StudioModel: ViewportInputHandler, LivePacedHandler {
                 var groups = character.activeFK
                 for (id, degrees) in rotations {
                     guard let boneID = Int32(exactly: id), let bone = character.bones[boneID],
-                          let target = preview.controller.targets.first(where: { $0.bone.id == id }) else { throw RigError.invalid("Export cannot add a previously absent FK record.") }
+                          let target = preview.controller.targets.first(where: { $0.bone.id == id }) else { throw RigError.invalid("Export cannot save FK bone \(id) of \"\(object.name)\" (key \(key)): the scene does not save that bone, and an export cannot add an FK record.") }
                     edits.transforms.append(.init(.characterFK(object: key, bone: boneID), transform: .init(
                         position: bone.transform.position, rotationDegrees: degrees, scale: bone.transform.scale)))
                     for (i, group) in SourceStudioPose.Group.fkParts.enumerated() where !group.intersection(target.bone.fkGroup).isEmpty { groups[i] = true }
@@ -3042,7 +3042,11 @@ final class StudioModel: ViewportInputHandler, LivePacedHandler {
         // ST-T03i: entries no installed plug-in reads travel verbatim; that
         // is CharaStudio's behavior only while no installed plug-in owns them.
         let orphans = source.orphanPluginIDs
+        // ST-T05a: a scene from an older CharaStudio is written the way
+        // CharaStudio 1.0.4.2 saves it, so even an unedited export changes
+        // its bytes.
         status = "Exported edited original scene to \(url.lastPathComponent)"
+            + (source.isLegacy ? ", saved as 1.0.4.2 from CharaStudio \(source.snapshot.version), as CharaStudio does" : "")
             + (orphans.isEmpty ? "" : ". It keeps plug-in data no installed plug-in reads, unchanged: \(orphans.joined(separator: ", "))")
     }
 

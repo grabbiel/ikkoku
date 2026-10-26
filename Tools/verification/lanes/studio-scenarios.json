@@ -2818,6 +2818,48 @@
       "timeout": 600
     },
     {
+      "id": "studio-scenario-legacy-scene",
+      "argv": [
+        ".local/build/Build/Products/Debug/Ikkoku.app/Contents/MacOS/Ikkoku"
+      ],
+      "fixtures": [
+        {
+          "env": "IKKOKU_SOURCE_SCENE",
+          "kind": "file",
+          "from": "IKKOKU_STUDIO_LEGACY_SCENE"
+        },
+        {
+          "env": "IKKOKU_SOURCE_AVATAR",
+          "kind": "file"
+        },
+        {
+          "env": "IKKOKU_MAKER_LIBRARY",
+          "kind": "file"
+        }
+      ],
+      "env": {
+        "IKKOKU_STUDIO_SCENARIO": "Tools/verification/scenarios/legacy-scene.json",
+        "IKKOKU_STUDIO_SCENARIO_REPORT": ".local/verification/reports/studio-scenario-legacy-scene.json"
+      },
+      "referenceTier": "app-smoke",
+      "tolerance": "ST-T05a on a CharaStudio 0.0.7 scene from the user's library (11 objects; its female character, key 0, saves 134 FK bones). The scene opens and draws. CharaStudio's load adds the 10 back-hair bones of the character's own hair; that hair is not converted, so the FK view shows the avatar hair's front-hair bones the record does not save, at zero rotation. Bone 112 is one: it can be posed (exact degrees), but export refuses the edit, naming the bone and saying the scene does not save it, and writes no file. After undo the frame is restored exactly. An unedited export is saved as 1.0.4.2, as CharaStudio does: the status line says so and the file is not the source's bytes. The export reimports and draws the same frame exactly (maximum RGBA8 channel delta 0). The upgrade's bytes are compared with CharaStudio's own saves by KoikatsuLegacySceneProbeTests; see docs/reference/studio/scene-editing.md.",
+      "artifacts": [
+        {
+          "path": ".local/verification/reports/studio-scenario-legacy-scene.json",
+          "kind": "scenario-report"
+        },
+        {
+          "path": ".local/verification/scenario-exports/legacy-scene.png",
+          "kind": "exported-scene"
+        },
+        {
+          "path": ".local/verification/renders/legacy-scene.png",
+          "kind": "render-capture"
+        }
+      ],
+      "timeout": 600
+    },
+    {
       "id": "studio-scenario-source-map",
       "argv": [
         ".local/build/Build/Products/Debug/Ikkoku.app/Contents/MacOS/Ikkoku"
