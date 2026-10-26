@@ -419,8 +419,8 @@ class SurveyTests(unittest.TestCase):
         self.assertFalse(maps.survey_summary(self.inventory(lightmaps=[]))['lightmaps']['reproduced'])
 
     def test_scene_usage_counts_maps_by_hashed_id_without_names(self):
-        usage = maps.scene_usage([('a' * 64, 34), ('b' * 64, -1), ('c' * 64, 34), ('d' * 64, None)])
-        self.assertEqual(usage, {'scenes': 4, 'unreadable': 1,
+        usage = maps.scene_usage([('a' * 64, 34), ('b' * 64, -1), ('c' * 64, 34), ('d' * 64, None), ('e' * 64, maps.APPLE_DOUBLE)])
+        self.assertEqual(usage, {'scenes': 4, 'unreadable': 1, 'appleDouble': 1,
                                  'maps': {'-1': dict(scenes=1, sceneIDs=['b' * 12]), '34': dict(scenes=2, sceneIDs=['a' * 12, 'c' * 12])}})
 
 

@@ -1610,11 +1610,18 @@ def survey_summary(inventory_result, rules=None):
     }
 
 
+APPLE_DOUBLE = "appleDouble"
+
+
 def scene_usage(scene_maps):
     """Per map number, how many scenes name it and their IDs (the first 12 hex digits of each
-    scene file's SHA-256; no names). scene_maps: [(sha256, map number or None if unreadable)]."""
-    maps, unreadable = {}, 0
+    scene file's SHA-256; no names). scene_maps: [(sha256, map number, None if unreadable, or
+    APPLE_DOUBLE for a macOS '._' metadata file, which is not a scene)]."""
+    maps, unreadable, apple_double = {}, 0, 0
     for sha, number in scene_maps:
+        if number == APPLE_DOUBLE:
+            apple_double += 1
+            continue
         if number is None:
             unreadable += 1
             continue
@@ -1623,7 +1630,8 @@ def scene_usage(scene_maps):
         entry["sceneIDs"].append(sha[:12])
     for entry in maps.values():
         entry["sceneIDs"].sort()
-    return {"scenes": len(scene_maps), "unreadable": unreadable, "maps": {str(k): maps[k] for k in sorted(maps)}}
+    return {"scenes": len(scene_maps) - apple_double, "unreadable": unreadable, "appleDouble": apple_double,
+            "maps": {str(k): maps[k] for k in sorted(maps)}}
 
 
 def read_scene_maps(scenes, inspect):
@@ -1633,6 +1641,9 @@ def read_scene_maps(scenes, inspect):
     result = []
     for path in sorted(p for p in Path(scenes).rglob("*") if p.is_file() and p.suffix.lower() == ".png"):
         sha = hashlib.sha256(path.read_bytes()).hexdigest()
+        if path.name.startswith("._"):
+            result.append((sha, APPLE_DOUBLE))
+            continue
         run = subprocess.run([str(inspect), "scene-document", str(path)], capture_output=True, text=True)
         number = None
         if run.returncode == 0:
@@ -1744,7 +1755,7 @@ def main():
         result = scene_usage(read_scene_maps(args.scenes, args.inspect))
         private(args.output).parent.mkdir(parents=True, exist_ok=True)
         args.output.write_text(json.dumps(result, indent=2) + "\n")
-        print(json.dumps({"scenes": result["scenes"], "unreadable": result["unreadable"],
+        print(json.dumps({"scenes": result["scenes"], "unreadable": result["unreadable"], "appleDouble": result["appleDouble"],
                           "maps": {k: v["scenes"] for k, v in result["maps"].items()}}))
     else:
         catalog = write_catalog(args.info_bundle, args.converted, private(args.output))
