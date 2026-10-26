@@ -155,6 +155,78 @@ struct LiveStepPacerTests {
         #expect(pacer.run(period: 1.0 / 120, count: 5, start: 1003) == [0, 4])
     }
 
+    /// The Maker's step (R7h2): `.ran` while live animation is on in Maker
+    /// mode, `.idle` otherwise, never `.busy`. Its 30 Hz timer, ticking between
+    /// the callbacks, resumes the pacer on every tick while there is work. A
+    /// resume of a pacer that is not parked changes nothing, so the steps keep
+    /// the 4-vsync grid at 120 Hz. A pause costs one `.idle` request, and the
+    /// first step after it comes within a timer tick and a vsync.
+    @Test func aTimerThatResumesWhileThereIsWorkKeepsTheGridAndCostsOneRequestPerPause() {
+        let vsync = 1.0 / 120, start = 1000.0
+        let pause = (start + 2)..<(start + 3)
+        func work(_ time: Double) -> Bool { !pause.contains(time) }
+        var events: [(time: Double, isCallback: Bool)] = (0..<600).map { (time: start + Double($0) * vsync, isCallback: true) }
+        events += (0..<150).map { (time: start + 0.003 + Double($0) / 30, isCallback: false) }
+        events.sort { $0.time < $1.time }
+        let pacer = Pacer()
+        var steps: [Double] = [], idle: [Double] = [], resumed: [Double] = [], ticksWithWork = 0
+        for event in events {
+            if !event.isCallback {
+                guard work(event.time) else { continue }
+                ticksWithWork += 1
+                if pacer.resume() { resumed.append(event.time) }
+            } else if pacer.callback(target: event.time) {
+                let result: LiveStepPacer.Result = work(event.time) ? .ran : .idle
+                if result == .ran { steps.append(event.time) } else { idle.append(event.time) }
+                pacer.finished(result, target: event.time)
+            }
+        }
+        #expect(idle.count == 1 && pause.contains(idle[0]), "\(idle)")
+        #expect(resumed.count == 1 && ticksWithWork > 100, "\(resumed)")
+        let before = steps.filter { $0 < pause.lowerBound }, after = steps.filter { $0 >= pause.upperBound }
+        #expect(before.count + after.count == steps.count)
+        for run in [before, after] {
+            let vsyncs = zip(run.dropFirst(), run).map { (($0 - $1) / vsync).rounded() }
+            #expect(Set(vsyncs) == [4], "\(vsyncs)")
+            #expect(run.count == 60 || run.count == 61, "\(run.count) steps in 2 s")
+        }
+        #expect(after[0] - pause.upperBound <= 1.0 / 30 + vsync + 1e-9, "first step \(after[0] - pause.upperBound) s after the pause")
+    }
+
+    /// A Studio/Maker switch replaces the viewport, so the step moves to the
+    /// new viewport's pacer. The old thread stopped, so its unanswered request
+    /// is answered `.idle`; that pacer is parked and asks no more. The new one
+    /// asks at its first callback and keeps the grid. One pacer asks at a
+    /// time, so the steps stay 30 a second across the switches.
+    @Test func aModeSwitchHandsTheStepToTheNewViewportsPacer() {
+        let vsync = 1.0 / 120
+        func target(_ vsyncs: Int) -> Double { 1000 + Double(vsyncs) * vsync }
+        var steps: [Int] = []
+        var old = Pacer()
+        for index in 0..<120 where old.callback(target: target(index)) {
+            steps.append(index)
+            old.finished(.ran, target: target(index))
+        }
+        for switchAt in [120, 243] {
+            // The switch: one request is unanswered when the old thread stops.
+            #expect(old.callback(target: target(switchAt)))
+            old.finished(.idle, target: target(switchAt))
+            #expect(old.value.parked)
+            #expect((1...12).allSatisfy { !old.callback(target: target(switchAt + $0)) })
+            // The new viewport's first callback comes a few vsyncs later.
+            let new = Pacer()
+            for index in (switchAt + 3)..<(switchAt + 123) where new.callback(target: target(index)) {
+                steps.append(index)
+                new.finished(.ran, target: target(index))
+            }
+            #expect(steps.contains(switchAt + 3), "the new pacer asks at its first callback")
+            old = new
+        }
+        let vsyncs = gaps(steps)
+        #expect(vsyncs.filter { $0 != 4 } == [7, 7], "\(vsyncs)")
+        #expect(steps.count == 90)
+    }
+
     /// A long gap between callbacks (a stalled thread, a window that was
     /// off screen) asks at once instead of waiting out the old schedule.
     @Test func aLongGapBetweenCallbacksAsksAtOnce() {

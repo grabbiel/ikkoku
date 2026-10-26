@@ -4,13 +4,15 @@ import Foundation
 /// live pacing).
 ///
 /// The Studio advances its live animation, timeline and plugin session in
-/// steps of exactly `interval` (1/30 s). A step's frame is drawn by the first
-/// callback after its `submit`. When a free-running 30 Hz timer started the
-/// steps, nothing tied a step to the display's vsync grid. A submit that
-/// landed just after a callback waited for the next one, so frames that
-/// should be 4 vsyncs apart at 120 Hz came 3 and 5 apart. This policy starts
-/// the steps from the viewport's display-link callbacks instead, so every
-/// step starts the same time before the callback that draws it.
+/// steps of exactly `interval` (1/30 s); the Maker steps its idle animation
+/// (blink, breathing, the source idle clip, hair dynamics) at the same rate.
+/// A step's frame is drawn by the first callback after its `submit`. When a
+/// free-running 30 Hz timer started the steps, nothing tied a step to the
+/// display's vsync grid. A submit that landed just after a callback waited
+/// for the next one, so frames that should be 4 vsyncs apart at 120 Hz came
+/// 3 and 5 apart. This policy starts the steps from the viewport's
+/// display-link callbacks instead, so every step starts the same time before
+/// the callback that draws it.
 ///
 /// A step is due 1/30 s after the previous one, in target-presentation time.
 /// The callback whose target is nearest that time asks for the step: the
@@ -51,7 +53,7 @@ public struct LiveStepPacer: Sendable, Equatable {
     /// How a request ended.
     public enum Result: String, Sendable, Equatable { case ran, busy, idle }
 
-    /// The Studio's step: 1/30 s.
+    /// The Studio's and the Maker's step: 1/30 s.
     public static let standardInterval = 1.0 / 30
     /// How close (seconds) to its due time a step's callback must be for the
     /// next step to count from that callback: 1% of a 30 Hz step.
