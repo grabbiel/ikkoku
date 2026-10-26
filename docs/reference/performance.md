@@ -66,6 +66,14 @@ there: a frame takes 1.3–2.1 ms of GPU time. The main thread is the limit.
    the app's part of a drag start stayed at parity
    ([live pacing](#phase-2-live-pacing)). The Maker's idle step is paced
    the same way ([Maker pacing](#maker-pacing)).
+8. **Selecting an object rebuilt the inspector.** A select from "Nothing
+   selected" and the redo of a duplicate built the Object tab again, about
+   100 ms of SwiftUI work each. Phase 2, item 7 keeps the tab and each
+   kind's section mounted while hidden, and the model publishes what the
+   tab shows, so an FK drag no longer re-evaluates it on every frame. A
+   select from nothing now takes 52–71 ms and a redo 68–96 ms; the 30 ms
+   target is not met, and what remains is listed
+   ([phase 2, item 7](#phase-2-item-7-selection-and-the-inspector)).
 
 These headline numbers are the original phase-1 measurements. The
 [resumed review](#resumed-phase-1-review-2026-10-23) retained near-120 FPS idle
@@ -203,8 +211,10 @@ locked `PerfDrawLog`. Everything else is recorded on the main thread.
   counted once) and other (SwiftUI updates, layout, AppKit event handling);
 - Maker ticks and refreshes (explicit hooks in `MakerModel`), Studio live
   ticks (`studioTick`, the timer's step outside a drag), `refresh()` calls
-  (`studioRefresh`) and camera-drag frame reuses (`studioCameraRefresh`, see
-  [phase 2, item 1](#phase-2-item-1-narrow-swiftui-invalidation)), all explicit
+  (`studioRefresh`), camera-drag frame reuses (`studioCameraRefresh`, see
+  [phase 2, item 1](#phase-2-item-1-narrow-swiftui-invalidation)) and the
+  inspector state each refresh computes and compares (`studioInspectorState`,
+  [phase 2, item 7](#phase-2-item-7-selection-and-the-inspector)), all explicit
   hooks in `StudioModel.swift` (phase 2, item 9), and every viewport input call;
 - model events without a duration (`events`): `studioDocChange` counts writes
   to the Studio document, each of which notifies every view that reads it, and
@@ -914,10 +924,11 @@ How to read the expected gain column:
 | 4 | **Done.** G3 ([evidence](#phase-2-item-4-unchanged-interactive-frames-g3)) skips unchanged interactive submissions. The [second part](#phase-2-item-4-adaptive-link-rate-idle-keep-alive-and-deformed-vertex-reuse) adds P2 (30 Hz after 0.5 s, 15 Hz after 3 s), an idle keep-alive that removes G3's drag-start drops, and deformed-vertex reuse for draws and picks (G9). G5 was dropped | G3, G5, G9, P2 | ~3/4 of idle draw CPU and GPU | the biggest GPU item on M1: idle GPU at ~10 ms/frame becomes ~2.5 ms of every 8.3 ms | captures identical (nothing renders differently, frames are only skipped) |
 | 5 | **Done** ([phase 2, item 5](#phase-2-item-5-asynchronous-hover-pick)). Asynchronous hover pick for the latest mouse position only, and a scissored pick pass. Measured: 2.29–2.41 → 0.01 ms per move on the main thread, hover's main busy time 518–531 → 239–242 ms/s, pick ids identical | M5 | 2 ms per mouse move off the main thread; fixes the hover hitch rise | same | gizmo hover scenarios |
 | 6 | **Done** ([phase 2, item 6](#phase-2-item-6-source-character-builds-off-the-main-thread)). Startup: cache decoded rigs and load source characters concurrently off the main thread, with a progress state. Duplicates and undo/redo also build in the background. Measured: scene ready 5.65 → 1.41 s, first draw 5.93 → 0.43 s, a duplicate's 671 ms stall → 45 ms of main-thread work, and an undo's 4.58 s stall → 91 ms. The [follow-up](#phase-2-item-6-follow-up-route-copies-prefetch-and-kept-donations) and the [third part](#phase-2-item-6-third-part-single-purpose-builds-rehydration-and-launch) move route copies, outfit selections, export baselines and rehydrated route characters off the main thread; only a plugin attachment's parent still builds there | C8, S1, S2, S4 | source scene ready in ~1.5 s instead of 4.7 s; first frame earlier | larger, since there is less memory bandwidth for repeated decoding; estimated ready at ~2 s instead of ~7 s ([M1](#scaling-to-the-low-end-base-m1-8-gb)) | `startup` workload; scene import results identical |
-| 7 | An opt-in optimized-Engine Debug build for app work | B1 | a Debug app at Release speed for Engine code | same | captures identical Debug and Release (already true) |
+| 7 | **Done** ([phase 2, item 7](#phase-2-item-7-selection-and-the-inspector)), added 2026-10-26. Selection and the inspector: keep the Object tab and each kind's section mounted while hidden, and publish what the tab shows from the model. Measured: a select from nothing 102–105 → 52–71 ms, a redo 106–136 → 68–96 ms, FK drag at or below base. This slot first held B1, now item 11 | M2 | Select and redo from ~100 ms of SwiftUI toward 30 ms | ~0.13 s → 0.07–0.12 s per select or redo | `IKKOKU_CAPTURE_UI` window captures with selection sequences identical; the inspector UI checks |
 | 8 | Texture compression at conversion time; release staging data after upload | G7, R1 | smaller footprint and bandwidth | main memory-pressure relief on 8 GB | image comparison; this is a quality trade-off, so it stays opt-in until compared |
 | 9 | **Done** ([phase 2, item 1](#phase-2-item-1-narrow-swiftui-invalidation)). Instrument `StudioModel` directly: explicit tick, refresh and doc-change hooks in place of the inferred ones | harness | exact Studio attribution (the inferred hooks cannot separate a SwiftUI pass caused by a doc change from one caused by layout) | — | `test_perf_trace.py`, harness report schema |
 | 10 | With the live source-shader opt-in ON, cache the item-to-slot mapping between refreshes | L1 | ~0.3 ms of each 0.39 ms refresh attach, only with the opt-in ON | same share | the live report and ON captures identical |
+| 11 | An opt-in optimized-Engine Debug build for app work (item 7 until 2026-10-26) | B1 | a Debug app at Release speed for Engine code | same | captures identical Debug and Release (already true) |
 
 ## Phase 2, item 1: narrow SwiftUI invalidation
 
@@ -4580,6 +4591,359 @@ serial CPU × 1.25.
   the first draw should come about 0.1 s sooner there too.
 - **Memory.** Unchanged: the builds hold what the synchronous builds held,
   for the same time.
+
+## Phase 2, item 7: selection and the inspector
+
+[The third part of item 6](#what-remains-after-the-third-part) left about
+100 ms of main-thread SwiftUI work on every select from "Nothing selected",
+and about 105 ms of the redo of a duplicate, because the inspector built its
+Object tab again each time. At 120 Hz, a 100 ms stall drops 12 frames.
+
+This item keeps the inspector's views mounted while they are hidden, keeps
+each kind's section once it has been shown, and has the model publish what
+the Object tab shows, so that a document write that changes nothing there
+invalidates nothing under it. In Release on the reference machine:
+
+- a select from nothing takes 52–71 ms instead of 102–105 ms;
+- a redo takes 68–96 ms instead of 106–136 ms;
+- an FK drag costs no more main-thread time than base
+  (CONFIRM_FK_SUMMARY).
+
+The 30 ms target is not met. The remaining costs are listed with numbers in
+[what remains](#what-remains-after-item-7).
+
+### Harness and checks
+
+- **`studio-select`** selects through a fixed list the way a click does
+  ([harness](#harness)). `IKKOKU_PERF_SELECT_KEYS` also preselects objects
+  before any other workload, so an FK drag can run with a route's section
+  kept hidden, and `IKKOKU_PERF_ACTION_KEY` picks the FK drag's character.
+- **`IKKOKU_PERF_KEEP_MOUNTED`** (`off`, `tab`, `on`; default `on`) turns
+  the kept views off in the same build, so every change below was measured
+  against its own `off`. The app reads it once at launch; it is a
+  measurement control only, with its own `CaptureRequest` rule and test.
+- **New counters:** the `studioInspectorState` model phase (computing and
+  comparing the published inspector state at each refresh), and the body
+  counters `objectInspectorContent` and `objectInspectorSection`.
+- **`IKKOKU_CAPTURE_UI_SELECT`** makes up to 16 selections by source key
+  (or `none`) before a window capture, one per readiness poll, so a capture
+  can show the inspector after earlier selections
+  ([build and test](../guides/build-and-test.md)). The base build has it
+  too, so base and head capture the same states.
+- **Five inspector checks** run in the window, in the `studio-scenarios`
+  lane (86 checks). They type into the Object tab's fields through the field
+  editor, change the selection mid-edit, cycle selections, undo and redo,
+  and read the accessibility tree and the Tab key-view loop. Three
+  (`inspector-edit-deselect`, `inspector-hidden-route`,
+  `inspector-hide-cycles`) were written and passed on base before any
+  change, to pin what base does. Two (`inspector-kept-views`,
+  `inspector-kept-route`) cover the kept views: undo of a rename, a route
+  point edit through undo and redo, an outfit change, collapsed sections,
+  and edits in flight when the selection changes
+  ([verification README](../../Tools/verification/README.md)).
+
+### Causes
+
+The baseline ran in a quiet window (06:22–06:28 on 2026-10-26) on a Release
+build of `main` `4d60b73` with the `studio-select` workload, with Time
+Profiler attached by pid. Medians of 13–15 actions, main busy ms (120 Hz
+frames dropped):
+
+| Scene | From nothing | Character to character | Kind change | Deselect | Redo of a duplicate (busy / stall) |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| Showoff (`IKKOKU_STUDIO_SCENARIO_SCENE`, 32 objects, 7 source characters) | 102.1 (12) | 35.3 (4) | to a folder 41.3 (4) | 36.6 (4) | 146.8 / 117.0 (14) |
+| Fixture (`IKKOKU_STUDIO_HALF_STATE_SCENE`, 4 objects) | 102.4 (12) | — | to a route 59.2 (7), to a folder 33.2 | 36.9 | 110.6 / 105.7 (12) |
+| Routes (`IKKOKU_ROUTE_CHILDREN_SCENE`, 3 objects) | route 101.8 (12) | — | — | — | 130.2 / 118.6 (14) |
+
+1. **A select from nothing builds the whole Object tab.** `ObjectInspector`
+   swapped the "Nothing selected" placeholder for `ObjectInspectorContent`,
+   a subtree with about 30 AppKit-backed controls: the name field, two
+   toggles, the Parent picker, three `VectorRow`s (9 text fields and 9
+   steppers), the Reset button, and the kind's sections. The inspector's
+   `ScrollView` proposes an unbounded height, so all of it is measured.
+   - Of the 100–113 ms: attribute-graph rule creation and evaluation about
+     35 ms, graph bookkeeping 27–30 ms, layout 8–10 ms, the display list
+     8–11 ms, creating and measuring the platform controls 10–13 ms,
+     accessibility 2–4 ms and the model 2–6 ms (deepest frames).
+     `LayoutEngineBox.spacing()` from `StackLayout.makeChildren` is about
+     21 ms inclusive: a new subtree's stack spacing is resolved recursively.
+   - Each `NSStepper` measures itself through a nested SwiftUI hosting
+     graph (`NSStepperCell cellSizeForBounds` calls
+     `ViewGraphRootValueUpdater._sizeThatFits`).
+   - An ablation build put the empty tab at 3–6 ms in all. Without the
+     `VectorRow`s a select saved about 30 ms; without only the steppers,
+     about 23 ms.
+   - A redo takes the same path: the undo leaves nothing selected, and the
+     redo selects the restored object. The redo's profile matches a select
+     from nothing within 3 ms, plus about 7 ms of rehydration.
+2. **A select that changes the kind builds that kind's section.** The route
+   section costs 18–25 ms: in the fixture, a select into the route takes
+   59 ms and one into a folder 33 ms.
+3. **A character to non-character select adds or removes the toolbar's
+   pose-mode picker:** about 13 ms (exploratory ablation).
+4. **Each select ran `refresh()` up to three times.** `selection`'s `didSet`
+   assigned `nil` to `selectedBone` and `selectedSourceIK` even when they
+   were already `nil`, and their own `didSet`s refresh. In the showoff scene
+   that was 5.8 ms of refresh per select, 4.2 ms of it from those two.
+5. **`EngineHost.locateMakerLibrary` decoded the library on every
+   rehydration:** about 3.5 ms per redo.
+
+Ruled out: the Parent picker's items (at most 2 ms), `DisclosureGroup`, any
+single body getter (1–4 ms in all), and the `ScrollView`'s implicit stack
+spacing (an explicit spacing-0 ablation was within noise).
+
+Two per-frame causes showed up later, when the kept views were measured
+under an FK drag (every frame of a drag writes the document):
+
+6. **`ObjectInspector` read the document.** Its body read `model.doc`
+   (through `selectedObject` and `ObjectInspectorState`), so every FK frame
+   re-evaluated it, 120 times a second (1,800 in a 15 s run, 0.024 ms each,
+   2.9 ms/s), and Observation dirtied everything under it. This predates
+   item 7, but kept views made that subtree larger.
+7. **A sibling read the document too.** `StudioCompatibilityDetails`, above
+   the tab in the same stack, read `compatibilityDiagnostics`, which
+   includes the document's preview diagnostics. Its invalidation dirtied the
+   stack's layout, and so the geometry of everything under the Object tab,
+   hidden kept sections included.
+
+### What changed
+
+Each change is a separate commit, measured against the build before it.
+
+- **C5, one refresh per selection change.** `selection`'s `didSet` resets
+  `selectedBone` and `selectedSourceIK` only when they are set. What the
+  model shows is unchanged.
+- **C3, the Maker library kept per file.** `EngineHost.locateMakerLibrary`
+  keeps the last library decoded, keyed by the file's resolved path, size
+  and modification date. A changed file decodes again, and a failure is not
+  kept. `EngineHost` is main-actor isolated, so the cache needs no lock.
+- **C1, the Object tab stays mounted while nothing is selected.** The
+  placeholder and the tab sit in a `ZStack(alignment: .top)`; the hidden one
+  keeps its layout but takes no space. A hidden view is framed to zero
+  height under `fixedSize`, reports at most the width proposed to it, is
+  drawn at zero opacity, takes no hits and is disabled. Without the width
+  clamp, a hidden view wider than the inspector (a kept route section)
+  widened the stack and moved what was shown; the window captures found
+  that ([correctness](#correctness-item-7)). Disabled is needed: without it the hidden fields stay in the
+  Tab key-view loop and can take focus (tested). A hidden `Picker`'s label
+  hides itself from accessibility (`inspectorKeptLabel()`), because SwiftUI
+  keeps it in the tree at zero opacity. While hidden, the tab keeps the
+  last state it showed, so it does not update.
+  - The first version used a custom `Layout`. `InspectorSwapLayout.sizeThatFits`
+    alone cost 2–4.5 ms per update, because a custom layout gets no size
+    caching, and character and folder selects got slower. The built-in
+    `ZStack` replaced it.
+- **C2, each kind's section stays mounted once shown**
+  ([ObjectInspectorSections.swift](../../Apps/IkkokuCreator/Studio/ObjectInspectorSections.swift)).
+  The character, voice, item, light, camera, source camera and route
+  sections are each an `Equatable` view of their own state. A section is
+  built the first time its kind is shown and is then hidden the same way
+  when another kind is selected. Behaviour stays as base's:
+  - a section the user collapsed stays collapsed from character to
+    character and opens again after another kind, as base rebuilt it;
+  - an edit in flight when the selection changes is dropped, as in base,
+    with no end-of-editing commit;
+  - a hidden section writes nothing to the model and is not in the
+    accessibility tree or the key-view loop.
+- **The model publishes the Object tab's state** (`StudioModel.objectInspectorState`)
+  **and the inspector's diagnostics** (`StudioModel.inspectorDiagnostics`).
+  Each is a separately observed value, like `documentCamera` in
+  [item 1](#phase-2-item-1-narrow-swiftui-invalidation).
+  - Both are computed in one place, from a `defer` at the top of `refresh()`,
+    so they run after the frame build (which prunes route runtimes and
+    publishes the active camera view), and also while a refresh is held.
+    Every document write reaches them through `refresh()`.
+  - Each is published only when it differs, so an FK frame that changes
+    nothing the tab shows notifies nothing.
+  - `ObjectInspector` reads only `objectInspectorState`, and
+    `StudioCompatibilityDetails` only `inspectorDiagnostics`.
+    `compatibilityDiagnostics` stays the source of truth for its other
+    readers (export, status).
+  - Debug builds check after every main run-loop turn that both published
+    values equal a fresh computation, and fail an assertion if not. The
+    inspector checks and the Studio lane ran with that check.
+  - The computation is timed as the `studioInspectorState` phase.
+
+The toolbar's pose-mode picker (cause 3) was not changed.
+
+### Measurement
+
+All runs are Release builds on the reference machine at 120 Hz, one launch
+at a time under the app lock, in quiet windows with the other agents
+paused. Each run logged the load average and the top five processes before
+and after it. A run was invalid when a process outside this work used more
+than 20% CPU, and was run again.
+
+- **Base, windows 2 and 3:** a Release build of `4ed83528`, which is
+  `main` `ca91cda5` plus the harness and check commits and nothing else
+  (executable `35182d6a…7439dd46`). The head merged `main` `890b1468`
+  (#287) before window 3; #287 changes card decoding, scene editing and
+  plug-in data rewrites, none of which a select, redo or FK drag runs.
+- **Base, the confirm window and the captures:** a Release build of
+  `main` `890b1468` with the same two harness commits cherry-picked
+  (CAPBASE2_LINE), so it is current `main`'s code apart from the harness.
+- **Window 2** (11:10–11:25, 34 runs, 0 invalid, 1-minute load 1.86–5.16)
+  compared base with the C2 head (`886a6664`) in each mode, to decide C1
+  (`tab` against `off`) and C2 (`on` against `tab`).
+- **Window 3** (12:05–12:17, 21 runs, 3 invalid and run again, load
+  2.08–4.57) compared base with the model-state head (`99d8d3ed`).
+- **The confirm window** (CONFIRM_WINDOW_LINE) measured the head
+  (`055c3cf9`), which adds the published diagnostics.
+
+**Window 2, median main busy ms per action** (base / `off` / `tab` / `on`):
+
+| Action | Base | off | tab | on |
+| --- | ---: | ---: | ---: | ---: |
+| Showoff, character from nothing | 111.6 | 112.1 | 71.7 | 74.4 |
+| Fixture, character from nothing | 99.6 | 105.2 | 74.8 | 59.7 |
+| Fixture, route from nothing | 98.7 | 103.5 | 69.5 | 60.1 |
+| Routes scene, route from nothing | 98.1 | 100.3 | 75.6 | 32.5 |
+| Character to character (showoff) | 32.0 | 31.9 | 31.5 | 33.9 |
+| Folder to route, warm (fixture) | 42.3 | 47.3 | 52.7 | 34.8 |
+| Route to character (fixture) | 62.5 | 60.5 | 62.7 | 46.5 |
+| Route to folder (routes scene) | 30.6 | 36.7 | 29.8 | 19.3 |
+| Deselect (showoff) | 42.4 | 37.6 | 45.0 | 38.1 |
+| Redo, showoff | 145.7 | 140.3 | 92.4 | 88.2 |
+| Redo, fixture | 111.9 | 118.7 | 63.6 | 72.5 |
+| Redo, routes | 117.3 | 119.9 | 75.4 | 69.1 |
+
+- C1 (`tab` against `off`): from nothing −25 to −40 ms, redo −45 to −55;
+  deselect and undo +0 to +22; kind changes ±7; character to character 0.
+- C2 (`on` against `tab`): from nothing 0 to −43, a kind change into a kept
+  section −16 to −18, route to folder −10; a few +4 to +9 within noise.
+- Base against `off` is C5 and C3. It was within noise (±5 ms on from
+  nothing and redo), so no gain is claimed for them.
+- The routes scene's `on` run was an outlier: its model refresh took
+  9.9 ms/s against 19.9–22.7 in every other routes run, which lowered all
+  its actions alike. Window 3 measured 53.0 ms there.
+
+**Window 3, base against the head, per action** (medians; busy / longest
+stall in ms, with the 120 Hz frames the stall drops):
+
+| Workload | Action | Runs base/head | Base | Head | Change |
+| --- | --- | ---: | ---: | ---: | ---: |
+| Select, showoff (keys 0, 963, 622) | character from nothing | 10/10 | 104.6 / 104.6 (12) | 71.3 / 71.3 (8) | −33.3 |
+| | character to character | 10/10 | 32.0 / 32.0 (3) | 28.5 / 28.5 (3) | −3.5 |
+| | to a folder | 9/9 | 41.7 / 41.7 (5) | 51.5 / 51.5 (6) | +9.8 |
+| | deselect | 9/9 | 35.6 / 35.6 (4) | 35.4 / 35.4 (4) | −0.2 |
+| Select, two characters (0, 963) | character from nothing | 13/13 | 104.7 / 104.7 (12) | 62.5 / 62.5 (7) | −42.2 |
+| | character to character | 13/13 | 33.0 / 33.0 (3) | 34.9 / 34.9 (4) | +1.9 |
+| | deselect | 12/12 | 42.2 / 42.2 (5) | 59.5 / 59.5 (7) | +17.2 |
+| Select, fixture | character from nothing | 10/10 | 101.8 / 101.8 (12) | 66.4 / 66.4 (7) | −35.4 |
+| | to a folder | 10/10 | 37.7 / 37.7 (4) | 41.3 / 41.3 (4) | +3.5 |
+| | to a route | 9/9 | 61.3 / 61.3 (7) | 38.6 / 38.6 (4) | −22.7 |
+| | deselect | 9/9 | 40.2 / 40.2 (4) | 46.2 / 46.2 (5) | +6.0 |
+| Select, fixture (20, 10, 11) | route from nothing | 10/10 | 102.4 / 102.4 (12) | 52.0 / 52.0 (6) | −50.4 |
+| | route to character | 10/10 | 63.7 / 63.7 (7) | 50.8 / 50.8 (6) | −12.9 |
+| | to a folder | 9/9 | 31.9 / 31.9 (3) | 36.6 / 36.6 (4) | +4.7 |
+| | deselect | 9/9 | 37.5 / 37.5 (4) | 46.8 / 46.8 (5) | +9.3 |
+| Select, routes scene | route from nothing | 13/13 | 103.0 / 103.0 (12) | 53.0 / 53.0 (6) | −50.0 |
+| | to a folder | 13/13 | 37.0 / 37.0 (4) | 37.3 / 37.3 (4) | +0.3 |
+| | deselect | 12/12 | 37.1 / 37.1 (4) | 45.2 / 45.2 (5) | +8.1 |
+| Redo, showoff | undo | 6/6 | 79.3 / 57.8 (6) | 83.5 / 61.3 (7) | +4.1 |
+| | redo | 6/6 | 136.0 / 109.6 (13) | 96.4 / 68.6 (8) | −39.6 |
+| | undo of the redo | 5/5 | 79.1 / 58.1 (6) | 86.3 / 62.4 (7) | +7.2 |
+| Redo, fixture | undo | 7/7 | 57.8 / 54.7 (6) | 64.1 / 60.0 (7) | +6.3 |
+| | redo | 7/7 | 105.8 / 93.5 (11) | 68.2 / 58.9 (7) | −37.7 |
+| | undo of the redo | 7/7 | 57.0 / 55.2 (6) | 61.0 / 58.1 (6) | +4.0 |
+| Redo, routes (key 0) | undo | 8/8 | 48.2 / 48.2 (5) | 55.4 / 55.4 (6) | +7.2 |
+| | redo | 8/8 | 128.2 / 115.2 (13) | 71.9 / 63.8 (7) | −56.2 |
+| | undo of the redo | 7/7 | 48.0 / 48.0 (5) | 55.7 / 55.7 (6) | +7.7 |
+
+Main busy time per second fell in all eight workloads: 131 → 114, 138 → 123,
+137 → 102, 132 → 108, 148 → 106, 144 → 121, 140 → 115 and 186 → 134 ms/s.
+The duplicate before each undo was unchanged (−0.1 to +5.0 ms).
+
+**FK drag and orbit** (main busy ms/s; 120 FK frames a second, each one a
+document write):
+
+| Run | Base | off | on |
+| --- | ---: | ---: | ---: |
+| Window 2, C2: showoff, character 65 | 313.3 | — | 311.4 |
+| Window 2, C2: fixture, route 20 then character 10 preselected | — | 249.5 | 265.2 (tab 260.0) |
+| Window 3, model state: showoff | 297.0 | 288.7 | 290.2 |
+| Window 3, model state: fixture, preselected | — | 237.8 | 250.0 |
+| Confirm, diagnostics too: showoff | CONFIRM_FK_SHOWOFF_BASE | — | CONFIRM_FK_SHOWOFF_ON |
+| Confirm, diagnostics too: fixture, preselected (two pairs, alternated) | — | CONFIRM_FK_FIX_OFF | CONFIRM_FK_FIX_ON |
+
+- With C2 alone, a hidden route section made the fixture drag 10–16 ms/s
+  dearer than `off`. Time Profiler put the difference in SwiftUI's
+  invalidation, not in any body: `AG::Graph::propagate_dirty` took 20.1 and
+  25.6 ms/s with `off` and 28.9–65.0 with `on`; `GraphHost.flushTransactions`
+  58–68 against 83–139.
+- The published Object tab state removed `ObjectInspector`'s per-frame body
+  (0 evaluations, against base's 1,800) and brought the showoff drag 7–8 ms/s
+  below base. In the fixture, propagation fell to 40.5 ms/s and the flush to
+  107 ms/s; the rest was cause 7.
+- With the diagnostics published too, three exploratory Time Profiler pairs
+  (outside a window, load 4.9–10.5) gave `propagate_dirty` 22.1, 29.9 and
+  13.6 ms/s with `off` and 22.3, 28.5 and 32.8 with `on`; the last `on` run
+  had three compiler processes beside it. CONFIRM_FK_PARAGRAPH
+- The computation costs 0.043 ms per refresh in the showoff scene (p95
+  0.049 ms), 5.1 ms/s at 120 refreshes a second during a drag, and 0.010 ms
+  in the fixture (1.2 ms/s). Base evaluated the same state inside
+  `ObjectInspector`'s body on every frame. Selects spend 0.3–1.4 ms/s on it.
+- Orbit (fixture, preselected, `on`) stays at 10.7 ms/s (9.5–10.5 in
+  window 2): the camera is observed on its own.
+- The character-to-character select, the case most sensitive to a stale or
+  extra recompute, CONFIRM_CHARS_LINE.
+
+### What remains after item 7
+
+- **The 30 ms target is not met.** A select from nothing still takes
+  52–71 ms and a redo 68–96 ms. What is left of them:
+  - **A section's first build.** A kind's section is built the first time
+    that kind is shown; the tab's kept state is the last object's. A cold
+    folder-to-route select costs 68–72 ms in every mode, and a select from
+    nothing still builds the sections the last object did not have (create
+    about 17 ms and graph work about 13 ms for Character and Voice after a
+    folder).
+  - **The rest of the window.** A select between two characters, which
+    builds nothing, costs 28–35 ms in base and head alike: the workspace
+    row's highlight, the toolbar, the frame refresh and the display list of
+    the whole window.
+  - **The redo's rehydration**, about 7 ms of app work, and its refresh.
+- **Hiding costs more than destroying.** Deselect is 0 to 17 ms dearer, and
+  an undo (which deselects) 4–8 ms. A hidden view's controls get their
+  enabled state updated and AppKit lays them out again (4.8 ms in the C1
+  profile), where `off` removed them from their superview and invalidated
+  their subgraph (about 6 ms).
+- **The toolbar's pose-mode picker** (cause 3) still appears and
+  disappears between a character and any other kind: about 13 ms
+  (exploratory). Keeping it mounted needs the same pixel-identity check.
+- **Other per-frame readers of the document.** During an FK drag,
+  `StudioWorkspacePanel`, `StudioToolbar` and the timeline bar still
+  re-render on every frame, 2–3 ms/s each, and lay out the window. This
+  predates item 7. `ObjectInspector` was the fourth such reader (cause 6:
+  1,800 bodies per 15 s, 0.024 ms each, 2.9 ms/s plus the propagation
+  under it); the published state removes it.
+- **Section expansion is not remembered.** As in base, a collapsed section
+  opens again after another kind. Keeping it collapsed would be a behaviour
+  change, so it is left as an option.
+
+### Correctness (item 7)
+
+CORRECTNESS_TBD
+
+### Limits
+
+- **One run per variant in each window.** Window 2 and window 3 agree
+  within noise apart from the routes outlier above.
+- **Windows 2 and 3 used a base before #287.** As noted under
+  measurement, #287 does not reach these actions; the confirm window and
+  the captures use a base of current `main`.
+- **Only the Object tab was changed and measured.** The Pose, Face, Clothes
+  and Scene tabs are as before.
+- **No M1 run** (estimate below).
+
+### Scaling to a base M1 (estimate)
+
+With the [scaling method](#scaling-to-the-low-end-base-m1-8-gb) (serial CPU
+× 1.25), a select from nothing holds an M1's main thread for about
+0.065–0.09 s instead of about 0.13 s (7–10 dropped 120 Hz frames instead of
+15), and a redo for about 0.085–0.12 s instead of 0.13–0.17 s (10–14 frames
+instead of 15–20). A deselect costs up to about 0.02 s more. An FK drag's
+per-frame main-thread time does not grow.
 
 ## Validation of this change
 
