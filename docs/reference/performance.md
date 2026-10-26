@@ -3619,6 +3619,142 @@ Offscreen benchmark at 1996×1824, median (range) of three runs of 60 frames:
 were made: in the showoff scene the props hide the room, so the draws
 change no pixel there. No Metal System Trace was recorded, and no M1 run.
 
+### Slice 3: map 34, the sky and block images
+
+Added 2026-10-26 with the third maps slice
+([maps: slice 3](studio/maps.md#map-34-the-sky-and-block-images-slice-3)).
+Three changes affect cost:
+
+- map textures upload as the bundle's BC1/BC3 blocks instead of PNGs
+  decoded to RGBA8 with MetalKit's mips;
+- map 34 draws, with its cube sky and particles;
+- map draws sample with anisotropy 9, the original player's forced
+  setting.
+
+**Measurement.** Release builds, in one quiet window the orchestrator
+granted (2026-10-26, 06:18:16–06:20:04):
+
+- every launch ran under the app lock, one at a time, with the other agents
+  paused;
+- the display ran at 120 Hz (1996×1824 drawable), and the load average was
+  1.4–3.7;
+- a watcher sampled every 2 s for `swift-build`, `swift-frontend`,
+  `swiftpm-testing-helper` and `xcodebuild` and saw none in any round.
+
+There were 54 launches, in three alternating rounds: `startup` once per
+scene and build per round, and the offscreen benchmark
+(`IKKOKU_BENCHMARK_OUTPUT`, 1996×1824, 60 measured frames) once per case per
+round. `perf_trace.py summarize` printed no warning. The reports are in
+`.local/sta11c-map34/perf/`.
+
+| Label | Commit | Export |
+| --- | --- | --- |
+| base | `4d60b73` (`main`, #285) | slice 2 for map 33; slice 3 for map 34 (`main`'s binary decodes its PNGs and has no sky or particle code) |
+| head | this change (its code is `147bd19`'s) | slice 3 |
+| tri | head with the two map samplers trilinear (no anisotropy), built for this window only | slice 3 |
+| decoded | head with `IKKOKU_SOURCE_MAP_DECODED_TEXTURES=1` (the PNGs, RGBA8 with mips) | slice 3 |
+
+Startup, seconds since process start, median (range) of three runs. The
+showoff scene has 7 characters and draws map 33. The map 34 day scene has
+no characters and draws only the map:
+
+| Scene | Build | Scene ready | Import call on the main thread | First draw | Map ready | Main thread until ready: busy of window ms | Longest busy period ms | Peak footprint MB | Peak Metal MB | Map load on the worker ms |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| showoff | base | 0.93 (0.91–0.93) | 9.2 ms (9.2–9.4) | 0.37 (0.33–0.38) | 0.93 (0.91–0.93) | 604 of 978 (593–605) | 394 (392–401) | 1,013 (1,013–1,019) | 412.8 | 97.7 (96.8–100.4) |
+| showoff | head | 0.91 (0.91–0.94) | 9.4 ms (9.4–9.5) | 0.33 (0.33–0.33) | 0.91 (0.90–0.94) | 582 of 972 (557–590) | 375 (357–379) | 969 (969–986) | 366.5 | 12.7 (12.5–13.3) |
+| map 34 day | base | 0.16 (0.16–0.17) | 4.8 ms (4.4–5.0) | 0.32 (0.30–0.34) | 0.51 (0.50–0.52) | 357 of 357 (351–360) | 357 (351–360) | 544 (529–545) | 449.4 | 401.0 (396.2–410.6) |
+| map 34 day | head | 0.16 (0.16–0.17) | 4.6 ms (4.5–4.7) | 0.31 (0.31–0.32) | 0.43 (0.43–0.43) | 359 of 359 (356–359) | 359 (356–359) | 327 (326–328) | 221.6 | 66.4 (65.1–69.7) |
+
+- **Import is unchanged.** Scene ready, the import call, the first draw and
+  the main thread's busy time are within run-to-run variation, or lower. The
+  map's main-thread work is still the catalog read and a 0.00–0.04 ms
+  placement.
+- **The worker's load is 6–8 times faster.** In the showoff scene it falls
+  from 97.7 to 12.7 ms. Map 34 falls from 401 ms, decoding 54 PNGs and
+  generating their mips, to 66 ms. The load copies the blocks and hashes
+  them; the 1.7–2.9 ms eager PNG read, measured outside the window, is part
+  of it.
+- **Map 34 is placed 80 ms sooner,** at 0.43 s against 0.51 s. That is
+  less than the 335 ms its load saves. When the load starts, and how long its
+  completion waits for the main thread during the first frames, were not
+  traced.
+- **Memory.**
+  - The showoff scene's peak Metal falls by 46.3 MB (412.8 → 366.5), map 33's
+    texture bytes exactly (56,492,032 → 10,207,232). Its peak footprint
+    falls by 44 MB.
+  - Map 34's scene peaks at 221.6 MB of Metal against 449.4 MB with `main`'s
+    decoded PNGs, and 327 MB of footprint against 544 MB.
+
+Offscreen benchmark at 1996×1824, median (range) of three runs of 60 frames:
+
+| Scene | Build | Items | CPU encode ms | GPU ms p50 | Completion ms | Metal bytes | Map load on the worker ms |
+| --- | --- | ---: | --- | --- | --- | ---: | --- |
+| `scene-map33.png`, no characters | base | 8 | 0.078 | 0.542 (0.494–0.551) | 0.926 | 373,719,040 | 74.0 (73.3–74.8) |
+| `scene-map33.png`, no characters | head | 8 | 0.080 | 0.498 (0.482–0.535) | 0.926 | 327,434,240 | 9.6 (9.5–9.7) |
+| `scene-map33.png`, no characters | tri | 8 | 0.080 | 0.534 (0.505–0.547) | 0.929 | 327,434,240 | 9.7 (9.4–9.7) |
+| map 34 day | base | 54 | 0.139 | 0.552 (0.552–0.555) | 1.005 | 591,659,008 | 374.5 (372.4–379.9) |
+| map 34 day | decoded | 54 | 0.140 | 0.494 (0.493–0.524) | 0.966 | 607,387,648 | 385.2 (373.4–389.2) |
+| map 34 day | head | 54 | 0.137 | 0.483 (0.481–0.535) | 0.941 | 378,978,304 | 58.1 (58.0–58.3) |
+| map 34 day | tri | 54 | 0.135 | 0.476 (0.476–0.521) | 0.933 | 378,978,304 | 59.5 (57.6–59.5) |
+| map 34 evening | base | 53 | 0.134 | 0.559 (0.554–0.560) | 1.005 | 591,659,008 | 366.9 (364.3–375.7) |
+| map 34 evening | head | 53 | 0.133 | 0.483 (0.479–0.527) | 0.954 | 378,978,304 | 58.0 (57.1–58.9) |
+| map 34 evening | tri | 53 | 0.137 | 0.478 (0.476–0.521) | 0.940 | 378,978,304 | 59.0 (54.8–59.6) |
+| showoff without props | base | 130 | 0.426 | 1.339 (1.332–1.341) | 2.109 | 510,853,120 | 81.1 (80.8–81.2) |
+| showoff without props | head | 130 | 0.428 | 1.349 (1.348–1.352) | 2.166 | 464,568,320 | 11.6 (11.5–11.9) |
+| showoff without props or catalog | base | 122 | 0.422 | 1.324 (1.320–1.325) | 2.157 | 454,131,712 | – |
+| showoff without props or catalog | head | 122 | 0.422 | 1.324 (1.316–1.328) | 2.175 | 454,131,712 | – |
+
+- **Map 34 with its sky:** 0.483 ms of GPU per frame at 1996×1824, from both
+  the day and the evening camera. The sky pass draws first, right after the
+  background and without a depth test, like Unity's Background queue. The
+  room then covers most of it. Its share of the 0.483 ms was not isolated.
+- **Anisotropy 9 costs less than this benchmark resolves.** Against `tri`,
+  map 34 differs by +0.007 and +0.005 ms, and map 33 by −0.036 ms, inside
+  every range.
+- **BC against RGBA8:** −0.011 ms on map 34 (0.494 → 0.483), also inside the
+  ranges.
+- **`main`'s binary on the slice-3 export** takes 0.552–0.559 ms for map 34.
+  It draws the sky sphere and the particle mesh with the item material,
+  which lights every fragment and samples the shadow map (**hypothesis**,
+  as in slice 2; no Metal System Trace was recorded).
+- **Behind the 7 characters,** map 33 costs +0.010 ms (1.339 → 1.349; the
+  ranges do not overlap), 0.1% of an 8.33 ms frame. No `tri` run was made
+  for this scene, so the cost is not split between anisotropy and BC.
+- **No map:** GPU time and Metal bytes are identical.
+- **CPU encode is unchanged** between the builds. Map 34's 54 draws encode
+  in 0.133–0.140 ms, against 0.076 ms for the empty Studio in slice 1.
+- **Memory.** Metal falls by exactly the texture bytes:
+  - map 33: 46,284,800 bytes;
+  - map 34: 228,409,344 bytes against the decoded PNGs. That is 196,608
+    bytes (0.09%) short of the texture bytes' 228,605,952, a difference not
+    attributed (Metal's per-allocation sizes are not the textures' byte
+    counts).
+
+**Scaling to a base M1 (estimate),** with the method above (GPU × about
+4.75, CPU × 1.25):
+
+- **GPU.** Map 34 with its sky, filling the window, takes about 2.3 ms per
+  frame. Behind characters, map 33 adds under 0.05 ms. The anisotropy cost
+  was below the benchmark's resolution here (under about 0.01 ms), so under
+  about 0.05 ms per frame on the M1. Anisotropic filtering spends texture
+  bandwidth, and the M1's bandwidth is about a twelfth of this machine's
+  (68 against 800 GB/s), against the 9.5× core ratio the method uses. So
+  this is the least certain of the estimates.
+- **Load.** The worker's load takes about 12–16 ms for map 33 and 75–85 ms for
+  map 34, against about 0.5 s decoding map 34's PNGs.
+- **Memory.** Map 34 needs about 60 MB of textures instead of 288 MB, so
+  its scene's peak Metal is about 220 MB instead of 450 MB. On 8 GB of
+  shared memory, that difference matters.
+
+**Limits.**
+
+- These are three runs per case.
+- No `studio-idle` or orbit runs were made: the showoff scene's props hide
+  the room, and the map 34 scenes have no characters to move.
+- No Metal System Trace was recorded, so the GPU differences under 0.05 ms
+  are not attributed.
+- No M1 run.
+
 ## Phase 2, item 6 follow-up: route copies, prefetch and kept donations
 
 Done 2026-10-25 (the follow-ups of inventory C8, S1 and S3, and ST-T11's

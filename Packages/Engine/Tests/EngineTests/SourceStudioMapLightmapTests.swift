@@ -28,7 +28,7 @@ import ShaderTypes
     #expect(MemoryLayout<MaterialUniforms>.offset(of: \MaterialUniforms.lightmapRange) == 340)
     #expect(MemoryLayout<MaterialUniforms>.offset(of: \MaterialUniforms.lightmapExponent) == 344)
     #expect(MemoryLayout<MaterialUniforms>.offset(of: \MaterialUniforms.oneMinusReflectivity) == 348)
-    for raw in Int32(0)...Int32(8) {
+    for raw in Int32(0)...Int32(9) {
         let kind = MaterialKind(rawValue: raw)
         let tail = withUnsafeBytes(of: MaterialUniforms.make(kind: kind)) { Array($0[340..<352]) }
         #expect(tail == Array(repeating: 0, count: 12), "kind \(kind.rawValue)")

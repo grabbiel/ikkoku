@@ -207,6 +207,103 @@ class LightmapFileTests(unittest.TestCase):
         self.assertEqual(gltf["materials"][3]["extras"]["droppedTerms"], ["item"])
 
 
+class BlockImageTests(unittest.TestCase):
+    """flip_block_rows against texture2ddecoder (the decoder UnityPy's PNG export uses)."""
+
+    @staticmethod
+    def decode(data, width, height, fmt):
+        import numpy as np
+        return np.frombuffer(maps.decode_blocks(data, width, height, fmt), np.uint8).reshape(height, width, 4)
+
+    def levels(self, data, width, height, mips, block):
+        sizes = maps.block_level_bytes(width, height, mips, block)
+        offsets = [sum(sizes[:i]) for i in range(mips)]
+        return [data[o:o + n] for o, n in zip(offsets, sizes)]
+
+    def test_every_level_decodes_to_the_source_with_its_rows_reversed(self):
+        import random
+        rng = random.Random(7)
+        for fmt, block in (("BC1", 8), ("BC3", 16)):
+            for width, height, mips in ((16, 8, 5), (8, 8, 4), (8, 4, 4)):
+                data = bytes(rng.randrange(256) for _ in range(sum(maps.block_level_bytes(width, height, mips, block))))
+                flipped = maps.flip_block_rows(data, width, height, mips, fmt)
+                self.assertEqual(len(flipped), len(data))
+                self.assertEqual(maps.flip_block_rows(flipped, width, height, mips, fmt), data)
+                w, h = width, height
+                for source, result in zip(self.levels(data, width, height, mips, block), self.levels(flipped, width, height, mips, block)):
+                    # A level under 4 pixels is one block: only its valid rows and columns are pixels.
+                    pw, ph = max(4, w), max(4, h)
+                    a, b = self.decode(source, pw, ph, fmt)[:h, :w], self.decode(result, pw, ph, fmt)[:h, :w]
+                    self.assertTrue((a[::-1] == b).all(), f"{fmt} {w}x{h}")
+                    w, h = max(1, w // 2), max(1, h // 2)
+
+    def test_sizes_and_partial_block_rows_are_refused(self):
+        with self.assertRaisesRegex(ValueError, "needs 40"):
+            maps.flip_block_rows(bytes(48), 8, 4, 4, "BC1")
+        with self.assertRaisesRegex(ValueError, "too few"):
+            maps.flip_block_rows(bytes(8), 8, 4, 4, "BC1")
+        with self.assertRaisesRegex(ValueError, "whole number of block rows"):
+            maps.flip_block_rows(bytes(8 * 4), 4, 6, 1, "BC1")
+        with self.assertRaises(KeyError):
+            maps.flip_block_rows(bytes(16), 4, 4, 1, "BC7")
+
+
+class SkyTests(unittest.TestCase):
+    N = 16
+
+    def cube(self):
+        """Faces of a smooth function of direction, row 0 at the top (D3D/Metal face mapping)."""
+        import numpy as np
+        c = (np.arange(self.N) + 0.5) / self.N * 2 - 1
+        u, v = np.meshgrid(c, c)  # u along columns, v down the rows
+        one = np.ones_like(u)
+        directions = [(one, -v, -u), (-one, -v, u), (u, one, v), (u, -one, -v), (u, -v, one), (-u, -v, -one)]
+        faces = []
+        for x, y, z in directions:
+            n = np.sqrt(x * x + y * y + z * z)
+            faces.append(np.stack([(x / n + 1) * 127, (y / n + 1) * 127, (z / n + 1) * 127], axis=-1))
+        return faces
+
+    def test_seams_meet_as_stored_and_not_with_rows_reversed(self):
+        errors = maps.cube_seam_errors(self.cube())
+        self.assertLess(errors["asStored"], 8)
+        self.assertGreater(errors["rowsFlipped"], 5 * errors["asStored"])
+        flipped = maps.cube_seam_errors([f[::-1] for f in self.cube()])
+        self.assertAlmostEqual(flipped["asStored"], errors["rowsFlipped"])
+
+    def test_engine_matrix_places_reflected_points_where_the_reflected_world_point_is(self):
+        m = maps.trs([-14.91, -1.5, -168.56], [0.1, 0.2, 0.3, math.sqrt(1 - 0.14)], [895.5949, 895.5958, 1225.75])
+        column_major = maps.engine_matrix(m)
+        engine = [[column_major[column * 4 + row] for column in range(4)] for row in range(4)]
+        for point in ([0.5, 0, 0], [0, -0.5, 0.25], [0.1, 0.2, -0.3]):
+            close(self, maps.apply_point(engine, maps.reflect(point)), maps.reflect(maps.apply_point(m, point)), places=6)
+
+    def test_sky_extras_linearize_the_tint_and_the_gamma_exposure(self):
+        extras = maps.sky_extras({"_Tint": [0.6691, 0.6691, 0.6691, 0.5]}, {"_Exposure": 1.3, "_Rotation": 291.0}, 2)
+        self.assertEqual((extras["kind"], extras["version"], extras["cube"], extras["rotationDegrees"]),
+                         ("ikkoku.unitySkyboxCubemap", 1, 2, 291.0))
+        close(self, extras["tintLinear"], [maps.gamma_to_linear_exact(0.6691)] * 3)
+        self.assertAlmostEqual(extras["exposure"], 1.3 ** 2.2)
+        self.assertEqual((extras["exposureSerialized"], extras["colorSpaceDouble"], extras["decodeInstructions"]),
+                         (1.3, 4.5947938, [1.0, 1.0, 0.0, 0.0]))
+        defaults = maps.sky_extras({}, {}, 0)
+        close(self, defaults["tintLinear"], [maps.gamma_to_linear_exact(0.5)] * 3)
+        self.assertEqual((defaults["exposure"], defaults["rotationDegrees"]), (1.0, 0.0))
+
+    def test_particle_tint_is_linearized_and_its_alpha_kept(self):
+        extras = maps.particle_extras({"_TintColor": [0.5, 0.25, 1.0, 0.534]})
+        close(self, extras["tintLinear"], [maps.gamma_to_linear_exact(0.5), maps.gamma_to_linear_exact(0.25), 1.0, 0.534])
+        close(self, maps.particle_extras({})["tintLinear"], [maps.gamma_to_linear_exact(0.5)] * 3 + [0.5])
+
+    def test_coverage_counts_standard_renderers_by_path(self):
+        material = lambda shader: {"extras": {"unityShader": shader}}
+        group = lambda m, lm, *paths: {"material": m, "lightmapIndex": lm, "renderers": [{"path": p, "triangles": 10} for p in paths]}
+        exporter = SimpleNamespace(gltf={"materials": [material("Standard"), material("Particles/Alpha Blended")]},
+                                   source={"groups": [group(0, 0, "a", "a", "b"), group(0, -1, "c"), group(1, -1, "d")]})
+        self.assertEqual(maps.lightmap_coverage(exporter), {"lightmappedRenderers": 2, "lightmappedTriangles": 30,
+                                                           "unlightmappedStandardRenderers": 1, "unlightmappedStandardTriangles": 10})
+
+
 class CatalogTests(unittest.TestCase):
     HEADER = [['#no', 'name'], ['', '']]
 
@@ -236,9 +333,16 @@ class CatalogTests(unittest.TestCase):
         drawn = {"lightmapExport": {"drawn": True}, "shaders": ["Standard"]}
         self.assertEqual(maps.approximations(drawn), ["realtime sun and its shadows", "specular and reflections",
                                                       "normal, metallic and detail maps", "fog", "camera effects"])
-        self.assertEqual(maps.approximations(dict(drawn, shaders=["Standard", "Particles/Alpha Blended"]))[-1],
-                         "shaders approximated (Particles/Alpha Blended)")
+        # Particles and the cube sky are drawn by their formulas (slice 3): not listed as approximated.
+        self.assertEqual(maps.approximations(dict(drawn, shaders=["Particles/Alpha Blended", "Skybox/Cubemap", "Standard"])),
+                         maps.approximations(drawn))
+        self.assertEqual(maps.approximations(dict(drawn, shaders=["Legacy Shaders/Diffuse", "Standard"]))[-1],
+                         "shaders approximated (Legacy Shaders/Diffuse)")
+        probes = dict(drawn, lightmapCoverage={"unlightmappedStandardRenderers": 37})
+        self.assertEqual(maps.approximations(probes)[-1], "light probes (37 Standard renderers without a lightmap drawn as items)")
         self.assertEqual(maps.approximations({'droppedTerms': ['x'], 'shaders': ['Standard']})[-1], 'shaders approximated (Standard)')
+        self.assertEqual(maps.approximations({'droppedTerms': ['x'], 'shaders': ['Skybox/Cubemap', 'Standard']})[-1],
+                         'shaders approximated (Standard)')
 
     def test_gpu_bytes_counts_rgba8_with_a_full_mip_chain(self):
         self.assertEqual(maps.gpu_bytes(4, 2), 4 * 2 * 4 + 2 * 1 * 4 + 1 * 1 * 4)

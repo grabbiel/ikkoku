@@ -361,7 +361,15 @@ fragment float4 eye_fragment(
 // memory, while TEXCOORD_1 has the glTF top-left origin: sample (u, 1 - v).
 // The direction is baked in Unity's left-handed world; the engine basis
 // reflects Z, so dir.z flips (dot products are unchanged by the reflection).
-constexpr sampler lightmapSampler(mag_filter::linear, min_filter::linear, mip_filter::linear, address::clamp_to_edge);
+// Sampler state (slice 3): the player runs QualitySettings.anisotropicFiltering
+// ForceEnable, and no game assembly calls Texture.SetGlobalAnisotropicFilteringLimits,
+// so every mipmapped, non-point map texture is sampled at Unity's forced minimum,
+// anisotropy 9 (the lightmaps' anisoLevel 3 and the particle textures' 1 are
+// raised to it). D3D11 samples an anisotropic texture with linear mips. The map
+// probe's irradiance and particle gates measure it: trilinear without anisotropy
+// fails both (docs/reference/studio/maps.md, "Sampler state").
+constexpr sampler lightmapSampler(mag_filter::linear, min_filter::linear, mip_filter::linear, max_anisotropy(9), address::clamp_to_edge);
+constexpr sampler mapForcedAnisoRepeat(mag_filter::linear, min_filter::linear, mip_filter::linear, max_anisotropy(9), address::repeat);
 
 inline float3 decodeLightmapRGBM(float4 data, float range, float exponent) {
     return (range * pow(data.a, exponent)) * data.rgb;
@@ -382,8 +390,15 @@ fragment float4 map_fragment(
     texture2d<float> lightmapDirection [[texture(TextureIndexLightmapDirection)]],
     texture2d<float> emissionTex [[texture(TextureIndexEmission)]])
 {
+    if (mat.flags & MaterialFlagMapParticle) {
+        // Particles/Alpha Blended (Particle Alpha Blend.shader v5.6.2f1): o.color = v.color * _TintColor,
+        // col = 2 * i.color * tex2D(_MainTex); no lighting, lightmap or fog term is read. baseColor is
+        // _TintColor as a Linear player uploads it; a mesh without colours reads white (fetchVertex).
+        float4 texel = (mat.flags & MaterialFlagHasBaseTexture) ? baseTex.sample(mapForcedAnisoRepeat, in.uv) : float4(1.0);
+        return 2.0 * in.color * mat.baseColor * texel;
+    }
     float4 albedo = mat.baseColor;
-    if (mat.flags & MaterialFlagHasBaseTexture) albedo *= baseTex.sample(linearRepeat, in.uv);
+    if (mat.flags & MaterialFlagHasBaseTexture) albedo *= baseTex.sample(mapForcedAnisoRepeat, in.uv);
     if ((mat.flags & MaterialFlagAlphaTest) && albedo.a < mat.params.w) discard_fragment();
     float2 luv = float2(in.uv1.x, 1.0 - in.uv1.y);
     float3 gi = decodeLightmapRGBM(lightmap.sample(lightmapSampler, luv), mat.lightmapRange, mat.lightmapExponent);
@@ -391,6 +406,61 @@ fragment float4 map_fragment(
         gi = decodeDirectionalLightmap(gi, lightmapDirection.sample(lightmapSampler, luv), normalize(in.worldNormal));
     }
     float3 color = albedo.rgb * mat.oneMinusReflectivity * gi;
-    if (mat.emissive.a > 0.0) color += emissionTex.sample(linearRepeat, in.uv).rgb * mat.emissive.rgb * mat.emissive.a;
+    if (mat.emissive.a > 0.0) color += emissionTex.sample(mapForcedAnisoRepeat, in.uv).rgb * mat.emissive.rgb * mat.emissive.a;
     return float4(color, (mat.flags & MaterialFlagAlphaBlend) ? albedo.a : 1.0);
+}
+
+// ---- ST-A11 map sky: Skybox/Cubemap on a mesh ------------------------------
+// Skybox-Cubed.shader (tag v5.6.2f1), Queue Background, Cull Off, ZWrite Off:
+//   vert: rotated = RotateAroundYInDegrees(v.vertex, _Rotation)
+//           (x' = cos a * x - sin a * z, z' = sin a * x + cos a * z);
+//         o.vertex = UnityObjectToClipPos(rotated); o.texcoord = v.vertex.xyz (unrotated)
+//   frag: DecodeHDR(texCUBE(_Tex, i.texcoord), _Tex_HDR) * _Tint.rgb * unity_ColorSpaceDouble.rgb * _Exposure
+// DecodeHDR (UnityCG.cginc L497-L512), Linear: alpha = w * (a - 1) + 1; (x * pow(alpha, y)) * rgb.
+// The mesh holds engine object-space positions (Unity's with z reflected): the rotation
+// and the cube direction use Unity's object space, the clip position the engine model.
+// The cube holds the bundle's faces as serialized, which D3D and Metal sample alike.
+struct SkyVertexOut {
+    float4 position [[position]];
+    float3 direction;
+};
+
+vertex SkyVertexOut sky_vertex(
+    uint vid [[vertex_id]],
+    device const DeformedVertex* verts [[buffer(BufferIndexVertices)]],
+    constant FrameUniforms& frame [[buffer(BufferIndexFrameUniforms)]],
+    constant DrawUniforms& draw [[buffer(BufferIndexDrawUniforms)]],
+    constant MaterialUniforms& mat [[buffer(BufferIndexMaterial)]])
+{
+    float3 p = verts[vid].position.xyz;
+    float3 unity = float3(p.x, p.y, -p.z);
+    float angle = mat.params.x * M_PI_F / 180.0;
+    float s = sin(angle), c = cos(angle);
+    float3 rotated = float3(c * unity.x - s * unity.z, unity.y, s * unity.x + c * unity.z);
+    SkyVertexOut o;
+    o.position = frame.viewProjection * (draw.model * float4(rotated.x, rotated.y, -rotated.z, 1.0));
+    o.direction = unity;
+    return o;
+}
+
+// The sky cubes carry one mip level (bilinear, clamp: the serialized texture settings).
+constexpr sampler skySampler(mag_filter::linear, min_filter::linear, address::clamp_to_edge);
+
+fragment float4 sky_fragment(
+    SkyVertexOut in [[stage_in]],
+    constant MaterialUniforms& mat [[buffer(BufferIndexMaterial)]],
+    texturecube<float> cube [[texture(TextureIndexSkyCube)]])
+{
+    float3 direction = in.direction;
+    // The map probe's negative control only: each face's rows flipped. A face's rows run
+    // along -y on the side faces and along z on the top and bottom faces.
+    if (mat.flags & MaterialFlagSkyRowsFlipped) {
+        float3 a = abs(direction);
+        direction = (a.y >= a.x && a.y >= a.z) ? float3(direction.x, direction.y, -direction.z)
+                                                : float3(direction.x, -direction.y, direction.z);
+    }
+    float4 texel = cube.sample(skySampler, direction);
+    float alpha = mat.params.w * (texel.a - 1.0) + 1.0;
+    float3 decoded = (mat.params.y * pow(alpha, mat.params.z)) * texel.rgb;
+    return float4(decoded * mat.baseColor.rgb, 1.0);
 }
