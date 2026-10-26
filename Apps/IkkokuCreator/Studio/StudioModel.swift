@@ -277,6 +277,27 @@ final class StudioModel: ViewportInputHandler, LivePacedHandler {
               doc.mainLight == MainLight() else { return doc.mainLight }
         return cached.light
     }
+    /// ST-A11: the imported scene's map (`StudioModel+SourceMap.swift`).
+    /// Runtime-only like `sourceSceneLight`: the request carries the scene
+    /// identity, which gates every read, so it survives undo/redo and New
+    /// Scene. `sourceMapAsset` is the one converted map on the GPU, reused by
+    /// any request for the same file and released when a request names no
+    /// map or another one; `sourceMapItems` are the request's placed draws
+    /// (nil until the asset is applied).
+    @ObservationIgnored var sourceMapRequest: SourceMapRequest?
+    @ObservationIgnored var sourceMapAsset: SourceStudioMapAsset?
+    @ObservationIgnored var sourceMapLoad: SourceStudioMapLoad?
+    @ObservationIgnored var sourceMapItems: [RenderItem]?
+    @ObservationIgnored var sourceMapFailure: Error?
+    @ObservationIgnored var sourceMapInstallSeconds: Double = 0
+    /// What `sourceMapLine` was last built from, so `refresh()` rebuilds it
+    /// only when one of its inputs changed (`publishSourceMapLine`).
+    @ObservationIgnored var sourceMapLineKey: SourceMapLineKey?
+    /// The current document's map line (status line and inspector): what the
+    /// scene names and whether it is drawn. nil for a document without a map.
+    internal(set) var sourceMapLine: String?
+    /// View ▸ Show Source Map: hides the drawn map without unloading it.
+    var showSourceMap = true { didSet { if oldValue != showSourceMap { publishSourceMapLine(); refresh() } } }
     /// Imported camera objects (`KoikatsuObjectKind.camera`), keyed by the
     /// placeholder entry's id. Runtime-only like `sourceSceneLight`: the
     /// placeholder stays a `.folder` and `doc.camera` keeps the saved scene
@@ -307,7 +328,9 @@ final class StudioModel: ViewportInputHandler, LivePacedHandler {
     /// shown with the source compatibility details.
     private(set) var resourceDiagnostics: [String] = []
     /// What the inspector's "Source compatibility details" lists.
-    var compatibilityDiagnostics: [String] { resourceDiagnostics + (doc.sourcePreviewDiagnostics ?? []) }
+    var compatibilityDiagnostics: [String] {
+        resourceDiagnostics + (sourceMapLine.map { [$0] } ?? []) + (doc.sourcePreviewDiagnostics ?? [])
+    }
 
     private func clearResourceDiagnostics() { resourceDiagnostics = [] }
 
@@ -1606,7 +1629,7 @@ final class StudioModel: ViewportInputHandler, LivePacedHandler {
         }
         if let resources { applyResourceCheck(resources) }
         plugins.restoredAttachments?.commit(document: next)
-        doc = next; rehydrateSourceRuntime()
+        doc = next; rehydrateSourceRuntime(); resumeSourceMapIfNeeded()
         commitSourcePlugins(plugins, running: false, replaceDocument: false)
     }
 
@@ -1952,16 +1975,23 @@ final class StudioModel: ViewportInputHandler, LivePacedHandler {
         }
         // A re-import of a loaded character borrows its converted assembly.
         let batch = sourceCharacterBatch(references.map { ($0, nil) })
-        return SourceSceneImportJob(sceneURL: sceneURL, rigURL: rigURL, boneCatalogURL: boneCatalogURL, hash: hash,
+        let job = SourceSceneImportJob(sceneURL: sceneURL, rigURL: rigURL, boneCatalogURL: boneCatalogURL, hash: hash,
             source: source, imported: imported, diagnostics: diagnostics, sceneLightOverride: sceneLightOverride,
             animationCatalog: animationCatalog, animationCatalogError: animationCatalogError,
             itemResolver: itemResolver, itemNames: itemNames, references: references, itemRecords: itemRecords,
             steps: steps, batch: batch)
+        // ST-A11: the map loads on its own worker beside the characters.
+        job.mapRequest = SourceMapRequest.make(settings: source.settings, sceneSHA256: hash)
+        job.mapLoad = startSourceMapLoad(for: job.mapRequest)
+        return job
     }
 
     /// The import's walk and commit: the original scene walk, taking each
     /// character and item from `job` in the order it reaches them.
     private func commitSourceSceneImport(_ job: SourceSceneImportJob) throws {
+        // A failed commit drops the map its preparation started loading.
+        var committed = false
+        defer { if !committed { job.mapLoad?.cancel() } }
         let sceneURL = job.sceneURL, hash = job.hash, source = job.source
         var imported = job.imported, diagnostics = job.diagnostics
         let sceneLightOverride = job.sceneLightOverride, itemResolver = job.itemResolver, itemNames = job.itemNames
@@ -2103,13 +2133,17 @@ final class StudioModel: ViewportInputHandler, LivePacedHandler {
         sourceAnimationCatalog = job.animationCatalog; sourceAnimationCatalogError = job.animationCatalogError
         stopSourceVoices(); sourcePluginSession = nil; sourcePluginsRunning = false; sourceAnimationTime = 0; sourceInstances = previews; sourceRoutes = routes; sourceRoutePlayState = Dictionary(uniqueKeysWithValues: routes.map { ($0.key, (playing: $0.value.route.active, start: 0)) }); sourceRouteCharacterPreviews = routeCharacterPreviews; lastSourceRouteDiagnostic = nil; releaseInstances { _ in true }; sourceCameras = cameras; sourceItemAssets = itemAssets; activeSourceCamera = activeCameraAtLoad; sourceCameraLoadActive = activeCameraAtLoad; clearResourceDiagnostics(); doc = imported; sourceSceneLight = sceneLightOverride.map { (hash, $0) }; coverSourceRuntime(imported); self.sceneURL = nil
         rebuildSourceRouteClocks()
+        committed = true
+        installSourceMap(job.mapRequest, load: job.mapLoad)
         selection = imported.objects.first(where: { $0.sourceCharacter != nil })?.id
         status = "Source preview · \(previews.count) converted characters (\(routeCharacterPreviews.count) rendered on routes) · \(imported.objects.count - previews.count) retained tree nodes. See source compatibility details."
     }
 
 
     /// Whether a background source scene import is still building its characters.
-    var isLoadingSourceScene: Bool { sourceImportJob != nil }
+    /// Includes the scene's map load (ST-A11), so a run that waits for the
+    /// import also waits for its map.
+    var isLoadingSourceScene: Bool { sourceImportJob != nil || sourceMapLoad != nil }
     /// Background builds of missing previews not installed yet.
     var pendingSourceCharacterBuilds: Int { pendingSourceBuilds.count }
 
@@ -2119,6 +2153,8 @@ final class StudioModel: ViewportInputHandler, LivePacedHandler {
     /// built release their meshes and buffers when dropped.
     func cancelSourceBuilds() {
         sourceImportJob?.batch.cancel()
+        sourceImportJob?.mapLoad?.cancel()
+        sourceMapLoad?.cancel(); sourceMapLoad = nil
         sourceImportJob = nil
         for build in pendingSourceBuilds.values { build.batch.cancel() }
         pendingSourceBuilds.removeAll()
@@ -2879,6 +2915,9 @@ final class StudioModel: ViewportInputHandler, LivePacedHandler {
             sourceRuntimeCoverage = coverage
         }
         var items: [RenderItem] = []
+        // About as many items as the last frame, so appending them (the
+        // characters' and, at the end, the map's) does not regrow the array.
+        items.reserveCapacity(frame.items.count)
         var skinSets: [UInt64: [float4x4]] = [:]
         var lights: [SceneLight] = []
         var gizmos: [GizmoBatch] = []
@@ -3133,6 +3172,10 @@ final class StudioModel: ViewportInputHandler, LivePacedHandler {
             gizmos += guides.batches(camera: viewCamera, viewport: viewportSize, highlight: hoverAxis)
             routeGuides = guides
         }
+        // ST-A11: the scene's map, placed once per request; it never grows
+        // `bounds`, which fit the character shadow map.
+        let mapItems = currentSourceMapItems
+        if !mapItems.isEmpty { items += mapItems }
         if bounds.isEmpty { bounds = AABB(min: Float3(-1, 0, -1), max: Float3(1, 2, 1)) }
         var f = RenderFrame(camera: viewCamera, mainLight: effectiveMainLight, lights: lights, items: items, gizmos: gizmos, effects: doc.effects, sceneBounds: bounds)
         f.skinSets = skinSets
@@ -3140,6 +3183,7 @@ final class StudioModel: ViewportInputHandler, LivePacedHandler {
         host.renderer.submit(f)
         if liveSourceShaders { publishLiveSourceShaderStatus(liveLines) }
         publishActiveSourceCameraView()
+        publishSourceMapLine(onlyIfChanged: true)
         if reusable, statusWrites == statusWritesBefore {
             cameraReuse = CameraReuse(frame: f, characterGuides: characterGuides, lightGlyphs: lightGlyphBatch, selectionGuide: selectionGuide,
                                       routeGuides: routeGuides)
@@ -3484,6 +3528,7 @@ final class StudioModel: ViewportInputHandler, LivePacedHandler {
         lastSourceRouteDiagnostic = nil
         rebuildSourceRouteClocks()
         coverSourceRuntime(doc)
+        installSourceMap(bundle.map)
     }
 
     private func sourceWorldRotation(of id: UUID) throws -> simd_quatf {

@@ -7,7 +7,7 @@ evaluator files, the ST-T11 second-slice route playback files, the ST-T11
 third-slice original route capture/comparison files, the ST-T11
 sixth-slice per-frame route stepping files, the ST-T11 ninth-slice route
 clock files, the ST-T11 character-light capture/mapping files, the ST-A11
-scene character-light preview override files, the original-player probe
+scene character-light preview override files, the ST-A11 first map slice files, the original-player probe
 robustness test, the ST-A06 camera-object capture files, the ST-A06
 source camera-object look-through files, the ST-A06 source scale rule files,
 the ST-T07 eye look reference and solver-port files, the ST-T07s eye look
@@ -23,26 +23,26 @@ branch was tested or every asset matches the original game. Feature status,
 specific comments and pending tasks are in the linked reports. Shared behavior
 may be discussed in more than one report; one primary owner is listed here.
 
-**974 files indexed; 974 assigned; 0 unassigned.**
+**990 files indexed; 990 assigned; 0 unassigned.**
 
 | Primary report | Files |
 | --- | ---: |
 | [App / gameplay / plugins](app-gameplay-and-plugins.md) | 110 |
 | [Character / Maker / mods](character-and-mods.md) | 128 |
-| [Studio / IK / animation](studio.md) | 200 |
+| [Studio / IK / animation](studio.md) | 211 |
 | [Renderer / foundation / assets](renderer-and-foundation.md) | 334 |
-| [Toolchain / verification / historical docs](toolchain-and-verification.md) | 192 |
+| [Toolchain / verification / historical docs](toolchain-and-verification.md) | 197 |
 
 | File role | Files |
 | --- | ---: |
 | App resource metadata / icon | 16 |
 | Build / repository configuration | 9 |
-| Conversion / recovery / verification tool | 224 |
-| Documentation / historical evidence | 64 |
+| Conversion / recovery / verification tool | 231 |
+| Documentation / historical evidence | 65 |
 | Generated asset / catalog / fixture | 205 |
-| Reference host / controlled fixture | 29 |
-| Runtime / shared shader declaration | 217 |
-| Test / validation | 197 |
+| Reference host / controlled fixture | 30 |
+| Runtime / shared shader declaration | 220 |
+| Test / validation | 201 |
 
 ## App / gameplay / plugins
 
@@ -302,8 +302,10 @@ Feature assessment: [studio.md](studio.md).
 
 | File | Role |
 | --- | --- |
+| [Apps/IkkokuCreator/AppState+SourceMapProbe.swift](../../Apps/IkkokuCreator/AppState+SourceMapProbe.swift) | Runtime / shared shader declaration |
 | [Apps/IkkokuCreator/Studio/StudioModel+Benchmark.swift](../../Apps/IkkokuCreator/Studio/StudioModel+Benchmark.swift) | Runtime / shared shader declaration |
 | [Apps/IkkokuCreator/Studio/StudioModel+Plugins.swift](../../Apps/IkkokuCreator/Studio/StudioModel+Plugins.swift) | Runtime / plugin session staging, adapters and guarded interactive commands |
+| [Apps/IkkokuCreator/Studio/StudioModel+SourceMap.swift](../../Apps/IkkokuCreator/Studio/StudioModel+SourceMap.swift) | Runtime / shared shader declaration |
 | [Apps/IkkokuCreator/Studio/StudioModel+SourceRehydration.swift](../../Apps/IkkokuCreator/Studio/StudioModel+SourceRehydration.swift) | Runtime / shared shader declaration |
 | [Apps/IkkokuCreator/Studio/StudioModel+SourceRoutes.swift](../../Apps/IkkokuCreator/Studio/StudioModel+SourceRoutes.swift) | Runtime / shared shader declaration |
 | [Apps/IkkokuCreator/Studio/StudioModel+SourceShaderLive.swift](../../Apps/IkkokuCreator/Studio/StudioModel+SourceShaderLive.swift) | Runtime / shared shader declaration |
@@ -347,6 +349,7 @@ Feature assessment: [studio.md](studio.md).
 | [Packages/Engine/Sources/Studio/SourceStudioItemColor.swift](../../Packages/Engine/Sources/Studio/SourceStudioItemColor.swift) | Runtime / shared shader declaration |
 | [Packages/Engine/Sources/Studio/SourceStudioLiveTick.swift](../../Packages/Engine/Sources/Studio/SourceStudioLiveTick.swift) | Runtime / shared shader declaration |
 | [Packages/Engine/Sources/Studio/SourceStudioLookData.swift](../../Packages/Engine/Sources/Studio/SourceStudioLookData.swift) | Runtime / shared shader declaration |
+| [Packages/Engine/Sources/Studio/SourceStudioMap.swift](../../Packages/Engine/Sources/Studio/SourceStudioMap.swift) | Runtime / shared shader declaration |
 | [Packages/Engine/Sources/Studio/SourceStudioNeckLook.swift](../../Packages/Engine/Sources/Studio/SourceStudioNeckLook.swift) | Runtime / shared shader declaration |
 | [Packages/Engine/Sources/Studio/SourceStudioNeckLookRuntime.swift](../../Packages/Engine/Sources/Studio/SourceStudioNeckLookRuntime.swift) | Runtime / shared shader declaration |
 | [Packages/Engine/Sources/Studio/SourceStudioNeckTargetAngle.swift](../../Packages/Engine/Sources/Studio/SourceStudioNeckTargetAngle.swift) | Runtime / shared shader declaration |
@@ -404,6 +407,7 @@ Feature assessment: [studio.md](studio.md).
 | [Packages/Engine/Tests/EngineTests/SourceStudioItemColorTests.swift](../../Packages/Engine/Tests/EngineTests/SourceStudioItemColorTests.swift) | Test / validation |
 | [Packages/Engine/Tests/EngineTests/SourceStudioLiveTickTests.swift](../../Packages/Engine/Tests/EngineTests/SourceStudioLiveTickTests.swift) | Test / validation |
 | [Packages/Engine/Tests/EngineTests/SourceStudioLookDataTests.swift](../../Packages/Engine/Tests/EngineTests/SourceStudioLookDataTests.swift) | Test / validation |
+| [Packages/Engine/Tests/EngineTests/SourceStudioMapTests.swift](../../Packages/Engine/Tests/EngineTests/SourceStudioMapTests.swift) | Test / validation |
 | [Packages/Engine/Tests/EngineTests/SourceStudioNeckLookRuntimeTests.swift](../../Packages/Engine/Tests/EngineTests/SourceStudioNeckLookRuntimeTests.swift) | Test / validation |
 | [Packages/Engine/Tests/EngineTests/SourceStudioNeckLookTests.swift](../../Packages/Engine/Tests/EngineTests/SourceStudioNeckLookTests.swift) | Test / validation |
 | [Packages/Engine/Tests/EngineTests/SourceStudioNeckTargetAngleTests.swift](../../Packages/Engine/Tests/EngineTests/SourceStudioNeckTargetAngleTests.swift) | Test / validation |
@@ -456,10 +460,12 @@ Feature assessment: [studio.md](studio.md).
 | [Tools/reverse/compare_hand_patterns.py](../../Tools/reverse/compare_hand_patterns.py) | Conversion / recovery / verification tool |
 | [Tools/reverse/compare_iris.py](../../Tools/reverse/compare_iris.py) | Conversion / recovery / verification tool |
 | [Tools/reverse/compare_neck_look.py](../../Tools/reverse/compare_neck_look.py) | Conversion / recovery / verification tool |
+| [Tools/reverse/compare_original_map.py](../../Tools/reverse/compare_original_map.py) | Conversion / recovery / verification tool |
 | [Tools/reverse/compare_route_playback.py](../../Tools/reverse/compare_route_playback.py) | Conversion / recovery / verification tool |
 | [Tools/reverse/compare_route_stepping.py](../../Tools/reverse/compare_route_stepping.py) | Conversion / recovery / verification tool |
 | [Tools/reverse/compare_scene_reload.py](../../Tools/reverse/compare_scene_reload.py) | Conversion / recovery / verification tool |
 | [Tools/reverse/dynamics_contract.py](../../Tools/reverse/dynamics_contract.py) | Conversion / recovery / verification tool |
+| [Tools/reverse/export_map_scene.py](../../Tools/reverse/export_map_scene.py) | Conversion / recovery / verification tool |
 | [Tools/reverse/fixtures/FinalIKOracle/Program.cs](../../Tools/reverse/fixtures/FinalIKOracle/Program.cs) | Reference host / controlled fixture |
 | [Tools/reverse/fixtures/FinalIKOracle/RecoverySurface.cs](../../Tools/reverse/fixtures/FinalIKOracle/RecoverySurface.cs) | Reference host / controlled fixture |
 | [Tools/reverse/fixtures/FinalIKOracle/UnityShim.cs](../../Tools/reverse/fixtures/FinalIKOracle/UnityShim.cs) | Reference host / controlled fixture |
@@ -467,6 +473,7 @@ Feature assessment: [studio.md](studio.md).
 | [Tools/reverse/fixtures/OriginalCameraObjectProbe.cs](../../Tools/reverse/fixtures/OriginalCameraObjectProbe.cs) | Reference host / controlled fixture |
 | [Tools/reverse/fixtures/OriginalDynamicsProbe.cs](../../Tools/reverse/fixtures/OriginalDynamicsProbe.cs) | Reference host / controlled fixture |
 | [Tools/reverse/fixtures/OriginalLightProbe.cs](../../Tools/reverse/fixtures/OriginalLightProbe.cs) | Reference host / controlled fixture |
+| [Tools/reverse/fixtures/OriginalMapProbe.cs](../../Tools/reverse/fixtures/OriginalMapProbe.cs) | Reference host / controlled fixture |
 | [Tools/reverse/fixtures/OriginalRouteProbe.cs](../../Tools/reverse/fixtures/OriginalRouteProbe.cs) | Reference host / controlled fixture |
 | [Tools/reverse/fixtures/OriginalSceneReloadProbe.cs](../../Tools/reverse/fixtures/OriginalSceneReloadProbe.cs) | Reference host / controlled fixture |
 | [Tools/reverse/fixtures/camera-object-reference.json](../../Tools/reverse/fixtures/camera-object-reference.json) | Reference host / controlled fixture |
@@ -475,6 +482,7 @@ Feature assessment: [studio.md](studio.md).
 | [Tools/reverse/original_camera_object_probe.py](../../Tools/reverse/original_camera_object_probe.py) | Conversion / recovery / verification tool |
 | [Tools/reverse/original_dynamics_probe.py](../../Tools/reverse/original_dynamics_probe.py) | Conversion / recovery / verification tool |
 | [Tools/reverse/original_light_probe.py](../../Tools/reverse/original_light_probe.py) | Conversion / recovery / verification tool |
+| [Tools/reverse/original_map_probe.py](../../Tools/reverse/original_map_probe.py) | Conversion / recovery / verification tool |
 | [Tools/reverse/original_route_probe.py](../../Tools/reverse/original_route_probe.py) | Conversion / recovery / verification tool |
 | [Tools/reverse/original_scene_reload_probe.py](../../Tools/reverse/original_scene_reload_probe.py) | Conversion / recovery / verification tool |
 | [Tools/reverse/studio_animation.py](../../Tools/reverse/studio_animation.py) | Conversion / recovery / verification tool |
@@ -489,11 +497,14 @@ Feature assessment: [studio.md](studio.md).
 | [Tools/reverse/test_compare_camera_objects.py](../../Tools/reverse/test_compare_camera_objects.py) | Test / validation |
 | [Tools/reverse/test_compare_dynamics_probe.py](../../Tools/reverse/test_compare_dynamics_probe.py) | Test / validation |
 | [Tools/reverse/test_compare_hand_patterns.py](../../Tools/reverse/test_compare_hand_patterns.py) | Test / validation |
+| [Tools/reverse/test_compare_original_map.py](../../Tools/reverse/test_compare_original_map.py) | Test / validation |
 | [Tools/reverse/test_compare_route_playback.py](../../Tools/reverse/test_compare_route_playback.py) | Test / validation |
 | [Tools/reverse/test_compare_scene_reload.py](../../Tools/reverse/test_compare_scene_reload.py) | Test / validation |
 | [Tools/reverse/test_dynamics_contract.py](../../Tools/reverse/test_dynamics_contract.py) | Test / validation |
+| [Tools/reverse/test_export_map_scene.py](../../Tools/reverse/test_export_map_scene.py) | Test / validation |
 | [Tools/reverse/test_original_camera_object_probe.py](../../Tools/reverse/test_original_camera_object_probe.py) | Test / validation |
 | [Tools/reverse/test_original_dynamics_probe.py](../../Tools/reverse/test_original_dynamics_probe.py) | Test / validation |
+| [Tools/reverse/test_original_map_probe.py](../../Tools/reverse/test_original_map_probe.py) | Test / validation |
 | [Tools/reverse/test_original_scene_reload_probe.py](../../Tools/reverse/test_original_scene_reload_probe.py) | Test / validation |
 | [Tools/reverse/test_studio_animation.py](../../Tools/reverse/test_studio_animation.py) | Test / validation |
 | [Tools/reverse/test_studio_hand_animation.py](../../Tools/reverse/test_studio_hand_animation.py) | Test / validation |
@@ -940,6 +951,7 @@ Feature assessment: [toolchain-and-verification.md](toolchain-and-verification.m
 | [Tools/verification/scenarios/reload-load-accessory-labels.json](../../Tools/verification/scenarios/reload-load-accessory-labels.json) | Conversion / recovery / verification tool |
 | [Tools/verification/scenarios/reload-load-camera.json](../../Tools/verification/scenarios/reload-load-camera.json) | Conversion / recovery / verification tool |
 | [Tools/verification/scenarios/expression-edit.json](../../Tools/verification/scenarios/expression-edit.json) | Conversion / recovery / verification tool |
+| [Tools/verification/scenarios/reload-load-source-map.json](../../Tools/verification/scenarios/reload-load-source-map.json) | Conversion / recovery / verification tool |
 | [Tools/verification/scenarios/reload-save-expression.json](../../Tools/verification/scenarios/reload-save-expression.json) | Conversion / recovery / verification tool |
 | [Tools/verification/scenarios/reload-load-expression.json](../../Tools/verification/scenarios/reload-load-expression.json) | Conversion / recovery / verification tool |
 | [Tools/verification/scenarios/reload-load-clothes.json](../../Tools/verification/scenarios/reload-load-clothes.json) | Conversion / recovery / verification tool |
@@ -956,6 +968,7 @@ Feature assessment: [toolchain-and-verification.md](toolchain-and-verification.m
 | [Tools/verification/scenarios/reload-save-outfit.json](../../Tools/verification/scenarios/reload-save-outfit.json) | Conversion / recovery / verification tool |
 | [Tools/verification/scenarios/reload-save-props.json](../../Tools/verification/scenarios/reload-save-props.json) | Conversion / recovery / verification tool |
 | [Tools/verification/scenarios/reload-save-route.json](../../Tools/verification/scenarios/reload-save-route.json) | Conversion / recovery / verification tool |
+| [Tools/verification/scenarios/reload-save-source-map.json](../../Tools/verification/scenarios/reload-save-source-map.json) | Conversion / recovery / verification tool |
 | [Tools/verification/scenarios/rename-folder.json](../../Tools/verification/scenarios/rename-folder.json) | Conversion / recovery / verification tool |
 | [Tools/verification/scenarios/route-children-motion.json](../../Tools/verification/scenarios/route-children-motion.json) | Conversion / recovery / verification tool |
 | [Tools/verification/scenarios/route-children-edit.json](../../Tools/verification/scenarios/route-children-edit.json) | Conversion / recovery / verification tool |
@@ -966,6 +979,8 @@ Feature assessment: [toolchain-and-verification.md](toolchain-and-verification.m
 | [Tools/verification/scenarios/shape-visual-reset.json](../../Tools/verification/scenarios/shape-visual-reset.json) | Conversion / recovery / verification tool |
 | [Tools/verification/scenarios/reload-save-skirt-dynamics.json](../../Tools/verification/scenarios/reload-save-skirt-dynamics.json) | Conversion / recovery / verification tool |
 | [Tools/verification/scenarios/reload-load-skirt-dynamics.json](../../Tools/verification/scenarios/reload-load-skirt-dynamics.json) | Conversion / recovery / verification tool |
+| [Tools/verification/scenarios/source-map-none.json](../../Tools/verification/scenarios/source-map-none.json) | Conversion / recovery / verification tool |
+| [Tools/verification/scenarios/source-map.json](../../Tools/verification/scenarios/source-map.json) | Conversion / recovery / verification tool |
 | [Tools/verification/scenarios/undo-camera.json](../../Tools/verification/scenarios/undo-camera.json) | Conversion / recovery / verification tool |
 | [Tools/verification/scenarios/undo-no-catalog.json](../../Tools/verification/scenarios/undo-no-catalog.json) | Conversion / recovery / verification tool |
 | [Tools/verification/scenarios/undo-props.json](../../Tools/verification/scenarios/undo-props.json) | Conversion / recovery / verification tool |
@@ -1021,6 +1036,7 @@ Feature assessment: [toolchain-and-verification.md](toolchain-and-verification.m
 | [docs/reference/studio/binary-contracts.md](../../docs/reference/studio/binary-contracts.md) | Documentation / historical evidence |
 | [docs/reference/studio/full-body-ik.md](../../docs/reference/studio/full-body-ik.md) | Documentation / historical evidence |
 | [docs/reference/studio/item-catalog.md](../../docs/reference/studio/item-catalog.md) | Documentation / historical evidence |
+| [docs/reference/studio/maps.md](../../docs/reference/studio/maps.md) | Documentation / historical evidence |
 | [docs/reference/studio/pose.md](../../docs/reference/studio/pose.md) | Documentation / historical evidence |
 | [docs/reference/studio/scene-editing.md](../../docs/reference/studio/scene-editing.md) | Documentation / historical evidence |
 | [docs/reference/studio/scene-records.md](../../docs/reference/studio/scene-records.md) | Documentation / historical evidence |

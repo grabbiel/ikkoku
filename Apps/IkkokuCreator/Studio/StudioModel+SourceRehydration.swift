@@ -22,6 +22,8 @@ struct StudioSourceRuntimeBundle {
         colors: [SIMD4<Float>], alpha: Float)] = [:]
     var sceneLight: MainLight?
     var activeCameraAtLoad: UUID?
+    /// ST-A11: the scene's map request (nil: no map, or a failed rehydration).
+    var map: SourceMapRequest?
 }
 
 extension StudioModel {
@@ -232,6 +234,7 @@ extension StudioModel {
             bundle.activeCameraAtLoad = cameraID
         }
         bundle.sceneLight = try? SourceStudioSceneLight.mainLight(from: source.settings.characterLight)
+        bundle.map = SourceMapRequest.make(settings: source.settings, sceneSHA256: hash)
         return bundle
     }
 }

@@ -711,6 +711,11 @@ final class AppState {
                 catch { print("[ikkoku] source scene capture edits failed: \(error)"); exit(1) }
             }
             studio.refresh(); frame = studio.frame
+            // ST-A11 evidence: the map's draws alone as geometry and depth-normals.
+            if let directory = env["IKKOKU_SOURCE_MAP_PROBE"] {
+                do { try writeSourceMapProbe(studio: studio, renderer: host.renderer, directory: URL(fileURLWithPath: directory, isDirectory: true), width: w, height: h) }
+                catch { print("[ikkoku] source map probe failed: \(error)"); exit(1) }
+            }
         }
         if env["IKKOKU_CAPTURE_STUDIO"] != nil, let studio = AppState.sharedStudio {
             studio.addCharacter(maker.card)

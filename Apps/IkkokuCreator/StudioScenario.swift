@@ -28,7 +28,8 @@ struct StudioScenario: Decodable {
         /// `"setAutomaticBlink"`, `"addCharacter"`, `"setIKEnabled"`, `"setIKTarget"`,
         /// `"captureIKPose"`, `"editDuringAdvance"`, `"backgroundBuild"`, `"delete"`, `"setParent"`, `"duplicate"`,
         /// `"addFolder"`, `"addCamera"`, `"addLight"`, `"export"`, `"exportRejected"`, `"reimport"`,
-        /// `"focus"`, `"selectRoutePoint"`, `"dragRoutePoint"`, `"editRoute"`, `"captureRoute"`, `"assert"`, `"assertRejected"`.
+        /// `"focus"`, `"selectRoutePoint"`, `"dragRoutePoint"`, `"editRoute"`, `"captureRoute"`, `"setShowSourceMap"`,
+        /// `"assert"`, `"assertRejected"`.
         let op: String
         let key: Int32?
         /// ST-T03: with `key`, address the n-th copy (document order) of that
@@ -192,6 +193,9 @@ struct StudioScenario: Decodable {
         /// assert only (ST-T11): how many route lines the current frame
         /// draws (the depth-tested line batches; light glyphs are not).
         let routeLines: Int?
+        /// assert only (ST-A11): the source scene's map as the render path
+        /// sees it (`StudioModel.sourceMapCensus()`); only named fields are checked.
+        let sourceMap: SourceMapValue?
 
         /// One route panel edit, applied through `StudioModel.editSourceRoute`
         /// and the add/delete point calls the inspector buttons make.
@@ -482,6 +486,23 @@ struct StudioScenario: Decodable {
             /// rotations), so a reparent proves the whole world pose stayed.
             let rotationWithin: Float?
         }
+        /// ST-A11: `none` asserts the document names no map (no request, no
+        /// draws, no status line); the other fields compare the census. Each
+        /// `pickNothingAt` point (viewport fractions, origin top-left) must
+        /// pick id 0 — map pixels never select or highlight anything — and
+        /// each `pickSomethingAt` point a nonzero id (the map does not hide
+        /// what stands in front of it).
+        struct SourceMapValue: Decodable {
+            let none: Bool?
+            let map: Int32?
+            let draws: Int?
+            let lineContains: String?
+            let lineAbsent: String?
+            let loading: Bool?
+            let pickNothingAt: [[Float]]?
+            let pickSomethingAt: [[Float]]?
+        }
+
         struct SourceRuntimeValue: Decodable {
             let cameras: Int?
             let items: Int?
@@ -498,7 +519,7 @@ struct StudioScenario: Decodable {
                  seconds, dx, dy, eyeLook, blink, handPattern, mode, axis, pixels,
                  render, exportIdenticalToSource, errorContains, outfit, accessoryLabels, pluginMount, state, clothes, expression,
                  sex, character, chain, delta, ik, edit, build, parent, children, absent, copy, added, activeCopyOf,
-                 aid, routeEdit, route, routeLines
+                 aid, routeEdit, route, routeLines, sourceMap
         }
 
         init(from decoder: Decoder) throws {
@@ -608,6 +629,7 @@ struct StudioScenario: Decodable {
             routeEdit = try c.decodeIfPresent(RouteEditValue.self, forKey: .routeEdit)
             route = try c.decodeIfPresent(RouteValue.self, forKey: .route)
             routeLines = try c.decodeIfPresent(Int.self, forKey: .routeLines)
+            sourceMap = try c.decodeIfPresent(SourceMapValue.self, forKey: .sourceMap)
         }
     }
 
@@ -1066,6 +1088,41 @@ struct StudioScenario: Decodable {
                 }
             }
             return nil
+        }
+
+        /// ST-A11: the source map census and picks over the current frame.
+        func assertSourceMap(_ check: Step.SourceMapValue, problems: inout [String], details: inout [String]) {
+            let census = studio.sourceMapCensus()
+            if check.none == true, census.map != nil || census.draws != 0 || census.line != nil {
+                problems.append("assert sourceMap: expected no map, found map \(census.map.map(String.init) ?? "none"), \(census.draws) draws, line \(census.line ?? "none")")
+            }
+            if let expected = check.map, census.map != expected {
+                problems.append("assert sourceMap: map \(census.map.map(String.init) ?? "none"), expected \(expected)")
+            }
+            if let expected = check.draws, census.draws != expected {
+                problems.append("assert sourceMap: \(census.draws) map draws, expected \(expected)")
+            }
+            if let expected = check.loading, census.loading != expected {
+                problems.append("assert sourceMap: loading \(census.loading), expected \(expected)")
+            }
+            if let fragment = check.lineContains, !(census.line ?? "").contains(fragment) {
+                problems.append("assert sourceMap: status line \"\(census.line ?? "")\" lacks \"\(fragment)\"")
+            }
+            if let fragment = check.lineAbsent, (census.line ?? "").contains(fragment) {
+                problems.append("assert sourceMap: status line \"\(census.line ?? "")\" contains \"\(fragment)\"")
+            }
+            let size = studio.viewportSize
+            for (points, nothing) in [(check.pickNothingAt ?? [], true), (check.pickSomethingAt ?? [], false)] {
+                for point in points {
+                    guard point.count == 2, (0...1).contains(point[0]), (0...1).contains(point[1]) else {
+                        problems.append("assert sourceMap: pick point \(point) is not two viewport fractions"); continue
+                    }
+                    let id = studio.pickID(at: SIMD2<Float>(point[0] * size.x, point[1] * size.y))
+                    if nothing, id != 0 { problems.append("assert sourceMap: pick at \(point) found id \(id), expected nothing (0)") }
+                    if !nothing, id == 0 { problems.append("assert sourceMap: pick at \(point) found nothing, expected an object") }
+                }
+            }
+            details.append("map \(census.map.map(String.init) ?? "none"), \(census.draws) draws, \(census.triangles) triangles, \(census.textureBytes) texture bytes, line \(census.line ?? "none")")
         }
 
         /// An object's world displacement from a `captureObject` position, read
@@ -2300,6 +2357,11 @@ struct StudioScenario: Decodable {
                 }
                 studio.orbitCamera(dx: dx, dy: dy)
                 record(step, true, "orbit dx=\(dx) dy=\(dy): yaw \(studio.doc.camera.yaw), pitch \(studio.doc.camera.pitch)")
+            case "setShowSourceMap":
+                // View ▸ Show Source Map (ST-A11): runtime only, the document never changes.
+                guard let on = step.on else { record(step, false, "setShowSourceMap: on is required"); continue }
+                studio.showSourceMap = on
+                record(step, true, "show source map \(on)")
             case "setAutomaticBlink":
                 guard let on = step.on else { record(step, false, "setAutomaticBlink: on is required"); continue }
                 // The Studio toggle's own property; its didSet forwards to
@@ -2689,6 +2751,7 @@ struct StudioScenario: Decodable {
                     if drawn != expected { problems.append("assert routeLines: the frame draws \(drawn) route lines, expected \(expected)") }
                     else { details.append("\(drawn) route lines drawn") }
                 }
+                if let check = step.sourceMap { assertSourceMap(check, problems: &problems, details: &details) }
                 if let check = step.children {
                     var parentID: UUID?, found = true
                     if let key = check.parent {

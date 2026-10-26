@@ -489,6 +489,11 @@ struct StudioStatusLine: View {
             if let indicator = model.activeSourceCameraView?.indicator {
                 Text(indicator).font(.caption).foregroundStyle(.secondary).lineLimit(2)
             }
+            // ST-A11: the scene's map and what the preview leaves out.
+            if let map = model.sourceMapLine {
+                Text(map).font(.caption).foregroundStyle(.secondary).lineLimit(2)
+                    .accessibilityIdentifier("studio.status.map")
+            }
         }.padding(6)
     }
 }

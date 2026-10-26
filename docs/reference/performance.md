@@ -192,9 +192,10 @@ locked `PerfDrawLog`. Everything else is recorded on the main thread.
   allocation, window occlusion samples and the machine's load average;
 - startup marks in seconds since process start: `appStateInit`, `engineReady`,
   `sourceSceneImport.begin/.end`, `sourceCardImport.begin/.end`, `makerReady`,
-  `studioReady`, `appStateReady`, `contentAppeared`, `firstDraw`, and
+  `studioReady`, `appStateReady`, `contentAppeared`, `firstDraw`,
   `sourceSceneReady`, when the startup scene's import committed (after the
-  import call, or at a background import's commit);
+  import call, or at a background import's commit), and `sourceMapReady`,
+  when the scene's original map was first placed ([ST-A11](#st-a11-original-studio-maps));
 - the main thread until the startup scene is ready (`startupMainThread`,
   [phase 2, item 6](#phase-2-item-6-source-character-builds-off-the-main-thread)):
   every busy period from `appStateInit` that began by `sourceSceneReady`,
@@ -814,7 +815,7 @@ loaded machine, so only the shares are used).
 | G5 | Shadow map re-rendered every frame | `Renderer` shadow pass | measured; **dropped** | Metal System Trace of `studio-orbit` (base `aee4287`): shadow 17 ms/s, 0.14 ms per frame, against deform 102 ms/s, 0.85 ms per frame. The main light follows the camera's yaw (`MainLight.direction(camera:)`), so a yaw orbit changes the shadow, and FK drags and Maker edits move the casters | at most 0.14 ms per rendered frame, only for pan, zoom, hover or selection on a static pose. Dropped in [item 4](#phase-2-item-4-adaptive-link-rate-idle-keep-alive-and-deformed-vertex-reuse) for deformed-vertex reuse (G9) | Low |
 | G9 | Every frame and pick re-dispatched the deform pass, even when the vertices were unchanged | `Renderer.encodeDeform` | measured; **done** | deform 102 ms/s in orbit (0.85 ms per frame), the largest GPU pass | skip a deformation whose buffer already holds the frame's inputs; **done** in [item 4](#phase-2-item-4-adaptive-link-rate-idle-keep-alive-and-deformed-vertex-reuse). Orbit GPU 1.40–1.52 → 0.65–0.66 ms per frame (0 dispatches), FK drag 1.95–1.99 → 1.19, Studio idle 1.98 → 1.21, hover pick 0.90–0.99 → 0.08 ms | Medium: buffers are read across command buffers; the [renderer contract](renderer.md#renderer-threads-r7-phase-2-item-2) orders them |
 | G6 | No pipeline binary archive | `Pipelines` | hypothesis | pipeline creation happens during startup | `MTLBinaryArchive` for the production pipelines; measure first-launch versus warm | Low |
-| G7 | Textures are uncompressed RGBA with runtime mip generation | `ResourceStore` (`MTKTextureLoader`, `.generateMipmaps`) | hypothesis | Metal allocation 470 MB peak for 6 characters | ASTC/BC compression at conversion time, cached mips; mostly memory and bandwidth (M1) | Medium: image quality must be checked |
+| G7 | Textures are uncompressed RGBA with runtime mip generation | `ResourceStore` (`MTKTextureLoader`, `.generateMipmaps`) | hypothesis; measured for maps | Metal allocation 470 MB peak for 6 characters. Original maps ship DXT1/DXT5 textures that the converter decodes: Map 33 takes 51.7 MB as RGBA8 with mips against 7.2 MB as BC (+52.5 MB of Metal measured), Map 34 would take 265.3 MB against 39.8 MB ([ST-A11](#st-a11-original-studio-maps)) | ASTC/BC compression at conversion time, cached mips; mostly memory and bandwidth (M1). For maps, keep the bundle's blocks and upload BC1/BC3 natively, which Map 34 needs first | Medium: image quality must be checked |
 | G8 | Argument buffers / Metal 4 argument tables, indirect command buffers, residency sets, heaps, parallel encoding | renderer | hypothesis | draw encoding is ≤ 0.9 ms CPU per frame | low value until item counts grow (many-prop scenes) | — |
 
 ### Frame pacing
@@ -834,6 +835,7 @@ loaded machine, so only the shares are used).
 | S2 | Repeated rig JSON decoding | see C8 | measured; **done** | 74% of the probe load | cache; ~3 s of the 4.7 s. **Done** with C8: 3.62 → 0.54 s of decode CPU in the startup import | Low |
 | S3 | Texture loading through `MTKTextureLoader` with runtime mips | `ResourceStore.texture` | hypothesis | (another task investigates a loader stall) | asynchronous loading with placeholder textures | Medium |
 | S4 | Maker library preparation at startup | `makerReady` mark | measured; **done** | ~0.9 s Release, ~4.1 s Debug | defer until first Maker use or load in the background. **Done** in [phase 2, item 6](#phase-2-item-6-source-character-builds-off-the-main-thread): a launch straight into a source scene creates the Maker on first use; `studioReady` 1.09 → 0.19 s | Low |
+| S5 | An imported scene's original map loads with the scene (ST-A11) | `SourceStudioMapLoad` (`Packages/Engine/Sources/Studio/SourceStudioMap.swift`) | measured; **done** | Map 33: 73–83 ms of glTF reads, PNG decodes and MetalKit loads with mips; 0.01 ms placement and a 24 KB catalog read on the main thread | loaded on a GCD worker beside the character builds from the start, with private textures retired through `retire(textures:)`. Scene ready 1.47 → 1.45 s and main-thread time until ready unchanged ([ST-A11](#st-a11-original-studio-maps)) | Low |
 
 ### Build configuration
 
@@ -3142,6 +3144,213 @@ warmup, second window, two runs each:
   often, so its presented cadence does not separate the modes. The first
   window's does.
 - **No M1 run** ([estimate](#scaling-to-the-low-end-base-m1-8-gb)).
+
+## ST-A11: original Studio maps
+
+Added 2026-10-25 with the first maps slice ([maps](studio/maps.md)). An imported
+CharaStudio scene that names Map 33 now draws it: 8 draws, 1,492 triangles and
+7 base textures that take 52.2 MB of Metal memory as RGBA8 with mips. The map
+loads on a GCD worker beside the import's characters. The main thread only
+reads the 24 KB catalog when the import starts and places the 8 draws at the
+commit. The measurements show:
+
+- **No added import time.** The scene is ready at the same time, and the main
+  thread does no more work until then.
+- **About 52 MB more GPU memory.**
+- **A small steady-state cost** that depends on how much of the room is in view.
+
+### Measurement
+
+Release builds, arm64, the commands of [measuring a change](#measuring-a-change):
+
+| Label | Commit | What it draws |
+| --- | --- | --- |
+| base | `74cee1c` (`main`, #274) | no map: base ignores `IKKOKU_STUDIO_MAP_CATALOG` |
+| no map | `ceccafa` (this change) without the catalog | no map: the line says the catalog is missing |
+| map | `ceccafa` with `IKKOKU_STUDIO_MAP_CATALOG` | Map 33 |
+
+Conditions:
+
+- **Window.** One quiet window the orchestrator granted (2026-10-25,
+  16:20–16:26). Base, no map and map alternated in each round, every launch
+  ran under the app lock, and the load average was 4.0–6.5.
+- **Display.** A 120 Hz display at 2×, with a 1996×1824 drawable.
+- **Scene.** `scene-map33-showoff.png`: `koikatu_cs0002591.png` with Map 33
+  added in the original player. It has 32 objects and 7 source characters.
+- **Runs.** `startup` ran three times per configuration. `studio-idle` and
+  `studio-orbit-bursts` ran twice, each recording 10 s after a 3 s warmup.
+  No run was flagged, occluded or given stray input.
+- **Evidence.** The reports are in `.local/sta11a-maps/perf/{base,nomap,map}/r{1,2,3}`.
+- **The props hide most of the room.** The scene's own props stand around the
+  characters, so from the scene camera they hide most of the room. In a
+  1200×1600 capture the map changes no pixel. In the 1996×1824 window, as the
+  orbit turns, parts of the room can show.
+- **The offscreen benchmark** therefore also renders the room fully in view.
+  It uses `IKKOKU_BENCHMARK_OUTPUT` at 1996×1824 with 60 measured frames,
+  three runs each. Its two scenes are:
+  - `scene-map33.png`, with no characters and the camera inside the room;
+  - the showoff scene without the item catalog, so the room shows behind the
+    7 characters.
+
+  The reports are in `.local/sta11a-maps/perf/benchmark`.
+
+Startup, seconds since process start, median (range) of three runs:
+
+| Build | Scene ready | Import call on the main thread | First draw | Main thread until ready: busy of window ms | Longest busy period ms | Peak footprint MB | Peak Metal MB |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| base | 1.47 (1.47–1.48) | 9.5 ms (9.5–9.8) | 0.46 (0.45–0.48) | 717 of 1,522 (667–728) | 452 (251–472) | 909 (908–919) | 356.0 |
+| no map | 1.47 (1.46–1.48) | 9.1 ms (9.0–10.2) | 0.46 (0.45–0.49) | 708 of 1,515 (702–729) | 286 (272–435) | 918 (916–921) | 356.0 |
+| map | 1.45 (1.44–1.46) | 10.1 ms (9.4–10.2) | 0.45 (0.44–0.45) | 674 of 1,466 (671–689) | 311 (302–450) | 980 (972–982) | 408.5 |
+
+- **The load.** It takes 73–83 ms on the worker: reading the glTF, decoding 7
+  PNGs and the MetalKit texture loads with mips. The value is from the
+  `[ikkoku] source map:` line of 12 Release capture and benchmark launches,
+  because the measured build printed it only when a load finished after the
+  commit.
+- **Placement.** Placing the 8 draws takes 0.00–0.01 ms on the main thread.
+- **When the map draws.** The load ends long before the 1.2 s character
+  builds, so the map is placed at the import's commit and drawn in the first
+  frame after `sourceSceneReady`.
+- **The `sourceMapReady` mark.** The measured build set it only when the load
+  finished after the commit, so these runs did not record it. The fix, made
+  after the window (`9735d01`), sets it whenever the map is placed. One
+  startup outside the window confirmed it: `sourceMapReady` at 1.654 s, 3 ms
+  before `sourceSceneReady`, inside the same commit.
+- **No import time added.** Scene ready, first draw and the main thread's
+  busy time until ready are within run-to-run variation. The import call's
+  extra ~1 ms is the catalog read, and its range overlaps.
+- **Memory.** Metal grows by 52.5 MB: the 52,248,576 texture bytes plus the
+  vertex and index buffers. The peak footprint grows by 50–62 MB.
+
+Steady state, median (range) of two runs:
+
+| Workload | Build | Main busy ms/s | Process CPU cores | Render-thread draw ms/s | GPU ms/s | GPU ms per frame p50 / p95 | Rendered draws/s | Peak footprint MB | Peak Metal MB |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| studio-idle | base | 26.2 (23.6–28.7) | 0.40 | 45.4 | 39.3 | 1.26 / 1.64 | 30.0 | 911 | 356.0 |
+| studio-idle | no map | 26.0 (23.3–28.8) | 0.40 | 44.6 | 39.2 | 1.27 / 1.61 | 30.0 | 912 | 356.0 |
+| studio-idle | map | 30.9 (29.2–32.6) | 0.45 | 45.7 | 42.7 | 1.37 / 1.74 | 30.0 | 962 | 408.5 |
+| studio-orbit-bursts | base | 9.8 (9.6–9.9) | 0.12 | 50.7 | 30.1 | 0.82 / 1.29 | 34.8 | 911 | 356.0 |
+| studio-orbit-bursts | no map | 9.4 (9.0–9.9) | 0.11 | 49.4 | 29.7 | 0.82 / 1.29 | 34.7 | 908 | 356.0 |
+| studio-orbit-bursts | map | 9.2 (8.9–9.5) | 0.11 | 49.4 | 28.3 | 0.66 / 1.31 | 35.1 | 966 | 408.5 |
+
+- **Idle main thread.** It was 4–6 ms/s higher with the map in the paired
+  rounds (28.8 → 32.6 and 23.3 → 29.2), with `refresh()` p50 0.47–0.53 →
+  0.55–0.59 ms at 30 refreshes per second. A micro-benchmark attributes it
+  (see [refresh attribution](#refresh-attribution)): the map adds at most a
+  few microseconds per refresh. The difference is these runs' variation: in
+  the same map runs, the off-main live evaluation's CPU rose by 8–29% (310 →
+  337 and 227 → 294 ms/s), although the map does not touch it.
+- **Idle GPU:** +0.10 ms per frame (+3.5 ms/s at 30 frames per second).
+- **Orbit bursts.** The main thread and draw CPU are unchanged. GPU time per
+  frame fell by 0.15 ms p50 (**not explained**; see the benchmark below).
+- **Drag starts after a pause** are unchanged: 30.8–30.9 ms to the first
+  presented frame, against 31.0–37.9 (no map) and 30.8–31.8 ms (base).
+
+Offscreen benchmark at 1996×1824, median (range) of three runs of 60 frames:
+
+| Scene | Map | Items | CPU encode ms | GPU ms p50 | Completion ms | Metal MB |
+| --- | --- | ---: | --- | --- | --- | ---: |
+| `scene-map33.png`, no characters | no | 0 | 0.076 | 0.535 (0.532–0.545) | 0.994 | 317.1 |
+| `scene-map33.png`, no characters | yes | 8 | 0.091 | 0.398 (0.391–0.414) | 0.868 | 369.5 |
+| showoff without props | no | 122 | 0.453 | 1.357 (1.339–1.358) | 2.232 | 454.1 |
+| showoff without props | yes | 130 | 0.445 | 1.425 (1.418–1.427) | 2.298 | 506.6 |
+
+- **With the room behind the 7 characters**, the map costs 0.07 ms of GPU per
+  frame. Encoding its 8 draws costs about 0.015 ms of CPU in the empty room,
+  and nothing measurable behind the characters.
+- **The room alone renders faster than the empty Studio.** It takes 0.40 ms
+  against 0.54 ms, which draws only the background gradient and the grid.
+  The likely cause (**hypothesis**) is the GPU's hidden-surface removal: the
+  room's opaque walls cover the whole frame, so the background and grid
+  fragments under them are never shaded. The same effect would explain the
+  lower orbit GPU time when parts of the room come into view.
+
+### Refresh attribution
+
+Afterwards, outside a quiet window, a temporary hook (not committed) timed
+`refresh()` in one Release process on the showoff scene with the map loaded.
+It ran 400 refreshes per configuration, interleaved over 9 rounds (live
+animation off, a load average of 13–26), and reports the median of the
+rounds. A 4 s `sample` of the map configuration found
+`publishSourceMapLine` in 12 and the rest of the map's code in 2 of about
+4,000 main-thread samples.
+
+| Build | No map µs | Map µs | Map hidden µs | `publishSourceMapLine` µs (built / unchanged inputs) | `currentSourceMapItems` µs |
+| --- | ---: | ---: | ---: | --- | ---: |
+| before | 451.7 | 455.3 | 453.2 | 1.36 / – | 0.38 |
+| after, run 1 | 461.7 | 467.1 | 465.7 | 1.47 / 0.24 | 0.35 |
+| after, run 2 | 455.5 | 455.2 | 451.2 | 1.50 / 0.23 | 0.36 |
+
+- **The map's per-refresh cost is at most a few microseconds,** within the
+  benchmark's variation: +3.6 µs before, then +5.5 and −0.2 µs. The target
+  of 10–20 µs holds.
+- **The steady-state runs' 0.08 ms gap** was therefore not the map.
+- **The change anyway** keeps per-frame work flat:
+  - `refresh()` rebuilds the map line only when one of its inputs changed
+    (`SourceMapLineKey`: the document's and the request's scene, the map,
+    the asset's identity, placed, failed, shown). Unchanged inputs cost
+    0.24 µs instead of the 1.4 µs string build.
+  - The frame's item array is reserved at the last frame's size, so the
+    characters' and the map's appends no longer regrow it.
+
+The reports are in `.local/sta11a-maps/refresh-bench`. With the change
+(`58d0998`), the four map checks passed 4/4 under `--strict`, and the 14
+Release captures were byte-identical to the merged head's
+(`.local/sta11a-maps/captures-fix`).
+
+### Scaling to a base M1 (estimate)
+
+This uses the method of [scaling to the low end](#scaling-to-the-low-end-base-m1-8-gb):
+CPU × 1.25, and GPU × 76/8 cores × the 1.8 / 3.6 Mpx window ratio, about 4.75.
+
+- **Load.** About 0.1 s on a worker. The scene's ~2 s character builds hide
+  it, and the main thread still does almost nothing for the map. The GPU's
+  mip generation for the 7 textures was not measured; it is part of the
+  worker's load and does not block the main thread.
+- **GPU.** With the room filling the frame, the room costs about 1.9 ms per
+  frame on its own. Behind characters it adds about 0.35 ms per frame, and
+  0.5 ms per frame in the showoff scene's idle (+14 ms/s at 30 frames per
+  second).
+- **Main thread.** A few microseconds per refresh at most.
+- **Memory.** +52 MB of Metal memory and 50–62 MB more footprint fit in
+  8 GB. That memory is the reason for native BC upload (G7) before larger
+  maps: Map 34 would take 265.3 MB as RGBA8 against 39.8 MB as BC.
+
+### Correctness
+
+Release captures from `74cee1c` and `ceccafa` (`.local/sta11a-maps/captures/{base,branch}/captures.json`):
+
+- **Byte-identical on base and branch,** with the live source-shader opt-in
+  OFF and ON:
+  - the no-map scenario scene (`koikatu_cs0002591.png`) with the catalog
+    supplied;
+  - the 2-character half-state fixture;
+  - the native Studio capture;
+  - the map scene without the catalog.
+
+  The live opt-in's reports are byte-identical too.
+- **With the catalog,** the emptied map 33 scene draws the room, identically
+  with the opt-in OFF and ON. The showoff scene without props draws the room
+  behind the characters, with the opt-in ON as well.
+- **After the merge.** The same set was repeated on the merged head `c094f92`
+  against `main` at `6502803` (#275 live pacing,
+  `.local/sta11a-maps/captures-merged/`). Every no-map capture was again
+  byte-identical, and every branch capture matched its pre-merge hash.
+
+The Studio lane (77/77), the Maker lane (10/10), the Engine suite and the
+negative controls are listed in [maps](studio/maps.md#evidence).
+
+### Limits
+
+- **Few runs.** Two steady-state runs and three startups per configuration.
+- **The room is mostly hidden in the in-app runs,** so the benchmark stands
+  in for the visible-room cost.
+- **The GPU reductions are not attributed;** no Metal System Trace was
+  recorded.
+- **The runs predate the merge of #275 (live pacing).** The map's costs are
+  per `refresh()` and per draw. Live pacing changes when the 30 Hz step
+  starts, not those costs, so the runs were not repeated.
+- **No M1 run.**
 
 ## Validation of this change
 

@@ -83,10 +83,13 @@ def upload_items(scenes):
     return [(label,'reload-'+label+'.png') for label in LABELS+FK_LABELS+EXPRESSION_LABELS+TOPOLOGY_LABELS+ROUTE_LABELS if label in (scenes or {})]
 
 
-def once_script(root,base,wait_seconds,uploads):
-    """The whole --once phase as run.ps1. `base` is the endpoint URL ending in the token and '/'."""
+def once_script(root,base,wait_seconds,uploads,source_name='SceneReloadProbe.cs',dll_name='IkkokuSceneReloadProbe.dll'):
+    """The whole --once phase as run.ps1. `base` is the endpoint URL ending in the token and '/'.
+    `source_name`/`dll_name` let another probe (original_map_probe.py capture) reuse this transport:
+    its source is served and compiled under its own names, and it writes to the same plugins/reload folder."""
     if not re.fullmatch(PLAYER_ROOT,root):raise ValueError('Unknown private player root')
     if not uploads or any(not re.fullmatch(r'reload-[a-z0-9-]+\.png',name) for name in uploads):raise ValueError('Unexpected scene upload names')
+    if not re.fullmatch(r'[A-Za-z]+\.cs',source_name) or not re.fullmatch(r'Ikkoku[A-Za-z]+\.dll',dll_name):raise ValueError('Unexpected probe source or plug-in name')
     names=','.join("'"+name+"'" for name in uploads)
     return ("$ErrorActionPreference='Stop';$root='"+root+"';$base='"+base+"';$r=[ordered]@{root=$root}\n"
             +r"""if(@(Get-Process CharaStudio,Koikatu -ErrorAction SilentlyContinue).Count){throw 'A game process already runs'}
@@ -118,7 +121,7 @@ if($kept.Count){$r.cleanupError='junctions not removed: '+($kept -join ', ')}els
 $r.removed=-not(Test-Path -LiteralPath $root);$r.remainingGameProcesses=@(Get-Process CharaStudio,Koikatu -ErrorAction SilentlyContinue|ForEach-Object{$_.Id})
 }
 [PSCustomObject]$r|ConvertTo-Json -Compress -Depth 4
-""")
+""").replace('SceneReloadProbe.cs',source_name).replace('IkkokuSceneReloadProbe.dll',dll_name)
 
 
 def run_once(vm,output,scenes,errno_baseline,host_address='10.211.55.2',wait_seconds=900,source=None):
