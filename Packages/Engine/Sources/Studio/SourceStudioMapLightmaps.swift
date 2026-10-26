@@ -75,15 +75,19 @@ public enum SourceStudioLightmapMath {
     }
 }
 
-/// Block-compressed textures uploaded exactly as the bundle serialized them
-/// (the converter writes Unity's `image_data` unchanged: every mip level,
-/// largest first, rows bottom-up like Unity's texture memory).
+/// Block-compressed textures uploaded as the converter wrote them: every mip
+/// level largest first. Lightmaps keep Unity's `image_data` unchanged (rows
+/// bottom-up); base and emission images (slice 3) are the same blocks with
+/// their rows reversed to top-down; a cube holds six faces (+X, -X, +Y, -Y,
+/// +Z, -Z), each with its own mip chain, as serialized.
 public enum SourceStudioBlockTexture {
     public enum Format: String, Sendable {
         /// Unity DXT1 (TextureFormat 10).
         case bc1 = "BC1"
         /// Unity DXT5 (TextureFormat 12).
         case bc3 = "BC3"
+        /// Unity BC7 (TextureFormat 25); the converter writes it for cubes only.
+        case bc7 = "BC7"
 
         public var blockBytes: Int { self == .bc1 ? 8 : 16 }
 
@@ -91,6 +95,7 @@ public enum SourceStudioBlockTexture {
             switch self {
             case .bc1: return srgb ? .bc1_rgba_srgb : .bc1_rgba
             case .bc3: return srgb ? .bc3_rgba_srgb : .bc3_rgba
+            case .bc7: return srgb ? .bc7_rgbaUnorm_srgb : .bc7_rgbaUnorm
             }
         }
     }
@@ -108,28 +113,35 @@ public enum SourceStudioBlockTexture {
         return counts
     }
 
-    /// A shared-storage texture holding `data` level by level. Refuses sizes
-    /// that do not add up, more levels than the size allows, and a device
-    /// without BC sampling.
+    /// A shared-storage texture holding `data` level by level (`faces` 6: a
+    /// cube, face by face, each face's levels in turn). Refuses sizes that do
+    /// not add up, more levels than the size allows, a non-square cube and a
+    /// device without BC sampling.
     public static func make(device: any MTLDevice, data: Data, width: Int, height: Int, mipCount: Int,
-                            format: Format, srgb: Bool, label: String) throws -> any MTLTexture {
+                            format: Format, srgb: Bool, faces: Int = 1, label: String) throws -> any MTLTexture {
         guard (1...16384).contains(width), (1...16384).contains(height) else {
             throw RigError.invalid("\(label): block texture size \(width)×\(height) is out of range.")
+        }
+        guard faces == 1 || (faces == 6 && width == height) else {
+            throw RigError.invalid("\(label): \(faces) faces of \(width)×\(height) are not a texture or a square cube.")
         }
         let fullChain = Int(log2(Double(max(width, height)))) + 1
         guard (1...fullChain).contains(mipCount) else {
             throw RigError.invalid("\(label): \(mipCount) mip levels for \(width)×\(height) (at most \(fullChain)).")
         }
         let counts = levelByteCounts(width: width, height: height, mipCount: mipCount, format: format)
-        let total = counts.reduce(0, +)
-        guard data.count == total else {
-            throw RigError.invalid("\(label): \(data.count) bytes, \(format.rawValue) \(width)×\(height) with \(mipCount) levels needs \(total).")
+        let faceBytes = counts.reduce(0, +)
+        guard data.count == faceBytes * faces else {
+            throw RigError.invalid("\(label): \(data.count) bytes, \(faces == 6 ? "six faces of " : "")\(format.rawValue) "
+                + "\(width)×\(height) with \(mipCount) levels needs \(faceBytes * faces).")
         }
         guard device.supportsBCTextureCompression else {
             throw RigError.invalid("\(label): this GPU does not sample BC textures.")
         }
-        let descriptor = MTLTextureDescriptor.texture2DDescriptor(pixelFormat: format.pixelFormat(srgb: srgb),
-                                                                  width: width, height: height, mipmapped: mipCount > 1)
+        let pixelFormat = format.pixelFormat(srgb: srgb)
+        let descriptor = faces == 6
+            ? MTLTextureDescriptor.textureCubeDescriptor(pixelFormat: pixelFormat, size: width, mipmapped: mipCount > 1)
+            : MTLTextureDescriptor.texture2DDescriptor(pixelFormat: pixelFormat, width: width, height: height, mipmapped: mipCount > 1)
         descriptor.mipmapLevelCount = mipCount
         descriptor.usage = .shaderRead
         descriptor.storageMode = .shared
@@ -139,30 +151,70 @@ public enum SourceStudioBlockTexture {
         texture.label = label
         data.withUnsafeBytes { (raw: UnsafeRawBufferPointer) in
             var offset = 0
-            var (w, h) = (width, height)
-            for level in 0..<mipCount {
-                texture.replace(region: MTLRegionMake2D(0, 0, w, h), mipmapLevel: level,
-                                withBytes: raw.baseAddress!.advanced(by: offset), bytesPerRow: max(1, (w + 3) / 4) * format.blockBytes)
-                offset += counts[level]
-                (w, h) = (max(1, w / 2), max(1, h / 2))
+            for face in 0..<faces {
+                var (w, h) = (width, height)
+                for level in 0..<mipCount {
+                    texture.replace(region: MTLRegionMake2D(0, 0, w, h), mipmapLevel: level, slice: face,
+                                    withBytes: raw.baseAddress!.advanced(by: offset), bytesPerRow: max(1, (w + 3) / 4) * format.blockBytes,
+                                    bytesPerImage: counts[level])
+                    offset += counts[level]
+                    (w, h) = (max(1, w / 2), max(1, h / 2))
+                }
             }
         }
         return texture
+    }
+
+    /// One converted block file as the glTF extras list it.
+    public struct File: Sendable, Equatable {
+        public let name: String
+        public let file: String
+        public let format: Format
+        public let width: Int, height: Int, mipCount: Int
+        public let srgb: Bool
+        public let sha256: String
+        public let bytes: Int
+    }
+
+    /// Parses a file entry (`name`, `file`, `format`, `width`, `height`,
+    /// `mipCount`, `srgb`, `sha256`, `bytes`); refuses a path that leaves the
+    /// map's directory.
+    static func parseFile(_ json: JSONValue?, failure: (String) -> Error, role: String) throws -> File {
+        guard let json, let name = json["name"]?.stringValue, let file = json["file"]?.stringValue,
+              let format = json["format"]?.stringValue.flatMap(Format.init(rawValue:)),
+              let width = json["width"]?.doubleValue, let height = json["height"]?.doubleValue,
+              let mips = json["mipCount"]?.doubleValue, let srgb = json["srgb"]?.boolValue,
+              let sha = json["sha256"]?.stringValue, let bytes = json["bytes"]?.doubleValue else {
+            throw failure("the \(role) is incomplete")
+        }
+        let parts = file.split(separator: "/", omittingEmptySubsequences: false)
+        guard !file.isEmpty, !file.hasPrefix("/"), !file.contains("\\"),
+              !parts.contains(where: { $0.isEmpty || $0 == "." || $0 == ".." }) else {
+            throw failure("\(file) leaves the map's directory")
+        }
+        return File(name: name, file: file, format: format, width: Int(width), height: Int(height),
+                    mipCount: Int(mips), srgb: srgb, sha256: sha, bytes: Int(bytes))
+    }
+
+    /// Reads one listed file, checks its size and SHA-256, and uploads it
+    /// with `srgb` (the sampling the caller needs) and `faces`.
+    public static func upload(_ file: File, directory: URL, device: any MTLDevice, srgb: Bool? = nil, faces: Int = 1,
+                              what: String) throws -> any MTLTexture {
+        let url = directory.appendingPathComponent(file.file)
+        let data = try Data(contentsOf: url)
+        guard data.count == file.bytes,
+              SHA256.hash(data: data).map({ String(format: "%02x", $0) }).joined() == file.sha256 else {
+            throw RigError.invalid("\(what) \(file.file) does not match its recorded size and SHA-256.")
+        }
+        return try make(device: device, data: data, width: file.width, height: file.height, mipCount: file.mipCount,
+                        format: file.format, srgb: srgb ?? file.srgb, faces: faces, label: file.name)
     }
 }
 
 /// The lightmaps a converted map carries (`ikkokuLightmaps` in the glTF's
 /// top-level extras, written by `export_map_scene.py`).
 public struct SourceStudioLightmapSet: Sendable {
-    public struct Texture: Sendable, Equatable {
-        public let name: String
-        public let file: String
-        public let format: SourceStudioBlockTexture.Format
-        public let width: Int, height: Int, mipCount: Int
-        public let srgb: Bool
-        public let sha256: String
-        public let bytes: Int
-    }
+    public typealias Texture = SourceStudioBlockTexture.File
     public struct Entry: Sendable, Equatable {
         public let index: Int
         public let light: Texture
@@ -194,20 +246,10 @@ public struct SourceStudioLightmapSet: Sendable {
         guard value["colorSpace"]?.stringValue == "Linear" else { throw fail("colour space \(value["colorSpace"]?.stringValue ?? "none") is not Linear") }
         guard value["rows"]?.stringValue == "bottomUp" else { throw fail("rows \(value["rows"]?.stringValue ?? "none") are not Unity's bottom-up order") }
         func texture(_ json: JSONValue?, _ role: String) throws -> Texture {
-            guard let json, let name = json["name"]?.stringValue, let file = json["file"]?.stringValue,
-                  let format = json["format"]?.stringValue.flatMap(SourceStudioBlockTexture.Format.init(rawValue:)),
-                  let width = json["width"]?.doubleValue, let height = json["height"]?.doubleValue,
-                  let mips = json["mipCount"]?.doubleValue, let srgb = json["srgb"]?.boolValue,
-                  let sha = json["sha256"]?.stringValue, let bytes = json["bytes"]?.doubleValue else {
-                throw fail("the \(role) map is incomplete")
-            }
-            let parts = file.split(separator: "/", omittingEmptySubsequences: false)
-            guard !file.isEmpty, !file.hasPrefix("/"), !file.contains("\\"),
-                  !parts.contains(where: { $0.isEmpty || $0 == "." || $0 == ".." }) else {
-                throw fail("\(file) leaves the map's directory")
-            }
-            return Texture(name: name, file: file, format: format, width: Int(width), height: Int(height),
-                           mipCount: Int(mips), srgb: srgb, sha256: sha, bytes: Int(bytes))
+            let file = try SourceStudioBlockTexture.parseFile(json, failure: fail, role: "\(role) map")
+            // Lightmaps are DXT1/DXT5 (the converter refuses anything else).
+            guard file.format != .bc7 else { throw fail("the \(role) map is \(file.format.rawValue)") }
+            return file
         }
         var entries: [Int: Entry] = [:]
         for map in value["maps"]?.arrayValue ?? [] {
@@ -224,15 +266,7 @@ public struct SourceStudioLightmapSet: Sendable {
 
     /// Reads one listed file, checks its size and SHA-256, and uploads it.
     public static func upload(_ texture: Texture, directory: URL, device: any MTLDevice) throws -> any MTLTexture {
-        let url = directory.appendingPathComponent(texture.file)
-        let data = try Data(contentsOf: url)
-        guard data.count == texture.bytes,
-              SHA256.hash(data: data).map({ String(format: "%02x", $0) }).joined() == texture.sha256 else {
-            throw RigError.invalid("Lightmap \(texture.file) does not match its recorded size and SHA-256.")
-        }
-        return try SourceStudioBlockTexture.make(device: device, data: data, width: texture.width, height: texture.height,
-                                                 mipCount: texture.mipCount, format: texture.format, srgb: texture.srgb,
-                                                 label: texture.name)
+        try SourceStudioBlockTexture.upload(texture, directory: directory, device: device, what: "Lightmap")
     }
 }
 
@@ -325,9 +359,10 @@ public enum SourceStudioMapMaterial {
     /// `material` drawn for the irradiance image: the same lightmaps, decode
     /// and directional term with a white albedo, no base or emission texture,
     /// a diffColor factor of 1 and no alpha, so `map_fragment` writes the
-    /// decoded lightmap alone. nil for a material that is not `MaterialKindMap`.
+    /// decoded lightmap alone. nil for a material that is not `MaterialKindMap`
+    /// or is a particle draw (which samples no lightmap).
     public static func irradiance(_ material: MaterialState, variant: IrradianceVariant = .decoded) -> MaterialState? {
-        guard material.kind == MaterialKindMap else { return nil }
+        guard material.kind == MaterialKindMap, material.uniforms.flags & MaterialFlagMapParticle.rawValue == 0 else { return nil }
         var m = material
         m.base = nil
         m.emission = nil

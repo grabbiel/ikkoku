@@ -65,6 +65,7 @@ typedef IK_ENUM(EnumBackingType, TextureIndex) {
     TextureIndexLightmap   = 16,  // MaterialKindMap: Unity baked lightmap (RGBM, raw BC rows)
     TextureIndexLightmapDirection = 17,  // MaterialKindMap: CombinedDirectional direction map
     TextureIndexEmission   = 18,  // MaterialKindMap: Standard _EmissionMap
+    TextureIndexSkyCube    = 19,  // MaterialKindSky: Skybox/Cubemap _Tex (a cube texture; no other kind binds it)
 };
 
 // MARK: - Material kinds / flags
@@ -78,6 +79,9 @@ typedef IK_ENUM(EnumBackingType, MaterialKind) {
     MaterialKindUnlit   = 6,
     MaterialKindEyelash = 7,  // alpha-tested strips drawn over hair
     MaterialKindMap     = 8,  // ST-A11 source map surface: Unity 5.6 Standard baked-lightmap subset (map_fragment)
+    MaterialKindSky     = 9,  // ST-A11 map sky: Unity 5.6 Skybox/Cubemap on a mesh (sky_vertex / sky_fragment).
+                              // baseColor.rgb = _Tint * unity_ColorSpaceDouble * _Exposure (Linear),
+                              // params = (_Rotation degrees, _Tex_HDR.x, _Tex_HDR.y, _Tex_HDR.w)
 };
 
 typedef IK_ENUM(IKUInt, MaterialFlags) {
@@ -101,6 +105,8 @@ typedef IK_ENUM(IKUInt, MaterialFlags) {
     MaterialFlagSourceBodyMask  = 1u << 17, // RG source coverage; requires HasBodyMask
     MaterialFlagSourceIrisHighlights = 1u << 18, // overlay0/1 alpha at UV1/UV2; eye.w enables highlights
     MaterialFlagMapDirectionalLightmap = 1u << 19, // MaterialKindMap: a CombinedDirectional direction map is bound
+    MaterialFlagMapParticle     = 1u << 20, // MaterialKindMap: Particles/Alpha Blended (2 * vertex colour * baseColor * base texture)
+    MaterialFlagSkyRowsFlipped  = 1u << 21, // MaterialKindSky: the map probe's negative control only (every cube face sampled with its rows flipped); the loader never sets it
 };
 
 #define DrawFlagHasHiddenBuffer 0x80000000u

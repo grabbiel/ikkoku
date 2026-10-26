@@ -502,6 +502,10 @@ struct StudioScenario: Decodable {
             let draws: Int?
             /// Draws with the baked-lightmap material (ST-A11 slice 2).
             let lightmappedDraws: Int?
+            /// Particle and sky draws, and images uploaded as BC blocks (slice 3).
+            let particleDraws: Int?
+            let skyDraws: Int?
+            let blockImages: Int?
             let lineContains: String?
             let lineAbsent: String?
             let loading: Bool?
@@ -1111,6 +1115,11 @@ struct StudioScenario: Decodable {
             if let expected = check.lightmappedDraws, census.lightmappedDraws != expected {
                 problems.append("assert sourceMap: \(census.lightmappedDraws) lightmapped draws, expected \(expected)")
             }
+            for (name, actual, expected) in [("particle draws", census.particleDraws, check.particleDraws),
+                                             ("sky draws", census.skyDraws, check.skyDraws),
+                                             ("block images", census.blockImages, check.blockImages)] {
+                if let expected, actual != expected { problems.append("assert sourceMap: \(actual) \(name), expected \(expected)") }
+            }
             if let expected = check.loading, census.loading != expected {
                 problems.append("assert sourceMap: loading \(census.loading), expected \(expected)")
             }
@@ -1131,7 +1140,7 @@ struct StudioScenario: Decodable {
                     if !nothing, id == 0 { problems.append("assert sourceMap: pick at \(point) found nothing, expected an object") }
                 }
             }
-            details.append("map \(census.map.map(String.init) ?? "none"), \(census.draws) draws (\(census.lightmappedDraws) lightmapped), \(census.triangles) triangles, \(census.textureBytes) texture bytes (\(census.lightmapBytes) lightmaps), line \(census.line ?? "none")")
+            details.append("map \(census.map.map(String.init) ?? "none"), \(census.draws) draws (\(census.lightmappedDraws) lightmapped, \(census.particleDraws) particle, \(census.skyDraws) sky), \(census.triangles) triangles, \(census.textureBytes) texture bytes (\(census.lightmapBytes) lightmaps, \(census.cubeBytes) sky cubes, \(census.blockImages) BC images), line \(census.line ?? "none")")
         }
 
         /// An object's world displacement from a `captureObject` position, read
