@@ -248,7 +248,11 @@ enum InlineTextureLoader {
 
     /// The texture MetalKit's `newTexture(cgImage:options:)` makes with
     /// `.generateMipmaps`, `.shaderRead` usage and `.private` storage.
-    static func texture(_ source: Image, srgb: Bool, device: any MTLDevice, queue: any MTLCommandQueue) throws -> any MTLTexture {
+    /// Returns only after the upload's command buffer has completed, so no
+    /// caller ever holds a texture the GPU is still writing. `didComplete`
+    /// sees that command buffer as the texture is handed out (tests only).
+    static func texture(_ source: Image, srgb: Bool, device: any MTLDevice, queue: any MTLCommandQueue,
+                        didComplete: ((any MTLCommandBuffer) -> Void)? = nil) throws -> any MTLTexture {
         let image = source.cgImage
         guard let layout = layout(for: source, srgb: srgb) else {
             throw Failure.unsupportedLayout(describe(image))
@@ -276,6 +280,7 @@ enum InlineTextureLoader {
             if command.status != .completed {
                 throw Failure.gpu("\(describe(image)): \(command.error.map { "\($0)" } ?? "status \(command.status.rawValue)")")
             }
+            didComplete?(command)
         }
         return texture
     }

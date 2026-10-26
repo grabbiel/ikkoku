@@ -212,7 +212,7 @@ public final class SourceStudioMapAsset: @unchecked Sendable {
     }
 
     /// Reads, validates and registers a converted map. Blocking: file reads,
-    /// PNG decodes and MetalKit texture loads. Run it on a GCD worker, never
+    /// PNG decodes and texture uploads. Run it on a GCD worker, never
     /// on the main thread or the Swift concurrency pool. A failure releases
     /// everything it registered.
     public static func load(url: URL, packageRoot: URL, resources: ResourceStore) throws -> SourceStudioMapAsset {

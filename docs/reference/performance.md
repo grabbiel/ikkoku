@@ -830,7 +830,7 @@ loaded machine, so only the shares are used).
 | G5 | Shadow map re-rendered every frame | `Renderer` shadow pass | measured; **dropped** | Metal System Trace of `studio-orbit` (base `aee4287`): shadow 17 ms/s, 0.14 ms per frame, against deform 102 ms/s, 0.85 ms per frame. The main light follows the camera's yaw (`MainLight.direction(camera:)`), so a yaw orbit changes the shadow, and FK drags and Maker edits move the casters | at most 0.14 ms per rendered frame, only for pan, zoom, hover or selection on a static pose. Dropped in [item 4](#phase-2-item-4-adaptive-link-rate-idle-keep-alive-and-deformed-vertex-reuse) for deformed-vertex reuse (G9) | Low |
 | G9 | Every frame and pick re-dispatched the deform pass, even when the vertices were unchanged | `Renderer.encodeDeform` | measured; **done** | deform 102 ms/s in orbit (0.85 ms per frame), the largest GPU pass | skip a deformation whose buffer already holds the frame's inputs; **done** in [item 4](#phase-2-item-4-adaptive-link-rate-idle-keep-alive-and-deformed-vertex-reuse). Orbit GPU 1.40–1.52 → 0.65–0.66 ms per frame (0 dispatches), FK drag 1.95–1.99 → 1.19, Studio idle 1.98 → 1.21, hover pick 0.90–0.99 → 0.08 ms | Medium: buffers are read across command buffers; the [renderer contract](renderer.md#renderer-threads-r7-phase-2-item-2) orders them |
 | G6 | No pipeline binary archive | `Pipelines` | hypothesis | pipeline creation happens during startup | `MTLBinaryArchive` for the production pipelines; measure first-launch versus warm | Low |
-| G7 | Textures are uncompressed RGBA with runtime mip generation | `ResourceStore` (`MTKTextureLoader`, `.generateMipmaps`) | hypothesis; measured for maps | Metal allocation 470 MB peak for 6 characters. Original maps ship DXT1/DXT5 textures that the converter decodes: Map 33 takes 51.7 MB as RGBA8 with mips against 7.2 MB as BC (+52.5 MB of Metal measured), Map 34 would take 265.3 MB against 39.8 MB ([ST-A11](#st-a11-original-studio-maps)) | ASTC/BC compression at conversion time, cached mips; mostly memory and bandwidth (M1). For maps, keep the bundle's blocks and upload BC1/BC3 natively, which Map 34 needs first | Medium: image quality must be checked |
+| G7 | Textures are uncompressed RGBA with runtime mip generation | `ResourceStore` (`InlineTextureLoader`, blit `generateMipmaps`; `MTKTextureLoader` before 2026-10-26) | hypothesis; measured for maps | Metal allocation 470 MB peak for 6 characters. Original maps ship DXT1/DXT5 textures that the converter decodes: Map 33 takes 51.7 MB as RGBA8 with mips against 7.2 MB as BC (+52.5 MB of Metal measured), Map 34 would take 265.3 MB against 39.8 MB ([ST-A11](#st-a11-original-studio-maps)) | ASTC/BC compression at conversion time, cached mips; mostly memory and bandwidth (M1). For maps, keep the bundle's blocks and upload BC1/BC3 natively, which Map 34 needs first | Medium: image quality must be checked |
 | G8 | Argument buffers / Metal 4 argument tables, indirect command buffers, residency sets, heaps, parallel encoding | renderer | hypothesis | draw encoding is ≤ 0.9 ms CPU per frame | low value until item counts grow (many-prop scenes) | — |
 
 ### Frame pacing
@@ -848,7 +848,7 @@ loaded machine, so only the shares are used).
 | --- | --- | --- | --- | --- | --- | --- |
 | S1 | Source scene import is synchronous on the main thread | `AppState.importSourceScenePreview` → `StudioModel.importSourceScenePreview` | measured; **done** | Release: 4.7 s import, first frame at 6.3 s; Debug 11.7 s / 20.0 s | load the characters concurrently off the main thread with a progress state; ~1–1.5 s on the reference machine. **Done** in [phase 2, item 6](#phase-2-item-6-source-character-builds-off-the-main-thread): first halves on workers, second halves in order on a build queue, one commit on the main actor; scene ready 5.65 → 1.41 s, first draw 5.93 → 0.43 s. Duplicates and undo/redo rebuild in the background too. The [follow-up](#phase-2-item-6-follow-up-route-copies-prefetch-and-kept-donations) adds route character copies (159 ms on the main thread → 2.4 ms call, 41 ms of main-thread work) and kept donations for the undo of a delete (992 → 351 ms); the showoff scene is ready at 1.04 s | Medium: model mutations must stay on the main actor |
 | S2 | Repeated rig JSON decoding | see C8 | measured; **done** | 74% of the probe load | cache; ~3 s of the 4.7 s. **Done** with C8: 3.62 → 0.54 s of decode CPU in the startup import | Low |
-| S3 | Texture loading through `MTKTextureLoader` with runtime mips | `ResourceStore.texture` | measured; **GPU wait done**, uploads open | 7-character import, second halves (on the build queue): 51 ms over 19 texture loads; the material compositors' new command queues waited 173 ms for 1.6 ms of GPU work | asynchronous loading with placeholder textures. **The larger wait is done** in the [item 6 follow-up](#phase-2-item-6-follow-up-route-copies-prefetch-and-kept-donations): one compositor queue per device, 173 → 12 ms, second halves 520 → 342 ms, the showoff scene ready about 0.15 s sooner. The uploads stay synchronous; making them asynchronous saves at most 51 ms there and needs `ResourceStore` API changes | Medium |
+| S3 | Synchronous texture loading with runtime mips (in line since 2026-10-26, [no worker threads](#texture-loads-without-worker-threads-2026-10-26); `MTKTextureLoader` before) | `ResourceStore.texture` | measured; **GPU wait done**, uploads open | 7-character import, second halves (on the build queue): 51 ms over 19 texture loads; the material compositors' new command queues waited 173 ms for 1.6 ms of GPU work | asynchronous loading with placeholder textures. **The larger wait is done** in the [item 6 follow-up](#phase-2-item-6-follow-up-route-copies-prefetch-and-kept-donations): one compositor queue per device, 173 → 12 ms, second halves 520 → 342 ms, the showoff scene ready about 0.15 s sooner. The uploads stay synchronous; making them asynchronous saves at most 51 ms there and needs `ResourceStore` API changes | Medium |
 | S4 | Maker library preparation at startup | `makerReady` mark | measured; **done** | ~0.9 s Release, ~4.1 s Debug | defer until first Maker use or load in the background. **Done** in [phase 2, item 6](#phase-2-item-6-source-character-builds-off-the-main-thread): a launch straight into a source scene creates the Maker on first use; `studioReady` 1.09 → 0.19 s | Low |
 | S5 | An imported scene's original map loads with the scene (ST-A11) | `SourceStudioMapLoad` (`Packages/Engine/Sources/Studio/SourceStudioMap.swift`) | measured; **done** | Map 33: 73–83 ms of glTF reads, PNG decodes and MetalKit loads with mips; 0.01 ms placement and a 24 KB catalog read on the main thread | loaded on a GCD worker beside the character builds from the start, with private textures retired through `retire(textures:)`. Scene ready 1.47 → 1.45 s and main-thread time until ready unchanged ([ST-A11](#st-a11-original-studio-maps)) | Low |
 
@@ -1824,7 +1824,8 @@ profile text only; the traces were deleted).
   test awaits it, so it holds no pool thread. `ResourceStore` is unchanged.
   Other tests that build previews still block pool threads while they
   load, so more such tests could hang a parallel run the same way. The
-  cause inside MetalKit was not established.
+  cause inside MetalKit was not established then. It was found and removed
+  later ([texture loads without worker threads](#texture-loads-without-worker-threads-2026-10-26)).
 - **Python.** Runner self-tests 187/187 (16 in `test_perf_trace.py`), the
   studio-inspector validator tests (11), mod tools (40), translation (33,
   2 skipped), reverse tools (424, 6 skipped) and analysis (279) pass.
@@ -3932,6 +3933,73 @@ performance and 4 efficiency cores, less two).
   charge, about 104 MB for the reference scene's characters, and the
   memory-pressure warning empties them. The prefetch adds about 50 MB of
   transient peak at startup. Both fit in 8 GB, beside the scene's 0.9 GB.
+
+## Texture loads without worker threads (2026-10-26)
+
+A parallel `swift test` of the Engine suite could hang with every thread of
+its test pool blocked in `MTKTextureLoader`'s synchronous load. MetalKit
+hands the work to its own concurrent queues, which run on GCD's
+default-QoS pool, and waits. Once every Swift cooperative thread is blocked
+like that, the kernel grants that pool no thread, so MetalKit's work never
+runs. `ResourceStore` now loads textures in line on the calling thread and
+waits only for its own GPU command buffer. The results are identical to
+MetalKit's, texel for texel. Details, the evidence and the formats are in
+[renderer](renderer.md#texture-loading-without-worker-threads-2026-10-26).
+
+### The pool rule
+
+Never block a Swift cooperative thread on work that needs a new thread from
+GCD's constrained pools at default QoS or below. That covers the global
+default and utility queues, and private concurrent queues that target
+them. When every cooperative thread is blocked that way, the kernel grants
+those pools no thread, and nothing ever wakes the waiters. Raising the
+waiting work's QoS only moves the limit.
+
+Waits that need no such thread are safe:
+- on work the waiting thread does itself;
+- on GPU completion of one's own command buffer;
+- on a serial (overcommit) queue;
+- on a plain counting semaphore whose holders never wait on a pool.
+
+Code that blocks for long (character builds, map loads, the live tick)
+also stays off the cooperative pool, on GCD workers or threads of its own,
+so it never starves other tasks.
+
+### What changed
+
+- `InlineTextureLoader` decodes with ImageIO, stages the pixels in the
+  texture's layout, then copies and generates mipmaps with one blit. It
+  replaces `MTKTextureLoader` in `ResourceStore`. MetalKit remains only in
+  the tests that compare against it.
+- Uploads use one command queue per device, shared by every store, never
+  the frame queue. A queue per store ran the driver out of command queues
+  at 256 stores.
+- GPU texture containers (KTX, KTX2, PVR, ASTC, DDS, ATX) are rejected by
+  name on every entry point.
+- The off-pool test helpers (`liveTickOffPool`) and the GCD workers in the
+  app stay. They follow the pool rule for reasons beyond texture loads.
+
+### Correctness
+
+- **Identity with MetalKit:** 2,016 synthetic layouts, 281 encoded files
+  and 19 decoder fixtures, every level and both colour flags:
+  0 mismatches.
+- **Saturation** through `ResourceStore.texture(data:)` with PNG bytes,
+  every load counted:
+  - The old call (ImageIO, then MetalKit) from 64 cooperative tasks hung.
+  - The in-line loads completed in every run: 64, 256 and 512 cooperative
+    tasks, 256 tasks at 1024², and stores shared or one per task (3 runs
+    each).
+
+### Limits
+
+- A crop of a decoded image loses its ImageIO type, so `texture(cgImage:)`
+  uploads it as a data image (RGBA8 where MetalKit made BGRA8). Nothing
+  passes one today.
+- AVCI's premultiplied alpha follows the HEIF decoder it shares; no file
+  could be made to measure it.
+- Loads stay synchronous: asynchronous uploads (S3) remain a separate
+  change.
 
 ## Validation of this change
 

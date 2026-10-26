@@ -630,7 +630,9 @@ or accessories, so no texture is loaded. A first version that drew the fully
 textured bundled characters passed when each test ran alone on CI. In the
 parallel suite, however, its two tests stalled together in their first
 `build`, the first synchronous `MTKTextureLoader` loads, and the Engine run
-exceeded the lane's 600 s timeout. The cause was not isolated further. The GPU
+exceeded the lane's 600 s timeout. The cause was not isolated then. It was
+MetalKit's own queues finding no thread once the pool was blocked, and texture
+loads no longer use them ([texture loading](#texture-loading-without-worker-threads-2026-10-26)). The GPU
 tests now also run one at a time (`@Suite(.serialized)`).
 
 The stall did not reproduce on the reference Mac (24 cores; Xcode 27.0, Swift
@@ -1214,7 +1216,8 @@ characters and steps them on a thread of its own (`liveTickOffPool`), and its
 checks run in the test's task. Building a preview blocks its thread in
 MetalKit's synchronous texture load. When these tests ran on the test pool,
 a parallel `swift test` hung with every pool thread blocked there (see
-[performance](performance.md#correctness-2)).
+[performance](performance.md#correctness-2)). Since 2026-10-26 texture loads
+wait on no pool ([texture loading](#texture-loading-without-worker-threads-2026-10-26)); the tests keep their own threads.
 The Studio scenario check `studio-scenario-live-step-edit` lands document,
 FK, undo and redo edits while a step is in flight in the app. ThreadSanitizer
 runs the Engine tests with `swift test --sanitize=thread --filter
@@ -1860,7 +1863,8 @@ touches it.
   (`liveTickOffPool`), and the test's task reports their checks. A build
   blocks its thread in MetalKit's synchronous texture load. On the test
   pool, they were among the tests holding all 24 pool threads blocked there
-  when a parallel suite hung.
+  when a parallel suite hung. Since 2026-10-26 texture loads wait on no pool
+  ([texture loading](#texture-loading-without-worker-threads-2026-10-26)).
 
 In the app, the strict Studio lane's `studio-scenario-background-build`
 check runs `Tools/verification/scenarios/background-build.json`. Its
@@ -1902,6 +1906,132 @@ the source runtime drew the frame before the rehydrated route previews
 existed, so a redone route copy showed without its character until
 something else refreshed. `applyHistoryDocument` now refreshes once more
 after a rehydration.
+
+### Texture loading without worker threads (2026-10-26)
+
+`ResourceStore` loads every texture in line, on the calling thread
+(`InlineTextureLoader`). ImageIO decodes the image, its pixels go into a
+shared staging buffer in the texture's layout, and one blit command buffer
+copies them into a private texture and generates its mipmaps. The caller
+waits for that command buffer and nothing else. The three entry points keep
+their signatures and stay synchronous: `texture(url:)`, `texture(data:)` and
+`texture(cgImage:)`.
+
+**Why not MetalKit.** `MTKTextureLoader`'s synchronous calls hand the
+decode, upload and completion to MetalKit's own concurrent queues
+(`com.apple.mtktextureloader*`) and block the caller on a semaphore. Those
+queues target GCD's default-QoS global pool, which is constrained. When
+every Swift cooperative thread is blocked in such a call (24 on the
+reference M2 Ultra), the kernel grants that pool no new thread at default
+QoS or below. MetalKit's blocks then never run, and the callers wait
+forever. This is the parallel `swift test` hang described under
+[source character builds](#source-character-builds-r7-phase-2-item-6) and
+[live step threads](#studio-live-step-threads-r7-phase-2-item-3). Evidence
+(private, `.local/rmat-pool-deadlock/root-cause/`):
+- An lldb dump of a hung suite found 39 threads waiting in
+  `newTextureWithCGImage`: all 24 cooperative threads and 15 threads the
+  tests had started themselves. Each of the 39 loaders had its decode block
+  queued with no thread running it, while its own three-load limit was
+  still free. A test on its own thread is therefore not safe either, once
+  other loads have taken the pool.
+- With 64 cooperative tasks blocked in MetalKit loads, blocks sent to the
+  global default, utility and private concurrent default queues did not
+  run within 3 s. Blocks on the userInitiated, userInteractive and serial
+  (overcommit) queues ran at once.
+- In a minimal reproduction, cooperative tasks loading 512² images through
+  MetalKit hung in every run at 48 and 64 tasks and in one of four at 32.
+  Up to 28 tasks always finished, as did 64 loads from GCD workers or from
+  plain threads.
+
+The app never loads textures on the cooperative pool: on the main actor,
+on serial userInitiated queues (Maker preparation, source builds, plug-in
+preparation) or on GCD workers (character batches, maps, rig prefetch, the
+live tick). So the deadlock was latent there; the in-line loader removes it
+for every caller anyway. Raising the QoS of the waiting work was rejected:
+it would only move the limit. The rule is in
+[performance](performance.md#the-pool-rule).
+
+**Identical results.** The in-line loader reproduces MetalKit's pixel
+format, size, mip count, usage, storage mode and every byte of every level.
+MetalKit treats two kinds of image differently, and the loader knows which
+it has from where the image came from, never from its description:
+- **Decoded by ImageIO** (`Source.imageIO(type:)`). `texture(url:)` and
+  `texture(data:)` decode the bytes themselves and pass the ImageIO type
+  (`CGImageSourceGetType`) down. `texture(cgImage:)` reads the image's
+  `utType`. Here the `srgb` flag picks the sRGB variant of 8-bit formats,
+  8-bit gray becomes R8 and gray-alpha RG8, and 8-bit colour becomes BGRA8.
+  Premultiplied colour is unpremultiplied. For straight alpha, the HEIF
+  family and JPEG XL are premultiplied (HEIC, HEICS, HEIF, AVIF, AVIF
+  sequences and JPEG XL, measured per decoder). PNG, TIFF, BMP, TGA,
+  ICO/CUR, ICNS, PSD, SGI, GIF, PICT and WebP stay straight. AVCI shares
+  the HEIF decoder and is in the premultiplied set unverified: no AVC-HEIF
+  encoder was available to make a file. 16-bit and float colour keep their
+  depth and gain an opaque alpha channel when they have none.
+- **Anything else** (`Source.data`: CGContext, Core Image and hand-built
+  images). The bytes are uploaded as they are: 8-bit gray as R8, and any
+  32-bit pixel as RGBA8 or BGRA8 by where its alpha sits. The `srgb` flag is
+  ignored. Every other layout is rejected, as MetalKit rejects it.
+
+A crop of a decoded image (`CGImage.cropping(to:)`) loses its `utType`, so
+`texture(cgImage:)` treats it as a data image. MetalKit would still have
+reached ImageIO's pixels through it and made BGRA8 where the in-line loader
+makes RGBA8. Nothing in the repository passes a crop; this is a documented
+limit with a test (`croppedDecodedImageIsADataImage`).
+
+**GPU texture containers are not supported.** KTX, KTX2, PVR, ASTC, DDS and
+ATX are rejected on every entry point with
+`ResourceError.unsupportedTextureContainer`, whose message names the
+container, for example "DDS texture containers are not supported:
+<file or key>". Bytes are checked by their magic numbers before decoding,
+and an image ImageIO decoded from one is rejected by its type. A mod or
+plug-in asset in one of these formats therefore fails with that message.
+They cannot be matched:
+- MetalKit parses some of them itself rather than through ImageIO. A 37×23
+  DXT5 DDS became a block-padded 40×24 texture.
+- Through ImageIO, MetalKit's result for an uncompressed DDS changes from
+  call to call. In one process all 12 loads of a file failed. In another,
+  the same file failed on one call and loaded on the next.
+
+No file in the repository or the private fixtures is a container.
+
+**One upload queue per device.** Uploads go to a command queue that only
+texture uploads use, never the renderer's frame queue, so an upload neither
+waits behind nor interleaves with frame command buffers. Every
+`ResourceStore` on a device shares that queue (`UploadQueues`, a
+lock-protected registry keyed by the device's registry ID). The GPU driver
+gives a process a limited number of command queues: with a queue per store,
+256 stores loading at once failed 98 of 256 uploads with
+`IOGPUCommandQueueErrorDomain` 518. Past the queue's 64 command buffers in
+flight, `makeCommandBuffer` waits until one completes on the GPU. That wait
+needs no worker thread from any pool. Each load commits its command buffer
+and waits for it before returning, so a texture is never handed out while
+the GPU still writes it, and one caller's loads complete in call order. Each
+staging buffer is released as soon as its copy completes.
+
+**Tests.**
+- `InlineTextureLoaderIdentityTests` compares the in-line loader with
+  MetalKit (kept in the tests only) at every level and with both colour
+  flags:
+  - 2,016 synthetic layouts (8, 16 and 32-bit; 1 to 4 components; every
+    alpha and byte order; colour spaces; indexed and 1/2/4-bit gray;
+    CGContext and Core Image output);
+  - the same layouts as 281 files from every ImageIO encoder;
+  - 19 synthetic files from decoders ImageIO cannot write
+    (`Fixtures/texture-identity`: JPEG XL, AVIF from another encoder and at
+    10 and 12 bits, an AVIF sequence, HEIF, WebP, PSD, SGI, ICNS, CUR, BMP
+    v5, TGA and both TIFF alpha kinds).
+
+  Every comparison matches. The suite also checks container rejection on
+  each entry point.
+- `InlineTextureLoaderCorpusTests` (strict, `IKKOKU_TEXTURE_CORPUS_ROOT`)
+  does the same for every texture the strict Engine suite and the strict
+  Studio and Maker lanes load, captured once by content hash.
+- `ResourceStoreUploadTests`:
+  - many threads get one queue for a device;
+  - an upload has completed when its texture is handed out, and one
+    store's uploads run in call order;
+  - a texture reads back whole from another queue right away;
+  - 256 stores load at once from the cooperative pool, every load counted.
 
 ## Checked math, legacy skeletons and cameras (R4)
 
