@@ -292,7 +292,14 @@ class Map34Tests(unittest.TestCase):
         endpoint = FakeEndpoint.instances[0]
         self.assertEqual(endpoint.files['reload-map34-showoff.png'], self.showoff.read_bytes())
         self.assertNotIn('reload-showoff.png', endpoint.files)
-        self.assertIn("@('reload-map34-showoff.png')", endpoint.files['run.ps1'].decode())
+        script = endpoint.files['run.ps1'].decode()
+        self.assertIn("@('reload-map34-showoff.png')", script)
+        # The junction scans: before the player setup, after the cleanup, read only.
+        self.assertLess(script.index('$r.scanBefore=Scan'), script.index("Fetch 'MapProbe.cs'"))
+        self.assertGreater(script.index('$r.scanAfter=Scan'), script.index('$r.removed='))
+        self.assertTrue(script.endswith('try{$r.scanAfter=Scan}catch{$r.scanAfterError=$_.ToString()}\n[PSCustomObject]$r|ConvertTo-Json -Compress -Depth 4\n'))
+        scan = probe.JUNCTION_SCAN
+        self.assertIn('Get-ChildItem', scan); self.assertNotRegex(scan, 'Remove-|Set-|New-|Copy-|Move-|Out-File')
         self.assertEqual(self.vm.call_count, 1); self.guard.assert_called_once_with(0)
         self.assertEqual(gzip.decompress((out / 'oracle-map34-day-sky.rgba.f32.gz').read_bytes()), self.rgba)
         self.assertEqual(gzip.decompress((out / 'oracle-map34-day-irradiance.f32.gz').read_bytes()), self.rgb)
@@ -303,6 +310,7 @@ class Map34Tests(unittest.TestCase):
         self.assertEqual(manifest, ['map-trace.json', 'oracle-map34-day-classes.png', 'oracle-map34-day-irradiance.f32.gz',
                                     'oracle-map34-day-sky.rgba.f32.gz', 'original-map34-day-color.png', 'probe-source.cs', 'run.json', 'status.json'])
         self.assertEqual((result['errno'], result['status']), ([0, 0], self.STATUS))
+        self.assertFalse(result['scansEqual'])  # the fake guest reports none
 
     def test_an_rgba_image_whose_size_is_not_whole_pixels_is_refused(self):
         with self.assertRaisesRegex(ValueError, 'not float32 RGBA'):

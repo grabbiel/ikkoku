@@ -177,6 +177,21 @@ SHOWOFF_UPLOAD = 'reload-showoff.png'
 
 
 MAP34_UPLOAD = 'reload-map34-showoff.png'
+# The player root's junction targets, read only: file and directory counts, bytes and the newest write
+# time of each, taken in the same run.ps1 before the player is set up and after the root is removed.
+JUNCTION_SCAN = (r"""function Scan{$o=[ordered]@{};foreach($n in @('abdata','CharaStudio_Data')){$p="C:\Illusion\Koikatsu\$n";"""
+                 r"""$f=@(Get-ChildItem -LiteralPath $p -Recurse -File -Force);$d=@(Get-ChildItem -LiteralPath $p -Recurse -Directory -Force);"""
+                 r"""$o[$n]=[ordered]@{files=$f.Count;dirs=$d.Count;bytes=[int64]($f|Measure-Object Length -Sum).Sum;"""
+                 r"""latestWriteUtc=($f|Sort-Object LastWriteTimeUtc|Select-Object -Last 1).LastWriteTimeUtc.ToString('o')}};$o}""")
+
+
+def with_junction_scans(script):
+    """`script` (once_script's run.ps1) with JUNCTION_SCAN recorded as scanBefore at the start and
+    scanAfter after its cleanup, both in the guest's JSON."""
+    head, sep, rest = script.partition('$r=[ordered]@{root=$root}\n')
+    tail = '[PSCustomObject]$r|ConvertTo-Json -Compress -Depth 4\n'
+    if not sep or not rest.endswith(tail): raise ValueError('Unexpected run.ps1 layout')
+    return head + sep + JUNCTION_SCAN + '\n$r.scanBefore=Scan\n' + rest[:-len(tail)] + 'try{$r.scanAfter=Scan}catch{$r.scanAfterError=$_.ToString()}\n' + tail
 
 
 def scene_record(path, what):
@@ -186,7 +201,7 @@ def scene_record(path, what):
     return data
 
 
-def run_probe(args, uploads, record, floats):
+def run_probe(args, uploads, record, floats, scans=False):
     """One `prlctl exec` of fixtures/OriginalMapProbe.cs with `uploads` ({reload-*.png name: bytes})
     placed next to the plug-in (original_scene_reload_probe.once_script). `record` adds to run.json;
     with `floats`, the received *.f32 images are gzipped (gzip_floats). Every guest hash is checked;
@@ -203,6 +218,7 @@ def run_probe(args, uploads, record, floats):
     files = {MAP_PROBE_NAMES[0]: source, **uploads}
     with Endpoint(args.host_address, files, upload='reload.zip') as endpoint:
         script = once_script(root, endpoint.base, args.wait_seconds, list(uploads), *MAP_PROBE_NAMES)
+        if scans: script = with_junction_scans(script)
         files['run.ps1'] = script.encode()
         (output / 'run.ps1').write_text(script.replace(endpoint.base, '<endpoint>/'))
         result = subprocess.run(['prlctl', 'exec', args.vm, '--current-user', 'powershell.exe', '-NoProfile', '-NonInteractive',
@@ -247,7 +263,12 @@ def map34(args):
     """Map 34's phases B and C in one `prlctl exec` (see the module docstring)."""
     if (private(args.output) / 'run.json').exists(): raise RuntimeError(f'{args.output}/run.json exists: run map34 into a new output folder')
     showoff = scene_record(args.showoff, '--showoff')
-    return run_probe(args, {MAP34_UPLOAD: showoff}, dict(mode='map34', showoff=str(args.showoff), showoffSHA256=digest(showoff)), floats=True)
+    result = run_probe(args, {MAP34_UPLOAD: showoff}, dict(mode='map34', showoff=str(args.showoff), showoffSHA256=digest(showoff)),
+                       floats=True, scans=True)
+    guest = json.loads((private(args.output) / 'run.json').read_text()).get('guest') or {}
+    result.update(scanBefore=guest.get('scanBefore'), scanAfter=guest.get('scanAfter'),
+                  scansEqual=guest.get('scanBefore') is not None and guest.get('scanBefore') == guest.get('scanAfter'))
+    return result
 
 
 ORACLE_CASE = re.compile(r'[a-z0-9]+(-[a-z0-9]+)*')
