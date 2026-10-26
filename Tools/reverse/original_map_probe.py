@@ -164,9 +164,8 @@ $sum=[int64]0;$over=@()
 foreach($i in $items){$n=$i[0];if(-not $r.sets.Contains($n)){$r.sets[$n]=[ordered]@{files=0;bytes=[int64]0;largest=[int64]0}}
 $e=$r.sets[$n];$e.files+=1;$e.bytes+=$i[2].Length;if($i[2].Length -gt $e.largest){$e.largest=$i[2].Length};$sum+=$i[2].Length;if($i[2].Length -gt $limit){$over+=,$i}}
 $r.listedFiles=$items.Count;$r.listedBytes=$sum;$r.missing=$rec.missing.Count
-if($over.Count){$r.stopped="$($over.Count) file(s) exceed the per-file bound $limit"}
-elseif($sum -gt $total){$r.stopped="the listing ($sum bytes) exceeds the total bound $total"}
-else{foreach($t in $trees){if($r.sets.Contains($t[0]) -and $r.sets[$t[0]].bytes -gt $treeMax){$r.stopped="tree $($t[0]) ($($r.sets[$t[0]].bytes) bytes) exceeds $treeMax"}}}
+if($over.Count){$r.stopped="$($over.Count) file(s) exceed the per-file bound $limit"}elseif($sum -gt $total){$r.stopped="the listing ($sum bytes) exceeds the total bound $total"}else{
+foreach($t in $trees){if($r.sets.Contains($t[0]) -and $r.sets[$t[0]].bytes -gt $treeMax){$r.stopped="tree $($t[0]) ($($r.sets[$t[0]].bytes) bytes) exceeds $treeMax"}}}
 New-Item -ItemType Directory $root|Out-Null
 Add-Type -AssemblyName System.IO.Compression;Add-Type -AssemblyName System.IO.Compression.FileSystem
 $k=0;$i=0
