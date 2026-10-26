@@ -109,7 +109,10 @@ acceptance boundary; their old “next” steps are historical, not a live queue
   head-0 face composite. Independent base/distinct targets stay within one byte;
   added coverage increases measured GPU work and memory. See the
   [face gate and costs](../reference/renderer.md#native-female-head-0-face-composite-r1cmt-04-219-2026-10-24). Same-input sampling
-  variation remains open in [#188](https://github.com/grabbiel/ikkoku/issues/188).
+  variation ([#188](https://github.com/grabbiel/ikkoku/issues/188)) came from derivative quads formed across
+  neighbouring triangles; translated pipelines now prevent it, and repeated live captures are bit-identical
+  ([cause and correction](../reference/renderer.md#cause-and-correction-cross-primitive-derivative-quads-2026-10-25)).
+  The history below predates that correction.
   The [sampling investigation](../reference/renderer.md#translated-sampling-repeatability-investigation-188)
   distinguishes diagnostic controls from production behavior; reductions are
   evidence, not fixes or added material coverage. The latest controlled split
@@ -650,6 +653,19 @@ cross-provider UV difference persists. Exact measurements and limitations are
 in the [renderer reference](../reference/renderer.md#translated-sampling-repeatability-investigation-188).
 This private diagnostic changes no production shader, material coverage,
 source-parity gate or performance claim.
+
+**Corrected — cross-primitive derivative quads, [#188](https://github.com/grabbiel/ikkoku/issues/188) (2026-10-25):**
+On this M2 Ultra host, an indexed draw whose vertex function writes no device
+memory can take a fragment's `dfdx`/`dfdy` from a neighbouring triangle that
+shares its vertices, and with the shoe's alpha test which neighbour does so
+changes between identical submissions. Every translated pipeline now compiles
+with a never-executed vertex-stage store (`TranslatedSourceVertexStore`), which
+keeps quads within one primitive as Direct3D 11 does. The shoe and whole
+controlled-character live captures are bit-identical across repeats in both
+texture providers, and every source gate passes with unchanged tolerances.
+An asset-free reproducer (`metal_quad_merge_repro.swift`) and a synthetic Engine
+regression cover the mechanism. Evidence, gate values and cost are in the
+[renderer reference](../reference/renderer.md#cause-and-correction-cross-primitive-derivative-quads-2026-10-25).
 
 **Reproduced limitation — saved attachment profiles, [#210](https://github.com/grabbiel/ikkoku/issues/210):**
 A supported hidden attachment initializer loads fresh and saves successfully,

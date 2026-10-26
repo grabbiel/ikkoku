@@ -75,6 +75,42 @@ stable, and extra MRT outputs can perturb compilation. This tool measures no
 performance and changes no production sampler, source gate or rendering path.
 Keep invocation/source/compiler provenance alongside each retained report.
 
+## Standalone Metal quad-merge reproducer
+
+`metal_quad_merge_repro.swift` is the asset-free reproducer for the cause of
+[#188](https://github.com/grabbiel/ikkoku/issues/188) (see
+[renderer.md](../../docs/reference/renderer.md#cause-and-correction-cross-primitive-derivative-quads-2026-10-25)).
+It reads no original assets, fixtures or environment variables and writes
+nothing; the JSON report goes to standard output.
+
+```sh
+mkdir -p .local/metal-quad-merge
+swiftc -O Tools/verification/metal_quad_merge_repro.swift -o .local/metal-quad-merge/probe
+.local/metal-quad-merge/probe --self-check
+.local/metal-quad-merge/probe --repeats 6 > .local/metal-quad-merge/report.json
+```
+
+Two 128×128 grids share their vertices: 16×16 cells of 6 px (512 triangles)
+and 96×96 cells of 0.75 px (18,432 triangles). Clip `w` is 1 and every
+position is a multiple of 1/256 px, so `u` is affine inside each triangle;
+`u` is hashed per vertex (`k/64`), so neighbouring triangles have different
+gradients. Each grid is drawn indexed (shared vertices) and non-indexed
+(expanded per triangle), with blending off and on (one/zero, as every
+translated pipeline enables blending), with no discard, a discard on an
+interpolated attribute, or a discard on a texture sample taken after the
+derivatives, and with or without a vertex-stage device store guarded by
+`vid == 0xffffffff`. No discard is taken and the store never runs. The
+fragment writes `dfdx(u)`, `dfdy(u)` and the primitive ID to one float32
+target.
+
+Per case, `pixelsWithAnotherTrianglesDerivatives` counts covered pixels whose
+derivatives differ from their own triangle's analytic window-space gradient
+(tolerance 1e-4, relative above 1), and `repeatChangedPixels` counts pixels
+that change from the first draw in each repeat. `--self-check` verifies the
+grid literals and layouts without creating a Metal device. Exit zero means
+collection completed; whether a GPU forms derivative quads across primitives is
+driver behaviour, not a Metal contract. The tool measures no performance.
+
 ## Usage
 
 ```sh

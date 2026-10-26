@@ -332,13 +332,16 @@ public final class TranslatedSourcePipelineCache: @unchecked Sendable {
 
     /// Pipeline and depth/stencil state for `program` on `target`. With
     /// `depth24Quantized` the fragment re-emits depth snapped to 24-bit fixed
-    /// point (`TranslatedSourceDepth24.rewrite`).
+    /// point (`TranslatedSourceDepth24.rewrite`). Every program gets the
+    /// unreachable vertex-stage store that keeps its derivative quads within
+    /// one primitive (`TranslatedSourceVertexStore`, #188).
     public func entry(_ program: TranslatedSourceProgram, target: TranslatedSourceTarget, depth24Quantized: Bool = false) throws -> Entry {
         guard !program.fragmentOnly else { throw TranslatedSourceProgram.ProgramError.invalid("A fragment-only create program is not a draw program") }
         let key = Key(program: program.url.standardizedFileURL.path + "#" + program.sourceSHA256, target: target, depth24: depth24Quantized)
         lock.lock(); if let cached = entries[key] { lock.unlock(); return cached }; lock.unlock()
         let options = MTLCompileOptions(); options.fastMathEnabled = false
-        let library = try device.makeLibrary(source: depth24Quantized ? try TranslatedSourceDepth24.rewrite(program.source) : program.source, options: options)
+        let source = try TranslatedSourceVertexStore.rewrite(program.source)
+        let library = try device.makeLibrary(source: depth24Quantized ? try TranslatedSourceDepth24.rewrite(source) : source, options: options)
         let descriptor = MTLRenderPipelineDescriptor(); descriptor.vertexFunction = library.makeFunction(name: "source_vertex"); descriptor.fragmentFunction = library.makeFunction(name: "source_fragment")
         descriptor.rasterSampleCount = target.sampleCount
         descriptor.colorAttachments[0].pixelFormat = target.color; descriptor.depthAttachmentPixelFormat = target.depthStencil; descriptor.stencilAttachmentPixelFormat = target.depthStencil
@@ -442,6 +445,63 @@ public enum TranslatedSourceDepth24 {
         ]
         var result = source
         for (range, replacement) in replacements.sorted(by: { $0.0.lowerBound > $1.0.lowerBound }) { result.replaceSubrange(range, with: replacement) }
+        return result
+    }
+}
+
+/// #188: an unreachable vertex-stage store that keeps every translated
+/// draw's derivative quads within one primitive.
+///
+/// On the investigated Apple GPU (M2 Ultra, macOS 27.0.1), an indexed draw
+/// whose vertex function writes no device memory can build a fragment's 2x2
+/// derivative quad from lanes of a neighbouring triangle that shares its
+/// vertices. `dfdx`/`dfdy`, and so implicit-LOD samples, then come from the
+/// neighbour's attribute plane at a large share of edge-adjacent pixels:
+/// about a third of the shoe forward pass's visible pixels. When the
+/// fragment function can also `discard_fragment()`, which neighbour lands in
+/// a quad changes between identical submissions, and repeated draws of a held
+/// frame differ while every vertex input, vertex output, visible UV and
+/// primitive ID is bit-identical. Direct3D 11, which the translated programs
+/// come from, shades each primitive in its own 2x2 quads with helper lanes. A
+/// vertex function that can write device memory, like a non-indexed draw,
+/// makes this GPU do the same: every visible derivative then matches the
+/// own-triangle finite difference and repeats are bit-identical.
+///
+/// The added store is guarded by `vid == 0xffffffff`. Every translated draw
+/// is a 32-bit indexed draw without a base vertex whose indices address its
+/// own vertex buffer, and that value is Metal's 32-bit primitive-restart
+/// index, so no vertex runs the store: it writes nothing, and sampling, alpha
+/// testing, outputs and bindings stay the source program's. The only other change is that buffer(0) is declared `device`
+/// instead of `device const`; the bound buffer is the same. The source is
+/// rewritten once per pipeline compile, with no per-frame work, binding or
+/// upload; the cost is the GPU's per-index vertex shading for such a function.
+public enum TranslatedSourceVertexStore {
+    static let constInput = "device const SourceInput *input [[buffer(0)]]"
+    static let mutableInput = "device SourceInput *input [[buffer(0)]]"
+
+    /// The rewritten source. Throws when the vertex stage does not have the
+    /// translation emitter's shape (`Tools/reverse/source_shader_translation.py`).
+    public static func rewrite(_ source: String) throws -> String {
+        typealias ProbeError = OriginalFrameProbe.ProbeError
+        guard let inputStruct = source.range(of: "struct SourceInput { float4 "),
+              let fieldEnd = source.range(of: ";", range: inputStruct.upperBound..<source.endIndex),
+              let signature = source.range(of: "vertex SourceOutput source_vertex(uint vid [[vertex_id]], "),
+              inputStruct.upperBound <= signature.lowerBound,
+              let input = source.range(of: constInput, range: signature.upperBound..<source.endIndex),
+              input.lowerBound == signature.upperBound,
+              source.range(of: constInput, range: input.upperBound..<source.endIndex) == nil,
+              let output = source.range(of: "SourceOutput out;", range: input.upperBound..<source.endIndex),
+              source.range(of: "SourceOutput out;", range: output.upperBound..<source.endIndex) == nil,
+              source.range(of: "fragment ", range: signature.upperBound..<output.lowerBound) == nil
+        else { throw ProbeError.invalid("Translated vertex stage shape (#188 vertex store)") }
+        let field = String(source[inputStruct.upperBound..<fieldEnd.lowerBound])
+        guard let first = field.first, first.isLetter, field.allSatisfy({ $0.isLetter || $0.isNumber || $0 == "_" }) else {
+            throw ProbeError.invalid("Translated vertex input field (#188 vertex store)")
+        }
+        var result = source
+        // The later range first, so the earlier one stays valid.
+        result.replaceSubrange(output, with: "if (vid == 0xffffffffu) { input[0].\(field) = float4(0.0f); } SourceOutput out;")
+        result.replaceSubrange(input, with: mutableInput)
         return result
     }
 }
