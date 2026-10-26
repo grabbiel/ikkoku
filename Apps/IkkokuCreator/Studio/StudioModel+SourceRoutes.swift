@@ -406,6 +406,9 @@ extension StudioModel {
 /// selected point's position (or the start point's rotation), speed, ease,
 /// connection and link. The controls CharaStudio greys out while the route
 /// plays are disabled the same way.
+/// R7 phase 2, item 7: its setters write only while the route is the
+/// selection, so a kept, hidden route section writes nothing, and its
+/// Picker labels hide themselves with it (`inspectorKeptLabel`).
 struct SourceRouteInspector: View {
     let model: StudioModel
     let id: UUID
@@ -414,21 +417,24 @@ struct SourceRouteInspector: View {
     let point: SourceRoutePointSelection?
 
     var body: some View {
+        let _ = PerfTrace.body(.objectInspectorSection)
         SectionBox(title: "Route") {
             Text("Route: \(playing ? "Playing" : "Stopped")").font(.callout)
             HStack {
                 Button(playing ? "Stop" : "Play") { model.toggleSourceRoute(id) }
                     .help(playing ? "Stop this route (Stop pins its children to point 0)" : "Play this route from the current time")
             }
-            Toggle("Loop", isOn: Binding(get: { route.loop }, set: { v in model.editSourceRoute(id, .loop) { $0.loop = v } }))
+            Toggle("Loop", isOn: Binding(get: { route.loop }, set: { v in guard model.selection == id else { return }; model.editSourceRoute(id, .loop) { $0.loop = v } }))
                 .disabled(playing)
-            Toggle("Show line", isOn: Binding(get: { route.visibleLine }, set: { v in model.editSourceRoute(id, .visibleLine) { $0.visibleLine = v } }))
-            Picker("Orient", selection: Binding(get: { route.orientation }, set: { v in
+            Toggle("Show line", isOn: Binding(get: { route.visibleLine }, set: { v in guard model.selection == id else { return }; model.editSourceRoute(id, .visibleLine) { $0.visibleLine = v } }))
+            Picker(selection: Binding(get: { route.orientation }, set: { v in
+                guard model.selection == id else { return }
                 model.editSourceRoute(id, .orientation) { $0.setOrientation(SourceStudioRoute.Orientation(rawValue: v) ?? .none) }
             })) {
                 Text("None").tag(Int32(0)); Text("XY").tag(Int32(1)); Text("Y").tag(Int32(2))
-            }.disabled(playing)
+            } label: { Text("Orient").inspectorKeptLabel() }.disabled(playing)
             ColorRow(label: "Line colour", color: Binding(get: { RGB(route.color.x, route.color.y, route.color.z) }, set: { v in
+                guard model.selection == id else { return }
                 let c = v.float3
                 model.editSourceRoute(id, .color) { try $0.setColor(red: c.x, green: c.y, blue: c.z) }
             }))
@@ -437,10 +443,10 @@ struct SourceRouteInspector: View {
                     .disabled(playing || route.points.count >= SourceStudioRouteState.pointLimit)
                 Text("\(route.points.count) of \(SourceStudioRouteState.pointLimit) points").font(.caption).foregroundStyle(.secondary)
             }
-            Picker("Point", selection: Binding(get: { point?.index ?? -1 }, set: { model.selectedRoutePoint = $0 < 0 ? nil : .init(index: $0) })) {
+            Picker(selection: Binding(get: { point?.index ?? -1 }, set: { index in if model.selection == id { model.selectedRoutePoint = index < 0 ? nil : .init(index: index) } })) {
                 Text("None").tag(-1)
                 ForEach(route.points.indices, id: \.self) { i in Text(i == 0 ? "Start" : "Point \(i)").tag(i) }
-            }
+            } label: { Text("Point").inspectorKeptLabel() }
             if let point, route.points.indices.contains(point.index) { pointControls(point.index) }
             Text("Point moves, added and deleted points and these settings are written into the exported original scene; the play state is saved as the route's active flag.")
                 .font(.caption).foregroundStyle(.secondary)
@@ -452,31 +458,36 @@ struct SourceRouteInspector: View {
         let locked = playing || route.speedAndEaseLocked(at: index)
         if index == 0 {
             VectorRow(label: "Rotation", value: Binding(get: { value.rotationDegrees }, set: { v in
+                guard model.selection == id else { return }
                 model.editSourceRoute(id, .move) { try $0.rotateStart(to: v) }
             }), step: 5, format: "%.1f")
         } else {
             VectorRow(label: "Position", value: Binding(get: { value.position }, set: { v in
+                guard model.selection == id else { return }
                 model.editSourceRoute(id, .move) { try $0.movePoint(index, to: v) }
             }), step: 0.05, format: "%.3f")
             Button("Delete point") { model.deleteSourceRoutePoint(id, index: index) }
         }
         FloatRow(label: "Speed", value: Binding(get: { value.speed }, set: { v in
+            guard model.selection == id else { return }
             model.editSourceRoute(id, .speed, point: index) { try $0.setSpeed(index, v) }
         }), range: SourceStudioRouteState.speedRange).disabled(locked)
-        Picker("Ease", selection: Binding(get: { value.easeType }, set: { v in
+        Picker(selection: Binding(get: { value.easeType }, set: { v in
+            guard model.selection == id else { return }
             model.editSourceRoute(id, .ease, point: index) { try $0.setEase(index, SourceStudioRoute.EaseType(rawValue: v) ?? .linear) }
         })) {
             ForEach(SourceStudioRouteState.easeChoices, id: \.ease) { choice in Text(choice.name).tag(choice.ease.rawValue) }
             if !SourceStudioRouteState.easeChoices.contains(where: { $0.ease.rawValue == value.easeType }) {
                 Text("Saved (\(value.easeType))").tag(value.easeType)
             }
-        }.disabled(locked)
-        Picker("Connection", selection: Binding(get: { value.connection }, set: { v in
+        } label: { Text("Ease").inspectorKeptLabel() }.disabled(locked)
+        Picker(selection: Binding(get: { value.connection }, set: { v in
+            guard model.selection == id else { return }
             model.editSourceRoute(id, .connection) { try $0.setConnection(index, SourceStudioRoute.Connection(rawValue: v) ?? .line) }
         })) {
             Text("Line").tag(Int32(0)); Text("Curve").tag(Int32(1))
-        }.disabled(playing)
-        Toggle("Link", isOn: Binding(get: { value.linked }, set: { v in model.editSourceRoute(id, .link) { try $0.setLink(index, v) } }))
+        } label: { Text("Connection").inspectorKeptLabel() }.disabled(playing)
+        Toggle("Link", isOn: Binding(get: { value.linked }, set: { v in guard model.selection == id else { return }; model.editSourceRoute(id, .link) { try $0.setLink(index, v) } }))
             .disabled(playing)
         if value.isCurve {
             Button("Select aid") { model.selectedRoutePoint = .init(index: index, aid: true) }

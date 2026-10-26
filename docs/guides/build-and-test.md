@@ -388,6 +388,14 @@ run, and a visible window's laid-out bounds must be nonzero and unchanged for
 five polls 0.1 s apart. Otherwise it exits 1 after `IKKOKU_CAPTURE_UI_TIMEOUT`
 seconds (default 30, at most 600), naming what was not ready.
 
+With `IKKOKU_CAPTURE_UI_MODE=studio`, `IKKOKU_CAPTURE_UI_SELECT` lists up to 16
+source keys, comma-separated, or `none` to clear the selection (R7 phase 2,
+item 7). After the default selection and `IKKOKU_CAPTURE_UI_STUDIO_TAB`, the
+readiness poll makes them one per poll, so SwiftUI commits each before the
+next, as successive clicks do. Readiness counts from the last one. For example,
+`0,622,none` captures "Nothing selected" after a character and a folder were
+shown. A key with no source object exits 1.
+
 Capture outputs are read back after writing: the UI PNG and
 `IKKOKU_CAPTURE_UI_REPORT`, thumbnails, offscreen PNGs and JSON reports. Each
 must be nonempty and byte-identical to what was written, and a PNG must be
@@ -504,7 +512,8 @@ These combinations used to run and now exit 1 at startup:
   1–8192; ticks, outfit and coordinate must be integers of at least 0. Yaw and
   timeline must be finite numbers, and presets one of face, upper or full (rig
   capture: only `face`). Flags must be 0 or 1, `IKKOKU_CAPTURE_SEX` m or f and
-  `IKKOKU_CAPTURE_UI_MODE` maker or studio. `IKKOKU_PERF_WORKLOAD` must be a
+  `IKKOKU_CAPTURE_UI_MODE` maker or studio. `IKKOKU_CAPTURE_UI_SELECT` must
+  list 1 to 16 source keys or `none`. `IKKOKU_PERF_WORKLOAD` must be a
   documented workload and the other `IKKOKU_PERF_*` values integers in range. Expression keys must be eyes, mouth,
   brows, head or gaze, with well-formed `key=value` lists. Focus events must be
   0/1 lists of at most 64. Native scene capture rejects `GRID=1` and `GIZMOS=1`.

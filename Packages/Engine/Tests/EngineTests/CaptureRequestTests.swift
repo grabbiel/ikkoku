@@ -491,7 +491,8 @@ private struct CaptureRecipe {
                                    "IKKOKU_PERF_LINK_RATE": "fixed", "IKKOKU_PERF_FRAME_SKIP": "off", "IKKOKU_PERF_KEEPALIVE_MS": "0", "IKKOKU_PERF_BURST_IDLE_MS": "250", "IKKOKU_PERF_DEFORM_REUSE": "off",
                                    "IKKOKU_PERF_LIVE_PACING": "timer", "IKKOKU_PERF_BURST_LIVE": "on",
                                    "IKKOKU_PERF_ACTION_KEY": "0", "IKKOKU_PERF_RIG_PREFETCH": "off", "IKKOKU_PERF_DONATIONS": "off", "IKKOKU_PERF_INSTALL_REFRESH": "each",
-                                   "IKKOKU_PERF_OUTFIT": "2",
+                                   "IKKOKU_PERF_OUTFIT": "2", "IKKOKU_PERF_SELECT_KEYS": "963,0,12", "IKKOKU_PERF_INSPECTOR_TAB": "pose",
+                                   "IKKOKU_PERF_KEEP_MOUNTED": "tab",
                                    "IKKOKU_SOURCE_SCENE": "/scenes/scene.png", "IKKOKU_SOURCE_AVATAR": "/rigs/source-avatar.json"]
     let request = try CaptureRequest.validate(trace)
     #expect(request.mode == .perfTrace)
@@ -509,12 +510,18 @@ private struct CaptureRecipe {
     #expect(captureRequestProblems(["IKKOKU_PERF_MAIN_LOAD_MS": "20"]) == loadOutside)
     let rateOutside: [[String]] = [["IKKOKU_PERF_LINK_RATE"]]
     #expect(captureRequestProblems(["IKKOKU_PERF_LINK_RATE": "fixed"]) == rateOutside)
+    let keptOutside: [[String]] = [["IKKOKU_PERF_KEEP_MOUNTED"]]
+    #expect(captureRequestProblems(["IKKOKU_PERF_KEEP_MOUNTED": "off"]) == keptOutside)
+    for value in ["off", "tab", "on"] {
+        #expect(captureRequestProblems(["IKKOKU_PERF_TRACE": "/p.json", "IKKOKU_PERF_KEEP_MOUNTED": value]).isEmpty, Comment(rawValue: value))
+    }
     let misspelled: [[String]] = [["IKKOKU_PERF_SECOND"]]
     #expect(captureRequestProblems(["IKKOKU_PERF_TRACE": "/p.json", "IKKOKU_PERF_SECOND": "10"]) == misspelled)
     let window: [[String]] = [["IKKOKU_CAPTURE_UI", "IKKOKU_PERF_TRACE"]]
     #expect(captureRequestProblems(["IKKOKU_PERF_TRACE": "/p.json", "IKKOKU_CAPTURE_UI": "/ui.png"]) == window)
     let withCapture: [[String]] = [["IKKOKU_PERF_TRACE", "IKKOKU_AUTOCAPTURE"]]
     #expect(captureRequestProblems(["IKKOKU_PERF_TRACE": "/p.json", "IKKOKU_AUTOCAPTURE": "/out.png"]) == withCapture)
+    let tooManyKeys: String = Array(repeating: "1", count: 65).joined(separator: ",")
     for (variable, value) in [("IKKOKU_PERF_WORKLOAD", "studio"), ("IKKOKU_PERF_SECONDS", "0"), ("IKKOKU_PERF_SECONDS", "2.5"),
                               ("IKKOKU_PERF_WINDOW_W", "100"), ("IKKOKU_PERF_INPUT_HZ", "0"), ("IKKOKU_PERF_CHARACTERS", "33"),
                               ("IKKOKU_PERF_MAIN_LOAD_MS", "-1"), ("IKKOKU_PERF_MAIN_LOAD_MS", "1001"), ("IKKOKU_PERF_MAIN_LOAD_HZ", "0"),
@@ -523,10 +530,38 @@ private struct CaptureRecipe {
                               ("IKKOKU_PERF_LIVE_PACING", "link"), ("IKKOKU_PERF_BURST_LIVE", "1"),
                               ("IKKOKU_PERF_ACTION_KEY", "-1"), ("IKKOKU_PERF_ACTION_KEY", "route"),
                               ("IKKOKU_PERF_RIG_PREFETCH", "no"), ("IKKOKU_PERF_DONATIONS", "1"), ("IKKOKU_PERF_INSTALL_REFRESH", "later"),
-                              ("IKKOKU_PERF_OUTFIT", "7"), ("IKKOKU_PERF_OUTFIT", "-1")] {
+                              ("IKKOKU_PERF_OUTFIT", "7"), ("IKKOKU_PERF_OUTFIT", "-1"),
+                              ("IKKOKU_PERF_SELECT_KEYS", ""), ("IKKOKU_PERF_SELECT_KEYS", "963,"), ("IKKOKU_PERF_SELECT_KEYS", "-1"),
+                              ("IKKOKU_PERF_SELECT_KEYS", "route"), ("IKKOKU_PERF_SELECT_KEYS", tooManyKeys),
+                              ("IKKOKU_PERF_INSPECTOR_TAB", "Object"), ("IKKOKU_PERF_INSPECTOR_TAB", "timeline"),
+                              ("IKKOKU_PERF_KEEP_MOUNTED", "On"), ("IKKOKU_PERF_KEEP_MOUNTED", "1"), ("IKKOKU_PERF_KEEP_MOUNTED", "")] {
         var environment: [String: String] = ["IKKOKU_PERF_TRACE": "/p.json"]
         environment[variable] = value
         let expected: [[String]] = [[variable]]
         #expect(captureRequestProblems(environment) == expected, Comment(rawValue: "\(variable)=\(value)"))
     }
+}
+
+// R7 phase 2, item 7: a Studio window capture can make selections first, one at a time.
+@Test func captureRequestAcceptsStudioWindowSelections() {
+    let studio: [String: String] = ["IKKOKU_SOURCE_SCENE": "/scenes/scene.png", "IKKOKU_SOURCE_AVATAR": "/rigs/source-avatar.json",
+                                    "IKKOKU_CAPTURE_UI": "/ui.png", "IKKOKU_CAPTURE_UI_MODE": "studio"]
+    for value in ["0", "0,622,none", "none", "963,none,963"] {
+        var environment = studio
+        environment["IKKOKU_CAPTURE_UI_SELECT"] = value
+        #expect(captureRequestProblems(environment).isEmpty, Comment(rawValue: value))
+    }
+    let tooMany: String = Array(repeating: "none", count: 17).joined(separator: ",")
+    let rejected: [[String]] = [["IKKOKU_CAPTURE_UI_SELECT"]]
+    for value in ["", "0,", "None", "-1", "route", tooMany] {
+        var environment = studio
+        environment["IKKOKU_CAPTURE_UI_SELECT"] = value
+        #expect(captureRequestProblems(environment) == rejected, Comment(rawValue: value))
+    }
+    var maker = studio
+    maker["IKKOKU_CAPTURE_UI_MODE"] = "maker"
+    maker["IKKOKU_CAPTURE_UI_SELECT"] = "0"
+    #expect(captureRequestProblems(maker) == rejected)
+    #expect(captureRequestMessage(maker).contains("IKKOKU_CAPTURE_UI_MODE=studio"))
+    #expect(captureRequestProblems(["IKKOKU_CAPTURE_UI_SELECT": "0"]) == rejected)
 }

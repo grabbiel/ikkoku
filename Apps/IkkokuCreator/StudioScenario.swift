@@ -646,6 +646,8 @@ struct StudioScenario: Decodable {
     let steps: [Step]
     let pluginLibrary: PluginLibraryScenario?
     let hideStudioUI: HideStudioUIScenario?
+    /// R7 phase 2, item 7: Object-tab checks run in the window once it is up.
+    let inspectorUI: InspectorUIScenario?
 
     struct Report: Encodable {
         struct StepResult: Encodable {

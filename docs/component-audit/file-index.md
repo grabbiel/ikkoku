@@ -23,25 +23,25 @@ branch was tested or every asset matches the original game. Feature status,
 specific comments and pending tasks are in the linked reports. Shared behavior
 may be discussed in more than one report; one primary owner is listed here.
 
-**1020 files indexed; 1020 assigned; 0 unassigned.**
+**1028 files indexed; 1028 assigned; 0 unassigned.**
 
 | Primary report | Files |
 | --- | ---: |
 | [App / gameplay / plugins](app-gameplay-and-plugins.md) | 110 |
 | [Character / Maker / mods](character-and-mods.md) | 128 |
-| [Studio / IK / animation](studio.md) | 235 |
+| [Studio / IK / animation](studio.md) | 238 |
 | [Renderer / foundation / assets](renderer-and-foundation.md) | 335 |
-| [Toolchain / verification / historical docs](toolchain-and-verification.md) | 202 |
+| [Toolchain / verification / historical docs](toolchain-and-verification.md) | 207 |
 
 | File role | Files |
 | --- | ---: |
 | App resource metadata / icon | 16 |
 | Build / repository configuration | 9 |
-| Conversion / recovery / verification tool | 238 |
+| Conversion / recovery / verification tool | 243 |
 | Documentation / historical evidence | 65 |
 | Generated asset / catalog / fixture | 205 |
 | Reference host / controlled fixture | 36 |
-| Runtime / shared shader declaration | 226 |
+| Runtime / shared shader declaration | 229 |
 | Test / validation | 212 |
 
 ## App / gameplay / plugins
@@ -313,8 +313,11 @@ Feature assessment: [studio.md](studio.md).
 | [Apps/IkkokuCreator/Studio/StudioModel.swift](../../Apps/IkkokuCreator/Studio/StudioModel.swift) | Runtime / shared shader declaration |
 | [Apps/IkkokuCreator/Studio/SourceExpressionInspector.swift](../../Apps/IkkokuCreator/Studio/SourceExpressionInspector.swift) | Runtime / shared shader declaration |
 | [Apps/IkkokuCreator/Studio/SourceSceneImportJob.swift](../../Apps/IkkokuCreator/Studio/SourceSceneImportJob.swift) | Runtime / shared shader declaration |
+| [Apps/IkkokuCreator/Studio/StudioInspectorMounting.swift](../../Apps/IkkokuCreator/Studio/StudioInspectorMounting.swift) | Runtime / shared shader declaration |
+| [Apps/IkkokuCreator/Studio/ObjectInspectorSections.swift](../../Apps/IkkokuCreator/Studio/ObjectInspectorSections.swift) | Runtime / shared shader declaration |
 | [Apps/IkkokuCreator/Studio/StudioView.swift](../../Apps/IkkokuCreator/Studio/StudioView.swift) | Runtime / shared shader declaration |
 | [Apps/IkkokuCreator/StudioScenario.swift](../../Apps/IkkokuCreator/StudioScenario.swift) | Runtime / shared shader declaration |
+| [Apps/IkkokuCreator/InspectorUIScenario.swift](../../Apps/IkkokuCreator/InspectorUIScenario.swift) | Runtime / shared shader declaration |
 | [Packages/Engine/Sources/Scene/IK.swift](../../Packages/Engine/Sources/Scene/IK.swift) | Runtime / shared shader declaration |
 | [Packages/Engine/Sources/Scene/SourceTrigonometricIK.swift](../../Packages/Engine/Sources/Scene/SourceTrigonometricIK.swift) | Runtime / shared shader declaration |
 | [Packages/Engine/Sources/Studio/Gizmo.swift](../../Packages/Engine/Sources/Studio/Gizmo.swift) | Runtime / shared shader declaration |
@@ -965,6 +968,11 @@ Feature assessment: [toolchain-and-verification.md](toolchain-and-verification.m
 | [Tools/verification/scenarios/gameplay-controlled-event.json](../../Tools/verification/scenarios/gameplay-controlled-event.json) | Conversion / recovery / verification tool |
 | [Tools/verification/scenarios/hand-patterns.json](../../Tools/verification/scenarios/hand-patterns.json) | Conversion / recovery / verification tool |
 | [Tools/verification/scenarios/hand-patterns-kept.json](../../Tools/verification/scenarios/hand-patterns-kept.json) | Conversion / recovery / verification tool |
+| [Tools/verification/scenarios/inspector-edit-deselect.json](../../Tools/verification/scenarios/inspector-edit-deselect.json) | Conversion / recovery / verification tool |
+| [Tools/verification/scenarios/inspector-hidden-route.json](../../Tools/verification/scenarios/inspector-hidden-route.json) | Conversion / recovery / verification tool |
+| [Tools/verification/scenarios/inspector-hide-cycles.json](../../Tools/verification/scenarios/inspector-hide-cycles.json) | Conversion / recovery / verification tool |
+| [Tools/verification/scenarios/inspector-kept-route.json](../../Tools/verification/scenarios/inspector-kept-route.json) | Conversion / recovery / verification tool |
+| [Tools/verification/scenarios/inspector-kept-views.json](../../Tools/verification/scenarios/inspector-kept-views.json) | Conversion / recovery / verification tool |
 | [Tools/verification/scenarios/item-props.json](../../Tools/verification/scenarios/item-props.json) | Conversion / recovery / verification tool |
 | [Tools/verification/scenarios/live-step-edit.json](../../Tools/verification/scenarios/live-step-edit.json) | Conversion / recovery / verification tool |
 | [Tools/verification/scenarios/maker-color-roundtrip.json](../../Tools/verification/scenarios/maker-color-roundtrip.json) | Conversion / recovery / verification tool |

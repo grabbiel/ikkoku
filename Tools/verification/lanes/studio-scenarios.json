@@ -3005,6 +3005,156 @@
         }
       ],
       "timeout": 600
+    },
+    {
+      "id": "studio-scenario-inspector-edit-deselect",
+      "argv": [
+        ".local/build/Build/Products/Debug/Ikkoku.app/Contents/MacOS/Ikkoku"
+      ],
+      "fixtures": [
+        {
+          "env": "IKKOKU_SOURCE_SCENE",
+          "kind": "file",
+          "from": "IKKOKU_STUDIO_SCENARIO_SCENE"
+        },
+        {
+          "env": "IKKOKU_SOURCE_AVATAR",
+          "kind": "file"
+        }
+      ],
+      "env": {
+        "IKKOKU_STUDIO_SCENARIO": "Tools/verification/scenarios/inspector-edit-deselect.json",
+        "IKKOKU_STUDIO_SCENARIO_REPORT": ".local/verification/reports/studio-scenario-inspector-edit-deselect.json"
+      },
+      "referenceTier": "app-smoke",
+      "tolerance": "R7 phase 2, item 7, in the window: types into the Object tab's Name field and its first Transform field (position x) through the field editor, then clears the selection (or deletes the object) while the field is still being edited, and pins what that does to the name, the position, the undo stack and the first responder, and what later typing reaches. The values are the ones the inspector gave before it kept the tab mounted.",
+      "artifacts": [
+        {
+          "path": ".local/verification/reports/studio-scenario-inspector-edit-deselect.json",
+          "kind": "scenario-report"
+        }
+      ],
+      "timeout": 600
+    },
+    {
+      "id": "studio-scenario-inspector-hidden-route",
+      "argv": [
+        ".local/build/Build/Products/Debug/Ikkoku.app/Contents/MacOS/Ikkoku"
+      ],
+      "fixtures": [
+        {
+          "env": "IKKOKU_SOURCE_SCENE",
+          "kind": "file",
+          "from": "IKKOKU_STUDIO_HALF_STATE_SCENE"
+        },
+        {
+          "env": "IKKOKU_SOURCE_AVATAR",
+          "kind": "file"
+        }
+      ],
+      "env": {
+        "IKKOKU_STUDIO_SCENARIO": "Tools/verification/scenarios/inspector-hidden-route.json",
+        "IKKOKU_STUDIO_SCENARIO_REPORT": ".local/verification/reports/studio-scenario-inspector-hidden-route.json"
+      },
+      "referenceTier": "app-smoke",
+      "tolerance": "R7 phase 2, item 7, in the window, on the half-state scene's route (key 20), character (10) and folder (11): selection cycles leave the document and the undo stack unchanged; the route's section is absent from the accessibility tree while another object is selected; deleting the route, undo and redo with its section out of view, then selecting it again, shows the section.",
+      "artifacts": [
+        {
+          "path": ".local/verification/reports/studio-scenario-inspector-hidden-route.json",
+          "kind": "scenario-report"
+        }
+      ],
+      "timeout": 600
+    },
+    {
+      "id": "studio-scenario-inspector-hide-cycles",
+      "argv": [
+        ".local/build/Build/Products/Debug/Ikkoku.app/Contents/MacOS/Ikkoku"
+      ],
+      "fixtures": [
+        {
+          "env": "IKKOKU_SOURCE_SCENE",
+          "kind": "file",
+          "from": "IKKOKU_STUDIO_SCENARIO_SCENE"
+        },
+        {
+          "env": "IKKOKU_SOURCE_AVATAR",
+          "kind": "file"
+        }
+      ],
+      "env": {
+        "IKKOKU_STUDIO_SCENARIO": "Tools/verification/scenarios/inspector-hide-cycles.json",
+        "IKKOKU_STUDIO_SCENARIO_REPORT": ".local/verification/reports/studio-scenario-inspector-hide-cycles.json"
+      },
+      "referenceTier": "app-smoke",
+      "tolerance": "R7 phase 2, item 7, in the window: five cycles of select and deselect over keys 0, 963 and 622 leave the document and the undo stack unchanged; with a character, nothing and a folder selected, the accessibility tree shows only that state's controls and the Tab key-view loop reaches no view outside the visible window.",
+      "artifacts": [
+        {
+          "path": ".local/verification/reports/studio-scenario-inspector-hide-cycles.json",
+          "kind": "scenario-report"
+        }
+      ],
+      "timeout": 600
+    },
+    {
+      "id": "studio-scenario-inspector-kept-views",
+      "argv": [
+        ".local/build/Build/Products/Debug/Ikkoku.app/Contents/MacOS/Ikkoku"
+      ],
+      "fixtures": [
+        {
+          "env": "IKKOKU_SOURCE_SCENE",
+          "kind": "file",
+          "from": "IKKOKU_STUDIO_SCENARIO_SCENE"
+        },
+        {
+          "env": "IKKOKU_SOURCE_AVATAR",
+          "kind": "file"
+        }
+      ],
+      "env": {
+        "IKKOKU_STUDIO_SCENARIO": "Tools/verification/scenarios/inspector-kept-views.json",
+        "IKKOKU_STUDIO_SCENARIO_REPORT": ".local/verification/reports/studio-scenario-inspector-kept-views.json"
+      },
+      "referenceTier": "app-smoke",
+      "tolerance": "R7 phase 2, item 7, in the window: the Object tab kept while nothing is selected. Its hidden fields take no click, no focus and no typing, and the accessibility tree and the Tab key-view loop show only the placeholder. A field shown again shows the document's value. A collapsed Transform section stays collapsed from one character to the next and is expanded again after nothing was selected, as when the tab was built anew. Selection cycles leave the document and the undo stack unchanged.",
+      "artifacts": [
+        {
+          "path": ".local/verification/reports/studio-scenario-inspector-kept-views.json",
+          "kind": "scenario-report"
+        }
+      ],
+      "timeout": 600
+    },
+    {
+      "id": "studio-scenario-inspector-kept-route",
+      "argv": [
+        ".local/build/Build/Products/Debug/Ikkoku.app/Contents/MacOS/Ikkoku"
+      ],
+      "fixtures": [
+        {
+          "env": "IKKOKU_SOURCE_SCENE",
+          "kind": "file",
+          "from": "IKKOKU_STUDIO_HALF_STATE_SCENE"
+        },
+        {
+          "env": "IKKOKU_SOURCE_AVATAR",
+          "kind": "file"
+        }
+      ],
+      "env": {
+        "IKKOKU_STUDIO_SCENARIO": "Tools/verification/scenarios/inspector-kept-route.json",
+        "IKKOKU_STUDIO_SCENARIO_REPORT": ".local/verification/reports/studio-scenario-inspector-kept-route.json"
+      },
+      "referenceTier": "app-smoke",
+      "tolerance": "R7 phase 2, item 7, in the window: a route's colour well active, or a route point's position field being edited, when the selection clears. The well stops taking the colour panel's colour and the edit is dropped without the end-of-editing commit, as when the section left the window; the document and the undo stack are unchanged, and later typing reaches nothing.",
+      "artifacts": [
+        {
+          "path": ".local/verification/reports/studio-scenario-inspector-kept-route.json",
+          "kind": "scenario-report"
+        }
+      ],
+      "timeout": 600
     }
   ]
 }

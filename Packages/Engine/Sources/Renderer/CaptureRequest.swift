@@ -448,12 +448,15 @@ extension CaptureRequest {
         ScopedOption("IKKOKU_PERF_DONATIONS", [.perfTrace]),
         ScopedOption("IKKOKU_PERF_INSTALL_REFRESH", [.perfTrace]),
         ScopedOption("IKKOKU_PERF_OUTFIT", [.perfTrace]),
+        ScopedOption("IKKOKU_PERF_SELECT_KEYS", [.perfTrace]),
+        ScopedOption("IKKOKU_PERF_INSPECTOR_TAB", [.perfTrace]),
+        ScopedOption("IKKOKU_PERF_KEEP_MOUNTED", [.perfTrace]),
     ]
 
     /// Options read only by the window capture.
     static let windowOptions: [String] = [
         "IKKOKU_CAPTURE_UI_TAB", "IKKOKU_CAPTURE_UI_MODE", "IKKOKU_CAPTURE_UI_STUDIO_TAB",
-        "IKKOKU_CAPTURE_UI_REPORT", UICaptureReadiness.timeoutVariable,
+        "IKKOKU_CAPTURE_UI_SELECT", "IKKOKU_CAPTURE_UI_REPORT", UICaptureReadiness.timeoutVariable,
     ]
 
     /// Inputs startup loads in any mode that builds the Maker and Studio, including
@@ -501,6 +504,7 @@ extension CaptureRequest {
         Dependency("IKKOKU_BENCHMARK_SIMULATION_FRAMES", requires: "IKKOKU_SOURCE_SCENE"),
         Dependency("IKKOKU_SOURCE_PLUGIN_DELTA", requires: "IKKOKU_SOURCE_PLUGIN_STEPS"),
         Dependency("IKKOKU_CAPTURE_UI_STUDIO_TAB", requires: "IKKOKU_CAPTURE_UI_MODE", value: "studio"),
+        Dependency("IKKOKU_CAPTURE_UI_SELECT", requires: "IKKOKU_CAPTURE_UI_MODE", value: "studio"),
         Dependency("IKKOKU_ORIGINAL_FRAME_FAMILY_SETS", requires: "IKKOKU_ORIGINAL_FRAME_FAMILIES", value: "1"),
         Dependency("IKKOKU_ORIGINAL_FRAME_TRACE_PIXELS", requires: "IKKOKU_ORIGINAL_FRAME_FAMILIES", value: "1"),
         Dependency("IKKOKU_ORIGINAL_FRAME_DEPTH24", requires: "IKKOKU_ORIGINAL_FRAME_FAMILIES", value: "1", when: "1"),
@@ -540,6 +544,7 @@ extension CaptureRequest {
         ValueRule("IKKOKU_LIVE_SOURCE_MAKER_WEAR", .oneOf(["0", "1"])),
         ValueRule("IKKOKU_CAPTURE_SEX", .oneOf(["m", "f"])),
         ValueRule("IKKOKU_CAPTURE_UI_MODE", .oneOf(["maker", "studio"])),
+        ValueRule("IKKOKU_CAPTURE_UI_SELECT", .integerList(0...Int(Int32.max), maxCount: 16, words: ["none"])),
         ValueRule("IKKOKU_CAPTURE_TICKS", .integer(0...Int.max)),
         ValueRule("IKKOKU_CAPTURE_OUTFIT", .integer(0...Int.max)),
         ValueRule("IKKOKU_SOURCE_COORDINATE", .integer(0...Int.max)),
@@ -582,6 +587,13 @@ extension CaptureRequest {
         ValueRule("IKKOKU_PERF_INSTALL_REFRESH", .oneOf(["step", "each"])),
         // The saved outfit `studio-outfit` selects (R7 phase 2, item 6, third part).
         ValueRule("IKKOKU_PERF_OUTFIT", .integer(0...6)),
+        // The source keys `studio-select` selects in turn, and the inspector
+        // tab it shows (R7 phase 2, item 7).
+        ValueRule("IKKOKU_PERF_SELECT_KEYS", .integerList(0...Int(Int32.max), maxCount: 64)),
+        ValueRule("IKKOKU_PERF_INSPECTOR_TAB", .oneOf(["object", "pose", "face", "clothes", "scene"])),
+        // Which hidden inspector views stay mounted (item 7): none as before,
+        // the Object tab, or the tab and each kind's section (the default).
+        ValueRule("IKKOKU_PERF_KEEP_MOUNTED", .oneOf(["off", "tab", "on"])),
     ]
 
     /// `IKKOKU_PERF_WORKLOAD` values, in the order `docs/reference/performance.md` lists them.
@@ -589,7 +601,7 @@ extension CaptureRequest {
         "studio-idle", "studio-orbit", "studio-fk-drag", "studio-hover", "maker-slider", "maker-idle",
         "studio-native", "viewport-lifecycle", "startup", "studio-static", "studio-orbit-bursts",
         "studio-duplicate", "studio-undo-delete", "studio-timeline",
-        "studio-outfit", "studio-export", "studio-redo", "studio-load",
+        "studio-outfit", "studio-export", "studio-redo", "studio-load", "studio-select",
     ]
 }
 
@@ -601,6 +613,8 @@ enum ValueCheck: Sendable {
     case finiteNumber
     /// Comma-separated `key=value` pairs; `keys` lists the accepted keys, or nil for any.
     case pairs(keys: [String]?, integerValues: Bool)
+    /// One to `maxCount` comma-separated items, each an integer in `range` or one of `words`.
+    case integerList(ClosedRange<Int>, maxCount: Int, words: [String] = [])
     /// `IKKOKU_APPLICATION_FOCUS`: at most 64 comma-separated 0 (loss) or 1 (gain).
     case focusEvents
 
@@ -639,6 +653,12 @@ enum ValueCheck: Sendable {
                 }
             }
             return nil
+        case .integerList(let range, let maxCount, let words):
+            let pieces = value.split(separator: ",", omittingEmptySubsequences: false)
+            let valid = pieces.allSatisfy { piece in words.contains(String(piece)) || (Int(piece).map(range.contains) ?? false) }
+            if pieces.count <= maxCount, valid { return nil }
+            let alternatives = words.isEmpty ? "" : " or " + joinedList(words, "or")
+            return "must list 1 to \(maxCount) comma-separated integers from \(range.lowerBound) to \(range.upperBound)\(alternatives), got '\(value)'"
         case .focusEvents:
             let events = value.split(separator: ",", omittingEmptySubsequences: false)
             if events.count <= 64, events.allSatisfy({ $0 == "0" || $0 == "1" }) { return nil }

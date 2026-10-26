@@ -1,0 +1,152 @@
+{
+  "steps": [],
+  "inspectorUI": {
+    "steps": [
+      {
+        "op": "select",
+        "key": 20
+      },
+      {
+        "op": "assert",
+        "key": 20,
+        "inspectorView": "ObjectInspector",
+        "axContains": [
+          "Add point"
+        ]
+      },
+      {
+        "op": "select",
+        "key": 10
+      },
+      {
+        "op": "assert",
+        "key": 10,
+        "inspectorView": "ObjectInspector",
+        "axAbsent": [
+          "Add point",
+          "Delete point",
+          "Show line"
+        ]
+      },
+      {
+        "op": "snapshot"
+      },
+      {
+        "op": "cycle",
+        "keys": [
+          20,
+          10,
+          -1,
+          11,
+          10,
+          20,
+          -1
+        ],
+        "count": 3
+      },
+      {
+        "op": "assert",
+        "unchanged": true
+      },
+      {
+        "op": "select",
+        "key": 10
+      },
+      {
+        "op": "delete",
+        "key": 20
+      },
+      {
+        "op": "assert",
+        "key": 20,
+        "exists": false,
+        "inspectorView": "none",
+        "axAbsent": [
+          "Add point"
+        ],
+        "undoCount": 2
+      },
+      {
+        "op": "select",
+        "key": 10
+      },
+      {
+        "op": "assert",
+        "key": 20,
+        "exists": false,
+        "axAbsent": [
+          "Add point"
+        ],
+        "undoCount": 2
+      },
+      {
+        "op": "undo"
+      },
+      {
+        "op": "assert",
+        "key": 20,
+        "exists": true,
+        "axAbsent": [
+          "Add point"
+        ],
+        "undoCount": 1,
+        "redoCount": 1
+      },
+      {
+        "op": "redo"
+      },
+      {
+        "op": "assert",
+        "key": 20,
+        "exists": false,
+        "axAbsent": [
+          "Add point"
+        ],
+        "undoCount": 2,
+        "redoCount": 0
+      },
+      {
+        "op": "undo"
+      },
+      {
+        "op": "assert",
+        "key": 20,
+        "exists": true,
+        "undoCount": 1,
+        "redoCount": 1
+      },
+      {
+        "op": "select",
+        "key": 20
+      },
+      {
+        "op": "assert",
+        "key": 20,
+        "inspectorView": "ObjectInspector",
+        "axContains": [
+          "Add point"
+        ],
+        "undoCount": 1,
+        "redoCount": 1
+      },
+      {
+        "op": "select",
+        "key": 11
+      },
+      {
+        "op": "select",
+        "key": 20
+      },
+      {
+        "op": "assert",
+        "key": 20,
+        "inspectorView": "ObjectInspector",
+        "axContains": [
+          "Add point"
+        ],
+        "undoCount": 1,
+        "redoCount": 1
+      }
+    ]
+  }
+}
