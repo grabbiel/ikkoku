@@ -688,8 +688,20 @@ The refusal is the engine's message, which names each plug-in and its reason. Th
     | Add a camera | 61/0/0 | 50/0/11 | 11 refused: the latent-bug fix |
     | Route point add or delete | none of the 61 has a route | — | — |
 
-    - **Blockers.** KKPE refuses deletes and copies in 51 scenes, MaterialEditor's item-keyed data in 23, Sideloader in 8 (every edit kind), and non-empty NodesConstraints and Timeline data in 3 each. No scene is refused only by unknown IDs.
+    - **Blockers.** A second read-only run (`run-2`) counted refusal reasons per scene, with numbers masked. Its counts equal the first run's.
+      - KKPE refuses deletes and copies in 51 scenes, MaterialEditor's item-keyed data in 23, LightSettings an added or copied light in 3, non-empty NodesConstraints and Timeline data in 3 each, and ItemLayerEdit in 2. No scene is refused only by unknown IDs.
+      - Sideloader refuses every edit kind in 8 scenes, all for one reason: a record names an object the scene does not have. This is not a gap in recognizing the data.
+        - This Sideloader's save never writes such a record. It rebuilds the lists from the same objects our walk visits, by each object's own `dicKey` (StudioObjectSearch.cs, UniversalAutoResolver.cs:560–775).
+        - Its load throws at the first such record (`dictionary[item2.DicKey]`, :1342). ExtendedSave catches that per subscriber (ExtensibleSaveFormat/ExtendedSave.cs:1381–1395). Every later record then stays unresolved, and so do the map, filter, ramp and BGM (:474–481).
+        - So these scenes already load partly unresolved in CharaStudio with this install. Its next save drops the unresolved items' records, and those items lose their mod identity. There is no faithful output to match, and the export is refused.
     - **Card links.** No character card in the 182 loaded scenes names KKAnimationController `Links` or `Eyes`, so the card check refuses nothing. The detection reads each card's ExtendedSave data as `OICharInfo.Load` loads it (OICharInfo.cs:250–251). It had no positive control on the player.
+
+- **Performance** (Release, quiet window, 2026-10-26; `SourceScenePluginDataPerformanceTests`, 60 calls each, median).
+  - **Showoff scene.** `koikatu_cs0002591` has no plug-in data. A one-transform export takes 5.63 ms and a subtree deletion 5.54 ms. The plug-in step takes 0.049 and 0.046 ms of that: one search of the written bytes for KKAnimationController data, then a return.
+  - **Fix found by the probe.** Before that early exit, the step built its edit model for every export: 0.85 ms in Debug, now 0.05 ms.
+  - **Phase-A fixture.** A delete with the Sideloader rewrite exports in 0.64 ms and a move in 0.69 ms. The plug-in step takes 0.013 and 0.016 ms.
+  - **Phase-B fixture** (every plug-in's entries). A light delete exports in 0.66 ms and a move in 0.71 ms. The plug-in step takes 0.026 and 0.027 ms. An item delete is refused by KKPE after 0.62 ms.
+  - **Import.** The import path is unchanged: nothing on it runs these rules.
 
 **Limits:**
 
@@ -700,6 +712,7 @@ The refusal is the engine's message, which names each plug-in and its reason. Th
 - A move keeps every entry as before. StudioItemIK stores world-space bone poses, so a moved IK chain loads from its old pose ([mods overview](../mods/overview.md#scene-plug-in-data-in-edited-original-scenes)).
 - The orphan rule holds for the pinned install only.
 - KKPE writes per-session instance IDs, so an export of a scene with KKPE data matches CharaStudio's only up to those IDs, as CharaStudio's own saves match each other.
+- A Sideloader record that names an object the scene does not have refuses every export that adds, deletes or copies objects or edits route points. Such records are stale: this install's Sideloader neither writes them nor loads past them. Eight installed scenes have one.
 - Survey 2 found no card with KKAnimationController links, and its card detection had no positive control on the player. The rule is proven on synthetic cards and by the parity gate.
 
 ## Shape and color reset contract
