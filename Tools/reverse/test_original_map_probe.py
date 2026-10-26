@@ -1,6 +1,6 @@
 """ST-A11 map probe driver: path checks, the read-only fetch script, placing fetched files, and
 the one-exec capture framing. VM calls and the endpoint are mocked: no VM or private data."""
-import hashlib, io, json, os, tempfile, unittest, zipfile
+import gzip, hashlib, io, json, os, tempfile, unittest, zipfile
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
@@ -182,6 +182,74 @@ class CaptureTests(unittest.TestCase):
             self.run_capture(returncode=1)
         self.assertEqual(json.loads((self.dir / 'out' / 'run.json').read_text())['execError'], 'boom')
 
+
+
+class OracleTests(unittest.TestCase):
+    """Phase C: authored records uploaded as reload-oracle-<case>.png, float images gzipped on arrival."""
+    STATUS = {'cases': ['map33']}
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory(); self.dir = Path(self.tmp.name)
+        self.scene = self.dir / 'scene-map33.png'; self.scene.write_bytes(b'\x89PNG\r\n\x1a\nmap33')
+        self.floats = bytes(range(24))  # two float32 RGB pixels
+        FakeEndpoint.instances = []
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def run_oracle(self, scenes=None, guest_change=None):
+        entries = {'status.json': json.dumps(self.STATUS).encode(), 'oracle-trace.json': b'{}',
+                   'oracle-map33-clean-color.png': b'png', 'oracle-map33-irradiance.f32': self.floats}
+        upload = archive(entries)
+        guest = dict(processID=78, source=sha(probe.MAP_PROBE.read_bytes()), scenes={'reload-oracle-map33.png': sha(self.scene.read_bytes())},
+                     zipSHA256=sha(upload), zipBytes=len(upload), exited=True, removed=True, remainingGameProcesses=[])
+        guest.update(guest_change or {})
+        FakeEndpoint.next_upload = upload
+        completed = SimpleNamespace(returncode=0, stdout=json.dumps(guest), stderr='')
+        args = SimpleNamespace(vm='vm', output=self.dir / 'out', scene=scenes or [f'map33={self.scene}'], errno_baseline=0,
+                               host_address='10.211.55.2', wait_seconds=60)
+        with patch.object(probe, 'private', side_effect=lambda p: Path(p).resolve()), \
+             patch.object(probe, 'fresh_root', return_value=PLAYER_ROOT), \
+             patch.object(probe, 'guarded', return_value=0) as guard, \
+             patch.object(probe, 'errno_count', return_value=0), \
+             patch.object(probe, 'Endpoint', FakeEndpoint), \
+             patch.object(probe.subprocess, 'run', return_value=completed) as vm:
+            try:
+                return probe.oracle(args)
+            finally:
+                self.guard, self.vm = guard, vm
+
+    def test_one_exec_uploads_the_records_and_gzips_the_float_images(self):
+        result = self.run_oracle()
+        out = self.dir / 'out'
+        endpoint = FakeEndpoint.instances[0]
+        self.assertEqual(endpoint.files['reload-oracle-map33.png'], self.scene.read_bytes())
+        self.assertIn("@('reload-oracle-map33.png')", endpoint.files['run.ps1'].decode())
+        self.assertEqual(self.vm.call_count, 1); self.guard.assert_called_once_with(0)
+        self.assertFalse((out / 'oracle-map33-irradiance.f32').exists())
+        self.assertEqual(gzip.decompress((out / 'oracle-map33-irradiance.f32.gz').read_bytes()), self.floats)
+        run = json.loads((out / 'run.json').read_text())
+        self.assertEqual(run['floatImages']['oracle-map33-irradiance.f32'],
+                         dict(sha256=sha(self.floats), bytes=24, file='oracle-map33-irradiance.f32.gz'))
+        self.assertEqual(run['scenes'], {'map33': sha(self.scene.read_bytes())})
+        manifest = sorted(f['file'] for f in json.loads((out / 'manifest.json').read_text())['files'])
+        self.assertEqual(manifest, ['oracle-map33-clean-color.png', 'oracle-map33-irradiance.f32.gz', 'oracle-trace.json',
+                                    'probe-source.cs', 'run.json', 'status.json'])
+        self.assertEqual((result['errno'], result['status']), ([0, 0], self.STATUS))
+
+    def test_bad_scene_arguments_are_refused_before_any_vm_call(self):
+        for scenes, message in (([f'Map33={self.scene}'], 'wants a new'), ([f'map33={self.scene}', f'map33={self.scene}'], 'wants a new'),
+                                ([str(self.scene)], 'wants a new'), ([], 'at least one')):
+            with self.subTest(scenes), self.assertRaisesRegex(ValueError, message):
+                self.run_oracle(scenes=scenes or ['']) if scenes else probe.oracle_scenes([])
+        self.scene.write_bytes(b'not a png')
+        with self.assertRaisesRegex(ValueError, 'not a PNG'):
+            self.run_oracle()
+        self.vm.assert_not_called()
+
+    def test_a_changed_record_on_the_guest_is_refused(self):
+        with self.assertRaisesRegex(ValueError, 'Guest scene hash differs'):
+            self.run_oracle(guest_change={'scenes': {'reload-oracle-map33.png': '0' * 64}})
 
 if __name__ == '__main__':
     unittest.main()

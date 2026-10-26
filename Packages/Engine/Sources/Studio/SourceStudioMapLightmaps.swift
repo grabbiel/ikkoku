@@ -311,4 +311,38 @@ public enum SourceStudioMapMaterial {
         if material.alphaMode == "MASK" { m.uniforms.params.w = material.alphaCutoff }
         return m
     }
+
+    /// The map probe's irradiance images (ST-A11 evidence, `compare_original_map.py`).
+    public enum IrradianceVariant: String, CaseIterable, Sendable {
+        /// The recovered decode: Unity's gi.indirect.diffuse.
+        case decoded
+        /// Negative control: the direction map ignored (DecodeDirectionalLightmap skipped).
+        case nonDirectional
+        /// Negative control: DecodeLightmapRGBM with the gamma-space constants (range 5, exponent 1).
+        case gammaConstants
+    }
+
+    /// `material` drawn for the irradiance image: the same lightmaps, decode
+    /// and directional term with a white albedo, no base or emission texture,
+    /// a diffColor factor of 1 and no alpha, so `map_fragment` writes the
+    /// decoded lightmap alone. nil for a material that is not `MaterialKindMap`.
+    public static func irradiance(_ material: MaterialState, variant: IrradianceVariant = .decoded) -> MaterialState? {
+        guard material.kind == MaterialKindMap else { return nil }
+        var m = material
+        m.base = nil
+        m.emission = nil
+        m.setFlag(MaterialFlagHasBaseTexture, false)
+        m.setFlag(MaterialFlagAlphaTest, false)
+        m.setFlag(MaterialFlagAlphaBlend, false)
+        m.transparent = false
+        m.uniforms.baseColor = Float4(1, 1, 1, 1)
+        m.uniforms.oneMinusReflectivity = 1
+        m.uniforms.emissive = .zero
+        switch variant {
+        case .decoded: break
+        case .nonDirectional: m.setFlag(MaterialFlagMapDirectionalLightmap, false)
+        case .gammaConstants: m.uniforms.lightmapRange = 5; m.uniforms.lightmapExponent = 1
+        }
+        return m
+    }
 }

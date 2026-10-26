@@ -29,7 +29,8 @@ uploads the blocks and decodes RGBM in the shader. The glTF's top-level extras
 and hashes, the lightmaps mode, the RGBM encoding (m_LightmapFormat 2) and the player's colour
 space (Linear). Standard materials carry `ikkokuStandard` extras: `_Color` and
 `_EmissionColor` converted to Linear (GammaToLinearSpaceExact, as a Linear player uploads
-material colours), OneMinusReflectivityFromMetallic(_Metallic) and the `_EmissionMap` image.
+material colours), OneMinusReflectivityFromMetallic of `_Metallic` (or of the
+`_MetallicGlossMap` red channel's mean under `_METALLICGLOSSMAP`) and the `_EmissionMap` image.
 provenance.json also records the lights, RenderSettings and SunLightInfo entries.
 
 Proprietary output belongs in .local, never in the repository.
@@ -221,23 +222,39 @@ def one_minus_reflectivity(metallic):
     return ONE_MINUS_DIELECTRIC_SPEC - metallic * ONE_MINUS_DIELECTRIC_SPEC
 
 
-def standard_inputs(colors, floats, keywords, emission_image=None, emission_srgb=True):
+def standard_inputs(colors, floats, keywords, emission_image=None, emission_srgb=True, metallic_map_mean=None):
     """What the app's baked-lightmap material needs from a Standard material: albedo and
-    emission colours in Linear, and diffColor's factor. `_METALLICGLOSSMAP` reads metallic
-    from a texture the export does not carry, so `_Metallic` stands in and says so."""
+    emission colours in Linear, and diffColor's factor. With `_METALLICGLOSSMAP` Standard reads
+    metallic per texel from `_MetallicGlossMap.r` (UnityStandardInput.cginc L153-L164); the app
+    draws no metallic map, so the texture's mean (as the sampler returns it, sRGB decoded when
+    the texture is sRGB) stands in and says so. With the keyword but no texture Unity samples
+    the property's default, white: metallic 1."""
     color = colors.get("_Color", [1, 1, 1, 1])
     words = set(keywords)
-    metallic = floats.get("_Metallic", 0.0)
+    if "_METALLICGLOSSMAP" in words:
+        metallic = 1.0 if metallic_map_mean is None else metallic_map_mean
+        source = ("_MetallicGlossMap absent: the white default" if metallic_map_mean is None
+                  else "_MetallicGlossMap.r mean over the texture (per-texel metallic is not drawn)")
+    else:
+        metallic, source = floats.get("_Metallic", 0.0), "_Metallic"
     result = {"albedoLinear": [gamma_to_linear_exact(c) for c in color[:3]] + [color[3]],
               "metallic": metallic, "oneMinusReflectivity": one_minus_reflectivity(metallic),
-              "metallicSource": "_MetallicGlossMap.r (not exported; _Metallic used)" if "_METALLICGLOSSMAP" in words else "_Metallic",
-              "emission": None}
+              "metallicSource": source, "emission": None}
     if "_EMISSION" in words:
         # Without a texture Unity samples the property's default, "white" (image None).
         emission = colors.get("_EmissionColor", [0, 0, 0, 1])
         result["emission"] = {"colorLinear": [gamma_to_linear_exact(c) for c in emission[:3]], "image": emission_image,
                               "srgb": emission_srgb}
     return result
+
+
+def texture_channel_mean(texture, channel):
+    """Mean of one channel of a texture's top mip as a sampler returns it: 0-1, decoded from
+    sRGB when the texture is sRGB (m_ColorSpace 1) in a Linear player."""
+    values = [value / 255.0 for value in texture.image.convert("RGBA").getchannel(channel).getdata()]
+    if texture.m_ColorSpace == 1:
+        values = [gamma_to_linear_exact(value) for value in values]
+    return sum(values) / len(values)
 
 
 def block_level_bytes(width, height, mip_count, block_bytes):
@@ -776,7 +793,10 @@ class MapExporter(Exporter):
             if "_EMISSION" in keywords_of(material) and emission_map and emission_map.m_Texture.path_id:
                 image = self.gltf["textures"][self.texture(emission_map.m_Texture)]["source"]
                 srgb = emission_map.m_Texture.read().m_ColorSpace == 1
-            result["extras"]["ikkokuStandard"] = standard_inputs(colors_of(material), floats, keywords_of(material), image, srgb)
+            metallic_map, mean = envs.get("_MetallicGlossMap"), None
+            if "_METALLICGLOSSMAP" in keywords_of(material) and metallic_map and metallic_map.m_Texture.path_id:
+                mean = texture_channel_mean(metallic_map.m_Texture.read(), 0)
+            result["extras"]["ikkokuStandard"] = standard_inputs(colors_of(material), floats, keywords_of(material), image, srgb, mean)
         index = len(self.gltf["materials"])
         self.material_cache[identity] = (index, tiling, bool(contract.get("vertexColor")))
         self.gltf["materials"].append(result)

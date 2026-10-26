@@ -687,6 +687,27 @@ public final class Renderer: @unchecked Sendable {
                        bitmapInfo: info, provider: provider, decode: nil, shouldInterpolate: false, intent: .defaultIntent)
     }
 
+    /// `capture`'s pass graph, returning the resolved linear scene colour
+    /// (`RenderTargets.hdr`: the main passes after their MSAA resolve, before
+    /// bloom, grading and the sRGB composite) as RGBA float16 bit patterns,
+    /// rows top-down. ST-A11 evidence (the map probe's irradiance image); nil
+    /// when the capture fails.
+    public func captureSceneHDR(frame: RenderFrame, width: Int, height: Int) -> [UInt16]? {
+        var hdr: (any MTLTexture)?
+        guard capture(frame: frame, width: width, height: height, configureTargets: { hdr = $0.hdr }) != nil, let hdr else { return nil }
+        let bytesPerRow = width * 8
+        guard let buffer = gpu.device.makeBuffer(length: bytesPerRow * height, options: .storageModeShared),
+              let cb = gpu.commandQueue.makeCommandBuffer(), let blit = cb.makeBlitCommandEncoder() else { return nil }
+        blit.copy(from: hdr, sourceSlice: 0, sourceLevel: 0, sourceOrigin: MTLOrigin(x: 0, y: 0, z: 0),
+                  sourceSize: MTLSize(width: width, height: height, depth: 1), to: buffer, destinationOffset: 0,
+                  destinationBytesPerRow: bytesPerRow, destinationBytesPerImage: bytesPerRow * height)
+        blit.endEncoding()
+        cb.commit()
+        cb.waitUntilCompleted()
+        guard cb.status == .completed else { return nil }
+        return Array(UnsafeBufferPointer(start: buffer.contents().assumingMemoryBound(to: UInt16.self), count: width * height * 4))
+    }
+
     /// Measures the same pass graph as capture while reusing all render targets.
     /// Each command buffer completes before the next sample. This is a render
     /// latency baseline, not an interactive application throughput measurement.
