@@ -75,7 +75,7 @@ nonisolated final class ViewportRenderThread: NSObject, CAMetalDisplayLinkDelega
     private var policy: DisplayLinkRatePolicy
     private var submitObserver: UInt64?
     /// The model's paced step, called on the main thread; nil when the
-    /// viewport's model has none (the Maker) or under `IKKOKU_PERF_LIVE_PACING=timer`.
+    /// viewport's model has none or under `IKKOKU_PERF_LIVE_PACING=timer`.
     private let pacedStep: (@MainActor () -> LiveStepPacer.Result)?
     private var pacer = LiveStepPacer()
     /// Signalled when the thread has invalidated the link and is exiting.

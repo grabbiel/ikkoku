@@ -513,11 +513,18 @@ final class PerfWorkloadDriver {
     /// Tears the viewport down and builds it again (Maker and Studio each own
     /// one, so a mode switch replaces it), resizes the window, minimizes and
     /// restores it, all while the display link draws, then quits through
-    /// `NSApp.terminate`. The report's `details.lifecycle` records the
-    /// viewport render threads alive before each step and at the end, and the
-    /// frames drawn and presented after the restore.
+    /// `NSApp.terminate`. The report's `details.lifecycle` records, before
+    /// each step and at the end, the viewport render threads alive and the
+    /// live-pacing hand-over: the mode, the viewports that render, which
+    /// models have live steps, which models a display link paces, and how
+    /// many paced steps each has run.
+    /// It also records the frames drawn and presented after the restore. The
+    /// Studio holds `studio-native`'s scene, and both models' live animation
+    /// is on.
     private func prepareViewportLifecycle() throws {
         guard app.ensureMaker() != nil, app.studio != nil else { throw RigError.invalid("needs the Maker and the Studio") }
+        // Both models have live steps, so the hand-over is checked both ways.
+        try prepareStudioNative()
         app.mode = .maker
         guard let window = NSApp.windows.first(where: { $0.isVisible && $0.contentView != nil }) else {
             throw RigError.invalid("no visible editor window")
@@ -551,14 +558,46 @@ final class PerfWorkloadDriver {
     private func runLifecycleStep(_ name: String, _ action: () -> Void) {
         guard trace.recording else { return }
         // Counted before acting: the previous step has had its settle time.
-        lifecycleLog.append(["step": name, "seconds": PerfTrace.round(CACurrentMediaTime() - recordingStart),
-                             "renderThreadsBefore": Self.renderThreadCount()])
+        var entry = pacingState()
+        entry["step"] = name
+        entry["seconds"] = PerfTrace.round(CACurrentMediaTime() - recordingStart)
+        entry["renderThreadsBefore"] = Self.renderThreadCount()
+        lifecycleLog.append(entry)
         action()
+    }
+
+    /// The live-pacing hand-over (R7 phase 2): the active mode, the models
+    /// whose viewports render (a switch replaces the viewport once SwiftUI
+    /// updates), which models have live steps to run when active,
+    /// which models a display link paces, and the paced steps each has run.
+    private func pacingState() -> [String: Any] {
+        ["mode": app.mode == .maker ? "maker" : "studio",
+         "viewports": viewportModels(),
+         "live": ["maker": app.maker?.liveAnimation ?? false, "studio": app.studio?.hasLiveStepWork ?? false],
+         "livePaced": ["maker": app.maker?.isLivePaced ?? false, "studio": app.studio?.isLivePaced ?? false],
+         "pacedSteps": ["maker": app.maker?.pacedSteps ?? 0, "studio": app.studio?.pacedSteps ?? 0]]
+    }
+
+    /// The models of the viewports that render now, sorted. A dismantled
+    /// viewport can stay in the window until SwiftUI removes it; it is not
+    /// counted.
+    private func viewportModels() -> [String] {
+        var models: [String] = []
+        func visit(_ view: NSView) {
+            if let viewport = view as? ViewportNSView, viewport.isRendering {
+                let handler = viewport.handler
+                models.append(handler === app.maker ? "maker" : handler === app.studio ? "studio" : "other")
+            }
+            view.subviews.forEach(visit)
+        }
+        for window in NSApp.windows { if let content = window.contentView { visit(content) } }
+        return models.sorted()
     }
 
     private func finishLifecycle() {
         var result: [String: Any] = ["steps": lifecycleLog, "renderThreadsAtEnd": Self.renderThreadCount(),
-                                     "windowMiniaturized": NSApp.windows.contains { $0.isMiniaturized }]
+                                     "windowMiniaturized": NSApp.windows.contains { $0.isMiniaturized },
+                                     "end": pacingState()]
         if let restoredAt {
             // Drawables presented more than half a second after the restore:
             // the display link kept running across minimize and restore.
