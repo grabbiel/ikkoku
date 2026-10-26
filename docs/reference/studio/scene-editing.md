@@ -810,12 +810,15 @@ The refusal is the engine's message, which names each plug-in and its reason. Th
   - **KKPE cards.** 794 characters carry KKPE card data, none in a legacy trailer. 52 of them have a `kkpe` entry without a `characterInfo` string or without a non-zero `uniqueId`. Every character duplicate in every scene was judged, and none was refused for its card, so none of the 52 is in a scene with a `kkpe` entry. The writer reads cards only there. In such a scene, a copy of such a character is refused by name.
   - **Card links.** No installed scene's cards name KKAnimationController links, as in survey 2.
 
-- **Performance** (Release, quiet window, 2026-10-26; `SourceScenePluginDataPerformanceTests`, 60 calls each, median).
-  - **Showoff scene.** `koikatu_cs0002591` has no plug-in data. A one-transform export takes 5.63 ms and a subtree deletion 5.54 ms. The plug-in step takes 0.049 and 0.046 ms of that: one search of the written bytes for KKAnimationController data, then a return.
-  - **Fix found by the probe.** Before that early exit, the step built its edit model for every export: 0.85 ms in Debug, now 0.05 ms.
-  - **Phase-A fixture.** A delete with the Sideloader rewrite exports in 0.64 ms and a move in 0.69 ms. The plug-in step takes 0.013 and 0.016 ms.
-  - **Phase-B fixture** (every plug-in's entries). A light delete exports in 0.66 ms and a move in 0.71 ms. The plug-in step takes 0.026 and 0.027 ms. An item delete is refused by KKPE after 0.62 ms.
-  - **Import.** The import path is unchanged: nothing on it runs these rules.
+- **Performance** (Release, `SourceScenePluginDataPerformanceTests`, 60 calls each, median; the tables, both builds and the method are in [performance](../performance.md#st-t03i-scene-plug-in-data-rewrites)). The numbers come from the second change's quiet window (2026-10-26, 07:19), with the rewrites and the lazy card hash.
+  - **Showoff scene.** `koikatu_cs0002591` has no plug-in data. A one-transform export takes 4.97 ms and a subtree deletion 4.80 ms. The plug-in step takes 0.049 and 0.044 ms of that: one search of the written bytes for KKAnimationController data, then a return.
+  - **Fix found by the probe (first change).** Before that early exit, the step built its edit model for every export: 0.85 ms in Debug, now 0.05 ms.
+  - **Phase-A fixture.** A delete with the Sideloader rewrite exports in 0.61 ms and a move in 0.67 ms. The plug-in step takes 0.040 and 0.047 ms.
+  - **Phase-B fixture** (every plug-in's entries). A light delete exports in 0.66 ms and a move in 0.70 ms. The plug-in step takes 0.025 and 0.059 ms. An item delete, which rewrites KKPE and MaterialEditor, exports in 0.65 ms with a 0.072 ms plug-in step.
+  - **Phase-C fixture** (all three plug-ins and a character). An item delete with three rewrites exports in 1.31 ms (plug-in step 0.21 ms), an item copy in 1.43 ms (0.29), a character copy with the KKPE card patch in 2.34 ms (0.90) and a move in 1.21 ms (0.09).
+  - **Largest KKPE scene** (80.5 MB, 173 objects, 42 characters, 36,553 B of plug-in data). An item delete exports in 83 ms (plug-in step 21 ms), an item copy in 97 ms (27) and a move to the root in 63 ms (0.7).
+  - **Fixes found by the probe (second change).** Card decode hashed every card's bytes, and every scene decode reads every card. It now computes `sourceSHA256` when read. On the largest scene that halves each export: a delete took 172 ms, a copy 187 ms and a move 125 ms. KKPE's used-ID scan searched the whole scene with `memmem` on every plan. It now makes one `memchr` pass, only when a plan needs a fresh ID.
+  - **Import.** Nothing on the import path runs these rules. The lazy card hash speeds it up: the Engine decodes the largest scene in 24.6 ms instead of 55.1 ms, and showoff in 2.45 ms instead of 2.64 ms.
 
 **Limits:**
 
