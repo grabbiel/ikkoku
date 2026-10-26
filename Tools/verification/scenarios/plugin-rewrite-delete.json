@@ -1,0 +1,17 @@
+{
+  "steps": [
+    {"op": "assert", "children": {"keys": [0, 1, 2, 5, 7, 14, 15, 16]}},
+    {"op": "assert", "children": {"parent": 0, "keys": [3, 4]}},
+    {"op": "delete", "key": 2},
+    {"op": "duplicate", "key": 5},
+    {"op": "exportRejected", "path": ".local/verification/scenario-exports/plugin-rewrite-delete.png", "errorContains": "both deletes objects and copies items"},
+    {"op": "undo"},
+    {"op": "assert", "absent": [2], "children": {"keys": [0, 1, 5, 7, 14, 15, 16]}},
+    {"op": "export", "path": ".local/verification/scenario-exports/plugin-rewrite-delete.png"},
+    {"op": "reimport", "path": ".local/verification/scenario-exports/plugin-rewrite-delete.png"},
+    {"op": "assertRejected", "children": {"keys": [0, 1, 2, 5, 7, 14, 15, 16]}, "errorContains": "assert children"},
+    {"op": "assert", "absent": [2], "children": {"keys": [0, 1, 5, 7, 14, 15, 16]}},
+    {"op": "assert", "children": {"parent": 0, "keys": [3, 4]}},
+    {"op": "assert", "children": {"parent": 1, "keys": [6]}}
+  ]
+}

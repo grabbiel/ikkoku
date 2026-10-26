@@ -193,7 +193,7 @@ Reproduce the VM run from the repository root (`.local/verification/scenario-exp
 **Not verified:**
 
 - Deleting an accessory child alone and the other refused cases (none of them is written).
-- Deletion in scenes carrying plug-in data other than Sideloader and StudioSceneSettings entries, in the original player ([plug-in data](#plug-in-data-st-t03i)).
+- Deletion in scenes carrying plug-in data other than Sideloader, StudioSceneSettings, KKPE, MaterialEditor and NodesConstraints entries, in the original player ([plug-in data](#plug-in-data-st-t03i)).
 - How the original orders the roots after an interactive remove and add (history-dependent; our order is documented above and loads as written).
 - Rendering the edited scenes in the original player. The capture records state, not pixels.
 
@@ -335,7 +335,7 @@ Reproduce the VM run from the repository root:
 
 **Not verified:**
 
-- New characters or items (refused). Duplicates and new records in scenes carrying plug-in data other than Sideloader and StudioSceneSettings entries, in the original player ([plug-in data](#plug-in-data-st-t03i)). Route copies were reloaded later ([route points and settings](#route-points-and-settings-st-t11-st-t03)).
+- New characters or items (refused). Duplicates and new records in scenes carrying plug-in data other than Sideloader, StudioSceneSettings, KKPE, MaterialEditor and NodesConstraints entries, in the original player ([plug-in data](#plug-in-data-st-t03i)). Route copies were reloaded later ([route points and settings](#route-points-and-settings-st-t11-st-t03)).
 - Lights: the reloaded scenes had one light, the new one. The two-light limit follows the recovered code and was not reloaded.
 - A new record inside a folder, and a copy inside a character's accessory group, are covered by the Engine tests only, without a reload in the original player.
 - Rendering in the original player. The capture records state and mesh counts, not pixels.
@@ -524,7 +524,7 @@ Reproduce the VM run from the repository root:
 **Not verified:**
 
 - A point moved while the route plays: the segment-start rule follows the recovered `StudioTween` code and the Engine tests, but no original-player capture of a live edit exists.
-- Route edits in scenes carrying plug-in data other than Sideloader and StudioSceneSettings entries, in the original player ([plug-in data](#plug-in-data-st-t03i)).
+- Route edits in scenes carrying plug-in data other than Sideloader, StudioSceneSettings, KKPE, MaterialEditor and NodesConstraints entries, in the original player ([plug-in data](#plug-in-data-st-t03i)).
 - The `routePointLimit` option turned off. The app always keeps the default limit.
 - A route nested in a folder or an item. Every fixture route is a root.
 - Rendering in the original player. The capture records state and positions, not pixels, and the line's Vectrosity shape is not compared.
@@ -563,7 +563,7 @@ The plug-ins are the installed DLLs of the [installed inventory](../mods/plugin-
   - **Steps.** For each `Links` pair, `(string)key`, `(int)value` and `loadedObjects[...]` are evaluated before `AddLink` (:2316). `Eyes` follows through `AddEyeLink` (:2335).
   - **Aborts.** A failed cast or a missing key throws. The per-character `catch` (:2309) ends that character's remaining links and `Eyes`. Other characters still load.
   - **Objects.** `loadedObjects` is `dicObjectCtrl` (KKAPI StudioSaveLoadApi.cs:427). It holds every object of the walk, attached items included (Studio.cs:705–711, :745–749). Route points are only in `dicInfo` (AddObjectRoute.cs:151, Studio.cs:780–785).
-  - **Int32 only.** The card's data is decoded by the game's MessagePack 1.x through `PrimitiveObjectFormatter` (Assembly-CSharp-firstpass, MessagePack.Formatters/PrimitiveObjectFormatter.cs:161–187). It boxes an `int` only for an Int32 (`0xd2`) value. Fixints and `0xcc`/`0xcd` box a `byte`/`ushort`, and `0xd0`/`0xd1` box an `sbyte`/`short`, so `(int)` throws on them. MessagePack-CSharp's own `int` writer never emits `0xd2` for a non-negative key (MessagePack/MessagePackBinary.cs:700–730). No installed DLL or game assembly replaces the default resolver. Links written that way are inert: the first one throws.
+  - **Int32 only.** The card's data is decoded by the game's MessagePack 1.x through `PrimitiveObjectFormatter` (Assembly-CSharp-firstpass, MessagePack.Formatters/PrimitiveObjectFormatter.cs:161–187). It boxes an `int` only for an Int32 (`0xd2`) value. Fixints and `0xcc`/`0xcd` box a `byte`/`ushort`, and `0xd0`/`0xd1` box an `sbyte`/`short`, so `(int)` throws on them. Which form a card holds depends on how the plug-in stored the value. A typed `int` (an `int` field or a `Dictionary<string, int>`) goes through MessagePack-CSharp's `int` writer, which never emits `0xd2` for a non-negative value (MessagePack/MessagePackBinary.cs:700–730). Links written that way are inert: the first one throws. A boxed `int`, such as a `Dictionary<string, object>` value, goes through `PrimitiveObjectFormatter`, which writes a forced Int32 block (`WriteInt32ForceInt32Block`, :97, :123), so those links are live. Phase C's card-link scene shows this: CharaStudio wrote the probe's boxed keys as `0xd2`. No installed DLL or game assembly replaces the default resolver.
   - **Unreadable data.** ExtendedSave replaces card data it cannot decode with an empty dictionary (ExtensibleSaveFormat/ExtendedSave.cs:181–188).
   - **Copies.** `Studio.Duplicate` saves and imports the character (Studio.cs:440–485), so its card data travels verbatim. NodesConstraints' `Studio.Duplicate` patch (:648–734) copies a constraint only when both ends' objects are copied.
 - **Lists keyed by object.** Each plug-in rebuilds its list from the live objects on save. Some also write data for copies.
@@ -588,6 +588,69 @@ The plug-ins are the installed DLLs of the [installed inventory](../mods/plugin-
   - StudioCharaLightLinkedToCamera (`26c4d1e6…`, KK_StudioCharaLightLinkedToCamera/Patches.cs:90–92). It writes and accepts only version 3 (:129, :136).
 - **Orphan IDs.** `KKVMDPlayExtSave`, `rendererEditor`, `com.rskoi.particleeditor`, `vnge_kfa` and `vnge_sss` occur in installed scenes. None of the 243 installed DLLs contains any of them as ASCII/UTF-8 or UTF-16LE, and no script host is installed. The scan is `.local/stt03i-plugin-data/inventory/orphan-scan.json` (coverage index SHA-256 `e146e45a…`, corpus digest `d81258cc…`). Nothing in this install reads or writes these entries, so CharaStudio's save carries them verbatim through any edit. **Parity holds for this pinned install only.** Once a plug-in that owns one is installed, its data may name objects the export changed.
 
+### Plug-in data rewrites
+
+Reviewed 2026-10-26 (ST-T03i, second change). `SourceScenePluginRewrites` (`Packages/Engine/Sources/Studio/SourceScenePluginRewrites.swift`) rewrites the KKPE, MaterialEditor and NodesConstraints entries after a delete or a copy, as CharaStudio's save writes them after the same interactive edit.
+
+- **How the plans work.** Each plan reads its entry strictly. A form or an edit its rule does not cover refuses the export, naming the plug-in. Bytes the rewrite does not change are kept.
+- **XML form.** KKPE and NodesConstraints each store one XML string, written by .NET's `XmlTextWriter` with default settings: elements and double-quoted attributes only, and ` />` for an empty element.
+  - The writer reads exactly that form. Text, comments, declarations and repeated attributes refuse.
+  - An integer attribute must read as `XmlConvert.ToString(int)` writes it.
+  - A rewritten element keeps its own bytes. Only the attribute values that change are patched, and a removed child is left out.
+
+- **KKPE 2.21.4** (`72d1b7b5…`, `kkpe`).
+  - **What it saves.** `OnSceneSave` (HSPE/MainWindow.cs:1585–1608) writes `sceneInfo`: a `<root version=…>` with one `itemInfo` per item in key order. Each carries `index` (the key) and its controller's state, with `uniqueId` set to the controller's instance ID (PoseController.cs:409).
+  - **Load.** `LoadSceneGeneric` (:1554–1583) loads the i-th `itemInfo` onto the i-th item and ignores `index`.
+  - **Characters.** A character's pose data is not scene data. It is the `characterInfo` of its card's `kkpe` entry (`OnCharaSave`, :1484–1504).
+  - **References.** A lone collider is an item named "Collider" (HSPE.AMModules/CollidersEditor.cs:561–575). It names the dynamic bones it acts on by their controller's ID, `poseControllerId` (:1037, :1048). The load matches those IDs by equality (:1128–1185).
+  - **After a delete**, CharaStudio writes no element for a deleted item, and no reference to a deleted controller. A lone collider drops those references in `Update` (:615–657).
+  - **After a copy**, the copy gets its template's element under its own key and a new instance ID (`OnDuplicate`, MainWindow.cs:1274, through `LoadFrom`). References are not remapped: `ColliderDataBase`'s copy keeps the template's (CollidersEditor.cs:274–291). A copied character's card gets its template's `characterInfo` under the copy's new controller ID.
+  - **Writer.**
+    - The kept items' elements stay in key order. Each copy gets its template's element with the copy's `index` and a fresh `uniqueId`. References to deleted controllers are dropped.
+    - **Copied characters.** A copied character's card gets a fresh ID, patched in place. The ID has the template's number of digits and sign, so the card keeps its length. It is not 0, and no `uniqueId` or `poseControllerId` in the scene or its cards uses it.
+    - The writer reads each patched card back.
+    - A card is patched only when the scene has a `kkpe` entry and the card has KKPE data. Any other card stays byte-identical.
+  - **Instance IDs** are new in every session, so this writer's IDs are deterministic. Comparisons with CharaStudio rename IDs in order of first appearance, as for phase B.
+  - **Refused:**
+    - an added item: CharaStudio writes a default element for it, which this writer does not;
+    - a copy of an object a lone collider names. Every controller with dynamic bones registers them with each lone collider (DynamicBonesEditor.cs:1799, BoobsEditor.cs:401), so CharaStudio adds entries for the copy;
+    - a delete together with an item copy: the copies' keys can differ from CharaStudio's ([#278](https://github.com/grabbiel/ikkoku/issues/278));
+    - a dropped reference whose controller ID more than one object has;
+    - a copied character whose KKPE data is in a legacy ExtendedSave trailer rather than the card's current block;
+    - a copied character, or a deleted one while a lone collider names any controller, whose card's `kkpe` entry has no `characterInfo` string with a non-zero `uniqueId`;
+    - an `itemInfo` count that is not the item count, an `index` that is not the item at that position, or an element without a `uniqueId`.
+- **MaterialEditor 4.0.2** (`dde57f4f…`, `com.deathweasel.bepinex.materialeditor`), data version 1.
+  - **What it saves.** Nine record lists and `TextureDictionary`, each nil or MessagePack bytes (KK_Plugins.MaterialEditor/SceneController.cs:20–330). A record's `ID` is an item's key.
+  - **Load.** It binds records to items only (`ExtractGameObject`, :501–508), so a record that names no item loads nowhere.
+  - **After a delete**, the item's records are gone (`OnObjectDeleted`, :1041–1062).
+  - **After a copy**, each list gains its template's records with the copy's key, after the existing ones, copy by copy (`OnObjectsCopied`, :725–855).
+  - **Save** (:378–466) purges textures that no `TexID` or animation frame uses (`PurgeUnusedTextures`, :469–500), and writes nil for an empty list or dictionary.
+  - **Writer.**
+    - Each list gets the records of kept items in order, then each copy's clones of its template's records. The `ID` is written in MessagePack-CSharp's shortest form, and every other byte of a record is kept.
+    - Records that name no item are dropped once a list is rewritten. They are also dropped when a copy's new key could be theirs.
+    - Unused textures are purged.
+  - **Textures.** Only the Bundled form is read: an int-to-bytes map (`SaveBundled`, KK_Plugins.MaterialEditor/TextureSaveHandler.cs:80–88). KKAPI picks the form from `Local Textures/Scene Save Type`, Bundled by default (KKAPI `7f4f50e1…`, KKAPI.Studio/SceneLocalTextures.cs:52–60, :89). The installed `marco.kkapi.cfg` sets Bundled (read in phase C). A Deduped or Local key refuses.
+  - **Refused:**
+    - version 0 data that needs a rewrite (CharaStudio writes version 1);
+    - a delete together with a copy of an item that has records (#278);
+    - a purge when Timeline data has texture tracks;
+    - a record key the writer does not know.
+- **NodesConstraints 1.6.2.1** (`817fd940…`, `nodesConstraints`).
+  - **What it saves.** `OnSceneSave` (NodesConstraints/NodesConstraints.cs:2393–2490) writes one empty `constraint` per entry of `_constraints`. Each has:
+    - `parentObjectIndex` (−2 for the main camera) and `childObjectIndex`, the ends' indices in the key-sorted `dicObjectCtrl`;
+    - `uniqueLoadId`, its position.
+  - **Load.** `LoadSceneGeneric` (:2141–2258) reads them back by index.
+  - **After a delete**, a constraint with a deleted end is removed (`ApplyConstraints` → `RemoveConstraintAt`, :1166–1205, :1951–1984). The others are written with their objects' new indices and their new positions.
+  - **After a copy**, `Studio_Duplicate_Patches` (:649–734) gives a constraint whose two ends are both copied a copy of its own. It walks `_constraints` in order and throws at the first camera-parented constraint. `AddConstraint` (:1874) skips a pair already present in either direction.
+  - **Writer.** The kept constraints, in order, with their ends' new indices and their new positions.
+  - **Refused:**
+    - a copy of both ends of a constraint before the first camera-parented one: this writer does not write constraint copies;
+    - a delete together with a copy while any constraint is kept (#278);
+    - removed or renumbered constraints when Timeline data mentions NodesConstraints, whose tracks address constraints by number;
+    - two constraints between the same transforms;
+    - an index the scene does not have.
+- **Verification.** The rewritten entries are parsed again. KKPE's items must be in key order, with the planned `index` and `uniqueId` and the planned references left out. MaterialEditor's lists must decode to the planned records and its textures to the kept ones. NodesConstraints' constraints must carry the planned indices and positions.
+
 ### Writer behavior
 
 - **When.** The rules run on the final written document: its records, their keys, kinds and parents, and each copy's template. A rule that depends on positions therefore sees exactly what CharaStudio would load. An export that only moves records or edits leaves keeps every entry, as before.
@@ -599,9 +662,9 @@ The plug-ins are the installed DLLs of the [installed inventory](../mods/plugin-
   | An orphan ID | Kept verbatim. |
   | Scene-global | Kept, for the recovered versions. |
   | Sideloader | Rewritten in CharaStudio's order: kept records with their order recomputed, each copy's records cloned from its template's with the copy's key and order, deleted records dropped. Scene-level keys are kept. An empty result removes the entry. A record for an object the scene does not have, for one of the wrong kind, or a second record for the same object refuses. |
-  | KKPE | Kept when the written items are the source items. Otherwise refused: its rewrite is a later change. |
-  | MaterialEditor | Kept when every list is nil, or the items are unchanged. Otherwise refused. |
-  | NodesConstraints | The empty `<constraints …/>` form is kept. A non-empty one is kept when every existing object keeps its index in the key-sorted object list and nothing is copied. Otherwise it is refused. |
+  | KKPE | Kept when no item is deleted, copied or added and no character is deleted or copied. Otherwise [rewritten](#plug-in-data-rewrites), and a copied character's card gets a fresh controller ID. |
+  | MaterialEditor | Kept when every list is nil, or no item with records is deleted or copied. Otherwise [rewritten](#plug-in-data-rewrites). |
+  | NodesConstraints | The empty `<constraints …/>` form is kept. A non-empty one is kept when every existing object keeps its index in the key-sorted object list and nothing is copied. Otherwise it is [rewritten](#plug-in-data-rewrites). |
   | Timeline | Kept when no interpolable has an `objectIndex`, or when positions hold as for NodesConstraints. |
   | KK_AnimationController | `[0, {}]` and an empty `AnimationInfo` list are kept. Links are refused when the edit deletes or copies objects. |
   | Lists keyed by object | Kept unless the edit deletes an object the data names, or copies one when the plug-in writes data for copies. LightSettings also refuses any added or copied light, because it writes a record per live light. SaveCameraObjectFov refuses a camera add, copy or delete when a camera index is not 0. An unknown field or an undecodable value refuses. |
@@ -629,7 +692,7 @@ The plug-ins are the installed DLLs of the [installed inventory](../mods/plugin-
 - **Verification.** The written trailer is parsed again. It must have the source's framing and the planned entries in order with the planned bytes. The Sideloader records must decode to their planned keys and positions.
 - **Keys.** Insertions take the smallest free keys, then added route points take theirs. Keys freed in the same export are not reused, unlike CharaStudio after an interactive delete ([#278](https://github.com/grabbiel/ikkoku/issues/278)).
 
-**Before ST-T03i**, delete, duplicate and route point add and delete were refused in any scene whose KKEx map held an entry, nil entries included. Additions were accepted in every scene, with the trailer kept verbatim. That was a latent bug: a new folder below the highest key shifts NodesConstraints' and Timeline's indices. Additions now follow the rules above. In scenes without plug-in data, deletes and copies were accepted. Now the card fallback check refuses only a delete of a live link's target, a copy of a linked character together with its target, or a delete with a copy when a card has steps.
+**Before ST-T03i**, delete, duplicate and route point add and delete were refused in any scene whose KKEx map held an entry, nil entries included. Additions were accepted in every scene, with the trailer kept verbatim. That was a latent bug: a new folder below the highest key shifts NodesConstraints' and Timeline's indices. Additions now follow the rules above. In scenes without plug-in data, deletes and copies were accepted. Now the card fallback check refuses only a delete of a live link's target, a copy of a linked character together with its target, or a delete with a copy when a card has steps. After the first ST-T03i change and before the rewrites, KKPE data, MaterialEditor records on an affected item and non-empty NodesConstraints data refused every delete and copy that touched them.
 
 ### App translation
 
@@ -696,24 +759,92 @@ The refusal is the engine's message, which names each plug-in and its reason. Th
         - So these scenes already load partly unresolved in CharaStudio with this install. Its next save drops the unresolved items' records, and those items lose their mod identity. There is no faithful output to match, and the export is refused.
     - **Card links.** No character card in the 182 loaded scenes names KKAnimationController `Links` or `Eyes`, so the card check refuses nothing. The detection reads each card's ExtendedSave data as `OICharInfo.Load` loads it (OICharInfo.cs:250–251). It had no positive control on the player.
 
-- **Performance** (Release, quiet window, 2026-10-26; `SourceScenePluginDataPerformanceTests`, 60 calls each, median).
-  - **Showoff scene.** `koikatu_cs0002591` has no plug-in data. A one-transform export takes 5.63 ms and a subtree deletion 5.54 ms. The plug-in step takes 0.049 and 0.046 ms of that: one search of the written bytes for KKAnimationController data, then a return.
-  - **Fix found by the probe.** Before that early exit, the step built its edit model for every export: 0.85 ms in Debug, now 0.05 ms.
-  - **Phase-A fixture.** A delete with the Sideloader rewrite exports in 0.64 ms and a move in 0.69 ms. The plug-in step takes 0.013 and 0.016 ms.
-  - **Phase-B fixture** (every plug-in's entries). A light delete exports in 0.66 ms and a move in 0.71 ms. The plug-in step takes 0.026 and 0.027 ms. An item delete is refused by KKPE after 0.62 ms.
-  - **Import.** The import path is unchanged: nothing on it runs these rules.
+- **Rewrites, Engine.** Two more test files cover the [rewrites](#plug-in-data-rewrites):
+  - `SourceScenePluginRewriteTests` (12 tests) builds KKPE XML, MaterialEditor lists and NodesConstraints constraints on the `TopologyScene` builder. Each rule's rewrite is checked byte for byte:
+    - KKPE deletes, copies under fresh IDs (deterministic, of the template's length), the card ID patched in place, no card read without a `kkpe` entry, and the probe comparison renaming only instance IDs;
+    - MaterialEditor records by item, stale records, the `ID` encodings and the texture purge;
+    - NodesConstraints by position;
+    - every refusal by its text, including a card whose KKPE data has no controller ID.
+  - `SourceScenePluginRewriteProbeTests` (3 tests) compares our exports with phases C and D below, and writes phase D's inputs.
+- **Rewrites, parity gate.** `sourceScenePluginDataWritesTheRuleParityCorpus` now writes 175 scenes. They carry KKPE, MaterialEditor and NodesConstraints data in each form the rules read, with lone colliders, KKPE cards in both blocks, texture tracks and camera constraints. The port agrees on all 4,026 single-target edits: 0 mismatches. Each of 19 mutants changes one clause of the port's three rules or of its XML reader. They give 2 to 124 mismatches each, so none survives (`.local/stt03j-plugin-rewrites/parity/mutations.txt`).
+- **Original player, phase C** (2026-10-26, one `prlctl exec`, `.local/stt03j-plugin-rewrites/phase-c`). The player root got phase B's plug-in set (ExtendedSave, Sideloader, KKAPI, StudioSceneSettings, KKPE, NodesConstraints and MaterialEditor), each checked against its SHA-256, and phase A's zipmod. `marco.kkapi.cfg`, read-only, sets `Scene Save Type = Bundled`.
+  - **Fixture.** `Tools/reverse/fixtures/OriginalPluginRewriteProbe.cs` added a female (a default `ChaFileControl`) to phase A's fixture. It then gave the scene, through each plug-in's own load or setter path:
+    - KKPE bone data on four items and on the female's neck;
+    - MaterialEditor values on three items: two floats, a color and two textures;
+    - NodesConstraints constraints item to item, bone to item and main camera to item, in that order.
+
+    CharaStudio's load-then-save of that scene is the fixture.
+  - **Edits.** From a fresh load each, CharaStudio saved delete (an item with data in all three plug-ins), delete-folder, delete-character, delete-parent (the parent of the item-to-item constraint), duplicate (an item with data in all three), duplicate-subtree (the folder with its two items), duplicate-character and delete-duplicate.
+  - **Comparison.** `sourceScenePluginRewritesMatchCharaStudioEdits` makes the same edits with our writer and CharaStudio's thumbnail.
+    - Seven exports are CharaStudio's files apart from KKPE's instance IDs and the female's live state. The scene's KKPE XML, every MaterialEditor list and texture, the NodesConstraints XML, the Sideloader records and the copied character's card all match.
+    - delete-duplicate is refused by name by KKPE, MaterialEditor and NodesConstraints (#278).
+    - **Live state.** CharaStudio's save refreshes each character's neck look bytes, eye angles and animator time from the running character (`OCIChar.OnSavePreprocessing`, OCIChar.cs:586–600). Its own load-then-save changes them. The comparison zeroes them at the same length, and only after checking that they are the record's own fields (OICharInfo.cs:218–222). A changed byte inside them compares equal; the byte before the neck data's length does not.
+    - CharaStudio's load-then-save of the fixture and of every edit is a fixed point on those terms.
+  - **Lone collider.** Not run. The install's only lone-collider item is `[J694] Dynamic Bone Collider` (zipmod SHA-256 `498169cb…`). Its list row names the manifest `studio_joan6694_dynamic_bone_collider`, which is neither registered nor in `abdata` (read-only check). So `AssetBundleManager.LoadAsset` (AssetBundleManager.cs:489) throws `KeyNotFoundException`, and CharaStudio cannot add the item. The lone-collider clauses rest on the Engine tests and the parity gate.
+  - **Attempts.** Two earlier attempts stopped after their exec. A female loaded from a synthetic card threw, and so did adding the collider. Their hygiene was clean.
+- **Original player, phase D** (2026-10-26, one `prlctl exec`, `.local/stt03j-plugin-rewrites/phase-d`).
+  - **Readback.** The player loaded phase C's fixture and edits and our seven exports. For each, it read every plug-in's per-object state:
+    - each KKPE controller's own XML, with instance IDs replaced by the owning object's key;
+    - MaterialEditor's records, with each texture by its bytes' SHA-256;
+    - NodesConstraints' constraints, with both ends as object key and path.
+
+    `sourceScenePluginRewritesReloadAsCharaStudioEdits` requires each export's state to be that of CharaStudio's edit, object by object. All seven pass, and the fixture's state is not empty.
+  - **Resave.** Each of our exports, loaded and saved by the player, is CharaStudio's edit apart from KKPE's IDs, live state and Sideloader's `LocalSlot`. Phases C and D are different sessions. Sideloader's save writes the saving session's resolved slot as `LocalSlot` (UniversalAutoResolver.cs:591, :618, :642, :670). No load reads it back. The scene load (`ExtendedSceneLoad` :474–482, `ResolveStudioObjects` :1326–1356) and the import (`ExtendedSceneImport` :484–556) pass each record to `ResolveStudioObject` (:1358–1412), `GetStudioResolveInfoForItem` (:1414–1433) or `ResolveStudioObjectPattern` (:1510–1538). Those take the record's GUID, group, category and display fields and the object's own saved `no` or pattern key, and write the slot their own session resolves (:1369, :1530). So the comparison masks `LocalSlot` in those records, and only across sessions. On phase C's fixture, another `LocalSlot` of the same width compares equal, another `Slot` does not, and without the mask the `LocalSlot` change shows.
+  - **Card links.** These are the card check's first controls on the player.
+    - Phase C saved `card-link.png`: phase A's fixture plus a female whose card holds KK_AnimationController `Links` and `Eyes`, boxed by the probe. CharaStudio wrote them as Int32.
+    - On reload, NodesConstraints made 2 constraints from that card, and the survey model counted the scene live (2 refused edits).
+    - The host's variant, with the same keys as fixints and the same length, made 0 constraints and 0 step scenes.
+  - **VM hygiene.** Both phases: errno-24 count 0 before and after, junction scans unchanged (abdata 4,565 files and 443 directories, CharaStudio_Data 102 and 9), root removed, no game process left.
+- **Survey 3** (read-only, counts only, last in phase D, 875 s, not truncated). It read the same 361 files as survey 2. The player's compiler first reproduced the parity gate: 4,026 edits, 0 mismatches.
+
+  | Edit kind (all/some/none of 61) | Survey 2 | Survey 3 |
+  | --- | --- | --- |
+  | Delete | 9/35/17 | 36/14/11 |
+  | Duplicate | 9/35/17 | 35/15/11 |
+  | Add a folder | 50/0/11 | 51/0/10 |
+  | Add a light | 47/0/14 | 48/0/13 |
+  | Add a camera | 50/0/11 | 51/0/10 |
+  | Route point add or delete | none of the 61 has a route | — |
+
+  - **Blockers** (scenes per reason, numbers masked): MaterialEditor version 0 data 23, a stale Sideloader record 8, Timeline object indices 3, LightSettings 3, ItemLayerEdit 2, a KKPE pose entry without a controller ID 1, and a NodesConstraints constraint copy 1. KKPE refused deletes and copies in 51 scenes in survey 2. Each add count rose by one: NodesConstraints' rewrite now renumbers constraints after an add, and survey 2 refused that in one scene nothing else blocks.
+  - **KKPE cards.** 794 characters carry KKPE card data, none in a legacy trailer. 52 of them have a `kkpe` entry without a `characterInfo` string or without a non-zero `uniqueId`. Every character duplicate in every scene was judged, and none was refused for its card, so none of the 52 is in a scene with a `kkpe` entry. The writer reads cards only there. In such a scene, a copy of such a character is refused by name.
+  - **Card links.** No installed scene's cards name KKAnimationController links, as in survey 2.
+
+- **Performance** (Release, `SourceScenePluginDataPerformanceTests`, 60 calls each, median; the tables, both builds and the method are in [performance](../performance.md#st-t03i-scene-plug-in-data-rewrites)). The numbers come from the second change's quiet window (2026-10-26, 07:19), with the rewrites and the lazy card hash.
+  - **Showoff scene.** `koikatu_cs0002591` has no plug-in data. A one-transform export takes 4.97 ms and a subtree deletion 4.80 ms. The plug-in step takes 0.049 and 0.044 ms of that: one search of the written bytes for KKAnimationController data, then a return.
+  - **Fix found by the probe (first change).** Before that early exit, the step built its edit model for every export: 0.85 ms in Debug, now 0.05 ms.
+  - **Phase-A fixture.** A delete with the Sideloader rewrite exports in 0.61 ms and a move in 0.67 ms. The plug-in step takes 0.040 and 0.047 ms.
+  - **Phase-B fixture** (every plug-in's entries). A light delete exports in 0.66 ms and a move in 0.70 ms. The plug-in step takes 0.025 and 0.059 ms. An item delete, which rewrites KKPE and MaterialEditor, exports in 0.65 ms with a 0.072 ms plug-in step.
+  - **Phase-C fixture** (all three plug-ins and a character). An item delete with three rewrites exports in 1.31 ms (plug-in step 0.21 ms), an item copy in 1.43 ms (0.29), a character copy with the KKPE card patch in 2.34 ms (0.90) and a move in 1.21 ms (0.09).
+  - **Largest KKPE scene** (80.5 MB, 173 objects, 42 characters, 36,553 B of plug-in data). An item delete exports in 83 ms (plug-in step 21 ms), an item copy in 97 ms (27) and a move to the root in 63 ms (0.7).
+  - **Fixes found by the probe (second change).** Card decode hashed every card's bytes, and every scene decode reads every card. It now computes `sourceSHA256` when read. On the largest scene that halves each export: a delete took 172 ms, a copy 187 ms and a move 125 ms. KKPE's used-ID scan searched the whole scene with `memmem` on every plan. It now makes one `memchr` pass, only when a plan needs a fresh ID.
+  - **Import.** Nothing on the import path runs these rules. The lazy card hash speeds it up: the Engine decodes the largest scene in 24.6 ms instead of 55.1 ms, and showoff in 2.45 ms instead of 2.64 ms.
+- **Lanes and the Engine suite.** These ran on the Debug build of `256147d`, with `main` `ca91cda` merged, under the app lock with `--strict` and 0 skipped. `studio-scenarios` passed 81/81 and `maker-scenarios` passed 10/10. Two checks are new ([plug-in data rewrites](../../../Tools/verification/README.md#plug-in-data-rewrites-st-t03i)):
+  - `plugin-rewrite-delete` deletes item 2 and exports. The same delete together with a copy is refused (#278).
+  - `plugin-rewrite-duplicate` copies the female and then item 5. Each reimport holds the copy at key 159, at its original's world position. The female's FK bones, IK targets and look-at target hold keys 17–158, and CharaStudio's own copies take 159 too.
+
+  The three exports' bytes after the PNG equal the Engine's exports of the same edits. The strict Engine suite with the shared fixture map passed 1,052 tests. The 6 skipped tests are the opt-in timing probes.
 
 **Limits:**
 
 - Keys freed by a delete in the same export are not reused, so a delete with a duplicate gives the copy a different key than CharaStudio after the same interactive edit (#278). The scene loads the same way, and the Sideloader records follow the key.
-- KKPE data, and non-empty NodesConstraints and MaterialEditor data, are kept only when what they read is unchanged. Otherwise they are refused, not rewritten.
+- KKPE, MaterialEditor and NodesConstraints data are rewritten after deletes and copies. Some cases are still refused, by name ([rewrites](#plug-in-data-rewrites)):
+  - a delete together with a copy (#278);
+  - an added item, in a scene with KKPE data;
+  - a copy of an object a KKPE lone collider names;
+  - a constraint copy NodesConstraints would make;
+  - MaterialEditor version 0 data, and textures saved Deduped or Local.
 - Entry IDs with no recovered rule refuse every export that adds, deletes or copies objects or edits route points, and so do unknown versions.
 - Entries kept under a rule keep their loaded bytes. CharaStudio's save rebuilds them from its live state, which decodes to the same data when nothing they name changed. Byte identity with CharaStudio is shown only for the entries the original-player runs loaded.
 - A move keeps every entry as before. StudioItemIK stores world-space bone poses, so a moved IK chain loads from its old pose ([mods overview](../mods/overview.md#scene-plug-in-data-in-edited-original-scenes)).
 - The orphan rule holds for the pinned install only.
 - KKPE writes per-session instance IDs, so an export of a scene with KKPE data matches CharaStudio's only up to those IDs, as CharaStudio's own saves match each other.
+- In a scene with a character, CharaStudio's save also refreshes the character's neck look bytes, eye angles and animator time from the running character (`OCIChar.OnSavePreprocessing`, OCIChar.cs:586–600). Our export keeps the loaded values, so it matches CharaStudio's save only up to those fields, as two CharaStudio saves do.
 - A Sideloader record that names an object the scene does not have refuses every export that adds, deletes or copies objects or edits route points. Such records are stale: this install's Sideloader neither writes them nor loads past them. Eight installed scenes have one.
-- Survey 2 found no card with KKAnimationController links, and its card detection had no positive control on the player. The rule is proven on synthetic cards and by the parity gate.
+- No installed scene's cards name KKAnimationController links (surveys 2 and 3). The card rule rests on synthetic cards, the parity gate and phase D's live and inert controls.
+- A KKPE lone collider was not added on the player: the install's only collider item names an asset bundle manifest the install does not have. Its rules rest on the Engine tests and the parity gate.
+- 52 installed characters carry KKPE card data without a controller ID. They are all in scenes without a `kkpe` entry, where no card is read. In a scene with one, a copy of such a character is refused.
+- What survey 3 still refuses: MaterialEditor version 0 data (23 scenes), stale Sideloader records (8), Timeline object indices (3), LightSettings on an added or copied light (3), ItemLayerEdit deletes and copies (2), a KKPE pose entry without a controller ID (1) and a NodesConstraints constraint copy (1).
 
 ## Shape and color reset contract
 

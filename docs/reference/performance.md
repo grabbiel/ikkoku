@@ -3755,6 +3755,134 @@ Offscreen benchmark at 1996×1824, median (range) of three runs of 60 frames:
   are not attributed.
 - No M1 run.
 
+## ST-T03i: scene plug-in data rewrites
+
+Added 2026-10-26 with the second plug-in data change ([plug-in data](studio/scene-editing.md#plug-in-data-st-t03i)).
+An export that deletes, copies or moves objects in a scene with KKPE,
+MaterialEditor or NodesConstraints data now rewrites that data inside
+`editedData`. Nothing in the app or on the main thread changed. The change's
+timing probe found two costs, and both were fixed:
+
+- **The card hash (commit `2b4cc156`).** `SourceCharacterCard.decode`
+  computed the card's SHA-256, plus a `String(format:)` per digest byte, for
+  every card it decoded. Several decodes read every embedded card:
+  - each scene decode (`KoikatsuSceneRecordReader`, line 45);
+  - the decode of the written scene that verifies each export;
+  - the KKPE step's reads of the cards that carry its data.
+
+  Only a few readers use the hash, each once: the Maker save, binding
+  provenance, the inspection CLI and the probes. `sourceSHA256` is now
+  computed when read. On the largest scene, 42 cards of 1.9 MB on average,
+  hashing took about 30 ms per pass over the cards.
+- **The KKPE used-ID scan.** Each KKPE plan searched the whole scene with
+  `memmem` for the two ID attributes, about 50 ms per pass on the largest
+  scene (a standalone `-O` benchmark, not in a quiet window). The scan now
+  runs only when a plan needs a fresh ID. It makes one `memchr` pass for the
+  quote and tests the attribute name that ends there, about 5.6 ms. Both
+  measured builds include this fix. Its corpus output is byte-identical.
+
+### Measurement
+
+The Release timing probe, `swift test -c release -Xswiftc -enable-testing
+--filter SourceScenePluginDataPerformance`, runs with `IKKOKU_PLUGIN_SCENE_PERF=1`
+and `IKKOKU_PLUGIN_SCENE_LARGEST`. Each case is the median of 60 calls after
+10 warmups.
+
+- **Window.** One quiet window the orchestrator granted (2026-10-26,
+  07:19–07:21), with load average 2.6 falling to 2.3. A watcher polled the
+  process list every second and saw no other build, test or app process.
+- **Builds.** Before is `43f6a577` (the eager hash) and after is `2b4cc156`
+  (the lazy hash). The runs went before, after, after, before, one process
+  each, and each cell lists the two runs.
+- **Scenes:**
+  - showoff (`koikatu_cs0002591`): 595,127 B, 7 characters, no plug-in data;
+  - the fixtures of the original-player phases A, B and C;
+  - the largest KKPE scene of the install: 80,535,331 B, 173 objects, 42
+    characters, 36,553 B of plug-in data. It is private, and its SHA-256
+    begins `c4825f76`.
+- **Evidence.** `.local/stt03j-plugin-rewrites/logs/window/`.
+
+Import, Engine side: `decodeDocument`, then `card()` for every character:
+
+| Scene | Step | Before ms | After ms |
+| --- | --- | --- | --- |
+| showoff | `decodeDocument` | 2.61, 2.66 | 2.43, 2.47 |
+| showoff | every `card()` (7) | 0.41, 0.41 | 0.09, 0.10 |
+| largest | `decodeDocument` | 55.2, 55.0 | 24.2, 25.0 |
+| largest | every `card()` (42) | 35.3, 34.5 | 4.34, 4.40 |
+
+Export: `editedData`, and the plug-in step within it:
+
+| Scene and edit | `editedData` before ms | after ms | Plug-in step before ms | after ms |
+| --- | --- | --- | --- | --- |
+| showoff, one transform | 5.41, 5.61 | 4.95, 4.98 | 0.049, 0.056 | 0.049, 0.049 |
+| showoff, subtree deletion | 5.17, 5.46 | 4.83, 4.77 | 0.043, 0.043 | 0.044, 0.043 |
+| phase C, delete item (three rewrites) | 1.41, 1.41 | 1.31, 1.31 | 0.215, 0.215 | 0.213, 0.205 |
+| phase C, duplicate item | 1.52, 1.55 | 1.48, 1.37 | 0.297, 0.278 | 0.285, 0.295 |
+| phase C, duplicate character (card patch) | 2.56, 2.70 | 2.34, 2.34 | 1.12, 1.14 | 0.94, 0.87 |
+| phase C, move | 1.29, 1.33 | 1.21, 1.21 | 0.086, 0.080 | 0.087, 0.085 |
+| largest, delete item | 174.0, 170.0 | 81.7, 83.6 | 50.8, 51.2 | 21.0, 21.0 |
+| largest, duplicate item | 185.4, 187.8 | 96.2, 98.7 | 57.0, 57.6 | 26.8, 27.4 |
+| largest, move item to the root | 125.0, 125.5 | 61.6, 65.1 | 0.77, 0.70 | 0.71, 0.71 |
+
+The phase A and B fixtures hold no characters, so the hash change cannot
+reach them. Their exports took 0.61–0.71 ms with a plug-in step of
+0.024–0.075 ms in both builds, within 0.07 ms of each other.
+
+What the numbers show:
+
+- **No cost without plug-in data.** On showoff the plug-in step is
+  0.043–0.056 ms in both builds. It searches the written bytes once for
+  KKAnimationController card data, then returns.
+- **The hash was most of the largest scene's time.** Without it, a decode of
+  that scene takes 24.6 ms instead of 55.1 ms. Reading all 42 cards takes
+  4.4 ms instead of 34.9 ms. A delete exports in 83 ms instead of 172 ms, a
+  duplicate in 97 ms instead of 187 ms, and a move in 63 ms instead of
+  125 ms. The move's plug-in step was 0.7 ms in both builds, so its 62 ms
+  came from the scene decodes alone.
+- **Small scenes gain a little.** Showoff reads its 7 cards in 0.09 ms
+  instead of 0.41 ms, and its exports are about 0.5 ms faster.
+- **What remains on the largest scene.** The plug-in step of a delete or
+  duplicate still takes 21–27 ms. A sample of the whole "before" test
+  process ranked the hash first (`AccelerateCrypto_SHA256_compress`, 2,478
+  samples), then memory copies (`_platform_memmove`, 1,066) and Foundation's
+  Boyer–Moore byte search (184). Card bytes are copied out of the scene with
+  `subdata` and searched with `Data.range(of:)`. Reading them in place is a
+  follow-up, not measured here.
+
+### Correctness
+
+- **The lazy hash has the same value.** `sourceCharacterCardHashIsTheSHA256OfItsPreservedBytes`
+  compares it with CommonCrypto's SHA-256 on the source card fixture and on
+  every card of phase C's scene, and two reads are equal. The commit lists
+  every reader. None reads the hash in a loop or per frame.
+- **The ID scan change writes the same bytes.** The 175-scene rule corpus is
+  byte-identical before and after it.
+- **Lanes and the Engine suite.** On `256147d` (Debug, `--strict`, 0
+  skipped): `studio-scenarios` passed 81/81, `maker-scenarios` 10/10, and the
+  Engine suite 1,052 tests ([plug-in data](studio/scene-editing.md#plug-in-data-st-t03i)).
+
+### Scaling to a base M1 (estimate)
+
+This uses the CPU factor of [scaling to the low end](#scaling-to-the-low-end-base-m1-8-gb),
+× 1.25. Everything measured here is single-threaded CPU work.
+
+- **The largest scene:**
+  - a decode in about 31 ms;
+  - a delete export in about 103 ms, a duplicate in about 122 ms and a move
+    in about 79 ms.
+
+  Before this change they were about 69, 215, 233 and 157 ms.
+- **Showoff and the fixtures:** under 7 ms per export.
+
+### Limits
+
+- Two runs per build in one window.
+- Engine timing only. The app's import and export were not timed.
+- The `memmem` figure comes from a standalone benchmark, not from this
+  window.
+- No M1 run.
+
 ## Phase 2, item 6 follow-up: route copies, prefetch and kept donations
 
 Done 2026-10-25 (the follow-ups of inventory C8, S1 and S3, and ST-T11's

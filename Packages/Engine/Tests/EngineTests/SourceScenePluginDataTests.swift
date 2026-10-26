@@ -324,36 +324,46 @@ private func sideloader(_ items: [Record], _ patterns: [Record] = [], map: Bool 
 
 @Test func sourceScenePluginDataKeepsPositionalDataOnlyWhilePositionsHold() throws {
     let route = try addPoint()
-    // KKPE: one element per item in key order.
+    // KKPE: one element per item in key order. Edits that move no item keep
+    // the entry without reading it; deletes and copies rewrite it
+    // (SourceScenePluginRewriteTests), and a form KKPE does not write is
+    // refused by name.
     let kkpe = [("kkpe", plugin(0, .map([("sceneInfo", .str("<root><item /></root>"))])))]
     for edits in [SourceSceneEdits(deletions: [5]), addFolder, addLight, moveItem, route] {
         #expect(verdict(pluginScene(kkpe), edits) == "kept")
     }
-    let items = "KKPE data ('kkpe') matches its pose data to items by their position in key order, and this edit adds or removes items, so poses would load onto the wrong items"
-    #expect(verdict(pluginScene(kkpe), .init(deletions: [4])).contains(items))
+    let form = "KKPE data ('kkpe') has pose data whose root is not KKPE's <root version=…>"
+    #expect(verdict(pluginScene(kkpe), .init(deletions: [4])).contains("cannot delete objects in this scene: \(form)"))
     // Indirectly: copying a folder copies its items.
-    #expect(verdict(pluginScene(kkpe), copyFolder).contains("cannot duplicate objects in this scene: \(items)"))
-    // NodesConstraints and Timeline: indices in the key-sorted dicObjectCtrl.
-    let constraints = [("nodesConstraints", plugin(0, .map([("constraints", .str(
-        #"<constraints version="1"><constraint parentObjectIndex="0" childObjectIndex="3" /></constraints>"#))])))]
+    #expect(verdict(pluginScene(kkpe), copyFolder).contains("cannot duplicate objects in this scene: \(form)"))
+    // Timeline: indices in the key-sorted dicObjectCtrl.
     let timeline = [("timeline", plugin(0, .map([("sceneInfo", .str(#"<root><interpolable objectIndex="3" /></root>"#))])))]
-    let cases: [([(String, PluginMP)], String, String)] = [
-        (constraints, "NodesConstraints data ('nodesConstraints')", "its constraints"), (timeline, "Timeline data ('timeline')", "its animation tracks"),
-    ]
-    for (entries, label, data) in cases {
-        let position = "\(label) addresses objects by their position among all objects in key order, and "
-        let shifted = position + "this edit removes or copies objects, which shifts the positions of others, so \(data) would point at the wrong objects"
-        let added = position + "the new object takes a free key below existing objects, which shifts their positions, so \(data) would point at the wrong objects"
-        // A new object above every key, route points and moves keep each
-        // object's index.
-        for edits in [addFolder, addCamera, moveItem, route] { #expect(verdict(pluginScene(entries), edits) == "kept") }
-        #expect(verdict(pluginScene(entries), .init(deletions: [5])).contains(shifted))
-        #expect(verdict(pluginScene(entries), copyItem).contains(shifted))
-        // Indirectly: a new folder takes the free key 12, below character 13.
-        #expect(verdict(pluginScene(entries, hole: true), addFolder).contains("cannot add objects in this scene: \(added)"))
-        // A route point taking the free key is not an object.
-        #expect(verdict(pluginScene(entries, hole: true), try addPoint(hole: true)) == "kept")
+    let position = "Timeline data ('timeline') addresses objects by their position among all objects in key order, and "
+    let tracks = "so its animation tracks would point at the wrong objects"
+    let shifted = position + "this edit removes or copies objects, which shifts the positions of others, " + tracks
+    let added = position + "the new object takes a free key below existing objects, which shifts their positions, " + tracks
+    // A new object above every key, route points and moves keep each
+    // object's index.
+    for edits in [addFolder, addCamera, moveItem, route] { #expect(verdict(pluginScene(timeline), edits) == "kept") }
+    #expect(verdict(pluginScene(timeline), .init(deletions: [5])).contains(shifted))
+    #expect(verdict(pluginScene(timeline), copyItem).contains(shifted))
+    // Indirectly: a new folder takes the free key 12, below character 13.
+    #expect(verdict(pluginScene(timeline, hole: true), addFolder).contains("cannot add objects in this scene: \(added)"))
+    // A route point taking the free key is not an object.
+    #expect(verdict(pluginScene(timeline, hole: true), try addPoint(hole: true)) == "kept")
+    // NodesConstraints (the same indices) is rewritten when the indices it
+    // names shift (SourceScenePluginRewriteTests) and kept when they do not.
+    func nodes(_ child: Int32) -> [(String, PluginMP)] {
+        [("nodesConstraints", plugin(0, .map([("constraints", .str(
+            #"<constraints version="1"><constraint parentObjectIndex="0" childObjectIndex="\#(child)" uniqueLoadId="0" /></constraints>"#))])))]
     }
+    for edits in [addFolder, addCamera, moveItem, route, SourceSceneEdits(deletions: [5]), copyItem] {
+        #expect(verdict(pluginScene(nodes(3)), edits) == "kept")
+    }
+    #expect(verdict(pluginScene(nodes(3)), .init(deletions: [2])) == "rewritten")
+    // Character 13 (index 8) moves when a new folder takes key 12.
+    #expect(verdict(pluginScene(nodes(8), hole: true), addFolder) == "rewritten")
+    #expect(verdict(pluginScene(nodes(8), hole: true), try addPoint(hole: true)) == "kept")
     // Timeline with global interpolables only names no object.
     let global = [("timeline", plugin(0, .map([("sceneInfo", .str("<root><interpolable id=\"camera\" /></root>"))])))]
     #expect(verdict(pluginScene(global), .init(deletions: [4])) == "kept")
@@ -365,9 +375,11 @@ private func sideloader(_ items: [Record], _ patterns: [Record] = [], map: Bool 
     // Studio.AddCtrlInfo, which fills dicInfo only), so no plug-in indexes
     // them. In one export adding a folder and a route point, the folder is
     // written first and takes the smallest free key; the rule reads the
-    // keys the export writes.
-    let constraints = [("nodesConstraints", plugin(0, .map([("constraints", .str(
-        #"<constraints version="1"><constraint parentObjectIndex="0" childObjectIndex="3" /></constraints>"#))])))]
+    // keys the export writes. The constraint names the character, index 8.
+    func constraints(_ child: Int32) -> [(String, PluginMP)] {
+        [("nodesConstraints", plugin(0, .map([("constraints", .str(
+            #"<constraints version="1"><constraint parentObjectIndex="0" childObjectIndex="\#(child)" uniqueLoadId="0" /></constraints>"#))])))]
+    }
     for hole in [false, true] {
         var edits = try addPoint(hole: hole)
         edits.insertions = [.init(.folder(name: "New"))]
@@ -376,9 +388,11 @@ private func sideloader(_ items: [Record], _ patterns: [Record] = [], map: Bool 
         let route = try #require(written.roots.first { $0.sourceKey == 6 }?.route)
         #expect(written.roots.last?.sourceKey == (hole ? 12 : 13))
         #expect(route.points.map(\.bone.sourceKey) == [7, 9, 14] && route.points.map(\.aid.sourceKey) == [8, 10, 15])
-        let result = verdict(pluginScene(constraints, hole: hole), edits)
+        let result = verdict(pluginScene(constraints(8), hole: hole), edits)
         if hole {
-            #expect(result.contains("cannot add objects or add or delete route points in this scene: NodesConstraints data"))
+            // Character 13 is index 9 after the folder at 12.
+            #expect(result == "rewritten")
+            #expect(try trailer(pluginScene(constraints(8), hole: hole), edits) == pluginTrailer(constraints(9)))
         } else {
             #expect(result == "kept")
         }
@@ -405,9 +419,9 @@ private func sideloader(_ items: [Record], _ patterns: [Record] = [], map: Bool 
     let emptyMaterial = (materialID, plugin(1, .map(MaterialEditorForm.keys.sorted().map { ($0, PluginMP.null) })))
     expectKept(emptyMaterial, [.init(deletions: [4]), copyFolder])
     let material = (materialID, plugin(1, .map([("MaterialShaderList", packed(.arr([.map([("ID", .int(4))])])))])))
-    expectKept(material, [.init(deletions: [5]), addFolder, moveItem])
-    let materialReason = "MaterialEditor data ('\(materialID)') keys its material edits by item, and this edit deletes or copies items"
-    expectRefused(material, [.init(deletions: [4]), copyFolder], materialReason)
+    expectKept(material, [.init(deletions: [5]), addFolder, moveItem, copyFolder])
+    // Its rewrites through deletes and copies: SourceScenePluginRewriteTests.
+    for edit in [SourceSceneEdits(deletions: [4]), copyItem] { #expect(verdict(pluginScene([material]), edit) == "rewritten") }
     // StudioCustomMasking: folder keys.
     let maskingID = "com.deathweasel.bepinex.studiocustommasking"
     let masking = (maskingID, plugin(0, .map([("MaskingFolders", packed(.arr([.int(0)])))])))
@@ -594,8 +608,9 @@ private let liveCard = controllerCard(links: .map([("f_t_hand_L", int32(4))]))
 /// must judge every single-target edit of these scenes as this writer does.
 /// IKKOKU_PLUGIN_RULE_CORPUS names the JSON file this writes: each scene's
 /// walk (key, kind, parent), used keys, each card's link steps
-/// (`cardLinkSteps`) and trailer, and per edit the verdict and the entry IDs
-/// a refusal names.
+/// (`cardLinkSteps`) and trailer, KKPE's inputs (`KKPEPlan.ids` of the file
+/// and each card's `KKPEPlan.card`), and per edit the verdict and the entry
+/// IDs a refusal names.
 @Test(.enabled(if: SourceFixtureSupport.shouldRun(["IKKOKU_PLUGIN_RULE_CORPUS"]), "Requires IKKOKU_PLUGIN_RULE_CORPUS (an output JSON path)"))
 func sourceScenePluginDataWritesTheRuleParityCorpus() throws {
     let output = URL(fileURLWithPath: try SourceFixtureSupport.require("IKKOKU_PLUGIN_RULE_CORPUS"))
@@ -639,7 +654,7 @@ func sourceScenePluginDataWritesTheRuleParityCorpus() throws {
             cases.append(row)
         }
     }
-    let json = try JSONSerialization.data(withJSONObject: ["schemaVersion": 1, "scenes": scenes, "cases": cases], options: [.sortedKeys])
+    let json = try JSONSerialization.data(withJSONObject: ["schemaVersion": 2, "scenes": scenes, "cases": cases], options: [.sortedKeys])
     try json.write(to: output)
     let counts = Dictionary(grouping: cases, by: { $0["verdict"] as! String }).mapValues(\.count)
     print("rule corpus: \(scenes.count) scenes, \(cases.count) cases \(counts.sorted { $0.key < $1.key })")
@@ -670,12 +685,22 @@ private func copyInsertions(_ record: KoikatsuObjectRecord, in snapshot: Koikats
 
 /// What the C# rules read: the walk, used keys, the card-link steps of each
 /// character whose card names KKAnimationController data (nil when it does
-/// not decode), trailer.
+/// not decode), trailer, every KKPE ID in the file and each character's KKPE
+/// card data (its controller ID and whether it is in the current block).
 private func ruleModel(_ document: KoikatsuSceneDocument) throws -> [String: Any] {
-    var objects: [[String: Any]] = [], cards: [[String: Any]] = []
+    var objects: [[String: Any]] = [], cards: [[String: Any]] = [], kkpeCards: [[String: Any]] = []
     let marker = Data(SourceScenePluginData.cardAnimationController.utf8)
     func visit(_ record: KoikatsuObjectRecord, _ parent: Int32?) throws {
         objects.append(["key": Int(record.sourceKey), "kind": Int(record.kind.rawValue), "parent": parent.map { Int($0) } ?? -1])
+        if let character = record.character {
+            do {
+                if let card = try KKPEPlan.card(character.cardData, key: record.sourceKey) {
+                    kkpeCards.append(["key": Int(record.sourceKey), "id": Int(card.id), "current": card.offset != nil])
+                }
+            } catch {
+                kkpeCards.append(["key": Int(record.sourceKey), "error": true])
+            }
+        }
         if let character = record.character, character.cardData.range(of: marker) != nil {
             if let payload = try? character.card().extensions().payload, let steps = try? SourceScenePluginData.cardLinkSteps(payload) {
                 cards.append(["key": Int(record.sourceKey), "steps": steps.map { Int($0) }])
@@ -691,7 +716,8 @@ private func ruleModel(_ document: KoikatsuSceneDocument) throws -> [String: Any
     for root in document.snapshot.roots { try visit(root, nil) }
     let used = SourceSceneInsertionPlan.usedKeys(document.snapshot).map { Int($0) }.sorted()
     let trailer = document.trailingData.map { String(format: "%02x", $0) }.joined()
-    return ["objects": objects, "used": used, "cards": cards, "trailer": trailer]
+    let kkpeIds = KKPEPlan.ids(in: document.preservedData).map { Int($0) }.sorted()
+    return ["objects": objects, "used": used, "cards": cards, "trailer": trailer, "kkpeIds": kkpeIds, "kkpeCards": kkpeCards]
 }
 
 /// Every entry form the tests above use, alone and in the combinations
@@ -769,6 +795,8 @@ private func ruleCorpusScenes() throws -> [TopologyScene] {
     scenes.append(pluginScene(forms.filter { $0.0 != "example.scene" && $0.0 != "kkpe" }.reduce(into: [(String, PluginMP)]()) { list, form in
         if !list.contains(where: { $0.0 == form.0 }) { list.append(form) }
     }))
+    // The rewrite rules' forms (KKPE, MaterialEditor, NodesConstraints).
+    scenes += pluginRewriteCorpusScenes()
     // No trailer, an empty map, and trailers that do not parse.
     scenes.append(pluginScene(nil)); scenes.append(pluginScene([]))
     var extra = Array(pluginTrailer([settings])); extra.append(0xc0); extra[9] = UInt8(truncatingIfNeeded: Int(extra[9]) + 1)

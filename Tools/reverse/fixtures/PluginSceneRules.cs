@@ -1,11 +1,13 @@
-// The plug-in (ExtendedSave) data rules of Packages/Engine/Sources/Studio/SourceScenePluginData.swift, ported to
-// C# 5 for the original player's csc, so the scene survey (original_plugin_scene_probe.py phase B, survey 2) judges
+// The plug-in (ExtendedSave) data rules of Packages/Engine/Sources/Studio/SourceScenePluginData.swift and
+// SourceScenePluginRewrites.swift (KKPE, MaterialEditor and NodesConstraints rewrites), ported to C# 5 for the
+// original player's csc, so the scene survey (original_plugin_scene_probe.py phase B, survey 2) judges
 // installed scenes as the Swift writer would. It answers only whether an export is refused and which entries a
 // refusal names; it writes nothing. The Swift test sourceScenePluginDataWritesTheRuleParityCorpus emits scenes and
 // the Swift verdict of every single-target edit of them; Tools/reverse/plugin_rule_parity.py compiles this file
 // with a harness and requires the same verdict and the same refused entry IDs for every case before a survey runs.
 using System;
 using System.Collections.Generic;
+using System.Globalization;
 using System.Text;
 using System.Text.RegularExpressions;
 
@@ -13,11 +15,16 @@ using System.Text.RegularExpressions;
 // accessory groups in ascending point order) with kind and parent key (-1 at the root), every key the scene's
 // hashIndex holds (objects and sub-infos), for each character whose card names KKAnimationController data the
 // object keys NodesConstraints' card fallback attaches to in order (CardSteps; null when the card does not decode),
-// and the bytes after the scene's 【KStudio】 marker.
+// and the bytes after the scene's 【KStudio】 marker. For KKPE: every uniqueId and poseControllerId value in the
+// scene file's bytes (KkpeIdsIn, KKPEPlan.ids), and for each character whose card holds KKPE data its controller ID
+// and 1 when that data is in the card's current Extended Save block (0: the version 2 trailer); null when the card
+// or its KKPE data does not read.
 public sealed class PluginSceneModel {
     public readonly List<int> Keys=new List<int>(),Kinds=new List<int>(),Parents=new List<int>();
     public readonly HashSet<int> Used=new HashSet<int>();
     public readonly Dictionary<int,List<int>> Cards=new Dictionary<int,List<int>>();
+    public readonly HashSet<int> KkpeIds=new HashSet<int>();
+    public readonly Dictionary<int,int[]> KkpeCards=new Dictionary<int,int[]>();
     public byte[] Trailer=new byte[0];
 }
 
@@ -100,13 +107,19 @@ public static class PluginSceneRules {
         }
         public bool KeysChange{get{return Deleted.Count>0||Copied.Count>0||Added||RoutePoints;}}
         public bool Rekeys{get{return Deleted.Count>0||Copied.Count>0;}}
-        List<int> Sorted(IList<int> keys,Func<int,int> kind,int[] kinds) {
+        public List<int> Sorted(IList<int> keys,Func<int,int> kind,int[] kinds) {
             var list=new List<int>();
             for(int i=0;i<keys.Count;i++)if(kinds==null||Array.IndexOf(kinds,kind(i))>=0)list.Add(keys[i]);
             list.Sort();return list;
         }
-        List<int> SourceSorted(int[] kinds){return Sorted(sourceKeys,i=>SourceKinds[sourceKeys[i]],kinds);}
-        List<int> FinalSorted(int[] kinds){return Sorted(FinalKeys,i=>FinalKinds[i],kinds);}
+        public List<int> SourceSorted(int[] kinds){return Sorted(sourceKeys,i=>SourceKinds[sourceKeys[i]],kinds);}
+        public List<int> FinalSorted(int[] kinds){return Sorted(FinalKeys,i=>FinalKinds[i],kinds);}
+        // Copies in key order (copies' keys rise in walk order): {copy key, template key}.
+        public List<int[]> Copies(int kind) {
+            var list=new List<int[]>();
+            for(int i=0;i<FinalKeys.Count;i++){if(kind>=0&&FinalKinds[i]!=kind)continue;int origin;if(Origins.TryGetValue(FinalKeys[i],out origin)&&origin!=FinalKeys[i])list.Add(new[]{FinalKeys[i],origin});}
+            return list;
+        }
         public bool Unchanged(params int[] kinds) {
             var a=SourceSorted(kinds);var b=FinalSorted(kinds);
             if(a.Count!=b.Count)return false;for(int i=0;i<a.Count;i++)if(a[i]!=b[i])return false;return true;
@@ -237,16 +250,21 @@ public static class PluginSceneRules {
             return "addresses objects by index";}
         case Kkpe:
             if(version!=0)return unknownVersion;
-            return edit.Unchanged(Item)?null:"matches pose data to items by position";
+            if(edit.Unchanged(Item)&&!edit.Touches(new HashSet<int>(edit.SourceSorted(new[]{Character})),true))return null;
+            try{CheckKkpe(trailer,entry,edit,scene);}catch(RuleFailure failure){return edit.KeysChange?failure.Message:null;}
+            return null;
         case MaterialEditor:
             if(version!=0&&version!=1)return unknownVersion;
-            return AllNil(trailer,entry,MaterialKeys)||edit.Unchanged(Item)?null:"keys material edits by item";
+            if(AllNil(trailer,entry,MaterialKeys)||edit.Unchanged(Item))return null;
+            try{CheckMaterial(trailer,entry,edit,version);}catch(RuleFailure failure){return failure.Message;}
+            return null;
         case NodesConstraints: {
             if(version!=0)return unknownVersion;
             string xml=SingleString(trailer,entry,"constraints");
             if(xml!=null&&ConstraintsEmpty(xml))return null;
             if(edit.PositionsKept)return null;
-            return "addresses objects by index";}
+            try{CheckConstraints(trailer,entry,edit);}catch(RuleFailure failure){return failure.Message;}
+            return null;}
         case AnimationController:
             if(version!=0)return unknownVersion;
             switch(ControllerForm(trailer,entry)) {
@@ -381,6 +399,370 @@ public static class PluginSceneRules {
                 Collect(k,reader,found);Collect(x,reader,found);
             }
             break;
+        }
+    }
+
+
+    // MARK: Rewrites (SourceScenePluginRewrites.swift)
+
+    // A rule's refusal (RuleFailure in Swift); its message is the reason.
+    sealed class RuleFailure:Exception{public RuleFailure(string m):base(m){}}
+
+    // KKPEPlan: one itemInfo per item in key order, loaded by position; controller IDs (uniqueId) that lone colliders
+    // name (poseControllerId). Deletes drop elements and references; copies take their template's element under a
+    // fresh ID; a copied character's card ID is patched in its current Extended Save block.
+    static readonly HashSet<string> KkpeReferences=new HashSet<string>{"dynamicBoneData","dynamicBoneData2","ignoredDynamicBone","ignoredDynamicBone2"};
+    static void CheckKkpe(Trailer trailer,Entry entry,Edit edit,PluginSceneModel scene) {
+        var sourceItems=edit.SourceSorted(new[]{Item});var sourceCharacters=edit.SourceSorted(new[]{Character});
+        for(int i=0;i<edit.FinalKeys.Count;i++)if(edit.FinalKinds[i]==Item&&!edit.Origins.ContainsKey(edit.FinalKeys[i]))throw new RuleFailure("adds an item");
+        var copies=new List<int[]>();
+        foreach(var c in edit.Copies(-1)){int kind=edit.SourceKinds[c[1]];if(kind==Item||kind==Character)copies.Add(c);}
+        var deletedItems=new List<int>();foreach(var k in sourceItems)if(edit.Deleted.Contains(k))deletedItems.Add(k);
+        var deletedCharacters=new List<int>();foreach(var k in sourceCharacters)if(edit.Deleted.Contains(k))deletedCharacters.Add(k);
+        bool itemCopied=false;foreach(var c in copies)if(edit.SourceKinds[c[1]]==Item)itemCopied=true;
+        var xml=XmlBytes(trailer,entry,"sceneInfo");
+        if(xml==null)throw new RuleFailure("has data other than one 'sceneInfo' XML string");
+        bool names=IndexOf(xml,Ascii("poseControllerId"),0)>=0;
+        var used=new HashSet<int>(scene.KkpeIds);
+        if(deletedItems.Count==0&&!itemCopied&&(!names||(deletedCharacters.Count==0&&copies.Count==0))) {
+            foreach(var c in copies)KkpeCharacterCopy(c,scene,used,new HashSet<int>());
+            return;
+        }
+        Xml doc;
+        try{doc=new Xml(xml);}catch(FormatException e){throw new RuleFailure("has pose data not in the XML form KKPE writes ("+e.Message+")");}
+        if(doc.Elements[0].Name!="root"||doc.Attribute(0,"version")<0)throw new RuleFailure("has pose data whose root is not KKPE's <root version=...>");
+        var elements=doc.Elements[0].Children;
+        foreach(var e in elements)if(doc.Elements[e].Name!="itemInfo")throw new RuleFailure("has pose data with an element other than itemInfo under its root");
+        if(elements.Count!=sourceItems.Count)throw new RuleFailure("has "+elements.Count+" item pose entries for "+sourceItems.Count+" items");
+        var idOf=new Dictionary<int,int>();
+        for(int i=0;i<elements.Count;i++) {
+            int index,id;
+            try {
+                if(!doc.Integer(elements[i],"index",out index)||index!=sourceItems[i])throw new RuleFailure("has an item pose entry whose index is not item "+sourceItems[i]);
+                if(!doc.Integer(elements[i],"uniqueId",out id)||id==0)throw new RuleFailure("has the pose entry of item "+sourceItems[i]+" without a controller ID");
+            } catch(FormatException e){throw new RuleFailure("has pose data KKPE does not write ("+e.Message+")");}
+            idOf[sourceItems[i]]=id;
+        }
+        var referenced=new HashSet<int>();
+        for(int i=0;i<doc.Elements.Count;i++) {
+            if(!KkpeReferences.Contains(doc.Elements[i].Name))continue;
+            int id;bool present;
+            try{present=doc.Integer(i,"poseControllerId",out id);}catch(FormatException){present=false;id=0;}
+            if(!present||id==0)throw new RuleFailure("has a dynamic bone reference without a canonical non-zero poseControllerId");
+            referenced.Add(id);
+        }
+        foreach(var id in idOf.Values)used.Add(id);foreach(var id in referenced)used.Add(id);
+        var removed=new HashSet<int>();foreach(var k in deletedItems)removed.Add(idOf[k]);
+        if(referenced.Count>0) {
+            foreach(var k in deletedCharacters){var card=KkpeCard(scene,k);if(card!=null)removed.Add(card[0]);}
+            var dropped=new List<int>();foreach(var id in removed)if(referenced.Contains(id))dropped.Add(id);
+            if(dropped.Count>0) {
+                var owners=new Dictionary<int,int>();
+                foreach(var id in idOf.Values)Bump(owners,id);
+                foreach(var k in sourceCharacters){var card=KkpeCard(scene,k);if(card!=null)Bump(owners,card[0]);}
+                foreach(var id in dropped)if(owners[id]>1)throw new RuleFailure("names the dynamic bones of controller "+id+", an ID more than one object has");
+            }
+        }
+        if(edit.Deleted.Count>0&&itemCopied)throw new RuleFailure("both deletes objects and copies items, so the copies' keys can differ from CharaStudio's");
+        foreach(var c in copies) {
+            if(edit.SourceKinds[c[1]]==Item)KkpeFresh(idOf[c[1]],c[1],used,referenced);
+            else KkpeCharacterCopy(c,scene,used,referenced);
+        }
+    }
+    static void Bump(Dictionary<int,int> counts,int key){int n;counts.TryGetValue(key,out n);counts[key]=n+1;}
+    // A copied character's card patch: a fresh ID for its template's controller, in the current block only.
+    static void KkpeCharacterCopy(int[] copy,PluginSceneModel scene,HashSet<int> used,HashSet<int> referenced) {
+        var card=KkpeCard(scene,copy[1]);if(card==null)return;
+        KkpeFresh(card[0],copy[1],used,referenced);
+        if(card[1]==0)throw new RuleFailure("keeps character "+copy[1]+"'s pose data in a card whose Extended Save is not the current block");
+    }
+    static int[] KkpeCard(PluginSceneModel scene,int key) {
+        int[] card;if(!scene.KkpeCards.TryGetValue(key,out card))return null;
+        if(card==null)throw new RuleFailure("cannot read character "+key+"'s KKPE card data");
+        return card;
+    }
+    static void KkpeFresh(int template,int key,HashSet<int> used,HashSet<int> referenced) {
+        if(referenced.Contains(template))throw new RuleFailure("registers a copy's dynamic bones with every lone collider, and a lone collider names those of object "+key);
+        int fresh;if(!FreshId(template,used,out fresh))throw new RuleFailure("has no free controller ID of the length of "+template+" for the copy of object "+key);
+        used.Add(fresh);
+    }
+    // KKPEPlan.freshID: the template's digit count and sign, magnitudes above it up to the largest of that length,
+    // then below it; never 0 or a used ID.
+    public static bool FreshId(int template,HashSet<int> used,out int fresh) {
+        bool negative=template<0;
+        ulong magnitude=negative?(ulong)(-(long)template):(ulong)template;
+        int digits=magnitude.ToString(CultureInfo.InvariantCulture).Length;
+        ulong power=1;for(int i=0;i<digits;i++)power*=10;
+        ulong low=digits==1?1UL:power/10,high=Math.Min(power-1,negative?2147483648UL:(ulong)int.MaxValue);
+        ulong candidate=magnitude;
+        while(candidate<high){candidate++;if(FreshValue(candidate,negative,used,out fresh))return true;}
+        candidate=magnitude;
+        while(candidate>low){candidate--;if(FreshValue(candidate,negative,used,out fresh))return true;}
+        fresh=0;return false;
+    }
+    static bool FreshValue(ulong candidate,bool negative,HashSet<int> used,out int value) {
+        long signed=negative?-(long)candidate:(long)candidate;value=0;
+        if(signed<int.MinValue||signed>int.MaxValue)return false;
+        value=(int)signed;return !used.Contains(value);
+    }
+    // KKPEPlan.ids: every uniqueId="..." and poseControllerId="..." value in a scene file's bytes.
+    public static void KkpeIdsIn(byte[] data,HashSet<int> result) {
+        foreach(var marker in new[]{Ascii("uniqueId=\""),Ascii("poseControllerId=\"")}) {
+            int start=0,found;
+            while((found=IndexOf(data,marker,start))>=0) {
+                int valueStart=found+marker.Length,end=valueStart,value;
+                while(end<data.Length&&data[end]!=0x22&&end-valueStart<=11)end++;
+                if(end<data.Length&&data[end]==0x22&&Int32Text(data,valueStart,end,out value))result.Add(value);
+                start=valueStart;
+            }
+        }
+    }
+    // KKPE's characterInfo in a card (KKPEPlan.card): its root's canonical non-zero uniqueId; false when the XML is
+    // not KKPE's form.
+    public static bool KkpeCardId(string xml,out int id) {
+        id=0;
+        try {
+            var doc=new Xml(Encoding.UTF8.GetBytes(xml));
+            return doc.Elements[0].Name=="characterInfo"&&doc.Integer(0,"uniqueId",out id)&&id!=0;
+        } catch(FormatException){return false;}
+    }
+
+    // MaterialEditorPlan: record lists keyed by item (ID), textures purged when no kept record uses them.
+    static readonly Dictionary<string,HashSet<string>> MaterialLists=MakeMaterialLists();
+    static Dictionary<string,HashSet<string>> MakeMaterialLists() {
+        var property=new[]{"ID","MaterialName","Property","Value","ValueOriginal"};
+        var d=new Dictionary<string,HashSet<string>>();
+        d["RendererPropertyList"]=new HashSet<string>{"ID","RendererName","Property","Value","ValueOriginal"};
+        d["ProjectorPropertyList"]=new HashSet<string>{"ID","ProjectorName","Property","Value","ValueOriginal"};
+        d["MaterialNamePropertyList"]=new HashSet<string>{"ID","Renderer","MaterialName","Value","ValueOriginal"};
+        foreach(var n in new[]{"MaterialFloatPropertyList","MaterialKeywordPropertyList","MaterialColorPropertyList"})d[n]=new HashSet<string>(property);
+        d["MaterialTexturePropertyList"]=new HashSet<string>{"ID","MaterialName","Property","TexID","Offset","OffsetOriginal","Scale","ScaleOriginal","TexAnimationDef"};
+        d["MaterialShaderList"]=new HashSet<string>{"ID","MaterialName","ShaderName","ShaderNameOriginal","RenderQueue","RenderQueueOriginal"};
+        d["MaterialCopyList"]=new HashSet<string>{"ID","MaterialName","MaterialCopyName"};
+        return d;
+    }
+    sealed class MaterialRecord{public int Id;public readonly List<int> Textures=new List<int>();}
+    static void CheckMaterial(Trailer trailer,Entry entry,Edit edit,long version) {
+        var fields=trailer.Fields(entry);if(fields==null)return;
+        var lists=new Dictionary<string,List<MaterialRecord>>();List<int> textures=null;
+        foreach(var f in fields) {
+            if(f.Key!="TextureDictionary"&&!MaterialLists.ContainsKey(f.Key))throw new RuleFailure("has a data key '"+f.Key+"' this writer does not read");
+            var c=new Spans(trailer.Bytes,f.ValueStart,f.ValueEnd);var h=c.Head();
+            if(h.Type==MPHead.Nil)continue;
+            if(h.Type!=MPHead.Binary)throw new RuleFailure("has a '"+f.Key+"' value that is not serialized bytes");
+            int start=c.Payload((int)h.Count),end=start+(int)h.Count;
+            if(f.Key=="TextureDictionary")textures=MaterialTextures(trailer.Bytes,start,end);
+            else lists[f.Key]=MaterialRecords(trailer.Bytes,start,end,f.Key);
+        }
+        var sourceItems=new HashSet<int>(edit.SourceSorted(new[]{Item}));
+        var copies=edit.Copies(Item);
+        var named=new HashSet<int>();foreach(var l in lists.Values)foreach(var r in l)named.Add(r.Id);
+        bool stale=false,deleted=false,copied=false;
+        foreach(var id in named){if(!sourceItems.Contains(id))stale=true;if(edit.Deleted.Contains(id))deleted=true;}
+        foreach(var c in copies)if(named.Contains(c[1]))copied=true;
+        if(!(deleted||copied||(stale&&copies.Count>0)))return;
+        if(version!=1)throw new RuleFailure("has version "+version+" data, which CharaStudio's save rewrites in its version 1 form");
+        if(edit.Deleted.Count>0&&copied)throw new RuleFailure("both deletes objects and copies items with material edits");
+        if(textures==null)return;
+        var usedTextures=new HashSet<int>();List<MaterialRecord> records;
+        if(lists.TryGetValue("MaterialTexturePropertyList",out records))
+            foreach(var r in records)if(sourceItems.Contains(r.Id)&&!edit.Deleted.Contains(r.Id))foreach(var t in r.Textures)usedTextures.Add(t);
+        bool purge=false;foreach(var t in textures)if(!usedTextures.Contains(t))purge=true;
+        if(purge&&TimelineMentions(trailer,"textureProperty"))throw new RuleFailure("purges textures no item uses except those Timeline's texture tracks use");
+    }
+    static bool Int32Head(MPHead h){return h.IsInteger&&h.Integer>=int.MinValue&&h.Integer<=int.MaxValue;}
+    static List<int> MaterialTextures(byte[] bytes,int start,int end) {
+        var malformed=new RuleFailure("has a TextureDictionary that is not MaterialEditor's Bundled int-to-bytes map");
+        var c=new Spans(bytes,start,end);var h=c.Head();if(h.Type!=MPHead.Map)throw malformed;
+        var keys=new HashSet<int>();var result=new List<int>();
+        for(long i=0;i<h.Count;i++) {
+            var k=c.Head();if(!Int32Head(k)||!keys.Add((int)k.Integer))throw malformed;
+            var v=c.Head();if(v.Type!=MPHead.Binary)throw malformed;
+            c.Payload((int)v.Count);result.Add((int)k.Integer);
+        }
+        if(c.Offset!=end)throw malformed;
+        return result;
+    }
+    static List<MaterialRecord> MaterialRecords(byte[] bytes,int start,int end,string name) {
+        var keys=MaterialLists[name];var malformed=new RuleFailure("has a '"+name+"' that is not a list of MaterialEditor records");
+        var c=new Spans(bytes,start,end);var h=c.Head();if(h.Type!=MPHead.Array)throw malformed;
+        var result=new List<MaterialRecord>();
+        for(long i=0;i<h.Count;i++) {
+            var fields=c.Fields();if(fields==null)throw malformed;
+            var r=new MaterialRecord();bool hasId=false;
+            foreach(var f in fields) {
+                if(!keys.Contains(f.Key))throw new RuleFailure("has a '"+name+"' record key '"+f.Key+"' this writer does not know");
+                var v=new Spans(bytes,f.ValueStart,f.ValueEnd);
+                if(f.Key=="ID"){var n=v.Head();if(!Int32Head(n))throw malformed;r.Id=(int)n.Integer;hasId=true;}
+                else if(f.Key=="TexID"){var n=v.Head();if(n.Type==MPHead.Nil)continue;if(!Int32Head(n))throw malformed;r.Textures.Add((int)n.Integer);}
+                else if(f.Key=="TexAnimationDef")AnimationTextures(bytes,f.ValueStart,f.ValueEnd,r.Textures,malformed);
+            }
+            if(!hasId)throw malformed;
+            result.Add(r);
+        }
+        if(c.Offset!=end)throw malformed;
+        return result;
+    }
+    // MEAnimationDefine: each frames entry's texID (key 0 of an int-keyed MEAnimationFrame).
+    static void AnimationTextures(byte[] bytes,int start,int end,List<int> into,RuleFailure malformed) {
+        var fields=new Spans(bytes,start,end).Fields();if(fields==null)return;
+        Field frames=null;foreach(var f in fields)if(f.Key=="frames")frames=f;
+        if(frames==null)throw malformed;
+        var l=new Spans(bytes,frames.ValueStart,frames.ValueEnd);var h=l.Head();if(h.Type!=MPHead.Array)throw malformed;
+        for(long i=0;i<h.Count;i++) {
+            var a=l.Head();if(a.Type!=MPHead.Array||a.Count<1)throw malformed;
+            var n=l.Head();if(!Int32Head(n))throw malformed;
+            for(long j=1;j<a.Count;j++)l.Skip(0);
+            into.Add((int)n.Integer);
+        }
+    }
+
+    // NodesConstraintsPlan: constraints by object index in key order (-2 the main camera), numbered by position.
+    static void CheckConstraints(Trailer trailer,Entry entry,Edit edit) {
+        var xml=XmlBytes(trailer,entry,"constraints");
+        if(xml==null)throw new RuleFailure("has data other than one 'constraints' XML string");
+        Xml doc;
+        try{doc=new Xml(xml);}catch(FormatException e){throw new RuleFailure("has constraints not in the XML form NodesConstraints writes ("+e.Message+")");}
+        if(doc.Elements[0].Name!="constraints"||doc.Attribute(0,"version")<0)throw new RuleFailure("has constraints whose root is not <constraints version=...>");
+        var sourceKeys=edit.SourceSorted(null);
+        var parents=new List<int>();var children=new List<int>();var loads=new List<int>();var pairs=new HashSet<string>();
+        foreach(var el in doc.Elements[0].Children) {
+            var node=doc.Elements[el];
+            if(node.Name!="constraint"||node.Children.Count>0)throw new RuleFailure("has an element other than an empty constraint under its root");
+            int parent,child,load;bool hasParent,hasChild,hasLoad;
+            try{hasParent=doc.Integer(el,"parentObjectIndex",out parent);hasChild=doc.Integer(el,"childObjectIndex",out child);hasLoad=doc.Integer(el,"uniqueLoadId",out load);}
+            catch(FormatException e){throw new RuleFailure("has constraints NodesConstraints does not write ("+e.Message+")");}
+            if(!hasParent||!hasChild||!hasLoad)throw new RuleFailure("has a constraint without parentObjectIndex, childObjectIndex and uniqueLoadId");
+            if(!(parent==-2||(parent>=0&&parent<sourceKeys.Count)))throw new RuleFailure("has a constraint on object index "+parent+", which this scene does not have");
+            if(!(child>=0&&child<sourceKeys.Count))throw new RuleFailure("has a constraint on object index "+child+", which this scene does not have");
+            string parentEnd=ConstraintEnd(doc,el,parent,"parentPath"),childEnd=ConstraintEnd(doc,el,child,"childPath");
+            if(pairs.Contains(childEnd+"\u0001"+parentEnd)||!pairs.Add(parentEnd+"\u0001"+childEnd))throw new RuleFailure("has two constraints between the same transforms");
+            parents.Add(parent==-2?int.MinValue:sourceKeys[parent]);children.Add(sourceKeys[child]);loads.Add(load);
+        }
+        if(edit.Copied.Count>0)
+            for(int i=0;i<parents.Count;i++) {
+                if(parents[i]==int.MinValue)break; // the duplicate patch throws at the first camera-parented constraint
+                if(edit.Copied.Contains(parents[i])&&edit.Copied.Contains(children[i]))throw new RuleFailure("gives the copies of objects "+parents[i]+" and "+children[i]+" a copy of their constraint");
+            }
+        var kept=new List<int>();
+        for(int i=0;i<parents.Count;i++)if(!(parents[i]!=int.MinValue&&edit.Deleted.Contains(parents[i]))&&!edit.Deleted.Contains(children[i]))kept.Add(loads[i]);
+        if(edit.Deleted.Count>0&&edit.Copied.Count>0&&kept.Count>0)throw new RuleFailure("both deletes and copies objects, so the copies' keys and the positions after them can differ from CharaStudio's");
+        bool renumbered=kept.Count!=parents.Count;for(int i=0;i<kept.Count;i++)if(kept[i]!=i)renumbered=true;
+        if(renumbered&&TimelineMentions(trailer,"NodesConstraints"))throw new RuleFailure("numbers its constraints by position, and this edit renumbers constraints Timeline data may animate by number");
+    }
+    // A constraint end: its object index and path (its bytes in hex).
+    static string ConstraintEnd(Xml doc,int el,int index,string path) {
+        int a=doc.Attribute(el,path);var e=doc.Elements[el];
+        string bytes=a<0?"-":"p"+BitConverter.ToString(doc.B,e.ValueStarts[a],e.ValueEnds[a]-e.ValueStarts[a]);
+        return index.ToString(CultureInfo.InvariantCulture)+" "+bytes;
+    }
+
+    // Whether the scene's Timeline data may name `word`: its sceneInfo contains it, or it is there but not readable.
+    static bool TimelineMentions(Trailer trailer,string word) {
+        foreach(var e in trailer.Entries) {
+            if(e.Id!=Timeline||e.IsNil)continue;
+            string xml;
+            try{xml=SingleString(trailer,e,"sceneInfo");}catch(Exception){return true;}
+            return xml==null||xml.IndexOf(word,StringComparison.Ordinal)>=0;
+        }
+        return false;
+    }
+
+    // The entry's one field `key` as the raw bytes of its string (xmlField); null for any other shape.
+    static byte[] XmlBytes(Trailer trailer,Entry entry,string key) {
+        var fields=trailer.Fields(entry);
+        if(fields==null||fields.Count!=1||fields[0].Key!=key)return null;
+        var c=new Spans(trailer.Bytes,fields[0].ValueStart,fields[0].ValueEnd);var h=c.Head();
+        if(h.Type!=MPHead.String)return null;
+        int start=c.Payload((int)h.Count);
+        if(c.Offset!=fields[0].ValueEnd)return null;
+        var result=new byte[h.Count];Buffer.BlockCopy(trailer.Bytes,start,result,0,(int)h.Count);return result;
+    }
+    static byte[] Ascii(string s){return Encoding.ASCII.GetBytes(s);}
+    static int IndexOf(byte[] data,byte[] needle,int start) {
+        for(int i=start;i+needle.Length<=data.Length;i++) {
+            if(data[i]!=needle[0])continue;
+            int j=1;while(j<needle.Length&&data[i+j]==needle[j])j++;
+            if(j==needle.Length)return i;
+        }
+        return -1;
+    }
+    // XmlConvert.ToString(int): -?[0-9]+ without a leading zero or "-0", within Int32.
+    static bool Int32Text(byte[] b,int start,int end,out int value) {
+        value=0;int i=start;bool negative=false;
+        if(i<end&&b[i]==0x2d){negative=true;i++;}
+        if(i>=end)return false;
+        if(b[i]==0x30){if(end-i==1&&!negative)return true;return false;}
+        long v=0;
+        for(;i<end;i++){if(b[i]<0x30||b[i]>0x39)return false;v=v*10+(b[i]-0x30);if(v>2147483648L)return false;}
+        long signed=negative?-v:v;
+        if(signed<int.MinValue||signed>int.MaxValue)return false;
+        value=(int)signed;return true;
+    }
+
+    // PluginXML: XML in the form XmlTextWriter writes with default settings (one root, double-quoted attributes,
+    // single spaces, " />" for empty elements, no text, whitespace, comments, declarations or instructions).
+    sealed class XmlElement {
+        public string Name;public int Start,AttributesEnd,HeadEnd,End,Parent;public bool SelfClosing;
+        public readonly List<string> Names=new List<string>();public readonly List<int> ValueStarts=new List<int>(),ValueEnds=new List<int>();
+        public readonly List<int> Children=new List<int>();
+    }
+    sealed class Xml {
+        public readonly byte[] B;public readonly List<XmlElement> Elements=new List<XmlElement>();
+        static bool NameStart(byte c){return (c>=0x41&&c<=0x5a)||(c>=0x61&&c<=0x7a)||c==0x5f;}
+        static bool NameChar(byte c){return NameStart(c)||(c>=0x30&&c<=0x39)||c==0x2d||c==0x2e||c==0x3a;}
+        static FormatException Fail(string what,int offset){return new FormatException(what+" at byte "+offset);}
+        string Name(ref int offset) {
+            int start=offset;
+            if(offset>=B.Length||!NameStart(B[offset]))throw Fail("a missing name",offset);
+            offset++;while(offset<B.Length&&NameChar(B[offset]))offset++;
+            return Encoding.ASCII.GetString(B,start,offset-start);
+        }
+        public Xml(byte[] b) {
+            B=b;int offset=0;var open=new List<int>();
+            if(b.Length==0)throw new FormatException("it is empty");
+            while(offset<b.Length) {
+                if(b[offset]!=0x3c)throw Fail("text outside a tag",offset);
+                offset++;
+                if(offset>=b.Length)throw Fail("a truncated tag",offset);
+                if(b[offset]==0x2f) {
+                    offset++;string closing=Name(ref offset);
+                    if(offset>=b.Length||b[offset]!=0x3e)throw Fail("a malformed end tag",offset);
+                    offset++;
+                    if(open.Count==0||Elements[open[open.Count-1]].Name!=closing)throw Fail("an unmatched end tag",offset);
+                    Elements[open[open.Count-1]].End=offset;open.RemoveAt(open.Count-1);
+                    continue;
+                }
+                if(open.Count==0&&Elements.Count>0)throw Fail("a second root element",offset);
+                var e=new XmlElement();e.Start=offset-1;e.Name=Name(ref offset);
+                while(offset+1<b.Length&&b[offset]==0x20&&NameStart(b[offset+1])) {
+                    offset++;string attribute=Name(ref offset);
+                    if(!(offset+1<b.Length&&b[offset]==0x3d&&b[offset+1]==0x22))throw Fail("an attribute that is not name=\"value\"",offset);
+                    offset+=2;int valueStart=offset;
+                    while(offset<b.Length&&b[offset]!=0x22){if(b[offset]==0x3c)throw Fail("'<' in an attribute value",offset);offset++;}
+                    if(offset>=b.Length)throw Fail("an unterminated attribute value",offset);
+                    if(e.Names.Contains(attribute))throw Fail("a repeated attribute",offset);
+                    e.Names.Add(attribute);e.ValueStarts.Add(valueStart);e.ValueEnds.Add(offset);offset++;
+                }
+                e.AttributesEnd=offset;
+                if(b.Length-offset>=3&&b[offset]==0x20&&b[offset+1]==0x2f&&b[offset+2]==0x3e){e.SelfClosing=true;offset+=3;}
+                else if(offset<b.Length&&b[offset]==0x3e)offset++;
+                else throw Fail("a malformed start tag",offset);
+                e.HeadEnd=offset;e.End=offset;e.Parent=open.Count>0?open[open.Count-1]:-1;
+                int index=Elements.Count;Elements.Add(e);
+                if(e.Parent>=0)Elements[e.Parent].Children.Add(index);
+                if(!e.SelfClosing)open.Add(index);
+                if(open.Count>256||Elements.Count>1000000)throw Fail("more nesting or elements than this writer reads",offset);
+            }
+            if(open.Count>0)throw new FormatException("it ends inside an element");
+        }
+        public int Attribute(int el,string name){return Elements[el].Names.IndexOf(name);}
+        // False when absent; FormatException when not XmlConvert.ToString(int)'s form.
+        public bool Integer(int el,string name,out int value) {
+            value=0;int a=Attribute(el,name);if(a<0)return false;
+            var e=Elements[el];
+            if(!Int32Text(B,e.ValueStarts[a],e.ValueEnds[a],out value))throw new FormatException(e.Name+" has a "+name+" that is not a canonical Int32");
+            return true;
         }
     }
 
