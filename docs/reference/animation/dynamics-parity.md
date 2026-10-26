@@ -65,7 +65,14 @@ IKKOKU_SOURCE_DYNAMICS_REFERENCE="$PWD/.local/reverse/dynamics/reference.json" \
 
 The original reference requires the existing local source avatar and
 `source-dynamics.json`. Without its environment variable, the optional original
-test returns without loading proprietary files. The synthetic tests always run. A green run without the local environment
+test returns without loading proprietary files. The generator writes every
+evidence path as an absolute path. Older references copied the contract's
+`.local/...` entries relative to the producing checkout. The test resolves such
+an entry against the checkout that holds the reference: the parent of the
+nearest `.local` above the given path, symlinks unresolved. It then checks
+each entry's SHA-256 as before. The test previously resolved these entries
+against its own source tree, so `regenerated-2026-10-23/reference.json` failed
+in every worktree. The synthetic tests always run. A green run without the local environment
 variable does not establish original-data comparison coverage.
 
 ## Arithmetic regression found by the audit

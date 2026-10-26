@@ -316,6 +316,16 @@
           "optional": true
         },
         {
+          "env": "IKKOKU_LIVE_SOURCE_GATE_TEXTURES",
+          "kind": "file",
+          "optional": true
+        },
+        {
+          "env": "IKKOKU_LIVE_SOURCE_GATE_HEAD_CONTRACT",
+          "kind": "file",
+          "optional": true
+        },
+        {
           "env": "IKKOKU_COMPOSITE_COLOUR_PROBE",
           "kind": "directory",
           "optional": true
