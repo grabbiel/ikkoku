@@ -503,7 +503,7 @@ final class PerfWorkloadDriver {
     /// restores it, all while the display link draws, then quits through
     /// `NSApp.terminate`. The report's `details.lifecycle` records, before
     /// each step and at the end, the viewport render threads alive and the
-    /// live-pacing hand-over: the mode, the viewports in a window, which
+    /// live-pacing hand-over: the mode, the viewports that render, which
     /// models have live steps, which models a display link paces, and how
     /// many paced steps each has run.
     /// It also records the frames drawn and presented after the restore. The
@@ -555,8 +555,8 @@ final class PerfWorkloadDriver {
     }
 
     /// The live-pacing hand-over (R7 phase 2): the active mode, the models
-    /// whose viewports are in a window (a switch replaces the viewport once
-    /// SwiftUI updates), which models have live steps to run when active,
+    /// whose viewports render (a switch replaces the viewport once SwiftUI
+    /// updates), which models have live steps to run when active,
     /// which models a display link paces, and the paced steps each has run.
     private func pacingState() -> [String: Any] {
         ["mode": app.mode == .maker ? "maker" : "studio",
@@ -566,11 +566,13 @@ final class PerfWorkloadDriver {
          "pacedSteps": ["maker": app.maker?.pacedSteps ?? 0, "studio": app.studio?.pacedSteps ?? 0]]
     }
 
-    /// The models of the viewports in a window now, sorted.
+    /// The models of the viewports that render now, sorted. A dismantled
+    /// viewport can stay in the window until SwiftUI removes it; it is not
+    /// counted.
     private func viewportModels() -> [String] {
         var models: [String] = []
         func visit(_ view: NSView) {
-            if let viewport = view as? ViewportNSView {
+            if let viewport = view as? ViewportNSView, viewport.isRendering {
                 let handler = viewport.handler
                 models.append(handler === app.maker ? "maker" : handler === app.studio ? "studio" : "other")
             }

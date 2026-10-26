@@ -47,6 +47,10 @@ protocol LivePacingOwner: AnyObject {
 final class ViewportNSView: NSView {
     private let renderer: Renderer
     private var renderThread: ViewportRenderThread?
+    /// Whether the render thread runs: from `viewDidMoveToWindow` until
+    /// `stopRendering`. SwiftUI dismantles a viewport (`dismantleNSView`)
+    /// before it removes the view from the window.
+    var isRendering: Bool { renderThread != nil }
     weak var handler: (any ViewportInputHandler)? {
         didSet {
             guard handler !== oldValue, threadPaces else { return }

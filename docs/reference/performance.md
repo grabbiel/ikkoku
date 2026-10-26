@@ -103,7 +103,7 @@ the run.
 | `maker-idle` | `IKKOKU_SOURCE_CARD` | Maker with the source card, idle animation, blink and hair |
 | `maker-slider` | same | source customization on, the first bound body slider oscillates ±0.3 (one binding write per input tick) |
 | `studio-native` | avatar, Maker library | New Scene, `IKKOKU_PERF_CHARACTERS` (default 6) native characters added with the Add menu's command, live animation |
-| `viewport-lifecycle` | avatar, Maker library | `studio-native`'s scene, then every 0.5 s: three Studio/Maker switches (each replaces the viewport), a window resize to 0.7× and back, minimize for 1.5 s, restore, Studio, Maker. Before each step it counts the threads named `com.grabbiel.Ikkoku.viewport-render`. Before each step and at the end it also records the live-pacing hand-over: the mode, which models have live work, which a display link paces, and each model's paced steps ([Maker pacing](#maker-pacing)). After the report it quits through `NSApp.terminate` while the link draws, instead of `exit` |
+| `viewport-lifecycle` | avatar, Maker library | `studio-native`'s scene, then every 0.5 s: three Studio/Maker switches (each replaces the viewport), a window resize to 0.7× and back, minimize for 1.5 s, restore, Studio, Maker. Before each step it counts the threads named `com.grabbiel.Ikkoku.viewport-render`. Before each step and at the end it also records the live-pacing hand-over: the mode, the viewports that render, which models have live work, which a display link paces, and each model's paced steps ([Maker pacing](#maker-pacing)). After the report it quits through `NSApp.terminate` while the link draws, instead of `exit` |
 | `startup` | as `studio-idle` | no workload; the report's `startupSeconds` marks are the result |
 | `studio-static` | as `studio-idle` | the source scene with live animation off and no input: nothing changes, so it measures what an idle viewport costs ([phase 2, item 4](#phase-2-item-4-adaptive-link-rate-idle-keep-alive-and-deformed-vertex-reuse)) |
 | `studio-orbit-bursts` | as `studio-idle` | live animation off (on with `IKKOKU_PERF_BURST_LIVE=on`, so each drag starts during playback); repeatedly `IKKOKU_PERF_BURST_IDLE_MS` (default 1000) without input, then a 0.5 s right-button orbit drag. `details.burstInputEnds` records when each burst's first `mouseDragged` returned, so the summary measures every drag start after a pause |
@@ -3088,15 +3088,21 @@ the phase happened to fall well.
   and the new one attaches the other model; one link paces at a time.
   `viewport-lifecycle` now gives the Studio `studio-native`'s scene, as the
   workload table always said, so both models have live steps. Before each
-  of its steps and at the end it records the mode, which models have live
-  work, which a link paces and each model's paced steps. `perf_trace` fails
-  the run in four cases:
-  - a model other than the active one is paced;
-  - two models are paced at once;
+  of its steps and at the end it records:
+  - the mode;
+  - the viewports that render;
+  - which models have live work;
+  - which models a link paces;
+  - each model's paced steps.
+
+  `perf_trace` warns in these cases:
+  - two models are paced at once, or one without a rendering viewport is;
+  - after the viewport switched, a model other than the active one is paced;
   - an inactive model ran paced steps;
   - a model with live work ran no paced step after the switch to it.
 
-  Under the timer control, no model may be paced.
+  Under the timer control, no model may be paced
+  ([contract](renderer.md#live-pacing-r7-phase-2)).
 - **Workloads.** `maker-idle` is the source card (idle clip, blink and
   source hair), and `maker-slider` adds slider writes at 120 a second. The
   bundled character's hair (`stepHairDynamics`) runs only without the

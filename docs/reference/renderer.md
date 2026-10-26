@@ -1258,16 +1258,27 @@ its mode is not active. A request still in flight from the old thread
 answers `.idle` without stepping. The new viewport's render thread attaches
 the other model, and its new pacer asks at its first callback. One link
 paces at a time, so the steps stay 30 a second across a switch.
-`viewport-lifecycle` records, before each of its steps and at the end, the
-mode, which models a link paces and each model's paced-step count.
-`perf_trace` fails the run in four cases:
-- a model other than the active one is paced;
-- two models are paced at once;
-- the inactive model ran paced steps;
-- the Maker ran no paced step after a switch to it while its live animation
-  was on.
+`viewport-lifecycle` records, before each of its steps and at the end:
+- the mode;
+- the models whose viewports render (SwiftUI dismantles a viewport before
+  it removes it from the window);
+- which models have live work;
+- which models a link paces;
+- each model's paced-step count.
 
-Under the timer control, no model may be paced.
+`perf_trace` warns in these cases:
+- two models are paced at once, or a model whose viewport does not render
+  is;
+- once the viewport has switched to the active mode, a model other than the
+  active one is paced;
+- the inactive model ran paced steps;
+- a model with live work ran no paced step after a switch to it, once its
+  viewport was in place.
+
+Under the timer control, no model may be paced. A main thread as slow as
+ThreadSanitizer's can record a step before SwiftUI replaces the viewport.
+The old viewport's model is then still paced, answering `.idle`, or no model
+is. The summary line names those steps.
 
 **Hidden, minimized, another mode.** `setVisible(false)` also tells the
 pacer, and no callback asks while the window is hidden. On visible again, the

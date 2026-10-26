@@ -329,7 +329,8 @@ def pacing_handover_problems(lifecycle, policy):
     viewports (R7 phase 2), from the state recorded before each lifecycle
     step and at the end. With the timer control no model is paced. With
     display pacing:
-    - at most one model is paced, and only one whose viewport is in a window;
+    - at most one model is paced, and only one whose viewport renders (a
+      dismantled viewport can stay in the window for a while);
     - once the viewport has switched to the active mode, exactly that mode's
       model is paced (a slow main thread can record a step before SwiftUI
       replaces the viewport);
