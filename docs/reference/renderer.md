@@ -2129,9 +2129,18 @@ staging buffer is released as soon as its copy completes.
 
 **At most eight loads at once.** A plain counting semaphore
 (`UploadPermits`, 8 permits) bounds how many loads hold decoded pixels and a
-staging buffer at the same time. A holder decodes, stages and waits for its
-own command buffer, never for a pool, so a caller waiting for a permit
-cannot deadlock. Without the bound, every load in flight left its freed
+staging buffer at the same time. The invariant is that a holder makes
+progress without any pool thread: it decodes and stages on its own thread
+and waits only for its own command buffer, which the GPU completes. So a
+caller waiting for a permit always gets one, however many cooperative
+threads are blocked.
+
+The main thread never waits for a permit. `texture(data:)` and
+`texture(url:)` are called from the main thread as well as from workers,
+and MetalKit's per-call wait never queued a main-thread load behind other
+loads. A load from the main thread therefore runs at
+once, as one holder over the limit, which leaves the cache bound at nine
+decode buffers. Without the bound, every load in flight left its freed
 4 MB decode buffer (for 1024²) in malloc's cache: 116–128 MB after 64
 concurrent loads, against none for MetalKit. Malloc's bytes in use did not
 grow over repeated batches, so this was a cache, not a leak. MetalKit
@@ -2170,11 +2179,16 @@ MetalKit, then in line:
     store's uploads run in call order;
   - a texture reads back whole from another queue right away;
   - 256 stores load at once from the cooperative pool, every load counted;
-  - the permits never admit more holders than their limit.
+  - the permits never admit more holders than their limit, and 64
+    concurrent loads stay within it;
+  - a load from the main thread completes while a plain thread holds
+    every permit.
 
   Removing the upload's wait makes the handout test fail (status not
   completed, and the call order broken); the readback test still passes,
-  because Metal orders the readback after the upload by itself.
+  because Metal orders the readback after the upload by itself. Removing
+  the main-thread bypass makes the main-thread test fail: its load waits
+  until the holder gives up after 20 s.
 
 ## Checked math, legacy skeletons and cameras (R4)
 

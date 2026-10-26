@@ -8,24 +8,57 @@ import Metal
 /// once. Unbounded, every load in flight leaves its freed decode buffer in
 /// malloc's cache for reuse: 4 MB after one 1024² load, 32 MB after 8 at
 /// once, 116–128 MB after 64, with 256 MB of staging at that peak. MetalKit
-/// allowed three loads per loader. A holder decodes,
-/// stages and waits only for its own command buffer, never for a pool, so a
-/// caller waiting for a permit cannot deadlock (`docs/reference/performance.md`,
-/// the pool rule).
+/// allowed three loads per loader.
+///
+/// The invariant: a holder makes progress without any pool thread. It
+/// decodes and stages on its own thread and waits only for its own command
+/// buffer, which the GPU completes. So a caller waiting for a permit always
+/// gets one, however many cooperative threads are blocked
+/// (`docs/reference/performance.md`, the pool rule).
+///
+/// The main thread never waits for a permit: a load from it runs at once,
+/// as one holder over the limit, so it cannot stall behind other loads.
 final class UploadPermits: @unchecked Sendable {
     static let limit = 8
     static let shared = UploadPermits(limit: limit)
 
+    /// What the permits saw since the last reset (tests and measurements).
+    struct Stats: Equatable {
+        /// The most permits held at once.
+        var mostHolders = 0
+        /// The longest a caller waited for a permit, in seconds.
+        var longestWait = 0.0
+        /// Loads from the main thread, which take no permit.
+        var mainThreadLoads = 0
+    }
+
     private let semaphore: DispatchSemaphore
     private let lock = NSLock()
     private var holders = 0
-    private var mostHolders = 0
+    private var stats = Stats()
 
     init(limit: Int) { semaphore = DispatchSemaphore(value: limit) }
 
+    /// Runs `body` holding a permit, or at once without one on the main thread.
+    func withPermit<T>(_ body: () throws -> T) rethrows -> T {
+        if Thread.isMainThread {
+            lock.lock(); stats.mainThreadLoads += 1; lock.unlock()
+            return try body()
+        }
+        acquire()
+        defer { release() }
+        return try body()
+    }
+
     func acquire() {
+        let start = DispatchTime.now().uptimeNanoseconds
         semaphore.wait()
-        lock.lock(); holders += 1; mostHolders = max(mostHolders, holders); lock.unlock()
+        let waited = Double(DispatchTime.now().uptimeNanoseconds - start) / 1e9
+        lock.lock()
+        holders += 1
+        stats.mostHolders = max(stats.mostHolders, holders)
+        stats.longestWait = max(stats.longestWait, waited)
+        lock.unlock()
     }
 
     func release() {
@@ -33,8 +66,12 @@ final class UploadPermits: @unchecked Sendable {
         semaphore.signal()
     }
 
-    /// The most permits held at once since the last reset (tests only).
-    func resetMost() -> Int { lock.lock(); defer { mostHolders = holders; lock.unlock() }; return mostHolders }
+    /// The statistics since the last reset, then a reset.
+    func resetStats() -> Stats {
+        lock.lock()
+        defer { stats = Stats(mostHolders: holders); lock.unlock() }
+        return stats
+    }
 }
 
 /// Creates shader-read textures from images on the calling thread.
@@ -297,10 +334,9 @@ enum InlineTextureLoader {
         descriptor.storageMode = .private
         guard let texture = device.makeTexture(descriptor: descriptor) else { throw Failure.gpu("texture \(describe(image))") }
         // The staging buffer lives only until the copy has completed. At most
-        // `UploadPermits.limit` loads hold decoded pixels and staging at once.
-        UploadPermits.shared.acquire()
-        defer { UploadPermits.shared.release() }
-        try autoreleasepool {
+        // `UploadPermits.limit` loads hold decoded pixels and staging at once,
+        // plus one from the main thread, which never waits for a permit.
+        try UploadPermits.shared.withPermit { try autoreleasepool {
             let staging = try stage(image, layout: layout, device: device)
             guard let command = queue.makeCommandBuffer(), let blit = command.makeBlitCommandEncoder() else {
                 throw Failure.gpu("command buffer for \(describe(image))")
@@ -317,7 +353,7 @@ enum InlineTextureLoader {
                 throw Failure.gpu("\(describe(image)): \(command.error.map { "\($0)" } ?? "status \(command.status.rawValue)")")
             }
             didComplete?(command)
-        }
+        } }
         return texture
     }
 

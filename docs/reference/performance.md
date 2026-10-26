@@ -4477,8 +4477,9 @@ so it never starves other tasks.
   the frame queue. A queue per store ran the driver out of command queues
   at 256 stores.
 - At most eight loads hold decoded pixels and staging at once
-  (`UploadPermits`, a plain counting semaphore whose holders never wait on
-  a pool).
+  (`UploadPermits`, a plain counting semaphore). A holder makes progress
+  without any pool thread, so waiting for a permit cannot deadlock. A load
+  from the main thread takes no permit and never waits behind other loads.
 - GPU texture containers (KTX, KTX2, PVR, ASTC, DDS, ATX) are rejected by
   name on every entry point.
 - The off-pool test helpers (`liveTickOffPool`) and the GCD workers in the
@@ -4518,7 +4519,9 @@ not leaked.
   - With the eight permits: 64, 256 and 512 cooperative tasks, 256 GCD
     workers and 256 threads, shared or per-task stores, 3 runs each: every
     load completed (512 loads of 512² in 0.11 s, 256 of 1024² in
-    0.14–0.17 s).
+    0.14–0.20 s). At most eight held a permit in every run. The longest
+    wait for one was 27–45 ms from tasks and GCD workers and 54–55 ms from
+    256 plain threads; no main-thread load waits at all.
 
 ### Limits
 

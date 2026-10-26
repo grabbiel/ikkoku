@@ -10,6 +10,12 @@ private func patternPNG(width: Int, height: Int) throws -> Data {
     return try #require(TextureIdentityCases.encode(image, as: "public.png"))
 }
 
+/// A value one thread sets and another reads after a semaphore handoff.
+private final class Box<Value>: @unchecked Sendable {
+    var value: Value
+    init(_ value: Value) { self.value = value }
+}
+
 /// The texture upload path that replaced `MTKTextureLoader`: one upload queue
 /// per device shared by every store, each upload complete before its texture
 /// is handed out, and loads that need no worker thread from any pool.
@@ -87,7 +93,37 @@ private func patternPNG(width: Int, height: Int) throws -> Data {
                 permits.release()
             }
         }
-        #expect(permits.resetMost() == 2)
+        let stats = permits.resetStats()
+        #expect(stats.mostHolders == 2)
+        #expect(stats.longestWait > 0)
+    }
+
+    /// `texture(data:)` has main-thread callers. MetalKit's per-call wait
+    /// never queued them behind other loads, and the permits must not either.
+    @Test("A load from the main thread completes while other loads hold every permit", .timeLimit(.minutes(1)))
+    @MainActor func mainThreadLoadNeverWaitsForAPermit() throws {
+        #expect(Thread.isMainThread)
+        let device = try #require(MTLCreateSystemDefaultDevice())
+        let resources = ResourceStore(device: device)
+        let png = try patternPNG(width: 512, height: 512)
+        let held = DispatchSemaphore(value: 0), letGo = DispatchSemaphore(value: 0), done = DispatchSemaphore(value: 0)
+        let timedOut = Box(false)
+        // A plain thread holds every shared permit until the main-thread load
+        // has returned, or for 20 s if it never does.
+        Thread {
+            for _ in 0..<UploadPermits.limit { UploadPermits.shared.acquire() }
+            held.signal()
+            timedOut.value = letGo.wait(timeout: .now() + 20) == .timedOut
+            for _ in 0..<UploadPermits.limit { UploadPermits.shared.release() }
+            done.signal()
+        }.start()
+        held.wait()
+        let handle = try resources.texture(data: png, key: "main-thread")
+        letGo.signal()
+        done.wait()
+        #expect(!timedOut.value, "the main-thread load waited for a permit")
+        #expect(resources.texture(handle)?.width == 512)
+        #expect(UploadPermits.shared.resetStats().mainThreadLoads >= 1)
     }
 
     @Test("Concurrent loads hold at most the shared limit of upload permits")
@@ -95,7 +131,7 @@ private func patternPNG(width: Int, height: Int) throws -> Data {
         let device = try #require(MTLCreateSystemDefaultDevice())
         let resources = ResourceStore(device: device)
         let png = try patternPNG(width: 256, height: 256)
-        _ = UploadPermits.shared.resetMost()
+        _ = UploadPermits.shared.resetStats()
         let failures = await withTaskGroup(of: Bool.self) { group -> Int in
             for index in 0..<64 {
                 group.addTask { (try? resources.texture(data: png, key: "permits-\(index)")) == nil }
@@ -105,7 +141,7 @@ private func patternPNG(width: Int, height: Int) throws -> Data {
             return failures
         }
         #expect(failures == 0)
-        #expect(UploadPermits.shared.resetMost() <= UploadPermits.limit)
+        #expect(UploadPermits.shared.resetStats().mostHolders <= UploadPermits.limit)
     }
 
     /// With a command queue per store, 256 stores loading at once failed about
