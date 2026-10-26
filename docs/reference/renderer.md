@@ -5481,12 +5481,47 @@ oracle; generated mips are diagnostics.
 new program. The face composite program already samples `_Texture5`, from the
 property's shared Unity default texture when no lipline is selected; ID1 binds the uploaded level
 there instead, so the pass, program, target and sampler counts do not change. The
-composite runs on recipe edits, never per frame. Comparative timings need a quiet
-window and are not claimed here.
+composite runs on recipe edits, never per frame, and only with the live opt-in.
+Comparative timings are deferred, as for the cheek: they need a quiet window, and
+the face composite (cheek and lipline) is to be measured in one before the native
+face path becomes default-ON.
+
+**App acceptance.** Release apps: base main `0e6181a` (binary `a659f515…`) and
+the candidate built at `4b99cea` (`e29baf9c…`; later commits are docs only), both
+from the same tracked `Assets` tree. Each default-OFF capture is byte-identical
+between base and candidate: the Studio source scene (`koikatu_cs0002591`), the
+native Studio capture and the Maker synthetic card, each with live opt-in OFF and
+ON (the ON runs add the live inputs, this store and contract). None of those
+reaches a face composite: the source-scene characters fall back first on the
+unrecovered CharaStudio SceneInfo globals, and the native and Maker captures have
+no live draws, so base and candidate live reports are identical too. The lipline
+path runs in the provider cohort: the candidate app on the lipline original-base
+card and frame (`835e27ed…`, `b2c03737…`), in the order old, new, new, old, old,
+new, capture:
+
+| Provider | Live slots / fallbacks | Unique composite keys / events | Registered textures |
+| --- | ---: | ---: | ---: |
+| Old 63-entry cheek store, three runs | 19 / 1 | 6 / 8 | 95 |
+| New 64-entry store, three runs | 20 / 0 | 7 / 9 | 100 |
+| Captured-pixel control | 20 / 0 | 0 / 0 | 72 |
+
+The old fallback is the face, because `_Texture5` (`cw_t_lip_line_000`) is not
+in that store. New runs add one face-creator miss with key
+`cbb5605ff82ac648725f7c0b93173ee2cf86fad716455a7aa08000837046239e` and 5,652,480
+target bytes; the six unrelated keys and eight events agree across providers.
+Every run records 41 meshes, 20 deform buffers, zero retiring resources, no
+unmatched slot, no renderer fallback and the one hidden double tooth. Toon,
+depth-normal and geometry PNGs are byte-identical across all seven processes.
+The strict Studio and Maker lanes pass 78/78 and 10/10 with none skipped. These
+were functional runs with concurrent work permitted; no timing is claimed from
+them. The live native rig uses captured globals; passing composite targets and
+control images does not establish whole-frame source shading, generated-mip parity
+or resolution of translated-draw repeatability issue #188.
 
 Private evidence is under `.local/rmat-gates-lipline/`: `source-audit/` (card
 audit, v3 audit rerun, source identity, overlap sweep, no-layer analysis,
-reproduction diff), `native-inputs/` (64-entry store, contract, bindings),
+reproduction diff), `app-acceptance/` (pair and cohort records, reports and
+captures), `native-inputs/` (64-entry store, contract, bindings),
 `original-pair/original-{base,distinct,none}` (15 files each) and `vm-run-1/`
 (session record, settings and per-case manifests; base and distinct are kept as
 hash manifests only).
