@@ -5531,7 +5531,17 @@ there instead, so the pass, program, target and sampler counts do not change. Th
 composite runs on recipe edits, never per frame, and only with the live opt-in.
 Comparative timings are deferred, as for the cheek: they need a quiet window, and
 the face composite (cheek and lipline) is to be measured in one before the native
-face path becomes default-ON.
+face path becomes default-ON. One unquiet, paired sample was taken, and it is not
+a gate.
+- Setup: one test process on an Apple M2 Ultra, with other work running. There were
+  20 pairs after 2 warm-up pairs, and the order alternated within each pair. Each
+  pair composed the stage-0 face with and without the layer under one new
+  `_Color5`, so all 44 composites were distinct cache misses of 5,652,480 bytes.
+- GPU time (command-buffer timestamps, pass plus mip generation): median 0.100 ms
+  with the lipline and 0.103 ms without. The paired difference had median
+  −0.001 ms (IQR −0.004 to 0.004 ms), and the lipline arm was slower in 9 of 20
+  pairs.
+- Wall time per composite: median 0.537 ms against 0.544 ms.
 
 **App acceptance.** Release apps: base main `0e6181a` (binary `a659f515…`) and
 the candidate built at `4b99cea` (`e29baf9c…`; later commits are docs only), both
@@ -5568,7 +5578,7 @@ or resolution of translated-draw repeatability issue #188.
 Private evidence is under `.local/rmat-gates-lipline/`: `source-audit/` (card
 audit, v3 audit rerun, source identity, overlap sweep, no-layer analysis,
 reproduction diff), `app-acceptance/` (pair and cohort records, reports and
-captures), `native-inputs/` (64-entry store, contract, bindings),
+captures), `timing/paired-unquiet.json` (the raw paired samples), `native-inputs/` (64-entry store, contract, bindings),
 `original-pair/original-{base,distinct,none}` (15 files each) and `vm-run-1/`
 (session record, settings and per-case manifests; base and distinct are kept as
 hash manifests only).
