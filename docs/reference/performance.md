@@ -3200,22 +3200,31 @@ Cost, medians (8 bundled runs, 4 a side):
   opt-in OFF and ON. The Maker's live animation is on in all of them. All
   12 PNGs and 5 reports are byte-identical to `main` `74cee1c`; #275 changed
   none of them, so that base holds for `6502803`.
-- **Lanes.** Debug, `--strict` under the app lock, 0 skipped:
-  - `maker-scenarios` 10/10 at `517b2fb`, and again at `3c0d48d` after
-    merging `main` `b4c59e7`;
-  - `studio-scenarios` 77/77 at `8c8d8a0`, the merge.
+- **Lanes.** Debug, `--strict` under the app lock, 0 skipped, at
+  `8586f9d` after merging `main` `3bfcc37`:
+  - `maker-scenarios` 10/10 (also at `517b2fb`, before the merges);
+  - `studio-scenarios` 78/78.
 - **Engine tests.** `LiveStepPacerTests` (11, two of them new) and
   `DisplayLinkRatePolicyTests` (4) pass, also under ThreadSanitizer with 0
-  warnings. The suite with the fixture map at the merge ran 982 tests. The
-  6 failures and 14 issues are the same fixture-environment ones as live
-  pacing's.
-- **App under ThreadSanitizer** (Debug, at `8c8d8a0`): 12 s each of
-  `maker-idle`, `maker-slider`, `viewport-lifecycle`, `studio-timeline` and
+  warnings. At `8586f9d`, after merging `main` `3bfcc37`, the suite with the
+  fixture map ran 988 tests. The 6 failures and 14 issues are the same
+  fixture-environment ones as live pacing's.
+- **App under ThreadSanitizer** (Debug, at `8586f9d`): 12 s each of
+  `viewport-lifecycle`, `maker-idle`, `maker-slider`, `studio-timeline` and
   `studio-idle`, and `maker-idle` with the bundled character, with 0
-  warnings. The original card's step took about 113 ms under
-  ThreadSanitizer, so 101 steps ran in 12 s, each answered `.ran`.
-  TBD tsan lifecycle
-- **`viewport-lifecycle`** (Release) TBD release lifecycle
+  warnings.
+  - The original card's step took about 115 ms under ThreadSanitizer, so 98
+    steps ran in 12 s, each answered `.ran`.
+  - `viewport-lifecycle` passed its hand-over check. Before one of its 12
+    steps SwiftUI had not yet replaced the viewport, which the check allows.
+- **`viewport-lifecycle`** (Release, at `8586f9d`) is clean in both modes:
+  - one render thread before every step and at the end;
+  - 86 frames presented after the restore;
+  - no keep-alive refresh while minimized.
+
+  With display pacing, the link paced exactly the active mode's model
+  before every step. The Maker ran 230 paced steps and the Studio 47. Under
+  the timer control no model was paced.
 - **Python.** All pass:
   - runner self-tests (200), with the hand-over check;
   - `Tools/reverse` 573, with 7 skipped;
