@@ -819,6 +819,11 @@ The refusal is the engine's message, which names each plug-in and its reason. Th
   - **Largest KKPE scene** (80.5 MB, 173 objects, 42 characters, 36,553 B of plug-in data). An item delete exports in 83 ms (plug-in step 21 ms), an item copy in 97 ms (27) and a move to the root in 63 ms (0.7).
   - **Fixes found by the probe (second change).** Card decode hashed every card's bytes, and every scene decode reads every card. It now computes `sourceSHA256` when read. On the largest scene that halves each export: a delete took 172 ms, a copy 187 ms and a move 125 ms. KKPE's used-ID scan searched the whole scene with `memmem` on every plan. It now makes one `memchr` pass, only when a plan needs a fresh ID.
   - **Import.** Nothing on the import path runs these rules. The lazy card hash speeds it up: the Engine decodes the largest scene in 24.6 ms instead of 55.1 ms, and showoff in 2.45 ms instead of 2.64 ms.
+- **Lanes and the Engine suite.** These ran on the Debug build of `256147d`, with `main` `ca91cda` merged, under the app lock with `--strict` and 0 skipped. `studio-scenarios` passed 81/81 and `maker-scenarios` passed 10/10. Two checks are new ([plug-in data rewrites](../../../Tools/verification/README.md#plug-in-data-rewrites-st-t03i)):
+  - `plugin-rewrite-delete` deletes item 2 and exports. The same delete together with a copy is refused (#278).
+  - `plugin-rewrite-duplicate` copies the female and then item 5. Each reimport holds the copy at key 159, at its original's world position. The female's FK bones, IK targets and look-at target hold keys 17–158, and CharaStudio's own copies take 159 too.
+
+  The three exports' bytes after the PNG equal the Engine's exports of the same edits. The strict Engine suite with the shared fixture map passed 1,052 tests. The 6 skipped tests are the opt-in timing probes.
 
 **Limits:**
 

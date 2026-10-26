@@ -3850,6 +3850,18 @@ What the numbers show:
   `subdata` and searched with `Data.range(of:)`. Reading them in place is a
   follow-up, not measured here.
 
+### Correctness
+
+- **The lazy hash has the same value.** `sourceCharacterCardHashIsTheSHA256OfItsPreservedBytes`
+  compares it with CommonCrypto's SHA-256 on the source card fixture and on
+  every card of phase C's scene, and two reads are equal. The commit lists
+  every reader. None reads the hash in a loop or per frame.
+- **The ID scan change writes the same bytes.** The 175-scene rule corpus is
+  byte-identical before and after it.
+- **Lanes and the Engine suite.** On `256147d` (Debug, `--strict`, 0
+  skipped): `studio-scenarios` passed 81/81, `maker-scenarios` 10/10, and the
+  Engine suite 1,052 tests ([plug-in data](studio/scene-editing.md#plug-in-data-st-t03i)).
+
 ### Scaling to a base M1 (estimate)
 
 This uses the CPU factor of [scaling to the low end](#scaling-to-the-low-end-base-m1-8-gb),
