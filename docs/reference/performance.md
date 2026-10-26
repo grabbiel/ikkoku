@@ -3583,9 +3583,89 @@ builds each):
 - **Route characters of a rehydration** (a scene load, or the redo of a
   route Duplicate) still build in one batch on the main thread.
 
+### The launch window setup
+
+Each build's system-wide Time Profiler recording was started before the
+launch. It was cut from the process's first main-thread sample to the
+app's `firstDraw` signpost, 0.42 s (base) and 0.43 s (after). The main
+thread holds 277 and 270 ms of samples in that span; for the rest it was
+not running (blocked in a call or waiting). The split is the same in both
+builds:
+
+| Inside | Base ms | After ms |
+| --- | ---: | ---: |
+| SwiftUI's attribute graph updates (`AG::Graph::UpdateStack::update`), the first view tree | 155 | 158 |
+| `NSWindow` work, including its layout | 119 | 89 |
+| `NSHostingView` | 55 | 51 |
+| `AppState.init` | 34 | 35 |
+| — `StudioModel.init` | 14 | 14 |
+| — `SourceStudioAudioBus.init` | 13 | 12 |
+| — `EngineHost.init` | 9 | 12 |
+| — `GPUContext.init` | 6 | 9 |
+| dyld (loading and binding) | 23 | 25 |
+| `NSImage` | 11 | 11 |
+| The import's prepare (`beginSourceSceneImport`) | 9 | 9 |
+
+These overlap, since they are nested frames. Most of the window setup is
+SwiftUI building and laying out the first view tree. The app's own
+initializers take 35 ms, and the audio bus could be created on first use
+(about 12 ms, a **hypothesis**). Reducing the rest means building less of
+the view tree before the first frame, which is UI work outside this item.
+
 ### Correctness
 
-CORRECTNESS-PLACEHOLDER
+After merging `main` `b4c59e7` (#276 maps, #277 translated vertex store),
+on the merged head:
+
+- **Captures.** Release builds of `main` `b4c59e7` and the merged head, each
+  capture its own launch under the app lock, run from the same working
+  directory (`.local/r7i-builds/captures`):
+  - eight `IKKOKU_AUTOCAPTURE` renders: the Studio scenario scene, the
+    fixture scene and the route-children scene, the native Studio, and the
+    Maker. The scenario scene, the fixture and the Maker are also captured
+    with the live source-shader opt-in ON;
+  - two `IKKOKU_CAPTURE_UI` windows, Studio and Maker;
+  - seven scenario reports: `topology-duplicate`, `undo-props`,
+    `undo-route`, `reload-save-route`, `reload-save-duplicate`,
+    `route-children-edit` and `reload-save-outfit`.
+
+  All 10 PNGs and the 3 live opt-in reports are byte-identical. Six of the
+  seven scenario reports are byte-identical. In `route-children-edit`, only
+  one step's detail differs: the drag events' median and max time (1.37
+  against 1.33 ms).
+- **Engine tests.** These are new:
+  - the prefetch without fixtures;
+  - the prefetch's decode count in the 7-character batch;
+  - the kept donation of a deleted character, rendered against a fresh
+    build;
+  - the donation cache's budget and eviction;
+  - `rigFiles` against the decodes a preparation runs;
+  - the shared compositor queue's bytes.
+
+  See the [renderer reference](renderer.md#source-character-builds-r7-phase-2-item-6).
+  The 12 tests of the decode share, the batch, the donation cache, the
+  compositor queue and `rigFiles` pass under ThreadSanitizer with 0
+  warnings, before and after the merge. No app TSan session was run: the
+  app's new code runs only on the main actor, and its new concurrency is in
+  these Engine types.
+- **Scenario.** `studio-scenario-background-build-route` passes. Before the
+  history fix, its hidden Redo differed from the synchronous one by 30,501
+  pixels.
+- **Lanes**, Debug, `--strict` under the app lock, 0 skipped:
+  - `studio-scenarios` 78/78 (1,183.3 s), with the new check;
+  - `maker-scenarios` 10/10 (196.7 s).
+- **Engine suite** with the fixture map, in parallel: 986 tests. The only
+  failure is the known `liveSourceShadersMeetTheControlledOriginalFrameGates`,
+  with 13 named skips. The 21 tests of the second target pass.
+- **Python.** All pass:
+  - runner self-tests, 199;
+  - `Tools/reverse`, 573 (6 skipped);
+  - `Tools/reverse/analysis`, 279;
+  - the site check and `doctor.py --require public`.
+- **`viewport-lifecycle`** (after build) is clean. There was one render
+  thread before each of the 12 steps and at the end, 85 frames were
+  presented after the restore, and there were no keep-alive refreshes while
+  minimized.
 
 ### Limits
 

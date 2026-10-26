@@ -1582,11 +1582,15 @@ runs. Captures and scenarios leave it off.
 | Previews a refresh finds missing: after undo or redo, a duplicate, a scene load or a restored outfit | `startMissingSourceBuilds` starts one batch in document order; the second halves run on `com.grabbiel.Ikkoku.source-builds`, and each preview installs itself on the main actor (`installSourceBuild`) | the same batch; `refreshFrame` builds each preview where its loop reaches it, as before |
 | Route character copies of a Duplicate | `startSourceRouteCharacterBuilds`: one batch in subtree order, borrowing the original's assembly; the second halves run on the build queue, and each copy installs itself on the main actor (`installSourceRouteCharacterBuild`) | `copySourceRouteRuntime` builds each copy on the main thread, as before |
 | Route characters of a rehydration (scene load, undo or redo) | one batch, built on the main thread in walk order | the same |
-| One character: outfit selection, a plugin attachment's parent, an export validation baseline | unchanged: the full initializer on the main thread | the same |
+| One character: outfit selection, a plugin attachment's parent, an export validation baseline | both halves on the main thread, with a prefetching decode share (`sourceRigShare()`); an outfit selection and an attachment parent borrow a donation when one matches | the same |
 
-`makeSourceCharacterPreview(reference:outfit:)` builds one preview on the
-main thread with a donation when one matches, for a caller that needs a
-single route character.
+`makeSourceCharacterPreview(reference:outfit:appearanceTransaction:)`
+builds one preview on the main thread. It borrows a loaded or kept
+donation when one matches, and otherwise decodes with a prefetching share.
+It serves a synchronous route character copy, an outfit selection and a
+plugin attachment's parent. The export validation baseline uses the share
+but no donation: its preview is dropped after the export, and taking a kept
+donation would lose it.
 
 **Background import.** `beginSourceSceneImport` runs in three parts:
 
