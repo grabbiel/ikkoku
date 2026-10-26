@@ -403,21 +403,32 @@ func legacyCorpusSceneUpgradesAndReadsBack() throws {
 }
 
 /// Finding 2: CharaStudio's load gives a legacy character each catalog FK
-/// bone its record lacks (AddObjectAssist.InitBone :38-46, InitHairBone
-/// :103-113): a fresh key and `new ChangeAmount()`, saved with the scene.
-/// Our pose binds the same catalog bones (SourceStudioPose.init), each
-/// unsaved one at that zero rotation, so the FK view shows them and
-/// previews edits of them; the record and its export keep the saved bones
-/// only, and an export that edits an unsaved one is refused.
+/// bone its record lacks and its body or hair has (AddObjectAssist.InitBone
+/// :38-46, InitHairBone :103-113): a fresh key and `new ChangeAmount()`,
+/// saved with the scene. On this 0.0.7 character those are the 10 bones of
+/// its back hair. Our pose binds the catalog bones it finds in the rig it
+/// draws (SourceStudioPose.swift:143-149): body bones under the body, hair
+/// bones under `cf_J_FaceUp_ty`. This character's hair is not converted,
+/// so the drawn hair is the avatar's: the FK view lists 9 of its front-hair
+/// bones, which the record does not save, at a zero rotation, and none of
+/// the 10 CharaStudio adds. Each previews an edit without trapping, and an
+/// export that edits any bone the record does not save is refused.
 @Test(.enabled(if: SourceFixtureSupport.shouldRun(["IKKOKU_STUDIO_LEGACY_SCENE", "IKKOKU_LEGACY_SCENE_PROBE", "IKKOKU_SOURCE_AVATAR",
-                                                   "IKKOKU_SOURCE_MALE_AVATAR", "IKKOKU_STUDIO_POSE_CONTRACT"]) && MTLCreateSystemDefaultDevice() != nil,
-               "Requires IKKOKU_STUDIO_LEGACY_SCENE, IKKOKU_LEGACY_SCENE_PROBE, both source avatars, IKKOKU_STUDIO_POSE_CONTRACT and a Metal device"))
-func legacyCharacterFKBindsTheBonesCharaStudioAdds() throws {
+                                                   "IKKOKU_SOURCE_MALE_AVATAR", "IKKOKU_STUDIO_POSE_CONTRACT", "IKKOKU_MAKER_LIBRARY"])
+                   && MTLCreateSystemDefaultDevice() != nil,
+               "Requires IKKOKU_STUDIO_LEGACY_SCENE, IKKOKU_LEGACY_SCENE_PROBE, both source avatars, IKKOKU_STUDIO_POSE_CONTRACT, IKKOKU_MAKER_LIBRARY and a Metal device"))
+func legacyCharacterFKShowsUnsavedBonesAtZeroAndRefusesTheirExport() throws {
     let path = try SourceFixtureSupport.require("IKKOKU_STUDIO_LEGACY_SCENE")
     let probe = URL(fileURLWithPath: try SourceFixtureSupport.require("IKKOKU_LEGACY_SCENE_PROBE"))
     let female = try SourceFixtureSupport.require("IKKOKU_SOURCE_AVATAR"), male = try SourceFixtureSupport.require("IKKOKU_SOURCE_MALE_AVATAR")
-    let catalog = try SourceFixtureSupport.require("IKKOKU_STUDIO_POSE_CONTRACT")
+    let catalog = try SourceFixtureSupport.require("IKKOKU_STUDIO_POSE_CONTRACT"), library = try SourceFixtureSupport.require("IKKOKU_MAKER_LIBRARY")
+    let attachments = URL(fileURLWithPath: catalog).deletingLastPathComponent().appendingPathComponent("attachments.json").path
+    struct Catalog: Decodable { let bones: [SourceStudioPose.Bone] }
+    let groups = Dictionary(uniqueKeysWithValues: try JSONDecoder().decode(Catalog.self, from: Data(contentsOf: URL(fileURLWithPath: catalog)))
+        .bones.map { (Int32($0.id), $0.group) })
+    func isHair(_ bone: Int32) -> Bool { groups[bone].map { (7...9).contains($0) } ?? false }
     let data = try Data(contentsOf: URL(fileURLWithPath: path)), document = try KoikatsuSceneReader.decodeDocument(data)
+    #expect(document.snapshot.version == "0.0.7")
     // The VM phase labels this record l007-<short hash>, as the file names it.
     let hash = try #require(URL(fileURLWithPath: path).deletingPathExtension().lastPathComponent.split(separator: "-").last)
     let resave = try KoikatsuSceneReader.decodeDocument(Data(contentsOf: probe.appendingPathComponent("resave-l007-\(hash).png")))
@@ -434,34 +445,46 @@ func legacyCharacterFKBindsTheBonesCharaStudioAdds() throws {
     let ours = characters(document), theirs = characters(resave), upgraded = try document.upgraded()
     #expect(!ours.isEmpty && Set(ours.keys) == Set(theirs.keys))
     let resources = ResourceStore(device: try #require(MTLCreateSystemDefaultDevice()))
-    var added = 0
+    var added = 0, shown = 0
     for (key, character) in ours.sorted(by: { $0.key < $1.key }) {
         let saved = try #require(theirs[key])
         let missing = Set(saved.bones.keys).subtracting(character.bones.keys)
         #expect(Set(character.bones.keys).isSubset(of: saved.bones.keys))
         #expect(missing.allSatisfy { saved.bones[$0]?.transform == KoikatsuChangeAmount(position: .zero, rotationDegrees: .zero, scale: .one) },
                 "character \(key): CharaStudio saved an added FK bone with a change amount")
+        // As the app builds it, with the maker library and attachments.
         let preview = try SourceStudioCharacterPreview(reference: SourceStudioCharacterReference(sceneFile: path,
-            sceneSHA256: OriginalCardFixture.hash(data), rigFile: character.sex == 0 ? male : female, boneCatalogFile: catalog, objectKey: key),
-            resources: resources)
+            sceneSHA256: OriginalCardFixture.hash(data), rigFile: character.sex == 0 ? male : female, boneCatalogFile: catalog, objectKey: key,
+            makerLibraryFile: library, attachmentCatalogFile: attachments), resources: resources)
         #expect(preview.record.bones.keys.sorted() == character.bones.keys.sorted())
         let unsaved = preview.controller.targets.filter { character.bones[Int32($0.bone.id)] == nil }
-        #expect(Set(unsaved.map { Int32($0.bone.id) }) == missing, "character \(key): our pose binds other unsaved FK bones than CharaStudio adds")
+        let unsavedIDs = Set(unsaved.map { Int32($0.bone.id) })
+        let hair = preview.selections.filter { $0.property.hasPrefix("ChaFileHair.") }.map { "\($0.property.dropFirst(12))=\($0.status)" }
+        print("[legacy-fk] character \(key): \(character.bones.count) saved FK bones; CharaStudio adds \(missing.sorted()); "
+            + "the FK view shows \(unsavedIDs.sorted()) unsaved, at zero; hair \(hair)")
+        // Every bone either side adds is a hair bone: the body bones the
+        // view shows are all saved.
+        #expect(missing.allSatisfy(isHair) && unsavedIDs.allSatisfy(isHair), "character \(key): an unsaved body FK bone")
+        // An unsaved bone the view shows sits at CharaStudio's new-record
+        // value; one CharaStudio adds is either shown so or absent.
         #expect(unsaved.allSatisfy { $0.hasGuide && $0.rotation == .zero })
-        added += missing.count
-        // An FK edit of an unsaved bone poses (nothing traps on it) ...
-        let target = try #require(unsaved.first)
-        let changed = try preview.editedPose(fkRotations: [target.bone.id: .init(11, 23, 7)])
-        _ = try preview.preview.source.rig.evaluate(changed)
-        // ... and its export is refused: the record has no such bone.
-        let edits = SourceSceneEdits(transforms: [.init(.characterFK(object: key, bone: Int32(target.bone.id)),
-                                                        transform: KoikatsuChangeAmount(position: .zero, rotationDegrees: .init(11, 23, 7), scale: .one))])
-        for scene in [upgraded, document] {
-            do { _ = try scene.editedData(edits); Issue.record("character \(key): an unsaved FK bone was exported") }
-            catch { #expect(error.localizedDescription.contains("unavailable scene transform destination"), "\(error.localizedDescription)") }
+        added += missing.count; shown += unsaved.count
+        // Edits of every unsaved bone shown pose and evaluate (nothing
+        // traps on them) ...
+        let rotations = Dictionary(uniqueKeysWithValues: unsaved.map { ($0.bone.id, SIMD3<Float>(11, 23, 7)) })
+        _ = try preview.preview.source.rig.evaluate(try preview.editedPose(fkRotations: rotations))
+        // ... and an export that edits a bone the record does not save,
+        // shown or not, is refused: the record has no such bone.
+        for bone in unsavedIDs.union(missing).sorted() {
+            let edits = SourceSceneEdits(transforms: [.init(.characterFK(object: key, bone: bone),
+                transform: KoikatsuChangeAmount(position: .zero, rotationDegrees: .init(11, 23, 7), scale: .one))])
+            for scene in [upgraded, document] {
+                do { _ = try scene.editedData(edits); Issue.record("character \(key): unsaved FK bone \(bone) was exported") }
+                catch { #expect(error.localizedDescription.contains("unavailable scene transform destination"), "\(error.localizedDescription)") }
+            }
         }
     }
-    #expect(added == 10)
+    #expect(added == 10 && shown > 0)
 }
 
 /// The user's corpus (opt-in: IKKOKU_SCENE_CORPUS, read in place; see

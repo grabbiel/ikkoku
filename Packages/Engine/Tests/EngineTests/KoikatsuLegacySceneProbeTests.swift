@@ -85,7 +85,8 @@ func legacyScenesReadAndSaveAsCharaStudio() throws {
         // Controls for that mask (finding 1), on the first item: a change in
         // its animator time is masked; one in the field before it
         // (enableDynamicBone) or after it (the child count) is not.
-        if let (key, span) = fullO.itemTimes.min(by: { $0.key < $1.key }) {
+        if let first = fullO.itemTimes.min(by: { $0.key < $1.key }) {
+            let key = first.key, span = first.value
             var inside = resaveOurs; inside[span.lowerBound] ^= 0x5a
             #expect(try Comparable(inside).body == fullO.body, "\(label): a change in item \(key)'s animator time is not masked")
             var before = resaveOurs; before[span.lowerBound - 1] ^= 1
