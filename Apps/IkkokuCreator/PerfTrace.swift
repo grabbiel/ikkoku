@@ -63,8 +63,8 @@ final class PerfTrace {
         /// Applying finished hover picks on the main actor (R7 phase 2, item 5),
         /// including the refresh when the highlight changes.
         case studioHoverPick
-        /// Computing and comparing the Object tab's state at each Studio
-        /// refresh (R7 phase 2, item 7).
+        /// Computing and comparing the Object tab's state and the inspector's
+        /// diagnostics at each Studio refresh (R7 phase 2, item 7).
         case studioInspectorState
         /// The synthetic main-thread load (`IKKOKU_PERF_MAIN_LOAD_MS`); not model time.
         case mainLoad

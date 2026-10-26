@@ -411,13 +411,14 @@ struct StudioInspectorTabPicker: View {
     }
 }
 
-/// Reads the document's source diagnostics; the details list itself only
-/// re-evaluates when the lines change.
+/// Reads the source diagnostics the model publishes when they change
+/// (`inspectorDiagnostics`, R7 phase 2, item 7), so a document write that
+/// leaves them as they were does not invalidate the inspector's stack.
 struct StudioCompatibilityDetails: View {
     let model: StudioModel
 
     var body: some View {
-        StudioCompatibilityLines(lines: model.compatibilityDiagnostics).equatable()
+        StudioCompatibilityLines(lines: model.inspectorDiagnostics).equatable()
     }
 }
 

@@ -1252,10 +1252,11 @@ The Tab walk of `keyLoop` commits rounded values as it passes the fields
 checks assert an unchanged document before a walk, not across one.
 
 The Object tab reads its state from the model (`StudioModel.objectInspectorState`),
-which publishes it only when it changes. In Debug builds the model checks,
-after every main run-loop turn, that the published state equals a fresh
+and the compatibility details read `StudioModel.inspectorDiagnostics`. The
+model publishes each only when it changes. In Debug builds the model checks,
+after every main run-loop turn, that both published values equal a fresh
 computation, and fails an assertion if not. So every Studio check also
-checks that no change reaches the Object tab without the refresh that
+checks that no change reaches the inspector without the refresh that
 publishes it.
 
 `IKKOKU_PERF_KEEP_MOUNTED` (`off`, `tab` or `on`, default `on`) is a

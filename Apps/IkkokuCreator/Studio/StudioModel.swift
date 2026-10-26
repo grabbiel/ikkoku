@@ -107,14 +107,21 @@ final class StudioModel: ViewportInputHandler, LivePacedHandler {
     var documentSourceSceneFile: String? { access(keyPath: \.documentSourceSceneFile); return documentStorage.sourceSceneFile }
 
     /// The Object tab's state for the selection, observed on its own (R7
-    /// phase 2, item 7). `refreshObjectInspectorState` computes it in one
-    /// place, at the end of every `refresh()`: every document write refreshes,
-    /// as does every other change the frame or the panels show. Readers are
-    /// notified only when it differs, so an FK drag frame, which writes the
-    /// document but changes nothing the tab shows, invalidates nothing under
-    /// the tab.
+    /// phase 2, item 7). `refreshInspectorState` computes it in one place, at
+    /// the end of every `refresh()`: every document write refreshes, as does
+    /// every other change the frame or the panels show. Readers are notified
+    /// only when it differs, so an FK drag frame, which writes the document
+    /// but changes nothing the tab shows, invalidates nothing under the tab.
     @ObservationIgnored private var objectInspectorStateStorage: ObjectInspectorState?
     var objectInspectorState: ObjectInspectorState? { access(keyPath: \.objectInspectorState); return objectInspectorStateStorage }
+
+    /// `compatibilityDiagnostics` as the inspector shows it, published the
+    /// same way: the details sit in the inspector's stack beside the tab, so
+    /// a read of the document there would invalidate the stack's layout, and
+    /// everything under the tab, on every FK drag frame (item 7).
+    /// `compatibilityDiagnostics` stays the source for its other readers.
+    @ObservationIgnored private var inspectorDiagnosticsStorage: [String] = []
+    var inspectorDiagnostics: [String] { access(keyPath: \.inspectorDiagnostics); return inspectorDiagnosticsStorage }
 
     /// The Object tab's state as the model is now: nil when nothing in the
     /// document is selected.
@@ -123,32 +130,39 @@ final class StudioModel: ViewportInputHandler, LivePacedHandler {
         return ObjectInspectorState(model: self, object: o)
     }
 
-    /// The one place `objectInspectorState` is computed and published.
-    private func refreshObjectInspectorState() {
+    /// The one place `objectInspectorState` and `inspectorDiagnostics` are
+    /// computed and published.
+    private func refreshInspectorState() {
         PerfTrace.measure(.studioInspectorState, "StudioInspectorState") {
             let state = currentObjectInspectorState()
             if state != objectInspectorStateStorage { withMutation(keyPath: \.objectInspectorState) { objectInspectorStateStorage = state } }
+            let diagnostics = compatibilityDiagnostics
+            if diagnostics != inspectorDiagnosticsStorage { withMutation(keyPath: \.inspectorDiagnostics) { inspectorDiagnosticsStorage = diagnostics } }
         }
     }
 
     #if DEBUG
-    /// Debug builds check, after every main run-loop turn, that the published
-    /// state equals a fresh computation, so a change that reaches the Object
-    /// tab without a refresh fails the lanes instead of leaving it stale.
-    @ObservationIgnored private var objectInspectorStateCheck: CFRunLoopObserver?
+    /// Debug builds check, after every main run-loop turn, that both
+    /// published values equal a fresh computation, so a change that reaches
+    /// the inspector without a refresh fails the lanes instead of leaving it
+    /// stale.
+    @ObservationIgnored private var inspectorStateCheck: CFRunLoopObserver?
 
-    private func installObjectInspectorStateCheck() {
+    private func installInspectorStateCheck() {
         let observer = CFRunLoopObserverCreateWithHandler(nil, CFRunLoopActivity.beforeWaiting.rawValue, true, 0) { [weak self] _, _ in
-            MainActor.assumeIsolated { self?.checkObjectInspectorState() }
+            MainActor.assumeIsolated { self?.checkInspectorState() }
         }
         CFRunLoopAddObserver(CFRunLoopGetMain(), observer, .commonModes)
-        objectInspectorStateCheck = observer
+        inspectorStateCheck = observer
     }
 
-    private func checkObjectInspectorState() {
+    private func checkInspectorState() {
         let fresh = currentObjectInspectorState()
         assert(fresh == objectInspectorStateStorage,
                "objectInspectorState is stale: published \(String(describing: objectInspectorStateStorage)), now \(String(describing: fresh))")
+        let diagnostics = compatibilityDiagnostics
+        assert(diagnostics == inspectorDiagnosticsStorage,
+               "inspectorDiagnostics is stale: published \(inspectorDiagnosticsStorage), now \(diagnostics)")
     }
     #endif
 
@@ -696,7 +710,7 @@ final class StudioModel: ViewportInputHandler, LivePacedHandler {
         sourceSingleBuilds = SourceStudioBackgroundBuilds<SourceSingleBuild>(queue: builds)
         refresh()
         #if DEBUG
-        installObjectInspectorStateCheck()
+        installInspectorStateCheck()
         #endif
         timer = Timer.scheduledTimer(withTimeInterval: 1.0 / 30.0, repeats: true) { [weak self] _ in
             MainActor.assumeIsolated { self?.tick() }
@@ -709,7 +723,7 @@ final class StudioModel: ViewportInputHandler, LivePacedHandler {
         for token in sourceFocusObservers { NotificationCenter.default.removeObserver(token) }
         if let token = sourceLaunchObserver { NotificationCenter.default.removeObserver(token) }
         #if DEBUG
-        if let observer = objectInspectorStateCheck { CFRunLoopObserverInvalidate(observer) }
+        if let observer = inspectorStateCheck { CFRunLoopObserverInvalidate(observer) }
         #endif
     }
 
@@ -3314,7 +3328,7 @@ final class StudioModel: ViewportInputHandler, LivePacedHandler {
     func refresh() {
         // After the frame, which can prune route runtimes and publish the
         // active camera view, and also when the refresh is held.
-        defer { refreshObjectInspectorState() }
+        defer { refreshInspectorState() }
         if holdsRefreshWhileHidden && !isActiveMode { return }
         // A live step in flight settles first; its frames go to this refresh.
         settleLiveTick(keepFrames: true)
