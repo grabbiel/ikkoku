@@ -15,7 +15,8 @@ public struct KoikatsuCharacterRecord: Sendable, Equatable {
     public let cardData: Data
     public let bones: [Int32: KoikatsuBoneRecord]
     public let ikTargets: [Int32: KoikatsuBoneRecord]
-    public let accessoryChildren: [Int32: [KoikatsuObjectRecord]]
+    /// `internal(set)` for the upgrade readback (`readBackRoots`) alone.
+    public internal(set) var accessoryChildren: [Int32: [KoikatsuObjectRecord]]
     public let kinematicMode: Int32
     public let animation: KoikatsuAnimationRecord
     public let handPatterns: [Int32]
@@ -26,7 +27,10 @@ public struct KoikatsuCharacterRecord: Sendable, Equatable {
     public let voices: [KoikatsuAnimationRecord], voiceRepeat: Int32
     public let visibleSon: Bool, sonLength: Float, visibleSimple: Bool, simpleColor: SIMD4<Float>
     public let animationOptionParameters: SIMD2<Float>
-    public let neckData: Data, eyesData: Data, animationNormalizedTime: Float
+    public let neckData: Data
+    /// `internal(set)` for the upgrade readback (`readBackRoots`) alone.
+    public internal(set) var eyesData: Data
+    public let animationNormalizedTime: Float
     public let accessoryGroupStates: [Int32: Int32], accessoryStates: [Int32: Int32]
 
     public func card() throws -> SourceCharacterCard { try SourceCharacterCard.decode(cardData) }

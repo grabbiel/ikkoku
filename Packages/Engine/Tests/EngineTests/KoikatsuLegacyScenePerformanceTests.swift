@@ -1,13 +1,14 @@
 import Foundation
 import Testing
-import Studio
+@testable import Studio
 
 /// ST-T05a decode timing probe (opt-in: IKKOKU_LEGACY_SCENE_PERF=1 plus
 /// IKKOKU_STUDIO_SCENARIO_SCENE, the showoff scene; IKKOKU_LEGACY_SCENE_LARGEST,
 /// a large legacy scene; and IKKOKU_LEGACY_SCENE_UPGRADED, that scene saved
 /// as 1.0.4.2 by `ikkoku-inspect scene-document --write-upgraded`). It uses
-/// only APIs the base build has, so the same file times both builds: the
-/// base refuses the legacy scene by version, and decodes its 1.0.4.2 form.
+/// only APIs the base build has up to the legacy decode, so the same file
+/// (without the last two timings) times both builds: the base refuses the
+/// legacy scene by version, and decodes its 1.0.4.2 form.
 /// Prints the median and p90 of 60 calls after 10 warmups. Run it in a quiet
 /// window with
 /// `swift test -c release -Xswiftc -enable-testing --package-path Packages/Engine --filter KoikatsuLegacyScenePerformance`.
@@ -54,4 +55,10 @@ func koikatsuLegacyScenePerformance() throws {
     // of the result) and the plug-in step.
     #expect(try document.editedData(SourceSceneEdits()) == upgradedData)
     try legacyPerfMedian("legacy export, no edit") { _ = try document.editedData(SourceSceneEdits()) }
+    // The upgrade alone (a second read for its patches, the splice, and the
+    // readback's decode and compare), then the readback's record compare.
+    let upgraded = try document.upgraded()
+    #expect(upgraded.snapshot.roots == document.readBackRoots())
+    try legacyPerfMedian("legacy upgraded()") { _ = try document.upgraded() }
+    legacyPerfMedian("legacy readback record compare") { _ = upgraded.snapshot.roots == document.readBackRoots() }
 }

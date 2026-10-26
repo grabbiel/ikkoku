@@ -871,8 +871,17 @@ It returns `self` for a 1.0.4.2 scene. The patches are:
 - the 1.0.3 route point's dropped bool is removed.
 
 Every other byte is kept, including the PNG, the embedded cards and the
-plug-in trailer. The result must read back with the same settings, trailer and
-object tree, or the upgrade refuses.
+plug-in trailer. The result must read back as the same scene, or the upgrade
+refuses ("The CharaStudio *v* scene's 1.0.4.2 upgrade does not read back as
+the same scene."). The settings and the trailer must be equal, and so must
+every object record, field by field, as the legacy document loaded it. The one
+difference by design is the eye data below 0.0.8, which gains the four zero
+angles. A splice in the wrong place that still parses therefore changes a
+value and is refused. `legacyUpgradeReadbackComparesValuesNotOnlyShape`
+moves each 1.0.4.1 route point's inserted link flag one byte earlier: the tree
+stays the same, but a point saved as initialized reads as not initialized and
+linked, and the readback refuses it. A NaN in a record compares unequal, so a
+scene holding one is refused as well. No scene in the user's corpus is.
 
 Every writer starts from the upgrade, computed once per export:
 

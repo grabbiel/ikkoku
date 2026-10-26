@@ -182,6 +182,14 @@ public extension KoikatsuSceneDocument {
     /// pre-0.0.8 eye data that is not two quaternions.
     func upgraded() throws -> KoikatsuSceneDocument {
         guard isLegacy else { return self }
+        return try readBack(applying(try upgradePatches()))
+    }
+}
+
+extension KoikatsuSceneDocument {
+    /// The upgrade's splices, in byte order, from a second read of the
+    /// legacy bytes; throws the first refusal.
+    func upgradePatches() throws -> [KoikatsuSceneUpgradePatch] {
         var reader = try KoikatsuBinaryReader(preservedData)
         try reader.skipPNG()
         guard try reader.sceneVersion() == snapshot.version else { throw reader.invalid("scene version differs from its decoded document") }
@@ -194,35 +202,59 @@ public extension KoikatsuSceneDocument {
         if let refusal = reader.upgradeRefusals.first {
             throw SourceSceneTopologyError.unsupported("This CharaStudio \(snapshot.version) scene cannot be saved as 1.0.4.2: \(refusal)")
         }
+        return reader.upgrade
+    }
+
+    /// The legacy bytes with `patches` spliced in.
+    func applying(_ patches: [KoikatsuSceneUpgradePatch]) throws -> Data {
         var output = Data(), position = 0
-        output.reserveCapacity(preservedData.count + reader.upgrade.reduce(0) { $0 + $1.bytes.count })
+        output.reserveCapacity(preservedData.count + patches.reduce(0) { $0 + $1.bytes.count })
         let base = preservedData.startIndex
-        for patch in reader.upgrade {
-            guard patch.range.lowerBound >= position else { throw reader.invalid("overlapping upgrade patches") }
+        for patch in patches {
+            guard patch.range.lowerBound >= position, patch.range.upperBound <= preservedData.count else {
+                throw KoikatsuReadError.invalidValue(offset: patch.range.lowerBound, description: "overlapping upgrade patches")
+            }
             output.append(preservedData[(base + position)..<(base + patch.range.lowerBound)])
             output.append(patch.bytes)
             position = patch.range.upperBound
         }
         output.append(preservedData[(base + position)...])
-        let upgraded = try KoikatsuSceneReader.decodeDocument(output)
+        return output
+    }
+
+    /// Decodes the upgrade and requires it to read back as this scene: the
+    /// same settings and trailer, and every object record equal, field by
+    /// field, to what the legacy document loaded. The one difference by
+    /// design is the eye data below 0.0.8, which gains the four zero angles
+    /// (`readBackRoots`). A splice in the wrong place that still parses
+    /// changes some value and is refused here. A NaN in a record compares
+    /// unequal, so a scene holding one is refused too.
+    func readBack(_ data: Data) throws -> KoikatsuSceneDocument {
+        let upgraded = try KoikatsuSceneReader.decodeDocument(data)
         guard !upgraded.isLegacy, upgraded.settings == settings, upgraded.trailingData == trailingData,
-              Self.shape(upgraded.snapshot.roots) == Self.shape(snapshot.roots) else {
+              upgraded.snapshot.roots == readBackRoots() else {
             throw SourceSceneTopologyError.unsupported("The CharaStudio \(snapshot.version) scene's 1.0.4.2 upgrade does not read back as the same scene.")
         }
         return upgraded
     }
 
-    private static func shape(_ records: [KoikatsuObjectRecord]) -> [String] {
-        var result: [String] = []
-        func visit(_ record: KoikatsuObjectRecord) {
-            result.append("\(record.kind.rawValue):\(record.sourceKey):\(record.rootDictionaryKey.map(String.init) ?? "-"):\(record.children.count)")
-            record.children.forEach(visit)
-            for point in (record.character?.accessoryChildren.keys.sorted() ?? []) {
-                result.append("point:\(point)")
-                record.character?.accessoryChildren[point]?.forEach(visit)
+    /// The legacy roots as their upgrade must read: identical, except that
+    /// a character's eye data below 0.0.8 (two quaternions, 32 bytes) gains
+    /// the 16 bytes of the four zero angles `EyeLookCalc.SaveAngle` writes.
+    func readBackRoots() -> [KoikatsuObjectRecord] {
+        guard !KoikatsuSceneLayout(dataVersion).eyeAngles else { return snapshot.roots }
+        func normalized(_ record: KoikatsuObjectRecord) -> KoikatsuObjectRecord {
+            var character = record.character
+            if var value = character {
+                value.eyesData += Data(repeating: 0, count: 16)
+                value.accessoryChildren = value.accessoryChildren.mapValues { $0.map(normalized) }
+                character = value
             }
+            return KoikatsuObjectRecord(kind: record.kind, rootDictionaryKey: record.rootDictionaryKey, sourceKey: record.sourceKey,
+                transform: record.transform, treeState: record.treeState, visible: record.visible, name: record.name,
+                cameraActive: record.cameraActive, item: record.item, light: record.light,
+                children: record.children.map(normalized), character: character, route: record.route)
         }
-        records.forEach(visit)
-        return result
+        return snapshot.roots.map(normalized)
     }
 }

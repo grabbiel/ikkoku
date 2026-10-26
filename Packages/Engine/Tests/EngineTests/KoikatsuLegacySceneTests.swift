@@ -289,6 +289,38 @@ private func decode(_ scene: LegacyScene) throws -> KoikatsuSceneDocument { try 
     #expect(try document.upgraded().preservedData == expected.data)
 }
 
+/// The readback compares every field, not only the tree's shape: a splice
+/// in the wrong place that still parses is refused. Moving each 1.0.4.1
+/// route point's inserted link flag one byte earlier, before `isInit`,
+/// reads a point saved initialized as not initialized and linked; the tree
+/// (kinds, keys, children) stays the same.
+@Test func legacyUpgradeReadbackComparesValuesNotOnlyShape() throws {
+    func shape(_ records: [KoikatsuObjectRecord]) -> [String] {
+        records.flatMap { ["\($0.kind.rawValue):\($0.sourceKey):\($0.children.count)"] + shape($0.children) }
+    }
+    var legacy = LegacyScene("1.0.4.1")
+    let points = [LegacyScene.Point(key: 51, aid: 52), .init(key: 53, connection: 0, aid: 54, aidInitialized: false)]
+    legacy.roots(1); legacy.out.i(30); legacy.route(30, points: points); legacy.tail()
+    let document = try decode(legacy), patches = try document.upgradePatches()
+    let links = patches.filter { $0.range.isEmpty && $0.bytes == Data([0]) }
+    #expect(links.count == 2)
+    let misplaced = patches.map { patch in
+        links.contains(patch) ? KoikatsuSceneUpgradePatch(range: (patch.range.lowerBound - 1)..<(patch.range.lowerBound - 1), bytes: patch.bytes) : patch
+    }
+    let data = try document.applying(misplaced)
+    // It parses, with the same tree ...
+    let misread = try KoikatsuSceneReader.decodeDocument(data)
+    #expect(shape(misread.snapshot.roots) == shape(document.snapshot.roots))
+    let point = try #require(misread.snapshot.roots.first?.route?.points.first)
+    #expect(!point.aidInitialized && point.linked)
+    // ... but a value differs, so the readback refuses it.
+    do { _ = try document.readBack(data); Issue.record("a misplaced splice read back") } catch {
+        #expect(error.localizedDescription.contains("1.0.4.2 upgrade does not read back as the same scene"), "\(error.localizedDescription)")
+    }
+    // The recorded patches read back.
+    #expect(try document.readBack(document.applying(patches)).preservedData == document.upgraded().preservedData)
+}
+
 @Test func legacyRoutePointsWithoutAidsTakeCharaStudioDefaultsAndAreRefused() throws {
     for text in ["1.0.0", "1.0.3", "1.0.4"] {
         var legacy = LegacyScene(text)
