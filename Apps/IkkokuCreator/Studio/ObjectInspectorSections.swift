@@ -262,7 +262,7 @@ struct KeptSection<Section: View & Equatable>: View {
     var body: some View {
         let hidden = shown == nil
         let _ = shown.map { kept.state = $0 }
-        if let section = shown ?? (kept.state as? Section) {
+        if let section = shown ?? kept.keptState(as: Section.self) {
             section.equatable()
                 .background(InspectorAnchor(kept: kept))
                 .environment(\.inspectorSectionExpansion, kept.sections)

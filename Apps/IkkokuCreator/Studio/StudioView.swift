@@ -586,7 +586,7 @@ struct ObjectInspector: View {
         let sectionsKept = StudioInspectorMounting.current.keepsSections ? keptSections : nil
         let _ = sectionsKept?.attach(to: kept.sections)
         ZStack(alignment: .top) {
-            if let state = shown ?? (kept.state as? ObjectInspectorState) {
+            if let state = shown ?? kept.keptState(as: ObjectInspectorState.self) {
                 ObjectInspectorContent(model: model, state: state, sectionsKept: sectionsKept).equatable()
                     .background(InspectorAnchor(kept: kept))
                     .environment(\.inspectorSectionExpansion, kept.sections)

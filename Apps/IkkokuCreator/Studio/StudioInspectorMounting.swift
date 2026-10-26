@@ -59,13 +59,25 @@ private struct InspectorKeptLabel: ViewModifier {
 
 /// What a kept inspector view holds besides its views: the last state it
 /// showed, an empty AppKit view behind it, and the sections the user
-/// collapsed in it. It is not generic over the state's type: the CI
-/// compiler (Swift 6.3.3) crashes in its Release optimizer (the early
-/// performance inliner) on a generic class's deinit here. Readers cast the
-/// state back to the kept view's type.
+/// collapsed in it. Keep it non-generic: the CI compiler (Swift 6.3.3)
+/// crashes in its Release optimizer (the early performance inliner) on the
+/// deinit of a generic `InspectorKeptViews<Shown>`. Readers get the state
+/// back as the kept view's type through `keptState(as:)`.
 @MainActor final class InspectorKeptViews {
     /// The last state the kept view showed, of that view's own type.
     var state: Any?
+
+    /// The kept state as the kept view's type. A state of another type is a
+    /// bug: Debug stops on it, and Release drops it, so the view is built
+    /// again from the model's state the next time it shows, as when nothing
+    /// was kept.
+    func keptState<Shown>(as type: Shown.Type) -> Shown? {
+        guard let state else { return nil }
+        if let kept = state as? Shown { return kept }
+        assertionFailure("InspectorKeptViews holds \(Swift.type(of: state)), not \(type)")
+        self.state = nil
+        return nil
+    }
     /// Set by `InspectorAnchor` when SwiftUI makes it.
     weak var anchor: InspectorAnchorView?
     let sections = InspectorSectionExpansion()
