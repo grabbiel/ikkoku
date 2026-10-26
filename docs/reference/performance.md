@@ -102,7 +102,7 @@ the run.
 | `maker-idle` | `IKKOKU_SOURCE_CARD` | Maker with the source card, idle animation, blink and hair |
 | `maker-slider` | same | source customization on, the first bound body slider oscillates ±0.3 (one binding write per input tick) |
 | `studio-native` | avatar, Maker library | New Scene, `IKKOKU_PERF_CHARACTERS` (default 6) native characters added with the Add menu's command, live animation |
-| `viewport-lifecycle` | avatar, Maker library | `studio-native`'s scene, then every 0.5 s: three Studio/Maker switches (each replaces the viewport), a window resize to 0.7× and back, minimize for 1.5 s, restore, Studio, Maker. Before each step it counts the threads named `com.grabbiel.Ikkoku.viewport-render`. After the report it quits through `NSApp.terminate` while the link draws, instead of `exit` |
+| `viewport-lifecycle` | avatar, Maker library | `studio-native`'s scene, then every 0.5 s: three Studio/Maker switches (each replaces the viewport), a window resize to 0.7× and back, minimize for 1.5 s, restore, Studio, Maker. Before each step it counts the threads named `com.grabbiel.Ikkoku.viewport-render`. Before each step and at the end it also records the live-pacing hand-over: the mode, which models have live work, which a display link paces, and each model's paced steps ([Maker pacing](#maker-pacing)). After the report it quits through `NSApp.terminate` while the link draws, instead of `exit` |
 | `startup` | as `studio-idle` | no workload; the report's `startupSeconds` marks are the result |
 | `studio-static` | as `studio-idle` | the source scene with live animation off and no input: nothing changes, so it measures what an idle viewport costs ([phase 2, item 4](#phase-2-item-4-adaptive-link-rate-idle-keep-alive-and-deformed-vertex-reuse)) |
 | `studio-orbit-bursts` | as `studio-idle` | live animation off (on with `IKKOKU_PERF_BURST_LIVE=on`, so each drag starts during playback); repeatedly `IKKOKU_PERF_BURST_IDLE_MS` (default 1000) without input, then a 0.5 s right-button orbit drag. `details.burstInputEnds` records when each burst's first `mouseDragged` returned, so the summary measures every drag start after a pause |
@@ -2907,7 +2907,8 @@ with 10 s runs:
   as the timer skipped it, so a slow scene slows down as before. With
   nothing to step, the pacer parks. The Studio timer, which still polls the
   status line, resumes it when there is something to step.
-- **The Maker** keeps its own timer ([what remains](#what-remains-after-live-pacing)).
+- **The Maker** kept its own timer in this change. A follow-up (R7h2) paces
+  it the same way ([Maker pacing](#maker-pacing)).
 - **Measurement.** `IKKOKU_PERF_LIVE_PACING=timer` brings the timer back in
   the same binary.
   - Schema 7 reports add per-request samples, a `pacing` summary, and a
@@ -3057,14 +3058,54 @@ warmup, second window, two runs each:
   longer warmup keeps them out of these runs; their source is not
   established.
 
+### Maker pacing
+
+R7h2 (2026-10-25) paces the Maker's idle step from the Maker viewport's
+display link, as the Studio's. Before it, the Maker stepped from its own
+30 Hz timer and kept the jitter. One `maker-idle` run of the first window
+above had 13.6 off-grid intervals a second, and `main`'s run had 0.5, where
+the phase happened to fall well.
+
+- **What changed.** `MakerModel` is a `LivePacedHandler`, and its
+  `displayStep` runs what the timer's tick did, minus the status line:
+  - with an original preview, the blink, the idle clip and the hair
+    dynamics;
+  - with the bundled character, blink, breathing and
+    `stepHairDynamics(dt: 1/30)`.
+
+  It answers `.ran` while the live animation is on in Maker mode, and
+  `.idle` otherwise; the step is synchronous, so never `.busy`. The timer
+  polls the status line and resumes a parked pacer while there is work, with
+  the same predicate as the answer. The steps still advance by the time
+  since the previous step. While the window is hidden, nothing steps; the
+  timer used to keep stepping. The contract is in the renderer reference:
+  [live pacing](renderer.md#live-pacing-r7-phase-2).
+- **Hand-over.** Each mode owns its viewport, so a Studio/Maker switch
+  replaces the viewport and its link. The old viewport detaches its model,
+  and the new one attaches the other model; one link paces at a time.
+  `viewport-lifecycle` now gives the Studio `studio-native`'s scene, as the
+  workload table always said, so both models have live steps. Before each
+  of its steps and at the end it records the mode, which models have live
+  work, which a link paces and each model's paced steps. `perf_trace` fails
+  the run in four cases:
+  - a model other than the active one is paced;
+  - two models are paced at once;
+  - an inactive model ran paced steps;
+  - a model with live work ran no paced step after the switch to it.
+
+  Under the timer control, no model may be paced.
+- **Workloads.** `maker-idle` is the source card (idle clip, blink and
+  source hair), and `maker-slider` adds slider writes at 120 a second. The
+  bundled character's hair (`stepHairDynamics`) runs only without the
+  original card and avatars. The runs below reach it with `maker-idle` and
+  a `--wrap` script that unsets `IKKOKU_SOURCE_CARD`,
+  `IKKOKU_SOURCE_AVATAR` and `IKKOKU_SOURCE_MALE_AVATAR` before taking the
+  app lock.
+
+TBD before/after
+
 ### What remains after live pacing
 
-- **The Maker.** It still steps from its own 30 Hz timer, so it keeps the
-  jitter: 13.6 off-grid intervals a second in one `maker-idle` run of the
-  first window, and 0.5 in `main`'s, where the phase happened to fall well.
-  Pacing it needs Maker code. `MakerModel`'s `timer` and `tick` are
-  private, and `AppState` has no step call site to pace. It would take a
-  `LivePacedHandler` conformance in `MakerModel`, as `StudioModel` has.
 - **Compositor lateness.** The remaining presented jitter comes from the
   compositor switching between presenting on target and one or two vsyncs
   late. When it switched little (first window), display-paced frames
