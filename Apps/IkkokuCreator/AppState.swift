@@ -429,10 +429,13 @@ final class AppState {
     }
 
     /// File ▸ Export Edited Original Scene once its panel chose `url`; the
-    /// performance harness's `studio-export` workload calls it too.
+    /// performance harness's `studio-export` workload calls it too. With
+    /// background builds, hidden characters' validation baselines build off
+    /// the main thread first (`StudioModel.beginSourceSceneExport`).
     func exportSourceScene(to url: URL) {
-        do { try studio?.exportSourceScene(to: url) }
-        catch { errorMessage = "Could not export original scene: \(error)" }
+        studio?.beginSourceSceneExport(to: url) { [weak self] error in
+            if let error { self?.errorMessage = "Could not export original scene: \(error)" }
+        }
     }
 
     func loadModLibrary(url: URL) throws {

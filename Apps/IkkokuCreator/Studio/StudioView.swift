@@ -1160,7 +1160,9 @@ extension ClothesInspector {
         let names = SourceStudioCharacterPreview.outfitNames
         SectionBox(title: "Outfit") {
             if preview.outfitCount > preview.coordinate {
-                Picker("Outfit", selection: Binding(get: { preview.coordinate }, set: { value in
+                // A selection still building shows the outfit chosen
+                // (R7 phase 2 item 6, third part).
+                Picker("Outfit", selection: Binding(get: { model.pendingSourceOutfits[o.id] ?? preview.coordinate }, set: { value in
                     model.selectSourceOutfit(o.id, coordinate: value)
                 })) {
                     ForEach(0..<min(preview.outfitCount, names.count), id: \.self) { index in

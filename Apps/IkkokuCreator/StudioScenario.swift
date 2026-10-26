@@ -131,8 +131,12 @@ struct StudioScenario: Decodable {
         /// backgroundBuild: the operation run both with synchronous and with
         /// background source character builds (R7 phase 2, item 6):
         /// `"import"`, `"importTwice"` (a second import replaces the first in
-        /// flight), `"importThenNewScene"` (New Scene cancels the import) or
-        /// `"duplicate"` (`key`, then undo).
+        /// flight), `"importThenNewScene"` (New Scene cancels the import),
+        /// `"duplicate"` (`key`, then undo), `"duplicateRoute"` (`key`, then
+        /// undo and redo), `"outfit"` (`key`'s outfit picker; third part),
+        /// `"export"` (`key` hidden with a face edit, exported to `path`) or
+        /// `"loadRoute"` (the scene saved to `path` and loaded over New
+        /// Scene); a `WhileHidden` suffix hides the Studio while it builds.
         let build: String?
         /// advance: how many seconds of live animation to run. The op walks
         /// `StudioModel.advanceLiveFrame` in its own 1/30 s steps, so the
@@ -2201,7 +2205,7 @@ struct StudioScenario: Decodable {
                 // refreshes it, as the mode switch does.
                 let build = step.build ?? ""
                 let builds = ["import", "importTwice", "importThenNewScene", "importWhileHidden", "duplicate", "duplicateWhileHidden",
-                              "duplicateRoute", "duplicateRouteWhileHidden"]
+                              "duplicateRoute", "duplicateRouteWhileHidden", "outfit", "outfitWhileHidden", "export", "loadRoute"]
                 guard builds.contains(build) else {
                     record(step, false, "backgroundBuild: build must be one of \(builds.joined(separator: ", "))"); continue
                 }
@@ -2223,10 +2227,11 @@ struct StudioScenario: Decodable {
                     return lines
                 }
                 func state() -> (summary: [String], pixels: [UInt8]?) { (summary(), captureStudioRender().flatMap(renderBytes)) }
-                /// Runs the main run loop until no background build is left.
+                /// Runs the main run loop until no background build, and no
+                /// export waiting for its baselines, is left.
                 func settle() -> Bool {
                     let deadline = Date().addingTimeInterval(300)
-                    while studio.isLoadingSourceScene || studio.pendingSourceCharacterBuilds > 0 {
+                    while studio.isLoadingSourceScene || studio.pendingSourceActionWork > 0 {
                         if Date() > deadline { return false }
                         _ = RunLoop.main.run(mode: .default, before: Date().addingTimeInterval(0.005))
                     }
@@ -2303,7 +2308,15 @@ struct StudioScenario: Decodable {
                         guard settled("duplicate", syncCopy) else { record(step, false, "backgroundBuild: the route copy's build did not finish in 300 s"); continue }
                         studio.undo()
                         guard settled("undo", syncUndo) else { record(step, false, "backgroundBuild: the undo did not settle in 300 s"); continue }
+                        // R7 phase 2 item 6, third part: the Redo rehydrates
+                        // the copy's route character in the background too.
+                        let shownBeforeRedo = Set(studio.sourceRouteCharacterPreviews.values.map(ObjectIdentifier.init))
                         studio.redo()
+                        let redoBuilds = studio.pendingSourceCharacterBuilds
+                        if !Set(studio.sourceRouteCharacterPreviews.values.map(ObjectIdentifier.init)).isSubset(of: shownBeforeRedo) {
+                            problems.append("the Redo built a route character preview on the main thread")
+                        }
+                        if redoBuilds == 0 { problems.append("the Redo started no route character build") }
                         guard settled("redo", syncRedo) else { record(step, false, "backgroundBuild: the redo did not settle in 300 s"); continue }
                         studio.undo()
                         guard settle() else { record(step, false, "backgroundBuild: the second undo did not settle in 300 s"); continue }
@@ -2320,7 +2333,219 @@ struct StudioScenario: Decodable {
                         if copies == 0 { problems.append("the Duplicate started no route character build") }
                         if raced == 0 { problems.append("the raced Duplicate started no route character build") }
                         if left != 0 { problems.append("\(left) builds stayed pending after the Undo removed their copies") }
-                        detail = "the Duplicate built \(copies) route character\(copies == 1 ? "" : "s") in the background; an Undo before the build landed left \(left) pending"
+                        detail = "the Duplicate built \(copies) route character\(copies == 1 ? "" : "s") and the Redo \(redoBuilds) in the background; an Undo before the build landed left \(left) pending"
+                    } else if build.hasPrefix("outfit") {
+                        // R7 phase 2 item 6, third part: the Clothes tab's
+                        // outfit picker (`selectSourceOutfit`) builds the
+                        // outfit in the background. The synchronous selection
+                        // and its Undo are the reference. Until the build
+                        // lands the character keeps its outfit and the picker
+                        // shows the one chosen; then the selection must match
+                        // the synchronous one with one undo step. A newer
+                        // selection supersedes an older one, choosing the
+                        // shown outfit again drops the build, and an Undo
+                        // while a build runs drops it and matches the Undo.
+                        guard let id = object(step), let shown = studio.sourceShapePreview(for: id) else {
+                            record(step, false, "backgroundBuild: no built character \(describe(step))"); continue
+                        }
+                        guard shown.outfitCount > 2 else { record(step, false, "backgroundBuild: \(describe(step)) needs a card with three saved outfits"); continue }
+                        let original = shown.coordinate
+                        let first = (original + 1) % shown.outfitCount, second = (original + 2) % shown.outfitCount
+                        studio.selectSourceOutfit(id, coordinate: first)
+                        if studio.sourceShapePreview(for: id)?.coordinate != first {
+                            record(step, false, "backgroundBuild: the synchronous selection of outfit \(first) failed: \(studio.status)"); continue
+                        }
+                        let syncOutfit = state()
+                        studio.undo()
+                        let syncUndo = state()
+                        studio.asyncSourceBuilds = true
+                        func landed(_ label: String, _ expected: (summary: [String], pixels: [UInt8]?)) -> Bool {
+                            if hidden { hide() }
+                            guard settle() else { return false }
+                            // A callback the drop failed to stop would be queued by now.
+                            _ = RunLoop.main.run(mode: .default, before: Date().addingTimeInterval(0.3))
+                            if hidden { show(label) }
+                            compare(label, expected, state())
+                            return true
+                        }
+                        // A selection that lands.
+                        var depth = studio.undoStack.count
+                        let shownID = studio.sourceShapePreview(for: id).map(ObjectIdentifier.init)
+                        let storedOutfit = studio.doc.object(id)?.sourceOutfit
+                        studio.selectSourceOutfit(id, coordinate: first)
+                        let building = studio.pendingSourceCharacterBuilds
+                        if studio.pendingSourceOutfits[id] != first { problems.append("the picker does not show the outfit chosen while it builds") }
+                        if studio.sourceShapePreview(for: id).map(ObjectIdentifier.init) != shownID || studio.doc.object(id)?.sourceOutfit != storedOutfit {
+                            problems.append("the selection changed the character before its build landed")
+                        }
+                        guard landed("selection", syncOutfit) else { record(step, false, "backgroundBuild: the outfit build did not finish in 300 s"); continue }
+                        if studio.undoStack.count != depth + 1 { problems.append("the selection recorded \(studio.undoStack.count - depth) undo steps") }
+                        studio.undo()
+                        guard landed("undo", syncUndo) else { record(step, false, "backgroundBuild: the undo did not settle in 300 s"); continue }
+                        // A newer selection supersedes the older ones: one install, one undo step.
+                        depth = studio.undoStack.count
+                        studio.selectSourceOutfit(id, coordinate: first)
+                        studio.selectSourceOutfit(id, coordinate: second)
+                        studio.selectSourceOutfit(id, coordinate: first)
+                        let superseding = studio.pendingSourceCharacterBuilds
+                        guard landed("superseded selection", syncOutfit) else { record(step, false, "backgroundBuild: the superseding build did not finish in 300 s"); continue }
+                        if studio.undoStack.count != depth + 1 { problems.append("the superseded selections recorded \(studio.undoStack.count - depth) undo steps") }
+                        studio.undo()
+                        guard landed("undo of the superseded selection", syncUndo) else { record(step, false, "backgroundBuild: the undo did not settle in 300 s"); continue }
+                        // The shown outfit chosen again drops the build.
+                        depth = studio.undoStack.count
+                        studio.selectSourceOutfit(id, coordinate: second)
+                        studio.selectSourceOutfit(id, coordinate: original)
+                        let dropped = studio.pendingSourceCharacterBuilds
+                        guard landed("shown outfit chosen again", syncUndo) else { record(step, false, "backgroundBuild: the dropped build did not settle in 300 s"); continue }
+                        if studio.undoStack.count != depth { problems.append("the dropped selection recorded an undo step") }
+                        // An Undo while a selection builds drops it.
+                        studio.selectSourceOutfit(id, coordinate: first)
+                        guard landed("selection before the undo", syncOutfit) else { record(step, false, "backgroundBuild: the outfit build did not finish in 300 s"); continue }
+                        studio.selectSourceOutfit(id, coordinate: second)
+                        studio.undo()
+                        let raced = studio.pendingSourceOutfits.count
+                        guard landed("undo during the build", syncUndo) else { record(step, false, "backgroundBuild: the undo did not settle in 300 s"); continue }
+                        if building != 1 || superseding != 1 { problems.append("the selections built \(building) and \(superseding) characters, expected 1 each") }
+                        if dropped != 0 { problems.append("choosing the shown outfit left \(dropped) builds") }
+                        if raced != 0 { problems.append("the Undo left \(raced) outfit selections building") }
+                        detail = "outfit \(first) built in the background with one undo step; a superseded selection, the shown outfit chosen again and an Undo during the build each left nothing behind"
+                    } else if build == "export" {
+                        // R7 phase 2 item 6, third part: File ▸ Export Edited
+                        // Original Scene builds the validation baselines of
+                        // hidden characters with face edits and no preview
+                        // in the background, then exports on the main actor.
+                        // The op saves the scene as a native document and
+                        // loads it, so `key` (hidden with a face edit by the
+                        // steps before) has no preview. The synchronous
+                        // export is the reference: the background export must
+                        // start in the background, leave the document and
+                        // the render as they were, and write byte-identical
+                        // bytes; a load while its baselines build must cancel
+                        // it with an error and write nothing. Every file the
+                        // op writes is removed at the end.
+                        guard let id = object(step) else { record(step, false, "backgroundBuild: no object \(describe(step))"); continue }
+                        guard let path = step.path, let target = insideLocal(path) else {
+                            record(step, false, "backgroundBuild: path must stay under .local/: \(step.path ?? "<missing>")"); continue
+                        }
+                        let folder = target.deletingLastPathComponent(), stem = target.deletingPathExtension().lastPathComponent
+                        let document = folder.appendingPathComponent("\(stem)-document.png")
+                        let syncURL = folder.appendingPathComponent("\(stem)-sync.png")
+                        let replacedURL = folder.appendingPathComponent("\(stem)-replaced.png")
+                        let written = [document, syncURL, target, replacedURL]
+                        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+                        for url in written where FileManager.default.fileExists(atPath: url.path) { try FileManager.default.removeItem(at: url) }
+                        defer { for url in written { try? FileManager.default.removeItem(at: url) } }
+                        try studio.saveScene(to: document)
+                        try studio.loadScene(from: document)
+                        if studio.doc.isVisible(id) || studio.sourceShapePreview(for: id) != nil || studio.doc.object(id)?.sourceExpression == nil {
+                            problems.append("\(describe(step)) must be hidden, with a face edit and no preview, after the load")
+                        }
+                        let reference = state()
+                        var syncOutcome: String?
+                        studio.beginSourceSceneExport(to: syncURL) { syncOutcome = $0.map { "failed: \($0)" } ?? "written" }
+                        guard syncOutcome == "written" else { record(step, false, "backgroundBuild: the synchronous export \(syncOutcome ?? "did not finish")"); continue }
+                        studio.asyncSourceBuilds = true
+                        var outcomes: [String] = []
+                        studio.beginSourceSceneExport(to: target) { outcomes.append($0.map { "failed: \($0)" } ?? "written") }
+                        let started = studio.pendingSourceActionWork
+                        if started == 0 || !outcomes.isEmpty || FileManager.default.fileExists(atPath: target.path) {
+                            problems.append("the export did not build its baselines in the background")
+                        }
+                        if studio.sourceBuildProgress == nil { problems.append("the status area shows no export in progress") }
+                        guard settle() else { record(step, false, "backgroundBuild: the export did not finish in 300 s"); continue }
+                        _ = RunLoop.main.run(mode: .default, before: Date().addingTimeInterval(0.3))
+                        if outcomes != ["written"] { problems.append("completions \(outcomes), expected [\"written\"]") }
+                        compare("export", reference, state())
+                        let syncBytes = try Data(contentsOf: syncURL)
+                        let asyncBytes = FileManager.default.fileExists(atPath: target.path) ? try Data(contentsOf: target) : Data()
+                        if syncBytes != asyncBytes {
+                            problems.append("the background export wrote \(asyncBytes.count) bytes that differ from the synchronous export's \(syncBytes.count)")
+                        }
+                        // A load while the baselines build cancels the export.
+                        var replaced: [String] = []
+                        studio.beginSourceSceneExport(to: replacedURL) { replaced.append($0.map { "\($0)" } ?? "written") }
+                        try studio.loadScene(from: document)
+                        guard settle() else { record(step, false, "backgroundBuild: the load did not finish in 300 s"); continue }
+                        _ = RunLoop.main.run(mode: .default, before: Date().addingTimeInterval(0.3))
+                        if replaced.count != 1 || !(replaced.first ?? "").contains("replaced") {
+                            problems.append("the export cancelled by a load completed \(replaced), expected one replacement error")
+                        }
+                        if FileManager.default.fileExists(atPath: replacedURL.path) { problems.append("the cancelled export wrote its file") }
+                        compare("load during the export", reference, state())
+                        detail = "the background export wrote the synchronous export's \(syncBytes.count) bytes; a load during it reported: \(replaced.first ?? "nothing")"
+                    } else if build == "loadRoute" {
+                        // R7 phase 2 item 6, third part: a scene load
+                        // rehydrates its route characters in the background,
+                        // like a route Duplicate's redo. The op saves the
+                        // scene as a native document to `path` and loads it
+                        // over New Scene (a load over the same scene keeps
+                        // the runtime its ids have). The synchronous Load,
+                        // Undo and Redo are the reference. With background
+                        // builds the Load and the Redo must build no route
+                        // character preview on the main thread and match
+                        // theirs once the builds land; an Undo before they
+                        // land, and a second load of the same scene before
+                        // they land, must match too, with nothing pending.
+                        guard let path = step.path, let document = insideLocal(path) else {
+                            record(step, false, "backgroundBuild: path must stay under .local/: \(step.path ?? "<missing>")"); continue
+                        }
+                        try FileManager.default.createDirectory(at: document.deletingLastPathComponent(), withIntermediateDirectories: true)
+                        if FileManager.default.fileExists(atPath: document.path) { try FileManager.default.removeItem(at: document) }
+                        defer { try? FileManager.default.removeItem(at: document) }
+                        try studio.saveScene(to: document)
+                        studio.newScene()
+                        try studio.loadScene(from: document)
+                        let syncLoad = state()
+                        let routeCharacters = studio.sourceRouteCharacterPreviews.count
+                        studio.undo()
+                        let syncUndo = state()
+                        studio.redo()
+                        let syncRedo = state()
+                        if routeCharacters == 0 { problems.append("the scene has no route character to rehydrate") }
+                        studio.asyncSourceBuilds = true
+                        /// Checks that `action` built no route character on the
+                        /// main thread and started their builds.
+                        func backgrounded(_ label: String, _ action: () throws -> Void) rethrows -> Int {
+                            studio.newScene()
+                            try action()
+                            if !studio.sourceRouteCharacterPreviews.isEmpty {
+                                problems.append("the \(label) built \(studio.sourceRouteCharacterPreviews.count) route character previews on the main thread")
+                            }
+                            return studio.pendingSourceCharacterBuilds
+                        }
+                        func landed(_ label: String, _ expected: (summary: [String], pixels: [UInt8]?)) -> Bool {
+                            guard settle() else { return false }
+                            _ = RunLoop.main.run(mode: .default, before: Date().addingTimeInterval(0.3))
+                            compare(label, expected, state())
+                            return true
+                        }
+                        let loads = try backgrounded("Load") { try studio.loadScene(from: document) }
+                        guard landed("load", syncLoad) else { record(step, false, "backgroundBuild: the load's builds did not finish in 300 s"); continue }
+                        studio.undo()
+                        guard landed("undo", syncUndo) else { record(step, false, "backgroundBuild: the undo did not settle in 300 s"); continue }
+                        let shownBeforeRedo = studio.sourceRouteCharacterPreviews.count
+                        studio.redo()
+                        let redoes = studio.pendingSourceCharacterBuilds
+                        if studio.sourceRouteCharacterPreviews.count != shownBeforeRedo {
+                            problems.append("the Redo built a route character preview on the main thread")
+                        }
+                        guard landed("redo", syncRedo) else { record(step, false, "backgroundBuild: the redo's builds did not finish in 300 s"); continue }
+                        // An Undo before the load's builds land.
+                        _ = try backgrounded("Load before the Undo") { try studio.loadScene(from: document) }
+                        studio.undo()
+                        let left = studio.pendingSourceCharacterBuilds
+                        guard landed("undo before the builds landed", syncUndo) else { record(step, false, "backgroundBuild: the undo did not settle in 300 s"); continue }
+                        // A second load of the same scene before the first's builds land.
+                        _ = try backgrounded("first of two Loads") { try studio.loadScene(from: document) }
+                        try studio.loadScene(from: document)
+                        let again = studio.pendingSourceCharacterBuilds
+                        guard landed("second load before the builds landed", syncLoad) else { record(step, false, "backgroundBuild: the second load's builds did not finish in 300 s"); continue }
+                        if loads == 0 { problems.append("the Load started no route character build") }
+                        if redoes == 0 { problems.append("the Redo started no route character build") }
+                        if again == 0 { problems.append("the second Load started no route character build") }
+                        if left != 0 { problems.append("\(left) builds stayed pending after the Undo emptied the scene") }
+                        detail = "the Load rehydrated \(loads) and the Redo \(redoes) of \(routeCharacters) route character\(routeCharacters == 1 ? "" : "s") in the background; an Undo before they landed left \(left) pending; a second Load before they landed rebuilt \(again)"
                     } else if build.hasPrefix("duplicate") {
                         guard let id = object(step) else { record(step, false, "backgroundBuild: no object \(describe(step))"); continue }
                         studio.selection = id
