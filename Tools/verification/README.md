@@ -1433,6 +1433,19 @@ own stores. Original readbacks are comparison data only; bound-input decode
 differences do not alter the output tolerance. Live resolution, default-off
 images and comparative Release costs require separate acceptance.
 
+`IKKOKU_LIPLINE_COMPOSITE_NONE_PROBE` names the no-layer control: the distinct
+card with only `face.lipLineId` set to 0, from the producer and session that
+reproduced every base/distinct face target and input readback. The folder holds
+the same 15 files as the lipline cases (frame, both cards, inputs 55–61, targets
+5, 62 and release 63). The original binds catalog row 0 (no `_Texture5`) but
+still binds the distinct `_Color5`. The gated
+`liveSourceHeadZeroLiplineNoLayerControlMatchesOriginalTargets` requires both
+targets within one byte, a recipe without a lipline input, the original lipline
+footprint (174 pixels inside bottom-up `[493,266,529,270]` at cheek 0 and 1),
+native lipline targets byte-identical to the no-layer targets outside that
+footprint, and pixel-identical output for a lipline recolour without a layer.
+It reads `IKKOKU_LIPLINE_COMPOSITE_PROBE` for the distinct lipline targets.
+
 ### Live-frame gate inputs
 
 `liveSourceShadersMeetTheControlledOriginalFrameGates` pins one exact native

@@ -76,5 +76,6 @@
   "IKKOKU_LIVE_SOURCE_GATE_TEXTURES": "/absolute/path/to/retained-native-inputs/textures/manifest.json",
   "IKKOKU_LIVE_SOURCE_GATE_HEAD_CONTRACT": "/absolute/path/to/retained-native-inputs/head-materials/contract.json",
   "IKKOKU_LIPLINE_COMPOSITE_BASE_PROBE": "/absolute/path/to/r1-lipline/original-base",
-  "IKKOKU_LIPLINE_COMPOSITE_PROBE": "/absolute/path/to/r1-lipline/original-distinct"
+  "IKKOKU_LIPLINE_COMPOSITE_PROBE": "/absolute/path/to/r1-lipline/original-distinct",
+  "IKKOKU_LIPLINE_COMPOSITE_NONE_PROBE": "/absolute/path/to/r1-lipline/original-none"
 }

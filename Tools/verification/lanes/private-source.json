@@ -384,6 +384,11 @@
           "env": "IKKOKU_LIPLINE_COMPOSITE_PROBE",
           "kind": "directory",
           "optional": true
+        },
+        {
+          "env": "IKKOKU_LIPLINE_COMPOSITE_NONE_PROBE",
+          "kind": "directory",
+          "optional": true
         }
       ],
       "env": {},
