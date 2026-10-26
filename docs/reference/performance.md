@@ -3883,6 +3883,95 @@ This uses the CPU factor of [scaling to the low end](#scaling-to-the-low-end-bas
   window.
 - No M1 run.
 
+## ST-T05a: older scene versions
+
+Added 2026-10-26 with [older scene versions](studio/scene-records.md#older-scene-versions-st-t05a).
+The reader now opens scenes saved by CharaStudio 0.0.5 through 1.0.4.1, and
+export saves them as 1.0.4.2. A 1.0.4.2 scene takes none of the new paths.
+Its reader reads layout flags set once from the version string, and its
+empty edit still returns the input bytes. Nothing in the app or on the main
+thread changed.
+
+### Measurement
+
+The Release timing probe, `swift test -c release -Xswiftc -enable-testing
+--filter KoikatsuLegacyScenePerformance`, runs with
+`IKKOKU_LEGACY_SCENE_PERF=1`, `IKKOKU_LEGACY_SCENE_LARGEST` and
+`IKKOKU_LEGACY_SCENE_UPGRADED`. Each case is the median of 60 calls after 10
+warmups.
+
+- **Window.** One quiet window the orchestrator granted (2026-10-26,
+  11:53:22–11:54:30), with load average 3.2–4.0. A watcher polled the process
+  list every second and saw no other build, test or app process. In 9 of its
+  62 samples, one or two processes it did not name used more than 20% CPU.
+- **Builds.** Before is `890b1468` (the base) and after is `9e2c0979`. The
+  runs went before, after, after, before, one process each, and each cell
+  lists the two runs.
+- **Scenes:**
+  - showoff (`koikatu_cs0002591`): 595,127 B, 7 characters, version 1.0.4.2;
+  - the largest legacy scene of the install: 1,676,359 B, version 1.0.3,
+    2,255 objects (1,894 items, 360 folders, 1 light), no characters. It is
+    private, and its SHA-256 begins `bcaca9ff`;
+  - the same scene as 1.0.4.2, written by `ikkoku-inspect scene-document
+    --write-upgraded`: 1,676,361 B. Only the version string grows, since
+    1.0.3 lacks no item field.
+- **Evidence.** `.local/stt05a-legacy-scenes/logs/window/`.
+
+| Scene | Step | Before ms | After ms |
+| --- | --- | --- | --- |
+| showoff | `decodeDocument` | 2.43, 2.47 | 2.58, 2.44 |
+| largest legacy, as 1.0.4.2 | `decodeDocument` | 85.1, 82.0 | 86.1, 86.7 |
+| largest legacy | `decodeDocument` | refused in 0.002 | 85.9, 86.8 |
+| largest legacy | `editedData`, no edit | refused | 172.8, 176.0 |
+
+What the numbers show:
+
+- **Showoff is unchanged.** The four runs are within 0.15 ms of each other,
+  and one after-run equals the before-runs.
+- **A legacy scene costs what its 1.0.4.2 form costs.** Its decode in the
+  after-build, 85.9 and 86.8 ms, matches the same build's 86.1 and 86.7 ms
+  for the 1.0.4.2 form. The version branches add nothing measurable.
+- **An unedited export of a legacy scene takes about two decodes.** The
+  upgrade decodes its result to check it, and every export decodes the
+  written scene to verify it.
+- **The 1.0.4.2 form: pending a second window.** The after-runs are 1.0 to
+  4.7 ms slower than the before-runs, but the two before-runs differ by
+  3.1 ms. Three more rounds of before, after, after, before, timing only the
+  showoff and 1.0.4.2 decodes (`IKKOKU_LEGACY_SCENE_PERF_CURRENT_ONLY=1`),
+  are pending the orchestrator's next window.
+- **Where the decode time goes.** The 85 ms of the largest scene's decode,
+  in both builds, is its item colours: a `sample` of the before-build shows
+  `jsonVector`, which reads each colour and UV vector with
+  `JSONSerialization`, at 87.4% of `decodeDocument`. Each item has 14
+  vectors, so this scene has about 26,500. That cost predates this change;
+  a follow-up change reads these vectors directly.
+
+### Correctness
+
+- **The corpus.** On the user's 182 scenes, the 120 current files decode to
+  the same digest of every field in both builds, and their empty edits still
+  export the input bytes. All 62 legacy files open and upgrade
+  ([corpus](studio/scene-records.md#corpus)).
+- **Lanes and the Engine suite.** On `7562962d` (Debug, `--strict`, 0
+  skipped): `studio-scenarios` passed 82/82 with the new
+  `studio-scenario-legacy-scene`, `maker-scenarios` (pending), and the Engine
+  suite 1,072 tests, with only the opt-in probes skipped.
+
+### Scaling to a base M1 (estimate)
+
+This uses the CPU factor of [scaling to the low end](#scaling-to-the-low-end-base-m1-8-gb),
+× 1.25. The decode is single-threaded CPU work.
+
+- The largest legacy scene: a decode in about 108 ms, and an unedited export
+  in about 218 ms.
+- Showoff: a decode in about 3 ms.
+
+### Limits
+
+- Two runs per build in one window, until the pending rounds.
+- Engine timing only. The app's import and export were not timed.
+- No M1 run.
+
 ## Phase 2, item 6 follow-up: route copies, prefetch and kept donations
 
 Done 2026-10-25 (the follow-ups of inventory C8, S1 and S3, and ST-T11's

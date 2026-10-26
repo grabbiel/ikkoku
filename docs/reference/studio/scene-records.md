@@ -368,7 +368,36 @@ CharaStudio itself. Ikkoku has no merge path.
 
 ### Corpus
 
-<<CORPUS>>
+Two opt-in checks read the user's 182 installed scenes in place
+(`IKKOKU_SCENE_CORPUS`). The files hold 175 distinct scenes, since 7 are
+copies. `koikatsuSceneCorpusDigest` prints, per scene, a digest of every
+decoded field and whether an empty edit exports the input bytes. It ran in
+the base build (`890b1468`) and in this change (`48b48017`, Debug).
+`legacyCorpusScenesUpgradeAndReadBack` checks that each legacy scene's upgrade
+reads back as the same scene.
+
+| Version | Files | Base | This change |
+| --- | --- | --- | --- |
+| 0.0.7 | 6 | refused | opens; saved as 1.0.4.2; the upgrade reads back |
+| 0.0.8 | 13 | refused | as above |
+| 0.0.9 | 1 | refused | as above |
+| 1.0.0 | 5 | refused | as above |
+| 1.0.1 | 29 | refused | as above |
+| 1.0.3 | 8 | refused | as above |
+| 1.0.4.2 | 120 | opens | unchanged |
+
+- **The 120 current files are unchanged.** Every decoded field has the same
+  digest in both builds, and every empty edit still exports the input bytes.
+- **Every legacy scene opens and upgrades.** The upgrade reads back with every
+  decoded field equal. The only exception is the eye bytes below 0.0.8, which
+  gain the four zero angles.
+- **Neither refusal fires on the corpus.** No legacy scene has a route, a
+  version-1 camera or a plug-in trailer, and all their pre-0.0.8 eye data is
+  32 bytes.
+- **The app writes the Engine's upgrade.** The lane check
+  `studio-scenario-legacy-scene` exports the 0.0.7 fixture without an edit,
+  and its file is byte-identical to the Engine's upgrade (SHA-256 begins
+  `413ab7b0`).
 
 ### Original player (one VM phase)
 
