@@ -7,8 +7,9 @@ import Testing
 /// IKKOKU_PLUGIN_SCENE_PROBE and IKKOKU_PLUGIN_SCENE_PROBE_B folders; with
 /// IKKOKU_PLUGIN_SCENE_PROBE_C also phase C's fixture, and with
 /// IKKOKU_PLUGIN_SCENE_LARGEST a large installed scene with KKPE data).
-/// Prints the median and p90 of `editedData` per export, and of the plug-in
-/// data step alone (`SourceScenePluginData.rewrite` on the same edit's
+/// Prints the median and p90 of the import's engine side (scene decode and
+/// card decodes), of `editedData` per export, and of the plug-in data step
+/// alone (`SourceScenePluginData.rewrite` on the same edit's
 /// output): the cost with the step, and the cost it adds. Run it in a quiet
 /// window with
 /// `swift test -c release -Xswiftc -enable-testing --package-path Packages/Engine --filter SourceScenePluginDataPerformance`.
@@ -49,6 +50,21 @@ private func pluginPerfExport(_ label: String, _ document: KoikatsuSceneDocument
     }
 }
 
+/// The engine side of an import: the scene decode, which reads every
+/// embedded card, and each character's card decode, as the Studio preview
+/// does once per character.
+private func pluginPerfImport(_ label: String, _ data: Data) throws {
+    var characters: [KoikatsuCharacterRecord] = []
+    func visit(_ record: KoikatsuObjectRecord) {
+        if let character = record.character { characters.append(character) }
+        record.children.forEach(visit)
+    }
+    try KoikatsuSceneReader.decodeDocument(data).snapshot.roots.forEach(visit)
+    print("[plugin-perf] \(label) import: \(data.count) B, \(characters.count) characters")
+    try pluginPerfMedian("\(label) import decodeDocument") { _ = try KoikatsuSceneReader.decodeDocument(data) }
+    try pluginPerfMedian("\(label) import every card()") { for character in characters { _ = try character.card() } }
+}
+
 @Test(.enabled(if: pluginPerfEnabled, "Opt-in timing probe: IKKOKU_PLUGIN_SCENE_PERF=1 plus the showoff scene and the probe folders"))
 func sourceScenePluginDataPerformance() throws {
     func load(_ variable: String, _ name: String? = nil) throws -> KoikatsuSceneDocument {
@@ -60,6 +76,7 @@ func sourceScenePluginDataPerformance() throws {
     // once, and a subtree deletion checks each character's card for
     // KKAnimationController links.
     let showoff = try load("IKKOKU_STUDIO_SCENARIO_SCENE")
+    try pluginPerfImport("showoff", showoff.preservedData)
     #expect(showoff.trailingData.isEmpty)
     let moved = try #require(showoff.snapshot.roots.first { $0.sourceKey == 622 })
     let transform = KoikatsuChangeAmount(position: moved.transform.position + SIMD3<Float>(0.125, 0, 0),
@@ -103,6 +120,7 @@ func sourceScenePluginDataPerformance() throws {
         }
         for root in large.snapshot.roots { visit(root, inFolder: true) }
         print("[plugin-perf] large scene: \(data.count) B, \(objects) objects, \(large.trailingData.count) B of plug-in data")
+        try pluginPerfImport("large", data)
         let item = try #require(items.max())
         try pluginPerfExport("large delete item", large, .init(deletions: [item]))
         try pluginPerfExport("large duplicate item", large, .init(insertions: [.init(.duplicate(of: item))]))
