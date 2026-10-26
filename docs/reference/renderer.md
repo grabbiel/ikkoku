@@ -2125,7 +2125,18 @@ flight, `makeCommandBuffer` waits until one completes on the GPU. That wait
 needs no worker thread from any pool. Each load commits its command buffer
 and waits for it before returning, so a texture is never handed out while
 the GPU still writes it, and one caller's loads complete in call order. Each
-staging buffer is released as soon as its copy completes.
+staging buffer is released as soon as its copy completes. Staging buffers are
+write-combined: the CPU only writes them, in order, and nothing reads one
+back. The readback test compares the texture with the decoded pixels, not
+with the staging buffer.
+
+ImageIO decodes PNG with alpha to straight RGBA8, and PNG without alpha and
+JPEG to RGBX8, so the common app inputs only swap red and blue
+(`vImagePermuteChannels_ARGB8888`). The scalar loops run only for
+premultiplied decodes (unpremultiply) and for the HEIF family, AVIF and
+JPEG XL with alpha (premultiply). `vImageUnpremultiplyData_RGBA8888` and
+`vImagePremultiplyData_RGBA8888` round exactly like those loops for all
+65,536 colour and alpha pairs.
 
 **At most eight loads at once.** A plain counting semaphore
 (`UploadPermits`, 8 permits) bounds how many loads hold decoded pixels and a

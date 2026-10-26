@@ -70,9 +70,21 @@ private final class Box<Value>: @unchecked Sendable {
         for (index, (width, height)) in ([(1024, 1024), (1000, 700), (2048, 256)] as [(Int, Int)]).enumerated() {
             let png = try patternPNG(width: width, height: height)
             let decoded = try #require(InlineTextureLoader.image(data: png))
-            let layout = try #require(InlineTextureLoader.layout(for: decoded, srgb: true))
-            let staged = try InlineTextureLoader.stage(decoded.cgImage, layout: layout, device: device)
-            let expected = Data(bytes: staged.contents(), count: width * height * layout.bytesPerPixel)
+            // ImageIO decodes the PNG to straight RGBA8, which loads as BGRA8.
+            // The expected bytes come from the decoded pixels, never from the
+            // write-combined staging buffer, which the CPU must not read.
+            #expect(InlineTextureLoader.layout(for: decoded, srgb: true)
+                    == InlineTextureLoader.Layout(pixelFormat: .bgra8Unorm_srgb, bytesPerPixel: 4, conversion: .swapRedBlue))
+            let pixels = [UInt8](try #require(decoded.cgImage.dataProvider?.data as Data?))
+            let sourceRow = decoded.cgImage.bytesPerRow
+            var bgra = [UInt8](repeating: 0, count: width * height * 4)
+            for y in 0..<height {
+                for x in 0..<width {
+                    let s = y * sourceRow + x * 4, t = (y * width + x) * 4
+                    bgra[t] = pixels[s + 2]; bgra[t + 1] = pixels[s + 1]; bgra[t + 2] = pixels[s]; bgra[t + 3] = pixels[s + 3]
+                }
+            }
+            let expected = Data(bgra)
             let handle = try resources.texture(data: png, key: "readback-\(index)")
             let texture = try #require(resources.texture(handle))
             // No wait on the upload queue: the readback queue sees only what
