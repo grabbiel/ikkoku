@@ -570,6 +570,8 @@ extension SourceScenePluginData {
 /// `ID` is an item's key (SceneController.cs:20-330). Records of objects that
 /// are not loaded items are dropped on load (`ExtractGameObject`, :499-508).
 ///
+/// Records load only onto items (`ExtractGameObject`, :501-508), so records
+/// naming no item are dropped by CharaStudio's load and its next save.
 /// After a delete (`OnObjectDeleted`, :1041-1062) an item's records are gone.
 /// After a copy (`OnObjectsCopied`, :725-855; KKAPI passes each copied
 /// item's template key with the copy, in copy order) each list gains, per
@@ -635,18 +637,19 @@ struct MaterialEditorPlan {
         }
         var sourceItems = Set<Int32>()
         for (key, record) in edit.sourceRecords where record.kind == .item { sourceItems.insert(key) }
-        var copies: [(key: Int32, template: Int32)] = [], newKeys = Set<Int32>()
-        for record in edit.finalRecords {
-            let origin = edit.origins[record.sourceKey]
-            if origin != record.sourceKey { newKeys.insert(record.sourceKey) }
-            if let origin, origin != record.sourceKey, record.kind == .item { copies.append((record.sourceKey, origin)) }
+        var copies: [(key: Int32, template: Int32)] = []
+        for record in edit.finalRecords where record.kind == .item {
+            if let origin = edit.origins[record.sourceKey], origin != record.sourceKey { copies.append((record.sourceKey, origin)) }
         }
         copies.sort { $0.key < $1.key }
         var named = Set<Int32>()
         for records in lists.values { for record in records { named.insert(record.id) } }
+        // Records naming no item load nowhere (ExtractGameObject binds items
+        // only) and are not saved again; they are kept until an item is
+        // copied, whose new key could be theirs.
         let stale = named.filter { !sourceItems.contains($0) }
         let copied = copies.filter { named.contains($0.template) }
-        guard !named.isDisjoint(with: edit.deletedKeys) || !copied.isEmpty || !stale.isDisjoint(with: newKeys) else {
+        guard !named.isDisjoint(with: edit.deletedKeys) || !copied.isEmpty || (!stale.isEmpty && !copies.isEmpty) else {
             decision = .keep; plannedLists = [:]; keptTextures = nil; return
         }
         guard entry.version == 1 else {

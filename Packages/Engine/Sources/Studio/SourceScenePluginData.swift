@@ -450,6 +450,10 @@ enum SourceScenePluginData {
                 // writes one element per item in key order and loads the
                 // i-th element onto the i-th item: positional (`KKPEPlan`).
                 guard version == 0 else { return unknownVersion() }
+                // Items keep their positions and no character's controller
+                // goes or is copied: nothing to read.
+                let characters = Set(edit.sourceRecords.compactMap { $0.value.kind == .character ? $0.key : nil })
+                if edit.unchanged([.item]), !edit.touches(characters, copies: true) { return nil }
                 do {
                     let plan = try KKPEPlan(trailer: trailer, entry: entry, edit: edit, scene: scene)
                     kkpePlan = plan; decision = plan.decision

@@ -55,6 +55,15 @@ private let rwCopyCharacter = SourceSceneEdits(insertions: [.init(.duplicate(of:
 private let rwAddFolder = SourceSceneEdits(insertions: [.init(.folder(name: "New"))])
 private let rwMoveItem = SourceSceneEdits(reparents: [.init(object: 4, parent: 0)])
 
+/// `OCIRoute.AddPoint` on route 6.
+private func rwAddPoint() throws -> SourceSceneEdits {
+    let document = try KoikatsuSceneReader.decodeDocument(rwScene(nil).data)
+    let route = try #require(document.snapshot.roots.first { $0.sourceKey == 6 }?.route)
+    var state = SourceStudioRouteState(record: route)
+    _ = try state.addPoint()
+    return .init(routes: [6: state])
+}
+
 private func rwEdited(_ scene: TopologyScene, _ edits: SourceSceneEdits) throws -> Data {
     try KoikatsuSceneReader.decodeDocument(scene.data).editedData(edits)
 }
@@ -306,7 +315,11 @@ private let kkpePlain = kkpeRoot([kkpeItem1, kkpeItem2, kkpeItem(3, -41274), kkp
     }
     let twoFields = ("kkpe", rwPlugin(0, .map([("sceneInfo", .str(kkpePlain)), ("future", .int(1))])))
     expectRefused(rwScene([twoFields]), .init(deletions: [4]), "has data other than one 'sceneInfo' XML string, which this writer does not read")
-    #expect(rwOutcome(rwScene([twoFields]), rwMoveItem) == "kept")
+    expectRefused(rwScene([twoFields]), rwCopyCharacter, "has data other than one 'sceneInfo' XML string, which this writer does not read")
+    // Edits that move no item and touch no character do not read the entry.
+    for edits in [rwMoveItem, rwAddFolder, SourceSceneEdits(deletions: [5]), try rwAddPoint()] {
+        #expect(rwOutcome(rwScene([twoFields]), edits) == "kept")
+    }
 }
 
 // MARK: - MaterialEditor
@@ -391,13 +404,18 @@ private func materialSource(shaders: PluginMP = .null, version: Int64 = 1, extra
 }
 
 @Test func sourceScenePluginRewritesMaterialEditorStaleRecordsAndEncodings() throws {
-    // A record for a key that is not an item loads nowhere and is not saved
-    // again: kept until a copy takes its key, then dropped.
+    // A record for a key that is not an item loads nowhere (ExtractGameObject
+    // binds items only) and is not saved again: kept until an item is
+    // copied, whose key could be its key, then dropped.
     let stale = materialEntry(floats: [materialFloat(1), materialFloat(13)], colors: [], textures: [], dictionary: [])
     let scene = rwScene([stale])
-    for edits in [SourceSceneEdits(deletions: [2]), .init(deletions: [5]), rwAddFolder] { #expect(rwOutcome(scene, edits) == "kept") }
+    for edits in [SourceSceneEdits(deletions: [2]), .init(deletions: [5]), rwAddFolder, rwCopyCharacter] {
+        #expect(rwOutcome(scene, edits) == "kept")
+    }
     let copied = materialEntry(floats: [materialFloat(1)], colors: [], textures: [], dictionary: [])
-    #expect(try rwTrailerAfter(rwScene([stale]), .init(insertions: [.init(.duplicate(of: 2), parent: .source(1))])) == rwTrailer([copied]))
+    #expect(try rwTrailerAfter(scene, .init(insertions: [.init(.duplicate(of: 2), parent: .source(1))])) == rwTrailer([copied]))
+    let elsewhere = rwScene([materialEntry(floats: [materialFloat(1), materialFloat(99)], colors: [], textures: [], dictionary: [])])
+    #expect(try rwTrailerAfter(elsewhere, rwCopyItem) == rwTrailer([copied]))
     let deleted = materialEntry(floats: [], colors: [], textures: [], dictionary: [])
     #expect(try rwTrailerAfter(scene, .init(deletions: [1])) == rwTrailer([deleted]))
     // Lists the edit does not change keep their bytes; a rewritten list is
