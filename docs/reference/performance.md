@@ -4645,8 +4645,8 @@ The 30 ms target is not met. The remaining costs are listed with numbers in
 ### Causes
 
 The baseline ran in a quiet window (06:22–06:28 on 2026-10-26) on a Release
-build of `main` `4d60b73` with the `studio-select` workload, with Time
-Profiler attached by pid. Medians of 13–15 actions, main busy ms (120 Hz
+build of `e36f877`, which is `main` `4d60b73` plus the `studio-select`
+workload, with Time Profiler attached by pid. Medians of 13–15 actions, main busy ms (120 Hz
 frames dropped):
 
 | Scene | From nothing | Character to character | Kind change | Deselect | Redo of a duplicate (busy / stall) |
@@ -4724,11 +4724,12 @@ Each change is a separate commit, measured against the build before it.
   drawn at zero opacity, takes no hits and is disabled. Without the width
   clamp, a hidden view wider than the inspector (a kept route section)
   widened the stack and moved what was shown; the window captures found
-  that ([correctness](#correctness-item-7)). Disabled is needed: without it the hidden fields stay in the
-  Tab key-view loop and can take focus (tested). A hidden `Picker`'s label
-  hides itself from accessibility (`inspectorKeptLabel()`), because SwiftUI
-  keeps it in the tree at zero opacity. While hidden, the tab keeps the
-  last state it showed, so it does not update.
+  that ([correctness](#correctness-item-7)). Disabled is needed: without
+  it the hidden fields stay in the Tab key-view loop and can take focus
+  (tested). A hidden `Picker`'s label hides itself from accessibility
+  (`inspectorKeptLabel()`), because SwiftUI keeps it in the tree at zero
+  opacity. While hidden, the tab keeps the last state it showed, so it
+  does not update.
   - The first version used a custom `Layout`. `InspectorSwapLayout.sizeThatFits`
     alone cost 2–4.5 ms per update, because a custom layout gets no size
     caching, and character and folder selects got slower. The built-in
@@ -4785,10 +4786,12 @@ than 20% CPU, and was run again.
 - **Window 2** (11:10–11:25, 34 runs, 0 invalid, 1-minute load 1.86–5.16)
   compared base with the C2 head (`886a6664`) in each mode, to decide C1
   (`tab` against `off`) and C2 (`on` against `tab`).
-- **Window 3** (12:05–12:17, 21 runs, 3 invalid and run again, load
-  2.08–4.57) compared base with the model-state head (`99d8d3ed`).
-- **The confirm window** (CONFIRM_WINDOW_LINE) measured the head
-  (`055c3cf9`), which adds the published diagnostics.
+- **Window 3** (12:05–12:17, 21 runs, load 2.08–4.57) compared base with
+  the model-state head (`99d8d3ed`). Three runs were invalid (a Spotlight
+  indexer twice, the Claude desktop app once) and were run again; one of
+  them was in a first start that was restarted.
+- **The confirm window** (CONFIRM_WINDOW_LINE) measured the final head
+  (`3b83be1f`), which adds the published diagnostics and the width clamp.
 
 **Window 2, median main busy ms per action** (base / `off` / `tab` / `on`):
 
@@ -4863,8 +4866,8 @@ document write):
 | Window 2, C2: fixture, route 20 then character 10 preselected | — | 249.5 | 265.2 (tab 260.0) |
 | Window 3, model state: showoff | 297.0 | 288.7 | 290.2 |
 | Window 3, model state: fixture, preselected | — | 237.8 | 250.0 |
-| Confirm, diagnostics too: showoff | CONFIRM_FK_SHOWOFF_BASE | — | CONFIRM_FK_SHOWOFF_ON |
-| Confirm, diagnostics too: fixture, preselected (two pairs, alternated) | — | CONFIRM_FK_FIX_OFF | CONFIRM_FK_FIX_ON |
+| Confirm, final head: showoff | CONFIRM_FK_SHOWOFF_BASE | — | CONFIRM_FK_SHOWOFF_ON |
+| Confirm, final head: fixture, preselected (two pairs, alternated) | — | CONFIRM_FK_FIX_OFF | CONFIRM_FK_FIX_ON |
 
 - With C2 alone, a hidden route section made the fixture drag 10–16 ms/s
   dearer than `off`. Time Profiler put the difference in SwiftUI's
@@ -4879,10 +4882,12 @@ document write):
   (outside a window, load 4.9–10.5) gave `propagate_dirty` 22.1, 29.9 and
   13.6 ms/s with `off` and 22.3, 28.5 and 32.8 with `on`; the last `on` run
   had three compiler processes beside it. CONFIRM_FK_PARAGRAPH
-- The computation costs 0.043 ms per refresh in the showoff scene (p95
-  0.049 ms), 5.1 ms/s at 120 refreshes a second during a drag, and 0.010 ms
-  in the fixture (1.2 ms/s). Base evaluated the same state inside
-  `ObjectInspector`'s body on every frame. Selects spend 0.3–1.4 ms/s on it.
+- The computation cost (window 3, the Object tab's state only) was
+  0.043 ms per refresh in the showoff scene (p95 0.049 ms), 5.1 ms/s at
+  120 refreshes a second during a drag, and 0.010 ms in the fixture
+  (1.2 ms/s). CONFIRM_PHASE Base evaluated the same state inside
+  `ObjectInspector`'s body on every frame. Selects spend 0.3–1.4 ms/s on
+  it.
 - Orbit (fixture, preselected, `on`) stays at 10.7 ms/s (9.5–10.5 in
   window 2): the camera is observed on its own.
 - The character-to-character select, the case most sensitive to a stale or
@@ -4898,10 +4903,9 @@ document write):
     nothing still builds the sections the last object did not have (create
     about 17 ms and graph work about 13 ms for Character and Voice after a
     folder).
-  - **The rest of the window.** A select between two characters, which
-    builds nothing, costs 28–35 ms in base and head alike: the workspace
-    row's highlight, the toolbar, the frame refresh and the display list of
-    the whole window.
+  - **The rest of the select.** A select between two characters, which
+    builds nothing, costs 28–35 ms in base and head alike. That work lies
+    outside the Object tab's build and was not broken down further.
   - **The redo's rehydration**, about 7 ms of app work, and its refresh.
 - **Hiding costs more than destroying.** Deselect is 0 to 17 ms dearer, and
   an undo (which deselects) 4–8 ms. A hidden view's controls get their
