@@ -326,6 +326,51 @@ is applied, exactly where `toon_eye_lod0` FORWARD does it, while both
 highlight samples stay unrotated. Default 0 keeps every other material and
 every untilted iris bit-identical.
 
+### Source map material (ST-A11 slice 2, 2026-10-25)
+
+An original Studio map's lightmapped surfaces draw with `MaterialKindMap` (8):
+the baked-lightmap subset of Unity 5.6.2f1's `Standard` shader. The recovered
+formula, with its citations and the oracle that checks it, is in
+[maps: baked lightmaps](studio/maps.md#baked-lightmaps-slice-2).
+
+- **Shader.** `map_fragment` in `Shaders/Toon.metal` uses the shared
+  `toon_vertex`. It computes `albedo × oneMinusReflectivity ×
+  DecodeDirectionalLightmap(DecodeLightmapRGBM(lightmap), direction, normal)`,
+  plus `_EmissionMap × _EmissionColor` when `emissive.a > 0`.
+  - The lightmaps are sampled at `(u, 1 − v)` of UV1, because their rows are
+    Unity's bottom-up rows.
+  - The direction's z is negated into the engine basis.
+  - It draws no realtime light, specular, normal map, fog or shadow.
+- **Pipelines.** `Pipelines.map` and `mapBlend` exist in the depth-only and
+  depth+stencil main-pass sets. The opaque and transparent loops pick them by
+  material kind, before the eye check. No other kind's pipeline choice
+  changed.
+- **Uniforms.** `lightmapRange`, `lightmapExponent` and
+  `oneMinusReflectivity` (`unity_Lightmap_HDR.xy` and Standard's
+  `OneMinusReflectivityFromMetallic`) occupy `MaterialUniforms`' former tail
+  padding at offsets 340–351. The stride stays 352. `ShaderTypes.h`
+  `static_assert`s it, and `materialUniformsKeepTheirStrideWithTheMapFloatsInTheTail`
+  checks it. Every non-map material writes the same bytes as before,
+  padding included (zeros). The no-map captures are byte-identical to base
+  ([maps](studio/maps.md#tests-and-checks)).
+- **Textures.** `TextureIndexLightmap` (16), `TextureIndexLightmapDirection`
+  (17) and `TextureIndexEmission` (18) are bound by `bindTextures` for map
+  draws only. A map draw binds its base texture and these three, and skips the
+  character slots. Missing textures fall back to black, black and white.
+  `MaterialFlagMapDirectionalLightmap` (bit 19) enables the directional term.
+- **Block upload.** `SourceStudioBlockTexture` (Studio package) uploads the
+  bundle's serialized DXT5 rows as `.bc3_rgba_srgb` (light map) and
+  `.bc3_rgba` (direction map). It does one `replace` per mip into
+  shared storage, then registers the texture with
+  `ResourceStore.register(texture:)`. `ResourceStore` itself is unchanged and
+  still decodes every other texture to RGBA8.
+  `blockTextureUploadKeepsEveryMipLevelByteForByte` blits every level back and
+  compares it with the file bytes.
+- **Evidence probe.** `Renderer.captureSceneHDR(frame:width:height:)` runs
+  `capture`'s pass graph. It returns the resolved HDR scene target
+  (`rgba16Float`, before bloom, grading and the sRGB composite) as float16 bit
+  patterns. The map probe writes its irradiance images with it.
+
 ### Deformation safety
 
 The renderer writes complete skin palettes into the frame ring's palette
@@ -5233,6 +5278,20 @@ Families move in both directions inside unchanged bounds; this is not a new
 parity claim. The gate ran with the retained 62-entry store and head contract
 under `.local/codex-continue-2026-10-24/rolling/materials-body/retained-native-inputs/`.
 
+**Gate inputs (2026-10-26).** The shared fixture map never held that pair.
+Its `IKKOKU_LIVE_SOURCE_TEXTURES` still named the 52-entry normal-top store
+(`textures-bc1`, three creators, promoted 2026-10-24), and its head contract
+lacks the body rows and `create_body`. So the gate failed on `main` at the
+store count, composites, content hash, the live set, fallbacks and composite
+events. The cheek gate needs the 63-entry store's cheek asset, which this
+gate's pinned count and hash reject, so one key cannot serve both. The gate
+now reads its store from `IKKOKU_LIVE_SOURCE_GATE_TEXTURES` (manifest
+`1b89b908…`) and its contract from `IKKOKU_LIVE_SOURCE_GATE_HEAD_CONTRACT`
+(`a02b6d35…`), both under the retained directory above. The live path and the
+other composite gates keep the existing keys. Bounds, counts and the content
+hash are unchanged. On `e7085c3` plus this change, the gate reproduces every
+value in the "After" column above, including content `b9ae136b…`.
+
 **Cost (measured, Release, quiet machine).** A private timing mode encodes the
 controlled frame's deform and live-input compute in one command buffer and its
 20 live translated records in a second, and reads the second's GPU start/end
@@ -5323,7 +5382,9 @@ Studio status lines show. Removed characters and replaced static imports release
 their GPU buffers once no pending frame names them
 ([second slice](#character-and-import-lifetime-r6-second-slice)). glTF UV1/2
 are decoded, but native materials sample imported glTF textures on UV0 and
-`LoadedAsset` rejects other selections. Initial morph weights are retained but not
+`LoadedAsset` rejects other selections. The one exception is the
+[source map material](#source-map-material-st-a11-slice-2-2026-10-25), which
+samples its lightmaps on UV1. Initial morph weights are retained but not
 applied, and tangent morphs are ignored; the loader reports both. There is no
 complete LOD, streaming or frustum-culling system. R3/R5/R6 define fixes and checks.
 

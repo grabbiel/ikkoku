@@ -687,6 +687,27 @@ public final class Renderer: @unchecked Sendable {
                        bitmapInfo: info, provider: provider, decode: nil, shouldInterpolate: false, intent: .defaultIntent)
     }
 
+    /// `capture`'s pass graph, returning the resolved linear scene colour
+    /// (`RenderTargets.hdr`: the main passes after their MSAA resolve, before
+    /// bloom, grading and the sRGB composite) as RGBA float16 bit patterns,
+    /// rows top-down. ST-A11 evidence (the map probe's irradiance image); nil
+    /// when the capture fails.
+    public func captureSceneHDR(frame: RenderFrame, width: Int, height: Int) -> [UInt16]? {
+        var hdr: (any MTLTexture)?
+        guard capture(frame: frame, width: width, height: height, configureTargets: { hdr = $0.hdr }) != nil, let hdr else { return nil }
+        let bytesPerRow = width * 8
+        guard let buffer = gpu.device.makeBuffer(length: bytesPerRow * height, options: .storageModeShared),
+              let cb = gpu.commandQueue.makeCommandBuffer(), let blit = cb.makeBlitCommandEncoder() else { return nil }
+        blit.copy(from: hdr, sourceSlice: 0, sourceLevel: 0, sourceOrigin: MTLOrigin(x: 0, y: 0, z: 0),
+                  sourceSize: MTLSize(width: width, height: height, depth: 1), to: buffer, destinationOffset: 0,
+                  destinationBytesPerRow: bytesPerRow, destinationBytesPerImage: bytesPerRow * height)
+        blit.endEncoding()
+        cb.commit()
+        cb.waitUntilCompleted()
+        guard cb.status == .completed else { return nil }
+        return Array(UnsafeBufferPointer(start: buffer.contents().assumingMemoryBound(to: UInt16.self), count: width * height * 4))
+    }
+
     /// Measures the same pass graph as capture while reusing all render targets.
     /// Each command buffer completes before the next sample. This is a render
     /// latency baseline, not an interactive application throughput measurement.
@@ -1264,6 +1285,15 @@ public final class Renderer: @unchecked Sendable {
     private func bindTextures(_ enc: any MTLRenderCommandEncoder, _ m: MaterialState, frame: RenderFrame) {
         let white = resources.whiteTexture, black = resources.blackTexture
         enc.setFragmentTexture(frame.texture(m.base, resources: resources) ?? white, index: Int(TextureIndexBase.rawValue))
+        if m.uniforms.kind == UInt32(MaterialKindMap.rawValue) {
+            // map_fragment samples only these four (ST-A11 source maps).
+            enc.setFragmentTexture(frame.texture(m.lightmap, resources: resources) ?? black, index: Int(TextureIndexLightmap.rawValue))
+            enc.setFragmentTexture(frame.texture(m.lightmapDirection, resources: resources) ?? black,
+                                   index: Int(TextureIndexLightmapDirection.rawValue))
+            // Unity's _EmissionMap default is white; map_fragment reads it only when emissive.a > 0.
+            enc.setFragmentTexture(frame.texture(m.emission, resources: resources) ?? white, index: Int(TextureIndexEmission.rawValue))
+            return
+        }
         enc.setFragmentTexture(frame.texture(m.colorMask, resources: resources) ?? black, index: Int(TextureIndexColorMask.rawValue))
         let isEye = m.uniforms.kind == UInt32(MaterialKindEye.rawValue)
         enc.setFragmentTexture(frame.texture(m.detail, resources: resources) ?? (isEye ? black : white), index: Int(TextureIndexDetail.rawValue))
@@ -1366,7 +1396,8 @@ public final class Renderer: @unchecked Sendable {
                 drawIndexed(enc, rec.mesh)
             }
             let nativeEye = m.uniforms.kind == UInt32(MaterialKindEye.rawValue) && (m.uniforms.flags & MaterialFlagSourceIrisHighlights.rawValue) == 0
-            enc.setRenderPipelineState(nativeEye ? main.eye : main.toonOpaque)
+            let isMap = m.uniforms.kind == UInt32(MaterialKindMap.rawValue)
+            enc.setRenderPipelineState(isMap ? main.map : nativeEye ? main.eye : main.toonOpaque)
             enc.setDepthStencilState(pipelines.depthWrite)
             enc.setCullMode((m.uniforms.flags & MaterialFlagDoubleSided.rawValue) != 0 ? .none : .back)
             drawIndexed(enc, rec.mesh)
@@ -1388,7 +1419,8 @@ public final class Renderer: @unchecked Sendable {
             for rec in ctx.transparent {
                 let material = rec.item.material.uniforms
                 let nativeEye = material.kind == UInt32(MaterialKindEye.rawValue) && (material.flags & MaterialFlagSourceIrisHighlights.rawValue) == 0
-                enc.setRenderPipelineState(nativeEye ? main.eyeBlend : main.toonBlend)
+                let isMap = material.kind == UInt32(MaterialKindMap.rawValue)
+                enc.setRenderPipelineState(isMap ? main.mapBlend : nativeEye ? main.eyeBlend : main.toonBlend)
                 bindDraw(enc, rec)
                 bindTextures(enc, rec.item.material, frame: ctx.frame)
                 enc.setCullMode((rec.item.material.uniforms.flags & MaterialFlagDoubleSided.rawValue) != 0 ? .none : .back)

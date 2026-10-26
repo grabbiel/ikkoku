@@ -95,8 +95,15 @@ public struct SourceStudioMapCatalog: Sendable {
 
 /// The lines the Studio shows for a scene's map (status and inspector).
 public enum SourceStudioMapStatus {
-    /// What every converted map in this slice leaves out (ST-A11 slice 1).
+    /// What a converted map without lightmaps leaves out (ST-A11 slice 1:
+    /// every part keeps the item toon material under the scene light).
     public static let approximationLabel = "approximated: no baked lightmaps, map lights, sun-type lighting, fog or ambient"
+    /// What a map drawn with its baked lightmaps still leaves out (slice 2,
+    /// `map_fragment`): every term of the original's Standard draw and camera
+    /// that the lightmap path does not reproduce. RenderSettings ambient is
+    /// not missing: a lightmapped Standard draw samples none (it is baked).
+    public static let lightmappedLabel = "baked lightmaps; approximated: no realtime sun or its shadows, "
+        + "no specular or reflections, no normal, metallic or detail maps, no fog, no camera effects"
 
     static func title(_ entry: SourceStudioMapCatalog.Entry) -> String { "Map \(entry.no) \(entry.name) (\(entry.scene))" }
 
@@ -112,7 +119,14 @@ public enum SourceStudioMapStatus {
 
     /// The line once a converted map is drawn.
     public static func loaded(_ entry: SourceStudioMapCatalog.Entry, asset: SourceStudioMapAsset) -> String {
-        var line = "\(title(entry)): \(approximationLabel)"
+        let label: String
+        switch asset.lightmappedParts {
+        case 0: label = approximationLabel
+        case asset.parts.count: label = lightmappedLabel
+        default: label = lightmappedLabel.replacingOccurrences(of: "baked lightmaps;",
+            with: "baked lightmaps on \(asset.lightmappedParts) of \(asset.parts.count) draws (the rest as items);")
+        }
+        var line = "\(title(entry)): \(label)"
         if let shaders = entry.approximations?.first(where: { $0.hasPrefix("shaders approximated") }) { line += "; \(shaders)" }
         return line + " · \(asset.triangles) triangles, \(asset.parts.count) draws"
     }
@@ -171,9 +185,17 @@ public final class SourceStudioMapAsset: @unchecked Sendable {
 
     public let url: URL
     public let parts: [Part]
+    /// Every texture the asset registered: base and emission images, lightmaps.
     public let textures: [TextureHandle]
-    /// Bytes the GPU allocated for the textures (RGBA8 with mips).
+    /// Bytes the GPU allocated for all of them (images RGBA8 with mips,
+    /// lightmaps as their bundle's BC blocks).
     public let textureBytes: Int
+    /// The lightmaps' share of `textureBytes`, and how many textures they are.
+    public let lightmapBytes: Int
+    public let lightmapTextures: Int
+    /// Parts drawn with their baked lightmap (`MaterialKindMap`); the others
+    /// keep the item toon material.
+    public let lightmappedParts: Int
     public let triangles: Int
     /// Wall time of `load` on its worker.
     public let loadSeconds: Double
@@ -181,8 +203,10 @@ public final class SourceStudioMapAsset: @unchecked Sendable {
     private let lock = NSLock()
     private var released = false
 
-    private init(url: URL, parts: [Part], textures: [TextureHandle], textureBytes: Int, loadSeconds: Double, resources: ResourceStore) {
+    private init(url: URL, parts: [Part], textures: [TextureHandle], textureBytes: Int, lightmapBytes: Int, lightmapTextures: Int,
+                 lightmappedParts: Int, loadSeconds: Double, resources: ResourceStore) {
         self.url = url; self.parts = parts; self.textures = textures; self.textureBytes = textureBytes
+        self.lightmapBytes = lightmapBytes; self.lightmapTextures = lightmapTextures; self.lightmappedParts = lightmappedParts
         self.triangles = parts.reduce(0) { $0 + $1.triangles }
         self.loadSeconds = loadSeconds; self.resources = resources
     }
@@ -194,9 +218,46 @@ public final class SourceStudioMapAsset: @unchecked Sendable {
     public static func load(url: URL, packageRoot: URL, resources: ResourceStore) throws -> SourceStudioMapAsset {
         let start = DispatchTime.now().uptimeNanoseconds
         let loaded = try LoadedAsset.loadStatic(url: url, packageRoot: packageRoot, resources: resources)
-        var textures: [Int: TextureHandle] = [:]
+        // Registration order, so a failure gives back everything at once.
+        var registered: [TextureHandle] = []
+        var images: [String: TextureHandle] = [:]
+        var lightmapHandles: [Int: (light: TextureHandle, direction: TextureHandle?)] = [:]
+        var lightmapHandleList: [TextureHandle] = []
         do {
             let gltf = loaded.asset
+            // ST-A11 slice 2: nil for an export without lightmaps (every part
+            // then keeps the item material).
+            let lightmaps = try SourceStudioLightmapSet.parse(gltf.extras, label: url.lastPathComponent)
+            let directory = url.deletingLastPathComponent()
+            /// Private (uncached) registration of one glTF image: the asset owns it.
+            func image(_ index: Int, srgb: Bool, material: String) throws -> TextureHandle {
+                let key = "\(index)#\(srgb)"
+                if let handle = images[key] { return handle }
+                guard gltf.images.indices.contains(index), !gltf.images[index].data.isEmpty else {
+                    throw RigError.invalid("\(url.lastPathComponent): material \(material) names a missing image.")
+                }
+                let handle = try resources.texture(data: gltf.images[index].data,
+                    key: "\(url.path)#map-img\(index)", srgb: srgb, cacheNew: false)
+                registered.append(handle)
+                images[key] = handle
+                return handle
+            }
+            func lightmap(_ entry: SourceStudioLightmapSet.Entry) throws -> (light: TextureHandle, direction: TextureHandle?) {
+                if let handles = lightmapHandles[entry.index] { return handles }
+                let light = resources.register(texture: try SourceStudioLightmapSet.upload(entry.light, directory: directory,
+                                                                                           device: resources.device))
+                registered.append(light); lightmapHandleList.append(light)
+                var direction: TextureHandle?
+                if let file = entry.direction {
+                    let handle = resources.register(texture: try SourceStudioLightmapSet.upload(file, directory: directory,
+                                                                                               device: resources.device))
+                    registered.append(handle); lightmapHandleList.append(handle)
+                    direction = handle
+                }
+                lightmapHandles[entry.index] = (light, direction)
+                return (light, direction)
+            }
+            var lightmapped = 0
             guard let mapNode = gltf.nodes.firstIndex(where: { $0.name == "Map" && $0.parent == nil }),
                   gltf.nodes[mapNode].extras?["ikkokuMapRole"]?.stringValue == Role.mapRoot.rawValue else {
                 throw RigError.invalid("\(url.lastPathComponent) is not a converted map: no root node \"Map\" with role mapRoot.")
@@ -228,31 +289,37 @@ public final class SourceStudioMapAsset: @unchecked Sendable {
                     }
                     visible.insert(number)
                 }
-                var base: TextureHandle?
-                if let image = part.material.baseColorImage {
-                    if let handle = textures[image] { base = handle } else {
-                        guard gltf.images.indices.contains(image), !gltf.images[image].data.isEmpty else {
-                            throw RigError.invalid("\(url.lastPathComponent): material \(part.materialName) names a missing image.")
-                        }
-                        // Private (uncached) registration: the asset owns it.
-                        let handle = try resources.texture(data: gltf.images[image].data,
-                            key: "\(url.path)#map-img\(image)", srgb: true, cacheNew: false)
-                        textures[image] = handle
-                        base = handle
+                let base = try part.material.baseColorImage.map { try image($0, srgb: true, material: part.materialName) }
+                let mesh = resources.mesh(part.mesh)
+                let indexCount = mesh?.indexCount ?? 0
+                var material = MaterialBuilder.itemMaterial(for: part, base: base)
+                let lightmapIndex = info["lightmapIndex"]?.doubleValue.flatMap { Int(exactly: $0) } ?? -1
+                if let lightmaps, lightmapIndex >= 0,
+                   let standard = try SourceStudioStandardInputs.parse(part.material.extras) {
+                    guard let entry = lightmaps.entries[lightmapIndex] else {
+                        throw RigError.invalid("\(url.lastPathComponent): mesh \(part.meshName) names lightmap \(lightmapIndex), which the map does not carry.")
                     }
+                    guard mesh?.carriesUV1 == true else {
+                        throw RigError.invalid("\(url.lastPathComponent): mesh \(part.meshName) is lightmapped but has no TEXCOORD_1.")
+                    }
+                    let handles = try lightmap(entry)
+                    let emission = try standard.emissionImage.map { try image($0, srgb: standard.emissionSRGB, material: part.materialName) }
+                    material = SourceStudioMapMaterial.make(part.material, standard: standard, base: base, emission: emission,
+                                                            lightmap: handles.light, direction: handles.direction,
+                                                            range: lightmaps.range, exponent: lightmaps.exponent)
+                    lightmapped += 1
                 }
-                let indexCount = resources.mesh(part.mesh)?.indexCount ?? 0
-                parts.append(Part(mesh: part.mesh, material: MaterialBuilder.itemMaterial(for: part, base: base),
+                parts.append(Part(mesh: part.mesh, material: material,
                                   local: part.worldMatrix, role: role, visibleFor: visible, triangles: indexCount / 3))
             }
-            let handles = textures.keys.sorted().compactMap { textures[$0] }
-            let bytes = handles.reduce(0) { $0 + (resources.texture($1)?.allocatedSize ?? 0) }
+            func bytes(_ handles: [TextureHandle]) -> Int { handles.reduce(0) { $0 + (resources.texture($1)?.allocatedSize ?? 0) } }
             let seconds = Double(DispatchTime.now().uptimeNanoseconds - start) / 1e9
-            return SourceStudioMapAsset(url: loaded.url, parts: parts, textures: handles, textureBytes: bytes,
-                                        loadSeconds: seconds, resources: resources)
+            return SourceStudioMapAsset(url: loaded.url, parts: parts, textures: registered, textureBytes: bytes(registered),
+                                        lightmapBytes: bytes(lightmapHandleList), lightmapTextures: lightmapHandleList.count,
+                                        lightmappedParts: lightmapped, loadSeconds: seconds, resources: resources)
         } catch {
             for part in loaded.parts { resources.unregister(mesh: part.mesh) }
-            for handle in textures.values { resources.unregister(texture: handle) }
+            for handle in registered { resources.unregister(texture: handle) }
             throw error
         }
     }

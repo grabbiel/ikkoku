@@ -995,7 +995,11 @@ Unknown plug-in values remain MessagePack values. Unknown trailers, malformed
 extensions and additional bytes are retained with diagnostics; they do not erase
 the base scene. This extension API provides data retention, not plugin execution.
 The bounded edited-original writer preserves those bytes; it does not dispatch
-plugin save callbacks or serialize arbitrary translated runtime fields.
+plugin save callbacks or serialize arbitrary translated runtime fields. An
+export that deletes, copies or adds objects, or adds or deletes route points,
+keeps or rewrites each entry by a rule recovered from its installed plug-in, or
+refuses and names the plug-in
+([plug-in data](scene-editing.md#plug-in-data-st-t03i)).
 
 The original import hook searches for the marker after the imported objects;
 the native document decoder instead parses the full known base format and reads
@@ -1104,8 +1108,10 @@ structure. It does not display thumbnails or instantiate scene content.
   edits are written too ([duplicates](scene-editing.md#duplicates-and-added-records-st-t03-st-s09-st-d03),
   [route editing](#route-editing)). Still missing:
   - new characters and items;
-  - the refused topology cases (item, route and accessory attachment, and
-    deletion in scenes that carry plug-in data);
+  - the refused topology cases (item, route and accessory attachment);
+  - edits whose plug-in data has no recovered rule, and the rewrite of KKPE,
+    non-empty NodesConstraints and MaterialEditor data, which are refused
+    ([plug-in data](scene-editing.md#plug-in-data-st-t03i));
   - GUID-specific plugin callbacks and save adapters that preserve source
     identities (`ST-T03`, `ST-T13`).
 
