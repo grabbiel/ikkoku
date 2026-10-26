@@ -89,18 +89,23 @@ func sourceScenePluginDataPerformance() throws {
         try pluginPerfExport("fixture C duplicate character (card patch)", fixtureC, .init(insertions: [.init(.duplicate(of: 16))]))
         try pluginPerfExport("fixture C move", fixtureC, .init(reparents: [.init(object: 5, parent: 0)]))
     }
-    // A large installed scene with KKPE data: a delete, a copy and a move of
-    // its highest-keyed root item without children (refused ones are timed to
-    // the refusal).
+    // A large installed scene with KKPE data: a delete, a copy and a move to
+    // the root of its highest-keyed item without children that sits at the
+    // root or in a folder (refused ones are timed to the refusal).
     if let path = pluginPerfEnvironment["IKKOKU_PLUGIN_SCENE_LARGEST"], !path.isEmpty {
         let data = try Data(contentsOf: URL(fileURLWithPath: path))
         let large = try KoikatsuSceneReader.decodeDocument(data)
-        let items = large.snapshot.roots.filter { $0.kind == .item && $0.children.isEmpty }.map(\.sourceKey).sorted()
-        let folder = large.snapshot.roots.first { $0.kind == .folder }?.sourceKey
-        print("[plugin-perf] large scene: \(data.count) B, \(large.snapshot.roots.count) roots, \(large.trailingData.count) B of plug-in data")
-        let item = try #require(items.last)
+        var items: [Int32] = [], objects = 0
+        func visit(_ record: KoikatsuObjectRecord, inFolder: Bool) {
+            objects += 1
+            if record.kind == .item, record.children.isEmpty, inFolder { items.append(record.sourceKey) }
+            for child in record.children { visit(child, inFolder: record.kind == .folder) }
+        }
+        for root in large.snapshot.roots { visit(root, inFolder: true) }
+        print("[plugin-perf] large scene: \(data.count) B, \(objects) objects, \(large.trailingData.count) B of plug-in data")
+        let item = try #require(items.max())
         try pluginPerfExport("large delete item", large, .init(deletions: [item]))
         try pluginPerfExport("large duplicate item", large, .init(insertions: [.init(.duplicate(of: item))]))
-        if let folder { try pluginPerfExport("large move", large, .init(reparents: [.init(object: item, parent: folder)])) }
+        try pluginPerfExport("large move item to the root", large, .init(reparents: [.init(object: item, parent: nil)]))
     }
 }
