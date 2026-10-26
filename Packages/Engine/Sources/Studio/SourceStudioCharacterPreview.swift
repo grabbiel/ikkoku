@@ -474,6 +474,12 @@ public final class SourceStudioCharacterPreview {
         let options = try SourceMakerAssemblyOptions.body(sex: identity.sex, exType: identity.exType, boneType: identity.boneType, correctionData: correctionData)
         let shared = donor.flatMap { $0.reference == reference && $0.coordinate == coordinate && $0.resources == ObjectIdentifier(resources)
             && $0.rigURL == rigURL && $0.directory == directory ? $0 : nil }
+        // R7 phase 2 item 6 follow-up: start every rig decode this card
+        // selects at once; the preparation below finds each one finished or
+        // in flight instead of running them one after another.
+        if shared == nil, let library, let rigs, rigs.prefetches {
+            rigs.prefetch(library.rigFiles(card: card, coordinate: coordinate, baseURL: rigURL, wear: true))
+        }
         let prepared = try shared.map { $0.prepared } ?? library.map { library in
             try rigs.map { try library.prepare(card: card, coordinate: coordinate, baseURL: rigURL, wear: true, sharing: $0) }
                 ?? library.prepare(card: card, coordinate: coordinate, baseURL: rigURL, wear: true)

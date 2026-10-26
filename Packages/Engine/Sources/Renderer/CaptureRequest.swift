@@ -443,6 +443,10 @@ extension CaptureRequest {
         ScopedOption("IKKOKU_PERF_DEFORM_REUSE", [.perfTrace]),
         ScopedOption("IKKOKU_PERF_LIVE_PACING", [.perfTrace]),
         ScopedOption("IKKOKU_PERF_BURST_LIVE", [.perfTrace]),
+        ScopedOption("IKKOKU_PERF_ACTION_KEY", [.perfTrace]),
+        ScopedOption("IKKOKU_PERF_RIG_PREFETCH", [.perfTrace]),
+        ScopedOption("IKKOKU_PERF_DONATIONS", [.perfTrace]),
+        ScopedOption("IKKOKU_PERF_INSTALL_REFRESH", [.perfTrace]),
     ]
 
     /// Options read only by the window capture.
@@ -569,6 +573,12 @@ extension CaptureRequest {
         // `studio-orbit-bursts` with live animation on.
         ValueRule("IKKOKU_PERF_LIVE_PACING", .oneOf(["display", "timer"])),
         ValueRule("IKKOKU_PERF_BURST_LIVE", .oneOf(["on", "off"])),
+        // The source key of the object `studio-duplicate` and
+        // `studio-undo-delete` act on (R7 phase 2, item 6 follow-up).
+        ValueRule("IKKOKU_PERF_ACTION_KEY", .integer(0...Int(Int32.max))),
+        ValueRule("IKKOKU_PERF_RIG_PREFETCH", .oneOf(["on", "off"])),
+        ValueRule("IKKOKU_PERF_DONATIONS", .oneOf(["on", "off"])),
+        ValueRule("IKKOKU_PERF_INSTALL_REFRESH", .oneOf(["step", "each"])),
     ]
 
     /// `IKKOKU_PERF_WORKLOAD` values, in the order `docs/reference/performance.md` lists them.

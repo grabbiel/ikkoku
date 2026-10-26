@@ -271,3 +271,31 @@ func sourceMaterialClothesFailedViewReleasesPrivateOutputAfterCompletion() throw
     #expect(weakOutput.value == nil)
     #expect(fixture.resources.statistics().textures == baseline)
 }
+
+/// R7 phase 2 item 6 follow-up: compositors share one command queue per
+/// device, and a composition through either gives the same bytes.
+@Test(.enabled(if: MTLCreateSystemDefaultDevice() != nil))
+func sourceMaterialCompositorsShareOneQueueAndComposeTheSameBytes() throws {
+    let device = try #require(MTLCreateSystemDefaultDevice())
+    let first = try SourceMaterialCompositor(device: device), second = try SourceMaterialCompositor(device: device)
+    #expect(first.queue === second.queue)
+    let width = 8, height = 4
+    let main = SourceMaterialImage(width: width, height: height, repeating: false,
+                                   bytes: (0..<(width * height * 4)).map { UInt8(($0 * 37) % 256) })
+    let mask = SourceMaterialImage(width: width, height: height, repeating: false,
+                                   bytes: (0..<(width * height * 4)).map { UInt8(($0 * 11 + 5) % 256) })
+    func compose(_ compositor: SourceMaterialCompositor) throws -> [UInt8] {
+        let batch = try compositor.makeBatch(maximumLogicalInputBytes: 1 << 20, timings: nil)
+        try batch.prepare(kind: .clothes, width: width, height: height, main: main, mask: mask,
+                          colors: [Float4(0.8, 0.2, 0.1, 1), Float4(0.1, 0.6, 0.3, 1), Float4(0.2, 0.3, 0.9, 1)],
+                          blend: 0.5, encodeSRGB: true, patterns: [], layers: [])
+        let output = try #require(try batch.complete().first)
+        var bytes = [UInt8](repeating: 0, count: width * height * 4)
+        bytes.withUnsafeMutableBytes {
+            output.getBytes($0.baseAddress!, bytesPerRow: width * 4, from: MTLRegionMake2D(0, 0, width, height), mipmapLevel: 0)
+        }
+        return bytes
+    }
+    let a = try compose(first), b = try compose(second)
+    #expect(a == b && a.contains { $0 != 0 })
+}
