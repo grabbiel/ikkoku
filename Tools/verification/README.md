@@ -291,8 +291,9 @@ makes, and checks that the highlighted axis is that of the last position, as
 the synchronous pick reads it, both in the model and in the frame's
 highlighted gizmo batches; the pick counters must show the coalesced moves
 and the dropped stale results),
-`backgroundBuild` `{build:"import"|"importTwice"|"importThenNewScene"|"importWhileHidden"}`
-or `{build:"duplicate"|"duplicateWhileHidden"|"duplicateRoute"|"duplicateRouteWhileHidden",key}` (R7 phase 2, item 6: interactive runs build source
+`backgroundBuild` `{build:"import"|"importTwice"|"importThenNewScene"|"importWhileHidden"|"loadRoute"}`
+or `{build:"duplicate"|"duplicateWhileHidden"|"duplicateRoute"|"duplicateRouteWhileHidden"|"outfit"|"outfitWhileHidden"|"export",key}`
+(`export` and `loadRoute` also take a `path` under `.local/verification/scenario-exports/`) (R7 phase 2, item 6: interactive runs build source
 characters off the main thread, while scenarios build them synchronously. The
 op runs the operation synchronously first, then with background builds through
 the app's own methods, pumps the main run loop until no import or character
@@ -307,7 +308,26 @@ least one character in the background. `duplicateRoute` duplicates the keyed
 route with its character: the synchronous Duplicate, Undo and Redo are the
 reference for the background ones, the Duplicate must build no route
 character preview on the main thread, and a Duplicate undone before its copy's
-build lands must leave nothing pending and match the synchronous Undo. The `WhileHidden` builds hide the
+build lands must leave nothing pending and match the synchronous Undo; the
+Redo must build no route character preview on the main thread either.
+`outfit` (third part) selects the keyed character's next outfit through the
+Clothes tab's picker (`selectSourceOutfit`; the card must save three): until
+the build lands the character keeps its outfit and the picker shows the one
+chosen; then it must match the synchronous selection with one undo step, and
+its Undo the synchronous Undo. Superseded selections must install once,
+choosing the shown outfit again must drop the build, and an Undo during a
+build must drop it. `export` saves and reloads the scene as a native
+document, so the keyed character (hidden, with a face edit, by the steps
+before) has no preview; the background export must start in the background,
+leave the document and render unchanged and write the synchronous export's
+bytes; an edit while its baselines build must fail it with a scene-changed
+error, and a load must cancel it with a replacement error, each writing
+nothing (the op removes every file it wrote).
+`loadRoute` saves the scene as a native document to `path` and loads it over
+New Scene: the synchronous Load, Undo and Redo are the reference, the Load
+and Redo must build no route character preview on the main thread, and an
+Undo, or a second Load, before the route characters land must match too with
+nothing left pending. The `WhileHidden` builds hide the
 Studio while the builds land, as a switch to the Maker does, with an empty
 frame standing in for the Maker's on the shared renderer: that frame must
 still be current when the Studio shows again and refreshes. Live animation is

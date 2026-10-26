@@ -28,7 +28,7 @@ extension StudioModel {
     func stopSourceVoice(_ id: UUID) { sourceVoicePlayers.removeValue(forKey: id)?.dispose() }
     func stopSourceVoices() {
         for player in sourceVoicePlayers.values { player.dispose() }
-        sourceVoicePlayers.removeAll(); sourceAudioBus.stopOutput()
+        sourceVoicePlayers.removeAll(); stopSourceAudioOutput()
     }
     func pruneSourceVoices() {
         let ids = Set(doc.objects.filter { $0.sourceCharacter != nil }.map(\.id))
