@@ -106,12 +106,88 @@ class MaterialTests(unittest.TestCase):
         self.assertTrue(contract['unlit'] and contract['vertexColor'] and contract['doubleSided'])
 
     def test_unmapped_shaders_fail_by_name_and_mapped_ones_list_their_dropped_terms(self):
-        with self.assertRaisesRegex(ValueError, "Legacy Shaders/Diffuse"):
-            maps.map_material_contract('Legacy Shaders/Diffuse', {}, {}, [])
+        with self.assertRaisesRegex(ValueError, "Legacy Shaders/Transparent/Diffuse"):
+            maps.map_material_contract('Legacy Shaders/Transparent/Diffuse', {}, {}, [])
         contract = maps.map_material_contract('Standard', {}, {}, [])
         self.assertEqual(contract['shaderParity'], 'approximated')
         self.assertIn('normal maps', contract['dropped'])
         self.assertIsNot(contract['dropped'], maps.MAP_SHADER_RULES['Standard']['dropped'])
+
+    def test_slice_four_contracts_take_both_faces_from_the_serialized_cull(self):
+        color = {'_Color': [0.5, 0.25, 1.0, 0.5], '_TintColor': [0.5, 0.5, 0.5, 0.5]}
+        double = maps.map_material_contract('Custom/StandardDouble', color, {}, [], cull='Off')
+        self.assertEqual((double['baseColorFactor'], double['alphaMode'], double['doubleSided']), ([0.5, 0.25, 1.0, 1], 'OPAQUE', True))
+        legacy = maps.map_material_contract('Legacy Shaders/Diffuse', color, {}, [], cull='Back')
+        self.assertEqual((legacy['baseColorFactor'], legacy['alphaMode'], legacy['doubleSided']), ([0.5, 0.25, 1.0, 1], 'OPAQUE', False))
+        unlit = maps.map_material_contract('Unlit/Transparent', color, {}, [], cull='Back')
+        self.assertEqual((unlit['baseColorFactor'], unlit['alphaMode'], unlit['unlit'], unlit['shaderParity']), ([1, 1, 1, 1], 'BLEND', True, 'verified'))
+        anim = maps.map_material_contract('Particles/Anim Alpha Blended', color, {}, [], cull='Off')
+        self.assertEqual(anim['baseColorFactor'], [1.0, 1.0, 1.0, 1.0])
+        self.assertTrue(anim['vertexColor'] and anim['doubleSided'])
+        mob = maps.map_material_contract('Custom/Silhouette', color, {}, [], cull='Back')
+        self.assertEqual((mob['baseColorFactor'], mob['alphaMode'], mob['doubleSided']), ([0.0, 0.0, 1.0, 0.5], 'BLEND', False))
+        item = maps.map_material_contract('Shader Forge/main_item', color, {}, [], cull='Off')
+        self.assertEqual((item['alphaMode'], item['doubleSided'], item['shaderParity']), ('OPAQUE', True, 'approximated'))
+        with self.assertRaisesRegex(ValueError, 'Cull'):
+            maps.map_material_contract('Unlit/Transparent', color, {}, [])
+        self.assertEqual(maps.legacy_diffuse_inputs({'_Color': [1.0, 0.5, 0.0, 0.5]}),
+                         {'albedoLinear': [1.0, maps.gamma_to_linear_exact(0.5), 0.0, 0.5], 'oneMinusReflectivity': 1.0})
+
+    def test_skipped_shaders_are_not_mapped_and_every_class_has_a_reason(self):
+        self.assertFalse(set(maps.MAP_SKIPPED_SHADERS) & set(maps.MAP_SHADER_RULES))
+        self.assertEqual(set(maps.MAP_SKIPPED_SHADERS.values()), set(maps.MAP_SKIPPED_REASONS))
+
+
+class ShaderStateTests(unittest.TestCase):
+    """Slice 4: render state from the serialized parsed form, and the SM4 reader the silhouette check uses."""
+    @staticmethod
+    def value(val, name='<noninit>'):
+        return SimpleNamespace(val=val, name=name)
+
+    def shader(self, passes):
+        def state(cull, zwrite, ztest, blend, mask, lightmode=''):
+            tags = SimpleNamespace(tags=[('LIGHTMODE', lightmode)] if lightmode else [])
+            rt = SimpleNamespace(srcBlend=blend[0], destBlend=blend[1], srcBlendAlpha=blend[2], destBlendAlpha=blend[3], colMask=mask)
+            return SimpleNamespace(m_State=SimpleNamespace(m_Name='', m_Tags=tags, culling=cull, zWrite=zwrite, zTest=ztest, rtBlend0=rt),
+                                   m_Name='')
+        sub = SimpleNamespace(m_LOD=300, m_Tags=SimpleNamespace(tags=[('QUEUE', 'Transparent')]), m_Passes=[state(*p) for p in passes])
+        return SimpleNamespace(m_ParsedForm=SimpleNamespace(m_SubShaders=[sub]))
+
+    def test_constants_and_property_bindings_resolve_to_named_state(self):
+        v = self.value
+        shader = self.shader([(v(2.0), v(0.0, '_ZWrite'), v(4.0), [v(5.0), v(10.0), v(1.0, '_SrcBlend'), v(0.0)], v(14.0), 'FORWARDBASE')])
+        states = maps.pass_states(shader, {'_ZWrite': 1.0, '_SrcBlend': 5.0})
+        self.assertEqual(states, [{'lod': 300, 'tags': {'QUEUE': 'Transparent'}, 'passes': [
+            {'name': '', 'lightMode': 'FORWARDBASE', 'cull': 'Back', 'zWrite': 1, 'zTest': 'LEqual',
+             'blend': ['SrcAlpha', 'OneMinusSrcAlpha', 'SrcAlpha', 'Zero'], 'colorMask': 'RGB'}]}])
+        self.assertEqual(maps.pass_states(shader)[0]['passes'][0]['zWrite'], '[_ZWrite]')
+        self.assertEqual(maps.color_mask_name(0), '0')
+        self.assertEqual(maps.color_mask_name(15), 'RGBA')
+
+    def test_forward_passes_are_forwardbase_else_every_always_pass(self):
+        v = self.value
+        blend = [v(1.0), v(0.0), v(1.0), v(0.0)]
+        base = self.shader([(v(2.0), v(1.0), v(4.0), blend, v(15.0), 'FORWARDBASE'), (v(2.0), v(0.0), v(4.0), blend, v(15.0), 'FORWARDADD')])
+        self.assertEqual([p['lightMode'] for p in maps.forward_passes(maps.pass_states(base))], ['FORWARDBASE'])
+        always = self.shader([(v(2.0), v(1.0), v(4.0), blend, v(0.0)), (v(0.0), v(0.0), v(4.0), blend, v(15.0))])
+        self.assertEqual([p['cull'] for p in maps.forward_passes(maps.pass_states(always))], ['Back', 'Off'])
+        self.assertEqual(maps.forward_passes(None), [])
+
+    @staticmethod
+    def dxbc(tokens):
+        import struct
+        body = struct.pack(f'<{len(tokens) + 2}I', 0x40, len(tokens) + 2, *tokens)
+        chunk = b'SHDR' + struct.pack('<I', len(body)) + body
+        header = b'DXBC' + bytes(16) + struct.pack('<III', 1, 32 + 4 + len(chunk), 1) + struct.pack('<I', 36)
+        return b'\x00' * 6 + header + chunk
+
+    def test_sm4_reader_decodes_a_constant_copy(self):
+        # mov o0.xyzw, cb0[2].xyzw; ret: an output with a write mask, a constant buffer with a swizzle.
+        dest, source = 2 | (0xF << 4) | (2 << 12) | (1 << 20), 2 | (1 << 2) | (0xE4 << 4) | (8 << 12) | (2 << 20)
+        program = self.dxbc([0x36 | (6 << 24), dest, 0, source, 0, 2, 0x3E | (1 << 24)])
+        self.assertEqual(maps.sm4_instructions(program), [('mov', ['o0.xyzw', 'cb0[2].xyzw']), ('ret', [])])
+        with self.assertRaisesRegex(ValueError, 'SHDR'):
+            maps.sm4_instructions(b'DXBC' + bytes(16) + bytes(12) + bytes(0))
 
 
 class StandardInputTests(unittest.TestCase):
@@ -169,8 +245,15 @@ class LightmapFileTests(unittest.TestCase):
                                  "mipCount": 4, "srgb": True, "bytes": 80, "sha256": hashlib.sha256(data).hexdigest()})
         with self.assertRaisesRegex(ValueError, "needs 80"):
             maps.lightmap_file_entry(self.RECORD, "f", data[:-1])
-        with self.assertRaisesRegex(ValueError, "not a block format"):
-            maps.lightmap_file_entry(dict(self.RECORD, textureFormat=4), "f", data)
+        with self.assertRaisesRegex(ValueError, "not a format the app uploads"):
+            maps.lightmap_file_entry(dict(self.RECORD, textureFormat=3), "f", data)
+        # Slice 4: RGBA32 lightmaps, four bytes a texel at every level.
+        raw = bytes(range(172))
+        self.assertEqual(maps.raw_level_bytes(8, 4, 4, 4), [128, 32, 8, 4])
+        rgba = maps.lightmap_file_entry(dict(self.RECORD, textureFormat=4), "lightmap-0-light.rgba8", raw)
+        self.assertEqual((rgba["format"], rgba["bytes"]), ("RGBA8", 172))
+        with self.assertRaisesRegex(ValueError, "needs 172"):
+            maps.lightmap_file_entry(dict(self.RECORD, textureFormat=4), "f", raw[:-4])
         self.assertEqual(maps.lightmap_file_entry(dict(self.RECORD, textureFormat=10, colorSpace=0), "f", data[:40])["format"], "BC1")
 
     def test_extras_name_the_mode_encoding_and_row_order(self):
@@ -336,13 +419,33 @@ class CatalogTests(unittest.TestCase):
         # Particles and the cube sky are drawn by their formulas (slice 3): not listed as approximated.
         self.assertEqual(maps.approximations(dict(drawn, shaders=["Particles/Alpha Blended", "Skybox/Cubemap", "Standard"])),
                          maps.approximations(drawn))
-        self.assertEqual(maps.approximations(dict(drawn, shaders=["Legacy Shaders/Diffuse", "Standard"]))[-1],
-                         "shaders approximated (Legacy Shaders/Diffuse)")
+        self.assertEqual(maps.approximations(dict(drawn, shaders=["Shader Forge/main_item", "Standard"]))[-1],
+                         "shaders approximated (Shader Forge/main_item)")
+        # Slice 4: drawn by their formulas too.
+        for shader in ("Legacy Shaders/Diffuse", "Unlit/Transparent", "Particles/Anim Alpha Blended", "Custom/Silhouette"):
+            self.assertEqual(maps.approximations(dict(drawn, shaders=[shader, "Standard"])), maps.approximations(drawn), shader)
         probes = dict(drawn, lightmapCoverage={"unlightmappedStandardRenderers": 37})
         self.assertEqual(maps.approximations(probes)[-1], "light probes (37 Standard renderers without a lightmap drawn as items)")
         self.assertEqual(maps.approximations({'droppedTerms': ['x'], 'shaders': ['Standard']})[-1], 'shaders approximated (Standard)')
         self.assertEqual(maps.approximations({'droppedTerms': ['x'], 'shaders': ['Skybox/Cubemap', 'Standard']})[-1],
                          'shaders approximated (Standard)')
+        # Without lightmaps the Standard family is drawn as items; particles keep their formulas.
+        unlit = {'droppedTerms': ['x'], 'shaders': ['Custom/StandardDouble', 'Particles/Anim Alpha Blended', 'Shader Forge/main_item',
+                                                    'Standard', 'Unlit/Transparent']}
+        self.assertEqual(maps.approximations(unlit)[-1], 'shaders approximated (Custom/StandardDouble, Shader Forge/main_item, Standard)')
+        self.assertEqual(maps.approximations({'droppedTerms': ['x'], 'shaders': ['Particles/Alpha Blended']}),
+                         ['no baked lightmaps', 'map lights', 'sun-type lighting', 'fog', 'ambient'])
+
+    def test_not_drawn_lists_skipped_classes_by_renderer_then_components(self):
+        provenance = {'skipped': [{'path': 'Map/a', 'reason': 'mirror', 'shader': 'FX/MirrorReflection_Transparent'},
+                                  {'path': 'Map/b', 'reason': 'stage effects', 'shader': 'Shader Forge/spotLaser'},
+                                  {'path': 'Map/b', 'submesh': 1, 'reason': 'stage effects', 'shader': 'Shader Forge/spotLight_glow'},
+                                  {'path': 'Map/c', 'reason': 'stage effects', 'shader': 'UnlitMosaicTextureShader'},
+                                  {'path': 'Map/d', 'reason': 'disabled renderer'}],
+                      'notDrawn': {'components': {'skinned renderers': 4, 'animated objects (drawn in their authored pose)': 2}}}
+        self.assertEqual(maps.not_drawn_notes(provenance), ['mirror (1 renderer)', 'stage effects (2 renderers)',
+                                                            '2 animated objects (drawn in their authored pose)', '4 skinned renderers'])
+        self.assertEqual(maps.not_drawn_notes({}), [])
 
     def test_gpu_bytes_counts_rgba8_with_a_full_mip_chain(self):
         self.assertEqual(maps.gpu_bytes(4, 2), 4 * 2 * 4 + 2 * 1 * 4 + 1 * 1 * 4)
