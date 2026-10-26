@@ -1421,6 +1421,21 @@ existing `create_head` program; original pixels are comparison data only. This
 does not add a live material slot: live resolution, default-off output and
 Release costs remain separate acceptance checks.
 
+### Live-frame gate inputs
+
+`liveSourceShadersMeetTheControlledOriginalFrameGates` pins one exact native
+store: 62 entries, five creator programs, no unavailable entries, and canonical
+content `b9ae136b…`. It reads that store from
+`IKKOKU_LIVE_SOURCE_GATE_TEXTURES` and its paired head contract from
+`IKKOKU_LIVE_SOURCE_GATE_HEAD_CONTRACT` (both files, optional in
+`private-source.json`). The live path's own `IKKOKU_LIVE_SOURCE_TEXTURES` and
+`IKKOKU_HEAD_MATERIAL_CONTRACT` stay free to name newer stores: the cheek gate
+needs the cheek asset from the 63-entry store, which this gate's pinned count
+and hash reject. Both gate keys name the retained ordinary-body inputs (`textures/manifest.json`
+and `head-materials/contract.json` under the body slice's
+`retained-native-inputs/`); see [the #188 correction](../../docs/reference/renderer.md#cause-and-correction-cross-primitive-derivative-quads-2026-10-25).
+The gate's bounds, counts and hash are unchanged.
+
 ### Selected skirt dynamics fixtures
 
 The private Engine suite additionally accepts `IKKOKU_SKIRT_DYNAMICS_FIXTURE`,

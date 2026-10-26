@@ -1229,7 +1229,9 @@ and the plugin session. Before, a 30 Hz `Timer` on the main run loop started
 it, at whatever phase it had against the display. A step whose frame was
 submitted near a callback went to that callback or the next, so frames due
 4 vsyncs apart at 120 Hz came 3 and 5 apart, 0–15 times a second depending
-on that phase ([attribution](performance.md#attribution)). The parts:
+on that phase ([attribution](performance.md#attribution)). The Maker
+viewport's link starts the Maker's idle step the same way (R7h2): blink,
+breathing, the original preview's idle clip and hair dynamics. The parts:
 
 - `LiveStepPacer` (Renderer, plain data) decides which callbacks ask for a
   step. A step is due 1/30 s after the previous one, in target-presentation
@@ -1270,25 +1272,81 @@ on that phase ([attribution](performance.md#attribution)). The parts:
     thread's `resumePacing` returns the link to full rate if it was
     parked, so the next callback asks within a vsync. Play or Live waits
     at most about 1/30 s for its first step, as with the timer.
+- `MakerModel.displayStep` (`LivePacedHandler`) likewise does what the
+  Maker timer's tick did, minus the status line. With an original preview
+  it updates the blink and advances the idle clip and hair dynamics
+  (`advanceSourceMotion`). With the bundled character it updates blink and
+  breathing and calls `stepHairDynamics(dt: 1/30)`. It then refreshes when
+  something moved. The step is synchronous, so it is never `.busy`. It
+  answers `.ran` while the live animation is on in Maker mode
+  (`hasLiveStepWork`) and `.idle` otherwise. The Maker timer polls the
+  status line. While `hasLiveStepWork` holds, it resumes the pacer on every
+  tick: a resume of a pacer that is not parked changes nothing. Otherwise it
+  moves the step clock to now, as its tick did, so the first step after a
+  pause advances by about one interval. The answer and the resume use the
+  same predicate. A paused Maker therefore costs one `.idle` request, and
+  resume never wakes the link while nothing steps.
 
-**Attach and detach.** `ViewportNSView` paces only a handler that is a
-`LivePacedHandler`; the Maker's is not, so its link sends no requests and
-its own timer is unchanged. When the render thread starts, the view calls
-`attachLivePacing(self)`, and from then on `StudioModel.tick` only polls the
-status line and resumes a parked pacer. `stopRendering` and a handler change call `detachLivePacing`,
-and the timer steps again. The model holds the view weakly, so a view
-released without detaching also hands the step back to the timer.
+**Attach and detach.** `ViewportNSView` paces a handler that is a
+`LivePacedHandler`: the Studio and the Maker. When the render thread starts,
+the view calls `attachLivePacing(self)`. From then on the model's `tick` only
+polls the status line and resumes a parked pacer. `stopRendering` and a
+handler change call `detachLivePacing`, and the timer steps again. The model
+holds the view weakly, so a view released without detaching also hands the
+step back to the timer.
+
+**Studio and Maker.** Each mode owns its viewport, and `ContentView` shows
+one at a time. A mode switch sets both models' `isActiveMode` and replaces
+the viewport. The old viewport leaves the window, so `stopRendering` detaches
+its model. That model's timer takes the step back and steps nothing, because
+its mode is not active. A request still in flight from the old thread
+answers `.idle` without stepping. The new viewport's render thread attaches
+the other model, and its new pacer asks at its first callback. One link
+paces at a time, so the steps stay 30 a second across a switch.
+`viewport-lifecycle` records, before each of its steps and at the end:
+- the mode;
+- the models whose viewports render (SwiftUI dismantles a viewport before
+  it removes it from the window);
+- which models have live work;
+- which models a link paces;
+- each model's paced-step count.
+
+`perf_trace` warns in these cases:
+- two models are paced at once, or a model whose viewport does not render
+  is;
+- once the viewport has switched to the active mode, a model other than the
+  active one is paced;
+- the inactive model ran paced steps;
+- a model with live work ran no paced step after a switch to it, once its
+  viewport was in place.
+
+Under the timer control, no model may be paced. A main thread as slow as
+ThreadSanitizer's can record a step before SwiftUI replaces the viewport.
+The old viewport's model is then still paced, answering `.idle`, or no model
+is. The summary line names those steps.
 
 **Hidden, minimized, another mode.** `setVisible(false)` also tells the
 pacer, and no callback asks while the window is hidden. On visible again, the
 next callback asks at once, unless the pacer is parked. A Studio that is not
 the active mode answers `.idle`, and its timer resumes nothing until it is
-active again.
+active again. The Maker's timer kept stepping while the window was hidden;
+the paced Maker does not. Its first step after a restore advances by the
+hidden time. The original preview's hair caps a step at 3 sub-steps, so the
+hair settles instead of catching up.
 
 **What does not change.**
 
-- Every step advances the clock by exactly 1/30 s, and steps never overlap
-  or queue (#149's leases).
+- Every Studio step advances its clock by exactly 1/30 s, and steps never
+  overlap or queue (#149's leases).
+- A Maker step advances the original preview by the time since its previous
+  step, and blink and breathing follow the clock, as before. The steps start
+  about 1/30 s apart, as the timer's did, but on the vsync grid.
+- Maker scenarios and captures step through `advanceSourceMotion` and
+  `stepHairDynamics` directly, or run without a viewport. They stay
+  deterministic.
+- The Maker still steps during an orbit drag. Like its timer, the request
+  runs in the default run-loop mode, so no step runs during AppKit event
+  tracking.
 - The scenario runner's `advance` (`advanceLiveFrame`) and `editDuringAdvance`
   do not go through the link. They complete any step in flight, start one,
   and complete it, as before.
@@ -1307,9 +1365,9 @@ after its callback. Cadence was the same.
 **Concurrency.** The pacer, like the rate policy, is read and written only
 under `control`. The request block captures the thread object. The block
 runs `pacedStep` through `MainActor.assumeIsolated` on the main queue's run
-loop. No lock is held while the model steps. Only the Studio viewport's
-render-thread callbacks ask: a callback delivered on the main thread draws
-but leaves the pacer alone.
+loop. No lock is held while the model steps. Only render-thread callbacks
+ask: a callback delivered on the main thread draws but leaves the pacer
+alone.
 
 **Measurement controls.** `IKKOKU_PERF_LIVE_PACING=timer` gives the view no
 `pacedStep`, so the timer steps as before. Schema 7 reports record each
@@ -1317,7 +1375,8 @@ request (`samples.paces`: asked, started, target and answer), the `pacing`
 summary and a `cadence` histogram of presented and target intervals and
 lateness, in display periods. `studio-timeline` plays a keyed timeline in the
 native scene, and `IKKOKU_PERF_BURST_LIVE=on` plays the live animation during
-`studio-orbit-bursts`.
+`studio-orbit-bursts`. `maker-idle` and `maker-slider` cover the Maker, and
+`viewport-lifecycle` covers the hand-over.
 
 **Tests.** `LiveStepPacerTests` covers:
 
@@ -1329,7 +1388,10 @@ native scene, and `IKKOKU_PERF_BURST_LIVE=on` plays the live animation during
 - busy skips, parking after an idle answer, `resume` and one request in
   flight;
 - stale answers;
-- a hidden window and a long gap.
+- a hidden window and a long gap;
+- the Maker's timer resuming on every tick while there is work, which keeps
+  the grid; a pause costs one request;
+- a Studio/Maker switch handing the step to the new viewport's pacer.
 
 The same tests pass under ThreadSanitizer. The app ran under
 ThreadSanitizer with 0 warnings ([performance](performance.md#correctness-of-live-pacing)).
@@ -5160,6 +5222,20 @@ below are three processes each (before: `51dff596…` on `74cee1c`; after:
 Families move in both directions inside unchanged bounds; this is not a new
 parity claim. The gate ran with the retained 62-entry store and head contract
 under `.local/codex-continue-2026-10-24/rolling/materials-body/retained-native-inputs/`.
+
+**Gate inputs (2026-10-26).** The shared fixture map never held that pair.
+Its `IKKOKU_LIVE_SOURCE_TEXTURES` still named the 52-entry normal-top store
+(`textures-bc1`, three creators, promoted 2026-10-24), and its head contract
+lacks the body rows and `create_body`. So the gate failed on `main` at the
+store count, composites, content hash, the live set, fallbacks and composite
+events. The cheek gate needs the 63-entry store's cheek asset, which this
+gate's pinned count and hash reject, so one key cannot serve both. The gate
+now reads its store from `IKKOKU_LIVE_SOURCE_GATE_TEXTURES` (manifest
+`1b89b908…`) and its contract from `IKKOKU_LIVE_SOURCE_GATE_HEAD_CONTRACT`
+(`a02b6d35…`), both under the retained directory above. The live path and the
+other composite gates keep the existing keys. Bounds, counts and the content
+hash are unchanged. On `e7085c3` plus this change, the gate reproduces every
+value in the "After" column above, including content `b9ae136b…`.
 
 **Cost (measured, Release, quiet machine).** A private timing mode encodes the
 controlled frame's deform and live-input compute in one command buffer and its

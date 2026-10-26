@@ -768,19 +768,26 @@ func liveSourceTextureStoreKeysUploadsByEveryMipAndUsesVerifiedBuffers() throws 
 /// capture's view) and checks it with the comparator's gates. Capture pixels
 /// stand in for textures (VALIDATION provider); the native store result is
 /// checked separately below.
+///
+/// The store half pins one exact retained store (62 entries, five creators,
+/// content `b9ae136b…`) and its paired head contract. They come from
+/// `IKKOKU_LIVE_SOURCE_GATE_TEXTURES` and `IKKOKU_LIVE_SOURCE_GATE_HEAD_CONTRACT`,
+/// not from the live path's `IKKOKU_LIVE_SOURCE_TEXTURES` and
+/// `IKKOKU_HEAD_MATERIAL_CONTRACT`: later composite gates need larger stores
+/// from those keys, and this gate must not move with them.
 @Test(.enabled(if: SourceFixtureSupport.shouldRun(["IKKOKU_SHADER_BINDING_PROBE", "IKKOKU_SOURCE_AVATAR", "IKKOKU_MAKER_LIBRARY",
-    "IKKOKU_HEAD_MATERIAL_CONTRACT", "IKKOKU_SHADER_BINDING_SUPPLEMENT", "IKKOKU_STUDIO_HAND_POSE", "IKKOKU_STUDIO_LOOK_SETTINGS",
-    "IKKOKU_LIVE_SOURCE_STREAMS", "IKKOKU_LIVE_SOURCE_TEXTURES"])))
+    "IKKOKU_LIVE_SOURCE_GATE_HEAD_CONTRACT", "IKKOKU_SHADER_BINDING_SUPPLEMENT", "IKKOKU_STUDIO_HAND_POSE", "IKKOKU_STUDIO_LOOK_SETTINGS",
+    "IKKOKU_LIVE_SOURCE_STREAMS", "IKKOKU_LIVE_SOURCE_GATE_TEXTURES"])))
 func liveSourceShadersMeetTheControlledOriginalFrameGates() throws {
     let folder = URL(fileURLWithPath: try SourceFixtureSupport.require("IKKOKU_SHADER_BINDING_PROBE"), isDirectory: true)
     let avatar = URL(fileURLWithPath: try SourceFixtureSupport.require("IKKOKU_SOURCE_AVATAR"))
     let makerLibrary = URL(fileURLWithPath: try SourceFixtureSupport.require("IKKOKU_MAKER_LIBRARY"))
     let configuration = SourceShaderLiveConfiguration.environment([
         "IKKOKU_LIVE_SOURCE_PROGRAMS": folder.appendingPathComponent("shaders").path,
-        "IKKOKU_LIVE_SOURCE_TEXTURES": try SourceFixtureSupport.require("IKKOKU_LIVE_SOURCE_TEXTURES"),
+        "IKKOKU_LIVE_SOURCE_TEXTURES": try SourceFixtureSupport.require("IKKOKU_LIVE_SOURCE_GATE_TEXTURES"),
         "IKKOKU_LIVE_SOURCE_STREAMS": try SourceFixtureSupport.require("IKKOKU_LIVE_SOURCE_STREAMS"),
         "IKKOKU_SHADER_BINDING_SUPPLEMENT": try SourceFixtureSupport.require("IKKOKU_SHADER_BINDING_SUPPLEMENT"),
-        "IKKOKU_HEAD_MATERIAL_CONTRACT": try SourceFixtureSupport.require("IKKOKU_HEAD_MATERIAL_CONTRACT"),
+        "IKKOKU_HEAD_MATERIAL_CONTRACT": try SourceFixtureSupport.require("IKKOKU_LIVE_SOURCE_GATE_HEAD_CONTRACT"),
     ], sourceAvatar: avatar)
     var request = SourceShaderLiveFixtureProbe.Request(
         frame: folder.appendingPathComponent("frame-mips.json"), avatar: avatar, card: folder.appendingPathComponent("fixture-card.png"),
