@@ -298,6 +298,12 @@ private func sideloader(_ items: [Record], _ patterns: [Record] = [], map: Bool 
         (("kkpe", .int(5)), "KKPE data ('kkpe') is not a [version, data] PluginData value"),
     ]
     for (entry, text) in cases { #expect(verdict(pluginScene([entry]), .init(deletions: [4])).contains(text)) }
+    // Data a rule reads but cannot parse is unknown data: refused by name
+    // for an edit that changes the objects, kept for a move.
+    let unreadable = ("com.deathweasel.bepinex.materialeditor", plugin(1, .int(5)))
+    #expect(verdict(pluginScene([unreadable]), .init(deletions: [4]))
+        .contains("MaterialEditor data ('com.deathweasel.bepinex.materialeditor') has data this writer cannot read"))
+    #expect(verdict(pluginScene([unreadable]), moveItem) == "kept")
     // Orphans (no installed plug-in reads or writes them) are kept.
     let orphan = pluginScene([("vnge_sss", plugin(0, .map([("objects", packed(.arr([.int(4)])))])))])
     for edits in [SourceSceneEdits(deletions: [4]), copyItem, addFolder] { #expect(verdict(orphan, edits) == "kept") }

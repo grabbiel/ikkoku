@@ -221,8 +221,16 @@ enum SourceScenePluginData {
                     decision = .remove
                 } else if orphanIDs.contains(entry.id) {
                     decision = .keep
-                } else if let reason = try decide(entry, cardLinksChecked: &cardLinksChecked, decision: &decision) {
-                    reasons.append("\(label(entry.id)) \(reason)")
+                } else {
+                    var reason: String?
+                    do {
+                        reason = try decide(entry, cardLinksChecked: &cardLinksChecked, decision: &decision)
+                    } catch {
+                        // Data the rule cannot read is unknown data.
+                        decision = .keep
+                        reason = edit.keysChange ? "has data this writer cannot read (\(error.localizedDescription))" : nil
+                    }
+                    if let reason { reasons.append("\(label(entry.id)) \(reason)") }
                 }
                 decisions.append(decision)
             }
