@@ -115,15 +115,22 @@ struct InspectorAnchor<Shown>: NSViewRepresentable {
     func updateNSView(_ nsView: InspectorAnchorView, context: Context) {}
 }
 
-/// Sections (`SectionBox`) the user collapsed in kept inspector views.
+/// Sections (`SectionBox`) the user collapsed in kept inspector views. A
+/// kept kind section's sections are also noted with the tab's, which expands
+/// them when the whole tab is hidden.
 @MainActor final class InspectorSectionExpansion {
     private var collapsed: [UUID: Binding<Bool>] = [:]
+    weak var parent: InspectorSectionExpansion?
 
     func note(_ token: UUID, expanded: Bool, binding: Binding<Bool>) {
         collapsed[token] = expanded ? nil : binding
+        parent?.note(token, expanded: expanded, binding: binding)
     }
 
-    func forget(_ token: UUID) { collapsed[token] = nil }
+    func forget(_ token: UUID) {
+        collapsed[token] = nil
+        parent?.forget(token)
+    }
 
     func expandAll() {
         guard !collapsed.isEmpty else { return }

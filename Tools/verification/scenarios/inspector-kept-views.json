@@ -187,6 +187,62 @@
         ]
       },
       {
+        "op": "press",
+        "label": "Character"
+      },
+      {
+        "op": "assert",
+        "key": 963,
+        "axAbsent": [
+          "Original character:"
+        ],
+        "axContains": [
+          "Play playlist"
+        ]
+      },
+      {
+        "op": "select",
+        "key": 0
+      },
+      {
+        "op": "assert",
+        "key": 0,
+        "axAbsent": [
+          "Original character:"
+        ],
+        "axContains": [
+          "Play playlist"
+        ]
+      },
+      {
+        "op": "select",
+        "key": 622
+      },
+      {
+        "op": "assert",
+        "key": 622,
+        "axAbsent": [
+          "Original character:",
+          "Play playlist"
+        ]
+      },
+      {
+        "op": "keyLoop",
+        "hiddenKeyViews": 0
+      },
+      {
+        "op": "select",
+        "key": 963
+      },
+      {
+        "op": "assert",
+        "key": 963,
+        "axContains": [
+          "Original character:",
+          "Play playlist"
+        ]
+      },
+      {
         "op": "select",
         "key": 622
       },

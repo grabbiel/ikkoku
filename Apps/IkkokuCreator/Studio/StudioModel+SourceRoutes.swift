@@ -417,6 +417,7 @@ struct SourceRouteInspector: View {
     let point: SourceRoutePointSelection?
 
     var body: some View {
+        let _ = PerfTrace.body(.objectInspectorSection)
         SectionBox(title: "Route") {
             Text("Route: \(playing ? "Playing" : "Stopped")").font(.callout)
             HStack {

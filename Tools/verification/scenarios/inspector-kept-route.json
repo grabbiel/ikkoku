@@ -117,6 +117,104 @@
         ]
       },
       {
+        "op": "routePoint",
+        "index": 1
+      },
+      {
+        "op": "focus",
+        "field": "vector9"
+      },
+      {
+        "op": "type",
+        "text": "0.25",
+        "replace": true
+      },
+      {
+        "op": "assert",
+        "editing": true
+      },
+      {
+        "op": "snapshot"
+      },
+      {
+        "op": "select",
+        "key": 10
+      },
+      {
+        "op": "assert",
+        "key": 10,
+        "unchanged": true,
+        "editing": false,
+        "inspectorView": "ObjectInspector",
+        "axContains": [
+          "Position"
+        ],
+        "axAbsent": [
+          "Add point",
+          "Delete point",
+          "Speed",
+          "Orient",
+          "Ease",
+          "Connection",
+          "Line colour"
+        ]
+      },
+      {
+        "op": "keyLoop",
+        "hiddenKeyViews": 0
+      },
+      {
+        "op": "type",
+        "text": "7"
+      },
+      {
+        "op": "assert",
+        "unchanged": true,
+        "editing": false
+      },
+      {
+        "op": "select",
+        "key": 20
+      },
+      {
+        "op": "activateWell"
+      },
+      {
+        "op": "assert",
+        "activeWells": 1
+      },
+      {
+        "op": "snapshot"
+      },
+      {
+        "op": "select",
+        "key": 10
+      },
+      {
+        "op": "assert",
+        "key": 10,
+        "unchanged": true,
+        "activeWells": 0,
+        "axAbsent": [
+          "Line colour"
+        ]
+      },
+      {
+        "op": "closeColorPanel"
+      },
+      {
+        "op": "select",
+        "key": 20
+      },
+      {
+        "op": "assert",
+        "key": 20,
+        "axContains": [
+          "Add point",
+          "Line colour"
+        ]
+      },
+      {
         "op": "snapshot"
       },
       {

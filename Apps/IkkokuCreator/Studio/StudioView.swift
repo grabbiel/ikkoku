@@ -558,13 +558,14 @@ struct WorkspaceRow: View, Equatable {
 struct ObjectInspector: View {
     let model: StudioModel
     @State private var kept = InspectorKeptViews<ObjectInspectorState>()
+    @State private var keptSections = ObjectInspectorSectionsKept()
 
     var body: some View {
         let _ = PerfTrace.body(.objectInspector)
         if StudioInspectorMounting.current.keepsTab {
             keptContent
         } else if let o = model.selectedObject, model.doc.index(of: o.id) != nil {
-            ObjectInspectorContent(model: model, state: ObjectInspectorState(model: model, object: o)).equatable()
+            ObjectInspectorContent(model: model, state: ObjectInspectorState(model: model, object: o), sectionsKept: nil).equatable()
                 .onAppear { model.displayedInspectorView = "ObjectInspector" }
                 .onDisappear { if model.displayedInspectorView == "ObjectInspector" { model.displayedInspectorView = "none" } }
         } else {
@@ -582,9 +583,11 @@ struct ObjectInspector: View {
         }
         let hidden = shown == nil
         let _ = shown.map { kept.state = $0 }
+        let sectionsKept = StudioInspectorMounting.current.keepsSections ? keptSections : nil
+        let _ = sectionsKept?.attach(to: kept.sections)
         ZStack(alignment: .top) {
             if let state = shown ?? kept.state {
-                ObjectInspectorContent(model: model, state: state).equatable()
+                ObjectInspectorContent(model: model, state: state, sectionsKept: sectionsKept).equatable()
                     .background(InspectorAnchor(kept: kept))
                     .environment(\.inspectorSectionExpansion, kept.sections)
                     .environment(\.inspectorKeptHidden, hidden)
@@ -674,19 +677,24 @@ struct ObjectInspectorState: Equatable {
 struct ObjectInspectorContent: View, Equatable {
     let model: StudioModel
     let state: ObjectInspectorState
-    @Environment(AppState.self) private var app
+    /// The kind sections kept once shown (R7 phase 2, item 7), or nil to
+    /// build and drop them as the kind changes.
+    let sectionsKept: ObjectInspectorSectionsKept?
 
-    static func == (a: Self, b: Self) -> Bool { a.model === b.model && a.state == b.state }
+    static func == (a: Self, b: Self) -> Bool {
+        a.model === b.model && a.state == b.state && a.sectionsKept === b.sectionsKept
+    }
 
     /// Edits the shown object while it is the selection. Kept content hidden
     /// with an earlier object's state writes nothing (R7 phase 2, item 7).
     private func update(_ change: (inout StudioObject) -> Void) {
-        guard model.selection == state.id else { return }
-        model.update(state.id, change)
+        model.inspectorUpdate(state.id, change)
     }
 
     var body: some View {
+        let _ = PerfTrace.body(.objectInspectorContent)
         let o = state, id = state.id
+        let sections = ObjectInspectorKindSections(model: model, state: o)
         VStack(alignment: .leading, spacing: 10) {
             TextField("Name", text: Binding(get: { o.name }, set: { v in update { $0.name = v } }))
             HStack {
@@ -697,84 +705,25 @@ struct ObjectInspectorContent: View, Equatable {
                 Text("None").tag(UUID?.none)
                 ForEach(o.parents) { p in Text(p.name).tag(UUID?.some(p.id)) }
             } label: { Text("Parent").inspectorKeptLabel() }
-            SectionBox(title: "Transform") {
-                VectorRow(label: "Position", value: Binding(get: { o.transform.position }, set: { v in update { $0.transform.position = v } }), step: 0.05, format: "%.3f")
-                VectorRow(label: "Rotation", value: Binding(get: { o.transform.rotation }, set: { v in update { $0.transform.rotation = v } }), step: 5, format: "%.0f")
-                VectorRow(label: "Scale", value: Binding(get: { o.transform.scale }, set: { v in update { $0.transform.scale = v } }), step: 0.1, format: "%.2f")
-                Button("Reset transform") { update { $0.transform = StudioTransform() } }
+            if let sectionsKept {
+                VStack(alignment: .leading, spacing: 0) {
+                    transformSection
+                    ObjectInspectorKeptSections(sections: sections, kept: sectionsKept)
+                }
+            } else {
+                transformSection
+                ObjectInspectorBuiltSections(sections: sections)
             }
-            switch o.kind {
-            case .character:
-                SectionBox(title: "Character") {
-                    Text(o.cardName).font(.callout)
-                    if !o.isSourceCharacter {
-                        HStack {
-                            Button("Edit in Maker") { if let c = model.doc.object(id)?.card { app.ensureMaker()?.load(card: c); app.mode = .maker } }
-                            Button("Replace from Maker") { if let c = app.ensureMaker()?.card { update { $0.card = c; $0.name = c.profile.name } } }
-                        }
-                        Toggle("Show clothing", isOn: Binding(get: { o.clothingVisible }, set: { v in update { $0.clothingVisible = v } }))
-                        Toggle("Show accessories", isOn: Binding(get: { o.accessoriesVisible }, set: { v in update { $0.accessoriesVisible = v } }))
-                    } else {
-                        Text("Original character: name, transform and voice are editable here. Maker editing, replacement and the prototype clothing/accessory toggles only affect unused native fields and are not available for this reference avatar.")
-                            .font(.caption).foregroundStyle(.secondary)
-                    }
-                }
-                if o.isSourceCharacter {
-                    SectionBox(title: "Voice") {
-                        HStack {
-                            Button("Play playlist") { model.playSourceVoice(id) }
-                            Button("Stop") { model.stopSourceVoice(id) }
-                            Menu("Repeat") {
-                                Button("Play once") { model.setSourceVoiceRepeat(id, mode: 0) }
-                                Button("Repeat playlist") { model.setSourceVoiceRepeat(id, mode: 1) }
-                                Button("Repeat selected") { model.setSourceVoiceRepeat(id, mode: 2) }
-                            }
-                        }
-                    }
-                }
-            case .item:
-                SectionBox(title: "Item") {
-                    ColorRow(label: "Tint", color: Binding(get: { o.tint ?? .white }, set: { v in update { $0.tint = v } }))
-                    FloatRow(label: "Emissive", value: Binding(get: { o.emissive }, set: { v in update { $0.emissive = v } }), range: 0...2)
-                    Button("Clear tint") { update { $0.tint = nil } }
-                }
-            case .light:
-                if let l = o.light {
-                    SectionBox(title: "Light") {
-                        Toggle("Enabled", isOn: Binding(get: { l.enabled }, set: { v in update { $0.light?.enabled = v } }))
-                        ColorRow(label: "Colour", color: Binding(get: { RGB(l.color.x, l.color.y, l.color.z) }, set: { v in update { $0.light?.color = v.float3 } }))
-                        FloatRow(label: "Intensity", value: Binding(get: { l.intensity }, set: { v in update { $0.light?.intensity = v } }), range: 0...4)
-                        if l.kind != .directional { FloatRow(label: "Range", value: Binding(get: { l.range }, set: { v in update { $0.light?.range = v } }), range: 0.1...20) }
-                        if l.kind == .spot {
-                            FloatRow(label: "Spot angle", value: Binding(get: { l.spotAngle }, set: { v in update { $0.light?.spotAngle = v } }), range: 5...120)
-                            FloatRow(label: "Spot blend", value: Binding(get: { l.spotBlend }, set: { v in update { $0.light?.spotBlend = v } }))
-                        }
-                        Text("Position and direction come from the transform above.").font(.caption).foregroundStyle(.secondary)
-                    }
-                }
-            case .camera:
-                SectionBox(title: "Camera") {
-                    HStack {
-                        Button("Look through") { model.lookThrough(id) }
-                        Button("Update from view") { model.updateCameraObject(id) }
-                    }
-                }
-            case .folder: EmptyView()
-            }
-            if let cameraName = o.sourceCameraName {
-                SectionBox(title: "Camera") {
-                    Text("Source camera: \(cameraName)").font(.callout)
-                    HStack {
-                        Button(o.sourceCameraButtonTitle) { model.toggleSourceCamera(id) }
-                            .help(o.lookingThroughSourceCamera ? "Deactivate this camera object (the saved scene camera returns)" : "Look through this camera object (the orbit controller is disabled while it is active)")
-                    }
-                    Text(o.sourceCameraStateText).font(.callout)
-                    Text("Runtime only — original export keeps the saved camera and active flag.").font(.caption).foregroundStyle(.secondary)
-                }
-            }
-            if o.routeIsSource, let route = o.route {
-                SourceRouteInspector(model: model, id: id, playing: o.routePlaying, route: route, point: o.routePoint)
-            }
+        }
+    }
+
+    private var transformSection: some View {
+        let o = state
+        return SectionBox(title: "Transform") {
+            VectorRow(label: "Position", value: Binding(get: { o.transform.position }, set: { v in update { $0.transform.position = v } }), step: 0.05, format: "%.3f")
+            VectorRow(label: "Rotation", value: Binding(get: { o.transform.rotation }, set: { v in update { $0.transform.rotation = v } }), step: 5, format: "%.0f")
+            VectorRow(label: "Scale", value: Binding(get: { o.transform.scale }, set: { v in update { $0.transform.scale = v } }), step: 0.1, format: "%.2f")
+            Button("Reset transform") { update { $0.transform = StudioTransform() } }
         }
     }
 }
