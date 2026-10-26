@@ -341,7 +341,12 @@ The realtime sun this slice leaves out adds light to 15,692 of map33's 691,200 p
 
 **Safe for `main` after the swap.** `main`'s binary with the slice-2 export is byte-identical to `main` with the first slice's export on all 6 map captures. Its log reports the same 52,248,576 texture bytes. `main`'s four map checks (`source-map`, `reload-save-source-map`, `reload-load-source-map`, `source-map-none`) passed 4/4 under `--strict` on its Debug build with the slice-2 export (`.local/sta11b-lightmaps/swap-proof/`). The one visible difference: `main`'s status line loses its `; shaders approximated (Standard)` suffix, because the new catalog row names the omitted terms instead. `main`'s checks assert the label prefix, which is unchanged.
 
-**Suites.** The private-source Engine suite ran 1,008 tests: 987 passed and 20 were skipped. The 1 failure is the known `liveSourceShadersMeetTheControlledOriginalFrameGates`, which #277 did not change. The Python suites pass: `Tools/reverse` 589 (6 skipped), `Tools/reverse/analysis` 279 and `Tools/verification` 199. CI passed on the PR.
+**Suites and lanes.**
+
+- **Engine, private source.** On the head merged with `main` (`3bfcc37`), the suite ran 1,014 tests: 992 passed and 21 were skipped. The 1 failure is the known `liveSourceShadersMeetTheControlledOriginalFrameGates`. Before that merge it ran 1,008 tests with the same single failure.
+- **Python.** `Tools/reverse` 589 (6 skipped), `Tools/reverse/analysis` 279 and `Tools/verification` 199 pass.
+- **Lanes.** On the merged head, with the slice-2 export and `--strict`, `studio-scenarios` passed 78 of 78, including the four map checks, and `maker-scenarios` passed 10 of 10 (`.local/sta11b-lightmaps/lanes/`).
+- **CI** passed on the PR.
 
 ### Installing the slice-2 export
 
