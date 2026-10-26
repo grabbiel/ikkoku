@@ -234,6 +234,66 @@
         "unchanged": true,
         "editing": false,
         "activeWells": 0
+      },
+      {
+        "op": "select",
+        "key": 20
+      },
+      {
+        "op": "routePoint",
+        "index": 1
+      },
+      {
+        "op": "focus",
+        "field": "vector9"
+      },
+      {
+        "op": "type",
+        "text": "0.75",
+        "replace": true
+      },
+      {
+        "op": "assert",
+        "editing": true
+      },
+      {
+        "op": "deselect"
+      },
+      {
+        "op": "select",
+        "key": 20
+      },
+      {
+        "op": "routePoint",
+        "index": 1
+      },
+      {
+        "op": "assert",
+        "key": 20,
+        "field": "vector9",
+        "fieldText": "0.750",
+        "editing": false
+      },
+      {
+        "op": "undo"
+      },
+      {
+        "op": "assert",
+        "key": 20,
+        "field": "vector9",
+        "fieldText": "0.250",
+        "editing": false,
+        "inspectorView": "ObjectInspector"
+      },
+      {
+        "op": "redo"
+      },
+      {
+        "op": "assert",
+        "key": 20,
+        "field": "vector9",
+        "fieldText": "0.750",
+        "inspectorView": "ObjectInspector"
       }
     ]
   }

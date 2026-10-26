@@ -281,6 +281,79 @@
         "unchanged": true,
         "editing": false,
         "inspectorView": "ObjectInspector"
+      },
+      {
+        "op": "select",
+        "key": 0
+      },
+      {
+        "op": "focus",
+        "field": "name"
+      },
+      {
+        "op": "type",
+        "text": "R"
+      },
+      {
+        "op": "assert",
+        "key": 0,
+        "name": "Source character 0 KR",
+        "editing": true
+      },
+      {
+        "op": "deselect"
+      },
+      {
+        "op": "select",
+        "key": 0
+      },
+      {
+        "op": "assert",
+        "key": 0,
+        "field": "name",
+        "fieldText": "Source character 0 KR",
+        "editing": false
+      },
+      {
+        "op": "undo"
+      },
+      {
+        "op": "assert",
+        "key": 0,
+        "name": "Source character 0 K",
+        "field": "name",
+        "fieldText": "Source character 0 K",
+        "editing": false,
+        "inspectorView": "ObjectInspector"
+      },
+      {
+        "op": "outfit",
+        "index": 1
+      },
+      {
+        "op": "assert",
+        "key": 0,
+        "field": "name",
+        "fieldText": "Source character 0 K",
+        "editing": false,
+        "inspectorView": "ObjectInspector"
+      },
+      {
+        "op": "assert",
+        "key": 0,
+        "field": "vector0",
+        "fieldText": "2.250"
+      },
+      {
+        "op": "outfit",
+        "index": 0
+      },
+      {
+        "op": "assert",
+        "key": 0,
+        "field": "name",
+        "fieldText": "Source character 0 K",
+        "inspectorView": "ObjectInspector"
       }
     ]
   }

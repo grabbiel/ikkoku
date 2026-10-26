@@ -643,7 +643,9 @@ SCENARIO_OPS = {"select", "setVisible", "rename", "toggleCamera", "toggleRoute",
 INSPECTOR_UI_OPS = {"select", "deselect", "focus", "type", "delete", "undo", "redo", "cycle",
                     "snapshot", "keyLoop", "assert",
                     # Added with the kept inspector views (R7 phase 2, item 7).
-                    "probe", "press", "activateWell", "routePoint", "closeColorPanel"}
+                    "probe", "press", "activateWell", "routePoint", "closeColorPanel",
+                    # Added with the model's Object tab state (R7 phase 2, item 7).
+                    "outfit"}
 
 # ST-T11 `editRoute` settings: point edits name the point, route edits do not.
 ROUTE_POINT_SETTINGS = ("delete", "move", "speed", "ease", "connection", "link")
@@ -850,7 +852,7 @@ class StudioScenarioLaneTests(unittest.TestCase):
                 self.assertRegex(step["field"], r"^(name|vector[0-9]+)$")
             if op == "press":
                 self.assertTrue(step["label"])
-            if op == "routePoint":
+            if op in ("routePoint", "outfit"):
                 self.assertIs(type(step["index"]), int)
                 self.assertGreaterEqual(step["index"], 0)
             if op == "type":

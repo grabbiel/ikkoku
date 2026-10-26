@@ -1180,6 +1180,10 @@ Added with the kept views, for the two checks below:
   the probed centre reaches the probed field) and `probeFocusable` (the
   probed field can become the first responder; an accepted attempt is undone).
 
+Added with the model's Object tab state (below): `outfit` (`index`) selects
+that saved outfit of the selected source character, through the Clothes
+tab's call, and waits until its build has finished.
+
 The three `studio-scenarios` checks pin what the inspector did before item 7
 kept the Object tab mounted:
 
@@ -1227,7 +1231,9 @@ get wrong:
   character 963 to character 0. Once folder 622 has hidden it, it is
   expanded again for character 963. Folder 622 and character 0 have
   12-view Tab loops, and five selection cycles leave the document and undo
-  depths unchanged.
+  depths unchanged. Then an undo of a rename shows the earlier name in the
+  Name field, and outfit 1 and back to outfit 0 leave the Object tab's
+  name and position fields as they were.
 - `inspector-kept-route` (`IKKOKU_STUDIO_HALF_STATE_SCENE`). The route's
   "Line colour" well, active when the selection clears, is no longer active.
   A route point's position x, still being edited when the selection
@@ -1238,11 +1244,19 @@ get wrong:
   character 10 replaces the route and only the route's section is hidden:
   the route point edit is dropped, the well is no longer active, the route's
   controls are absent from the accessibility tree, and the Tab loop has no
-  view outside the visible window.
+  view outside the visible window. Finally, a route point's x typed as
+  0.75 shows 0.250 after an undo and 0.750 after a redo.
 
-The Tab walk of `keyLoop` ends editing in two fields as it passes them,
-which pushes two undo entries on base and on head alike, so the checks
-assert an unchanged document before a walk, not across one.
+The Tab walk of `keyLoop` commits rounded values as it passes the fields
+(two undo entries in these scenes, on base and on head alike), so the
+checks assert an unchanged document before a walk, not across one.
+
+The Object tab reads its state from the model (`StudioModel.objectInspectorState`),
+which publishes it only when it changes. In Debug builds the model checks,
+after every main run-loop turn, that the published state equals a fresh
+computation, and fails an assertion if not. So every Studio check also
+checks that no change reaches the Object tab without the refresh that
+publishes it.
 
 `IKKOKU_PERF_KEEP_MOUNTED` (`off`, `tab` or `on`, default `on`) is a
 measurement control only. The app reads it once at launch, `CaptureRequest`

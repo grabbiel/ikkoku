@@ -547,11 +547,12 @@ struct WorkspaceRow: View, Equatable {
 
 // MARK: - Inspector panels
 
-/// The Object tab. It reads the selected object and hands the fields it
-/// shows to `ObjectInspectorContent`, so an edit that changes nothing shown
-/// here (an FK drag, say) skips the content.
+/// The Object tab. It reads the model's `objectInspectorState`, the fields
+/// it shows, which the model publishes only when they change (R7 phase 2,
+/// item 7), so an edit that changes nothing shown here (an FK drag, say)
+/// does not re-evaluate it or anything under it.
 ///
-/// R7 phase 2, item 7: once built, the content stays mounted while nothing
+/// Also item 7: once built, the content stays mounted while nothing
 /// is selected, hidden with the last state it showed, so a selection from
 /// nothing updates its controls instead of building them again
 /// (`StudioInspectorMounting`).
@@ -564,8 +565,8 @@ struct ObjectInspector: View {
         let _ = PerfTrace.body(.objectInspector)
         if StudioInspectorMounting.current.keepsTab {
             keptContent
-        } else if let o = model.selectedObject, model.doc.index(of: o.id) != nil {
-            ObjectInspectorContent(model: model, state: ObjectInspectorState(model: model, object: o), sectionsKept: nil).equatable()
+        } else if let state = model.objectInspectorState {
+            ObjectInspectorContent(model: model, state: state, sectionsKept: nil).equatable()
                 .onAppear { model.displayedInspectorView = "ObjectInspector" }
                 .onDisappear { if model.displayedInspectorView == "ObjectInspector" { model.displayedInspectorView = "none" } }
         } else {
@@ -578,9 +579,7 @@ struct ObjectInspector: View {
     }
 
     @ViewBuilder private var keptContent: some View {
-        let shown = model.selectedObject.flatMap { o in
-            model.doc.index(of: o.id) != nil ? ObjectInspectorState(model: model, object: o) : nil
-        }
+        let shown = model.objectInspectorState
         let hidden = shown == nil
         let _ = shown.map { kept.state = $0 }
         let sectionsKept = StudioInspectorMounting.current.keepsSections ? keptSections : nil

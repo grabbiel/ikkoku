@@ -185,6 +185,17 @@ struct InspectorUIScenario: Decodable {
                 studio.selectedRoutePoint = .init(index: index)
                 await settle()
                 record(step.op, true, "route point \(index)")
+            case "outfit":
+                // The Clothes tab's outfit picker on the selected source
+                // character; waits until its build has finished.
+                guard let index = step.index, let id = studio.selection, let before = studio.sourceShapePreview(for: id)?.coordinate else {
+                    record(step.op, false, "no index, or the selection is not a built source character"); continue
+                }
+                studio.selectSourceOutfit(id, coordinate: index)
+                let deadline = Date().addingTimeInterval(Self.windowTimeout)
+                repeat { await settle() } while studio.pendingSourceOutfits[id] != nil && Date() < deadline
+                let after = studio.sourceShapePreview(for: id)?.coordinate
+                record(step.op, after == index, "outfit \(before) to \(index): shows \(after.map { "\($0)" } ?? "none")")
             case "closeColorPanel":
                 if NSColorPanel.sharedColorPanelExists { NSColorPanel.shared.orderOut(nil) }
                 await settle()

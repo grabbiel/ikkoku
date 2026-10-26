@@ -234,7 +234,7 @@ def row(name, report):
     def stat(entry, field):
         return "%.2f" % entry[field] if entry and field in entry else "-"
 
-    model = [k for k in ("studioTick", "studioRefresh", "studioCameraRefresh", "studioHoverPick", "makerTick", "makerRefresh", "input")
+    model = [k for k in ("studioTick", "studioRefresh", "studioCameraRefresh", "studioHoverPick", "studioInspectorState", "makerTick", "makerRefresh", "input")
              if k in phases]
     model_text = ", ".join("%s %s/%s ×%.0f/s" % (k, phase(k), phase(k, "p95"), phases[k]["perSecond"]) for k in model) or "-"
     build = report["build"]
