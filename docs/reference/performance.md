@@ -3944,7 +3944,8 @@ What the numbers show:
   `jsonVector`, which reads each colour and UV vector with
   `JSONSerialization`, at 87.4% of `decodeDocument`. Each item has 14
   vectors, so this scene has about 26,500. That cost predates this change;
-  a follow-up change reads these vectors directly.
+  [scene JSON vectors read directly](#scene-json-vectors-read-directly)
+  removes it.
 
 ### Correctness
 
@@ -3971,6 +3972,49 @@ This uses the CPU factor of [scaling to the low end](#scaling-to-the-low-end-bas
 - Two runs per build in one window, until the pending rounds.
 - Engine timing only. The app's import and export were not timed.
 - No M1 run.
+
+## Scene JSON vectors read directly
+
+Added 2026-10-26, after the [ST-T05a timing](#st-t05a-older-scene-versions)
+found it. A scene stores each item colour and UV vector as Unity
+`JsonUtility` text: 14 per item, plus a few per character, route and the
+settings. `KoikatsuBinaryReader.jsonVector` parsed every one with
+`JSONSerialization`, then cast the result to `[String: Any]` and each value to
+`NSNumber`. A `sample` of the Release decode of the largest legacy scene
+(1,894 items) put `jsonVector` at 87.4% of `decodeDocument`. Most of that was
+the parser and the bridging casts.
+
+The reader now reads the exact form `JsonUtility` writes directly
+(`unityJSONVector`; see [binary contracts](studio/binary-contracts.md)), to
+the Float `JSONSerialization` gives it. Every other form goes to
+`JSONSerialization` as before.
+
+### Correctness
+
+- **The fuzz.** `unityJSONVectorNumbersReadAsJSONSerialization` reads 27,995
+  number forms in each position and with both name sets, 111,980 readings in
+  all. The forms include random Floats printed 5 ways, long fractions,
+  integers up to 21 digits, exponents, negative zeros, NaN, booleans and
+  strings. 34,708 readings take the direct path. Every reading gives the same
+  Float bits as `JSONSerialization`, or the same error.
+- **Malformed and other layouts.** `unityJSONVectorOtherFormsReadAsJSONSerialization`
+  checks 435 more strings the same way: whitespace, BOM, other order, missing,
+  extra or duplicate names, escapes, wrong value types, trailing bytes, every
+  prefix of a plain vector, and every one-byte change of it to 12 characters.
+- **The corpus.** `unityJSONVectorReadsTheCorpusAsJSONSerialization` (opt-in)
+  finds every vector string in the user's 182 scenes by its framing:
+  678,678 vectors, 678,573 of them on the direct path, and 0 that differ.
+  `koikatsuSceneCorpusDigest` gives every one of the 175 distinct scenes the
+  same digest of every decoded field and the same export as before the
+  change.
+- **Lanes and the Engine suite.** On this change (Debug, `--strict`): the
+  Engine suite passed 1,075 tests, with only the opt-in probes skipped;
+  `studio-scenarios` (pending).
+
+### Measurement
+
+Pending the orchestrator's next quiet window: one round of before, after,
+after, before with the ST-T05a probe, before being the legacy-scene change.
 
 ## Phase 2, item 6 follow-up: route copies, prefetch and kept donations
 
