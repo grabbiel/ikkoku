@@ -2254,11 +2254,16 @@ struct StudioScenario: Decodable {
                     studio.isActiveMode = true
                     studio.refresh()
                 }
-                func compare(_ label: String, _ expected: (summary: [String], pixels: [UInt8]?), _ actual: (summary: [String], pixels: [UInt8]?)) {
-                    if expected.summary != actual.summary {
-                        let first = zip(expected.summary, actual.summary).first { $0 != $1 }
+                /// `status: false` leaves the status line out, for an
+                /// operation that names its own file there.
+                func compare(_ label: String, _ expected: (summary: [String], pixels: [UInt8]?), _ actual: (summary: [String], pixels: [UInt8]?),
+                             status: Bool = true) {
+                    let kept = { (lines: [String]) in status ? lines : lines.filter { !$0.hasPrefix("status: ") } }
+                    let (expectedSummary, actualSummary) = (kept(expected.summary), kept(actual.summary))
+                    if expectedSummary != actualSummary {
+                        let first = zip(expectedSummary, actualSummary).first { $0 != $1 }
                         problems.append("\(label): the document differs from the synchronous build: "
-                            + (first.map { "\"\($0.0)\" against \"\($0.1)\"" } ?? "\(expected.summary.count) against \(actual.summary.count) lines"))
+                            + (first.map { "\"\($0.0)\" against \"\($0.1)\"" } ?? "\(expectedSummary.count) against \(actualSummary.count) lines"))
                     }
                     guard let a = expected.pixels, let b = actual.pixels else { problems.append("\(label): a frame did not render"); return }
                     let difference = pixelDifference(a, b)
@@ -2358,6 +2363,8 @@ struct StudioScenario: Decodable {
                         let syncOutfit = state()
                         studio.undo()
                         let syncUndo = state()
+                        studio.selectSourceOutfit(id, coordinate: original)
+                        let syncShown = state()
                         studio.asyncSourceBuilds = true
                         func landed(_ label: String, _ expected: (summary: [String], pixels: [UInt8]?)) -> Bool {
                             if hidden { hide() }
@@ -2397,7 +2404,7 @@ struct StudioScenario: Decodable {
                         studio.selectSourceOutfit(id, coordinate: second)
                         studio.selectSourceOutfit(id, coordinate: original)
                         let dropped = studio.pendingSourceCharacterBuilds
-                        guard landed("shown outfit chosen again", syncUndo) else { record(step, false, "backgroundBuild: the dropped build did not settle in 300 s"); continue }
+                        guard landed("shown outfit chosen again", syncShown) else { record(step, false, "backgroundBuild: the dropped build did not settle in 300 s"); continue }
                         if studio.undoStack.count != depth { problems.append("the dropped selection recorded an undo step") }
                         // An Undo while a selection builds drops it.
                         studio.selectSourceOutfit(id, coordinate: first)
@@ -2421,9 +2428,9 @@ struct StudioScenario: Decodable {
                         // export is the reference: the background export must
                         // start in the background, leave the document and
                         // the render as they were, and write byte-identical
-                        // bytes; a load while its baselines build must cancel
-                        // it with an error and write nothing. Every file the
-                        // op writes is removed at the end.
+                        // bytes; an edit, or a load, while its baselines build
+                        // must fail it with an error and write nothing. Every
+                        // file the op writes is removed at the end.
                         guard let id = object(step) else { record(step, false, "backgroundBuild: no object \(describe(step))"); continue }
                         guard let path = step.path, let target = insideLocal(path) else {
                             record(step, false, "backgroundBuild: path must stay under .local/: \(step.path ?? "<missing>")"); continue
@@ -2432,7 +2439,8 @@ struct StudioScenario: Decodable {
                         let document = folder.appendingPathComponent("\(stem)-document.png")
                         let syncURL = folder.appendingPathComponent("\(stem)-sync.png")
                         let replacedURL = folder.appendingPathComponent("\(stem)-replaced.png")
-                        let written = [document, syncURL, target, replacedURL]
+                        let changedURL = folder.appendingPathComponent("\(stem)-changed.png")
+                        let written = [document, syncURL, target, replacedURL, changedURL]
                         try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
                         for url in written where FileManager.default.fileExists(atPath: url.path) { try FileManager.default.removeItem(at: url) }
                         defer { for url in written { try? FileManager.default.removeItem(at: url) } }
@@ -2456,12 +2464,29 @@ struct StudioScenario: Decodable {
                         guard settle() else { record(step, false, "backgroundBuild: the export did not finish in 300 s"); continue }
                         _ = RunLoop.main.run(mode: .default, before: Date().addingTimeInterval(0.3))
                         if outcomes != ["written"] { problems.append("completions \(outcomes), expected [\"written\"]") }
-                        compare("export", reference, state())
+                        // The export names its file on the status line.
+                        compare("export", reference, state(), status: false)
+                        if studio.status != "Exported edited original scene to \(target.lastPathComponent)" {
+                            problems.append("the export left the status \"\(studio.status)\"")
+                        }
                         let syncBytes = try Data(contentsOf: syncURL)
                         let asyncBytes = FileManager.default.fileExists(atPath: target.path) ? try Data(contentsOf: target) : Data()
                         if syncBytes != asyncBytes {
                             problems.append("the background export wrote \(asyncBytes.count) bytes that differ from the synchronous export's \(syncBytes.count)")
                         }
+                        // An edit before the baselines land fails the export:
+                        // its file would not be the scene it was chosen for.
+                        var changed: [String] = []
+                        studio.beginSourceSceneExport(to: changedURL) { changed.append($0.map { "\($0)" } ?? "written") }
+                        studio.update(id) { $0.transform.position.x += 0.25 }
+                        guard settle() else { record(step, false, "backgroundBuild: the edited export did not finish in 300 s"); continue }
+                        _ = RunLoop.main.run(mode: .default, before: Date().addingTimeInterval(0.3))
+                        if changed.count != 1 || !(changed.first ?? "").contains("changed") {
+                            problems.append("the export edited during its build completed \(changed), expected one scene-changed error")
+                        }
+                        if FileManager.default.fileExists(atPath: changedURL.path) { problems.append("the export edited during its build wrote its file") }
+                        studio.undo()
+                        guard settle() else { record(step, false, "backgroundBuild: the undo did not settle in 300 s"); continue }
                         // A load while the baselines build cancels the export.
                         var replaced: [String] = []
                         studio.beginSourceSceneExport(to: replacedURL) { replaced.append($0.map { "\($0)" } ?? "written") }
@@ -2473,7 +2498,7 @@ struct StudioScenario: Decodable {
                         }
                         if FileManager.default.fileExists(atPath: replacedURL.path) { problems.append("the cancelled export wrote its file") }
                         compare("load during the export", reference, state())
-                        detail = "the background export wrote the synchronous export's \(syncBytes.count) bytes; a load during it reported: \(replaced.first ?? "nothing")"
+                        detail = "the background export wrote the synchronous export's \(syncBytes.count) bytes; an edit during it reported: \(changed.first ?? "nothing"); a load during it reported: \(replaced.first ?? "nothing")"
                     } else if build == "loadRoute" {
                         // R7 phase 2 item 6, third part: a scene load
                         // rehydrates its route characters in the background,

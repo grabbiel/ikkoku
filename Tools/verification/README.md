@@ -320,8 +320,9 @@ build must drop it. `export` saves and reloads the scene as a native
 document, so the keyed character (hidden, with a face edit, by the steps
 before) has no preview; the background export must start in the background,
 leave the document and render unchanged and write the synchronous export's
-bytes, and a load while its baselines build must cancel it with a
-replacement error and write nothing (the op removes every file it wrote).
+bytes; an edit while its baselines build must fail it with a scene-changed
+error, and a load must cancel it with a replacement error, each writing
+nothing (the op removes every file it wrote).
 `loadRoute` saves the scene as a native document to `path` and loads it over
 New Scene: the synchronous Load, Undo and Redo are the reference, the Load
 and Redo must build no route character preview on the main thread, and an

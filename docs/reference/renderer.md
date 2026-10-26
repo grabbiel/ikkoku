@@ -1676,14 +1676,16 @@ checks them there.
 - **Export validation baselines.** A hidden character with face-state
   edits and no preview needs a validation baseline. `beginSourceSceneExport`
   builds all of them under `.export(n)`, then runs `exportSourceScene(to:baselines:)`
-  on the main actor, which writes the document as it is at that moment and
-  uses a baseline only while its object still has the reference and
-  outfit it was built for (else it builds that one synchronously, as
-  before). Meanwhile the scene stays editable, and the status area shows
-  "Exporting <file>". An import, a load or New Scene cancels it with an
-  error ("the scene was replaced before the hidden characters of <file>
-  were built; export it again") and writes nothing. Without baselines to
-  build, it exports at once.
+  on the main actor. Meanwhile the scene stays editable, and the status
+  area shows "Exporting <file>". The file is the scene as it was when the
+  export was chosen, as with the synchronous export: the job keeps the
+  document, the camera looked through and the routes' play flags, and if
+  any of them changed before the baselines landed, the export fails ("the
+  scene changed while the hidden characters of <file> were built; export
+  it again") and writes nothing. An import, a load or New Scene cancels it
+  with an error ("the scene was replaced before …") and writes nothing.
+  Without baselines to build, or while plugins run (their steps write the
+  document), it exports at once on the main thread, as before.
 - **Route characters of a rehydration.** With background builds the
   rehydration's walk lists the route characters instead of building them,
   installs the runtime, then starts their builds in walk order

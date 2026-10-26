@@ -227,6 +227,19 @@ final class StudioModel: ViewportInputHandler, LivePacedHandler {
         let url: URL
         let wanted: [(id: UUID, reference: SourceStudioCharacterReference, outfit: Int?)]
         let completion: @MainActor (Error?) -> Void
+        /// What the export reads besides the baselines, as it was when the
+        /// export was chosen (`SourceExportInputs`).
+        let inputs: SourceExportInputs
+    }
+    /// The model state an export writes from, apart from the previews: the
+    /// document, the camera looked through and the routes' play flags.
+    private struct SourceExportInputs: Equatable {
+        let document: StudioDocument
+        let camera: UUID?
+        let routesPlaying: [UUID: Bool]
+    }
+    private var sourceExportInputs: SourceExportInputs {
+        SourceExportInputs(document: doc, camera: activeSourceCamera, routesPlaying: sourceRoutePlayState.mapValues(\.playing))
     }
     /// A background build that failed, kept so `refresh()` reports it like
     /// the synchronous build's error instead of building it every frame.
@@ -2738,16 +2751,20 @@ final class StudioModel: ViewportInputHandler, LivePacedHandler {
     /// validation baseline (`exportSourceScene`). With `asyncSourceBuilds`
     /// those baselines build first, in the background and in document order,
     /// with a prefetching decode share and no donation, as the synchronous
-    /// export builds them. The export then runs on the main actor with them,
-    /// writing the document as it is at that moment. Meanwhile the scene stays
-    /// editable and the status area shows "Exporting <file>". A scene import
-    /// or load, or New Scene, cancels it: `completion` gets an error and
-    /// nothing is written. Without baselines to build, or without
-    /// `asyncSourceBuilds` (captures, scenarios), it exports at once.
-    /// `completion` gets the export's error, or nil once the file is written.
+    /// export builds them. The export then runs on the main actor with them.
+    /// Meanwhile the scene stays editable and the status area shows
+    /// "Exporting <file>". The file is the scene as it was when the export was
+    /// chosen, as with the synchronous export: if the document, the camera
+    /// looked through or a route's play state changed before the baselines
+    /// landed, `completion` gets an error and nothing is written. A scene
+    /// import or load, or New Scene, cancels it with an error too. Without
+    /// baselines to build, without `asyncSourceBuilds` (captures, scenarios),
+    /// or while plugins run (their steps write the document), it exports at
+    /// once. `completion` gets the export's error, or nil once the file is
+    /// written.
     func beginSourceSceneExport(to url: URL, completion: @escaping @MainActor (Error?) -> Void) {
         let wanted = sourceExportBaselineRequests()
-        guard asyncSourceBuilds, !wanted.isEmpty else {
+        guard asyncSourceBuilds, !sourcePluginsRunning, !wanted.isEmpty else {
             do { try exportSourceScene(to: url); completion(nil) } catch { completion(error) }
             return
         }
@@ -2755,7 +2772,7 @@ final class StudioModel: ViewportInputHandler, LivePacedHandler {
         let key = nextSourceExport
         let batch = SourceStudioCharacterBatch(requests: wanted.map { .init(reference: $0.reference, coordinate: $0.outfit) },
                                                resources: host.renderer.resources, rigs: sourceRigShare())
-        sourceExportJobs[key] = SourceExportJob(url: url, wanted: wanted, completion: completion)
+        sourceExportJobs[key] = SourceExportJob(url: url, wanted: wanted, completion: completion, inputs: sourceExportInputs)
         sourceSingleBuilds.start(.export(key), batch: batch) { [weak self] outcomes in
             self?.finishSourceSceneExport(key, outcomes: outcomes)
         }
@@ -2783,6 +2800,9 @@ final class StudioModel: ViewportInputHandler, LivePacedHandler {
         }
         let failure: Error?
         do {
+            guard sourceExportInputs == job.inputs else {
+                throw RigError.invalid("the scene changed while the hidden characters of \(job.url.lastPathComponent) were built; export it again")
+            }
             try exportSourceScene(to: job.url, baselines: baselines)
             failure = nil
         } catch { failure = error }
