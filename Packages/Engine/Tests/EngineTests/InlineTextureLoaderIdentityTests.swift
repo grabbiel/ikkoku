@@ -454,4 +454,127 @@ enum TextureIdentityCases {
         }
         #expect(mismatches.isEmpty, "\(mismatches.count) of \(names.count * 4) fixture loads differ:\n\(mismatches.prefix(20).joined(separator: "\n"))")
     }
+
+    /// Strips change only how the pixels reach the texture. Every conversion,
+    /// read back at every level, against the same image in one strip. The
+    /// height is prime, so the last strip is shorter than the others for every
+    /// limit but one row; the last command buffer's label counts the strips.
+    @Test("Strip uploads match one-strip uploads for every conversion, at every level, a shorter last strip included")
+    func stripUploadsMatchOneStrip() async throws {
+        let width = 300, height = 257
+        let sources: [(name: String, bpc: Int, components: Int, alpha: CGImageAlphaInfo, order: CGBitmapInfo, float: Bool, type: String?)] = [
+            ("png rgba", 8, 4, .last, [], false, "public.png"),
+            ("png rgb", 8, 4, .noneSkipLast, [], false, "public.png"),
+            ("tiff premultiplied", 8, 4, .premultipliedLast, [], false, "public.tiff"),
+            ("heic rgba", 8, 4, .last, [], false, "public.heic"),
+            ("png rgb16", 16, 3, .none, .byteOrder16Little, false, "public.png"),
+            ("tiff rgb half", 16, 3, .none, .byteOrder16Little, true, "public.tiff"),
+            ("tiff rgb float", 32, 3, .none, .byteOrder32Little, true, "public.tiff"),
+            ("png grey", 8, 1, .none, [], false, "public.png"),
+            ("data rgba", 8, 4, .premultipliedLast, [], false, nil),
+        ]
+        var cases: [(name: String, image: InlineTextureLoader.Image)] = []
+        for source in sources {
+            let plain = try #require(TextureIdentityCases.plain(bpc: source.bpc, components: source.components, alpha: source.alpha,
+                                                                order: source.order, float: source.float, width: width, height: height),
+                                     "\(source.name)")
+            guard let type = source.type else {
+                cases.append((source.name, InlineTextureLoader.Image(cgImage: plain, source: .data)))
+                continue
+            }
+            let data = try #require(TextureIdentityCases.encode(plain, as: type), "\(source.name) encode")
+            cases.append((source.name, try #require(InlineTextureLoader.image(data: data), "\(source.name) decode")))
+        }
+        let snapshot = cases
+        let result = await onOwnThread { () -> (problems: [String], conversions: Set<String>) in
+            let device = MTLCreateSystemDefaultDevice()!, queue = device.makeCommandQueue()!
+            var problems: [String] = [], conversions = Set<String>()
+            for (name, image) in snapshot {
+                guard let layout = InlineTextureLoader.layout(for: image, srgb: true) else { problems.append("\(name): no layout"); continue }
+                conversions.insert(String("\(layout.conversion)".prefix { $0 != "(" }))
+                let rowBytes = width * layout.bytesPerPixel
+                func load(_ limit: Int) throws -> (record: TextureIdentityRecord, label: String?) {
+                    var label: String?
+                    let texture = try InlineTextureLoader.texture(image, srgb: true, device: device, queue: queue, stagingLimit: limit) {
+                        label = $0.label
+                    }
+                    return (try TextureIdentityRecord(texture, device: device, queue: queue), label)
+                }
+                do {
+                    let whole = try load(.max)
+                    if whole.label != "InlineTextureLoader strip 1/1" { problems.append("\(name): one strip labelled \(whole.label ?? "nil")") }
+                    for limit in [64 << 10, rowBytes * 3 + 7, 1] {
+                        let rows = max(1, min(height, limit / rowBytes)), strips = (height + rows - 1) / rows
+                        let stripped = try load(limit)
+                        if strips < 2 { problems.append("\(name) limit \(limit): one strip") }
+                        if stripped.label != "InlineTextureLoader strip \(strips)/\(strips)" {
+                            problems.append("\(name) limit \(limit): labelled \(stripped.label ?? "nil"), expected \(strips) strips")
+                        }
+                        if stripped.record != whole.record {
+                            problems.append("\(name) limit \(limit), \(strips) strips of \(rows) rows: \(stripped.record) differs from \(whole.record)")
+                        }
+                    }
+                } catch {
+                    problems.append("\(name): \(error)")
+                }
+            }
+            return (problems, conversions)
+        }
+        #expect(result.problems.isEmpty, "\(result.problems.joined(separator: "\n"))")
+        #expect(result.conversions == ["copy", "swapRedBlue", "unpremultiplySwapRedBlue", "premultiplySwapRedBlue", "appendAlpha16", "appendAlphaFloat32"],
+                "conversions covered: \(result.conversions.sorted())")
+    }
+
+    /// Opt-in timing, Release (`swift test -c release -Xswiftc -enable-testing`):
+    /// what strips cost a 2048² load against one staging buffer the size of
+    /// the image, alternating the two, with 1024² (one strip either way) as
+    /// the control. Noise PNGs decode as slowly as real textures do.
+    @Test(.enabled(if: (ProcessInfo.processInfo.environment["IKKOKU_TEXTURE_STRIP_PERF"] ?? "") == "1" && MTLCreateSystemDefaultDevice() != nil,
+                   "Opt-in timing probe: IKKOKU_TEXTURE_STRIP_PERF=1 and a Metal device"))
+    func stripUploadTiming() async throws {
+        func noisePNG(_ side: Int) throws -> Data {
+            var bytes = [UInt8](repeating: 0, count: side * side * 4), seed: UInt32 = 12345
+            for i in bytes.indices { seed = seed &* 1664525 &+ 1013904223; bytes[i] = UInt8(truncatingIfNeeded: seed >> 24) }
+            let provider = try #require(CGDataProvider(data: Data(bytes) as CFData))
+            let image = try #require(CGImage(width: side, height: side, bitsPerComponent: 8, bitsPerPixel: 32, bytesPerRow: side * 4,
+                                             space: CGColorSpace(name: CGColorSpace.sRGB)!,
+                                             bitmapInfo: CGBitmapInfo(rawValue: CGImageAlphaInfo.last.rawValue), provider: provider,
+                                             decode: nil, shouldInterpolate: false, intent: .defaultIntent))
+            return try #require(TextureIdentityCases.encode(image, as: "public.png"))
+        }
+        let files: [(side: Int, data: Data)] = [(2048, try noisePNG(2048)), (1024, try noisePNG(1024))]
+        let lines = await onOwnThread { () -> [String] in
+            let device = MTLCreateSystemDefaultDevice()!, queue = device.makeCommandQueue()!
+            func milliseconds(_ data: Data, _ limit: Int) -> Double {
+                let start = DispatchTime.now().uptimeNanoseconds
+                guard let image = InlineTextureLoader.image(data: data),
+                      (try? InlineTextureLoader.texture(image, srgb: true, device: device, queue: queue, stagingLimit: limit)) != nil else { return .nan }
+                return Double(DispatchTime.now().uptimeNanoseconds - start) / 1e6
+            }
+            func summary(_ values: [Double]) -> String {
+                let sorted = values.sorted()
+                return String(format: "%.2f ms (%.2f-%.2f)", sorted[sorted.count / 2], sorted[0], sorted[sorted.count - 1])
+            }
+            return files.map { side, data in
+                let rows = max(1, min(side, InlineTextureLoader.stagingLimit / (side * 4))), strips = (side + rows - 1) / rows
+                for _ in 0..<3 { _ = milliseconds(data, .max); _ = milliseconds(data, InlineTextureLoader.stagingLimit) }
+                var whole: [Double] = [], stripped: [Double] = []
+                for round in 0..<16 {
+                    if round % 2 == 0 {
+                        whole.append(milliseconds(data, .max)); stripped.append(milliseconds(data, InlineTextureLoader.stagingLimit))
+                    } else {
+                        stripped.append(milliseconds(data, InlineTextureLoader.stagingLimit)); whole.append(milliseconds(data, .max))
+                    }
+                }
+                let delta = stripped.sorted()[stripped.count / 2] - whole.sorted()[whole.count / 2]
+                return "[texture-strip-perf] \(side)x\(side) RGBA8 PNG: one strip \(summary(whole)); \(strips) strips \(summary(stripped)); "
+                    + String(format: "median delta %+.2f ms", delta)
+            }
+        }
+        for line in lines { print(line) }
+        if let path = ProcessInfo.processInfo.environment["IKKOKU_TEXTURE_STRIP_PERF_REPORT"] {
+            try (lines.joined(separator: "\n") + "\n").write(toFile: path, atomically: true, encoding: .utf8)
+        }
+        #expect(lines.allSatisfy { !$0.contains("nan") })
+    }
 }

@@ -82,7 +82,7 @@ final class UploadPermits: @unchecked Sendable {
 /// cooperative thread is blocked, the kernel grants that pool no thread, so a
 /// cooperative caller waits forever (`docs/performance.md`, the pool rule).
 /// This loader decodes, stages and blits on the caller's thread and waits only
-/// on its own command buffer, so it needs no worker thread from any pool.
+/// on its own command buffers, so it needs no worker thread from any pool.
 ///
 /// It reproduces MetalKit's results exactly: pixel format, size, mip count,
 /// usage, storage mode and every texel of every level
@@ -252,19 +252,82 @@ enum InlineTextureLoader {
         return levels
     }
 
-    /// Decodes `image` into a staging buffer in the texture's layout.
-    static func stage(_ image: CGImage, layout: Layout, device: any MTLDevice) throws -> any MTLBuffer {
-        let width = image.width, height = image.height
-        let rowBytes = width * layout.bytesPerPixel
-        guard let data = image.dataProvider?.data, let source = CFDataGetBytePtr(data) else {
-            throw Failure.decode(describe(image))
+    /// The most bytes a load stages at once. A larger image uploads in strips
+    /// of whole rows through one staging buffer of this size: each strip is
+    /// converted, copied and waited for before the next is written, and the
+    /// mips are generated with the last. One staging buffer the size of a
+    /// 2048² RGBA8 image put the load's peak 54 MiB above its start (decoded
+    /// pixels 16, staging 16, texture and mips 21.3) against MetalKit's 44.
+    /// malloc keeps a freed decode buffer of that size counted, so releasing
+    /// the pixels earlier does not lower it (`docs/reference/renderer.md`).
+    /// 1024² RGBA8 and smaller images stage in one strip.
+    static let stagingLimit = 4 << 20
+
+    /// The texture MetalKit's `newTexture(cgImage:options:)` makes with
+    /// `.generateMipmaps`, `.shaderRead` usage and `.private` storage.
+    /// Returns only after the upload's last command buffer has completed, so
+    /// no caller ever holds a texture the GPU is still writing. `didComplete`
+    /// sees that command buffer as the texture is handed out, and a small
+    /// `stagingLimit` forces strips on small images (tests only).
+    static func texture(_ source: Image, srgb: Bool, device: any MTLDevice, queue: any MTLCommandQueue,
+                        stagingLimit: Int = stagingLimit,
+                        didComplete: ((any MTLCommandBuffer) -> Void)? = nil) throws -> any MTLTexture {
+        let image = source.cgImage
+        guard let layout = layout(for: source, srgb: srgb) else {
+            throw Failure.unsupportedLayout(describe(image))
         }
-        let sourceRow = image.bytesPerRow, sourcePixel = image.bitsPerPixel / 8
-        guard CFDataGetLength(data) >= sourceRow * (height - 1) + width * sourcePixel else { throw Failure.decode(describe(image)) }
-        guard let staging = device.makeBuffer(length: rowBytes * height, options: [.storageModeShared, .cpuCacheModeWriteCombined]) else {
-            throw Failure.gpu("staging buffer of \(rowBytes * height) bytes")
-        }
-        let target = staging.contents()
+        let width = image.width, height = image.height, rowBytes = width * layout.bytesPerPixel
+        let descriptor = MTLTextureDescriptor.texture2DDescriptor(pixelFormat: layout.pixelFormat, width: width, height: height, mipmapped: false)
+        descriptor.mipmapLevelCount = mipLevelCount(width: width, height: height)
+        descriptor.usage = .shaderRead
+        descriptor.storageMode = .private
+        guard let texture = device.makeTexture(descriptor: descriptor) else { throw Failure.gpu("texture \(describe(image))") }
+        // At most `UploadPermits.limit` loads hold decoded pixels and staging
+        // at once, plus one from the main thread, which never waits for a permit.
+        try UploadPermits.shared.withPermit { try autoreleasepool {
+            guard let data = image.dataProvider?.data else { throw Failure.decode(describe(image)) }
+            try withExtendedLifetime(data) {
+                guard let pixels = CFDataGetBytePtr(data),
+                      CFDataGetLength(data) >= image.bytesPerRow * (height - 1) + width * (image.bitsPerPixel / 8) else {
+                    throw Failure.decode(describe(image))
+                }
+                let stripRows = max(1, min(height, stagingLimit / rowBytes))
+                guard let staging = device.makeBuffer(length: stripRows * rowBytes, options: [.storageModeShared, .cpuCacheModeWriteCombined]) else {
+                    throw Failure.gpu("staging buffer of \(stripRows * rowBytes) bytes")
+                }
+                let strips = (height + stripRows - 1) / stripRows
+                for strip in 0..<strips {
+                    let top = strip * stripRows, rows = min(stripRows, height - top), last = strip == strips - 1
+                    try convert(image, pixels: pixels + top * image.bytesPerRow, rows: rows, layout: layout, into: staging.contents())
+                    guard let command = queue.makeCommandBuffer(), let blit = command.makeBlitCommandEncoder() else {
+                        throw Failure.gpu("command buffer for \(describe(image))")
+                    }
+                    command.label = "InlineTextureLoader strip \(strip + 1)/\(strips)"
+                    blit.copy(from: staging, sourceOffset: 0, sourceBytesPerRow: rowBytes, sourceBytesPerImage: rowBytes * rows,
+                              sourceSize: MTLSize(width: width, height: rows, depth: 1), to: texture, destinationSlice: 0,
+                              destinationLevel: 0, destinationOrigin: MTLOrigin(x: 0, y: top, z: 0))
+                    if last && texture.mipmapLevelCount > 1 { blit.generateMipmaps(for: texture) }
+                    blit.endEncoding()
+                    command.commit()
+                    // The next strip overwrites the staging buffer only after
+                    // the GPU has read this one.
+                    command.waitUntilCompleted()
+                    if command.status != .completed {
+                        throw Failure.gpu("\(describe(image)): \(command.error.map { "\($0)" } ?? "status \(command.status.rawValue)")")
+                    }
+                    if last { didComplete?(command) }
+                }
+            }
+        } }
+        return texture
+    }
+
+    /// Converts `rows` rows of decoded pixels, starting at `source`, into
+    /// `target` in the texture's layout. The target is write-combined
+    /// staging: it is written once, in order, and never read.
+    static func convert(_ image: CGImage, pixels source: UnsafePointer<UInt8>, rows height: Int, layout: Layout,
+                        into target: UnsafeMutableRawPointer) throws {
+        let width = image.width, rowBytes = width * layout.bytesPerPixel, sourceRow = image.bytesPerRow
         switch layout.conversion {
         case .copy:
             if sourceRow == rowBytes { target.copyMemory(from: source, byteCount: rowBytes * height) }
@@ -281,7 +344,7 @@ enum InlineTextureLoader {
             // vImage rounds as MetalKit does for every colour and alpha pair:
             // unpremultiplied min(255, (c * 255 + a / 2) / a), 0 where a is 0;
             // premultiplied (c * a + 127) / 255. It converts in strips through
-            // a small cached buffer, so the staging buffer is written once, in
+            // a small buffer, so the staging buffer is still written once, in
             // order, and never read.
             let strip = max(1, min(height, (256 * 1024) / rowBytes))
             var temporary = [UInt8](repeating: 0, count: strip * rowBytes)
@@ -319,48 +382,6 @@ enum InlineTextureLoader {
                 }
             }
         }
-        return staging
-    }
-
-    /// The texture MetalKit's `newTexture(cgImage:options:)` makes with
-    /// `.generateMipmaps`, `.shaderRead` usage and `.private` storage.
-    /// Returns only after the upload's command buffer has completed, so no
-    /// caller ever holds a texture the GPU is still writing. `didComplete`
-    /// sees that command buffer as the texture is handed out (tests only).
-    static func texture(_ source: Image, srgb: Bool, device: any MTLDevice, queue: any MTLCommandQueue,
-                        didComplete: ((any MTLCommandBuffer) -> Void)? = nil) throws -> any MTLTexture {
-        let image = source.cgImage
-        guard let layout = layout(for: source, srgb: srgb) else {
-            throw Failure.unsupportedLayout(describe(image))
-        }
-        let width = image.width, height = image.height
-        let descriptor = MTLTextureDescriptor.texture2DDescriptor(pixelFormat: layout.pixelFormat, width: width, height: height, mipmapped: false)
-        descriptor.mipmapLevelCount = mipLevelCount(width: width, height: height)
-        descriptor.usage = .shaderRead
-        descriptor.storageMode = .private
-        guard let texture = device.makeTexture(descriptor: descriptor) else { throw Failure.gpu("texture \(describe(image))") }
-        // The staging buffer lives only until the copy has completed. At most
-        // `UploadPermits.limit` loads hold decoded pixels and staging at once,
-        // plus one from the main thread, which never waits for a permit.
-        try UploadPermits.shared.withPermit { try autoreleasepool {
-            let staging = try stage(image, layout: layout, device: device)
-            guard let command = queue.makeCommandBuffer(), let blit = command.makeBlitCommandEncoder() else {
-                throw Failure.gpu("command buffer for \(describe(image))")
-            }
-            let rowBytes = width * layout.bytesPerPixel
-            blit.copy(from: staging, sourceOffset: 0, sourceBytesPerRow: rowBytes, sourceBytesPerImage: rowBytes * height,
-                      sourceSize: MTLSize(width: width, height: height, depth: 1), to: texture, destinationSlice: 0,
-                      destinationLevel: 0, destinationOrigin: MTLOrigin(x: 0, y: 0, z: 0))
-            if texture.mipmapLevelCount > 1 { blit.generateMipmaps(for: texture) }
-            blit.endEncoding()
-            command.commit()
-            command.waitUntilCompleted()
-            if command.status != .completed {
-                throw Failure.gpu("\(describe(image)): \(command.error.map { "\($0)" } ?? "status \(command.status.rawValue)")")
-            }
-            didComplete?(command)
-        } }
-        return texture
     }
 
     /// The first image of an encoded file or buffer, decoded by ImageIO the
