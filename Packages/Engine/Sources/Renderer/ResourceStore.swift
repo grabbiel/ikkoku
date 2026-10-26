@@ -99,6 +99,27 @@ public final class GPUMesh: @unchecked Sendable {
     }
 }
 
+/// The texture upload queue for each device, shared by every `ResourceStore`.
+/// The GPU driver gives a process a limited number of command queues: with a
+/// queue per store, 256 stores loading at once failed about 100 uploads with
+/// `IOGPUCommandQueueErrorDomain` 518. Uploads need no order between stores.
+/// Past the queue's 64 command buffers in flight, `makeCommandBuffer` waits
+/// for one to complete on the GPU, which needs no worker thread.
+final class UploadQueues: @unchecked Sendable {
+    static let shared = UploadQueues()
+    private let lock = NSLock()
+    private var queues: [UInt64: any MTLCommandQueue] = [:]
+
+    func queue(for device: any MTLDevice) -> any MTLCommandQueue {
+        lock.lock(); defer { lock.unlock() }
+        if let queue = queues[device.registryID] { return queue }
+        let queue = device.makeCommandQueue()!
+        queue.label = "ResourceStore texture uploads"
+        queues[device.registryID] = queue
+        return queue
+    }
+}
+
 public enum ResourceError: Error, CustomStringConvertible {
     case bufferAllocation, imageDecode(String), invalidSkin(String), invalidUV(String)
     /// A GPU texture container (KTX, KTX2, PVR, ASTC, DDS, ATX) and its file
@@ -166,7 +187,8 @@ public final class ResourceStore: @unchecked Sendable {
     /// this value is unchanged (R7 phase 2, item 4; `Renderer.DrawnFrame`).
     private var generationValue: UInt64 = 0
     /// Texture uploads only, never the renderer's frame queue: an upload
-    /// neither interleaves with nor waits behind frame command buffers.
+    /// neither interleaves with nor waits behind frame command buffers. One
+    /// queue per device serves every store (`UploadQueues`).
     let uploadQueue: any MTLCommandQueue
 
     public let whiteTexture: any MTLTexture
@@ -180,8 +202,7 @@ public final class ResourceStore: @unchecked Sendable {
     public init(device: any MTLDevice) {
         self.device = device
         self.translatedPipelines = TranslatedSourcePipelineCache(device: device)
-        self.uploadQueue = device.makeCommandQueue()!
-        uploadQueue.label = "ResourceStore texture uploads"
+        self.uploadQueue = UploadQueues.shared.queue(for: device)
         whiteTexture = ResourceStore.makeSolid(device: device, rgba: [255, 255, 255, 255], label: "White")
         blackTexture = ResourceStore.makeSolid(device: device, rgba: [0, 0, 0, 0], label: "Black")
         flatNormalTexture = ResourceStore.makeSolid(device: device, rgba: [128, 128, 255, 255], label: "FlatNormal")
