@@ -4610,6 +4610,15 @@ so it never starves other tasks.
   from the main thread takes no permit and never waits behind other loads.
 - GPU texture containers (KTX, KTX2, PVR, ASTC, DDS, ATX) are rejected by
   name on every entry point.
+- Pixel conversion uses vImage. PNG and JPEG only swap red and blue
+  (`vImagePermuteChannels_ARGB8888`). Premultiplied decodes and the HEIF
+  family, AVIF and JPEG XL with alpha are un- or premultiplied by vImage,
+  which rounds as MetalKit does for every colour and alpha pair, in strips
+  through a small cached buffer. The write-combined staging buffer is
+  written once, in order, and never read on the CPU.
+- One line outside the loader: `SourceStudioCharacterPreview.setColorEdits`
+  types its sorted color-edit loop explicitly, because CI's Swift 6.3.3
+  could not type-check the untyped form once Renderer imported Accelerate.
 - The off-pool test helpers (`liveTickOffPool`) and the GCD workers in the
   app stay. They follow the pool rule for reasons beyond texture loads.
 
