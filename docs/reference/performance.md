@@ -3168,6 +3168,37 @@ Cost, medians (8 bundled runs, 4 a side):
   the timer, 646–657 ms/s with display pacing. Main busy time differed by
   +0.1 and +13.1 ms/s.
 
+**Correctness.**
+
+- **Captures** at `517b2fb`, Release, with the shared fixture map, one
+  launch each under the app lock. The set is live pacing's: six
+  `IKKOKU_AUTOCAPTURE` renders, two `IKKOKU_CAPTURE_UI` windows and the
+  `advance` scenario. The renders include the Maker source with the live
+  opt-in OFF and ON. The Maker's live animation is on in all of them. All
+  12 PNGs and 5 reports are byte-identical to `main` `74cee1c`; #275 changed
+  none of them, so that base holds for `6502803`.
+- **Lanes.** Debug, `--strict` under the app lock, 0 skipped:
+  - `maker-scenarios` 10/10 at `517b2fb`, and again at `3c0d48d` after
+    merging `main` `b4c59e7`;
+  - `studio-scenarios` 77/77 at `8c8d8a0`, the merge.
+- **Engine tests.** `LiveStepPacerTests` (11, two of them new) and
+  `DisplayLinkRatePolicyTests` (4) pass, also under ThreadSanitizer with 0
+  warnings. The suite with the fixture map at the merge ran 982 tests. The
+  6 failures and 14 issues are the same fixture-environment ones as live
+  pacing's.
+- **App under ThreadSanitizer** (Debug, at `8c8d8a0`): 12 s each of
+  `maker-idle`, `maker-slider`, `viewport-lifecycle`, `studio-timeline` and
+  `studio-idle`, and `maker-idle` with the bundled character, with 0
+  warnings. The original card's step took about 113 ms under
+  ThreadSanitizer, so 101 steps ran in 12 s, each answered `.ran`.
+  TBD tsan lifecycle
+- **`viewport-lifecycle`** (Release) TBD release lifecycle
+- **Python.** All pass:
+  - runner self-tests (200), with the hand-over check;
+  - `Tools/reverse` 573, with 7 skipped;
+  - `Tools/reverse/analysis` 279;
+  - the site check.
+
 ### What remains after live pacing
 
 - **Compositor lateness.** The remaining presented jitter comes from the
