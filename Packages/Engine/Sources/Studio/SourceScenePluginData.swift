@@ -765,7 +765,10 @@ struct SideloaderPlan {
             var result: [Int32: Int] = [:]
             for (position, record) in records.enumerated() {
                 guard let key = Int32(exactly: record.key), let object = edit.sourceRecords[key] else {
-                    throw Failure(reason: "has a record for object \(record.key), which the scene does not have")
+                    // Sideloader's load throws here (UniversalAutoResolver.cs:1342)
+                    // and resolves nothing after it (:474-481); its save never
+                    // writes such a record.
+                    throw Failure(reason: "names object \(record.key), which is not in this scene, so CharaStudio also loads this scene partly unresolved: its later mod items, map, filter, ramp and music")
                 }
                 guard kinds.contains(object.kind) else {
                     throw Failure(reason: "has a record for object \(key), a \(object.kind) rather than an item, light or character")

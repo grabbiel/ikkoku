@@ -401,7 +401,7 @@ public static class PluginSceneRules {
                 var seen=new HashSet<int>();
                 foreach(var key in records) {
                     int kind;
-                    if(key<int.MinValue||key>int.MaxValue||!edit.SourceKinds.TryGetValue((int)key,out kind))throw new SideloaderFailure("has a record for object "+key+", which the scene does not have");
+                    if(key<int.MinValue||key>int.MaxValue||!edit.SourceKinds.TryGetValue((int)key,out kind))throw new SideloaderFailure("names object "+key+", which is not in this scene, so CharaStudio also loads this scene partly unresolved");
                     if(pattern?kind!=Item:(kind!=Item&&kind!=Light&&kind!=Character))throw new SideloaderFailure("has a record for object "+key+" of the wrong kind");
                     if(!seen.Add((int)key))throw new SideloaderFailure("has two records for object "+key);
                 }

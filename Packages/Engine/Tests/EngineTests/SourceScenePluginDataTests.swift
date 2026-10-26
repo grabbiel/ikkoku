@@ -219,7 +219,7 @@ private func sideloader(_ items: [Record], _ patterns: [Record] = [], map: Bool 
 @Test func sourceScenePluginDataRefusesSideloaderRecordsItCannotPlace() throws {
     let label = "Sideloader data ('\(sideloaderID)')"
     let cases: [([Record], String)] = [
-        ([Record(99, 99, 0)], "has a record for object 99, which the scene does not have"),
+        ([Record(99, 99, 0)], "names object 99, which is not in this scene, so CharaStudio also loads this scene partly unresolved: its later mod items, map, filter, ramp and music"),
         ([Record(0, 0, 0)], "has a record for object 0, a folder rather than an item, light or character"),
         ([Record(4, 4, 3), Record(4, 4, 3)], "has two records for object 4"),
     ]
