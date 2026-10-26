@@ -116,6 +116,16 @@ func sourceScenePluginDataWritesThePhaseBInputs() throws {
 /// carries their entries), each edit of it (edit-<label>.png), the
 /// load-then-save of every one of those (resave-*.png), of our phase-A
 /// exports (resave-ours-*.png) and of the nil-entry fixture.
+///
+/// KKPE writes each pose controller's Unity instance ID as `uniqueId`
+/// (HSPE/PoseController.cs:409), and CollidersEditor references them as
+/// `poseControllerId` (HSPE.AMModules/CollidersEditor.cs:1037, :1048). The
+/// load uses them only to match references within the same file
+/// (`_oldInstanceId` with `_loadId`, :1140-1176), and they change every
+/// session, so no two CharaStudio saves of a KKPE scene are byte-identical,
+/// its own load-then-save included. Files are compared with those IDs
+/// renamed in order of first appearance (`withoutInstanceIDs`); everything
+/// else, every other entry's bytes included, must be identical.
 @Test(.enabled(if: SourceFixtureSupport.shouldRun([phaseBVariable]), "Requires IKKOKU_PLUGIN_SCENE_PROBE_B (the probe's phase-b folder)"))
 func sourceScenePluginDataMatchesCharaStudioWithEveryPlugin() throws {
     let root = URL(fileURLWithPath: try SourceFixtureSupport.require(phaseBVariable))
@@ -127,6 +137,13 @@ func sourceScenePluginDataMatchesCharaStudioWithEveryPlugin() throws {
     for id in [SourceScenePluginData.kkpe, SourceScenePluginData.nodesConstraints, SourceScenePluginData.materialEditor] {
         #expect(kkex.entries.contains { $0.id == id }, "fixture.png has no \(id) entry")
     }
+    // The comparison renames instance IDs only: another edit, or one KKPE
+    // attribute changed at the same length, still differs.
+    #expect(try withoutInstanceIDs(load("edit-move.png")) != withoutInstanceIDs(load("edit-route-add.png")))
+    let flag = Data(#"enabled="false""#.utf8), changed = Data(#"enabled="fals_""#.utf8)
+    let at = try #require(fixture.range(of: flag, options: .backwards))
+    var mutated = fixture; mutated.replaceSubrange(at, with: changed)
+    #expect(try withoutInstanceIDs(mutated) != withoutInstanceIDs(fixture))
     // Our export of each edit of this fixture: refused where an item is
     // added or removed (KKPE's per-item list is positional; its rewrite is
     // PR 2), otherwise CharaStudio's file.
@@ -140,8 +157,10 @@ func sourceScenePluginDataMatchesCharaStudioWithEveryPlugin() throws {
         edits.thumbnailData = try pngPrefix(saved)
         do {
             let ours = try source.editedData(edits)
-            #expect(ours == saved, "\(label): the file differs at \(firstDifference(ours, saved))")
-            lines.append("\(label): \(ours == saved ? "byte-identical file" : "differs at \(firstDifference(ours, saved))")")
+            let same = try withoutInstanceIDs(ours) == withoutInstanceIDs(saved)
+            #expect(same, "\(label): the file differs beyond KKPE's instance IDs")
+            lines.append("\(label): " + (ours == saved ? "byte-identical file"
+                : same ? "identical apart from KKPE's instance IDs (\(ours.count) and \(saved.count) B)" : "differs at \(firstDifference(ours, saved))"))
         } catch let error as SourceSceneTopologyError {
             let reason = error.errorDescription ?? ""
             #expect(reason.contains("KKPE"), "\(label): \(reason)")
@@ -150,11 +169,14 @@ func sourceScenePluginDataMatchesCharaStudioWithEveryPlugin() throws {
         }
     }
     #expect(refused == ["delete", "delete-folder", "duplicate", "delete-duplicate"])
-    // CharaStudio's load-then-save is a fixed point of its own saves.
+    // CharaStudio's load-then-save is a fixed point of its own saves, up to
+    // KKPE's instance IDs.
     for name in ["fixture.png"] + (phaseAEdits + ["delete-light", "add-folder"]).map({ "edit-\($0).png" }) {
-        let same = try afterPNG(load("resave-\(name)")) == afterPNG(load(name))
+        let resaved = try load("resave-\(name)"), saved = try load(name)
+        let same = try withoutInstanceIDs(resaved) == withoutInstanceIDs(saved)
         #expect(same, "resave-\(name)")
-        lines.append("resave-\(name): \(same ? "same scene bytes" : "differs")")
+        let identical = try afterPNG(resaved) == afterPNG(saved)
+        lines.append("resave-\(name): \(identical ? "same scene bytes" : same ? "same apart from KKPE's instance IDs" : "differs")")
     }
     // Our phase-A exports, loaded and saved by this player, are its own
     // edits of the phase-B fixture; delete-duplicate's copy keeps our key.
@@ -163,16 +185,17 @@ func sourceScenePluginDataMatchesCharaStudioWithEveryPlugin() throws {
         if label == "delete-duplicate" {
             let ours = try KoikatsuSceneReader.decodeDocument(load("resave-ours-\(label).png"))
             #expect(ours.snapshot.roots.map(\.sourceKey) == [0, 2, 5, 7, 14, 15, 16])
-            lines.append("resave-ours-\(label): \(resaved.count == theirs.count ? "same length" : "length differs"), keys as ours (#278)")
+            lines.append("resave-ours-\(label): keys as ours (#278)")
         } else {
-            #expect(resaved == theirs, "resave-ours-\(label)")
-            lines.append("resave-ours-\(label): \(resaved == theirs ? "same scene bytes as CharaStudio's edit" : "differs")")
+            let same = try withoutInstanceIDs(load("resave-ours-\(label).png")) == withoutInstanceIDs(load("edit-\(label).png"))
+            #expect(same, "resave-ours-\(label)")
+            lines.append("resave-ours-\(label): \(resaved == theirs ? "same scene bytes as CharaStudio's edit" : same ? "CharaStudio's edit apart from KKPE's instance IDs" : "differs")")
         }
     }
     // Nil entries are inert: the nil-entry fixture saves as the fixture does.
-    let nilSame = try afterPNG(load("resave-fixture-nil.png")) == afterPNG(fixture)
+    let nilSame = try withoutInstanceIDs(load("resave-fixture-nil.png")) == withoutInstanceIDs(fixture)
     #expect(nilSame)
-    lines.append("resave-fixture-nil: \(nilSame ? "same scene bytes as fixture.png" : "differs")")
+    lines.append("resave-fixture-nil: \(nilSame ? "fixture.png apart from KKPE's instance IDs" : "differs")")
     print("plug-in probe phase B:\n" + lines.joined(separator: "\n"))
 }
 
@@ -188,6 +211,38 @@ private func addedFolder(source: KoikatsuSceneDocument, theirs: KoikatsuSceneDoc
 
 /// The scene after its leading PNG.
 private func afterPNG(_ data: Data) throws -> Data { data.dropFirst(try pngPrefix(data).count) }
+
+/// The scene after its PNG, with KKPE's per-session instance IDs (`uniqueId`
+/// and `poseControllerId`) renamed in order of first appearance: the scene
+/// bytes, the KKEx data version, and per entry its ID and bytes, or for
+/// KKPE its PluginData version and renamed `sceneInfo`.
+private func withoutInstanceIDs(_ data: Data) throws -> [String] {
+    let document = try KoikatsuSceneReader.decodeDocument(data)
+    let trailer = document.trailingData
+    var parts = [try afterPNG(data).dropLast(trailer.count).base64EncodedString()]
+    guard !trailer.isEmpty else { return parts }
+    let kkex = try SourceSceneKKEx.parse(trailer)
+    parts.append("KKEx \(kkex.dataVersion)")
+    let pattern = try NSRegularExpression(pattern: #"(uniqueId|poseControllerId)="(-?[0-9]+)""#)
+    for entry in kkex.entries {
+        guard entry.id == SourceScenePluginData.kkpe, let fields = try kkex.fields(entry), fields.count == 1,
+              fields[0].key == "sceneInfo", let xml = try kkex.string(fields[0].value) else {
+            parts.append(entry.id + " " + Data(kkex.bytes[entry.span]).base64EncodedString())
+            continue
+        }
+        var names: [String: Int] = [:], renamed = "", last = xml.startIndex
+        for match in pattern.matches(in: xml, range: NSRange(xml.startIndex..., in: xml)) {
+            let attribute = Range(match.range(at: 1), in: xml)!, value = Range(match.range(at: 2), in: xml)!
+            let name = names[String(xml[value])] ?? names.count
+            names[String(xml[value])] = name
+            renamed += xml[last..<attribute.lowerBound] + "\(xml[attribute])=\"#\(name)\""
+            last = Range(match.range, in: xml)!.upperBound
+        }
+        renamed += xml[last...]
+        parts.append("kkpe \(entry.version.map(String.init) ?? "-") " + renamed)
+    }
+    return parts
+}
 
 /// `scene` with nil entries `ids` appended to its KKEx map (a fixmap).
 private func nilEntries(_ scene: Data, trailer: Data, ids: [String]) throws -> Data {

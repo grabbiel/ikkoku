@@ -329,7 +329,7 @@ private func sideloader(_ items: [Record], _ patterns: [Record] = [], map: Bool 
     for edits in [SourceSceneEdits(deletions: [5]), addFolder, addLight, moveItem, route] {
         #expect(verdict(pluginScene(kkpe), edits) == "kept")
     }
-    let items = "KKPE data ('kkpe') matches its pose data to items by their position in key order, and this edit adds or removes items"
+    let items = "KKPE data ('kkpe') matches its pose data to items by their position in key order, and this edit adds or removes items, so poses would load onto the wrong items"
     #expect(verdict(pluginScene(kkpe), .init(deletions: [4])).contains(items))
     // Indirectly: copying a folder copies its items.
     #expect(verdict(pluginScene(kkpe), copyFolder).contains("cannot duplicate objects in this scene: \(items)"))
@@ -337,18 +337,20 @@ private func sideloader(_ items: [Record], _ patterns: [Record] = [], map: Bool 
     let constraints = [("nodesConstraints", plugin(0, .map([("constraints", .str(
         #"<constraints version="1"><constraint parentObjectIndex="0" childObjectIndex="3" /></constraints>"#))])))]
     let timeline = [("timeline", plugin(0, .map([("sceneInfo", .str(#"<root><interpolable objectIndex="3" /></root>"#))])))]
-    let cases: [([(String, PluginMP)], String)] = [
-        (constraints, "NodesConstraints data ('nodesConstraints')"), (timeline, "Timeline data ('timeline')"),
+    let cases: [([(String, PluginMP)], String, String)] = [
+        (constraints, "NodesConstraints data ('nodesConstraints')", "its constraints"), (timeline, "Timeline data ('timeline')", "its animation tracks"),
     ]
-    for (entries, label) in cases {
-        let shifted = "\(label) addresses objects by their index among all objects in key order, and this edit removes, copies or renumbers some"
+    for (entries, label, data) in cases {
+        let position = "\(label) addresses objects by their position among all objects in key order, and "
+        let shifted = position + "this edit removes or copies objects, which shifts the positions of others, so \(data) would point at the wrong objects"
+        let added = position + "the new object takes a free key below existing objects, which shifts their positions, so \(data) would point at the wrong objects"
         // A new object above every key, route points and moves keep each
         // object's index.
         for edits in [addFolder, addCamera, moveItem, route] { #expect(verdict(pluginScene(entries), edits) == "kept") }
         #expect(verdict(pluginScene(entries), .init(deletions: [5])).contains(shifted))
         #expect(verdict(pluginScene(entries), copyItem).contains(shifted))
         // Indirectly: a new folder takes the free key 12, below character 13.
-        #expect(verdict(pluginScene(entries, hole: true), addFolder).contains("cannot add objects in this scene: \(shifted)"))
+        #expect(verdict(pluginScene(entries, hole: true), addFolder).contains("cannot add objects in this scene: \(added)"))
         // A route point taking the free key is not an object.
         #expect(verdict(pluginScene(entries, hole: true), try addPoint(hole: true)) == "kept")
     }
@@ -438,7 +440,7 @@ private func sideloader(_ items: [Record], _ patterns: [Record] = [], map: Bool 
     expectRefused(lights, [.init(deletions: [5]), copyLight], "LightSettings data ('LightSettingsData') \(named)")
     let characterLight = ("LightSettingsData", plugin(0, .map([("LightSettingsData_lights", packed(.arr([.map([("ObjectId", .int(-10))])])))])))
     expectKept(characterLight, [.init(deletions: [5])])
-    expectRefused(characterLight, [addLight, copyLight], "writes a record for every light, and this edit adds or copies a light")
+    expectRefused(characterLight, [addLight, copyLight], "saves settings for every light, and this edit adds or copies a light that would load without the settings CharaStudio saves for it")
     // StudioItemIK: IK item keys with their target and pole items.
     let ikID = "org.njaecha.plugins.StudioItemIK"
     let ik = (ikID, plugin(0, .map([("activeIKs", packed(.arr([.int(4)]))),

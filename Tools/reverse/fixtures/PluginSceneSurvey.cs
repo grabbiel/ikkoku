@@ -31,6 +31,7 @@ using System.Collections;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
+using System.Text.RegularExpressions;
 using System.Reflection;
 using Studio;
 
@@ -58,6 +59,8 @@ public sealed class PluginSceneSurvey {
     readonly SortedDictionary<string,long> orphanShapes=new SortedDictionary<string,long>(StringComparer.Ordinal);
     readonly SortedDictionary<string,SortedDictionary<string,long>> withoutEntries=new SortedDictionary<string,SortedDictionary<string,long>>(StringComparer.Ordinal);
     readonly SortedDictionary<string,long> cardHits=new SortedDictionary<string,long>(StringComparer.Ordinal);
+    // Scenes per refusal reason ("<entry ID> <reason>", numbers as "#"): why an entry refuses, never which scene.
+    readonly SortedDictionary<string,long> reasonScenes=new SortedDictionary<string,long>(StringComparer.Ordinal);
     int namedLinks; // characters of the scene being modelled whose card names Links or Eyes
     readonly List<long> objectCounts=new List<long>();
     // The current scene's routes in walk order: key and point count (points are sub-infos, not objects).
@@ -233,6 +236,7 @@ public sealed class PluginSceneSurvey {
     }
 
     void Judge(PluginSceneModel scene) {
+        var sceneReasons=new HashSet<string>(StringComparer.Ordinal);
         var edits=new Dictionary<string,List<PluginSceneEdit>>();
         foreach(var kind in EditKinds)edits[kind]=new List<PluginSceneEdit>();
         for(int i=0;i<scene.Keys.Count;i++) {
@@ -256,6 +260,7 @@ public sealed class PluginSceneSurvey {
                 var verdict=PluginSceneRules.Judge(scene,edit);counts["judgedEdits"]++;
                 if(!verdict.Refused){accepted++;continue;}
                 refused=true;
+                foreach(var reason in verdict.Reasons){var r=Regex.Replace(reason,"-?[0-9]+","#");sceneReasons.Add(r.Length>240?r.Substring(0,240):r);}
                 if(verdict.Ids.Count==0)onlyUnknown=false; // an unreadable trailer
                 foreach(var id in verdict.Ids){refusing.Add(id);if(PluginSceneRules.Known(id))onlyUnknown=false;}
             }
@@ -264,6 +269,7 @@ public sealed class PluginSceneSurvey {
             if(refused&&onlyUnknown)unknownOnly[kind]++;
             foreach(var id in refusing)Bump(ids[id].Refuses,kind);
         }
+        foreach(var reason in sceneReasons)Bump(reasonScenes,reason);
     }
 
     static int IndexOf(byte[] data,byte[] marker,byte[] next) {
@@ -291,6 +297,6 @@ public sealed class PluginSceneSurvey {
                 {"median",objectCounts.Count==0?0:objectCounts[objectCounts.Count/2]}}},
             {"scenesByEditKindAfter",after},{"scenesByEditKindBefore",before},{"scenesRefusedOnlyByUnknownIDs",unknownOnly},
             {"entryIDs",idList},{"orphanShapes",orphanShapes},{"withoutEntriesWithStepsByEditKind",withoutEntries},
-            {"cardRefusedScenesByEditKind",cardHits}};
+            {"cardRefusedScenesByEditKind",cardHits},{"refusalReasonScenes",reasonScenes}};
     }
 }

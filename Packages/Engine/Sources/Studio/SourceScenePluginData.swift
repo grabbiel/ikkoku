@@ -42,6 +42,7 @@ enum SourceScenePluginData {
     static let customMasking = "com.deathweasel.bepinex.studiocustommasking"
     static let timeline = "timeline"
     static let cardAnimationController = "com.deathweasel.bepinex.animationcontroller"
+    static let cardMarker = Data(cardAnimationController.utf8)
 
     /// Scene entry IDs that none of the 243 DLLs installed under
     /// `BepInEx\plugins` contains, as ASCII/UTF-8 or UTF-16LE (installed
@@ -86,6 +87,10 @@ enum SourceScenePluginData {
     /// before insertions; `copies` maps each copy's key to its template's.
     static func rewrite(_ data: Data, final: KoikatsuSceneDocument, source: KoikatsuSceneDocument,
                         copies: [Int32: Int32], moved: Bool) throws -> Data {
+        // No plug-in data: only the card fallback can refuse, and only for a
+        // card that names KKAnimationController data. Every written card is
+        // in `data` verbatim, so one search keeps such scenes at no cost.
+        if final.trailingData.isEmpty, data.range(of: cardMarker) == nil { return data }
         let edit = Edit(source: source.snapshot, final: final.snapshot, copies: copies, moved: moved)
         guard edit.structural else { return data }
         guard !final.trailingData.isEmpty else {
@@ -138,7 +143,7 @@ enum SourceScenePluginData {
     /// points are only in `dicInfo` (AddObjectRoute.cs:151).
     static func cardLinks(_ edit: Edit, _ controller: AnimationControllerForm) -> String? {
         guard edit.rekeys, controller == .empty else { return nil }
-        let marker = Data(cardAnimationController.utf8)
+        let marker = cardMarker
         var objects: Set<Int32>?
         for record in edit.finalRecords {
             guard let character = record.character, character.cardData.range(of: marker) != nil else { continue }
@@ -372,6 +377,16 @@ enum SourceScenePluginData {
             if !rewrites { decisions = decisions.map { _ in .keep } }
         }
 
+        /// NodesConstraints' and Timeline's reason: their data addresses
+        /// objects by index in the key-sorted dicObjectCtrl, and what the
+        /// edit does to those indices.
+        private func shifted(_ data: String) -> String {
+            let cause = edit.deleted || edit.copied
+                ? "this edit removes or copies objects, which shifts the positions of others"
+                : "the new object takes a free key below existing objects, which shifts their positions"
+            return "addresses objects by their position among all objects in key order, and \(cause), so \(data) would point at the wrong objects"
+        }
+
         /// The rule for one non-nil entry; a refusal reason, or nil.
         private mutating func decide(_ entry: SourceSceneKKEx.Entry, decision: inout Decision) throws -> String? {
             let unknown = edit.keysChange ? "has no rule in this writer for following object edits (its plug-in's save, copy and delete code is not recovered here)" : nil
@@ -402,14 +417,14 @@ enum SourceScenePluginData {
                 guard version == 0 else { return unknownVersion() }
                 guard let xml = try TimelineForm.sceneInfo(trailer, entry) else { return unknown }
                 if !xml.contains("objectIndex") || edit.positionsKept { return nil }
-                return "addresses objects by their index among all objects in key order, and this edit removes, copies or renumbers some"
+                return shifted("its animation tracks")
             case kkpe:
                 // KKPE (HSPE/MainWindow.cs OnSceneSave, LoadSceneGeneric)
                 // writes one element per item in key order and loads the
                 // i-th element onto the i-th item: positional.
                 guard version == 0 else { return unknownVersion() }
                 if edit.unchanged([.item]) { return nil }
-                return "matches its pose data to items by their position in key order, and this edit adds or removes items"
+                return "matches its pose data to items by their position in key order, and this edit adds or removes items, so poses would load onto the wrong items"
             case materialEditor:
                 // MaterialEditor SceneController: edits keyed by item key;
                 // only an item's delete or copy changes them.
@@ -423,7 +438,7 @@ enum SourceScenePluginData {
                 // dicObjectCtrl. The card fallback (`cardLinks`) adds to
                 // them on load either way.
                 if edit.positionsKept { return nil }
-                return "addresses objects by their index among all objects in key order, and this edit removes, copies or renumbers some"
+                return shifted("its constraints")
             case animationController:
                 guard version == 0 else { return unknownVersion() }
                 switch try AnimationControllerForm(trailer, entry) {
@@ -440,10 +455,10 @@ enum SourceScenePluginData {
                         : "names objects by key, and this edit deletes one of them"
                 }
                 if rule.lights, edit.finalRecords.contains(where: { $0.kind == .light && edit.origins[$0.sourceKey] != $0.sourceKey }) {
-                    return "writes a record for every light, and this edit adds or copies a light"
+                    return "saves settings for every light, and this edit adds or copies a light that would load without the settings CharaStudio saves for it"
                 }
                 if found.positional, !edit.unchanged([.camera]) {
-                    return "selects a camera by its position in the camera list, and this edit adds, copies or deletes cameras"
+                    return "selects a camera by its position in the camera list, and this edit adds, copies or deletes cameras, so it would select the wrong camera"
                 }
                 return nil
             }

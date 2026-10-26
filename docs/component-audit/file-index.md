@@ -23,13 +23,13 @@ branch was tested or every asset matches the original game. Feature status,
 specific comments and pending tasks are in the linked reports. Shared behavior
 may be discussed in more than one report; one primary owner is listed here.
 
-**1006 files indexed; 1006 assigned; 0 unassigned.**
+**1007 files indexed; 1007 assigned; 0 unassigned.**
 
 | Primary report | Files |
 | --- | ---: |
 | [App / gameplay / plugins](app-gameplay-and-plugins.md) | 110 |
 | [Character / Maker / mods](character-and-mods.md) | 128 |
-| [Studio / IK / animation](studio.md) | 224 |
+| [Studio / IK / animation](studio.md) | 225 |
 | [Renderer / foundation / assets](renderer-and-foundation.md) | 335 |
 | [Toolchain / verification / historical docs](toolchain-and-verification.md) | 199 |
 
@@ -42,7 +42,7 @@ may be discussed in more than one report; one primary owner is listed here.
 | Generated asset / catalog / fixture | 205 |
 | Reference host / controlled fixture | 35 |
 | Runtime / shared shader declaration | 222 |
-| Test / validation | 206 |
+| Test / validation | 207 |
 
 ## App / gameplay / plugins
 
@@ -386,6 +386,7 @@ Feature assessment: [studio.md](studio.md).
 | [Packages/Engine/Tests/EngineTests/SourceSceneEditingTests.swift](../../Packages/Engine/Tests/EngineTests/SourceSceneEditingTests.swift) | Test / validation |
 | [Packages/Engine/Tests/EngineTests/SourceSceneExportValidationTests.swift](../../Packages/Engine/Tests/EngineTests/SourceSceneExportValidationTests.swift) | Test / validation |
 | [Packages/Engine/Tests/EngineTests/SourceSceneInsertionTests.swift](../../Packages/Engine/Tests/EngineTests/SourceSceneInsertionTests.swift) | Test / validation |
+| [Packages/Engine/Tests/EngineTests/SourceScenePluginDataPerformanceTests.swift](../../Packages/Engine/Tests/EngineTests/SourceScenePluginDataPerformanceTests.swift) | Test / validation |
 | [Packages/Engine/Tests/EngineTests/SourceScenePluginDataProbeTests.swift](../../Packages/Engine/Tests/EngineTests/SourceScenePluginDataProbeTests.swift) | Test / validation |
 | [Packages/Engine/Tests/EngineTests/SourceScenePluginDataTests.swift](../../Packages/Engine/Tests/EngineTests/SourceScenePluginDataTests.swift) | Test / validation |
 | [Packages/Engine/Tests/EngineTests/SourceSceneRouteEditTests.swift](../../Packages/Engine/Tests/EngineTests/SourceSceneRouteEditTests.swift) | Test / validation |
