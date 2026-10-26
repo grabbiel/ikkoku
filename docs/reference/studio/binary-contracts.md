@@ -83,6 +83,17 @@ Item kind 1 follows its common header with:
 4. bool FK enabled; i32 bone count; each bone is a string name plus a Bone record.
 5. bool dynamic bone enabled, float32 normalized animation time, then a child list.
 
+Each JSON colour or Vector4 is the string Unity's `JsonUtility` writes, such
+as `{"r":0.5,"g":1,"b":0.25,"a":1.0}`. The reader reads that exact form
+directly (`KoikatsuBinaryReader.unityJSONVector`): the four names in order, no
+whitespace, and plain numbers without an exponent. A number with a fraction
+becomes the nearest Double and an integer an Int64, each then rounded to Float,
+which is the value `JSONSerialization` and `NSNumber.floatValue` give. Every
+other form goes to `JSONSerialization` as before, so it reads, or is refused,
+exactly as it was. `KoikatsuJSONVectorTests` holds the two readings to the
+same Float bits or the same error: a fuzz of number forms and malformed
+strings, and, opt-in, every vector string in the user's scenes.
+
 This item order is the observed 1.0.4.2 writer's. Its loader also reads older
 versions: an item before 0.0.7 has no emission fields, one before 0.0.6 has no
 panel either, and one before 1.0.1 has no dynamic bone flag. The native reader

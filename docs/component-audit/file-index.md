@@ -23,13 +23,13 @@ branch was tested or every asset matches the original game. Feature status,
 specific comments and pending tasks are in the linked reports. Shared behavior
 may be discussed in more than one report; one primary owner is listed here.
 
-**1029 files indexed; 1029 assigned; 0 unassigned.**
+**1030 files indexed; 1030 assigned; 0 unassigned.**
 
 | Primary report | Files |
 | --- | ---: |
 | [App / gameplay / plugins](app-gameplay-and-plugins.md) | 110 |
 | [Character / Maker / mods](character-and-mods.md) | 128 |
-| [Studio / IK / animation](studio.md) | 243 |
+| [Studio / IK / animation](studio.md) | 244 |
 | [Renderer / foundation / assets](renderer-and-foundation.md) | 335 |
 | [Toolchain / verification / historical docs](toolchain-and-verification.md) | 203 |
 
@@ -42,7 +42,7 @@ may be discussed in more than one report; one primary owner is listed here.
 | Generated asset / catalog / fixture | 205 |
 | Reference host / controlled fixture | 37 |
 | Runtime / shared shader declaration | 227 |
-| Test / validation | 217 |
+| Test / validation | 218 |
 
 ## App / gameplay / plugins
 
@@ -382,6 +382,7 @@ Feature assessment: [studio.md](studio.md).
 | [Packages/Engine/Tests/EngineTests/Fixtures/route-reference.json](../../Packages/Engine/Tests/EngineTests/Fixtures/route-reference.json) | Reference host / controlled fixture |
 | [Packages/Engine/Tests/EngineTests/Fixtures/route-stepping.json](../../Packages/Engine/Tests/EngineTests/Fixtures/route-stepping.json) | Reference host / controlled fixture |
 | [Packages/Engine/Tests/EngineTests/KoikatsuBinaryTests.swift](../../Packages/Engine/Tests/EngineTests/KoikatsuBinaryTests.swift) | Test / validation |
+| [Packages/Engine/Tests/EngineTests/KoikatsuJSONVectorTests.swift](../../Packages/Engine/Tests/EngineTests/KoikatsuJSONVectorTests.swift) | Test / validation |
 | [Packages/Engine/Tests/EngineTests/KoikatsuLayoutTests.swift](../../Packages/Engine/Tests/EngineTests/KoikatsuLayoutTests.swift) | Test / validation |
 | [Packages/Engine/Tests/EngineTests/KoikatsuLegacyScenePerformanceTests.swift](../../Packages/Engine/Tests/EngineTests/KoikatsuLegacyScenePerformanceTests.swift) | Test / validation |
 | [Packages/Engine/Tests/EngineTests/KoikatsuLegacySceneProbeTests.swift](../../Packages/Engine/Tests/EngineTests/KoikatsuLegacySceneProbeTests.swift) | Test / validation |
