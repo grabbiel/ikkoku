@@ -121,6 +121,13 @@ def checked_found(path, directory, pattern, recursive):
     return below
 
 
+def powershell_rows(rows):
+    """An array of string arrays in PowerShell. `@(@('a','b'))` flattens to the inner array, so a
+    single row needs the unary comma: `@(,@('a','b'))`."""
+    items = ["@(" + ",".join("'" + value + "'" for value in row) + ")" for row in rows]
+    return "@(" + ("," + items[0] if len(items) == 1 else ",".join(items)) + ")"
+
+
 def fetch_script(root, base, files, globs, trees=(), limit=MAX_FETCH_BYTES, batch=BATCH_BYTES, total=MAX_TOTAL_BYTES,
                  tree_max=TREE_MAX_BYTES):
     """The whole fetch phase (see the module docstring). `files` are exact relative paths,
@@ -132,14 +139,14 @@ def fetch_script(root, base, files, globs, trees=(), limit=MAX_FETCH_BYTES, batc
         checked_tree(f'{label}:{directory}/{pattern}')
     if not 0 < batch < UPLOAD_BOUND or batch < limit: raise ValueError('A batch must hold the largest file and fit one upload')
     quoted = lambda values: '@(' + ','.join("'" + v.replace('/', '\\') + "'" for v in values) + ')'
-    tree_list = '@(' + ','.join("@('" + label + "','" + d.replace('/', '\\') + "','" + p + "')" for label, d, p in trees) + ')'
-    scans = '@(' + ','.join("@('" + label + "','" + d + "')" for label, d in FETCH_SCANS) + ')'
+    tree_list = powershell_rows([(label, d.replace('/', '\\'), p) for label, d, p in trees])
+    scans = powershell_rows(FETCH_SCANS)
     return ("$ErrorActionPreference='Stop';$root='" + root + "';$base='" + base + "';$src='C:\\Illusion\\Koikatsu'\n"
             + "$files=" + quoted(files) + ";$globs=" + quoted(globs) + ";$trees=" + tree_list + ";$scans=" + scans + "\n"
             + f"$limit={limit};$batch={batch};$total={total};$treeMax={tree_max}\n"
             + r"""$r=[ordered]@{root=$root;player='none: no player run, no player root, no junctions';sets=[ordered]@{};batches=@()}
 $rec=[ordered]@{files=@();missing=@()}
-function Scan{$o=[ordered]@{};foreach($s in $scans){$p="$src\$($s[1])";if(-not(Test-Path -LiteralPath $p)){$o[$s[0]]='absent';continue}
+function Scan{$o=[ordered]@{};foreach($s in $scans){if($s.Count -ne 2){throw 'A scan row is malformed'};$p="$src\$($s[1])";if(-not(Test-Path -LiteralPath $p)){$o[$s[0]]='absent';continue}
 $f=@(Get-ChildItem -LiteralPath $p -Recurse -File -Force|Sort-Object FullName);$d=@(Get-ChildItem -LiteralPath $p -Recurse -Directory -Force)
 $t=($f|ForEach-Object{$_.FullName.Substring($p.Length+1)+"`t"+$_.Length+"`t"+$_.LastWriteTimeUtc.ToString('o')}) -join "`n"
 $h=[Security.Cryptography.SHA256]::Create();$x=($h.ComputeHash([Text.Encoding]::UTF8.GetBytes($t))|ForEach-Object{$_.ToString('x2')}) -join ''
@@ -157,7 +164,7 @@ $items=New-Object Collections.ArrayList
 function Want($set,$rel){$full="$src\$rel";if(-not(Test-Path -LiteralPath $full -PathType Leaf)){$rec.missing+=,@($set,$rel);return};[void]$items.Add(@($set,$rel,(Get-Item -LiteralPath $full)))}
 foreach($rel in $files){Want 'files' $rel}
 foreach($g in $globs){$d=Split-Path $g -Parent;$f=Split-Path $g -Leaf;foreach($i in @(Get-ChildItem -LiteralPath "$src\$d" -Filter $f -File|Where-Object{$_.Name -like $f}|Sort-Object Name)){Want ($g -replace '\\','/') "$d\$($i.Name)"}}
-foreach($t in $trees){$d="$src\$($t[1])";if(-not(Test-Path -LiteralPath $d -PathType Container)){$rec.missing+=,@($t[0],$t[1]);continue}
+foreach($t in $trees){if($t.Count -ne 3){throw 'A tree row is malformed'};$d="$src\$($t[1])";if(-not(Test-Path -LiteralPath $d -PathType Container)){$rec.missing+=,@($t[0],$t[1]);continue}
 foreach($i in @(Get-ChildItem -LiteralPath $d -Filter $t[2] -File -Recurse -Force|Where-Object{$_.Name -like $t[2]}|Sort-Object FullName)){
 if(-not $i.FullName.StartsWith("$src\",[StringComparison]::OrdinalIgnoreCase)){throw 'A tree file lies outside the game folder'};Want $t[0] $i.FullName.Substring($src.Length+1)}}
 $sum=[int64]0;$over=@()

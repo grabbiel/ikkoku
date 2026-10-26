@@ -73,10 +73,17 @@ class FetchScriptTests(unittest.TestCase):
         self.assertIn('$r.scanAfter=Scan', cleanup)
         self.assertLess(script.index('$r.scanBefore=Scan'), script.index('Copy-Item'))
 
+    def test_powershell_rows_keep_every_row_an_array(self):
+        self.assertEqual(probe.powershell_rows([]), '@()')
+        self.assertEqual(probe.powershell_rows([('a', 'b')]), "@(,@('a','b'))")
+        self.assertEqual(probe.powershell_rows([('a', 'b'), ('c', 'd')]), "@(@('a','b'),@('c','d'))")
+
     def test_the_listing_comes_first_and_any_bound_stops_every_copy(self):
         script = probe.fetch_script(FETCH_ROOT, 'http://h/t/', [], ['abdata/map/scene/*.unity3d'],
                                     [('scenes', 'UserData/studio/scene', '*.png')], tree_max=4 * 1024 ** 3)
-        self.assertIn(r"$trees=@(@('scenes','UserData\studio\scene','*.png'))", script)
+        # One row needs the unary comma, or PowerShell flattens it into three strings.
+        self.assertIn(r"$trees=@(,@('scenes','UserData\studio\scene','*.png'))", script)
+        self.assertIn("throw 'A tree row is malformed'", script)
         self.assertIn('$treeMax=4294967296', script)
         self.assertIn('-File -Recurse -Force', script)
         for reason in ('exceed the per-file bound', 'exceeds the total bound', 'exceeds $treeMax'):
