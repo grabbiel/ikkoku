@@ -687,7 +687,7 @@ def inventory(bundles, scene, builtin_resources=None):
     map_scene = MapScene(bundles, scene, builtin_resources)
     sun_tree, infos = map_scene.sun_light_info()
     active = sun_type_active(map_scene.authored_active(), infos)
-    renderers, materials, textures, meshes, unsupported = [], {}, {}, {}, {}
+    renderers, materials, textures, meshes, unsupported, shader_infos = [], {}, {}, {}, {}, {}
     prefab_lightmaps = map_scene.lightmap_prefab_parameters()
     draw_groups = set()
     for pid, reader in map_scene.of_type("MeshRenderer"):
@@ -703,6 +703,7 @@ def inventory(bundles, scene, builtin_resources=None):
                 raise
             mesh = None  # the default resources file was not supplied
         triangles = None if builtin and mesh is None else 0
+        per_material = None
         if mesh is not None:
             identity = key(mesh_pointer)
             if identity not in meshes:
@@ -711,7 +712,14 @@ def inventory(bundles, scene, builtin_resources=None):
                 tris = handler.get_triangles()
                 meshes[identity] = {"name": mesh.m_Name, "vertices": len(handler.m_Vertices or []),
                                     "submeshTriangles": [len(t) for t in tris], "uv1": bool(handler.m_UV1)}
-            triangles = sum(meshes[identity]["submeshTriangles"][:len(renderer.m_Materials)])
+            batch = renderer.m_StaticBatchInfo
+            if batch is not None and batch.subMeshCount > 0:
+                # A static batch draws its own submeshes of the combined mesh (one per material).
+                first = batch.firstSubMesh
+                per_material = meshes[identity]["submeshTriangles"][first:first + batch.subMeshCount]
+            else:
+                per_material = meshes[identity]["submeshTriangles"][:len(renderer.m_Materials)]
+            triangles = sum(per_material)
         names = []
         for pointer in renderer.m_Materials:
             if not pointer.path_id:
@@ -734,6 +742,7 @@ def inventory(bundles, scene, builtin_resources=None):
                             textures[tid]["slots"].add(slot)
                 floats = dict(material.m_SavedProperties.m_Floats)
                 colors = colors_of(material)
+                shader_infos.setdefault(shader_name(material), shader_info(material))
                 materials[identity] = {"name": material.m_Name, "shader": shader_name(material),
                                        "keywords": keywords_of(material), "textures": textures_bound,
                                        "mainTexST": [xyz2(e.m_Scale) + xyz2(e.m_Offset) for s, e in dict(material.m_SavedProperties.m_TexEnvs).items() if s == "_MainTex"],
@@ -752,7 +761,11 @@ def inventory(bundles, scene, builtin_resources=None):
                           "triangles": triangles, "builtinMesh": builtin, "underMapRoot": map_scene.under_map_root(host),
                           "visibleFor": keys, "lightmapIndex": renderer.m_LightmapIndex,
                           "effectiveLightmapIndex": lm_index, "lightmapSource": lm_source,
-                          "staticBatch": [static_batch.firstSubMesh, static_batch.subMeshCount] if static_batch else None})
+                          "staticBatch": [static_batch.firstSubMesh, static_batch.subMeshCount] if static_batch else None,
+                          "staticBatchRoot": str(renderer.m_StaticBatchRoot.path_id) if getattr(renderer, "m_StaticBatchRoot", None)
+                          and renderer.m_StaticBatchRoot.path_id else None,
+                          "mesh": meshes[key(mesh_pointer)]["name"] if mesh is not None else None,
+                          "trianglesPerMaterial": per_material})
     for pid, reader in map_scene.objects.items():
         name = reader.type.name
         if name in {"Transform", "GameObject", "MeshRenderer", "MeshFilter"}:
@@ -815,7 +828,55 @@ def inventory(bundles, scene, builtin_resources=None):
         "lights": lights_of(map_scene, active), "renderSettings": render_settings_of(map_scene),
         "otherComponents": dict(sorted(unsupported.items())),
         "lightmapPrefabRenderers": len(map_scene.lightmap_prefab_parameters()),
+        "shaderInfo": dict(sorted(shader_infos.items())),
+        "lightmapSettings": lightmap_settings_of(map_scene),
+        "ambientProbe": ambient_probe_of(map_scene),
     }
+
+
+def shader_info(material):
+    """What the survey needs from a material's shader: its properties, the passes' LightMode
+    tags and the subshader's queue and RenderType (Unity's serialized parsed form)."""
+    shader = material.m_Shader.read()
+    form = getattr(shader, "m_ParsedForm", None)
+    if form is None:
+        return {"parsed": False}
+    tags = lambda tag_map: dict(getattr(tag_map, "tags", None) or [])
+    subshaders = []
+    for sub in form.m_SubShaders:
+        sub_tags = tags(sub.m_Tags)
+        subshaders.append({"tags": sub_tags, "passes": [tags(p.m_State.m_Tags).get("LIGHTMODE", "") or p.m_Name or "" for p in sub.m_Passes]})
+    return {"parsed": True, "properties": [p.m_Name for p in form.m_PropInfo.m_Props], "subShaders": subshaders,
+            "fallback": form.m_FallbackName or None}
+
+
+def lightmap_settings_of(map_scene):
+    """LightmapSettings' mode, shadow-mask use and the light probe count (0 when the
+    LightProbes asset is empty or absent)."""
+    for _, reader in map_scene.of_type("LightmapSettings"):
+        settings = reader.read()
+        probes = 0
+        pointer = settings.m_LightProbes
+        if pointer is not None and pointer.path_id:
+            probes = len(pointer.read().m_Data.m_Positions)
+        return {"mode": settings.m_LightmapsMode, "lightmaps": len(settings.m_Lightmaps), "lightProbes": probes,
+                "useShadowmask": getattr(settings, "m_UseShadowmask", None), "shadowMaskMode": getattr(settings, "m_ShadowMaskMode", None)}
+    return None
+
+
+def ambient_probe_of(map_scene):
+    """RenderSettings' baked ambient SH (the ambient probe Unity lights a renderer with when no
+    light probe reaches it): its 27 coefficients and the L0 RGB."""
+    for _, reader in map_scene.of_type("RenderSettings"):
+        tree = reader.read_typetree()
+        # Serialized as {"sh[ 0]": ..., "sh[26]": ...}: red 0-8, green 9-17, blue 18-26.
+        sh = lambda probe: [(probe or {}).get(f"sh[{i:2d}]") for i in range(27)]
+        coefficients = sh(tree.get("m_AmbientProbe"))
+        if any(c is None for c in coefficients):
+            return {"coefficients": None, "l0": None, "ambientMode": tree.get("m_AmbientMode")}
+        return {"coefficients": coefficients, "l0": coefficients[0:27:9], "ambientMode": tree.get("m_AmbientMode"),
+                "ambientIntensity": tree.get("m_AmbientIntensity")}
+    return None
 
 
 def summarize_sun(map_scene, tree, infos):
@@ -1424,6 +1485,200 @@ def write_catalog(info_bundles, converted, output):
     return catalog
 
 
+# ---------------------------------------------------------------- survey (ST-A11 slice 4)
+
+# Unity TextureFormat names the survey reports (UnityEngine.TextureFormat, 5.6).
+TEXTURE_FORMATS = {1: "Alpha8", 3: "RGB24", 4: "RGBA32", 5: "ARGB32", 7: "RGB565", 10: "DXT1", 12: "DXT5", 13: "RGBA4444",
+                   14: "BGRA32", 24: "BC6H", 25: "BC7", 26: "BC4", 27: "BC5", 28: "DXT1Crunched", 29: "DXT5Crunched"}
+# Light.m_Type and m_Lightmapping (LightmapBakeType) in Unity 5.6.
+LIGHT_TYPES = {0: "spot", 1: "directional", 2: "point", 3: "area"}
+LIGHT_MODES = {1: "mixed", 2: "baked", 4: "realtime"}
+# Scene components the converter does not draw or animate (export only reads MeshRenderer +
+# MeshFilter): the survey counts them so every renderer is accounted for.
+UNCONVERTED_COMPONENTS = ("SkinnedMeshRenderer", "ParticleSystem", "ParticleSystemRenderer", "LineRenderer", "TrailRenderer",
+                          "BillboardRenderer", "SpriteRenderer", "Terrain", "Cloth", "Projector", "Animator", "Animation",
+                          "LightProbeGroup", "ReflectionProbe", "LensFlare", "Halo")
+BUILTIN_SHADER_PREFIXES = ("Legacy Shaders/", "Unlit/", "Particles/", "Skybox/", "Mobile/", "Nature/", "UI/", "Sprites/",
+                           "Hidden/", "GUI/", "FX/", "Self-Illumin/", "Reflective/", "Transparent/", "VertexLit", "Diffuse",
+                           "Bumped", "Specular", "Parallax")
+
+
+def shader_family(name):
+    """The survey's shader classes: Standard, Standard (Specular setup), Unity's other built-in
+    families by name prefix, else the game's own shader."""
+    if name in ("Standard", "Standard (Specular setup)"):
+        return name
+    for prefix in BUILTIN_SHADER_PREFIXES:
+        if name.startswith(prefix):
+            return prefix.rstrip("/") if prefix.endswith("/") else "Legacy Shaders"
+    return "game shader"
+
+
+def survey_summary(inventory_result, rules=None):
+    """One map's survey row from its `inventory`: renderers, triangles and materials per shader,
+    lightmaps and whether slice 2 reproduces them, probes, skies, textures by format, lights, the
+    sun types and what the converter would refuse or leave out, each with its reason."""
+    rules = MAP_SHADER_RULES if rules is None else rules
+    materials = {}
+    for material in inventory_result["materials"]:
+        materials.setdefault(material["name"], material)
+    drawn = [r for r in inventory_result["renderers"] if r["enabled"] and r["visibleFor"]]
+    shaders, refusals, notes = {}, [], []
+    batched = 0
+    for renderer in drawn:
+        per_material = renderer.get("trianglesPerMaterial") or []
+        if (renderer.get("staticBatch") or [0, 0])[1] > 0:
+            batched += 1
+        if per_material and len(renderer["materials"]) > len(per_material) and not (renderer.get("staticBatch") or [0, 0])[1]:
+            refusals.append(f"{renderer['path']}: more materials than submeshes")
+        for slot, name in enumerate(renderer["materials"]):
+            if name is None:
+                continue
+            shader = materials[name]["shader"]
+            entry = shaders.setdefault(shader, {"family": shader_family(shader), "renderers": set(), "materials": set(), "triangles": 0,
+                                                "lightmappedRenderers": set()})
+            entry["renderers"].add(renderer["path"]); entry["materials"].add(name)
+            entry["triangles"] += per_material[slot] if slot < len(per_material) else 0
+            if renderer["effectiveLightmapIndex"] >= 0:
+                entry["lightmappedRenderers"].add(renderer["path"])
+    for shader in sorted(shaders):
+        if shader not in rules and shader not in NON_GEOMETRY_SHADERS:
+            entry = shaders[shader]
+            refusals.append(f"shader {shader!r} has no map rule ({len(entry['renderers'])} renderers, {entry['triangles']} triangles)")
+    if batched:
+        refusals.append(f"{batched} static-batched renderers: their placement under the map transform needs evidence")
+    settings = inventory_result.get("lightmapSettings") or {}
+    lightmaps = inventory_result.get("lightmaps") or []
+    problems = []
+    if lightmaps:
+        if settings.get("mode") not in LIGHTMAPS_MODES:
+            problems.append(f"LightmapsMode {settings.get('mode')}")
+        for entry in lightmaps:
+            light = entry.get("Lightmap")
+            if light is None:
+                problems.append(f"lightmap {entry['index']}: no light map")
+                continue
+            if light.get("lightmapFormat") != RGBM_LIGHTMAP_FORMAT:
+                problems.append(f"lightmap {entry['index']}: m_LightmapFormat {light.get('lightmapFormat')} is not RGBM")
+            for field in ("Lightmap", "DirLightmap"):
+                if field in entry and entry[field]["textureFormat"] not in BLOCK_FORMATS:
+                    problems.append(f"lightmap {entry['index']} {field}: TextureFormat {entry[field]['textureFormat']}")
+            if "ShadowMask" in entry:
+                problems.append(f"lightmap {entry['index']}: a shadow mask")
+            if LIGHTMAPS_MODES.get(settings.get("mode")) == "CombinedDirectional" and "DirLightmap" not in entry:
+                problems.append(f"lightmap {entry['index']}: no direction map")
+    other = inventory_result.get("otherComponents") or {}
+    unconverted = {name: other[name] for name in UNCONVERTED_COMPONENTS if other.get(name)}
+    for name, count in unconverted.items():
+        notes.append(f"{count} {name} not converted")
+    formats = {}
+    for texture in inventory_result.get("textures") or []:
+        label = TEXTURE_FORMATS.get(texture["textureFormat"], str(texture["textureFormat"]))
+        entry = formats.setdefault(label, {"textures": 0, "bytes": 0})
+        entry["textures"] += 1; entry["bytes"] += texture["serializedBytes"]
+    lights = {}
+    for light in inventory_result.get("lights") or []:
+        if not light["enabled"] or not light["visibleFor"]:
+            continue
+        label = f"{LIGHT_TYPES.get(light['type'], light['type'])} {LIGHT_MODES.get(light['lightmapping'], light['lightmapping'])}"
+        lights[label] = lights.get(label, 0) + 1
+    sun = inventory_result.get("sunLightInfo") or {}
+    standard = [s for s in ("Standard", "Standard (Specular setup)") if s in shaders]
+    standard_renderers = set().union(*(shaders[s]["renderers"] for s in standard)) if standard else set()
+    lightmapped = set().union(*(shaders[s]["lightmappedRenderers"] for s in standard)) if standard else set()
+    return {
+        "renderers": len(inventory_result["renderers"]), "drawnRenderers": len(drawn), "triangles": inventory_result["triangles"],
+        "materials": inventory_result["materialCount"],
+        "shaders": {name: {"family": e["family"], "renderers": len(e["renderers"]), "materials": len(e["materials"]),
+                           "triangles": e["triangles"], "lightmappedRenderers": len(e["lightmappedRenderers"])}
+                    for name, e in sorted(shaders.items())},
+        "lightmaps": {"count": len(lightmaps), "mode": LIGHTMAPS_MODES.get(settings.get("mode"), settings.get("mode")),
+                      "encodings": sorted({str((e.get("Lightmap") or {}).get("lightmapFormat")) for e in lightmaps}),
+                      "reproduced": bool(lightmaps) and not problems, "problems": problems},
+        "standardRenderers": len(standard_renderers), "lightmappedStandardRenderers": len(lightmapped),
+        "lightProbes": settings.get("lightProbes"), "reflectionProbes": other.get("ReflectionProbe", 0),
+        "ambient": {k: (inventory_result.get("ambientProbe") or {}).get(k) for k in ("ambientMode", "l0")},
+        "skies": sorted(s for s in shaders if s.startswith("Skybox/")),
+        "renderSettingsSkybox": (inventory_result.get("renderSettings") or {}).get("skyboxMaterial"),
+        "fog": (inventory_result.get("renderSettings") or {}).get("fog"),
+        "textureFormats": dict(sorted(formats.items())),
+        "textureBytes": sum(e["bytes"] for e in formats.values()),
+        "lights": dict(sorted(lights.items())),
+        "sunTypes": sorted(e["type"] for e in sun.get("entries", [])),
+        "unconverted": unconverted, "refusals": refusals, "notes": notes,
+        "monoBehaviours": sorted(k.split(":", 1)[1] for k in other if k.startswith("MonoBehaviour:")),
+    }
+
+
+def scene_usage(scene_maps):
+    """Per map number, how many scenes name it and their IDs (the first 12 hex digits of each
+    scene file's SHA-256; no names). scene_maps: [(sha256, map number or None if unreadable)]."""
+    maps, unreadable = {}, 0
+    for sha, number in scene_maps:
+        if number is None:
+            unreadable += 1
+            continue
+        entry = maps.setdefault(int(number), {"scenes": 0, "sceneIDs": []})
+        entry["scenes"] += 1
+        entry["sceneIDs"].append(sha[:12])
+    for entry in maps.values():
+        entry["sceneIDs"].sort()
+    return {"scenes": len(scene_maps), "unreadable": unreadable, "maps": {str(k): maps[k] for k in sorted(maps)}}
+
+
+def read_scene_maps(scenes, inspect):
+    """[(sha256, map)] for every *.png under `scenes` (recursively), read with
+    `ikkoku-inspect scene-document` (the engine's scene parser); None when it cannot read one."""
+    import subprocess
+    result = []
+    for path in sorted(p for p in Path(scenes).rglob("*") if p.is_file() and p.suffix.lower() == ".png"):
+        sha = hashlib.sha256(path.read_bytes()).hexdigest()
+        run = subprocess.run([str(inspect), "scene-document", str(path)], capture_output=True, text=True)
+        number = None
+        if run.returncode == 0:
+            try:
+                number = json.loads(run.stdout).get("map")
+            except json.JSONDecodeError:
+                number = None
+        result.append((sha, number))
+    return result
+
+
+def survey(catalog, bundle_root, output, builtin_resources=None, usage=None, numbers=None):
+    """Inventory every catalog row's bundle under `bundle_root` (<root>/abdata/<bundlePath>), write
+    each inventory to <output>/inventory/ and the survey rows to <output>/survey.json."""
+    rows = json.loads(Path(catalog).read_text())["maps"]
+    usage_maps = (usage or {}).get("maps", {})
+    (output / "inventory").mkdir(parents=True, exist_ok=True)
+    result = []
+    for row in rows:
+        if numbers and row["no"] not in numbers:
+            continue
+        bundle = Path(bundle_root) / "abdata" / row["bundlePath"]
+        entry = {"no": row["no"], "name": row["name"], "scene": row["scene"], "bundlePath": row["bundlePath"],
+                 "converted": row.get("file") is not None, "vanish": row.get("vanish"),
+                 "usage": usage_maps.get(str(row["no"]), {}).get("scenes", 0)}
+        if not bundle.is_file():
+            entry["status"] = "bundle not fetched"
+            result.append(entry)
+            continue
+        entry["bundleBytes"] = bundle.stat().st_size
+        try:
+            found = inventory([bundle], row["scene"], builtin_resources)
+        except Exception as error:  # the survey records why a map cannot be read
+            entry["status"] = f"inventory failed: {type(error).__name__}: {error}"[:500]
+            result.append(entry)
+            continue
+        (output / "inventory" / f"{row['no']:02d}-{safe_name(row['scene'])}.json").write_text(
+            json.dumps(found, indent=2, ensure_ascii=False) + "\n")
+        entry.update(status="surveyed", **survey_summary(found))
+        result.append(entry)
+    document = {"kind": "ikkoku.sourceStudioMapSurvey", "version": 1, "catalog": str(catalog),
+                "catalogSHA256": hashlib.sha256(Path(catalog).read_bytes()).hexdigest(), "maps": result}
+    (output / "survey.json").write_text(json.dumps(document, indent=2, ensure_ascii=False) + "\n")
+    return document
+
+
 def local_roots():
     """The ignored .local directory and the targets of symlinks placed directly in it (a
     worktree links its private folders to the main checkout's .local that way)."""
@@ -1455,6 +1710,17 @@ def main():
     exp.add_argument("--max-texture", type=int, help="reduce base textures by powers of two to at most this size")
     exp.add_argument("--builtin-resources", type=Path,
                      help="the player's 'unity default resources' file (built-in meshes such as a sky Sphere)")
+    sur = commands.add_parser("survey", help="inventory every catalog row's bundle and summarize it (slice 4)")
+    sur.add_argument("--catalog", type=Path, required=True)
+    sur.add_argument("--bundle-root", type=Path, required=True, help="the folder holding abdata/<bundlePath>")
+    sur.add_argument("--output", type=Path, required=True)
+    sur.add_argument("--builtin-resources", type=Path, help="the player's 'unity default resources' file")
+    sur.add_argument("--usage", type=Path, help="a scene-usage JSON (counts per map)")
+    sur.add_argument("--map", type=int, action="append", help="only these map numbers")
+    use = commands.add_parser("scene-usage", help="count the scenes naming each map (IDs are hashes; no names)")
+    use.add_argument("--scenes", type=Path, required=True)
+    use.add_argument("--inspect", type=Path, required=True, help="the ikkoku-inspect executable")
+    use.add_argument("--output", type=Path, required=True)
     cat = commands.add_parser("catalog", help="write the runtime map catalog")
     cat.add_argument("--info-bundle", type=Path, action="append", required=True)
     cat.add_argument("--converted", type=Path, action="append", default=[], help="an export directory (repeatable)")
@@ -1470,6 +1736,16 @@ def main():
         result = export(args.bundle, args.scene, args.map_no, private(args.output), args.max_texture, args.builtin_resources)
         print(json.dumps({k: result[k] for k in ("mapNo", "scene", "meshes", "materials", "textures", "vertices", "triangles",
                                                  "textureGPUBytesRGBA8Mips", "shaders", "droppedTerms")}, indent=2, ensure_ascii=False))
+    elif args.command == "survey":
+        usage = json.loads(args.usage.read_text()) if args.usage else None
+        document = survey(args.catalog, args.bundle_root, private(args.output), args.builtin_resources, usage, set(args.map or []))
+        print(json.dumps({"maps": len(document["maps"]), "surveyed": sum(m.get("status") == "surveyed" for m in document["maps"])}))
+    elif args.command == "scene-usage":
+        result = scene_usage(read_scene_maps(args.scenes, args.inspect))
+        private(args.output).parent.mkdir(parents=True, exist_ok=True)
+        args.output.write_text(json.dumps(result, indent=2) + "\n")
+        print(json.dumps({"scenes": result["scenes"], "unreadable": result["unreadable"],
+                          "maps": {k: v["scenes"] for k, v in result["maps"].items()}}))
     else:
         catalog = write_catalog(args.info_bundle, args.converted, private(args.output))
         print(json.dumps({"maps": len(catalog["maps"]), "converted": [m["no"] for m in catalog["maps"] if m["file"]]}, indent=2))

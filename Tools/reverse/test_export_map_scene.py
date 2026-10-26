@@ -349,6 +349,81 @@ class CatalogTests(unittest.TestCase):
         self.assertEqual(maps.gpu_bytes(1, 1), 4)
 
 
+class SurveyTests(unittest.TestCase):
+    """ST-A11 slice 4: one map's survey row from a synthetic inventory, and the scene usage counts."""
+    def inventory(self, **change):
+        renderer = lambda path, materials, tris, lm=-1, batch=(0, 0), enabled=True, keys=(0, 1, 2, -1): dict(
+            path=path, enabled=enabled, materials=list(materials), trianglesPerMaterial=list(tris), visibleFor=list(keys),
+            effectiveLightmapIndex=lm, staticBatch=list(batch))
+        result = dict(
+            renderers=[renderer('Map/wall', ['wall'], [100], lm=0), renderer('Map/desk', ['desk', 'glass'], [40, 2]),
+                       renderer('Map/water', ['water'], [8]), renderer('Map/off', ['wall'], [5], enabled=False),
+                       renderer('Map/sky', ['sky'], [768])],
+            materials=[dict(name='wall', shader='Standard'), dict(name='desk', shader='Standard'),
+                       dict(name='glass', shader='Legacy Shaders/Transparent/Diffuse'), dict(name='water', shader='Koikano/Water'),
+                       dict(name='sky', shader='Skybox/Cubemap')],
+            triangles=918, materialCount=5,
+            lightmaps=[dict(index=0, Lightmap=dict(lightmapFormat=2, textureFormat=12), DirLightmap=dict(textureFormat=12))],
+            lightmapSettings=dict(mode=1, lightmaps=1, lightProbes=12),
+            otherComponents={'ReflectionProbe': 2, 'SkinnedMeshRenderer': 1, 'MonoBehaviour:SunLightInfo': 1, 'BoxCollider': 3},
+            textures=[dict(textureFormat=10, serializedBytes=8), dict(textureFormat=25, serializedBytes=16), dict(textureFormat=10, serializedBytes=8)],
+            lights=[dict(type=1, lightmapping=4, enabled=True, visibleFor=[0]), dict(type=2, lightmapping=2, enabled=True, visibleFor=[0]),
+                    dict(type=2, lightmapping=2, enabled=False, visibleFor=[0])],
+            sunLightInfo=dict(entries=[dict(type=1), dict(type=0)]),
+            renderSettings=dict(skyboxMaterial='Skybox/Procedural', fog=False), ambientProbe=dict(ambientMode=3, l0=[0.1, 0.2, 0.3]))
+        result.update(change)
+        return result
+
+    def test_every_drawn_renderer_is_counted_by_shader_with_its_triangles(self):
+        row = maps.survey_summary(self.inventory())
+        self.assertEqual((row['renderers'], row['drawnRenderers']), (5, 4))
+        self.assertEqual(row['shaders']['Standard'], dict(family='Standard', renderers=2, materials=2, triangles=140, lightmappedRenderers=1))
+        self.assertEqual(row['shaders']['Legacy Shaders/Transparent/Diffuse']['family'], 'Legacy Shaders')
+        self.assertEqual(row['shaders']['Koikano/Water']['family'], 'game shader')
+        self.assertEqual(row['shaders']['Skybox/Cubemap']['family'], 'Skybox')
+        self.assertEqual(row['skies'], ['Skybox/Cubemap'])
+        self.assertEqual((row['standardRenderers'], row['lightmappedStandardRenderers'], row['lightProbes'], row['reflectionProbes']), (2, 1, 12, 2))
+        self.assertEqual(row['textureFormats'], {'BC7': dict(textures=1, bytes=16), 'DXT1': dict(textures=2, bytes=16)})
+        self.assertEqual(row['lights'], {'directional realtime': 1, 'point baked': 1})
+        self.assertEqual(row['sunTypes'], [0, 1])
+        self.assertEqual(row['unconverted'], {'SkinnedMeshRenderer': 1, 'ReflectionProbe': 2})
+        self.assertEqual(row['monoBehaviours'], ['SunLightInfo'])
+
+    def test_refusals_name_unmapped_shaders_static_batches_and_slot_mismatches(self):
+        row = maps.survey_summary(self.inventory())
+        self.assertEqual(row['refusals'], ["shader 'Koikano/Water' has no map rule (1 renderers, 8 triangles)",
+                                           "shader 'Legacy Shaders/Transparent/Diffuse' has no map rule (1 renderers, 2 triangles)"])
+        inv = self.inventory()
+        inv['renderers'][0]['staticBatch'] = [3, 1]
+        inv['renderers'][2]['trianglesPerMaterial'] = []
+        inv['renderers'][1]['trianglesPerMaterial'] = [40]
+        refusals = maps.survey_summary(inv)['refusals']
+        self.assertIn('1 static-batched renderers: their placement under the map transform needs evidence', refusals)
+        self.assertIn('Map/desk: more materials than submeshes', refusals)
+
+    def test_lightmaps_reproduce_only_as_slice_two_draws_them(self):
+        self.assertEqual(maps.survey_summary(self.inventory())['lightmaps'],
+                         dict(count=1, mode='CombinedDirectional', encodings=['2'], reproduced=True, problems=[]))
+        cases = [
+            (dict(lightmapSettings=dict(mode=2)), 'LightmapsMode 2'),
+            (dict(lightmaps=[dict(index=0, Lightmap=dict(lightmapFormat=1, textureFormat=12), DirLightmap=dict(textureFormat=12))]), 'not RGBM'),
+            (dict(lightmaps=[dict(index=0, Lightmap=dict(lightmapFormat=2, textureFormat=24), DirLightmap=dict(textureFormat=12))]), 'TextureFormat 24'),
+            (dict(lightmaps=[dict(index=0, Lightmap=dict(lightmapFormat=2, textureFormat=12))]), 'no direction map'),
+            (dict(lightmaps=[dict(index=0, Lightmap=dict(lightmapFormat=2, textureFormat=12), DirLightmap=dict(textureFormat=12),
+                                  ShadowMask=dict(textureFormat=12))]), 'a shadow mask'),
+        ]
+        for change, problem in cases:
+            with self.subTest(problem):
+                lightmaps = maps.survey_summary(self.inventory(**change))['lightmaps']
+                self.assertFalse(lightmaps['reproduced']); self.assertTrue(any(problem in p for p in lightmaps['problems']))
+        self.assertFalse(maps.survey_summary(self.inventory(lightmaps=[]))['lightmaps']['reproduced'])
+
+    def test_scene_usage_counts_maps_by_hashed_id_without_names(self):
+        usage = maps.scene_usage([('a' * 64, 34), ('b' * 64, -1), ('c' * 64, 34), ('d' * 64, None)])
+        self.assertEqual(usage, {'scenes': 4, 'unreadable': 1,
+                                 'maps': {'-1': dict(scenes=1, sceneIDs=['b' * 12]), '34': dict(scenes=2, sceneIDs=['a' * 12, 'c' * 12])}})
+
+
 class PrivateOutputTests(unittest.TestCase):
     def test_outputs_must_resolve_into_local_or_a_link_placed_in_it(self):
         with tempfile.TemporaryDirectory() as tmp:
