@@ -2766,7 +2766,7 @@
         "IKKOKU_STUDIO_SCENARIO_REPORT": ".local/verification/reports/studio-scenario-plugin-rewrite-duplicate.json"
       },
       "referenceTier": "app-smoke",
-      "tolerance": "ST-T03i plug-in data rewrites, duplicate: on the same phase C fixture, duplicate the female (key 16, whose card carries KKPE data) and export, then undo and duplicate mod item 5 (data in all three plug-ins) and export. Each export reimports with the copy at key 17 appended to the root, holding its original's world pose within 5e-4 m and 0.05 degrees. A negative control proves the tree check fails without the copy. The exports' scene bytes after the PNG are compared with the Engine's exports of the same edits, which phases C and D tie to CharaStudio's (the character copy's card gets a fresh KKPE controller ID); see docs/reference/studio/scene-editing.md.",
+      "tolerance": "ST-T03i plug-in data rewrites, duplicate: on the same phase C fixture, duplicate the female (key 16, whose card carries KKPE data) and export, then undo and duplicate mod item 5 (data in all three plug-ins) and export. Each export reimports with the copy at key 159 appended to the root (keys 17-158 are the female's bone and IK records; CharaStudio's phase C copies take 159 too), holding its original's world pose within 5e-4 m and 0.05 degrees. A negative control proves the tree check fails without the copy. The exports' scene bytes after the PNG are compared with the Engine's exports of the same edits, which phases C and D tie to CharaStudio's (the character copy's card gets a fresh KKPE controller ID); see docs/reference/studio/scene-editing.md.",
       "artifacts": [
         {
           "path": ".local/verification/reports/studio-scenario-plugin-rewrite-duplicate.json",
