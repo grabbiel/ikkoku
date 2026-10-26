@@ -158,10 +158,26 @@ func sourceScenePluginRewritesReloadAsCharaStudioEdits() throws {
         for plugin in ["kkpe", "materialEditor", "nodesConstraints"] where (mine[plugin] as? NSObject) != (theirs[plugin] as? NSObject) {
             lines.append("\(label): \(plugin) differs")
         }
-        let same = try pluginProbeComparable(load("resave-\(name)")) == pluginProbeComparable(Data(contentsOf: phaseC.appendingPathComponent("edit-\(label).png")))
+        // Phase C and phase D are different sessions with different mod sets.
+        let same = try pluginProbeComparable(load("resave-\(name)"), acrossSessions: true)
+            == pluginProbeComparable(Data(contentsOf: phaseC.appendingPathComponent("edit-\(label).png")), acrossSessions: true)
         #expect(same, "resave-\(name)")
-        lines.append("\(label): same plug-in state as CharaStudio's edit; resave \(same ? "is CharaStudio's edit apart from KKPE's IDs" : "DIFFERS")")
+        lines.append("\(label): same plug-in state as CharaStudio's edit; resave \(same ? "is CharaStudio's edit apart from KKPE's IDs, live state and LocalSlot" : "DIFFERS")")
     }
+    // The session mask covers Sideloader's LocalSlot and nothing else: on
+    // phase C's fixture another LocalSlot of the same width compares equal,
+    // another Slot does not, and without the mask the LocalSlot change shows.
+    let source = try Data(contentsOf: phaseC.appendingPathComponent("fixture.png"))
+    let localSlot = Data([0xa9] + Array("LocalSlot".utf8) + [0xce]), slot = Data([0xa4] + Array("Slot".utf8))
+    var otherLocal = source, otherSlot = source
+    let local = try #require(source.range(of: localSlot), "no uint32 LocalSlot in phase C's fixture")
+    otherLocal[local.upperBound + 3] ^= 0x01
+    let slotRange = try #require(source.range(of: slot), "no Slot in phase C's fixture")
+    #expect(source[slotRange.upperBound] < 0x7f)
+    otherSlot[slotRange.upperBound] += 1
+    #expect(try pluginProbeComparable(otherLocal, acrossSessions: true) == pluginProbeComparable(source, acrossSessions: true))
+    #expect(try pluginProbeComparable(otherSlot, acrossSessions: true) != pluginProbeComparable(source, acrossSessions: true))
+    #expect(try pluginProbeComparable(otherLocal) != pluginProbeComparable(source))
     // The fixture's state is not empty: the comparison above saw real data.
     let fixture = try state("fixture.png")
     let controllers = (fixture["kkpe"] as? [String: [String: Any]]) ?? [:]
@@ -257,7 +273,19 @@ private func leadingPNG(_ data: Data) throws -> Data {
 /// Each character's live state, which `OCIChar.OnSavePreprocessing`
 /// (Studio/OCIChar.cs:586-600) reads from the running character at every
 /// save, is zeroed at the same length (`liveStateMasked`).
-func pluginProbeComparable(_ data: Data) throws -> [String] {
+///
+/// `acrossSessions` compares saves the original player made in different
+/// sessions: Sideloader's records are compared decoded, with `LocalSlot` set
+/// to 0. Its save writes the saving session's resolved slot there
+/// (UniversalAutoResolver.cs:591, :618, :642, :670), which depends on the
+/// mods that session loaded. Neither the scene load (`ExtendedSceneLoad`
+/// :474-482, `ResolveStudioObjects` :1326-1356) nor the import (:484-556)
+/// reads a record's `LocalSlot`: `ResolveStudioObject` (:1358-1412),
+/// `GetStudioResolveInfoForItem` (:1414-1433) and
+/// `ResolveStudioObjectPattern` (:1510-1538) take the record's GUID, group,
+/// category and display fields and the object's own saved `no` or pattern
+/// key, and write the slot this session resolves (:1369, :1530).
+func pluginProbeComparable(_ data: Data, acrossSessions: Bool = false) throws -> [String] {
     let document = try KoikatsuSceneReader.decodeDocument(data)
     let trailer = document.trailingData
     let masked = try liveStateMasked(data)
@@ -283,11 +311,43 @@ func pluginProbeComparable(_ data: Data) throws -> [String] {
     for entry in kkex.entries {
         if entry.id == SourceScenePluginData.kkpe, let xml = try kkpeSceneInfo(kkex) {
             parts.append("kkpe \(entry.version.map(String.init) ?? "-") " + renamed(xml, names: &names))
+        } else if acrossSessions, entry.id == SourceScenePluginData.sideloader {
+            parts.append(entry.id + " " + sessionFree(try SourceMessagePack.decode(Data(kkex.bytes[entry.value]))))
         } else {
             parts.append(entry.id + " " + Data(kkex.bytes[entry.span]).base64EncodedString())
         }
     }
     return parts
+}
+
+/// A decoded value as text, every byte of strings, binaries and numbers
+/// kept; inside Sideloader's `itemInfo` and `patternInfo` records,
+/// `LocalSlot` reads 0 (`pluginProbeComparable`, `acrossSessions`).
+private func sessionFree(_ value: SourceMessagePackValue, records: Bool = false) -> String {
+    switch value {
+    case .null: return "nil"
+    case .bool(let flag): return "\(flag)"
+    case .integer(let number): return "i\(number)"
+    case .unsigned(let number): return "u\(number)"
+    case .float(let number): return "f\(number.bitPattern)"
+    case .string(let text): return "s" + text.debugDescription
+    case .binary(let bytes):
+        guard records, let record = try? SourceMessagePack.decode(bytes), case .map = record else { return "b" + bytes.base64EncodedString() }
+        return "record " + sessionFree(record, records: true)
+    case .ext(let type, let bytes): return "x\(type) " + bytes.base64EncodedString()
+    case .array(let items): return "[" + items.map { sessionFree($0, records: records) }.joined(separator: ",") + "]"
+    case .map(let entries):
+        return "{" + entries.map { entry -> String in
+            let key = sessionFree(entry.key)
+            if records, entry.key.stringValue == "LocalSlot" { return key + ":0" }
+            // Each list is an array of MessagePack-encoded records
+            // (`List<byte[]>`, UniversalAutoResolver.cs:1331, :1338).
+            if ["itemInfo", "patternInfo"].contains(entry.key.stringValue ?? ""), case .array = entry.value {
+                return key + ":list " + sessionFree(entry.value, records: true)
+            }
+            return key + ":" + sessionFree(entry.value, records: records)
+        }.joined(separator: ",") + "}"
+    }
 }
 
 /// The scene with each character's neck look data, eye angles and animator

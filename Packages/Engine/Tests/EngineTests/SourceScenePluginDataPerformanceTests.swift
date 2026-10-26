@@ -4,7 +4,9 @@ import Testing
 
 /// ST-T03i export timing probe (opt-in: IKKOKU_PLUGIN_SCENE_PERF=1 plus
 /// IKKOKU_STUDIO_SCENARIO_SCENE, the showoff scene, and the plug-in probe's
-/// IKKOKU_PLUGIN_SCENE_PROBE and IKKOKU_PLUGIN_SCENE_PROBE_B folders).
+/// IKKOKU_PLUGIN_SCENE_PROBE and IKKOKU_PLUGIN_SCENE_PROBE_B folders; with
+/// IKKOKU_PLUGIN_SCENE_PROBE_C also phase C's fixture, and with
+/// IKKOKU_PLUGIN_SCENE_LARGEST a large installed scene with KKPE data).
 /// Prints the median and p90 of `editedData` per export, and of the plug-in
 /// data step alone (`SourceScenePluginData.rewrite` on the same edit's
 /// output): the cost with the step, and the cost it adds. Run it in a quiet
@@ -28,19 +30,22 @@ private func pluginPerfMedian(_ label: String, iterations: Int = 60, _ body: () 
     print("[plugin-perf] \(label) median \(String(format: "%.3f", median)) ms p90 \(String(format: "%.3f", p90)) ms over \(iterations) calls")
 }
 
-/// `editedData`, then the plug-in step alone on its output, for one export.
-/// A refused export is timed up to its refusal.
+/// `editedData`, then the plug-in step alone on the input `editedData` gives
+/// it: the staged copies with the source trailer (`inserting`), the edited
+/// body (`editedBody`) and the copies map. A refused export is timed up to
+/// its refusal.
 private func pluginPerfExport(_ label: String, _ document: KoikatsuSceneDocument, _ edits: SourceSceneEdits) throws {
-    let output: Data
-    do { output = try document.editedData(edits) } catch let error as SourceSceneTopologyError {
+    do { _ = try document.editedData(edits) } catch let error as SourceSceneTopologyError {
         print("[plugin-perf] \(label): refused (\(error.errorDescription?.prefix(80) ?? ""))")
         pluginPerfMedian("\(label) editedData (refused)") { _ = try? document.editedData(edits) }
         return
     }
-    let final = try KoikatsuSceneReader.decodeDocument(output)
+    let stage = try document.inserting(edits.insertions)
+    var rest = edits; rest.insertions = []
+    let (body, final) = try stage.document.editedBody(rest)
     try pluginPerfMedian("\(label) editedData") { _ = try document.editedData(edits) }
     try pluginPerfMedian("\(label) plug-in step") {
-        _ = try SourceScenePluginData.rewrite(output, final: final, source: document, copies: [:], moved: !edits.reparents.isEmpty)
+        _ = try SourceScenePluginData.rewrite(body, final: final, source: document, copies: stage.copies, moved: !rest.reparents.isEmpty)
     }
 }
 
@@ -67,10 +72,35 @@ func sourceScenePluginDataPerformance() throws {
     try pluginPerfExport("fixture A delete (Sideloader rewrite)", fixtureA, .init(deletions: [2]))
     try pluginPerfExport("fixture A move", fixtureA, .init(reparents: [.init(object: 5, parent: 0)]))
     // Phase B's fixture adds KKPE, NodesConstraints and MaterialEditor: a
-    // light's delete keeps them and rewrites Sideloader; an item's delete is
-    // refused by KKPE.
+    // light's delete keeps them and rewrites Sideloader; an item's delete
+    // rewrites KKPE and MaterialEditor too.
     let fixtureB = try load("IKKOKU_PLUGIN_SCENE_PROBE_B", "fixture.png")
     try pluginPerfExport("fixture B delete light", fixtureB, .init(deletions: [15]))
     try pluginPerfExport("fixture B move", fixtureB, .init(reparents: [.init(object: 5, parent: 0)]))
     try pluginPerfExport("fixture B delete item", fixtureB, .init(deletions: [2]))
+    // Phase C's fixture has data in all three plug-ins and a character with
+    // KKPE card data: an item delete rewrites KKPE, MaterialEditor and
+    // NodesConstraints; a copy clones records; a character copy patches its
+    // card's controller ID.
+    if !(pluginPerfEnvironment["IKKOKU_PLUGIN_SCENE_PROBE_C"] ?? "").isEmpty {
+        let fixtureC = try load("IKKOKU_PLUGIN_SCENE_PROBE_C", "fixture.png")
+        try pluginPerfExport("fixture C delete item (three rewrites)", fixtureC, .init(deletions: [2]))
+        try pluginPerfExport("fixture C duplicate item", fixtureC, .init(insertions: [.init(.duplicate(of: 5))]))
+        try pluginPerfExport("fixture C duplicate character (card patch)", fixtureC, .init(insertions: [.init(.duplicate(of: 16))]))
+        try pluginPerfExport("fixture C move", fixtureC, .init(reparents: [.init(object: 5, parent: 0)]))
+    }
+    // A large installed scene with KKPE data: a delete, a copy and a move of
+    // its highest-keyed root item without children (refused ones are timed to
+    // the refusal).
+    if let path = pluginPerfEnvironment["IKKOKU_PLUGIN_SCENE_LARGEST"], !path.isEmpty {
+        let data = try Data(contentsOf: URL(fileURLWithPath: path))
+        let large = try KoikatsuSceneReader.decodeDocument(data)
+        let items = large.snapshot.roots.filter { $0.kind == .item && $0.children.isEmpty }.map(\.sourceKey).sorted()
+        let folder = large.snapshot.roots.first { $0.kind == .folder }?.sourceKey
+        print("[plugin-perf] large scene: \(data.count) B, \(large.snapshot.roots.count) roots, \(large.trailingData.count) B of plug-in data")
+        let item = try #require(items.last)
+        try pluginPerfExport("large delete item", large, .init(deletions: [item]))
+        try pluginPerfExport("large duplicate item", large, .init(insertions: [.init(.duplicate(of: item))]))
+        if let folder { try pluginPerfExport("large move", large, .init(reparents: [.init(object: item, parent: folder)])) }
+    }
 }

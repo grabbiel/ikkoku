@@ -98,7 +98,7 @@ no native host.
 
 ## Scene plug-in data in edited original scenes
 
-Reviewed 2026-10-25. An edited original scene that deletes, copies or adds
+Reviewed 2026-10-26. An edited original scene that deletes, copies or adds
 records, or adds or deletes route points, keeps or rewrites each ExtendedSave
 entry, or the export is refused and the reason names the plug-in. The contract
 is [scene editing, plug-in data](../studio/scene-editing.md#plug-in-data-st-t03i).
@@ -162,8 +162,15 @@ controller whose save throws also keeps its loaded entry.
   record stays unresolved.
   - CharaStudio never writes such a record, because its save rebuilds the list
     from the live objects (:560–775).
+  - **Session slots.** Each record's `LocalSlot` is the slot the saving
+    session resolved (:591, :618, :642, :670), which depends on the mods it
+    loaded. No scene load or import reads it back: they resolve by the record's
+    GUID, group and category and the object's own saved `no` or pattern key
+    (:1326–1433, :1510–1538). So saves from two sessions can differ there and
+    load the same.
   - **What we do.** We drop the records of deleted objects. We refuse a scene
     whose records name an object it does not have, or one of the wrong kind.
+    Copied records keep their template's `LocalSlot`.
 - **NodesConstraints adopts card links on every load.** No installed DLL
   declares KK_AnimationController, so `NodesConstraints.OnSceneLoad`
   (`817fd940…`, NodesConstraints/NodesConstraints.cs:2061–2068) runs
@@ -176,8 +183,12 @@ controller whose save throws also keeps its loaded entry.
     A failed cast or a missing object ends that character's remaining links
     (catch at :2309).
   - **Int32 only.** The game's MessagePack boxes an `int` only for Int32 (`0xd2`)
-    values (PrimitiveObjectFormatter.cs:161–187), and MessagePack-CSharp writes
-    non-negative ints in shorter forms, so links written that way are inert.
+    values (PrimitiveObjectFormatter.cs:161–187).
+    - A typed `int` is written in a shorter form when it is non-negative, so
+      links stored that way are inert.
+    - A boxed `int`, such as a `Dictionary<string, object>` value, is written
+      as a forced Int32 block (:97, :123), so links stored that way are live.
+      CharaStudio wrote phase C's card links that way.
   - **What we do.** We read each card's links up to the first abort. We refuse
     a delete of an object a reached link names, a copy of a linked character
     together with such an object (NodesConstraints' duplicate patch, :648–734,

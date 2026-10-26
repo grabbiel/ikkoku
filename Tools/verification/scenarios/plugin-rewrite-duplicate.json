@@ -1,0 +1,21 @@
+{
+  "steps": [
+    {"op": "assert", "children": {"keys": [0, 1, 2, 5, 7, 14, 15, 16]}},
+    {"op": "captureObject", "key": 5, "name": "m3"},
+    {"op": "captureObject", "key": 16, "name": "female"},
+    {"op": "duplicate", "key": 16},
+    {"op": "assert", "children": {"labels": ["0", "1", "2", "5", "7", "14", "15", "16", "copy:16"]}},
+    {"op": "export", "path": ".local/verification/scenario-exports/plugin-rewrite-duplicate-character.png"},
+    {"op": "undo"},
+    {"op": "duplicate", "key": 5},
+    {"op": "assert", "children": {"labels": ["0", "1", "2", "5", "7", "14", "15", "16", "copy:5"]}},
+    {"op": "export", "path": ".local/verification/scenario-exports/plugin-rewrite-duplicate.png"},
+    {"op": "reimport", "path": ".local/verification/scenario-exports/plugin-rewrite-duplicate.png"},
+    {"op": "assert", "children": {"keys": [0, 1, 2, 5, 7, 14, 15, 16, 17]}},
+    {"op": "assert", "position": {"key": 17, "from": "m3", "within": 0.0005, "rotationWithin": 0.05}},
+    {"op": "assertRejected", "children": {"keys": [0, 1, 2, 5, 7, 14, 15, 16]}, "errorContains": "assert children"},
+    {"op": "reimport", "path": ".local/verification/scenario-exports/plugin-rewrite-duplicate-character.png"},
+    {"op": "assert", "children": {"keys": [0, 1, 2, 5, 7, 14, 15, 16, 17]}},
+    {"op": "assert", "position": {"key": 17, "from": "female", "within": 0.0005, "rotationWithin": 0.05}}
+  ]
+}

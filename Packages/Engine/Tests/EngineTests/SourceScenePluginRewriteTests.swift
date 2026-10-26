@@ -110,7 +110,10 @@ private func kkpeBoobReference(_ id: Int32) -> String { #"<dynamicBoneData2 pose
 /// (`OnCharaSave`) with controller ID `id`, in the current block or, with
 /// `legacy`, in the version 2 trailer.
 private func kkpeCard(_ id: Int32, legacy: Bool = false) -> Data {
-    let info = #"<characterInfo version="2.21.4" uniqueId="\#(id)"><boobs enabled="true" /></characterInfo>"#
+    kkpeCard(info: #"<characterInfo version="2.21.4" uniqueId="\#(id)"><boobs enabled="true" /></characterInfo>"#, legacy: legacy)
+}
+/// The same with `info` as KKPE's `characterInfo` string.
+private func kkpeCard(info: String, legacy: Bool = false) -> Data {
     if legacy {
         let data = OriginalCardFixture.map([("characterInfo", .string(info))])
         let value = OriginalCardFixture.map([("kkpe", OriginalCardFixture.plugin(0, data: data))])
@@ -271,6 +274,14 @@ private let kkpePlain = kkpeRoot([kkpeItem1, kkpeItem2, kkpeItem(3, -41274), kkp
         expected.cards[13] = card
         #expect(try rwEdited(scene, rwCopyCharacter) == expected.data)
     }
+    // Nor is a card read whose KKPE data has no controller ID.
+    let odd = kkpeCard(info: #"<characterInfo version="2.21.4" />"#)
+    let oddScene = rwScene([rwSettings], card: odd)
+    var oddExpected = oddScene
+    oddExpected.roots.append(.character(13, rwGroups))
+    oddExpected.copies[13] = 12; oddExpected.lookAt[13] = 14
+    oddExpected.cards[13] = odd
+    #expect(try rwEdited(oddScene, rwCopyCharacter) == oddExpected.data)
     // A kkpe entry with a plain card (no KKPE data in it) patches nothing.
     let plainCard = rwScene([kkpeEntry(kkpePlain)])
     var expected = plainCard
@@ -312,6 +323,15 @@ private let kkpePlain = kkpeRoot([kkpeItem1, kkpeItem2, kkpeItem(3, -41274), kkp
     // A card in the version 2 trailer is not patched.
     expectRefused(rwScene([kkpeEntry(kkpePlain)], card: kkpeCard(-50000, legacy: true)), rwCopyCharacter,
                   "keeps character 12's pose data in a card whose Extended Save is not the current block, which this writer does not patch")
+    // A card whose KKPE data has no non-zero controller ID: a copy needs
+    // that ID, so it is refused by name; a delete without lone colliders
+    // does not read cards.
+    for info in [#"<characterInfo version="2.21.4"><boobs enabled="true" /></characterInfo>"#,
+                 #"<characterInfo version="2.21.4" uniqueId="0" />"#, #"<other uniqueId="-50000" />"#] {
+        let odd = rwScene([kkpeEntry(kkpePlain)], card: kkpeCard(info: info))
+        expectRefused(odd, rwCopyCharacter, "has KKPE data in character 12's card in a form this writer does not read")
+        #expect(rwOutcome(odd, .init(deletions: [12])) == "kept")
+    }
     // A deleted controller's ID that two objects share.
     let shared = kkpeRoot([kkpeItem1, kkpeItem(2, -41286, kkpeBones), kkpeCollider([kkpeBoneReference(-41286)]), kkpeItem4])
     expectRefused(rwScene([kkpeEntry(shared)]), .init(deletions: [4]),
