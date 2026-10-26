@@ -106,6 +106,27 @@ public final class LoadedAsset: @unchecked Sendable {
         }
     }
 
+    /// A static converted package loaded outside any library cache, for an
+    /// owner that keeps and releases its meshes itself (ST-A11 source maps,
+    /// which load on a GCD worker). Any thread: the store is thread-safe, and
+    /// nothing here touches `AssetLibrary` state. The package rules are
+    /// `AssetLibrary.importStaticAsset`'s: every external buffer and image
+    /// inside `packageRoot`, no skins, at least one drawable mesh. Textures
+    /// are not created here; `imageTexture` would cache them by file path.
+    public static func loadStatic(url: URL, packageRoot: URL, resources: ResourceStore) throws -> LoadedAsset {
+        let source = url.standardizedFileURL
+        let gltf = try GLBLoader.load(url: source, packageRoot: packageRoot)
+        guard gltf.skins.isEmpty else {
+            throw GLTFError.io("Static model import does not support skinned characters; a skeleton mapping is required.")
+        }
+        let loaded = try LoadedAsset(url: source, asset: gltf, resources: resources)
+        guard !loaded.parts.isEmpty, !loaded.bounds.isEmpty else {
+            for part in loaded.parts { resources.unregister(mesh: part.mesh) }
+            throw GLTFError.io("The model contains no drawable triangle meshes.")
+        }
+        return loaded
+    }
+
     public var bounds: AABB {
         var b = AABB.empty
         for p in parts { b.expand(p.skinned ? p.bounds : p.bounds.transformed(by: p.worldMatrix)) }

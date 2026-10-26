@@ -385,6 +385,8 @@ extension CaptureRequest {
         ScopedOption("IKKOKU_STUDIO_HAND_POSE", [.liveSourceShaderProbe]),
         // The Studio app capture's live source-shader status (R1/CMT-04).
         ScopedOption("IKKOKU_LIVE_SOURCE_REPORT", [.appCapture]),
+        // ST-A11: the source scene's map draws alone (geometry, depth-normals, matrices).
+        ScopedOption("IKKOKU_SOURCE_MAP_PROBE", [.appCapture]),
         ScopedOption("IKKOKU_SOURCE_HEIGHT", [.rigCapture]),
         ScopedOption("IKKOKU_CAPTURE_SHADOWS", [.rigCapture]),
         ScopedOption("IKKOKU_RIG_BONES", [.rigCapture]),
@@ -470,6 +472,8 @@ extension CaptureRequest {
         "IKKOKU_STUDIO_ANIMATION_CATALOG", "IKKOKU_STUDIO_ATTACHMENT_CATALOG", "IKKOKU_STUDIO_ITEM_CATALOG",
         "IKKOKU_STUDIO_DYNAMICS", "IKKOKU_STUDIO_HAND_PATTERNS", "IKKOKU_STUDIO_LOOK_SETTINGS",
         "IKKOKU_STUDIO_VOICE_CATALOG",
+        // ST-A11: converted original maps by Map_ number (`SourceStudioMapCatalog`).
+        "IKKOKU_STUDIO_MAP_CATALOG",
         // Live source-shader inputs (`SourceShaderLiveConfiguration`).
         "IKKOKU_LIVE_SOURCE_PROGRAMS", "IKKOKU_LIVE_SOURCE_TEXTURES", "IKKOKU_LIVE_SOURCE_STREAMS",
         "IKKOKU_SHADER_BINDING_SUPPLEMENT", "IKKOKU_HEAD_MATERIAL_CONTRACT",
@@ -486,6 +490,7 @@ extension CaptureRequest {
         Dependency("IKKOKU_CAPTURE_ITEMS", requires: "IKKOKU_CAPTURE_STUDIO"),
         Dependency("IKKOKU_CAPTURE_TIMELINE", requires: "IKKOKU_CAPTURE_STUDIO"),
         Dependency("IKKOKU_SOURCE_SCENE_EDITS", requires: "IKKOKU_SOURCE_SCENE"),
+        Dependency("IKKOKU_SOURCE_MAP_PROBE", requires: "IKKOKU_SOURCE_SCENE"),
         Dependency("IKKOKU_BENCHMARK_FRAMES", requires: "IKKOKU_BENCHMARK_OUTPUT"),
         Dependency("IKKOKU_BENCHMARK_SIMULATION_FRAMES", requires: "IKKOKU_BENCHMARK_OUTPUT"),
         Dependency("IKKOKU_BENCHMARK_SIMULATION_FRAMES", requires: "IKKOKU_SOURCE_SCENE"),

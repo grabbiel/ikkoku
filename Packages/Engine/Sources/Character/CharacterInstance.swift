@@ -678,6 +678,21 @@ public enum MaterialBuilder {
     }
 
     /// Generic material for studio items (props).
+    /// `itemMaterial(for:asset:tint:nil, emissive:0)` with a base texture the
+    /// caller created and owns (ST-A11 source maps register their textures
+    /// privately, so a retired map never shares a cache key with a later
+    /// load). A part's normal texture is not bound: the converter writes none.
+    public static func itemMaterial(for part: LoadedAsset.Part, base: TextureHandle?) -> MaterialState {
+        var m = MaterialState(uniforms: .make(kind: MaterialKindItem))
+        m.base = base
+        m.setFlag(MaterialFlagHasBaseTexture, base != nil)
+        applySurfaceProperties(part.material, to: &m)
+        let f = part.material.baseColorFactor
+        m.uniforms.baseColor = f
+        m.uniforms.emissive = Float4(f.x, f.y, f.z, 0)
+        return m
+    }
+
     public static func itemMaterial(for part: LoadedAsset.Part, asset: LoadedAsset, tint: RGB?, emissive: Float = 0) -> MaterialState {
         var m = importedMaterial(for: part, asset: asset, kind: MaterialKindItem)
         m.base = baseTexture(for: part, asset: asset)

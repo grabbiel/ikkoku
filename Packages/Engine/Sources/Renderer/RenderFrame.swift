@@ -71,6 +71,11 @@ public struct RenderItem: Sendable {
     /// instead of the native toon shader. Shadow and pick passes keep the
     /// native draw. nil (the default) renders exactly as before.
     public var sourceShader: SourceShaderLiveDraw? = nil
+    /// An item with `objectID` 0 that still hides what is behind it from the
+    /// pick pass (ST-A11 source map geometry): it writes depth and id 0, so a
+    /// pick or hover over its pixels selects nothing. Gizmos still draw on top.
+    /// false (the default) leaves an id-0 item out of the pick pass, as before.
+    public var pickOccluder: Bool = false
 
     public init(mesh: MeshHandle, material: MaterialState, model: float4x4, objectID: UInt32,
                 deformKey: UInt64? = nil, skinSet: UInt64? = nil, morphWeights: [(index: Int, weight: Float)] = []) {
