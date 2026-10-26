@@ -101,3 +101,44 @@ public struct SourceStudioSilhouetteInputs: Sendable, Equatable {
         return m
     }
 }
+
+extension SourceStudioUnlitInputs {
+    /// The unlit group's evidence variants (`IKKOKU_SOURCE_MAP_PROBE`).
+    public enum Variant: String, CaseIterable, Sendable {
+        /// The recovered shader: the texel alone.
+        case decoded
+        /// Negative control: the particle shader's factor 2 applied to an unlit draw.
+        case doubled
+    }
+
+    /// `material` (an unlit material from `material(_:base:)`) drawn as
+    /// `variant`; nil for any other draw.
+    public static func variant(_ material: MaterialState, _ variant: Variant) -> MaterialState? {
+        guard SourceStudioMapAsset.Draw(material) == .unlit else { return nil }
+        var m = material
+        if variant == .doubled {
+            let c = m.uniforms.baseColor
+            m.uniforms.baseColor = Float4(c.x * 2, c.y * 2, c.z * 2, c.w)
+        }
+        return m
+    }
+}
+
+extension SourceStudioSilhouetteInputs {
+    /// The silhouette group's evidence variants (`IKKOKU_SOURCE_MAP_PROBE`).
+    public enum Variant: String, CaseIterable, Sendable {
+        /// The recovered passes in the mob colour.
+        case decoded
+        /// Negative control: the mob colour's alpha ignored (drawn at 1).
+        case alphaIgnored
+    }
+
+    /// `material` (a silhouette material from `material()`) drawn as
+    /// `variant`; nil for any other draw.
+    public static func variant(_ material: MaterialState, _ variant: Variant) -> MaterialState? {
+        guard SourceStudioMapAsset.Draw(material) == .silhouette else { return nil }
+        var m = material
+        if variant == .alphaIgnored { m.uniforms.baseColor.w = 1 }
+        return m
+    }
+}

@@ -414,5 +414,105 @@ class Slice3Tests(OracleTests):
             self.assertFalse(self.run_case()['passes'], change)
 
 
+class Slice4Tests(Slice3Tests):
+    """The maps mode: per-case map and far plane, a skipped irradiance, mob silhouettes and unlit draws."""
+    MOB = [0.0, 0.0, 1.0, 0.5]
+
+    def setUp(self):
+        super().setUp()
+        # Two overlapping mobs: one layer is the mob colour times its alpha, two layers blend once more.
+        self.mobs = np.zeros((H, W, 4))
+        self.mobs[3:14, 4:12, 2] = 0.5; self.mobs[8:20, 9:20, 2] = 0.5; self.mobs[8:14, 9:12, 2] = 0.75
+        self.poster = np.zeros((H, W, 4)); self.poster[10:22, 14:28, :3] = [0.3, 0.2, 0.1]
+
+    def add_slice4(self, silhouettes=True, unlit=True, skip_irradiance=False):
+        self.add_oracle(sky=False, particles=False)
+        trace = json.loads((self.oracle / 'oracle-trace.json').read_text())
+        case = trace['cases']['c']; measured = case['oracle']
+        case['authored'] = dict(mobColor=self.MOB)
+        for name, image, on in (('silhouettes', self.mobs, silhouettes), ('unlit', self.poster, unlit)):
+            if on:
+                (self.oracle / f'oracle-c-{name}.rgba.f32.gz').write_bytes(gzip.compress(image.astype('<f4').tobytes()))
+                measured[name] = dict(written=True, file=f'oracle-c-{name}.rgba.f32')
+            else:
+                measured.pop(name, None)
+        if skip_irradiance:
+            measured['irradiance'] = dict(written=False, reason='the map has no baked lightmaps')
+            measured['irradianceLit'] = dict(written=False, reason='the map has no baked lightmaps')
+        (self.oracle / 'oracle-trace.json').write_text(json.dumps(trace))
+
+    def write_ours_slice4(self, mobs=None, alpha_ignored=None, poster=None, doubled=None):
+        native = json.loads((self.ours / 'native-map.json').read_text())
+        def deflate(image, name):
+            packer = zlib.compressobj(wbits=-15)
+            (self.ours / name).write_bytes(packer.compress(image.astype('<f2').tobytes()) + packer.flush())
+        groups = (('silhouettes', dict(decoded=mobs, alphaIgnored=alpha_ignored)), ('unlit', dict(decoded=poster, doubled=doubled)))
+        for group, variants in groups:
+            if variants['decoded'] is None: continue
+            files = {}
+            for variant, image in variants.items():
+                files[variant] = f'native-map-{group}-{variant}.rgba16f.deflate'; deflate(image, files[variant])
+            native[group] = dict(written=True, files=files)
+        (self.ours / 'native-map.json').write_text(json.dumps(native))
+
+    def opaque_mobs(self):
+        image = self.mobs.copy(); image[..., 2] = np.where(self.mobs[..., 2] > 0, 1.0, 0.0)
+        return image
+
+    def test_silhouettes_and_unlit_pass_and_their_controls_fail(self):
+        self.add_slice4()
+        self.write_ours_slice4(self.mobs, self.opaque_mobs(), self.poster, self.poster * 2)
+        case = self.run_oracle()
+        self.assertTrue(case['passes'], json.dumps(case, indent=1, default=str))
+        sil = case['silhouettes']
+        self.assertTrue(sil['gated'] and sil['passes'] and sil['footprintIoU'] == 1.0)
+        self.assertEqual(sil['unityLevels'], {'1': sil['unityLevels']['1'], '1.5': sil['unityLevels']['1.5']})
+        self.assertTrue(sil['controls']['alphaIgnored']['fails'])
+        self.assertTrue(case['unlit']['passes'] and case['unlit']['controls']['doubled']['fails'])
+
+    def test_edges_are_left_out_but_a_missing_overlap_fails(self):
+        self.add_slice4(unlit=False)
+        soft = self.mobs.copy(); soft[3, 4:12, 2] = 0.3; soft[3:14, 11, 2] = 0.3  # MSAA-resolved edge pixels
+        self.write_ours_slice4(soft, self.opaque_mobs())
+        self.assertTrue(self.run_oracle()['silhouettes']['passes'])
+        once = self.mobs.copy(); once[8:14, 9:12, 2] = 0.5  # the far mob hidden by the near one's depth pass
+        self.write_ours_slice4(once, self.opaque_mobs())
+        case = self.run_oracle()
+        self.assertFalse(case['silhouettes']['passes']); self.assertFalse(case['passes'])
+
+    def test_silhouettes_on_one_side_without_a_mob_colour_or_a_passing_control_fail(self):
+        self.add_slice4(unlit=False)
+        self.write_ours_slice4(self.mobs, self.mobs)
+        self.assertFalse(self.run_oracle()['silhouettes']['passes'])
+        self.add_slice4(silhouettes=False, unlit=False)
+        self.write_ours_slice4(self.mobs, self.opaque_mobs())
+        self.assertEqual(self.run_oracle()['silhouettes']['reason'], 'only our capture draws mob silhouettes')
+        self.add_slice4(unlit=False)
+        trace = json.loads((self.oracle / 'oracle-trace.json').read_text()); del trace['cases']['c']['authored']
+        (self.oracle / 'oracle-trace.json').write_text(json.dumps(trace))
+        self.assertEqual(self.run_oracle()['silhouettes']['reason'], "the original's trace has no mob colour")
+
+    def test_a_skipped_irradiance_is_reported_not_gated(self):
+        self.add_slice4(silhouettes=False, unlit=False, skip_irradiance=True)
+        self.write_ours({})
+        case = self.run_oracle()
+        self.assertTrue(case['passes'], json.dumps(case, indent=1, default=str))
+        self.assertFalse(case['irradiance']['gated']); self.assertIn('no baked lightmaps', case['irradiance']['reason'])
+
+    def test_each_case_carries_its_map_and_far_plane(self):
+        trace = json.loads((self.original / 'map-trace.json').read_text())
+        trace.update(mapNo=None, depthFar=None, mode='maps'); trace['cases']['c'].update(mapNo=33, depthFar=FAR)
+        (self.original / 'map-trace.json').write_text(json.dumps(trace))
+        result = compare.compare(self.original, [('c', self.ours)])
+        self.assertTrue(result['passes']); self.assertEqual((result['mode'], result['cases'][0]['mapNo']), ('maps', 33))
+        trace['cases']['c']['mapNo'] = 41
+        (self.original / 'map-trace.json').write_text(json.dumps(trace))
+        self.assertFalse(self.run_case()['record']['passes'])
+        trace['cases']['c'].update(mapNo=33, depthFar=1000)
+        (self.original / 'map-trace.json').write_text(json.dumps(trace))
+        with self.assertRaisesRegex(ValueError, 'far plane'):
+            self.run_case()
+
+
 if __name__ == '__main__':
     unittest.main()

@@ -134,6 +134,21 @@ func unlitBranchDrawsTheTexelAlone() throws {
     #expect(simd_length(pixel - want) < 1e-5, "\(pixel) != \(want)")
 }
 
+/// The probe's evidence variants (`IKKOKU_SOURCE_MAP_PROBE`): each changes only
+/// its own group's term, and refuses other draws.
+@Test func silhouetteAndUnlitVariantsChangeOnlyTheirTerm() throws {
+    let unlit = SourceStudioUnlitInputs.material(MaterialData(name: "poster", baseColorFactor: Float4(0.5, 0.25, 1, 0.75), alphaMode: "BLEND"),
+                                                 base: TextureHandle(id: 1))
+    let silhouette = try #require(try SourceStudioSilhouetteInputs.parse(try json(["ikkokuSilhouette": silhouetteState()]))).material()
+    #expect(SourceStudioUnlitInputs.variant(unlit, .decoded) == unlit)
+    let doubled = try #require(SourceStudioUnlitInputs.variant(unlit, .doubled))
+    #expect(doubled.uniforms.baseColor == Float4(1, 0.5, 2, 0.75) && doubled.uniforms.flags == unlit.uniforms.flags)
+    #expect(SourceStudioSilhouetteInputs.variant(silhouette, .decoded) == silhouette)
+    let opaque = try #require(SourceStudioSilhouetteInputs.variant(silhouette, .alphaIgnored))
+    #expect(opaque.uniforms.baseColor == Float4(0, 0, 1, 1) && opaque.uniforms.flags == silhouette.uniforms.flags)
+    #expect(SourceStudioUnlitInputs.variant(silhouette, .decoded) == nil && SourceStudioSilhouetteInputs.variant(unlit, .decoded) == nil)
+}
+
 /// Particles/Anim Alpha Blended: 2 × colour × tint × lerp(tex(uv0), tex(uv2), uv1.x).
 @Test(.enabled(if: MTLCreateSystemDefaultDevice() != nil))
 func animatedParticleBranchBlendsToTheSecondUVByTheFirstUVsX() throws {

@@ -60,6 +60,21 @@ Slice 3 (map 34; docs/reference/studio/maps.md, "The sky gate" and "Particles"):
   must FAIL.
 A single `original_map_probe.py map34` folder is both --original and --oracle (its
 map-trace.json holds each case's oracle).
+
+Slice 4 (`original_map_probe.py maps`: twelve maps in one folder; maps.md, "Slice 4"):
+- each case carries its own map number and far plane (every map but 33 uses 1000 m);
+- the irradiance pair is not gated where the oracle recorded why it skipped it (a map
+  without baked lightmaps);
+- silhouettes (gated when either side draws them): Unity's mob silhouettes alone against
+  ours, RGB over black. Both are one flat colour per overlap count, so the error is taken
+  on the pixels whose 3x3 neighbourhood is flat in Unity's image (no edge crosses them, so
+  MSAA leaves our value whole), against SILHOUETTE_TOLERANCE (float16 storage); the
+  footprint is each side's pixels at half the colour of one layer, IoU >=
+  SILHOUETTE_TOLERANCE["footprintIoU"]. Our alphaIgnored variant must FAIL;
+- unlit (gated when either side draws them and covers a pixel): Unlit/Transparent alone,
+  RGB over black, against UNLIT_TOLERANCE (the particles' allowance: texture filtering and
+  blend order). Our doubled variant must FAIL.
+The tolerances were fixed before any slice 4 data was compared.
 """
 from __future__ import annotations
 import argparse, gzip, hashlib, json, math, zlib
@@ -132,6 +147,14 @@ SKY_VARIANTS = ("decoded", "rowsFlipped", "rotationIgnored", "gammaConstants")
 PARTICLE_TOLERANCE = dict(mean=2.0 ** -6, p99=2.0 ** -3, footprintIoU=0.98)
 PARTICLE_FLOOR = 2.0 ** -6
 PARTICLE_VARIANTS = ("decoded", "noDoubling", "gammaTint")
+# Slice 4, fixed before any slice 4 data was compared. Silhouettes: one flat colour per overlap count on both
+# sides, compared where no edge crosses the pixel, so only our float16 storage is allowed for (the sky's
+# allowance). The footprint allows for MSAA and rasterization at the figures' edges. Unlit: textured and
+# blended like the particles, with their allowance.
+SILHOUETTE_TOLERANCE = dict(mean=2.0 ** -10, p99=2.0 ** -9, footprintIoU=0.98)
+SILHOUETTE_VARIANTS = ("decoded", "alphaIgnored")
+UNLIT_TOLERANCE = dict(PARTICLE_TOLERANCE)
+UNLIT_VARIANTS = ("decoded", "doubled")
 
 
 def read_oracle_floats(path, width, height):
@@ -270,6 +293,86 @@ def particle_section(measured, oracle, ours, native, width, height):
                 passes=within and footprint >= PARTICLE_TOLERANCE["footprintIoU"] and all(c["fails"] for c in controls.values()))
 
 
+def flat_interior(image):
+    """Pixels whose 3x3 neighbourhood holds one RGB value in `image` (the border left out)."""
+    keep = np.ones(image.shape[:2], dtype=bool)
+    for dy in (-1, 0, 1):
+        for dx in (-1, 0, 1):
+            if dy or dx: keep &= (np.abs(np.roll(np.roll(image, dy, axis=0), dx, axis=1) - image).max(axis=-1) <= 1e-6)
+    keep[0, :] = keep[-1, :] = keep[:, 0] = keep[:, -1] = False
+    return keep
+
+
+def silhouette_section(measured, oracle, ours, native, width, height, mob_color):
+    """The silhouettes gate (see the module docstring); RGB only."""
+    theirs, mine = measured.get("silhouettes") or {}, native.get("silhouettes") or {}
+    if not theirs.get("written") and not mine.get("written"):
+        return dict(gated=False, reason="neither side draws mob silhouettes")
+    if not (theirs.get("written") and mine.get("written")):
+        return dict(gated=True, passes=False, reason=f"only {'the original' if theirs.get('written') else 'our capture'} draws mob silhouettes")
+    files = mine.get("files") or {}
+    if any(v not in files for v in SILHOUETTE_VARIANTS):
+        return dict(gated=True, passes=False, reason=f"our capture lacks silhouette images {[v for v in SILHOUETTE_VARIANTS if v not in files]}")
+    if not mob_color or len(mob_color) != 4:
+        return dict(gated=True, passes=False, reason="the original's trace has no mob colour")
+    unity = read_oracle_rgba(oracle / (theirs["file"] + ".gz"), width, height)[..., :3]
+    image = read_native_rgba(ours / files["decoded"], width, height)[..., :3]
+    one_layer = float(max(mob_color[:3]) * mob_color[3])
+    a, b = unity.max(axis=-1) > one_layer / 2, image.max(axis=-1) > one_layer / 2
+    footprint = iou(a, b)
+    if not a.any() and not b.any():
+        return dict(gated=False, coveredUnity=0, coveredOurs=0, reason="both sides draw mob silhouettes; neither covers a pixel from this camera")
+    mask = flat_interior(unity) & a & b
+    if not mask.any(): return dict(gated=True, passes=False, footprintIoU=footprint, reason="no flat pixel both cover")
+    def metrics(candidate):
+        relative = relative_error(unity, candidate, mask, 1e-3)
+        mean, p99 = float(relative.mean()), float(np.percentile(relative, 99))
+        return relative, mean, p99, mean <= SILHOUETTE_TOLERANCE["mean"] and p99 <= SILHOUETTE_TOLERANCE["p99"]
+    relative, mean, p99, within = metrics(image)
+    controls = {}
+    for variant in SILHOUETTE_VARIANTS[1:]:
+        _, c_mean, c_p99, c_within = metrics(read_native_rgba(ours / files[variant], width, height)[..., :3])
+        controls[variant] = dict(meanRelative=c_mean, p99Relative=c_p99, fails=not c_within)
+    levels = np.unique(np.round(unity[mask].max(axis=-1) / one_layer, 3), return_counts=True)
+    return dict(gated=True, mobColor=list(mob_color), coveredUnity=int(a.sum()), coveredOurs=int(b.sum()), footprintIoU=footprint,
+                comparedPixels=int(mask.sum()), meanRelative=mean, p99Relative=p99, maximumRelative=float(relative.max()),
+                unityLevels={f"{k:g}": int(n) for k, n in zip(*levels)}, tolerance=dict(SILHOUETTE_TOLERANCE), controls=controls,
+                passes=within and footprint >= SILHOUETTE_TOLERANCE["footprintIoU"] and all(c["fails"] for c in controls.values()))
+
+
+def unlit_section(measured, oracle, ours, native, width, height):
+    """The unlit comparison (see the module docstring); RGB only."""
+    theirs, mine = measured.get("unlit") or {}, native.get("unlit") or {}
+    if not theirs.get("written") and not mine.get("written"):
+        return dict(gated=False, reason="neither side draws unlit textures")
+    if not (theirs.get("written") and mine.get("written")):
+        return dict(gated=True, passes=False, reason=f"only {'the original' if theirs.get('written') else 'our capture'} draws unlit textures")
+    files = mine.get("files") or {}
+    if any(v not in files for v in UNLIT_VARIANTS):
+        return dict(gated=True, passes=False, reason=f"our capture lacks unlit images {[v for v in UNLIT_VARIANTS if v not in files]}")
+    unity = read_oracle_rgba(oracle / (theirs["file"] + ".gz"), width, height)[..., :3]
+    image = read_native_rgba(ours / files["decoded"], width, height)[..., :3]
+    a, b = unity.max(axis=-1) > 1e-4, image.max(axis=-1) > 1e-4
+    both = a & b
+    footprint = iou(a, b)
+    if not a.any() and not b.any():
+        return dict(gated=False, coveredUnity=0, coveredOurs=0, reason="both sides draw unlit textures; neither covers a pixel from this camera")
+    if not both.any(): return dict(gated=True, passes=False, footprintIoU=footprint, reason="no pixel both cover")
+    def metrics(candidate):
+        relative = relative_error(unity, candidate, both, PARTICLE_FLOOR)
+        mean, p99 = float(relative.mean()), float(np.percentile(relative, 99))
+        return relative, mean, p99, mean <= UNLIT_TOLERANCE["mean"] and p99 <= UNLIT_TOLERANCE["p99"]
+    relative, mean, p99, within = metrics(image)
+    controls = {}
+    for variant in UNLIT_VARIANTS[1:]:
+        _, c_mean, c_p99, c_within = metrics(read_native_rgba(ours / files[variant], width, height)[..., :3])
+        controls[variant] = dict(meanRelative=c_mean, p99Relative=c_p99, fails=not c_within)
+    return dict(gated=True, coveredUnity=int(a.sum()), coveredOurs=int(b.sum()), footprintIoU=footprint, comparedPixels=int(both.sum()),
+                meanRelative=mean, p99Relative=p99, maximumRelative=float(relative.max()), unityMean=float(unity[both].mean()),
+                oursMean=float(image[both].mean()), floor=PARTICLE_FLOOR, tolerance=dict(UNLIT_TOLERANCE), controls=controls,
+                passes=within and footprint >= UNLIT_TOLERANCE["footprintIoU"] and all(c["fails"] for c in controls.values()))
+
+
 def oracle_case(oracle_trace, case, oracle, ours, native, geometry, depth_normals, nc, width, height, far):
     """The --oracle sections for one case (see the module docstring)."""
     record = oracle_trace["cases"][case]
@@ -277,6 +380,8 @@ def oracle_case(oracle_trace, case, oracle, ours, native, geometry, depth_normal
     result = {}
     result["sky"] = sky_section(measured, oracle, ours, native, width, height)
     result["particles"] = particle_section(measured, oracle, ours, native, width, height)
+    result["silhouettes"] = silhouette_section(measured, oracle, ours, native, width, height, (record.get("authored") or {}).get("mobColor"))
+    result["unlit"] = unlit_section(measured, oracle, ours, native, width, height)
     classes = None
     if measured.get("classes"):
         path = oracle / measured["classes"]["image"]
@@ -287,6 +392,10 @@ def oracle_case(oracle_trace, case, oracle, ours, native, geometry, depth_normal
                                  counts=measured["classes"].get("counts"))
     clean = oracle / measured["clean"]["image"]
     result["cleanColor"] = dict(gated=False, image=dict(file=str(clean), sha256=digest(clean)), **color_error(pixels(clean), nc))
+    if measured["irradiance"].get("written") is False:  # slice 4: the oracle recorded why it has no irradiance
+        result["irradianceLit"] = dict(gated=False, reason=measured["irradiance"]["reason"])
+        result["irradiance"] = dict(gated=False, reason="the original has no irradiance to compare: " + measured["irradiance"]["reason"])
+        return result
     unity = read_oracle_floats(oracle / (measured["irradiance"]["file"] + ".gz"), width, height)
     lit = read_oracle_floats(oracle / (measured["irradianceLit"]["file"] + ".gz"), width, height)
     added = (lit - unity).max(axis=-1)
@@ -316,18 +425,20 @@ def oracle_case(oracle_trace, case, oracle, ours, native, geometry, depth_normal
 
 def compare_case(trace, case, original, ours, oracle=None, oracle_trace=None):
     record = trace["cases"][case]
+    # Slice 4's maps mode records the map and far plane per case.
+    map_no, far = record.get("mapNo", trace.get("mapNo")), record.get("depthFar", trace.get("depthFar"))
     native = json.loads((ours / "native-map.json").read_text())
     after = record["settled"]
     root = after["mapRoot"]
     if root is None: raise ValueError(f"{case}: the original has no map root after the load")
-    if native["depthFar"] != trace["depthFar"] or native["width"] != trace["width"] or native["height"] != trace["height"]:
+    if native["depthFar"] != far or native["width"] != trace["width"] or native["height"] != trace["height"]:
         raise ValueError(f"{case}: our capture is not at the original's size and far plane")
     ca = after["caMap"]
-    result = dict(case=case, scene=record["scene"], sceneSHA256=record["sceneSHA256"], ourSceneSHA256=native["sceneSHA256"])
+    result = dict(case=case, mapNo=map_no, depthFar=far, scene=record["scene"], sceneSHA256=record["sceneSHA256"], ourSceneSHA256=native["sceneSHA256"])
     # The record our parser read.
     record_error = max(abs(a - b) for a, b in zip(native["transform"]["position"] + native["transform"]["rotationDegrees"], ca["pos"] + ca["rot"]))
     sun_ok = "sunLightType" not in after or native.get("sunLightType") == after["sunLightType"]
-    record_ok = native["map"] == after["sceneInfoMap"] == trace["mapNo"] and record_error <= 1e-6 and native["sceneSHA256"] == record["sceneSHA256"] and sun_ok
+    record_ok = native["map"] == after["sceneInfoMap"] == map_no and record_error <= 1e-6 and native["sceneSHA256"] == record["sceneSHA256"] and sun_ok
     result["record"] = dict(map=native["map"], originalMap=after["sceneInfoMap"], sunLightType=native.get("sunLightType"),
                             originalSunLightType=after.get("sunLightType"), maximumError=record_error, passes=record_ok)
     # MapCtrl.Reflect, computed independently.
@@ -376,9 +487,9 @@ def compare_case(trace, case, original, ours, oracle=None, oracle_trace=None):
     a = pixels(names["originalGeometry"])[:, :, 0] > 127; b = pixels(names["nativeGeometry"])[:, :, 0] > 127
     result["geometry"] = geometry_metrics(a, b)
     od = pixels(names["originalDepthNormals"]); nd = pixels(names["nativeDepthNormals"])
-    result["depthNormals"] = depth_metrics(od, nd, a & b, float(trace["depthFar"]))
+    result["depthNormals"] = depth_metrics(od, nd, a & b, float(far))
     shifted = np.roll(nd, 1, axis=1)
-    control = depth_metrics(od, shifted, a & b, float(trace["depthFar"]))
+    control = depth_metrics(od, shifted, a & b, float(far))
     result["depthNormals"]["onePixelShiftControl"] = dict(p99Metres=control["p99Metres"], normalP99ChannelBytes=control["normalP99ChannelBytes"],
                                                           fails=not control["passes"])
     # Colour, reported only.
@@ -394,8 +505,8 @@ def compare_case(trace, case, original, ours, oracle=None, oracle_trace=None):
     result["color"] = dict(gated=False, lightmappedDraws=census.get("lightmappedDraws"), reason=reason, **color_error(oc, nc))
     gated = ["record", "rule", "placement", "camera", "geometry", "depthNormals"]
     if oracle is not None:
-        result.update(oracle_case(oracle_trace, case, oracle, ours, native, a & b, od, nc, trace["width"], trace["height"], float(trace["depthFar"])))
-        gated += [k for k in ("irradiance", "sky", "particles") if result[k].get("gated")]
+        result.update(oracle_case(oracle_trace, case, oracle, ours, native, a & b, od, nc, trace["width"], trace["height"], float(far)))
+        gated += [k for k in ("irradiance", "sky", "particles", "silhouettes", "unlit") if result[k].get("gated")]
     result["images"] = {k: dict(file=str(v), sha256=digest(v)) for k, v in names.items()}
     result["passes"] = all(result[k]["passes"] for k in gated) \
         and (result["rule"]["wrongEulerOrderControl"]["fails"] or not result["rule"]["wrongEulerOrderControl"]["applicable"]) \
@@ -410,7 +521,7 @@ def compare(original, ours_by_case, oracle=None):
     if oracle_trace is not None and (oracle_trace["width"], oracle_trace["height"]) != (trace["width"], trace["height"]):
         raise ValueError("the oracle is not at the original captures' size")
     cases = [compare_case(trace, case, original, ours, oracle, oracle_trace) for case, ours in ours_by_case]
-    result = dict(schemaVersion=1, scope=__doc__.strip().splitlines()[0], mapNo=trace["mapNo"], depthFar=trace["depthFar"],
+    result = dict(schemaVersion=1, scope=__doc__.strip().splitlines()[0], mapNo=trace.get("mapNo"), depthFar=trace.get("depthFar"), mode=trace.get("mode"),
                   width=trace["width"], height=trace["height"], traceSHA256=digest(original / "map-trace.json"),
                   cases=cases, passes=all(c["passes"] for c in cases))
     if oracle is not None: result["oracleTraceSHA256"] = digest(oracle_file)
@@ -439,9 +550,9 @@ def main():
               + (f", sky mean {c['sky']['meanRelative']:.2e} p99 {c['sky']['p99Relative']:.2e}"
                  f" (controls {', '.join(f'{k} p99 {v['p99Relative']:.3f}' for k, v in c['sky']['controls'].items())})"
                  if c.get("sky", {}).get("controls") else "")
-              + (f", particles IoU {c['particles']['footprintIoU']:.4f} mean {c['particles']['meanRelative']:.4f} p99 {c['particles']['p99Relative']:.4f}"
-                 f" (controls {', '.join(f'{k} p99 {v['p99Relative']:.3f}' for k, v in c['particles']['controls'].items())})"
-                 if c.get("particles", {}).get("comparedPixels") else ""))
+              + "".join(f", {g} IoU {c[g]['footprintIoU']:.4f} mean {c[g]['meanRelative']:.4f} p99 {c[g]['p99Relative']:.4f}"
+                        f" (controls {', '.join(f'{k} p99 {v['p99Relative']:.3f}' for k, v in c[g]['controls'].items())})"
+                        for g in ("particles", "silhouettes", "unlit") if c.get(g, {}).get("comparedPixels")))
     raise SystemExit(0 if result["passes"] else 1)
 
 

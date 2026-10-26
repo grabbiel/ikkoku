@@ -9,10 +9,11 @@ import ShaderTypes
 extension AppState {
     /// The Unity depth-normals far plane both sides encode with: the original
     /// probe (`Tools/reverse/fixtures/OriginalMapProbe.cs`, `DepthFar33` /
-    /// `DepthFar34`) renders its depth pass with the same far plane, so equal
-    /// encodings mean equal metres. Map 34's outside geometry reaches about
-    /// 800 m through its windows: 25 m would clip it on the original side only.
-    static func sourceMapProbeDepthFar(map: Int) -> Float { map == 34 ? 1000 : 25 }
+    /// `DepthFar34`, `UseMap`) renders its depth pass with the same far plane,
+    /// so equal encodings mean equal metres. Map 34's outside geometry reaches
+    /// about 800 m through its windows, and the other maps' outdoor geometry
+    /// further: 25 m (map 33's small room) would clip it on the original side only.
+    static func sourceMapProbeDepthFar(map: Int) -> Float { map == 33 ? 25 : 1000 }
 
     /// The map-only passes compare the map's solid draws, as the original probe
     /// does (its renderers whose materials are all `RenderType=Opaque`, the tag
@@ -43,8 +44,11 @@ extension AppState {
     /// `native-map-sky-<variant>.rgba16f.deflate` (`SourceStudioSkyMaterial
     /// .Variant`: the formula and its three negative controls) and
     /// `native-map-particles-<variant>.rgba16f.deflate` (`SourceStudioParticleInputs
-    /// .Variant`: the formula and its two negative controls). None of these images
-    /// carries the editor grid. A scene whose map is not drawn fails, naming the
+    /// .Variant`: the formula and its two negative controls). Slice 4 adds the
+    /// mob silhouettes (`native-map-silhouettes-<variant>`,
+    /// `SourceStudioSilhouetteInputs.Variant`) and the unlit draws
+    /// (`native-map-unlit-<variant>`, `SourceStudioUnlitInputs.Variant`), each
+    /// alone the same way. None of these images carries the editor grid. A scene whose map is not drawn fails, naming the
     /// status line.
     static func writeSourceMapProbe(studio: StudioModel, renderer: Renderer, directory: URL, width: Int, height: Int) throws {
         let census = studio.sourceMapCensus()
@@ -116,25 +120,39 @@ extension AppState {
             groups["sky"] = ["written": true, "files": files, "draws": skies.count, "rotationDegrees": skies.map { $0.material.uniforms.params.x },
                              "background": "transparent black", "format": hdrFormat]
         }
-        let particles = items.filter { SourceStudioMapAsset.Draw($0.material) == .particle }
-        if particles.isEmpty {
-            groups["particles"] = ["written": false]
-        } else {
+        // Slices 3 and 4: the particles, the mob silhouettes and the unlit draws, each group alone over
+        // transparent black, as the formula and its negative controls.
+        func writeGroup(_ group: String, _ draw: SourceStudioMapAsset.Draw, _ variants: [String],
+                        _ variant: (MaterialState, String) -> MaterialState?) throws {
+            let members = items.filter { SourceStudioMapAsset.Draw($0.material) == draw }
+            guard !members.isEmpty else {
+                groups[group] = ["written": false]
+                return
+            }
             var files: [String: String] = [:]
-            for variant in SourceStudioParticleInputs.Variant.allCases {
+            for name in variants {
                 var probe = frame
-                probe.items = particles.compactMap { item in
-                    guard let material = SourceStudioParticleInputs.variant(item.material, variant) else { return nil }
+                probe.items = members.compactMap { item in
+                    guard let material = variant(item.material, name) else { return nil }
                     var copy = item
                     copy.material = material
                     return copy
                 }
                 probe.effects.transparentBackground = true
-                let name = "native-map-particles-\(variant.rawValue).rgba16f.deflate"
-                try writeHDR(probe, name)
-                files[variant.rawValue] = name
+                let file = "native-map-\(group)-\(name).rgba16f.deflate"
+                try writeHDR(probe, file)
+                files[name] = file
             }
-            groups["particles"] = ["written": true, "files": files, "draws": particles.count, "background": "transparent black", "format": hdrFormat]
+            groups[group] = ["written": true, "files": files, "draws": members.count, "background": "transparent black", "format": hdrFormat]
+        }
+        try writeGroup("particles", .particle, SourceStudioParticleInputs.Variant.allCases.map(\.rawValue)) { material, name in
+            SourceStudioParticleInputs.Variant(rawValue: name).flatMap { SourceStudioParticleInputs.variant(material, $0) }
+        }
+        try writeGroup("silhouettes", .silhouette, SourceStudioSilhouetteInputs.Variant.allCases.map(\.rawValue)) { material, name in
+            SourceStudioSilhouetteInputs.Variant(rawValue: name).flatMap { SourceStudioSilhouetteInputs.variant(material, $0) }
+        }
+        try writeGroup("unlit", .unlit, SourceStudioUnlitInputs.Variant.allCases.map(\.rawValue)) { material, name in
+            SourceStudioUnlitInputs.Variant(rawValue: name).flatMap { SourceStudioUnlitInputs.variant(material, $0) }
         }
         let camera = frame.camera
         func columns(_ m: float4x4) -> [Float] { (0..<4).flatMap { c in (0..<4).map { r in m[c][r] } } }
@@ -145,6 +163,7 @@ extension AppState {
             "census": try JSONSerialization.jsonObject(with: JSONEncoder().encode(census)),
             "sceneSHA256": request.sceneSHA256,
             "irradiance": irradiance, "sky": groups["sky"] as Any, "particles": groups["particles"] as Any,
+            "silhouettes": groups["silhouettes"] as Any, "unlit": groups["unlit"] as Any,
             "solidDraws": solid.count,
             "map": request.map, "sunLightType": request.sunLightType,
             "transform": ["position": [request.transform.position.x, request.transform.position.y, request.transform.position.z],
