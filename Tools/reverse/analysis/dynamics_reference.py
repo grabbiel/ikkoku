@@ -292,6 +292,13 @@ def synthetic_document():
                 scenarios=scenarios, collisions=cases)
 
 
+def checkout_evidence(entries):
+    """Evidence with absolute paths. Contract entries name `.local/...` files
+    relative to this checkout; copying them verbatim made the reference depend
+    on the directory a test later runs from."""
+    return [dict(e, path=str((REPO / e['path']).resolve())) for e in entries]
+
+
 def original_document(directory):
     """Assemble source body/head/hair hierarchies independently of native output."""
     def read(name):
@@ -327,7 +334,7 @@ def original_document(directory):
     return dict(schemaVersion=1, reference='independent source hierarchy assembly and recovered float32 DynamicBone methods',
                 sourceAvatar=str((directory / 'source-avatar.json').resolve()),
                 evidence=[dict(path=str((directory / name).resolve()), sha256=hashlib.sha256((directory / name).read_bytes()).hexdigest()) for name in paths],
-                managedAndBundleEvidence=source['evidence'],
+                managedAndBundleEvidence=checkout_evidence(source['evidence']),
                 scenarios=scenarios, collisions=[])
 
 
@@ -387,7 +394,7 @@ def skirt_document(directory, contract_path, library_path, bottom=4):
     paths = [body_path, garment_path, contract_path, library_path]
     return dict(schemaVersion=1, reference='independent recovered float32 skirt dynamics; raw body hierarchy and scripted leg motion',
                 evidence=[dict(path=str(p.resolve()), sha256=hashlib.sha256(p.read_bytes()).hexdigest()) for p in paths],
-                managedAndBundleEvidence=[dict(e, path=str((REPO / e['path']).resolve())) for e in contract['evidence']],
+                managedAndBundleEvidence=checkout_evidence(contract['evidence']),
                 colliderControl=dict(minimumSignedDistance=clearances, excludes='root particles; includes particle radius and source final length projection'),
                 scenarios=scenarios, collisions=[])
 

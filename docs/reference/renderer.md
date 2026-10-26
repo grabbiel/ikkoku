@@ -5178,6 +5178,20 @@ Families move in both directions inside unchanged bounds; this is not a new
 parity claim. The gate ran with the retained 62-entry store and head contract
 under `.local/codex-continue-2026-10-24/rolling/materials-body/retained-native-inputs/`.
 
+**Gate inputs (2026-10-26).** The shared fixture map never held that pair.
+Its `IKKOKU_LIVE_SOURCE_TEXTURES` still named the 52-entry normal-top store
+(`textures-bc1`, three creators, promoted 2026-10-24), and its head contract
+lacks the body rows and `create_body`. So the gate failed on `main` at the
+store count, composites, content hash, the live set, fallbacks and composite
+events. The cheek gate needs the 63-entry store's cheek asset, which this
+gate's pinned count and hash reject, so one key cannot serve both. The gate
+now reads its store from `IKKOKU_LIVE_SOURCE_GATE_TEXTURES` (manifest
+`1b89b908…`) and its contract from `IKKOKU_LIVE_SOURCE_GATE_HEAD_CONTRACT`
+(`a02b6d35…`), both under the retained directory above. The live path and the
+other composite gates keep the existing keys. Bounds, counts and the content
+hash are unchanged. On `e7085c3` plus this change, the gate reproduces every
+value in the "After" column above, including content `b9ae136b…`.
+
 **Cost (measured, Release, quiet machine).** A private timing mode encodes the
 controlled frame's deform and live-input compute in one command buffer and its
 20 live translated records in a second, and reads the second's GPU start/end
