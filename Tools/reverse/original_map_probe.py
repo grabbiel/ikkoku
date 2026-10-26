@@ -158,14 +158,14 @@ $o[$s[0]]=[ordered]@{files=$f.Count;dirs=$d.Count;bytes=[int64]($f|Measure-Objec
 function Put($path,$name){$q=[Net.HttpWebRequest]::Create($base+$name);$q.Method='PUT';$q.AllowWriteStreamBuffering=$false
 $q.ContentType='application/octet-stream';$q.ContentLength=(Get-Item -LiteralPath $path).Length;$q.Timeout=3600000;$q.ReadWriteTimeout=3600000
 $s=$q.GetRequestStream();$f=[IO.File]::OpenRead($path);try{$f.CopyTo($s,1048576)}finally{$f.Close();$s.Close()};$q.GetResponse().Close()}
-function Hash($p){(Get-FileHash -LiteralPath $p -Algorithm SHA256).Hash.ToLower()}
+function Hash($p){$h=[Security.Cryptography.SHA256]::Create();$f=[IO.File]::OpenRead($p);try{($h.ComputeHash($f)|ForEach-Object{$_.ToString('x2')}) -join ''}finally{$f.Close()}}
 if(@(Get-Process CharaStudio,Koikatu -ErrorAction SilentlyContinue).Count){throw 'A game process already runs'}
 if(Test-Path -LiteralPath $root){throw "Root exists: $root"}
 [Net.ServicePointManager]::Expect100Continue=$false
 try{
 $r.scanBefore=Scan
 $items=New-Object Collections.ArrayList
-function Want($set,$rel){$full="$src\$rel";if(-not(Test-Path -LiteralPath $full -PathType Leaf)){$rec.missing+=,@($set,$rel);return};[void]$items.Add(@($set,$rel,(Get-Item -LiteralPath $full)))}
+function Want($set,$rel){$full="$src\$rel";if(-not(Test-Path -LiteralPath $full -PathType Leaf)){$rec.missing+=,@($set,$rel);return};[void]$items.Add(@($set,$rel,(Get-Item -LiteralPath $full -Force)))}
 foreach($rel in $files){Want 'files' $rel}
 foreach($g in $globs){$d=Split-Path $g -Parent;$f=Split-Path $g -Leaf;foreach($i in @(Get-ChildItem -LiteralPath "$src\$d" -Filter $f -File|Where-Object{$_.Name -like $f}|Sort-Object Name)){Want ($g -replace '\\','/') "$d\$($i.Name)"}}
 foreach($t in $trees){if($t.Count -ne 3){throw 'A tree row is malformed'};$d="$src\$($t[1])";if(-not(Test-Path -LiteralPath $d -PathType Container)){$rec.missing+=,@($t[0],$t[1]);continue}
@@ -184,7 +184,7 @@ while(-not $r.stopped -and $i -lt $items.Count){
 $k++;$dir="$root\b$k";New-Item -ItemType Directory $dir|Out-Null;$size=[int64]0;$n=0
 while($i -lt $items.Count -and ($n -eq 0 -or $size+$items[$i][2].Length -le $batch)){
 $set=$items[$i][0];$rel=$items[$i][1];$item=$items[$i][2];$full="$src\$rel";$name='f{0:d5}' -f $i
-$hash=Hash $full;Copy-Item -LiteralPath $full "$dir\$name";if((Hash "$dir\$name") -ne $hash){throw "Copy hash differs: $rel"}
+$hash=Hash $full;[IO.File]::Copy($full,"$dir\$name");if((Hash "$dir\$name") -ne $hash){throw "Copy hash differs: $rel"}
 $rec.files+=[ordered]@{path=($rel -replace '\\','/');set=$set;name=$name;batch=$k;bytes=$item.Length;sha256=$hash;lastWriteUtc=$item.LastWriteTimeUtc.ToString('o')}
 $size+=$item.Length;$n++;$i++}
 $z="$root\fetch-$k.zip";[IO.Compression.ZipFile]::CreateFromDirectory($dir,$z,[IO.Compression.CompressionLevel]::NoCompression,$false)

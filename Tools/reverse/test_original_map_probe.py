@@ -62,8 +62,12 @@ class FetchScriptTests(unittest.TestCase):
         self.assertIn("throw 'A game process already runs'", script)
         self.assertIn('Copy hash differs', script)
         self.assertNotIn('Remove-Item -LiteralPath $full', script)
-        self.assertNotIn('Copy-Item -LiteralPath $root', script)  # nothing is copied back into the game
-        self.assertNotIn('Copy-Item -LiteralPath $dir', script)
+        self.assertNotIn('Copy-Item', script)  # one copy, from the game into the private root
+        self.assertEqual(script.count('[IO.File]::Copy('), 1)
+        self.assertIn('[IO.File]::Copy($full,"$dir\\$name")', script)
+        # Hidden files (a user's tree can hold them) need -Force for Get-Item; .NET ignores the attribute.
+        self.assertIn('Get-Item -LiteralPath $full -Force', script)
+        self.assertNotIn('Get-FileHash', script)
         for write in ('Set-Content', 'Out-File', 'Junction', 'mklink', 'Move-Item', 'Rename-Item'):
             self.assertNotIn(write, script)
         self.assertIn("player='none: no player run, no player root, no junctions'", script)
@@ -71,7 +75,7 @@ class FetchScriptTests(unittest.TestCase):
         self.assertIn('Remove-Item -LiteralPath $root -Recurse -Force', cleanup)
         self.assertIn('remainingGameProcesses', cleanup)
         self.assertIn('$r.scanAfter=Scan', cleanup)
-        self.assertLess(script.index('$r.scanBefore=Scan'), script.index('Copy-Item'))
+        self.assertLess(script.index('$r.scanBefore=Scan'), script.index('[IO.File]::Copy('))
 
     def test_powershell_rows_keep_every_row_an_array(self):
         self.assertEqual(probe.powershell_rows([]), '@()')
@@ -90,7 +94,7 @@ class FetchScriptTests(unittest.TestCase):
         self.assertIn('-File -Recurse -Force', script)
         for reason in ('exceed the per-file bound', 'exceeds the total bound', 'exceeds $treeMax'):
             self.assertIn(reason, script)
-        listing, copying = script.index('$r.listedFiles='), script.index('Copy-Item')
+        listing, copying = script.index('$r.listedFiles='), script.index('[IO.File]::Copy(')
         self.assertLess(listing, copying)
         self.assertIn('while(-not $r.stopped', script[listing:copying])
         # Paths travel in the UTF-8 record, never as zip entry names: entries are index names.
