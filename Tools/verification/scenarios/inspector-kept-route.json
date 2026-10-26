@@ -160,10 +160,6 @@
         ]
       },
       {
-        "op": "keyLoop",
-        "hiddenKeyViews": 0
-      },
-      {
         "op": "type",
         "text": "7"
       },
@@ -171,6 +167,10 @@
         "op": "assert",
         "unchanged": true,
         "editing": false
+      },
+      {
+        "op": "keyLoop",
+        "hiddenKeyViews": 0
       },
       {
         "op": "select",

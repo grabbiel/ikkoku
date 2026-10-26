@@ -1223,21 +1223,32 @@ get wrong:
   character 0 K" as typed, and "2.250" for position x 2.25 typed as "2.25",
   as a field built anew does. A collapsed Transform section stays collapsed
   from character 0 to character 963. Once nothing has been selected, it is
-  expanded again. Folder 622 and character 0 have 12-view Tab loops, and five
-  selection cycles leave the document and undo depths unchanged.
+  expanded again. A collapsed Character section stays collapsed from
+  character 963 to character 0. Once folder 622 has hidden it, it is
+  expanded again for character 963. Folder 622 and character 0 have
+  12-view Tab loops, and five selection cycles leave the document and undo
+  depths unchanged.
 - `inspector-kept-route` (`IKKOKU_STUDIO_HALF_STATE_SCENE`). The route's
   "Line colour" well, active when the selection clears, is no longer active.
   A route point's position x, still being edited when the selection
   clears, is dropped without the end-of-editing commit. In both cases, the
   document and undo depths are unchanged and later typing reaches nothing.
   The route's labels ("Orient", "Ease", "Connection", "Parent") are absent
-  from the accessibility tree while it is hidden.
+  from the accessibility tree while it is hidden. The same holds when
+  character 10 replaces the route and only the route's section is hidden:
+  the route point edit is dropped, the well is no longer active, the route's
+  controls are absent from the accessibility tree, and the Tab loop has no
+  view outside the visible window.
+
+The Tab walk of `keyLoop` ends editing in two fields as it passes them,
+which pushes two undo entries on base and on head alike, so the checks
+assert an unchanged document before a walk, not across one.
 
 `IKKOKU_PERF_KEEP_MOUNTED` (`off`, `tab` or `on`, default `on`) is a
 measurement control only. The app reads it once at launch, `CaptureRequest`
 accepts it only with `IKKOKU_PERF_TRACE`, and no lane sets it. `off` builds
 and drops the inspector's views as before item 7. `tab` keeps the Object
-tab, and `on` also keeps each kind's section.
+tab, and `on` also keeps each kind's section once it has been shown.
 
 ### Plug-in data rewrites (ST-T03i)
 
