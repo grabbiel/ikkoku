@@ -86,7 +86,7 @@ func sourceScenePluginRewritesMatchCharaStudioEdits() throws {
 }
 
 /// Phase D's inputs: our export of each edit phase C saved (ours-<label>.png;
-/// an edit our writer refuses has none), and card-link-int32.png.
+/// an edit our writer refuses has none), and card-link-fixint.png.
 @Test(.enabled(if: SourceFixtureSupport.shouldRun([phaseCVariable, phaseCInputsVariable]),
                "Requires IKKOKU_PLUGIN_SCENE_PROBE_C (phase-c folder) and IKKOKU_PLUGIN_SCENE_INPUTS_C (output folder)"))
 func sourceScenePluginRewritesWriteThePhaseDInputs() throws {
@@ -106,25 +106,29 @@ func sourceScenePluginRewritesWriteThePhaseDInputs() throws {
         }
     }
     #expect(written.count >= rewriteEdits.count - 1)
-    // card-link.png's KK_AnimationController keys are MessagePack fixints,
-    // which NodesConstraints' `(int)` cast rejects (NodesConstraints.cs:2290);
-    // the variant writes them as Int32 and shortens Pad by the bytes that adds.
+    // card-link.png's KK_AnimationController keys are boxed ints, which the
+    // game's PrimitiveObjectFormatter writes as Int32 (d2, its
+    // WriteInt32ForceInt32Block, PrimitiveObjectFormatter.cs:97, :123): the
+    // live control. The variant writes them as fixints, which NodesConstraints'
+    // `(int)` cast rejects (NodesConstraints.cs:2290), and lengthens Pad by the
+    // bytes that saves: the inert control.
     let trace = try JSONSerialization.jsonObject(with: Data(contentsOf: root.appendingPathComponent("plugin-scene-trace.json"))) as? [String: Any]
     let link = try #require((trace?["cases"] as? [String: Any])?["card-link"] as? [String: Any])
     let target = try #require(link["ikTarget"] as? String)
     let linked = try #require(link["linked"] as? Int), eyes = try #require(link["eyes"] as? Int)
     let original = try Data(contentsOf: root.appendingPathComponent("card-link.png"))
-    let variant = try int32CardLinks(original, target: target, linked: linked, eyes: eyes)
+    let variant = try fixintCardLinks(original, target: target, linked: linked, eyes: eyes)
     #expect(variant.count == original.count)
-    let w2 = try #require(record(KoikatsuSceneReader.decodeDocument(variant), keys["W2"]!)?.character)
+    let w2 = try #require(record(KoikatsuSceneReader.decodeDocument(original), keys["W2"]!)?.character)
     #expect(try SourceScenePluginData.cardLinkSteps(w2.card().extensions().payload) == [Int32(linked), Int32(eyes)])
-    let before = try #require(record(KoikatsuSceneReader.decodeDocument(original), keys["W2"]!)?.character)
-    #expect(try SourceScenePluginData.cardLinkSteps(before.card().extensions().payload) == [])
-    try variant.write(to: output.appendingPathComponent("card-link-int32.png"))
-    // PR 1's card rule: deleting a live link's target is refused only in the variant.
-    let source = try KoikatsuSceneReader.decodeDocument(variant)
+    let inert = try #require(record(KoikatsuSceneReader.decodeDocument(variant), keys["W2"]!)?.character)
+    #expect(try SourceScenePluginData.cardLinkSteps(inert.card().extensions().payload) == [])
+    try variant.write(to: output.appendingPathComponent("card-link-fixint.png"))
+    // PR 1's card rule: deleting a live link's target is refused in
+    // CharaStudio's own card-link scene and accepted in the inert variant.
+    let source = try KoikatsuSceneReader.decodeDocument(original)
     #expect(throws: SourceSceneTopologyError.self) { try source.editedData(.init(deletions: [Int32(linked)])) }
-    _ = try KoikatsuSceneReader.decodeDocument(original).editedData(.init(deletions: [Int32(linked)]))
+    _ = try KoikatsuSceneReader.decodeDocument(variant).editedData(.init(deletions: [Int32(linked)]))
     _ = try source.editedData(.init(deletions: [1]))
 }
 
@@ -167,13 +171,13 @@ func sourceScenePluginRewritesReloadAsCharaStudioEdits() throws {
     // NodesConstraints attaches KK_AnimationController card links only when
     // the keys are Int32 (PR 1's card rule), and the survey model counts them.
     let link = try #require(cases["card-link"] as? [String: Any])
-    let fixint = ((link["card-link.png"] as? [String: Any])?["nodesConstraints"] as? [Any])?.count
-    let int32 = ((link["card-link-int32.png"] as? [String: Any])?["nodesConstraints"] as? [Any])?.count
-    #expect(fixint == 0); #expect(int32 == 2)
+    let int32 = ((link["card-link.png"] as? [String: Any])?["nodesConstraints"] as? [Any])?.count
+    let fixint = ((link["card-link-fixint.png"] as? [String: Any])?["nodesConstraints"] as? [Any])?.count
+    #expect(int32 == 2); #expect(fixint == 0)
     let survey = try JSONSerialization.jsonObject(with: load("card-link-survey.json")) as? [String: Any]
     func counts(_ name: String) -> [String: Any]? { (survey?[name] as? [String: Any])?["counts"] as? [String: Any] }
-    #expect(counts("card-link.png")?["cardStepScenes"] as? Int == 0)
-    #expect(counts("card-link-int32.png")?["cardLiveScenes"] as? Int == 1)
+    #expect(counts("card-link.png")?["cardLiveScenes"] as? Int == 1)
+    #expect(counts("card-link-fixint.png")?["cardStepScenes"] as? Int == 0)
     lines.append("card links: \(fixint ?? -1) constraints from fixint keys, \(int32 ?? -1) from Int32 keys")
     // Survey 3 (these rules) against survey 2 (PR 1's), per edit kind.
     let three = try JSONSerialization.jsonObject(with: load("survey3.json")) as? [String: Any]
@@ -404,17 +408,20 @@ private func constraintCount(_ kkex: SourceSceneKKEx) throws -> Int {
 }
 
 /// card-link.png with W2's KK_AnimationController `Links` value and `Eyes`
-/// written as MessagePack Int32 (d2) instead of fixints, and `Pad`'s str8
-/// shortened by the eight bytes that adds, so no length in the card changes.
-private func int32CardLinks(_ data: Data, target: String, linked: Int, eyes: Int) throws -> Data {
+/// written as MessagePack fixints instead of Int32 (d2), and `Pad`'s str8
+/// lengthened by the eight bytes that saves, so no length in the card changes.
+private func fixintCardLinks(_ data: Data, target: String, linked: Int, eyes: Int) throws -> Data {
     let name = Array(target.utf8)
-    guard name.count < 32, (0..<128).contains(linked), (0..<128).contains(eyes) else { throw SourceFixtureError.missing("fixint card links") }
+    guard name.count < 32, (0..<128).contains(linked), (0..<128).contains(eyes) else { throw SourceFixtureError.missing("fixint-sized card links") }
     let links = Array("Links".utf8), eyesKey = Array("Eyes".utf8), padKey = Array("Pad".utf8)
+    let linkedInt32: [UInt8] = [0xd2, 0, 0, 0, UInt8(linked)], eyesInt32: [UInt8] = [0xd2, 0, 0, 0, UInt8(eyes)]
+    let pad40: [UInt8] = [0xd9, 40] + [UInt8](repeating: 0x70, count: 40)
+    let pad48: [UInt8] = [0xd9, 48] + [UInt8](repeating: 0x70, count: 48)
+    let linkHead: [UInt8] = [0xa5] + links + [0x81, UInt8(0xa0 + name.count)] + name
     let patches: [([UInt8], [UInt8])] = [
-        ([0xa5] + links + [0x81, UInt8(0xa0 + name.count)] + name + [UInt8(linked)],
-         [0xa5] + links + [0x81, UInt8(0xa0 + name.count)] + name + [0xd2, 0, 0, 0, UInt8(linked)]),
-        ([0xa4] + eyesKey + [UInt8(eyes)], [0xa4] + eyesKey + [0xd2, 0, 0, 0, UInt8(eyes)]),
-        ([0xa3] + padKey + [0xd9, 40] + [UInt8](repeating: 0x70, count: 40), [0xa3] + padKey + [0xd9, 32] + [UInt8](repeating: 0x70, count: 32)),
+        (linkHead + linkedInt32, linkHead + [UInt8(linked)]),
+        ([0xa4] + eyesKey + eyesInt32, [0xa4] + eyesKey + [UInt8(eyes)]),
+        ([0xa3] + padKey + pad40, [0xa3] + padKey + pad48),
     ]
     var bytes = [UInt8](data)
     var found: [(Range<Int>, [UInt8])] = []

@@ -65,7 +65,7 @@ phase. See the probe source for what each phase does.
     texture mode stays Bundled there whatever the install says;
   - copies the largest scene under UserData\\studio\\scene whose KKEx trailer has a "kkpe" entry, read-only, into
     the upload as largest-kkpe.png (for the export-time measurement), with its SHA-256 and size; no name is kept.
-- Phase D's inputs are phase C's scenes, our exports (ours-*.png) and card-link-int32.png from --inputs, the rule
+- Phase D's inputs are phase C's scenes, our exports (ours-*.png) and card-link-fixint.png from --inputs, the rule
   corpus, and survey.txt. Phase C's collider zipmod, when it had one, is copied in again by name and hash.
 """
 from __future__ import annotations
@@ -462,7 +462,7 @@ def run_d(vm, output, errno_baseline, phase_c, inputs, corpus, host_address='10.
     files = {name: (phase_c / name).read_bytes() for name in names}
     ours = sorted(inputs.glob('ours-*.png'))
     if not ours: raise ValueError(f'no ours-*.png in {inputs}')
-    for path in ours + [inputs / 'card-link-int32.png']: files[path.name] = path.read_bytes()
+    for path in ours + [inputs / 'card-link-fixint.png']: files[path.name] = path.read_bytes()
     files['corpus.txt'] = corpus.read_bytes(); files['phase.txt'] = b'D'
     return run_rewrite(vm, output, errno_baseline, 'D', files, run['zipmod'], collider, host_address, wait_seconds,
                        survey_seconds, survey_file_bytes)

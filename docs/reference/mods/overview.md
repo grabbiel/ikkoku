@@ -184,6 +184,40 @@ controller whose save throws also keeps its loaded entry.
     would constrain the copy to the copy), and a delete with a copy when a
     card has links (#278). A copied character alone, a copied target alone and
     every other edit carry the card and the trailer as before.
+- **KKPE writes session IDs and registers copies with lone colliders.**
+  `com.joan6694.kkplugins.kkpe` (`72d1b7b5…`) saves each pose controller's
+  Unity instance ID as `uniqueId` (HSPE/PoseController.cs:409). A lone
+  collider names the dynamic bones it acts on by those IDs
+  (HSPE.AMModules/CollidersEditor.cs:1037, :1048).
+  - **Session IDs.** The IDs are new in every session, so no two saves of a
+    KKPE scene are byte-identical.
+  - **Copies.** Every controller with dynamic bones registers them with each
+    lone collider (DynamicBonesEditor.cs:1799, BoobsEditor.cs:401). So a copy
+    of an object a lone collider names gains entries in that collider's data.
+  - **Characters.** A character's pose data lives in its card's `kkpe` entry,
+    so a copied character's card carries a new controller ID.
+  - **What we do.**
+    - Each copy gets a deterministic fresh ID of its template's length, which
+      nothing in the scene uses.
+    - A copied character's card is patched in place at the same length.
+    - We refuse a copy of an object a lone collider names.
+- **MaterialEditor purges textures and drops stale records on save.**
+  `com.deathweasel.bepinex.materialeditor` (`dde57f4f…`,
+  KK_Plugins.MaterialEditor/SceneController.cs:378–500) removes textures no
+  record uses. Records whose `ID` names no item never load (`ExtractGameObject`,
+  :501–508), so its next save drops them.
+  - **What we do.** A rewrite drops them too, and purges the unused textures.
+    An entry that needs no rewrite keeps its bytes, stale records included.
+  - **Timeline.** We refuse a purge when Timeline data has texture tracks,
+    which the purge spares.
+- **NodesConstraints stops copying at a camera constraint.** Its
+  `Studio.Duplicate` patch (`817fd940…`, NodesConstraints.cs:649–734) gives
+  the copies of a constraint's two ends a copy of the constraint. It walks the
+  constraint list in order, and throws at the first constraint whose parent is
+  the main camera, so later constraints are never copied.
+  - **What we do.** We refuse an export whose copies would get a constraint
+    copy. Constraints after the first camera-parented one are left alone, as
+    CharaStudio does.
 
 ## Archive importer
 

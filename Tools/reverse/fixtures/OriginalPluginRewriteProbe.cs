@@ -27,10 +27,11 @@
 //               Optional: a failure is recorded in the trace's collider case, its partial files are removed, and
 //               the steps after it run.
 //   card-link   phase A's fixture plus female W2 whose card holds KK_AnimationController data (Links: one IK target
-//               name -> M3's key, Eyes: M1's key, Pad: 40 characters), saved as card-link.png. ExtendedSave
-//               writes the keys as MessagePack fixints, which NodesConstraints' card fallback cannot cast to int;
-//               the driver makes card-link-int32.png from it, the same bytes with Int32 keys and an 8-character
-//               shorter Pad, for phase D.
+//               name -> M3's key, Eyes: M1's key, Pad: 40 characters), saved as card-link.png. The keys are boxed
+//               ints, which the game's PrimitiveObjectFormatter writes as MessagePack Int32 (WriteInt32ForceInt32Block),
+//               the one form NodesConstraints' card fallback casts to int: the live control. The host makes
+//               card-link-fixint.png from it, the same bytes with fixint keys and an 8-character longer Pad, for
+//               phase D: the inert control.
 //   resave      loads and saves fixture.png, fixture-lc.png and every edit again (resave-*.png).
 //
 // Phase D loads files and reads back every plug-in's per-object state (`State`), saving nothing but resaves:
@@ -39,7 +40,7 @@
 //               object's key, MaterialEditor's record lists with texture IDs replaced by the texture bytes' SHA-256,
 //               and NodesConstraints' constraints with both ends as object key and path; each ours-*.png is also
 //               saved again as resave-ours-*.png.
-//   card-link   card-link.png and card-link-int32.png: the constraints NodesConstraints made from the cards, and
+//   card-link   card-link.png and card-link-fixint.png: the constraints NodesConstraints made from the cards, and
 //               the survey model's card counts for each file (card-link-survey.json).
 //   survey      last, nothing is saved after it: rule parity on reload-input\corpus.txt with this player's compiler,
 //               then survey 3 over the install's scene folder (reload-input\survey.txt) into survey3.json.
@@ -285,14 +286,14 @@ public sealed class OriginalPluginRewriteProbe:BaseUnityPlugin {
     }
     IEnumerator CardLinkControl() {
         var result=new Dictionary<string,object>();
-        foreach(var name in new[]{"card-link.png","card-link-int32.png"}) {
+        foreach(var name in new[]{"card-link.png","card-link-fixint.png"}) {
             var load=Load(Path.Combine(input,name));while(load.MoveNext())yield return load.Current;
             result[name]=K("objects",Objects(),"nodesConstraints",NcState());
         }
         // The survey model's card counts, one file at a time, on an emptied scene (PluginSceneSurvey.Model clears
         // the scene's key set).
         var counts=new Dictionary<string,object>();
-        foreach(var name in new[]{"card-link.png","card-link-int32.png"}) {
+        foreach(var name in new[]{"card-link.png","card-link-fixint.png"}) {
             studio.InitScene(false);
             for(int i=0;i<3;i++)yield return null;
             var survey=new PluginSceneSurvey(studio,60,512L*1024*1024);

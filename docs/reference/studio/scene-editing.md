@@ -768,12 +768,18 @@ The refusal is the engine's message, which names each plug-in and its reason. Th
 **Limits:**
 
 - Keys freed by a delete in the same export are not reused, so a delete with a duplicate gives the copy a different key than CharaStudio after the same interactive edit (#278). The scene loads the same way, and the Sideloader records follow the key.
-- KKPE data, and non-empty NodesConstraints and MaterialEditor data, are kept only when what they read is unchanged. Otherwise they are refused, not rewritten.
+- KKPE, MaterialEditor and NodesConstraints data are rewritten after deletes and copies. Some cases are still refused, by name ([rewrites](#plug-in-data-rewrites)):
+  - a delete together with a copy (#278);
+  - an added item, in a scene with KKPE data;
+  - a copy of an object a KKPE lone collider names;
+  - a constraint copy NodesConstraints would make;
+  - MaterialEditor version 0 data, and textures saved Deduped or Local.
 - Entry IDs with no recovered rule refuse every export that adds, deletes or copies objects or edits route points, and so do unknown versions.
 - Entries kept under a rule keep their loaded bytes. CharaStudio's save rebuilds them from its live state, which decodes to the same data when nothing they name changed. Byte identity with CharaStudio is shown only for the entries the original-player runs loaded.
 - A move keeps every entry as before. StudioItemIK stores world-space bone poses, so a moved IK chain loads from its old pose ([mods overview](../mods/overview.md#scene-plug-in-data-in-edited-original-scenes)).
 - The orphan rule holds for the pinned install only.
 - KKPE writes per-session instance IDs, so an export of a scene with KKPE data matches CharaStudio's only up to those IDs, as CharaStudio's own saves match each other.
+- In a scene with a character, CharaStudio's save also refreshes the character's neck look bytes, eye angles and animator time from the running character (`OCIChar.OnSavePreprocessing`, OCIChar.cs:586–600). Our export keeps the loaded values, so it matches CharaStudio's save only up to those fields, as two CharaStudio saves do.
 - A Sideloader record that names an object the scene does not have refuses every export that adds, deletes or copies objects or edits route points. Such records are stale: this install's Sideloader neither writes them nor loads past them. Eight installed scenes have one.
 - Survey 2 found no card with KKAnimationController links, and its card detection had no positive control on the player. The rule is proven on synthetic cards and by the parity gate.
 

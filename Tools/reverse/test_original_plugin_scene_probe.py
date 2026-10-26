@@ -125,7 +125,7 @@ class RunBTests(unittest.TestCase):
 
 COLLIDER = {'name': '[KKPE] Collider.zipmod', 'sha256': 'c' * 64}
 INPUTS_C = ['fixture.png', 'phase.txt']
-INPUTS_D = ['fixture.png', 'card-link.png', 'edit-delete.png', 'ours-delete.png', 'card-link-int32.png', 'corpus.txt', 'phase.txt']
+INPUTS_D = ['fixture.png', 'card-link.png', 'edit-delete.png', 'ours-delete.png', 'card-link-fixint.png', 'corpus.txt', 'phase.txt']
 
 
 def rewrite(phase='C', **changes):
@@ -211,7 +211,7 @@ class RunCDTests(unittest.TestCase):
         (phase_c / 'run.json').write_text(json.dumps({'zipmod': ZIPMOD, 'guest': {'collider': {'zipmod': COLLIDER}}}))
         for name in ('fixture.png', 'card-link.png', 'edit-delete.png', 'edit-duplicate.png') + (('fixture-lc.png',) if lone_collider else ()):
             (phase_c / name).write_bytes(name.encode())
-        for name in ('ours-delete.png', 'card-link-int32.png'): (inputs / name).write_bytes(name.encode())
+        for name in ('ours-delete.png', 'card-link-fixint.png'): (inputs / name).write_bytes(name.encode())
         corpus = local / 'corpus.txt'; corpus.write_bytes(b'corpus')
         done = subprocess.CompletedProcess([], 0, stdout=json.dumps(self.guest({})), stderr='')
         with patch('original_plugin_scene_probe.local_roots', return_value=[local.resolve()]),\
@@ -237,7 +237,7 @@ class RunCDTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             record, _ = self.run_phase(tmp, 'D')
             self.assertEqual(sorted(record['inputs']), sorted(['fixture.png', 'card-link.png', 'edit-delete.png', 'edit-duplicate.png',
-                                                               'fixture-lc.png', 'ours-delete.png', 'card-link-int32.png', 'corpus.txt', 'phase.txt']))
+                                                               'fixture-lc.png', 'ours-delete.png', 'card-link-fixint.png', 'corpus.txt', 'phase.txt']))
             self.assertEqual(record['collider'], COLLIDER)
             self.assertEqual(record['inputs']['phase.txt'], hashlib.sha256(b'D').hexdigest())
 
