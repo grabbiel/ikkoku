@@ -621,6 +621,15 @@ The image effects account for the gap to the frame with effects. The showoff inc
 
   `studio-scenario-source-map` also asserts map 33's 8 BC images. Both need the slice-3 export and `IKKOKU_STUDIO_MAP34_SCENE` (see [installing](#installing-the-slice-3-export)).
 
+Results on the head merged with `main` `4d60b73` (`.local/sta11c-map34/lanes/`):
+
+- **Engine.** The strict suite passed with the private fixtures and the slice-3 export: 1,036 Swift Testing tests and 21 XCTest tests, 0 failures. The 6 skips are opt-in timing probes. `IKKOKU_APPEARANCE_REFERENCE_ROOT` was set for the run only; it stays out of `environment.json`.
+- **Python.** `Tools/reverse` 626 (6 skipped), `Tools/reverse/analysis` and `Tools/verification` 201 pass.
+- **Lanes.** On the Debug build of `e7ac998`, with the slice-3 export and `--strict`:
+  - `studio-scenarios` passed 79 of 79, including the five map checks;
+  - `maker-scenarios` passed 10 of 10.
+- **CI** passed on the PR.
+
 #### Captures (slice 3)
 
 Release captures, 16 per set, from `main` (`4d60b73`) and from this change merged with it (`147bd19`; later commits change no code). Each binary ran on the slice-2 export (the shared fixture) and on the slice-3 export: `.local/sta11c-map34/captures/{base-old,base-new,head,head-old}/captures.json`.
