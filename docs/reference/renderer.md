@@ -371,6 +371,63 @@ formula, with its citations and the oracle that checks it, is in
   (`rgba16Float`, before bloom, grading and the sRGB composite) as float16 bit
   patterns. The map probe writes its irradiance images with it.
 
+### Source map sky, particles and block images (ST-A11 slice 3, 2026-10-26)
+
+Slice 3 draws Map 34's `Skybox/Cubemap` sky and `Particles/Alpha Blended`
+trees, uploads every map image as BC blocks, and samples map textures the
+original player's way. The recovered formulas, the probe gates and the numbers
+are in [maps: slice 3](studio/maps.md#map-34-the-sky-and-block-images-slice-3).
+
+- **Sky kind.** `MaterialKindSky` draws `sky_vertex` / `sky_fragment` with
+  `Pipelines.sky`, which exists in both the depth-only and the depth+stencil
+  main-pass sets. `depthOnlyAndStencilMainPassesCarryTheSameGroups` checks that the two sets
+  list the same pipelines.
+  - **Vertex.** It turns the vertex by `_Rotation` about Y in Unity's object
+    space for the clip position, and passes the unrotated Unity direction on.
+  - **Fragment.** It samples the cube with `skySampler` (bilinear, clamp: the
+    cubes have one level) and writes `texel × DecodeHDR × scale`.
+  - **Uniforms.** `baseColor.rgb` is `_Tint × unity_ColorSpaceDouble ×
+    _Exposure`. `params` is (`_Rotation`, `_Tex_HDR.x`, `.y`, `.w`).
+    `MaterialUniforms` stays 352 bytes.
+  - **Probe flag.** `MaterialFlagSkyRowsFlipped` (bit 21) is set only by the
+    map probe's negative control, never by the loader.
+- **Sky pass.** `prepare` puts sky draws in their own list and drops one whose
+  cube does not resolve to a cube texture. The main pass draws them in a `Sky`
+  group right after the background, with `depthNone` and no culling: Unity's
+  Background queue, ZWrite Off. Later geometry covers them. Sky draws never
+  cast shadows, occlude picks or take live source shaders.
+- **Cube binding.** `bindTextures` returns early for a sky draw after binding
+  only `MaterialState.cubemap` at `TextureIndexSkyCube` (19), so a sky draw
+  binds one texture.
+- **Particles.** `MaterialFlagMapParticle` (bit 20) on `MaterialKindMap`
+  selects `map_fragment`'s particle branch, `2 × vertex colour × tint ×
+  texture`. It is alpha blended in the transparent pass with both faces drawn,
+  and reads no lightmap.
+- **Sampler state.** `map_fragment` samples the light map and direction map
+  (`lightmapSampler`) and the base, emission and particle textures
+  (`mapForcedAnisoRepeat`) with linear filtering, linear mips and
+  `max_anisotropy(9)`.
+  - **Why 9.** The original player runs `QualitySettings.anisotropicFiltering`
+    ForceEnable, which raises every texture to Unity's forced minimum of 9.
+    The phase-map34 trace records the setting, and no game assembly changes
+    the limits.
+  - **Characters and items** keep `linearRepeat` (no anisotropy).
+  - **Test.** `mapTexturesSampleWithThePlayersForcedAnisotropy` draws a
+    16:1 texture footprint over a texture whose levels 0–1 are white and the
+    rest black. Each map texture reads 1. `max_anisotropy` 1–4 reads 0 on
+    Apple GPUs.
+- **Block images.** `SourceStudioBlockImages` parses the glTF's
+  `ikkokuBlockImages`. `SourceStudioBlockTexture.make` (slice 2's lightmap
+  upload, generalised) uploads BC1 and BC3 images (`.bc1_rgba(_srgb)`,
+  `.bc3_rgba(_srgb)`) and six-face cubes (BC1, BC3 and BC7, `textureCube`),
+  every level, one `replace` per level and face, after checking each file's
+  size and SHA-256. It runs on the map's load worker, and the asset registers
+  the result with `register(texture:)`. `ResourceStore` is unchanged, and
+  every non-map texture still decodes to RGBA8 there.
+  `IKKOKU_SOURCE_MAP_DECODED_TEXTURES=1` loads the PNGs instead; it is a
+  measurement switch. Map 34's textures take 59.6 MB of Metal memory as BC
+  against 288.2 MB decoded.
+
 ### Deformation safety
 
 The renderer writes complete skin palettes into the frame ring's palette

@@ -1073,7 +1073,7 @@ reused 7 of 7 frames instead of 6.
 
 ### Source maps (ST-A11)
 
-Four checks cover the map an imported scene names
+Five checks cover the map an imported scene names
 ([maps](../../docs/reference/studio/maps.md)). Each declares
 `IKKOKU_STUDIO_MAP_CATALOG`, the converted map catalog; no other check
 declares it, so the runner gives no other check a map.
@@ -1082,7 +1082,8 @@ declares it, so the runner gives no other check a map.
   the showoff characters with Map 33 added by the original player; 15 steps).
   It runs these steps in order:
   1. Before the first step the map is already drawn: 8 draws, all 8 with the
-     baked-lightmap material (`lightmappedDraws`, since ST-A11 slice 2), not
+     baked-lightmap material (`lightmappedDraws`, since ST-A11 slice 2), all 8
+     images uploaded as BC blocks (`blockImages`, since slice 3), not
      loading. The status line holds the exact label `Map 33 空き部室 (bushitu):
      baked lightmaps; approximated: no realtime sun or its shadows, no specular
      or reflections, no normal, metallic or detail maps, no fog, no camera
@@ -1101,6 +1102,16 @@ declares it, so the runner gives no other check a map.
 - `reload-load-source-map` (only the avatar and the catalog) runs next. It
   loads that save in a fresh process. One rehydration rebuilds the map request,
   and the map draws again with its lightmaps, the same line and picks.
+- `source-map34` (`IKKOKU_SOURCE_SCENE` from `IKKOKU_STUDIO_MAP34_SCENE`,
+  Map 34 alone, moved, with the day sun, saved by the original player; 15
+  steps) runs the same steps on map 34. The map is drawn before the first step:
+  54 draws (30 lightmapped, 1 particle, 1 sky; `particleDraws`, `skyDraws`),
+  54 images as BC blocks, and the exact label, `Map 34 空き教室 (akikyoushitu):
+  baked lightmaps on 30 of 57 draws (the rest as items), cubemap sky,
+  particles (no soft-particle fade or per-renderer sorting); approximated: …`.
+  Two map points pick nothing. The View toggle hides and restores all 54
+  draws, sky included. The exports are byte-identical, and reimport, New Scene
+  and undo restore the map.
 - `source-map-none` (`IKKOKU_STUDIO_SCENARIO_SCENE`, `koikatu_cs0002591.png`,
   which names no map) supplies the catalog. It asserts there is no map request
   or line before and after an original-format round trip, and that the export
@@ -1110,7 +1121,20 @@ The first three need the slice-2 export of Map 33 (with lightmaps) behind
 `IKKOKU_STUDIO_MAP_CATALOG`. With the first slice's export they fail on the
 label and `lightmappedDraws`, which is the point: they pin the lightmapped
 path. [Installing the slice-2 export](../../docs/reference/studio/maps.md#installing-the-slice-2-export)
-gives the commands.
+gives the commands. Since slice 3, `source-map` and `source-map34` need the
+slice-3 export (block images, and map 34), and `source-map34` needs
+`IKKOKU_STUDIO_MAP34_SCENE` in the environment ([installing the slice-3
+export](../../docs/reference/studio/maps.md#installing-the-slice-3-export)).
+
+`sourceMap` asserts take `particleDraws`, `skyDraws` and `blockImages`, and
+the report's detail line prints them with the sky cube bytes.
+
+**Measurement switch.** `IKKOKU_SOURCE_MAP_DECODED_TEXTURES=1` makes a map
+load decode its PNGs to RGBA8 (MetalKit mips) instead of uploading the
+`ikkokuBlockImages` BC blocks. The load reads it once, and the default is
+BC. It exists to measure the BC upload against the decoded path (memory,
+load time, the map probe gates). No check sets it, and the census shows it
+as `decodedImages` and `source decoded`.
 
 ## Maker scenario hook (T-T04)
 
