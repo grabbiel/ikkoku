@@ -639,6 +639,10 @@ SCENARIO_OPS = {"select", "setVisible", "rename", "toggleCamera", "toggleRoute",
                 "delete", "setParent", "exportRejected", "duplicate", "addFolder", "addCamera", "addLight",
                 "focus", "selectRoutePoint", "dragRoutePoint", "captureRoute", "editRoute", "setShowSourceMap"}
 
+# R7 phase 2, item 7: the window-run inspector checks (`"inspectorUI": {"steps": [...]}`).
+INSPECTOR_UI_OPS = {"select", "deselect", "focus", "type", "delete", "undo", "redo", "cycle",
+                    "snapshot", "keyLoop", "assert"}
+
 # ST-T11 `editRoute` settings: point edits name the point, route edits do not.
 ROUTE_POINT_SETTINGS = ("delete", "move", "speed", "ease", "connection", "link")
 ROUTE_SETTINGS = ROUTE_POINT_SETTINGS + ("add", "rotateStart", "loop", "line", "orientation", "color")
@@ -821,7 +825,7 @@ class StudioScenarioLaneTests(unittest.TestCase):
                       and not name.startswith(("maker-", "gameplay-")))
 
     def test_lane_validates_and_covers_every_scenario(self):
-        self.assertEqual(len(self.checks), 79)
+        self.assertEqual(len(self.checks), 82)
         referenced = set()
         for check in self.checks:
             scenario = check["env"]["IKKOKU_STUDIO_SCENARIO"]
@@ -832,6 +836,29 @@ class StudioScenarioLaneTests(unittest.TestCase):
                          self.scenario_files(),
                          "a scenario file is not run by the lane, or the lane "
                          "names a scenario that is not in Tools/verification/scenarios")
+
+    def check_inspector_ui_steps(self, path, steps):
+        self.assertTrue(steps)
+        for step in steps:
+            op = step["op"]
+            self.assertIn(op, INSPECTOR_UI_OPS, "unknown inspector UI op in %s" % path)
+            if op in ("select", "delete"):
+                self.assertIs(type(step["key"]), int)
+            if op == "focus":
+                self.assertRegex(step["field"], r"^(name|vector[0-8])$")
+            if op == "type":
+                self.assertTrue(step["text"])
+            if op == "cycle":
+                self.assertTrue(step["keys"])
+                self.assertTrue(all(type(key) is int for key in step["keys"]))
+                self.assertIs(type(step["count"]), int)
+                self.assertGreater(step["count"], 0)
+            for name in ("undoCount", "redoCount", "keyViews", "hiddenKeyViews"):
+                if name in step:
+                    self.assertIs(type(step[name]), int)
+            for name in ("axContains", "axAbsent"):
+                if name in step:
+                    self.assertTrue(all(isinstance(text, str) and text for text in step[name]))
 
     def test_scenario_reports_are_artifacts(self):
         for check in self.checks:
@@ -846,7 +873,9 @@ class StudioScenarioLaneTests(unittest.TestCase):
             with open(os.path.join(run.REPO_ROOT,
                                    check["env"]["IKKOKU_STUDIO_SCENARIO"]),
                       encoding="utf-8") as handle:
-                steps = json.load(handle)["steps"]
+                scenario = json.load(handle)
+            # An inspector UI scenario has no checklist steps; it starts from an import.
+            steps = scenario["steps"] or scenario["inspectorUI"]["steps"]
             fixtures = {f["env"] for f in check.get("fixtures", [])}
             # A scenario whose first step is loadDocument runs in a process
             # that must never import (that is the point of the reload-load
@@ -865,7 +894,12 @@ class StudioScenarioLaneTests(unittest.TestCase):
         for check in self.checks:
             path = os.path.join(run.REPO_ROOT, check["env"]["IKKOKU_STUDIO_SCENARIO"])
             with open(path, encoding="utf-8") as handle:
-                steps = json.load(handle)["steps"]
+                scenario = json.load(handle)
+            steps = scenario["steps"]
+            if "inspectorUI" in scenario:
+                self.assertEqual(steps, [], "inspector UI checks cannot carry checklist steps: %s" % path)
+                self.check_inspector_ui_steps(path, scenario["inspectorUI"]["steps"])
+                continue
             self.assertTrue(steps)
             for step in steps:
                 op = step["op"]
@@ -1180,7 +1214,11 @@ class StudioScenarioLaneTests(unittest.TestCase):
         for check in self.checks:
             path = os.path.join(run.REPO_ROOT, check["env"]["IKKOKU_STUDIO_SCENARIO"])
             with open(path, encoding="utf-8") as handle:
-                steps = json.load(handle)["steps"]
+                scenario = json.load(handle)
+            if "inspectorUI" in scenario:
+                # The inspector UI checks read the window; they save nothing.
+                continue
+            steps = scenario["steps"]
             ops = [step["op"] for step in steps]
             # Every checklist must round-trip its state through a file and
             # verify it again: the original-format pair (export → reimport)

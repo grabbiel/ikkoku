@@ -534,3 +534,27 @@ private struct CaptureRecipe {
         #expect(captureRequestProblems(environment) == expected, Comment(rawValue: "\(variable)=\(value)"))
     }
 }
+
+// R7 phase 2, item 7: a Studio window capture can make selections first, one at a time.
+@Test func captureRequestAcceptsStudioWindowSelections() {
+    let studio: [String: String] = ["IKKOKU_SOURCE_SCENE": "/scenes/scene.png", "IKKOKU_SOURCE_AVATAR": "/rigs/source-avatar.json",
+                                    "IKKOKU_CAPTURE_UI": "/ui.png", "IKKOKU_CAPTURE_UI_MODE": "studio"]
+    for value in ["0", "0,622,none", "none", "963,none,963"] {
+        var environment = studio
+        environment["IKKOKU_CAPTURE_UI_SELECT"] = value
+        #expect(captureRequestProblems(environment).isEmpty, Comment(rawValue: value))
+    }
+    let tooMany: String = Array(repeating: "none", count: 17).joined(separator: ",")
+    let rejected: [[String]] = [["IKKOKU_CAPTURE_UI_SELECT"]]
+    for value in ["", "0,", "None", "-1", "route", tooMany] {
+        var environment = studio
+        environment["IKKOKU_CAPTURE_UI_SELECT"] = value
+        #expect(captureRequestProblems(environment) == rejected, Comment(rawValue: value))
+    }
+    var maker = studio
+    maker["IKKOKU_CAPTURE_UI_MODE"] = "maker"
+    maker["IKKOKU_CAPTURE_UI_SELECT"] = "0"
+    #expect(captureRequestProblems(maker) == rejected)
+    #expect(captureRequestMessage(maker).contains("IKKOKU_CAPTURE_UI_MODE=studio"))
+    #expect(captureRequestProblems(["IKKOKU_CAPTURE_UI_SELECT": "0"]) == rejected)
+}
