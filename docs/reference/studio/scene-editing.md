@@ -664,6 +664,32 @@ The refusal is the engine's message, which names each plug-in and its reason. Th
   - **Pass-through.** A control entry under an ID no plug-in owns keeps its bytes through CharaStudio's delete. Our writer refuses that delete by name.
   - **Coverage.** Phase A loaded only those four plug-ins, so its byte identity covers the Sideloader and StudioSceneSettings entries only.
   - **VM hygiene.** The errno-24 count was 0 before and after. The root was removed, and no game process was left.
+- **Original player, phase B and survey 2** (2026-10-26, one `prlctl exec`, `.local/stt03i-plugin-data/phase-b/run-1`).
+  - **Setup.** The player root got every installed plug-in, copied and checked against its SHA-256, and phase A's zipmod. Only `abdata` and `CharaStudio_Data` are junctions. Their file counts and newest modification times were scanned before setup and after cleanup and were unchanged (abdata 4,565 files, CharaStudio_Data 102). `-logFile` pointed into the root. KKPE's "Disable advanced mode on copied objects" reads `false` in the install's config, read-only.
+  - **Fixture and edits.** CharaStudio saved phase A's fixture again, now with KKPE, NodesConstraints (empty) and MaterialEditor entries. It then saved each phase-A edit plus delete-light and add-folder, and the load-then-save of every file: the fixture, each edit, our seven phase-A exports, and the fixture with nil entries.
+  - **KKPE instance IDs.** KKPE writes each pose controller's Unity instance ID as `uniqueId` (HSPE/PoseController.cs:409), and CollidersEditor writes references to them as `poseControllerId` (HSPE.AMModules/CollidersEditor.cs:1037, :1048). The values change every session. The load uses them only to match references within the same file (`_oldInstanceId` with `_loadId`, :1140–1176). So no two CharaStudio saves of a KKPE scene are byte-identical, its own load-then-save included.
+    - `sourceScenePluginDataMatchesCharaStudioWithEveryPlugin` compares files with those IDs renamed in order of first appearance. Everything else must be identical, every other entry's bytes included.
+    - Two negative controls still differ: another edit, and one KKPE attribute changed at the same length.
+  - **Results.**
+    - CharaStudio's load-then-save is a fixed point on those terms.
+    - Our move, route-add, route-delete, delete-light and add-folder exports are CharaStudio's files on those terms: the empty NodesConstraints form, MaterialEditor and KKPE kept, and Sideloader rewritten.
+    - Delete, delete-folder, duplicate and delete-duplicate are refused by KKPE. Its rewrite is a later change.
+    - Our phase-A exports, loaded and saved by this player, are CharaStudio's own edits apart from KKPE's instance IDs. The exception is delete-duplicate, whose copy keeps our key (#278).
+    - The fixture with nil entries saves as the fixture does.
+  - **Parity on the player.** The C# port, compiled by the player's own compiler, agreed on all 2,462 corpus edits before the survey ran.
+  - **Survey 2** (read-only, counts only, 168 s, not truncated). It read 361 files: 61 scenes with entries, 121 without (80 with no trailer, 41 with an empty map), and 179 without an end marker. Every scene loaded.
+
+    | Edit kind | Before ST-T03i (all/some/none of 61) | Now | Change |
+    | --- | --- | --- | --- |
+    | Delete | 0/0/61 | 9/35/17 | 9 scenes fully and 35 partly unlocked |
+    | Duplicate | 0/0/61 | 9/35/17 | 9 fully and 35 partly unlocked |
+    | Add a folder | 61/0/0 | 50/0/11 | 11 refused: the latent-bug fix |
+    | Add a light | 61/0/0 | 47/0/14 | 14 refused: the latent-bug fix and LightSettings |
+    | Add a camera | 61/0/0 | 50/0/11 | 11 refused: the latent-bug fix |
+    | Route point add or delete | none of the 61 has a route | — | — |
+
+    - **Blockers.** KKPE refuses deletes and copies in 51 scenes, MaterialEditor's item-keyed data in 23, Sideloader in 8 (every edit kind), and non-empty NodesConstraints and Timeline data in 3 each. No scene is refused only by unknown IDs.
+    - **Card links.** No character card in the 182 loaded scenes names KKAnimationController `Links` or `Eyes`, so the card check refuses nothing. The detection reads each card's ExtendedSave data as `OICharInfo.Load` loads it (OICharInfo.cs:250–251). It had no positive control on the player.
 
 **Limits:**
 
@@ -673,6 +699,8 @@ The refusal is the engine's message, which names each plug-in and its reason. Th
 - Entries kept under a rule keep their loaded bytes. CharaStudio's save rebuilds them from its live state, which decodes to the same data when nothing they name changed. Byte identity with CharaStudio is shown only for the entries the original-player runs loaded.
 - A move keeps every entry as before. StudioItemIK stores world-space bone poses, so a moved IK chain loads from its old pose ([mods overview](../mods/overview.md#scene-plug-in-data-in-edited-original-scenes)).
 - The orphan rule holds for the pinned install only.
+- KKPE writes per-session instance IDs, so an export of a scene with KKPE data matches CharaStudio's only up to those IDs, as CharaStudio's own saves match each other.
+- Survey 2 found no card with KKAnimationController links, and its card detection had no positive control on the player. The rule is proven on synthetic cards and by the parity gate.
 
 ## Shape and color reset contract
 
