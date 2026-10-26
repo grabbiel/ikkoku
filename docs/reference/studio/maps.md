@@ -471,7 +471,7 @@ Not drawn:
 
 ### Sampler state
 
-The player runs `QualitySettings.anisotropicFiltering` `ForceEnable` (in the phase-map34 trace). Every mipmapped texture that is not point-filtered is then sampled with anisotropy clamped into Unity's forced limits, [9, 16]. No game assembly calls `Texture.SetGlobalAnisotropicFilteringLimits` or sets the quality value: only `UnityEngine.dll` names them. So the lightmaps' `anisoLevel` 3 and the particle and base textures' 1 are raised to 9. D3D11 samples an anisotropic texture with linear mips.
+The player runs `QualitySettings.anisotropicFiltering` `ForceEnable`. The phase-map34 trace (`.local/sta11c-map34/phase-map34/map-trace.json`) records it in every case's `capture.quality` and `oracle.quality`, beside the lightmaps' `anisoLevel` 3 and the sky and particle textures' 1. Every mipmapped texture that is not point-filtered is then sampled with anisotropy clamped into Unity's forced limits, [9, 16]. No game assembly calls `Texture.SetGlobalAnisotropicFilteringLimits` or sets the quality value: only `UnityEngine.dll` names them. So the lightmaps' `anisoLevel` 3 and the particle and base textures' 1 are raised to 9. D3D11 samples an anisotropic texture with linear mips.
 
 `map_fragment` now samples the light map, direction map, base, emission and particle textures with anisotropy 9 and linear mips (`lightmapSampler`, `mapForcedAnisoRepeat`). Character and item draws keep `linearRepeat`.
 
@@ -720,6 +720,17 @@ Slice 2 (baked lightmaps), Release, in one quiet window ([performance: slice 2](
 - **Import.** Scene ready, first draw and the main thread are unchanged. The worker's load takes 2.7–4.3 ms longer to hash and upload the lightmap blocks and to load the emission map.
 - **Memory.** Metal grows by 4.2 MB: 2.8 MB of BC3 lightmaps (about 11.2 MB as RGBA8) and the 1.4 MB emission map.
 - **Base M1 (estimate).** About +0.4 ms per frame for the room filling the window, +4–5 ms of worker load and +4.2 MB.
+
+Slice 3 (map 34, the sky and block images), Release, in one quiet window ([performance: slice 3](../performance.md#slice-3-map-34-the-sky-and-block-images)). The comparison is against `main` (`4d60b73`), whose binary decodes the PNGs:
+
+- **GPU.** Map 34 with its sky takes 0.483 ms per frame at 1996×1824, from the day and the evening camera; `main`'s binary, without the sky or particle formula, takes 0.552–0.559 ms. Anisotropy 9 costs less than the benchmark resolves: +0.005–0.007 ms on map 34 against trilinear map samplers, inside the ranges. Behind the 7 characters, map 33 costs +0.010 ms. Scenes without a map are unchanged.
+- **Memory.** Metal falls by exactly the texture bytes: 46.3 MB for map 33, and 228.4 MB for map 34 against its decoded PNGs. Map 34's scene peaks at 221.6 MB of Metal instead of 449.4 MB.
+- **Import.** Scene ready, the import call, the first draw and the main thread are unchanged. The worker's load falls from 97.7 to 12.7 ms in the showoff scene, and from 401 to 66 ms for map 34.
+- **Base M1 (estimate).**
+  - about 2.3 ms per frame for map 34 filling the window;
+  - under 0.05 ms for anisotropy, the least certain estimate, since the M1 has about a twelfth of this machine's bandwidth;
+  - 75–85 ms of worker load instead of about 0.5 s;
+  - about 220 MB of peak Metal for map 34's scene instead of 450 MB.
 
 ## What remains
 

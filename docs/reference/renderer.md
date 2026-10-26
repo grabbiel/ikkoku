@@ -409,8 +409,15 @@ are in [maps: slice 3](studio/maps.md#map-34-the-sky-and-block-images-slice-3).
   `max_anisotropy(9)`.
   - **Why 9.** The original player runs `QualitySettings.anisotropicFiltering`
     ForceEnable, which raises every texture to Unity's forced minimum of 9.
-    The phase-map34 trace records the setting, and no game assembly changes
-    the limits.
+    The phase-map34 trace (`.local/sta11c-map34/phase-map34/map-trace.json`)
+    records `anisotropicFiltering: "ForceEnable"` in every case's
+    `capture.quality` and `oracle.quality`, with the lightmaps'
+    `anisoLevel` 3 and the sky and particle textures' 1. No game assembly
+    changes the limits.
+  - **Cost.** Against the same build with trilinear map samplers, map 34
+    differs by +0.005–0.007 ms of GPU per frame at 1996×1824. That is inside
+    the offscreen benchmark's run-to-run range
+    ([performance: slice 3](performance.md#slice-3-map-34-the-sky-and-block-images)).
   - **Characters and items** keep `linearRepeat` (no anisotropy).
   - **Test.** `mapTexturesSampleWithThePlayersForcedAnisotropy` draws a
     16:1 texture footprint over a texture whose levels 0–1 are white and the
