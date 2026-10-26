@@ -559,7 +559,7 @@ struct WorkspaceRow: View, Equatable {
 /// (`StudioInspectorMounting`).
 struct ObjectInspector: View {
     let model: StudioModel
-    @State private var kept = InspectorKeptViews<ObjectInspectorState>()
+    @State private var kept = InspectorKeptViews()
     @State private var keptSections = ObjectInspectorSectionsKept()
 
     var body: some View {
@@ -586,7 +586,7 @@ struct ObjectInspector: View {
         let sectionsKept = StudioInspectorMounting.current.keepsSections ? keptSections : nil
         let _ = sectionsKept?.attach(to: kept.sections)
         ZStack(alignment: .top) {
-            if let state = shown ?? kept.state {
+            if let state = shown ?? (kept.state as? ObjectInspectorState) {
                 ObjectInspectorContent(model: model, state: state, sectionsKept: sectionsKept).equatable()
                     .background(InspectorAnchor(kept: kept))
                     .environment(\.inspectorSectionExpansion, kept.sections)

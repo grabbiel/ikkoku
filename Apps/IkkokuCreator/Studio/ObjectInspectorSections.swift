@@ -202,12 +202,15 @@ struct ObjectInspectorKindSections {
 
 /// The kept sections of one Object tab.
 @MainActor final class ObjectInspectorSectionsKept {
-    let character = InspectorKeptViews<ObjectCharacterSections>()
-    let item = InspectorKeptViews<ObjectItemSection>()
-    let light = InspectorKeptViews<ObjectLightSection>()
-    let camera = InspectorKeptViews<ObjectCameraSection>()
-    let sourceCamera = InspectorKeptViews<ObjectSourceCameraSection>()
-    let route = InspectorKeptViews<SourceRouteInspector>()
+    // Each keeps its section's state: ObjectCharacterSections, ObjectItemSection,
+    // ObjectLightSection, ObjectCameraSection, ObjectSourceCameraSection and
+    // SourceRouteInspector.
+    let character = InspectorKeptViews()
+    let item = InspectorKeptViews()
+    let light = InspectorKeptViews()
+    let camera = InspectorKeptViews()
+    let sourceCamera = InspectorKeptViews()
+    let route = InspectorKeptViews()
 
     /// Sections collapsed in a kept section also expand when the whole tab is hidden.
     func attach(to tab: InspectorSectionExpansion) {
@@ -254,12 +257,12 @@ struct ObjectInspectorKeptSections: View {
 /// last state it showed.
 struct KeptSection<Section: View & Equatable>: View {
     let shown: Section?
-    let kept: InspectorKeptViews<Section>
+    let kept: InspectorKeptViews
 
     var body: some View {
         let hidden = shown == nil
         let _ = shown.map { kept.state = $0 }
-        if let section = shown ?? kept.state {
+        if let section = shown ?? (kept.state as? Section) {
             section.equatable()
                 .background(InspectorAnchor(kept: kept))
                 .environment(\.inspectorSectionExpansion, kept.sections)
