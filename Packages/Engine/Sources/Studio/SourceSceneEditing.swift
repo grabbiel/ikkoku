@@ -210,8 +210,8 @@ extension KoikatsuSceneDocument {
     }
 
     /// The scene bytes with every edit but the plug-in data, and their
-    /// decoded document.
-    private func editedBody(_ edits: SourceSceneEdits) throws -> (Data, KoikatsuSceneDocument) {
+    /// decoded document (internal for the plug-in step's timing probe).
+    func editedBody(_ edits: SourceSceneEdits) throws -> (Data, KoikatsuSceneDocument) {
         guard !edits.transforms.isEmpty || !edits.cards.isEmpty || !edits.kinematics.isEmpty || !edits.animations.isEmpty || !edits.voices.isEmpty || edits.currentCamera != nil || !edits.cameraSlots.isEmpty || edits.thumbnailData != nil || !edits.visibility.isEmpty || !edits.names.isEmpty || !edits.cameraActive.isEmpty || !edits.routeActive.isEmpty || !edits.mouth.isEmpty || !edits.deletions.isEmpty || !edits.reparents.isEmpty || !edits.routes.isEmpty else { return (preservedData, self) }
         guard edits.transforms.count <= 100_000, edits.cards.count <= 10_000, edits.kinematics.count <= 10_000, edits.animations.count <= 10_000, edits.voices.count <= 10_000, edits.visibility.count <= 100_000, edits.names.count <= 100_000, edits.cameraActive.count <= 100_000, edits.routeActive.count <= 100_000, edits.mouth.count <= 10_000, edits.deletions.count <= 100_000, edits.reparents.count <= 100_000, edits.routes.count <= 100_000 else { throw KoikatsuReadError.limitExceeded("too many scene edits") }
         var reader = try KoikatsuBinaryReader(preservedData)

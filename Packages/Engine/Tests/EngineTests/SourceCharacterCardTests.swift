@@ -1,8 +1,10 @@
 import Foundation
 import CryptoKit
+import CommonCrypto
 import Testing
 import Assets
 import Character
+import Studio
 
 /// Synthetic BinaryWriter/MessagePack bytes. This deliberately does not use an
 /// engine card encoder, source game files, or native CharacterCard serialization.
@@ -434,4 +436,34 @@ func sourceCharacterCardMatchesIndependentPythonOriginalFormatOracle() throws {
         #expect(modifiers.source.payloadSHA256 == OriginalCardFixture.hash(boneData))
     }
     #expect(card.preservedData == bytes)
+}
+
+/// `sourceSHA256` is computed from `preservedData` when read: on the source
+/// card fixture and on every card embedded in phase C's plug-in scene it is
+/// the SHA-256 of those bytes by CommonCrypto (not the CryptoKit call the
+/// property uses), the same on every read.
+@Test(.enabled(if: SourceFixtureSupport.shouldRun(["IKKOKU_SOURCE_CARD_FIXTURE", "IKKOKU_PLUGIN_REWRITE_SCENE"]),
+               "Requires IKKOKU_SOURCE_CARD_FIXTURE, IKKOKU_PLUGIN_REWRITE_SCENE"))
+func sourceCharacterCardHashIsTheSHA256OfItsPreservedBytes() throws {
+    func commonCryptoSHA256(_ data: Data) -> String {
+        var digest = [UInt8](repeating: 0, count: Int(CC_SHA256_DIGEST_LENGTH))
+        data.withUnsafeBytes { _ = CC_SHA256($0.baseAddress, CC_LONG($0.count), &digest) }
+        return digest.map { String(format: "%02x", $0) }.joined()
+    }
+    let fixture = URL(fileURLWithPath: try SourceFixtureSupport.require("IKKOKU_SOURCE_CARD_FIXTURE"))
+    let card = try SourceCharacterCard.load(url: fixture)
+    #expect(card.preservedData == (try Data(contentsOf: fixture)))
+    #expect(card.sourceSHA256 == commonCryptoSHA256(card.preservedData) && card.sourceSHA256 == card.sourceSHA256)
+    let scene = try Data(contentsOf: URL(fileURLWithPath: try SourceFixtureSupport.require("IKKOKU_PLUGIN_REWRITE_SCENE")))
+    var embedded = 0
+    func visit(_ record: KoikatsuObjectRecord) throws {
+        if let character = record.character {
+            let card = try character.card()
+            #expect(card.preservedData == character.cardData && card.sourceSHA256 == commonCryptoSHA256(character.cardData))
+            embedded += 1
+        }
+        for child in record.children { try visit(child) }
+    }
+    for root in try KoikatsuSceneReader.decodeDocument(scene).snapshot.roots { try visit(root) }
+    #expect(embedded >= 1)
 }

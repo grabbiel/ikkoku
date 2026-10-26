@@ -2712,6 +2712,78 @@
       "timeout": 600
     },
     {
+      "id": "studio-scenario-plugin-rewrite-delete",
+      "argv": [
+        ".local/build/Build/Products/Debug/Ikkoku.app/Contents/MacOS/Ikkoku"
+      ],
+      "fixtures": [
+        {
+          "env": "IKKOKU_SOURCE_SCENE",
+          "kind": "file",
+          "from": "IKKOKU_PLUGIN_REWRITE_SCENE"
+        },
+        {
+          "env": "IKKOKU_SOURCE_AVATAR",
+          "kind": "file"
+        }
+      ],
+      "env": {
+        "IKKOKU_STUDIO_SCENARIO": "Tools/verification/scenarios/plugin-rewrite-delete.json",
+        "IKKOKU_STUDIO_SCENARIO_REPORT": ".local/verification/reports/studio-scenario-plugin-rewrite-delete.json"
+      },
+      "referenceTier": "app-smoke",
+      "tolerance": "ST-T03i plug-in data rewrites, delete: on the original player's phase C fixture (KKPE, MaterialEditor and NodesConstraints data on its items, female and camera; IKKOKU_PLUGIN_REWRITE_SCENE) delete mod item 2, which has data in all three plug-ins, through the workspace Delete path. A delete together with an item copy must be refused before any byte is written (#278: KKPE's positional items). The delete alone exports and reimports with root [0, 1, 5, 7, 14, 15, 16], key 2 absent and both folders' children kept. A negative control proves the tree check fails on the source's keys. The export's scene bytes after the PNG are compared with the Engine's export of the same edit, which phases C and D tie to CharaStudio's; see docs/reference/studio/scene-editing.md.",
+      "artifacts": [
+        {
+          "path": ".local/verification/reports/studio-scenario-plugin-rewrite-delete.json",
+          "kind": "scenario-report"
+        },
+        {
+          "path": ".local/verification/scenario-exports/plugin-rewrite-delete.png",
+          "kind": "exported-scene"
+        }
+      ],
+      "timeout": 600
+    },
+    {
+      "id": "studio-scenario-plugin-rewrite-duplicate",
+      "argv": [
+        ".local/build/Build/Products/Debug/Ikkoku.app/Contents/MacOS/Ikkoku"
+      ],
+      "fixtures": [
+        {
+          "env": "IKKOKU_SOURCE_SCENE",
+          "kind": "file",
+          "from": "IKKOKU_PLUGIN_REWRITE_SCENE"
+        },
+        {
+          "env": "IKKOKU_SOURCE_AVATAR",
+          "kind": "file"
+        }
+      ],
+      "env": {
+        "IKKOKU_STUDIO_SCENARIO": "Tools/verification/scenarios/plugin-rewrite-duplicate.json",
+        "IKKOKU_STUDIO_SCENARIO_REPORT": ".local/verification/reports/studio-scenario-plugin-rewrite-duplicate.json"
+      },
+      "referenceTier": "app-smoke",
+      "tolerance": "ST-T03i plug-in data rewrites, duplicate: on the same phase C fixture, duplicate the female (key 16, whose card carries KKPE data) and export, then undo and duplicate mod item 5 (data in all three plug-ins) and export. Each export reimports with the copy at key 159 appended to the root (the female's FK bones, IK targets and look-at target hold keys 17-158; CharaStudio's phase C copies take 159 too), holding its original's world pose within 5e-4 m and 0.05 degrees. A negative control proves the tree check fails without the copy. The exports' scene bytes after the PNG are compared with the Engine's exports of the same edits, which phases C and D tie to CharaStudio's (the character copy's card gets a fresh KKPE controller ID); see docs/reference/studio/scene-editing.md.",
+      "artifacts": [
+        {
+          "path": ".local/verification/reports/studio-scenario-plugin-rewrite-duplicate.json",
+          "kind": "scenario-report"
+        },
+        {
+          "path": ".local/verification/scenario-exports/plugin-rewrite-duplicate.png",
+          "kind": "exported-scene"
+        },
+        {
+          "path": ".local/verification/scenario-exports/plugin-rewrite-duplicate-character.png",
+          "kind": "exported-scene"
+        }
+      ],
+      "timeout": 600
+    },
+    {
       "id": "studio-scenario-topology-insert-refused",
       "argv": [
         ".local/build/Build/Products/Debug/Ikkoku.app/Contents/MacOS/Ikkoku"
