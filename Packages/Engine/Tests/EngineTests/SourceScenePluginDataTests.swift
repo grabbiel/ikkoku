@@ -523,3 +523,175 @@ private func sideloader(_ items: [Record], _ patterns: [Record] = [], map: Bool 
         #expect(header(.string, count) + Array(text.utf8) == PluginMP.str(text).bytes, "str \(count)")
     }
 }
+
+// MARK: - Rule parity corpus
+
+/// The survey's C# port of these rules (Tools/reverse/fixtures/PluginSceneRules.cs)
+/// must judge every single-target edit of these scenes as this writer does.
+/// IKKOKU_PLUGIN_RULE_CORPUS names the JSON file this writes: each scene's
+/// walk (key, kind, parent), used keys, characters whose card carries
+/// KKAnimationController links and trailer, and per edit the verdict and
+/// the entry IDs a refusal names.
+@Test(.enabled(if: SourceFixtureSupport.shouldRun(["IKKOKU_PLUGIN_RULE_CORPUS"]), "Requires IKKOKU_PLUGIN_RULE_CORPUS (an output JSON path)"))
+func sourceScenePluginDataWritesTheRuleParityCorpus() throws {
+    let output = URL(fileURLWithPath: try SourceFixtureSupport.require("IKKOKU_PLUGIN_RULE_CORPUS"))
+    var scenes: [[String: Any]] = [], cases: [[String: Any]] = []
+    for (index, scene) in try ruleCorpusScenes().enumerated() {
+        let document = try KoikatsuSceneReader.decodeDocument(scene.data)
+        let model = try ruleModel(document)
+        scenes.append(model)
+        let walk = SourceSceneInsertionPlan.records(document.snapshot)
+        var edits: [([String: Any], SourceSceneEdits)] = []
+        for record in walk {
+            edits.append((["kind": "delete", "key": Int(record.sourceKey)], .init(deletions: [record.sourceKey])))
+            edits.append((["kind": "duplicate", "key": Int(record.sourceKey)], .init(insertions: copyInsertions(record, in: document.snapshot))))
+        }
+        edits.append((["kind": "add", "object": 3], addFolder))
+        edits.append((["kind": "add", "object": 2], addLight))
+        edits.append((["kind": "add", "object": 5], addCamera))
+        if let route = walk.first(where: { $0.route != nil }), let points = route.route {
+            var added = SourceStudioRouteState(record: points); _ = try added.addPoint()
+            edits.append((["kind": "routeAdd", "key": Int(route.sourceKey)], .init(routes: [route.sourceKey: added])))
+            if points.points.count > 1 {
+                var deleted = SourceStudioRouteState(record: points); try deleted.deletePoint(1)
+                edits.append((["kind": "routeDelete", "key": Int(route.sourceKey)], .init(routes: [route.sourceKey: deleted])))
+            }
+        }
+        let ids = (try? SourceSceneKKEx.parse(document.trailingData))?.entries.map(\.id) ?? []
+        for (spec, edit) in edits {
+            var row: [String: Any] = ["scene": index, "edit": spec]
+            do {
+                let result = try KoikatsuSceneReader.decodeDocument(document.editedData(edit))
+                row["verdict"] = result.trailingData == document.trailingData ? "kept" : "rewritten"
+            } catch let error as SourceSceneTopologyError {
+                let text = error.errorDescription ?? ""
+                if text.hasPrefix("Original-scene export cannot ") {
+                    row["verdict"] = "refused"
+                    row["ids"] = ids.filter { text.contains("('\($0)')") || text.contains("plug-in data '\($0)'") }.sorted()
+                } else {
+                    row["verdict"] = "other"   // a topology rule, not plug-in data
+                }
+            }
+            cases.append(row)
+        }
+    }
+    let json = try JSONSerialization.data(withJSONObject: ["schemaVersion": 1, "scenes": scenes, "cases": cases], options: [.sortedKeys])
+    try json.write(to: output)
+    let counts = Dictionary(grouping: cases, by: { $0["verdict"] as! String }).mapValues(\.count)
+    print("rule corpus: \(scenes.count) scenes, \(cases.count) cases \(counts.sorted { $0.key < $1.key })")
+}
+
+/// Studio.Duplicate of a record: its copy under the same parent, then each
+/// descendant's copy under its parent's copy.
+private func copyInsertions(_ record: KoikatsuObjectRecord, in snapshot: KoikatsuSceneSnapshot) -> [SourceSceneInsertion] {
+    var parents: [Int32: Int32] = [:], points: [Int32: Int32] = [:]
+    for parent in SourceSceneInsertionPlan.records(snapshot) {
+        for child in parent.children { parents[child.sourceKey] = parent.sourceKey }
+        for (point, children) in parent.character?.accessoryChildren ?? [:] {
+            for child in children { parents[child.sourceKey] = parent.sourceKey; points[child.sourceKey] = point }
+        }
+    }
+    var result: [SourceSceneInsertion] = []
+    func visit(_ node: KoikatsuObjectRecord, _ parent: SourceSceneInsertion.Parent) {
+        let index = result.count
+        result.append(.init(.duplicate(of: node.sourceKey), parent: parent, attachment: points[node.sourceKey]))
+        for child in node.children { visit(child, .inserted(index)) }
+        for point in (node.character?.accessoryChildren ?? [:]).keys.sorted() {
+            for child in node.character!.accessoryChildren[point]! { visit(child, .inserted(index)) }
+        }
+    }
+    visit(record, parents[record.sourceKey].map { .source($0) } ?? .root)
+    return result
+}
+
+/// What the C# rules read: the walk, used keys, linked characters, trailer.
+private func ruleModel(_ document: KoikatsuSceneDocument) throws -> [String: Any] {
+    var objects: [[String: Any]] = [], linked: [Int] = []
+    func visit(_ record: KoikatsuObjectRecord, _ parent: Int32?) throws {
+        objects.append(["key": Int(record.sourceKey), "kind": Int(record.kind.rawValue), "parent": parent.map { Int($0) } ?? -1])
+        if let character = record.character {
+            let data = try character.card().extensions().plugins[SourceScenePluginData.cardAnimationController]?.data
+            if [data?["Links"], data?["Eyes"]].contains(where: { value in value.map { $0 != .null } ?? false }) {
+                linked.append(Int(record.sourceKey))
+            }
+        }
+        for child in record.children { try visit(child, record.sourceKey) }
+        for point in (record.character?.accessoryChildren ?? [:]).keys.sorted() {
+            for child in record.character!.accessoryChildren[point]! { try visit(child, record.sourceKey) }
+        }
+    }
+    for root in document.snapshot.roots { try visit(root, nil) }
+    let used = SourceSceneInsertionPlan.usedKeys(document.snapshot).map { Int($0) }.sorted()
+    let trailer = document.trailingData.map { String(format: "%02x", $0) }.joined()
+    return ["objects": objects, "used": used, "linked": linked, "trailer": trailer]
+}
+
+/// Every entry form the tests above use, alone and in the combinations
+/// whose rules interact, plus unreadable trailers.
+private func ruleCorpusScenes() throws -> [TopologyScene] {
+    let linked = OriginalCardFixture.card(blocks: OriginalCardFixture.blocks() + [OriginalCardFixture.extended(OriginalCardFixture.map([
+        ("com.deathweasel.bepinex.animationcontroller",
+         OriginalCardFixture.plugin(0, data: OriginalCardFixture.map([("Links", .binary(Data([0x90]))), ("Eyes", .null)]))),
+    ]))])
+    let items = [Record(1, 1, 0), Record(2, 2, 1), Record(3, 3, 2), Record(4, 4, 3), Record(5, 5, 0), Record(12, 12, 0)]
+    let zero = PluginMP.raw([0xd2, 0, 0, 0, 0])
+    let constraints = plugin(0, .map([("constraints", .str(#"<constraints version="1"><constraint parentObjectIndex="0" childObjectIndex="3" /></constraints>"#))]))
+    let emptyNodes = plugin(0, .map([("constraints", .str(#"<constraints version="1" />"#))]))
+    let forms: [(String, PluginMP)] = [
+        (sideloaderID, sideloader(items, [Record(3, 3, 2)])), (sideloaderID, sideloader([Record(99, 99, 0)])),
+        (sideloaderID, sideloader(items, map: false)), (sideloaderID, plugin(1, .map([]))), settings, (settingsID, plugin(1, .map([]))),
+        ("kkpe", plugin(0, .map([("sceneInfo", .str("<root />"))]))), ("kkpe", .int(5)),
+        ("com.deathweasel.bepinex.materialeditor", plugin(1, .map(MaterialEditorForm.keys.sorted().map { ($0, PluginMP.null) }))),
+        ("com.deathweasel.bepinex.materialeditor", plugin(1, .map([("MaterialShaderList", packed(.arr([.map([("ID", .int(4))])])))]))),
+        ("com.deathweasel.bepinex.materialeditor", plugin(1, .int(5))),
+        ("nodesConstraints", constraints), ("nodesConstraints", emptyNodes),
+        ("timeline", plugin(0, .map([("sceneInfo", .str(#"<root><interpolable objectIndex="3" /></root>"#))]))),
+        ("timeline", plugin(0, .map([("sceneInfo", .str(#"<root><interpolable id="camera" /></root>"#))]))),
+        ("KK_AnimationController", plugin(0, .map([]))), ("KK_AnimationController", plugin(0, .map([("AnimationInfo", .arr([]))]))),
+        ("KK_AnimationController", plugin(0, .map([("AnimationInfo", .arr([.map([("CharDicKey", .int(12)), ("ItemDicKey", .int(4))])]))]))),
+        ("com.deathweasel.bepinex.studiocustommasking", plugin(0, .map([("MaskingFolders", packed(.arr([.int(0)])))]))),
+        ("com.deathweasel.bepinex.studiocustommasking", plugin(0, .map([("MaskingFolders", .null), ("Future", .int(1))]))),
+        ("keelhauled.itemlayeredit", plugin(0, .map([("SavedLayers", packed(.arr([.map([("ObjectId", .int(4)), ("Layer", .int(10))])])))]))),
+        ("keelhauled.realpov", plugin(0, .map([("PovData", packed(.map([("CharaId", .int(12)), ("Fov", .f32(45))])))]))),
+        ("orange.spork.moarcamzplugin", plugin(0, .map([("MoarCamz", packed(.arr([.map([("CenterTarget", .int(4))])]))), ("MoarCamzLastSelection", .int(0))]))),
+        ("BetterScalingData", plugin(0, .map([("BetterScalingData_scaledFoldersFlag", .bool(true)), ("BetterScalingData_scaledOCI", packed(.arr([.int(3)])))]))),
+        ("LightSettingsData", plugin(0, .map([("LightSettingsData_lights", packed(.arr([.map([("ObjectId", .int(-10))]), .map([("ObjectId", .int(5))])]))),
+                                             ("LightSettingsData_cookies", .null)]))),
+        ("LightSettingsData", plugin(0, .map([("LightSettingsData_lights", packed(.arr([.map([("ObjectId", .int(-10))])])))]))),
+        ("org.njaecha.plugins.StudioItemIK", plugin(0, .map([("activeIKs", packed(.arr([.int(4)]))),
+                                                             ("objectTargetPairs", packed(.imap([(Int64(4), .arr([.int(3), .int(1)]))])))]))),
+        ("org.njaecha.plugins.StudioItemIK", plugin(0, .map([("activeIKs", packed(.arr([]))), ("objectTargetPairs", packed(.imap([])))]))),
+        ("org.njaecha.plugins.objimport", plugin(0, .map([]))),
+        ("org.njaecha.plugins.objimport", plugin(0, .map([("version", .int(1)), ("meshes", .bin([1])), ("ids", packed(.arr([.int(4)])))]))),
+        ("com.rikkibalboa.bepinex.savecameraobjectfov", plugin(0, .map([("cameras", .null), ("mainFov", .f32(23)), ("previousCameraIndex", zero), ("cameraIndex", zero)]))),
+        ("com.rikkibalboa.bepinex.savecameraobjectfov", plugin(0, .map([("cameras", packed(.imap([(Int64(11), .f32(40))]))), ("mainFov", .f32(23)),
+                                                                       ("previousCameraIndex", zero), ("cameraIndex", .raw([0xd2, 0, 0, 0, 1]))]))),
+        ("vnge_sss", plugin(0, .map([("objects", packed(.arr([.int(4)])))]))), ("KKVMDPlayExtSave", plugin(0, .map([("motion", .bin([1]))]))),
+        ("example.scene", plugin(0, .map([]))), ("example.nil", .null),
+        ("com.jim60105.kk.studiocharalightlinkedtocamera", plugin(3, .map([("Locked", .bool(true))]))), ("TwoLutPlugin", plugin(0, .map([]))),
+        ("com.deathweasel.bepinex.studioimageembed", plugin(0, .map([]))),
+    ]
+    var scenes: [TopologyScene] = []
+    for form in forms {
+        scenes.append(pluginScene([form]))
+        scenes.append(pluginScene([form, settings], hole: true))
+    }
+    // Interacting rules: the card fallback, and several entries at once.
+    let controllerEmpty = ("KK_AnimationController", plugin(0, .map([])))
+    let controllerList = ("KK_AnimationController", plugin(0, .map([("AnimationInfo", .arr([]))])))
+    for entries in [[("nodesConstraints", emptyNodes)], [("nodesConstraints", constraints)], [controllerEmpty],
+                    [("nodesConstraints", emptyNodes), controllerList], [("nodesConstraints", emptyNodes), controllerEmpty]] {
+        scenes.append(pluginScene(entries, card: linked))
+        scenes.append(pluginScene(entries))
+    }
+    scenes.append(pluginScene(forms.filter { $0.0 != "example.scene" && $0.0 != "kkpe" }.reduce(into: [(String, PluginMP)]()) { list, form in
+        if !list.contains(where: { $0.0 == form.0 }) { list.append(form) }
+    }))
+    // No trailer, an empty map, and trailers that do not parse.
+    scenes.append(pluginScene(nil)); scenes.append(pluginScene([]))
+    var extra = Array(pluginTrailer([settings])); extra.append(0xc0); extra[9] = UInt8(truncatingIfNeeded: Int(extra[9]) + 1)
+    for bytes in [Data(extra), pluginTrailer([settings, settings]), Data([0, 255, 3])] {
+        var scene = pluginScene(nil); scene.trailer = bytes; scenes.append(scene)
+    }
+    return scenes
+}
