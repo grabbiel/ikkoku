@@ -312,6 +312,22 @@ class PerfTraceTests(unittest.TestCase):
         self.assertIn("the maker ran no paced step after the switch to it, before resize", perf_trace.lifecycle_problem(stalled))
         studio_stalled = lifecycle([good[0], state("maker", "studio", ["studio"], (10, 0))], state("end", "studio", ["studio"], (10, 5)))
         self.assertIn("the studio ran no paced step after the switch to it, before maker", perf_trace.lifecycle_problem(studio_stalled))
+        # A slow main thread (ThreadSanitizer) can record a step before
+        # SwiftUI replaces the viewport: the old viewport's model may still be
+        # paced, or no model, until the switch lands.
+        def shown(record, viewports):
+            return dict(record, viewports=viewports)
+        lagging = [shown(state("studio", "maker", ["maker"], (10, 0)), ["maker"]),
+                   shown(state("maker", "studio", ["maker"], (10, 0)), ["maker"]),
+                   shown(state("resize", "maker", [], (10, 0)), [])]
+        lagging_end = shown(state("end", "maker", ["maker"], (25, 0)), ["maker"])
+        self.assertIsNone(perf_trace.lifecycle_problem(lifecycle(lagging, lagging_end)))
+        self.assertIn("viewport not yet switched before maker, resize",
+                      perf_trace.lifecycle_line("run", lifecycle(lagging, lagging_end)))
+        # Only a model whose viewport is in a window may be paced.
+        stray = [shown(state("studio", "maker", ["studio"], (10, 0)), ["maker"])]
+        self.assertIn("before studio, in maker mode, the link paced studio (viewports: maker)",
+                      perf_trace.lifecycle_problem(lifecycle(stray, shown(state("end", "maker", ["maker"], (20, 0)), ["maker"]))))
         # Without live work a model is not expected to step.
         still = [state("studio", "maker", ["maker"], (0, 0), live=()), state("maker", "studio", ["studio"], (0, 0), live=()),
                  state("resize", "maker", ["maker"], (0, 0), live=())]
