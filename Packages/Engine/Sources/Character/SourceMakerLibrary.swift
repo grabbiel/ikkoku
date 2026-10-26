@@ -399,6 +399,59 @@ public struct SourceMakerLibrary: Sendable {
                         sharing rigs: SourceRigDecodeShare) throws -> Prepared {
         try prepare(card: card, coordinate: coordinate, baseURL: baseURL, wear: wear, timings: nil, rigReuse: rigs)
     }
+    /// The converted rig files `prepare` decodes for this card and outfit,
+    /// in its order, found without reading, verifying or decoding any of
+    /// them (R7 phase 2 item 6 follow-up): the converted hair, clothes and
+    /// accessory selections, the base hair and clothes those leave, then the
+    /// base skeletons, body and head. A hint for starting the decodes early
+    /// (`SourceRigDecodeShare.prefetch`); `prepare` still selects, verifies
+    /// and reads every file itself, so a list that misses or adds a file
+    /// costs time, never a different result. A card or manifest `prepare`
+    /// would reject gives the files found before the problem.
+    public func rigFiles(card: SourceCharacterCard, coordinate: Int, baseURL: URL, wear: Bool) -> [URL] {
+        var files: [URL] = []
+        func add(_ url: URL?) { if let url, !files.contains(url) { files.append(url) } }
+        let references: SourceCardModReferences?
+        do { references = try card.modReferences() } catch { return [] }
+        guard (0..<7).contains(coordinate), let bytes = try? Data(contentsOf: baseURL),
+              let manifest = try? JSONDecoder().decode(SourceAvatarManifest.self, from: bytes) else { return [] }
+        let folder = baseURL.deletingLastPathComponent().resolvingSymlinksInPath()
+        func component(_ path: String) -> URL? {
+            let url = folder.appendingPathComponent(path).resolvingSymlinksInPath()
+            return !path.hasPrefix("/") && url.path.hasPrefix(folder.path + "/") ? url : nil
+        }
+        var referenceHair: [Int: String] = [:], referenceClothes: [Int: String] = [:]
+        for (i, part) in manifest.hair.enumerated() { referenceHair[part.slot ?? i] = part.file }
+        for (i, part) in manifest.clothes.enumerated() where i < 3 || part.slot != nil { referenceClothes[part.slot ?? [0, 1, 8][i]] = part.file }
+        func ids(_ fields: [String: SourceMessagePackValue]?, limit: Int) -> [(slot: Int, fields: [String: SourceMessagePackValue])] {
+            guard let parts = fields?["parts"]?.arrayValue, parts.count <= limit else { return [] }
+            return parts.enumerated().compactMap { slot, part in (try? part.stringKeyedMap()).map { (slot, $0) } }
+        }
+        /// The selection's converted rig, if any; true when a library entry
+        /// (converted or explicitly empty) replaces the base part.
+        func selected(_ category: Int, _ fields: [String: SourceMessagePackValue], _ property: String) -> Bool {
+            guard let id = fields["id"]?.integerValue,
+                  let entry = selection(category: category, savedID: id, property: property, references: references).entry else { return false }
+            if entry.empty != true, let rig = entry.rig { add(try? contained(rig)) }
+            return true
+        }
+        let hairNames = ["HairBack", "HairFront", "HairSide", "HairOption"]
+        for (slot, fields) in ids(try? card.recordFields(.hair), limit: 4) where selected(101 + slot, fields, "ChaFileHair." + hairNames[slot]) {
+            referenceHair[slot] = nil
+        }
+        let clothesNames = ["Top", "Bot", "Bra", "Shorts", "Gloves", "Pants", "Socks", "ShoesInner", "ShoesOuter"]
+        for (slot, fields) in ids(try? card.recordFields(.clothes(coordinate: coordinate)), limit: 9) where slot != 7 || wear {
+            if selected(min(105 + slot, 112), fields, "outfit\(coordinate).ChaFileClothes.Clothes" + clothesNames[slot]) { referenceClothes[slot] = nil }
+        }
+        for (slot, fields) in ids(try? card.recordFields(.accessory(coordinate: coordinate)), limit: 20) {
+            guard let category = fields["type"]?.integerValue, (121...130).contains(category) else { continue }
+            _ = selected(category, fields, "outfit\(coordinate).accessory\(slot).ChaFileAccessory.PartsInfo.id")
+        }
+        for slot in referenceHair.keys.sorted() { add(component(referenceHair[slot]!)) }
+        for slot in referenceClothes.keys.sorted() { add(component(referenceClothes[slot]!)) }
+        for path in [manifest.bodySkeleton, manifest.headSkeleton, manifest.body.file, manifest.head.file] { add(component(path)) }
+        return files
+    }
     func prepare(card: SourceCharacterCard, coordinate: Int, baseURL: URL, wear: Bool,
                  timings: SourceMakerPreparationTimings?, rigReuse: (any SourceRigDecoding)?) throws -> Prepared {
         guard (0..<7).contains(coordinate) else { throw RigError.invalid("Invalid Maker outfit index.") }
