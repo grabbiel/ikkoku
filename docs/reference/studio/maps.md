@@ -32,7 +32,7 @@ These rules come from the recovered managed code (`Studio.Map`, `Studio.MapCtrl`
   - The root node is named `Map`, carries only the authored scale, and has the extra `ikkokuMapRole: "mapRoot"`. Each mesh's `ikkokuMap` extras give its role, the sun-type keys it is visible for (0, 1, 2 and -1) and its lightmap index.
   - Materials go through `MAP_SHADER_RULES`, which list the dropped terms. `Standard` keeps base colour, texture and alpha mode. `Particles/Alpha Blended` keeps 2 × tint × vertex colour. Any other shader fails the conversion by name. `Skybox/*` shaders draw nothing.
   - `_MainTex_ST` is baked into UV0. TEXCOORD_1 holds the lightmap UV: mesh UV1 (else UV0) × `lightmapScaleOffset`, using the `LightmapPrefab` value where it names the renderer, then V flipped like UV0.
-  - **Lightmaps (slice 2).** Each `LightmapSettings` entry's light map and CombinedDirectional direction map are written as `lightmap-<index>-light.bc3` and `lightmap-<index>-dir.bc3`. Each file is the texture's serialized `image_data`, byte for byte: DXT5 blocks (BC3), all 11 mip levels largest first, rows bottom-up as in Unity's texture memory. Nothing is decoded or re-encoded, so each file's SHA-256 is the serialized data's. The glTF's top-level `ikkokuLightmaps` extras (`kind: ikkoku.unityLightmaps`, version 1) name the files with their format, size, mips, colour space (`m_ColorSpace` 1 is sRGB), byte count and SHA-256. They also record the lightmaps mode (`CombinedDirectional`), the encoding (`m_LightmapFormat` 2, RGBM), the row order and the player's colour space (Linear). A mode, encoding or format the app does not reproduce fails the export by name.
+  - **Lightmaps (slice 2).** Each `LightmapSettings` entry's light map and CombinedDirectional direction map are written as `lightmap-<index>-light.bc3` and `lightmap-<index>-dir.bc3`. Each file is the texture's serialized `image_data`, byte for byte: DXT5 blocks (BC3), all 11 mip levels largest first, rows bottom-up as in Unity's texture memory. Nothing is decoded or re-encoded, so each file's SHA-256 is the serialized data's. The glTF's top-level `ikkokuLightmaps` extras (`kind: ikkoku.unityLightmaps`, version 1) name the files with their format, size, mips, colour space (`m_ColorSpace` 1 is sRGB), byte count and SHA-256. They also record the lightmaps mode (`CombinedDirectional`), the encoding (`m_LightmapFormat` 2, RGBM), the row order and the player's colour space (Linear). The converter records any lightmap it cannot reproduce in `provenance.json`'s `lightmapExport.problems`, and then writes no `ikkokuLightmaps`, so the map draws with the item material and the first slice's label. That covers a lightmaps mode other than NonDirectional or CombinedDirectional, an encoding other than RGBM, a format that is not DXT1/DXT5, a byte count that does not match, or a shadow mask.
   - **Standard inputs (slice 2).** Each `Standard` material carries `ikkokuStandard` extras:
     - `_Color` converted to Linear with `GammaToLinearSpaceExact`, as a Linear player uploads material colours;
     - `OneMinusReflectivityFromMetallic` of `_Metallic`, or under `_METALLICGLOSSMAP` of the `_MetallicGlossMap` red channel's mean (the texture is linearized first when it is sRGB);
@@ -189,6 +189,205 @@ $P Tools/reverse/compare_original_map.py --original .local/sta11a-maps/phase-b \
 
 Phase A wrote its copies under `.local/sta11a-maps/fetch-a/source/`. They were then moved to `.local/reverse/source/abdata/`, as `fetch.json` records.
 
+## Baked lightmaps (slice 2)
+
+Map 33 now draws with its baked lightmaps, the way Unity 5.6's Standard shader lights a lightmapped surface. The bundle and the original player are both Unity 5.6.2f1: UnityPy reads the bundle's version, and the player reported its own in phase C. The citations below are the built-in shader sources at tag `v5.6.2f1` of `chsxf/unity-built-in-shaders`.
+
+### Recovered formula
+
+Map 33's 8 renderers draw with `Standard` in `ForwardBase`, with `LIGHTMAP_ON` and `DIRLIGHTMAP_COMBINED` in a Linear-colour-space player. `LightmapSettings` holds one `CombinedDirectional` pair, `Lightmap-0_comp_light` and `Lightmap-0_comp_dir`, both 1024² DXT5 with 11 mips. `m_LightmapFormat` 2 is RGBM. The sun, `Map/SunLight`, is realtime (`m_Lightmapping` 4), so `LIGHTMAP_SHADOW_MIXING` does not apply.
+
+- **The combine.**
+  - `fragForwardBaseInternal` (`UnityStandardCore.cginc` L407–L425) gives `c = UNITY_BRDF_PBS(diffColor, specColor, oneMinusReflectivity, smoothness, normal, eye, light, gi.indirect) + Emission(uv)`.
+  - `BRDF1_Unity_PBS` (`UnityStandardBRDF.cginc` L304–L306) gives `diffColor * (gi.diffuse + light.color * diffuseTerm)` plus the two specular terms.
+- **The baked term.** `UnityGI_Base` (`UnityGlobalIllumination.cginc` L88–L148) gives `gi.diffuse = DecodeDirectionalLightmap(DecodeLightmap(unity_Lightmap), unity_LightmapInd, normalWorld) * occlusion`.
+  - With `LIGHTMAP_ON` no SH ambient is sampled (`UNITY_SHOULD_SAMPLE_SH`, `UnityCG.cginc` L49), so RenderSettings ambient never reaches a lightmapped draw.
+  - Occlusion is 1: no map 33 material has an `_OcclusionMap`.
+- **RGBM decode.** `DecodeLightmapRGBM` (`UnityCG.cginc` L517–L529), in its Linear branch, gives `unity_Lightmap_HDR.x * pow(data.a, unity_Lightmap_HDR.y) * data.rgb`. Its data comes from the sRGB light map, whose RGB the sampler has already linearized.
+  - In Linear, `unity_Lightmap_HDR` is (`GammaToLinearSpaceExact(5)`, 2.2) = (34.4932, 2.2).
+  - The original player reported `unity_Lightmap_HDR` = (34.4932442, 2.2, 0, 1) in both phase-C cases.
+- **Directional term.** `DecodeDirectionalLightmap` (`UnityCG.cginc` L570–L582) gives `color * (dot(normalWorld, dir.xyz - 0.5) + 0.5) / max(1e-4, dir.w)`. Here `dir` is the linear direction map's texel.
+- **Diffuse colour.**
+  - `DiffuseAndSpecularFromMetallic` (`UnityStandardUtils.cginc` L35–L51) gives `diffColor = albedo * oneMinusReflectivity`.
+  - `OneMinusReflectivityFromMetallic(m)` is `(1 - m) * unity_ColorSpaceDielectricSpec.a`, where `.a` is `1 - 0.04` in Linear (`UnityCG.cginc` L27).
+  - `MetallicGloss` (`UnityStandardInput.cginc` L153–L164) reads `metallic` from `_MetallicGlossMap.r` under `_METALLICGLOSSMAP`, else from `_Metallic`.
+  - The albedo is `_MainTex * _Color`, with `_Color` linearized by `GammaToLinearSpaceExact` (`UnityCG.cginc` L88–L96).
+- **Emission.** `Emission` (`UnityStandardInput.cginc` L176–L183) gives `tex2D(_EmissionMap, uv).rgb * _EmissionColor.rgb` under `_EMISSION`.
+
+The slice draws **`diffColor * gi.diffuse + Emission`**: the decoded directional lightmap with the albedo and emission. It leaves out the rest:
+
+| Term | Status |
+| --- | --- |
+| `light.color * diffuseTerm`: the realtime sun and its shadows | not drawn. The oracle measures it below (`irradianceLit`) |
+| both specular terms and the reflection probe | not drawn |
+| `_BumpMap` (normal maps) | not drawn: the directional term uses the geometric normal |
+| per-texel `_MetallicGlossMap` | approximated by the texture's mean red channel (one material, `doa00`) |
+| detail maps (`_DETAIL_MULX2` on `glass00`, which has no detail texture) | not drawn |
+| RenderSettings fog | not drawn. It was off at runtime in both phase-C scenes (`RenderSettings.fog` false), so it took nothing from these two captures |
+| camera image effects | not drawn |
+| RenderSettings ambient | not missing: a lightmapped Standard draw samples no SH |
+
+### The map material
+
+`MaterialKindMap` (8) selects `map_fragment` in `Shaders/Toon.metal`, with its own opaque and blended pipelines (`Pipelines.map`, `mapBlend`). It is sampled with the same `toon_vertex`. The fragment does the following:
+
+- It computes the albedo as `baseColor × _MainTex` (UV0), with the item path's alpha test and blend flags.
+- It samples the light map and direction map at `(u, 1 − v)` of TEXCOORD_1. The files keep Unity's bottom-up rows, while TEXCOORD_1 has the glTF top-left origin.
+- It decodes RGBM with `lightmapRange` and `lightmapExponent`.
+- Under `MaterialFlagMapDirectionalLightmap`, it applies the directional term with `normalize(worldNormal)`. The direction was baked in Unity's left-handed world. The engine basis reflects Z, so the direction's z is negated.
+- It writes `albedo × oneMinusReflectivity × gi`, plus emission when `emissive.a > 0`.
+
+The three uniforms `lightmapRange`, `lightmapExponent` and `oneMinusReflectivity` sit in what was `MaterialUniforms`' tail padding (offsets 340, 344 and 348). The stride stays 352: a `static_assert` in `ShaderTypes.h` and an Engine test pin it. Every other material kind leaves them zero. The main pass binds the lightmap, the direction map and the emission map at texture indices 16–18, for map draws only. A missing lightmap binds black; a missing emission map binds white, Unity's `_EmissionMap` default. Each map draw costs three texture bindings more than an item draw. Nothing is allocated per frame.
+
+**Upload.** `SourceStudioBlockTexture.make` uploads the light map as `.bc3_rgba_srgb` and the direction map as `.bc3_rgba` into a shared-storage texture, one `replace` per mip level. `ResourceStore` is unchanged: the asset registers the finished texture with `register(texture:)`. The upload refuses:
+
+- a byte count that does not match the size, format and mips;
+- more mip levels than the size allows;
+- a device without BC sampling.
+
+The two lightmaps take 2,818,048 bytes of Metal memory. Decoded to RGBA8 with mips, they would take about 11.2 MB.
+
+**Sampler.** The lightmaps are sampled with linear filtering, linear mips and clamp to edge. The original uses Bilinear with anisotropy 3, under `QualitySettings.anisotropicFiltering` ForceEnable. The difference shows only at grazing angles.
+
+The base textures are still decoded to RGBA8 by `ResourceStore`. Native BC upload of those is the separate store change listed under [what remains](#what-remains).
+
+### Evidence (phase C)
+
+**The oracle.** Phase C (`original_map_probe.py oracle`, `OriginalMapProbe.cs`'s oracle mode) ran in the isolated player copy under the same hygiene as phases A and B. That means one `prlctl exec`, an errno-24 count of 0 before and after, nothing written under `C:\Illusion\Koikatsu`, the private root removed and no game process left. The probe reloaded both phase-B scenes through `Studio.LoadSceneCoroutine`. For each scene it then:
+
+- **rendered a clean colour frame** with `Camera.main`'s settings but without its image-effect components (`oracle-<case>-clean-color.png`);
+- **rendered Unity's own decoded lightmap** per pixel. It replaced the map renderers' materials with copies of a keyword-free `Standard` map material (`mm_koi_stu_map49_meta00`) with metallic 0 and smoothness 0, and set every light to intensity 0. It rendered them into a linear `ARGBFloat` target, once with a white and once with a black `_Color` and `_MainTex`. White minus black, over 0.96, is `gi.indirect.diffuse`: the black render cancels emission and anything else albedo-independent. The probe rendered that image twice. The repeat differed by 0 in both scenes;
+- **rendered the same image with the lights at their authored intensities** (`irradianceLit`), which measures the realtime sun this slice leaves out;
+- **recorded** `unity_Lightmap_HDR`, the colour space, the lightmaps mode, each lightmap texture's filter, anisotropy, wrap and format, the lights and the runtime RenderSettings.
+
+Float images are stored gzipped. `run.json` records each one's raw SHA-256.
+
+#### The irradiance gate
+
+`compare_original_map.py --oracle` adds a gated `irradiance` metric for a capture with lightmapped draws. It compares our `native-map-irradiance-decoded` image with Unity's `gi.indirect.diffuse`.
+
+- **Pixels.** Interior pixels only: both silhouettes cover them, and their 3×3 neighbourhood lies on one smooth surface of the original's depth-normals (depth steps of at most 2% of the depth, normal steps of at most 6 bytes). The image border is excluded. This leaves out the MSAA-resolved edges, where a pixel mixes two surfaces.
+- **Error.** Per pixel, the largest channel's |ours − Unity| / Unity.
+- **Tolerance.** This is a new gate; no existing gate changed. The mean must be at most 2⁻¹⁰ (9.8e-4) and the p99 at most 2⁻⁹ (2.0e-3). The bounds come from the controls:
+  - the oracle's repeat render differed by 0;
+  - the Engine test puts the GPU decode within 1e-4 of the cited formula;
+  - what remains is our float16 HDR target, whose 10-bit mantissa makes one storage step at most 2⁻¹⁰ relative.
+
+  So the gate allows one float16 step on average and two at p99.
+- **Conditions.** The oracle's repeat must have differed by 0. Two negative controls, drawn by the same probe, must fail the same gate:
+  - `nonDirectional`: the direction map ignored;
+  - `gammaConstants`: RGBM decoded with the gamma-space constants (range 5, exponent 1).
+
+Results, Release build of this change (`.local/sta11b-lightmaps/comparison.json`):
+
+| Case | Interior pixels | Mean | p99 | `nonDirectional` mean / p99 | `gammaConstants` mean / p99 | Gate |
+| --- | ---: | ---: | ---: | --- | --- | --- |
+| map33 | 675,369 of 691,200 | 5.9e-4 | 9.3e-4 | 0.049 / 0.157 | 0.318 / 0.381 | pass; both controls fail |
+| map33-showoff | 680,813 of 691,200 | 4.9e-4 | 9.1e-4 | 0.0030 / 0.012 | 0.302 / 0.371 | pass; both controls fail |
+
+Unity's mean irradiance over those pixels is 1.742 in map33 and 1.725 in the showoff view; ours is 1.741 and 1.724. The largest single-pixel error is 0.37 in map33, on a few pixels the interior mask keeps, and 0.0036 in the showoff. `nonDirectional` fails the showoff view by a smaller margin than map33 (p99 0.012 against 0.157). Both controls still fail it on the mean and the p99.
+
+Every slice-1 gate passes unchanged on the new captures: record, rule, placement, camera, silhouette IoU, depth and normals (`comparison.json`).
+
+#### Colour before and after
+
+Colour is still reported, not gated: the realtime sun and the camera effects are missing. Mean absolute error and p99, in channel bytes, of our `native-color.png` against two original frames. One is the phase-B frame with `Camera.main`'s image effects; the other is the phase-C clean frame without them. Before is the first slice's capture (`.local/sta11a-maps/ours/`); after is this change's Release capture (`.local/sta11b-lightmaps/ours/`).
+
+| Case | Against | Before MAE (p99) | After MAE (p99) |
+| --- | --- | --- | --- |
+| map33 (map only) | original with effects | 27.4 (76) | **13.7 (48)** |
+| map33 (map only) | clean original | 37.6 (70) | **9.7 (31)** |
+| map33-showoff | original with effects | 58.3 (193) | 64.0 (193) |
+| map33-showoff | clean original | 46.6 (147) | 52.3 (149) |
+
+- **map33 (map only).** The error halves against the original with its effects, and falls to a quarter against the clean frame. The rest is the realtime sun, specular, the normal maps and the camera effects.
+- **Showoff.** The error rises, and the rise does not measure the map:
+  - In the original's showoff frame, the room is hidden behind the scene's own props, a light backdrop around the characters.
+  - Our probe capture, like the first slice's, runs without the item catalog. It draws the room there, along with the source avatar's characters.
+  - On the 236,140 pixels where the lightmaps changed our capture, the original shows that backdrop (mean RGB 214, 207, 212). The lit room (132, 136, 146) is darker than the unlit one (157, 155, 158), so it is further from the backdrop: 65.2 → 81.9 against the frame with effects. The other 455,060 pixels are unchanged (54.8).
+  - With the props drawn (the item catalog supplied), the map changes no pixel of the showoff capture, on base or branch.
+  - The map's own correctness in that view is the irradiance gate above.
+
+The realtime sun this slice leaves out adds light to 15,692 of map33's 691,200 pixels by more than 1% (by up to 0.70, a mean of 0.010 over the frame), where the sun comes through the windows. It adds nothing in the showoff frame.
+
+#### Tests and checks
+
+- **Engine.** `SourceStudioMapLightmapTests.swift`:
+  - `materialUniformsKeepTheirStrideWithTheMapFloatsInTheTail`: stride and size 352, the three offsets, and zero map floats for every other kind's `make`;
+  - `lightmapDecodeFollowsTheCitedFormula`: the CPU decode against values computed by hand from the cited formulas;
+  - `blockTextureUploadKeepsEveryMipLevelByteForByte`: a 16×8 BC3 texture with 5 mips of random blocks, sRGB and linear, blitted back to a buffer and compared byte for byte, plus the refusals;
+  - `mapFragmentDrawsTheDecodedDirectionalLightmapTimesDiffColorPlusEmission`: `toon_vertex` + `map_fragment` compiled from source, drawing a two-block light map. It checks the V flip, the directional term on both sides of the direction, emission and the three irradiance variants against the CPU formula within 1e-4;
+  - `lightmapRecordsParseAndRefuseWhatTheyDoNotReproduce`;
+  - the `SourceStudioLightmappedMapTests` suite: a converted fixture loads with its lightmapped parts, textures and label; a changed lightmap hash or a missing TEXCOORD_1 fails the load and leaves nothing registered.
+- **Python.**
+  - `test_export_map_scene.py`: Standard inputs, lightmap files and extras, the lightmapped dropped terms, the label lists;
+  - `test_compare_original_map.py`: the irradiance gate and both controls on synthetic images;
+  - `test_original_map_probe.py`: the oracle subcommand.
+- **Scenarios.** The three source-map scenarios assert the lightmapped label and `lightmappedDraws: 8`.
+
+**Byte-identical captures.** Release builds of `main` (`b4c59e7`) and this change were run under the app lock, one launch per capture (`.local/sta11b-lightmaps/captures/{base-old,base-new,branch,branch-old}/captures.json`).
+
+- **No-map captures, base against branch:** identical with the live source-shader opt-in OFF and ON. That covers:
+  - the no-map scenario scene with the catalog supplied;
+  - the half-state fixture;
+  - the native Studio capture;
+  - the map scene without a catalog;
+  - the showoff scene without props.
+
+  The live opt-in's reports are identical too.
+- **The showoff scene with props:** identical OFF and ON, because its props hide the room.
+- **Map captures with the room in view:** they change only with the slice-2 export, as intended. `scene-map33.png` and the showoff scene without props differ from base, and identically OFF and ON for map33.
+- **This change with the first slice's export:** byte-identical to `main` on all 6 map captures. Its fallback path, the item material when an export has no lightmaps, is unchanged.
+
+**Safe for `main` after the swap.** `main`'s binary with the slice-2 export is byte-identical to `main` with the first slice's export on all 6 map captures. Its log reports the same 52,248,576 texture bytes. `main`'s four map checks (`source-map`, `reload-save-source-map`, `reload-load-source-map`, `source-map-none`) passed 4/4 under `--strict` on its Debug build with the slice-2 export (`.local/sta11b-lightmaps/swap-proof/`). The one visible difference: `main`'s status line loses its `; shaders approximated (Standard)` suffix, because the new catalog row names the omitted terms instead. `main`'s checks assert the label prefix, which is unchanged.
+
+**Suites.** The private-source Engine suite ran 1,008 tests: 987 passed and 20 were skipped. The 1 failure is the known `liveSourceShadersMeetTheControlledOriginalFrameGates`, which #277 did not change. The Python suites pass: `Tools/reverse` 589 (6 skipped), `Tools/reverse/analysis` 279 and `Tools/verification` 199. CI passed on the PR.
+
+### Installing the slice-2 export
+
+The shared fixture (`.local/reverse/exports/maps/`) keeps the first slice's export until this change merges. Other branches compare captures against it, and replacing it in place mid-run could tear a read. The slice-2 export is built privately in `.local/sta11b-lightmaps/exports/maps/`. Its file hashes are in `.local/sta11b-lightmaps/new-export.sha256`, and the old export's are in `old-export.sha256`. Both trees are on the same volume, so every `mv` below is an atomic rename.
+
+Install it from the main checkout, with no app run or lane using the map:
+
+```sh
+cd /Users/rumpology/code/repo/ikkoku
+M=$PWD/.local/reverse/exports/maps            # the shared fixture (environment.json names $M/catalog.json)
+N=$PWD/.local/sta11b-lightmaps/exports/maps   # the slice-2 export
+B=$PWD/.local/sta11b-lightmaps/old-export     # the backup of the first slice's export
+H=$PWD/.local/sta11b-lightmaps               # the two hash manifests
+# 0. Both trees are what the manifests say.
+(cd "$M" && shasum -a 256 -c "$H/old-export.sha256")
+(cd "$N" && shasum -a 256 -c "$H/new-export.sha256")
+# 1. Stage the new export beside the shared one.
+mv "$N/33-bushitu" "$M/33-bushitu.sta11b" && mv "$N/catalog.json" "$M/catalog.json.sta11b"
+# 2. Back up the old export and put the new one in its place.
+mkdir -p "$B"
+mv "$M/33-bushitu" "$B/33-bushitu" && mv "$M/33-bushitu.sta11b" "$M/33-bushitu"
+mv "$M/catalog.json" "$B/catalog.json" && mv "$M/catalog.json.sta11b" "$M/catalog.json"
+# 3. Check the result.
+(cd "$M" && shasum -a 256 -c "$H/new-export.sha256")
+(cd "$B" && shasum -a 256 -c "$H/old-export.sha256")
+rmdir "$N" "$H/exports"
+```
+
+To roll back, swap the two the same way:
+
+```sh
+mv "$M/33-bushitu" "$M/33-bushitu.sta11b" && mv "$B/33-bushitu" "$M/33-bushitu"
+mv "$M/catalog.json" "$M/catalog.json.sta11b" && mv "$B/catalog.json" "$M/catalog.json"
+```
+
+**Safe for branches still on `main`.** `main`'s binary (`b4c59e7`) ignores everything the new export adds:
+
+- the lightmap files;
+- the `ikkokuLightmaps` and `ikkokuStandard` extras;
+- the emission image, which no `baseColorTexture` names;
+- the catalog row's new `approximations`.
+
+The renamed PNGs keep their bytes, and `bushitu.bin` is unchanged. Rendered by `main`'s binary, the six map captures are byte-identical on both exports, and `main`'s map checks pass on the new one (see [tests and checks](#tests-and-checks)).
+
+**Storage.** The shared export grows from 3.0 MB to 6.6 MB (+3.6 MB). The backup holds the old 3.0 MB. The private copy is moved, not duplicated.
+
 ## Performance
 
 Release, on the reference machine, in one quiet window. The full tables are in [performance: ST-A11](../performance.md#st-a11-original-studio-maps).
@@ -209,6 +408,13 @@ Release, on the reference machine, in one quiet window. The full tables are in [
   - about 1.9 ms of GPU per frame for the room filling the window, and 0.35 ms behind characters;
   - +52 MB of Metal memory.
 
+Slice 2 (baked lightmaps), Release, in one quiet window ([performance: slice 2](../performance.md#slice-2-baked-lightmaps)), against `main` with the first slice's export:
+
+- **GPU.** With the room alone at 1996×1824 it costs +0.087 ms per frame (0.422 → 0.509). Behind the 7 characters it measured −0.047 ms, which is not explained. Scenes without a map are unchanged.
+- **Import.** Scene ready, first draw and the main thread are unchanged. The worker's load takes 2.7–4.3 ms longer to hash and upload the lightmap blocks and to load the emission map.
+- **Memory.** Metal grows by 4.2 MB: 2.8 MB of BC3 lightmaps (about 11.2 MB as RGBA8) and the 1.4 MB emission map.
+- **Base M1 (estimate).** About +0.4 ms per frame for the room filling the window, +4–5 ms of worker load and +4.2 MB.
+
 ## What remains
 
 - **Map 34 `空き教室` (`akikyoushitu`), and larger maps generally,** need two separate pieces of work.
@@ -216,12 +422,15 @@ Release, on the reference machine, in one quiet window. The full tables are in [
   - (2) **The cubemap sky pass.** Map 34 draws its sky with `Skybox/Cubemap` on three meshes: `mo_koi_sky_hiru00`, `mo_koi_sky_yo00` and `mo_koi_sky_yu00`. They use Unity's built-in `Sphere` (`unity default resources` path ID 10207), which is not in the bundle. The converter currently skips skybox-shader submeshes and lists them under `skipped`.
 
   Map 34 also has 58 merged draws, `Particles/Alpha Blended` materials and a reflection probe. Every other `Map_XX` row stays `file: null` and is reported by name.
-- **Baked lightmaps for map 33 (the next slice).** It needs:
-  - a second texture binding sampled with UV1, alongside the base texture, in the item material;
-  - a decode path for the lightmaps;
-  - and their metadata, which `provenance.json` already records.
+- **The realtime sun and its shadows.** Map 33's only map light, `Map/SunLight`, is realtime. Its term is `diffColor × light.color × diffuseTerm` with its soft shadows. Drawing it needs:
+  - the sun as a scene light in the map's draws;
+  - the `SunLightInfo` angle, colour and intensity per sun type;
+  - a shadow map of the room.
 
-  The lightmap UVs are already in TEXCOORD_1, with `LightmapPrefab`'s scale/offset baked in: 8 of 8 renderers take theirs from `LightmapPrefab`. Map 33 has one `CombinedDirectional` lightmap pair, both 1024² DXT5 with 11 mips: `Lightmap-0_comp_light` (colour space 1) and `Lightmap-0_comp_dir` (the direction map). UnityPy decodes both.
-- **Other lighting.** Map lights, sun-type lighting (the `SunLightInfo` angle, colour, intensity and fog per type), RenderSettings fog and ambient, reflection probes and the dropped `Standard` terms remain.
+  In map33 the phase-C oracle shows the sun adding up to 0.70 of irradiance on 15,692 pixels, where it comes through the windows (`irradianceLit`).
+- **The rest of `Standard`.** Not drawn: specular and the reflection probe, normal maps, per-texel `_MetallicGlossMap` and detail maps.
+- **Fog and camera effects.** RenderSettings fog was off at runtime in both phase-C scenes. The per-sun-type fog of `SunLightInfo` and CharaStudio's camera image effects are not drawn.
+- **Native BC upload of the base textures.** This slice uploads only the lightmaps as BC3, outside `ResourceStore`. The base textures still decode to RGBA8: item (1) above.
+- **Lightmapped maps beyond 33.** A map whose lightmaps the converter cannot reproduce draws as items, with the reason recorded in `lightmapExport.problems`. Map 34's lightmaps have not been inspected.
 - **Mods.** Rows that mods add are not evaluated.
 - **Character fidelity.** The showoff capture's character differences are the existing character-fidelity work, outside this slice.

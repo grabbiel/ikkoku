@@ -3375,6 +3375,95 @@ negative controls are listed in [maps](studio/maps.md#evidence).
   starts, not those costs, so the runs were not repeated.
 - **No M1 run.**
 
+### Slice 2: baked lightmaps
+
+Added 2026-10-25 with the second maps slice
+([maps: baked lightmaps](studio/maps.md#baked-lightmaps-slice-2)). Map 33's
+8 draws now use `map_fragment`. Each samples its base texture, two BC3
+lightmaps on UV1 and, for two materials, an emission map. The lightmap
+blocks upload as BC3 on the load's worker.
+
+**Measurement.** Release builds, in one quiet window the orchestrator
+granted (2026-10-25, 20:43:38–20:44:42). Every launch ran under the app
+lock with the other agents paused, at 120 Hz (`maximumFramesPerSecond` 120,
+1996×1824 drawable). The load average was 2.8–3.7. There were 24 launches:
+
+- `startup` 3 times per build, alternating;
+- the offscreen benchmark (`IKKOKU_BENCHMARK_OUTPUT`, 1996×1824, 60
+  measured frames) 3 times per case, alternating.
+
+`perf_trace.py summarize` printed no warning. Each startup took about 4 s
+and each benchmark launch about 2 s, which is why the window was short. The
+reports are in `.local/sta11b-lightmaps/perf/`.
+
+| Label | Commit | Export |
+| --- | --- | --- |
+| base | `b4c59e7` (`main`, #277) | the first slice's (Map 33 with the item material) |
+| lightmap | `2eefcdc` (this change, before it merged #280) | the slice-2 export (Map 33 lightmapped) |
+
+Startup on `scene-map33-showoff.png`, seconds since process start, median
+(range) of three runs:
+
+| Build | Scene ready | Import call on the main thread | First draw | Main thread until ready: busy of window ms | Longest busy period ms | Peak footprint MB | Peak Metal MB | Map load on the worker ms |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| base | 1.39 (1.38–1.42) | 9.7 ms (9.0–9.8) | 0.41 (0.41–0.47) | 662 of 1,436 (651–664) | 465 (246–481) | 966 (963–978) | 408.5 | 91.1 (90.7–91.3) |
+| lightmap | 1.41 (1.37–1.41) | 9.4 ms (9.1–10.1) | 0.41 (0.40–0.42) | 679 of 1,477 (663–700) | 420 (291–431) | 975 (974–981) | 412.8 | 94.4 (93.6–95.0) |
+
+Offscreen benchmark at 1996×1824, median (range) of three runs of 60 frames:
+
+| Scene | Build | Items | CPU encode ms | GPU ms p50 | Completion ms | Metal MB | Map load on the worker ms |
+| --- | --- | ---: | --- | --- | --- | ---: | --- |
+| `scene-map33.png`, no characters | base | 8 | 0.080 | 0.422 (0.416–0.426) | 0.850 | 369.5 | 71.1 |
+| `scene-map33.png`, no characters | lightmap | 8 | 0.081 | 0.509 (0.505–0.538) | 0.947 | 373.7 | 75.4 |
+| showoff without props | base | 130 | 0.425 | 1.381 (1.370–1.386) | 2.197 | 506.6 | 75.0 |
+| showoff without props | lightmap | 130 | 0.437 | 1.334 (1.333–1.346) | 2.178 | 510.9 | 77.7 |
+| showoff without props or catalog | base | 122 | 0.414 | 1.320 (1.312–1.330) | 2.186 | 454.1 | – |
+| showoff without props or catalog | branch | 122 | 0.420 | 1.325 (1.315–1.328) | 2.195 | 454.1 | – |
+
+- **GPU, room alone:** +0.087 ms per frame (0.422 → 0.509). Each fragment
+  takes two trilinear BC3 samples and the RGBM `pow`, in place of the item
+  material's lighting.
+- **GPU, room behind the 7 characters:** −0.047 ms per frame (1.381 →
+  1.334), consistent over the three runs. This is **not explained**. The
+  hypothesis is the shadow map: the item material lights every room
+  fragment with the scene light and samples the character shadow map, and
+  `map_fragment` does neither. In the empty map33 scene there are no
+  character shadows to sample. No Metal System Trace was recorded.
+- **No map:** unchanged. GPU is within 0.005 ms, and Metal memory is
+  identical.
+- **CPU:** the encode time is unchanged (three more texture bindings per
+  map draw, 8 draws), and so is the main thread.
+- **Import:**
+  - The scene is ready at the same time, and the first draw and the import
+    call are unchanged.
+  - The main thread's busy time until ready overlaps between the builds. The
+    map's main-thread work is the same catalog read and a 0.00–0.01 ms
+    placement.
+  - The worker's load takes 2.7–4.3 ms longer: reading and hashing the
+    2.8 MB of lightmap blocks, 22 `replace` calls (11 mips × 2), and the
+    emission PNG.
+- **Memory:** Metal grows by exactly 4,243,456 bytes:
+  - the two BC3 lightmaps take 2,818,048;
+  - the emission map takes 1,425,408 (RGBA8 with mips through
+    `ResourceStore`).
+
+  Decoded to RGBA8 with mips, the lightmaps would take about 11.2 MB
+  instead of 2.8 MB. The peak footprint is +9 MB by median, and its ranges
+  touch.
+
+**Scaling to a base M1 (estimate),** with the method above (GPU × about
+4.75, CPU × 1.25):
+
+- the room filling the window takes about 2.4 ms per frame, against 2.0 ms
+  with the item material (+0.4 ms);
+- behind characters there is no measurable increase;
+- the worker's load takes about 4–5 ms longer;
+- Metal memory grows by 4.2 MB.
+
+**Limits.** These are three runs per case. No `studio-idle` or orbit runs
+were made: in the showoff scene the props hide the room, so the draws
+change no pixel there. No Metal System Trace was recorded, and no M1 run.
+
 ## Phase 2, item 6 follow-up: route copies, prefetch and kept donations
 
 Done 2026-10-25 (the follow-ups of inventory C8, S1 and S3, and ST-T11's
