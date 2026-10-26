@@ -64,7 +64,8 @@ there: a frame takes 1.3–2.1 ms of GPU time. The main thread is the limit.
    it was paced for, and with a steady compositor the frames presented
    4 vsyncs apart except 0–0.3 times a second. CPU, GPU, idle cost and
    the app's part of a drag start stayed at parity
-   ([live pacing](#phase-2-live-pacing)).
+   ([live pacing](#phase-2-live-pacing)). The Maker's idle step is paced
+   the same way ([Maker pacing](#maker-pacing)).
 
 These headline numbers are the original phase-1 measurements. The
 [resumed review](#resumed-phase-1-review-2026-10-23) retained near-120 FPS idle
@@ -779,7 +780,7 @@ gains are for the reference machine unless stated; the M1 column of the
 | M3 | Camera orbit, pan and dolly mutate `doc.camera`; the `doc` didSet then runs a full `refresh()` and invalidates every view that reads `doc` | `StudioModel` (`doc` didSet, `mouseDragged` `.orbit`) | measured | orbit: `refresh()` 0.89 ms × 76/s plus the SwiftUI cost of M2 per event | keep the view camera outside the observed document (or in its own observed property) and send camera-only changes straight to the renderer's frame uniforms without rebuilding items. **Done** ([phase 2, item 1](#phase-2-item-1-narrow-swiftui-invalidation)): `documentCamera` has its own observation, and orbit and pan drags reuse the frame's camera-independent content | Medium: the camera is saved with the document and undo must keep working |
 | M4 | Maker slider writes invalidate the whole source rig panel | `SourceRigPanel.body` reads `sourceBodyValues`/`sourceFaceValues` for every slider | measured | `maker-slider`: `NSHostingView.layout` 591 ms/s, `Slider.body` 53 ms/s, material effect updates 111 ms/s at 66 writes/s ([rank 3](#ranked-costs)) | one row view per slider taking its value and a setter, the slider list in a child view, and per-slot observation so only the dragged row re-evaluates. **Done** ([phase 2, item 1](#phase-2-item-1-narrow-swiftui-invalidation)): 11.8 → 2.5 ms of graph update per write; the panel's layout remains | Low |
 | M5 | Hover pick is a synchronous GPU round trip per `mouseMoved` | `StudioModel.mouseMoved` → `Renderer.pick` (`waitUntilCompleted`) | measured; **done** | 2.02 ms p50 per event at 46 events/s with a selection | pick asynchronously (completion handler, apply the hover on the next frame) and only for the latest mouse position; a 1×1 scissor on the pick pass cuts its GPU work. **Done** ([phase 2, item 5](#phase-2-item-5-asynchronous-hover-pick)): 2.29–2.41 → 0.01 ms per move on the main thread; the pick pass's GPU time 0.13 → 0.06 ms, its 0.85 ms deform pass remains | Low; renderer file |
-| M6 | The Studio timer is a default-mode `Timer`; ticks skip while the timer handler is late and it does not fire during AppKit event tracking. Its phase against the display is arbitrary, so a step's frame lands on the callback before or after the one it is due for | `StudioModel.init` | measured; **done** for the Studio | with the timer, frames due 4 vsyncs apart came 3 and 5 apart at 0–15/s, decided by the timer's phase ([attribution](#attribution)) | drive the live step from the display link. **Done** in [live pacing](#phase-2-live-pacing). The Studio viewport's link asks for each step (`LiveStepPacer`; every 4th callback at 120 Hz). Steps stay exactly 1/30 s, a busy step is still skipped, and steps still never run during event tracking. Every target interval was 4 vsyncs, at CPU, GPU and idle-cost parity. Lowering the link to 30 Hz during playback was measured and dropped. The Maker keeps its own timer | Medium: the scenario lanes rely on fixed 1/30 s steps; `advance` does not go through the link |
+| M6 | The Studio timer is a default-mode `Timer`; ticks skip while the timer handler is late and it does not fire during AppKit event tracking. Its phase against the display is arbitrary, so a step's frame lands on the callback before or after the one it is due for | `StudioModel.init`, `MakerModel` | measured; **done** | with the timer, frames due 4 vsyncs apart came 3 and 5 apart at 0–15/s, decided by the timer's phase ([attribution](#attribution)) | drive the live step from the display link. **Done** in [live pacing](#phase-2-live-pacing). The Studio viewport's link asks for each step (`LiveStepPacer`; every 4th callback at 120 Hz). Steps stay exactly 1/30 s, a busy step is still skipped, and steps still never run during event tracking. Every target interval was 4 vsyncs, at CPU, GPU and idle-cost parity. Lowering the link to 30 Hz during playback was measured and dropped. The Maker's idle step is paced the same way since R7h2. In its window every target interval of the eight idle runs was 4 vsyncs; with the timer, 0–2.2 a second were not ([Maker pacing](#maker-pacing)) | Medium: the scenario lanes rely on fixed 1/30 s steps; `advance` does not go through the link |
 | M7 | Status-line churn | `StudioModel.tick` → `RenderStatusReporter.status` | measured (negative) | assigns only when the text changes | none needed | — |
 | M8 | Native characters step hair dynamics once per `refresh()`, not per tick, so an orbit (one refresh per mouse event) runs their hair simulation faster than real time | `StudioModel.refresh` (`inst.stepHairDynamics(dt: 1/30)`) | measured (code path) | `studio-native` refreshes at 30/s idle; any extra refresh adds a 1/30 s step | step native hair only from the live tick. Since [phase 2, item 1](#phase-2-item-1-narrow-swiftui-invalidation), an FK drag event refreshes once instead of twice, and orbit and pan with native characters still refresh fully | Behavior change; a correctness fix more than a performance one |
 
@@ -3104,7 +3105,62 @@ the phase happened to fall well.
   `IKKOKU_SOURCE_AVATAR` and `IKKOKU_SOURCE_MALE_AVATAR` before taking the
   app lock.
 
-TBD before/after
+**Before and after.** The window ran 19:26–19:33 on the M32UC at 120 Hz.
+The build was Release `517b2fb`: this change on `main` `6502803`, before
+`main`'s later maps and sampling merges, which do not touch the Maker. Every
+launch held the app lock. Each run recorded 10 s after a 3 s warmup, and the
+timer control (T) ran against display pacing (D) in ABBA order:
+- `T D D T T D D T` for `maker-idle`;
+- `T D D T` for `maker-slider`;
+- `T D D T` twice for the bundled character.
+
+No run was retried or saw stray input.
+
+Cadence, as intervals other than 4 vsyncs per second:
+
+| Workload | Timer: target | Display: target | Timer: presented | Display: presented |
+| --- | --- | --- | --- | --- |
+| `maker-idle`, original card | 0 (all 4) | 0 (all 4) | 9.5, 9.5, 7.7, 9.3 | 9.1, 7.0, 8.9, 10.1 |
+| `maker-idle`, bundled character | 0.6, 2.2, 0, 0 | 0 (all 4) | 6.4, 6.1, 7.1, 4.6 | 4.8, 6.6, 6.2, 5.5 |
+
+- **Targets.** With display pacing, every target interval in the eight idle
+  runs was 4 vsyncs. With the timer, two bundled runs had 0.6 and 2.2 a
+  second. The original card's four timer runs had none in this window: their
+  phases fell well, as `main`'s did in the first live-pacing window. That
+  window's other timer run had 13.4 a second.
+- **Presented frames.** The compositor presented 8–34% of each run's frames
+  one vsync late, in both modes alike. Each switch between late and on time
+  makes a 3/5 pair, as in the second live-pacing window.
+- **`maker-slider`** redraws every vsync, because its slider writes come 120
+  times a second. Its intervals are 1 vsync in both modes, and the paced
+  step still ran 30 times a second.
+- **Requests.** Every request ran: 300 per run, none busy or idle. The step
+  started 0.01–0.04 ms after its request (p50), and 0.02–0.08 ms at p95.
+
+Cost, medians (8 bundled runs, 4 a side):
+
+| Workload | Process CPU ms/s: timer → display | Main busy ms/s | Step ms/s | Step p50 ms | GPU ms/s |
+| --- | --- | --- | --- | --- | --- |
+| `maker-idle`, original card | 137.8 → 134.6 | 53.9 → 49.8 | 51.4 → 46.6 | 1.61 → 1.46 | 19.3 → 19.5 |
+| `maker-idle`, bundled character | 99.5 → 106.4 | 19.7 → 20.6 | 17.1 → 17.1 | 0.51 → 0.50 | 20.0 → 19.9 |
+| `maker-slider` | 643 → 652 | 564 → 571 | 15.1 → 15.7 | 0.49 → 0.50 | 71.6 → 71.0 |
+
+- **Original card.** The step is shorter with display pacing, as the
+  Studio's was: 1.46 against 1.61 ms (p50). Main busy time was lower in 3 of
+  4 pairs.
+- **Bundled character.** Process CPU was higher with display pacing in 3 of
+  4 pairs: +9.3, +8.6, −0.5 and +5.9 ms/s, a median of +6.8 ms/s.
+  - The step itself is at parity: 0.50 against 0.51 ms (p50).
+  - The main thread's share is +1.2 ms/s of CPU. Off the main thread it is
+    +5.2 ms/s. The render thread's draws account for +1.0 ms/s of that, and
+    the harness does not break down the rest.
+  - The cause is not established. Paced, the main thread wakes twice per
+    step: once for the timer's status poll, once for the request. The timer
+    wakes it once.
+- **Slider.** Process CPU was 7.5–9.2 ms/s higher with display pacing in
+  both pairs, about 1.3%. The two modes' ranges overlap: 637–650 ms/s with
+  the timer, 646–657 ms/s with display pacing. Main busy time differed by
+  +0.1 and +13.1 ms/s.
 
 ### What remains after live pacing
 
@@ -3117,7 +3173,10 @@ TBD before/after
 - **Two main-thread wakeups per step.** During playback the main thread
   wakes once for the timer, which polls the status line, and once for the
   step. Folding the status poll into the step would save one wakeup per
-  step, which is not measured.
+  step, which is not measured. The paced Maker does the same, and with the
+  bundled character its process CPU was a median 6.8 ms/s higher, mostly
+  off the main thread ([Maker pacing](#maker-pacing)). Whether the second
+  wakeup causes it is the first thing to test.
 - **A step near one vsync long.** Pacing fixes where a step starts. If a
   step takes about one vsync from request to submit (8.3 ms at 120 Hz), its
   submit straddles a callback again. That is far from the 3–5 ms here, but
