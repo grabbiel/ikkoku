@@ -45,13 +45,19 @@ final class PerfWorkloadDriver {
     private var finishGesture: (() -> Void)?
     /// Keeps App Nap off for the measurement (see `configureWindow`).
     private var activity: (any NSObjectProtocol)?
-    /// `studio-duplicate` and `studio-undo-delete` (R7 phase 2, item 6): the
-    /// actions repeated in order while recording, the one waiting for its
-    /// character builds, and the finished ones.
+    /// The action workloads (`studio-duplicate`, `studio-undo-delete`,
+    /// `studio-redo`, `studio-outfit`, `studio-export`, `studio-load`; R7
+    /// phase 2, item 6): the actions repeated in order while recording, the
+    /// one waiting for its background work, and the finished ones with the
+    /// status line and any error alert they left.
     private var actionSteps: [(name: String, measured: Bool, run: () -> Void)] = []
     private var actionIndex = 0
     private var pendingAction: (name: String, measured: Bool, start: CFTimeInterval, end: CFTimeInterval)?
-    private var finishedActions: [(name: String, measured: Bool, start: CFTimeInterval, end: CFTimeInterval, ready: CFTimeInterval)] = []
+    private var finishedActions: [(name: String, measured: Bool, start: CFTimeInterval, end: CFTimeInterval, ready: CFTimeInterval,
+                                   status: String, error: String?)] = []
+    /// The temporary folder `studio-export` and `studio-load` write scene
+    /// files to, removed when the run stops.
+    private var scratchFolder: URL?
 
     private init(app: AppState, trace: PerfTrace) {
         self.app = app
@@ -165,6 +171,7 @@ final class PerfWorkloadDriver {
         loadTimer?.invalidate(); loadTimer = nil
         if !lifecycle.isEmpty { finishLifecycle() }
         if !actionSteps.isEmpty { finishActions() }
+        if let folder = scratchFolder { try? FileManager.default.removeItem(at: folder) }
         trace.endRecording()
         finishGesture?()
         // Presented handlers of the last frames arrive after their vsync.
@@ -199,7 +206,10 @@ final class PerfWorkloadDriver {
         case "studio-orbit-bursts": try prepareStudioOrbitBursts()
         case "viewport-lifecycle": try prepareViewportLifecycle()
         case "startup": break
-        case "studio-duplicate", "studio-undo-delete": try prepareStudioHistory(workload)
+        case "studio-duplicate", "studio-undo-delete", "studio-redo": try prepareStudioHistory(workload)
+        case "studio-outfit": try prepareStudioOutfit()
+        case "studio-export": try prepareStudioExport()
+        case "studio-load": try prepareStudioLoad()
         default: throw RigError.invalid("unknown workload \(workload)")
         }
     }
@@ -422,48 +432,156 @@ final class PerfWorkloadDriver {
         trace.details["timelineDuration"] = Double(studio.doc.timeline.duration)
     }
 
-    /// `studio-duplicate`: the workspace Duplicate button's call on one source
-    /// character, then Undo, repeated. `studio-undo-delete`: Delete, then Undo
-    /// (which restores the character), repeated. Live animation stays on.
-    /// The object is `IKKOKU_PERF_ACTION_KEY`'s source object (any kind, such
-    /// as a route with its children), else source key 963 (the one the
-    /// ST-T03 duplicate timing used), or the first source character when the
-    /// scene has no key 963.
-    /// It is selected before each cycle, outside the timed actions. Each
-    /// action is timed from its call until no character build is pending
-    /// and every preview it started is installed; `finishActions` adds the
-    /// main-thread busy time and longest busy period in that span.
-    private func prepareStudioHistory(_ workload: String) throws {
-        let studio = try prepareStudioSource(selectKey: nil)
-        let characters = studio.doc.objects.filter { $0.kind == .character && $0.sourceCharacter != nil }
-        let target: StudioObject
+    /// The object the action workloads act on: `IKKOKU_PERF_ACTION_KEY`'s
+    /// source object (any kind, such as a route with its children), else
+    /// source key 963 (the one the ST-T03 duplicate timing used), or the first
+    /// source character when the scene has no key 963.
+    private func actionTarget(_ studio: StudioModel) throws -> StudioObject {
         if let key = configuration.actionKey {
             guard let object = studio.doc.objects.first(where: { $0.sourceObjectKey == key }) else {
                 throw RigError.invalid("IKKOKU_PERF_ACTION_KEY: no source object with key \(key)")
             }
-            target = object
-        } else {
-            guard let character = characters.first(where: { $0.sourceObjectKey == 963 }) ?? characters.first else {
-                throw RigError.invalid("needs a source character")
-            }
-            target = character
+            return object
         }
+        let characters = studio.doc.objects.filter { $0.kind == .character && $0.sourceCharacter != nil }
+        guard let character = characters.first(where: { $0.sourceObjectKey == 963 }) ?? characters.first else {
+            throw RigError.invalid("needs a source character")
+        }
+        return character
+    }
+
+    /// `studio-duplicate`: the workspace Duplicate button's call on one source
+    /// character, then Undo, repeated. `studio-undo-delete`: Delete, then Undo
+    /// (which restores the character), repeated. `studio-redo`: Duplicate,
+    /// Undo, Redo and Undo, repeated; the Redo of a route's Duplicate
+    /// rehydrates the scene's route runtime with its route characters. Live
+    /// animation stays on. The object is `actionTarget`'s. It is selected
+    /// before each cycle, outside the timed actions. Each action is timed from
+    /// its call until no background work is pending and every preview it
+    /// started is installed; `finishActions` adds the main-thread busy time
+    /// and longest busy period in that span.
+    private func prepareStudioHistory(_ workload: String) throws {
+        let studio = try prepareStudioSource(selectKey: nil)
+        let target = try actionTarget(studio)
         let id = target.id
         let select = ("select", false, { studio.selection = id })
-        if workload == "studio-duplicate" {
+        let gesture: String
+        switch workload {
+        case "studio-duplicate":
             actionSteps = [select, ("duplicate", true, { studio.duplicateSelection() }), ("undo", true, { studio.undo() })]
-        } else {
+            gesture = "select, Duplicate, Undo"
+        case "studio-redo":
+            actionSteps = [select, ("duplicate", true, { studio.duplicateSelection() }), ("undo", true, { studio.undo() }),
+                           ("redo", true, { studio.redo() }), ("undo of the redo", true, { studio.undo() })]
+            gesture = "select, Duplicate, Undo, Redo, Undo"
+        default:
             actionSteps = [select, ("delete", true, { studio.deleteSelection() }), ("undo", true, { studio.undo() })]
+            gesture = "select, Delete, Undo"
         }
         trace.details["actionSourceKey"] = Int(target.sourceObjectKey ?? -1)
         trace.details["actionObjectKind"] = "\(target.kind)"
-        trace.details["gesture"] = workload == "studio-duplicate"
-            ? "select, Duplicate, Undo on source key \(target.sourceObjectKey ?? -1), repeated; live animation on"
-            : "select, Delete, Undo on source key \(target.sourceObjectKey ?? -1), repeated; live animation on"
+        trace.details["gesture"] = "\(gesture) on source key \(target.sourceObjectKey ?? -1), repeated; live animation on"
+    }
+
+    /// `studio-outfit`: the Clothes tab's outfit picker
+    /// (`StudioModel.selectSourceOutfit`) on `actionTarget`'s character:
+    /// another outfit the card saves (`IKKOKU_PERF_OUTFIT`, else the first
+    /// other one), then the shown outfit back, repeated. Live animation stays
+    /// on. A selection borrows the assembly the previous one kept, so only
+    /// the first selection of the other outfit reads and decodes its files;
+    /// with `IKKOKU_PERF_DONATIONS=off` every selection does.
+    private func prepareStudioOutfit() throws {
+        let studio = try prepareStudioSource(selectKey: nil)
+        let target = try actionTarget(studio)
+        guard target.kind == .character, let preview = studio.sourceShapePreview(for: target.id) else {
+            throw RigError.invalid("studio-outfit needs a built source character")
+        }
+        let count = min(preview.outfitCount, SourceStudioCharacterPreview.outfitNames.count), shown = preview.coordinate
+        let other: Int
+        if let outfit = configuration.outfit {
+            guard outfit < count, outfit != shown else {
+                throw RigError.invalid("IKKOKU_PERF_OUTFIT \(outfit): the card saves \(count) outfits and shows \(shown)")
+            }
+            other = outfit
+        } else {
+            guard let first = (0..<count).first(where: { $0 != shown }) else { throw RigError.invalid("the card saves no other outfit") }
+            other = first
+        }
+        let id = target.id
+        actionSteps = [("select", false, { studio.selection = id }),
+                       ("outfit", true, { studio.selectSourceOutfit(id, coordinate: other) }),
+                       ("outfit back", true, { studio.selectSourceOutfit(id, coordinate: shown) })]
+        trace.details["actionSourceKey"] = Int(target.sourceObjectKey ?? -1)
+        trace.details["outfits"] = [shown, other]
+        trace.details["gesture"] = "select, outfit \(other), outfit \(shown) on source key \(target.sourceObjectKey ?? -1), repeated; live animation on"
+    }
+
+    /// A new temporary folder for the run's scene files (`scratchFolder`).
+    private func makeScratchFolder() throws -> URL {
+        let folder = FileManager.default.temporaryDirectory.appendingPathComponent("ikkoku-perf-\(getpid())", isDirectory: true)
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        scratchFolder = folder
+        return folder
+    }
+
+    /// `studio-export`: File ▸ Export Edited Original Scene
+    /// (`AppState.exportSourceScene(to:)`), repeated, of a scene whose hidden
+    /// character has a face-state edit and no preview, so each export builds
+    /// that character's validation baseline. The setup uses the UI's calls:
+    /// a cheek edit on `actionTarget`'s character (`setSourceExpression`),
+    /// Visible off (`update`), then File ▸ Save Scene and File ▸ Open of that
+    /// file, after which only the visible characters build. Each export
+    /// writes a new file and removes the previous one.
+    private func prepareStudioExport() throws {
+        let studio = try prepareStudioSource(selectKey: nil)
+        let target = try actionTarget(studio)
+        guard target.kind == .character, let preview = studio.sourceShapePreview(for: target.id) else {
+            throw RigError.invalid("studio-export needs a built source character")
+        }
+        var face = preview.expressionState
+        face.cheek = face.cheek < 0.5 ? 1 : 0
+        try studio.setSourceExpression(target.id, face)
+        studio.update(target.id) { $0.visible = false }
+        let folder = try makeScratchFolder(), scene = folder.appendingPathComponent("hidden-face.png")
+        try studio.saveScene(to: scene)
+        app.openScene(at: scene, importing: false)
+        if let error = app.errorMessage { throw RigError.invalid(error) }
+        guard studio.sourceShapePreview(for: target.id) == nil else {
+            throw RigError.invalid("the hidden character was built by the load, so an export would not build its baseline")
+        }
+        var count = 0
+        var previous: URL?
+        actionSteps = [("export", true, { [weak self] in
+            if let previous { try? FileManager.default.removeItem(at: previous) }
+            count += 1
+            let url = folder.appendingPathComponent("export-\(count).png")
+            previous = url
+            self?.app.exportSourceScene(to: url)
+        })]
+        trace.details["actionSourceKey"] = Int(target.sourceObjectKey ?? -1)
+        trace.details["gesture"] = "File ▸ Export Edited Original Scene with source key \(target.sourceObjectKey ?? -1) hidden, a cheek edit and no preview, repeated; live animation on"
+    }
+
+    /// `studio-load`: File ▸ Open (`AppState.openScene(at:importing:)`) of the
+    /// source scene saved as an Ikkoku scene, repeated. Each load replaces the
+    /// document, so its characters build again, and the scene's route
+    /// runtime with its route characters is rehydrated from the scene file.
+    /// Live animation stays on.
+    private func prepareStudioLoad() throws {
+        let studio = try prepareStudioSource(selectKey: nil)
+        let scene = try makeScratchFolder().appendingPathComponent("scene.png")
+        try studio.saveScene(to: scene)
+        actionSteps = [("load", true, { [weak self] in self?.app.openScene(at: scene, importing: false) })]
+        trace.details["gesture"] = "File ▸ Open of the source scene saved as an Ikkoku scene, repeated; live animation on"
     }
 
     private func runNextAction() {
         guard trace.recording, pendingAction == nil else { return }
+        // Work a setup left (a load's builds) finishes before the first action.
+        if (app.studio?.pendingSourceActionWork ?? 0) > 0 {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.01) { self.runNextAction() }
+            return
+        }
         let step = actionSteps[actionIndex % actionSteps.count]
         actionIndex += 1
         let start = CACurrentMediaTime()
@@ -477,13 +595,15 @@ final class PerfWorkloadDriver {
     private func waitForAction() {
         guard let action = pendingAction else { return }
         guard trace.recording else { pendingAction = nil; return }
-        if (app.studio?.pendingSourceCharacterBuilds ?? 0) > 0 {
+        if (app.studio?.pendingSourceActionWork ?? 0) > 0 {
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.001) { self.waitForAction() }
             return
         }
         let installed = PerfTrace.lastCharacterInstall
         let ready = installed >= action.start ? max(action.end, installed) : action.end
-        finishedActions.append((action.name, action.measured, action.start, action.end, ready))
+        let error = app.errorMessage
+        app.errorMessage = nil
+        finishedActions.append((action.name, action.measured, action.start, action.end, ready, app.studio?.status ?? "", error))
         pendingAction = nil
         DispatchQueue.main.asyncAfter(deadline: .now() + (action.measured ? 0.5 : 0.2)) { self.runNextAction() }
     }
@@ -506,7 +626,8 @@ final class PerfWorkloadDriver {
                     "callMs": PerfTrace.round((action.end - action.start) * 1000),
                     "readyMs": PerfTrace.round((action.ready - action.start) * 1000),
                     "busyMs": PerfTrace.round(lengths.reduce(0, +)),
-                    "longestStallMs": PerfTrace.round(lengths.max() ?? 0)]
+                    "longestStallMs": PerfTrace.round(lengths.max() ?? 0),
+                    "status": action.status, "error": action.error.map { $0 as Any } ?? NSNull()]
         }
     }
 

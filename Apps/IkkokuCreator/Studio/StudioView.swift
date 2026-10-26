@@ -1149,8 +1149,8 @@ struct ClothesInspector: View {
 extension ClothesInspector {
     /// The source character's outfit selection (ST-C03), the counterpart of
     /// CharaStudio's seven outfit buttons. Choosing an outfit goes through
-    /// `StudioModel.setSourceOutfit`, the same path the scenario's `setOutfit`
-    /// op drives; only outfits the card saves are offered. Selections of the
+    /// `StudioModel.selectSourceOutfit` (`setSourceOutfit`, the same path the
+    /// scenario's `setOutfit` op drives); only outfits the card saves are offered. Selections of the
     /// shown outfit that are not converted are listed with their saved source
     /// IDs, as the preview's diagnostics report them; no other ID is
     /// substituted. The picker numbers outfits from 1; documents and scenarios
@@ -1161,10 +1161,7 @@ extension ClothesInspector {
         SectionBox(title: "Outfit") {
             if preview.outfitCount > preview.coordinate {
                 Picker("Outfit", selection: Binding(get: { preview.coordinate }, set: { value in
-                    do {
-                        try model.setSourceOutfit(o.id, coordinate: value)
-                        model.status = "Outfit \(value + 1) (\(names[value])) selected"
-                    } catch { model.status = "Outfit: \(error)" }
+                    model.selectSourceOutfit(o.id, coordinate: value)
                 })) {
                     ForEach(0..<min(preview.outfitCount, names.count), id: \.self) { index in
                         Text("\(index + 1) \(names[index])\(index == preview.savedCoordinate ? " (saved)" : "")").tag(index)

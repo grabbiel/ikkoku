@@ -1144,6 +1144,17 @@ final class StudioModel: ViewportInputHandler, LivePacedHandler {
         doc.objects[i] = edited
     }
 
+    /// The Clothes tab's outfit picker: selects the card's saved outfit
+    /// `coordinate` (`setSourceOutfit`) and reports the outcome on the status
+    /// line. The performance harness's `studio-outfit` workload calls it too.
+    func selectSourceOutfit(_ id: UUID, coordinate: Int) {
+        let names = SourceStudioCharacterPreview.outfitNames
+        do {
+            try setSourceOutfit(id, coordinate: coordinate)
+            status = "Outfit \(coordinate + 1) (\(names.indices.contains(coordinate) ? names[coordinate] : "?")) selected"
+        } catch { status = "Outfit: \(error)" }
+    }
+
     /// Clothes state (ST-C03), CharaStudio's clothing-detail buttons
     /// (MPCharCtrl.StateInfo.OnClickClothingDetails -> OCIChar.SetClothesState
     /// -> ChaControl.SetClothesState(kind, state)): `kind` is the row (0 top,
@@ -2178,6 +2189,9 @@ final class StudioModel: ViewportInputHandler, LivePacedHandler {
     /// Background builds of missing previews and of route character copies
     /// not installed yet.
     var pendingSourceCharacterBuilds: Int { pendingSourceBuilds.count + pendingRouteCharacterBuilds.count }
+    /// Background work a Studio command started and has not finished: the
+    /// performance harness's action workloads wait for it.
+    var pendingSourceActionWork: Int { pendingSourceCharacterBuilds }
 
     /// Stops every background character build: the import in flight, the
     /// rebuilds of missing previews and the route character copies (another

@@ -447,6 +447,7 @@ extension CaptureRequest {
         ScopedOption("IKKOKU_PERF_RIG_PREFETCH", [.perfTrace]),
         ScopedOption("IKKOKU_PERF_DONATIONS", [.perfTrace]),
         ScopedOption("IKKOKU_PERF_INSTALL_REFRESH", [.perfTrace]),
+        ScopedOption("IKKOKU_PERF_OUTFIT", [.perfTrace]),
     ]
 
     /// Options read only by the window capture.
@@ -579,6 +580,8 @@ extension CaptureRequest {
         ValueRule("IKKOKU_PERF_RIG_PREFETCH", .oneOf(["on", "off"])),
         ValueRule("IKKOKU_PERF_DONATIONS", .oneOf(["on", "off"])),
         ValueRule("IKKOKU_PERF_INSTALL_REFRESH", .oneOf(["step", "each"])),
+        // The saved outfit `studio-outfit` selects (R7 phase 2, item 6, third part).
+        ValueRule("IKKOKU_PERF_OUTFIT", .integer(0...6)),
     ]
 
     /// `IKKOKU_PERF_WORKLOAD` values, in the order `docs/reference/performance.md` lists them.
@@ -586,6 +589,7 @@ extension CaptureRequest {
         "studio-idle", "studio-orbit", "studio-fk-drag", "studio-hover", "maker-slider", "maker-idle",
         "studio-native", "viewport-lifecycle", "startup", "studio-static", "studio-orbit-bursts",
         "studio-duplicate", "studio-undo-delete", "studio-timeline",
+        "studio-outfit", "studio-export", "studio-redo", "studio-load",
     ]
 }
 

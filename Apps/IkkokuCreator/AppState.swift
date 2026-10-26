@@ -425,6 +425,12 @@ final class AppState {
         let panel = NSSavePanel(); panel.allowedContentTypes = [.png]
         panel.nameFieldStringValue = "edited-original-scene.png"
         guard panel.runModal() == .OK, let url = panel.url else { return }
+        exportSourceScene(to: url)
+    }
+
+    /// File ▸ Export Edited Original Scene once its panel chose `url`; the
+    /// performance harness's `studio-export` workload calls it too.
+    func exportSourceScene(to url: URL) {
         do { try studio?.exportSourceScene(to: url) }
         catch { errorMessage = "Could not export original scene: \(error)" }
     }
@@ -1152,6 +1158,13 @@ final class AppState {
         panel.allowedContentTypes = [.png]
         panel.message = importing ? "Import an Ikkoku scene (PNG) into the current scene" : "Open an Ikkoku scene (PNG)"
         guard panel.runModal() == .OK, let url = panel.url else { return }
+        openScene(at: url, importing: importing)
+    }
+
+    /// File ▸ Open or Import Scene once its panel chose `url`; the
+    /// performance harness's `studio-load` workload calls it too.
+    func openScene(at url: URL, importing: Bool) {
+        guard let studio else { return }
         do { if importing { try studio.importScene(from: url) } else { try studio.loadScene(from: url) }; mode = .studio }
         catch { errorMessage = "Could not open scene: \(error)" }
     }

@@ -109,6 +109,10 @@ the run.
 | `studio-duplicate` | as `studio-idle` | live animation on; selects the source object `IKKOKU_PERF_ACTION_KEY` names (any kind, such as a route with its children), else source key 963 (or the first source character), then repeats Duplicate and Undo. Each action starts 0.5 s after the previous one was ready, and is timed from its call until no character build is pending and every preview it started is installed (`details.actions`, [phase 2, item 6](#phase-2-item-6-source-character-builds-off-the-main-thread)). Its frame rates are not cited: a build on the main thread stalls it for seconds |
 | `studio-undo-delete` | as `studio-idle` | the same with Delete and Undo; the undo restores the character |
 | `studio-timeline` | avatar, Maker library | `studio-native`'s scene with live animation on. The first character is keyed at 0 s and, moved 1 unit along x, at 2.5 s; then nothing is selected and the timeline plays from 0. It measures the timeline's step, which runs on the main thread ([live pacing](#phase-2-live-pacing)) |
+| `studio-redo` | as `studio-idle` | as `studio-duplicate`, with Duplicate, Undo, Redo and Undo; the Redo of a route's Duplicate (`IKKOKU_PERF_ACTION_KEY`) rehydrates the scene's route runtime with its route characters |
+| `studio-outfit` | as `studio-idle` | the Clothes tab's outfit picker (`StudioModel.selectSourceOutfit`) on the `studio-duplicate` character: another saved outfit (`IKKOKU_PERF_OUTFIT`, else the first other one), then the shown one back, repeated, live animation on. After the first selection each one borrows the outfit's kept assembly; `IKKOKU_PERF_DONATIONS=off` builds every one from its files |
+| `studio-export` | as `studio-idle` | File ▸ Export Edited Original Scene (`AppState.exportSourceScene(to:)`), repeated, after a setup through the UI's calls: a cheek edit on the `studio-duplicate` character, Visible off, then Save Scene and Open of that file, so the hidden character has no preview and each export builds its validation baseline. Exports go to a temporary folder, removed at the end |
+| `studio-load` | as `studio-idle` | File ▸ Open (`AppState.openScene(at:importing:)`) of the source scene saved as an Ikkoku scene, repeated; each load builds the characters again and rehydrates the route characters |
 
 Other options:
 
@@ -134,9 +138,11 @@ Other options:
   timer instead of the display link, a measurement control for
   [live pacing](#phase-2-live-pacing); the default is `display`.
 - `IKKOKU_PERF_ACTION_KEY` (a source key, 0 or more): the object
-  `studio-duplicate` and `studio-undo-delete` act on, for example route 0 of
+  action workloads (`studio-duplicate`, `studio-undo-delete`, `studio-redo`,
+  `studio-outfit`, `studio-export`) act on, for example route 0 of
   `scene-route-children.png` with its folder and character. Without it they
   use source key 963 or the first source character.
+- `IKKOKU_PERF_OUTFIT` (0–6): the saved outfit `studio-outfit` selects.
 - Measurement controls for the
   [item 6 follow-up](#phase-2-item-6-follow-up-route-copies-prefetch-and-kept-donations),
   all defaulting to the shipped behavior:
@@ -216,11 +222,14 @@ locked `PerfDrawLog`. Everything else is recorded on the main thread.
   counted whole, with the launch before the run loop first waits as one
   period. The block holds their total, the longest, and how many exceeded 50
   and 100 ms. `summarize` prints it as a startup line;
-- for `studio-duplicate` and `studio-undo-delete`, each action
-  (`details.actions`): its call time, the time until its builds were
-  installed (`PerfTrace.characterInstalled`), and the main thread's busy
-  time and longest busy period from the call until then. `summarize` prints
-  the medians per action;
+- for the action workloads (`studio-duplicate`, `studio-undo-delete`,
+  `studio-redo`, `studio-outfit`, `studio-export`, `studio-load`), each
+  action (`details.actions`): its call time, the time until its builds were
+  installed or its other background work finished
+  (`PerfTrace.characterInstalled`, `backgroundWorkFinished`), the main
+  thread's busy time and longest busy period from the call until then, and
+  the status line and any error alert it left. `summarize` prints the
+  medians per action and warns about an action that left an error;
 - the build: Debug/Release, the app's and the Engine package's own assert
   configuration (`EngineBuild.assertConfiguration`, so an Engine compiled `-O`
   inside a Debug app is visible).

@@ -172,6 +172,10 @@ final class PerfTrace {
         /// Studio build's frame waits for the next live step; "each" refreshes
         /// at every install, as before (measurement control).
         let installRefresh: String
+        /// `IKKOKU_PERF_OUTFIT`: the saved outfit (0-based) `studio-outfit`
+        /// selects before selecting the shown one back; nil takes the first
+        /// other outfit the card saves.
+        let outfit: Int?
 
         /// Reads `IKKOKU_PERF_*`; `CaptureRequest.validate` already checked the values.
         static func from(_ env: [String: String]) -> Configuration? {
@@ -197,7 +201,8 @@ final class PerfTrace {
                 actionKey: env["IKKOKU_PERF_ACTION_KEY"].flatMap { Int32($0) },
                 rigPrefetch: env["IKKOKU_PERF_RIG_PREFETCH"] != "off",
                 donations: env["IKKOKU_PERF_DONATIONS"] != "off",
-                installRefresh: env["IKKOKU_PERF_INSTALL_REFRESH"] ?? "step")
+                installRefresh: env["IKKOKU_PERF_INSTALL_REFRESH"] ?? "step",
+                outfit: env["IKKOKU_PERF_OUTFIT"].flatMap { Int($0) })
         }
     }
 
@@ -237,9 +242,11 @@ final class PerfTrace {
     private var startupReady: CFTimeInterval?
     /// Set once recording begins: startup periods are no longer collected.
     private var startupClosed = false
-    /// When a Studio character preview was last installed, on any path. The
-    /// action workloads take an action as finished once no build is pending
-    /// and every preview it started is installed (R7 phase 2, item 6).
+    /// When a Studio character preview was last installed, on any path, or
+    /// other background work a command started last finished (an export
+    /// written after its builds). The action workloads take an action as
+    /// finished once no such work is pending and every preview it started is
+    /// installed (R7 phase 2, item 6).
     static var lastCharacterInstall: CFTimeInterval = 0
     private var observers: [CFRunLoopObserver] = []
     private var memoryTimer: Timer?
@@ -300,6 +307,10 @@ final class PerfTrace {
         guard active != nil else { return }
         lastCharacterInstall = CACurrentMediaTime()
     }
+
+    /// Records that background work a Studio command started, other than a
+    /// preview install, finished now (an export written after its builds).
+    static func backgroundWorkFinished() { characterInstalled() }
 
     /// Times one startup step as a mark pair and a signpost interval.
     static func step<T>(_ name: String, _ body: () throws -> T) rethrows -> T {
@@ -707,7 +718,7 @@ final class PerfTrace {
                 "burstLive": configuration.burstLive,
                 "livePacing": configuration.livePacing,
                 "rigPrefetch": configuration.rigPrefetch, "donations": configuration.donations,
-                "installRefresh": configuration.installRefresh,
+                "installRefresh": configuration.installRefresh, "outfit": configuration.outfit ?? -1,
             ] as [String: Any],
             "build": PerfTrace.buildDescription(),
             "machine": PerfTrace.machineDescription(device: device),

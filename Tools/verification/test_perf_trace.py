@@ -369,6 +369,21 @@ class PerfTraceTests(unittest.TestCase):
         text = perf_trace.actions_line("dup", data)
         self.assertIn("duplicate x3 call 12.0, ready 120.0, main busy 30.0, longest stall 9.0 (max 50.0)", text)
 
+    def test_action_problem_flags_an_action_that_left_an_error(self):
+        data = report()
+        data["workload"] = "studio-export"
+        self.assertIsNone(perf_trace.action_problem(data))
+        data["details"] = {"actions": [{"name": "export", "measured": True, "error": None},
+                                       {"name": "export", "measured": True, "error": "Could not export original scene: x"}]}
+        self.assertEqual(perf_trace.action_problem(data),
+                         "1 actions left an error, the first export: Could not export original scene: x")
+        data["workload"] = "studio-idle"
+        self.assertIsNone(perf_trace.action_problem(data))
+        for workload in ("studio-outfit", "studio-export", "studio-redo", "studio-load"):
+            self.assertIn(workload, perf_trace.WORKLOADS)
+            self.assertIn(workload, perf_trace.INPUTLESS_WORKLOADS)
+            self.assertIn(workload, perf_trace.PRESENTATION_EXEMPT)
+
     def test_attribution_row_reports_events_and_view_bodies_per_input(self):
         orbit = report()
         orbit["summary"].update(recordedSeconds=10, inputCalls={"mouseDown": 1, "mouseDragged": 1199},
