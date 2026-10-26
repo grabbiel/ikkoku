@@ -378,10 +378,10 @@ with a following `false` one, and a card whose saved `eyesBlink` flag is off
 renders the fixed sentinel and can never set it), `handPattern`
 `{key,left?,right?}` (the saved `handPatterns` pair the loader replays;
 absent hands are not asserted), `sourceMap`
-`{none?,map?,draws?,loading?,lineContains?,lineAbsent?,pickNothingAt?,pickSomethingAt?}`
+`{none?,map?,draws?,lightmappedDraws?,loading?,lineContains?,lineAbsent?,pickNothingAt?,pickSomethingAt?}`
 (ST-A11: the imported scene's map as the render path sees it,
 `StudioModel.sourceMapCensus()`; `none` asserts no map request, draws or
-line; each `pickNothingAt`/`pickSomethingAt` point is two viewport
+line; `lightmappedDraws` counts draws with the baked-lightmap material; each `pickNothingAt`/`pickSomethingAt` point is two viewport
 fractions, origin top-left, and must pick id 0 / a nonzero id — see
 [source maps](#source-maps-st-a11)),
 `sourceRuntime`
@@ -1057,10 +1057,13 @@ declares it, so the runner gives no other check a map.
 - `source-map` (`IKKOKU_SOURCE_SCENE` from `IKKOKU_STUDIO_MAP_SHOWOFF_SCENE`,
   the showoff characters with Map 33 added by the original player; 15 steps).
   It runs these steps in order:
-  1. Before the first step the map is already drawn: 8 draws, not loading. The
-     status line holds the exact label `Map 33 空き部室 (bushitu): approximated:
-     no baked lightmaps, map lights, sun-type lighting, fog or ambient`. Two
-     map-only points pick nothing, and a character in front of the wall picks.
+  1. Before the first step the map is already drawn: 8 draws, all 8 with the
+     baked-lightmap material (`lightmappedDraws`, since ST-A11 slice 2), not
+     loading. The status line holds the exact label `Map 33 空き部室 (bushitu):
+     baked lightmaps; approximated: no realtime sun or its shadows, no specular
+     or reflections, no normal, metallic or detail maps, no fog, no camera
+     effects`. Two map-only points pick nothing, and a character in front of
+     the wall picks.
   2. `setShowSourceMap` off draws 0 parts, and the line says `hidden (View ▸
      Show Source Map)`.
   3. With the map hidden, the original-format export is byte-identical to the
@@ -1069,14 +1072,21 @@ declares it, so the runner gives no other check a map.
   5. Reimporting that export, New Scene (no map, no line) and undo restore the
      map. A map pixel still picks nothing and the character still picks.
 - `reload-save-source-map` (same fixtures) saves the scene natively. The map
-  stays drawn, and the save needs no scene-file rehydration.
+  stays drawn with its lightmaps, and the save needs no scene-file
+  rehydration.
 - `reload-load-source-map` (only the avatar and the catalog) runs next. It
   loads that save in a fresh process. One rehydration rebuilds the map request,
-  and the map draws again with the same line and picks.
+  and the map draws again with its lightmaps, the same line and picks.
 - `source-map-none` (`IKKOKU_STUDIO_SCENARIO_SCENE`, `koikatu_cs0002591.png`,
   which names no map) supplies the catalog. It asserts there is no map request
   or line before and after an original-format round trip, and that the export
   is byte-identical.
+
+The first three need the slice-2 export of Map 33 (with lightmaps) behind
+`IKKOKU_STUDIO_MAP_CATALOG`. With the first slice's export they fail on the
+label and `lightmappedDraws`, which is the point: they pin the lightmapped
+path. [Installing the slice-2 export](../../docs/reference/studio/maps.md#installing-the-slice-2-export)
+gives the commands.
 
 ## Maker scenario hook (T-T04)
 

@@ -2,9 +2,13 @@
 
 Reviewed 2026-10-25 against the working tree. The [Studio audit](../../component-audit/studio.md) is the feature-status and actionable-backlog index; this page records the narrower source contract and its evidence.
 
-An imported CharaStudio scene that names an original map now shows that map in the Studio preview, placed the way CharaStudio 1.0.4.2 places it. This first slice converts one map, Map 33 `空き部室` (`bushitu`), at full texture resolution. Every other `Map_XX` row is listed in the catalog with no conversion, and a scene that names one of them says so by name. The map is runtime-only: the native document has no map field, and original export still writes the scene record's map bytes verbatim.
+An imported CharaStudio scene that names an original map now shows that map in the Studio preview, placed the way CharaStudio 1.0.4.2 places it. The first slice converts one map, Map 33 `空き部室` (`bushitu`), at full texture resolution. Every other `Map_XX` row is listed in the catalog with no conversion, and a scene that names one of them says so by name. The map is runtime-only: the native document has no map field, and original export still writes the scene record's map bytes verbatim.
 
-The preview draws the map's geometry and base textures with the item toon material under the scene light. The status line names what it leaves out, word for word: `approximated: no baked lightmaps, map lights, sun-type lighting, fog or ambient`.
+Since the second slice, the preview draws Map 33 with its baked lightmaps. Each surface gets the term Unity 5.6's Standard shader computes for a lightmapped draw: the albedo times the decoded directional lightmap, plus emission. The decode runs in the shader on the bundle's own lightmap blocks (see [baked lightmaps](#baked-lightmaps-slice-2)). The status line names what is still left out, word for word:
+
+`baked lightmaps; approximated: no realtime sun or its shadows, no specular or reflections, no normal, metallic or detail maps, no fog, no camera effects`
+
+A converted map without lightmaps (a first-slice export) still draws with the item toon material under the scene light. It keeps the first slice's label, `approximated: no baked lightmaps, map lights, sun-type lighting, fog or ambient`.
 
 ## Recovered rules
 
@@ -27,11 +31,19 @@ These rules come from the recovered managed code (`Studio.Map`, `Studio.MapCtrl`
   - Geometry is merged per role, material, visibility class and lightmap index. Vertices under `mapRoot` (role `mapRoot`) stay in its local frame. Vertices under other roots (role `scene`) are written in scene world space.
   - The root node is named `Map`, carries only the authored scale, and has the extra `ikkokuMapRole: "mapRoot"`. Each mesh's `ikkokuMap` extras give its role, the sun-type keys it is visible for (0, 1, 2 and -1) and its lightmap index.
   - Materials go through `MAP_SHADER_RULES`, which list the dropped terms. `Standard` keeps base colour, texture and alpha mode. `Particles/Alpha Blended` keeps 2 × tint × vertex colour. Any other shader fails the conversion by name. `Skybox/*` shaders draw nothing.
-  - `_MainTex_ST` is baked into UV0. TEXCOORD_1 already holds the lightmap UV for the next slice: mesh UV1 (else UV0) × `lightmapScaleOffset`, using the `LightmapPrefab` value where it names the renderer.
+  - `_MainTex_ST` is baked into UV0. TEXCOORD_1 holds the lightmap UV: mesh UV1 (else UV0) × `lightmapScaleOffset`, using the `LightmapPrefab` value where it names the renderer, then V flipped like UV0.
+  - **Lightmaps (slice 2).** Each `LightmapSettings` entry's light map and CombinedDirectional direction map are written as `lightmap-<index>-light.bc3` and `lightmap-<index>-dir.bc3`. Each file is the texture's serialized `image_data`, byte for byte: DXT5 blocks (BC3), all 11 mip levels largest first, rows bottom-up as in Unity's texture memory. Nothing is decoded or re-encoded, so each file's SHA-256 is the serialized data's. The glTF's top-level `ikkokuLightmaps` extras (`kind: ikkoku.unityLightmaps`, version 1) name the files with their format, size, mips, colour space (`m_ColorSpace` 1 is sRGB), byte count and SHA-256. They also record the lightmaps mode (`CombinedDirectional`), the encoding (`m_LightmapFormat` 2, RGBM), the row order and the player's colour space (Linear). A mode, encoding or format the app does not reproduce fails the export by name.
+  - **Standard inputs (slice 2).** Each `Standard` material carries `ikkokuStandard` extras:
+    - `_Color` converted to Linear with `GammaToLinearSpaceExact`, as a Linear player uploads material colours;
+    - `OneMinusReflectivityFromMetallic` of `_Metallic`, or under `_METALLICGLOSSMAP` of the `_MetallicGlossMap` red channel's mean (the texture is linearized first when it is sRGB);
+    - under `_EMISSION`, `_EmissionColor` in Linear and the `_EmissionMap` image. The map is sampled at UV0, where Standard samples it (`i.tex.xy`).
+
+    A lightmapped material's `droppedTerms` list only what the lightmap material leaves out (`droppedLightmapped`). The first slice's item-material list is used where a material is drawn without a lightmap.
   - `provenance.json` records:
     - the bundle hashes and output hashes;
     - the transform rule;
     - each lightmap's name, size, format, mip count and serialized-data hash, and whether it decodes;
+    - which lightmap files were written (`lightmapExport`);
     - the `SunLightInfo` entries, the lights and RenderSettings;
     - the dropped shader terms.
 - **`catalog`** writes `catalog.json` (`kind: ikkoku.sourceStudioMapCatalog`, version 1). It holds every `Map_XX` row of the supplied info bundles, keyed by original number. Each row has its converted glTF path relative to the catalog, or `file: null`, plus the conversion summary and approximation list.
@@ -40,12 +52,14 @@ Outputs are refused outside the ignored `.local` directory. A symlink placed dir
 
 | Fixture | Location |
 | --- | --- |
-| Converted map 33 | `.local/reverse/exports/maps/33-bushitu/`: 8 meshes, 8 materials, 7 PNGs, 2,526 vertices, 1,492 triangles |
+| Converted map 33 | `.local/reverse/exports/maps/33-bushitu/`: 8 meshes, 8 materials, 8 PNGs, 2 lightmap files, 2,526 vertices, 1,492 triangles. Until the slice-2 export is installed (see [installing the slice-2 export](#installing-the-slice-2-export)), this is the first slice's export (7 PNGs, no lightmaps), and the private copy is `.local/sta11b-lightmaps/exports/maps/` |
 | Catalog | `.local/reverse/exports/maps/catalog.json`: 42 rows (0–41) from 23 info bundles; only 33 converted |
 | Source bundles | `.local/reverse/source/abdata/` (`studio/map/bushitu.unity3d`, `studio/map/akikyoushitu.unity3d`, `studio/info/*.unity3d`, `abdata`), each with a `.provenance.json`. To save disk space, `akikyoushitu.unity3d` (26.9 MB, used only for Map 34's inventory) is a symlink into the external archive (`/Volumes/My Book/ikkoku-archive/local/sta11a-maps/`), with the same SHA-256 |
 | Authored scenes | `.local/reverse/studio-scenes/maps/scene-map33.png` and `scene-map33-showoff.png`, with `provenance.json` |
 
-Map 33's conversion has 8 merged draws for every sun type. Its 7 base textures are 512² to 2048² DXT1/DXT5 in the bundle. They need 51,729,740 bytes as RGBA8 with mips (Metal reports 52,248,576 allocated) against 7,165,376 bytes native. The map's only shader is `Standard`, so the catalog also lists `shaders approximated (Standard)`, and the status line appends it after the label.
+Map 33's conversion has 8 merged draws for every sun type, all 8 lightmapped with lightmap 0. Its 7 base textures are 512² to 2048² DXT1/DXT5 in the bundle. They need 51,729,740 bytes as RGBA8 with mips (Metal reports 52,248,576 allocated) against 7,165,376 bytes native. Slice 2 adds the 512² emission map of `mm_koi_stu_map49_denki00` (`4_mt_koi_stu_map49_denki00_em.png`, 1,398,100 bytes as RGBA8 with mips). Because it is inserted at image index 4, the glass, metal and roof images move to indices 5–7; their bytes are unchanged. `glass00`'s emission map is its base texture, so it adds no image. The two lightmaps take 1,398,128 bytes each as BC3. Altogether Metal allocates 56,492,032 texture bytes, 2,818,048 of them for the lightmaps.
+
+With the first slice's export, the map's only shader, `Standard`, made the catalog list `shaders approximated (Standard)`, and the status line appended it after the label. With lightmaps drawn, the catalog row's `approximations` instead name the omitted terms one by one. These are the label's terms: realtime sun and its shadows; specular and reflections; normal, metallic and detail maps; fog; camera effects. Only a shader other than `Standard` would still be listed as approximated.
 
 ## Runtime
 
@@ -53,17 +67,20 @@ Map 33's conversion has 8 merged draws for every sun type. Its 7 base textures a
 
 - **Catalog.** `SourceStudioMapCatalog.load` reads `IKKOKU_STUDIO_MAP_CATALOG`. It refuses another kind or version, duplicate numbers, and a file path that leaves the catalog directory. `resolve` returns one of four cases: `.none` (-1), `.converted`, `.notConverted` or `.notInCatalog`. Only `.converted` draws.
 - **Request.** `SourceMapRequest.make` reads the record's map number, transform and sun type at import (and at rehydration), with the scene SHA. A scene without a map (-1) has no request, and no catalog read happens. Without a catalog, the line says why.
-- **Loading off the main thread.** `SourceStudioMapLoad` runs `SourceStudioMapAsset.load` on a GCD worker at `.userInitiated`, never on the main thread or the Swift concurrency pool. The load is blocking work: file reads, PNG decodes and MetalKit texture loads.
+- **Loading off the main thread.** `SourceStudioMapLoad` runs `SourceStudioMapAsset.load` on a GCD worker at `.userInitiated`, never on the main thread or the Swift concurrency pool. The load is blocking work: file reads, PNG decodes, MetalKit texture loads and, since slice 2, the lightmap files' SHA-256 checks and block uploads.
   - The import job starts the load beside the characters. The commit hands both to the model. A cancelled or failed import cancels the load.
   - The result returns on the main queue. Synchronous paths (captures, scenarios) wait for the load instead, so their first frame already has the map.
   - A finished load nobody took is released.
-- **Textures.** Textures are registered privately (`cacheNew: false`). `release()` retires meshes and textures through `ResourceStore.retire(meshes:)` and the new `retire(textures:)`, so a frame already in flight keeps them until a later frame is prepared.
+- **Textures.** Textures are registered privately (`cacheNew: false`). `release()` retires meshes and textures through `ResourceStore.retire(meshes:)` and the new `retire(textures:)`, so a frame already in flight keeps them until a later frame is prepared. Slice 2's lightmaps and emission maps are owned and released the same way. A load that fails part-way unregisters everything it registered.
+- **Lightmapped parts (slice 2).** `SourceStudioLightmapSet.parse` reads the glTF's `ikkokuLightmaps` extras. An export without them gives nil, and every part keeps the item material. A part whose mesh has a lightmap index of 0 or more, and whose material has `ikkokuStandard` extras, is drawn with the map material (`MaterialKindMap`, see [the material](#the-map-material)). The load fails by name, and registers nothing, when such a part names a lightmap the map does not carry or has no TEXCOORD_1, or when a lightmap file's size or SHA-256 differs from the extras.
 - **Placement.** `SourceStudioMapPlacement.mapRootMatrix` computes `T(pos) · R(UnityCoordinates.eulerDegrees(rot))` in the engine basis, which is B · M_unity · B with B = diag(1, 1, -1, 1). A non-finite component is refused by name. `mapRoot` parts are drawn at `root × local`, and `scene` parts at their authored matrix.
-- **Timing.** Each placement sets the `sourceMapReady` startup mark (the perf report keeps the first) and prints `[ikkoku] source map: <draws>, <triangles>, <texture bytes>; loaded in <ms> on a worker, placed in <ms> on the main thread`. An import's load usually ends before the import commits, so the map is placed at the commit.
+- **Timing.** Each placement sets the `sourceMapReady` startup mark (the perf report keeps the first) and prints `[ikkoku] source map: <draws> draws (<n> lightmapped), <triangles> triangles, <bytes> texture bytes (<bytes> in <n> lightmaps); loaded in <ms> on a worker, placed in <ms> on the main thread`. An import's load usually ends before the import commits, so the map is placed at the commit.
 - **Sun type.** `sunTypeKey` maps 0–2 to themselves and any other value to -1, and parts not visible for that key are skipped.
 - **Draws and picks.** Every map draw has `objectID` 0, `pickOccluder` (new on `RenderItem`), no shadow casting, no outline, and `order` 100, which puts it after the characters. The pick pass draws pick occluders with id 0. A pick or hover over map pixels therefore selects and highlights nothing, while a character in front of a wall still picks. Gizmos still draw on top.
 - **Status line.** `sourceMapLine` sits under the Studio status line (`studio.status.map`). Its forms:
-  - `Map 33 空き部室 (bushitu): approximated: no baked lightmaps, map lights, sun-type lighting, fog or ambient; shaders approximated (Standard) · 1492 triangles, 8 draws` once the map is drawn;
+  - `Map 33 空き部室 (bushitu): baked lightmaps; approximated: no realtime sun or its shadows, no specular or reflections, no normal, metallic or detail maps, no fog, no camera effects · 1492 triangles, 8 draws` once the map is drawn with its lightmaps;
+  - `…: baked lightmaps on <n> of <m> draws (the rest as items); approximated: …` when only some parts are lightmapped;
+  - `…: approximated: no baked lightmaps, map lights, sun-type lighting, fog or ambient; shaders approximated (Standard) · …` for an export without lightmaps;
   - `…: loading`;
   - `…: not converted (<bundle>); no map shown`;
   - `Map <n>: not in the map catalog (mods are not evaluated); no map shown`;
@@ -75,7 +92,8 @@ Map 33's conversion has 8 merged draws for every sun type. Its 7 base textures a
 
 - `native-map-geometry.png`: white on black;
 - `native-map-depth-normals.png`: Unity's depth-normals encoding over a 25 m far plane, `AppState.sourceMapProbeDepthFar`;
-- `native-map.json`: the census, the camera matrices, the map root and every draw's model matrix, in the engine basis, column-major.
+- `native-map.json`: the census, the camera matrices, the map root and every draw's model matrix, in the engine basis, column-major;
+- for a lightmapped map (slice 2), `native-map-irradiance-<variant>.rgba16f.deflate`: the map drawn with `SourceStudioMapMaterial.irradiance`, read from the HDR scene target (`Renderer.captureSceneHDR`, after the MSAA resolve and before bloom, grading and the sRGB composite) as RGBA float16, rows top-down, raw DEFLATE. The variants are `decoded`, `nonDirectional` and `gammaConstants` (see [the irradiance gate](#the-irradiance-gate)). `native-map.json` lists them under `irradiance`.
 
 A scene whose map is not drawn fails, and the failure names the status line.
 
