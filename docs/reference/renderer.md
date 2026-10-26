@@ -5377,3 +5377,116 @@ superseded failures, conversion/input reviews, `native-attempt-2/`, archived
 producer sources, and `final-acceptance/`. The latter pins 5,822 inputs in
 checkpoint `97a9e316…`; the seven-provider summary is `80ea9e36…`. Root reviews
 record exact target, cache, resource, process and final-app controls separately.
+
+## Native stock lipline ID1 composite (R1/CMT-04, #255, 2026-10-26)
+
+The ordinary female/head0/exType0/high-detail face compositor now accepts exact
+stock lipline category 404/ID1 (`chara/mt_lipline_00.unity3d`,
+`cw_t_lip_line_000`). Lipline selection and colour are face-owned
+(`face.lipLineId`, `face.lipLineColor`), so they do not follow the base or
+coordinate makeup record that supplies the cheek and paints. The creator program
+(`create_head`, DXBC `9ec842e7…`) is unchanged: the layer samples `_Texture5`
+through the fixed creator vector `_tex5uv` = (0.5, 0.745, −8, −20) with identity
+ST, and lerps by sampled alpha × `_Color5.a` without the paint-mask weight. ID0
+binds no texture (catalog row 0, `MainAB`/`LiplineTex` = `0`/`0`) while
+`_Color5` still binds. Only stock cheek 0 or 1 may accompany lipline 1: any other
+cheek, either face paint or the mole leaves the recipe unresolved under either
+makeup record (`sourceShaderLiplineCompositeRefusesLayersThatCouldOverlapIt`).
+Other lipline IDs, `_low` assets, other heads and resolver-backed replacements
+stay outside this gate.
+
+**Source identity.** Category 404 has one table, `mt_lipline_00` in
+`list/characustom/00.unity3d` (`5fe4e681…`, `CAB-f743f6c6…`, pathID
+`3157866646249929324`, IDs 0–6). Row 1 names the texture bundle `f919dc77…`;
+the texture is `CAB-fc3dc8db…`/`-7938000018075691814`, 80×36 RGBA32 sRGB, one
+authored mip, Bilinear, Clamp, aniso 1.
+
+**Original evidence.** Codex's base and distinct players (producer `9a7e401`,
+`OriginalCharacterProbe.cs` `9f73ec6d…`) were re-audited from the files: the
+cards differ only in `face.lipLineColor[0..3]`, each in-place cheek rebuild
+changes only `baseMakeup.cheekId`/`cheekColor`, and header, face PNG, plug-in
+data, footer and every other block are identical. One later session (producer
+`ffb246f8…` at `1bd775b`, all three cases with the same source) ran the
+`liplineCompositeCase=none` control, then base and distinct again. The rerun
+base/distinct cases reproduce every face target and input readback byte for
+byte; their cards differ only in the rendered thumbnail and the frames only in
+bones, meshes, globals and render time. The no-layer card is the distinct card
+with only `face.lipLineId` set to 0. The no-layer inputs equal the lipline
+cases' inputs (main `6d90eca1…`, mask `52eb3278…`, paint mask `40d0edd1…`,
+cheek after the rebuild `6d3ca822…`), all vectors equal the distinct case
+including `_Color5`, and the release readback equals the combined target.
+
+Against the no-layer targets, the lipline targets differ at exactly 174 pixels
+(495 channels for base, 501 for distinct) inside bottom-up `[493,266,529,270]`,
+with the same pixel set at cheek 0 and cheek 1. The cheek rebuild of the no-layer
+target changes 74,798 pixels inside `[215,276,810,460]`. The two sets do not
+intersect, and outside the lipline footprint the cheek-1 lipline targets equal the
+no-layer cheek-1 target exactly. A distinct `_Color5` with no layer changes no
+pixel.
+
+**Cheek and lipline cannot overlap for this pair.** Neither layer has a layout
+field: both UV transforms are the fixed creator vectors above (cheek
+(0.5, 0.64, −0.33, −4)), and card colours scale the blend weight but cannot create
+alpha. The footprints therefore depend only on the two textures. Mapping each
+target pixel through the exact `create_head` UV math with Clamp, and counting
+every texel within a dilation radius of a nonzero-alpha texel, gives:
+
+| Dilation (texels) | Cheek footprint (px) | Lipline footprint (px) | Overlap (px) |
+| ---: | ---: | ---: | ---: |
+| 1 | 85,914 | 254 | 0 |
+| 2 | 87,519 | 362 | 0 |
+| 4 | 96,070 | 698 | 0 |
+| 6 | 130,719 | 1,099 | 0 |
+| 8 | 201,328 | 1,444 | 0 |
+| 10 | 226,634 | 1,976 | 0 |
+| 11 | 243,116 | 51,717 | 2,325 |
+| 12 | 257,555 | 54,164 | 2,895 |
+
+Radius 2 covers bilinear support plus the cheek's 1.52 texel-per-pixel minification
+(the lipline is magnified, 0.70 × 0.74). All 136,582 cheek and 70 lipline
+nonzero-alpha texels are at least 4 and 11 texels from their nearest edge, and every
+edge texel of both textures has alpha 0. From radius 11 the dilated lipline mask
+reaches its top edge row, and Clamp spreads that row over the rest of the target;
+the overlap at 11 and 12 is that artefact of the conservative dilation, not a real
+footprint. Original and native levels give the same footprints. So the relative
+order of the two layers cannot change any pixel for 402/1 × 404/1; no oracle
+establishes that order, and the native path refuses every combination that could
+expose it. The computation is `cheek_lipline_overlap.py` in the private evidence,
+with one report per radius.
+
+**Conversion.** The 64-entry store (manifest `23695599…`, five composite
+programs) is the accepted 63-entry cheek store plus one lipline level: all 397
+cheek-store files are byte-identical clones and the head contract regenerates
+byte-identical (`d2dd3f1b…`). Decoded lipline RGB matches the original bound-input
+readback (`652527f6…`) exactly; 26 alpha components differ by at most
+0.00048828125. No decoder or tolerance changed.
+
+**Native gates.** `liveSourceHeadZeroLiplineCompositeMatchesFourOriginalTargets`
+passes all four targets within one output byte (1,668 / 2,080 / 1,669 / 2,081
+one-byte channels for base and distinct at cheek 0 and 1), alpha 255. Fifteen
+recolours release their transient targets, 19 content keys stay distinct,
+reverting returns the retained targets, and a second owner allocates and releases
+its own. Retained inputs are five uploaded assets, one black default and three
+samplers; each target is 5,652,480 bytes. `liveSourceHeadZeroLiplineNoLayerControlMatchesOriginalTargets`
+passes both no-layer targets within one byte (1,668 / 2,080 channels) with no
+lipline input in the recipe, reproduces the 174-pixel footprint, finds no native
+difference between lipline and no-layer targets outside it, and checks that a
+lipline recolour without a layer is a new content key with identical bytes. The
+first run of that test expected four uploaded assets at cheek 1; the stage-0
+lipline comparison render had already uploaded the lipline, so only the
+expectation changed (to five). Only target level 0 has an independent original
+oracle; generated mips are diagnostics.
+
+**Cost.** One added input, an 80×36 RGBA32 level (11,520 bytes authored), and no
+new program. The face composite program already samples `_Texture5`, from the
+property's shared Unity default texture when no lipline is selected; ID1 binds the uploaded level
+there instead, so the pass, program, target and sampler counts do not change. The
+composite runs on recipe edits, never per frame. Comparative timings need a quiet
+window and are not claimed here.
+
+Private evidence is under `.local/rmat-gates-lipline/`: `source-audit/` (card
+audit, v3 audit rerun, source identity, overlap sweep, no-layer analysis,
+reproduction diff), `native-inputs/` (64-entry store, contract, bindings),
+`original-pair/original-{base,distinct,none}` (15 files each) and `vm-run-1/`
+(session record, settings and per-case manifests; base and distinct are kept as
+hash manifests only).
