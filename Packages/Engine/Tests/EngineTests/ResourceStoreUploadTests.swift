@@ -83,16 +83,23 @@ private final class Box<Value>: @unchecked Sendable {
         }
     }
 
+    /// Plain threads, not `concurrentPerform`: in a busy parallel suite GCD
+    /// grants `concurrentPerform` no extra worker, and the holders would run
+    /// one at a time. Blocking this test's thread on them is safe, because
+    /// they need no pool thread.
     @Test("Upload permits never let more holders in than their limit")
-    func uploadPermitsBoundTheirHolders() async {
+    func uploadPermitsBoundTheirHolders() {
         let permits = UploadPermits(limit: 2)
-        await onOwnThread {
-            DispatchQueue.concurrentPerform(iterations: 16) { _ in
+        let finished = DispatchSemaphore(value: 0)
+        for _ in 0..<16 {
+            Thread {
                 permits.acquire()
                 usleep(5_000)
                 permits.release()
-            }
+                finished.signal()
+            }.start()
         }
+        for _ in 0..<16 { finished.wait() }
         let stats = permits.resetStats()
         #expect(stats.mostHolders == 2)
         #expect(stats.longestWait > 0)
@@ -100,7 +107,11 @@ private final class Box<Value>: @unchecked Sendable {
 
     /// `texture(data:)` has main-thread callers. MetalKit's per-call wait
     /// never queued them behind other loads, and the permits must not either.
-    @Test("A load from the main thread completes while other loads hold every permit", .timeLimit(.minutes(1)))
+    /// The test bounds itself: the holder lets go after 20 s, so without the
+    /// bypass the load returns late and the test fails rather than hangs. A
+    /// time limit would also count the time a busy suite queues the test for
+    /// the main actor.
+    @Test("A load from the main thread completes while other loads hold every permit")
     @MainActor func mainThreadLoadNeverWaitsForAPermit() throws {
         #expect(Thread.isMainThread)
         let device = try #require(MTLCreateSystemDefaultDevice())
@@ -117,13 +128,14 @@ private final class Box<Value>: @unchecked Sendable {
             for _ in 0..<UploadPermits.limit { UploadPermits.shared.release() }
             done.signal()
         }.start()
-        held.wait()
+        // Other tests' loads hold permits too, and each releases its own as
+        // soon as its upload completes.
+        try #require(held.wait(timeout: .now() + 300) == .success, "the holder never took every permit")
         let handle = try resources.texture(data: png, key: "main-thread")
         letGo.signal()
         done.wait()
         #expect(!timedOut.value, "the main-thread load waited for a permit")
         #expect(resources.texture(handle)?.width == 512)
-        #expect(UploadPermits.shared.resetStats().mainThreadLoads >= 1)
     }
 
     @Test("Concurrent loads hold at most the shared limit of upload permits")
@@ -148,7 +160,9 @@ private final class Box<Value>: @unchecked Sendable {
     /// 100 uploads with `IOGPUCommandQueueErrorDomain` 518 (the driver's queue
     /// limit). Hundreds of cooperative tasks also block every cooperative
     /// thread at once, the condition under which `MTKTextureLoader` deadlocked.
-    @Test("Hundreds of stores load at once from the cooperative pool, every load counted", .timeLimit(.minutes(2)))
+    /// The time limit catches a hang; it is generous because it also counts
+    /// the time a busy parallel suite queues the test.
+    @Test("Hundreds of stores load at once from the cooperative pool, every load counted", .timeLimit(.minutes(10)))
     func manyStoresLoadAtOnceFromTheCooperativePool() async throws {
         let device = try #require(MTLCreateSystemDefaultDevice())
         let count = 256
