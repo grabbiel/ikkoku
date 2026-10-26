@@ -756,9 +756,16 @@ func everyConvertedMapLoadsItsBlockImagesByteForByte() async throws {
             #expect(try readBack(texture, format: listed.format, slices: faces, device: device, queue: queue) == data,
                     "map \(number) \(listed.file)")
         }
+        let started = Date()
         let asset = try await liveTickOffPool {
             try SourceStudioMapAsset.load(url: file, packageRoot: packageRoot, resources: resources, imageSource: .blocks)
         }
+        // The structural census of every converted map (maps.md, slice 4): the status line, the loaded
+        // parts by draw and the texture bytes, with this (fixture-run, unquiet) load time.
+        print("[map census] \(number) load \(Int(Date().timeIntervalSince(started) * 1000)) ms, \(asset.parts.count) parts "
+              + "(\(asset.lightmappedParts) lightmapped, \(asset.skyParts) sky, \(asset.particleParts) particle, \(asset.unlitParts) unlit, "
+              + "\(asset.silhouetteParts) silhouette, \(asset.optionParts) option), \(asset.blockImages) block images, "
+              + "\(asset.textureBytes) texture bytes · \(SourceStudioMapStatus.loaded(entry, asset: asset))")
         #expect(blocks == nil ? asset.blockImages == 0 : asset.blockImages > 0, "map \(number)")
         let blockOnly = gltf.images.indices.filter { gltf.images[$0].mimeType?.hasPrefix(SourceStudioMapAsset.blockOnlyMimePrefix) == true }
         for index in blockOnly {
