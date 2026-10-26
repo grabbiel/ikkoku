@@ -28,7 +28,7 @@ enum CameraPreset: String, CaseIterable, Identifiable {
 
 /// Character Maker state: one character, an orbit camera, and the card being edited.
 @MainActor @Observable
-final class MakerModel: ViewportInputHandler {
+final class MakerModel: ViewportInputHandler, LivePacedHandler {
     let host: EngineHost
     @ObservationIgnored let character: CharacterInstance
     var card: CharacterCard { didSet { character.card = card; refresh() } }
@@ -235,16 +235,79 @@ final class MakerModel: ViewportInputHandler {
         }
     }
 
-    /// Idle animation tick (blink + breathing). Cheap: only rebuilds the frame when something moves.
-    private func tick() { PerfTrace.measure(.makerTick, "MakerTick") { tickBody() } }
-
-    private func tickBody() {
+    /// The 30 Hz timer: the status line, and the live step when no display
+    /// link paces it. While the Maker viewport's display link paces the step
+    /// (`attachLivePacing`, R7 phase 2, live pacing), the link starts each
+    /// step through `displayStep`; the timer polls the status line and, when
+    /// there is something to step, resumes a link parked by an `.idle` answer.
+    private func tick() {
+        guard let livePacer else {
+            PerfTrace.measure(.makerTick, "MakerTick") {
+                let now = ProcessInfo.processInfo.systemUptime
+                pollStatus(now: now)
+                stepLive(now: now)
+            }
+            return
+        }
         let now = ProcessInfo.processInfo.systemUptime
-        let delta = Float(now - sourceLastTick); sourceLastTick = now
+        pollStatus(now: now)
+        if hasLiveStepWork {
+            livePacer.resumeLiveSteps()
+        } else {
+            // As the timer's tick did while nothing stepped: the first step
+            // after a pause advances by about one interval.
+            sourceLastTick = now
+        }
+    }
+
+    private func pollStatus(now: TimeInterval) {
         if isActiveMode, let text = renderStatus.status(current: status, error: host.renderer.lastFrameError,
                                                         statistics: host.renderer.lastFrameStatistics, now: now) {
             status = text
         }
+    }
+
+    // MARK: Live pacing (R7 phase 2)
+
+    /// The viewport whose display link starts the live step, if any. While
+    /// one is attached, the timer does not step; while its window is hidden
+    /// the link asks for no step, so none runs. Weak, so a viewport released
+    /// without detaching hands the step back to the timer.
+    @ObservationIgnored private weak var livePacer: (any LivePacingOwner)?
+    /// Steps the display link started (`.ran` answers), for the
+    /// `viewport-lifecycle` hand-over check.
+    @ObservationIgnored private(set) var pacedSteps = 0
+    /// Whether a display link starts the steps now.
+    var isLivePaced: Bool { livePacer != nil }
+
+    /// The Maker viewport's display link starts paced steps from now on
+    /// (`owner` identifies it); the timer stops stepping.
+    func attachLivePacing(_ owner: any LivePacingOwner) { livePacer = owner }
+
+    /// The viewport `owner` no longer paces the step; unless another one took
+    /// over, the timer steps again.
+    func detachLivePacing(_ owner: any LivePacingOwner) { if livePacer === owner { livePacer = nil } }
+
+    /// Whether a paced step has something to do: `displayStep` answers
+    /// `.idle` exactly when this is false.
+    private var hasLiveStepWork: Bool { liveAnimation && isActiveMode }
+
+    /// One step asked for by the display link of the viewport that paces it:
+    /// what the timer's tick did, minus the status line. The Maker's step is
+    /// synchronous, so it is never busy: `.ran`, or `.idle` when there is
+    /// nothing to step (the link then asks nothing until `tick` resumes it).
+    func displayStep() -> LiveStepPacer.Result {
+        guard livePacer != nil, hasLiveStepWork else { return .idle }
+        PerfTrace.measure(.makerTick, "MakerTick") { stepLive(now: ProcessInfo.processInfo.systemUptime) }
+        pacedSteps += 1
+        return .ran
+    }
+
+    /// Idle animation step (blink + breathing, the source idle clip and hair
+    /// dynamics). It advances by the time since the previous step. Cheap: it
+    /// rebuilds the frame only when something moves.
+    private func stepLive(now: TimeInterval) {
+        let delta = Float(now - sourceLastTick); sourceLastTick = now
         guard liveAnimation, isActiveMode else { return }
         if let preview = sourceRigPreview {
             do {
