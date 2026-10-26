@@ -150,6 +150,7 @@ class RewriteScriptTests(unittest.TestCase):
                    r'^function Mod\(\$name,\$sha\)\{\$m=@\(Get-ChildItem -LiteralPath "\$original\\mods" -Recurse -File .*$',
                    r'^\$src=Join-Path "\$original\\BepInEx\\plugins" \$e\[0\]$',
                    r'^foreach\(\$m in @\(Get-ChildItem -LiteralPath "\$original\\mods" -Recurse -File .*$',
+                   r'^if\(\$mf -match .*\)\{\$r\.collider\.list\.manifestInAbdata=\(Test-Path -LiteralPath "\$original\\abdata\\\$mf"\)\}$',
                    r'^foreach\(\$n in @\(.*\)\)\{\$cfg="\$original\\BepInEx\\config\\\$n"$',
                    r'^foreach\(\$f in @\(Get-ChildItem -LiteralPath "\$original\\UserData\\studio\\scene" -Recurse -File .*$',
                    r'^\[IO\.File\]::WriteAllText\("\$in\\survey\.txt","\$original\\UserData\\studio\\scene`n.*$')
@@ -187,19 +188,29 @@ class RewriteScriptTests(unittest.TestCase):
         self.assertIn("$c[6].Trim() -ceq 'Collider'", rewrite('C'))
         self.assertIn('OriginalPluginRewriteProbe.cs', rewrite('C'))
 
+    def test_phase_c_records_the_collider_row_read_only(self):
+        body = rewrite('C')
+        self.assertIn("$r.collider.list=[ordered]@{entry=$x.FullName;row=@($c|ForEach-Object{$_.Trim()})};$mf=$c[4].Trim()", body)
+        # The manifest name comes from a mod's list: it is only tested for existence, and only when it is a plain
+        # relative name without '..'.
+        self.assertEqual(re.findall(r'([\w-]+) -LiteralPath "\$original\\abdata\\\$mf"', body), ['Test-Path'])
+        self.assertIn("if($mf -match '^[A-Za-z0-9_][A-Za-z0-9_./-]*$' -and $mf -notmatch '\\.\\.')", body)
+        self.assertNotIn('manifestInAbdata', rewrite('D'))
+
 
 class RunCDTests(unittest.TestCase):
     def guest(self, record_inputs):
         return {'junctionTargetsChanged': False, 'removed': True, 'collider': {'zipmod': COLLIDER},
                 'sources': None, 'inputs': record_inputs}
 
-    def run_phase(self, tmp, phase):
+    def run_phase(self, tmp, phase, lone_collider=True):
         local = Path(tmp) / '.local'; phase_a = local / 'phase-a'; phase_c = local / 'phase-c'; inputs = local / 'inputs'
         for folder in (phase_a, phase_c, inputs): folder.mkdir(parents=True)
         (phase_a / 'run.json').write_text(json.dumps({'guest': {'zipmod': ZIPMOD}}))
         (phase_a / 'fixture.png').write_bytes(b'fixture-a')
         (phase_c / 'run.json').write_text(json.dumps({'zipmod': ZIPMOD, 'guest': {'collider': {'zipmod': COLLIDER}}}))
-        for name in ('fixture.png', 'card-link.png', 'edit-delete.png', 'edit-duplicate.png', 'fixture-lc.png'): (phase_c / name).write_bytes(name.encode())
+        for name in ('fixture.png', 'card-link.png', 'edit-delete.png', 'edit-duplicate.png') + (('fixture-lc.png',) if lone_collider else ()):
+            (phase_c / name).write_bytes(name.encode())
         for name in ('ours-delete.png', 'card-link-int32.png'): (inputs / name).write_bytes(name.encode())
         corpus = local / 'corpus.txt'; corpus.write_bytes(b'corpus')
         done = subprocess.CompletedProcess([], 0, stdout=json.dumps(self.guest({})), stderr='')
@@ -229,6 +240,11 @@ class RunCDTests(unittest.TestCase):
                                                                'fixture-lc.png', 'ours-delete.png', 'card-link-int32.png', 'corpus.txt', 'phase.txt']))
             self.assertEqual(record['collider'], COLLIDER)
             self.assertEqual(record['inputs']['phase.txt'], hashlib.sha256(b'D').hexdigest())
+
+    def test_phase_d_sends_no_collider_without_the_lone_collider_fixture(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            record, _ = self.run_phase(tmp, 'D', lone_collider=False)
+            self.assertIsNone(record['collider']); self.assertNotIn('fixture-lc.png', record['inputs'])
 
 
 if __name__ == '__main__':

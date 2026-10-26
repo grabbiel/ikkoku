@@ -53,6 +53,15 @@ func sourceScenePluginRewritesMatchCharaStudioEdits() throws {
         let flag = Data(#"enabled="true""#.utf8), changed = Data(#"enabled="tru_""#.utf8)
         var mutated = fixture; mutated.replaceSubrange(try #require(fixture.range(of: flag, options: .backwards)), with: changed)
         #expect(try pluginProbeComparable(mutated) != pluginProbeComparable(fixture))
+        // The live-state mask covers W's neck, eyes and animator time and
+        // nothing else: a changed byte inside them compares equal, the byte
+        // before the neck data's length (animeOptionParam[1]) does not.
+        let live = try #require(try liveStateSpans(fixture)[keys["W"]!])
+        var inside = fixture, before = fixture
+        inside[live[0].lowerBound] ^= 0xff; inside[live[2].lowerBound] ^= 0xff
+        before[live[0].lowerBound - 5] ^= 0xff
+        #expect(try pluginProbeComparable(inside) == pluginProbeComparable(fixture))
+        #expect(try pluginProbeComparable(before) != pluginProbeComparable(fixture))
         lines.append("\(fixtureName): \(kkex.entries.map(\.id).joined(separator: ", ")); resave is a fixed point")
         for label in labels {
             let saved = try load("edit-\(label).png")
@@ -63,8 +72,8 @@ func sourceScenePluginRewritesMatchCharaStudioEdits() throws {
                 let ours = try source.editedData(edits)
                 #expect(refusedEdits[label] == nil, "\(label): accepted, but expected a refusal")
                 let same = try pluginProbeComparable(ours) == pluginProbeComparable(saved)
-                #expect(same, "\(label): the file differs beyond KKPE's instance IDs")
-                lines.append("\(label): " + (ours == saved ? "byte-identical" : same ? "identical apart from KKPE's instance IDs (\(ours.count) and \(saved.count) B)" : "DIFFERS"))
+                #expect(same, "\(label): the file differs beyond KKPE's instance IDs and the characters' live state")
+                lines.append("\(label): " + (ours == saved ? "byte-identical" : same ? "identical apart from KKPE's instance IDs and live state (\(ours.count) and \(saved.count) B)" : "DIFFERS"))
             } catch let error as SourceSceneTopologyError {
                 let reason = error.errorDescription ?? ""
                 #expect(refusedEdits[label].map { reason.contains($0) } == true, "\(label): \(reason)")
@@ -241,10 +250,14 @@ private func leadingPNG(_ data: Data) throws -> Data {
 /// scene's KKPE `sceneInfo`, is renamed in order of first appearance across
 /// the file (cards first, as they come first), so a copy's fresh ID of any
 /// length compares equal while the equality pattern among IDs must match.
+/// Each character's live state, which `OCIChar.OnSavePreprocessing`
+/// (Studio/OCIChar.cs:586-600) reads from the running character at every
+/// save, is zeroed at the same length (`liveStateMasked`).
 func pluginProbeComparable(_ data: Data) throws -> [String] {
     let document = try KoikatsuSceneReader.decodeDocument(data)
     let trailer = document.trailingData
-    let scene = Data(data.dropFirst(try leadingPNG(data).count).dropLast(trailer.count))
+    let masked = try liveStateMasked(data)
+    let scene = Data(masked.dropFirst(try leadingPNG(data).count).dropLast(trailer.count))
     var cards: [Data] = []
     func visit(_ record: KoikatsuObjectRecord) {
         if let character = record.character { cards.append(character.cardData) }
@@ -271,6 +284,50 @@ func pluginProbeComparable(_ data: Data) throws -> [String] {
         }
     }
     return parts
+}
+
+/// The scene with each character's neck look data, eye angles and animator
+/// time zeroed in place. CharaStudio's save writes them from the running
+/// character (`neckLookCtrl.SaveNeckLookCtrl`, `eyeLookScript.SaveAngle`,
+/// the body animator's normalized time; OCIChar.cs:586-600), so they change
+/// between any two saves, a load-then-save included. They are the record's
+/// last fields before its accessory states (OICharInfo.cs:218-222): an Int32
+/// length and the neck bytes, an Int32 length and the eye bytes, then the
+/// Float time. The lengths stay.
+func liveStateMasked(_ data: Data) throws -> Data {
+    var bytes = [UInt8](data)
+    for spans in try liveStateSpans(data).values { for range in spans { for offset in range { bytes[offset] = 0 } } }
+    return Data(bytes)
+}
+
+/// Each character's neck bytes, eye bytes and animator time, by key.
+func liveStateSpans(_ data: Data) throws -> [Int32: [Range<Int>]] {
+    var reader = try KoikatsuBinaryReader(data)
+    try reader.skipPNG()
+    _ = try reader.string()
+    var characters: [Int32: KoikatsuCharacterRecord] = [:]
+    func index(_ object: KoikatsuObjectRecord) {
+        if let character = object.character {
+            characters[object.sourceKey] = character
+            for children in character.accessoryChildren.values { children.forEach(index) }
+        }
+        object.children.forEach(index)
+    }
+    for _ in 0..<(try reader.count()) {
+        let rootKey = try reader.int32()
+        index(try reader.object(depth: 0, rootKey: rootKey))
+    }
+    var result: [Int32: [Range<Int>]] = [:]
+    for (key, character) in characters {
+        let time = try #require(reader.editSpans.animations[key]?.normalizedTime, "no animator time span for character \(key)")
+        let eyes = (time.lowerBound - character.eyesData.count)..<time.lowerBound
+        let neck = (eyes.lowerBound - 4 - character.neckData.count)..<(eyes.lowerBound - 4)
+        try #require(neck.lowerBound >= 4 && time.upperBound <= data.count)
+        try #require(data[neck] == character.neckData && data[eyes] == character.eyesData,
+                     "character \(key)'s neck and eye bytes are not where its record says")
+        result[key] = [neck, eyes, time]
+    }
+    return result
 }
 
 /// A card's parts: its header fields, each block but KKEx by bytes, and its

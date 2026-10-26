@@ -331,7 +331,9 @@ $r.collider.scanned++;$z=$null
 try{$z=[IO.Compression.ZipFile]::OpenRead($m.FullName)
 foreach($x in $z.Entries){if($x.FullName.Replace('\','/').ToLowerInvariant() -notmatch '^abdata/studio/info/(.+/)?itemlist_[^/]*\.csv$'){continue}
 $sr=New-Object IO.StreamReader($x.Open());$text=$sr.ReadToEnd();$sr.Close()
-foreach($line in ($text -split "`r?`n")){$c=$line.Split(',');if($c.Count -ge 7 -and $c[0].Trim() -match '^\d+$' -and $c[6].Trim() -ceq 'Collider'){$pick=$m;break}}
+foreach($line in ($text -split "`r?`n")){$c=$line.Split(',');if($c.Count -ge 7 -and $c[0].Trim() -match '^\d+$' -and $c[6].Trim() -ceq 'Collider'){$pick=$m
+$r.collider.list=[ordered]@{entry=$x.FullName;row=@($c|ForEach-Object{$_.Trim()})};$mf=$c[4].Trim()
+if($mf -match '^[A-Za-z0-9_][A-Za-z0-9_./-]*$' -and $mf -notmatch '\.\.'){$r.collider.list.manifestInAbdata=(Test-Path -LiteralPath "$original\abdata\$mf")};break}}
 if($pick){break}}
 }catch{$r.collider.errors++}finally{if($z){$z.Dispose()}}
 if($pick){break}}
@@ -453,7 +455,8 @@ def run_d(vm, output, errno_baseline, phase_c, inputs, corpus, host_address='10.
           survey_seconds=900, survey_file_bytes=512 * 1024 * 1024):
     """Phase D: phase C's scenes, our exports and the card-link variant in; per-object plug-in state and survey 3 out."""
     run = json.loads((phase_c / 'run.json').read_text())
-    collider = ((run.get('guest') or {}).get('collider') or {}).get('zipmod')
+    # The collider zipmod only when phase C saved the lone-collider fixture.
+    collider = ((run.get('guest') or {}).get('collider') or {}).get('zipmod') if (phase_c / 'fixture-lc.png').is_file() else None
     names = ['fixture.png', 'card-link.png'] + sorted(p.name for p in phase_c.glob('edit-*.png'))
     if (phase_c / 'fixture-lc.png').is_file(): names.append('fixture-lc.png')
     files = {name: (phase_c / name).read_bytes() for name in names}

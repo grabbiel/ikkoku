@@ -588,6 +588,68 @@ The plug-ins are the installed DLLs of the [installed inventory](../mods/plugin-
   - StudioCharaLightLinkedToCamera (`26c4d1e6…`, KK_StudioCharaLightLinkedToCamera/Patches.cs:90–92). It writes and accepts only version 3 (:129, :136).
 - **Orphan IDs.** `KKVMDPlayExtSave`, `rendererEditor`, `com.rskoi.particleeditor`, `vnge_kfa` and `vnge_sss` occur in installed scenes. None of the 243 installed DLLs contains any of them as ASCII/UTF-8 or UTF-16LE, and no script host is installed. The scan is `.local/stt03i-plugin-data/inventory/orphan-scan.json` (coverage index SHA-256 `e146e45a…`, corpus digest `d81258cc…`). Nothing in this install reads or writes these entries, so CharaStudio's save carries them verbatim through any edit. **Parity holds for this pinned install only.** Once a plug-in that owns one is installed, its data may name objects the export changed.
 
+### Plug-in data rewrites
+
+Reviewed 2026-10-26 (ST-T03i, second change). `SourceScenePluginRewrites` (`Packages/Engine/Sources/Studio/SourceScenePluginRewrites.swift`) rewrites the KKPE, MaterialEditor and NodesConstraints entries after a delete or a copy, as CharaStudio's save writes them after the same interactive edit.
+
+- **How the plans work.** Each plan reads its entry strictly. A form or an edit its rule does not cover refuses the export, naming the plug-in. Bytes the rewrite does not change are kept.
+- **XML form.** KKPE and NodesConstraints each store one XML string, written by .NET's `XmlTextWriter` with default settings: elements and double-quoted attributes only, and ` />` for an empty element.
+  - The writer reads exactly that form. Text, comments, declarations and repeated attributes refuse.
+  - An integer attribute must read as `XmlConvert.ToString(int)` writes it.
+  - A rewritten element keeps its own bytes. Only the attribute values that change are patched, and a removed child is left out.
+
+- **KKPE 2.21.4** (`72d1b7b5…`, `kkpe`).
+  - **What it saves.** `OnSceneSave` (HSPE/MainWindow.cs:1585–1608) writes `sceneInfo`: a `<root version=…>` with one `itemInfo` per item in key order. Each carries `index` (the key) and its controller's state, with `uniqueId` set to the controller's instance ID (PoseController.cs:409).
+  - **Load.** `LoadSceneGeneric` (:1554–1583) loads the i-th `itemInfo` onto the i-th item and ignores `index`.
+  - **Characters.** A character's pose data is not scene data. It is the `characterInfo` of its card's `kkpe` entry (`OnCharaSave`, :1484–1504).
+  - **References.** A lone collider is an item named "Collider" (HSPE.AMModules/CollidersEditor.cs:561–575). It names the dynamic bones it acts on by their controller's ID, `poseControllerId` (:1037, :1048). The load matches those IDs by equality (:1128–1185).
+  - **After a delete**, CharaStudio writes no element for a deleted item, and no reference to a deleted controller. A lone collider drops those references in `Update` (:615–657).
+  - **After a copy**, the copy gets its template's element under its own key and a new instance ID (`OnDuplicate`, MainWindow.cs:1274, through `LoadFrom`). References are not remapped: `ColliderDataBase`'s copy keeps the template's (CollidersEditor.cs:274–291). A copied character's card gets its template's `characterInfo` under the copy's new controller ID.
+  - **Writer.**
+    - The kept items' elements stay in key order. Each copy gets its template's element with the copy's `index` and a fresh `uniqueId`. References to deleted controllers are dropped.
+    - **Copied characters.** A copied character's card gets a fresh ID, patched in place. The ID has the template's number of digits and sign, so the card keeps its length. It is not 0, and no `uniqueId` or `poseControllerId` in the scene or its cards uses it.
+    - The writer reads each patched card back.
+    - A card is patched only when the scene has a `kkpe` entry and the card has KKPE data. Any other card stays byte-identical.
+  - **Instance IDs** are new in every session, so this writer's IDs are deterministic. Comparisons with CharaStudio rename IDs in order of first appearance, as for phase B.
+  - **Refused:**
+    - an added item: CharaStudio writes a default element for it, which this writer does not;
+    - a copy of an object a lone collider names. Every controller with dynamic bones registers them with each lone collider (DynamicBonesEditor.cs:1799, BoobsEditor.cs:401), so CharaStudio adds entries for the copy;
+    - a delete together with an item copy: the copies' keys can differ from CharaStudio's ([#278](https://github.com/grabbiel/ikkoku/issues/278));
+    - a dropped reference whose controller ID more than one object has;
+    - a copied character whose KKPE data is in a legacy ExtendedSave trailer rather than the card's current block;
+    - an `itemInfo` count that is not the item count, an `index` that is not the item at that position, or an element without a `uniqueId`.
+- **MaterialEditor 4.0.2** (`dde57f4f…`, `com.deathweasel.bepinex.materialeditor`), data version 1.
+  - **What it saves.** Nine record lists and `TextureDictionary`, each nil or MessagePack bytes (KK_Plugins.MaterialEditor/SceneController.cs:20–330). A record's `ID` is an item's key.
+  - **Load.** It binds records to items only (`ExtractGameObject`, :501–508), so a record that names no item loads nowhere.
+  - **After a delete**, the item's records are gone (`OnObjectDeleted`, :1041–1062).
+  - **After a copy**, each list gains its template's records with the copy's key, after the existing ones, copy by copy (`OnObjectsCopied`, :725–855).
+  - **Save** (:378–466) purges textures that no `TexID` or animation frame uses (`PurgeUnusedTextures`, :469–500), and writes nil for an empty list or dictionary.
+  - **Writer.**
+    - Each list gets the records of kept items in order, then each copy's clones of its template's records. The `ID` is written in MessagePack-CSharp's shortest form, and every other byte of a record is kept.
+    - Records that name no item are dropped once a list is rewritten. They are also dropped when a copy's new key could be theirs.
+    - Unused textures are purged.
+  - **Textures.** Only the Bundled form is read: an int-to-bytes map (`SaveBundled`, KK_Plugins.MaterialEditor/TextureSaveHandler.cs:80–88). KKAPI picks the form from `Local Textures/Scene Save Type`, Bundled by default (KKAPI `7f4f50e1…`, KKAPI.Studio/SceneLocalTextures.cs:52–60, :89). The installed `marco.kkapi.cfg` sets Bundled (read in phase C). A Deduped or Local key refuses.
+  - **Refused:**
+    - version 0 data that needs a rewrite (CharaStudio writes version 1);
+    - a delete together with a copy of an item that has records (#278);
+    - a purge when Timeline data has texture tracks;
+    - a record key the writer does not know.
+- **NodesConstraints 1.6.2.1** (`817fd940…`, `nodesConstraints`).
+  - **What it saves.** `OnSceneSave` (NodesConstraints/NodesConstraints.cs:2393–2490) writes one empty `constraint` per entry of `_constraints`. Each has:
+    - `parentObjectIndex` (−2 for the main camera) and `childObjectIndex`, the ends' indices in the key-sorted `dicObjectCtrl`;
+    - `uniqueLoadId`, its position.
+  - **Load.** `LoadSceneGeneric` (:2141–2258) reads them back by index.
+  - **After a delete**, a constraint with a deleted end is removed (`ApplyConstraints` → `RemoveConstraintAt`, :1166–1205, :1951–1984). The others are written with their objects' new indices and their new positions.
+  - **After a copy**, `Studio_Duplicate_Patches` (:649–734) gives a constraint whose two ends are both copied a copy of its own. It walks `_constraints` in order and throws at the first camera-parented constraint. `AddConstraint` (:1874) skips a pair already present in either direction.
+  - **Writer.** The kept constraints, in order, with their ends' new indices and their new positions.
+  - **Refused:**
+    - a copy of both ends of a constraint before the first camera-parented one: this writer does not write constraint copies;
+    - a delete together with a copy while any constraint is kept (#278);
+    - removed or renumbered constraints when Timeline data mentions NodesConstraints, whose tracks address constraints by number;
+    - two constraints between the same transforms;
+    - an index the scene does not have.
+- **Verification.** The rewritten entries are parsed again. KKPE's items must be in key order, with the planned `index` and `uniqueId` and the planned references left out. MaterialEditor's lists must decode to the planned records and its textures to the kept ones. NodesConstraints' constraints must carry the planned indices and positions.
+
 ### Writer behavior
 
 - **When.** The rules run on the final written document: its records, their keys, kinds and parents, and each copy's template. A rule that depends on positions therefore sees exactly what CharaStudio would load. An export that only moves records or edits leaves keeps every entry, as before.
@@ -599,9 +661,9 @@ The plug-ins are the installed DLLs of the [installed inventory](../mods/plugin-
   | An orphan ID | Kept verbatim. |
   | Scene-global | Kept, for the recovered versions. |
   | Sideloader | Rewritten in CharaStudio's order: kept records with their order recomputed, each copy's records cloned from its template's with the copy's key and order, deleted records dropped. Scene-level keys are kept. An empty result removes the entry. A record for an object the scene does not have, for one of the wrong kind, or a second record for the same object refuses. |
-  | KKPE | Kept when the written items are the source items. Otherwise refused: its rewrite is a later change. |
-  | MaterialEditor | Kept when every list is nil, or the items are unchanged. Otherwise refused. |
-  | NodesConstraints | The empty `<constraints …/>` form is kept. A non-empty one is kept when every existing object keeps its index in the key-sorted object list and nothing is copied. Otherwise it is refused. |
+  | KKPE | Kept when no item is deleted, copied or added and no character is deleted or copied. Otherwise [rewritten](#plug-in-data-rewrites), and a copied character's card gets a fresh controller ID. |
+  | MaterialEditor | Kept when every list is nil, or no item with records is deleted or copied. Otherwise [rewritten](#plug-in-data-rewrites). |
+  | NodesConstraints | The empty `<constraints …/>` form is kept. A non-empty one is kept when every existing object keeps its index in the key-sorted object list and nothing is copied. Otherwise it is [rewritten](#plug-in-data-rewrites). |
   | Timeline | Kept when no interpolable has an `objectIndex`, or when positions hold as for NodesConstraints. |
   | KK_AnimationController | `[0, {}]` and an empty `AnimationInfo` list are kept. Links are refused when the edit deletes or copies objects. |
   | Lists keyed by object | Kept unless the edit deletes an object the data names, or copies one when the plug-in writes data for copies. LightSettings also refuses any added or copied light, because it writes a record per live light. SaveCameraObjectFov refuses a camera add, copy or delete when a camera index is not 0. An unknown field or an undecodable value refuses. |

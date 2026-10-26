@@ -24,6 +24,8 @@
 //               run.ps1 copies in from the install's mods when one exists): fixture.png plus that item LC, saved,
 //               loaded and saved as fixture-lc.png, then lc-delete-character (W), lc-delete-collider (LC),
 //               lc-duplicate-collider (LC) and lc-duplicate-character (W, refused by our writer: LC names W).
+//               Optional: a failure is recorded in the trace's collider case, its partial files are removed, and
+//               the steps after it run.
 //   card-link   phase A's fixture plus female W2 whose card holds KK_AnimationController data (Links: one IK target
 //               name -> M3's key, Eyes: M1's key, Pad: 40 characters), saved as card-link.png. ExtendedSave
 //               writes the keys as MessagePack fixints, which NodesConstraints' card fallback cannot cast to int;
@@ -105,9 +107,18 @@ public sealed class OriginalPluginRewriteProbe:BaseUnityPlugin {
         }
         foreach(var step in steps) {
             if(error!=null)break;
-            IEnumerator run=null;
-            try{run=step.Value();}catch(Exception e){error=step.Key+": "+e;}
-            while(error==null){bool more=false;object current=null;try{more=run.MoveNext();if(more)current=run.Current;}catch(Exception e){error=step.Key+": "+e;}if(error!=null||!more)break;yield return current;}
+            IEnumerator run=null;string failure=null;
+            try{run=step.Value();}catch(Exception e){failure=step.Key+": "+e;}
+            while(failure==null){bool more=false;object current=null;try{more=run.MoveNext();if(more)current=run.Current;}catch(Exception e){failure=step.Key+": "+e;}if(failure!=null||!more)break;yield return current;}
+            if(failure==null)continue;
+            // The lone-collider case is optional: its failure is recorded, its partial files and key are dropped (so no
+            // reader sees half a case), and the remaining steps run.
+            if(step.Key!="collider"){error=failure;continue;}
+            var removed=new List<string>();
+            foreach(var pattern in new[]{"fixture-lc*.png","edit-lc-*.png","resave-fixture-lc*.png"})
+                foreach(var path in Directory.GetFiles(folder,pattern)){File.Delete(path);removed.Add(Path.GetFileName(path));}
+            keys.Remove("LC");
+            cases["collider"]=K("available",true,"item",colliderItem,"error",failure,"removed",removed);
         }
         try{File.WriteAllText(Path.Combine(folder,"plugin-scene-trace.json"),J(K("schemaVersion",1,"phase",phase,"plugins",plugins,"keys",keys,"colliderItem",colliderItem,"cases",cases)));}
         catch(Exception e){if(error==null)error="trace write: "+e;}

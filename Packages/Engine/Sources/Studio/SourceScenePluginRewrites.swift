@@ -247,7 +247,7 @@ extension SourceScenePluginData {
 /// reference to a deleted controller (lone colliders drop them in `Update`,
 /// :615-657; other colliders skip a destroyed bone at save). A copied item
 /// gets its template's element (`Studio_Duplicate_Patches` → `OnDuplicate`
-/// → `LoadFrom`; references are not remapped, ColliderDataBase :274-291)
+/// → `LoadFrom`; references are not remapped, CollidersEditor.cs:274-291)
 /// under its own key and controller ID; a copied character's card gets its
 /// template's `characterInfo` under the copy's controller ID. Every
 /// controller with dynamic bones registers them with each lone collider
@@ -580,7 +580,7 @@ extension SourceScenePluginData {
 /// animation frame uses (`PurgeUnusedTextures`, :469-500), except those
 /// Timeline uses, and writes nil for an empty list or dictionary. The
 /// Bundled texture form (KKAPI `Scene Save Type`, default Bundled) is an
-/// `int → bytes` map (TextureSaveHandler.cs:80-93); Deduped and Local keys
+/// `int → bytes` map (MaterialEditor TextureSaveHandler.cs:80-88); Deduped and Local keys
 /// are not read here.
 struct MaterialEditorPlan {
     typealias Failure = SourceScenePluginData.RuleFailure
