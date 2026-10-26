@@ -77,6 +77,8 @@ class FetchScriptTests(unittest.TestCase):
         self.assertEqual(probe.powershell_rows([]), '@()')
         self.assertEqual(probe.powershell_rows([('a', 'b')]), "@(,@('a','b'))")
         self.assertEqual(probe.powershell_rows([('a', 'b'), ('c', 'd')]), "@(@('a','b'),@('c','d'))")
+        with self.assertRaises(ValueError):
+            probe.powershell_rows([('a', "b'c")])
 
     def test_the_listing_comes_first_and_any_bound_stops_every_copy(self):
         script = probe.fetch_script(FETCH_ROOT, 'http://h/t/', [], ['abdata/map/scene/*.unity3d'],

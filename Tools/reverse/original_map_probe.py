@@ -123,7 +123,11 @@ def checked_found(path, directory, pattern, recursive):
 
 def powershell_rows(rows):
     """An array of string arrays in PowerShell. `@(@('a','b'))` flattens to the inner array, so a
-    single row needs the unary comma: `@(,@('a','b'))`."""
+    single row needs the unary comma: `@(,@('a','b'))`. Values are quoted verbatim, so a single
+    quote is refused."""
+    for row in rows:
+        for value in row:
+            if "'" in value: raise ValueError('A PowerShell row value contains a single quote')
     items = ["@(" + ",".join("'" + value + "'" for value in row) + ")" for row in rows]
     return "@(" + ("," + items[0] if len(items) == 1 else ",".join(items)) + ")"
 
