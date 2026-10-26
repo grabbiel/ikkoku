@@ -4,6 +4,7 @@ import CoreMath
 import Assets
 import Scene
 import Renderer
+import ShaderTypes
 import Character
 
 // ST-A11 / ST-B03 / ST-T04: the original map a CharaStudio scene names, drawn
@@ -117,14 +118,23 @@ public enum SourceStudioMapStatus {
         }
     }
 
-    /// The line once a converted map is drawn.
+    /// What the particle draws leave out of Particles/Alpha Blended (slice 3).
+    public static let particlesLabel = "particles (no soft-particle fade or per-renderer sorting)"
+
+    /// The line once a converted map is drawn. The lightmap count is over the
+    /// Standard parts; the sky and particles, drawn by their own formulas, are
+    /// named after it.
     public static func loaded(_ entry: SourceStudioMapCatalog.Entry, asset: SourceStudioMapAsset) -> String {
+        let standard = asset.parts.count - asset.skyParts - asset.particleParts
+        var drawn = ""
+        if asset.skyParts > 0 { drawn += ", cubemap sky" }
+        if asset.particleParts > 0 { drawn += ", \(particlesLabel)" }
         let label: String
         switch asset.lightmappedParts {
-        case 0: label = approximationLabel
-        case asset.parts.count: label = lightmappedLabel
+        case 0: label = approximationLabel + drawn.replacingOccurrences(of: ", ", with: "; ")
+        case standard: label = lightmappedLabel.replacingOccurrences(of: "baked lightmaps;", with: "baked lightmaps\(drawn);")
         default: label = lightmappedLabel.replacingOccurrences(of: "baked lightmaps;",
-            with: "baked lightmaps on \(asset.lightmappedParts) of \(asset.parts.count) draws (the rest as items);")
+            with: "baked lightmaps on \(asset.lightmappedParts) of \(standard) draws (the rest as items)\(drawn);")
         }
         var line = "\(title(entry)): \(label)"
         if let shaders = entry.approximations?.first(where: { $0.hasPrefix("shaders approximated") }) { line += "; \(shaders)" }
@@ -171,6 +181,39 @@ public enum SourceStudioMapPlacement {
 public final class SourceStudioMapAsset: @unchecked Sendable {
     public enum Role: String, Sendable { case mapRoot, scene }
 
+    /// How a part is drawn.
+    public enum Draw: String, Sendable {
+        /// The item toon material (slice 1; unlightmapped Standard parts).
+        case item
+        /// Standard with its baked lightmap (`MaterialKindMap`, slice 2).
+        case lightmapped
+        /// Particles/Alpha Blended (`MaterialKindMap` + `MaterialFlagMapParticle`, slice 3).
+        case particle
+        /// Skybox/Cubemap (`MaterialKindSky`, slice 3).
+        case sky
+
+        /// The draw a map part's material makes (for counting placed items).
+        public init(_ material: MaterialState) {
+            if material.kind == MaterialKindSky { self = .sky }
+            else if material.kind == MaterialKindMap {
+                self = material.uniforms.flags & MaterialFlagMapParticle.rawValue != 0 ? .particle : .lightmapped
+            } else { self = .item }
+        }
+    }
+
+    /// Where the map's 2D images come from (read once per load).
+    public enum ImageSource: String, Sendable {
+        /// The converter's BC blocks where listed, the PNG otherwise (the default).
+        case blocks
+        /// Every image decoded from its PNG to RGBA8 with generated mips (the
+        /// slice-2 path): the measurement switch `IKKOKU_SOURCE_MAP_DECODED_TEXTURES=1`.
+        case decoded
+
+        public static func fromEnvironment(_ environment: [String: String] = ProcessInfo.processInfo.environment) -> ImageSource {
+            environment["IKKOKU_SOURCE_MAP_DECODED_TEXTURES"] == "1" ? .decoded : .blocks
+        }
+    }
+
     public struct Part: Sendable {
         public let mesh: MeshHandle
         public let material: MaterialState
@@ -181,6 +224,7 @@ public final class SourceStudioMapAsset: @unchecked Sendable {
         /// The sun-type keys this geometry is active for (see `sunTypeKey`).
         public let visibleFor: Set<Int32>
         public let triangles: Int
+        public let draw: Draw
     }
 
     public let url: URL
@@ -194,8 +238,18 @@ public final class SourceStudioMapAsset: @unchecked Sendable {
     public let lightmapBytes: Int
     public let lightmapTextures: Int
     /// Parts drawn with their baked lightmap (`MaterialKindMap`); the others
-    /// keep the item toon material.
+    /// keep the item toon material, or are particles or sky.
     public let lightmappedParts: Int
+    /// Particles/Alpha Blended parts and Skybox/Cubemap parts (slice 3).
+    public let particleParts: Int
+    public let skyParts: Int
+    /// The cubes' share of `textureBytes`, and how many there are.
+    public let cubeBytes: Int
+    public let cubeTextures: Int
+    /// Images uploaded as their converter's BC blocks, and from their PNGs.
+    public let blockImages: Int
+    public let decodedImages: Int
+    public let imageSource: ImageSource
     public let triangles: Int
     /// Wall time of `load` on its worker.
     public let loadSeconds: Double
@@ -204,18 +258,26 @@ public final class SourceStudioMapAsset: @unchecked Sendable {
     private var released = false
 
     private init(url: URL, parts: [Part], textures: [TextureHandle], textureBytes: Int, lightmapBytes: Int, lightmapTextures: Int,
-                 lightmappedParts: Int, loadSeconds: Double, resources: ResourceStore) {
+                 cubeBytes: Int, cubeTextures: Int, blockImages: Int, decodedImages: Int, imageSource: ImageSource,
+                 loadSeconds: Double, resources: ResourceStore) {
         self.url = url; self.parts = parts; self.textures = textures; self.textureBytes = textureBytes
-        self.lightmapBytes = lightmapBytes; self.lightmapTextures = lightmapTextures; self.lightmappedParts = lightmappedParts
+        self.lightmapBytes = lightmapBytes; self.lightmapTextures = lightmapTextures
+        self.lightmappedParts = parts.filter { $0.draw == .lightmapped }.count
+        self.particleParts = parts.filter { $0.draw == .particle }.count
+        self.skyParts = parts.filter { $0.draw == .sky }.count
+        self.cubeBytes = cubeBytes; self.cubeTextures = cubeTextures
+        self.blockImages = blockImages; self.decodedImages = decodedImages; self.imageSource = imageSource
         self.triangles = parts.reduce(0) { $0 + $1.triangles }
         self.loadSeconds = loadSeconds; self.resources = resources
     }
 
     /// Reads, validates and registers a converted map. Blocking: file reads,
-    /// PNG decodes and MetalKit texture loads. Run it on a GCD worker, never
-    /// on the main thread or the Swift concurrency pool. A failure releases
-    /// everything it registered.
-    public static func load(url: URL, packageRoot: URL, resources: ResourceStore) throws -> SourceStudioMapAsset {
+    /// SHA-256 checks, BC uploads, PNG decodes and MetalKit texture loads. Run
+    /// it on a GCD worker, never on the main thread or the Swift concurrency
+    /// pool. A failure releases everything it registered. `imageSource` is
+    /// read once here (default: the environment's measurement switch).
+    public static func load(url: URL, packageRoot: URL, resources: ResourceStore,
+                            imageSource: ImageSource = .fromEnvironment()) throws -> SourceStudioMapAsset {
         let start = DispatchTime.now().uptimeNanoseconds
         let loaded = try LoadedAsset.loadStatic(url: url, packageRoot: packageRoot, resources: resources)
         // Registration order, so a failure gives back everything at once.
@@ -223,23 +285,48 @@ public final class SourceStudioMapAsset: @unchecked Sendable {
         var images: [String: TextureHandle] = [:]
         var lightmapHandles: [Int: (light: TextureHandle, direction: TextureHandle?)] = [:]
         var lightmapHandleList: [TextureHandle] = []
+        var cubeHandles: [Int: TextureHandle] = [:]
+        var blockImageCount = 0, decodedImageCount = 0
         do {
             let gltf = loaded.asset
             // ST-A11 slice 2: nil for an export without lightmaps (every part
             // then keeps the item material).
             let lightmaps = try SourceStudioLightmapSet.parse(gltf.extras, label: url.lastPathComponent)
+            // Slice 3: nil for an export without block files.
+            let blocks = try SourceStudioBlockImages.parse(gltf.extras, label: url.lastPathComponent)
             let directory = url.deletingLastPathComponent()
             /// Private (uncached) registration of one glTF image: the asset owns it.
+            /// Its BC blocks when the converter wrote them (sampled as `srgb`
+            /// asks, like the PNG), else the PNG decoded by MetalKit.
             func image(_ index: Int, srgb: Bool, material: String) throws -> TextureHandle {
                 let key = "\(index)#\(srgb)"
                 if let handle = images[key] { return handle }
                 guard gltf.images.indices.contains(index), !gltf.images[index].data.isEmpty else {
                     throw RigError.invalid("\(url.lastPathComponent): material \(material) names a missing image.")
                 }
-                let handle = try resources.texture(data: gltf.images[index].data,
-                    key: "\(url.path)#map-img\(index)", srgb: srgb, cacheNew: false)
+                let handle: TextureHandle
+                if imageSource == .blocks, let file = blocks?.images[index] {
+                    handle = resources.register(texture: try SourceStudioBlockTexture.upload(file, directory: directory,
+                        device: resources.device, srgb: srgb, what: "Map image"))
+                    blockImageCount += 1
+                } else {
+                    handle = try resources.texture(data: gltf.images[index].data,
+                        key: "\(url.path)#map-img\(index)", srgb: srgb, cacheNew: false)
+                    decodedImageCount += 1
+                }
                 registered.append(handle)
                 images[key] = handle
+                return handle
+            }
+            func cube(_ index: Int, material: String) throws -> TextureHandle {
+                if let handle = cubeHandles[index] { return handle }
+                guard let file = blocks?.cubes[index] else {
+                    throw RigError.invalid("\(url.lastPathComponent): sky material \(material) names cube \(index), which the map does not carry.")
+                }
+                let handle = resources.register(texture: try SourceStudioBlockTexture.upload(file, directory: directory,
+                    device: resources.device, faces: 6, what: "Map sky cube"))
+                registered.append(handle)
+                cubeHandles[index] = handle
                 return handle
             }
             func lightmap(_ entry: SourceStudioLightmapSet.Entry) throws -> (light: TextureHandle, direction: TextureHandle?) {
@@ -257,7 +344,6 @@ public final class SourceStudioMapAsset: @unchecked Sendable {
                 lightmapHandles[entry.index] = (light, direction)
                 return (light, direction)
             }
-            var lightmapped = 0
             guard let mapNode = gltf.nodes.firstIndex(where: { $0.name == "Map" && $0.parent == nil }),
                   gltf.nodes[mapNode].extras?["ikkokuMapRole"]?.stringValue == Role.mapRoot.rawValue else {
                 throw RigError.invalid("\(url.lastPathComponent) is not a converted map: no root node \"Map\" with role mapRoot.")
@@ -289,10 +375,28 @@ public final class SourceStudioMapAsset: @unchecked Sendable {
                     }
                     visible.insert(number)
                 }
-                let base = try part.material.baseColorImage.map { try image($0, srgb: true, material: part.materialName) }
                 let mesh = resources.mesh(part.mesh)
                 let indexCount = mesh?.indexCount ?? 0
+                if let sky = try SourceStudioSkyInputs.parse(part.material.extras) {
+                    guard info["sky"]?.boolValue == true else {
+                        throw RigError.invalid("\(url.lastPathComponent): mesh \(part.meshName) has a sky material but is not a sky mesh.")
+                    }
+                    let material = SourceStudioSkyMaterial.make(sky, cube: try cube(sky.cube, material: part.materialName))
+                    parts.append(Part(mesh: part.mesh, material: material, local: part.worldMatrix, role: role, visibleFor: visible,
+                                      triangles: indexCount / 3, draw: .sky))
+                    continue
+                }
+                guard info["sky"]?.boolValue != true else {
+                    throw RigError.invalid("\(url.lastPathComponent): sky mesh \(part.meshName) has no Skybox/Cubemap material.")
+                }
+                let base = try part.material.baseColorImage.map { try image($0, srgb: true, material: part.materialName) }
+                if let particle = try SourceStudioParticleInputs.parse(part.material.extras) {
+                    parts.append(Part(mesh: part.mesh, material: particle.material(base: base), local: part.worldMatrix, role: role,
+                                      visibleFor: visible, triangles: indexCount / 3, draw: .particle))
+                    continue
+                }
                 var material = MaterialBuilder.itemMaterial(for: part, base: base)
+                var draw = Draw.item
                 let lightmapIndex = info["lightmapIndex"]?.doubleValue.flatMap { Int(exactly: $0) } ?? -1
                 if let lightmaps, lightmapIndex >= 0,
                    let standard = try SourceStudioStandardInputs.parse(part.material.extras) {
@@ -307,16 +411,19 @@ public final class SourceStudioMapAsset: @unchecked Sendable {
                     material = SourceStudioMapMaterial.make(part.material, standard: standard, base: base, emission: emission,
                                                             lightmap: handles.light, direction: handles.direction,
                                                             range: lightmaps.range, exponent: lightmaps.exponent)
-                    lightmapped += 1
+                    draw = .lightmapped
                 }
                 parts.append(Part(mesh: part.mesh, material: material,
-                                  local: part.worldMatrix, role: role, visibleFor: visible, triangles: indexCount / 3))
+                                  local: part.worldMatrix, role: role, visibleFor: visible, triangles: indexCount / 3, draw: draw))
             }
             func bytes(_ handles: [TextureHandle]) -> Int { handles.reduce(0) { $0 + (resources.texture($1)?.allocatedSize ?? 0) } }
             let seconds = Double(DispatchTime.now().uptimeNanoseconds - start) / 1e9
+            let cubes = Array(cubeHandles.values)
             return SourceStudioMapAsset(url: loaded.url, parts: parts, textures: registered, textureBytes: bytes(registered),
                                         lightmapBytes: bytes(lightmapHandleList), lightmapTextures: lightmapHandleList.count,
-                                        lightmappedParts: lightmapped, loadSeconds: seconds, resources: resources)
+                                        cubeBytes: bytes(cubes), cubeTextures: cubes.count, blockImages: blockImageCount,
+                                        decodedImages: decodedImageCount, imageSource: imageSource,
+                                        loadSeconds: seconds, resources: resources)
         } catch {
             for part in loaded.parts { resources.unregister(mesh: part.mesh) }
             for handle in registered { resources.unregister(texture: handle) }
@@ -338,7 +445,8 @@ public final class SourceStudioMapAsset: @unchecked Sendable {
                                   model: part.role == .mapRoot ? root * part.local : part.local, objectID: 0)
             item.castsShadow = false
             item.outline = false
-            item.pickOccluder = true
+            // The sky is drawn in its own group behind everything and never picked.
+            item.pickOccluder = part.draw != .sky
             item.order = 100
             return item
         }

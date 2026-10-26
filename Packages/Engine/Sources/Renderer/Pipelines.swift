@@ -22,6 +22,8 @@ final class Pipelines: @unchecked Sendable {
     /// ST-A11 source map surfaces (`MaterialKindMap`): the Standard baked-lightmap subset.
     let map: any MTLRenderPipelineState
     let mapBlend: any MTLRenderPipelineState
+    /// ST-A11 map sky (`MaterialKindSky`): Skybox/Cubemap on a mesh, no blending.
+    let sky: any MTLRenderPipelineState
     let outline: any MTLRenderPipelineState
     let shadow: any MTLRenderPipelineState
     let background: any MTLRenderPipelineState
@@ -64,6 +66,7 @@ final class Pipelines: @unchecked Sendable {
         eyeBlend = try render("EyeBlend", "toon_vertex", "eye_fragment", color: hdr, depth: dep, samples: ms, blend: .alpha)
         map = try render("Map", "toon_vertex", "map_fragment", color: hdr, depth: dep, samples: ms)
         mapBlend = try render("MapBlend", "toon_vertex", "map_fragment", color: hdr, depth: dep, samples: ms, blend: .alpha)
+        sky = try render("Sky", "sky_vertex", "sky_fragment", color: hdr, depth: dep, samples: ms)
         outline = try render("Outline", "outline_vertex", "outline_fragment", color: hdr, depth: dep, samples: ms)
         shadow = try render("Shadow", "shadow_vertex", "shadow_fragment", color: nil, depth: dep, samples: 1)
         background = try render("Background", "fullscreen_vertex", "background_fragment", color: hdr, depth: dep, samples: ms)
@@ -136,12 +139,18 @@ final class Pipelines: @unchecked Sendable {
     /// depth+stencil target with these same shaders recompiled for that
     /// attachment; a frame without live draws keeps the depth-only set.
     struct MainPass {
-        let background, grid, outline, toonOpaque, toonBlend, eye, eyeBlend, map, mapBlend, gizmoHDR: any MTLRenderPipelineState
+        let background, grid, outline, toonOpaque, toonBlend, eye, eyeBlend, map, mapBlend, sky, gizmoHDR: any MTLRenderPipelineState
+
+        /// Every pipeline's label in field order, so tests can check that the
+        /// depth-only and stencil variants carry the same groups.
+        var labels: [String] {
+            [background, grid, outline, toonOpaque, toonBlend, eye, eyeBlend, map, mapBlend, sky, gizmoHDR].map { $0.label ?? "" }
+        }
     }
     static let depthStencilFormat: MTLPixelFormat = .depth32Float_stencil8
     var depthOnlyMainPass: MainPass {
         MainPass(background: background, grid: grid, outline: outline, toonOpaque: toonOpaque, toonBlend: toonBlend,
-                 eye: eye, eyeBlend: eyeBlend, map: map, mapBlend: mapBlend, gizmoHDR: gizmoHDR)
+                 eye: eye, eyeBlend: eyeBlend, map: map, mapBlend: mapBlend, sky: sky, gizmoHDR: gizmoHDR)
     }
     private let stencilLock = NSLock()
     private var stencilPass: MainPass?
@@ -163,6 +172,7 @@ final class Pipelines: @unchecked Sendable {
             eyeBlend: try render("EyeBlend", "toon_vertex", "eye_fragment", blend: .alpha),
             map: try render("Map", "toon_vertex", "map_fragment"),
             mapBlend: try render("MapBlend", "toon_vertex", "map_fragment", blend: .alpha),
+            sky: try render("Sky", "sky_vertex", "sky_fragment"),
             gizmoHDR: try render("GizmoHDR", "gizmo_vertex", "gizmo_fragment", blend: .alpha))
         stencilPass = result
         return result

@@ -817,6 +817,9 @@ public final class Renderer: @unchecked Sendable {
         let background: FrameAllocation?
         let opaque: [DrawRecord]
         let transparent: [DrawRecord]
+        /// ST-A11 map sky draws (`MaterialKindSky`): drawn after the background
+        /// with no depth test or write; never shadow casters, picked or live.
+        var sky: [DrawRecord] = []
         let shadowCasters: [DrawRecord]
         let deforms: [DeformRecord]
         let gizmos: [GizmoRecord]
@@ -1047,6 +1050,7 @@ public final class Renderer: @unchecked Sendable {
 
         var opaque: [DrawRecord] = []
         var transparent: [DrawRecord] = []
+        var sky: [DrawRecord] = []
         var casters: [DrawRecord] = []
         var deforms: [DeformRecord] = []
         var deformSeen = Set<UInt64>()
@@ -1055,6 +1059,9 @@ public final class Renderer: @unchecked Sendable {
 
         for item in frame.items where item.visible {
             guard let mesh = resources.mesh(item.mesh) else { continue }
+            let isSky = item.material.uniforms.kind == UInt32(MaterialKindSky.rawValue)
+            // A sky draw needs its cube: without it there is nothing to sample.
+            if isSky, frame.texture(item.material.cubemap, resources: resources)?.textureType != .typeCube { continue }
             let palette = item.skinSet.flatMap { skinPalettes[$0] }
             if mesh.skin != nil, let key = item.skinSet {
                 do {
@@ -1121,6 +1128,7 @@ public final class Renderer: @unchecked Sendable {
             let c = item.model.transformPoint(mesh.bounds.center)
             let rec = DrawRecord(item: item, mesh: mesh, vertexBuffer: vb, hiddenBuffer: hb, draw: drawUniforms,
                                  material: materialUniforms, distance: length(c - cp))
+            if isSky { sky.append(rec); continue }
             if item.sourceShader != nil { liveCandidates.append(rec) }
             else if item.material.transparent { transparent.append(rec) } else { opaque.append(rec) }
             if item.castsShadow && !item.material.transparent { casters.append(rec) }
@@ -1161,7 +1169,7 @@ public final class Renderer: @unchecked Sendable {
             gizmos.append(GizmoRecord(batch: g, vertices: vertices, draw: draw))
         }
         return FrameContext(frame: frame, frameUniforms: frameUniforms, lights: lights, post: post, background: background,
-                            opaque: opaque, transparent: transparent, shadowCasters: casters, deforms: deforms,
+                            opaque: opaque, transparent: transparent, sky: Self.sortedOpaque(sky), shadowCasters: casters, deforms: deforms,
                             gizmos: gizmos, width: W, height: H, live: live, liveMainPass: liveMainPass)
     }
 
@@ -1284,6 +1292,14 @@ public final class Renderer: @unchecked Sendable {
 
     private func bindTextures(_ enc: any MTLRenderCommandEncoder, _ m: MaterialState, frame: RenderFrame) {
         let white = resources.whiteTexture, black = resources.blackTexture
+        if m.uniforms.kind == UInt32(MaterialKindSky.rawValue) {
+            // sky_fragment samples only the cube (ST-A11 map sky). prepare drops a
+            // sky draw whose cube does not resolve, so index 19 always holds a cube here.
+            if let cube = frame.texture(m.cubemap, resources: resources) {
+                enc.setFragmentTexture(cube, index: Int(TextureIndexSkyCube.rawValue))
+            }
+            return
+        }
         enc.setFragmentTexture(frame.texture(m.base, resources: resources) ?? white, index: Int(TextureIndexBase.rawValue))
         if m.uniforms.kind == UInt32(MaterialKindMap.rawValue) {
             // map_fragment samples only these four (ST-A11 source maps).
@@ -1372,6 +1388,20 @@ public final class Renderer: @unchecked Sendable {
             enc.setFragmentBuffer(ctx.post.buffer, offset: ctx.post.offset, index: Int(BufferIndexPostParams.rawValue))
             enc.drawPrimitives(type: .triangle, vertexStart: 0, vertexCount: 3)
             enc.setFragmentBuffer(ctx.frameUniforms.buffer, offset: ctx.frameUniforms.offset, index: Int(BufferIndexFrameUniforms.rawValue))
+            enc.popDebugGroup()
+        }
+        if !ctx.sky.isEmpty {
+            // Unity draws Background-queue geometry first, ZWrite Off; the sphere
+            // lies far inside the infinite reverse-Z frustum, so nothing clips it.
+            enc.pushDebugGroup("Sky")
+            enc.setRenderPipelineState(main.sky)
+            enc.setDepthStencilState(pipelines.depthNone)
+            enc.setCullMode(.none)
+            for rec in ctx.sky {
+                bindDraw(enc, rec)
+                bindTextures(enc, rec.item.material, frame: ctx.frame)
+                drawIndexed(enc, rec.mesh)
+            }
             enc.popDebugGroup()
         }
         if fx.showGrid {
