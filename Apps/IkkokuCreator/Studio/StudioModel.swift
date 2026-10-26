@@ -114,7 +114,18 @@ final class StudioModel: ViewportInputHandler, LivePacedHandler {
         sourcePreviewsChecked = false
         refresh()
     }
-    var selection: UUID? { didSet { if selection != oldValue { selectedBone = nil; selectedSourceIK = nil; selectedRoutePoint = nil; refresh() } } }
+    /// A new selection clears the bone, IK guide and route point handles. Each
+    /// of those setters refreshes, so only one that is set is cleared: the one
+    /// refresh below then serves the whole change (R7 phase 2, item 7).
+    var selection: UUID? {
+        didSet {
+            guard selection != oldValue else { return }
+            if selectedBone != nil { selectedBone = nil }
+            if selectedSourceIK != nil { selectedSourceIK = nil }
+            selectedRoutePoint = nil
+            refresh()
+        }
+    }
     var gizmoMode: GizmoMode = .translate { didSet { refresh() } }
     var localSpace = true { didSet { refresh() } }
     var poseMode: PoseMode = .object { didSet { refresh() } }
