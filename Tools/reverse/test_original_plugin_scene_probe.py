@@ -124,7 +124,7 @@ class RunBTests(unittest.TestCase):
 
 
 COLLIDER = {'name': '[KKPE] Collider.zipmod', 'sha256': 'c' * 64}
-INPUTS_C = ['fixture.png', 'author-card.png', 'phase.txt']
+INPUTS_C = ['fixture.png', 'phase.txt']
 INPUTS_D = ['fixture.png', 'card-link.png', 'edit-delete.png', 'ours-delete.png', 'card-link-int32.png', 'corpus.txt', 'phase.txt']
 
 
@@ -198,7 +198,6 @@ class RunCDTests(unittest.TestCase):
         for folder in (phase_a, phase_c, inputs): folder.mkdir(parents=True)
         (phase_a / 'run.json').write_text(json.dumps({'guest': {'zipmod': ZIPMOD}}))
         (phase_a / 'fixture.png').write_bytes(b'fixture-a')
-        card = local / 'card.png'; card.write_bytes(b'card')
         (phase_c / 'run.json').write_text(json.dumps({'zipmod': ZIPMOD, 'guest': {'collider': {'zipmod': COLLIDER}}}))
         for name in ('fixture.png', 'card-link.png', 'edit-delete.png', 'edit-duplicate.png', 'fixture-lc.png'): (phase_c / name).write_bytes(name.encode())
         for name in ('ours-delete.png', 'card-link-int32.png'): (inputs / name).write_bytes(name.encode())
@@ -210,11 +209,11 @@ class RunCDTests(unittest.TestCase):
              patch('original_plugin_scene_probe.errno_count', return_value=0),\
              patch('original_plugin_scene_probe.fresh_root', return_value=ROOT_A),\
              patch('original_plugin_scene_probe.subprocess.run', return_value=done):
-            if phase == 'C': result = probe.run_c('vm', local / 'out', 0, phase_a, card)
+            if phase == 'C': result = probe.run_c('vm', local / 'out', 0, phase_a)
             else: result = probe.run_d('vm', local / 'out', 0, phase_c, inputs, corpus)
         return json.loads((local / 'out' / 'run.json').read_text()), result
 
-    def test_phase_c_sends_the_fixture_card_and_phase(self):
+    def test_phase_c_sends_the_fixture_and_phase(self):
         with tempfile.TemporaryDirectory() as tmp:
             record, result = self.run_phase(tmp, 'C')
             self.assertEqual(sorted(record['inputs']), sorted(INPUTS_C))

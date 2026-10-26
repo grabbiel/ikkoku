@@ -7,7 +7,7 @@ import Character
 // Phases C and D of the plug-in scene probe (Tools/reverse/original_plugin_scene_probe.py,
 // fixtures/OriginalPluginRewriteProbe.cs), ST-T03j. Phase C: CharaStudio,
 // with KKPE, NodesConstraints and MaterialEditor loaded, gave phase A's
-// fixture a female W (synthetic fixture card) and data in all three
+// fixture a female W (a default ChaFileControl) and data in all three
 // plug-ins, saved its load-then-save as fixture.png, and saved its own
 // delete and duplicate edits of that (edit-<label>.png). Our export of each
 // edit must be CharaStudio's file apart from KKPE's per-session instance

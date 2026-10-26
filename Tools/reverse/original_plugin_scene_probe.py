@@ -55,7 +55,7 @@ Phases C and D (--phase c, --phase d; ST-T03j) are the same kind of exec with ph
 run fixtures/OriginalPluginRewriteProbe.cs (compiled with SOURCES_B) instead; reload-input\\phase.txt names the
 phase. See the probe source for what each phase does.
 
-- Phase C's inputs are phase A's fixture.png and a synthetic fixture card (author-card.png, --card). Before the
+- Phase C's input is phase A's fixture.png; the probe makes its females from a default ChaFileControl. Before the
   player starts, run.ps1 also:
   - looks, for at most --scan-seconds, through the install's mods for the smallest .zipmod whose
     abdata/studio/info item list names a prefab "Collider" (a KKPE lone collider), and copies it into the root's
@@ -440,11 +440,11 @@ def run_rewrite(vm, output, errno_baseline, phase, files, zipmod, collider, host
                 errno=[record['errnoBefore'], record['errnoAfter']], files=len(provenance), statusError=(status or {}).get('error'))
 
 
-def run_c(vm, output, errno_baseline, phase_a, card, host_address='10.211.55.2', wait_seconds=1800, scan_seconds=180,
+def run_c(vm, output, errno_baseline, phase_a, host_address='10.211.55.2', wait_seconds=1800, scan_seconds=180,
           survey_file_bytes=512 * 1024 * 1024):
-    """Phase C: phase A's fixture and the synthetic fixture card in, CharaStudio's authored fixture and edits out."""
+    """Phase C: phase A's fixture in, CharaStudio's authored fixture and edits out."""
     zipmod = json.loads((phase_a / 'run.json').read_text())['guest']['zipmod']
-    files = {'fixture.png': (phase_a / 'fixture.png').read_bytes(), 'author-card.png': card.read_bytes(), 'phase.txt': b'C'}
+    files = {'fixture.png': (phase_a / 'fixture.png').read_bytes(), 'phase.txt': b'C'}
     return run_rewrite(vm, output, errno_baseline, 'C', files, zipmod, None, host_address, wait_seconds,
                        survey_file_bytes=survey_file_bytes, scan_seconds=scan_seconds)
 
@@ -580,7 +580,6 @@ def main():
     p.add_argument('--phase', choices=('a', 'b', 'c', 'd'), default='a')
     p.add_argument('--output', type=Path, help='new output folder (default .local/stt03i-plugin-data/phase-<a|b>, '
                                                '.local/stt03j-plugin-rewrites/phase-<c|d>)')
-    p.add_argument('--card', type=Path, help='phase C: the synthetic fixture card the probe adds its characters from')
     p.add_argument('--phase-c', type=Path, default=ROOT / '.local/stt03j-plugin-rewrites/phase-c', help='phase D: the phase-C output folder')
     p.add_argument('--scan-seconds', type=int, default=180, help='phase C: bound on the collider zipmod and largest-scene scans')
     p.add_argument('--phase-a', type=Path, default=ROOT / '.local/stt03i-plugin-data/phase-a', help='phase B: the phase-A output folder')
@@ -595,8 +594,7 @@ def main():
     a = p.parse_args()
     output = a.output or ROOT / (f'.local/stt03i-plugin-data/phase-{a.phase}' if a.phase in 'ab' else f'.local/stt03j-plugin-rewrites/phase-{a.phase}')
     if a.phase == 'c':
-        if a.card is None: p.error('phase c needs --card')
-        print(json.dumps(run_c(a.vm, output, a.errno_baseline, a.phase_a, a.card, a.host_address, a.wait_seconds or 1800,
+        print(json.dumps(run_c(a.vm, output, a.errno_baseline, a.phase_a, a.host_address, a.wait_seconds or 1800,
                                a.scan_seconds, a.survey_file_bytes), indent=2))
     elif a.phase == 'd':
         if a.inputs is None or a.corpus is None: p.error('phase d needs --inputs and --corpus')

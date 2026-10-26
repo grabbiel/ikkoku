@@ -5,8 +5,8 @@
 //
 // Phase C authors scenes with data in all three plug-ins and saves CharaStudio's own edits of them:
 //   author      loads phase A's fixture.png (keys as phase A's trace: folder F 0 [M2 3, V2 4], vanilla item V1 1
-//               [M4 6], mod items M1 2 and M3 5, route R 7, camera C 14, light L 15), adds female W from the
-//               synthetic fixture card (reload-input\author-card.png) and then gives the scene:
+//               [M4 6], mod items M1 2 and M3 5, route R 7, camera C 14, light L 15), adds female W (a default
+//               ChaFileControl with sex 1, as OriginalCameraObjectProbe.LookAtCase builds one) and then gives the scene:
 //                 KKPE   bone data (one child transform moved and scaled) on M1, M3, V1 and V2 through
 //                        HSPE.MainWindow.ExternalLoadScene, the path a scene load takes, every item's controller
 //                        enabled, and bone data on W's neck through its CharaPoseController's ScheduleLoad;
@@ -466,16 +466,15 @@ public sealed class OriginalPluginRewriteProbe:BaseUnityPlugin {
     }
 
     // ---- Scene operations ----
-    // One female from the synthetic fixture card through the player's own scene-restore call
-    // (OriginalSceneReloadProbe.AddFixtureFemale).
+    // One female from a default ChaFileControl (sex 1, as OriginalCameraObjectProbe.LookAtCase builds one; the
+    // synthetic parser card has no parameter answers and does not load) through the player's own scene-restore
+    // call (OriginalSceneReloadProbe.AddFixtureFemale).
     OCIChar AddFemale(Vector3 position) {
-        var card=Path.Combine(input,"author-card.png");
-        var cardFile=new ChaFileControl();cardFile.skipRangeCheck=true;
-        if(!cardFile.LoadCharaFile(card,byte.MaxValue,true))throw new Exception("ChaFileControl.LoadCharaFile returned false for "+card);
+        var cardFile=new ChaFileControl();cardFile.parameter.sex=1;
         var info=new OICharInfo(cardFile,Studio.Studio.GetNewIndex());
         info.changeAmount.pos=position;
         var character=AddObjectFemale.Load(info,null,null);
-        if(character==null)throw new Exception("AddObjectFemale.Load returned null for "+card);
+        if(character==null)throw new Exception("AddObjectFemale.Load returned null for a default female");
         Studio.Studio.AddInfo(info,character);
         return character;
     }
