@@ -18,12 +18,19 @@ visibility class, lightmap index): role "mapRoot" vertices are in mapRoot's loca
 Each merged mesh's glTF extras name its role, the sun-type keys it is visible for (0, 1, 2,
 and -1 for any other saved value, which leaves the authored state) and its lightmap index.
 
-Lightmaps are not applied in this slice; the export keeps what the next slice needs:
-TEXCOORD_1 is the lightmap UV (mesh UV1, else UV0) with the effective
-`lightmapScaleOffset` applied (LightmapPrefab.Resetup's value where it names the renderer)
-and V flipped like TEXCOORD_0, and provenance.json records each lightmap texture (name,
-size, format, mips, hashes of the serialized image data, whether UnityPy decodes it), the
-lights, RenderSettings and SunLightInfo entries.
+Baked lightmaps (slice 2): TEXCOORD_1 is the lightmap UV (mesh UV1, else UV0) with the
+effective `lightmapScaleOffset` applied (LightmapPrefab.Resetup's value where it names the
+renderer) and V flipped like TEXCOORD_0. Each LightmapSettings entry's light map and
+CombinedDirectional direction map are written as their serialized Unity `image_data`, byte for
+byte: DXT1/DXT5 blocks (BC1/BC3), every mip level largest first, rows bottom-up as in Unity's
+texture memory, so the output's SHA-256 equals the bundle's. Nothing is decoded: the app
+uploads the blocks and decodes RGBM in the shader. The glTF's top-level extras
+`ikkokuLightmaps` name the files, their format, size, mips, colour space (m_ColorSpace 1 = sRGB)
+and hashes, the lightmaps mode, the RGBM encoding (m_LightmapFormat 2) and the player's colour
+space (Linear). Standard materials carry `ikkokuStandard` extras: `_Color` and
+`_EmissionColor` converted to Linear (GammaToLinearSpaceExact, as a Linear player uploads
+material colours), OneMinusReflectivityFromMetallic(_Metallic) and the `_EmissionMap` image.
+provenance.json also records the lights, RenderSettings and SunLightInfo entries.
 
 Proprietary output belongs in .local, never in the repository.
 """
@@ -67,6 +74,17 @@ MAP_SHADER_RULES = {
 }
 # Shaders the map scene references that draw nothing in Studio's map path.
 NON_GEOMETRY_SHADERS = {"Skybox/Procedural", "Skybox/Cubemap"}
+# The original player's QualitySettings.activeColorSpace (Unity 5.6.2f1, D3D11), which the
+# phase-B probe recorded in its status.json; it selects the Linear RGBM decode.
+PLAYER_COLOR_SPACE = "Linear"
+# Unity TextureFormat values whose serialized data the app uploads as block textures.
+BLOCK_FORMATS = {10: ("BC1", 8), 12: ("BC3", 16)}  # DXT1, DXT5
+# LightmapSettings.m_LightmapsMode values the app draws.
+LIGHTMAPS_MODES = {0: "NonDirectional", 1: "CombinedDirectional"}
+# Texture2D.m_LightmapFormat (TextureUsageMode) 2: an RGBM-encoded lightmap.
+RGBM_LIGHTMAP_FORMAT = 2
+# unity_ColorSpaceDielectricSpec.a in Linear (UnityCG.cginc L27): 1 - 0.04.
+ONE_MINUS_DIELECTRIC_SPEC = 1 - 0.04
 
 
 # ---------------------------------------------------------------- pure math (unit tested)
@@ -187,6 +205,72 @@ def effective_lightmap(renderer_index, renderer_offset, prefab_parameter):
     if index < 0 or index >= 0xFFFE:
         return NO_LIGHTMAP, None, source
     return index, list(offset), source
+
+
+def gamma_to_linear_exact(value):
+    """UnityCG.cginc GammaToLinearSpaceExact (L88-L96): how a Linear player uploads colours."""
+    if value <= 0.04045:
+        return value / 12.92
+    if value < 1.0:
+        return ((value + 0.055) / 1.055) ** 2.4
+    return value ** 2.2
+
+
+def one_minus_reflectivity(metallic):
+    """UnityStandardUtils.cginc OneMinusReflectivityFromMetallic (L35-L44), Linear."""
+    return ONE_MINUS_DIELECTRIC_SPEC - metallic * ONE_MINUS_DIELECTRIC_SPEC
+
+
+def standard_inputs(colors, floats, keywords, emission_image=None, emission_srgb=True):
+    """What the app's baked-lightmap material needs from a Standard material: albedo and
+    emission colours in Linear, and diffColor's factor. `_METALLICGLOSSMAP` reads metallic
+    from a texture the export does not carry, so `_Metallic` stands in and says so."""
+    color = colors.get("_Color", [1, 1, 1, 1])
+    words = set(keywords)
+    metallic = floats.get("_Metallic", 0.0)
+    result = {"albedoLinear": [gamma_to_linear_exact(c) for c in color[:3]] + [color[3]],
+              "metallic": metallic, "oneMinusReflectivity": one_minus_reflectivity(metallic),
+              "metallicSource": "_MetallicGlossMap.r (not exported; _Metallic used)" if "_METALLICGLOSSMAP" in words else "_Metallic",
+              "emission": None}
+    if "_EMISSION" in words:
+        # Without a texture Unity samples the property's default, "white" (image None).
+        emission = colors.get("_EmissionColor", [0, 0, 0, 1])
+        result["emission"] = {"colorLinear": [gamma_to_linear_exact(c) for c in emission[:3]], "image": emission_image,
+                              "srgb": emission_srgb}
+    return result
+
+
+def block_level_bytes(width, height, mip_count, block_bytes):
+    """Bytes of each mip level of a DXT/BC texture, largest first (a level under 4x4 is one block)."""
+    sizes, w, h = [], width, height
+    for _ in range(mip_count):
+        sizes.append(max(1, (w + 3) // 4) * max(1, (h + 3) // 4) * block_bytes)
+        w, h = max(1, w // 2), max(1, h // 2)
+    return sizes
+
+
+def lightmap_file_entry(record, file, data):
+    """The `ikkokuLightmaps` entry for one serialized lightmap texture written verbatim."""
+    fmt = BLOCK_FORMATS.get(record["textureFormat"])
+    if fmt is None:
+        raise ValueError(f"{record['name']}: TextureFormat {record['textureFormat']} is not a block format the app uploads")
+    expected = sum(block_level_bytes(record["width"], record["height"], record["mipCount"], fmt[1]))
+    if len(data) != expected:
+        raise ValueError(f"{record['name']}: {len(data)} serialized bytes, {fmt[0]} with {record['mipCount']} mips needs {expected}")
+    return {"name": record["name"], "file": file, "format": fmt[0], "width": record["width"], "height": record["height"],
+            "mipCount": record["mipCount"], "srgb": record["colorSpace"] == 1, "bytes": len(data),
+            "sha256": hashlib.sha256(data).hexdigest()}
+
+
+def lightmaps_extras(mode, entries):
+    """glTF top-level extras for the exported lightmaps. entries: [(index, light, direction)]."""
+    if mode not in LIGHTMAPS_MODES:
+        raise ValueError(f"LightmapsMode {mode} is not drawn")
+    if LIGHTMAPS_MODES[mode] == "CombinedDirectional" and any(direction is None for _, _, direction in entries):
+        raise ValueError("A CombinedDirectional lightmap lacks its direction map")
+    maps = [{"index": index, "light": light, **({"direction": direction} if direction else {})} for index, light, direction in entries]
+    return {"kind": "ikkoku.unityLightmaps", "version": 1, "mode": LIGHTMAPS_MODES[mode], "encoding": "RGBM",
+            "colorSpace": PLAYER_COLOR_SPACE, "rows": "bottomUp", "maps": maps}
 
 
 def standard_contract(colors, floats, keywords):
@@ -684,6 +768,15 @@ class MapExporter(Exporter):
         if main and main.m_Texture.path_id:
             result["pbrMetallicRoughness"]["baseColorTexture"] = {"index": self.texture(main.m_Texture)}
             tiling = (xyz2(main.m_Scale), xyz2(main.m_Offset))
+        if name == "Standard":
+            emission_map = envs.get("_EmissionMap")
+            image, srgb = None, True
+            # Standard samples _EmissionMap at i.tex.xy, the _MainTex_ST UV already baked into
+            # TEXCOORD_0 (UnityStandardCore.cginc L421); the map's own _ST is never read.
+            if "_EMISSION" in keywords_of(material) and emission_map and emission_map.m_Texture.path_id:
+                image = self.gltf["textures"][self.texture(emission_map.m_Texture)]["source"]
+                srgb = emission_map.m_Texture.read().m_ColorSpace == 1
+            result["extras"]["ikkokuStandard"] = standard_inputs(colors_of(material), floats, keywords_of(material), image, srgb)
         index = len(self.gltf["materials"])
         self.material_cache[identity] = (index, tiling, bool(contract.get("vertexColor")))
         self.gltf["materials"].append(result)
@@ -814,21 +907,15 @@ def export(bundles, scene, map_no, output, max_texture=None):
         raise ValueError("The map scene has no drawable static meshes")
     if any(m.get("extensions", {}).get("KHR_materials_unlit") is not None for m in exporter.gltf["materials"]):
         exporter.gltf["extensionsUsed"] = ["KHR_materials_unlit"]
+    lightmaps, lightmap_mode, lightmap_export = export_lightmaps(map_scene, output)
+    lightmap_extras = lightmap_export.pop("extras", None)
+    lightmap_export["drawn"] = lightmap_extras is not None
+    if lightmap_extras:
+        exporter.gltf["extras"] = {"ikkokuLightmaps": lightmap_extras}
     exporter.gltf["buffers"] = [{"uri": stem + ".bin", "byteLength": len(exporter.blob)}]
     (output / (stem + ".bin")).write_bytes(exporter.blob)
     (output / (stem + ".gltf")).write_text(json.dumps(exporter.gltf, indent=2) + "\n")
     (output / "source.unity.json").write_text(json.dumps(exporter.source, indent=2, ensure_ascii=False) + "\n")
-    lightmaps = []
-    for _, reader in map_scene.of_type("LightmapSettings"):
-        settings = reader.read()
-        for index, data in enumerate(settings.m_Lightmaps):
-            entry = {"index": index}
-            for field in ("m_Lightmap", "m_DirLightmap", "m_ShadowMask"):
-                pointer = getattr(data, field, None)
-                if pointer is not None and pointer.path_id:
-                    entry[field[2:]] = texture_record(pointer.read(), pointer)
-            lightmaps.append(entry)
-        lightmap_mode = settings.m_LightmapsMode
     dropped = sorted({term for m in exporter.gltf["materials"] for term in m["extras"]["droppedTerms"]})
     shaders = sorted({m["extras"]["unityShader"] for m in exporter.gltf["materials"]})
     provenance = {
@@ -837,6 +924,7 @@ def export(bundles, scene, map_no, output, max_texture=None):
                        "uv0": "_MainTex_ST baked, then u,1-v", "uv1": "lightmap UV (mesh UV1, else UV0) * ST.xy + ST.zw, then u,1-v",
                        "tangent": "x,y,-z,w (w negated again under a mirroring transform)",
                        "merge": "per (role, material, visibility class, lightmap index); role mapRoot in mapRoot's local frame, role scene in world space",
+                       "lightmaps": "serialized image_data written verbatim (BC blocks, all mips, rows bottom-up); sampled at (u, 1 - v) of TEXCOORD_1",
                        "images": "UnityPy PNG (top-down)" + (f"; reduced by powers of two to <= {max_texture} px" if max_texture else "")},
         "transformRule": "mapRoot.localPosition = caMap.pos; mapRoot.localRotation = Quaternion.Euler(caMap.rot); scale never written (MapCtrl.Reflect)",
         "sources": [{"path": str(p), "sha256": hashlib.sha256(p.read_bytes()).hexdigest(), "bytes": p.stat().st_size} for p in map_scene.bundles],
@@ -845,7 +933,7 @@ def export(bundles, scene, map_no, output, max_texture=None):
         "vertices": totals["vertices"], "triangles": totals["triangles"],
         "textureGPUBytesRGBA8Mips": sum(gpu_bytes(t["outputWidth"], t["outputHeight"]) for t in exporter.source["textures"]),
         "shaders": shaders, "droppedTerms": dropped, "skipped": skipped, "lightmapUVSources": lightmap_sources,
-        "lightmapsMode": lightmap_mode if lightmaps else None, "lightmaps": lightmaps,
+        "lightmapsMode": lightmap_mode if lightmaps else None, "lightmaps": lightmaps, "lightmapExport": lightmap_export,
         "sunLightInfo": summarize_sun(map_scene, sun_tree, infos), "lights": lights_of(map_scene, active),
         "renderSettings": render_settings_of(map_scene),
     }
@@ -853,8 +941,82 @@ def export(bundles, scene, map_no, output, max_texture=None):
     return provenance
 
 
+def texture_settings(texture):
+    """m_TextureSettings (filter, anisotropy, mip bias, wrap) as serialized."""
+    settings = getattr(texture, "m_TextureSettings", None)
+    if settings is None:
+        return None
+    return {k: getattr(settings, k) for k in ("m_FilterMode", "m_Aniso", "m_MipBias", "m_WrapMode", "m_WrapU", "m_WrapV", "m_WrapW")
+            if hasattr(settings, k)}
+
+
+def export_lightmaps(map_scene, output):
+    """Records every LightmapSettings entry and writes each light/direction map's serialized
+    data verbatim. Returns (records, mode, export summary); the summary's "extras" is the glTF's
+    `ikkokuLightmaps`, absent when the lightmaps cannot be drawn (the reason is recorded)."""
+    records, mode, entries, problems = [], None, [], []
+    for _, reader in map_scene.of_type("LightmapSettings"):
+        settings = reader.read()
+        mode = settings.m_LightmapsMode
+        for index, data in enumerate(settings.m_Lightmaps):
+            record, written = {"index": index}, {}
+            for field in ("m_Lightmap", "m_DirLightmap", "m_ShadowMask"):
+                pointer = getattr(data, field, None)
+                if pointer is None or not pointer.path_id:
+                    continue
+                texture = pointer.read()
+                record[field[2:]] = texture_record(texture, pointer)
+                record[field[2:]]["textureSettings"] = texture_settings(texture)
+                if field == "m_ShadowMask":
+                    problems.append(f"lightmap {index}: a shadow mask is not drawn")
+                    continue
+                if field == "m_Lightmap" and record["Lightmap"]["lightmapFormat"] != RGBM_LIGHTMAP_FORMAT:
+                    problems.append(f"lightmap {index}: m_LightmapFormat {record['Lightmap']['lightmapFormat']} is not RGBM")
+                    continue
+                raw = bytes(texture.image_data)
+                fmt = BLOCK_FORMATS.get(int(texture.m_TextureFormat), ("raw", 0))[0].lower()
+                name = f"lightmap-{index}-{'light' if field == 'm_Lightmap' else 'dir'}.{fmt}"
+                try:
+                    entry = lightmap_file_entry(record[field[2:]], name, raw)
+                except ValueError as error:
+                    problems.append(str(error))
+                    continue
+                if entry["sha256"] != record[field[2:]]["serializedSHA256"]:
+                    raise ValueError(f"{name}: written data differs from the serialized image data")
+                (output / name).write_bytes(raw)
+                record[field[2:]]["output"] = name
+                written[field] = entry
+            records.append(record)
+            if "m_Lightmap" in written:
+                entries.append((index, written["m_Lightmap"], written.get("m_DirLightmap")))
+            else:
+                problems.append(f"lightmap {index}: no light map written")
+    summary = {"written": [name for _, light, direction in entries for name in [light["file"]] + ([direction["file"]] if direction else [])],
+               "problems": problems}
+    if entries and not problems:
+        try:
+            summary["extras"] = lightmaps_extras(mode, entries)
+        except ValueError as error:
+            problems.append(str(error))
+    return records, mode, summary
+
+
+# What the app's Standard baked-lightmap material (map_fragment) leaves out; the app's
+# status line names the same terms (SourceStudioMapStatus.lightmappedLabel).
+LIGHTMAPPED_OMISSIONS = ["realtime sun and its shadows", "specular and reflections", "normal, metallic and detail maps",
+                         "fog", "camera effects"]
+
+
 def approximations(provenance):
-    """The app's label: what the converted map does not reproduce."""
+    """The catalog's list of what the converted map does not reproduce. With lightmaps, the
+    Standard terms the app leaves out are named one by one; any other shader is still listed
+    as approximated."""
+    if (provenance.get("lightmapExport") or {}).get("drawn"):
+        notes = list(LIGHTMAPPED_OMISSIONS)
+        others = [shader for shader in provenance.get("shaders", []) if shader != "Standard"]
+        if others:
+            notes.append("shaders approximated (" + ", ".join(others) + ")")
+        return notes
     notes = ["no baked lightmaps", "map lights", "sun-type lighting", "fog", "ambient"]
     if provenance.get("droppedTerms"):
         notes.append("shaders approximated (" + ", ".join(provenance["shaders"]) + ")")

@@ -1264,6 +1264,15 @@ public final class Renderer: @unchecked Sendable {
     private func bindTextures(_ enc: any MTLRenderCommandEncoder, _ m: MaterialState, frame: RenderFrame) {
         let white = resources.whiteTexture, black = resources.blackTexture
         enc.setFragmentTexture(frame.texture(m.base, resources: resources) ?? white, index: Int(TextureIndexBase.rawValue))
+        if m.uniforms.kind == UInt32(MaterialKindMap.rawValue) {
+            // map_fragment samples only these four (ST-A11 source maps).
+            enc.setFragmentTexture(frame.texture(m.lightmap, resources: resources) ?? black, index: Int(TextureIndexLightmap.rawValue))
+            enc.setFragmentTexture(frame.texture(m.lightmapDirection, resources: resources) ?? black,
+                                   index: Int(TextureIndexLightmapDirection.rawValue))
+            // Unity's _EmissionMap default is white; map_fragment reads it only when emissive.a > 0.
+            enc.setFragmentTexture(frame.texture(m.emission, resources: resources) ?? white, index: Int(TextureIndexEmission.rawValue))
+            return
+        }
         enc.setFragmentTexture(frame.texture(m.colorMask, resources: resources) ?? black, index: Int(TextureIndexColorMask.rawValue))
         let isEye = m.uniforms.kind == UInt32(MaterialKindEye.rawValue)
         enc.setFragmentTexture(frame.texture(m.detail, resources: resources) ?? (isEye ? black : white), index: Int(TextureIndexDetail.rawValue))
@@ -1366,7 +1375,8 @@ public final class Renderer: @unchecked Sendable {
                 drawIndexed(enc, rec.mesh)
             }
             let nativeEye = m.uniforms.kind == UInt32(MaterialKindEye.rawValue) && (m.uniforms.flags & MaterialFlagSourceIrisHighlights.rawValue) == 0
-            enc.setRenderPipelineState(nativeEye ? main.eye : main.toonOpaque)
+            let isMap = m.uniforms.kind == UInt32(MaterialKindMap.rawValue)
+            enc.setRenderPipelineState(isMap ? main.map : nativeEye ? main.eye : main.toonOpaque)
             enc.setDepthStencilState(pipelines.depthWrite)
             enc.setCullMode((m.uniforms.flags & MaterialFlagDoubleSided.rawValue) != 0 ? .none : .back)
             drawIndexed(enc, rec.mesh)
@@ -1388,7 +1398,8 @@ public final class Renderer: @unchecked Sendable {
             for rec in ctx.transparent {
                 let material = rec.item.material.uniforms
                 let nativeEye = material.kind == UInt32(MaterialKindEye.rawValue) && (material.flags & MaterialFlagSourceIrisHighlights.rawValue) == 0
-                enc.setRenderPipelineState(nativeEye ? main.eyeBlend : main.toonBlend)
+                let isMap = material.kind == UInt32(MaterialKindMap.rawValue)
+                enc.setRenderPipelineState(isMap ? main.mapBlend : nativeEye ? main.eyeBlend : main.toonBlend)
                 bindDraw(enc, rec)
                 bindTextures(enc, rec.item.material, frame: ctx.frame)
                 enc.setCullMode((rec.item.material.uniforms.flags & MaterialFlagDoubleSided.rawValue) != 0 ? .none : .back)
