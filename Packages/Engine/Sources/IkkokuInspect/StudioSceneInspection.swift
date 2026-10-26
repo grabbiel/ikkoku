@@ -3,7 +3,9 @@ import CryptoKit
 import Studio
 
 /// Full framing inspection, deliberately separate from runtime scene restoration.
-func inspectStudioScene(url: URL) throws -> [String: Any] {
+/// With `upgradeURL`, a legacy scene's 1.0.4.2 export is written there; a
+/// current scene, or a refused upgrade, writes nothing and throws.
+func inspectStudioScene(url: URL, writingUpgradeTo upgradeURL: URL? = nil) throws -> [String: Any] {
     let file = try FileHandle(forReadingFrom: url)
     defer { try? file.close() }
     let data = try file.read(upToCount: 256 * 1024 * 1024 + 1) ?? Data()
@@ -56,7 +58,16 @@ func inspectStudioScene(url: URL) throws -> [String: Any] {
             let upgraded = try document.upgraded()
             upgrade["upgradedBytes"] = upgraded.preservedData.count
             upgrade["upgradedSHA256"] = hash(upgraded.preservedData)
-        } catch { upgrade["refusal"] = error.localizedDescription }
+            if let upgradeURL {
+                try upgraded.preservedData.write(to: upgradeURL, options: .withoutOverwriting)
+                upgrade["written"] = upgradeURL.path
+            }
+        } catch {
+            if upgradeURL != nil { throw error }
+            upgrade["refusal"] = error.localizedDescription
+        }
+    } else if upgradeURL != nil {
+        throw SourceSceneTopologyError.unsupported("This scene is already saved as 1.0.4.2; there is no upgrade to write.")
     }
     return ["path": url.path, "sha256": hash(data), "version": document.snapshot.version, "upgrade": upgrade,
         "coordinateSpace": "unity-left-handed-y-up", "angleUnit": "degrees", "lengthUnit": "unity-source-unit",

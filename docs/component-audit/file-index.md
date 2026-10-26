@@ -14,7 +14,7 @@ the ST-T07 eye look reference and solver-port files, the ST-T07s eye look
 Studio preview runtime files, the ST-T07u iris rendering files and the ST-T04
 studio item shader contract and record color files and the ST-T08 first-slice
 original motion capture/replay files. The 2026-10-23 ST-T08e skirt slice updates runtime, exporter, fixture, test and reference files and adds its paired
-Studio save/load scenarios; it does not represent a new code audit. The 2026-10-25 ST-T03i plug-in data slice adds its rule, test, rule-parity, survey and original-player probe files. It lists every present Git-visible
+Studio save/load scenarios; it does not represent a new code audit. The 2026-10-25 ST-T03i plug-in data slice adds its rule, test, rule-parity, survey and original-player probe files. The 2026-10-26 ST-T05a legacy-scene slice adds its reader, test, timing, original-player probe and scenario files. It lists every present Git-visible
 tracked/untracked non-ignored repository file outside
 `docs/component-audit/`. It excludes private `.local/`, dependency/build caches
 and ignored intermediate assets. Binary assets are inventoried, not reviewed as
@@ -23,26 +23,26 @@ branch was tested or every asset matches the original game. Feature status,
 specific comments and pending tasks are in the linked reports. Shared behavior
 may be discussed in more than one report; one primary owner is listed here.
 
-**1020 files indexed; 1020 assigned; 0 unassigned.**
+**1029 files indexed; 1029 assigned; 0 unassigned.**
 
 | Primary report | Files |
 | --- | ---: |
 | [App / gameplay / plugins](app-gameplay-and-plugins.md) | 110 |
 | [Character / Maker / mods](character-and-mods.md) | 128 |
-| [Studio / IK / animation](studio.md) | 235 |
+| [Studio / IK / animation](studio.md) | 243 |
 | [Renderer / foundation / assets](renderer-and-foundation.md) | 335 |
-| [Toolchain / verification / historical docs](toolchain-and-verification.md) | 202 |
+| [Toolchain / verification / historical docs](toolchain-and-verification.md) | 203 |
 
 | File role | Files |
 | --- | ---: |
 | App resource metadata / icon | 16 |
 | Build / repository configuration | 9 |
-| Conversion / recovery / verification tool | 238 |
+| Conversion / recovery / verification tool | 240 |
 | Documentation / historical evidence | 65 |
 | Generated asset / catalog / fixture | 205 |
-| Reference host / controlled fixture | 36 |
-| Runtime / shared shader declaration | 226 |
-| Test / validation | 212 |
+| Reference host / controlled fixture | 37 |
+| Runtime / shared shader declaration | 227 |
+| Test / validation | 217 |
 
 ## App / gameplay / plugins
 
@@ -320,6 +320,7 @@ Feature assessment: [studio.md](studio.md).
 | [Packages/Engine/Sources/Studio/Gizmo.swift](../../Packages/Engine/Sources/Studio/Gizmo.swift) | Runtime / shared shader declaration |
 | [Packages/Engine/Sources/Studio/KoikatsuBinary.swift](../../Packages/Engine/Sources/Studio/KoikatsuBinary.swift) | Runtime / shared shader declaration |
 | [Packages/Engine/Sources/Studio/KoikatsuLayoutImporter.swift](../../Packages/Engine/Sources/Studio/KoikatsuLayoutImporter.swift) | Runtime / shared shader declaration |
+| [Packages/Engine/Sources/Studio/KoikatsuLegacyScenes.swift](../../Packages/Engine/Sources/Studio/KoikatsuLegacyScenes.swift) | Runtime / shared shader declaration |
 | [Packages/Engine/Sources/Studio/KoikatsuSceneRecordReader.swift](../../Packages/Engine/Sources/Studio/KoikatsuSceneRecordReader.swift) | Runtime / shared shader declaration |
 | [Packages/Engine/Sources/Studio/KoikatsuSceneRecords.swift](../../Packages/Engine/Sources/Studio/KoikatsuSceneRecords.swift) | Runtime / shared shader declaration |
 | [Packages/Engine/Sources/Studio/Poses.swift](../../Packages/Engine/Sources/Studio/Poses.swift) | Runtime / shared shader declaration |
@@ -382,6 +383,10 @@ Feature assessment: [studio.md](studio.md).
 | [Packages/Engine/Tests/EngineTests/Fixtures/route-stepping.json](../../Packages/Engine/Tests/EngineTests/Fixtures/route-stepping.json) | Reference host / controlled fixture |
 | [Packages/Engine/Tests/EngineTests/KoikatsuBinaryTests.swift](../../Packages/Engine/Tests/EngineTests/KoikatsuBinaryTests.swift) | Test / validation |
 | [Packages/Engine/Tests/EngineTests/KoikatsuLayoutTests.swift](../../Packages/Engine/Tests/EngineTests/KoikatsuLayoutTests.swift) | Test / validation |
+| [Packages/Engine/Tests/EngineTests/KoikatsuLegacyScenePerformanceTests.swift](../../Packages/Engine/Tests/EngineTests/KoikatsuLegacyScenePerformanceTests.swift) | Test / validation |
+| [Packages/Engine/Tests/EngineTests/KoikatsuLegacySceneProbeTests.swift](../../Packages/Engine/Tests/EngineTests/KoikatsuLegacySceneProbeTests.swift) | Test / validation |
+| [Packages/Engine/Tests/EngineTests/KoikatsuLegacySceneTests.swift](../../Packages/Engine/Tests/EngineTests/KoikatsuLegacySceneTests.swift) | Test / validation |
+| [Packages/Engine/Tests/EngineTests/KoikatsuSceneCorpusDigestTests.swift](../../Packages/Engine/Tests/EngineTests/KoikatsuSceneCorpusDigestTests.swift) | Test / validation |
 | [Packages/Engine/Tests/EngineTests/KoikatsuSceneDocumentTests.swift](../../Packages/Engine/Tests/EngineTests/KoikatsuSceneDocumentTests.swift) | Test / validation |
 | [Packages/Engine/Tests/EngineTests/SourceDynamicBoneParityTests.swift](../../Packages/Engine/Tests/EngineTests/SourceDynamicBoneParityTests.swift) | Test / validation |
 | [Packages/Engine/Tests/EngineTests/SourceDynamicBoneTests.swift](../../Packages/Engine/Tests/EngineTests/SourceDynamicBoneTests.swift) | Test / validation |
@@ -488,6 +493,7 @@ Feature assessment: [studio.md](studio.md).
 | [Tools/reverse/fixtures/OriginalAnimationProbe.cs](../../Tools/reverse/fixtures/OriginalAnimationProbe.cs) | Reference host / controlled fixture |
 | [Tools/reverse/fixtures/OriginalCameraObjectProbe.cs](../../Tools/reverse/fixtures/OriginalCameraObjectProbe.cs) | Reference host / controlled fixture |
 | [Tools/reverse/fixtures/OriginalDynamicsProbe.cs](../../Tools/reverse/fixtures/OriginalDynamicsProbe.cs) | Reference host / controlled fixture |
+| [Tools/reverse/fixtures/OriginalLegacySceneProbe.cs](../../Tools/reverse/fixtures/OriginalLegacySceneProbe.cs) | Reference host / controlled fixture |
 | [Tools/reverse/fixtures/OriginalLightProbe.cs](../../Tools/reverse/fixtures/OriginalLightProbe.cs) | Reference host / controlled fixture |
 | [Tools/reverse/fixtures/OriginalMapProbe.cs](../../Tools/reverse/fixtures/OriginalMapProbe.cs) | Reference host / controlled fixture |
 | [Tools/reverse/fixtures/OriginalPluginRewriteProbe.cs](../../Tools/reverse/fixtures/OriginalPluginRewriteProbe.cs) | Reference host / controlled fixture |
@@ -502,6 +508,7 @@ Feature assessment: [studio.md](studio.md).
 | [Tools/reverse/original_animation_probe.py](../../Tools/reverse/original_animation_probe.py) | Conversion / recovery / verification tool |
 | [Tools/reverse/original_camera_object_probe.py](../../Tools/reverse/original_camera_object_probe.py) | Conversion / recovery / verification tool |
 | [Tools/reverse/original_dynamics_probe.py](../../Tools/reverse/original_dynamics_probe.py) | Conversion / recovery / verification tool |
+| [Tools/reverse/original_legacy_scene_probe.py](../../Tools/reverse/original_legacy_scene_probe.py) | Conversion / recovery / verification tool |
 | [Tools/reverse/original_light_probe.py](../../Tools/reverse/original_light_probe.py) | Conversion / recovery / verification tool |
 | [Tools/reverse/original_map_probe.py](../../Tools/reverse/original_map_probe.py) | Conversion / recovery / verification tool |
 | [Tools/reverse/original_plugin_scene_probe.py](../../Tools/reverse/original_plugin_scene_probe.py) | Conversion / recovery / verification tool |
@@ -527,6 +534,7 @@ Feature assessment: [studio.md](studio.md).
 | [Tools/reverse/test_export_map_scene.py](../../Tools/reverse/test_export_map_scene.py) | Test / validation |
 | [Tools/reverse/test_original_camera_object_probe.py](../../Tools/reverse/test_original_camera_object_probe.py) | Test / validation |
 | [Tools/reverse/test_original_dynamics_probe.py](../../Tools/reverse/test_original_dynamics_probe.py) | Test / validation |
+| [Tools/reverse/test_original_legacy_scene_probe.py](../../Tools/reverse/test_original_legacy_scene_probe.py) | Test / validation |
 | [Tools/reverse/test_original_map_probe.py](../../Tools/reverse/test_original_map_probe.py) | Test / validation |
 | [Tools/reverse/test_original_plugin_scene_probe.py](../../Tools/reverse/test_original_plugin_scene_probe.py) | Test / validation |
 | [Tools/reverse/test_original_scene_reload_probe.py](../../Tools/reverse/test_original_scene_reload_probe.py) | Test / validation |
@@ -966,6 +974,7 @@ Feature assessment: [toolchain-and-verification.md](toolchain-and-verification.m
 | [Tools/verification/scenarios/hand-patterns.json](../../Tools/verification/scenarios/hand-patterns.json) | Conversion / recovery / verification tool |
 | [Tools/verification/scenarios/hand-patterns-kept.json](../../Tools/verification/scenarios/hand-patterns-kept.json) | Conversion / recovery / verification tool |
 | [Tools/verification/scenarios/item-props.json](../../Tools/verification/scenarios/item-props.json) | Conversion / recovery / verification tool |
+| [Tools/verification/scenarios/legacy-scene.json](../../Tools/verification/scenarios/legacy-scene.json) | Conversion / recovery / verification tool |
 | [Tools/verification/scenarios/live-step-edit.json](../../Tools/verification/scenarios/live-step-edit.json) | Conversion / recovery / verification tool |
 | [Tools/verification/scenarios/maker-color-roundtrip.json](../../Tools/verification/scenarios/maker-color-roundtrip.json) | Conversion / recovery / verification tool |
 | [Tools/verification/scenarios/maker-outfit-colors.json](../../Tools/verification/scenarios/maker-outfit-colors.json) | Conversion / recovery / verification tool |

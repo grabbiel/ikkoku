@@ -3042,7 +3042,11 @@ final class StudioModel: ViewportInputHandler, LivePacedHandler {
         // ST-T03i: entries no installed plug-in reads travel verbatim; that
         // is CharaStudio's behavior only while no installed plug-in owns them.
         let orphans = source.orphanPluginIDs
+        // ST-T05a: a scene from an older CharaStudio is written the way
+        // CharaStudio 1.0.4.2 saves it, so even an unedited export changes
+        // its bytes.
         status = "Exported edited original scene to \(url.lastPathComponent)"
+            + (source.isLegacy ? ", saved as 1.0.4.2 from CharaStudio \(source.snapshot.version), as CharaStudio does" : "")
             + (orphans.isEmpty ? "" : ". It keeps plug-in data no installed plug-in reads, unchanged: \(orphans.joined(separator: ", "))")
     }
 
