@@ -475,7 +475,7 @@ The player runs `QualitySettings.anisotropicFiltering` `ForceEnable` (in the pha
 
 `map_fragment` now samples the light map, direction map, base, emission and particle textures with anisotropy 9 and linear mips (`lightmapSampler`, `mapForcedAnisoRepeat`). Character and item draws keep `linearRepeat`.
 
-The probe gates found it. With trilinear sampling, map 34's irradiance failed on surfaces seen edge-on (baseboards, shelf boards), and the particles failed outright. A sampler sweep, with one rebuild and the four captures per state:
+The probe gates found it. With trilinear sampling, map 34's irradiance failed on surfaces seen edge-on (baseboards, shelf boards), and the particles failed outright. A sampler sweep, with one rebuild and the four captures per state (`.local/sta11c-map34/exp/<state>/comparison.json`):
 
 | Lightmap sampler | Irradiance p99, day / evening / night / showoff | Pixels over 2⁻⁹, day |
 | --- | --- | ---: |
@@ -620,6 +620,70 @@ The image effects account for the gap to the frame with effects. The showoff inc
   - reimport, New Scene and undo.
 
   `studio-scenario-source-map` also asserts map 33's 8 BC images. Both need the slice-3 export and `IKKOKU_STUDIO_MAP34_SCENE` (see [installing](#installing-the-slice-3-export)).
+
+#### Captures (slice 3)
+
+Release captures, 16 per set, from `main` (`4d60b73`) and from this change merged with it (`147bd19`; later commits change no code). Each binary ran on the slice-2 export (the shared fixture) and on the slice-3 export: `.local/sta11c-map34/captures/{base-old,base-new,head,head-old}/captures.json`.
+
+- **No map: byte-identical in all four sets**, with the live source-shader opt-in OFF and ON:
+  - the scenario scene with the catalog;
+  - the half-state fixture;
+  - native Studio;
+  - the showoff scene without the catalog, and with it (its props hide the room);
+  - the showoff scene without props or catalog.
+
+  The four live reports are byte-identical too. Characters and items keep their samplers.
+- **`main`'s binary renders map 33 identically on both exports:** the emptied map 33 scene and the showoff scene without props, OFF and ON.
+- **This change on the slice-2 export** loads map 33 from its 8 PNGs (`images: 0 as BC blocks, 8 decoded`). A scene naming map 34 draws no map, because that catalog's row has no file.
+- **This change against `main`, map 33:**
+  - the emptied scene differs by MAE 0.33 of 255 (p99 2, max 21);
+  - anisotropy alone (this change on the slice-2 export against `main`) is MAE 0.04 on 5.1% of the pixels;
+  - BC against RGBA8 is MAE 0.30;
+  - the showoff scene without props differs by MAE 0.11 (p99 2).
+- **Map 34.** `main`'s binary on the slice-3 export draws map 34's 54 draws from the decoded PNGs (272,449,536 texture bytes). It has no code for the sky cube or the particle formula. Ours differs from it by MAE 1.8 (p99 40), almost all of it on the alpha-tested trees through the window. Their cutout edges follow the mips (Unity's in the BC blocks against MetalKit's box filter) and the sampler. The [colour table](#colour-before-and-after-map-34) shows ours is the closer of the two to the original.
+
+### Installing the slice-3 export
+
+The shared fixture (`.local/reverse/exports/maps/`) keeps the slice-2 export until this change merges. The slice-3 export is built privately in `.local/sta11c-map34/exports/maps/`. Its 142 file hashes are in `.local/sta11c-map34/new-export.sha256`, and the slice-2 export's 15 are in `old-export.sha256`. Both trees are on the same volume, so every `mv` below is an atomic rename.
+
+Install it from the main checkout, with no app run or lane using the map:
+
+```sh
+cd /Users/rumpology/code/repo/ikkoku
+M=$PWD/.local/reverse/exports/maps          # the shared fixture (environment.json names $M/catalog.json)
+N=$PWD/.local/sta11c-map34/exports/maps     # the slice-3 export
+B=$PWD/.local/sta11c-map34/old-export       # the backup of the slice-2 export
+H=$PWD/.local/sta11c-map34                  # the two hash manifests
+# 0. Both trees are what the manifests say.
+(cd "$M" && shasum -a 256 -c "$H/old-export.sha256")
+(cd "$N" && shasum -a 256 -c "$H/new-export.sha256")
+# 1. Stage the new export beside the shared one. The slice-2 catalog names no file for map 34.
+mv "$N/34-akikyoushitu" "$M/34-akikyoushitu"
+mv "$N/33-bushitu" "$M/33-bushitu.sta11c" && mv "$N/catalog.json" "$M/catalog.json.sta11c"
+# 2. Back up the old export and put the new one in its place.
+mkdir -p "$B"
+mv "$M/33-bushitu" "$B/33-bushitu" && mv "$M/33-bushitu.sta11c" "$M/33-bushitu"
+mv "$M/catalog.json" "$B/catalog.json" && mv "$M/catalog.json.sta11c" "$M/catalog.json"
+# 3. Check the result.
+(cd "$M" && shasum -a 256 -c "$H/new-export.sha256")
+(cd "$B" && shasum -a 256 -c "$H/old-export.sha256")
+rmdir "$N" "$H/exports"
+# 4. The map 34 scene for studio-scenario-source-map34, beside the map 33 scenes.
+cp "$H/phase-map34/scene-map34-day.png" "$PWD/.local/reverse/studio-scenes/maps/scene-map34-day.png"
+```
+
+Then add `IKKOKU_STUDIO_MAP34_SCENE` = `.local/reverse/studio-scenes/maps/scene-map34-day.png` (absolute) to `environment.json`.
+
+To roll back, swap the two the same way. `34-akikyoushitu/` can stay, since the slice-2 catalog does not name it:
+
+```sh
+mv "$M/33-bushitu" "$M/33-bushitu.sta11c" && mv "$B/33-bushitu" "$M/33-bushitu"
+mv "$M/catalog.json" "$M/catalog.json.sta11c" && mv "$B/catalog.json" "$M/catalog.json"
+```
+
+**Safe for branches still on `main`.** Map 33's PNGs, `bushitu.bin` and its lightmap files keep their bytes. Its glTF gains the block-image extras, which `main`'s binary ignores. Rendered by `main`'s binary, the map 33 captures are byte-identical on both exports ([captures](#captures-slice-3)). The one change `main` sees is that a scene naming map 34 now draws it, without its sky or particle formula. No `main` scene or lane names map 34.
+
+**Storage.** The shared export grows from 5.7 MB to 88 MB (+82 MB). Map 34 takes 76 MB of that, of which its PNG copies take 17 MB. Map 33 grows from 5.7 to 13 MB with its BC files. The backup holds the old 5.7 MB, and the private copy is moved, not duplicated.
 
 ## Performance
 
