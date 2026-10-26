@@ -9,7 +9,7 @@ import Testing
 /// data step alone (`SourceScenePluginData.rewrite` on the same edit's
 /// output): the cost with the step, and the cost it adds. Run it in a quiet
 /// window with
-/// `swift test -c release --package-path Packages/Engine --filter SourceScenePluginDataPerformance`.
+/// `swift test -c release -Xswiftc -enable-testing --package-path Packages/Engine --filter SourceScenePluginDataPerformance`.
 private let pluginPerfEnvironment = ProcessInfo.processInfo.environment
 private let pluginPerfEnabled = pluginPerfEnvironment["IKKOKU_PLUGIN_SCENE_PERF"] == "1"
     && ["IKKOKU_STUDIO_SCENARIO_SCENE", "IKKOKU_PLUGIN_SCENE_PROBE", "IKKOKU_PLUGIN_SCENE_PROBE_B"]
