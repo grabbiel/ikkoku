@@ -72,7 +72,7 @@ private func readBack(_ texture: any MTLTexture, format: SourceStudioBlockTextur
         for level in 0..<texture.mipmapLevelCount {
             blit.copy(from: texture, sourceSlice: slice, sourceLevel: level, sourceOrigin: MTLOrigin(x: 0, y: 0, z: 0),
                       sourceSize: MTLSize(width: width, height: height, depth: 1), to: buffer, destinationOffset: offset,
-                      destinationBytesPerRow: max(1, (width + 3) / 4) * format.blockBytes, destinationBytesPerImage: counts[level])
+                      destinationBytesPerRow: format.bytesPerRow(width: width), destinationBytesPerImage: counts[level])
             offset += counts[level]
             (width, height) = (max(1, width / 2), max(1, height / 2))
         }
@@ -469,7 +469,7 @@ func depthOnlyAndStencilMainPassesCarryTheSameGroups() throws {
     let renderer = try makeSourceShaderRenderer()
     let depthOnly = renderer.pipelines.depthOnlyMainPass.labels
     let stencil = try renderer.pipelines.stencilMainPass().labels
-    #expect(depthOnly.contains("Sky") && depthOnly.count == 11)
+    #expect(depthOnly.contains("Sky") && depthOnly.contains("MapDepthOnly") && depthOnly.count == 12)
     #expect(stencil == depthOnly.map { $0 + "Stencil" })
 }
 
@@ -675,7 +675,7 @@ struct SourceStudioSkyMapTests {
         #expect(asset.blockImages == 1 && asset.decodedImages == 0 && asset.cubeTextures == 1 && asset.imageSource == .blocks)
         // The image, two lightmaps and the cube; the cube is six 8-byte faces.
         #expect(asset.textures.count == 4 && asset.cubeBytes >= 48 && asset.textureBytes > asset.lightmapBytes + asset.cubeBytes)
-        let items = try asset.items(transform: KoikatsuChangeAmount(position: .zero, rotationDegrees: .zero, scale: .one), sunLightType: 0)
+        let items = try asset.items(transform: KoikatsuChangeAmount(position: .zero, rotationDegrees: .zero, scale: .one), sunLightType: 0, mapOption: true)
         let sky = try #require(items.first { SourceStudioMapAsset.Draw($0.material) == .sky })
         let leaf = try #require(items.first { SourceStudioMapAsset.Draw($0.material) == .particle })
         let lit = try #require(items.first { SourceStudioMapAsset.Draw($0.material) == .lightmapped })
@@ -732,7 +732,9 @@ struct SourceStudioSkyMapTests {
 /// Every converted map in `IKKOKU_STUDIO_MAP_CATALOG` loads both ways
 /// (block images, and the measurement switch's decoded PNGs); each listed
 /// block image and cube uploads to its file byte for byte (blitted back); a
-/// map without a sky or particles keeps its slice-2 status line.
+/// map without a sky or particles keeps its slice-2 status line. A slice-4
+/// map with block-only images (no PNG) is refused by the switch by name, and
+/// its block-only image entries are exactly the listed block files.
 @Test(.enabled(if: SourceFixtureSupport.shouldRun(["IKKOKU_STUDIO_MAP_CATALOG"]) && MTLCreateSystemDefaultDevice() != nil),
       .timeLimit(.minutes(5)))
 func everyConvertedMapLoadsItsBlockImagesByteForByte() async throws {
@@ -758,11 +760,24 @@ func everyConvertedMapLoadsItsBlockImagesByteForByte() async throws {
             try SourceStudioMapAsset.load(url: file, packageRoot: packageRoot, resources: resources, imageSource: .blocks)
         }
         #expect(blocks == nil ? asset.blockImages == 0 : asset.blockImages > 0, "map \(number)")
+        let blockOnly = gltf.images.indices.filter { gltf.images[$0].mimeType?.hasPrefix(SourceStudioMapAsset.blockOnlyMimePrefix) == true }
+        for index in blockOnly {
+            let listed = try #require(blocks?.images[index], "map \(number) image \(index)")
+            #expect(gltf.images[index].data == (try Data(contentsOf: directory.appendingPathComponent(listed.file))), "map \(number) image \(index)")
+        }
         #expect(asset.cubeTextures == (blocks?.cubes.count ?? 0) || asset.skyParts == 0, "map \(number)")
         if asset.skyParts == 0, asset.particleParts == 0, asset.lightmappedParts == asset.parts.count, asset.lightmappedParts > 0 {
             #expect(SourceStudioMapStatus.loaded(entry, asset: asset).contains(": baked lightmaps; approximated: "), "map \(number)")
         }
         asset.release()
+        guard blockOnly.isEmpty else {
+            let refusal = try await liveTickOffPool { () -> String? in
+                do { try SourceStudioMapAsset.load(url: file, packageRoot: packageRoot, resources: resources, imageSource: .decoded).release(); return nil }
+                catch { return "\(error)" }
+            }
+            #expect(refusal?.contains("IKKOKU_SOURCE_MAP_DECODED_TEXTURES=1 cannot decode it") == true, "map \(number): \(refusal ?? "decoded")")
+            continue
+        }
         let decoded = try await liveTickOffPool {
             try SourceStudioMapAsset.load(url: file, packageRoot: packageRoot, resources: resources, imageSource: .decoded)
         }

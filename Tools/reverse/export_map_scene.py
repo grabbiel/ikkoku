@@ -1518,8 +1518,8 @@ def not_drawn_components(map_scene, active):
 
 
 def not_drawn_notes(provenance):
-    """The catalog's "not drawn" list: skipped shader classes with renderer counts, then the
-    components the converter does not read."""
+    """The catalog's "not drawn" list (the app's "not reproduced"): skipped shader classes with
+    renderer counts, then the components the converter does not read, as "label: count"."""
     notes, classes = [], {}
     for entry in provenance.get("skipped", []):
         if "shader" in entry:
@@ -1527,7 +1527,7 @@ def not_drawn_notes(provenance):
     for reason, paths in sorted(classes.items()):
         notes.append(f"{reason} ({len(paths)} renderer{'s' if len(paths) != 1 else ''})")
     for label, count in sorted((provenance.get("notDrawn") or {}).get("components", {}).items()):
-        notes.append(f"{count} {label}")
+        notes.append(f"{label}: {count}")
     return notes
 
 

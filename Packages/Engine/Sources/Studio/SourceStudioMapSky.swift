@@ -53,8 +53,8 @@ public struct SourceStudioBlockImages: Sendable {
             let image = try index(json, "image")
             guard images[image] == nil else { throw fail("image \(image) is listed twice") }
             let file = try SourceStudioBlockTexture.parseFile(json, failure: fail, role: "image \(image)")
-            // BC7 cannot be row-flipped losslessly; the converter keeps those PNG-only.
-            guard file.format != .bc7 else { throw fail("image \(image) is BC7") }
+            // BC7 cannot be row-flipped losslessly; the converter keeps those PNG-only. RGBA8 is for lightmaps.
+            guard file.format == .bc1 || file.format == .bc3 else { throw fail("image \(image) is \(file.format.rawValue)") }
             images[image] = file
         }
         var cubes: [Int: SourceStudioBlockTexture.File] = [:]
@@ -62,7 +62,7 @@ public struct SourceStudioBlockImages: Sendable {
             let cube = try index(json, "cube")
             guard cubes[cube] == nil else { throw fail("cube \(cube) is listed twice") }
             let file = try SourceStudioBlockTexture.parseFile(json, failure: fail, role: "cube \(cube)")
-            guard json["faces"]?.doubleValue == 6, file.width == file.height,
+            guard file.format.isBlock, json["faces"]?.doubleValue == 6, file.width == file.height,
                   json["faceOrder"]?.arrayValue?.compactMap(\.stringValue) == faceOrder,
                   json["rows"]?.stringValue == "topDown" else {
                 throw fail("cube \(cube) is not six square faces in D3D order, rows top-down")
@@ -176,24 +176,36 @@ public enum SourceStudioSkyMaterial {
 }
 
 /// A Particles/Alpha Blended material (`ikkokuParticle`): _TintColor as a
-/// Linear player uploads it.
+/// Linear player uploads it. Slice 4: `animBlend` marks Particles/Anim Alpha
+/// Blended (Particle AnimAlphaBlend.shader v5.6.2f1: the same formula with the
+/// texture lerped from TEXCOORD_0 to TEXCOORD_2 by TEXCOORD_1.x, as the
+/// converter writes the mesh).
 public struct SourceStudioParticleInputs: Sendable, Equatable {
     public let tint: Float4
+    public let animBlend: Bool
+
+    public init(tint: Float4, animBlend: Bool = false) { self.tint = tint; self.animBlend = animBlend }
 
     public static func parse(_ extras: JSONValue?) throws -> SourceStudioParticleInputs? {
         guard let value = extras?["ikkokuParticle"] else { return nil }
         guard let tint = value["tintLinear"]?.arrayValue?.compactMap(\.doubleValue), tint.count == 4, tint.allSatisfy(\.isFinite) else {
             throw RigError.invalid("A map particle material's tint is incomplete.")
         }
-        return SourceStudioParticleInputs(tint: Float4(Float(tint[0]), Float(tint[1]), Float(tint[2]), Float(tint[3])))
+        var anim = false
+        if let flag = value["animBlend"], flag != .null {
+            guard let on = flag.boolValue else { throw RigError.invalid("A map particle material's animBlend is not a boolean.") }
+            anim = on
+        }
+        return SourceStudioParticleInputs(tint: Float4(Float(tint[0]), Float(tint[1]), Float(tint[2]), Float(tint[3])), animBlend: anim)
     }
 
     /// `MaterialKindMap` with `MaterialFlagMapParticle`: 2 * vertex colour *
-    /// tint * texture, alpha blended, both faces, in the transparent pass.
+    /// tint * texture, alpha blended, both faces, in the transparent pass;
+    /// `MaterialFlagMapParticleAnim` for the animated sheet.
     public func material(base: TextureHandle?) -> MaterialState {
         var m = MaterialState(uniforms: .make(kind: MaterialKindMap))
         m.uniforms.flags = MaterialFlagNoOutline.rawValue | MaterialFlagMapParticle.rawValue | MaterialFlagDoubleSided.rawValue
-            | MaterialFlagAlphaBlend.rawValue
+            | MaterialFlagAlphaBlend.rawValue | (animBlend ? MaterialFlagMapParticleAnim.rawValue : 0)
         m.uniforms.baseColor = tint
         m.base = base
         m.setFlag(MaterialFlagHasBaseTexture, base != nil)

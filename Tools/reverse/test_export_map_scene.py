@@ -135,7 +135,8 @@ class MaterialTests(unittest.TestCase):
 
     def test_skipped_shaders_are_not_mapped_and_every_class_has_a_reason(self):
         self.assertFalse(set(maps.MAP_SKIPPED_SHADERS) & set(maps.MAP_SHADER_RULES))
-        self.assertEqual(set(maps.MAP_SKIPPED_SHADERS.values()), set(maps.MAP_SKIPPED_REASONS))
+        # Render-texture screens are skipped by their material's texture, whatever the shader.
+        self.assertEqual(set(maps.MAP_SKIPPED_SHADERS.values()) | {'render-texture screens'}, set(maps.MAP_SKIPPED_REASONS))
 
 
 class ShaderStateTests(unittest.TestCase):
@@ -444,7 +445,7 @@ class CatalogTests(unittest.TestCase):
                                   {'path': 'Map/d', 'reason': 'disabled renderer'}],
                       'notDrawn': {'components': {'skinned renderers': 4, 'animated objects (drawn in their authored pose)': 2}}}
         self.assertEqual(maps.not_drawn_notes(provenance), ['mirror (1 renderer)', 'stage effects (2 renderers)',
-                                                            '2 animated objects (drawn in their authored pose)', '4 skinned renderers'])
+                                                            'animated objects (drawn in their authored pose): 2', 'skinned renderers: 4'])
         self.assertEqual(maps.not_drawn_notes({}), [])
 
     def test_gpu_bytes_counts_rgba8_with_a_full_mip_chain(self):

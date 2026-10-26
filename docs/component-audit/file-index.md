@@ -23,13 +23,13 @@ branch was tested or every asset matches the original game. Feature status,
 specific comments and pending tasks are in the linked reports. Shared behavior
 may be discussed in more than one report; one primary owner is listed here.
 
-**1014 files indexed; 1014 assigned; 0 unassigned.**
+**1016 files indexed; 1016 assigned; 0 unassigned.**
 
 | Primary report | Files |
 | --- | ---: |
 | [App / gameplay / plugins](app-gameplay-and-plugins.md) | 110 |
 | [Character / Maker / mods](character-and-mods.md) | 128 |
-| [Studio / IK / animation](studio.md) | 231 |
+| [Studio / IK / animation](studio.md) | 233 |
 | [Renderer / foundation / assets](renderer-and-foundation.md) | 335 |
 | [Toolchain / verification / historical docs](toolchain-and-verification.md) | 200 |
 
@@ -41,8 +41,8 @@ may be discussed in more than one report; one primary owner is listed here.
 | Documentation / historical evidence | 65 |
 | Generated asset / catalog / fixture | 205 |
 | Reference host / controlled fixture | 35 |
-| Runtime / shared shader declaration | 225 |
-| Test / validation | 210 |
+| Runtime / shared shader declaration | 226 |
+| Test / validation | 211 |
 
 ## App / gameplay / plugins
 
@@ -355,6 +355,7 @@ Feature assessment: [studio.md](studio.md).
 | [Packages/Engine/Sources/Studio/SourceStudioMap.swift](../../Packages/Engine/Sources/Studio/SourceStudioMap.swift) | Runtime / shared shader declaration |
 | [Packages/Engine/Sources/Studio/SourceStudioMapLightmaps.swift](../../Packages/Engine/Sources/Studio/SourceStudioMapLightmaps.swift) | Runtime / shared shader declaration |
 | [Packages/Engine/Sources/Studio/SourceStudioMapSky.swift](../../Packages/Engine/Sources/Studio/SourceStudioMapSky.swift) | Runtime / shared shader declaration |
+| [Packages/Engine/Sources/Studio/SourceStudioMapUnlitDraws.swift](../../Packages/Engine/Sources/Studio/SourceStudioMapUnlitDraws.swift) | Runtime / shared shader declaration |
 | [Packages/Engine/Sources/Studio/SourceStudioNeckLook.swift](../../Packages/Engine/Sources/Studio/SourceStudioNeckLook.swift) | Runtime / shared shader declaration |
 | [Packages/Engine/Sources/Studio/SourceStudioNeckLookRuntime.swift](../../Packages/Engine/Sources/Studio/SourceStudioNeckLookRuntime.swift) | Runtime / shared shader declaration |
 | [Packages/Engine/Sources/Studio/SourceStudioNeckTargetAngle.swift](../../Packages/Engine/Sources/Studio/SourceStudioNeckTargetAngle.swift) | Runtime / shared shader declaration |
@@ -419,6 +420,7 @@ Feature assessment: [studio.md](studio.md).
 | [Packages/Engine/Tests/EngineTests/SourceStudioLookDataTests.swift](../../Packages/Engine/Tests/EngineTests/SourceStudioLookDataTests.swift) | Test / validation |
 | [Packages/Engine/Tests/EngineTests/SourceStudioMapLightmapTests.swift](../../Packages/Engine/Tests/EngineTests/SourceStudioMapLightmapTests.swift) | Test / validation |
 | [Packages/Engine/Tests/EngineTests/SourceStudioMapSkyTests.swift](../../Packages/Engine/Tests/EngineTests/SourceStudioMapSkyTests.swift) | Test / validation |
+| [Packages/Engine/Tests/EngineTests/SourceStudioMapUnlitDrawTests.swift](../../Packages/Engine/Tests/EngineTests/SourceStudioMapUnlitDrawTests.swift) | Test / validation |
 | [Packages/Engine/Tests/EngineTests/SourceStudioMapTests.swift](../../Packages/Engine/Tests/EngineTests/SourceStudioMapTests.swift) | Test / validation |
 | [Packages/Engine/Tests/EngineTests/SourceStudioNeckLookRuntimeTests.swift](../../Packages/Engine/Tests/EngineTests/SourceStudioNeckLookRuntimeTests.swift) | Test / validation |
 | [Packages/Engine/Tests/EngineTests/SourceStudioNeckLookTests.swift](../../Packages/Engine/Tests/EngineTests/SourceStudioNeckLookTests.swift) | Test / validation |

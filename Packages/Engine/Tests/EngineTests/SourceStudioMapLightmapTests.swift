@@ -383,7 +383,7 @@ struct SourceStudioLightmappedMapTests {
         let asset = try await liveTickOffPool { try SourceStudioMapAsset.load(url: url, packageRoot: root, resources: resources) }
         #expect(asset.parts.count == 2 && asset.lightmappedParts == 1 && asset.lightmapTextures == 2)
         #expect(asset.textures.count == 3 && asset.lightmapBytes > 0 && asset.textureBytes > asset.lightmapBytes)
-        let items = try asset.items(transform: KoikatsuChangeAmount(position: .zero, rotationDegrees: .zero, scale: .one), sunLightType: 0)
+        let items = try asset.items(transform: KoikatsuChangeAmount(position: .zero, rotationDegrees: .zero, scale: .one), sunLightType: 0, mapOption: true)
         let map = try #require(items.first { $0.material.kind == MaterialKindMap })
         let item = try #require(items.first { $0.material.kind == MaterialKindItem })
         #expect(map.material.lightmap != nil && map.material.lightmapDirection != nil && map.material.base != nil && map.material.emission == nil)

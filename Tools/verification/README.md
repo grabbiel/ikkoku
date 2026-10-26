@@ -1127,14 +1127,19 @@ slice-3 export (block images, and map 34), and `source-map34` needs
 export](../../docs/reference/studio/maps.md#installing-the-slice-3-export)).
 
 `sourceMap` asserts take `particleDraws`, `skyDraws` and `blockImages`, and
-the report's detail line prints them with the sky cube bytes.
+the report's detail line prints them with the sky cube bytes. Since slice 4
+they also take `unlitDraws`, `silhouetteDraws` and `optionDraws` (the
+placed draws under a map option root, 0 while the scene's map option is
+off).
 
 **Measurement switch.** `IKKOKU_SOURCE_MAP_DECODED_TEXTURES=1` makes a map
 load decode its PNGs to RGBA8 (MetalKit mips) instead of uploading the
 `ikkokuBlockImages` BC blocks. The load reads it once, and the default is
 BC. It exists to measure the BC upload against the decoded path (memory,
 load time, the map probe gates). No check sets it, and the census shows it
-as `decodedImages` and `source decoded`.
+as `decodedImages` and `source decoded`. A slice-4 map whose images are
+block-only (`image/x-ikkoku-bc1`/`bc3`, no PNG) cannot be decoded: the
+switch fails its load by name.
 
 ## Maker scenario hook (T-T04)
 

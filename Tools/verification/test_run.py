@@ -1058,12 +1058,14 @@ class StudioScenarioLaneTests(unittest.TestCase):
                         # ST-A11: `none`, or census fields; pick points are two viewport fractions.
                         source_map = step["sourceMap"]
                         self.assertTrue(set(source_map) <= {"none", "map", "draws", "lightmappedDraws", "particleDraws", "skyDraws", "blockImages",
+                                                            "unlitDraws", "silhouetteDraws", "optionDraws",
                                                             "loading", "lineContains", "lineAbsent", "pickNothingAt", "pickSomethingAt"},
                                         "unknown sourceMap field: %s" % path)
                         self.assertTrue(source_map, "a sourceMap assert must name what it checks: %s" % path)
                         if source_map.get("none"):
                             self.assertEqual(set(source_map), {"none"}, "no map has no census to compare: %s" % path)
-                        for name in ("map", "draws", "lightmappedDraws", "particleDraws", "skyDraws", "blockImages"):
+                        for name in ("map", "draws", "lightmappedDraws", "particleDraws", "skyDraws", "blockImages",
+                                     "unlitDraws", "silhouetteDraws", "optionDraws"):
                             if name in source_map:
                                 self.assertIs(type(source_map[name]), int)
                         for name in ("pickNothingAt", "pickSomethingAt"):

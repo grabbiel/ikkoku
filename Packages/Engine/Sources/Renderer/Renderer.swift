@@ -1450,10 +1450,24 @@ public final class Renderer: @unchecked Sendable {
                 let material = rec.item.material.uniforms
                 let nativeEye = material.kind == UInt32(MaterialKindEye.rawValue) && (material.flags & MaterialFlagSourceIrisHighlights.rawValue) == 0
                 let isMap = material.kind == UInt32(MaterialKindMap.rawValue)
-                enc.setRenderPipelineState(isMap ? main.mapBlend : nativeEye ? main.eyeBlend : main.toonBlend)
                 bindDraw(enc, rec)
                 bindTextures(enc, rec.item.material, frame: ctx.frame)
                 enc.setCullMode((rec.item.material.uniforms.flags & MaterialFlagDoubleSided.rawValue) != 0 ? .none : .back)
+                if isMap, (material.flags & MaterialFlagMapSilhouette.rawValue) != 0 {
+                    // Custom/Silhouette, per renderer as Unity draws it: pass 1 writes
+                    // depth only (ColorMask 0, ZWrite On, ZTest LEqual), pass 2 blends
+                    // the colour where pass 1 left the nearest depth (ZWrite Off,
+                    // ZTest LEqual), so a renderer's overlapping faces blend once.
+                    enc.setRenderPipelineState(main.mapDepthOnly)
+                    enc.setDepthStencilState(pipelines.depthWriteLEqual)
+                    drawIndexed(enc, rec.mesh)
+                    enc.setRenderPipelineState(main.mapBlend)
+                    enc.setDepthStencilState(pipelines.depthTestLEqual)
+                    drawIndexed(enc, rec.mesh)
+                    enc.setDepthStencilState(pipelines.depthTest)
+                    continue
+                }
+                enc.setRenderPipelineState(isMap ? main.mapBlend : nativeEye ? main.eyeBlend : main.toonBlend)
                 drawIndexed(enc, rec.mesh)
             }
             enc.popDebugGroup()

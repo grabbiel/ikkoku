@@ -33,6 +33,9 @@ public struct SourceStudioMapCatalog: Sendable {
         public let file: String?
         /// What the converted map does not reproduce (the converter's list).
         public let approximations: [String]?
+        /// Slice 4: what the map has that the app does not draw or animate
+        /// (skipped shader classes, unread components), present when any.
+        public let notDrawn: [String]?
     }
 
     /// What a scene's map number resolves to. Only `.converted` draws.
@@ -120,15 +123,24 @@ public enum SourceStudioMapStatus {
 
     /// What the particle draws leave out of Particles/Alpha Blended (slice 3).
     public static let particlesLabel = "particles (no soft-particle fade or per-renderer sorting)"
+    /// Unlit/Transparent draws (slice 4): the texture alone, blended.
+    public static let unlitLabel = "unlit textures"
+    /// Custom/Silhouette draws (slice 4): Studio's mob colour is a user
+    /// setting the app does not read; its default is drawn.
+    public static let silhouetteLabel = "mob silhouettes in the default mob colour (the user's setting is not read)"
 
     /// The line once a converted map is drawn. The lightmap count is over the
-    /// Standard parts; the sky and particles, drawn by their own formulas, are
-    /// named after it.
-    public static func loaded(_ entry: SourceStudioMapCatalog.Entry, asset: SourceStudioMapAsset) -> String {
-        let standard = asset.parts.count - asset.skyParts - asset.particleParts
+    /// Standard parts; the sky, particles, unlit and silhouette draws, drawn by
+    /// their own formulas, are named after it. After the counts: the option
+    /// objects hidden when the scene turns the map option off, and what the
+    /// catalog says the map has that is not reproduced (slice 4).
+    public static func loaded(_ entry: SourceStudioMapCatalog.Entry, asset: SourceStudioMapAsset, mapOption: Bool = true) -> String {
+        let standard = asset.parts.count - asset.skyParts - asset.particleParts - asset.unlitParts - asset.silhouetteParts
         var drawn = ""
         if asset.skyParts > 0 { drawn += ", cubemap sky" }
         if asset.particleParts > 0 { drawn += ", \(particlesLabel)" }
+        if asset.unlitParts > 0 { drawn += ", \(unlitLabel)" }
+        if asset.silhouetteParts > 0 { drawn += ", \(silhouetteLabel)" }
         let label: String
         switch asset.lightmappedParts {
         case 0: label = approximationLabel + drawn.replacingOccurrences(of: ", ", with: "; ")
@@ -138,7 +150,10 @@ public enum SourceStudioMapStatus {
         }
         var line = "\(title(entry)): \(label)"
         if let shaders = entry.approximations?.first(where: { $0.hasPrefix("shaders approximated") }) { line += "; \(shaders)" }
-        return line + " · \(asset.triangles) triangles, \(asset.parts.count) draws"
+        line += " · \(asset.triangles) triangles, \(asset.parts.count) draws"
+        if !mapOption, asset.optionParts > 0 { line += "; map option off: \(asset.optionParts) option draws hidden" }
+        if let notDrawn = entry.notDrawn, !notDrawn.isEmpty { line += "; not reproduced: " + notDrawn.joined(separator: ", ") }
+        return line
     }
 
     public static func failed(_ entry: SourceStudioMapCatalog.Entry, _ error: Error) -> String {
@@ -191,12 +206,20 @@ public final class SourceStudioMapAsset: @unchecked Sendable {
         case particle
         /// Skybox/Cubemap (`MaterialKindSky`, slice 3).
         case sky
+        /// Unlit/Transparent (`MaterialKindMap` + `MaterialFlagMapUnlit`, slice 4).
+        case unlit
+        /// Custom/Silhouette (`MaterialKindMap` + `MaterialFlagMapSilhouette`, slice 4).
+        case silhouette
 
         /// The draw a map part's material makes (for counting placed items).
         public init(_ material: MaterialState) {
             if material.kind == MaterialKindSky { self = .sky }
             else if material.kind == MaterialKindMap {
-                self = material.uniforms.flags & MaterialFlagMapParticle.rawValue != 0 ? .particle : .lightmapped
+                let flags = material.uniforms.flags
+                if flags & MaterialFlagMapSilhouette.rawValue != 0 { self = .silhouette }
+                else if flags & MaterialFlagMapUnlit.rawValue != 0 { self = .unlit }
+                else if flags & MaterialFlagMapParticle.rawValue != 0 { self = .particle }
+                else { self = .lightmapped }
             } else { self = .item }
         }
     }
@@ -225,7 +248,21 @@ public final class SourceStudioMapAsset: @unchecked Sendable {
         public let visibleFor: Set<Int32>
         public let triangles: Int
         public let draw: Draw
+        /// Under one of `Studio.Map`'s option roots (slice 4): shown only while
+        /// the scene's `mapOption` is on (`Map.visibleOption`).
+        public let option: Bool
     }
+
+    /// The decoder for a map image that is not block-only (its PNG or JPEG):
+    /// `ResourceStore.texture(data:)` unless a test counts the calls.
+    public typealias ImageDecoder = @Sendable (_ data: Data, _ key: String, _ srgb: Bool, _ resources: ResourceStore) throws -> TextureHandle
+    public static let storeDecoder: ImageDecoder = { data, key, srgb, resources in
+        try resources.texture(data: data, key: key, srgb: srgb, cacheNew: false)
+    }
+    /// The glTF image mimeType prefix of a block-only image (slice 4): the
+    /// converter wrote no PNG, the uri names the BC file, and only this
+    /// loader reads it. Never handed to an image decoder.
+    public static let blockOnlyMimePrefix = "image/x-ikkoku-bc"
 
     public let url: URL
     public let parts: [Part]
@@ -243,6 +280,11 @@ public final class SourceStudioMapAsset: @unchecked Sendable {
     /// Particles/Alpha Blended parts and Skybox/Cubemap parts (slice 3).
     public let particleParts: Int
     public let skyParts: Int
+    /// Unlit/Transparent and Custom/Silhouette parts, and the parts under an
+    /// option root (slice 4).
+    public let unlitParts: Int
+    public let silhouetteParts: Int
+    public let optionParts: Int
     /// The cubes' share of `textureBytes`, and how many there are.
     public let cubeBytes: Int
     public let cubeTextures: Int
@@ -265,6 +307,9 @@ public final class SourceStudioMapAsset: @unchecked Sendable {
         self.lightmappedParts = parts.filter { $0.draw == .lightmapped }.count
         self.particleParts = parts.filter { $0.draw == .particle }.count
         self.skyParts = parts.filter { $0.draw == .sky }.count
+        self.unlitParts = parts.filter { $0.draw == .unlit }.count
+        self.silhouetteParts = parts.filter { $0.draw == .silhouette }.count
+        self.optionParts = parts.filter(\.option).count
         self.cubeBytes = cubeBytes; self.cubeTextures = cubeTextures
         self.blockImages = blockImages; self.decodedImages = decodedImages; self.imageSource = imageSource
         self.triangles = parts.reduce(0) { $0 + $1.triangles }
@@ -276,8 +321,11 @@ public final class SourceStudioMapAsset: @unchecked Sendable {
     /// it on a GCD worker, never on the main thread or the Swift concurrency
     /// pool. A failure releases everything it registered. `imageSource` is
     /// read once here (default: the environment's measurement switch).
+    /// `decoder` decodes the PNG and JPEG images; a block-only image never
+    /// reaches it (refused by name instead).
     public static func load(url: URL, packageRoot: URL, resources: ResourceStore,
-                            imageSource: ImageSource = .fromEnvironment()) throws -> SourceStudioMapAsset {
+                            imageSource: ImageSource = .fromEnvironment(),
+                            decoder: ImageDecoder = SourceStudioMapAsset.storeDecoder) throws -> SourceStudioMapAsset {
         let start = DispatchTime.now().uptimeNanoseconds
         let loaded = try LoadedAsset.loadStatic(url: url, packageRoot: packageRoot, resources: resources)
         // Registration order, so a failure gives back everything at once.
@@ -297,21 +345,40 @@ public final class SourceStudioMapAsset: @unchecked Sendable {
             let directory = url.deletingLastPathComponent()
             /// Private (uncached) registration of one glTF image: the asset owns it.
             /// Its BC blocks when the converter wrote them (sampled as `srgb`
-            /// asks, like the PNG), else the PNG decoded by MetalKit.
+            /// asks, like the PNG), else the PNG decoded by MetalKit. A block-only
+            /// image (slice 4: `image/x-ikkoku-bc*`, no PNG) is its BC file,
+            /// already read by the glTF loader through its uri; the measurement
+            /// switch cannot decode it and refuses it by name.
             func image(_ index: Int, srgb: Bool, material: String) throws -> TextureHandle {
                 let key = "\(index)#\(srgb)"
                 if let handle = images[key] { return handle }
                 guard gltf.images.indices.contains(index), !gltf.images[index].data.isEmpty else {
                     throw RigError.invalid("\(url.lastPathComponent): material \(material) names a missing image.")
                 }
+                let entry = gltf.images[index]
                 let handle: TextureHandle
-                if imageSource == .blocks, let file = blocks?.images[index] {
+                if let mime = entry.mimeType, mime.hasPrefix(blockOnlyMimePrefix) {
+                    guard let file = blocks?.images[index], mime == "image/x-ikkoku-" + file.format.rawValue.lowercased() else {
+                        throw RigError.invalid("\(url.lastPathComponent): image \(index) (\(mime)) is block-only but the map lists no matching block file for it.")
+                    }
+                    guard imageSource == .blocks else {
+                        throw RigError.invalid("\(url.lastPathComponent): image \(index) is block-only (\(mime), no PNG); "
+                            + "IKKOKU_SOURCE_MAP_DECODED_TEXTURES=1 cannot decode it.")
+                    }
+                    handle = resources.register(texture: try SourceStudioBlockTexture.upload(file, data: entry.data,
+                        device: resources.device, srgb: srgb, what: "Map image"))
+                    blockImageCount += 1
+                } else if imageSource == .blocks, let file = blocks?.images[index] {
                     handle = resources.register(texture: try SourceStudioBlockTexture.upload(file, directory: directory,
                         device: resources.device, srgb: srgb, what: "Map image"))
                     blockImageCount += 1
                 } else {
-                    handle = try resources.texture(data: gltf.images[index].data,
-                        key: "\(url.path)#map-img\(index)", srgb: srgb, cacheNew: false)
+                    // Only PNG and JPEG bytes reach the decoder.
+                    guard SourceStudioMapImageBytes.isPNGOrJPEG(entry.data) else {
+                        throw RigError.invalid("\(url.lastPathComponent): image \(index) (\(entry.mimeType ?? "no mimeType")) "
+                            + "is not a PNG or JPEG; it is not decoded.")
+                    }
+                    handle = try decoder(entry.data, "\(url.path)#map-img\(index)", srgb, resources)
                     decodedImageCount += 1
                 }
                 registered.append(handle)
@@ -377,22 +444,42 @@ public final class SourceStudioMapAsset: @unchecked Sendable {
                 }
                 let mesh = resources.mesh(part.mesh)
                 let indexCount = mesh?.indexCount ?? 0
+                let option = info["option"]?.boolValue == true
                 if let sky = try SourceStudioSkyInputs.parse(part.material.extras) {
                     guard info["sky"]?.boolValue == true else {
                         throw RigError.invalid("\(url.lastPathComponent): mesh \(part.meshName) has a sky material but is not a sky mesh.")
                     }
                     let material = SourceStudioSkyMaterial.make(sky, cube: try cube(sky.cube, material: part.materialName))
                     parts.append(Part(mesh: part.mesh, material: material, local: part.worldMatrix, role: role, visibleFor: visible,
-                                      triangles: indexCount / 3, draw: .sky))
+                                      triangles: indexCount / 3, draw: .sky, option: option))
                     continue
                 }
                 guard info["sky"]?.boolValue != true else {
                     throw RigError.invalid("\(url.lastPathComponent): sky mesh \(part.meshName) has no Skybox/Cubemap material.")
                 }
+                // Custom/Silhouette draws its colour alone: no image is read.
+                if let silhouette = try SourceStudioSilhouetteInputs.parse(part.material.extras) {
+                    guard option else {
+                        throw RigError.invalid("\(url.lastPathComponent): silhouette mesh \(part.meshName) is not under a map option root.")
+                    }
+                    parts.append(Part(mesh: part.mesh, material: silhouette.material(), local: part.worldMatrix, role: role,
+                                      visibleFor: visible, triangles: indexCount / 3, draw: .silhouette, option: option))
+                    continue
+                }
                 let base = try part.material.baseColorImage.map { try image($0, srgb: true, material: part.materialName) }
                 if let particle = try SourceStudioParticleInputs.parse(part.material.extras) {
+                    // Particles/Anim Alpha Blended blends to its second UV set by TEXCOORD_1.x.
+                    if particle.animBlend, mesh?.carriesUV1 != true || mesh?.carriesUV2 != true {
+                        throw RigError.invalid("\(url.lastPathComponent): mesh \(part.meshName) is an animated particle but lacks TEXCOORD_1 or TEXCOORD_2.")
+                    }
                     parts.append(Part(mesh: part.mesh, material: particle.material(base: base), local: part.worldMatrix, role: role,
-                                      visibleFor: visible, triangles: indexCount / 3, draw: .particle))
+                                      visibleFor: visible, triangles: indexCount / 3, draw: .particle, option: option))
+                    continue
+                }
+                if try SourceStudioUnlitInputs.parse(part.material.extras) != nil {
+                    parts.append(Part(mesh: part.mesh, material: SourceStudioUnlitInputs.material(part.material, base: base),
+                                      local: part.worldMatrix, role: role, visibleFor: visible, triangles: indexCount / 3,
+                                      draw: .unlit, option: option))
                     continue
                 }
                 var material = MaterialBuilder.itemMaterial(for: part, base: base)
@@ -413,8 +500,8 @@ public final class SourceStudioMapAsset: @unchecked Sendable {
                                                             range: lightmaps.range, exponent: lightmaps.exponent)
                     draw = .lightmapped
                 }
-                parts.append(Part(mesh: part.mesh, material: material,
-                                  local: part.worldMatrix, role: role, visibleFor: visible, triangles: indexCount / 3, draw: draw))
+                parts.append(Part(mesh: part.mesh, material: material, local: part.worldMatrix, role: role, visibleFor: visible,
+                                  triangles: indexCount / 3, draw: draw, option: option))
             }
             func bytes(_ handles: [TextureHandle]) -> Int { handles.reduce(0) { $0 + (resources.texture($1)?.allocatedSize ?? 0) } }
             let seconds = Double(DispatchTime.now().uptimeNanoseconds - start) / 1e9
@@ -433,14 +520,15 @@ public final class SourceStudioMapAsset: @unchecked Sendable {
 
     /// The map's draws for one scene record: `mapRoot` parts placed by the
     /// record's map transform, `scene` parts where they were authored, only
-    /// the geometry active for the saved sun type. Unpickable but occluding
-    /// picks (objectID 0, `pickOccluder`), no outline, no shadow casting;
-    /// drawn after the characters (order 100), so early depth rejects the
-    /// map pixels they cover.
-    public func items(transform: KoikatsuChangeAmount, sunLightType: Int32) throws -> [RenderItem] {
+    /// the geometry active for the saved sun type, and the option parts only
+    /// while `mapOption` is on (`Map.visibleOption`, applied after the sun
+    /// type). Unpickable but occluding picks (objectID 0, `pickOccluder`), no
+    /// outline, no shadow casting; drawn after the characters (order 100), so
+    /// early depth rejects the map pixels they cover.
+    public func items(transform: KoikatsuChangeAmount, sunLightType: Int32, mapOption: Bool) throws -> [RenderItem] {
         let root = try SourceStudioMapPlacement.mapRootMatrix(transform)
         let key = SourceStudioMapPlacement.sunTypeKey(sunLightType)
-        return parts.filter { $0.visibleFor.contains(key) }.map { part in
+        return parts.filter { $0.visibleFor.contains(key) && (mapOption || !$0.option) }.map { part in
             var item = RenderItem(mesh: part.mesh, material: part.material,
                                   model: part.role == .mapRoot ? root * part.local : part.local, objectID: 0)
             item.castsShadow = false
@@ -450,6 +538,13 @@ public final class SourceStudioMapAsset: @unchecked Sendable {
             item.order = 100
             return item
         }
+    }
+
+    /// How many of `items`' draws are option parts for this sun type and option.
+    public func optionDraws(sunLightType: Int32, mapOption: Bool) -> Int {
+        guard mapOption else { return 0 }
+        let key = SourceStudioMapPlacement.sunTypeKey(sunLightType)
+        return parts.filter { $0.option && $0.visibleFor.contains(key) }.count
     }
 
     public var isReleased: Bool { lock.lock(); defer { lock.unlock() }; return released }
