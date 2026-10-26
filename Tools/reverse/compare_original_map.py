@@ -54,7 +54,7 @@ Slice 3 (map 34; docs/reference/studio/maps.md, "The sky gate" and "Particles"):
   mean <= SKY_TOLERANCE["mean"] and p99 <= SKY_TOLERANCE["p99"], coverage IoU >=
   SKY_TOLERANCE["coverageIoU"]. Our rowsFlipped and gammaConstants variants must
   FAIL, and rotationIgnored too when the sky has a nonzero _Rotation;
-- particles (gated when either side draws them): RGB over black, footprint IoU and
+- particles (gated when either side draws them and covers a pixel): RGB over black, footprint IoU and
   the relative error on pixels both cover, against PARTICLE_TOLERANCE (fixed
   before any map 34 data was compared). Our noDoubling and gammaTint variants
   must FAIL.
@@ -250,6 +250,8 @@ def particle_section(measured, oracle, ours, native, width, height):
     a, b = unity.max(axis=-1) > 1e-4, image.max(axis=-1) > 1e-4
     both = a & b
     footprint = iou(a, b)
+    if not a.any() and not b.any():  # both draw them, out of this camera's view
+        return dict(gated=False, coveredUnity=0, coveredOurs=0, reason="both sides draw particles; neither covers a pixel from this camera")
     if not both.any(): return dict(gated=True, passes=False, footprintIoU=footprint, reason="no pixel both cover")
     def metrics(candidate):
         relative = relative_error(unity, candidate, both, PARTICLE_FLOOR)

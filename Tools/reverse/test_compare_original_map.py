@@ -349,6 +349,17 @@ class Slice3Tests(OracleTests):
         case = self.run_oracle()
         self.assertLess(case['particles']['footprintIoU'], 0.98); self.assertFalse(case['passes'])
 
+    def test_particles_out_of_view_on_both_sides_are_not_gated_and_on_one_side_fail(self):
+        self.leaves[:] = 0
+        self.add_oracle(sky=False)
+        self.write_ours_groups(particles=self.leaves)
+        case = self.run_oracle()
+        self.assertFalse(case['particles']['gated']); self.assertTrue(case['passes'])
+        shown = self.leaves.copy(); shown[2:6, 3:9, :3] = [0.1, 0.3, 0.05]
+        self.write_ours_groups(particles=shown)
+        case = self.run_oracle()
+        self.assertTrue(case['particles']['gated']); self.assertFalse(case['passes'])
+
     def test_a_passing_particle_control_or_a_missing_control_image_fails(self):
         self.add_oracle(sky=False)
         self.write_ours_groups(particles=self.leaves, particle_controls=dict(noDoubling=self.leaves, gammaTint=self.leaves * 1.4))
