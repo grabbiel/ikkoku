@@ -6,6 +6,12 @@
     {"op": "backgroundBuild", "build": "duplicate", "key": 65},
     {"op": "backgroundBuild", "build": "importWhileHidden"},
     {"op": "backgroundBuild", "build": "duplicateWhileHidden", "key": 65},
+    {"op": "backgroundBuild", "build": "outfit", "key": 65},
+    {"op": "backgroundBuild", "build": "outfitWhileHidden", "key": 65},
+    {"op": "setExpression", "key": 65, "expression": {"mouthPattern": 6}},
+    {"op": "setVisible", "key": 65, "visible": false},
+    {"op": "backgroundBuild", "build": "export", "key": 65, "path": ".local/verification/scenario-exports/background-build-hidden.png"},
+    {"op": "setVisible", "key": 65, "visible": true},
     {"op": "export", "path": ".local/verification/scenario-exports/background-build.png"},
     {"op": "reimport", "path": ".local/verification/scenario-exports/background-build.png"},
     {"op": "assert", "key": 65, "visible": true}

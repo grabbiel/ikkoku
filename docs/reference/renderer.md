@@ -1688,16 +1688,18 @@ runs. Captures and scenarios leave it off.
 | Scene import (startup `IKKOKU_SOURCE_SCENE`, File menu) | `beginSourceSceneImport`: see below | `importSourceScenePreview`: one batch; each second half runs on the main thread where the import's walk reaches it |
 | Previews a refresh finds missing: after undo or redo, a duplicate, a scene load or a restored outfit | `startMissingSourceBuilds` starts one batch in document order; the second halves run on `com.grabbiel.Ikkoku.source-builds`, and each preview installs itself on the main actor (`installSourceBuild`) | the same batch; `refreshFrame` builds each preview where its loop reaches it, as before |
 | Route character copies of a Duplicate | `startSourceRouteCharacterBuilds`: one batch in subtree order, borrowing the original's assembly; the second halves run on the build queue, and each copy installs itself on the main actor (`installSourceRouteCharacterBuild`) | `copySourceRouteRuntime` builds each copy on the main thread, as before |
-| Route characters of a rehydration (scene load, undo or redo) | one batch, built on the main thread in walk order | the same |
-| One character: outfit selection, a plugin attachment's parent, an export validation baseline | both halves on the main thread, with a prefetching decode share (`sourceRigShare()`); an outfit selection and an attachment parent borrow a donation when one matches | the same |
+| Route characters of a rehydration (scene load, undo or redo) | the walk lists them; after the install, `startSourceRouteCharacterBuilds(_:rehydration: true)` builds them like a Duplicate's copies (third part, below) | one batch, built on the main thread in walk order |
+| Outfit selection (the Clothes tab's picker, `selectSourceOutfit`) | `SourceStudioBackgroundBuilds` under the key `.outfit(id)`: both halves off the main thread, borrowing a donation when one matches; `finishSourceOutfit` applies the selection on the main actor (third part, below) | `setSourceOutfit`: both halves on the main thread |
+| Export validation baselines (File ▸ Export Edited Original Scene, `beginSourceSceneExport`) | `SourceStudioBackgroundBuilds` under the key `.export(n)`: one batch in document order with a prefetching decode share and no donation; the export then runs on the main actor with them (third part, below) | `exportSourceScene` builds each baseline on the main thread |
+| A plugin attachment's parent | both halves on the main thread, with a prefetching decode share (`sourceRigShare()`), borrowing a donation when one matches | the same |
 
 `makeSourceCharacterPreview(reference:outfit:appearanceTransaction:)`
 builds one preview on the main thread. It borrows a loaded or kept
 donation when one matches, and otherwise decodes with a prefetching share.
-It serves a synchronous route character copy, an outfit selection and a
-plugin attachment's parent. The export validation baseline uses the share
-but no donation: its preview is dropped after the export, and taking a kept
-donation would lose it.
+It serves a synchronous route character copy, a synchronous outfit
+selection and a plugin attachment's parent. The export validation baseline
+uses the share but no donation, in either mode: its preview is dropped
+after the export, and taking a kept donation would lose it.
 
 **Background import.** `beginSourceSceneImport` runs in three parts:
 
@@ -1748,7 +1750,58 @@ before its build lands drops the build, cancels its batch once no other
 object waits on it, and takes the copy out of the runtime coverage, so a
 redo rehydrates it like an installed copy. An import's commit, a
 rehydration's install and `cancelSourceBuilds()` cancel the copies in
-flight.
+flight. A copy cancelled before its first preview installed also leaves
+the runtime coverage (third part), so the next rehydration builds it: a
+load of the same scene while its builds ran would otherwise find its ids
+covered and leave it unbuilt.
+
+**Single-purpose builds in the background (third part).**
+`SourceStudioBackgroundBuilds<Key>` (Studio module, main-actor only) runs
+builds that each serve one purpose, keyed by it. `start` runs a batch's
+second halves in request order on the Studio's build queue with its other
+builds, then hands the main actor every outcome at once, in request order.
+A newer `start` for the same key cancels the older batch, whose completion
+never runs; `start` returns it so its borrowed donations can be kept.
+`cancel(_:)` and `cancelAll()` run on the main actor, and every callback
+checks them there.
+
+- **Outfit selection.** `selectSourceOutfit` makes the synchronous
+  selection's checks (a loaded character, no outfit-scoped color edit),
+  then builds the outfit under `.outfit(id)`. While it builds, the
+  character keeps its outfit, is drawn and stays editable; the picker shows
+  the outfit chosen (`pendingSourceOutfits`); the status area shows
+  "Building 1 source character". When the build lands,
+  `finishSourceOutfit` applies it only if the character still shows the
+  preview it was made on: it rechecks the color edits, applies the
+  document's edits as they are then, and installs it with one undo step,
+  as `setSourceOutfit` does. A failure leaves the character as it was and
+  shows the synchronous message ("Outfit: …"). A newer selection of the
+  character supersedes it; choosing the shown outfit again cancels it; an
+  undo or redo, an import, a load, New Scene or the character's deletion
+  drops it. An install that lands while the Maker is shown keeps the
+  Maker's frame (`holdsRefreshWhileHidden`, as for an import's commit).
+- **Export validation baselines.** A hidden character with face-state
+  edits and no preview needs a validation baseline. `beginSourceSceneExport`
+  builds all of them under `.export(n)`, then runs `exportSourceScene(to:baselines:)`
+  on the main actor. Meanwhile the scene stays editable, and the status
+  area shows "Exporting <file>". The file is the scene as it was when the
+  export was chosen, as with the synchronous export: the job keeps the
+  document, the camera looked through and the routes' play flags, and if
+  any of them changed before the baselines landed, the export fails ("the
+  scene changed while the hidden characters of <file> were built; export
+  it again") and writes nothing. An import, a load or New Scene cancels it
+  with an error ("the scene was replaced before …") and writes nothing.
+  Without baselines to build, or while plugins run (their steps write the
+  document), it exports at once on the main thread, as before.
+- **Route characters of a rehydration.** With background builds the
+  rehydration's walk lists the route characters instead of building them,
+  installs the runtime, then starts their builds in walk order
+  (`startSourceRouteCharacterBuilds(_:rehydration: true)`). A route
+  character already shown for the same record keeps its preview until its
+  rebuild lands; one not shown yet (after New Scene, a load, the redo of a
+  route Duplicate) draws nothing, and objects attached to it wait without a
+  message, as for a Duplicate's copy. A failed build leaves its placeholder
+  drawing nothing without a message, as the synchronous rehydration did.
 
 **The frame after an install.** Each install used to refresh the whole
 frame on the main thread, seven times for an undo that rebuilds seven
@@ -1765,7 +1818,8 @@ the `studioInstallRefreshDeferred` trace event.
 
 **Cancellation.** `cancelSourceBuilds()` runs on the main actor for a new
 import (synchronous or background), New Scene and a scene load. It cancels
-every batch in flight:
+every batch in flight, the outfit selections and the exports' baselines
+included (each export's completion gets its error):
 
 - queued first halves never start, a running one finishes and is dropped,
   and every later `build` throws `CancellationError`;
@@ -1824,7 +1878,8 @@ its invariant written on the type:
 `Assembly` and `Donation` are plain `Sendable` values. The compositors'
 queue registry is a `nonisolated(unsafe)` static dictionary under an
 `NSLock`. `SourceStudioDonationCache` is not `Sendable`: only the main actor
-touches it.
+touches it. `SourceStudioBackgroundBuilds` is `@MainActor`: its entries are
+touched only by the main actor and by `run`'s main-actor callbacks.
 
 **Tests** (`SourceStudioCharacterBatchTests.swift`):
 
@@ -5424,3 +5479,161 @@ superseded failures, conversion/input reviews, `native-attempt-2/`, archived
 producer sources, and `final-acceptance/`. The latter pins 5,822 inputs in
 checkpoint `97a9e316…`; the seven-provider summary is `80ea9e36…`. Root reviews
 record exact target, cache, resource, process and final-app controls separately.
+
+## Native stock lipline ID1 composite (R1/CMT-04, #255, 2026-10-26)
+
+The ordinary female/head0/exType0/high-detail face compositor now accepts exact
+stock lipline category 404/ID1 (`chara/mt_lipline_00.unity3d`,
+`cw_t_lip_line_000`). Lipline selection and colour are face-owned
+(`face.lipLineId`, `face.lipLineColor`), so they do not follow the base or
+coordinate makeup record that supplies the cheek and paints. The creator program
+(`create_head`, DXBC `9ec842e7…`) is unchanged: the layer samples `_Texture5`
+through the fixed creator vector `_tex5uv` = (0.5, 0.745, −8, −20) with identity
+ST, and lerps by sampled alpha × `_Color5.a` without the paint-mask weight. ID0
+binds no texture (catalog row 0, `MainAB`/`LiplineTex` = `0`/`0`) while
+`_Color5` still binds. Only stock cheek 0 or 1 may accompany lipline 1: any other
+cheek, either face paint or the mole leaves the recipe unresolved under either
+makeup record (`sourceShaderLiplineCompositeRefusesLayersThatCouldOverlapIt`).
+Other lipline IDs, `_low` assets, other heads and resolver-backed replacements
+stay outside this gate.
+
+**Source identity.** Category 404 has one table, `mt_lipline_00` in
+`list/characustom/00.unity3d` (`5fe4e681…`, `CAB-f743f6c6…`, pathID
+`3157866646249929324`, IDs 0–6). Row 1 names the texture bundle `f919dc77…`;
+the texture is `CAB-fc3dc8db…`/`-7938000018075691814`, 80×36 RGBA32 sRGB, one
+authored mip, Bilinear, Clamp, aniso 1.
+
+**Original evidence.** Codex's base and distinct players (producer `9a7e401`,
+`OriginalCharacterProbe.cs` `9f73ec6d…`) were re-audited from the files: the
+cards differ only in `face.lipLineColor[0..3]`, each in-place cheek rebuild
+changes only `baseMakeup.cheekId`/`cheekColor`, and header, face PNG, plug-in
+data, footer and every other block are identical. One later session (producer
+`ffb246f8…` at `1bd775b`, all three cases with the same source) ran the
+`liplineCompositeCase=none` control, then base and distinct again. The rerun
+base/distinct cases reproduce every face target and input readback byte for
+byte; their cards differ only in the rendered thumbnail and the frames only in
+bones, meshes, globals and render time. The no-layer card is the distinct card
+with only `face.lipLineId` set to 0. The no-layer inputs equal the lipline
+cases' inputs (main `6d90eca1…`, mask `52eb3278…`, paint mask `40d0edd1…`,
+cheek after the rebuild `6d3ca822…`), all vectors equal the distinct case
+including `_Color5`, and the release readback equals the combined target.
+
+Against the no-layer targets, the lipline targets differ at exactly 174 pixels
+(495 channels for base, 501 for distinct) inside bottom-up `[493,266,529,270]`,
+with the same pixel set at cheek 0 and cheek 1. The cheek rebuild of the no-layer
+target changes 74,798 pixels inside `[215,276,810,460]`. The two sets do not
+intersect, and outside the lipline footprint the cheek-1 lipline targets equal the
+no-layer cheek-1 target exactly. A distinct `_Color5` with no layer changes no
+pixel.
+
+**Cheek and lipline cannot overlap for this pair.** Neither layer has a layout
+field: both UV transforms are the fixed creator vectors above (cheek
+(0.5, 0.64, −0.33, −4)), and card colours scale the blend weight but cannot create
+alpha. The footprints therefore depend only on the two textures. Mapping each
+target pixel through the exact `create_head` UV math with Clamp, and counting
+every texel within a dilation radius of a nonzero-alpha texel, gives:
+
+| Dilation (texels) | Cheek footprint (px) | Lipline footprint (px) | Overlap (px) |
+| ---: | ---: | ---: | ---: |
+| 1 | 85,914 | 254 | 0 |
+| 2 | 87,519 | 362 | 0 |
+| 4 | 96,070 | 698 | 0 |
+| 6 | 130,719 | 1,099 | 0 |
+| 8 | 201,328 | 1,444 | 0 |
+| 10 | 226,634 | 1,976 | 0 |
+| 11 | 243,116 | 51,717 | 2,325 |
+| 12 | 257,555 | 54,164 | 2,895 |
+
+Radius 2 covers bilinear support plus the cheek's 1.52 texel-per-pixel minification
+(the lipline is magnified, 0.70 × 0.74). All 136,582 cheek and 70 lipline
+nonzero-alpha texels are at least 4 and 11 texels from their nearest edge, and every
+edge texel of both textures has alpha 0. From radius 11 the dilated lipline mask
+reaches its top edge row, and Clamp spreads that row over the rest of the target;
+the overlap at 11 and 12 is that artefact of the conservative dilation, not a real
+footprint. Original and native levels give the same footprints. So the relative
+order of the two layers cannot change any pixel for 402/1 × 404/1; no oracle
+establishes that order, and the native path refuses every combination that could
+expose it. The computation is `cheek_lipline_overlap.py` in the private evidence,
+with one report per radius.
+
+**Conversion.** The 64-entry store (manifest `23695599…`, five composite
+programs) is the accepted 63-entry cheek store plus one lipline level: all 397
+cheek-store files are byte-identical clones and the head contract regenerates
+byte-identical (`d2dd3f1b…`). Decoded lipline RGB matches the original bound-input
+readback (`652527f6…`) exactly; 26 alpha components differ by at most
+0.00048828125. No decoder or tolerance changed.
+
+**Native gates.** `liveSourceHeadZeroLiplineCompositeMatchesFourOriginalTargets`
+passes all four targets within one output byte (1,668 / 2,080 / 1,669 / 2,081
+one-byte channels for base and distinct at cheek 0 and 1), alpha 255. Fifteen
+recolours release their transient targets, 19 content keys stay distinct,
+reverting returns the retained targets, and a second owner allocates and releases
+its own. Retained inputs are five uploaded assets, one black default and three
+samplers; each target is 5,652,480 bytes. `liveSourceHeadZeroLiplineNoLayerControlMatchesOriginalTargets`
+passes both no-layer targets within one byte (1,668 / 2,080 channels) with no
+lipline input in the recipe, reproduces the 174-pixel footprint, finds no native
+difference between lipline and no-layer targets outside it, and checks that a
+lipline recolour without a layer is a new content key with identical bytes. The
+first run of that test expected four uploaded assets at cheek 1; the stage-0
+lipline comparison render had already uploaded the lipline, so only the
+expectation changed (to five). Only target level 0 has an independent original
+oracle; generated mips are diagnostics.
+
+**Cost.** One added input, an 80×36 RGBA32 level (11,520 bytes authored), and no
+new program. The face composite program already samples `_Texture5`, from the
+property's shared Unity default texture when no lipline is selected; ID1 binds the uploaded level
+there instead, so the pass, program, target and sampler counts do not change. The
+composite runs on recipe edits, never per frame, and only with the live opt-in.
+Comparative timings are deferred, as for the cheek: they need a quiet window, and
+the face composite (cheek and lipline) is to be measured in one before the native
+face path becomes default-ON. One unquiet, paired sample was taken, and it is not
+a gate.
+- Setup: one test process on an Apple M2 Ultra, with other work running. There were
+  20 pairs after 2 warm-up pairs, and the order alternated within each pair. Each
+  pair composed the stage-0 face with and without the layer under one new
+  `_Color5`, so all 44 composites were distinct cache misses of 5,652,480 bytes.
+- GPU time (command-buffer timestamps, pass plus mip generation): median 0.100 ms
+  with the lipline and 0.103 ms without. The paired difference had median
+  −0.001 ms (IQR −0.004 to 0.004 ms), and the lipline arm was slower in 9 of 20
+  pairs.
+- Wall time per composite: median 0.537 ms against 0.544 ms.
+
+**App acceptance.** Release apps: base main `0e6181a` (binary `a659f515…`) and
+the candidate built at `4b99cea` (`e29baf9c…`; later commits are docs only), both
+from the same tracked `Assets` tree. Each default-OFF capture is byte-identical
+between base and candidate: the Studio source scene (`koikatu_cs0002591`), the
+native Studio capture and the Maker synthetic card, each with live opt-in OFF and
+ON (the ON runs add the live inputs, this store and contract). None of those
+reaches a face composite: the source-scene characters fall back first on the
+unrecovered CharaStudio SceneInfo globals, and the native and Maker captures have
+no live draws, so base and candidate live reports are identical too. The lipline
+path runs in the provider cohort: the candidate app on the lipline original-base
+card and frame (`835e27ed…`, `b2c03737…`), in the order old, new, new, old, old,
+new, capture:
+
+| Provider | Live slots / fallbacks | Unique composite keys / events | Registered textures |
+| --- | ---: | ---: | ---: |
+| Old 63-entry cheek store, three runs | 19 / 1 | 6 / 8 | 95 |
+| New 64-entry store, three runs | 20 / 0 | 7 / 9 | 100 |
+| Captured-pixel control | 20 / 0 | 0 / 0 | 72 |
+
+The old fallback is the face, because `_Texture5` (`cw_t_lip_line_000`) is not
+in that store. New runs add one face-creator miss with key
+`cbb5605ff82ac648725f7c0b93173ee2cf86fad716455a7aa08000837046239e` and 5,652,480
+target bytes; the six unrelated keys and eight events agree across providers.
+Every run records 41 meshes, 20 deform buffers, zero retiring resources, no
+unmatched slot, no renderer fallback and the one hidden double tooth. Toon,
+depth-normal and geometry PNGs are byte-identical across all seven processes.
+The strict Studio and Maker lanes pass 78/78 and 10/10 with none skipped. These
+were functional runs with concurrent work permitted; no timing is claimed from
+them. The live native rig uses captured globals; passing composite targets and
+control images does not establish whole-frame source shading, generated-mip parity
+or resolution of translated-draw repeatability issue #188.
+
+Private evidence is under `.local/rmat-gates-lipline/`: `source-audit/` (card
+audit, v3 audit rerun, source identity, overlap sweep, no-layer analysis,
+reproduction diff), `app-acceptance/` (pair and cohort records, reports and
+captures), `timing/paired-unquiet.json` (the raw paired samples), `native-inputs/` (64-entry store, contract, bindings),
+`original-pair/original-{base,distinct,none}` (15 files each) and `vm-run-1/`
+(session record, settings and per-case manifests; base and distinct are kept as
+hash manifests only).

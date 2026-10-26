@@ -17,6 +17,12 @@ import Character
 struct StudioSourceRuntimeBundle {
     var routes: [UUID: SourceRouteRuntime] = [:]
     var routeCharacterPreviews: [UUID: SourceStudioCharacterPreview] = [:]
+    /// R7 phase 2 item 6, third part: with background builds, the route
+    /// characters to build after the install, in the walk's order
+    /// (`startSourceRouteCharacterBuilds`). `routeCharacterPreviews` then
+    /// holds only the previews already shown for the same records, kept until
+    /// their rebuilds land.
+    var routeCharacterBuilds: [(id: UUID, reference: SourceStudioCharacterReference)] = []
     var cameras: [UUID: (sceneSHA256: String, objectKey: Int32, name: String)] = [:]
     var itemAssets: [UUID: (sceneSHA256: String, key: String, path: String,
         colors: [SIMD4<Float>], alpha: Float)] = [:]
@@ -65,8 +71,10 @@ extension StudioModel {
             }
             let source = try KoikatsuSceneReader.decodeDocument(bytes)
             let (rigURL, boneCatalogURL) = try sourceRigInputs()
-            installSourceRuntime(try buildSourceRuntimeBundle(source: source, sceneURL: sceneURL,
-                hash: hash, rigURL: rigURL, boneCatalogURL: boneCatalogURL, document: doc))
+            let bundle = try buildSourceRuntimeBundle(source: source, sceneURL: sceneURL,
+                hash: hash, rigURL: rigURL, boneCatalogURL: boneCatalogURL, document: doc)
+            installSourceRuntime(bundle)
+            startSourceRouteCharacterBuilds(bundle.routeCharacterBuilds, rehydration: true)
         } catch {
             // Empty install: every cache entry carries the scene identity, so
             // clearing them leaves the guards to report "ordinary native
@@ -160,7 +168,10 @@ extension StudioModel {
         }
         // R7 phase 2 item 6: every route character's first half starts now,
         // together (`sourceCharacterBatch`); the walk below builds each one
-        // where it reaches it, so registration keeps the walk's order.
+        // where it reaches it, so registration keeps the walk's order. With
+        // `asyncSourceBuilds` (third part) the walk only lists them, and they
+        // build in the background after the install, in the same order, like
+        // a Duplicate's route character copies.
         var routeCharacters: [SourceStudioCharacterReference] = []
         var plan = source.snapshot.roots.reversed().map { ($0, false) }
         while let (record, routeChild) = plan.popLast() {
@@ -175,8 +186,8 @@ extension StudioModel {
                 }
             }
         }
-        let routeBatch = sourceCharacterBatch(routeCharacters.map { ($0, nil) })
-        defer { routeBatch.cancel() }
+        let routeBatch = asyncSourceBuilds ? nil : sourceCharacterBatch(routeCharacters.map { ($0, nil) })
+        defer { routeBatch?.cancel() }
         var routeIndex = 0
         var stack = source.snapshot.roots.reversed().map { ($0, false) }
         while let (record, routeChild) = stack.popLast() {
@@ -197,6 +208,16 @@ extension StudioModel {
                     guard routeChild else { continue }
                     let index = routeIndex
                     routeIndex += 1
+                    guard let routeBatch else {
+                        let reference = routeCharacters[index]
+                        bundle.routeCharacterBuilds.append((id, reference))
+                        // A route character already shown for this record
+                        // keeps its preview until the rebuild replaces it.
+                        if let shown = sourceRouteCharacterPreviews[id], shown.reference == reference {
+                            bundle.routeCharacterPreviews[id] = shown
+                        }
+                        continue
+                    }
                     if let preview = try? routeBatch.build(index) {
                         preview.automaticBlink = sourceAutomaticBlink
                         bundle.routeCharacterPreviews[id] = preview

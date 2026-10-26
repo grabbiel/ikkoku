@@ -873,9 +873,12 @@ class StudioScenarioLaneTests(unittest.TestCase):
                 if op == "backgroundBuild":
                     self.assertIn(step["build"], ("import", "importTwice", "importThenNewScene", "importWhileHidden",
                                                   "duplicate", "duplicateWhileHidden",
-                                                  "duplicateRoute", "duplicateRouteWhileHidden"))
-                    if step["build"].startswith("duplicate"):
+                                                  "duplicateRoute", "duplicateRouteWhileHidden",
+                                                  "outfit", "outfitWhileHidden", "export", "loadRoute"))
+                    if step["build"].startswith(("duplicate", "outfit", "export")):
                         self.assertIs(type(step["key"]), int)
+                    if step["build"] in ("export", "loadRoute"):
+                        self.assertTrue(step["path"].startswith(".local/verification/scenario-exports/"))
                 if op == "measureAccessoryLabels":
                     self.assertIs(type(step["index"]), int)
                     self.assertIn(step["index"], range(100, 2001))

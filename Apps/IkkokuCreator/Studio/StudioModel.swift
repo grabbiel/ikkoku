@@ -184,7 +184,7 @@ final class StudioModel: ViewportInputHandler, LivePacedHandler {
     /// output is exactly the sequential build's.
     @ObservationIgnored var asyncSourceBuilds = false
     /// The second halves of character builds, one at a time in order.
-    @ObservationIgnored let sourceBuildQueue = DispatchQueue(label: "com.grabbiel.Ikkoku.source-builds", qos: .userInitiated)
+    @ObservationIgnored let sourceBuildQueue: DispatchQueue
     /// The background import in flight.
     @ObservationIgnored private var sourceImportJob: SourceSceneImportJob?
     /// A background build of a missing preview, by object: what it builds
@@ -192,12 +192,55 @@ final class StudioModel: ViewportInputHandler, LivePacedHandler {
     private struct PendingSourceBuild {
         let reference: SourceStudioCharacterReference, outfit: Int?
         let batch: SourceStudioCharacterBatch
+        /// A route character of a rehydration (R7 phase 2 item 6, third
+        /// part) rather than a Duplicate's copy: a failure drops the preview
+        /// without a message, as the synchronous rehydration does.
+        var rehydration = false
     }
     @ObservationIgnored private var pendingSourceBuilds: [UUID: PendingSourceBuild] = [:]
     /// A route character copy's background build (a Duplicate of a route
     /// with its character), by the copy's placeholder object; it installs
     /// into `sourceRouteCharacterPreviews` (`installSourceRouteCharacterBuild`).
     @ObservationIgnored private var pendingRouteCharacterBuilds: [UUID: PendingSourceBuild] = [:]
+    /// R7 phase 2 item 6, third part: the background builds that serve one
+    /// purpose each, an object's outfit selection or one export's validation
+    /// baselines, on `sourceBuildQueue` with the other builds.
+    nonisolated enum SourceSingleBuild: Hashable, Sendable { case outfit(UUID), export(Int) }
+    @ObservationIgnored private let sourceSingleBuilds: SourceStudioBackgroundBuilds<SourceSingleBuild>
+    /// The outfit selections building in the background, by object: the
+    /// preview they replace, the outfit the document will keep, and the
+    /// status line once they land.
+    @ObservationIgnored private var pendingOutfitSelections: [UUID: (current: SourceStudioCharacterPreview, stored: Int?, selected: String)] = [:]
+    /// The outfit the Clothes tab's picker shows for a selection still
+    /// building (`selectSourceOutfit`). Changes only when a selection starts
+    /// or ends.
+    private(set) var pendingSourceOutfits: [UUID: Int] = [:]
+    /// The exports building their hidden characters' baselines
+    /// (`beginSourceSceneExport`), by number.
+    @ObservationIgnored private var sourceExportJobs: [Int: SourceExportJob] = [:]
+    @ObservationIgnored private var nextSourceExport = 0
+    struct SourceExportBaseline {
+        let reference: SourceStudioCharacterReference, outfit: Int?
+        let preview: Result<SourceStudioCharacterPreview, Error>
+    }
+    private struct SourceExportJob {
+        let url: URL
+        let wanted: [(id: UUID, reference: SourceStudioCharacterReference, outfit: Int?)]
+        let completion: @MainActor (Error?) -> Void
+        /// What the export reads besides the baselines, as it was when the
+        /// export was chosen (`SourceExportInputs`).
+        let inputs: SourceExportInputs
+    }
+    /// The model state an export writes from, apart from the previews: the
+    /// document, the camera looked through and the routes' play flags.
+    private struct SourceExportInputs: Equatable {
+        let document: StudioDocument
+        let camera: UUID?
+        let routesPlaying: [UUID: Bool]
+    }
+    private var sourceExportInputs: SourceExportInputs {
+        SourceExportInputs(document: doc, camera: activeSourceCamera, routesPlaying: sourceRoutePlayState.mapValues(\.playing))
+    }
     /// A background build that failed, kept so `refresh()` reports it like
     /// the synchronous build's error instead of building it every frame.
     @ObservationIgnored private var failedSourceBuilds: [UUID: (reference: SourceStudioCharacterReference, outfit: Int?, error: String)] = [:]
@@ -480,7 +523,19 @@ final class StudioModel: ViewportInputHandler, LivePacedHandler {
             doc.object(id).map { SourceStudioCameraLabel.title(name: $0.name, key: entry.objectKey) }
         } }
     }
-    let sourceAudioBus = SourceStudioAudioBus()
+    /// The voices' audio graph, made on first use: a voice played, a plugin
+    /// that reads or writes the master volume, or a tone check. Creating its
+    /// `AVAudioEngine` took about 12 ms of the launch's main thread (R7 phase
+    /// 2 item 6, third part); nothing starts its output before a voice plays.
+    var sourceAudioBus: SourceStudioAudioBus {
+        if let bus = sourceAudioBusStorage { return bus }
+        let bus = SourceStudioAudioBus()
+        sourceAudioBusStorage = bus
+        return bus
+    }
+    @ObservationIgnored private var sourceAudioBusStorage: SourceStudioAudioBus?
+    /// Stops the audio output if the bus exists; one never made never started.
+    func stopSourceAudioOutput() { sourceAudioBusStorage?.stopOutput() }
     @ObservationIgnored var sourceVoicePlayers: [UUID: SourceStudioVoicePlayer] = [:]
     @ObservationIgnored private var nextInstanceID: UInt64 = 100
     /// A new drag, or none, drops the camera drag's reusable frame.
@@ -579,6 +634,9 @@ final class StudioModel: ViewportInputHandler, LivePacedHandler {
 
     init(host: EngineHost) {
         self.host = host
+        let builds = DispatchQueue(label: "com.grabbiel.Ikkoku.source-builds", qos: .userInitiated)
+        sourceBuildQueue = builds
+        sourceSingleBuilds = SourceStudioBackgroundBuilds<SourceSingleBuild>(queue: builds)
         refresh()
         timer = Timer.scheduledTimer(withTimeInterval: 1.0 / 30.0, repeats: true) { [weak self] _ in
             MainActor.assumeIsolated { self?.tick() }
@@ -1114,19 +1172,42 @@ final class StudioModel: ViewportInputHandler, LivePacedHandler {
     /// The document stores nil for the card's saved outfit, so selecting it
     /// again exports byte-identical card bytes.
     func setSourceOutfit(_ id: UUID, coordinate: Int) throws {
+        guard let selection = try sourceOutfitSelection(id, coordinate: coordinate) else { return }
+        // Borrows the outfit's assembly when a preview shows it or one was
+        // kept (selecting an outfit back), else decodes with a prefetch.
+        let fresh = try makeSourceCharacterPreview(reference: selection.reference, outfit: selection.stored)
+        try installSourceOutfit(fresh, id: id, current: selection.current, stored: selection.stored)
+    }
+
+    /// The checks an outfit selection makes before it builds: a loaded
+    /// source character, and no outfit-scoped color edit (`setSourceOutfit`).
+    /// Nil when `coordinate` is the outfit shown. `stored` is what the
+    /// document keeps: nil for the card's saved outfit.
+    private func sourceOutfitSelection(_ id: UUID, coordinate: Int) throws
+        -> (reference: SourceStudioCharacterReference, current: SourceStudioCharacterPreview, stored: Int?)? {
         guard let i = doc.index(of: id), let reference = doc.objects[i].sourceCharacter, let current = sourceInstances[id] else {
             throw RigError.invalid("Outfit selection needs a loaded source character.")
         }
-        guard coordinate != current.coordinate else { return }
-        let object = doc.objects[i]
+        guard coordinate != current.coordinate else { return nil }
+        try checkSourceOutfitColorEdits(doc.objects[i], current: current)
+        return (reference, current, coordinate == current.savedCoordinate ? nil : coordinate)
+    }
+
+    private func checkSourceOutfitColorEdits(_ object: StudioObject, current: SourceStudioCharacterPreview) throws {
         let scoped = current.draftColors.filter { $0.record.coordinate != nil && object.sourceColorEdits?[$0.id] != nil }
         guard scoped.isEmpty else {
             throw RigError.invalid("Reset the color edits of outfit \(current.coordinate) (\(scoped.map(\.label).joined(separator: ", "))) before selecting another outfit.")
         }
-        let stored = coordinate == current.savedCoordinate ? nil : coordinate
-        // Borrows the outfit's assembly when a preview shows it or one was
-        // kept (selecting an outfit back), else decodes with a prefetch.
-        let fresh = try makeSourceCharacterPreview(reference: reference, outfit: stored)
+    }
+
+    /// The rest of an outfit selection once the new outfit's preview `fresh`
+    /// is built for `stored`: the document's edits are applied to it, and any
+    /// that does not fit throws before anything is recorded; then it
+    /// replaces `current` and the document records the outfit.
+    private func installSourceOutfit(_ fresh: SourceStudioCharacterPreview, id: UUID,
+                                     current: SourceStudioCharacterPreview, stored: Int?) throws {
+        guard let i = doc.index(of: id) else { throw RigError.invalid("Outfit selection needs a loaded source character.") }
+        let object = doc.objects[i]
         fresh.automaticBlink = sourceAutomaticBlink
         if let edits = object.sourceColorEdits { try fresh.setColorEdits(edits) }
         _ = try fresh.editedPose(fkRotations: object.sourceFKRotations ?? [:], faceValues: object.sourceFaceValues, bodyValues: object.sourceBodyValues,
@@ -1150,6 +1231,89 @@ final class StudioModel: ViewportInputHandler, LivePacedHandler {
         var edited = doc.objects[i]
         edited.sourceOutfit = stored; edited.sourceClothesState = storedClothes
         doc.objects[i] = edited
+    }
+
+    /// The Clothes tab's outfit picker: selects the card's saved outfit
+    /// `coordinate` and reports the outcome on the status line. The
+    /// performance harness's `studio-outfit` workload calls it too.
+    ///
+    /// Captures and scenarios select it at once (`setSourceOutfit`). With
+    /// `asyncSourceBuilds` (R7 phase 2 item 6, third part) the new outfit's
+    /// preview builds in the background (`sourceSingleBuilds`), and
+    /// `finishSourceOutfit` applies the selection when it lands. Until then
+    /// the character keeps its outfit and stays editable, the picker shows
+    /// the outfit chosen (`pendingSourceOutfits`) and the status area the
+    /// build in progress. A newer selection of the character supersedes it,
+    /// choosing the shown outfit again cancels it, and an undo or redo, a
+    /// scene import or load, New Scene, or the character's deletion drops it.
+    func selectSourceOutfit(_ id: UUID, coordinate: Int) {
+        let names = SourceStudioCharacterPreview.outfitNames
+        let selected = "Outfit \(coordinate + 1) (\(names.indices.contains(coordinate) ? names[coordinate] : "?")) selected"
+        guard asyncSourceBuilds else {
+            do {
+                try setSourceOutfit(id, coordinate: coordinate)
+                status = selected
+            } catch { status = "Outfit: \(error)" }
+            return
+        }
+        do {
+            guard let selection = try sourceOutfitSelection(id, coordinate: coordinate) else {
+                cancelSourceOutfit(id)
+                status = selected
+                return
+            }
+            if pendingSourceOutfits[id] == coordinate { return }
+            let batch = sourceCharacterBatch([(selection.reference, selection.stored)])
+            pendingOutfitSelections[id] = (selection.current, selection.stored, selected)
+            pendingSourceOutfits[id] = coordinate
+            let superseded = sourceSingleBuilds.start(.outfit(id), batch: batch) { [weak self] outcomes in
+                self?.finishSourceOutfit(id, outcome: outcomes[0])
+            }
+            // A superseded selection's borrowed assembly stays borrowable.
+            if let superseded { keepSourceDonations(superseded.requests.compactMap { $0.donation }) }
+            updateSourceBuildProgress()
+        } catch { status = "Outfit: \(error)" }
+    }
+
+    /// An outfit selection's build landed (`selectSourceOutfit`). It applies
+    /// only to the preview it was made on: an undo or redo, a rebuild or a
+    /// deletion replaced or dropped that preview, and the selection lapses.
+    /// Otherwise it rechecks the color edits and installs as the synchronous
+    /// selection does; a failure leaves the character as it was and reports
+    /// the synchronous selection's message.
+    private func finishSourceOutfit(_ id: UUID, outcome: Result<SourceStudioCharacterPreview, Error>) {
+        guard let pending = pendingOutfitSelections.removeValue(forKey: id) else { return }
+        pendingSourceOutfits[id] = nil
+        defer { updateSourceBuildProgress() }
+        guard let current = sourceInstances[id], current === pending.current,
+              let object = doc.object(id), object.sourceCharacter == current.reference else { return }
+        do {
+            let fresh = try outcome.get()
+            try checkSourceOutfitColorEdits(object, current: current)
+            // Landing while the Maker is shown, the document write keeps the
+            // Maker's frame, as an import's commit does; showing the Studio
+            // refreshes.
+            holdsRefreshWhileHidden = true
+            defer { holdsRefreshWhileHidden = false }
+            try installSourceOutfit(fresh, id: id, current: current, stored: pending.stored)
+            status = pending.selected
+            PerfTrace.characterInstalled()
+        } catch { status = "Outfit: \(error)" }
+    }
+
+    /// Stops the outfit selection building for `id`, if any. Its borrowed
+    /// assembly stays borrowable.
+    private func cancelSourceOutfit(_ id: UUID) {
+        guard pendingOutfitSelections.removeValue(forKey: id) != nil else { return }
+        pendingSourceOutfits[id] = nil
+        if let batch = sourceSingleBuilds.cancel(.outfit(id)) { keepSourceDonations(batch.requests.compactMap { $0.donation }) }
+        updateSourceBuildProgress()
+    }
+
+    /// Stops every outfit selection in flight (an undo or redo, a scene
+    /// replacement).
+    private func cancelSourceOutfits() {
+        for id in Array(pendingOutfitSelections.keys) { cancelSourceOutfit(id) }
     }
 
     /// Clothes state (ST-C03), CharaStudio's clothing-detail buttons
@@ -1639,6 +1803,9 @@ final class StudioModel: ViewportInputHandler, LivePacedHandler {
     }
     private func applyHistoryDocument(_ next: StudioDocument, plugins: PreparedSourcePlugins,
                                       resources: StudioResourceResolution?) {
+        // An outfit selection still building applies to a preview this
+        // drops, so it lapses (R7 phase 2 item 6, third part).
+        cancelSourceOutfits()
         // The rebuilds borrow the dropped previews' converted assemblies
         // (R7 phase 2 item 6); their meshes are released now.
         sourceDonations = sourceInstances.values.map(\.donation)
@@ -2185,7 +2352,13 @@ final class StudioModel: ViewportInputHandler, LivePacedHandler {
     var isLoadingSourceScene: Bool { sourceImportJob != nil || sourceMapLoad != nil }
     /// Background builds of missing previews and of route character copies
     /// not installed yet.
-    var pendingSourceCharacterBuilds: Int { pendingSourceBuilds.count + pendingRouteCharacterBuilds.count }
+    var pendingSourceCharacterBuilds: Int {
+        pendingSourceBuilds.count + pendingRouteCharacterBuilds.count + pendingOutfitSelections.count
+    }
+    /// Background work a Studio command started and has not finished: the
+    /// performance harness's action workloads wait for it. Includes the
+    /// exports building their baselines.
+    var pendingSourceActionWork: Int { pendingSourceCharacterBuilds + sourceExportJobs.count }
 
     /// Stops every background character build: the import in flight, the
     /// rebuilds of missing previews and the route character copies (another
@@ -2202,15 +2375,33 @@ final class StudioModel: ViewportInputHandler, LivePacedHandler {
         failedSourceBuilds.removeAll()
         sourceDonations.removeAll()
         cancelSourceRouteCharacterBuilds()
+        // R7 phase 2 item 6, third part: outfit selections and exports.
+        pendingOutfitSelections.removeAll()
+        if !pendingSourceOutfits.isEmpty { pendingSourceOutfits.removeAll() }
+        sourceSingleBuilds.cancelAll()
+        let exports = sourceExportJobs.sorted { $0.key < $1.key }.map(\.value)
+        sourceExportJobs.removeAll()
         updateSourceBuildProgress()
+        for export in exports {
+            export.completion(RigError.invalid("the scene was replaced before the hidden characters of \(export.url.lastPathComponent) were built; export it again"))
+        }
     }
 
     /// Stops the route character copies in flight: their placeholders' route
     /// previews are being replaced (an import's commit, a rehydration) or
-    /// every build stops.
+    /// every build stops. A route character stopped before its first preview
+    /// installed is no longer covered (R7 phase 2 item 6, third part), so the
+    /// next rehydration builds it: a load of the same scene while a load's,
+    /// a redo's or a Duplicate's route characters build would otherwise find
+    /// its ids covered and leave them unbuilt.
     func cancelSourceRouteCharacterBuilds() {
         guard !pendingRouteCharacterBuilds.isEmpty else { return }
         for build in pendingRouteCharacterBuilds.values { build.batch.cancel() }
+        let unbuilt = pendingRouteCharacterBuilds.keys.filter { sourceRouteCharacterPreviews[$0] == nil }
+        if !unbuilt.isEmpty, var coverage = sourceRuntimeCoverage {
+            coverage.objectIDs.subtract(unbuilt)
+            sourceRuntimeCoverage = coverage
+        }
         pendingRouteCharacterBuilds.removeAll()
         updateSourceBuildProgress()
     }
@@ -2229,6 +2420,8 @@ final class StudioModel: ViewportInputHandler, LivePacedHandler {
         if let job = sourceImportJob {
             progress = .init(label: "Importing \(job.sceneURL.deletingPathExtension().lastPathComponent)",
                              built: job.builtCount, total: job.references.count)
+        } else if let export = sourceExportJobs.min(by: { $0.key < $1.key })?.value {
+            progress = .init(label: "Exporting \(export.url.deletingPathExtension().lastPathComponent)", built: 0, total: export.wanted.count)
         } else if pendingSourceCharacterBuilds > 0 {
             let count = pendingSourceCharacterBuilds
             progress = .init(label: "Building \(count) source character\(count == 1 ? "" : "s")", built: 0, total: count)
@@ -2256,7 +2449,11 @@ final class StudioModel: ViewportInputHandler, LivePacedHandler {
     /// follow-up). The first call also empties the cache on the system's
     /// memory-pressure warnings.
     private func keepSourceDonations(_ previews: some Sequence<SourceStudioCharacterPreview>) {
-        for preview in previews { sourceDonationCache.keep(preview.donation) }
+        keepSourceDonations(previews.map(\.donation))
+    }
+
+    private func keepSourceDonations(_ donations: [SourceStudioCharacterPreview.Donation]) {
+        for donation in donations { sourceDonationCache.keep(donation) }
         guard sourceDonationPressure == nil, sourceDonationCache.count > 0 else { return }
         let source = DispatchSource.makeMemoryPressureSource(eventMask: [.warning, .critical], queue: .main)
         source.setEventHandler { [weak self] in
@@ -2369,12 +2566,16 @@ final class StudioModel: ViewportInputHandler, LivePacedHandler {
     /// halves run on `sourceBuildQueue`. Each copy installs itself
     /// (`installSourceRouteCharacterBuild`); until then its placeholder
     /// draws nothing, and objects attached to it wait without a message.
-    func startSourceRouteCharacterBuilds(_ copies: [(id: UUID, reference: SourceStudioCharacterReference)]) {
+    /// With `rehydration` (third part) they are the route characters of a
+    /// rehydration (a scene load, an undo or redo), in its walk's order; one
+    /// already shown for the same record keeps its preview until then.
+    func startSourceRouteCharacterBuilds(_ copies: [(id: UUID, reference: SourceStudioCharacterReference)], rehydration: Bool = false) {
         guard !copies.isEmpty else { return }
         let batch = sourceCharacterBatch(copies.map { ($0.reference, nil) })
         for copy in copies {
             let superseded = pendingRouteCharacterBuilds[copy.id]?.batch
-            pendingRouteCharacterBuilds[copy.id] = PendingSourceBuild(reference: copy.reference, outfit: nil, batch: batch)
+            pendingRouteCharacterBuilds[copy.id] = PendingSourceBuild(reference: copy.reference, outfit: nil, batch: batch,
+                                                                      rehydration: rehydration)
             if let superseded { cancelSourceBatchIfUnused(superseded) }
         }
         updateSourceBuildProgress()
@@ -2388,7 +2589,8 @@ final class StudioModel: ViewportInputHandler, LivePacedHandler {
     /// placeholder is still in the document showing the same record of the
     /// same scene (the prune rule of `refreshFrame`), exactly as the
     /// synchronous copy installs it; a failure reports the synchronous
-    /// copy's message.
+    /// copy's message. A rehydration's failure leaves the placeholder
+    /// drawing nothing without a message, as the synchronous rehydration did.
     private func installSourceRouteCharacterBuild(_ delivery: SourceStudioCharacterBatch.Delivery, id: UUID,
                                                   batch: SourceStudioCharacterBatch) {
         guard let pending = pendingRouteCharacterBuilds[id], pending.batch === batch else { return }
@@ -2402,7 +2604,10 @@ final class StudioModel: ViewportInputHandler, LivePacedHandler {
             sourceRouteCharacterPreviews[id] = preview
             PerfTrace.characterInstalled()
         case .failure(let error):
-            status = "Route character copy: \(error)"
+            // A rehydration's route character renders nothing, without a
+            // message, as when the synchronous rehydration's build fails.
+            if pending.rehydration { sourceRouteCharacterPreviews[id] = nil }
+            else { status = "Route character copy: \(error)" }
         }
         refreshAfterInstall()
     }
@@ -2549,9 +2754,77 @@ final class StudioModel: ViewportInputHandler, LivePacedHandler {
         status = "Saved scene \(url.lastPathComponent)"
     }
 
+    /// File ▸ Export Edited Original Scene (R7 phase 2 item 6, third part).
+    /// A hidden character with face-state edits and no preview needs a
+    /// validation baseline (`exportSourceScene`). With `asyncSourceBuilds`
+    /// those baselines build first, in the background and in document order,
+    /// with a prefetching decode share and no donation, as the synchronous
+    /// export builds them. The export then runs on the main actor with them.
+    /// Meanwhile the scene stays editable and the status area shows
+    /// "Exporting <file>". The file is the scene as it was when the export was
+    /// chosen, as with the synchronous export: if the document, the camera
+    /// looked through or a route's play state changed before the baselines
+    /// landed, `completion` gets an error and nothing is written. A scene
+    /// import or load, or New Scene, cancels it with an error too. Without
+    /// baselines to build, without `asyncSourceBuilds` (captures, scenarios),
+    /// or while plugins run (their steps write the document), it exports at
+    /// once. `completion` gets the export's error, or nil once the file is
+    /// written.
+    func beginSourceSceneExport(to url: URL, completion: @escaping @MainActor (Error?) -> Void) {
+        let wanted = sourceExportBaselineRequests()
+        guard asyncSourceBuilds, !sourcePluginsRunning, !wanted.isEmpty else {
+            do { try exportSourceScene(to: url); completion(nil) } catch { completion(error) }
+            return
+        }
+        nextSourceExport += 1
+        let key = nextSourceExport
+        let batch = SourceStudioCharacterBatch(requests: wanted.map { .init(reference: $0.reference, coordinate: $0.outfit) },
+                                               resources: host.renderer.resources, rigs: sourceRigShare())
+        sourceExportJobs[key] = SourceExportJob(url: url, wanted: wanted, completion: completion, inputs: sourceExportInputs)
+        sourceSingleBuilds.start(.export(key), batch: batch) { [weak self] outcomes in
+            self?.finishSourceSceneExport(key, outcomes: outcomes)
+        }
+        updateSourceBuildProgress()
+    }
+
+    /// The characters an export builds a validation baseline for, in
+    /// document order: those with face-state edits, a resolved reference and
+    /// no preview (hidden after a native reload). It covers every baseline
+    /// `exportSourceScene` builds.
+    private func sourceExportBaselineRequests() -> [(id: UUID, reference: SourceStudioCharacterReference, outfit: Int?)] {
+        let previews = sourceInstances
+        return doc.objects.compactMap { object in
+            guard object.sourceExpression != nil, let reference = object.sourceCharacter,
+                  !resourceBlockedObjects.contains(object.id), previews[object.id] == nil else { return nil }
+            return (object.id, reference, object.sourceOutfit)
+        }
+    }
+
+    private func finishSourceSceneExport(_ key: Int, outcomes: [Result<SourceStudioCharacterPreview, Error>]) {
+        guard let job = sourceExportJobs.removeValue(forKey: key) else { return }
+        var baselines: [UUID: SourceExportBaseline] = [:]
+        for (request, outcome) in zip(job.wanted, outcomes) {
+            baselines[request.id] = SourceExportBaseline(reference: request.reference, outfit: request.outfit, preview: outcome)
+        }
+        let failure: Error?
+        do {
+            guard sourceExportInputs == job.inputs else {
+                throw RigError.invalid("the scene changed while the hidden characters of \(job.url.lastPathComponent) were built; export it again")
+            }
+            try exportSourceScene(to: job.url, baselines: baselines)
+            failure = nil
+        } catch { failure = error }
+        updateSourceBuildProgress()
+        PerfTrace.backgroundWorkFinished()
+        job.completion(failure)
+    }
+
     /// Export supported edits into a new original-format scene. Native object
     /// UUIDs never replace the original object, bone or plug-in identities.
-    func exportSourceScene(to url: URL) throws {
+    /// `baselines` are hidden characters' validation baselines built before
+    /// the call (`beginSourceSceneExport`); one is used only while its object
+    /// still has the reference and outfit it was built for.
+    func exportSourceScene(to url: URL, baselines: [UUID: SourceExportBaseline] = [:]) throws {
         guard let path = doc.sourceSceneFile, let expected = doc.sourceSceneSHA256 else { throw RigError.invalid("Import an original Studio scene first.") }
         guard url.resolvingSymlinksInPath().path != URL(fileURLWithPath: path).resolvingSymlinksInPath().path,
               !FileManager.default.fileExists(atPath: url.path) else { throw RigError.invalid("Choose a new filename for the edited original scene.") }
@@ -2657,9 +2930,15 @@ final class StudioModel: ViewportInputHandler, LivePacedHandler {
                     // Reconstruct only this export's validation baseline; never
                     // populate the live render cache or advance its simulation.
                     // No donation: this preview is dropped after the export,
-                    // and taking a kept one would lose it.
-                    let fresh = try SourceStudioCharacterPreview(reference: reference, resources: host.renderer.resources,
+                    // and taking a kept one would lose it. A baseline built in
+                    // the background throws its build's error here.
+                    let fresh: SourceStudioCharacterPreview
+                    if let baseline = baselines[object.id], baseline.reference == reference, baseline.outfit == object.sourceOutfit {
+                        fresh = try baseline.preview.get()
+                    } else {
+                        fresh = try SourceStudioCharacterPreview(reference: reference, resources: host.renderer.resources,
                                                                  coordinate: object.sourceOutfit, rigs: sourceRigShare())
+                    }
                     try fresh.setShapeValues(face: object.sourceFaceValues, body: object.sourceBodyValues)
                     if let colors = object.sourceColorEdits { try fresh.setColorEdits(colors) }
                     try fresh.setWear(clothesState: object.sourceClothesState, showAccessory: object.sourceShowAccessory, shoesType: object.sourceShoesType)
@@ -2961,8 +3240,10 @@ final class StudioModel: ViewportInputHandler, LivePacedHandler {
         return inst
     }
 
-    /// Set while a background import commits (R7 phase 2, item 6). A commit
-    /// or a background build's install lands whenever its builds finish,
+    /// Set while a background import commits (R7 phase 2, item 6) or a
+    /// background outfit selection installs (third part): their document
+    /// writes refresh. A commit or a background build's install lands
+    /// whenever its builds finish,
     /// possibly while the Maker is shown; the Maker's frame on the shared
     /// renderer must stay, and switching back to the Studio refreshes it.
     @ObservationIgnored private var holdsRefreshWhileHidden = false
@@ -3062,6 +3343,8 @@ final class StudioModel: ViewportInputHandler, LivePacedHandler {
             // A deleted character's assembly stays borrowable for its undo.
             keepSourceDonations(sourceInstances.filter { !currentIDs.contains($0.key) }.values)
             sourceInstances = keptSourceInstances
+            // Its outfit selection in flight lapses.
+            for id in pendingOutfitSelections.keys where !currentIDs.contains(id) { cancelSourceOutfit(id) }
         }
         // R7 phase 2 item 6: the source characters this frame lacks start
         // building together; see `startMissingSourceBuilds`.

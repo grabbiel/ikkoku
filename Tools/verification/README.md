@@ -291,8 +291,9 @@ makes, and checks that the highlighted axis is that of the last position, as
 the synchronous pick reads it, both in the model and in the frame's
 highlighted gizmo batches; the pick counters must show the coalesced moves
 and the dropped stale results),
-`backgroundBuild` `{build:"import"|"importTwice"|"importThenNewScene"|"importWhileHidden"}`
-or `{build:"duplicate"|"duplicateWhileHidden"|"duplicateRoute"|"duplicateRouteWhileHidden",key}` (R7 phase 2, item 6: interactive runs build source
+`backgroundBuild` `{build:"import"|"importTwice"|"importThenNewScene"|"importWhileHidden"|"loadRoute"}`
+or `{build:"duplicate"|"duplicateWhileHidden"|"duplicateRoute"|"duplicateRouteWhileHidden"|"outfit"|"outfitWhileHidden"|"export",key}`
+(`export` and `loadRoute` also take a `path` under `.local/verification/scenario-exports/`) (R7 phase 2, item 6: interactive runs build source
 characters off the main thread, while scenarios build them synchronously. The
 op runs the operation synchronously first, then with background builds through
 the app's own methods, pumps the main run loop until no import or character
@@ -307,7 +308,26 @@ least one character in the background. `duplicateRoute` duplicates the keyed
 route with its character: the synchronous Duplicate, Undo and Redo are the
 reference for the background ones, the Duplicate must build no route
 character preview on the main thread, and a Duplicate undone before its copy's
-build lands must leave nothing pending and match the synchronous Undo. The `WhileHidden` builds hide the
+build lands must leave nothing pending and match the synchronous Undo; the
+Redo must build no route character preview on the main thread either.
+`outfit` (third part) selects the keyed character's next outfit through the
+Clothes tab's picker (`selectSourceOutfit`; the card must save three): until
+the build lands the character keeps its outfit and the picker shows the one
+chosen; then it must match the synchronous selection with one undo step, and
+its Undo the synchronous Undo. Superseded selections must install once,
+choosing the shown outfit again must drop the build, and an Undo during a
+build must drop it. `export` saves and reloads the scene as a native
+document, so the keyed character (hidden, with a face edit, by the steps
+before) has no preview; the background export must start in the background,
+leave the document and render unchanged and write the synchronous export's
+bytes; an edit while its baselines build must fail it with a scene-changed
+error, and a load must cancel it with a replacement error, each writing
+nothing (the op removes every file it wrote).
+`loadRoute` saves the scene as a native document to `path` and loads it over
+New Scene: the synchronous Load, Undo and Redo are the reference, the Load
+and Redo must build no route character preview on the main thread, and an
+Undo, or a second Load, before the route characters land must match too with
+nothing left pending. The `WhileHidden` builds hide the
 Studio while the builds land, as a switch to the Maker does, with an empty
 frame standing in for the Maker's on the shared renderer: that frame must
 still be current when the Studio shows again and refreshes. Live animation is
@@ -1420,6 +1440,41 @@ the target gate. The isolated native store adds the exact cheek asset using the
 existing `create_head` program; original pixels are comparison data only. This
 does not add a live material slot: live resolution, default-off output and
 Release costs remain separate acceptance checks.
+
+`IKKOKU_LIPLINE_COMPOSITE_BASE_PROBE` and `IKKOKU_LIPLINE_COMPOSITE_PROBE`
+name the two fresh original lipline 404/1 cases for ordinary female head 0,
+high detail. Lipline selection and colour are face-owned. Each case starts with
+cheek 0, then rebuilds with exact stock cheek 402/1 using the original setter.
+Folders contain `fixture-card.png`, `lipline-cheek-card.png`, `frame.json`,
+fresh initial/combined input and target readbacks, and a separate release
+readback equal to the combined target. Requested card colour bits and exact
+bound-before/after bits are separate invariants; source input retention remains
+a diagnostic lifecycle, not a default-lifetime or cost measurement.
+
+The gated `liveSourceHeadZeroLiplineCompositeMatchesFourOriginalTargets`
+requires all four target base levels within one byte after colour-space
+conversion, alpha 255, exact lipline source identity, no-op/revert cache reuse,
+and bounded released-target residency over 15 edits. The authored lipline is
+80 by 36 sRGB RGBA32 with one mip. Only target level 0 has an independent
+original oracle; generated mip readbacks are diagnostics. The 64-entry native
+store adds one lipline asset to the accepted 63-entry cheek store and reuses
+the same five create programs. Keep older count-pinned fixture gates on their
+own stores. Original readbacks are comparison data only; bound-input decode
+differences do not alter the output tolerance. Live resolution, default-off
+images and comparative Release costs require separate acceptance.
+
+`IKKOKU_LIPLINE_COMPOSITE_NONE_PROBE` names the no-layer control: the distinct
+card with only `face.lipLineId` set to 0, from the producer and session that
+reproduced every base/distinct face target and input readback. The folder holds
+the same 15 files as the lipline cases (frame, both cards, inputs 55–61, targets
+5, 62 and release 63). The original binds catalog row 0 (no `_Texture5`) but
+still binds the distinct `_Color5`. The gated
+`liveSourceHeadZeroLiplineNoLayerControlMatchesOriginalTargets` requires both
+targets within one byte, a recipe without a lipline input, the original lipline
+footprint (174 pixels inside bottom-up `[493,266,529,270]` at cheek 0 and 1),
+native lipline targets byte-identical to the no-layer targets outside that
+footprint, and pixel-identical output for a lipline recolour without a layer.
+It reads `IKKOKU_LIPLINE_COMPOSITE_PROBE` for the distinct lipline targets.
 
 ### Live-frame gate inputs
 
