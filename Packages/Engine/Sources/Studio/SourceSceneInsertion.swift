@@ -96,6 +96,11 @@ public struct SourceSceneStage: Sendable {
     public let keys: [Int32]
     /// Whether an insertion adds a light record.
     let addsLights: Bool
+    /// The scene before the insertions, and each copy's key mapped to its
+    /// template's: the plug-in data rewrite follows copies from them
+    /// (`SourceScenePluginData`).
+    let source: KoikatsuSceneDocument
+    let copies: [Int32: Int32]
 
     /// The final scene: `edits` (leaf edits keyed by stage keys, deletions
     /// and moves) applied to the staged document. Inserted lights must leave
@@ -113,7 +118,7 @@ public struct SourceSceneStage: Sendable {
                 throw SourceSceneTopologyError.unsupported("CharaStudio keeps at most two lights (SceneInfo.isLightCheck); the edited scene would have \(lights.count).")
             }
         }
-        return try document.editedData(edits)
+        return try document.editedData(edits, source: source, copies: copies)
     }
 }
 
@@ -123,16 +128,19 @@ public extension KoikatsuSceneDocument {
     /// each changed child list gets its new count. Refuses, with the reason,
     /// anything it cannot place exactly as CharaStudio would.
     func inserting(_ insertions: [SourceSceneInsertion]) throws -> SourceSceneStage {
-        guard !insertions.isEmpty else { return SourceSceneStage(document: self, keys: [], addsLights: false) }
+        guard !insertions.isEmpty else { return SourceSceneStage(document: self, keys: [], addsLights: false, source: self, copies: [:]) }
         guard insertions.count <= 100_000 else { throw KoikatsuReadError.limitExceeded("too many scene insertions") }
         let plan = try SourceSceneInsertionPlan(self, insertions)
-        if insertions.contains(where: { if case .duplicate = $0.record { return true } else { return false } }) {
-            try refuseObjectKeyedExtensions("Original-scene export does not duplicate objects in a scene that carries plug-in (ExtendedSave) data: plug-ins key that data by object, and this writer cannot run what they do on a duplicate. Save in native format instead.")
-        }
         let data = try plan.emit()
         let staged = try KoikatsuSceneReader.decodeDocument(data)
         try plan.verify(staged)
-        return SourceSceneStage(document: staged, keys: plan.keys, addsLights: plan.addsLights)
+        var copies: [Int32: Int32] = [:]
+        for (index, insertion) in insertions.enumerated() {
+            if case .duplicate(let template) = insertion.record { copies[plan.keys[index]] = template }
+        }
+        // Plug-in data follows the copies when the final scene is written
+        // (`SourceSceneStage.editedData`); the stage keeps the source trailer.
+        return SourceSceneStage(document: staged, keys: plan.keys, addsLights: plan.addsLights, source: self, copies: copies)
     }
 }
 

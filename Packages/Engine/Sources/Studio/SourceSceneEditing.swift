@@ -194,7 +194,25 @@ public extension KoikatsuSceneDocument {
             var rest = edits; rest.insertions = []
             return try inserting(edits.insertions).editedData(rest)
         }
-        guard !edits.transforms.isEmpty || !edits.cards.isEmpty || !edits.kinematics.isEmpty || !edits.animations.isEmpty || !edits.voices.isEmpty || edits.currentCamera != nil || !edits.cameraSlots.isEmpty || edits.thumbnailData != nil || !edits.visibility.isEmpty || !edits.names.isEmpty || !edits.cameraActive.isEmpty || !edits.routeActive.isEmpty || !edits.mouth.isEmpty || !edits.deletions.isEmpty || !edits.reparents.isEmpty || !edits.routes.isEmpty else { return preservedData }
+        return try editedData(edits, source: self, copies: [:])
+    }
+}
+
+extension KoikatsuSceneDocument {
+    /// `edits` applied to this (staged) scene, then its plug-in data made to
+    /// follow the final object set (`SourceScenePluginData`). `source` is
+    /// the scene before insertions and `copies` maps each copy's key to its
+    /// template's.
+    func editedData(_ edits: SourceSceneEdits, source: KoikatsuSceneDocument, copies: [Int32: Int32]) throws -> Data {
+        let (result, final) = try editedBody(edits)
+        return try SourceScenePluginData.rewrite(result, final: final, source: source, copies: copies,
+                                                 moved: !edits.reparents.isEmpty)
+    }
+
+    /// The scene bytes with every edit but the plug-in data, and their
+    /// decoded document.
+    private func editedBody(_ edits: SourceSceneEdits) throws -> (Data, KoikatsuSceneDocument) {
+        guard !edits.transforms.isEmpty || !edits.cards.isEmpty || !edits.kinematics.isEmpty || !edits.animations.isEmpty || !edits.voices.isEmpty || edits.currentCamera != nil || !edits.cameraSlots.isEmpty || edits.thumbnailData != nil || !edits.visibility.isEmpty || !edits.names.isEmpty || !edits.cameraActive.isEmpty || !edits.routeActive.isEmpty || !edits.mouth.isEmpty || !edits.deletions.isEmpty || !edits.reparents.isEmpty || !edits.routes.isEmpty else { return (preservedData, self) }
         guard edits.transforms.count <= 100_000, edits.cards.count <= 10_000, edits.kinematics.count <= 10_000, edits.animations.count <= 10_000, edits.voices.count <= 10_000, edits.visibility.count <= 100_000, edits.names.count <= 100_000, edits.cameraActive.count <= 100_000, edits.routeActive.count <= 100_000, edits.mouth.count <= 10_000, edits.deletions.count <= 100_000, edits.reparents.count <= 100_000, edits.routes.count <= 100_000 else { throw KoikatsuReadError.limitExceeded("too many scene edits") }
         var reader = try KoikatsuBinaryReader(preservedData)
         try reader.skipPNG()
@@ -219,7 +237,6 @@ public extension KoikatsuSceneDocument {
         let topology = edits.deletions.isEmpty && edits.reparents.isEmpty ? nil
             : try SourceSceneTopology.plan(snapshot, deletions: edits.deletions, reparents: edits.reparents)
         if let topology {
-            if !edits.deletions.isEmpty { try refuseObjectKeyedExtensions() }
             // An edit of a deleted record has no destination left; refuse it
             // even when it would not change a byte.
             var targets = edits.transforms.map { edit -> Int32 in
@@ -400,7 +417,7 @@ public extension KoikatsuSceneDocument {
             let decoded = try KoikatsuSceneReader.decodeDocument(result)
             try topology.verify(decoded.snapshot)
             try Self.verify(routes, in: decoded)
-            return result
+            return (result, decoded)
         }
         patches.sort { $0.0.lowerBound < $1.0.lowerBound }
         var result = Data(), cursor = 0
@@ -414,8 +431,9 @@ public extension KoikatsuSceneDocument {
         guard result.count <= 256 * 1024 * 1024 else { throw KoikatsuReadError.limitExceeded("edited scene exceeds 256 MiB") }
         // Parsing the complete result catches any shifted embedded-card boundary
         // before an invalid export can leave this pure writer.
-        try Self.verify(routes, in: KoikatsuSceneReader.decodeDocument(result))
-        return result
+        let decoded = try KoikatsuSceneReader.decodeDocument(result)
+        try Self.verify(routes, in: decoded)
+        return (result, decoded)
     }
 
     /// ST-T11: the patches of every route edit (see `SourceSceneEdits.routes`)
@@ -445,12 +463,8 @@ public extension KoikatsuSceneDocument {
             }
             try state.validate(against: record)
             // Route points are keyed Studio objects (`Studio.AddCtrlInfo` in
-            // `AddObjectRoute.LoadPoint`): adding or deleting one follows the
-            // duplicate and delete rule for plug-in data.
-            let kept = state.points.filter { $0.sourceIndex != nil }.count
-            if kept != state.points.count || kept != record.points.count {
-                try refuseObjectKeyedExtensions("Original-scene export does not add or delete route points in a scene that carries plug-in (ExtendedSave) data: plug-ins key that data by object, route points included, and rewrite it when CharaStudio saves. Save in native format instead.")
-            }
+            // `AddObjectRoute.LoadPoint`): plug-in data follows an added or
+            // deleted one like any other object (`SourceScenePluginData`).
             var points: [KoikatsuRoutePointRecord] = []
             for point in state.points {
                 if let index = point.sourceIndex {
@@ -503,27 +517,6 @@ public extension KoikatsuSceneDocument {
         }
         let used = SourceSceneInsertionPlan.usedKeys(document.snapshot)
         guard Set(used).count == used.count else { throw SourceSceneTopologyError.unsupported("The edited scene uses a key twice.") }
-    }
-}
-
-extension KoikatsuSceneDocument {
-    /// Plug-ins key their scene data by object `dicKey` and rewrite it from
-    /// live objects when CharaStudio saves, which this writer cannot run.
-    /// Deleting and duplicating are therefore limited to scenes whose
-    /// trailer carries no plug-in entries: no trailer, or one KKEx block
-    /// with a nil or empty map.
-    func refuseObjectKeyedExtensions(_ reason: String = "Original-scene export does not delete objects from a scene that carries plug-in (ExtendedSave) data: plug-ins key that data by object and rewrite it when CharaStudio saves. Save in native format instead.") throws {
-        guard !trailingData.isEmpty else { return }
-        let extensions = extensions()
-        let empty: Bool
-        switch extensions.payload {
-        case .some(.null): empty = true
-        case .some(let payload): empty = (try? payload.stringKeyedMap())?.isEmpty == true
-        case .none: empty = false
-        }
-        guard extensions.version != nil, empty, extensions.diagnostics.count == 1 else {
-            throw SourceSceneTopologyError.unsupported(reason)
-        }
     }
 }
 
