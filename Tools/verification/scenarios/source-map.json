@@ -1,0 +1,21 @@
+{
+  "steps": [
+    {"op": "assert", "sourceMap": {"map": 33, "draws": 8, "loading": false,
+      "lineContains": "Map 33 空き部室 (bushitu): approximated: no baked lightmaps, map lights, sun-type lighting, fog or ambient",
+      "pickNothingAt": [[0.5, 0.03], [0.25, 0.97]], "pickSomethingAt": [[0.08, 0.25]]}},
+    {"op": "setShowSourceMap", "on": false},
+    {"op": "assert", "sourceMap": {"map": 33, "draws": 0, "lineContains": "hidden (View ▸ Show Source Map)"}},
+    {"op": "export", "path": ".local/verification/scenario-exports/source-map-hidden.png"},
+    {"op": "assert", "exportIdenticalToSource": ".local/verification/scenario-exports/source-map-hidden.png"},
+    {"op": "setShowSourceMap", "on": true},
+    {"op": "assert", "sourceMap": {"map": 33, "draws": 8, "lineAbsent": "hidden"}},
+    {"op": "export", "path": ".local/verification/scenario-exports/source-map.png"},
+    {"op": "assert", "exportIdenticalToSource": ".local/verification/scenario-exports/source-map.png"},
+    {"op": "reimport", "path": ".local/verification/scenario-exports/source-map.png"},
+    {"op": "assert", "sourceMap": {"map": 33, "draws": 8, "loading": false, "lineContains": "Map 33 空き部室 (bushitu): approximated: no baked lightmaps, map lights, sun-type lighting, fog or ambient"}},
+    {"op": "newScene"},
+    {"op": "assert", "sourceMap": {"none": true}},
+    {"op": "undo"},
+    {"op": "assert", "sourceMap": {"map": 33, "draws": 8, "loading": false, "pickNothingAt": [[0.5, 0.03]], "pickSomethingAt": [[0.08, 0.25]]}}
+  ]
+}
