@@ -18,6 +18,9 @@ import Assets
 // mod item, V1 and V2 a vanilla one.
 
 private let probeVariable = "IKKOKU_PLUGIN_SCENE_PROBE"
+private let inputsVariable = "IKKOKU_PLUGIN_SCENE_INPUTS"
+private let phaseBVariable = "IKKOKU_PLUGIN_SCENE_PROBE_B"
+private let phaseAEdits = ["delete", "delete-folder", "duplicate", "delete-duplicate", "move", "route-add", "route-delete"]
 
 @Test(.enabled(if: SourceFixtureSupport.shouldRun([probeVariable]), "Requires IKKOKU_PLUGIN_SCENE_PROBE (the probe's phase-a folder)"))
 func sourceScenePluginDataMatchesCharaStudioEdits() throws {
@@ -26,7 +29,7 @@ func sourceScenePluginDataMatchesCharaStudioEdits() throws {
     let source = try KoikatsuSceneReader.decodeDocument(fixture)
     #expect(try sideloaderRecords(source.trailingData) == [[3, 0], [6, 3], [2, 4], [5, 5]])
     var results: [String] = []
-    for label in ["delete", "delete-folder", "duplicate", "delete-duplicate", "move", "route-add", "route-delete"] {
+    for label in phaseAEdits {
         let saved = try Data(contentsOf: root.appendingPathComponent("edit-\(label).png"))
         let theirs = try KoikatsuSceneReader.decodeDocument(saved)
         var edits = try probeEdits(label, source: source, theirs: theirs)
@@ -80,6 +83,126 @@ func sourceScenePluginDataMatchesCharaStudioEdits() throws {
     let moved = try KoikatsuSceneReader.decodeDocument(passthrough.editedData(
         .init(transforms: [.init(.object(5), transform: move.transform)], reparents: [.init(object: 5, parent: 0)])))
     #expect(try probeEntry(moved) == probeEntry(passthrough))
+}
+
+// MARK: - Phase B
+
+/// The phase-B player run's inputs, from phase A: our export of each phase-A
+/// edit of fixture.png as the app writes it (the source thumbnail kept),
+/// ours-<edit>.png, and fixture-nil.png, phase A's fixture with nil
+/// MaterialEditor and example.nil entries added to its KKEx map.
+@Test(.enabled(if: SourceFixtureSupport.shouldRun([probeVariable, inputsVariable]),
+               "Requires IKKOKU_PLUGIN_SCENE_PROBE (phase-a folder) and IKKOKU_PLUGIN_SCENE_INPUTS (output folder)"))
+func sourceScenePluginDataWritesThePhaseBInputs() throws {
+    let root = URL(fileURLWithPath: try SourceFixtureSupport.require(probeVariable))
+    let output = URL(fileURLWithPath: try SourceFixtureSupport.require(inputsVariable))
+    try FileManager.default.createDirectory(at: output, withIntermediateDirectories: true)
+    let fixture = try Data(contentsOf: root.appendingPathComponent("fixture.png"))
+    let source = try KoikatsuSceneReader.decodeDocument(fixture)
+    for label in phaseAEdits {
+        let theirs = try KoikatsuSceneReader.decodeDocument(Data(contentsOf: root.appendingPathComponent("edit-\(label).png")))
+        let ours = try source.editedData(probeEdits(label, source: source, theirs: theirs))
+        try ours.write(to: output.appendingPathComponent("ours-\(label).png"))
+    }
+    let withNil = try nilEntries(fixture, trailer: source.trailingData,
+                                 ids: [SourceScenePluginData.materialEditor, "example.nil"])
+    let decoded = try SourceSceneKKEx.parse(KoikatsuSceneReader.decodeDocument(withNil).trailingData)
+    #expect(decoded.entries.map(\.isNil) == [false, false, true, true])
+    try withNil.write(to: output.appendingPathComponent("fixture-nil.png"))
+}
+
+/// Phase B: CharaStudio with KKPE, NodesConstraints and MaterialEditor
+/// loaded as well saved phase A's fixture again (fixture.png, which now
+/// carries their entries), each edit of it (edit-<label>.png), the
+/// load-then-save of every one of those (resave-*.png), of our phase-A
+/// exports (resave-ours-*.png) and of the nil-entry fixture.
+@Test(.enabled(if: SourceFixtureSupport.shouldRun([phaseBVariable]), "Requires IKKOKU_PLUGIN_SCENE_PROBE_B (the probe's phase-b folder)"))
+func sourceScenePluginDataMatchesCharaStudioWithEveryPlugin() throws {
+    let root = URL(fileURLWithPath: try SourceFixtureSupport.require(phaseBVariable))
+    func load(_ name: String) throws -> Data { try Data(contentsOf: root.appendingPathComponent(name)) }
+    let fixture = try load("fixture.png")
+    let source = try KoikatsuSceneReader.decodeDocument(fixture)
+    let kkex = try SourceSceneKKEx.parse(source.trailingData)
+    var lines = ["fixture entries: " + kkex.entries.map { "\($0.id) \($0.span.count) B" }.joined(separator: ", ")]
+    for id in [SourceScenePluginData.kkpe, SourceScenePluginData.nodesConstraints, SourceScenePluginData.materialEditor] {
+        #expect(kkex.entries.contains { $0.id == id }, "fixture.png has no \(id) entry")
+    }
+    // Our export of each edit of this fixture: refused where an item is
+    // added or removed (KKPE's per-item list is positional; its rewrite is
+    // PR 2), otherwise CharaStudio's file.
+    var refused: [String] = []
+    for label in phaseAEdits + ["delete-light", "add-folder"] {
+        let saved = try load("edit-\(label).png")
+        let theirs = try KoikatsuSceneReader.decodeDocument(saved)
+        var edits = try label == "delete-light" ? .init(deletions: [15])
+            : label == "add-folder" ? addedFolder(source: source, theirs: theirs)
+            : probeEdits(label, source: source, theirs: theirs)
+        edits.thumbnailData = try pngPrefix(saved)
+        do {
+            let ours = try source.editedData(edits)
+            #expect(ours == saved, "\(label): the file differs at \(firstDifference(ours, saved))")
+            lines.append("\(label): \(ours == saved ? "byte-identical file" : "differs at \(firstDifference(ours, saved))")")
+        } catch let error as SourceSceneTopologyError {
+            let reason = error.errorDescription ?? ""
+            #expect(reason.contains("KKPE"), "\(label): \(reason)")
+            refused.append(label)
+            lines.append("\(label): refused (\(reason))")
+        }
+    }
+    #expect(refused == ["delete", "delete-folder", "duplicate", "delete-duplicate"])
+    // CharaStudio's load-then-save is a fixed point of its own saves.
+    for name in ["fixture.png"] + (phaseAEdits + ["delete-light", "add-folder"]).map({ "edit-\($0).png" }) {
+        let same = try afterPNG(load("resave-\(name)")) == afterPNG(load(name))
+        #expect(same, "resave-\(name)")
+        lines.append("resave-\(name): \(same ? "same scene bytes" : "differs")")
+    }
+    // Our phase-A exports, loaded and saved by this player, are its own
+    // edits of the phase-B fixture; delete-duplicate's copy keeps our key.
+    for label in phaseAEdits {
+        let resaved = try afterPNG(load("resave-ours-\(label).png")), theirs = try afterPNG(load("edit-\(label).png"))
+        if label == "delete-duplicate" {
+            let ours = try KoikatsuSceneReader.decodeDocument(load("resave-ours-\(label).png"))
+            #expect(ours.snapshot.roots.map(\.sourceKey) == [0, 2, 5, 7, 14, 15, 16])
+            lines.append("resave-ours-\(label): \(resaved.count == theirs.count ? "same length" : "length differs"), keys as ours (#278)")
+        } else {
+            #expect(resaved == theirs, "resave-ours-\(label)")
+            lines.append("resave-ours-\(label): \(resaved == theirs ? "same scene bytes as CharaStudio's edit" : "differs")")
+        }
+    }
+    // Nil entries are inert: the nil-entry fixture saves as the fixture does.
+    let nilSame = try afterPNG(load("resave-fixture-nil.png")) == afterPNG(fixture)
+    #expect(nilSame)
+    lines.append("resave-fixture-nil: \(nilSame ? "same scene bytes as fixture.png" : "differs")")
+    print("plug-in probe phase B:\n" + lines.joined(separator: "\n"))
+}
+
+/// AddObjectFolder.Add's folder as CharaStudio saved it: the root record
+/// whose key the fixture does not have.
+private func addedFolder(source: KoikatsuSceneDocument, theirs: KoikatsuSceneDocument) throws -> SourceSceneEdits {
+    let keys = Set(source.snapshot.roots.map(\.sourceKey))
+    let added = try #require(theirs.snapshot.roots.first { !keys.contains($0.sourceKey) })
+    #expect(added.kind == .folder && added.sourceKey == 16)
+    let header = SourceSceneInsertion.Header(transform: added.transform, treeState: added.treeState, visible: added.visible)
+    return .init(insertions: [.init(.folder(name: added.name ?? "", header: header))])
+}
+
+/// The scene after its leading PNG.
+private func afterPNG(_ data: Data) throws -> Data { data.dropFirst(try pngPrefix(data).count) }
+
+/// `scene` with nil entries `ids` appended to its KKEx map (a fixmap).
+private func nilEntries(_ scene: Data, trailer: Data, ids: [String]) throws -> Data {
+    var bytes = [UInt8](trailer)
+    let count = Int(bytes[13]) - 0x80
+    guard bytes[13] & 0xf0 == 0x80, count + ids.count <= 15 else { throw SourceFixtureError.missing("a fixmap KKEx payload") }
+    bytes[13] = UInt8(0x80 + count + ids.count)
+    for id in ids {
+        let utf8 = Array(id.utf8)
+        bytes += utf8.count < 32 ? [UInt8(0xa0 + utf8.count)] : [0xd9, UInt8(utf8.count)]
+        bytes += utf8 + [0xc0]
+    }
+    let length = UInt32(bytes.count - 13)
+    bytes.replaceSubrange(9..<13, with: [UInt8(length & 0xff), UInt8(length >> 8 & 0xff), UInt8(length >> 16 & 0xff), UInt8(length >> 24)])
+    return scene.prefix(scene.count - trailer.count) + Data(bytes)
 }
 
 /// The probe's edits (OriginalPluginSceneProbe.cs `Edit`) as our export's.

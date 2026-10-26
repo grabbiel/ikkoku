@@ -32,6 +32,24 @@ sets up a fresh private player root (original_character_probe.PLAYER_SETUP) and 
 
 Nothing in C:\\Illusion\\Koikatsu is written. The Parallels errno-24 count must equal
 --errno-baseline before the exec. Outputs stay under .local.
+
+Phase B (--phase b) is the same kind of exec, with these differences:
+
+- KKPE, NodesConstraints and KK_Plugins\\KK_MaterialEditor are copied as well (PLUGINS_B, same checks).
+- The zipmod is phase A's: the file of that name under the install's mods folder, which must hash as
+  phase A's run.json recorded.
+- No survey 1. The probe is compiled together with fixtures/PluginSceneRules.cs, PluginSceneRuleParity.cs
+  and PluginSceneSurvey.cs, and its plug-in folder gets reload-input: phase A's fixture.png, the
+  ours-*.png and fixture-nil.png that sourceScenePluginDataWritesThePhaseBInputs wrote into --inputs,
+  the rule corpus (plugin_rule_parity.py's corpus.txt) and survey.txt (the install's scene folder and
+  the survey bounds). The probe then runs its phase B (see its source), with survey 2 last.
+- Before PLAYER_SETUP creates the abdata and CharaStudio_Data junctions, and again after the cleanup
+  has removed them, run.ps1 records the file count, directory count and newest LastWriteTimeUtc
+  (entries and the folder itself) under both junction targets. Any difference is reported as
+  junctionTargetsChanged and must be treated as an incident.
+- The KKPE setting "Disable advanced mode on copied objects" is read from the install's
+  BepInEx\\config\\com.joan6694.kkplugins.kkpe.cfg (read-only, with the file's SHA-256), for the
+  KKPE rewrite that follows (PR 2). The player in the private root uses its own default config.
 """
 from __future__ import annotations
 import argparse, json, re, subprocess
@@ -55,6 +73,16 @@ PLUGINS = (
     ('KKAPI.NativeHelper.dll', '09ab8d27b7e0acfbbed61a300f6b676834d086c0843c504b716e595b30bfc098', 31744),
     ('KK_Plugins\\KK_StudioSceneSettings.dll', '5ae7cd405d9dc47c12afcf708415b0d6962fbffe9f043f8972fcff78437bae99', 21504),
 )
+# Phase B's additions, from the same inventory: KKPE 2.21.4 (com.joan6694.kkplugins.kkpe; ExtendedSave, KKAPI >= 1.43),
+# NodesConstraints 1.6.2.1 (com.joan6694.illusionplugins.nodesconstraints; KKAPI) and MaterialEditor 4.0.2
+# (com.deathweasel.bepinex.materialeditor; KKAPI, ResourceRedirector, ExtendedSave, Sideloader). KKPE and
+# NodesConstraints also reference Vectrosity, which ships in CharaStudio_Data\\Managed.
+PLUGINS_B = (
+    ('KKPE.dll', '72d1b7b5107e1f56a28482f7cfcaf845455d4a2b6504e858464bd1c94463377c', 574464),
+    ('NodesConstraints.dll', '817fd940d001db9550e0f562e9f248ba601999a92e7ddc864f38a91cf28a4e03', 119296),
+    ('KK_Plugins\\KK_MaterialEditor.dll', 'dde57f4f65161aa5374a283619791c77e89ce4a014c28d4b00e70cf9905ab596', 718848),
+)
+SOURCES_B = ('PluginSceneRules.cs', 'PluginSceneRuleParity.cs', 'PluginSceneSurvey.cs')
 
 
 def local_roots():
@@ -151,6 +179,79 @@ $r.removed=-not(Test-Path -LiteralPath $root);$r.remainingGameProcesses=@(Get-Pr
 """)
 
 
+# File count, directory count and newest LastWriteTimeUtc under a folder (entries and the folder itself).
+TREE = r"""function Tree($path){$i=New-Object IO.DirectoryInfo $path;$f=0;$d=0;$t=$i.LastWriteTimeUtc
+foreach($e in $i.EnumerateFileSystemInfos('*',[IO.SearchOption]::AllDirectories)){if($e -is [IO.DirectoryInfo]){$d++}else{$f++};if($e.LastWriteTimeUtc -gt $t){$t=$e.LastWriteTimeUtc}}
+[ordered]@{files=$f;directories=$d;newestUtc=$t.ToString('o')}}
+function Targets{try{[ordered]@{abdata=(Tree "$original\abdata");CharaStudio_Data=(Tree "$original\CharaStudio_Data")}}catch{[ordered]@{error=$_.ToString()}}}
+"""
+
+
+def reload_script(root, base, wait_seconds, survey_seconds, survey_file_bytes, zipmod, inputs):
+    """Phase B as run.ps1: the player with the full plug-in set, phase A's zipmod, the reload inputs and survey 2."""
+    if not re.fullmatch(PLAYER_ROOT, root): raise ValueError('Unknown private player root')
+    for value in (wait_seconds, survey_seconds, survey_file_bytes):
+        if not isinstance(value, int) or value <= 0: raise ValueError('Bounds must be positive integers')
+    if not re.fullmatch(r"[^'\\/:*?\"<>|]+\.zipmod", zipmod['name']) or not re.fullmatch(r'[0-9a-f]{64}', zipmod['sha256']):
+        raise ValueError('Unexpected zipmod record')
+    plugins = ','.join("@('%s','%s',%d)" % entry for entry in PLUGINS + PLUGINS_B)
+    if not all(re.fullmatch(r'[A-Za-z0-9.-]+', name) for name in inputs): raise ValueError('Unexpected input name')
+    names = ','.join("'%s'" % name for name in inputs)
+    sources = ' '.join('"$root\\%s"' % name for name in ('PluginSceneProbe.cs',) + SOURCES_B)
+    return ("$ErrorActionPreference='Stop';$root='" + root + "';$base='" + base + "';$r=[ordered]@{root=$root;phase='B'}\n"
+            + r"""if(@(Get-Process CharaStudio,Koikatu -ErrorAction SilentlyContinue).Count){throw 'A game process already runs'}
+if(Test-Path -LiteralPath $root){throw "Root exists: $root"}
+[Net.ServicePointManager]::Expect100Continue=$false
+function Fetch($name,$path){Invoke-WebRequest -UseBasicParsing -Uri ($base+$name) -OutFile $path;(Get-FileHash -LiteralPath $path -Algorithm SHA256).Hash.ToLower()}
+function Sha($path){(Get-FileHash -LiteralPath $path -Algorithm SHA256).Hash.ToLower()}
+function Own{@(Get-Process -ErrorAction SilentlyContinue|Where-Object{$_.Path -and $_.Path.StartsWith($root+'\')})}
+$original='C:\Illusion\Koikatsu'
+""" + TREE + r"""$r.junctionTargetsBefore=Targets
+if($r.junctionTargetsBefore.error){throw "Junction targets could not be scanned: $($r.junctionTargetsBefore.error)"}
+try{
+""" + PLAYER_SETUP + r"""
+$p="$root\BepInEx\plugins";$out="$p\reload";$in="$p\reload-input";New-Item -ItemType Directory $out,$in -Force|Out-Null
+$r.plugins=@()
+foreach($e in @(""" + plugins + r""")){
+$src=Join-Path "$original\BepInEx\plugins" $e[0];$dst=Join-Path $p $e[0];New-Item -ItemType Directory (Split-Path $dst) -Force|Out-Null
+Copy-Item -LiteralPath $src -Destination $dst;$h=Sha $dst;$n=(Get-Item -LiteralPath $dst).Length
+if($h -ne $e[1] -or $n -ne $e[2]){throw "Plug-in copy differs from the inventory: $($e[0]) $h $n"}
+$r.plugins+=[ordered]@{path=$e[0];sha256=$h;bytes=$n}}
+$mods=@(Get-ChildItem -LiteralPath "$original\mods" -Recurse -File -ErrorAction SilentlyContinue|Where-Object{$_.Name -ceq '""" + zipmod['name'] + r"""'})
+if($mods.Count -ne 1){throw "Expected one zipmod named as phase A's, found $($mods.Count)"}
+New-Item -ItemType Directory "$root\mods" -Force|Out-Null;$copy="$root\mods\$($mods[0].Name)"
+Copy-Item -LiteralPath $mods[0].FullName -Destination $copy;$r.zipmod=[ordered]@{name=$mods[0].Name;bytes=$mods[0].Length;sha256=(Sha $copy)}
+if($r.zipmod.sha256 -ne '""" + zipmod['sha256'] + r"""'){throw "Zipmod differs from phase A's: $($r.zipmod.sha256)"}
+$r.inputs=[ordered]@{};foreach($n in @(""" + names + r""")){$r.inputs[$n]=Fetch $n "$in\$n"}
+""" + r"""[IO.File]::WriteAllText("$in\survey.txt","$original\UserData\studio\scene`n""" + str(survey_seconds) + '`n' + str(survey_file_bytes) + r"""`n")
+$cfg="$original\BepInEx\config\com.joan6694.kkplugins.kkpe.cfg";$r.kkpeConfig=[ordered]@{path=$cfg;exists=(Test-Path -LiteralPath $cfg)}
+if($r.kkpeConfig.exists){$r.kkpeConfig.sha256=Sha $cfg;$m=@(Get-Content -LiteralPath $cfg|Where-Object{$_ -match '^\s*Disable advanced mode on copied objects\s*='});$r.kkpeConfig.lines=$m.Count;if($m.Count -eq 1){$r.kkpeConfig.value=($m[0] -split '=',2)[1].Trim()}}
+$r.sources=[ordered]@{};foreach($n in @('PluginSceneProbe.cs',""" + ','.join("'%s'" % n for n in SOURCES_B) + r""")){$r.sources[$n]=Fetch $n "$root\$n"}
+$refs=@("$root\BepInEx\core\BepInEx.dll")+(Get-ChildItem "$root\CharaStudio_Data\Managed" -Filter '*.dll'|ForEach-Object{$_.FullName})
+$c=& C:\Windows\Microsoft.NET\Framework64\v4.0.30319\csc.exe /nologo /noconfig /nostdlib+ /target:library /out:"$p\IkkokuPluginSceneProbe.dll" /reference:$($refs -join ',') """ + sources + r""" 2>&1|Out-String
+if($LASTEXITCODE -ne 0){throw "Compile failed:$c"}
+$r.playerArguments=@('-force-d3d11','-screen-fullscreen','0','-screen-width','640','-screen-height','480','-logFile',"$root\unity.log")
+$x=Start-Process -FilePath "$root\CharaStudio.exe" -WorkingDirectory $root -ArgumentList $r.playerArguments -PassThru
+$r.processID=$x.Id;$r.exited=$x.WaitForExit(""" + str(wait_seconds * 1000) + r""")
+$left=Own;$left|Stop-Process -Force;$r.stopped=@($left|ForEach-Object{$_.Id});Start-Sleep -Seconds 2
+foreach($n in @('unity.log','BepInEx\LogOutput.log')){if(Test-Path -LiteralPath "$root\$n"){Copy-Item -LiteralPath "$root\$n" "$out\$(Split-Path $n -Leaf)"}}
+Add-Type -AssemblyName System.IO.Compression.FileSystem
+$z="$root\reload.zip";[IO.Compression.ZipFile]::CreateFromDirectory($out,$z);$r.zipSHA256=Sha $z;$r.zipBytes=(Get-Item -LiteralPath $z).Length
+Invoke-WebRequest -UseBasicParsing -Method Put -InFile $z -ContentType 'application/zip' -Uri ($base+'reload.zip')|Out-Null
+}catch{$r.error=$_.ToString()}
+finally{
+$left=Own;$left|Stop-Process -Force -ErrorAction SilentlyContinue;$r.stoppedAtCleanup=@($left|ForEach-Object{$_.Id});Start-Sleep -Seconds 1
+$kept=@()
+foreach($j in @("$root\abdata","$root\CharaStudio_Data")){if(Test-Path -LiteralPath $j){if((Get-Item -LiteralPath $j -Force).Attributes -band [IO.FileAttributes]::ReparsePoint){cmd /c rmdir "$j"|Out-Null}if(Test-Path -LiteralPath $j){$kept+=$j}}}
+if($kept.Count){$r.cleanupError='junctions not removed: '+($kept -join ', ')}elseif(Test-Path -LiteralPath $root){Remove-Item -LiteralPath $root -Recurse -Force}
+$r.removed=-not(Test-Path -LiteralPath $root);$r.remainingGameProcesses=@(Get-Process CharaStudio,Koikatu -ErrorAction SilentlyContinue|ForEach-Object{$_.Id})
+$r.junctionTargetsAfter=Targets
+$r.junctionTargetsChanged=(($r.junctionTargetsBefore|ConvertTo-Json -Compress) -ne ($r.junctionTargetsAfter|ConvertTo-Json -Compress))
+}
+[PSCustomObject]$r|ConvertTo-Json -Compress -Depth 5
+""")
+
+
 def run(vm, output, errno_baseline, host_address='10.211.55.2', wait_seconds=900, survey_seconds=600,
         survey_file_bytes=512 * 1024 * 1024, zipmod_max_bytes=8 * 1024 * 1024):
     """One-exec phase A into a new output folder: run.json, run.ps1, survey.json, plugin-scene-trace.json,
@@ -198,19 +299,91 @@ def run(vm, output, errno_baseline, host_address='10.211.55.2', wait_seconds=900
                 statusError=(status or {}).get('error'))
 
 
+def run_b(vm, output, errno_baseline, inputs, corpus, phase_a, host_address='10.211.55.2', wait_seconds=1800,
+          survey_seconds=900, survey_file_bytes=512 * 1024 * 1024):
+    """One-exec phase B into a new output folder: run.json, run.ps1, the probe's scenes, plugin-scene-trace.json,
+    status.json, survey2.json, unity.log, LogOutput.log, source/ and manifest.json."""
+    if not any(output.resolve().is_relative_to(root) for root in local_roots()): raise ValueError('Outputs must stay under .local')
+    if (output / 'run.json').exists(): raise RuntimeError(f'{output}/run.json exists: run the probe into a new output folder')
+    phase_a_run = json.loads((phase_a / 'run.json').read_text())
+    zipmod = phase_a_run['guest']['zipmod']
+    files = {'fixture.png': (phase_a / 'fixture.png').read_bytes(), 'fixture-nil.png': (inputs / 'fixture-nil.png').read_bytes(),
+             'corpus.txt': corpus.read_bytes()}
+    ours = sorted(inputs.glob('ours-*.png'))
+    if len(ours) != 7: raise ValueError(f'expected 7 ours-*.png in {inputs}, found {len(ours)}')
+    for path in ours: files[path.name] = path.read_bytes()
+    input_hashes = {name: digest(data) for name, data in files.items()}
+    sources = {'PluginSceneProbe.cs': PROBE.read_bytes()}
+    for name in SOURCES_B: sources[name] = (FIXTURES / name).read_bytes()
+    output.mkdir(parents=True, exist_ok=True)
+    root = fresh_root()
+    record = dict(vm=vm, root=root, phase='B', sources={n: digest(b) for n, b in sources.items()}, inputs=input_hashes,
+                  zipmod=dict(name=zipmod['name'], sha256=zipmod['sha256']),
+                  plugins=[dict(path=p, sha256=h, bytes=n) for p, h, n in PLUGINS + PLUGINS_B],
+                  errnoBaseline=errno_baseline, errnoBefore=guarded(errno_baseline),
+                  transport='one prlctl exec; run.ps1 over a host-only HTTP endpoint')
+    dump(output / 'run.json', record)
+    served = dict(files); served.update(sources)
+    timeout = wait_seconds + 1800
+    with Endpoint(host_address, served, upload='reload.zip') as endpoint:
+        script = reload_script(root, endpoint.base, wait_seconds, survey_seconds, survey_file_bytes, zipmod, list(files))
+        served['run.ps1'] = script.encode()
+        (output / 'run.ps1').write_text(script.replace(endpoint.base, '<endpoint>/'))
+        result = subprocess.run(['prlctl', 'exec', vm, '--current-user', 'powershell.exe', '-NoProfile', '-NonInteractive',
+                                 '-Command', bootstrap(endpoint.base)], text=True, capture_output=True, timeout=timeout)
+        upload = endpoint.upload
+    record['errnoAfter'] = errno_count()
+    if result.returncode:
+        record['execError'] = (result.stderr or result.stdout)[-4000:]; dump(output / 'run.json', record)
+        raise RuntimeError('VM exec failed: ' + record['execError'])
+    guest = json.loads(result.stdout.lstrip('\ufeff').strip())
+    record['guest'] = guest
+    dump(output / 'run.json', record)
+    for name, sha in (guest.get('sources') or {}).items():
+        if sha != record['sources'].get(name): raise ValueError(f'Guest source hash differs: {name}')
+    for name, sha in (guest.get('inputs') or {}).items():
+        if sha != input_hashes.get(name): raise ValueError(f'Guest input hash differs: {name}')
+    names = []
+    if upload is not None:
+        if digest(upload) != guest.get('zipSHA256') or len(upload) != guest.get('zipBytes'): raise ValueError('Upload differs from the guest zip')
+        names = extract(upload, output)
+    (output / 'source').mkdir(exist_ok=True)
+    for name, data in sources.items(): (output / 'source' / name).write_bytes(data)
+    provenance = [dict(file=str(p.relative_to(output)), sha256=digest(p.read_bytes()), bytes=p.stat().st_size)
+                  for p in sorted([output / n for n in set(names + ['run.json', 'run.ps1'])] + list((output / 'source').iterdir())) if p.is_file()]
+    dump(output / 'manifest.json', dict(schemaVersion=1, inputs=input_hashes, files=provenance))
+    status = json.loads((output / 'status.json').read_text()) if (output / 'status.json').is_file() else None
+    return dict(root=root, exited=guest.get('exited'), error=guest.get('error'), cleanupError=guest.get('cleanupError'),
+                removed=guest.get('removed'), remainingGameProcesses=guest.get('remainingGameProcesses'),
+                junctionTargetsBefore=guest.get('junctionTargetsBefore'), junctionTargetsAfter=guest.get('junctionTargetsAfter'),
+                junctionTargetsChanged=guest.get('junctionTargetsChanged'), kkpeConfig=guest.get('kkpeConfig'),
+                zipmod=guest.get('zipmod'), errno=[record['errnoBefore'], record['errnoAfter']], files=len(provenance),
+                statusError=(status or {}).get('error'))
+
+
 def main():
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument('--vm', default='Windows 11')
-    p.add_argument('--output', type=Path, default=ROOT / '.local/stt03i-plugin-data/phase-a')
+    p.add_argument('--phase', choices=('a', 'b'), default='a')
+    p.add_argument('--output', type=Path, help='new output folder (default .local/stt03i-plugin-data/phase-<phase>)')
+    p.add_argument('--phase-a', type=Path, default=ROOT / '.local/stt03i-plugin-data/phase-a', help='phase B: the phase-A output folder')
+    p.add_argument('--inputs', type=Path, help='phase B: the folder sourceScenePluginDataWritesThePhaseBInputs wrote')
+    p.add_argument('--corpus', type=Path, help="phase B: plugin_rule_parity.py's corpus.txt")
     p.add_argument('--errno-baseline', type=int, required=True, help='Parallels errno-24 count that must hold before the exec')
     p.add_argument('--host-address', default='10.211.55.2', help="the Mac's address on the VM's host-only network")
-    p.add_argument('--wait-seconds', type=int, default=900, help='bound on the player run')
-    p.add_argument('--survey-seconds', type=int, default=600, help='bound on the scene survey')
+    p.add_argument('--wait-seconds', type=int, help='bound on the player run (default 900, phase B 1800)')
+    p.add_argument('--survey-seconds', type=int, help='bound on the scene survey (default 600, phase B 900)')
     p.add_argument('--survey-file-bytes', type=int, default=512 * 1024 * 1024, help='scenes larger than this are counted, not read')
     p.add_argument('--zipmod-max-bytes', type=int, default=8 * 1024 * 1024, help='largest zipmod considered for the fixture')
     a = p.parse_args()
-    print(json.dumps(run(a.vm, a.output, a.errno_baseline, a.host_address, a.wait_seconds, a.survey_seconds,
-                         a.survey_file_bytes, a.zipmod_max_bytes), indent=2))
+    output = a.output or ROOT / f'.local/stt03i-plugin-data/phase-{a.phase}'
+    if a.phase == 'b':
+        if a.inputs is None or a.corpus is None: p.error('phase b needs --inputs and --corpus')
+        print(json.dumps(run_b(a.vm, output, a.errno_baseline, a.inputs, a.corpus, a.phase_a, a.host_address,
+                               a.wait_seconds or 1800, a.survey_seconds or 900, a.survey_file_bytes), indent=2))
+    else:
+        print(json.dumps(run(a.vm, output, a.errno_baseline, a.host_address, a.wait_seconds or 900, a.survey_seconds or 600,
+                             a.survey_file_bytes, a.zipmod_max_bytes), indent=2))
 
 
 if __name__ == '__main__':

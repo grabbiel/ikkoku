@@ -129,9 +129,8 @@ public static class PluginSceneRules {
         var verdict=new PluginSceneVerdict();
         if(scene.Trailer==null||scene.Trailer.Length==0)return verdict;
         var edit=new Edit(scene,spec);
-        Trailer trailer;
-        try{trailer=Trailer.Parse(scene.Trailer);}
-        catch(Exception e){if(edit.KeysChange){verdict.Refused=true;verdict.Reasons.Add("unreadable trailer: "+e.Message);}return verdict;}
+        string error;var trailer=Parsed(scene.Trailer,out error);
+        if(trailer==null){if(edit.KeysChange){verdict.Refused=true;verdict.Reasons.Add("unreadable trailer: "+error);}return verdict;}
         bool cardChecked=false;
         foreach(var entry in trailer.Entries) {
             if(entry.IsNil||Orphans.Contains(entry.Id))continue;
@@ -143,6 +142,66 @@ public static class PluginSceneRules {
         verdict.Ids.Sort(StringComparer.Ordinal);
         verdict.Refused=verdict.Ids.Count>0;
         return verdict;
+    }
+
+    // The last trailer parsed, by reference: a survey judges every edit of one scene against the same bytes.
+    static byte[] cachedBytes;static Trailer cachedTrailer;static string cachedError;
+    static Trailer Parsed(byte[] bytes,out string error) {
+        if(!ReferenceEquals(bytes,cachedBytes)) {
+            cachedBytes=bytes;cachedTrailer=null;cachedError=null;
+            try{cachedTrailer=Trailer.Parse(bytes);}catch(Exception e){cachedError=e.Message;}
+        }
+        error=cachedError;return cachedTrailer;
+    }
+
+    // Each entry's form, for the survey's counts (not a verdict): {ID, form, shape}. The shape (PluginData version
+    // and data keys) is given for orphan entries only. Throws when the trailer does not parse.
+    public static List<string[]> Forms(byte[] bytes) {
+        string error;var trailer=Parsed(bytes,out error);
+        if(trailer==null)throw new FormatException(error);
+        var result=new List<string[]>();
+        foreach(var entry in trailer.Entries) {
+            string form,shape="";
+            try{form=Form(trailer,entry);}catch(Exception){form="unreadable";}
+            if(Orphans.Contains(entry.Id)&&!entry.IsNil) {
+                try {
+                    var keys=new List<string>();var fields=entry.HasVersion?trailer.Fields(entry):null;
+                    if(fields!=null)foreach(var f in fields)keys.Add(f.Key);
+                    keys.Sort(StringComparer.Ordinal);
+                    shape=(entry.HasVersion?"v"+entry.Version:"shapeless")+":"+String.Join(",",keys.ToArray());
+                } catch(Exception){shape="unreadable";}
+            }
+            result.Add(new[]{entry.Id,form,shape});
+        }
+        return result;
+    }
+
+    static string Form(Trailer trailer,Entry entry) {
+        if(entry.IsNil)return "nil";
+        if(Orphans.Contains(entry.Id))return "orphan";
+        if(!entry.HasVersion)return "shapeless";
+        long version=entry.Version;long[] globals;
+        if(SceneGlobal.TryGetValue(entry.Id,out globals))return Array.IndexOf(globals,version)>=0?"global":"unknownVersion";
+        switch(entry.Id) {
+        case Sideloader:return version==0?"records":"unknownVersion";
+        case Timeline: {
+            if(version!=0)return "unknownVersion";
+            string xml=SingleString(trailer,entry,"sceneInfo");
+            return xml==null?"unknown":xml.IndexOf("objectIndex",StringComparison.Ordinal)>=0?"objectIndex":"global";}
+        case Kkpe:return version==0?"perItem":"unknownVersion";
+        case MaterialEditor:return version!=0&&version!=1?"unknownVersion":AllNil(trailer,entry,MaterialKeys)?"allNil":"itemKeyed";
+        case NodesConstraints: {
+            if(version!=0)return "unknownVersion";
+            string xml=SingleString(trailer,entry,"constraints");
+            return xml!=null&&ConstraintsEmpty(xml)?"empty":"constraints";}
+        case AnimationController:return version!=0?"unknownVersion":ControllerForm(trailer,entry);
+        default: {
+            Rule rule;if(!Keyed.TryGetValue(entry.Id,out rule))return "unknown";
+            if(Array.IndexOf(rule.Versions,version)<0)return "unknownVersion";
+            HashSet<int> keys;bool positional;
+            if(!References(trailer,entry,rule,out keys,out positional))return "unknown";
+            return positional?"positional":keys.Count>0?"references":"noReferences";}
+        }
     }
 
     static string Decide(Trailer trailer,Entry entry,Edit edit,PluginSceneModel scene,ref bool cardChecked) {

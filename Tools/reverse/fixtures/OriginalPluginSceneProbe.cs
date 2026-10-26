@@ -17,6 +17,19 @@
 // an ID no installed plug-in owns (values of every integer width, a float, a double, a string and bytes);
 // passthrough-delete.png loads it, deletes M1 and saves, which shows ExtendedSave's carry-over of an entry
 // no plug-in rewrites. Only the private root's files and the probe's own scenes are read or written.
+//
+// Phase B runs when the plug-in folder holds reload-input\fixture.png (phase A's fixture), with KKPE, NodesConstraints
+// and MaterialEditor copied in as well. Compiled together with PluginSceneRules.cs, PluginSceneRuleParity.cs and
+// PluginSceneSurvey.cs. Instead of authoring, it loads phase A's fixture and saves it as fixture.png, which adds the
+// three plug-ins' entries for that scene, then makes the same edits of that fixture and two more that leave every
+// item in place (delete-light deletes light L; add-folder adds a folder at the root with AddObjectFolder.Add), the
+// resaves and the passthrough pair. Then:
+//   ours        loads each reload-input\ours-<edit>.png (our writer's export of phase A's edit) and saves it again
+//   nil         loads reload-input\fixture-nil.png (phase A's fixture plus nil MaterialEditor and example.nil
+//               entries) and saves it again
+//   survey      last, and nothing is saved after it: repeats the rule parity check on reload-input\corpus.txt with
+//               this player's compiler, and only when every case agrees runs PluginSceneSurvey over the install's
+//               scene folder (reload-input\survey.txt: folder, seconds bound, per-file byte bound) into survey2.json.
 using System;
 using System.Collections;
 using System.Collections.Generic;
@@ -33,14 +46,22 @@ public sealed class OriginalPluginSceneProbe:BaseUnityPlugin {
     const int ModSlotBase=100000000; // Sideloader's UniversalAutoResolver.BaseSlotID: resolved studio IDs start here
     static readonly string[] Required={"com.bepis.bepinex.extendedsave","com.bepis.bepinex.sideloader","marco.kkapi",
         "com.deathweasel.bepinex.studioscenesettings","gravydevsupreme.xunity.resourceredirector"};
+    static readonly string[] RequiredReload={"com.joan6694.kkplugins.kkpe","com.joan6694.illusionplugins.nodesconstraints","com.deathweasel.bepinex.materialeditor"};
+    static readonly string[] Edits={"delete","delete-folder","duplicate","delete-duplicate","move","route-add","route-delete"};
+    static readonly string[] ReloadEdits={"delete-light","add-folder"};
+    // Phase A's fixture keys (its plugin-scene-trace.json), checked against the loaded scene in phase B.
+    static readonly object[] FixtureKeys={"F",0,"V1",1,"M1",2,"M2",3,"V2",4,"M3",5,"M4",6,"R",7,"R.p0",8,"R.p1",10,"R.p2",12,"C",14,"L",15};
     const string PassthroughID="org.ikkoku.probe.passthrough";
-    string folder,fixture;
+    string folder,fixture,input;
+    bool reload;
     Studio.Studio studio;
     readonly Dictionary<string,object> cases=new Dictionary<string,object>();
     readonly Dictionary<string,int> keys=new Dictionary<string,int>();
     string modItem,vanillaItem;
     IEnumerator Start() {
-        folder=Path.Combine(Path.GetDirectoryName(Assembly.GetExecutingAssembly().Location),"reload");Directory.CreateDirectory(folder);
+        string here=Path.GetDirectoryName(Assembly.GetExecutingAssembly().Location);
+        folder=Path.Combine(here,"reload");Directory.CreateDirectory(folder);
+        input=Path.Combine(here,"reload-input");reload=File.Exists(Path.Combine(input,"fixture.png"));
         string error=null;int waited=0;
         for(;waited<3600;waited++){if(Ready())break;yield return null;}
         if(waited>=3600)error="Studio, the scene container, cameraCtrl or Camera.main were not ready within 3600 frames";
@@ -49,23 +70,32 @@ public sealed class OriginalPluginSceneProbe:BaseUnityPlugin {
         studio=Singleton<Studio.Studio>.Instance;
         var plugins=new Dictionary<string,object>();
         foreach(var entry in BepInEx.Bootstrap.Chainloader.PluginInfos)plugins[entry.Key]=entry.Value.Metadata.Version.ToString();
-        foreach(var id in Required)if(error==null&&!plugins.ContainsKey(id))error="required plug-in "+id+" did not load";
+        var required=new List<string>(Required);if(reload)required.AddRange(RequiredReload);
+        foreach(var id in required)if(error==null&&!plugins.ContainsKey(id))error="required plug-in "+id+" did not load";
         if(error==null&&SettingsSet("MapMasking")==null)error="StudioSceneSettings did not build its scene settings within 600 frames";
         var steps=new List<KeyValuePair<string,Func<IEnumerator>>>();
-        steps.Add(new KeyValuePair<string,Func<IEnumerator>>("author",Author));
-        foreach(var label in new[]{"delete","delete-folder","duplicate","delete-duplicate","move","route-add","route-delete"}){var l=label;steps.Add(new KeyValuePair<string,Func<IEnumerator>>(l,()=>Edit(l)));}
+        if(reload)steps.Add(new KeyValuePair<string,Func<IEnumerator>>("base",Base));
+        else steps.Add(new KeyValuePair<string,Func<IEnumerator>>("author",Author));
+        foreach(var label in Labels()){var l=label;steps.Add(new KeyValuePair<string,Func<IEnumerator>>(l,()=>Edit(l)));}
         steps.Add(new KeyValuePair<string,Func<IEnumerator>>("resave",Resaves));
         steps.Add(new KeyValuePair<string,Func<IEnumerator>>("passthrough",Passthrough));
+        if(reload) {
+            steps.Add(new KeyValuePair<string,Func<IEnumerator>>("ours",Ours));
+            steps.Add(new KeyValuePair<string,Func<IEnumerator>>("nil",Nil));
+            steps.Add(new KeyValuePair<string,Func<IEnumerator>>("survey",Survey)); // last: nothing is saved after it
+        }
         foreach(var step in steps) {
             if(error!=null)break;
             IEnumerator run=null;
             try{run=step.Value();}catch(Exception e){error=step.Key+": "+e;}
             while(error==null){bool more=false;object current=null;try{more=run.MoveNext();if(more)current=run.Current;}catch(Exception e){error=step.Key+": "+e;}if(error!=null||!more)break;yield return current;}
         }
-        try{File.WriteAllText(Path.Combine(folder,"plugin-scene-trace.json"),J(K("schemaVersion",1,"plugins",plugins,"keys",keys,"modItem",modItem,"vanillaItem",vanillaItem,"cases",cases)));}
+        try{File.WriteAllText(Path.Combine(folder,"plugin-scene-trace.json"),J(K("schemaVersion",1,"phase",reload?"B":"A","plugins",plugins,"keys",keys,"modItem",modItem,"vanillaItem",vanillaItem,"cases",cases)));}
         catch(Exception e){if(error==null)error="trace write: "+e;}
         File.WriteAllText(Path.Combine(folder,"status.json"),J(K("error",error,"unity",Application.unityVersion,"plugins",plugins,
-            "scope","CharaStudio's own saves of the plug-in data fixture and of each supported edit, the load-then-save of every saved scene, and ExtendedSave's carry-over of an entry no plug-in owns")));
+            "phase",reload?"B":"A",
+            "scope",reload?"phase B: the phase A fixture saved again with KKPE, NodesConstraints and MaterialEditor loaded, CharaStudio's own saves of each edit of it, the load-then-save of every saved scene, of our exports and of the nil-entry fixture, ExtendedSave's carry-over of an entry no plug-in owns, and last the counts-only scene survey"
+                :"CharaStudio's own saves of the plug-in data fixture and of each supported edit, the load-then-save of every saved scene, and ExtendedSave's carry-over of an entry no plug-in owns")));
         Application.Quit();
         for(int i=0;i<3600;i++){yield return null;if(i%30==29)Application.Quit();}
     }
@@ -104,6 +134,19 @@ public sealed class OriginalPluginSceneProbe:BaseUnityPlugin {
         var saved=Save("fixture.png");fixture=Path.Combine(folder,"fixture.png");
         cases["author"]=K("label","author","saved",saved);
     }
+    List<string> Labels(){var labels=new List<string>(Edits);if(reload)labels.AddRange(ReloadEdits);return labels;}
+    // Phase B: phase A's fixture, loaded and saved with the full plug-in set, is this phase's fixture.
+    IEnumerator Base() {
+        for(int i=0;i<FixtureKeys.Length;i+=2)keys[(string)FixtureKeys[i]]=(int)FixtureKeys[i+1];
+        var load=Load(Path.Combine(input,"fixture.png"));while(load.MoveNext())yield return load.Current;
+        var loaded=Snapshot();
+        var expected=new[]{"F","OIFolderInfo","V1","OIItemInfo","M1","OIItemInfo","M2","OIItemInfo","V2","OIItemInfo","M3","OIItemInfo","M4","OIItemInfo","R","OIRouteInfo","C","OICameraInfo","L","OILightInfo"};
+        for(int i=0;i<expected.Length;i+=2){var kind=Ctrl(expected[i]).objectInfo.GetType().Name;if(kind!=expected[i+1])throw new Exception("phase A key of "+expected[i]+" holds "+kind);}
+        var route=(OCIRoute)Ctrl("R");
+        for(int i=0;i<3;i++)if(route.listPoint.Count!=3||route.listPoint[i].objectInfo.dicKey!=keys["R.p"+i])throw new Exception("route R's points differ from phase A's");
+        var saved=Save("fixture.png");fixture=Path.Combine(folder,"fixture.png");
+        cases["base"]=K("label","base","loaded",loaded,"saved",saved);
+    }
     IEnumerator Edit(string label) {
         var load=Load(fixture);while(load.MoveNext())yield return load.Current;
         var loaded=Snapshot();
@@ -119,6 +162,8 @@ public sealed class OriginalPluginSceneProbe:BaseUnityPlugin {
             studio.treeNodeCtrl.DeleteNode(point.treeNodeObject);
             if(route.listPoint.Count!=count-1)throw new Exception("route point delete left "+route.listPoint.Count+" points, expected "+(count-1));
         }
+        else if(label=="delete-light")Delete(Ctrl("L"));
+        else if(label=="add-folder"){var added=AddObjectFolder.Add();if(added==null)throw new Exception("AddObjectFolder.Add returned null");note["added"]=added.objectInfo.dicKey;}
         else throw new Exception("unknown edit "+label);
         for(int i=0;i<Settle;i++)yield return null;
         var saved=Save("edit-"+label+".png");
@@ -126,7 +171,7 @@ public sealed class OriginalPluginSceneProbe:BaseUnityPlugin {
     }
     IEnumerator Resaves() {
         var names=new List<string>{"fixture.png"};
-        foreach(var label in new[]{"delete","delete-folder","duplicate","delete-duplicate","move","route-add","route-delete"})names.Add("edit-"+label+".png");
+        foreach(var label in Labels())names.Add("edit-"+label+".png");
         var list=new List<object>();
         foreach(var name in names) {
             var load=Load(Path.Combine(folder,name));while(load.MoveNext())yield return load.Current;
@@ -148,6 +193,48 @@ public sealed class OriginalPluginSceneProbe:BaseUnityPlugin {
         Delete(Ctrl("M1"));
         for(int i=0;i<Settle;i++)yield return null;
         cases["passthrough"]=K("label","passthrough","saved",first,"loaded",loaded,"deleted",Save("passthrough-delete.png"));
+    }
+    // Phase B: our writer's exports of phase A's edits, loaded and saved by CharaStudio with the full plug-in set.
+    IEnumerator Ours() {
+        var names=new List<string>();
+        foreach(var path in Directory.GetFiles(input,"ours-*.png"))names.Add(Path.GetFileName(path));
+        names.Sort(StringComparer.Ordinal);
+        if(names.Count==0)throw new Exception("no ours-*.png in reload-input");
+        var list=new List<object>();
+        foreach(var name in names) {
+            var load=Load(Path.Combine(input,name));while(load.MoveNext())yield return load.Current;
+            var loaded=Snapshot();
+            list.Add(K("source",name,"loaded",loaded,"saved",Save("resave-"+name)));
+        }
+        cases["ours"]=list;
+    }
+    // Phase B: nil entries (a MaterialEditor one and one no plug-in owns) on phase A's fixture.
+    IEnumerator Nil() {
+        var load=Load(Path.Combine(input,"fixture-nil.png"));while(load.MoveNext())yield return load.Current;
+        var loaded=Snapshot();
+        cases["nil"]=K("label","nil","loaded",loaded,"saved",Save("resave-fixture-nil.png"));
+    }
+    // Phase B, last: the counts-only scene survey. Nothing is saved after it.
+    IEnumerator Survey() {
+        var parameters=File.ReadAllLines(Path.Combine(input,"survey.txt"));
+        string scenes=parameters[0].Trim();
+        double seconds=Double.Parse(parameters[1].Trim(),CultureInfo.InvariantCulture);long bound=Int64.Parse(parameters[2].Trim(),CultureInfo.InvariantCulture);
+        int count;var mismatches=PluginSceneRuleParity.Check(File.ReadAllText(Path.Combine(input,"corpus.txt")),out count);
+        var result=K("schemaVersion",1,"parityCases",count,"parityMismatches",mismatches.Count,"folderExists",Directory.Exists(scenes));
+        if(mismatches.Count==0&&count>0&&Directory.Exists(scenes)) {
+            studio.InitScene(false);
+            for(int i=0;i<3;i++)yield return null;
+            if(studio.dicObjectCtrl.Count!=0)throw new Exception("expected an empty scene before the survey");
+            var survey=new PluginSceneSurvey(studio,seconds,bound);
+            foreach(var path in Directory.GetFiles(scenes,"*.png",SearchOption.AllDirectories)) {
+                if(survey.TimedOut){survey.Truncated=true;break;}
+                survey.Add(path);
+                yield return null;
+            }
+            foreach(var entry in survey.Result())result[entry.Key]=entry.Value;
+        } else result["skipped"]=mismatches.Count!=0||count==0?"the rule parity check failed":"the scene folder does not exist";
+        File.WriteAllText(Path.Combine(folder,"survey2.json"),J(result));
+        cases["survey"]=K("parityCases",count,"parityMismatches",mismatches.Count);
     }
     IEnumerator Load(string path) {
         studio.InitScene(false);
