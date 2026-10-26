@@ -277,22 +277,28 @@ enum InlineTextureLoader {
             guard vImagePermuteChannels_ARGB8888(&from, &to, map, vImage_Flags(kvImageDoNotTile)) == kvImageNoError else {
                 throw Failure.decode("channel order of \(describe(image))")
             }
-        case .unpremultiplySwapRedBlue:
-            for y in 0..<height {
-                let s = source + y * sourceRow, t = (target + y * rowBytes).assumingMemoryBound(to: UInt8.self)
-                for x in 0..<width {
-                    let o = x * 4, a = Int(s[o + 3])
-                    func straight(_ c: UInt8) -> UInt8 { a == 0 ? 0 : UInt8(min(255, (Int(c) * 255 + a / 2) / a)) }
-                    t[o] = straight(s[o + 2]); t[o + 1] = straight(s[o + 1]); t[o + 2] = straight(s[o]); t[o + 3] = UInt8(a)
-                }
-            }
-        case .premultiplySwapRedBlue:
-            for y in 0..<height {
-                let s = source + y * sourceRow, t = (target + y * rowBytes).assumingMemoryBound(to: UInt8.self)
-                for x in 0..<width {
-                    let o = x * 4, a = Int(s[o + 3])
-                    func premultiplied(_ c: UInt8) -> UInt8 { UInt8((Int(c) * a + 127) / 255) }
-                    t[o] = premultiplied(s[o + 2]); t[o + 1] = premultiplied(s[o + 1]); t[o + 2] = premultiplied(s[o]); t[o + 3] = UInt8(a)
+        case .unpremultiplySwapRedBlue, .premultiplySwapRedBlue:
+            // vImage rounds as MetalKit does for every colour and alpha pair:
+            // unpremultiplied min(255, (c * 255 + a / 2) / a), 0 where a is 0;
+            // premultiplied (c * a + 127) / 255. It converts in strips through
+            // a small cached buffer, so the staging buffer is written once, in
+            // order, and never read.
+            let strip = max(1, min(height, (256 * 1024) / rowBytes))
+            var temporary = [UInt8](repeating: 0, count: strip * rowBytes)
+            let map: [UInt8] = [2, 1, 0, 3], flags = vImage_Flags(kvImageDoNotTile)
+            let unpremultiply = layout.conversion == .unpremultiplySwapRedBlue
+            try temporary.withUnsafeMutableBytes { middle in
+                for top in stride(from: 0, to: height, by: strip) {
+                    let rows = vImagePixelCount(min(strip, height - top))
+                    var from = vImage_Buffer(data: UnsafeMutableRawPointer(mutating: source + top * sourceRow), height: rows,
+                                             width: vImagePixelCount(width), rowBytes: sourceRow)
+                    var through = vImage_Buffer(data: middle.baseAddress, height: rows, width: vImagePixelCount(width), rowBytes: rowBytes)
+                    var to = vImage_Buffer(data: target + top * rowBytes, height: rows, width: vImagePixelCount(width), rowBytes: rowBytes)
+                    let alpha = unpremultiply ? vImageUnpremultiplyData_RGBA8888(&from, &through, flags)
+                                              : vImagePremultiplyData_RGBA8888(&from, &through, flags)
+                    guard alpha == kvImageNoError, vImagePermuteChannels_ARGB8888(&through, &to, map, flags) == kvImageNoError else {
+                        throw Failure.decode("alpha of \(describe(image))")
+                    }
                 }
             }
         case .appendAlpha16(let low, let high):

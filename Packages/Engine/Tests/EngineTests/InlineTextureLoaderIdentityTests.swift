@@ -281,6 +281,68 @@ enum TextureIdentityCases {
         #expect(mismatches.isEmpty, "\(mismatches.count) of \(files.count * 2) files differ:\n\(mismatches.prefix(20).joined(separator: "\n"))")
     }
 
+    /// Row `a` holds alpha `a` and column `c` colour `c`, so one 256² image
+    /// covers every pair. The texture is read back; the write-combined
+    /// staging buffer never is.
+    @Test("Un- and premultiplying round every colour and alpha pair as MetalKit does")
+    func alphaConversionsRoundEveryPair() async throws {
+        var bytes = [UInt8](repeating: 0, count: 256 * 256 * 4)
+        for a in 0..<256 {
+            for c in 0..<256 {
+                let i = (a * 256 + c) * 4
+                bytes[i] = UInt8(c); bytes[i + 1] = UInt8(c); bytes[i + 2] = UInt8(c); bytes[i + 3] = UInt8(a)
+            }
+        }
+        let pairs = Data(bytes)
+        let result = await onOwnThread { () -> [String] in
+            var problems: [String] = []
+            let device = MTLCreateSystemDefaultDevice()!, queue = device.makeCommandQueue()!
+            func image(_ alpha: CGImageAlphaInfo) -> CGImage {
+                CGImage(width: 256, height: 256, bitsPerComponent: 8, bitsPerPixel: 32, bytesPerRow: 1024,
+                        space: CGColorSpace(name: CGColorSpace.sRGB)!, bitmapInfo: CGBitmapInfo(rawValue: alpha.rawValue),
+                        provider: CGDataProvider(data: pairs as CFData)!, decode: nil, shouldInterpolate: false, intent: .defaultIntent)!
+            }
+            let unpremultiplied: (Int, Int) -> Int = { c, a in a == 0 ? 0 : min(255, (c * 255 + a / 2) / a) }
+            let premultiplied: (Int, Int) -> Int = { c, a in (c * a + 127) / 255 }
+            let cases: [(String, CGImageAlphaInfo, String, (Int, Int) -> Int)] = [
+                ("unpremultiply", .premultipliedLast, "public.tiff", unpremultiplied),
+                ("premultiply", .last, "public.heic", premultiplied),
+            ]
+            for (name, alpha, type, expected) in cases {
+                let source = InlineTextureLoader.Image(cgImage: image(alpha), source: .imageIO(type: type))
+                do {
+                    let texture = try InlineTextureLoader.texture(source, srgb: false, device: device, queue: queue)
+                    let level = [UInt8](try TextureIdentityRecord(texture, device: device, queue: queue).levels[0])
+                    var differing = 0
+                    for a in 0..<256 {
+                        for c in 0..<256 {
+                            let i = (a * 256 + c) * 4, value = UInt8(expected(c, a))
+                            if level[i] != value || level[i + 1] != value || level[i + 2] != value || level[i + 3] != UInt8(a) { differing += 1 }
+                        }
+                    }
+                    if differing > 0 { problems.append("\(name): \(differing) of 65,536 pairs differ") }
+                } catch {
+                    problems.append("\(name): \(error)")
+                }
+            }
+            // The same pairs through ImageIO's TIFF decoder, against MetalKit.
+            if let tiff = TextureIdentityCases.encode(image(.premultipliedLast), as: "public.tiff"),
+               let decoded = InlineTextureLoader.image(data: tiff) {
+                let loader = MTKTextureLoader(device: device)
+                for srgb in [false, true] {
+                    if let mismatch = TextureIdentityComparison.compare(name: "tiff pairs srgb \(srgb)", image: decoded, url: nil, srgb: srgb,
+                                                                        device: device, loader: loader, queue: queue) {
+                        problems.append(mismatch.description)
+                    }
+                }
+            } else {
+                problems.append("the TIFF of every pair did not round-trip")
+            }
+            return problems
+        }
+        #expect(result.isEmpty, "\(result.joined(separator: "\n"))")
+    }
+
     @Test("A crop of a decoded image counts as a data image: the documented limit of texture(cgImage:)")
     func croppedDecodedImageIsADataImage() throws {
         let base = try #require(TextureIdentityCases.plain(bpc: 8, components: 4, alpha: .last, order: [], float: false, width: 37, height: 23))

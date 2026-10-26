@@ -2132,11 +2132,13 @@ with the staging buffer.
 
 ImageIO decodes PNG with alpha to straight RGBA8, and PNG without alpha and
 JPEG to RGBX8, so the common app inputs only swap red and blue
-(`vImagePermuteChannels_ARGB8888`). The scalar loops run only for
-premultiplied decodes (unpremultiply) and for the HEIF family, AVIF and
-JPEG XL with alpha (premultiply). `vImageUnpremultiplyData_RGBA8888` and
-`vImagePremultiplyData_RGBA8888` round exactly like those loops for all
-65,536 colour and alpha pairs.
+(`vImagePermuteChannels_ARGB8888`). Premultiplied decodes (TIFF with
+associated alpha, for one) are unpremultiplied, and the HEIF family, AVIF
+and JPEG XL with alpha are premultiplied, both with vImage
+(`vImageUnpremultiplyData_RGBA8888`, `vImagePremultiplyData_RGBA8888`) in
+strips through a small cached buffer before the swap. vImage rounds as
+MetalKit does for all 65,536 colour and alpha pairs; scalar loops did the
+same work about 150 times slower in a debug build.
 
 **At most eight loads at once.** A plain counting semaphore
 (`UploadPermits`, 8 permits) bounds how many loads hold decoded pixels and a
@@ -2174,6 +2176,8 @@ MetalKit, then in line:
     alpha and byte order; colour spaces; indexed and 1/2/4-bit gray;
     CGContext and Core Image output);
   - the same layouts as 281 files from every ImageIO encoder;
+  - every colour and alpha pair, un- and premultiplied, against the
+    formulas and, through a TIFF with associated alpha, against MetalKit;
   - 19 synthetic files from decoders ImageIO cannot write
     (`Fixtures/texture-identity`: JPEG XL, AVIF from another encoder and at
     10 and 12 bits, an AVIF sequence, HEIF, WebP, PSD, SGI, ICNS, CUR, BMP
