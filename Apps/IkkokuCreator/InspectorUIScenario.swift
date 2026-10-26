@@ -17,7 +17,12 @@ struct InspectorUIScenario: Decodable {
         /// `"delete"` (`key`: selects it, then deletes the selection), `"undo"`, `"redo"`,
         /// `"cycle"` (`keys`, `count`: selects each key in turn, -1 deselects),
         /// `"snapshot"` (keeps the document and the undo depths for `unchanged`),
-        /// `"keyLoop"` (walks the Tab key-view loop) and `"assert"`.
+        /// `"keyLoop"` (walks the Tab key-view loop) and `"assert"`. Added with the
+        /// kept views: `"probe"` (`field`: remembers that field and its centre),
+        /// `"press"` (`label`: presses the accessibility element with that label or
+        /// title, a section's disclosure triangle), `"activateWell"` (activates the
+        /// inspector's first visible colour well), `"routePoint"` (`index`: selects
+        /// that point of the selected route) and `"closeColorPanel"`.
         let op: String
         let key: Int32?
         let keys: [Int32]?
@@ -28,6 +33,8 @@ struct InspectorUIScenario: Decodable {
         let text: String?
         /// type: replace the field's text instead of appending to it.
         let replace: Bool?
+        let label: String?
+        let index: Int?
         // assert only; an absent key is not checked.
         let name: String?
         let positionX: Float?
@@ -47,6 +54,15 @@ struct InspectorUIScenario: Decodable {
         /// and how many views the loop must have.
         let hiddenKeyViews: Int?
         let keyViews: Int?
+        /// assert with `field`: the text that visible field shows.
+        let fieldText: String?
+        /// How many colour wells in the window are active.
+        let activeWells: Int?
+        /// Whether a click at the probed field's centre reaches that field, and
+        /// whether it can become the first responder (a refused attempt changes
+        /// nothing; an accepted one is undone with no first responder).
+        let probeHit: Bool?
+        let probeFocusable: Bool?
     }
 
     let steps: [Step]
@@ -86,6 +102,7 @@ struct InspectorUIScenario: Decodable {
             return studio.doc.flattened().map(\.object).first { $0.sourceObjectKey == key }
         }
         var snapshot: (doc: StudioDocument, undo: Int, redo: Int)?
+        var probe: (field: NSTextField, center: CGPoint)?
 
         for step in steps {
             studio.endUndoCoalescing()
@@ -142,6 +159,36 @@ struct InspectorUIScenario: Decodable {
                     }
                 }
                 record(step.op, missing.isEmpty, "\(count) cycles over \(keys)" + (missing.isEmpty ? "" : "; missing \(missing)"))
+            case "probe":
+                guard let fieldName = step.field, let field = Self.textField(fieldName, in: window) else {
+                    record(step.op, false, "no visible field '\(step.field ?? "")' in the inspector"); continue
+                }
+                let frame = field.convert(field.bounds, to: nil)
+                probe = (field, CGPoint(x: frame.midX, y: frame.midY))
+                record(step.op, true, "probed \(fieldName) at \(Int(frame.midX)),\(Int(frame.midY))")
+            case "press":
+                guard let label = step.label, let element = Self.accessibilityElement(label, in: window) else {
+                    record(step.op, false, "no accessibility element labelled '\(step.label ?? "")'"); continue
+                }
+                _ = element.object.perform(NSSelectorFromString("accessibilityPerformPress"))
+                await settle()
+                record(step.op, true, "pressed \(element.role) '\(label)'")
+            case "activateWell":
+                guard let well = Self.colorWells(in: window).first(where: { !$0.visibleRect.isEmpty && $0.isEnabled }) else {
+                    record(step.op, false, "no visible colour well"); continue
+                }
+                well.activate(true)
+                await settle()
+                record(step.op, well.isActive, "colour well active \(well.isActive)")
+            case "routePoint":
+                guard let index = step.index else { record(step.op, false, "no index"); continue }
+                studio.selectedRoutePoint = .init(index: index)
+                await settle()
+                record(step.op, true, "route point \(index)")
+            case "closeColorPanel":
+                if NSColorPanel.sharedColorPanelExists { NSColorPanel.shared.orderOut(nil) }
+                await settle()
+                record(step.op, true, "colour panel closed")
             case "snapshot":
                 snapshot = (studio.doc, studio.undoStack.count, studio.redoStack.count)
                 record(step.op, true, "undo \(studio.undoStack.count), redo \(studio.redoStack.count)")
@@ -181,6 +228,31 @@ struct InspectorUIScenario: Decodable {
                 if let view = step.inspectorView, view != studio.displayedInspectorView { problems.append("inspector \(studio.displayedInspectorView ?? "nil"), expected \(view)") }
                 for text in step.axContains ?? [] where !ax.contains(where: { $0.contains(text) }) { problems.append("no accessibility element shows '\(text)'") }
                 for text in step.axAbsent ?? [] where ax.contains(where: { $0.contains(text) }) { problems.append("an accessibility element shows '\(text)'") }
+                if let expected = step.fieldText {
+                    if let fieldName = step.field, let field = Self.textField(fieldName, in: window) {
+                        // Reading a field being edited would validate it, so read its field editor.
+                        let shown = field === editedField ? (window.firstResponder as? NSTextView)?.string ?? "" : field.stringValue
+                        seen.append("\(fieldName) shows '\(shown)'")
+                        if shown != expected { problems.append("\(fieldName) shows '\(shown)', expected '\(expected)'") }
+                    } else { problems.append("no visible field '\(step.field ?? "")'") }
+                }
+                let wells = Self.colorWells(in: window).filter(\.isActive).count
+                seen.append("active wells \(wells)")
+                if let n = step.activeWells, n != wells { problems.append("active wells \(wells), expected \(n)") }
+                if step.probeHit != nil || step.probeFocusable != nil {
+                    if let probe, let content = window.contentView {
+                        let hit = content.hitTest(content.superview?.convert(probe.center, from: nil) ?? probe.center)
+                        let reaches = hit.map { $0 === probe.field || $0.isDescendant(of: probe.field) } ?? false
+                        seen.append("probe hit \(hit.map { Self.describe($0) } ?? "nil")")
+                        if let expected = step.probeHit, expected != reaches { problems.append("probe hit \(reaches), expected \(expected)") }
+                        if let expected = step.probeFocusable {
+                            let focused = window.makeFirstResponder(probe.field) && Self.editedField(window) === probe.field
+                            seen.append("probe focusable \(focused)")
+                            if focused { window.makeFirstResponder(nil) }
+                            if expected != focused { problems.append("probe focusable \(focused), expected \(expected)") }
+                        }
+                    } else { problems.append("no probe") }
+                }
                 if !problems.isEmpty, step.axContains != nil || step.axAbsent != nil { seen.append("ax strings: " + ax.joined(separator: " | ")) }
                 record(step.op, problems.isEmpty, (problems + ["seen: " + seen.joined(separator: ", ")]).joined(separator: "; "))
             default:
@@ -192,11 +264,12 @@ struct InspectorUIScenario: Decodable {
 
     // MARK: AppKit reads
 
-    /// The visible, editable text fields under `view`, top to bottom, then left to right.
+    /// The visible, editable and enabled text fields under `view`, top to bottom,
+    /// then left to right. Kept, hidden inspector views are disabled.
     @MainActor static func visibleTextFields(in view: NSView) -> [NSTextField] {
         var found: [NSTextField] = []
         func visit(_ v: NSView) {
-            if let field = v as? NSTextField, field.isEditable, !field.isHiddenOrHasHiddenAncestor, !field.visibleRect.isEmpty {
+            if let field = v as? NSTextField, field.isEditable, field.isEnabled, !field.isHiddenOrHasHiddenAncestor, !field.visibleRect.isEmpty {
                 found.append(field)
             }
             v.subviews.forEach(visit)
@@ -221,6 +294,39 @@ struct InspectorUIScenario: Decodable {
         let top = nameField.convert(nameField.bounds, to: nil).minY
         let numbers = visibleTextFields(in: scope).filter { $0 !== nameField && $0.convert($0.bounds, to: nil).maxY <= top }
         return index < numbers.count ? numbers[index] : nil
+    }
+
+    /// The colour wells in the window.
+    @MainActor static func colorWells(in window: NSWindow) -> [NSColorWell] {
+        var found: [NSColorWell] = []
+        func visit(_ v: NSView) {
+            if let well = v as? NSColorWell { found.append(well) }
+            v.subviews.forEach(visit)
+        }
+        if let content = window.contentView { visit(content) }
+        return found
+    }
+
+    /// The first accessibility element (depth first) whose label or title is `text`.
+    @MainActor static func accessibilityElement(_ text: String, in window: NSWindow) -> (object: NSObject, role: String)? {
+        var visited = 0
+        func get(_ object: NSObject, _ name: String) -> Any? {
+            let selector = NSSelectorFromString(name)
+            guard object.responds(to: selector) else { return nil }
+            return object.perform(selector)?.takeUnretainedValue()
+        }
+        func visit(_ element: Any, depth: Int) -> (object: NSObject, role: String)? {
+            guard depth < 80, visited < 20_000, let object = element as? NSObject else { return nil }
+            visited += 1
+            let role = get(object, "accessibilityRole") as? String ?? ""
+            let names = ["accessibilityLabel", "accessibilityTitle"].compactMap { get(object, $0) as? String }
+            if names.contains(text), object.responds(to: NSSelectorFromString("accessibilityPerformPress")) { return (object, role) }
+            for child in get(object, "accessibilityChildren") as? [Any] ?? [] {
+                if let found = visit(child, depth: depth + 1) { return found }
+            }
+            return nil
+        }
+        return visit(window, depth: 0)
     }
 
     /// The text field whose field editor is the first responder.

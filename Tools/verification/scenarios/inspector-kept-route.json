@@ -1,0 +1,142 @@
+{
+  "steps": [],
+  "inspectorUI": {
+    "steps": [
+      {
+        "op": "select",
+        "key": 20
+      },
+      {
+        "op": "assert",
+        "key": 20,
+        "axContains": [
+          "Add point",
+          "Line colour"
+        ],
+        "activeWells": 0
+      },
+      {
+        "op": "activateWell"
+      },
+      {
+        "op": "assert",
+        "activeWells": 1
+      },
+      {
+        "op": "snapshot"
+      },
+      {
+        "op": "deselect"
+      },
+      {
+        "op": "assert",
+        "unchanged": true,
+        "activeWells": 0,
+        "inspectorView": "none",
+        "axAbsent": [
+          "Add point",
+          "Line colour",
+          "Parent"
+        ]
+      },
+      {
+        "op": "closeColorPanel"
+      },
+      {
+        "op": "select",
+        "key": 20
+      },
+      {
+        "op": "routePoint",
+        "index": 1
+      },
+      {
+        "op": "assert",
+        "key": 20,
+        "axContains": [
+          "Delete point",
+          "Speed",
+          "Orient",
+          "Ease",
+          "Connection"
+        ]
+      },
+      {
+        "op": "focus",
+        "field": "vector9"
+      },
+      {
+        "op": "type",
+        "text": "0.5",
+        "replace": true
+      },
+      {
+        "op": "assert",
+        "editing": true
+      },
+      {
+        "op": "snapshot"
+      },
+      {
+        "op": "deselect"
+      },
+      {
+        "op": "assert",
+        "unchanged": true,
+        "editing": false,
+        "inspectorView": "none",
+        "axAbsent": [
+          "Delete point",
+          "Speed",
+          "Orient",
+          "Ease",
+          "Connection",
+          "Line colour",
+          "Parent"
+        ]
+      },
+      {
+        "op": "type",
+        "text": "7"
+      },
+      {
+        "op": "assert",
+        "unchanged": true,
+        "editing": false
+      },
+      {
+        "op": "select",
+        "key": 20
+      },
+      {
+        "op": "assert",
+        "key": 20,
+        "unchanged": true,
+        "axContains": [
+          "Add point"
+        ]
+      },
+      {
+        "op": "snapshot"
+      },
+      {
+        "op": "cycle",
+        "keys": [
+          20,
+          10,
+          -1,
+          11,
+          20,
+          -1
+        ],
+        "count": 3
+      },
+      {
+        "op": "assert",
+        "unchanged": true,
+        "editing": false,
+        "activeWells": 0
+      }
+    ]
+  }
+}

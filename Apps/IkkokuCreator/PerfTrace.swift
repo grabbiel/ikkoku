@@ -731,6 +731,7 @@ final class PerfTrace {
                 "installRefresh": configuration.installRefresh, "outfit": configuration.outfit ?? -1,
                 "selectKeys": configuration.selectKeys.map { $0.map { Int($0) } as Any } ?? NSNull(),
                 "inspectorTab": configuration.inspectorTab.map { $0 as Any } ?? NSNull(),
+                "keepMounted": StudioInspectorMounting.current.rawValue,
             ] as [String: Any],
             "build": PerfTrace.buildDescription(),
             "machine": PerfTrace.machineDescription(device: device),

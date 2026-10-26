@@ -450,6 +450,7 @@ extension CaptureRequest {
         ScopedOption("IKKOKU_PERF_OUTFIT", [.perfTrace]),
         ScopedOption("IKKOKU_PERF_SELECT_KEYS", [.perfTrace]),
         ScopedOption("IKKOKU_PERF_INSPECTOR_TAB", [.perfTrace]),
+        ScopedOption("IKKOKU_PERF_KEEP_MOUNTED", [.perfTrace]),
     ]
 
     /// Options read only by the window capture.
@@ -590,6 +591,9 @@ extension CaptureRequest {
         // tab it shows (R7 phase 2, item 7).
         ValueRule("IKKOKU_PERF_SELECT_KEYS", .integerList(0...Int(Int32.max), maxCount: 64)),
         ValueRule("IKKOKU_PERF_INSPECTOR_TAB", .oneOf(["object", "pose", "face", "clothes", "scene"])),
+        // Which hidden inspector views stay mounted (item 7): none as before,
+        // the Object tab, or the tab and each kind's section (the default).
+        ValueRule("IKKOKU_PERF_KEEP_MOUNTED", .oneOf(["off", "tab", "on"])),
     ]
 
     /// `IKKOKU_PERF_WORKLOAD` values, in the order `docs/reference/performance.md` lists them.

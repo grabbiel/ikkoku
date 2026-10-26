@@ -492,6 +492,7 @@ private struct CaptureRecipe {
                                    "IKKOKU_PERF_LIVE_PACING": "timer", "IKKOKU_PERF_BURST_LIVE": "on",
                                    "IKKOKU_PERF_ACTION_KEY": "0", "IKKOKU_PERF_RIG_PREFETCH": "off", "IKKOKU_PERF_DONATIONS": "off", "IKKOKU_PERF_INSTALL_REFRESH": "each",
                                    "IKKOKU_PERF_OUTFIT": "2", "IKKOKU_PERF_SELECT_KEYS": "963,0,12", "IKKOKU_PERF_INSPECTOR_TAB": "pose",
+                                   "IKKOKU_PERF_KEEP_MOUNTED": "tab",
                                    "IKKOKU_SOURCE_SCENE": "/scenes/scene.png", "IKKOKU_SOURCE_AVATAR": "/rigs/source-avatar.json"]
     let request = try CaptureRequest.validate(trace)
     #expect(request.mode == .perfTrace)
@@ -509,6 +510,11 @@ private struct CaptureRecipe {
     #expect(captureRequestProblems(["IKKOKU_PERF_MAIN_LOAD_MS": "20"]) == loadOutside)
     let rateOutside: [[String]] = [["IKKOKU_PERF_LINK_RATE"]]
     #expect(captureRequestProblems(["IKKOKU_PERF_LINK_RATE": "fixed"]) == rateOutside)
+    let keptOutside: [[String]] = [["IKKOKU_PERF_KEEP_MOUNTED"]]
+    #expect(captureRequestProblems(["IKKOKU_PERF_KEEP_MOUNTED": "off"]) == keptOutside)
+    for value in ["off", "tab", "on"] {
+        #expect(captureRequestProblems(["IKKOKU_PERF_TRACE": "/p.json", "IKKOKU_PERF_KEEP_MOUNTED": value]).isEmpty, Comment(rawValue: value))
+    }
     let misspelled: [[String]] = [["IKKOKU_PERF_SECOND"]]
     #expect(captureRequestProblems(["IKKOKU_PERF_TRACE": "/p.json", "IKKOKU_PERF_SECOND": "10"]) == misspelled)
     let window: [[String]] = [["IKKOKU_CAPTURE_UI", "IKKOKU_PERF_TRACE"]]
@@ -527,7 +533,8 @@ private struct CaptureRecipe {
                               ("IKKOKU_PERF_OUTFIT", "7"), ("IKKOKU_PERF_OUTFIT", "-1"),
                               ("IKKOKU_PERF_SELECT_KEYS", ""), ("IKKOKU_PERF_SELECT_KEYS", "963,"), ("IKKOKU_PERF_SELECT_KEYS", "-1"),
                               ("IKKOKU_PERF_SELECT_KEYS", "route"), ("IKKOKU_PERF_SELECT_KEYS", tooManyKeys),
-                              ("IKKOKU_PERF_INSPECTOR_TAB", "Object"), ("IKKOKU_PERF_INSPECTOR_TAB", "timeline")] {
+                              ("IKKOKU_PERF_INSPECTOR_TAB", "Object"), ("IKKOKU_PERF_INSPECTOR_TAB", "timeline"),
+                              ("IKKOKU_PERF_KEEP_MOUNTED", "On"), ("IKKOKU_PERF_KEEP_MOUNTED", "1"), ("IKKOKU_PERF_KEEP_MOUNTED", "")] {
         var environment: [String: String] = ["IKKOKU_PERF_TRACE": "/p.json"]
         environment[variable] = value
         let expected: [[String]] = [[variable]]

@@ -550,18 +550,58 @@ struct WorkspaceRow: View, Equatable {
 /// The Object tab. It reads the selected object and hands the fields it
 /// shows to `ObjectInspectorContent`, so an edit that changes nothing shown
 /// here (an FK drag, say) skips the content.
+///
+/// R7 phase 2, item 7: once built, the content stays mounted while nothing
+/// is selected, hidden with the last state it showed, so a selection from
+/// nothing updates its controls instead of building them again
+/// (`StudioInspectorMounting`).
 struct ObjectInspector: View {
     let model: StudioModel
+    @State private var kept = InspectorKeptViews<ObjectInspectorState>()
 
     var body: some View {
         let _ = PerfTrace.body(.objectInspector)
-        if let o = model.selectedObject, model.doc.index(of: o.id) != nil {
+        if StudioInspectorMounting.current.keepsTab {
+            keptContent
+        } else if let o = model.selectedObject, model.doc.index(of: o.id) != nil {
             ObjectInspectorContent(model: model, state: ObjectInspectorState(model: model, object: o)).equatable()
                 .onAppear { model.displayedInspectorView = "ObjectInspector" }
                 .onDisappear { if model.displayedInspectorView == "ObjectInspector" { model.displayedInspectorView = "none" } }
         } else {
-            ContentUnavailableView("Nothing selected", systemImage: "cursorarrow.click", description: Text("Click an object in the viewport or the workspace."))
+            Self.nothingSelected
         }
+    }
+
+    static var nothingSelected: some View {
+        ContentUnavailableView("Nothing selected", systemImage: "cursorarrow.click", description: Text("Click an object in the viewport or the workspace."))
+    }
+
+    @ViewBuilder private var keptContent: some View {
+        let shown = model.selectedObject.flatMap { o in
+            model.doc.index(of: o.id) != nil ? ObjectInspectorState(model: model, object: o) : nil
+        }
+        let hidden = shown == nil
+        let _ = shown.map { kept.state = $0 }
+        InspectorSwapLayout {
+            if let state = shown ?? kept.state {
+                ObjectInspectorContent(model: model, state: state).equatable()
+                    .background(InspectorAnchor(kept: kept))
+                    .environment(\.inspectorSectionExpansion, kept.sections)
+                    .inspectorKeptHidden(hidden)
+                    .inspectorHidden(hidden)
+            }
+            Self.nothingSelected.inspectorHidden(!hidden)
+        }
+        .onAppear { if !hidden { model.displayedInspectorView = "ObjectInspector" } }
+        .onChange(of: hidden) { _, nowHidden in
+            if nowHidden {
+                kept.didHide()
+                if model.displayedInspectorView == "ObjectInspector" { model.displayedInspectorView = "none" }
+            } else {
+                model.displayedInspectorView = "ObjectInspector"
+            }
+        }
+        .onDisappear { if model.displayedInspectorView == "ObjectInspector" { model.displayedInspectorView = "none" } }
     }
 }
 
@@ -638,23 +678,30 @@ struct ObjectInspectorContent: View, Equatable {
 
     static func == (a: Self, b: Self) -> Bool { a.model === b.model && a.state == b.state }
 
+    /// Edits the shown object while it is the selection. Kept content hidden
+    /// with an earlier object's state writes nothing (R7 phase 2, item 7).
+    private func update(_ change: (inout StudioObject) -> Void) {
+        guard model.selection == state.id else { return }
+        model.update(state.id, change)
+    }
+
     var body: some View {
         let o = state, id = state.id
         VStack(alignment: .leading, spacing: 10) {
-            TextField("Name", text: Binding(get: { o.name }, set: { v in model.update(id) { $0.name = v } }))
+            TextField("Name", text: Binding(get: { o.name }, set: { v in update { $0.name = v } }))
             HStack {
-                Toggle("Visible", isOn: Binding(get: { o.visible }, set: { v in model.update(id) { $0.visible = v } }))
-                Toggle("Locked", isOn: Binding(get: { o.locked }, set: { v in model.update(id) { $0.locked = v } }))
+                Toggle("Visible", isOn: Binding(get: { o.visible }, set: { v in update { $0.visible = v } }))
+                Toggle("Locked", isOn: Binding(get: { o.locked }, set: { v in update { $0.locked = v } }))
             }
-            Picker("Parent", selection: Binding(get: { o.parent }, set: { model.setParent(id, to: $0) })) {
+            Picker(selection: Binding(get: { o.parent }, set: { parent in if model.selection == id { model.setParent(id, to: parent) } })) {
                 Text("None").tag(UUID?.none)
                 ForEach(o.parents) { p in Text(p.name).tag(UUID?.some(p.id)) }
-            }
+            } label: { Text("Parent").inspectorKeptLabel() }
             SectionBox(title: "Transform") {
-                VectorRow(label: "Position", value: Binding(get: { o.transform.position }, set: { v in model.update(id) { $0.transform.position = v } }), step: 0.05, format: "%.3f")
-                VectorRow(label: "Rotation", value: Binding(get: { o.transform.rotation }, set: { v in model.update(id) { $0.transform.rotation = v } }), step: 5, format: "%.0f")
-                VectorRow(label: "Scale", value: Binding(get: { o.transform.scale }, set: { v in model.update(id) { $0.transform.scale = v } }), step: 0.1, format: "%.2f")
-                Button("Reset transform") { model.update(id) { $0.transform = StudioTransform() } }
+                VectorRow(label: "Position", value: Binding(get: { o.transform.position }, set: { v in update { $0.transform.position = v } }), step: 0.05, format: "%.3f")
+                VectorRow(label: "Rotation", value: Binding(get: { o.transform.rotation }, set: { v in update { $0.transform.rotation = v } }), step: 5, format: "%.0f")
+                VectorRow(label: "Scale", value: Binding(get: { o.transform.scale }, set: { v in update { $0.transform.scale = v } }), step: 0.1, format: "%.2f")
+                Button("Reset transform") { update { $0.transform = StudioTransform() } }
             }
             switch o.kind {
             case .character:
@@ -663,10 +710,10 @@ struct ObjectInspectorContent: View, Equatable {
                     if !o.isSourceCharacter {
                         HStack {
                             Button("Edit in Maker") { if let c = model.doc.object(id)?.card { app.ensureMaker()?.load(card: c); app.mode = .maker } }
-                            Button("Replace from Maker") { if let c = app.ensureMaker()?.card { model.update(id) { $0.card = c; $0.name = c.profile.name } } }
+                            Button("Replace from Maker") { if let c = app.ensureMaker()?.card { update { $0.card = c; $0.name = c.profile.name } } }
                         }
-                        Toggle("Show clothing", isOn: Binding(get: { o.clothingVisible }, set: { v in model.update(id) { $0.clothingVisible = v } }))
-                        Toggle("Show accessories", isOn: Binding(get: { o.accessoriesVisible }, set: { v in model.update(id) { $0.accessoriesVisible = v } }))
+                        Toggle("Show clothing", isOn: Binding(get: { o.clothingVisible }, set: { v in update { $0.clothingVisible = v } }))
+                        Toggle("Show accessories", isOn: Binding(get: { o.accessoriesVisible }, set: { v in update { $0.accessoriesVisible = v } }))
                     } else {
                         Text("Original character: name, transform and voice are editable here. Maker editing, replacement and the prototype clothing/accessory toggles only affect unused native fields and are not available for this reference avatar.")
                             .font(.caption).foregroundStyle(.secondary)
@@ -687,20 +734,20 @@ struct ObjectInspectorContent: View, Equatable {
                 }
             case .item:
                 SectionBox(title: "Item") {
-                    ColorRow(label: "Tint", color: Binding(get: { o.tint ?? .white }, set: { v in model.update(id) { $0.tint = v } }))
-                    FloatRow(label: "Emissive", value: Binding(get: { o.emissive }, set: { v in model.update(id) { $0.emissive = v } }), range: 0...2)
-                    Button("Clear tint") { model.update(id) { $0.tint = nil } }
+                    ColorRow(label: "Tint", color: Binding(get: { o.tint ?? .white }, set: { v in update { $0.tint = v } }))
+                    FloatRow(label: "Emissive", value: Binding(get: { o.emissive }, set: { v in update { $0.emissive = v } }), range: 0...2)
+                    Button("Clear tint") { update { $0.tint = nil } }
                 }
             case .light:
                 if let l = o.light {
                     SectionBox(title: "Light") {
-                        Toggle("Enabled", isOn: Binding(get: { l.enabled }, set: { v in model.update(id) { $0.light?.enabled = v } }))
-                        ColorRow(label: "Colour", color: Binding(get: { RGB(l.color.x, l.color.y, l.color.z) }, set: { v in model.update(id) { $0.light?.color = v.float3 } }))
-                        FloatRow(label: "Intensity", value: Binding(get: { l.intensity }, set: { v in model.update(id) { $0.light?.intensity = v } }), range: 0...4)
-                        if l.kind != .directional { FloatRow(label: "Range", value: Binding(get: { l.range }, set: { v in model.update(id) { $0.light?.range = v } }), range: 0.1...20) }
+                        Toggle("Enabled", isOn: Binding(get: { l.enabled }, set: { v in update { $0.light?.enabled = v } }))
+                        ColorRow(label: "Colour", color: Binding(get: { RGB(l.color.x, l.color.y, l.color.z) }, set: { v in update { $0.light?.color = v.float3 } }))
+                        FloatRow(label: "Intensity", value: Binding(get: { l.intensity }, set: { v in update { $0.light?.intensity = v } }), range: 0...4)
+                        if l.kind != .directional { FloatRow(label: "Range", value: Binding(get: { l.range }, set: { v in update { $0.light?.range = v } }), range: 0.1...20) }
                         if l.kind == .spot {
-                            FloatRow(label: "Spot angle", value: Binding(get: { l.spotAngle }, set: { v in model.update(id) { $0.light?.spotAngle = v } }), range: 5...120)
-                            FloatRow(label: "Spot blend", value: Binding(get: { l.spotBlend }, set: { v in model.update(id) { $0.light?.spotBlend = v } }))
+                            FloatRow(label: "Spot angle", value: Binding(get: { l.spotAngle }, set: { v in update { $0.light?.spotAngle = v } }), range: 5...120)
+                            FloatRow(label: "Spot blend", value: Binding(get: { l.spotBlend }, set: { v in update { $0.light?.spotBlend = v } }))
                         }
                         Text("Position and direction come from the transform above.").font(.caption).foregroundStyle(.secondary)
                     }

@@ -641,7 +641,9 @@ SCENARIO_OPS = {"select", "setVisible", "rename", "toggleCamera", "toggleRoute",
 
 # R7 phase 2, item 7: the window-run inspector checks (`"inspectorUI": {"steps": [...]}`).
 INSPECTOR_UI_OPS = {"select", "deselect", "focus", "type", "delete", "undo", "redo", "cycle",
-                    "snapshot", "keyLoop", "assert"}
+                    "snapshot", "keyLoop", "assert",
+                    # Added with the kept inspector views (R7 phase 2, item 7).
+                    "probe", "press", "activateWell", "routePoint", "closeColorPanel"}
 
 # ST-T11 `editRoute` settings: point edits name the point, route edits do not.
 ROUTE_POINT_SETTINGS = ("delete", "move", "speed", "ease", "connection", "link")
@@ -825,7 +827,7 @@ class StudioScenarioLaneTests(unittest.TestCase):
                       and not name.startswith(("maker-", "gameplay-")))
 
     def test_lane_validates_and_covers_every_scenario(self):
-        self.assertEqual(len(self.checks), 82)
+        self.assertEqual(len(self.checks), 84)
         referenced = set()
         for check in self.checks:
             scenario = check["env"]["IKKOKU_STUDIO_SCENARIO"]
@@ -844,8 +846,13 @@ class StudioScenarioLaneTests(unittest.TestCase):
             self.assertIn(op, INSPECTOR_UI_OPS, "unknown inspector UI op in %s" % path)
             if op in ("select", "delete"):
                 self.assertIs(type(step["key"]), int)
-            if op == "focus":
-                self.assertRegex(step["field"], r"^(name|vector[0-8])$")
+            if op in ("focus", "probe") or "fieldText" in step:
+                self.assertRegex(step["field"], r"^(name|vector[0-9]+)$")
+            if op == "press":
+                self.assertTrue(step["label"])
+            if op == "routePoint":
+                self.assertIs(type(step["index"]), int)
+                self.assertGreaterEqual(step["index"], 0)
             if op == "type":
                 self.assertTrue(step["text"])
             if op == "cycle":
@@ -853,9 +860,12 @@ class StudioScenarioLaneTests(unittest.TestCase):
                 self.assertTrue(all(type(key) is int for key in step["keys"]))
                 self.assertIs(type(step["count"]), int)
                 self.assertGreater(step["count"], 0)
-            for name in ("undoCount", "redoCount", "keyViews", "hiddenKeyViews"):
+            for name in ("undoCount", "redoCount", "keyViews", "hiddenKeyViews", "activeWells"):
                 if name in step:
                     self.assertIs(type(step[name]), int)
+            for name in ("probeHit", "probeFocusable", "editing", "unchanged", "exists"):
+                if name in step:
+                    self.assertIs(type(step[name]), bool)
             for name in ("axContains", "axAbsent"):
                 if name in step:
                     self.assertTrue(all(isinstance(text, str) and text for text in step[name]))
