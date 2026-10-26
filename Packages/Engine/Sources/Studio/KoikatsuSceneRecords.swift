@@ -113,7 +113,29 @@ public struct KoikatsuCharacterRecord: Sendable, Equatable {
 public struct KoikatsuRoutePointRecord: Sendable, Equatable {
     public let bone: KoikatsuBoneRecord
     public let speed: Float, easeType: Int32, connection: Int32
-    public let aid: KoikatsuBoneRecord, aidInitialized: Bool, linked: Bool
+    /// The aid's object key, or nil when the scene saves no aid (versions
+    /// before 1.0.4.1): CharaStudio then creates one at load
+    /// (`AddObjectRoute.InitAid`) under a key `GetNewIndex` allocates from
+    /// runtime state, and the aid has not been allocated in this record.
+    public let aidKey: Int32?
+    /// The aid's transform: the saved one, or for an unsaved aid the
+    /// `p_RoutePoint` prefab's that `InitAid` gives it ((1, 1, 1), zero, one).
+    public let aidTransform: KoikatsuChangeAmount
+    public let aidInitialized: Bool, linked: Bool
+
+    /// The saved aid record; nil when the scene saves none (`aidKey`).
+    public var aid: KoikatsuBoneRecord? { aidKey.map { KoikatsuBoneRecord(sourceKey: $0, transform: aidTransform) } }
+
+    init(bone: KoikatsuBoneRecord, speed: Float, easeType: Int32, connection: Int32,
+         aid: KoikatsuBoneRecord, aidInitialized: Bool, linked: Bool) {
+        self.init(bone: bone, speed: speed, easeType: easeType, connection: connection, aidKey: aid.sourceKey,
+                  aidTransform: aid.transform, aidInitialized: aidInitialized, linked: linked)
+    }
+    init(bone: KoikatsuBoneRecord, speed: Float, easeType: Int32, connection: Int32, aidKey: Int32?,
+         aidTransform: KoikatsuChangeAmount, aidInitialized: Bool, linked: Bool) {
+        self.bone = bone; self.speed = speed; self.easeType = easeType; self.connection = connection
+        self.aidKey = aidKey; self.aidTransform = aidTransform; self.aidInitialized = aidInitialized; self.linked = linked
+    }
 }
 
 public struct KoikatsuRouteRecord: Sendable, Equatable {

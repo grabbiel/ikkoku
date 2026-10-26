@@ -39,7 +39,8 @@ func inspectStudioScene(url: URL) throws -> [String: Any] {
             result["route"] = ["active": route.active, "loop": route.loop, "visibleLine": route.visibleLine,
                 "orientation": route.orientation, "points": route.points.map { point in
                     ["record": bone(point.bone), "speed": point.speed, "easeType": point.easeType,
-                     "connection": point.connection, "aid": bone(point.aid), "aidInitialized": point.aidInitialized,
+                     "connection": point.connection, "aid": point.aid.map(bone) as Any? ?? NSNull(),
+                     "aidTransform": transform(point.aidTransform), "aidInitialized": point.aidInitialized,
                      "linked": point.linked] as [String: Any]
                 }]
         }
@@ -48,7 +49,16 @@ func inspectStudioScene(url: URL) throws -> [String: Any] {
     let extensions = document.extensions()
     let plugins = (try? extensions.payload?.stringKeyedMap()) ?? [:]
     let pluginIDs = plugins.keys.sorted()
-    return ["path": url.path, "sha256": hash(data), "version": document.snapshot.version,
+    // A legacy scene's export: CharaStudio's 1.0.4.2 save of what it loads.
+    var upgrade: [String: Any] = ["legacy": document.isLegacy]
+    if document.isLegacy {
+        do {
+            let upgraded = try document.upgraded()
+            upgrade["upgradedBytes"] = upgraded.preservedData.count
+            upgrade["upgradedSHA256"] = hash(upgraded.preservedData)
+        } catch { upgrade["refusal"] = error.localizedDescription }
+    }
+    return ["path": url.path, "sha256": hash(data), "version": document.snapshot.version, "upgrade": upgrade,
         "coordinateSpace": "unity-left-handed-y-up", "angleUnit": "degrees", "lengthUnit": "unity-source-unit",
         "roots": document.snapshot.roots.map(object), "objectSectionEndOffset": document.snapshot.objectSectionEndOffset,
         "baseSceneEndOffset": document.baseSceneEndOffset, "trailingBytes": document.trailingData.count,
@@ -62,5 +72,5 @@ func inspectStudioScene(url: URL) throws -> [String: Any] {
         "cameraSlotCount": document.settings.cameraSlots.count, "sceneFloatSettings": document.settings.floatSettings,
         "sceneBoolSettings": document.settings.boolSettings, "background": document.settings.background,
         "frame": document.settings.frame,
-        "scope": "Complete installed 1.0.4.2 record framing with retained original bytes. Parsing does not execute source appearance assembly, animations, IK, routes, dynamics, lighting, sound or plug-in callbacks."]
+        "scope": "Complete installed 1.0.4.2 record framing with retained original bytes; scene versions 0.0.5 through 1.0.4.1 are read with CharaStudio 1.0.4.2's load branches and defaults. Parsing does not execute source appearance assembly, animations, IK, routes, dynamics, lighting, sound or plug-in callbacks."]
 }

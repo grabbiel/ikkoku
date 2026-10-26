@@ -95,8 +95,8 @@ public struct SourceStudioRouteState: Codable, Sendable, Equatable {
             Point(sourceIndex: index, position: point.bone.transform.position,
                   rotationDegrees: point.bone.transform.rotationDegrees, scale: point.bone.transform.scale,
                   speed: point.speed, easeType: point.easeType, connection: point.connection,
-                  aidPosition: point.aid.transform.position, aidRotationDegrees: point.aid.transform.rotationDegrees,
-                  aidScale: point.aid.transform.scale, aidInitialized: point.aidInitialized, linked: point.linked)
+                  aidPosition: point.aidTransform.position, aidRotationDegrees: point.aidTransform.rotationDegrees,
+                  aidScale: point.aidTransform.scale, aidInitialized: point.aidInitialized, linked: point.linked)
         }
         loop = record.loop; visibleLine = record.visibleLine; orientation = record.orientation; color = record.color
     }
@@ -108,9 +108,10 @@ public struct SourceStudioRouteState: Codable, Sendable, Equatable {
     public func record(authored: KoikatsuRouteRecord) -> KoikatsuRouteRecord {
         var added: Int32 = -1
         let points = points.map { point -> KoikatsuRoutePointRecord in
-            let keys: (Int32, Int32)
+            // A legacy point's unsaved aid stays unallocated (nil).
+            let keys: (Int32, Int32?)
             if let index = point.sourceIndex, authored.points.indices.contains(index) {
-                keys = (authored.points[index].bone.sourceKey, authored.points[index].aid.sourceKey)
+                keys = (authored.points[index].bone.sourceKey, authored.points[index].aidKey)
             } else {
                 keys = (added, added - 1); added -= 2
             }
@@ -298,8 +299,8 @@ public struct SourceStudioRouteState: Codable, Sendable, Equatable {
                 throw fail("Route point \(index) only moves in CharaStudio (its guide has no rotation).")
             }
             guard bitEqual(point.scale, scale) else { throw fail("Route points do not scale in CharaStudio (route point \(index)).") }
-            guard bitEqual(point.aidRotationDegrees, saved?.aid.transform.rotationDegrees ?? .zero),
-                  bitEqual(point.aidScale, saved?.aid.transform.scale ?? .one) else {
+            guard bitEqual(point.aidRotationDegrees, saved?.aidTransform.rotationDegrees ?? .zero),
+                  bitEqual(point.aidScale, saved?.aidTransform.scale ?? .one) else {
                 throw fail("A route point aid only moves in CharaStudio (route point \(index)).")
             }
             if saved == nil, !point.aidInitialized, !bitEqual(point.aidPosition, Self.newAidPosition) {
@@ -308,7 +309,7 @@ public struct SourceStudioRouteState: Codable, Sendable, Equatable {
             if saved?.aidInitialized == true, !point.aidInitialized {
                 throw fail("CharaStudio never resets a placed aid (route point \(index)).")
             }
-            if !point.aidInitialized, let saved, !bitEqual(point.aidPosition, saved.aid.transform.position) {
+            if !point.aidInitialized, let saved, !bitEqual(point.aidPosition, saved.aidTransform.position) {
                 throw fail("An aid that was never placed keeps its saved position (route point \(index)).")
             }
             guard let connection = SourceStudioRoute.Connection(rawValue: point.connection) else {
@@ -341,11 +342,11 @@ public struct SourceStudioRouteState: Codable, Sendable, Equatable {
 }
 
 extension SourceStudioRouteState.Point {
-    func record(pointKey: Int32, aidKey: Int32) -> KoikatsuRoutePointRecord {
+    func record(pointKey: Int32, aidKey: Int32?) -> KoikatsuRoutePointRecord {
         KoikatsuRoutePointRecord(
             bone: KoikatsuBoneRecord(sourceKey: pointKey, transform: .init(position: position, rotationDegrees: rotationDegrees, scale: scale)),
-            speed: speed, easeType: easeType, connection: connection,
-            aid: KoikatsuBoneRecord(sourceKey: aidKey, transform: .init(position: aidPosition, rotationDegrees: aidRotationDegrees, scale: aidScale)),
+            speed: speed, easeType: easeType, connection: connection, aidKey: aidKey,
+            aidTransform: .init(position: aidPosition, rotationDegrees: aidRotationDegrees, scale: aidScale),
             aidInitialized: aidInitialized, linked: linked)
     }
 }

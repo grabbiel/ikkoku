@@ -1212,8 +1212,8 @@ struct StudioScenario: Decodable {
             if let expected = check.keys, runtime.route.points.map(\.bone.sourceKey) != expected {
                 problems.append("point keys \(runtime.route.points.map(\.bone.sourceKey)), expected \(expected)")
             }
-            if let expected = check.aidKeys, runtime.route.points.map(\.aid.sourceKey) != expected {
-                problems.append("aid keys \(runtime.route.points.map(\.aid.sourceKey)), expected \(expected)")
+            if let expected = check.aidKeys, runtime.route.points.map(\.aidKey) != expected.map(Optional.some) {
+                problems.append("aid keys \(runtime.route.points.map { $0.aidKey.map(String.init) ?? "unallocated" }), expected \(expected)")
             }
             if let label = check.from {
                 if let base = capturedRoutes[label] {

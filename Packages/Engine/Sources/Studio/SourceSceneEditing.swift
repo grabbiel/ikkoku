@@ -188,8 +188,11 @@ struct SourceSceneEditSpans {
 public extension KoikatsuSceneDocument {
     /// Pure byte transformation. The caller chooses a separate output URL.
     /// Any unsupported/missing destination or invalid input rejects the whole
-    /// edit before bytes are returned; source data is never mutated.
+    /// edit before bytes are returned; source data is never mutated. A legacy
+    /// scene is written as CharaStudio saves it, as 1.0.4.2 (`upgraded`),
+    /// so even an empty edit changes its bytes.
     func editedData(_ edits: SourceSceneEdits) throws -> Data {
+        if isLegacy { return try upgraded().editedData(edits) }
         if !edits.insertions.isEmpty {
             var rest = edits; rest.insertions = []
             return try inserting(edits.insertions).editedData(rest)
@@ -212,12 +215,15 @@ extension KoikatsuSceneDocument {
     /// The scene bytes with every edit but the plug-in data, and their
     /// decoded document (internal for the plug-in step's timing probe).
     func editedBody(_ edits: SourceSceneEdits) throws -> (Data, KoikatsuSceneDocument) {
+        // The byte writers below emit 1.0.4.2 records; a legacy scene is
+        // upgraded first (`editedData(_:)`, `inserting`).
+        guard !isLegacy else { throw SourceSceneTopologyError.unsupported("A CharaStudio \(snapshot.version) scene is edited after its 1.0.4.2 upgrade.") }
         guard !edits.transforms.isEmpty || !edits.cards.isEmpty || !edits.kinematics.isEmpty || !edits.animations.isEmpty || !edits.voices.isEmpty || edits.currentCamera != nil || !edits.cameraSlots.isEmpty || edits.thumbnailData != nil || !edits.visibility.isEmpty || !edits.names.isEmpty || !edits.cameraActive.isEmpty || !edits.routeActive.isEmpty || !edits.mouth.isEmpty || !edits.deletions.isEmpty || !edits.reparents.isEmpty || !edits.routes.isEmpty else { return (preservedData, self) }
         guard edits.transforms.count <= 100_000, edits.cards.count <= 10_000, edits.kinematics.count <= 10_000, edits.animations.count <= 10_000, edits.voices.count <= 10_000, edits.visibility.count <= 100_000, edits.names.count <= 100_000, edits.cameraActive.count <= 100_000, edits.routeActive.count <= 100_000, edits.mouth.count <= 10_000, edits.deletions.count <= 100_000, edits.reparents.count <= 100_000, edits.routes.count <= 100_000 else { throw KoikatsuReadError.limitExceeded("too many scene edits") }
         var reader = try KoikatsuBinaryReader(preservedData)
         try reader.skipPNG()
         let thumbnailRange = 0..<reader.offset
-        guard try reader.string() == snapshot.version else { throw reader.invalid("scene version differs from its decoded document") }
+        guard try reader.sceneVersion() == snapshot.version else { throw reader.invalid("scene version differs from its decoded document") }
         var objects: [Int32: KoikatsuObjectRecord] = [:]
         func index(_ object: KoikatsuObjectRecord) {
             objects[object.sourceKey] = object
@@ -468,7 +474,7 @@ extension KoikatsuSceneDocument {
             var points: [KoikatsuRoutePointRecord] = []
             for point in state.points {
                 if let index = point.sourceIndex {
-                    points.append(point.record(pointKey: record.points[index].bone.sourceKey, aidKey: record.points[index].aid.sourceKey))
+                    points.append(point.record(pointKey: record.points[index].bone.sourceKey, aidKey: record.points[index].aidKey))
                 } else {
                     let pointKey = try next(), aidKey = try next()
                     points.append(point.record(pointKey: pointKey, aidKey: aidKey))
@@ -482,7 +488,12 @@ extension KoikatsuSceneDocument {
             for point in points {
                 integer(point.bone.sourceKey, &bytes); amount(point.bone.transform, &bytes)
                 float(point.speed, &bytes); integer(point.easeType, &bytes); integer(point.connection, &bytes)
-                integer(point.aid.sourceKey, &bytes); amount(point.aid.transform, &bytes)
+                // A 1.0.4.2 record always saves its aid; only a legacy read
+                // leaves one unallocated, and legacy scenes export upgraded.
+                guard let aidKey = point.aidKey else {
+                    throw SourceSceneTopologyError.unsupported("Original-scene export cannot write route \(key): a point has no allocated aid.")
+                }
+                integer(aidKey, &bytes); amount(point.aidTransform, &bytes)
                 bytes.append(point.aidInitialized ? 1 : 0); bytes.append(point.linked ? 1 : 0)
             }
             add(span.points, bytes)
