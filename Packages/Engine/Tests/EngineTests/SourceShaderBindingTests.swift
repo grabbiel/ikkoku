@@ -798,6 +798,36 @@ private enum FaceCompositeFixture {
     }
 }
 
+/// Stock cheek 402/1 and lipline 404/1 have fixed creator UVs, no layout field
+/// and disjoint alpha footprints, so their blend order is not observable on any
+/// card (renderer.md, "Native stock lipline ID1 composite"). Layers that could
+/// overlap the lipline (another cheek, either paint or the mole) are not
+/// verified with it and must leave the recipe unresolved under either makeup record.
+@Test func sourceShaderLiplineCompositeRefusesLayersThatCouldOverlapIt() throws {
+    typealias F = FaceCompositeFixture
+    let directory = try AppearanceTestFixture.directory(); defer { try? FileManager.default.removeItem(at: directory) }
+    let lipline: F.Fields = [("lipLineId", .integer(1))]
+    func recipe(_ makeup: F.Fields, face: F.Fields, coordinate: Bool) throws -> SourceShaderBindingSet.CompositeRecipe? {
+        let card = coordinate ? try F.card(coordinate: true, coordinateOverrides: makeup, faceOverrides: face)
+                              : try F.card(baseOverrides: makeup, faceOverrides: face)
+        return try F.derive(directory: directory, card: card, head: F.liplineHead())?.composite
+    }
+    for coordinate in [false, true] {
+        #expect(try recipe([], face: lipline, coordinate: coordinate)?.unresolved == nil)
+        #expect(try recipe([("cheekId", .integer(1))], face: lipline, coordinate: coordinate)?.unresolved == nil)
+        let overlapping: [(F.Fields, F.Fields)] = [
+            ([("cheekId", .integer(2))], lipline), ([("cheekId", .integer(3))], lipline),
+            ([("paintId", .array([.integer(1), .integer(0)]))], lipline),
+            ([("paintId", .array([.integer(0), .integer(2)]))], lipline),
+            ([("cheekId", .integer(1)), ("paintId", .array([.integer(1), .integer(0)]))], lipline),
+            ([], lipline + [("moleId", .integer(1))]),
+            ([("cheekId", .integer(1))], lipline + [("moleId", .integer(1))])]
+        for (makeup, face) in overlapping {
+            #expect(try recipe(makeup, face: face, coordinate: coordinate)?.unresolved != nil, "\(makeup) \(face) coordinate \(coordinate)")
+        }
+    }
+}
+
 @Test func sourceShaderLiplineCompositeRequiresExactMetadataAndSourceRevision() throws {
     typealias F = FaceCompositeFixture
     let directory = try AppearanceTestFixture.directory(); defer { try? FileManager.default.removeItem(at: directory) }
