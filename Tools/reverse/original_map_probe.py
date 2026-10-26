@@ -49,6 +49,14 @@ scene-map34-day.png (map transform nonzero, sun type day), scene-map34-evening.p
 scene-map34-night.png (reset transform) and scene-map34-showoff.png (map 34 added to the character
 scene), reads each back, and writes per case the phase B images and the oracle images, including
 oracle-<case>-classes.png, -sky.rgba.f32 and -particles.rgba.f32, all traced in map-trace.json.
+
+`maps` (ST-A11 slice 4) is the same for twelve more maps in one exec: --showoff is uploaded as
+reload-maps-showoff.png, which selects the probe's maps mode (its MapCase table: twelve inside cases
+scene-mapNN.png, eight outside cases scene-mapNN-outside.png whose camera crosses one of the map's
+vanish colliders, and scene-map41-showoff.png). Each case also records the vanish state (renderer
+enabled flags, the view capsule and the colliders it overlaps) and the map option; the oracle adds
+-silhouettes.rgba.f32 and -unlit.rgba.f32 where a map has them and skips the irradiance pair, with the
+reason recorded, where a map has no lightmaps.
 """
 from __future__ import annotations
 import argparse, fnmatch, gzip, hashlib, http.server, io, json, re, subprocess, threading, uuid, zipfile
@@ -363,6 +371,7 @@ SHOWOFF_UPLOAD = 'reload-showoff.png'
 
 
 MAP34_UPLOAD = 'reload-map34-showoff.png'
+MAPS_UPLOAD = 'reload-maps-showoff.png'
 # The player root's junction targets, read only: file and directory counts, bytes and the newest write
 # time of each, taken in the same run.ps1 before the player is set up and after the root is removed.
 JUNCTION_SCAN = (r"""function Scan{$o=[ordered]@{};foreach($n in @('abdata','CharaStudio_Data')){$p="C:\Illusion\Koikatsu\$n";"""
@@ -447,9 +456,20 @@ def capture(args):
 
 def map34(args):
     """Map 34's phases B and C in one `prlctl exec` (see the module docstring)."""
-    if (private(args.output) / 'run.json').exists(): raise RuntimeError(f'{args.output}/run.json exists: run map34 into a new output folder')
+    return showoff_phase(args, 'map34', MAP34_UPLOAD)
+
+
+def maps(args):
+    """Slice 4's phases B and C across twelve maps in one `prlctl exec` (see the module docstring)."""
+    return showoff_phase(args, 'maps', MAPS_UPLOAD)
+
+
+def showoff_phase(args, mode, upload):
+    """Phases B and C in one exec, the probe's mode selected by the name `upload` gives --showoff;
+    the player root's junction targets are scanned before and after."""
+    if (private(args.output) / 'run.json').exists(): raise RuntimeError(f'{args.output}/run.json exists: run {mode} into a new output folder')
     showoff = scene_record(args.showoff, '--showoff')
-    result = run_probe(args, {MAP34_UPLOAD: showoff}, dict(mode='map34', showoff=str(args.showoff), showoffSHA256=digest(showoff)),
+    result = run_probe(args, {upload: showoff}, dict(mode=mode, showoff=str(args.showoff), showoffSHA256=digest(showoff)),
                        floats=True, scans=True)
     guest = json.loads((private(args.output) / 'run.json').read_text()).get('guest') or {}
     result.update(scanBefore=guest.get('scanBefore'), scanAfter=guest.get('scanAfter'),
@@ -528,8 +548,14 @@ def main():
     m.add_argument('--errno-baseline', type=int, required=True, help='Parallels errno-24 count that must hold before the exec')
     m.add_argument('--host-address', default='10.211.55.2', help="the Mac's address on the VM's host-only network")
     m.add_argument('--wait-seconds', type=int, default=1800, help='bound on the player run')
+    s = commands.add_parser('maps', help='author, capture and measure the slice 4 cases across twelve maps in the original player (phases B and C)')
+    s.add_argument('--vm', default='Windows 11'); s.add_argument('--output', type=Path, required=True)
+    s.add_argument('--showoff', type=Path, required=True, help='a character scene record without a map; the player adds map 41 to it')
+    s.add_argument('--errno-baseline', type=int, required=True, help='Parallels errno-24 count that must hold before the exec')
+    s.add_argument('--host-address', default='10.211.55.2', help="the Mac's address on the VM's host-only network")
+    s.add_argument('--wait-seconds', type=int, default=3600, help='bound on the player run')
     args = p.parse_args()
-    run = dict(fetch=fetch, capture=capture, oracle=oracle, map34=map34)[args.command]
+    run = dict(fetch=fetch, capture=capture, oracle=oracle, map34=map34, maps=maps)[args.command]
     print(json.dumps(run(args), indent=2))
 
 

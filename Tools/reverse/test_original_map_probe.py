@@ -1,6 +1,6 @@
 """ST-A11 map probe driver: path checks, the read-only batched fetch, placing fetched files per set, and
 the one-exec capture framing. VM calls and the endpoint are mocked: no VM or private data."""
-import gzip, hashlib, io, json, os, shutil, tempfile, unittest, urllib.error, urllib.request, zipfile
+import gzip, hashlib, io, json, os, re, shutil, tempfile, unittest, urllib.error, urllib.request, zipfile
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
@@ -532,6 +532,67 @@ class Map34Tests(unittest.TestCase):
         for label in ('map34-day', 'map34-evening', 'map34-night', 'map34-showoff', '"map33"', '"map33-showoff"'):
             self.assertIn(label, source)
         self.assertIn('DepthFar33=25f', source); self.assertIn('DepthFar34=1000f', source)
+
+
+class MapsTests(unittest.TestCase):
+    """Slice 4: twelve maps' phases B and C in one exec, selected by the reload-maps-showoff.png upload."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory(); self.dir = Path(self.tmp.name)
+        self.showoff = self.dir / 'showoff.png'; self.showoff.write_bytes(b'\x89PNG\r\n\x1a\nscene')
+        FakeEndpoint.instances = []
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def run_maps(self):
+        rgba = bytes(range(32))
+        upload = archive({'status.json': b'{}', 'map-trace.json': b'{}', 'oracle-map38-silhouettes.rgba.f32': rgba})
+        guest = dict(processID=80, source=sha(probe.MAP_PROBE.read_bytes()), scenes={probe.MAPS_UPLOAD: sha(self.showoff.read_bytes())},
+                     zipSHA256=sha(upload), zipBytes=len(upload), exited=True, removed=True, remainingGameProcesses=[])
+        FakeEndpoint.next_upload = upload
+        completed = SimpleNamespace(returncode=0, stdout=json.dumps(guest), stderr='')
+        args = SimpleNamespace(vm='vm', output=self.dir / 'out', showoff=self.showoff, errno_baseline=0, host_address='10.211.55.2', wait_seconds=60)
+        with patch.object(probe, 'private', side_effect=lambda p: Path(p).resolve()), \
+             patch.object(probe, 'fresh_root', return_value=PLAYER_ROOT), \
+             patch.object(probe, 'guarded', return_value=0), \
+             patch.object(probe, 'errno_count', return_value=0), \
+             patch.object(probe, 'Endpoint', FakeEndpoint), \
+             patch.object(probe.subprocess, 'run', return_value=completed) as vm:
+            try:
+                return probe.maps(args)
+            finally:
+                self.vm = vm
+
+    def test_one_exec_uploads_the_showoff_under_the_maps_name_with_the_junction_scans(self):
+        self.run_maps()
+        out = self.dir / 'out'
+        endpoint = FakeEndpoint.instances[0]
+        self.assertEqual(endpoint.files['reload-maps-showoff.png'], self.showoff.read_bytes())
+        self.assertNotIn('reload-map34-showoff.png', endpoint.files)
+        script = endpoint.files['run.ps1'].decode()
+        self.assertIn("@('reload-maps-showoff.png')", script)
+        self.assertIn('$r.scanBefore=Scan', script); self.assertIn('$r.scanAfter=Scan', script)
+        self.assertIn("'-logFile',\"$root\\unity.log\"", script)
+        self.assertEqual(self.vm.call_count, 1)
+        self.assertEqual(json.loads((out / 'run.json').read_text())['mode'], 'maps')
+        self.assertEqual(gzip.decompress((out / 'oracle-map38-silhouettes.rgba.f32.gz').read_bytes()), bytes(range(32)))
+        self.showoff.write_bytes(b'\x89PNG\r\n\x1a\nscene')
+        with self.assertRaisesRegex(RuntimeError, 'run maps into a new output folder'):
+            self.run_maps()
+
+    def test_the_probe_source_has_the_maps_mode_cases(self):
+        source = probe.MAP_PROBE.read_text()
+        self.assertIn('MapsUpload="reload-maps-showoff.png"', source)
+        cases = re.findall(r'new MapCase\("([a-z0-9-]+)",(\d+),(\d),(true|false),(true|false),', source)
+        self.assertEqual(len(cases), 20)
+        inside = [c for c in cases if c[4] == 'false']; outside = [c for c in cases if c[4] == 'true']
+        self.assertEqual(sorted(int(c[1]) for c in inside), [1, 11, 15, 19, 21, 22, 25, 27, 29, 38, 40, 41])
+        self.assertEqual(sorted(int(c[1]) for c in outside), [1, 11, 15, 19, 21, 22, 25, 27])
+        self.assertTrue(all(c[0] == f'map{int(c[1]):02d}' + ('-outside' if c[4] == 'true' else '') for c in cases))
+        self.assertEqual({c[2] for c in inside}, {'0', '1', '2'})  # every sun type
+        self.assertIn('Guard("map41-showoff"', source)
+        self.assertIn('depthFar=no==33?DepthFar33:DepthFar34', source)
 
 
 if __name__ == '__main__':
