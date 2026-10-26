@@ -3977,8 +3977,9 @@ window comes 0.10–0.12 s sooner, and the scenes are ready 0.07–0.09 s
 sooner.
 
 Once a build lands, the user sees the same characters, poses and pixels as
-before. Captures, scenario reports and exports are byte-identical; only
-time, threads and memory change.
+before. Captures and exports are byte-identical, and so are the scenario
+reports apart from two drag timings (Correctness, below); only time,
+threads and memory change.
 
 ### What changed
 
@@ -4185,7 +4186,86 @@ change does not trim.
 
 ### Correctness
 
-<!-- r7j: filled in after the merged-head runs -->
+After merging `main` `4512842` (#279 lightmaps, #282 and #283 material
+gates and lipline, #284 plugin data), on the merged head `2231888`. The base
+is a Release build of `main` `4512842`. Both sides used one snapshot of the
+fixture map (113 keys), taken after #283 changed it.
+
+- **Captures.** Release builds of the base and the merged head, each
+  capture its own launch under the app lock
+  (`.local/r7j-main-builds/captures`):
+  - eight `IKKOKU_AUTOCAPTURE` renders: the Studio scenario scene, the
+    fixture scene and the route-children scene, the native Studio, and the
+    Maker. The scenario scene, the fixture and the Maker are also captured
+    with the live source-shader opt-in ON;
+  - two `IKKOKU_CAPTURE_UI` windows, Studio and Maker;
+  - ten scenario reports: `topology-duplicate`, `undo-props`,
+    `undo-route`, `reload-save-route`, `reload-save-duplicate`,
+    `route-children-edit`, `reload-save-outfit`, `route-edit-export`,
+    `reload-save-expression` and `reload-load-expression`;
+  - the six scene files those scenarios export. One of them is
+    `reload-load-expression`'s, whose export builds the validation
+    baseline of a hidden edited character inside the command.
+
+  All 10 PNGs, the 3 live opt-in reports and the 6 exported scene files
+  are byte-identical. Eight of the ten scenario reports are byte-identical.
+  In `route-children-edit` and `route-edit-export`, only the drag events'
+  median and max times differ.
+
+  Two things made a base and an after differ although neither change was
+  involved:
+  - **The source-tree fallback.** Scenario launches keep the fallback on,
+    which reads the Maker library from the compiling checkout's
+    `.local/reverse`. A base built in a worktree without it exported a
+    different `topology-duplicate` thumbnail. Both worktrees link
+    `.local/reverse`.
+  - **The window state.** `viewport-lifecycle` changes the saved window
+    frame, so a window captured after it is 52 pt shorter and looks
+    inactive. The window captures of both builds run before it.
+- **Engine tests.** These are new:
+  - the registry completes only the newest build of a key and runs no
+    completion after a cancel;
+  - with the fixtures, a second outfit selection supersedes the first, and
+    only the second lands. Its diagnostics and a render match a synchronous
+    build of that outfit. An export's baselines land at once, in request
+    order, and match sequential builds;
+  - with the fixtures, a build cancelled while its delivery waits for the
+    main actor completes nothing, and the store holds what it held before;
+  - `IKKOKU_PERF_OUTFIT` parsing.
+
+  The 14 tests of the registry, the batch and the donation cache pass under
+  ThreadSanitizer with 0 warnings, before and after the merge. No app TSan
+  session was run: the app's new code runs only on the main actor, and its
+  new concurrency is in these Engine types.
+- **Scenario.** These checks pass:
+  - `studio-scenario-background-build`, with the outfit, hidden-outfit and
+    export steps;
+  - `studio-scenario-background-build-route`, with the Redo and `loadRoute`
+    steps, which require that no route character preview is built on the
+    main thread.
+
+  Each compares the background build with the synchronous one: the
+  document summary and a 512×512 render are byte-identical, and the export
+  writes the synchronous export's bytes.
+- **Lanes**, Debug, `--strict` under the app lock, 0 skipped:
+  - `studio-scenarios` 78/78 (1,247.7 s), with both background-build
+    checks;
+  - `maker-scenarios` 10/10 (202.6 s).
+- **Engine suite** with the fixture map, in parallel, at a parallelization
+  width of 8 (`SWT_EXPERIMENTAL_MAXIMUM_PARALLELIZATION_WIDTH=8`, while
+  wider runs can stall in `MTKTextureLoader`). 1,022 tests pass, with 7
+  named skips and no stall, and the 21 tests of the second target pass. The
+  usually failing `liveSourceShadersMeetTheControlledOriginalFrameGates`
+  passed in this run.
+- **Python.** All pass:
+  - runner self-tests, 201;
+  - `Tools/reverse`, 601 (6 skipped);
+  - `Tools/reverse/analysis`, 280;
+  - the site check and `doctor.py --require public`.
+- **`viewport-lifecycle`** (after build) is clean, run after the window
+  captures. There was one render thread before each of the 12 steps and at
+  the end, 87 frames were presented after the restore, and there were no
+  keep-alive refreshes while minimized.
 
 ### Limits
 
