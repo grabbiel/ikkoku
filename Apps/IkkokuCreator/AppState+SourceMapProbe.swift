@@ -42,8 +42,10 @@ extension AppState {
     /// transparent black background, in the same format:
     /// `native-map-sky-<variant>.rgba16f.deflate` (`SourceStudioSkyMaterial
     /// .Variant`: the formula and its three negative controls) and
-    /// `native-map-particles.rgba16f.deflate`.
-    /// A scene whose map is not drawn fails, naming the status line.
+    /// `native-map-particles-<variant>.rgba16f.deflate` (`SourceStudioParticleInputs
+    /// .Variant`: the formula and its two negative controls). None of these images
+    /// carries the editor grid. A scene whose map is not drawn fails, naming the
+    /// status line.
     static func writeSourceMapProbe(studio: StudioModel, renderer: Renderer, directory: URL, width: Int, height: Int) throws {
         let census = studio.sourceMapCensus()
         let items = studio.currentSourceMapItems
@@ -54,6 +56,8 @@ extension AppState {
         var frame = studio.frame
         frame.items = items
         frame.gizmos = []
+        // The HDR images hold the map's draws alone: no editor grid over them.
+        frame.effects.showGrid = false
         let far = sourceMapProbeDepthFar(map: Int(request.map))
         let solid = items.filter(isSolidSourceMapDraw)
         var solidFrame = frame
@@ -116,12 +120,21 @@ extension AppState {
         if particles.isEmpty {
             groups["particles"] = ["written": false]
         } else {
-            var probe = frame
-            probe.items = particles
-            probe.effects.transparentBackground = true
-            let name = "native-map-particles.rgba16f.deflate"
-            try writeHDR(probe, name)
-            groups["particles"] = ["written": true, "file": name, "draws": particles.count, "background": "transparent black", "format": hdrFormat]
+            var files: [String: String] = [:]
+            for variant in SourceStudioParticleInputs.Variant.allCases {
+                var probe = frame
+                probe.items = particles.compactMap { item in
+                    guard let material = SourceStudioParticleInputs.variant(item.material, variant) else { return nil }
+                    var copy = item
+                    copy.material = material
+                    return copy
+                }
+                probe.effects.transparentBackground = true
+                let name = "native-map-particles-\(variant.rawValue).rgba16f.deflate"
+                try writeHDR(probe, name)
+                files[variant.rawValue] = name
+            }
+            groups["particles"] = ["written": true, "files": files, "draws": particles.count, "background": "transparent black", "format": hdrFormat]
         }
         let camera = frame.camera
         func columns(_ m: float4x4) -> [Float] { (0..<4).flatMap { c in (0..<4).map { r in m[c][r] } } }

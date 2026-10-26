@@ -280,7 +280,7 @@ class Slice3Tests(OracleTests):
         else:
             (self.oracle / 'oracle-trace.json').write_text(json.dumps(trace))
 
-    def write_ours_groups(self, sky=None, rotation=291.0, particles=None):
+    def write_ours_groups(self, sky=None, rotation=291.0, particles=None, particle_controls=None):
         native = json.loads((self.ours / 'native-map.json').read_text())
         def deflate(image, name):
             packer = zlib.compressobj(wbits=-15)
@@ -291,8 +291,11 @@ class Slice3Tests(OracleTests):
                 files[variant] = f'native-map-sky-{variant}.rgba16f.deflate'; deflate(image, files[variant])
             native['sky'] = dict(written=True, files=files, rotationDegrees=[rotation])
         if particles is not None:
-            deflate(particles, 'native-map-particles.rgba16f.deflate')
-            native['particles'] = dict(written=True, file='native-map-particles.rgba16f.deflate')
+            controls = particle_controls or dict(noDoubling=particles * 0.5, gammaTint=particles * np.array([1.25, 1.4, 1.4, 1]))
+            files = {}
+            for variant, image in dict(decoded=particles, **controls).items():
+                files[variant] = f'native-map-particles-{variant}.rgba16f.deflate'; deflate(image, files[variant])
+            native['particles'] = dict(written=True, files=files)
         (self.ours / 'native-map.json').write_text(json.dumps(native))
 
     def sky_variants(self, decoded=None, flipped=None, unrotated=None, gamma=None):
@@ -311,6 +314,8 @@ class Slice3Tests(OracleTests):
         self.assertLess(sky['p99Relative'], 2 ** -10)
         self.assertTrue(all(c['fails'] and c['applicable'] for c in sky['controls'].values()))
         self.assertTrue(case['particles']['passes']); self.assertEqual(case['particles']['footprintIoU'], 1.0)
+        self.assertEqual(set(case['particles']['controls']), {'noDoubling', 'gammaTint'})
+        self.assertTrue(all(c['fails'] for c in case['particles']['controls'].values()))
 
     def test_a_wrong_sky_a_passing_control_or_missing_coverage_fails(self):
         self.add_oracle(particles=False)
@@ -343,6 +348,17 @@ class Slice3Tests(OracleTests):
         self.write_ours_groups(particles=np.roll(self.leaves, 2, axis=1))
         case = self.run_oracle()
         self.assertLess(case['particles']['footprintIoU'], 0.98); self.assertFalse(case['passes'])
+
+    def test_a_passing_particle_control_or_a_missing_control_image_fails(self):
+        self.add_oracle(sky=False)
+        self.write_ours_groups(particles=self.leaves, particle_controls=dict(noDoubling=self.leaves, gammaTint=self.leaves * 1.4))
+        case = self.run_oracle()
+        self.assertFalse(case['particles']['controls']['noDoubling']['fails']); self.assertFalse(case['particles']['passes'])
+        native = json.loads((self.ours / 'native-map.json').read_text())
+        del native['particles']['files']['gammaTint']
+        (self.ours / 'native-map.json').write_text(json.dumps(native))
+        case = self.run_oracle()
+        self.assertIn('gammaTint', case['particles']['reason']); self.assertFalse(case['passes'])
 
     def test_the_irradiance_gate_keeps_only_the_lightmapped_class(self):
         # Unity's right half is a light-probe-lit part: our lightmapped-only image differs there.

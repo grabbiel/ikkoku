@@ -200,4 +200,36 @@ public struct SourceStudioParticleInputs: Sendable, Equatable {
         m.transparent = true
         return m
     }
+
+    /// The map probe's particle images (ST-A11 evidence, `compare_original_map.py`'s particle gate).
+    public enum Variant: String, CaseIterable, Sendable {
+        /// The recovered formula.
+        case decoded
+        /// Negative control: `col = i.color * tex` (the shader's factor 2 left out, alpha included).
+        case noDoubling
+        /// Negative control: _TintColor as stored (sRGB), without the Linear player's conversion.
+        case gammaTint
+    }
+
+    /// `material` (a particle material from `material(base:)`) drawn as
+    /// `variant`; nil for any other draw.
+    public static func variant(_ material: MaterialState, _ variant: Variant) -> MaterialState? {
+        guard SourceStudioMapAsset.Draw(material) == .particle else { return nil }
+        var m = material
+        let t = m.uniforms.baseColor
+        switch variant {
+        case .decoded:
+            break
+        case .noDoubling:
+            m.uniforms.baseColor = t * 0.5
+        case .gammaTint:
+            m.uniforms.baseColor = Float4(srgbEncoded(t.x), srgbEncoded(t.y), srgbEncoded(t.z), t.w)
+        }
+        return m
+    }
+
+    /// Unity's `Mathf.LinearToGammaSpace` (the sRGB transfer function).
+    static func srgbEncoded(_ linear: Float) -> Float {
+        linear <= 0.0031308 ? linear * 12.92 : 1.055 * powf(linear, 1 / 2.4) - 0.055
+    }
 }

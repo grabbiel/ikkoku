@@ -341,6 +341,125 @@ func particleBranchDrawsTwiceVertexColorTimesTintTimesTexture() throws {
     #expect(SourceStudioMapMaterial.irradiance(material) == nil)
 }
 
+@Test func particleProbeVariantsChangeOnlyTheirTerm() throws {
+    let inputs = SourceStudioParticleInputs(tint: Float4(0.684, 0.6395, 0.25, 0.534))
+    let base = inputs.material(base: TextureHandle(id: 2))
+    func made(_ v: SourceStudioParticleInputs.Variant) throws -> MaterialState { try #require(SourceStudioParticleInputs.variant(base, v)) }
+    #expect(try made(.decoded) == base)
+    let undoubled = try made(.noDoubling)
+    #expect(undoubled.uniforms.baseColor == inputs.tint * 0.5 && undoubled.uniforms.flags == base.uniforms.flags && undoubled.base == base.base)
+    // Unity's Mathf.LinearToGammaSpace on rgb; alpha as stored.
+    let gamma = try made(.gammaTint).uniforms.baseColor
+    func srgb(_ x: Float) -> Float { x <= 0.0031308 ? x * 12.92 : 1.055 * powf(x, 1 / 2.4) - 0.055 }
+    #expect(abs(gamma.x - srgb(0.684)) < 1e-6 && abs(gamma.z - srgb(0.25)) < 1e-6 && gamma.w == 0.534)
+    #expect(abs(gamma.x - 0.8455) < 1e-3 && abs(gamma.z - 0.5371) < 1e-3)
+    // Not a particle draw: no variant.
+    let sky = SourceStudioSkyMaterial.make(SourceStudioSkyInputs(cube: 0, tint: SIMD3(1, 1, 1), exposure: 1, rotationDegrees: 0,
+                                                                 colorSpaceDouble: 1, decodeInstructions: SIMD4(1, 1, 0, 0)),
+                                           cube: TextureHandle(id: 3))
+    #expect(SourceStudioParticleInputs.variant(sky, .noDoubling) == nil)
+    #expect(SourceStudioParticleInputs.variant(MaterialState(uniforms: .make(kind: MaterialKindMap)), .gammaTint) == nil)
+}
+
+// MARK: - Sampler state
+
+/// The player's sampler state for map textures (QualitySettings.anisotropicFiltering
+/// ForceEnable, Unity's forced minimum 9; Toon.metal, "Sampler state"): map_fragment
+/// samples the lightmap, base, emission and particle textures with anisotropy 9.
+/// The draw's texture footprint is 16 texels per pixel across and 1 down (ratio 16)
+/// on a 1024² texture whose levels 0 and 1 are white and every coarser level black.
+/// Measured on Apple GPUs: max_anisotropy 1 (trilinear) to 4 reads 0 (level 2 or
+/// coarser), so neither the textures' own anisoLevel (1, 3) nor no anisotropy passes;
+/// 8 to 16 read 1.
+@Test(.enabled(if: MTLCreateSystemDefaultDevice() != nil))
+func mapTexturesSampleWithThePlayersForcedAnisotropy() throws {
+    let device = try #require(MTLCreateSystemDefaultDevice())
+    let resources = ResourceStore(device: device)
+    let library = try shaderLibrary(device)
+    let descriptor = MTLRenderPipelineDescriptor()
+    descriptor.vertexFunction = library.makeFunction(name: "toon_vertex")
+    descriptor.fragmentFunction = library.makeFunction(name: "map_fragment")
+    descriptor.colorAttachments[0].pixelFormat = .rgba32Float
+    let pipeline = try device.makeRenderPipelineState(descriptor: descriptor)
+    let queue = try #require(device.makeCommandQueue())
+    let size = 64
+    let targetDescriptor = MTLTextureDescriptor.texture2DDescriptor(pixelFormat: .rgba32Float, width: size, height: size, mipmapped: false)
+    targetDescriptor.usage = [.renderTarget, .shaderRead]; targetDescriptor.storageMode = .shared
+    let target = try #require(device.makeTexture(descriptor: targetDescriptor))
+    let levelsDescriptor = MTLTextureDescriptor.texture2DDescriptor(pixelFormat: .rgba8Unorm, width: 1024, height: 1024, mipmapped: true)
+    let levels = try #require(device.makeTexture(descriptor: levelsDescriptor))
+    for level in 0..<levels.mipmapLevelCount {
+        let side = 1024 >> level
+        let bytes = [UInt8](repeating: level <= 1 ? 255 : 0, count: side * side * 4)
+        levels.replace(region: MTLRegionMake2D(0, 0, side, side), mipmapLevel: level, withBytes: bytes, bytesPerRow: side * 4)
+    }
+    var frame = FrameUniforms(); frame.viewProjection = matrix_identity_float4x4
+    frame.shadowViewProjection = matrix_identity_float4x4; frame.cameraPosition = Float4(0, 0, 1, 1)
+    var draw = DrawUniforms(); draw.model = matrix_identity_float4x4; draw.normalMatrix = matrix_identity_float4x4
+    // Clip x -1...1 is u 0...1 (1024 texels over 64 pixels); clip y -1...1 is v 0...1/16 (64 texels).
+    let positions = [Float3(-1, -1, 0.25), Float3(3, -1, 0.25), Float3(-1, 3, 0.25)]
+    let uvs = positions.map { Float2(($0.x + 1) / 2, ($0.y + 1) / 32) }
+    let data = MeshData(name: "aniso-probe", positions: positions, normals: Array(repeating: Float3(0, 0, 1), count: 3),
+                        uvs: uvs, uvs1: uvs, uvs2: [], indices: [0, 1, 2])
+    let handle = try resources.register(mesh: data)
+    defer { resources.unregister(mesh: handle) }
+    let mesh = try #require(resources.mesh(handle))
+
+    /// The mean colour of the draw with `state`, `levels` bound where named and white elsewhere.
+    func render(_ state: MaterialState, levelsAt: [TextureIndex], lightmap: (any MTLTexture)? = nil) throws -> Float3 {
+        var material = state.uniforms
+        let pass = MTLRenderPassDescriptor(); pass.colorAttachments[0].texture = target
+        pass.colorAttachments[0].loadAction = .clear; pass.colorAttachments[0].storeAction = .store
+        let command = try #require(queue.makeCommandBuffer())
+        let encoder = try #require(command.makeRenderCommandEncoder(descriptor: pass))
+        encoder.setRenderPipelineState(pipeline)
+        for (buffer, index) in [(mesh.baseVertices, BufferIndexVertices), (mesh.texcoords, BufferIndexTexcoords),
+            (mesh.texcoords1, BufferIndexTexcoords1), (mesh.texcoords2, BufferIndexTexcoords2),
+            (resources.dummyBuffer, BufferIndexVertexColors), (resources.dummyBuffer, BufferIndexVertexHidden)] {
+            encoder.setVertexBuffer(buffer, offset: 0, index: Int(index.rawValue))
+        }
+        encoder.setVertexBytes(&frame, length: MemoryLayout<FrameUniforms>.stride, index: Int(BufferIndexFrameUniforms.rawValue))
+        encoder.setVertexBytes(&draw, length: MemoryLayout<DrawUniforms>.stride, index: Int(BufferIndexDrawUniforms.rawValue))
+        encoder.setVertexBytes(&material, length: MemoryLayout<MaterialUniforms>.stride, index: Int(BufferIndexMaterial.rawValue))
+        encoder.setFragmentBytes(&material, length: MemoryLayout<MaterialUniforms>.stride, index: Int(BufferIndexMaterial.rawValue))
+        for index in [TextureIndexBase, TextureIndexLightmap, TextureIndexLightmapDirection, TextureIndexEmission] {
+            let texture: any MTLTexture = levelsAt.contains(index) ? levels : (index == TextureIndexLightmap ? lightmap ?? resources.whiteTexture : resources.whiteTexture)
+            encoder.setFragmentTexture(texture, index: Int(index.rawValue))
+        }
+        encoder.drawIndexedPrimitives(type: .triangle, indexCount: mesh.indexCount, indexType: .uint32, indexBuffer: mesh.indices, indexBufferOffset: 0)
+        encoder.endEncoding(); command.commit(); command.waitUntilCompleted()
+        try #require(command.status == .completed, "map_fragment draw failed: \(String(describing: command.error))")
+        var pixels = [Float](repeating: 0, count: size * size * 4)
+        pixels.withUnsafeMutableBytes { target.getBytes($0.baseAddress!, bytesPerRow: size * 16, from: MTLRegionMake2D(0, 0, size, size), mipmapLevel: 0) }
+        var sum = Float3.zero
+        for p in stride(from: 0, to: pixels.count, by: 4) { sum += Float3(pixels[p], pixels[p + 1], pixels[p + 2]) }
+        return sum / Float(size * size)
+    }
+    func check(_ result: Float3, _ want: Float, _ label: String) {
+        // Anisotropy 1-4 reads 0 here (see the doc comment).
+        #expect(result.x >= 0.9 * want && result.x <= 1.0001 * want && result.x == result.y && result.y == result.z, "\(label): \(result) for \(want)")
+    }
+    var gltf = MaterialData(name: "map")
+    gltf.alphaMode = "OPAQUE"
+    let texture = TextureHandle(id: 1)
+    let standard = SourceStudioStandardInputs(albedo: Float4(1, 1, 1, 1), oneMinusReflectivity: 0.5, emissionColor: Float3(1, 1, 1),
+                                              emissionImage: 2, emissionSRGB: true)
+    let range = SourceStudioLightmapMath.linearRGBMRange
+    let map = SourceStudioMapMaterial.make(gltf, standard: standard, base: texture, emission: texture, lightmap: texture, direction: nil,
+                                           range: range, exponent: SourceStudioLightmapMath.linearRGBMExponent)
+    // The light map alone: RGBM (1, 1, 1, 1) decodes to the range.
+    let irradiance = try #require(SourceStudioMapMaterial.irradiance(map))
+    check(try render(irradiance, levelsAt: [TextureIndexLightmap]), range, "light map")
+    // The base texture under a white light map (gi is the range), emission off: 0.5 * texel * range.
+    var unlit = map; unlit.uniforms.emissive = .zero
+    check(try render(unlit, levelsAt: [TextureIndexBase]), 0.5 * range, "base texture")
+    // The emission texture over a black light map (RGBM 0 decodes to 0).
+    check(try render(map, levelsAt: [TextureIndexEmission], lightmap: resources.blackTexture), 1, "emission texture")
+    // Particles: 2 * white vertex * tint 0.5 * texel.
+    let particle = SourceStudioParticleInputs(tint: Float4(0.5, 0.5, 0.5, 0.5)).material(base: texture)
+    check(try render(particle, levelsAt: [TextureIndexBase]), 1, "particle texture")
+}
+
 // MARK: - Pass routing
 
 /// The sky group exists in both main-pass variants (frames with live source

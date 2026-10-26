@@ -56,7 +56,8 @@ Slice 3 (map 34; docs/reference/studio/maps.md, "The sky gate" and "Particles"):
   FAIL, and rotationIgnored too when the sky has a nonzero _Rotation;
 - particles (gated when either side draws them): RGB over black, footprint IoU and
   the relative error on pixels both cover, against PARTICLE_TOLERANCE (fixed
-  before any map 34 data was compared).
+  before any map 34 data was compared). Our noDoubling and gammaTint variants
+  must FAIL.
 A single `original_map_probe.py map34` folder is both --original and --oracle (its
 map-trace.json holds each case's oracle).
 """
@@ -123,12 +124,14 @@ IRRADIANCE_VARIANTS = ("decoded", "nonDirectional", "gammaConstants")
 # float16 target. Coverage is alpha on both sides (the fragment writes 1).
 SKY_TOLERANCE = dict(mean=2.0 ** -10, p99=2.0 ** -9, coverageIoU=0.999)
 SKY_VARIANTS = ("decoded", "rowsFlipped", "rotationIgnored", "gammaConstants")
-# Particles (slice 3): minified, alpha-blended leaf cards whose texture filtering (mip and anisotropy
-# selection) and per-renderer blend order are not the same on both sides, so the gate is far looser than
-# the sky's and still far tighter than any term of the formula (the 2x factor alone is 75 %, the tint about
-# 55 %). Relative errors use PARTICLE_FLOOR as the smallest denominator (blended edges are near black).
+# Particles (slice 3): minified, alpha-blended leaf cards. The tolerance was fixed before any map 34 data
+# was compared, allowing for texture filtering and per-renderer blend order: far looser than the sky's and
+# still far tighter than any term of the formula (the 2x factor alone is 75 %, the tint about 55 %). With the
+# player's forced anisotropy (Toon.metal, mapForcedAnisoRepeat) the measured error is about 0.001 mean and
+# 0.004 p99. Relative errors use PARTICLE_FLOOR as the smallest denominator (blended edges are near black).
 PARTICLE_TOLERANCE = dict(mean=2.0 ** -6, p99=2.0 ** -3, footprintIoU=0.98)
 PARTICLE_FLOOR = 2.0 ** -6
+PARTICLE_VARIANTS = ("decoded", "noDoubling", "gammaTint")
 
 
 def read_oracle_floats(path, width, height):
@@ -239,20 +242,30 @@ def particle_section(measured, oracle, ours, native, width, height):
         return dict(gated=False, reason="neither side draws particles")
     if not (theirs.get("written") and mine.get("written")):
         return dict(gated=True, passes=False, reason=f"only {'the original' if theirs.get('written') else 'our capture'} draws particles")
+    files = mine.get("files") or {}
+    if any(v not in files for v in PARTICLE_VARIANTS):
+        return dict(gated=True, passes=False, reason=f"our capture lacks particle images {[v for v in PARTICLE_VARIANTS if v not in files]}")
     unity = read_oracle_rgba(oracle / (theirs["file"] + ".gz"), width, height)[..., :3]
-    image = read_native_rgba(ours / mine["file"], width, height)[..., :3]
+    image = read_native_rgba(ours / files["decoded"], width, height)[..., :3]
     a, b = unity.max(axis=-1) > 1e-4, image.max(axis=-1) > 1e-4
     both = a & b
     footprint = iou(a, b)
     if not both.any(): return dict(gated=True, passes=False, footprintIoU=footprint, reason="no pixel both cover")
-    relative = relative_error(unity, image, both, PARTICLE_FLOOR)
-    mean, p99 = float(relative.mean()), float(np.percentile(relative, 99))
+    def metrics(candidate):
+        relative = relative_error(unity, candidate, both, PARTICLE_FLOOR)
+        mean, p99 = float(relative.mean()), float(np.percentile(relative, 99))
+        return relative, mean, p99, mean <= PARTICLE_TOLERANCE["mean"] and p99 <= PARTICLE_TOLERANCE["p99"]
+    relative, mean, p99, within = metrics(image)
+    controls = {}
+    for variant in PARTICLE_VARIANTS[1:]:
+        _, c_mean, c_p99, c_within = metrics(read_native_rgba(ours / files[variant], width, height)[..., :3])
+        controls[variant] = dict(meanRelative=c_mean, p99Relative=c_p99, fails=not c_within)
     absolute = np.abs(image - unity)[a | b]
     return dict(gated=True, coveredUnity=int(a.sum()), coveredOurs=int(b.sum()), footprintIoU=footprint, comparedPixels=int(both.sum()),
                 meanRelative=mean, p99Relative=p99, maximumRelative=float(relative.max()), meanAbsolute=float(absolute.mean()),
                 p99Absolute=float(np.percentile(absolute, 99)), unityMean=float(unity[both].mean()), oursMean=float(image[both].mean()),
-                floor=PARTICLE_FLOOR, tolerance=dict(PARTICLE_TOLERANCE),
-                passes=mean <= PARTICLE_TOLERANCE["mean"] and p99 <= PARTICLE_TOLERANCE["p99"] and footprint >= PARTICLE_TOLERANCE["footprintIoU"])
+                floor=PARTICLE_FLOOR, tolerance=dict(PARTICLE_TOLERANCE), controls=controls,
+                passes=within and footprint >= PARTICLE_TOLERANCE["footprintIoU"] and all(c["fails"] for c in controls.values()))
 
 
 def oracle_case(oracle_trace, case, oracle, ours, native, geometry, depth_normals, nc, width, height, far):
@@ -425,6 +438,7 @@ def main():
                  f" (controls {', '.join(f'{k} p99 {v['p99Relative']:.3f}' for k, v in c['sky']['controls'].items())})"
                  if c.get("sky", {}).get("controls") else "")
               + (f", particles IoU {c['particles']['footprintIoU']:.4f} mean {c['particles']['meanRelative']:.4f} p99 {c['particles']['p99Relative']:.4f}"
+                 f" (controls {', '.join(f'{k} p99 {v['p99Relative']:.3f}' for k, v in c['particles']['controls'].items())})"
                  if c.get("particles", {}).get("comparedPixels") else ""))
     raise SystemExit(0 if result["passes"] else 1)
 
