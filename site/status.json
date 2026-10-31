@@ -1,6 +1,6 @@
 {
   "reviewed": "2026-10-31",
-  "revision": "5d55db5a60a9743bee7603734db199ff495f5aa7",
+  "revision": "3eb26b2edd8895448b06c7a9ef84a327ce780aad",
   "components": [
     {
       "id": "character-maker",
@@ -8,9 +8,9 @@
       "group": "Priority",
       "stage": "Mid-stage",
       "summary": "The core editing path works for selected normal characters.",
-      "available": "Normal male/female cards, asynchronous head 0/200/201 and converted asset selection, shape and color edits, static ABMX, and identity-preserving edited exports. Bounded decoded-rig reuse accelerates repeated normal-head selections while retaining actual byte verification. Maker-only bounded clothes groups reduce six GPU completions to four during the measured normal-head selection path. Reader-local verified RGBA digests remove repeated hashing within each head preparation without adding another pixel buffer.",
+      "available": "Normal male/female cards, asynchronous head 0/200/201 and converted asset selection, shape and color edits, static ABMX, and identity-preserving edited exports. Bounded decoded-rig reuse accelerates repeated normal-head selections while retaining actual byte verification. Maker-only bounded clothes groups reduce six GPU completions to four during the measured normal-head selection path. Reader-local verified RGBA digests remove repeated hashing within each head preparation without adding another pixel buffer. Bounded decoded-shape-contract reuse also skips repeated decoding after verifying the current input bytes.",
       "remaining": "Wider catalogs, special and modded assemblies, complete original editing workflows, and remaining owner-thread stalls. First selections still decode and verify input bytes.",
-      "evidence": "Clothes grouping measured 15–21 ms lower selection latency with about 5 MiB additional logical texture peak. The later digest comparison hashes 29 MiB fewer bytes per selection and measures 7–11 ms lower average API latency across four sex/cycle groups, with exact exports/resources. Owner-thread means rose slightly and individual stalls remain 61–113 ms. Each comparison has two process repetitions per arm/sex, correlated transitions and a background VM; no RSS or FPS claim.",
+      "evidence": "The latest decoded-shape comparison measures repeated head selections at about 81 ms versus 103 ms, with first use 2.4–2.6 ms slower. It passes 20 focused CPU tests, 400 matched Maker checks and 32 static rendered images with 20 exact comparisons. There are two process repetitions per arm/sex, correlated heads and ordinary desktop/idle VM activity. Earlier clothes-group and digest measurements remain linked below. Owner-thread stalls remain; no RSS, FPS, live-animation or universal source-parity claim.",
       "docs": [
         [
           "Maker contract",
@@ -31,6 +31,10 @@
         [
           "Digest reuse measurements",
           "docs/reference/character/maker-assets.md#reader-local-verified-rgba-digest-reuse-192"
+        ],
+        [
+          "Shape reuse measurements",
+          "docs/reference/character/contracts.md#bounded-decoded-contract-reuse"
         ]
       ],
       "issue": [
@@ -80,9 +84,9 @@
       "group": "Priority",
       "stage": "Mid-stage",
       "summary": "Recovered shape rules drive a bounded set of native controls.",
-      "available": "52 face and 44 body controls with recovered destination and ordering rules, numerical gates, and the source fixed-height rule for normal male Maker models. Immutable decoded domains validate once; the containing contract retains its structural checks.",
+      "available": "52 face and 44 body controls with recovered destination and ordering rules, numerical gates, and the source fixed-height rule for normal male Maker models. Immutable decoded domains validate once; the containing contract retains its structural checks. A Maker-owned six-entry, 8 MiB logical cache reuses decoded contracts after byte verification; failed selections preserve the previous cache.",
       "remaining": "Broader model/shape combinations and unsupported transform cases. The control count is not a universal parity claim.",
-      "evidence": "Independent model gates cover selected coupled edits; individual kernel results and complete assembled-model results remain distinct. The validation change passes 28 focused tests and 400 matched Maker checks. Quiet shape-decode and selection timings are mixed, so no latency improvement is established.",
+      "evidence": "Independent model gates cover selected coupled edits; individual kernel results and complete assembled-model results remain distinct. Validation-once passes 28 focused tests and 400 matched Maker checks with mixed timing. The later decoded-contract cache passes 20 focused tests, 400 matched Maker checks and 32 static images with 20 exact comparisons; repeated selections improve from about 103 to 81 ms in a small comparison, while first use rises 2.4–2.6 ms. These are separate changes; neither establishes wider shape parity.",
       "docs": [
         [
           "Shape contracts",
@@ -99,6 +103,10 @@
         [
           "Validation and timing limits",
           "docs/reference/character/contracts.md#validate-decoded-domains-once"
+        ],
+        [
+          "Decoded-contract reuse and limits",
+          "docs/reference/character/contracts.md#bounded-decoded-contract-reuse"
         ]
       ]
     },
