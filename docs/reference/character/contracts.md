@@ -178,7 +178,7 @@ without skips, including the recovered shape/body/face checks. Fresh Release
 Maker collections passed 248 functional checks: female/male selected and reloaded
 exports matched between arms, all 12 corresponding resource/work records matched,
 and four reloads consumed their own newly exported cards. The build runners first
-recorded exit 126 for lingering owned compiler children; both children released
+recorded exit 126 for lingering owned compiler children; the observed children released
 naturally, and supplemental full-bundle verification accepted the products without
 rebuilding or rewriting those raw results.
 
