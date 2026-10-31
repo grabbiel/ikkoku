@@ -199,9 +199,9 @@ isolate the removed traversal. The change adds no asset coverage or source-game
 parity claim, and the broader owner-thread work in [#192](https://github.com/grabbiel/ikkoku/issues/192)
 remains open.
 
-### Bounded decoded-contract reuse (local integration)
+### Bounded decoded-contract reuse
 
-Local integration `4ad74a45`, reviewed on 2026-10-31, connects immutable shape
+Runtime checkpoint `4ad74a45`, reviewed on 2026-10-31, connects immutable shape
 contracts to optional normal-head preparation. Every preparation still performs
 the original contained, size-checked file read. Reuse keys combine SHA-256 of
 those actual bytes, their length and the decoder version; a hit skips only
@@ -249,8 +249,17 @@ The two apps passed 248 functional scenario checks covering female/male heads
 export roles produced byte-identical cards across the apps. Resource counts and
 non-shape work matched at all 12 compared selection stages. The candidate still
 read and hashed each selected contract; failed preparations did not warm reuse.
-These checks establish state and persistence behavior. Separate rendered-frame
-comparisons remain pending before integration acceptance.
+These checks establish state and persistence behavior.
+
+The 16 exported cards also contain 32 freshly rendered thumbnails: full-body
+504×704 and face 256×256. A separate CRC and RGBA decode audit, independently
+checked with Pillow, finds zero changed pixels in 20 corresponding comparisons.
+All export invocations bind to successful scenario reports; four candidate pair
+exports follow a verified head-0 cache hit. The source path renders from the
+committed preview and its current contract, replacing both thumbnails. This
+covers static customization rendering, not the live animated viewport or every
+head. The first offline audit failed on an import-name mistake before reading
+images; that failure is retained beside the corrected audit.
 
 A quiet female ABBA / male BAAB sequence passed 152 additional checks across
 eight fresh processes, retaining all 48 selection observations. Each process
