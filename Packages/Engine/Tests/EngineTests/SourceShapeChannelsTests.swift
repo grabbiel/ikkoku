@@ -105,6 +105,119 @@ private func fixtureContract() throws -> SourceShapeContract {
     #expect(try restored.domain("test")?.makeState() == contract.domain("test")?.makeState())
 }
 
+@Test func sourceShapeContractPreservesDomainAndRootErrorOrder() throws {
+    let fixture = shapeFixture()
+    let valid = try #require((fixture["domains"] as? [[String: Any]])?.first)
+    var badDefaults = valid; badDefaults["defaultValues"] = [0.5]
+    var badSamples = valid; badSamples["id"] = "later"
+    badSamples["channels"] = [["name": "controller", "samples": []]]
+    let defaultsError = SourceShapeError.invalidContract("test: invalid defaults")
+    let samplesError = SourceShapeError.invalidContract("later: invalid sample count")
+    let headerError = SourceShapeError.invalidContract("unsupported schema or coordinate convention")
+    let domainsError = SourceShapeError.invalidContract("invalid or duplicate domains")
+    let tooMany = (0..<17).map { index in
+        var domain = valid; domain["id"] = "domain-\(index)"; return domain
+    }
+    let cases: [(domains: [[String: Any]], version: Int, error: SourceShapeError)] = [
+        ([badDefaults], 2, defaultsError),
+        ([badDefaults, badSamples], 1, defaultsError),
+        ([badSamples, badDefaults], 1, samplesError),
+        ([valid, valid, badSamples], 2, samplesError),
+        ([valid, valid], 2, headerError),
+        ([valid, valid], 1, domainsError),
+        ([], 2, headerError),
+        ([], 1, domainsError),
+        (tooMany, 1, domainsError),
+    ]
+    for item in cases {
+        var input = fixture; input["domains"] = item.domains; input["schemaVersion"] = item.version
+        let bytes = try JSONSerialization.data(withJSONObject: input)
+        let expected = item.error
+        #expect(throws: expected) { try SourceShapeContract.decode(bytes) }
+    }
+    for (domain, expected) in [(badDefaults, defaultsError), (badSamples, samplesError)] {
+        let bytes = try JSONSerialization.data(withJSONObject: domain)
+        #expect(throws: expected) { try JSONDecoder().decode(SourceShapeDomain.self, from: bytes) }
+    }
+}
+
+@Test func sourceShapeContractPreservesMalformedFieldPathsBeforeRootValidation() throws {
+    let fixture = shapeFixture()
+    let valid = try #require((fixture["domains"] as? [[String: Any]])?.first)
+    var invalid = valid; invalid["defaultValues"] = [0.5]
+    var malformedHeader = fixture
+    malformedHeader["schemaVersion"] = "not-an-integer"
+    malformedHeader["domains"] = [invalid]
+    let headerBytes = try JSONSerialization.data(withJSONObject: malformedHeader)
+    do {
+        _ = try SourceShapeContract.decode(headerBytes)
+        Issue.record("Expected the malformed schemaVersion before domain validation.")
+    } catch DecodingError.typeMismatch(let type, let context) {
+        let isInteger = type == Int.self
+        let path = context.codingPath.map(\.stringValue)
+        #expect(isInteger)
+        #expect(path == ["schemaVersion"])
+    } catch { throw error }
+
+    var missingSamples = valid; missingSamples["channels"] = [["name": "controller"]]
+    var malformedDomain = fixture
+    malformedDomain["schemaVersion"] = 2
+    malformedDomain["domains"] = [valid, missingSamples]
+    let domainBytes = try JSONSerialization.data(withJSONObject: malformedDomain)
+    do {
+        _ = try SourceShapeContract.decode(domainBytes)
+        Issue.record("Expected the missing samples before unsupported-header or duplicate-domain checks.")
+    } catch DecodingError.keyNotFound(let key, let context) {
+        let path = context.codingPath.map(\.stringValue)
+        let indices = context.codingPath.compactMap(\.intValue)
+        #expect(key.stringValue == "samples")
+        #expect(path == ["domains", "Index 1", "channels", "Index 0"])
+        #expect(indices == [1, 0])
+    } catch { throw error }
+}
+
+@Test func sourceShapeDirectAndEmbeddedDomainsPreserveRoundTripStatesAndDestinations() throws {
+    var fixture = shapeFixture()
+    let first = try #require((fixture["domains"] as? [[String: Any]])?.first)
+    var second = first; second["id"] = "second"; second["defaultValues"] = [0.25, 0.75]
+    fixture["domains"] = [first, second]
+    let bytes = try JSONSerialization.data(withJSONObject: fixture)
+    let contract = try SourceShapeContract.decode(bytes)
+    let encoded = try JSONEncoder().encode(contract)
+    let restored = try SourceShapeContract.decode(encoded)
+    for (index, input) in [first, second].enumerated() {
+        let domainBytes = try JSONSerialization.data(withJSONObject: input)
+        let direct = try JSONDecoder().decode(SourceShapeDomain.self, from: domainBytes)
+        let embedded = contract.domains[index], roundTrip = restored.domains[index]
+        let directDefaults = try direct.makeState()
+        let embeddedDefaults = try embedded.makeState()
+        let restoredDefaults = try roundTrip.makeState()
+        #expect(directDefaults == embeddedDefaults)
+        #expect(restoredDefaults == embeddedDefaults)
+        for rate: Float in [0, 0.25, 0.5, 0.75, 1] {
+            let values = [rate, rate]
+            let expected = try direct.makeState(values: values)
+            // Independent fixture values also guard against equal-but-wrong routes.
+            #expect(expected["controller"]?.position == SIMD3<Float>(20 * rate, 20 + 40 * rate, 0))
+            #expect(expected["controller"]?.scale == SIMD3<Float>(1 + 2 * rate, 1, 1))
+            let expectedUpdates = try direct.destinationUpdates(from: expected)
+            for domain in [embedded, roundTrip] {
+                let state = try domain.makeState(values: values)
+                #expect(state == expected)
+                let updates = try domain.destinationUpdates(from: state)
+                try #require(updates.count == expectedUpdates.count)
+                for (actual, reference) in zip(updates, expectedUpdates) {
+                    #expect(actual.destinationName == reference.destinationName)
+                    #expect(actual.transform == reference.transform)
+                    #expect(actual.positionMask == reference.positionMask)
+                    #expect(actual.rotationMask == reference.rotationMask)
+                    #expect(actual.scaleMask == reference.scaleMask)
+                }
+            }
+        }
+    }
+}
+
 @Test(.enabled(if: SourceFixtureSupport.shouldRun(["IKKOKU_SHAPE_CONTRACT"]),
                "Requires IKKOKU_SHAPE_CONTRACT"))
 func sourceShapeLoadsLocalRecoveredContractWhenRequested() throws {
