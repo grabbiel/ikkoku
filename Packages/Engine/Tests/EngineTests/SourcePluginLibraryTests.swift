@@ -2,7 +2,7 @@ import Foundation
 import Testing
 import CryptoKit
 @testable import Gameplay
-import Studio
+@testable import Studio
 import simd
 
 // P-T02 synthetic plugin library tests. `PluginLibraryFixture` writes libraries in
@@ -1164,7 +1164,7 @@ private struct PendingAttachmentFixture {
     let document: StudioDocument
     let parent: UUID, child: UUID, target: UUID, descendant: UUID
 
-    init(root: URL, variant: String) throws {
+    init(root: URL, variant: String, targetInitializerDestroys: Bool = false) throws {
         let readerGUID = "Ikkoku.Validation.Pending.Reader", targetGUID = "Ikkoku.Validation.Pending.Target"
         var records: [[String: Any]] = []
         for (guid, reader) in [(readerGUID, true), (targetGUID, false)] {
@@ -1175,11 +1175,23 @@ private struct PendingAttachmentFixture {
             program["fields"] = reader ? ["position", "positionAgain"].map {
                 ["name": $0, "type": "Vector3", "serialized": $0 == "position", "initializer": variant == "plainPending" ? zero : read] as [String: Any]
             } : []
-            let methods: [[String: Any]] = ["Awake", "OnEnable", "Start", "OnDisable", "OnDestroy"].map { event in
+            var methods: [[String: Any]] = ["Awake", "OnEnable", "Start", "OnDisable", "OnDestroy"].map { event in
                 let destroy: [String: Any] = ["kind": "expression", "children": [["kind": "api", "type": "Void", "name": "world.Destroy", "children": [
                     ["kind": "api", "type": "Object", "name": "gameObject", "children": []]]]]]
                 return ["name": event, "symbol": "M:Fixture.\(event)", "static": false, "returnType": "Void", "parameters": [],
                     "body": ["kind": "block", "children": !reader && variant != "readerNoPending" && event == "Awake" ? [destroy] : []], "lifecycle": event]
+            }
+            if !reader && targetInitializerDestroys {
+                program["fields"] = [["name": "queued", "type": "Float", "serialized": true,
+                    "initializer": ["kind": "call", "type": "Float", "name": "QueueDestroy", "children": []]]]
+                let object: [String: Any] = ["kind": "api", "type": "Object", "name": "gameObject", "children": []]
+                let destroy: [String: Any] = ["kind": "api", "type": "Void", "name": "world.Destroy", "children": [object]]
+                let body: [String: Any] = ["kind": "block", "children": [
+                    ["kind": "expression", "children": [destroy]],
+                    ["kind": "return", "children": [["kind": "literal", "type": "Float", "value": 0]]]
+                ]]
+                methods.append(["name": "QueueDestroy", "symbol": "M:Fixture.QueueDestroy", "static": false,
+                    "returnType": "Float", "parameters": [], "body": body])
             }
             program["methods"] = methods
             var identity = program["identity"] as! [String: Any]; identity["symbols"] = methods.map { $0["symbol"]! }; program["identity"] = identity
@@ -1264,4 +1276,72 @@ func sourcePluginPendingAttachmentSavedRootsAndContinuation(library: Bool, varia
     #expect(restored.runtime.callbackTrace == Array(fresh.runtime.callbackTrace.dropFirst(beforeTrace.count)))
     #expect(restored.runtime.callbackTrace.map { $0.components(separatedBy: ":").last! } == (pending ? ["OnDestroy"] : ["Start"]))
     #expect(calls == expectedCalls) // No attachment read is added by these frames.
+}
+
+@Test(arguments: [false, true], ["sameRoot", "newRoot", "missing", "null", "noRequest"])
+func sourcePluginRestorationObservesEveryDestructionRequest(library: Bool, form: String) throws {
+    let root = try PluginLibraryFixture.directory("restore-destruction-observation-" + form)
+    defer { try? FileManager.default.removeItem(at: root) }
+    let requests = form != "noRequest"
+    let f = try PendingAttachmentFixture(root: root, variant: "readerPending", targetInitializerDestroys: requests)
+    var reads = 0
+    let resolver: SourceStudioPluginWorld.AttachmentResolver = { _, _ in
+        reads += 1; return (matrix_identity_float4x4, simd_quatf(angle: 0, axis: SIMD3<Float>(0, 1, 0)))
+    }
+    let fresh = try f.session(f.document, library: library, attachment: resolver)
+    let original = try fresh.savedDocument(), originalState = try #require(original.sourcePluginState)
+    #expect(reads == 2 && !fresh.initializationRequestedDestruction)
+    #expect(fresh.world.restoringDestructionRequested == nil)
+    let roots: Any?
+    switch form {
+    case "missing": roots = nil
+    case "null": roots = NSNull()
+    case "newRoot": roots = [String]()
+    default: roots = [f.target.uuidString]
+    }
+    let state = try PluginRestoreFixture.pendingState(originalState, roots: roots)
+    var candidate = original; candidate.sourcePluginState = state; reads = 0
+    let restored = try f.session(candidate, library: library, restoring: state, attachment: resolver)
+    #expect(reads == 2 && restored.initializationRequestedDestruction == requests)
+    #expect(restored.world.pendingSourceDestructionRoots() == [f.target])
+    #expect(restored.world.restoringDestructionRequested == nil)
+    // Same-root requests leave the queue unchanged but remain observable. A
+    // later ordinary request cannot mutate this immutable construction result.
+    restored.world.destroy(try restored.world.object(id: f.target))
+    #expect(restored.initializationRequestedDestruction == requests)
+    #expect(try fresh.savedDocument() == original)
+}
+
+@Test(arguments: [false, true])
+func sourcePluginPendingAttachmentMalformedRootsPrecedeReads(library: Bool) throws {
+    let root = try PluginLibraryFixture.directory("pending-attachment-invalid")
+    defer { try? FileManager.default.removeItem(at: root) }
+    let f = try PendingAttachmentFixture(root: root, variant: "readerPending")
+    var reads = 0
+    let resolver: SourceStudioPluginWorld.AttachmentResolver = { _, _ in
+        reads += 1; return (matrix_identity_float4x4, simd_quatf(angle: 0, axis: SIMD3<Float>(0, 1, 0)))
+    }
+    let fresh = try f.session(f.document, library: library, attachment: resolver)
+    let saved = try fresh.savedDocument(), state = try #require(saved.sourcePluginState)
+    let beforeTrace = fresh.runtime.callbackTrace
+    for kind in ["duplicate", "unknown", "tombstone", "bound"] {
+        var candidate = saved
+        let roots: [String]
+        switch kind {
+        case "duplicate": roots = [f.target.uuidString, f.target.uuidString.lowercased()]
+        case "unknown": roots = [UUID().uuidString]
+        case "tombstone":
+            candidate.objects.removeAll { $0.id == f.descendant }; roots = [f.descendant.uuidString]
+        default: roots = Array(repeating: f.target.uuidString, count: 10001)
+        }
+        let malformed = try PluginRestoreFixture.pendingState(state, roots: roots)
+        candidate.sourcePluginState = malformed; reads = 0
+        var reason: String?
+        do { _ = try f.session(candidate, library: library, restoring: malformed, attachment: resolver) }
+        catch SourcePluginError.invalid(let message) { reason = message }
+        #expect(reason == "Invalid saved pending destruction roots.")
+        #expect(reads == 0)
+        #expect(try fresh.savedDocument() == saved)
+        #expect(fresh.runtime.callbackTrace == beforeTrace)
+    }
 }
