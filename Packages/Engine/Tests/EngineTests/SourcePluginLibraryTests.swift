@@ -1201,7 +1201,7 @@ private struct PendingAttachmentFixture {
         document = input; profile = root.appendingPathComponent("profile.json")
         let packages: [[String: Any]] = try [readerGUID, targetGUID].enumerated().map { offset, guid in
             let revision = try #require(index.revisions.first { $0.guid == guid })
-            return ["manifest": index.manifestURL(revision).path, "bindings": [["type": "Fixture", "sourceObjectKey": offset == 0 ? 12 : 11]]]
+            return ["manifest": try index.manifestURL(revision).path, "bindings": [["type": "Fixture", "sourceObjectKey": offset == 0 ? 12 : 11]]]
         }
         try JSONSerialization.data(withJSONObject: ["schemaVersion": 1, "fixedDeltaTime": 0.02, "packages": packages]).write(to: profile)
     }
