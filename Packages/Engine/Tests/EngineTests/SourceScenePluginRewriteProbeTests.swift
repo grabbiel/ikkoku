@@ -1,4 +1,5 @@
 import Foundation
+import CryptoKit
 import Testing
 import Assets
 import Character
@@ -29,6 +30,98 @@ private let colliderEdits = ["lc-delete-character", "lc-delete-collider", "lc-du
 /// Edits our writer refuses: a delete with an item copy (#278), and a copy of
 /// a controller a lone collider names (DynamicBonesEditor.cs:1799).
 private let refusedEdits = ["delete-duplicate": "KKPE", "lc-duplicate-character": "KKPE"]
+
+/// Diagnostic only (#278): both source operation orders collapse to the same
+/// unordered export request today. Retain all four observations before emitting
+/// parity failures; a deliberate plugin refusal is recorded, never bypassed.
+@Test(.enabled(if: SourceFixtureSupport.shouldRun(["IKKOKU_ORDERED_SCENE_PROBE", "IKKOKU_ORDERED_SCENE_OUTPUT"]),
+               "Requires the ordered original-player A/C oracles and a fresh diagnostic output folder"))
+func sourceSceneOrderedDeleteDuplicateDiagnostic() throws {
+    let root = URL(fileURLWithPath: try SourceFixtureSupport.require("IKKOKU_ORDERED_SCENE_PROBE"))
+    let output = URL(fileURLWithPath: try SourceFixtureSupport.require("IKKOKU_ORDERED_SCENE_OUTPUT"))
+    try #require(!FileManager.default.fileExists(atPath: output.path), "Preserve every prior diagnostic attempt")
+    try FileManager.default.createDirectory(at: output, withIntermediateDirectories: true)
+    let inputHashes = ["a": "1e6ecf3932a8f91789b1716f75640028d2edb5a73b8828ff3bedd825deb13a29",
+                       "c": "477f3789793b851c025884420653d93519cff96c17161a166d034224cba39562"]
+    var rows: [[String: Any]] = [], failures: [String] = []
+    func hash(_ data: Data) -> String { SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined() }
+    func saveReport(_ complete: Bool) throws {
+        let report: [String: Any] = ["schemaVersion": 1, "complete": complete,
+            "scope": "Current unordered writer versus independent original operation orders; no new normalization or production gate",
+            "rows": rows, "parityFailures": failures]
+        try JSONSerialization.data(withJSONObject: report, options: [.sortedKeys, .prettyPrinted])
+            .write(to: output.appendingPathComponent("report.json"), options: .atomic)
+    }
+    try saveReport(false)
+    for phase in ["a", "c"] {
+        let folder = root.appendingPathComponent("phase-\(phase)")
+        func load(_ name: String) throws -> Data { try Data(contentsOf: folder.appendingPathComponent(name)) }
+        let input = try load("source-fixture.png"), baseline = try load("fixture.png")
+        try #require(hash(input) == inputHashes[phase], "The exact retained original input is required")
+        let trace = try #require(try JSONSerialization.jsonObject(with: load("plugin-scene-trace.json")) as? [String: Any])
+        try #require(trace["phase"] as? String == "O" + phase.uppercased())
+        let status = try #require(try JSONSerialization.jsonObject(with: load("status.json")) as? [String: Any])
+        try #require(status["error"] is NSNull, "Do not interpret a partial original-player run")
+        let cases = try #require(trace["cases"] as? [String: [String: Any]])
+        let source = try KoikatsuSceneReader.decodeDocument(baseline)
+        let original = try KoikatsuSceneReader.decodeDocument(input)
+        try #require(source.snapshot.roots.map(\.sourceKey) == original.snapshot.roots.map(\.sourceKey), "Baseline changed root order")
+        try #require(source.snapshot.roots.map(\.sourceKey) == (phase == "a" ? [0, 1, 2, 5, 7, 14, 15] : [0, 1, 2, 5, 7, 14, 15, 16]))
+        try #require(try source.editedData(.init()) == baseline, "Unordered no-op changed source bytes")
+        let resavedBaseline = try load("resave-fixture.png")
+        let baselineFixed = phase == "a" ? baseline == resavedBaseline
+            : try pluginProbeComparable(baseline) == pluginProbeComparable(resavedBaseline)
+        try #require(baselineFixed, "Original baseline was not a fixed point under the existing comparator")
+        // Independent negative control: a valid root's own saved visibility is
+        // never removed by the existing plugin comparator.
+        let visible = try #require(source.snapshot.roots.first { $0.sourceKey == 5 }).visible
+        let changed = try source.editedData(.init(visibility: [5: !visible]))
+        try #require(try pluginProbeComparable(changed) != pluginProbeComparable(baseline))
+        for label in ["delete-duplicate", "duplicate-delete"] {
+            let saved = try load("edit-\(label).png"), resaved = try load("resave-edit-\(label).png")
+            let expected = try KoikatsuSceneReader.decodeDocument(saved)
+            let observed = try #require(cases[label]), actions = try #require(observed["actions"] as? [[String: Any]])
+            let order = label == "delete-duplicate" ? ["delete", "duplicate"] : ["duplicate", "delete"]
+            try #require(actions.compactMap { $0["operation"] as? String } == order)
+            let duplicate = try #require(actions.first { $0["operation"] as? String == "duplicate" })
+            let copies = try #require(duplicate["copies"] as? [Int])
+            try #require(copies.count == 1, "Only the actual single item duplicate is this oracle")
+            let after = try #require(observed["afterSave"] as? [String: Any])
+            let rootRows = try #require(after["rootEnumeration"] as? [[String: Int]])
+            let roots = expected.snapshot.roots.map { Int($0.sourceKey) }
+            try #require(rootRows.compactMap { $0["ordinal"] } == Array(roots.indices))
+            try #require(rootRows.compactMap { $0["key"] } == roots, "Trace root order differs from saved bytes")
+            let expectedCopy = label == "delete-duplicate" ? 1 : (phase == "a" ? 16 : 159)
+            try #require(copies == [expectedCopy], "Keep new source allocation evidence explicit; do not normalize it")
+            let fixed = phase == "a" ? saved == resaved : try pluginProbeComparable(saved) == pluginProbeComparable(resaved)
+            try #require(fixed, "Original edited save was not a fixed point")
+            var row: [String: Any] = ["phase": phase, "order": order, "inputSHA256": hash(input),
+                "baselineSHA256": hash(baseline), "expectedSHA256": hash(saved), "resavedSHA256": hash(resaved),
+                "expectedCopy": expectedCopy, "expectedRoots": roots, "originalFixedPoint": fixed]
+            var edits = SourceSceneEdits(deletions: [1], insertions: [.init(.duplicate(of: 5))])
+            edits.thumbnailData = try leadingPNG(saved)
+            do {
+                let ours = try source.editedData(edits)
+                let name = "ours-\(phase)-\(label).png"
+                try ours.write(to: output.appendingPathComponent(name), options: .withoutOverwriting)
+                let decoded = try KoikatsuSceneReader.decodeDocument(ours)
+                let same = phase == "a" ? ours == saved : try pluginProbeComparable(ours) == pluginProbeComparable(saved)
+                row["output"] = name; row["actualSHA256"] = hash(ours)
+                row["actualRoots"] = decoded.snapshot.roots.map { Int($0.sourceKey) }
+                row["parity"] = same
+                if !same { failures.append("phase \(phase) \(label): writer differs from the independent original") }
+            } catch let error as SourceSceneTopologyError {
+                let reason = error.errorDescription ?? String(describing: error)
+                row["refusal"] = reason; row["parity"] = false
+                failures.append("phase \(phase) \(label): current writer refused (\(reason))")
+            }
+            rows.append(row); try saveReport(false)
+            try #require(try load("fixture.png") == baseline, "Diagnostic changed its source fixture")
+        }
+    }
+    try saveReport(true)
+    for failure in failures { Issue.record(Comment(rawValue: failure)) }
+}
 
 @Test(.enabled(if: SourceFixtureSupport.shouldRun([phaseCVariable]), "Requires IKKOKU_PLUGIN_SCENE_PROBE_C (the probe's phase-c folder)"))
 func sourceScenePluginRewritesMatchCharaStudioEdits() throws {

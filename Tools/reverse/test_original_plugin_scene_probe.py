@@ -1,5 +1,5 @@
 """Plug-in scene probe driver framing (phase B); VM calls are mocked, so no VM or private data is needed."""
-import hashlib, json, re, subprocess, tempfile, unittest
+import hashlib, io, json, re, subprocess, tempfile, unittest, zipfile
 from pathlib import Path
 from unittest.mock import patch
 import original_plugin_scene_probe as probe
@@ -245,6 +245,104 @@ class RunCDTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             record, _ = self.run_phase(tmp, 'D', lone_collider=False)
             self.assertIsNone(record['collider']); self.assertNotIn('fixture-lc.png', record['inputs'])
+
+
+def runtime_pins():
+    return {name: {'sha256': 'a' * 64, 'bytes': 1} for name in (
+        'CharaStudio.exe', 'winhttp.dll', 'doorstop_config.ini', 'BepInEx/core/BepInEx.dll',
+        'CharaStudio_Data/Managed/Assembly-CSharp.dll', 'CharaStudio_Data/Managed/UnityEngine.dll',
+        'CharaStudio_Data/Managed/mscorlib.dll', '@compiler')}
+
+
+class OrderedOracleTests(unittest.TestCase):
+    def test_two_profiles_keep_exact_plugin_sets_and_no_survey(self):
+        for phase in ('OA', 'OC'):
+            body = rewrite(phase, wait_seconds=180, collider=None, inputs=['fixture.png', 'fixture.sha256', 'phase.txt'])
+            self.assertIn('OriginalPluginRewriteProbe.cs', body)
+            self.assertNotIn('survey.txt', body); self.assertNotIn('largestKKPE', body)
+            self.assertNotIn('$r.collider', body); self.assertNotIn('$r.configs', body)
+            self.assertEqual('KKPE.dll' in body, phase == 'OC')
+            self.assertIn('$c.WaitForExit(60000)', body); self.assertIn('$x.WaitForExit(180000)', body)
+            self.assertIn('$same.StartTime.ToUniversalTime().Ticks -eq $stamp', body)
+            self.assertIn('$r.compiler.exitCode', body); self.assertIn('$r.playerStartUTC', body)
+            self.assertIn('200000', body); self.assertIn('20000', body)
+
+    def test_ordered_runtime_requires_complete_exact_bounded_pins(self):
+        pins = runtime_pins(); body = probe.ordered_runtime_check(pins)
+        self.assertIn('Compare-Object -CaseSensitive', body)
+        self.assertIn('Runtime contains a reparse point', body)
+        self.assertIn('Get-Item -Force -LiteralPath $path', body)
+        for bad in (None, {}, {k:v for k,v in pins.items() if k != '@compiler'},
+                    dict(pins, **{'CharaStudio_Data/../outside.dll': {'sha256':'a'*64,'bytes':1}}),
+                    dict(pins, **{'charastudio.exe': {'sha256':'a'*64,'bytes':1}}),
+                    dict(pins, **{'CharaStudio_Data/too-big': {'sha256':'a'*64,'bytes':512*1024*1024+1}})):
+            with self.subTest(bad=bad), self.assertRaises(ValueError): probe.ordered_runtime_check(bad)
+        # Complete inventories can contain empty/hidden files; neither is omitted.
+        pins['CharaStudio_Data/._app.info'] = {'sha256':'b'*64,'bytes':0}
+        self.assertIn('._app.info', probe.ordered_runtime_check(pins))
+
+    def test_ordered_bounds_reject_before_any_transport(self):
+        for kwargs in ({'wait_seconds':181}, {'collider':COLLIDER}):
+            with self.subTest(kwargs=kwargs), self.assertRaises(ValueError):
+                rewrite('OA', **dict({'wait_seconds':180,'collider':None}, **kwargs))
+        with tempfile.TemporaryDirectory() as tmp, patch.object(probe, 'run_rewrite') as transport:
+            root = Path(tmp); fixture = root/'fixture.png'; fixture.write_bytes(b'exact fixture')
+            run = root/'run.json';run.write_text(json.dumps({'guest':{'zipmod':ZIPMOD}}))
+            args = ['vm',root/'output',0,'a',fixture,hashlib.sha256(fixture.read_bytes()).hexdigest(),run,runtime_pins()]
+            for index, value in ((3,'other'),(5,'0'*64),(7,{})):
+                changed=list(args);changed[index]=value
+                with self.subTest(index=index), self.assertRaises(ValueError): probe.run_ordered(*changed)
+            (root/'output').mkdir();(root/'output'/'partial.log').write_text('retain failed start')
+            with self.assertRaisesRegex(RuntimeError,'new directory'): probe.run_ordered(*args)
+            self.assertEqual((root/'output'/'partial.log').read_text(),'retain failed start')
+            transport.assert_not_called()
+
+    def test_ordered_sends_original_input_identity_without_reauthoring(self):
+        with tempfile.TemporaryDirectory() as tmp, patch.object(probe, 'run_rewrite', return_value={'accepted':True}) as transport:
+            root=Path(tmp);fixture=root/'fixture.png';fixture.write_bytes(b'exact fixture')
+            run=root/'run.json';run.write_text(json.dumps({'guest':{'zipmod':ZIPMOD}}))
+            expected=hashlib.sha256(fixture.read_bytes()).hexdigest()
+            probe.run_ordered('vm',root/'output',0,'c',fixture,expected,run,runtime_pins())
+            args=transport.call_args.args
+            self.assertEqual(args[3],'OC')
+            self.assertEqual(args[4],{'fixture.png':b'exact fixture','fixture.sha256':expected.encode(),'phase.txt':b'OC'})
+            self.assertIsNone(args[6]);self.assertEqual(args[8],180)
+            self.assertEqual(transport.call_args.kwargs['runtime_pins'],runtime_pins())
+
+    def test_ordered_acceptance_requires_all_outputs_and_exact_runtime_proof(self):
+        for missing_output, wrong_runtime in ((False,False),(True,False),(False,True)):
+            with self.subTest(missing_output=missing_output,wrong_runtime=wrong_runtime), tempfile.TemporaryDirectory() as tmp:
+                local=Path(tmp)/'.local';local.mkdir();output=local/'output'
+                files={'fixture.png':b'original','fixture.sha256':b'expected','phase.txt':b'OA'}
+                archive=io.BytesIO()
+                with zipfile.ZipFile(archive,'w') as z:
+                    z.writestr('status.json',json.dumps({'phase':'OA','error':None}))
+                    z.writestr('plugin-scene-trace.json','{}')
+                    for n in ['fixture.png','resave-fixture.png','edit-delete-duplicate.png','resave-edit-delete-duplicate.png',
+                              'edit-duplicate-delete.png','resave-edit-duplicate-delete.png']:
+                        if missing_output and n=='edit-duplicate-delete.png':continue
+                        z.writestr(n,b'captured')
+                payload=archive.getvalue()
+                class UploadedEndpoint(FakeEndpoint):
+                    def __init__(self,*args,**kwargs):super().__init__(*args,**kwargs);self.upload=payload
+                def execute(command,out,record,seconds):
+                    record['hostGroupReleased']=True
+                    (out/'exec.stdout').write_text('mock');(out/'exec.stderr').write_text('')
+                    guest={'exited':True,'playerExitCode':0,'removed':True,'remainingGameProcesses':[],
+                        'junctionTargetsChanged':False,'runtimeBefore':runtime_pins(),
+                        'runtimeAfter':{} if wrong_runtime else runtime_pins(), 'sources':record['sources'],
+                        'inputs':record['inputs'],'zipSHA256':hashlib.sha256(payload).hexdigest(),'zipBytes':len(payload)}
+                    return subprocess.CompletedProcess(command,0,json.dumps(guest),'')
+                with patch.object(probe,'local_roots',return_value=[local.resolve()]),patch.object(probe,'Endpoint',UploadedEndpoint),\
+                     patch.object(probe,'guarded',return_value=0),patch.object(probe,'errno_count',return_value=0),\
+                     patch.object(probe,'fresh_root',return_value=ROOT_A),patch.object(probe,'ordered_transport',side_effect=execute):
+                    result=probe.run_rewrite('vm',output,0,'OA',files,ZIPMOD,None,'host',180,runtime_pins=runtime_pins())
+                self.assertEqual(result['accepted'],not(missing_output or wrong_runtime))
+                self.assertEqual((output/'source-fixture.png').read_bytes(),b'original')
+                body=(output/'run.ps1').read_text()
+                self.assertLess(body.index('$r.runtimeBefore=VerifyRuntime'),body.index(PLAYER_SETUP))
+                self.assertLess(body.index('Input digest mismatch:'),body.index('$c=Start-Process'))
+                self.assertLess(body.index('Remove-Item -LiteralPath $root'),body.index('$r.runtimeAfter=VerifyRuntime'))
 
 
 if __name__ == '__main__':
