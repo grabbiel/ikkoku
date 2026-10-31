@@ -69,6 +69,10 @@ func sourceSceneOrderedDeleteDuplicateDiagnostic() throws {
         try #require(source.snapshot.roots.map(\.sourceKey) == (phase == "a" ? [0, 1, 2, 5, 7, 14, 15] : [0, 1, 2, 5, 7, 14, 15, 16]))
         try #require(try source.editedData(.init()) == baseline, "Unordered no-op changed source bytes")
         let resavedBaseline = try load("resave-fixture.png")
+        let baselineTrace = try #require(cases["baseline"])
+        try #require(baselineTrace["inputSHA256"] as? String == hash(input))
+        try #require(baselineTrace["savedSHA256"] as? String == hash(baseline))
+        try #require(baselineTrace["resavedSHA256"] as? String == hash(resavedBaseline))
         let baselineFixed = phase == "a" ? baseline == resavedBaseline
             : try pluginProbeComparable(baseline) == pluginProbeComparable(resavedBaseline)
         try #require(baselineFixed, "Original baseline was not a fixed point under the existing comparator")
@@ -81,8 +85,11 @@ func sourceSceneOrderedDeleteDuplicateDiagnostic() throws {
             let saved = try load("edit-\(label).png"), resaved = try load("resave-edit-\(label).png")
             let expected = try KoikatsuSceneReader.decodeDocument(saved)
             let observed = try #require(cases[label]), actions = try #require(observed["actions"] as? [[String: Any]])
+            try #require(observed["savedSHA256"] as? String == hash(saved))
+            try #require(observed["resavedSHA256"] as? String == hash(resaved))
             let order = label == "delete-duplicate" ? ["delete", "duplicate"] : ["duplicate", "delete"]
             try #require(actions.compactMap { $0["operation"] as? String } == order)
+            try #require(actions.compactMap { $0["target"] as? Int } == (label == "delete-duplicate" ? [1, 5] : [5, 1]))
             let duplicate = try #require(actions.first { $0["operation"] as? String == "duplicate" })
             let copies = try #require(duplicate["copies"] as? [Int])
             try #require(copies.count == 1, "Only the actual single item duplicate is this oracle")
