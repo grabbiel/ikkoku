@@ -203,6 +203,60 @@ foreach($e in $i.EnumerateFileSystemInfos('*',[IO.SearchOption]::AllDirectories)
 function Targets{try{[ordered]@{abdata=(Tree "$original\abdata");CharaStudio_Data=(Tree "$original\CharaStudio_Data")}}catch{[ordered]@{error=$_.ToString()}}}
 """
 
+# Used only by OA/OC. Paths describe recorded instances; they never select a
+# process for termination by themselves. The independent compiler is also
+# retained immediately so the outer finally can clean up after later errors.
+ORDERED_OWNERS = r'''$script:orderedOwners=@{};$script:orderedCompiler=$null;$script:orderedCompilerIdentity=$null
+function ProcessIdentity($process){
+[ordered]@{pid=$process.Id;startTicks=$process.StartTime.ToUniversalTime().Ticks;path=$process.Path}}
+function MatchingProcess($identity){
+$process=Get-Process -Id $identity.pid -ErrorAction SilentlyContinue
+if(-not $process){return $null}
+if($process.StartTime.ToUniversalTime().Ticks -ne $identity.startTicks -or $process.Path -cne $identity.path){return $null}
+return $process}
+function RememberPlayer($process){
+$identity=ProcessIdentity $process
+if(-not $identity.path){throw 'Owned process executable path is unavailable'}
+if($script:orderedOwners.Count -ge 32){throw 'Ordered process-owner bound exceeded'}
+$script:orderedOwners[[int]$identity.pid]=$identity
+$r.observedOwners=@($script:orderedOwners.Values)
+return $identity}
+function ObservePlayerChildren{
+$table=@(Get-CimInstance Win32_Process -OperationTimeoutSec 5);$changed=$true
+while($changed){$changed=$false
+foreach($row in $table){
+if($script:orderedOwners.ContainsKey([int]$row.ProcessId) -or -not $script:orderedOwners.ContainsKey([int]$row.ParentProcessId)){continue}
+$parent=$script:orderedOwners[[int]$row.ParentProcessId];$liveParent=MatchingProcess $parent
+if(-not $liveParent){continue}
+$child=Get-Process -Id $row.ProcessId -ErrorAction SilentlyContinue
+if(-not $child){continue}
+if($child.StartTime.ToUniversalTime().Ticks -lt $parent.startTicks){throw 'Child predates recorded parent'}
+[void](RememberPlayer $child);$changed=$true}}
+}
+function StopPlayerOwners{
+$stopped=@();$errors=@()
+foreach($identity in @($script:orderedOwners.Values)){
+try{
+$process=MatchingProcess $identity
+if($process){$process|Stop-Process -Force;$stopped+=$identity.pid
+if(-not $process.WaitForExit(5000)){throw 'Recorded player owner did not exit within cleanup bound'}}
+}catch{$errors+=$_.ToString()}}
+$r.ownerCleanupErrors=$errors
+$r.ownersRemaining=@($script:orderedOwners.Values|Where-Object{MatchingProcess $_})
+if($r.ownersRemaining.Count -or $errors.Count){throw 'Recorded player owner cleanup incomplete'}
+return ,$stopped}
+function StopOwnedCompiler{
+if(-not $script:orderedCompiler){return}
+if(-not $script:orderedCompilerIdentity){
+if($script:orderedCompiler.HasExited){return}
+$script:orderedCompilerIdentity=ProcessIdentity $script:orderedCompiler}
+$identity=$script:orderedCompilerIdentity;$process=MatchingProcess $identity
+if($process){$process|Stop-Process -Force
+if(-not $process.WaitForExit(5000)){throw 'Recorded compiler did not exit within cleanup bound'}}
+$r.compilerRemaining=[bool](MatchingProcess $identity)
+if($r.compilerRemaining){throw 'Recorded compiler remains'}}
+'''
+
 
 def reload_script(root, base, wait_seconds, survey_seconds, survey_file_bytes, zipmod, inputs):
     """Phase B as run.ps1: the player with the full plug-in set, phase A's zipmod, the reload inputs and survey 2."""
@@ -390,6 +444,9 @@ $r.junctionTargetsChanged=(($r.junctionTargetsBefore|ConvertTo-Json -Compress) -
 [PSCustomObject]$r|ConvertTo-Json -Compress -Depth 6
 """)
     if ordered:
+        old_owners = "function Own{@(Get-Process -ErrorAction SilentlyContinue|Where-Object{$_.Path -and $_.Path.StartsWith($root+'\\')})}"
+        if old_owners not in head: raise AssertionError('Ordered owner insertion point changed')
+        head = head.replace(old_owners, ORDERED_OWNERS, 1)
         head = head.replace('[Net.ServicePointManager]::Expect100Continue=$false', r'''$r.guestPID=$PID;$r.guestStartUTC=(Get-Process -Id $PID).StartTime.ToUniversalTime().ToString('o')
 [Console]::Error.WriteLine('ORDERED_GUEST:'+(@{pid=$PID;startUTC=$r.guestStartUTC;root=$root}|ConvertTo-Json -Compress))
 [Net.ServicePointManager]::Expect100Continue=$false''', 1)
@@ -400,17 +457,25 @@ $r.junctionTargetsChanged=(($r.junctionTargetsBefore|ConvertTo-Json -Compress) -
         tail = tail[:start] + (r'''$compiler='C:\Windows\Microsoft.NET\Framework64\v4.0.30319\csc.exe'
 $arguments=@('/nologo','/noconfig','/nostdlib+','/target:library',('/out:"'+$p+'\IkkokuPluginRewriteProbe.dll"'),('/reference:"'+($refs -join ',')+'"'),''' + compile_args + r''')
 $c=Start-Process -FilePath $compiler -ArgumentList $arguments -RedirectStandardOutput "$out\compile.stdout" -RedirectStandardError "$out\compile.stderr" -PassThru
-$stamp=$c.StartTime.ToUniversalTime().Ticks;$r.compiler=[ordered]@{pid=$c.Id;startTicks=$stamp;path=$compiler;maximumSeconds=60}
+$script:orderedCompiler=$c;$script:orderedCompilerIdentity=ProcessIdentity $c
+$stamp=$script:orderedCompilerIdentity.startTicks;$r.compiler=[ordered]@{pid=$c.Id;startTicks=$stamp;path=$compiler;maximumSeconds=60}
 if(-not $c.WaitForExit(60000)){
-$same=Get-Process -Id $c.Id -ErrorAction SilentlyContinue
-if($same -and $same.StartTime.ToUniversalTime().Ticks -eq $stamp -and $same.Path -ieq $compiler){$same|Stop-Process -Force;$r.compiler.stopped=$true}
-if(-not $c.WaitForExit(5000)){throw 'Owned compiler did not exit after bounded cleanup'}
+StopOwnedCompiler;$r.compiler.stopped=$true
 throw 'Owned compiler exceeded 60 seconds'}
 $c.Refresh();$r.compiler.exitCode=$c.ExitCode;$r.compiler.exited=$true
 if($c.ExitCode -ne 0){throw 'Compile failed; see retained compiler logs'}
 ''') + tail[end:]
-        tail = tail.replace('$r.processID=$x.Id;', '$r.playerStartUTC=$x.StartTime.ToUniversalTime().ToString("o");$r.processID=$x.Id;', 1)
-        tail = tail.replace('$left=Own;$left|Stop-Process -Force;', 'if($r.exited){$r.playerExitCode=$x.ExitCode}\n$left=Own;$left|Stop-Process -Force;', 1)
+        old_wait = '$r.processID=$x.Id;$r.exited=$x.WaitForExit(' + str(wait_seconds * 1000) + ')'
+        new_wait = r'''$r.playerIdentity=RememberPlayer $x;$r.processID=$x.Id;$r.playerStartUTC=$x.StartTime.ToUniversalTime().ToString('o')
+$r.playerExecutableSHA256=Sha "$root\CharaStudio.exe";$playerWatch=[Diagnostics.Stopwatch]::StartNew()
+while(-not $x.HasExited -and $playerWatch.Elapsed.TotalSeconds -lt ''' + str(wait_seconds) + r'''){
+ObservePlayerChildren;[void]$x.WaitForExit(250)}
+$r.exited=$x.HasExited;if($r.exited){$r.playerExitCode=$x.ExitCode}'''
+        if old_wait not in tail: raise AssertionError('Ordered wait insertion point changed')
+        tail = tail.replace(old_wait, new_wait, 1)
+        tail = tail.replace('$left=Own;$left|Stop-Process -Force;$r.stopped=@($left|ForEach-Object{$_.Id});', '$r.stopped=StopPlayerOwners;', 1)
+        tail = tail.replace('$left=Own;$left|Stop-Process -Force -ErrorAction SilentlyContinue;$r.stoppedAtCleanup=@($left|ForEach-Object{$_.Id});',
+                            "try{StopOwnedCompiler}catch{$r.cleanupError=$_.ToString()};try{$r.stoppedAtCleanup=StopPlayerOwners}catch{$r.cleanupError+='; '+$_.ToString()};", 1)
         tail = tail.replace('Invoke-WebRequest -UseBasicParsing -Method Put', 'Invoke-WebRequest -UseBasicParsing -TimeoutSec 30 -Method Put')
         tail = tail.replace("Invoke-WebRequest -UseBasicParsing -TimeoutSec 30 -Method Put", "if($r.zipBytes -gt 134217728){throw 'Ordered capture exceeds 128 MiB'}\nInvoke-WebRequest -UseBasicParsing -TimeoutSec 30 -Method Put", 1)
         # Retain compiler/partial probe output even when no successful player
