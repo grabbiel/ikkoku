@@ -588,6 +588,28 @@ The plug-ins are the installed DLLs of the [installed inventory](../mods/plugin-
   - StudioCharaLightLinkedToCamera (`26c4d1e6…`, KK_StudioCharaLightLinkedToCamera/Patches.cs:90–92). It writes and accepts only version 3 (:129, :136).
 - **Orphan IDs.** `KKVMDPlayExtSave`, `rendererEditor`, `com.rskoi.particleeditor`, `vnge_kfa` and `vnge_sss` occur in installed scenes. None of the 243 installed DLLs contains any of them as ASCII/UTF-8 or UTF-16LE, and no script host is installed. The scan is `.local/stt03i-plugin-data/inventory/orphan-scan.json` (coverage index SHA-256 `e146e45a…`, corpus digest `d81258cc…`). Nothing in this install reads or writes these entries, so CharaStudio's save carries them verbatim through any edit. **Parity holds for this pinned install only.** Once a plug-in that owns one is installed, its data may name objects the export changed.
 
+### Ordered delete/copy diagnostic (#278, 2026-10-31)
+
+A private four-case diagnostic compares the unchanged native writer with
+retained original saves, including independent native parsing of serialized
+root keys. In the plain fixture, deleting first lets the original reuse key 1
+and its serialized root position; the native export instead allocates key 16 and appends it.
+Copying first and then deleting produces byte-identical exports for that one
+fixture. With MaterialEditor, NodesConstraints and KKPE data, both orders still
+refuse export under the existing mixed-delete/copy guards. The diagnostic's
+nonzero result records one mismatch and two refusals; it is not a passing
+production gate or an implementation of ordered edit history.
+
+The run completed the existing fixed-point and negative controls, using the
+existing comparator without new masks. Both original-player processes
+produced their artifacts but exited with an access violation, so their lifecycle
+and the original pair remain unaccepted. A baseline-only shutdown control is
+still pending. The diagnostic therefore identifies remaining writer work without
+expanding supported plugin edits. Private evidence is retained under
+`.local/codex-continue-2026-10-24/wave-three/plugins/ordered-export-278/`;
+the four-row report SHA-256 is
+`3b2f49db3aed538140e5a001b145890905743b1e0c57c5def02f05ee48172fe8`.
+
 ### Plug-in data rewrites
 
 Reviewed 2026-10-26 (ST-T03i, second change). `SourceScenePluginRewrites` (`Packages/Engine/Sources/Studio/SourceScenePluginRewrites.swift`) rewrites the KKPE, MaterialEditor and NodesConstraints entries after a delete or a copy, as CharaStudio's save writes them after the same interactive edit.
