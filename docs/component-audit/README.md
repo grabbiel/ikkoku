@@ -740,6 +740,15 @@ general compatibility benefit is claimed. The
 [plugin reference](../reference/mods/plugin-execution.md#saved-scenes-and-migration)
 records schema compatibility, exact producer hashes and the preserved failing pair.
 
+**2026-10-31 — pending roots with attachment reads, #267:** Current-main
+diagnostic `3cd9612` passes 18 focused Engine invocations and 135 app checks.
+The shared session preserves unrelated saved roots and first-step behavior;
+native open/undo/redo still reject the combination and retain prior state and
+frames. Six real saves, 12 successful controls and 12 rejected cold/warm cases
+isolate the remaining host-policy gap. This is reproduction, not new support;
+the [execution reference](../reference/mods/plugin-execution.md#saved-scenes-and-migration)
+records the evidence and required exclusions.
+
 **Completed before this wave:** ST-T02/A-T04 passed local acceptance at PR #2
 (head `93e6b06`, merge `aa4bcb9`). Both configurations retained identities and
 identical reload frames; enabled tone gain muted/restored. See

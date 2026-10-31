@@ -491,6 +491,25 @@ attachment and has pending destruction rejects explicitly before commit, even
 when those roots came from saved state. This combination remains unsupported.
 Older readers that ignore the new field do not gain queue persistence.
 
+**Current-main reproduction of #267 (2026-10-31).** Diagnostic `3cd9612`
+on runtime `890b1468` isolates an unrelated saved destruction root from the
+attachment parent and reader. Six genuine paused profile/library saves retain
+the target, its unbound descendant, four identities and clock zero. The shared
+session restores the roots and two initializer reads, then matches the original
+session's first-step destruction and callbacks. Native open, undo and redo still
+reject the combined case; attachment-free pending roots and attachment reads
+without pending roots restore successfully.
+
+All 18 focused Engine invocations and 135 app checks pass. Independent review
+rehashes 162 observations and 13 fixtures, decodes all six PNG payloads and
+compares 12 rejected cold/warm state-and-frame pairs, including warm pose bits.
+Only declared UUID-map encoding and the exact expected history error status are
+normalized. The first diagnostic compile failure is retained separately. This
+reproduces the existing restriction; it does not enable the combination or
+establish performance or original-player parity. The next change must distinguish
+validated saved roots from new initializer destruction without weakening
+candidate ownership, topology or rollback guards.
+
 Release `e9e6198` (binary SHA-256
 `31fa829571ecc2eb18461e40f6777e6526725dcd62944f3495b7bac893fb1ff7`)
 passes all 222 checks across nine fresh processes: the unchanged 15+29 save/reopen
