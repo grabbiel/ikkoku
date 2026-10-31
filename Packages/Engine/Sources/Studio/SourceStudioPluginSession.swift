@@ -160,7 +160,7 @@ public final class SourceStudioPluginSession {
                     guard state.objectIdentity.utf8.elementsEqual(expected.utf8) else { throw SourcePluginError.invalid("Destroyed profile target identity differs.") }
                     object = try world.restoredObject(identity: expected, destroyed: true)
                 } else {
-                    object = try binding.objectID.map { try world.object(id: $0) } ?? world.object(sourceKey: binding.sourceObjectKey!)
+                    object = try binding.objectID.map { try observedWorld.object(id: $0) } ?? world.object(sourceKey: binding.sourceObjectKey!)
                 }
                 let identity = try JSONEncoder().encode([package.manifest.identity.guid, program.type, object.sourceIdentity])
                 guard identities.insert(identity).inserted else { throw SourcePluginError.invalid("Duplicate plugin component/object binding.") }
