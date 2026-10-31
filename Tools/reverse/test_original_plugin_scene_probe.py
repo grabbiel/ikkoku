@@ -336,6 +336,28 @@ class OrderedOracleTests(unittest.TestCase):
             self.assertNotIn('guest', record); self.assertFalse((output / 'summary.json').exists())
             extract.assert_not_called()
 
+    def test_ordered_null_child_fields_and_reparented_unresolved_instances_fail_closed(self):
+        for phase in ('OA', 'OC'):
+            body = rewrite(phase, wait_seconds=180, collider=None, inputs=['fixture.png', 'fixture.sha256', 'phase.txt'])
+            observer = body.split('function ObservePlayerChildren{', 1)[1].split('function StopPlayerOwners{', 1)[0]
+            guard = observer.index("-not ($childStart -is [DateTime]) -or -not $rowBirth")
+            self.assertLess(guard, observer.index('$childStart.ToUniversalTime()'))
+            self.assertNotIn('$row.CreationDate.ToUniversalTime()', observer)
+            self.assertNotIn('$child.StartTime.ToUniversalTime()', observer)
+            self.assertIn("'Live child identity read failed'", observer)
+            self.assertIn("'Missing child path or birth'", observer)
+            self.assertIn("'Child live/CIM identity differs'", observer)
+            self.assertNotIn('RememberPlayer $child', observer)  # No second, racy identity read after validation.
+            self.assertIn('$script:orderedUnresolved.ContainsKey($key)', body)
+            self.assertIn('$script:orderedUnresolved.Count -ge 32', body)
+            self.assertIn('unresolvedChildren=$r.unresolvedChildObservations', body)
+            veto = body.split('$r.unresolvedRecordedInstances=@(', 1)[1].split('$r.unresolvedPlayerOwners=', 1)[0]
+            self.assertIn('[int]$row.ProcessId -ne $observation.pid', veto)
+            self.assertIn('-not $observation.birth -or -not $birth -or $birth -ceq $observation.birth', veto)
+            for forbidden in ('ParentProcessId', 'ExecutablePath', 'Stop-Process', 'RememberPlayer'):
+                self.assertNotIn(forbidden, veto)
+            self.assertIn('$r.unresolvedRecordedInstances.Count -or $r.childObservationOverflow', body)
+
     def test_ordered_runtime_requires_complete_exact_bounded_pins(self):
         pins = runtime_pins(); body = probe.ordered_runtime_check(pins)
         self.assertIn('Compare-Object -CaseSensitive', body)

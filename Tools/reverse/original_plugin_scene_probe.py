@@ -210,7 +210,8 @@ ORDERED_ENVELOPE = r'''function OrderedStamp($stage){
 $r.stage=$stage
 $state=[ordered]@{stage=$stage;root=$root;guestPID=$r.guestPID;guestStartUTC=$r.guestStartUTC;
 compiler=$r.compiler;processID=$r.processID;playerStartUTC=$r.playerStartUTC;playerIdentity=$r.playerIdentity;
-observedOwners=$r.observedOwners;error=$r.error;errorStage=$r.errorStage;cleanupErrors=$r.cleanupErrors}
+observedOwners=$r.observedOwners;unresolvedChildren=$r.unresolvedChildObservations;childObservationOverflow=$r.childObservationOverflow;
+error=$r.error;errorStage=$r.errorStage;cleanupErrors=$r.cleanupErrors}
 [Console]::Error.WriteLine('ORDERED_STATE:'+($state|ConvertTo-Json -Compress -Depth 6))}
 function OrderedCleanupFailure($failure){
 $r.cleanupErrors+=@([ordered]@{stage=$r.stage;message=$failure.ToString();position=$failure.InvocationInfo.PositionMessage})
@@ -220,7 +221,19 @@ $r.cleanupErrors=@();$r.guestPID=$PID;OrderedStamp 'bootstrap-pid'
 $r.guestStartUTC=(Get-Process -Id $PID).StartTime.ToUniversalTime().ToString('o');OrderedStamp 'bootstrap-identity'
 '''
 
-ORDERED_OWNERS = r'''$script:orderedOwners=@{};$script:orderedCompiler=$null;$script:orderedCompilerIdentity=$null
+ORDERED_OWNERS = r'''$script:orderedOwners=@{};$script:orderedUnresolved=@{};$script:orderedCompiler=$null;$script:orderedCompilerIdentity=$null
+function RowBirth($row){if($row.CreationDate -is [DateTime]){return $row.CreationDate.ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ss.ffffff')};return $null}
+function RememberUnresolved($row,$reason,$livePath=$null,$liveStart=$null){
+$cimBirth=RowBirth $row;$liveBirth=$null
+if($liveStart -is [DateTime]){$liveBirth=$liveStart.ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ss.ffffff')}
+$birth=if($cimBirth){$cimBirth}else{$liveBirth}
+$key=([string]$row.ProcessId)+':'+$birth
+if($script:orderedUnresolved.ContainsKey($key)){return}
+if($script:orderedUnresolved.Count -ge 32){if(-not $r.childObservationOverflow){$r.childObservationOverflow=$true;OrderedStamp 'child-observation-overflow'};return}
+$script:orderedUnresolved[$key]=[ordered]@{pid=[int]$row.ProcessId;parent=[int]$row.ParentProcessId;birth=$birth;
+name=$row.Name;cimPath=$row.ExecutablePath;livePath=$livePath;cimBirth=$cimBirth;liveBirth=$liveBirth;reason=$reason}
+$r.unresolvedChildObservations=@($script:orderedUnresolved.Values)
+OrderedStamp 'unresolved-child-recorded'}
 function ProcessIdentity($process){
 [ordered]@{pid=$process.Id;startTicks=$process.StartTime.ToUniversalTime().Ticks;path=$process.Path}}
 function MatchingProcess($identity){
@@ -241,13 +254,26 @@ $table=@(Get-CimInstance Win32_Process -OperationTimeoutSec 5);$changed=$true
 while($changed){$changed=$false
 foreach($row in $table){
 if($script:orderedOwners.ContainsKey([int]$row.ProcessId) -or -not $script:orderedOwners.ContainsKey([int]$row.ParentProcessId)){continue}
-$parent=$script:orderedOwners[[int]$row.ParentProcessId];$liveParent=MatchingProcess $parent
-if(-not $liveParent){continue}
+$parent=$script:orderedOwners[[int]$row.ParentProcessId]
+try{$liveParent=MatchingProcess $parent}catch{RememberUnresolved $row 'Recorded parent identity unavailable';continue}
+if(-not $liveParent){RememberUnresolved $row 'Recorded parent no longer matches';continue}
 $child=Get-Process -Id $row.ProcessId -ErrorAction SilentlyContinue
-if(-not $child){continue}
-if($child.Path -ine $row.ExecutablePath -or $child.StartTime.ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ss.ffffff') -cne $row.CreationDate.ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ss.ffffff')){continue}
-if($child.StartTime.ToUniversalTime().Ticks -lt $parent.startTicks){throw 'Child predates recorded parent'}
-[void](RememberPlayer $child);$changed=$true}}
+if(-not $child){RememberUnresolved $row 'Child process disappeared or is unavailable';continue}
+$childPath=$null;$childStart=$null
+try{$childPath=$child.Path;$childStart=$child.StartTime}catch{RememberUnresolved $row 'Live child identity read failed' $childPath $childStart;continue}
+$rowBirth=RowBirth $row
+if(-not $childPath -or -not $row.ExecutablePath -or -not ($childStart -is [DateTime]) -or -not $rowBirth){
+RememberUnresolved $row 'Missing child path or birth' $childPath $childStart;continue}
+if($childPath -ine $row.ExecutablePath -or $childStart.ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ss.ffffff') -cne $rowBirth){
+RememberUnresolved $row 'Child live/CIM identity differs' $childPath $childStart;continue}
+if($childStart.ToUniversalTime().Ticks -lt $parent.startTicks){RememberUnresolved $row 'Child predates recorded parent' $childPath $childStart;continue}
+# Remember the verified values, without another fallible property read after
+# validation. Missing fields are observations, never authority to stop a PID.
+if($script:orderedOwners.Count -ge 32){if(-not $r.childObservationOverflow){$r.childObservationOverflow=$true;OrderedStamp 'child-observation-overflow'};RememberUnresolved $row 'Owner bound exceeded' $childPath $childStart;continue}
+$identity=[ordered]@{pid=$child.Id;startTicks=$childStart.ToUniversalTime().Ticks;path=$childPath}
+$script:orderedOwners[[int]$identity.pid]=$identity;$r.observedOwners=@($script:orderedOwners.Values)
+OrderedStamp 'player-owner-recorded'
+$changed=$true}}
 }
 function StopPlayerOwners{
 $stopped=@();$errors=@()
@@ -277,11 +303,18 @@ $r.ownersRemaining=@($script:orderedOwners.Values|Where-Object{MatchingProcess $
 $r.compilerRemaining=if($script:orderedCompilerIdentity){[bool](MatchingProcess $script:orderedCompilerIdentity)}else{$false}
 # This inventory only vetoes deletion. It never adopts or stops an unknown
 # process by path/parent PID. A detached or unrecorded child retains the root.
-$r.unresolvedPlayerOwners=@(Get-CimInstance Win32_Process -OperationTimeoutSec 5|Where-Object{
+$table=@(Get-CimInstance Win32_Process -OperationTimeoutSec 5)
+$r.unresolvedRecordedInstances=@(foreach($observation in $script:orderedUnresolved.Values){
+foreach($row in $table){if([int]$row.ProcessId -ne $observation.pid){continue}
+$birth=RowBirth $row
+# Only an absent PID or a known different birth proves the old instance gone.
+# Reparenting and missing current paths cannot erase an unresolved observation.
+if(-not $observation.birth -or -not $birth -or $birth -ceq $observation.birth){$observation}}})
+$r.unresolvedPlayerOwners=@($table|Where-Object{
 ($_.ExecutablePath -and $_.ExecutablePath.StartsWith($root+'\',[StringComparison]::OrdinalIgnoreCase)) -or
 ($_.Name -in @('CharaStudio.exe','Koikatu.exe')) -or $script:orderedOwners.ContainsKey([int]$_.ParentProcessId)
-}|ForEach-Object{[ordered]@{pid=$_.ProcessId;parent=$_.ParentProcessId;path=$_.ExecutablePath;createdUTC=$_.CreationDate.ToUniversalTime().ToString('o')}})
-return -not($r.ownersRemaining.Count -or $r.compilerRemaining -or $r.unresolvedPlayerOwners.Count)}
+}|ForEach-Object{[ordered]@{pid=$_.ProcessId;parent=$_.ParentProcessId;path=$_.ExecutablePath;birth=(RowBirth $_)}})
+return -not($r.ownersRemaining.Count -or $r.compilerRemaining -or $r.unresolvedPlayerOwners.Count -or $r.unresolvedRecordedInstances.Count -or $r.childObservationOverflow)}
 '''
 
 
