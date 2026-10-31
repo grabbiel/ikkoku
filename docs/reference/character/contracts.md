@@ -199,13 +199,15 @@ isolate the removed traversal. The change adds no asset coverage or source-game
 parity claim, and the broader owner-thread work in [#192](https://github.com/grabbiel/ikkoku/issues/192)
 remains open.
 
-### Decoded-contract reuse foundation (local checkpoint)
+### Bounded decoded-contract reuse (local integration)
 
-Local checkpoint `48885ea4`, reviewed on 2026-10-31, adds immutable contract
-holders and a persistent admission ledger. It is not yet connected to Maker
-preparation: this checkpoint avoids no application decoding and establishes no
-selection-latency improvement. Optional preparation and guarded owner publication
-remain the next implementation step.
+Local integration `4ad74a45`, reviewed on 2026-10-31, connects immutable shape
+contracts to optional normal-head preparation. Every preparation still performs
+the original contained, size-checked file read. Reuse keys combine SHA-256 of
+those actual bytes, their length and the decoder version; a hit skips only
+decoding. The default nil input preserves the original preparation path without
+cache hashing, admission or new timing work. Later expression, rig and appearance
+validation retains its original order.
 
 The ledger bounds live holders to six entries, 8 MiB of logical entry charge and
 four snapshots, including values retained by canceled workers and delayed
@@ -213,15 +215,31 @@ deliveries across resets. Charges use checked native element strides and UTF-8
 lengths; they exclude spare capacity, allocator headers, temporary decode storage
 and native value copies outside the cache. This is not an RSS bound.
 
-All 12 focused tests passed without skips at that checkpoint, covering Unicode
-accounting, overflow, immutable copies, concurrent admission, foreign/stale
-publication, cancellation, reset, delivery retention and release outside locks.
+The worker stages a candidate only after successful CPU preparation. Maker
+publishes it beside rig reuse after the selection-generation and active-mode
+checks and all fallible preview, appearance and frame preparation. Failed or
+canceled selections retain the previous cache. Reset epochs reject stale
+delivery; a full ledger requests a clear only on successful owner commit, while
+an intrinsically oversized contract bypasses admission without evicting entries.
+
+All 20 focused tests passed without skips, including the 12 foundation checks
+at `48885ea4`. They cover Unicode accounting, overflow, immutable copies,
+concurrent admission, foreign/stale publication, cancellation, reset, delivery
+retention and release outside locks. Integration regressions preserve typed
+errors and read/size/validation order, including changed bytes at the same path,
+length and timestamp. Eighteen normal-head combinations preserve decoded
+contracts and evaluated body/face states; six warm observations each reuse one
+contract without decoding and retain three entries totaling 1,217,103 logical
+bytes.
+
 The six pinned female/male head 0/200/201 contracts total 2,434,206 logical entry
 bytes on the tested arm64 host; a six-entry snapshot adds 96 reference bytes.
 The complete 88-entry build-product archive remained unchanged before and after
-the run, and every observed process released. These foundation checks do not
-replace future Maker save/reload, failure-path, matched-output or quiet timing
-gates for the integrated cache.
+the focused run, and every observed process released. These are CPU integration
+checks: the Maker app build and fresh save/reload, failure-path, matched-frame
+and export gates remain pending. Enabled reuse adds a hash per non-noop read
+and an admission traversal on misses. Quiet matched measurements are still
+required before claiming a selection-latency improvement.
 
 ### Shape evaluation boundary
 

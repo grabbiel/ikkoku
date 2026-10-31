@@ -97,9 +97,10 @@ acceptance boundary; their old “next” steps are historical, not a live queue
   now avoids a second traversal of immutable decoded domains. Focused tests and
   matched Maker checks preserve behavior; the quiet pair shows no consistent
   selection-latency improvement. A local
-  [decoded-contract reuse foundation](../reference/character/contracts.md#decoded-contract-reuse-foundation-local-checkpoint)
-  passes 12 lifetime/accounting checks; Maker integration and application gains
-  remain pending. New base-load
+  [decoded-contract reuse integration](../reference/character/contracts.md#bounded-decoded-contract-reuse-local-integration)
+  passes 20 CPU checks, including 18 normal-head combinations and warm reuse
+  without decoding. Fresh Maker app, export/frame and quiet timing gates remain
+  pending; no application speedup is claimed. New base-load
   diagnostics attribute most cold base-appearance time to MetalKit texture
   loading. A separately validated worker diagnostic attributes 88–90% of the
   selected preparation operation to rig decoding, validation and conversion.
