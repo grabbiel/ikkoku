@@ -2186,12 +2186,24 @@ MetalKit, then in line:
   Every comparison matches. The suite also checks container rejection on
   each entry point.
 - `InlineTextureLoaderCorpusTests` (strict, `IKKOKU_TEXTURE_CORPUS_ROOT`)
-  does the same for every texture the strict Engine suite and the strict
-  Studio and Maker lanes load, captured once by content hash: 139 entries
-  (117 through `texture(data:)`, 22 through `texture(url:)`), 24 MiB. Every
-  entry matches. One is a test's deliberately corrupt input, which both
-  loaders reject. The container inputs of the rejection tests are left out,
-  because `ResourceStore` refuses them before any decode.
+  checks captured Engine/Studio/Maker loads by content hash. Every file must
+  exist and match its SHA-256 filename. URL cases use private snapshots of
+  those verified bytes. All 138 positive cases must create both textures and
+  complete every mip readback before descriptor/byte comparison; matching
+  errors cannot pass. The 139-entry, 24 MiB corpus has 117 data and 22 URL
+  rows. Its one negative is the exact data/sRGB `Data("not an image".utf8)`
+  from the appearance rollback test, independently read, hashed and rejected.
+  Unrelated corruption fails. Synthetic layouts rejected by both loaders stay
+  separate. Container inputs remain excluded because `ResourceStore` refuses
+  them before decode.
+
+  At `46a94326` (2026-10-31), five CPU regressions, the strict corpus test and
+  five shared identity tests pass with zero skips. The corpus records 138
+  successful pairs, one pinned rejection and zero failures; 2,016 synthetic
+  layouts (1,060 rejected by both) and 281 encoded files have zero mismatches.
+  The first test-macro compile failure is retained separately. This test-only
+  change leaves runtime code and pixel tolerances unchanged; it does not replace
+  final-runtime suite, app, capture or comparative-performance acceptance.
 - `ResourceStoreUploadTests`:
   - many threads get one queue for a device;
   - an upload has completed when its texture is handed out, and one
