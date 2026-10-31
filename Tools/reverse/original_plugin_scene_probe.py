@@ -230,6 +230,7 @@ $parent=$script:orderedOwners[[int]$row.ParentProcessId];$liveParent=MatchingPro
 if(-not $liveParent){continue}
 $child=Get-Process -Id $row.ProcessId -ErrorAction SilentlyContinue
 if(-not $child){continue}
+if($child.Path -ine $row.ExecutablePath -or $child.StartTime.ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ss.ffffff') -cne $row.CreationDate.ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ss.ffffff')){continue}
 if($child.StartTime.ToUniversalTime().Ticks -lt $parent.startTicks){throw 'Child predates recorded parent'}
 [void](RememberPlayer $child);$changed=$true}}
 }
