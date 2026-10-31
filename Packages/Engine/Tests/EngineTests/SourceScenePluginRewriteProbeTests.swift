@@ -61,6 +61,7 @@ func sourceSceneOrderedDeleteDuplicateDiagnostic() throws {
         let trace = try #require(try JSONSerialization.jsonObject(with: load("plugin-scene-trace.json")) as? [String: Any])
         try #require(trace["phase"] as? String == "O" + phase.uppercased())
         let status = try #require(try JSONSerialization.jsonObject(with: load("status.json")) as? [String: Any])
+        try #require(status["phase"] as? String == trace["phase"] as? String)
         try #require(status["error"] is NSNull, "Do not interpret a partial original-player run")
         let cases = try #require(trace["cases"] as? [String: [String: Any]])
         let source = try KoikatsuSceneReader.decodeDocument(baseline)
@@ -85,6 +86,7 @@ func sourceSceneOrderedDeleteDuplicateDiagnostic() throws {
             let saved = try load("edit-\(label).png"), resaved = try load("resave-edit-\(label).png")
             let expected = try KoikatsuSceneReader.decodeDocument(saved)
             let observed = try #require(cases[label]), actions = try #require(observed["actions"] as? [[String: Any]])
+            try #require(observed["source"] as? String == "fixture.png")
             try #require(observed["savedSHA256"] as? String == hash(saved))
             try #require(observed["resavedSHA256"] as? String == hash(resaved))
             let order = label == "delete-duplicate" ? ["delete", "duplicate"] : ["duplicate", "delete"]
