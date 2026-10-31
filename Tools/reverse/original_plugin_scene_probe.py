@@ -456,22 +456,24 @@ $r.junctionTargetsChanged=(($r.junctionTargetsBefore|ConvertTo-Json -Compress) -
         start = tail.index('$c=& '); end = tail.index('$r.playerArguments=')
         compile_args = ','.join("('\"'+$root+'\\%s\"')" % name for name in sources)
         tail = tail[:start] + (r'''$compiler='C:\Windows\Microsoft.NET\Framework64\v4.0.30319\csc.exe'
-$arguments=@('/nologo','/noconfig','/nostdlib+','/target:library',('/out:"'+$p+'\IkkokuPluginRewriteProbe.dll"'),('/reference:"'+($refs -join ',')+'"'),''' + compile_args + r''')
+$referenceArguments=@($refs|ForEach-Object{('/reference:"'+$_+'"')})
+$arguments=@('/nologo','/noconfig','/nostdlib+','/target:library',('/out:"'+$p+'\IkkokuPluginRewriteProbe.dll"'))+$referenceArguments+@(''' + compile_args + r''')
 $c=Start-Process -FilePath $compiler -ArgumentList $arguments -RedirectStandardOutput "$out\compile.stdout" -RedirectStandardError "$out\compile.stderr" -PassThru
-$script:orderedCompiler=$c;$script:orderedCompilerIdentity=ProcessIdentity $c
+$script:orderedCompiler=$c;[void]$c.Handle;$script:orderedCompilerIdentity=ProcessIdentity $c
 $stamp=$script:orderedCompilerIdentity.startTicks;$r.compiler=[ordered]@{pid=$c.Id;startTicks=$stamp;path=$compiler;maximumSeconds=60}
 if(-not $c.WaitForExit(60000)){
 StopOwnedCompiler;$r.compiler.stopped=$true
 throw 'Owned compiler exceeded 60 seconds'}
-$c.Refresh();$r.compiler.exitCode=$c.ExitCode;$r.compiler.exited=$true
+if($null -eq $c.ExitCode){throw 'Owned compiler exit code is unavailable'}
+$r.compiler.exitCode=$c.ExitCode;$r.compiler.exited=$true
 if($c.ExitCode -ne 0){throw 'Compile failed; see retained compiler logs'}
 ''') + tail[end:]
         old_wait = '$r.processID=$x.Id;$r.exited=$x.WaitForExit(' + str(wait_seconds * 1000) + ')'
-        new_wait = r'''$r.playerIdentity=RememberPlayer $x;$r.processID=$x.Id;$r.playerStartUTC=$x.StartTime.ToUniversalTime().ToString('o')
+        new_wait = r'''[void]$x.Handle;$r.playerIdentity=RememberPlayer $x;$r.processID=$x.Id;$r.playerStartUTC=$x.StartTime.ToUniversalTime().ToString('o')
 $r.playerExecutableSHA256=Sha "$root\CharaStudio.exe";$playerWatch=[Diagnostics.Stopwatch]::StartNew()
 while(-not $x.HasExited -and $playerWatch.Elapsed.TotalSeconds -lt ''' + str(wait_seconds) + r'''){
 ObservePlayerChildren;[void]$x.WaitForExit(250)}
-$r.exited=$x.HasExited;if($r.exited){$r.playerExitCode=$x.ExitCode}'''
+$r.exited=$x.HasExited;if($r.exited){if($null -eq $x.ExitCode){throw 'Owned player exit code is unavailable'};$r.playerExitCode=$x.ExitCode}'''
         if old_wait not in tail: raise AssertionError('Ordered wait insertion point changed')
         tail = tail.replace(old_wait, new_wait, 1)
         tail = tail.replace('$left=Own;$left|Stop-Process -Force;$r.stopped=@($left|ForEach-Object{$_.Id});', '$r.stopped=StopPlayerOwners;', 1)

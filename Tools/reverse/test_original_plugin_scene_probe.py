@@ -265,12 +265,26 @@ class OrderedOracleTests(unittest.TestCase):
             self.assertIn('$c.WaitForExit(60000)', body); self.assertIn('$playerWatch.Elapsed.TotalSeconds -lt 180', body)
             self.assertIn('$process.StartTime.ToUniversalTime().Ticks -ne $identity.startTicks', body)
             self.assertIn('$process.Path -cne $identity.path', body)
-            self.assertIn('$script:orderedCompiler=$c;$script:orderedCompilerIdentity=ProcessIdentity $c', body)
+            self.assertIn('$script:orderedCompiler=$c;[void]$c.Handle;$script:orderedCompilerIdentity=ProcessIdentity $c', body)
             self.assertNotIn('function Own{', body); self.assertNotIn('$left=Own', body)
             self.assertIn('ObservePlayerChildren;[void]$x.WaitForExit(250)', body)
             self.assertIn('try{StopOwnedCompiler}catch', body); self.assertIn('try{$r.stoppedAtCleanup=StopPlayerOwners}', body)
             self.assertIn('$r.compiler.exitCode', body); self.assertIn('$r.playerStartUTC', body)
             self.assertIn('200000', body); self.assertIn('20000', body)
+
+    def test_ordered_compiler_keeps_references_separate_and_retains_exit_handles(self):
+        for phase in ('OA', 'OC'):
+            body=rewrite(phase,wait_seconds=180,collider=None,inputs=['fixture.png','fixture.sha256','phase.txt'])
+            # csc treats a quote around an entire comma list as one metadata
+            # filename (the retained CS0006). Each DLL needs its own option.
+            self.assertIn("$referenceArguments=@($refs|ForEach-Object{('/reference:\"'+$_+'\"')})",body)
+            self.assertIn('+$referenceArguments+@(',body)
+            self.assertNotIn("('/reference:\"'+($refs -join ',')+'\"')",body)
+            self.assertLess(body.index('[void]$c.Handle'),body.index('$c.WaitForExit(60000)'))
+            self.assertNotIn('$c.Refresh()',body)
+            self.assertIn("if($null -eq $c.ExitCode){throw 'Owned compiler exit code is unavailable'}",body)
+            self.assertLess(body.index('[void]$x.Handle'),body.index('$x.WaitForExit(250)'))
+            self.assertIn("if($null -eq $x.ExitCode){throw 'Owned player exit code is unavailable'}",body)
 
     def test_ordered_runtime_requires_complete_exact_bounded_pins(self):
         pins = runtime_pins(); body = probe.ordered_runtime_check(pins)
