@@ -1,6 +1,6 @@
 {
-  "reviewed": "2026-10-25",
-  "revision": "653dc20c9f569bad7b9aaf8acf1f708fc5941b8b",
+  "reviewed": "2026-10-31",
+  "revision": "890b14684e0f05f3d72e84aa4505f31f8a8027b2",
   "components": [
     {
       "id": "character-maker",
@@ -44,10 +44,14 @@
       "group": "Priority",
       "stage": "Mid-stage",
       "summary": "Six normal assemblies have bounded original-player comparisons.",
-      "available": "Female and male heads 0/200/201 have independent neutral and one coupled-shape gates. Bone-type-1 checks cover heads 0 and 201 for both sexes and female head 200.",
+      "available": "Female and male heads 0/200/201 have independent neutral, repeat and one coupled-shape gates for both standard and bone-type-1 skeletons.",
       "remaining": "Other corrected types, arbitrary shapes, complete hierarchy, animation and appearance parity. Passing selected vertex and binding checks does not establish full-character parity.",
-      "evidence": "Corrected female head 200 passes three independent original/native cases across 38,594 selected vertices, with unchanged tolerances, zero shape coercions and exact neutral repeats. Corrected head 201 also passes three cases for each sex, covering 37,124 selected female vertices and 35,645 male vertices. The reference retains exact identities, hashes and exclusions; CPU silhouettes establish geometry only.",
+      "evidence": "Corrected male head 200 completes this six-assembly subset: three independent original/native cases cover 37,115 selected vertices with maximum error 9.54e-7 against unchanged 2e-5 tolerance, zero morph error and exact neutral repeats. Only the original normal-male height coercion is allowed. The reference retains the earlier five corrected assemblies, exact identities, hashes and exclusions; CPU silhouettes establish geometry only.",
       "docs": [
+        [
+          "Corrected male head 200",
+          "docs/reference/character/neutral-model-parity.md#corrected-male-head200-skeleton-265"
+        ],
         [
           "Corrected female head 200",
           "docs/reference/character/neutral-model-parity.md#corrected-female-head200-skeleton-260"
@@ -100,9 +104,9 @@
       "group": "Priority",
       "stage": "Mid-stage",
       "summary": "Native toon rendering and an opt-in source-shader path are usable.",
-      "available": "Metal rendering, explicit toon fallbacks, resource ownership and caching, and live translated source shaders in selected Studio scenes.",
-      "remaining": "Remaining material dispatch, original scene effects, resource limits, and representative displayed-scene performance acceptance.",
-      "evidence": "Allocation reductions and functional passes are recorded separately from timing. Source-shader rendering remains opt-in.",
+      "available": "Metal rendering, explicit toon fallbacks, resource ownership and caching, and live translated source shaders in selected Studio scenes. The translated vertex path includes a host-validated correction for derivative quads crossing shared-vertex primitives. Selected original maps use baked lightmaps and compressed texture blocks.",
+      "remaining": "Remaining material dispatch, original scene effects, resource limits, broader hardware validation and representative displayed-scene performance acceptance.",
+      "evidence": "The derivative correction restores exact repeated frames and own-triangle derivatives on the tested M2 Ultra/macOS host. It adds about 0.06 ms GPU time to the controlled 20 translated draws; default rendering is unaffected because the source-shader path remains opt-in. Map-specific costs and omissions have separate evidence.",
       "docs": [
         [
           "Renderer contract and evidence",
@@ -111,6 +115,14 @@
         [
           "Performance contract",
           "docs/reference/performance.md"
+        ],
+        [
+          "Primitive derivative correction",
+          "docs/reference/renderer.md#cause-and-correction-cross-primitive-derivative-quads-2026-10-25"
+        ],
+        [
+          "Original maps",
+          "docs/reference/studio/maps.md"
         ]
       ]
     },
@@ -120,10 +132,14 @@
       "group": "Priority",
       "stage": "Mid-stage",
       "summary": "Selected native composites pass independent image gates.",
-      "available": "The controlled ordinary female fixture reaches 20 of 20 live material slots, including head-0 face and the verified ordinary body composite. Exact stock cheek ID1 now passes independent base/distinct color targets, inactive-edit reuse and transient-target cleanup checks.",
-      "remaining": "Other head/body identities, additional makeup and paint layers, patterns, states and whole-character shading remain open. Cheek comparative costs need a quiet run; whole-frame source-color parity and repeated-frame variation remain unresolved.",
-      "evidence": "20/20 is fixture-specific. Cheek targets stay within one output byte; four uploaded inputs, one default and three samplers remain stable through edits, with transient targets released. Seven final functional runs preserve unrelated composite keys and control PNGs; six default-OFF captures match prior controls. Comparative cheek timings are deferred. Earlier body costs remain in their owning reference.",
+      "available": "The controlled ordinary female fixture reaches 20 of 20 live material slots. Exact stock cheek ID1 and face-owned lipline ID1 pass independent original target, cache reuse and transient-target release checks. Map 33 and 34 have selected baked-lightmap materials; map 34 also has a sky and particle-tree formula.",
+      "remaining": "Other head/body identities, makeup and paint layers, patterns, states and whole-character shading remain open. Cheek/lipline comparative costs need a quiet run before the face path becomes default-on. Map realtime sun, shadows, light probes and remaining Standard terms are incomplete.",
+      "evidence": "20/20 is fixture-specific. Four lipline targets and two no-layer controls remain within one output byte. Fifteen recolours release transient targets. The seven-process app cohort improves the lipline fixture from 19 live slots/one fallback on the old store to 20/zero on the new store, preserving unrelated composites and control images. Default-OFF captures match; 78 Studio and 10 Maker lane checks pass. Unquiet lipline timings are retained as observations, not acceptance.",
       "docs": [
+        [
+          "Stock lipline ID1 gates",
+          "docs/reference/renderer.md#native-stock-lipline-id1-composite-r1cmt-04-255-2026-10-26"
+        ],
         [
           "Stock cheek ID1 gates",
           "docs/reference/renderer.md#native-stock-cheek-id1-composite-r1cmt-04-243-2026-10-25"
@@ -139,11 +155,11 @@
         [
           "Appearance recipes",
           "docs/reference/character/card-appearance.md"
+        ],
+        [
+          "Map materials and limits",
+          "docs/reference/studio/maps.md"
         ]
-      ],
-      "issue": [
-        "Whole-frame repeatability",
-        "188"
       ]
     },
     {
@@ -152,22 +168,18 @@
       "group": "Priority",
       "stage": "Mid-stage",
       "summary": "Selected geometry and image checks pass; full-scene parity is open.",
-      "available": "Bounded geometry, pose, material and matched-frame gates, plus independently evaluated live comparisons and sampling diagnostics.",
-      "remaining": "Full-character silhouette and color parity, and repeatable same-input live sampling. Discard and explicit-gradient experiments are diagnostic evidence, not production fixes.",
-      "evidence": "Frozen geometry, recovered-code oracles and original-player comparisons prove different things; each gate names its reference.",
+      "available": "Bounded geometry, pose, material and matched-frame gates, plus independent live comparisons. The measured same-input translated-sampling instability is corrected on the tested host without relaxing the image gates.",
+      "remaining": "Full-character silhouette and color parity, animated/live-scene coverage, other hardware and OS validation, and the remaining map-lighting terms. The driver-sensitive derivative correction is not a whole-renderer parity result.",
+      "evidence": "Original-player geometry and target comparisons retain their exact inputs and exclusions. The primitive-derivative reproducer and controlled frame repeats pass on the recorded host, with a measured GPU cost. Source-only shadows, generated mip diagnostics and CPU silhouette checks remain separately scoped.",
       "docs": [
         [
           "Fidelity audit",
           "docs/component-audit/renderer-and-foundation.md"
         ],
         [
-          "Sampling investigation",
-          "docs/reference/renderer.md#translated-sampling-repeatability-investigation-188"
+          "Sampling correction and limits",
+          "docs/reference/renderer.md#cause-and-correction-cross-primitive-derivative-quads-2026-10-25"
         ]
-      ],
-      "issue": [
-        "Sampling repeatability",
-        "188"
       ]
     },
     {
@@ -176,9 +188,9 @@
       "group": "Priority",
       "stage": "Mid-stage",
       "summary": "Immutable indexing and selected asset resolution preserve identity.",
-      "available": "Incremental archive/profile indexing, saved-ID resolution, converted selections, static ABMX and unknown-payload preservation.",
-      "remaining": "General mod geometry, dynamic callbacks, migrations and installation-wide compatibility. Preserved data does not imply executable support.",
-      "evidence": "Resolved catalog identity and byte-preserving round trips are bounded to the documented input formats and versions.",
+      "available": "Incremental archive/profile indexing, saved-ID resolution, converted selections, static ABMX and unknown-payload preservation. Original scene exports have bounded versioned rules for preserving or rewriting selected plugin data after deletes and copies, including KKPE, MaterialEditor and NodesConstraints.",
+      "remaining": "General mod geometry, dynamic callbacks, migrations and installation-wide compatibility. Unknown versions and unsupported topology edits reject explicitly. Delete-plus-copy key allocation remains restricted; data rewrites do not execute the original plugins.",
+      "evidence": "Selected rewrites are checked against original-player saves and parsed again after writing. KKPE per-session IDs and refreshed character fields have explicit normalization limits. Eighty-one Studio and ten Maker scenario checks pass for the documented merged rewrite slice; supported forms and refusals remain version-specific.",
       "docs": [
         [
           "Mod library guide",
@@ -191,6 +203,10 @@
         [
           "ABMX subset",
           "docs/reference/mods/abmx.md"
+        ],
+        [
+          "Original scene plugin-data rewrites",
+          "docs/reference/studio/scene-editing.md#plug-in-data-rewrites"
         ]
       ]
     },
@@ -200,9 +216,9 @@
       "group": "Priority",
       "stage": "Infancy",
       "summary": "A useful bounded execution subset exists; general compatibility is early.",
-      "available": "Translated profiles and three exact-revision native adapters: Mute, StudioAccessoryNames and HideAllUI. Selected mount, cancellation, failure isolation and save/restore workflows are exercised. Native save/reopen now retains queued destruction roots without replaying Awake. Rejected frames restore exact route history, including irregular time steps and lazy-clock ownership. Direct translated-profile/native loading and saved scene open, undo and redo reject incompatible candidate pairs before changing the live session. Disposing a temporary Studio model now releases its focus observers. Native library-backed scene open, undo and redo can now read attachments during read-only initialization using the candidate scene; the prepared session is reused after acceptance.",
-      "remaining": "General DLL, Harmony, coroutine and Unity compatibility, original save adapters, and broader lifecycle coverage. Initialization that changes candidate state is rejected; initial library installation retains a separate attachment-read boundary.",
-      "evidence": "Metadata inventory does not establish loadability. Direct mixed-graph rejection passed 13 Engine and 38 final Release app checks. Saved candidate restoration passes 16 focused Engine and 71 integrated app checks, preserving state and frames on rejection except the expected history error status. Original tampered-file errors retain precedence. Route-only checkpoint costs have a bounded quiet measurement; graph validation cost was not timed. Temporary-owner disposal passes 59 focused and 132 lifecycle app checks; the two retained focus tokens per disposed owner are released. This does not establish an RSS or timing improvement. Library-backed attachment restoration passes 9 focused Engine invocations and 105 save/reopen app checks, including cold candidates, warm-scene isolation, repeated read failures, exact rollback and cancellation. No timing or allocation improvement is claimed. A separate 81-check installation diagnostic confirms the remaining initial library attachment-read rejection and unchanged state; it does not establish support for that path.",
+      "available": "Translated profiles and three exact-revision native adapters: Mute, StudioAccessoryNames and HideAllUI. Selected mount, cancellation, failure isolation and save/restore workflows are exercised. Native save/reopen now retains queued destruction roots without replaying Awake. Rejected frames restore exact route history, including irregular time steps and lazy-clock ownership. Direct translated-profile/native loading and saved scene open, undo and redo reject incompatible candidate pairs before changing the live session. Disposing a temporary Studio model now releases its focus observers. Native library-backed scene open, undo and redo can now read attachments during read-only initialization using the candidate scene; the prepared session is reused after acceptance. Explicit initial library mounts also prepare attachment reads transactionally, with native save/reopen acceptance.",
+      "remaining": "General DLL, Harmony, coroutine and Unity compatibility, original save adapters for arbitrary translated runtime state, and broader lifecycle coverage. Restoration still rejects initializer topology changes; detached preparation retains its attachment-read gate. Pending destruction combined with attachment-reading restoration remains an open reproduction task.",
+      "evidence": "Metadata inventory does not establish loadability. Direct mixed-graph rejection passed 13 Engine and 38 final Release app checks. Saved candidate restoration passes 16 focused Engine and 71 integrated app checks, preserving state and frames on rejection except the expected history error status. Original tampered-file errors retain precedence. Route-only checkpoint costs have a bounded quiet measurement; graph validation cost was not timed. Temporary-owner disposal passes 59 focused and 132 lifecycle app checks; the two retained focus tokens per disposed owner are released. This does not establish an RSS or timing improvement. Library-backed attachment restoration passes 9 focused Engine invocations and 105 save/reopen app checks, including cold candidates, warm-scene isolation, repeated read failures, exact rollback and cancellation. No timing or allocation improvement is claimed. Initial library attachment preparation subsequently passes 76 save and 20 fresh-process reopen checks, including cold/warm failure rollback, cancellation and exact fields/clocks. The earlier 81-check rejection diagnostic remains historical. Original scene plugin-data rewrites are documented separately from native translated execution.",
       "docs": [
         [
           "Execution and persistence",
@@ -233,9 +249,13 @@
           "docs/reference/mods/plugin-execution.md#candidate-owned-library-attachment-restoration-250"
         ],
         [
-          "Initial library installation boundary",
-          "docs/reference/mods/plugin-execution.md#initial-library-attachment-installation-boundary-257"
+          "Initial library attachment preparation",
+          "docs/reference/mods/plugin-execution.md#initial-library-attachment-preparation-262"
         ]
+      ],
+      "issue": [
+        "Pending destruction with attachment reads",
+        "267"
       ]
     },
     {
@@ -244,9 +264,9 @@
       "group": "Application",
       "stage": "Mid-stage",
       "summary": "Selected source scenes can be viewed and edited.",
-      "available": "Original characters, cameras, FK/IK, animation, expression/shape/outfit/accessory edits, reachable Pose/Face/Clothes inspectors, and bounded scene export.",
-      "remaining": "Broader interactive acceptance, mixed scene objects, maps, lights, routes, effects, source timeline tracks and edit topology.",
-      "evidence": "Parsing and preserving an object record do not establish a rendered or editable native consumer.",
+      "available": "Original characters, cameras, FK/IK, animation, expression/shape/outfit/accessory edits, reachable Pose/Face/Clothes inspectors, route edits, bounded topology and plugin-data-aware scene export. Converted maps 33 and 34 have baked lightmaps; map 34 includes sun-type sky cubes and particle trees.",
+      "remaining": "Broader interactive acceptance, remaining maps, realtime sun and shadows, light probes, camera effects, source timeline tracks and unsupported topology/plugin-data combinations. The map preview is runtime-only; export preserves loaded map bytes.",
+      "evidence": "Map 34 uses compressed texture blocks and the source map sampler settings; its recorded fixture peaks at 221.6 MB of Metal versus 449.4 MB for decoded PNGs. This is a map-specific comparison, not whole-scene parity. Original-player scene export checks distinguish payload preservation, scoped rewrites and named refusals.",
       "docs": [
         [
           "Studio audit",
@@ -259,6 +279,14 @@
         [
           "Scene records",
           "docs/reference/studio/scene-records.md"
+        ],
+        [
+          "Map conversion, fidelity and cost",
+          "docs/reference/studio/maps.md"
+        ],
+        [
+          "Plugin-data-aware export",
+          "docs/reference/studio/scene-editing.md#plug-in-data-rewrites"
         ]
       ]
     },

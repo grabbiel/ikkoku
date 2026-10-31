@@ -43,9 +43,9 @@ fixtures and otherwise return without exercising source behavior.
 
 ## Current scope
 
-Overview refreshed **2026-10-24**, with scoped updates through
-[#245](https://github.com/grabbiel/ikkoku/pull/245). The public status site tracks
-the same accepted component scope. Each linked reference retains
+Overview refreshed **2026-10-24**, with scoped status reconciliation on
+**2026-10-31** through [#287](https://github.com/grabbiel/ikkoku/pull/287).
+The public status site identifies its accepted source commit and review date. Each linked reference retains
 its own measured commit, inputs and exclusions; this refresh is not a new
 all-project acceptance run. All eight priority components remain incomplete.
 
@@ -56,14 +56,17 @@ all-project acceptance run. All eight priority components remain incomplete.
 | **Base Shapes** | 52 face and 44 body controls with recovered destination/order rules and bounded numerical gates; normal male Maker height follows the source fixed value. [Shape contracts](docs/reference/character/contracts.md). | Broader model/shape combinations and unsupported transform cases; control count alone does not establish universal parity. |
 | **Renderer** | Native toon rendering plus opt-in live translated source shaders in Studio, with explicit toon fallbacks and resource ownership/caching. [Renderer contract](docs/reference/renderer.md). | Remaining material dispatch, source scene effects, resource limits and representative performance acceptance. |
 | **Materials** | Selected native GPU composites and strict independent image gates. The controlled ordinary female fixture reaches 20 of 20 live slots; exact cheek ID1 and lipline ID1 also pass target, cache and resource checks. Their comparative timings remain pending. [Material evidence](docs/reference/renderer.md#native-stock-lipline-id1-composite-r1cmt-04-255-2026-10-26). | Other body/head identities, broader layers/patterns/states and whole-character shading. Coverage is fixture-specific. |
-| **Visual Fidelity** | Bounded geometry, pose, material and matched-frame gates; independent live comparisons and sampling diagnostics. [Fidelity audit](docs/component-audit/renderer-and-foundation.md). | Full-character silhouette/color parity and same-input live sampling repeatability ([#188](https://github.com/grabbiel/ikkoku/issues/188)). |
+| **Visual Fidelity** | Bounded geometry, pose, material and matched-frame gates. The translated sampling correction restores exact repeats on the tested host, with a measured GPU cost. [Sampling evidence](docs/reference/renderer.md#cause-and-correction-cross-primitive-derivative-quads-2026-10-25). | Full-character silhouette/color parity, broader live scenes and validation on other GPUs and OS versions. |
 | **Mods** | Incremental immutable archive/profile indexing, saved-ID resolution, converted selections, static ABMX and unknown-payload preservation. [Mod guide](docs/guides/mod-library.md). | General mod geometry, dynamic callbacks, migrations and installation-wide compatibility. |
 | **Plugins** | Bounded translated execution and three exact-revision native adapters: Mute, StudioAccessoryNames and HideAllUI. Mounted-session controls, cancellation, fresh-profile failure isolation, candidate-owned attachment reads and pending-destruction save/restore have selected acceptance. Direct profile/native loads and saved scene open/undo/redo reject incompatible candidate packages before live mutation. Saved library attachment reads use candidate-owned previews for native open and undo/redo; explicit initial mounts also prepare attachment reads transactionally and pass native save/reopen checks. Temporary Studio model disposal releases its focus observers. [Execution contract](docs/reference/mods/plugin-execution.md). | General DLL/Harmony/coroutine/Unity compatibility, original save adapters and broader lifecycle coverage. Restoration rejects initializer topology changes; detached preparation retains its attachment-read gate. [Initial mount scope](docs/reference/mods/plugin-execution.md#initial-library-attachment-preparation-262). |
 
 Studio supports selected original characters, cameras, FK/IK, animation,
-expression/shape/outfit/accessory edits and bounded scene export. Its source
-Pose, Face and Clothes inspectors are reachable; broader interactive acceptance,
-mixed scene objects, maps, lights and effects remain open. Gameplay has bounded
+expression/shape/outfit/accessory edits and bounded scene export, including
+[versioned plugin-data rewrites](docs/reference/studio/scene-editing.md#plug-in-data-rewrites).
+Its source Pose, Face and Clothes inspectors are reachable.
+[Maps 33 and 34](docs/reference/studio/maps.md) have selected lightmap, sky and
+particle support; other maps, realtime lighting, effects and broader interactive
+acceptance remain open. Gameplay has bounded
 cycle, event and ADV kernels and a headless host, with no complete playable mode.
 
 [Reader-local verified RGBA digests](docs/reference/character/maker-assets.md#reader-local-verified-rgba-digest-reuse-192)
