@@ -1,6 +1,6 @@
 {
   "reviewed": "2026-10-31",
-  "revision": "890b14684e0f05f3d72e84aa4505f31f8a8027b2",
+  "revision": "5d55db5a60a9743bee7603734db199ff495f5aa7",
   "components": [
     {
       "id": "character-maker",
@@ -80,9 +80,9 @@
       "group": "Priority",
       "stage": "Mid-stage",
       "summary": "Recovered shape rules drive a bounded set of native controls.",
-      "available": "52 face and 44 body controls with recovered destination and ordering rules, numerical gates, and the source fixed-height rule for normal male Maker models.",
+      "available": "52 face and 44 body controls with recovered destination and ordering rules, numerical gates, and the source fixed-height rule for normal male Maker models. Immutable decoded domains validate once; the containing contract retains its structural checks.",
       "remaining": "Broader model/shape combinations and unsupported transform cases. The control count is not a universal parity claim.",
-      "evidence": "Independent model gates cover selected coupled edits; individual kernel results and complete assembled-model results remain distinct.",
+      "evidence": "Independent model gates cover selected coupled edits; individual kernel results and complete assembled-model results remain distinct. The validation change passes 28 focused tests and 400 matched Maker checks. Quiet shape-decode and selection timings are mixed, so no latency improvement is established.",
       "docs": [
         [
           "Shape contracts",
@@ -95,6 +95,10 @@
         [
           "Body destinations",
           "docs/reference/character/body-shape.md"
+        ],
+        [
+          "Validation and timing limits",
+          "docs/reference/character/contracts.md#validate-decoded-domains-once"
         ]
       ]
     },
@@ -216,9 +220,9 @@
       "group": "Priority",
       "stage": "Infancy",
       "summary": "A useful bounded execution subset exists; general compatibility is early.",
-      "available": "Translated profiles and three exact-revision native adapters: Mute, StudioAccessoryNames and HideAllUI. Selected mount, cancellation, failure isolation and save/restore workflows are exercised. Native save/reopen now retains queued destruction roots without replaying Awake. Rejected frames restore exact route history, including irregular time steps and lazy-clock ownership. Direct translated-profile/native loading and saved scene open, undo and redo reject incompatible candidate pairs before changing the live session. Disposing a temporary Studio model now releases its focus observers. Native library-backed scene open, undo and redo can now read attachments during read-only initialization using the candidate scene; the prepared session is reused after acceptance. Explicit initial library mounts also prepare attachment reads transactionally, with native save/reopen acceptance.",
-      "remaining": "General DLL, Harmony, coroutine and Unity compatibility, original save adapters for arbitrary translated runtime state, and broader lifecycle coverage. Restoration still rejects initializer topology changes; detached preparation retains its attachment-read gate. Pending destruction combined with attachment-reading restoration remains an open reproduction task.",
-      "evidence": "Metadata inventory does not establish loadability. Direct mixed-graph rejection passed 13 Engine and 38 final Release app checks. Saved candidate restoration passes 16 focused Engine and 71 integrated app checks, preserving state and frames on rejection except the expected history error status. Original tampered-file errors retain precedence. Route-only checkpoint costs have a bounded quiet measurement; graph validation cost was not timed. Temporary-owner disposal passes 59 focused and 132 lifecycle app checks; the two retained focus tokens per disposed owner are released. This does not establish an RSS or timing improvement. Library-backed attachment restoration passes 9 focused Engine invocations and 105 save/reopen app checks, including cold candidates, warm-scene isolation, repeated read failures, exact rollback and cancellation. No timing or allocation improvement is claimed. Initial library attachment preparation subsequently passes 76 save and 20 fresh-process reopen checks, including cold/warm failure rollback, cancellation and exact fields/clocks. The earlier 81-check rejection diagnostic remains historical. Original scene plugin-data rewrites are documented separately from native translated execution.",
+      "available": "Translated profiles and three exact-revision native adapters: Mute, StudioAccessoryNames and HideAllUI. Selected mount, cancellation, failure isolation and save/restore workflows are exercised. Native save/reopen now retains queued destruction roots without replaying Awake. Rejected frames restore exact route history, including irregular time steps and lazy-clock ownership. Direct translated-profile/native loading and saved scene open, undo and redo reject incompatible candidate pairs before changing the live session. Disposing a temporary Studio model now releases its focus observers. Native library-backed scene open, undo and redo can now read attachments during read-only initialization using the candidate scene; the prepared session is reused after acceptance. Explicit initial library mounts also prepare attachment reads transactionally, with native save/reopen acceptance. Native open and history restoration also accept validated saved destruction roots unrelated to attachment readers and their parents.",
+      "remaining": "General DLL, Harmony, coroutine and Unity compatibility, original save adapters for arbitrary translated runtime state, and broader lifecycle coverage. Restoration still rejects initializer topology changes; detached preparation retains its attachment-read gate. Initializer destruction requests, including an already-pending root, and pending subtrees touching attachment readers or parents remain rejected.",
+      "evidence": "Metadata inventory does not establish loadability. Direct mixed-graph rejection passed 13 Engine and 38 final Release app checks. Saved candidate restoration passes 16 focused Engine and 71 integrated app checks, preserving state and frames on rejection except the expected history error status. Original tampered-file errors retain precedence. Route-only checkpoint costs have a bounded quiet measurement; graph validation cost was not timed. Temporary-owner disposal passes 59 focused and 132 lifecycle app checks; the two retained focus tokens per disposed owner are released. This does not establish an RSS or timing improvement. Library-backed attachment restoration passes 9 focused Engine invocations and 105 save/reopen app checks, including cold candidates, warm-scene isolation, repeated read failures, exact rollback and cancellation. No timing or allocation improvement is claimed. Initial library attachment preparation subsequently passes 76 save and 20 fresh-process reopen checks, including cold/warm failure rollback, cancellation and exact fields/clocks. The earlier 81-check rejection diagnostic remains historical. Original scene plugin-data rewrites are documented separately from native translated execution. Unrelated saved-root restoration passes 39 Engine invocations and 320 app checks, including 24 exact restored continuations and 44 rejected state/frame pairs. A candidate-only membership index bounds repeated queries; no latency, RSS or original-player parity claim.",
       "docs": [
         [
           "Execution and persistence",
@@ -251,11 +255,11 @@
         [
           "Initial library attachment preparation",
           "docs/reference/mods/plugin-execution.md#initial-library-attachment-preparation-262"
+        ],
+        [
+          "Saved roots and attachment reads",
+          "docs/reference/mods/plugin-execution.md#saved-pending-roots-with-attachment-reads-267"
         ]
-      ],
-      "issue": [
-        "Pending destruction with attachment reads",
-        "267"
       ]
     },
     {
