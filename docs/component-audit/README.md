@@ -103,7 +103,13 @@ acceptance boundary; their old “next” steps are historical, not a live queue
   [Shape-domain validation](../reference/character/contracts.md#validate-decoded-domains-once)
   now avoids a second traversal of immutable decoded domains. Focused tests and
   matched Maker checks preserve behavior; the quiet pair shows no consistent
-  selection-latency improvement. New base-load
+  selection-latency improvement.
+  [Decoded-contract reuse](../reference/character/contracts.md#bounded-decoded-contract-reuse)
+  passes 20 CPU checks and 248 fresh Maker functional checks, preserving matching
+  card exports and resource counts. Its small Release pair reduces mean repeated
+  head selection from about 103 to 81 ms, with first use 2.4–2.6 ms slower.
+  Fresh static full-body/face thumbnails match exactly; live animated viewport
+  equivalence is outside this comparison. New base-load
   diagnostics attribute most cold base-appearance time to MetalKit texture
   loading. A separately validated worker diagnostic attributes 88–90% of the
   selected preparation operation to rig decoding, validation and conversion.
