@@ -110,9 +110,10 @@ func sourceMaterialClothesGroupPreservesIndependentPixelsReplayAndLeases() throw
     _ = try withoutDiagnostics.append(plan, identity: fixture.identity(0))
     let plain = try withoutDiagnostics.finish()
     // A material handle alone does not retain the appearance's texture leases.
-    try withExtendedLifetime(plain) {
-        #expect(try groupPixels(plain[0].application.appearance.materials["part"]?.first?.base, resources: resources) == groupedPixels)
+    let plainPixels = try withExtendedLifetime(plain) {
+        try groupPixels(plain[0].application.appearance.materials["part"]?.first?.base, resources: resources)
     }
+    #expect(plainPixels == groupedPixels)
 }
 
 @Test(.enabled(if: MTLCreateSystemDefaultDevice() != nil))
