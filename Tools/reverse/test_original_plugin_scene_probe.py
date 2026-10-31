@@ -265,10 +265,12 @@ class OrderedOracleTests(unittest.TestCase):
             self.assertIn('$c.WaitForExit(60000)', body); self.assertIn('$playerWatch.Elapsed.TotalSeconds -lt 180', body)
             self.assertIn('$process.StartTime.ToUniversalTime().Ticks -ne $identity.startTicks', body)
             self.assertIn('$process.Path -cne $identity.path', body)
-            self.assertIn('$script:orderedCompiler=$c;[void]$c.Handle;$script:orderedCompilerIdentity=ProcessIdentity $c', body)
+            self.assertIn('$script:orderedCompiler=$c;$r.compiler=', body)
+            self.assertIn('$script:orderedCompilerIdentity=ProcessIdentity $c', body)
             self.assertNotIn('function Own{', body); self.assertNotIn('$left=Own', body)
             self.assertIn('ObservePlayerChildren;[void]$x.WaitForExit(250)', body)
-            self.assertIn('try{StopOwnedCompiler}catch', body); self.assertIn('try{$r.stoppedAtCleanup=StopPlayerOwners}', body)
+            self.assertIn("try{OrderedStamp 'cleanup-compiler';StopOwnedCompiler}catch", body)
+            self.assertIn("try{OrderedStamp 'cleanup-player';$r.stoppedAtCleanup=StopPlayerOwners}catch", body)
             self.assertIn('$r.compiler.exitCode', body); self.assertIn('$r.playerStartUTC', body)
             self.assertIn('200000', body); self.assertIn('20000', body)
 
@@ -285,6 +287,54 @@ class OrderedOracleTests(unittest.TestCase):
             self.assertIn("if($null -eq $c.ExitCode){throw 'Owned compiler exit code is unavailable'}",body)
             self.assertLess(body.index('[void]$x.Handle'),body.index('$x.WaitForExit(250)'))
             self.assertIn("if($null -eq $x.ExitCode){throw 'Owned player exit code is unavailable'}",body)
+
+    def test_ordered_lifecycle_stamps_survive_cleanup_and_unknown_owners_retain_root(self):
+        for phase in ('OA', 'OC'):
+            body = rewrite(phase, wait_seconds=180, collider=None, inputs=['fixture.png', 'fixture.sha256', 'phase.txt'])
+            for start, pid, identity, wait in [
+                ('$c=Start-Process', "OrderedStamp 'compiler-pid'", "OrderedStamp 'compiler-identity-read'", '$c.WaitForExit(60000)'),
+                ('$x=Start-Process', "OrderedStamp 'player-pid'", "OrderedStamp 'player-identity-read'", '$x.WaitForExit(250)')]:
+                offsets = [body.index(text) for text in [start, pid, identity, wait]]
+                self.assertEqual(offsets, sorted(offsets))
+            # The primary failure is recorded before cleanup and cannot be
+            # overwritten by a root-removal/late verification exception.
+            primary = body.index('$r.errorStage=$r.stage;$r.error=$_.ToString()')
+            cleanup = body.index("OrderedStamp 'cleanup-compiler'", primary)
+            proof = body.index('$r.rootRemovalReady=RootRemovalReady', cleanup)
+            refusal = body.index("throw 'Root retained: exact owner exit or detached-child drain is unproven'", proof)
+            removal = body.index('Remove-Item -LiteralPath $root', refusal)
+            final = body.index("[Console]::Error.WriteLine('ORDERED_FINAL:'", removal)
+            self.assertEqual([primary, cleanup, proof, refusal, removal, final], sorted([primary, cleanup, proof, refusal, removal, final]))
+            self.assertNotIn('$r.error=', body[cleanup:])
+            self.assertIn('}catch{OrderedCleanupFailure $_}finally{', body)
+            self.assertIn('$script:orderedOwners.ContainsKey([int]$_.ParentProcessId)', body)
+            self.assertIn('$r.unresolvedPlayerOwners.Count', body)
+        self.assertNotIn('ORDERED_FINAL:', rewrite('C'))
+        self.assertNotIn('ORDERED_FINAL:', rewrite('D'))
+
+    def test_ordered_transport_failure_retains_upload_without_accepting_or_extracting_it(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            local = Path(tmp) / '.local'; local.mkdir(); output = local / 'output'
+            # Retention must also work without valid ZIP/JSON. No unverified
+            # bytes may reach extraction after an incomplete guest envelope.
+            payload = b'partial uploaded evidence'
+            class UploadedEndpoint(FakeEndpoint):
+                def __init__(self, *args, **kwargs): super().__init__(*args, **kwargs); self.upload = payload
+            done = subprocess.CompletedProcess([], 1, '', 'late cleanup failed')
+            with patch.object(probe, 'local_roots', return_value=[local.resolve()]), patch.object(probe, 'Endpoint', UploadedEndpoint),\
+                 patch.object(probe, 'guarded', return_value=0), patch.object(probe, 'errno_count', return_value=0),\
+                 patch.object(probe, 'fresh_root', return_value=ROOT_A), patch.object(probe, 'ordered_transport', return_value=done),\
+                 patch.object(probe, 'extract') as extract:
+                with self.assertRaisesRegex(RuntimeError, 'VM exec failed: late cleanup failed'):
+                    probe.run_rewrite('vm', output, 0, 'OA', {'fixture.png': b'original'}, ZIPMOD, None, 'host', 180,
+                                      runtime_pins=runtime_pins())
+            self.assertEqual((output / 'transport-upload.zip').read_bytes(), payload)
+            record = json.loads((output / 'run.json').read_text())
+            self.assertEqual(record['unverifiedUpload'], {'file': 'transport-upload.zip', 'bytes': len(payload),
+                                                         'sha256': hashlib.sha256(payload).hexdigest()})
+            self.assertEqual(record['execError'], 'late cleanup failed')
+            self.assertNotIn('guest', record); self.assertFalse((output / 'summary.json').exists())
+            extract.assert_not_called()
 
     def test_ordered_runtime_requires_complete_exact_bounded_pins(self):
         pins = runtime_pins(); body = probe.ordered_runtime_check(pins)

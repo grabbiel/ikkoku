@@ -206,6 +206,20 @@ function Targets{try{[ordered]@{abdata=(Tree "$original\abdata");CharaStudio_Dat
 # Used only by OA/OC. Paths describe recorded instances; they never select a
 # process for termination by themselves. The independent compiler is also
 # retained immediately so the outer finally can clean up after later errors.
+ORDERED_ENVELOPE = r'''function OrderedStamp($stage){
+$r.stage=$stage
+$state=[ordered]@{stage=$stage;root=$root;guestPID=$r.guestPID;guestStartUTC=$r.guestStartUTC;
+compiler=$r.compiler;processID=$r.processID;playerStartUTC=$r.playerStartUTC;playerIdentity=$r.playerIdentity;
+observedOwners=$r.observedOwners;error=$r.error;errorStage=$r.errorStage;cleanupErrors=$r.cleanupErrors}
+[Console]::Error.WriteLine('ORDERED_STATE:'+($state|ConvertTo-Json -Compress -Depth 6))}
+function OrderedCleanupFailure($failure){
+$r.cleanupErrors+=@([ordered]@{stage=$r.stage;message=$failure.ToString();position=$failure.InvocationInfo.PositionMessage})
+$r.cleanupError=($r.cleanupErrors|ForEach-Object{$_.stage+': '+$_.message}) -join '; '
+OrderedStamp 'cleanup-error'}
+$r.cleanupErrors=@();$r.guestPID=$PID;OrderedStamp 'bootstrap-pid'
+$r.guestStartUTC=(Get-Process -Id $PID).StartTime.ToUniversalTime().ToString('o');OrderedStamp 'bootstrap-identity'
+'''
+
 ORDERED_OWNERS = r'''$script:orderedOwners=@{};$script:orderedCompiler=$null;$script:orderedCompilerIdentity=$null
 function ProcessIdentity($process){
 [ordered]@{pid=$process.Id;startTicks=$process.StartTime.ToUniversalTime().Ticks;path=$process.Path}}
@@ -220,6 +234,7 @@ if(-not $identity.path){throw 'Owned process executable path is unavailable'}
 if($script:orderedOwners.Count -ge 32){throw 'Ordered process-owner bound exceeded'}
 $script:orderedOwners[[int]$identity.pid]=$identity
 $r.observedOwners=@($script:orderedOwners.Values)
+OrderedStamp 'player-owner-recorded'
 return $identity}
 function ObservePlayerChildren{
 $table=@(Get-CimInstance Win32_Process -OperationTimeoutSec 5);$changed=$true
@@ -256,6 +271,17 @@ if($process){$process|Stop-Process -Force
 if(-not $process.WaitForExit(5000)){throw 'Recorded compiler did not exit within cleanup bound'}}
 $r.compilerRemaining=[bool](MatchingProcess $identity)
 if($r.compilerRemaining){throw 'Recorded compiler remains'}}
+function RootRemovalReady{
+if(($r.processID -and -not $r.playerIdentity.path) -or ($script:orderedCompiler -and -not $script:orderedCompilerIdentity.path)){return $false}
+$r.ownersRemaining=@($script:orderedOwners.Values|Where-Object{MatchingProcess $_})
+$r.compilerRemaining=if($script:orderedCompilerIdentity){[bool](MatchingProcess $script:orderedCompilerIdentity)}else{$false}
+# This inventory only vetoes deletion. It never adopts or stops an unknown
+# process by path/parent PID. A detached or unrecorded child retains the root.
+$r.unresolvedPlayerOwners=@(Get-CimInstance Win32_Process -OperationTimeoutSec 5|Where-Object{
+($_.ExecutablePath -and $_.ExecutablePath.StartsWith($root+'\',[StringComparison]::OrdinalIgnoreCase)) -or
+($_.Name -in @('CharaStudio.exe','Koikatu.exe')) -or $script:orderedOwners.ContainsKey([int]$_.ParentProcessId)
+}|ForEach-Object{[ordered]@{pid=$_.ProcessId;parent=$_.ParentProcessId;path=$_.ExecutablePath;createdUTC=$_.CreationDate.ToUniversalTime().ToString('o')}})
+return -not($r.ownersRemaining.Count -or $r.compilerRemaining -or $r.unresolvedPlayerOwners.Count)}
 '''
 
 
@@ -445,12 +471,14 @@ $r.junctionTargetsChanged=(($r.junctionTargetsBefore|ConvertTo-Json -Compress) -
 [PSCustomObject]$r|ConvertTo-Json -Compress -Depth 6
 """)
     if ordered:
+        header_end = head.index('\n') + 1
+        head = head[:header_end] + ORDERED_ENVELOPE + head[header_end:]
         old_owners = "function Own{@(Get-Process -ErrorAction SilentlyContinue|Where-Object{$_.Path -and $_.Path.StartsWith($root+'\\')})}"
         if old_owners not in head: raise AssertionError('Ordered owner insertion point changed')
         head = head.replace(old_owners, ORDERED_OWNERS, 1)
-        head = head.replace('[Net.ServicePointManager]::Expect100Continue=$false', r'''$r.guestPID=$PID;$r.guestStartUTC=(Get-Process -Id $PID).StartTime.ToUniversalTime().ToString('o')
-[Console]::Error.WriteLine('ORDERED_GUEST:'+(@{pid=$PID;startUTC=$r.guestStartUTC;root=$root}|ConvertTo-Json -Compress))
+        head = head.replace('[Net.ServicePointManager]::Expect100Continue=$false', r'''[Console]::Error.WriteLine('ORDERED_GUEST:'+(@{pid=$PID;startUTC=$r.guestStartUTC;root=$root}|ConvertTo-Json -Compress))
 [Net.ServicePointManager]::Expect100Continue=$false''', 1)
+        head = head.replace(PLAYER_SETUP, "OrderedStamp 'private-player-setup'\n" + PLAYER_SETUP, 1)
         # The compiler is outside the private root. Retain its exact instance
         # and bound that process separately, before any original player starts.
         start = tail.index('$c=& '); end = tail.index('$r.playerArguments=')
@@ -458,38 +486,76 @@ $r.junctionTargetsChanged=(($r.junctionTargetsBefore|ConvertTo-Json -Compress) -
         tail = tail[:start] + (r'''$compiler='C:\Windows\Microsoft.NET\Framework64\v4.0.30319\csc.exe'
 $referenceArguments=@($refs|ForEach-Object{('/reference:"'+$_+'"')})
 $arguments=@('/nologo','/noconfig','/nostdlib+','/target:library',('/out:"'+$p+'\IkkokuPluginRewriteProbe.dll"'))+$referenceArguments+@(''' + compile_args + r''')
+OrderedStamp 'compiler-start'
 $c=Start-Process -FilePath $compiler -ArgumentList $arguments -RedirectStandardOutput "$out\compile.stdout" -RedirectStandardError "$out\compile.stderr" -PassThru
-$script:orderedCompiler=$c;[void]$c.Handle;$script:orderedCompilerIdentity=ProcessIdentity $c
+$script:orderedCompiler=$c;$r.compiler=[ordered]@{pid=$c.Id;expectedPath=$compiler;maximumSeconds=60};OrderedStamp 'compiler-pid'
+[void]$c.Handle;OrderedStamp 'compiler-identity-read';$script:orderedCompilerIdentity=ProcessIdentity $c
 $stamp=$script:orderedCompilerIdentity.startTicks;$r.compiler=[ordered]@{pid=$c.Id;startTicks=$stamp;path=$compiler;maximumSeconds=60}
+OrderedStamp 'compiler-wait'
 if(-not $c.WaitForExit(60000)){
 StopOwnedCompiler;$r.compiler.stopped=$true
 throw 'Owned compiler exceeded 60 seconds'}
+OrderedStamp 'compiler-exit-read'
 if($null -eq $c.ExitCode){throw 'Owned compiler exit code is unavailable'}
 $r.compiler.exitCode=$c.ExitCode;$r.compiler.exited=$true
+OrderedStamp 'compiler-complete'
 if($c.ExitCode -ne 0){throw 'Compile failed; see retained compiler logs'}
 ''') + tail[end:]
         old_wait = '$r.processID=$x.Id;$r.exited=$x.WaitForExit(' + str(wait_seconds * 1000) + ')'
-        new_wait = r'''[void]$x.Handle;$r.playerIdentity=RememberPlayer $x;$r.processID=$x.Id;$r.playerStartUTC=$x.StartTime.ToUniversalTime().ToString('o')
+        new_wait = r'''$r.processID=$x.Id;OrderedStamp 'player-pid'
+[void]$x.Handle;OrderedStamp 'player-birth-read';$r.playerStartUTC=$x.StartTime.ToUniversalTime().ToString('o')
+OrderedStamp 'player-identity-read';$r.playerIdentity=RememberPlayer $x
+OrderedStamp 'player-executable-hash'
 $r.playerExecutableSHA256=Sha "$root\CharaStudio.exe";$playerWatch=[Diagnostics.Stopwatch]::StartNew()
+OrderedStamp 'player-monitor'
 while(-not $x.HasExited -and $playerWatch.Elapsed.TotalSeconds -lt ''' + str(wait_seconds) + r'''){
 ObservePlayerChildren;[void]$x.WaitForExit(250)}
-$r.exited=$x.HasExited;if($r.exited){if($null -eq $x.ExitCode){throw 'Owned player exit code is unavailable'};$r.playerExitCode=$x.ExitCode}'''
+OrderedStamp 'player-exit-read';$r.exited=$x.HasExited
+if($r.exited){if($null -eq $x.ExitCode){throw 'Owned player exit code is unavailable'};$r.playerExitCode=$x.ExitCode}
+OrderedStamp 'player-complete' '''
         if old_wait not in tail: raise AssertionError('Ordered wait insertion point changed')
         tail = tail.replace(old_wait, new_wait, 1)
-        tail = tail.replace('$left=Own;$left|Stop-Process -Force;$r.stopped=@($left|ForEach-Object{$_.Id});', '$r.stopped=StopPlayerOwners;', 1)
-        tail = tail.replace('$left=Own;$left|Stop-Process -Force -ErrorAction SilentlyContinue;$r.stoppedAtCleanup=@($left|ForEach-Object{$_.Id});',
-                            "try{StopOwnedCompiler}catch{$r.cleanupError=$_.ToString()};try{$r.stoppedAtCleanup=StopPlayerOwners}catch{$r.cleanupError+='; '+$_.ToString()};", 1)
+        tail = tail.replace('$x=Start-Process', "OrderedStamp 'player-start'\n$x=Start-Process", 1)
+        tail = tail.replace('$left=Own;$left|Stop-Process -Force;$r.stopped=@($left|ForEach-Object{$_.Id});', "OrderedStamp 'player-drain';$r.stopped=StopPlayerOwners;", 1)
+        tail = tail.replace("foreach($n in @('unity.log'", "OrderedStamp 'capture-logs'\nforeach($n in @('unity.log'", 1)
+        tail = tail.replace('$z="$root\\reload.zip";', "OrderedStamp 'capture-archive'\n$z=\"$root\\reload.zip\";", 1)
         tail = tail.replace('Invoke-WebRequest -UseBasicParsing -Method Put', 'Invoke-WebRequest -UseBasicParsing -TimeoutSec 30 -Method Put')
-        tail = tail.replace("Invoke-WebRequest -UseBasicParsing -TimeoutSec 30 -Method Put", "if($r.zipBytes -gt 134217728){throw 'Ordered capture exceeds 128 MiB'}\nInvoke-WebRequest -UseBasicParsing -TimeoutSec 30 -Method Put", 1)
+        tail = tail.replace("Invoke-WebRequest -UseBasicParsing -TimeoutSec 30 -Method Put", "if($r.zipBytes -gt 134217728){throw 'Ordered capture exceeds 128 MiB'}\nOrderedStamp 'capture-upload'\nInvoke-WebRequest -UseBasicParsing -TimeoutSec 30 -Method Put", 1)
         # Retain compiler/partial probe output even when no successful player
-        # result reaches the normal upload. No second player/compile attempt.
-        tail = tail.replace('$kept=@()', r'''if(-not $r.zipSHA256 -and $out -and (Test-Path -LiteralPath $out)){
-try{$z="$root\partial.zip";[IO.Compression.ZipFile]::CreateFromDirectory($out,$z)
+        # result reaches the normal upload. Each cleanup step retains its own
+        # error; it cannot replace the primary error or suppress the envelope.
+        tail = tail[:tail.index('}catch{$r.error=$_.ToString()}')] + r'''}catch{
+$r.errorStage=$r.stage;$r.error=$_.ToString();$r.errorPosition=$_.InvocationInfo.PositionMessage
+OrderedStamp 'primary-error'
+}finally{
+try{
+try{OrderedStamp 'cleanup-compiler';StopOwnedCompiler}catch{OrderedCleanupFailure $_}
+try{OrderedStamp 'cleanup-player';$r.stoppedAtCleanup=StopPlayerOwners}catch{OrderedCleanupFailure $_}
+if(-not $r.zipSHA256 -and $out -and (Test-Path -LiteralPath $out)){
+try{OrderedStamp 'partial-archive';$z="$root\partial.zip";[IO.Compression.ZipFile]::CreateFromDirectory($out,$z)
 $r.zipSHA256=Sha $z;$r.zipBytes=(Get-Item -LiteralPath $z).Length
 if($r.zipBytes -gt 134217728){throw 'Ordered partial capture exceeds 128 MiB'}
+OrderedStamp 'partial-upload'
 Invoke-WebRequest -UseBasicParsing -TimeoutSec 30 -Method Put -InFile $z -ContentType 'application/zip' -Uri ($base+'reload.zip')|Out-Null
-}catch{$r.partialUploadError=$_.ToString()}}
-$kept=@()''', 1)
+}catch{$r.partialUploadError=$_.ToString();OrderedCleanupFailure $_}}
+try{
+OrderedStamp 'root-removal-proof';$r.rootRemovalReady=RootRemovalReady
+if(-not $r.rootRemovalReady){throw 'Root retained: exact owner exit or detached-child drain is unproven'}
+OrderedStamp 'junction-removal';$kept=@()
+foreach($j in @("$root\abdata","$root\CharaStudio_Data")){if(Test-Path -LiteralPath $j){if((Get-Item -LiteralPath $j -Force).Attributes -band [IO.FileAttributes]::ReparsePoint){cmd /c rmdir "$j"|Out-Null}if(Test-Path -LiteralPath $j){$kept+=$j}}}
+if($kept.Count){throw ('junctions not removed: '+($kept -join ', '))}
+OrderedStamp 'root-removal';if(Test-Path -LiteralPath $root){Remove-Item -LiteralPath $root -Recurse -Force}
+}catch{OrderedCleanupFailure $_}
+try{OrderedStamp 'remaining-processes';$r.removed=-not(Test-Path -LiteralPath $root)
+$r.remainingGameProcesses=@(Get-Process CharaStudio,Koikatu -ErrorAction SilentlyContinue|ForEach-Object{$_.Id})}catch{OrderedCleanupFailure $_}
+OrderedStamp 'runtime-after'
+$r.junctionTargetsAfter=Targets
+$r.junctionTargetsChanged=(($r.junctionTargetsBefore|ConvertTo-Json -Compress) -ne ($r.junctionTargetsAfter|ConvertTo-Json -Compress))
+}catch{OrderedCleanupFailure $_}finally{
+OrderedStamp 'final-envelope';[Console]::Error.WriteLine('ORDERED_FINAL:'+($r|ConvertTo-Json -Compress -Depth 6))}
+}
+[PSCustomObject]$r|ConvertTo-Json -Compress -Depth 6
+'''
         head = head.replace('Invoke-WebRequest -UseBasicParsing -Uri', 'Invoke-WebRequest -UseBasicParsing -TimeoutSec 30 -Uri')
         # Bound the inherited target-metadata and exact-zipmod traversal too.
         head = head.replace('$f=0;$d=0;$t=$i.LastWriteTimeUtc', '$f=0;$d=0;$t=$i.LastWriteTimeUtc;$watch=[Diagnostics.Stopwatch]::StartNew()')
@@ -554,6 +620,17 @@ def run_rewrite(vm, output, errno_baseline, phase, files, zipmod, collider, host
         result = (ordered_transport(command, output, record, timeout) if ordered else
                   subprocess.run(command, text=True, capture_output=True, timeout=timeout))
         upload = endpoint.upload
+    if ordered and upload is not None:
+        # A late guest/finally error must not discard bytes already delivered
+        # by the capture endpoint. Retention is not provenance acceptance or
+        # extraction: those still require the matching guest envelope below.
+        if len(upload) > 128 * 1024 * 1024:
+            record['unverifiedUploadBytes'] = len(upload)
+            dump(output / 'run.json', record)
+            raise ValueError('Ordered transport upload exceeds 128 MiB')
+        (output / 'transport-upload.zip').write_bytes(upload)
+        record['unverifiedUpload'] = dict(file='transport-upload.zip', bytes=len(upload), sha256=digest(upload))
+        dump(output / 'run.json', record)
     record['errnoAfter'] = errno_count()
     if result.returncode:
         record['execError'] = (result.stderr or result.stdout)[-4000:]; dump(output / 'run.json', record)
@@ -572,6 +649,7 @@ def run_rewrite(vm, output, errno_baseline, phase, files, zipmod, collider, host
     (output / 'source').mkdir(exist_ok=True)
     for name, data in sources.items(): (output / 'source' / name).write_bytes(data)
     retained = ['run.json', 'run.ps1'] + (['source-fixture.png', 'exec.stdout', 'exec.stderr'] if ordered else [])
+    if ordered and upload is not None: retained.append('transport-upload.zip')
     provenance = [dict(file=str(p.relative_to(output)), sha256=digest(p.read_bytes()), bytes=p.stat().st_size)
                   for p in sorted([output / n for n in set(names + retained)] + list((output / 'source').iterdir())) if p.is_file()]
     dump(output / 'manifest.json', dict(schemaVersion=1, inputs=input_hashes, files=provenance))
