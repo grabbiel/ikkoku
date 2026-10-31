@@ -4669,13 +4669,17 @@ extension PluginLibraryScenario {
                                 && (!warm || preview.map(ObjectIdentifier.init) != oldPreview)
                                 && preview?.reference == (variant == "plainPending" ? nil : saved.objects[0].sourceCharacter))
                             let beforeResources = resourceCounts()
+                            try persist(["old": oldPreview.map { String(describing: $0) } ?? "nil",
+                                "candidate": preview.map { String(describing: ObjectIdentifier($0)) } ?? "nil"], prefix + "-preview-owners")
+                            try persist(beforeResources, prefix + "-resources-before")
                             try studio.stepSourcePlugins(deltaTime: 0.02)
                             let continued = try session.savedDocument(); try persist(continued, prefix + "-continued")
                             try persist(session.runtime.callbackTrace, prefix + "-callbacks")
                             try check(prefix + "Continuation", continued.objects == oracle.document.objects
                                 && continued.sourcePluginState == oracle.document.sourcePluginState && session.runtime.callbackTrace == oracle.callbacks)
+                            let afterResources = resourceCounts(); try persist(afterResources, prefix + "-resources-after")
                             try check(prefix + "PreviewReused", studio.sourceShapePreview(for: parent) === preview
-                                && resourceCounts() == beforeResources)
+                                && afterResources == beforeResources)
                         }
                     }
                     if variant == "readerPending" {
@@ -4712,10 +4716,14 @@ extension PluginLibraryScenario {
                 _ = try SourceStudioPluginWorld(document: bounded, identities: bounded.sourcePluginState!.objectIdentities,
                     pendingDestructionRoots: bounded.sourcePluginState!.pendingDestructionRoots!)
                 let membership = StudioModel.PluginAttachmentRestorePreparation.PendingMembership(document: bounded)
+                try persist(["indexedObjects": membership.indexedObjects, "descendantEdges": membership.descendantEdges,
+                    "ancestorEdges": membership.ancestorEdges, "blocked": membership.blocked.count], "membership-index")
                 try check("MembershipIndex", membership.blocked == Set(chain.map(\.id))
                     && membership.indexedObjects == bounded.objects.count && membership.descendantEdges == 511
                     && membership.ancestorEdges <= bounded.objects.count + chain.count)
                 let empty = StudioModel.PluginAttachmentRestorePreparation.PendingMembership(document: try withRoots(bounded, []))
+                try persist(["indexedObjects": empty.indexedObjects, "descendantEdges": empty.descendantEdges,
+                    "ancestorEdges": empty.ancestorEdges, "blocked": empty.blocked.count], "membership-empty")
                 try check("MembershipNoPending", empty.blocked.isEmpty && empty.indexedObjects == 0
                     && empty.descendantEdges == 0 && empty.ancestorEdges == 0)
                 for origin in ["profile", "library"] {
@@ -4777,6 +4785,7 @@ extension PluginLibraryScenario {
                                 oracle = try SourceStudioPluginSession(selection: request.selection, resolution: request.selection.resolve(),
                                     configuration: request.configuration, document: candidate, restoring: candidate.sourcePluginState, attachment: resolver)
                             }
+                            try persist(["initializationRequestedDestruction": oracle.initializationRequestedDestruction], origin + "-" + kind + "-oracle-observation")
                             try persist(calls, origin + "-" + kind + "-oracle-calls")
                             try persist(try oracle.savedDocument(), origin + "-" + kind + "-oracle-restored")
                             try check(origin + "-" + kind + "RequestOracle", calls == Array(repeating:
