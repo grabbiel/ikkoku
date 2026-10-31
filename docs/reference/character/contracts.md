@@ -199,6 +199,30 @@ isolate the removed traversal. The change adds no asset coverage or source-game
 parity claim, and the broader owner-thread work in [#192](https://github.com/grabbiel/ikkoku/issues/192)
 remains open.
 
+### Decoded-contract reuse foundation (local checkpoint)
+
+Local checkpoint `48885ea4`, reviewed on 2026-10-31, adds immutable contract
+holders and a persistent admission ledger. It is not yet connected to Maker
+preparation: this checkpoint avoids no application decoding and establishes no
+selection-latency improvement. Optional preparation and guarded owner publication
+remain the next implementation step.
+
+The ledger bounds live holders to six entries, 8 MiB of logical entry charge and
+four snapshots, including values retained by canceled workers and delayed
+deliveries across resets. Charges use checked native element strides and UTF-8
+lengths; they exclude spare capacity, allocator headers, temporary decode storage
+and native value copies outside the cache. This is not an RSS bound.
+
+All 12 focused tests passed without skips at that checkpoint, covering Unicode
+accounting, overflow, immutable copies, concurrent admission, foreign/stale
+publication, cancellation, reset, delivery retention and release outside locks.
+The six pinned female/male head 0/200/201 contracts total 2,434,206 logical entry
+bytes on the tested arm64 host; a six-entry snapshot adds 96 reference bytes.
+The complete 88-entry build-product archive remained unchanged before and after
+the run, and every observed process released. These foundation checks do not
+replace future Maker save/reload, failure-path, matched-output or quiet timing
+gates for the integrated cache.
+
 ### Shape evaluation boundary
 
 `SourceShapeChannels.swift` strictly loads the generated schema, reconstructs
