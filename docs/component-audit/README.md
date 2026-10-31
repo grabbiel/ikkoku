@@ -92,7 +92,11 @@ acceptance boundary; their old “next” steps are historical, not a live queue
   and reduces the selected case from 16 waits to six;
   its small timing comparison retains mixed owner-thread results. See
   [#208](https://github.com/grabbiel/ikkoku/issues/208); remaining stalls stay
-  tracked in [#192](https://github.com/grabbiel/ikkoku/issues/192). New base-load
+  tracked in [#192](https://github.com/grabbiel/ikkoku/issues/192).
+  [Shape-domain validation](../reference/character/contracts.md#validate-decoded-domains-once)
+  now avoids a second traversal of immutable decoded domains. Focused tests and
+  matched Maker checks preserve behavior; the quiet pair shows no consistent
+  selection-latency improvement. New base-load
   diagnostics attribute most cold base-appearance time to MetalKit texture
   loading. A separately validated worker diagnostic attributes 88–90% of the
   selected preparation operation to rig decoding, validation and conversion.

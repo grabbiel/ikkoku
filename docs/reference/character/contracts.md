@@ -164,6 +164,43 @@ through JSON; preservation does not imply native plug-in execution.
 
 ## Native scope and limits
 
+### Validate decoded domains once
+
+`SourceShapeDomain.init(from:)` validates each complete, immutable domain before
+returning it. The containing `SourceShapeContract` retains its schema, coordinate,
+range, domain-count and duplicate-ID checks without traversing every domain a
+second time. Direct domain decoding and embedded contract decoding retain the
+same typed errors, error order, coding paths, sampled states and destination masks.
+
+Acceptance on 2026-10-31 used candidate `51bb3073` against runtime control
+`890b1468` with matching toolchains and pinned inputs. All 28 focused tests passed
+without skips, including the recovered shape/body/face checks. Fresh Release
+Maker collections passed 248 functional checks: female/male selected and reloaded
+exports matched between arms, all 12 corresponding resource/work records matched,
+and four reloads consumed their own newly exported cards. The build runners first
+recorded exit 126 for lingering owned compiler children; both children released
+naturally, and supplemental full-bundle verification accepted the products without
+rebuilding or rewriting those raw results.
+
+A separate quiet collection ran female ABBA and male BAAB, with two processes per
+arm/sex and six head transitions per process. Its 152 checks, 48 stage records,
+16 no-op checks and eight exports passed with matching non-timing work and bytes.
+The following medians pool 12 observations per arm/sex; those observations are
+clustered within two processes and are not 12 independent launches.
+
+| Sex | Shape decode, control → candidate | Selection, control → candidate |
+| --- | --- | --- |
+| Female | 22.55 → 22.49 ms | 217.70 → 215.73 ms |
+| Male | 22.43 → 22.59 ms | 214.63 → 217.52 ms |
+
+This removes a redundant validation traversal but establishes no consistent
+latency improvement. `shapeDecode` includes decoding and validation; it does not
+isolate the removed traversal. The change adds no asset coverage or source-game
+parity claim, and the broader owner-thread work in [#192](https://github.com/grabbiel/ikkoku/issues/192)
+remains open.
+
+### Shape evaluation boundary
+
 `SourceShapeChannels.swift` strictly loads the generated schema, reconstructs
 default source state, samples channels, applies masked slider values, and emits
 verified direct destination updates. It validates dimensions, finite numbers,
