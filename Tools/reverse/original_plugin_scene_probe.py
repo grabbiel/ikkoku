@@ -390,6 +390,9 @@ $r.junctionTargetsChanged=(($r.junctionTargetsBefore|ConvertTo-Json -Compress) -
 [PSCustomObject]$r|ConvertTo-Json -Compress -Depth 6
 """)
     if ordered:
+        head = head.replace('[Net.ServicePointManager]::Expect100Continue=$false', r'''$r.guestPID=$PID;$r.guestStartUTC=(Get-Process -Id $PID).StartTime.ToUniversalTime().ToString('o')
+[Console]::Error.WriteLine('ORDERED_GUEST:'+(@{pid=$PID;startUTC=$r.guestStartUTC;root=$root}|ConvertTo-Json -Compress))
+[Net.ServicePointManager]::Expect100Continue=$false''', 1)
         # The compiler is outside the private root. Retain its exact instance
         # and bound that process separately, before any original player starts.
         start = tail.index('$c=& '); end = tail.index('$r.playerArguments=')
