@@ -6,7 +6,7 @@ import Scene
 /// their named leaf APIs; these nested durations must not be summed together.
 public final class SourceMakerPreparationTimings {
     public enum Phase: String, Sendable {
-        case manifestRead, manifestDecode, shapeRead, shapeDecode
+        case manifestRead, manifestDecode, shapeRead, shapeDecode, shapeReuseSHA, shapeReuseAdmission
         case expressionRead, expressionDecode, correctionRead, bodyOptions, settingsValidation
         case libraryPreparation, libraryManifestRead, libraryManifestDecode
         case verifiedFileRead, verifiedFileSHA, rigRead, rigReuseSHA, rigDecode, assembly
@@ -72,6 +72,8 @@ public struct SourceMakerHeadPreparation: Sendable {
     public let workerStages: SourceMakerPreparationTimings.Sample?
     public let rigReuseCandidate: SourceMakerRigReuse.Candidate?
     public let rigReuseSample: SourceMakerRigReuse.Sample?
+    public let shapeReuseCandidate: SourceMakerShapeReuse.Candidate?
+    public let shapeReuseSample: SourceMakerShapeReuse.Sample?
 
     /// `baseURL` is a configuration snapshot for the sex's head-0 assembly, not
     /// the currently displayed head-200/201 URL. Assembly/contract I/O and the
@@ -79,7 +81,8 @@ public struct SourceMakerHeadPreparation: Sendable {
     /// component image loads, GPU composition and resources remain owner-side.
     public static func prepare(card: SourceCharacterCard, library: SourceMakerLibrary,
                                coordinate: Int, baseURL: URL?, timings: SourceMakerPreparationTimings? = nil,
-                               rigReuse: SourceMakerRigReuse.Input? = nil) throws -> Self {
+                               rigReuse: SourceMakerRigReuse.Input? = nil,
+                               shapeReuse: SourceMakerShapeReuse.Input? = nil) throws -> Self {
         try card.validateMakerSelectionMetadata()
         try SourceMakerLibrary.validateAssemblyIdentity(card: card)
         let identity = try card.customization()
@@ -119,10 +122,12 @@ public struct SourceMakerHeadPreparation: Sendable {
               (manifest.headID ?? 0) == identity.headID else {
             throw RigError.invalid("Selected card and head assembly identities differ.")
         }
+        let shapeReuseWorker = shapeReuse.map(SourceShapeReuseWorker.init)
         let contract: SourceShapeContract
         do {
             let bytes = try companion("character-shape-contract.json", maximum: 64 * 1024 * 1024, phase: .shapeRead)
-            contract = try SourceMakerPreparationTimings.measure(timings, .shapeDecode) { try SourceShapeContract.decode(bytes) }
+            if let shapeReuseWorker { contract = try shapeReuseWorker.decode(bytes, timings: timings) }
+            else { contract = try SourceMakerPreparationTimings.measure(timings, .shapeDecode) { try SourceShapeContract.decode(bytes) } }
         }
         let expressions: SourceExpressionContract
         do {
@@ -145,9 +150,11 @@ public struct SourceMakerHeadPreparation: Sendable {
             try assets.prepareAppearanceInputs(card: SourceCardAppearance(card: card, coordinate: coordinate), baseURL: url, timings: timings)
         }
         let reuseResult = reuseWorker?.finish()
+        let shapeReuseResult = shapeReuseWorker?.finish()
         return Self(manifestURL: url, sex: identity.sex, headID: identity.headID,
             boneType: identity.boneType, coordinate: coordinate, assets: assets, contract: contract,
             expressions: expressions, bodyOptions: options, appearanceInputs: appearanceInputs, workerStages: timings?.sample,
-            rigReuseCandidate: reuseResult?.0, rigReuseSample: reuseResult?.1)
+            rigReuseCandidate: reuseResult?.0, rigReuseSample: reuseResult?.1,
+            shapeReuseCandidate: shapeReuseResult?.0, shapeReuseSample: shapeReuseResult?.1)
     }
 }

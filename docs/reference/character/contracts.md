@@ -199,6 +199,89 @@ isolate the removed traversal. The change adds no asset coverage or source-game
 parity claim, and the broader owner-thread work in [#192](https://github.com/grabbiel/ikkoku/issues/192)
 remains open.
 
+### Bounded decoded-contract reuse
+
+Runtime checkpoint `4ad74a45`, reviewed on 2026-10-31, connects immutable shape
+contracts to optional normal-head preparation. Every preparation still performs
+the original contained, size-checked file read. Reuse keys combine SHA-256 of
+those actual bytes, their length and the decoder version; a hit skips only
+decoding. The default nil input preserves the original preparation path without
+cache hashing, admission or new timing work. Later expression, rig and appearance
+validation retains its original order.
+
+The ledger bounds live holders to six entries, 8 MiB of logical entry charge and
+four snapshots, including values retained by canceled workers and delayed
+deliveries across resets. Charges use checked native element strides and UTF-8
+lengths; they exclude spare capacity, allocator headers, temporary decode storage
+and native value copies outside the cache. This is not an RSS bound.
+
+The worker stages a candidate only after successful CPU preparation. Maker
+publishes it beside rig reuse after the selection-generation and active-mode
+checks and all fallible preview, appearance and frame preparation. Failed or
+canceled selections retain the previous cache. Reset epochs reject stale
+delivery; a full ledger requests a clear only on successful owner commit, while
+an intrinsically oversized contract bypasses admission without evicting entries.
+
+All 20 focused tests passed without skips, including the 12 foundation checks
+at `48885ea4`. They cover Unicode accounting, overflow, immutable copies,
+concurrent admission, foreign/stale publication, cancellation, reset, delivery
+retention and release outside locks. Integration regressions preserve typed
+errors and read/size/validation order, including changed bytes at the same path,
+length and timestamp. Eighteen normal-head combinations preserve decoded
+contracts and evaluated body/face states; six warm observations each reuse one
+contract without decoding and retain three entries totaling 1,217,103 logical
+bytes.
+
+The six pinned female/male head 0/200/201 contracts total 2,434,206 logical entry
+bytes on the tested arm64 host; a six-entry snapshot adds 96 reference bytes.
+The complete 88-entry build-product archive remained unchanged before and after
+the focused run, and every observed process released.
+
+Fresh unsigned arm64 Release apps at candidate `4ad74a45` and control `ab1aae04`
+passed bundle inspection. Both build wrappers originally reported surviving
+Interface Builder children after compilation; those failures are retained.
+The children exited naturally, and separate archive/inspection receipts accepted
+the artifacts without rebuilding. The candidate binary SHA-256 begins
+`88143c65`; the control begins `a2722f30`.
+
+The two apps passed 248 functional scenario checks covering female/male heads
+0/200/201, failure recovery, cancellation, edits and save/reload. Four matching
+export roles produced byte-identical cards across the apps. Resource counts and
+non-shape work matched at all 12 compared selection stages. The candidate still
+read and hashed each selected contract; failed preparations did not warm reuse.
+These checks establish state and persistence behavior.
+
+The 16 exported cards also contain 32 freshly rendered thumbnails: full-body
+504×704 and face 256×256. A separate CRC and RGBA decode audit, independently
+checked with Pillow, finds zero changed pixels in 20 corresponding comparisons.
+All export invocations bind to successful scenario reports; four candidate pair
+exports follow a verified head-0 cache hit. The source path renders from the
+committed preview and its current contract, replacing both thumbnails. This
+covers static customization rendering, not the live animated viewport or every
+head. The first offline audit failed on an import-name mistake before reading
+images; that failure is retained beside the corrected audit.
+
+A quiet female ABBA / male BAAB sequence passed 152 additional checks across
+eight fresh processes, retaining all 48 selection observations. Each process
+selected heads 200, 201 and 0 twice. The table reports arithmetic means of six
+selections per cell, with only two independent processes per arm and sex:
+
+| Sex | First-use selection, control → candidate | Repeated selection, control → candidate |
+| --- | --- | --- |
+| Female | 480.07 → 482.69 ms | 102.97 → 80.85 ms |
+| Male | 493.65 → 496.09 ms | 102.70 → 80.89 ms |
+
+Repeated selections skip about 22 ms of shape decoding while adding about
+0.55 ms of hashing. First use adds hashing and an approximately 0.08 ms admission
+traversal; its measured total selection time increases by 2.4–2.6 ms. Every
+repeated sex/head cell improves in this cohort. Inclusive phase durations are
+not added together. First use means first occurrence in that process, not a
+cold disk cache. Ordinary desktop activity and an idle VM remained, and head
+observations within a process are correlated. No selections were excluded.
+This supports a bounded repeated-selection benefit, not an FPS, RSS or general
+source-fidelity claim. Owner-thread changes are mixed; [#192](https://github.com/grabbiel/ikkoku/issues/192)
+remains open.
+
 ### Shape evaluation boundary
 
 `SourceShapeChannels.swift` strictly loads the generated schema, reconstructs
