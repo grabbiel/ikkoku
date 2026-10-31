@@ -29,11 +29,12 @@ struct LiveTickFailure: Error, CustomStringConvertible {
 }
 
 /// Runs `body` on a thread of its own and suspends the calling test until it
-/// returns. Building a preview blocks its thread in MetalKit's synchronous
-/// texture load (`ResourceStore.texture`). A parallel `swift test` hung twice
-/// with every thread of its test pool blocked there, with these tests running
-/// on that pool. Without these tests, the suite passed. Here they hold no
-/// pool thread while they load or step. Their checks stay in the test's own
+/// returns. Building a preview blocks its thread in synchronous texture loads
+/// (`ResourceStore.texture`). While those went through MetalKit, a parallel
+/// `swift test` hung twice with every thread of its test pool blocked there,
+/// with these tests running on that pool. Loads no longer wait on any pool
+/// (`InlineTextureLoader`); these tests still hold no pool thread while they
+/// load or step. Their checks stay in the test's own
 /// task: `body` returns what they compare.
 func liveTickOffPool<T: Sendable>(_ body: @escaping @Sendable () throws -> T) async throws -> T {
     try await withCheckedThrowingContinuation { continuation in

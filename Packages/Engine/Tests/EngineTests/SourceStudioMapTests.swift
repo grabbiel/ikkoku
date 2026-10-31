@@ -156,10 +156,10 @@ private struct MapFixture {
     func remove() { try? FileManager.default.removeItem(at: root) }
 }
 
-/// A map load blocks its thread in MetalKit's synchronous texture load, and
+/// A map load blocks its thread in synchronous texture loads, and
 /// `SourceStudioMapLoad.wait()` blocks until it ends. Both run on a thread of
 /// their own (`liveTickOffPool`), so these tests hold no test-pool thread
-/// (a parallel `swift test` once hung with every pool thread in that load);
+/// (a parallel `swift test` once hung with every pool thread in MetalKit's load);
 /// the checks stay in the test's task.
 @Suite(.serialized, .enabled(if: MTLCreateSystemDefaultDevice() != nil))
 struct SourceStudioMapAssetTests {

@@ -50,6 +50,13 @@ There is deliberately no whole-game completion percentage: a complete original
 feature inventory and a common denominator across installed assets, DLC and mods
 have not been established. Current catalog counts state their actual denominators.
 
+**2026-10-31 — texture corpus validation:** Local `46a94326` closes a false-pass
+path where missing or undecodable captured textures could count as matching
+failures. Eleven focused tests pass: 138 positive corpus loads must create and
+read back both textures, while one exact synthetic negative stays explicit.
+Runtime behavior and pixel tolerances are unchanged. Final-runtime acceptance
+for the in-line loader remains separate; see the [renderer contract](../reference/renderer.md).
+
 ## Component-level assessment
 
 | Component | Overall stage | Main remaining boundary |
