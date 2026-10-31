@@ -235,11 +235,43 @@ bytes.
 The six pinned female/male head 0/200/201 contracts total 2,434,206 logical entry
 bytes on the tested arm64 host; a six-entry snapshot adds 96 reference bytes.
 The complete 88-entry build-product archive remained unchanged before and after
-the focused run, and every observed process released. These are CPU integration
-checks: the Maker app build and fresh save/reload, failure-path, matched-frame
-and export gates remain pending. Enabled reuse adds a hash per non-noop read
-and an admission traversal on misses. Quiet matched measurements are still
-required before claiming a selection-latency improvement.
+the focused run, and every observed process released.
+
+Fresh unsigned arm64 Release apps at candidate `4ad74a45` and control `ab1aae04`
+passed bundle inspection. Both build wrappers originally reported surviving
+Interface Builder children after compilation; those failures are retained.
+The children exited naturally, and separate archive/inspection receipts accepted
+the artifacts without rebuilding. The candidate binary SHA-256 begins
+`88143c65`; the control begins `a2722f30`.
+
+The two apps passed 248 functional scenario checks covering female/male heads
+0/200/201, failure recovery, cancellation, edits and save/reload. Four matching
+export roles produced byte-identical cards across the apps. Resource counts and
+non-shape work matched at all 12 compared selection stages. The candidate still
+read and hashed each selected contract; failed preparations did not warm reuse.
+These checks establish state and persistence behavior. Separate rendered-frame
+comparisons remain pending before integration acceptance.
+
+A quiet female ABBA / male BAAB sequence passed 152 additional checks across
+eight fresh processes, retaining all 48 selection observations. Each process
+selected heads 200, 201 and 0 twice. The table reports arithmetic means of six
+selections per cell, with only two independent processes per arm and sex:
+
+| Sex | First-use selection, control → candidate | Repeated selection, control → candidate |
+| --- | --- | --- |
+| Female | 480.07 → 482.69 ms | 102.97 → 80.85 ms |
+| Male | 493.65 → 496.09 ms | 102.70 → 80.89 ms |
+
+Repeated selections skip about 22 ms of shape decoding while adding about
+0.55 ms of hashing. First use adds hashing and an approximately 0.08 ms admission
+traversal; its measured total selection time increases by 2.4–2.6 ms. Every
+repeated sex/head cell improves in this cohort. Inclusive phase durations are
+not added together. First use means first occurrence in that process, not a
+cold disk cache. Ordinary desktop activity and an idle VM remained, and head
+observations within a process are correlated. No selections were excluded.
+This supports a bounded repeated-selection benefit, not an FPS, RSS or general
+source-fidelity claim. Owner-thread changes are mixed; [#192](https://github.com/grabbiel/ikkoku/issues/192)
+remains open.
 
 ### Shape evaluation boundary
 
