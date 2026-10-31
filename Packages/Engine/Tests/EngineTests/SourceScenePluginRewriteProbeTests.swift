@@ -86,6 +86,7 @@ func sourceSceneOrderedDeleteDuplicateDiagnostic() throws {
             let saved = try load("edit-\(label).png"), resaved = try load("resave-edit-\(label).png")
             let expected = try KoikatsuSceneReader.decodeDocument(saved)
             let observed = try #require(cases[label]), actions = try #require(observed["actions"] as? [[String: Any]])
+            try #require(actions.count == 2, "Exactly two paired action records are required")
             try #require(observed["source"] as? String == "fixture.png")
             try #require(observed["savedSHA256"] as? String == hash(saved))
             try #require(observed["resavedSHA256"] as? String == hash(resaved))
