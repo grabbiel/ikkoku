@@ -1558,12 +1558,48 @@ final class StudioModel: ViewportInputHandler, LivePacedHandler {
     /// Native open/history callbacks belong to a different document. Even a
     /// matching UUID cannot borrow the old document's preview, clock or policy.
     @MainActor final class PluginAttachmentRestorePreparation {
+        /// Event-local membership, constructed only after the session has
+        /// validated hierarchy/roots. Counts bound work without timing claims.
+        struct PendingMembership {
+            let blocked: Set<UUID>
+            let indexedObjects: Int, descendantEdges: Int, ancestorEdges: Int
+
+            init(document: StudioDocument) {
+                let roots = document.sourcePluginState?.pendingDestructionRoots ?? []
+                guard !roots.isEmpty else {
+                    blocked = []; indexedObjects = 0; descendantEdges = 0; ancestorEdges = 0; return
+                }
+                var parents: [UUID: UUID] = [:], children: [UUID: [UUID]] = [:]
+                for object in document.objects {
+                    if let parent = object.parent {
+                        parents[object.id] = parent; children[parent, default: []].append(object.id)
+                    }
+                }
+                var descendants = Set<UUID>(), ancestors = Set<UUID>(), remaining = roots
+                var down = 0, up = 0
+                while let id = remaining.popLast() {
+                    guard descendants.insert(id).inserted else { continue }
+                    let next = children[id] ?? []; down += next.count; remaining.append(contentsOf: next)
+                }
+                for root in roots {
+                    var id = root
+                    while let parent = parents[id] {
+                        up += 1
+                        guard ancestors.insert(parent).inserted else { break }
+                        id = parent
+                    }
+                }
+                blocked = descendants.union(ancestors)
+                indexedObjects = document.objects.count; descendantEdges = down; ancestorEdges = up
+            }
+        }
         private weak var studio: StudioModel?
         private var document: StudioDocument?
         private let blockedObjects: Set<UUID>
         private let animationElapsed: Float
         private var cold: [UUID: SourceStudioCharacterPreview] = [:]
         private var appearance: SourceAppearanceLoadTransaction?
+        private(set) var pendingMembership: PendingMembership?
         private var committed = false, aborted = false
         private(set) var didReadAttachment = false
 
@@ -1596,6 +1632,13 @@ final class StudioModel: ViewportInputHandler, LivePacedHandler {
             guard !blockedObjects.contains(original.id) else {
                 throw RigError.invalid("Character '\(parent.name)' has an unresolved resource reference; see the source compatibility details.")
             }
+            // The session validates saved roots before invoking any resolver.
+            // Only unrelated saved subtrees are supported: a pending ancestor,
+            // parent, reader or descendant must fail before allocating a preview.
+            if pendingMembership == nil { pendingMembership = PendingMembership(document: document) }
+            guard !pendingMembership!.blocked.contains(original.id), !pendingMembership!.blocked.contains(child.id) else {
+                throw SourcePluginError.invalid("Saved pending destruction overlaps the plugin attachment parent or reader subtree.")
+            }
             let preview: SourceStudioCharacterPreview
             if let cached = cold[parent.id] {
                 guard cached.reference == reference, cached.coordinate == (parent.sourceOutfit ?? cached.savedCoordinate) else {
@@ -1624,12 +1667,12 @@ final class StudioModel: ViewportInputHandler, LivePacedHandler {
                     studio.sourceInstances[id] = preview
                 }
             }
-            committed = true; cold.removeAll(); appearance = nil; self.document = nil
+            committed = true; cold.removeAll(); appearance = nil; pendingMembership = nil; self.document = nil
         }
 
         func abort() {
             guard !committed && !aborted else { return }
-            cold.removeAll(); appearance = nil; document = nil; aborted = true
+            cold.removeAll(); appearance = nil; pendingMembership = nil; document = nil; aborted = true
         }
     }
 

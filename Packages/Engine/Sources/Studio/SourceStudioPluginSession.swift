@@ -39,6 +39,9 @@ public final class SourceStudioPluginSession {
         let schemaVersion: Int, fixedDeltaTime: Float, packages: [Package]
     }
     public let world: SourceStudioPluginWorld, runtime: SourcePluginRuntime, library: SourcePluginLibrary
+    /// Valid Destroy requests while replaying a saved session's construction,
+    /// even if the requested root was already pending. Fresh installs keep false.
+    public let initializationRequestedDestruction: Bool
     public let profileURL: URL?, profileSHA256: String?
     public let libraryConfigurationSHA256: String?
     private let packageIdentities: [SourceStudioPluginState.PackageIdentity]
@@ -135,6 +138,10 @@ public final class SourceStudioPluginSession {
         } else { restoreBaseline = nil }
         runtime = try SourcePluginRuntime(world: world, fixedDeltaTime: fixedDeltaTime)
         if let saved { try runtime.restoreClock(saved.clock) }
+        let observedWorld = world
+        var requestedDestruction = false
+        if saved != nil { observedWorld.restoringDestructionRequested = { requestedDestruction = true } }
+        defer { observedWorld.restoringDestructionRequested = nil }
         var bindingCount = 0, identities = Set<Data>()
         for package in library.packages {
             for binding in requested[package.ordinalGUID] ?? [] {
@@ -153,7 +160,7 @@ public final class SourceStudioPluginSession {
                     guard state.objectIdentity.utf8.elementsEqual(expected.utf8) else { throw SourcePluginError.invalid("Destroyed profile target identity differs.") }
                     object = try world.restoredObject(identity: expected, destroyed: true)
                 } else {
-                    object = try binding.objectID.map { try world.object(id: $0) } ?? world.object(sourceKey: binding.sourceObjectKey!)
+                    object = try binding.objectID.map { try observedWorld.object(id: $0) } ?? world.object(sourceKey: binding.sourceObjectKey!)
                 }
                 let identity = try JSONEncoder().encode([package.manifest.identity.guid, program.type, object.sourceIdentity])
                 guard identities.insert(identity).inserted else { throw SourcePluginError.invalid("Duplicate plugin component/object binding.") }
@@ -175,6 +182,7 @@ public final class SourceStudioPluginSession {
             }
         }
         try runtime.start()
+        initializationRequestedDestruction = requestedDestruction
         if let baseline = restoreBaseline {
             guard Set(world.document.objects.map(\.id)) == baseline.objects,
                   world.cloneSerial == baseline.cloneSerial, world.identities.count == baseline.identities.count,

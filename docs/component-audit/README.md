@@ -99,7 +99,11 @@ acceptance boundary; their old “next” steps are historical, not a live queue
   and reduces the selected case from 16 waits to six;
   its small timing comparison retains mixed owner-thread results. See
   [#208](https://github.com/grabbiel/ikkoku/issues/208); remaining stalls stay
-  tracked in [#192](https://github.com/grabbiel/ikkoku/issues/192). New base-load
+  tracked in [#192](https://github.com/grabbiel/ikkoku/issues/192).
+  [Shape-domain validation](../reference/character/contracts.md#validate-decoded-domains-once)
+  now avoids a second traversal of immutable decoded domains. Focused tests and
+  matched Maker checks preserve behavior; the quiet pair shows no consistent
+  selection-latency improvement. New base-load
   diagnostics attribute most cold base-appearance time to MetalKit texture
   loading. A separately validated worker diagnostic attributes 88–90% of the
   selected preparation operation to rig decoding, validation and conversion.
@@ -746,6 +750,15 @@ pending roots, with no descendant expansion or new file access; no timing or
 general compatibility benefit is claimed. The
 [plugin reference](../reference/mods/plugin-execution.md#saved-scenes-and-migration)
 records schema compatibility, exact producer hashes and the preserved failing pair.
+
+**2026-10-31 — pending roots with attachment reads, #267:** Native open/undo/redo
+now restore unchanged saved roots unrelated to attachment parents/readers.
+Checkpoint `53db6d7` passes 39 Engine invocations and 320 app checks, including
+24 restored continuations and 44 exact rejection/rollback pairs. Constructor
+destruction, overlapping subtrees and malformed roots remain rejected. A
+candidate-only membership index bounds repeated queries; no timing improvement
+is claimed. The [execution reference](../reference/mods/plugin-execution.md#saved-pending-roots-with-attachment-reads-267)
+retains the earlier `3cd9612` reproduction separately and defines the support boundary.
 
 **Completed before this wave:** ST-T02/A-T04 passed local acceptance at PR #2
 (head `93e6b06`, merge `aa4bcb9`). Both configurations retained identities and
