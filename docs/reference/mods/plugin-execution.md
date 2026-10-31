@@ -485,20 +485,20 @@ binding flags are restored. Destruction still occurs at the ordinary next frame
 barrier; save/open never forces a tick. Snapshotting only sorts the pending root
 set, with no scene/descendant traversal, file work or new tick scheduling.
 
-The topology/identity/clone guard remains unchanged. The candidate-owned
-attachment-read guard also remains unchanged: a restore that actually reads an
-attachment and has pending destruction rejects explicitly before commit, even
-when those roots came from saved state. This combination remains unsupported.
+The topology/identity/clone guard remains unchanged. Candidate-owned attachment
+restoration now accepts validated saved destruction roots when they are unrelated
+to the attachment parent and reader subtrees. Initializer destruction requests and
+overlapping subtrees remain rejected; see the [bounded restore policy](#saved-pending-roots-with-attachment-reads-267).
 Older readers that ignore the new field do not gain queue persistence.
 
-**Current-main reproduction of #267 (2026-10-31).** Diagnostic `3cd9612`
+**Pre-fix reproduction of #267 (2026-10-31).** Diagnostic `3cd9612`
 on runtime `890b1468` isolates an unrelated saved destruction root from the
 attachment parent and reader. Six genuine paused profile/library saves retain
 the target, its unbound descendant, four identities and clock zero. The shared
 session restores the roots and two initializer reads, then matches the original
-session's first-step destruction and callbacks. Native open, undo and redo still
-reject the combined case; attachment-free pending roots and attachment reads
-without pending roots restore successfully.
+session's first-step destruction and callbacks. At that checkpoint, native open,
+undo and redo reject the combined case; attachment-free pending roots and
+attachment reads without pending roots restore successfully.
 
 All 18 focused Engine invocations and 135 app checks pass. Independent review
 rehashes 162 observations and 13 fixtures, decodes all six PNG payloads and
@@ -506,9 +506,8 @@ compares 12 rejected cold/warm state-and-frame pairs, including warm pose bits.
 Only declared UUID-map encoding and the exact expected history error status are
 normalized. The first diagnostic compile failure is retained separately. This
 reproduces the existing restriction; it does not enable the combination or
-establish performance or original-player parity. The next change must distinguish
-validated saved roots from new initializer destruction without weakening
-candidate ownership, topology or rollback guards.
+establish performance or original-player parity. The implementation below keeps
+this evidence separate from its supported restoration checks.
 
 Release `e9e6198` (binary SHA-256
 `31fa829571ecc2eb18461e40f6777e6526725dcd62944f3495b7bac893fb1ff7`)
@@ -686,6 +685,48 @@ Remaining work:
 - Recovery of the installed Chainloader's duplicate and `System.Version` rules
   from private evidence.
 - A joint cross-language test. Each side's tests check the documented schema.
+
+### Saved pending roots with attachment reads (#267)
+
+Native open and undo/redo can restore profile and immutable-library attachment
+readers alongside unchanged, validated saved destruction roots. The roots must
+not intersect the reader, attachment parent, or their ancestor/descendant
+relationships. The normal frame barrier still performs destruction; restoration
+does not tick or alter saved fields, clocks, callback flags or identities.
+
+Construction observes every valid destruction request, including a request for a
+root already in the saved set. A temporary world callback is cleared when
+construction succeeds or throws; the session retains only an immutable result.
+This prevents unchanged set equality from hiding an initializer request. After an
+attachment read, document mutation, cloning or any initializer destruction request
+still rejects before commit. Attachment-free restoration retains its prior policy,
+and detached attachment reads remain unsupported.
+
+The candidate preparation context lazily indexes pending descendants and ancestors
+once, after root/hierarchy validation and before allocating previews. Repeated
+membership queries use sets; commit or abort clears this candidate-only state.
+Empty roots avoid the index entirely. A 512-node overlapping-root fixture records
+516 indexed objects, 511 descendant edges and 1,021 ancestor edges; the empty-root
+control records zero work. This bounds repeated membership work without claiming
+a measured latency or memory improvement.
+
+Acceptance at `53db6d7` (2026-10-31), Release binary SHA-256
+`41f075f3b7c9494d1e97ac6f23c47eb7877657d8e2611d07d46d75bb366cb01e`,
+passes 14 Engine functions / 39 invocations with zero skips and all 320 app checks
+in three fresh processes: 34 paused-save/continuation, 101 supported restoration,
+and 185 rejection-policy checks. Independent review rehashes 524 observations and
+13 writer fixtures, compares 24 restored documents/continuations, four constructor
+request oracles, two overlapping-root controls, and 44 rejected state/frame/warm
+preview pairs. Warm candidate previews never borrow the prior scene's owner.
+
+Restored continuations retain exactly the saved resource binding, which the
+original live continuation does not acquire merely by saving; every other document
+field and callback matches that original continuation. UUID-map encoding order
+and the exact expected history error status are the only normalized comparisons.
+Duplicate/unknown/tombstoned/excess roots, changed identities and overlapping
+reader subtrees remain rejected. The first compile failure is retained separately.
+These are native functional and operation-count results, with no GUI, timing or
+original-player parity claim.
 
 ### Candidate-owned library attachment restoration (#250)
 

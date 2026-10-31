@@ -740,14 +740,14 @@ general compatibility benefit is claimed. The
 [plugin reference](../reference/mods/plugin-execution.md#saved-scenes-and-migration)
 records schema compatibility, exact producer hashes and the preserved failing pair.
 
-**2026-10-31 — pending roots with attachment reads, #267:** Current-main
-diagnostic `3cd9612` passes 18 focused Engine invocations and 135 app checks.
-The shared session preserves unrelated saved roots and first-step behavior;
-native open/undo/redo still reject the combination and retain prior state and
-frames. Six real saves, 12 successful controls and 12 rejected cold/warm cases
-isolate the remaining host-policy gap. This is reproduction, not new support;
-the [execution reference](../reference/mods/plugin-execution.md#saved-scenes-and-migration)
-records the evidence and required exclusions.
+**2026-10-31 — pending roots with attachment reads, #267:** Native open/undo/redo
+now restore unchanged saved roots unrelated to attachment parents/readers.
+Checkpoint `53db6d7` passes 39 Engine invocations and 320 app checks, including
+24 restored continuations and 44 exact rejection/rollback pairs. Constructor
+destruction, overlapping subtrees and malformed roots remain rejected. A
+candidate-only membership index bounds repeated queries; no timing improvement
+is claimed. The [execution reference](../reference/mods/plugin-execution.md#saved-pending-roots-with-attachment-reads-267)
+retains the earlier `3cd9612` reproduction separately and defines the support boundary.
 
 **Completed before this wave:** ST-T02/A-T04 passed local acceptance at PR #2
 (head `93e6b06`, merge `aa4bcb9`). Both configurations retained identities and
