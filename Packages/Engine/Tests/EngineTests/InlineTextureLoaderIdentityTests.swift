@@ -21,8 +21,6 @@ struct TextureIdentityRecord: Equatable, CustomStringConvertible {
 
     var description: String { "\(descriptor) levels \(levels.map(\.count))" }
 
-    static func failed(_ error: any Error) -> TextureIdentityRecord { .init(descriptor: "failed", levels: []) }
-
     init(descriptor: String, levels: [Data]) { self.descriptor = descriptor; self.levels = levels }
 
     init(_ texture: any MTLTexture, device: any MTLDevice, queue: any MTLCommandQueue) throws {
@@ -43,6 +41,7 @@ struct TextureIdentityRecord: Equatable, CustomStringConvertible {
                       sourceSize: MTLSize(width: width, height: height, depth: 1), to: buffer, destinationOffset: 0,
                       destinationBytesPerRow: width * bytesPerPixel, destinationBytesPerImage: length)
             blit.endEncoding(); command.commit(); command.waitUntilCompleted()
+            try #require(command.status == .completed, "texture readback failed: \(String(describing: command.error))")
             levels.append(Data(bytes: buffer.contents(), count: length))
         }
         self.levels = levels
@@ -78,9 +77,9 @@ struct TextureIdentityComparison: Sendable {
 
     /// Compares one image (or file) both ways; nil when they agree.
     static func compare(name: String, image: InlineTextureLoader.Image?, url: URL?, srgb: Bool, device: any MTLDevice,
-                        loader: MTKTextureLoader, queue: any MTLCommandQueue) -> Mismatch? {
-        func record(_ make: () throws -> any MTLTexture) -> TextureIdentityRecord {
-            do { return try TextureIdentityRecord(try make(), device: device, queue: queue) } catch { return .failed(error) }
+                        loader: MTKTextureLoader, queue: any MTLCommandQueue, requireSuccess: Bool = false) -> Mismatch? {
+        func record(_ make: () throws -> any MTLTexture) -> Result<TextureIdentityRecord, any Error> {
+            Result { try TextureIdentityRecord(try make(), device: device, queue: queue) }
         }
         let metalKit = record {
             if let url { return try loader.newTexture(URL: url, options: options(srgb)) }
@@ -93,6 +92,31 @@ struct TextureIdentityComparison: Sendable {
             }
             return try InlineTextureLoader.texture(image!, srgb: srgb, device: device, queue: queue)
         }
+        return compareRecords(name: name, metalKit: metalKit, inline: inline, requireSuccess: requireSuccess)
+    }
+
+    /// Synthetic layouts may be unsupported by both loaders. A captured successful
+    /// load must instead produce two textures; equal errors are never its oracle.
+    static func compareRecords(name: String, metalKit: Result<TextureIdentityRecord, any Error>,
+                               inline: Result<TextureIdentityRecord, any Error>, requireSuccess: Bool) -> Mismatch? {
+        switch (metalKit, inline) {
+        case (.success(let a), .success(let b)):
+            return difference(name: name, metalKit: a, inline: b)
+        case (.failure, .failure) where !requireSuccess:
+            return nil
+        default:
+            func describe(_ result: Result<TextureIdentityRecord, any Error>) -> String {
+                switch result {
+                case .success(let record): return record.description
+                case .failure(let error): return "failed: \(error)"
+                }
+            }
+            return Mismatch(name: name, metalKit: describe(metalKit), inline: describe(inline),
+                            detail: "both loaders must successfully create and read back a texture")
+        }
+    }
+
+    private static func difference(name: String, metalKit: TextureIdentityRecord, inline: TextureIdentityRecord) -> Mismatch? {
         if metalKit == inline { return nil }
         var detail = metalKit.descriptor == inline.descriptor ? "same descriptor" : "descriptor differs"
         if metalKit.levels.count == inline.levels.count {
