@@ -1,4 +1,5 @@
 import Foundation
+import CryptoKit
 import os
 
 /// One persistent ledger per Maker. Only numeric counters live under its lock;
@@ -129,9 +130,16 @@ extension SourceShapeContract {
 final class SourceShapeReuseEntry: Sendable {
     let contract: SourceShapeContract, key: SourceShapeReuseKey, epoch: SourceShapeReuseEpoch, logicalCharge: Int
     fileprivate let permit: SourceShapeReuseAdmission.EntryPermit
-    init?(contract: SourceShapeContract, key: SourceShapeReuseKey, epoch: SourceShapeReuseEpoch, admission: SourceShapeReuseAdmission) {
-        guard let charge = Self.charge(contract: contract, key: key), let permit = admission.entryPermit(charge: charge) else { return nil }
-        self.contract = contract; self.key = key; self.epoch = epoch; self.logicalCharge = charge; self.permit = permit
+    convenience init?(contract: SourceShapeContract, key: SourceShapeReuseKey, epoch: SourceShapeReuseEpoch, admission: SourceShapeReuseAdmission) {
+        guard let charge = Self.charge(contract: contract, key: key) else { return nil }
+        self.init(contract: contract, key: key, epoch: epoch, admission: admission, measuredCharge: charge)
+    }
+    /// The worker just measured this exact immutable contract/key; admission
+    /// still checks the live ledger without traversing the payload a second time.
+    fileprivate init?(contract: SourceShapeContract, key: SourceShapeReuseKey, epoch: SourceShapeReuseEpoch,
+                      admission: SourceShapeReuseAdmission, measuredCharge: Int) {
+        guard let permit = admission.entryPermit(charge: measuredCharge) else { return nil }
+        self.contract = contract; self.key = key; self.epoch = epoch; self.logicalCharge = measuredCharge; self.permit = permit
     }
     static func charge(contract: SourceShapeContract, key: SourceShapeReuseKey) -> Int? {
         guard let payload = contract.decodedCacheLogicalByteCount else { return nil }
@@ -164,8 +172,8 @@ final class SourceShapeReuseSnapshot: Sendable {
     }
 }
 
-/// Boundary only: not connected to Maker preparation yet. This persistent ledger
-/// outlives reset snapshots while any old captured/delivery holder still exists.
+/// Owner-side publication only. The persistent ledger outlives reset snapshots
+/// while any old captured/worker/delivery holder still exists.
 @MainActor public final class SourceMakerShapeReuse {
     public struct Input: Sendable {
         let admission: SourceShapeReuseAdmission, epoch: SourceShapeReuseEpoch
@@ -173,12 +181,19 @@ final class SourceShapeReuseSnapshot: Sendable {
     }
     public struct Candidate: Sendable {
         let admission: SourceShapeReuseAdmission, epoch: SourceShapeReuseEpoch
-        /// nil represents a clear-on-success intent, never an error fallback.
+        /// nil publishes an empty cache or clear-on-success intent, never an error fallback.
         let snapshot: SourceShapeReuseSnapshot?
         init?(snapshot: SourceShapeReuseSnapshot?, epoch: SourceShapeReuseEpoch, admission: SourceShapeReuseAdmission) {
             if let snapshot { guard snapshot.epoch == epoch && snapshot.permit.owner === admission else { return nil } }
             self.snapshot = snapshot; self.epoch = epoch; self.admission = admission
         }
+    }
+    public struct Sample: Sendable, Encodable {
+        public let hits: Int, misses: Int, admitted: Int, intrinsicBypasses: Int, capacityBypasses: Int
+        public let clearOnCommit: Bool, retainedEntries: Int, logicalEntryBytes: Int, logicalReferenceBytes: Int
+        /// One instantaneous ledger observation including old captured/delivery
+        /// holders. Excludes native non-cache value copies and is not heap/RSS.
+        public let liveEntries: Int, liveLogicalEntryBytes: Int, liveSnapshots: Int
     }
     private let admission: SourceShapeReuseAdmission
     private var epoch: SourceShapeReuseEpoch
@@ -197,5 +212,69 @@ final class SourceShapeReuseSnapshot: Sendable {
         // admission. Keep it outside the counter-only ledger lock.
         snapshot = candidate.snapshot
         return true
+    }
+}
+
+/// Synchronous worker-local adapter, never shared with the owner. Call only with
+/// bytes from the original contained, bounded read; a hit skips decoding alone.
+final class SourceShapeReuseWorker {
+    private let input: SourceMakerShapeReuse.Input
+    private var entries: [SourceShapeReuseEntry]
+    private var hits = 0, misses = 0, admitted = 0, intrinsicBypasses = 0, capacityBypasses = 0
+    private var clearOnCommit = false
+    init(_ input: SourceMakerShapeReuse.Input) { self.input = input; entries = input.snapshot?.entries ?? [] }
+
+    func decode(_ data: Data, timings: SourceMakerPreparationTimings?) throws -> SourceShapeContract {
+        let hash = SourceMakerPreparationTimings.measure(timings, .shapeReuseSHA) {
+            let digest = SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()
+            timings?.hashed(data.count, phase: .shapeReuseSHA, matches: true)
+            return digest
+        }
+        // Canonical SHA256 and Data.count satisfy the checked key, without
+        // substituting a URL, modification time or a declared metadata digest.
+        guard let key = SourceShapeReuseKey(sha256: hash, byteCount: data.count) else {
+            intrinsicBypasses += 1
+            return try SourceMakerPreparationTimings.measure(timings, .shapeDecode) { try SourceShapeContract.decode(data) }
+        }
+        if let entry = entries.first(where: { $0.key == key }) { hits += 1; return entry.contract }
+        misses += 1
+        let contract = try SourceMakerPreparationTimings.measure(timings, .shapeDecode) { try SourceShapeContract.decode(data) }
+        SourceMakerPreparationTimings.measure(timings, .shapeReuseAdmission) {
+            guard let charge = SourceShapeReuseEntry.charge(contract: contract, key: key), charge <= input.admission.maximumBytes else {
+                intrinsicBypasses += 1; return
+            }
+            guard !clearOnCommit, entries.count < input.admission.maximumEntries,
+                  let entry = SourceShapeReuseEntry(contract: contract, key: key, epoch: input.epoch,
+                      admission: input.admission, measuredCharge: charge) else {
+                capacityBypasses += 1; clearOnCommit = true; return
+            }
+            entries.append(entry); admitted += 1
+        }
+        return contract
+    }
+
+    /// Called only after every preparation stage succeeds. The owner must still
+    /// reject failed/canceled/stale selections before publishing the candidate.
+    func finish() -> (SourceMakerShapeReuse.Candidate, SourceMakerShapeReuse.Sample) {
+        let snapshot: SourceShapeReuseSnapshot?
+        if clearOnCommit { snapshot = nil }
+        else if admitted == 0 { snapshot = input.snapshot }
+        else {
+            snapshot = SourceShapeReuseSnapshot(entries: entries, epoch: input.epoch, admission: input.admission)
+            if snapshot == nil { capacityBypasses += 1; clearOnCommit = true }
+        }
+        // Both the captured input and any new snapshot use this exact ledger and
+        // epoch; a rejection here would be a programming invariant violation.
+        let candidate = SourceMakerShapeReuse.Candidate(snapshot: snapshot, epoch: input.epoch, admission: input.admission)!
+        let live = input.admission.counts
+        let sample = SourceMakerShapeReuse.Sample(hits: hits, misses: misses, admitted: admitted,
+            intrinsicBypasses: intrinsicBypasses, capacityBypasses: capacityBypasses,
+            clearOnCommit: clearOnCommit, retainedEntries: snapshot?.entries.count ?? 0,
+            // Every entry still holds its admission permit; this sum is bounded
+            // by the ledger cap. Snapshot references are charged separately.
+            logicalEntryBytes: snapshot?.entries.reduce(0, { $0 + $1.logicalCharge }) ?? 0,
+            logicalReferenceBytes: snapshot?.logicalReferenceBytes ?? 0,
+            liveEntries: live.entries, liveLogicalEntryBytes: live.logicalBytes, liveSnapshots: live.snapshots)
+        return (candidate, sample)
     }
 }

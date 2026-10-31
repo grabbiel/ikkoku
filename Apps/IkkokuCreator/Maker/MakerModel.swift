@@ -61,6 +61,7 @@ final class MakerModel: ViewportInputHandler, LivePacedHandler {
     }
     @ObservationIgnored private let sourcePreparation = SourceMakerPreparationQueue<PreparedSelection>()
     @ObservationIgnored private let sourceRigReuse = SourceMakerRigReuse()
+    @ObservationIgnored private let sourceShapeReuse = SourceMakerShapeReuse()
     @ObservationIgnored private var sourceNormalBaseURL: URL?
     @ObservationIgnored private var sourceSelectionGeneration: UInt64 = 0
     /// Only asset pickers are disabled while preparing; shape/color controls stay live.
@@ -71,6 +72,7 @@ final class MakerModel: ViewportInputHandler, LivePacedHandler {
         var headWorkerStages: SourceMakerPreparationTimings.Sample? = nil
         var headQueueStages: SourceMakerPreparationQueueTiming? = nil
         var headRigReuse: SourceMakerRigReuse.Sample? = nil
+        var headShapeReuse: SourceMakerShapeReuse.Sample? = nil
         var baseAppearanceStages: SourceBaseAppearanceTimings.Sample? = nil
         var cardAppearanceStages: SourceAppearanceTimings.Sample? = nil
         var preparedAppearanceBytes: Int? = nil
@@ -331,7 +333,7 @@ final class MakerModel: ViewportInputHandler, LivePacedHandler {
     /// A mode exit invalidates preparation even if Maker is shown again before
     /// its worker finishes; an inactive completion must never replace Studio's frame.
     var isActiveMode = true {
-        didSet { if oldValue && !isActiveMode { cancelSourceSelection(); sourceRigReuse.reset() } }
+        didSet { if oldValue && !isActiveMode { cancelSourceSelection(); sourceRigReuse.reset(); sourceShapeReuse.reset() } }
     }
 
     var library: AssetLibrary { host.library }
@@ -424,7 +426,7 @@ final class MakerModel: ViewportInputHandler, LivePacedHandler {
 
     func newCharacter(sex: Sex) {
         cancelSourceSelection()
-        sourceRigReuse.reset()
+        sourceRigReuse.reset(); sourceShapeReuse.reset()
         importedSourceCard = nil; importedSourceCardURL = nil
         sourceRigPreview = nil
         card = sex == .female ? .defaultFemale() : .defaultMale()
@@ -445,7 +447,7 @@ final class MakerModel: ViewportInputHandler, LivePacedHandler {
         }
     }
 
-    func load(card: CharacterCard) { cancelSourceSelection(); sourceRigReuse.reset(); importedSourceCard = nil; importedSourceCardURL = nil; sourceRigPreview = nil; self.card = card }
+    func load(card: CharacterCard) { cancelSourceSelection(); sourceRigReuse.reset(); sourceShapeReuse.reset(); importedSourceCard = nil; importedSourceCardURL = nil; sourceRigPreview = nil; self.card = card }
 
     func openSourceRig(url: URL) throws { try openSourceRig(url: url, importing: nil, cardURL: nil) }
 
@@ -529,7 +531,7 @@ final class MakerModel: ViewportInputHandler, LivePacedHandler {
         applySourceCustomization = false
         sourceBoneModifiers = nil
         importedSourceCard = imported
-        sourceRigReuse.reset()
+        sourceRigReuse.reset(); sourceShapeReuse.reset()
         sourceMakerLibrary = makerLibrary; sourcePreparedAssets = prepared
         sourceAssetSelections = prepared?.selections ?? []
         sourceSelectionRows = selectionRows(card: imported, library: makerLibrary, coordinate: 0,
@@ -570,7 +572,7 @@ final class MakerModel: ViewportInputHandler, LivePacedHandler {
         frameSourceRig()
     }
 
-    func closeSourceRig() { cancelSourceSelection(); sourceRigReuse.reset(); sourceSelectionRows = []; sourceHeadChoices = []; sourceNormalBaseURL = nil; importedSourceCard = nil; importedSourceCardURL = nil; sourceRigPreview = nil; resetCamera(); refresh(); status = "Character Maker" }
+    func closeSourceRig() { cancelSourceSelection(); sourceRigReuse.reset(); sourceShapeReuse.reset(); sourceSelectionRows = []; sourceHeadChoices = []; sourceNormalBaseURL = nil; importedSourceCard = nil; importedSourceCardURL = nil; sourceRigPreview = nil; resetCamera(); refresh(); status = "Character Maker" }
 
     func setModLibrary(_ library: SourceModLibrary?, catalog: SourceModCatalog? = nil,
                        contract: SourceModCatalogContract? = nil) throws {
@@ -607,7 +609,7 @@ final class MakerModel: ViewportInputHandler, LivePacedHandler {
                 sourceAppliedColors = Dictionary(uniqueKeysWithValues: (sourceAppearanceDraft?.colors ?? []).map { ($0.id, $0.rgba) })
             }
         }
-        sourceRigReuse.reset()
+        sourceRigReuse.reset(); sourceShapeReuse.reset()
         sourceModLibrary = library
         sourceModCatalog = catalog
         sourceModCatalogContract = contract
@@ -961,7 +963,7 @@ final class MakerModel: ViewportInputHandler, LivePacedHandler {
         guard bytes != card.preservedData else { return }
         let candidate = try SourceCharacterCard.decode(bytes)
         let coordinate = sourceBoneModifierCoordinate, baseURL = sourceNormalBaseURL
-        let rigReuseInput = sourceRigReuse.input()
+        let rigReuseInput = sourceRigReuse.input(), shapeReuseInput = sourceShapeReuse.input()
         sourceSelectionPending = "Preparing head · ID \(id)"
         status = sourceSelectionPending!
         defer { if generation == sourceSelectionGeneration { sourceSelectionPending = nil } }
@@ -972,7 +974,7 @@ final class MakerModel: ViewportInputHandler, LivePacedHandler {
                 beforePreparation?()
                 let timings = SourceMakerPreparationTimings()
                 return .head(try SourceMakerHeadPreparation.prepare(card: candidate, library: library,
-                    coordinate: coordinate, baseURL: baseURL, timings: timings, rigReuse: rigReuseInput))
+                    coordinate: coordinate, baseURL: baseURL, timings: timings, rigReuse: rigReuseInput, shapeReuse: shapeReuseInput))
             }
             guard case .head(let value) = result.value else { throw RigError.invalid("Unexpected Maker preparation result.") }
             head = value; queueTiming = result.timing
@@ -1029,6 +1031,7 @@ final class MakerModel: ViewportInputHandler, LivePacedHandler {
         updatingSource = true
         appearanceTransaction.commit()
         sourceRigReuse.commit(head.rigReuseCandidate)
+        sourceShapeReuse.commit(head.shapeReuseCandidate)
         defer {
             updatingSource = false
             refresh()
@@ -1043,6 +1046,7 @@ final class MakerModel: ViewportInputHandler, LivePacedHandler {
                     poseFrameMilliseconds: (poseFrameFinished - previewFinished) * 1000,
                     commitRefreshMilliseconds: (commitFinished - poseFrameFinished) * 1000),
                 headWorkerStages: head.workerStages, headQueueStages: queueTiming, headRigReuse: head.rigReuseSample,
+                headShapeReuse: head.shapeReuseSample,
                 baseAppearanceStages: baseAppearanceTimings.sample,
                 cardAppearanceStages: appearanceTimings.sample, preparedAppearanceBytes: head.appearanceInputs.byteCount,
                 preparedAppearanceBytesByCall: head.appearanceInputs.perCallByteCounts)

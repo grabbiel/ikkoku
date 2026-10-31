@@ -3,6 +3,7 @@ import Dispatch
 import CryptoKit
 import os
 import Testing
+import Scene
 @testable import Character
 
 private func shapeReuseData(label: String = "幅") throws -> Data {
@@ -296,4 +297,275 @@ func sourceShapeReuseRepresentativeNativeChargesFitProvisionalBound() throws {
         "snapshotReferenceBytes": snapshot.logicalReferenceBytes, "entryCap": ledger.maximumEntries,
         "logicalByteCap": ledger.maximumBytes, "snapshotCap": ledger.maximumSnapshots], options: .sortedKeys)
     print("sourceShapeReuseRepresentativeCharges " + String(decoding: output, as: UTF8.self))
+}
+
+private func shapeReuseEncoded(_ contract: SourceShapeContract) throws -> Data {
+    let encoder = JSONEncoder(); encoder.outputFormatting = [.sortedKeys]
+    return try encoder.encode(contract)
+}
+
+/// Error identity, not NSError descriptions (which include unstable object addresses).
+private func shapeReuseFailure(_ action: () throws -> Void) -> [String: String] {
+    do { try action(); Issue.record("Invalid shape preparation was accepted"); return [:] }
+    catch let error as SourceShapeError { return ["shape": error.errorDescription ?? ""] }
+    catch RigError.invalid(let reason) { return ["rig": reason] }
+    catch let error as DecodingError {
+        let kind: String, context: DecodingError.Context
+        switch error {
+        case .dataCorrupted(let value): kind = "dataCorrupted"; context = value
+        case .keyNotFound(let key, let value): kind = "keyNotFound:" + key.stringValue; context = value
+        case .typeMismatch(let type, let value): kind = "typeMismatch:" + String(describing: type); context = value
+        case .valueNotFound(let type, let value): kind = "valueNotFound:" + String(describing: type); context = value
+        @unknown default: return ["unknownDecodingError": "true"]
+        }
+        return ["decode": kind, "path": context.codingPath.map(\.stringValue).joined(separator: "/"), "detail": context.debugDescription]
+    } catch {
+        let error = error as NSError
+        var result = ["domain": error.domain, "code": String(error.code), "path": error.userInfo[NSFilePathErrorKey] as? String ?? ""]
+        if let underlying = error.userInfo[NSUnderlyingErrorKey] as? NSError {
+            result["underlyingDomain"] = underlying.domain; result["underlyingCode"] = String(underlying.code)
+            result["underlyingPath"] = underlying.userInfo[NSFilePathErrorKey] as? String ?? ""
+        }
+        return result
+    }
+}
+
+@MainActor @Test func sourceShapeReuseWorkerHashesBytesAndSkipsOnlyWarmDecode() throws {
+    let owner = SourceMakerShapeReuse(), data = try shapeReuseData(), changed = try shapeReuseData(label: "高")
+    #expect(data.count == changed.count && data != changed)
+    try {
+        let worker = SourceShapeReuseWorker(owner.input()), timings = SourceMakerPreparationTimings()
+        let decoded = try worker.decode(data, timings: timings), original = try SourceShapeContract.decode(data)
+        let actual = try shapeReuseEncoded(decoded), expected = try shapeReuseEncoded(original)
+        #expect(actual == expected)
+        let (candidate, sample) = worker.finish()
+        #expect(sample.misses == 1 && sample.hits == 0 && sample.admitted == 1)
+        #expect(timings.sample.intervals["shapeDecode"]?.calls == 1 && timings.sample.intervals["shapeReuseAdmission"]?.calls == 1)
+        #expect(timings.sample.bytesHashed["shapeReuseSHA"] == data.count)
+        #expect(owner.commit(candidate))
+    }()
+    let worker = SourceShapeReuseWorker(owner.input()), timings = SourceMakerPreparationTimings()
+    let warm = try worker.decode(data, timings: timings)
+    #expect(warm.domains[0].slots[0].label == "幅")
+    #expect(timings.sample.intervals["shapeDecode"] == nil && timings.sample.intervals["shapeReuseAdmission"] == nil)
+    #expect(timings.sample.intervals["shapeReuseSHA"]?.calls == 1 && timings.sample.bytesHashed["shapeReuseSHA"] == data.count)
+    let different = try worker.decode(changed, timings: timings)
+    #expect(different.domains[0].slots[0].label == "高")
+    let (candidate, sample) = worker.finish()
+    #expect(sample.hits == 1 && sample.misses == 1 && sample.admitted == 1 && sample.retainedEntries == 2)
+    #expect(timings.sample.intervals["shapeDecode"]?.calls == 1 && timings.sample.bytesHashed["shapeReuseSHA"] == data.count + changed.count)
+    #expect(owner.commit(candidate))
+    // Nil timing collectors still perform real cache work, without a clock/sample collector.
+    let noTimings = SourceShapeReuseWorker(owner.input())
+    let nilValue = try noTimings.decode(changed, timings: nil), nilBytes = try shapeReuseEncoded(nilValue)
+    let expected = try shapeReuseEncoded(different)
+    #expect(nilBytes == expected && noTimings.finish().1.hits == 1)
+}
+
+@MainActor @Test func sourceShapeReuseWorkerPreservesTypedDecodeFailures() throws {
+    let owner = SourceMakerShapeReuse(), ledger = owner.input().admission
+    var invalidSchema = try #require(try JSONSerialization.jsonObject(with: shapeReuseData()) as? [String: Any])
+    invalidSchema["schemaVersion"] = 2
+    let cases = [Data("{".utf8), try JSONSerialization.data(withJSONObject: invalidSchema), Data("{\"domains\":[]}".utf8)]
+    for data in cases {
+        let worker = SourceShapeReuseWorker(owner.input()), timings = SourceMakerPreparationTimings()
+        let expected = shapeReuseFailure { _ = try SourceShapeContract.decode(data) }
+        let actual = shapeReuseFailure { _ = try worker.decode(data, timings: timings) }
+        #expect(actual == expected && !actual.isEmpty)
+        #expect(timings.sample.intervals["shapeDecode"]?.failures == 1 && timings.sample.intervals["shapeReuseAdmission"] == nil)
+        #expect(timings.sample.bytesHashed["shapeReuseSHA"] == data.count && ledger.counts == .init())
+    }
+}
+
+@MainActor @Test func sourceShapeReuseWorkerIntrinsicBypassPreservesSnapshot() throws {
+    let data = try shapeReuseData(), contract = try SourceShapeContract.decode(data)
+    let charge = try #require(SourceShapeReuseEntry.charge(contract: contract, key: shapeReuseKey()))
+    let ledger = SourceShapeReuseAdmission(maximumBytes: charge), owner = SourceMakerShapeReuse(admission: ledger)
+    try {
+        let worker = SourceShapeReuseWorker(owner.input()); _ = try worker.decode(data, timings: nil)
+        #expect(owner.commit(worker.finish().0))
+    }()
+    weak var previous = owner.input().snapshot
+    let large = try shapeReuseData(label: String(repeating: "幅", count: 100))
+    let worker = SourceShapeReuseWorker(owner.input()), decoded = try worker.decode(large, timings: nil)
+    let (candidate, sample) = worker.finish()
+    #expect(decoded.domains[0].slots[0].label.utf8.count == 300)
+    #expect(sample.intrinsicBypasses == 1 && sample.capacityBypasses == 0 && !sample.clearOnCommit && sample.admitted == 0)
+    let sameSnapshot = candidate.snapshot === previous
+    #expect(sameSnapshot && ledger.counts.entries == 1 && ledger.counts.snapshots == 1)
+    #expect(owner.commit(candidate))
+    let emptyLedger = SourceShapeReuseAdmission(maximumBytes: 0), emptyOwner = SourceMakerShapeReuse(admission: emptyLedger)
+    let empty = SourceShapeReuseWorker(emptyOwner.input()); _ = try empty.decode(data, timings: nil)
+    let emptyResult = empty.finish()
+    #expect(emptyResult.1.intrinsicBypasses == 1 && !emptyResult.1.clearOnCommit && emptyLedger.counts == .init())
+}
+
+@MainActor @Test func sourceShapeReuseWorkerCapacityClearRequiresCommitAndDrain() throws {
+    let ledger = SourceShapeReuseAdmission(maximumEntries: 1), owner = SourceMakerShapeReuse(admission: ledger)
+    let a = try shapeReuseData(), b = try shapeReuseData(label: "高")
+    try {
+        let worker = SourceShapeReuseWorker(owner.input()); _ = try worker.decode(a, timings: nil)
+        #expect(owner.commit(worker.finish().0))
+    }()
+    var held: SourceMakerShapeReuse.Input? = owner.input(); weak var old = held?.snapshot
+    let clear = try { () -> SourceMakerShapeReuse.Candidate in
+        let worker = SourceShapeReuseWorker(owner.input()); _ = try worker.decode(b, timings: nil)
+        let (candidate, sample) = worker.finish()
+        #expect(sample.capacityBypasses == 1 && sample.clearOnCommit && sample.admitted == 0 && candidate.snapshot == nil)
+        return candidate
+    }()
+    let unchangedBeforeCommit = owner.input().snapshot === old
+    #expect(unchangedBeforeCommit && ledger.counts.entries == 1)
+    #expect(owner.commit(clear))
+    #expect(old != nil && ledger.counts.entries == 1) // Captured input still owns its credits.
+    try {
+        let worker = SourceShapeReuseWorker(owner.input()); _ = try worker.decode(b, timings: nil)
+        #expect(worker.finish().1.capacityBypasses == 1)
+    }()
+    held = nil
+    #expect(old == nil && ledger.counts == .init())
+    try {
+        let worker = SourceShapeReuseWorker(owner.input()); _ = try worker.decode(b, timings: nil)
+        let (candidate, sample) = worker.finish()
+        #expect(sample.admitted == 1 && !sample.clearOnCommit); #expect(owner.commit(candidate))
+    }()
+    let recovered = SourceShapeReuseWorker(owner.input()); _ = try recovered.decode(b, timings: nil)
+    #expect(recovered.finish().1.hits == 1)
+}
+
+@MainActor @Test func sourceShapeReuseWorkerSnapshotExhaustionDoesNotPublishOnFailure() throws {
+    let ledger = SourceShapeReuseAdmission(maximumEntries: 2, maximumSnapshots: 1), owner = SourceMakerShapeReuse(admission: ledger)
+    let a = try shapeReuseData(), b = try shapeReuseData(label: "高")
+    try {
+        let worker = SourceShapeReuseWorker(owner.input()); _ = try worker.decode(a, timings: nil)
+        #expect(owner.commit(worker.finish().0))
+    }()
+    weak var old = owner.input().snapshot
+    let rejected = try { () -> SourceMakerShapeReuse.Candidate in
+        let worker = SourceShapeReuseWorker(owner.input()); _ = try worker.decode(b, timings: nil)
+        let (candidate, sample) = worker.finish()
+        #expect(sample.admitted == 1 && sample.capacityBypasses == 1 && sample.clearOnCommit)
+        #expect(sample.liveEntries == 2 && sample.liveSnapshots == 1 && candidate.snapshot == nil)
+        return candidate
+    }()
+    // Later transaction failure does not call commit. The new entry dies with
+    // the worker; the previous owner snapshot and its permit are untouched.
+    #expect(ledger.counts.entries == 1 && ledger.counts.snapshots == 1 && old != nil)
+    let unchanged = owner.input().snapshot === old
+    #expect(unchanged)
+    owner.reset()
+    try {
+        let worker = SourceShapeReuseWorker(owner.input()); _ = try worker.decode(a, timings: nil)
+        #expect(owner.commit(worker.finish().0))
+    }()
+    #expect(!owner.commit(rejected)) // A stale clear cannot evict the new epoch.
+    let warm = SourceShapeReuseWorker(owner.input()); _ = try warm.decode(a, timings: nil)
+    #expect(warm.finish().1.hits == 1)
+}
+
+@MainActor @Test func sourceShapeReuseCancelledCandidateDoesNotPublishOrEvict() async throws {
+    let ledger = SourceShapeReuseAdmission(maximumEntries: 2), owner = SourceMakerShapeReuse(admission: ledger)
+    let a = try shapeReuseData(), b = try shapeReuseData(label: "高"), barrier = ShapeReuseBarrier()
+    let queue = SourceMakerPreparationQueue<SourceMakerShapeReuse.Candidate?>()
+    defer { barrier.release() }
+    try {
+        let worker = SourceShapeReuseWorker(owner.input()); _ = try worker.decode(a, timings: nil)
+        #expect(owner.commit(worker.finish().0))
+    }()
+    weak var old = owner.input().snapshot
+    let running = Task { [input = owner.input()] in try await queue.prepare {
+        let worker = SourceShapeReuseWorker(input); _ = try worker.decode(b, timings: nil)
+        let candidate = worker.finish().0
+        barrier.waitOnWorker()
+        return candidate
+    } }
+    await barrier.arrival(); running.cancel()
+    do { _ = try await running.value; Issue.record("Cancelled candidate was delivered") }
+    catch { #expect(error is CancellationError) }
+    let unchanged = owner.input().snapshot === old
+    #expect(unchanged && ledger.counts.entries == 2)
+    barrier.release(); await queue.drain()
+    let drained = try await queue.prepare { nil }
+    #expect(drained == nil && ledger.counts.entries == 1 && ledger.counts.snapshots == 1)
+    let worker = SourceShapeReuseWorker(owner.input()); _ = try worker.decode(b, timings: nil)
+    #expect(worker.finish().1.misses == 1) // The canceled candidate never warmed the owner.
+}
+
+@MainActor @Test func sourceMakerShapeReusePreservesReadAndFailureOrder() throws {
+    let directory = try AppearanceTestFixture.directory(); defer { try? FileManager.default.removeItem(at: directory) }
+    let libraryURL = directory.appendingPathComponent("library.json"), manifestURL = directory.appendingPathComponent("source-avatar.json")
+    try JSONSerialization.data(withJSONObject: ["schemaVersion": 1, "entries": [], "assemblies": []]).write(to: libraryURL)
+    let library = try SourceMakerLibrary.load(url: libraryURL), card = try AppearanceTestFixture.card()
+    var manifest: [String: Any] = ["schemaVersion": 1, "kind": "koikatsu-female-avatar", "name": "fixture", "sex": 1, "headID": 0,
+        "bodySkeleton": "missing-body-master.json", "headSkeleton": "missing-head-master.json",
+        "body": ["file": "missing-body.json"], "head": ["file": "missing-head.json"], "clothes": [], "hair": []]
+    func writeManifest() throws { try JSONSerialization.data(withJSONObject: manifest).write(to: manifestURL) }
+    try writeManifest()
+    let shapeURL = directory.appendingPathComponent("character-shape-contract.json")
+    let expressionURL = directory.appendingPathComponent("source-expression-contract.json")
+    let data = try shapeReuseData(), changed = try shapeReuseData(label: "高")
+    let ledger = SourceShapeReuseAdmission(), owner = SourceMakerShapeReuse(admission: ledger)
+    try {
+        let worker = SourceShapeReuseWorker(owner.input()); _ = try worker.decode(data, timings: nil)
+        #expect(owner.commit(worker.finish().0))
+    }()
+    let initialCounts = ledger.counts
+    weak var initialSnapshot = owner.input().snapshot
+    func compareFailure(hashCalls: Int?, decodeCalls: Int?) -> ([String: String], SourceMakerPreparationTimings.Sample) {
+        let plain = SourceMakerPreparationTimings(), cached = SourceMakerPreparationTimings()
+        let expected = shapeReuseFailure { _ = try SourceMakerHeadPreparation.prepare(card: card, library: library,
+            coordinate: 0, baseURL: manifestURL, timings: plain) }
+        let actual = shapeReuseFailure { _ = try SourceMakerHeadPreparation.prepare(card: card, library: library,
+            coordinate: 0, baseURL: manifestURL, timings: cached, shapeReuse: owner.input()) }
+        #expect(actual == expected && !actual.isEmpty)
+        #expect(plain.sample.intervals["shapeReuseSHA"] == nil && plain.sample.intervals["shapeReuseAdmission"] == nil)
+        #expect(cached.sample.intervals["shapeReuseSHA"]?.calls == hashCalls && cached.sample.intervals["shapeDecode"]?.calls == decodeCalls)
+        let unchanged = owner.input().snapshot === initialSnapshot
+        #expect(unchanged && ledger.counts == initialCounts)
+        return (actual, cached.sample)
+    }
+    // Wrong selected identity wins even with a missing shape and expression file.
+    manifest["sex"] = 0; try writeManifest()
+    let wrongIdentity = compareFailure(hashCalls: nil, decodeCalls: nil)
+    #expect(wrongIdentity.0["rig"] == "Selected card and head assembly identities differ.")
+    manifest["sex"] = 1; try writeManifest()
+    let missing = compareFailure(hashCalls: nil, decodeCalls: nil)
+    #expect(missing.1.intervals["shapeRead"]?.failures == 1 && missing.1.intervals["expressionRead"] == nil)
+    // A cached digest does not authorize a companion symlink outside the selected folder.
+    let outside = directory.deletingLastPathComponent().appendingPathComponent(UUID().uuidString)
+    try data.write(to: outside); defer { try? FileManager.default.removeItem(at: outside) }
+    try FileManager.default.createSymbolicLink(at: shapeURL, withDestinationURL: outside)
+    let escaping = compareFailure(hashCalls: nil, decodeCalls: nil)
+    #expect(escaping.0["rig"] == "Head assembly input escapes its folder.")
+    try FileManager.default.removeItem(at: shapeURL)
+    // Sparse file exercises the real bounded read and oversize-before-SHA order.
+    try Data().write(to: shapeURL)
+    let handle = try FileHandle(forWritingTo: shapeURL)
+    try handle.truncate(atOffset: UInt64(64 * 1024 * 1024 + 1)); try handle.close()
+    let oversized = compareFailure(hashCalls: nil, decodeCalls: nil)
+    #expect(oversized.0["rig"] == "Head assembly input exceeds its size limit.")
+    #expect(oversized.1.bytesRead["shapeRead"] == 64 * 1024 * 1024 + 1)
+    // Warm bytes still read/hash, then the original missing expression failure wins.
+    try data.write(to: shapeURL)
+    try FileManager.default.setAttributes([.modificationDate: Date(timeIntervalSince1970: 123)], ofItemAtPath: shapeURL.path)
+    let warm = compareFailure(hashCalls: 1, decodeCalls: nil)
+    #expect(warm.1.bytesRead["shapeRead"] == data.count && warm.1.bytesHashed["shapeReuseSHA"] == data.count)
+    #expect(warm.1.intervals["expressionRead"]?.failures == 1)
+    // Same path, length and timestamp do not hide changed bytes. A later failure
+    // must drop the newly admitted contract rather than warming/clearing the owner.
+    try changed.write(to: shapeURL)
+    try FileManager.default.setAttributes([.modificationDate: Date(timeIntervalSince1970: 123)], ofItemAtPath: shapeURL.path)
+    let changedRead = compareFailure(hashCalls: 1, decodeCalls: 1)
+    #expect(changedRead.1.intervals["shapeReuseAdmission"]?.calls == 1 && changedRead.1.intervals["expressionRead"]?.failures == 1)
+    // Malformed shape must fail before an independently malformed later expression.
+    let malformed = Data("{".utf8)
+    try malformed.write(to: shapeURL); try malformed.write(to: expressionURL)
+    let shapeFailure = compareFailure(hashCalls: 1, decodeCalls: 1)
+    let decoderFailure = shapeReuseFailure { _ = try SourceShapeContract.decode(malformed) }
+    #expect(shapeFailure.0 == decoderFailure && shapeFailure.1.intervals["expressionRead"] == nil)
+    #expect(shapeFailure.1.intervals["shapeDecode"]?.failures == 1 && shapeFailure.1.intervals["shapeReuseAdmission"] == nil)
+    // A successful shape hit does not suppress the later expression decoder.
+    try data.write(to: shapeURL)
+    let expressionFailure = compareFailure(hashCalls: 1, decodeCalls: nil)
+    #expect(expressionFailure.1.intervals["expressionDecode"]?.failures == 1)
 }
