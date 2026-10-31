@@ -4883,3 +4883,33 @@ section.
 - **The drawable is not a full 4K frame.** It is 1996×1824 pixels, the
   window's viewport on a 4K display at scale 2. A full-screen viewport on
   that display has about 2.2× the pixels, which matters for GPU time only.
+
+## Texture-loading candidate validation (#288, 2026-10-31)
+
+The unmerged [PR #288](https://github.com/grabbiel/ikkoku/pull/288) checkpoint
+`95ee1773` passes 1,095 full Release tests with seven explicitly named
+performance-probe skips. Its strict texture corpus covers 138 successful inputs
+and one expected rejection; all seven separate upload gates also pass. The fresh Release app
+passes ten Maker checks (281 operations), 81 Studio checks (1,250 operations),
+and six control/candidate capture pairs with exact encoded and decoded pixels.
+These checks establish this candidate's bounded functional behavior, not wider
+material coverage or source-game visual parity.
+
+A separate six-process showoff startup comparison completes all reports with
+matching configuration, display and machine context. Its frozen quiet rule
+rejects comparative interpretation: 93 unrelated-process intervals exceed 20%
+of one logical CPU, and 19 departing processes have unobserved final CPU tails.
+All raw process samples and per-run values are retained; no speed or FPS claim
+is made, and the cohort is not rerun in the unchanged environment. This does not
+invalidate the preceding functional and image checks.
+
+The accepted app archive retains its original build-wrapper exit 126 and a
+separate successful no-rebuild package inspection; the build leader's exit was
+not recorded. The earlier Release test failure exposed a test-owned texture
+lease ending before its read, corrected with an explicit test lifetime. Both
+failures remain in the evidence. Combining this candidate with later merged
+Maker/shape work still requires a distinct source identity and integration
+checks. Private evidence is under
+`.local/codex-resume-2026-10-30/materials-runtime-acceptance/`; the rejected quiet
+cohort's result SHA-256 is
+`3e2d4f4474a8702b354fa4433f706c7f0e6819061dfc9977cea671b93161b2f0`.

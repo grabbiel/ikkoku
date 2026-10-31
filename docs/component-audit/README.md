@@ -1,7 +1,7 @@
 # Component audit and implementation backlog
 
 **Baseline review: 2026-09-25 · commit `2cfb859` and that review's working tree.
-Scoped acceptance updates through 2026-10-24 appear below.** Later entries update
+Scoped acceptance updates through 2026-10-31 appear below.** Later entries update
 only their named behavior and evidence; the original audit was not rerun in full. The
 [documentation index](../README.md) links maintained guides and technical contracts. Older rebuild/checkpoint
 documents remain useful evidence of individual milestones, but their completion
@@ -123,6 +123,10 @@ acceptance boundary; their old “next” steps are historical, not a live queue
   neighbouring triangles; translated pipelines now prevent it, and repeated live captures are bit-identical
   ([cause and correction](../reference/renderer.md#cause-and-correction-cross-primitive-derivative-quads-2026-10-25)).
   The history below predates that correction.
+  The unmerged [texture-loading checkpoint](../reference/performance.md#texture-loading-candidate-validation-288-2026-10-31)
+  passes full Release, Maker/Studio and paired-image checks. Its startup cohort
+  fails the frozen background-activity limits, so no comparative speed claim or
+  current-main integration acceptance follows from those results.
   The [sampling investigation](../reference/renderer.md#translated-sampling-repeatability-investigation-188)
   distinguishes diagnostic controls from production behavior; reductions are
   evidence, not fixes or added material coverage. The latest controlled split
@@ -156,6 +160,10 @@ acceptance boundary; their old “next” steps are historical, not a live queue
   across replacement, rejected loads and repeated unload/remount, with exact
   state/resource retention and explicit unload changes. Real OS focus and
   multiple-window ownership still need separate acceptance.
+  An [ordered delete/copy diagnostic](../reference/studio/scene-editing.md#ordered-deletecopy-diagnostic-278-2026-10-31)
+  identifies an allocation/root-order mismatch and preserves both plugin-rich
+  refusals. Original-player shutdown failures remain unresolved; this adds no
+  supported export behavior.
   General plugin compatibility remains outside the supported subset.
 
 Use the linked issue/PR state for work in review, and the owning reference for
