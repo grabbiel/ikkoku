@@ -409,6 +409,8 @@ Reviewed 2026-11-01. When one export both deletes source records and adds record
 - **Lanes.**
   - `topology-delete-duplicate.json` (koikatu_cs0002591) deletes character 65, then duplicates item 1540 and folder 962, with three undos and redos. After export and reimport, 1540's copy is key 65 in the character's root slot, and 962's copy is key 66 appended, with children 67, 251, 252 and 253. An independent Python walk of the rules above predicts those keys. Each copy holds its original's world pose within 5e-4 m and 0.05°. A second export after a Set Parent names the `move` fallback. Negative controls reject the set-based roots (113 and 114 appended) and a wrong pose.
   - `plugin-rewrite-delete.json` (phase C fixture) deletes item 2 and copies item 5, which has data in all three plug-ins. The copy reimports at key 2 in item 2's root slot; the set-based export would append 159.
+- **Phase C row.** #287's phase C `delete-duplicate` (delete V1, then duplicate M3), exported in that order, is CharaStudio's file apart from KKPE's instance IDs and the live state (96,393 B each). It was refused before.
+- **Gates.** On the Debug build of `bec97157` (`main` `7cb4f995` merged), `studio-scenarios` passed 87/87 under `--strict` under the app lock (0 skipped, 1,577.8 s). The strict Engine suite with the shared fixture map passed 1,121 tests. Its 8 skips are the 7 opt-in timing probes and the opt-in oracle parity test (`IKKOKU_ORDERED_ORACLE`).
 
 **Not verified:**
 
