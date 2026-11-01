@@ -1,6 +1,7 @@
 import CoreGraphics
 import Foundation
 import Metal
+import MetalKit
 import Testing
 @testable import Renderer
 
@@ -150,5 +151,133 @@ private func steppedLaps(_ calls: [Int]) -> [Aggregate] { calls.map { Aggregate(
             }
         }
         #expect(uploads == 8)
+    }
+}
+
+/// Opt-in timing, Release (`swift test -c release -Xswiftc -enable-testing`
+/// with `IKKOKU_TEXTURE_FORMAT_PERF=1`): where an encoded JPEG, HEIC or PNG
+/// load spends its time, against MetalKit's whole load (#290). Each round
+/// times, in rotating order on one plain thread: MetalKit's
+/// `newTexture(data:)`; ours, `image(data:)` then `texture`, without an
+/// observer; the same with an observer, for the stage split; and MetalKit's
+/// `newTexture(cgImage:)` on a fresh ImageIO image, which shows how fast
+/// MetalKit reaches decoded pixels. A second provider access on the observed
+/// image afterwards separates the copy from the decode. Medians of 16 rounds
+/// after 3 warm-ups; the stage medians need not add up to the median whole.
+@Suite struct InlineTextureLoadFormatTiming {
+    /// Photo-like content: smooth waves with a little noise, so JPEG and
+    /// HEIC compress it as they would a texture, not as noise.
+    static func image(side: Int, alpha: Bool) -> CGImage? {
+        var bytes = [UInt8](repeating: 255, count: side * side * 4), seed: UInt32 = 0x9e37_79b9
+        func noise() -> Float {
+            seed = seed &* 1_664_525 &+ 1_013_904_223
+            return Float(Int(seed >> 27)) - 16
+        }
+        func channel(_ value: Float) -> UInt8 { UInt8(max(0, min(255, value.rounded()))) }
+        for y in 0..<side {
+            for x in 0..<side {
+                let fx = Float(x), fy = Float(y), i = (y * side + x) * 4
+                bytes[i] = channel(128 + 100 * sin(fx * 0.013 + fy * 0.007) + noise())
+                bytes[i + 1] = channel(128 + 100 * sin(fx * 0.005 - fy * 0.011 + 1) + noise())
+                bytes[i + 2] = channel(128 + 100 * cos((fx + fy) * 0.009) + noise())
+                if alpha { bytes[i + 3] = channel(160 + 90 * sin(fx * 0.004 + fy * 0.003)) }
+            }
+        }
+        guard let provider = CGDataProvider(data: Data(bytes) as CFData) else { return nil }
+        let info = alpha ? CGImageAlphaInfo.last : .noneSkipLast
+        return CGImage(width: side, height: side, bitsPerComponent: 8, bitsPerPixel: 32, bytesPerRow: side * 4,
+                       space: CGColorSpace(name: CGColorSpace.sRGB)!, bitmapInfo: CGBitmapInfo(rawValue: info.rawValue),
+                       provider: provider, decode: nil, shouldInterpolate: false, intent: .defaultIntent)
+    }
+
+    static func encode(_ image: CGImage, as type: String, quality: Double?) -> Data? {
+        let data = NSMutableData()
+        guard let destination = CGImageDestinationCreateWithData(data, type as CFString, 1, nil) else { return nil }
+        let options = quality.map { [kCGImageDestinationLossyCompressionQuality: $0] as CFDictionary }
+        CGImageDestinationAddImage(destination, image, options)
+        guard CGImageDestinationFinalize(destination), data.length > 0 else { return nil }
+        return data as Data
+    }
+
+    @Test(.enabled(if: (ProcessInfo.processInfo.environment["IKKOKU_TEXTURE_FORMAT_PERF"] ?? "") == "1" && MTLCreateSystemDefaultDevice() != nil,
+                   "Opt-in timing probe: IKKOKU_TEXTURE_FORMAT_PERF=1 and a Metal device"))
+    func formatLoadStages() async throws {
+        let specs: [(name: String, side: Int, alpha: Bool, type: String, quality: Double?)] = [
+            ("jpeg-1024", 1024, false, "public.jpeg", 0.9), ("jpeg-2048", 2048, false, "public.jpeg", 0.9),
+            ("heic-rgba-1024", 1024, true, "public.heic", 0.9), ("heic-rgba-2048", 2048, true, "public.heic", 0.9),
+            ("png-rgba-1024", 1024, true, "public.png", nil),
+        ]
+        var files: [(name: String, data: Data)] = []
+        for spec in specs {
+            let image = try #require(Self.image(side: spec.side, alpha: spec.alpha))
+            files.append((spec.name, try #require(Self.encode(image, as: spec.type, quality: spec.quality), "\(spec.name) encode")))
+        }
+        let inputs = files
+        let lines = await onOwnThread { () -> [String] in
+            let device = MTLCreateSystemDefaultDevice()!, queue = device.makeCommandQueue()!, loader = MTKTextureLoader(device: device)
+            let options = TextureIdentityComparison.options(true)
+            func now() -> UInt64 { DispatchTime.now().uptimeNanoseconds }
+            func ms(_ start: UInt64, _ end: UInt64) -> Double { Double(end - start) / 1e6 }
+            func median(_ values: [Double]) -> Double { values.sorted()[values.count / 2] }
+            return inputs.map { name, data -> String in
+                var metalKitData: [Double] = [], metalKitImage: [Double] = [], ours: [Double] = [], observed: [Double] = []
+                var creation: [Double] = []
+                var again: [Double] = [], stages = [[Double]](repeating: [], count: InlineTextureLoadObservations.Stage.allCases.count)
+                var conversion = "?", failures = 0
+                for round in 0..<19 {
+                    let warm = round < 3
+                    func runMetalKitData() {
+                        let start = now()
+                        if (try? loader.newTexture(data: data, options: options)) == nil { failures += 1 }
+                        if !warm { metalKitData.append(ms(start, now())) }
+                    }
+                    func runMetalKitImage() {
+                        guard let decoded = InlineTextureLoader.image(data: data) else { failures += 1; return }
+                        let start = now()
+                        if (try? loader.newTexture(cgImage: decoded.cgImage, options: options)) == nil { failures += 1 }
+                        if !warm { metalKitImage.append(ms(start, now())) }
+                    }
+                    func runOurs() {
+                        let start = now()
+                        guard let decoded = InlineTextureLoader.image(data: data),
+                              (try? InlineTextureLoader.texture(decoded, srgb: true, device: device, queue: queue)) != nil else {
+                            failures += 1; return
+                        }
+                        if !warm { ours.append(ms(start, now())) }
+                    }
+                    func runObserved() {
+                        let observer = InlineTextureLoadObservations()
+                        let start = now()
+                        guard let decoded = InlineTextureLoader.image(data: data) else { failures += 1; return }
+                        let created = now()
+                        if (try? InlineTextureLoader.texture(decoded, srgb: true, device: device, queue: queue, observations: observer)) == nil {
+                            failures += 1; return
+                        }
+                        let end = now()
+                        let copy = decoded.cgImage.dataProvider?.data
+                        let secondEnd = now()
+                        withExtendedLifetime(copy) {}
+                        conversion = InlineTextureLoader.layout(for: decoded, srgb: true).map { "\($0.conversion)" } ?? "none"
+                        guard !warm else { return }
+                        observed.append(ms(start, end)); creation.append(ms(start, created)); again.append(ms(end, secondEnd))
+                        for stage in InlineTextureLoadObservations.Stage.allCases { stages[stage.rawValue].append(observer[stage].milliseconds) }
+                    }
+                    let order: [() -> Void] = [runMetalKitData, runOurs, runObserved, runMetalKitImage]
+                    for k in 0..<order.count { order[(k + round) % order.count]() }
+                }
+                guard failures == 0, !ours.isEmpty else { return "[texture-format-perf] \(name): \(failures) failures" }
+                let split = InlineTextureLoadObservations.Stage.allCases.map { "\($0) " + String(format: "%.2f", median(stages[$0.rawValue])) }
+                return "[texture-format-perf] \(name) (\(data.count / 1024) KB, \(conversion)): "
+                    + String(format: "MetalKit data %.2f ms; MetalKit cgImage %.2f ms; ours %.2f ms; observed %.2f ms = image creation %.2f + texture [",
+                             median(metalKitData), median(metalKitImage), median(ours), median(observed), median(creation))
+                    + split.joined(separator: ", ")
+                    + String(format: "]; provider data again %.2f ms", median(again))
+            }
+        }
+        for line in lines { print(line) }
+        if let path = ProcessInfo.processInfo.environment["IKKOKU_TEXTURE_FORMAT_PERF_REPORT"] {
+            try (lines.joined(separator: "\n") + "\n").write(toFile: path, atomically: true, encoding: .utf8)
+        }
+        #expect(lines.allSatisfy { !$0.contains("failures") })
     }
 }
