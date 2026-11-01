@@ -89,9 +89,11 @@ public enum SourceSceneLightLimit: Sendable, Equatable {
     /// so only an install without the limit can author a third light.
     case charaStudio
     /// CharaStudio with KK_Fix_UnlimitedMapLights 22.1, the user's install.
-    /// Its getter postfixes make `isLightCheck` true and `isLightLimitOver`
-    /// false (IllusionFixes/UnlimitedMapLights.cs:40–52), so no light is
-    /// refused or dropped.
+    /// Its two getter postfixes force one result to true and the other to
+    /// false (IllusionFixes/UnlimitedMapLights.cs:40–52); that they make
+    /// `isLightCheck` true and `isLightLimitOver` false is inferred from the
+    /// forced values, because ILSpy could not decode the attribute arguments.
+    /// So no light is refused or dropped.
     case unlimitedMapLights
 }
 
