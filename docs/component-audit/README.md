@@ -142,7 +142,9 @@ acceptance boundary; their old “next” steps are historical, not a live queue
   A [2026-11-01 ImageIO option probe](../reference/renderer.md#imageio-eager-cache-correctness-probe-290-2026-11-01)
   rejects eager caching as an exact substitution for one synthetic JPEG; its
   PNG control matches. No production change or comparative timing follows,
-  and JPEG/HEIC cost issue #290 remains open.
+  and JPEG/HEIC cost issue #290 remains open. A follow-on byte-only audit passes
+  68 asset-free controls but stops at an unsupported nested Exif IFD in that
+  JPEG; it produces no complete structure or pixel/block correlation result.
   The [sampling investigation](../reference/renderer.md#translated-sampling-repeatability-investigation-188)
   distinguishes diagnostic controls from production behavior; reductions are
   evidence, not fixes or added material coverage. The latest controlled split
