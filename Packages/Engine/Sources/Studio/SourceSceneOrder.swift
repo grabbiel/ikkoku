@@ -322,12 +322,20 @@ public extension SourceSceneExportValidation {
 
     /// #278: the document's recorded operations as replay steps, checked
     /// against the staged scene and the topology edits. Only an export that
-    /// deletes source records and adds records can need them.
+    /// adds records after an operation that freed a key or a root slot can
+    /// need them: a source delete, a delete of an added object, a route
+    /// point added or deleted (`AddPoint` takes keys, a delete frees them),
+    /// or a move (`dicObject` loses or gains a root). Without one, the
+    /// set-based keys and appended roots are CharaStudio's, and the export
+    /// is unchanged. A document without a log falls back only when it
+    /// deletes, since nothing else shows it needed the order.
     static func order(_ document: StudioDocument, staged: Staged, deletions: Set<Int32>,
                       reparents: [SourceSceneEdits.Reparent]) -> Order {
-        guard !deletions.isEmpty, !staged.objects.isEmpty else { return .unneeded }
-        guard let log = document.sourceStructuralEdits else { return .fallback(.noLog) }
+        guard !staged.objects.isEmpty else { return .unneeded }
+        guard let log = document.sourceStructuralEdits else { return deletions.isEmpty ? .unneeded : .fallback(.noLog) }
         if log.edits.contains(.unordered(.overflow)) { return .fallback(.overflow) }
+        // The replay does not model the keys an added object held before its
+        // delete, so every later key can differ.
         if log.edits.contains(.delete(sourceKey: nil)) { return .fallback(.addThenDelete) }
         let index = Dictionary(staged.objects.enumerated().map { ($0.element, $0.offset) }, uniquingKeysWith: { a, _ in a })
         let tree = SourceSceneTopology.Tree(staged.stage.source.snapshot)
@@ -355,8 +363,9 @@ public extension SourceSceneExportValidation {
                 steps.append(.insert(members)); if freed { needed = true }
             case .unordered(let reason):
                 unordered = unordered ?? reason
-                // Route point edits take and free keys themselves.
-                if reason == .routePoints { if freed { needed = true }; freed = true }
+                // Route point edits take and free keys, and moves take and
+                // free root slots, outside the replay.
+                if reason == .routePoints || reason == .move { if freed { needed = true }; freed = true }
             }
         }
         // Every addition and every deleted source record must be in the log.

@@ -540,6 +540,13 @@ private let liveCard = controllerCard(links: .map([("f_t_hand_L", int32(4))]))
         // Deleting the linked character takes its links with it.
         #expect(verdict(scene, .init(deletions: [12])) == "kept")
     }
+    // #278: an ordered delete with a copy is still refused here, though the
+    // copy carries CharaStudio's key: no original-player run has reloaded a
+    // linked card after one.
+    let linkedStage = try KoikatsuSceneReader.decodeDocument(pluginScene(nil, card: liveCard).data).inserting([.init(.duplicate(of: 2))])
+    var ordered = SourceSceneEdits(deletions: [3]); ordered.order = [.delete(3), .insert([0])]
+    do { _ = try linkedStage.editedData(ordered); Issue.record("an ordered delete with a copy of a linked card's scene was written") }
+    catch let error as SourceSceneTopologyError { #expect(error.errorDescription?.contains("both deletes and copies objects") == true) }
     // A trailer-less scene whose live link the edit does not touch exports
     // exactly as the topology writer writes the deletion.
     let groups: [(point: Int32, children: [TopologyNode])] = [(point: Int32(0), children: [TopologyNode]())]

@@ -318,7 +318,16 @@ enum SourceScenePluginData {
             return keys.sorted()
         }
         func unchanged(_ kinds: Set<KoikatsuObjectKind>?) -> Bool {
-            keys(Array(sourceRecords.values), kinds) == keys(finalRecords, kinds)
+            keys(Array(sourceRecords.values), kinds) == keys(finalRecords, kinds) && ownKeys(kinds)
+        }
+        /// No copy or new record of `kinds` holds a source record's key. Only
+        /// an ordered export (#278) gives one a key a deleted record freed;
+        /// set-based keys are never a source key.
+        func ownKeys(_ kinds: Set<KoikatsuObjectKind>?) -> Bool {
+            finalRecords.allSatisfy { record in
+                !(kinds?.contains(record.kind) ?? true) || sourceRecords[record.sourceKey] == nil
+                    || origins[record.sourceKey] == record.sourceKey
+            }
         }
         /// Data addressing objects by their index in the key-sorted
         /// `dicObjectCtrl` still names the same objects: every source object
@@ -326,7 +335,7 @@ enum SourceScenePluginData {
         /// nothing removed, every new key above them) and nothing is copied
         /// (the plug-ins' `Studio.Duplicate` patches add data for copies).
         var positionsKept: Bool {
-            !copied && keys(finalRecords, nil).starts(with: keys(Array(sourceRecords.values), nil))
+            !copied && keys(finalRecords, nil).starts(with: keys(Array(sourceRecords.values), nil)) && ownKeys(nil)
         }
         /// Whether the edit deletes, or with `copies` copies, a key in `keys`.
         func touches(_ keys: Set<Int32>, copies: Bool) -> Bool {
