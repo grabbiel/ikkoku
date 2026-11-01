@@ -102,6 +102,9 @@ public sealed class OriginalPluginRewriteProbe:BaseUnityPlugin {
         input=Path.Combine(here,"reload-input");
         string error=null;
         try{phase=File.ReadAllText(Path.Combine(input,"phase.txt")).Trim();}catch(Exception e){error="phase.txt: "+e.Message;}
+        // OL begin (#316): the light phases run LightStart (end of file); every other phase runs on unchanged.
+        if(error==null&&(phase=="OL"||phase=="OU")){var light=LightStart();while(light.MoveNext())yield return light.Current;yield break;}
+        // OL end
         if(error==null&&phase!="C"&&phase!="D"&&phase!="OA"&&phase!="OB")error="unknown phase "+phase;
         bool ordered=phase=="OA"||phase=="OB";
         int waited=0;
@@ -697,4 +700,169 @@ public sealed class OriginalPluginRewriteProbe:BaseUnityPlugin {
         var list=value as IEnumerable;if(list!=null){var a=new List<string>();foreach(var x in list)a.Add(J(x));return "["+String.Join(",",a.ToArray())+"]";}
         return Convert.ToString(value,CultureInfo.InvariantCulture);
     }
+    // OL begin (#316)
+    // Light phases (#316, #320; phase OL of original_plugin_scene_probe.py), core plug-ins only, phase A's exact
+    // fixture. Two players share one private root:
+    //   OL  vanilla: no KK_Fix_UnlimitedMapLights.
+    //   OU  the same root with KK_Fix_UnlimitedMapLights copied in from the install.
+    // Each runs phase A's baseline (OrderedBaseline), every LightCases row from it (the real Delete, Duplicate and
+    // Add Light, which CharaStudio 1.0.4.2 may refuse or let drop a light: a step that adds nothing is recorded,
+    // not an error), then loads and saves each of our exports with more than two lights (reload-input\
+    // ours-light-*.png). Every snapshot adds SceneInfo.lightCount (private, read only), isLightCheck and
+    // isLightLimitOver, read through reflection so that a Harmony patch of either getter is what answers, and the
+    // light keys. The trace lists every Harmony patch on SceneInfo with its owners.
+    const string LightFix="KK_Fix_UnlimitedMapLights";
+    // Label, fixture and the operations in order, each "operation:object"; add-light's argument is the
+    // Light_00 catalog number (1: point).
+    public static readonly string[][] LightCases={
+        new[]{"delete-duplicate-light","a","delete:V1","duplicate:L"},
+        new[]{"delete-light-add-light-twice","a","delete:L","add-light:1","add-light:1"},
+        new[]{"delete-duplicate-light-twice","a","delete:V1","duplicate:L","duplicate:L"},
+        new[]{"add-light-twice","a","add-light:1","add-light:1"}};
+    public static readonly string[] LightInputs={"ours-light-roots.png","ours-light-nested.png"};
+    IEnumerator LightStart() {
+        string error=null;
+        int waited=0;
+        for(;waited<3600;waited++){if(Ready())break;yield return null;}
+        if(waited>=3600)error="Studio, the scene container, cameraCtrl or Camera.main were not ready within 3600 frames";
+        for(int i=0;i<60&&error==null;i++)yield return null;
+        studio=Singleton<Studio.Studio>.Instance;
+        var plugins=new Dictionary<string,object>();
+        foreach(var entry in BepInEx.Bootstrap.Chainloader.PluginInfos)plugins[entry.Key]=entry.Value.Metadata.Version.ToString();
+        for(int i=0;i<5;i++)if(error==null&&!plugins.ContainsKey(Required[i]))error="required plug-in "+Required[i]+" did not load";
+        for(int i=5;i<Required.Length;i++)if(error==null&&plugins.ContainsKey(Required[i]))error="unexpected full-set plug-in in "+phase+": "+Required[i];
+        if(error==null&&plugins.ContainsKey(LightFix)!=(phase=="OU"))error=phase=="OU"?LightFix+" did not load":"unexpected "+LightFix+" in the vanilla player";
+        if(error==null){try{voiceRepair=RepairVoice();}catch(Exception e){error="voice repair: "+e;}}
+        for(int i=0;i<FixtureKeys.Length;i+=2)keys[(string)FixtureKeys[i]]=(int)FixtureKeys[i+1];
+        var steps=new List<KeyValuePair<string,Func<IEnumerator>>>();
+        steps.Add(new KeyValuePair<string,Func<IEnumerator>>("baseline",()=>OrderedBaseline("a")));
+        foreach(var row in LightCases){var r=row;steps.Add(new KeyValuePair<string,Func<IEnumerator>>(r[0],()=>LightEdit(r)));}
+        foreach(var name in LightInputs){var n=name;steps.Add(new KeyValuePair<string,Func<IEnumerator>>(n,()=>LightLoad(n)));}
+        foreach(var step in steps) {
+            if(error!=null)break;
+            IEnumerator run=null;string failure=null;
+            try{run=step.Value();}catch(Exception e){failure=step.Key+": "+e;}
+            while(failure==null){bool more=false;object current=null;try{more=run.MoveNext();if(more)current=run.Current;}catch(Exception e){failure=step.Key+": "+e;}if(failure!=null||!more)break;yield return current;}
+            if(failure!=null)error=failure;
+        }
+        object patches=null;
+        try{patches=LightPatches();}catch(Exception e){if(error==null)error="patches: "+e;}
+        try{File.WriteAllText(Path.Combine(folder,"plugin-scene-trace.json"),J(K("schemaVersion",1,"phase",phase,"plugins",plugins,"keys",keys,"patches",patches,"cases",cases)));}
+        catch(Exception e){if(error==null)error="trace write: "+e;}
+        File.WriteAllText(Path.Combine(folder,"status.json"),J(K("error",error,"unity",Application.unityVersion,"plugins",plugins,"phase",phase,"voiceRepair",voiceRepair,
+            "scope",(phase=="OL"?"light oracle (#316, #320), vanilla":"light oracle (#316, #320) with "+LightFix)+": phase A's exact input loaded and saved, each light case's real Delete, Duplicate and Add Light with SceneInfo.hashIndex, root enumeration and lightCount snapshots, its save, reload and save again, then the load and save of our exports with more than two lights; no scene authoring or survey")));
+        Application.Quit();
+        for(int i=0;i<3600;i++){yield return null;if(i%30==29)Application.Quit();}
+    }
+    // One LightCases row from the baseline's save, as OrderedEdit, with light snapshots. A refused Add Light shows
+    // CharaStudio's notification scene (Studio.cs:297-308), so each step also waits until the scene is ready again.
+    IEnumerator LightEdit(string[] spec) {
+        string label=spec[0];
+        if(spec[1]!="a")throw new Exception("light case "+label+" is not on phase A's fixture");
+        var load=Load(Path.Combine(folder,"fixture.png"));while(load.MoveNext())yield return load.Current;
+        var actions=new List<object>();
+        var loaded=LightSnapshot();var row=K("label",label,"fixture","a","source","fixture.png","loaded",loaded,"actions",actions);cases[label]=row;
+        SameOrderedStructure((Dictionary<string,object>)((Dictionary<string,object>)cases["baseline"])["loaded"],loaded,label+" baseline");
+        for(int i=2;i<spec.Length;i++) {
+            string operation=spec[i].Substring(0,spec[i].IndexOf(':')),target=spec[i].Substring(spec[i].IndexOf(':')+1);
+            var step=K("operation",operation,"name",target,"before",LightSnapshot());actions.Add(step);
+            bool added=true;
+            if(operation=="delete"){step["target"]=keys[target];Delete(Ctrl(target));}
+            else if(operation=="duplicate"){step["target"]=keys[target];var copies=DuplicateLight(Ctrl(target));step["copies"]=copies;added=copies.Count>0;}
+            else if(operation=="add-light"){var light=AddLight(Int32.Parse(target,CultureInfo.InvariantCulture));step["added"]=light;added=light.Count>0;}
+            else throw new Exception("unknown light operation "+operation);
+            step["afterImmediate"]=LightSnapshot();
+            for(int f=0;f<Settle;f++)yield return null;
+            float until=Time.realtimeSinceStartup+(added?0f:3f);
+            while(Time.realtimeSinceStartup<until)yield return null;
+            until=Time.realtimeSinceStartup+15f;
+            while(!Ready()){if(Time.realtimeSinceStartup>until)throw new Exception(label+": the scene was not ready 15 seconds after "+spec[i]);yield return null;}
+            step["afterSettled"]=LightSnapshot();
+        }
+        string name="edit-"+label+".png";
+        row["saved"]=Save(name);row["savedSHA256"]=FileHash(Path.Combine(folder,name));
+        var afterSave=LightSnapshot();row["afterSave"]=afterSave;
+        load=Load(Path.Combine(folder,name));while(load.MoveNext())yield return load.Current;
+        var reloaded=LightSnapshot();row["reloaded"]=reloaded;row["leakedAtReload"]=SameOrderedStructure(afterSave,reloaded,label+" reload",true);
+        row["resaved"]=Save("resave-"+name);
+        row["resavedSHA256"]=FileHash(Path.Combine(folder,"resave-"+name));
+        var afterResave=LightSnapshot();row["afterResave"]=afterResave;SameOrderedStructure(reloaded,afterResave,label+" resave");
+    }
+    // One of our exports: loaded (SceneInfo.Load, which keeps root lights and checks nested ones) and saved.
+    IEnumerator LightLoad(string name) {
+        var load=Load(Path.Combine(input,name));while(load.MoveNext())yield return load.Current;
+        var row=K("input",name,"loaded",LightSnapshot());cases[name]=row;
+        row["resaved"]=Save("resave-"+name);row["resavedSHA256"]=FileHash(Path.Combine(folder,"resave-"+name));
+        row["afterResave"]=LightSnapshot();
+    }
+    // Duplicate without its no-copy check: Studio.Duplicate runs SceneInfo.Import, which drops a light once two
+    // are counted (SceneInfo.cs:483-502).
+    List<object> DuplicateLight(ObjectCtrlInfo oci) {
+        var before=new HashSet<int>(studio.dicObjectCtrl.Keys);
+        studio.treeNodeCtrl.SelectSingle(oci.treeNodeObject,false);
+        studio.Duplicate();
+        var added=new List<int>();
+        foreach(var key in studio.dicObjectCtrl.Keys)if(!before.Contains(key))added.Add(key);
+        added.Sort();var copies=new List<object>();foreach(var key in added)copies.Add(key);
+        return copies;
+    }
+    // The toolbar's Add Light (Studio.AddLight -> AddObjectLight.Add), which refuses once two are counted. The
+    // parity test's new light has the OILightInfo constructor's placement, so the option must be the default.
+    List<object> AddLight(int no) {
+        int position=Studio.Studio.optionSystem.initialPosition;
+        if(position!=0)throw new Exception("optionSystem.initialPosition is "+position+", not the default 0");
+        var before=new HashSet<int>(studio.dicObjectCtrl.Keys);
+        studio.AddLight(no);
+        var added=new List<int>();
+        foreach(var key in studio.dicObjectCtrl.Keys)if(!before.Contains(key))added.Add(key);
+        added.Sort();var list=new List<object>();foreach(var key in added)list.Add(key);
+        if(list.Count>1)throw new Exception("Studio.AddLight added "+list.Count+" objects");
+        return list;
+    }
+    Dictionary<string,object> LightSnapshot() {
+        var snapshot=OrderedSnapshot();var info=studio.sceneInfo;
+        var count=typeof(SceneInfo).GetField("lightCount",BindingFlags.NonPublic|BindingFlags.Instance);
+        if(count==null)throw new Exception("SceneInfo.lightCount is unavailable");
+        snapshot["lightCount"]=count.GetValue(info);
+        foreach(var name in new[]{"isLightCheck","isLightLimitOver"}) {
+            var property=typeof(SceneInfo).GetProperty(name,BindingFlags.Public|BindingFlags.Instance);
+            if(property==null)throw new Exception("SceneInfo."+name+" is unavailable");
+            snapshot[name]=property.GetValue(info,null);
+        }
+        var lights=new List<int>();
+        foreach(var entry in studio.dicObjectCtrl)if(entry.Value is OCILight)lights.Add(entry.Key);
+        lights.Sort();var list=new List<object>();foreach(var key in lights)list.Add(key);
+        snapshot["lights"]=list;
+        return snapshot;
+    }
+    // Every Harmony patch on a SceneInfo method (HarmonyLib through reflection: the probe is compiled without
+    // 0Harmony), each with its owner IDs and patch methods, in signature order.
+    static List<object> LightPatches() {
+        var harmony=FindType("HarmonyLib.Harmony");if(harmony==null)throw new Exception("HarmonyLib.Harmony is not loaded");
+        var all=harmony.GetMethod("GetAllPatchedMethods",BindingFlags.Public|BindingFlags.Static,null,Type.EmptyTypes,null);
+        var info=harmony.GetMethod("GetPatchInfo",BindingFlags.Public|BindingFlags.Static,null,new[]{typeof(MethodBase)},null);
+        if(all==null||info==null)throw new Exception("HarmonyLib.Harmony has no GetAllPatchedMethods() or GetPatchInfo(MethodBase)");
+        var rows=new SortedDictionary<string,object>(StringComparer.Ordinal);
+        foreach(var item in (IEnumerable)all.Invoke(null,null)) {
+            var method=item as MethodBase;if(method==null||method.DeclaringType!=typeof(SceneInfo))continue;
+            var patches=info.Invoke(null,new object[]{method});
+            var row=K("method",method.Name,"signature",method.ToString());
+            foreach(var kind in new[]{"Prefixes","Postfixes","Transpilers","Finalizers"}) {
+                var owners=new List<object>();row[kind]=owners;
+                if(patches==null)continue;
+                var type=patches.GetType();var field=type.GetField(kind);var property=field==null?type.GetProperty(kind):null;
+                var value=field!=null?field.GetValue(patches):property!=null?property.GetValue(patches,null):null;
+                var each=value as IEnumerable;if(each==null)continue;
+                foreach(var patch in each) {
+                    var pt=patch.GetType();var owner=pt.GetField("owner");var pm=pt.GetProperty("PatchMethod");
+                    var target=pm!=null?pm.GetValue(patch,null) as MethodInfo:null;
+                    if(target==null){var pf=pt.GetField("patch");if(pf!=null)target=pf.GetValue(patch) as MethodInfo;}
+                    owners.Add(K("owner",owner==null?null:owner.GetValue(patch),"method",target==null?null:(object)(target.DeclaringType.FullName+"."+target.Name)));
+                }
+            }
+            rows[method.ToString()]=row;
+        }
+        return new List<object>(rows.Values);
+    }
+    // OL end
 }
