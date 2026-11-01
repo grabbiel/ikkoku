@@ -2999,7 +2999,10 @@ final class StudioModel: ViewportInputHandler, LivePacedHandler {
         edits.lightLimit = sourceExportUnlimitedLights ? .unlimitedMapLights : .charaStudio
         // #278: replayed in the order they were made, deletes and additions
         // give each added record CharaStudio's key and root position.
-        let order = SourceSceneExportValidation.order(doc, staged: staged, deletions: topology.deletions, reparents: topology.reparents)
+        // #316: under CharaStudio 1.0.4.2's limit, an order that would drop
+        // or refuse a light keeps the set-based keys.
+        let order = SourceSceneExportValidation.order(doc, staged: staged, deletions: topology.deletions, reparents: topology.reparents,
+                                                      lightLimit: edits.lightLimit)
         if case .replayed(let steps) = order { edits.order = steps }
         // #320: every exported record is one document object, so the
         // exported scene's lights are counted here.
@@ -3187,15 +3190,9 @@ final class StudioModel: ViewportInputHandler, LivePacedHandler {
             edits.thumbnailData = try CaptureOutput.pngData(image)
         }
         try staged.stage.editedData(edits).write(to: url, options: .atomic)
-        // ST-T05a's legacy note, ST-T03i's orphaned plug-in data and #278's
-        // fallback reason, in that order.
-        status = SourceSceneExportValidation.exportStatus(fileName: url.lastPathComponent, source: source, order: order)
-        // #320: a CharaStudio without KK_Fix_UnlimitedMapLights loads every
-        // root light (SceneInfo.Load) but drops each nested light loaded once
-        // two are counted (ObjectInfoAssist.LoadChild).
-        if lights > 2 {
-            status += ". \(lights) lights: a CharaStudio without KK_Fix_UnlimitedMapLights loads every root light but drops each nested light loaded after the second"
-        }
+        // ST-T05a's legacy note, ST-T03i's orphaned plug-in data, #278's
+        // fallback reason and #320's light note, in that order.
+        status = SourceSceneExportValidation.exportStatus(fileName: url.lastPathComponent, source: source, order: order, lights: lights)
     }
 
     /// Deterministic integration input using original object/bone IDs. This

@@ -2,6 +2,7 @@ import Foundation
 import Testing
 import Assets
 import Character
+import Scene
 @testable import Studio
 
 // #278: ordered exports. Each case is a row of the original-player oracle
@@ -162,7 +163,8 @@ private let duplicateM3 = [SourceSceneInsertion(.duplicate(of: 5))]
     var fewer = SourceStudioRouteState(record: route); fewer.points.removeLast()
     #expect(refusal([.delete(1), .insert([0])]) { $0.routes[7] = fewer }.contains("route 7's added or deleted points are not replayed"))
     #expect(refusal([.delete(1), .insert([0])]) { $0.routes[7] = SourceStudioRouteState(record: route) } == "accepted")
-    #expect(refusal([.delete(1), .insert([0])], insertions: [.init(.light(SourceSceneNewLight(no: 1)))]).contains("lights are not replayed"))
+    // #316: a light replays like any record.
+    #expect(refusal([.delete(1), .insert([0])], insertions: [.init(.light(SourceSceneNewLight(no: 1)))]) == "accepted")
 }
 
 // MARK: - The order the export builds from the document
@@ -201,10 +203,32 @@ private struct Session {
         if logged { document.recordSourceEdit(.insert([copy.id])) }
         return copy.id
     }
-    func order() throws -> (order: SourceSceneExportValidation.Order, staged: SourceSceneExportValidation.Staged, deletions: Set<Int32>) {
+    /// Duplicate on a source record: its whole subtree, copied in one logged step.
+    @discardableResult mutating func duplicateSubtree(_ key: Int32) -> [UUID] {
+        var ids: [UUID] = []
+        func copy(_ original: StudioObject, parent: UUID?) {
+            var object = original
+            object.id = UUID(); object.sourceObjectKey = nil; object.sourceDuplicateOf = original.sourceObjectKey; object.parent = parent
+            document.objects.append(object); ids.append(object.id)
+            for child in document.objects.filter({ $0.parent == original.id }) { copy(child, parent: object.id) }
+        }
+        let original = document.objects.first { $0.sourceObjectKey == key }!
+        copy(original, parent: original.parent)
+        document.recordSourceEdit(.insert(ids))
+        return ids
+    }
+    /// The workspace's Add Light (point), at the root.
+    @discardableResult mutating func addLight() -> UUID {
+        var object = StudioObject(name: "Point Light", kind: .light); object.light = SceneLight(kind: .point)
+        document.objects.append(object); document.recordSourceEdit(.insert([object.id]))
+        return object.id
+    }
+    func order(_ lightLimit: SourceSceneLightLimit = .charaStudio) throws
+        -> (order: SourceSceneExportValidation.Order, staged: SourceSceneExportValidation.Staged, deletions: Set<Int32>) {
         let staged = try SourceSceneExportValidation.stage(document, source: source)
         let topology = try SourceSceneExportValidation.topologyEdits(document, against: staged.stage.document.snapshot, keys: staged.keys)
-        return (SourceSceneExportValidation.order(document, staged: staged, deletions: topology.deletions, reparents: topology.reparents),
+        return (SourceSceneExportValidation.order(document, staged: staged, deletions: topology.deletions, reparents: topology.reparents,
+                                                  lightLimit: lightLimit),
                 staged, topology.deletions)
     }
 }
@@ -259,15 +283,140 @@ private struct Session {
     #expect(try outcome { $0.document.recordSourceEdit(.unordered(.routePoints)); $0.duplicate(5) } == .fallback(.routePoints))
     #expect(try outcome { $0.delete(1); $0.document.recordSourceEdit(.unordered(.routePoints)); $0.duplicate(5) } == .fallback(.routePoints))
     #expect(try outcome { $0.duplicate(5); $0.document.recordSourceEdit(.unordered(.routePoints)) } == .unneeded)
-    // A copied light (SceneInfo.isLightCheck), and a full log.
-    #expect(try outcome { $0.delete(1); $0.duplicate(15) } == .fallback(.light))
+    // #316: a copied light that CharaStudio builds (the second light) is
+    // replayed; one it would drop is `light` (see the light tests below).
+    #expect(try outcome { $0.delete(1); $0.duplicate(15) } == .replayed([.delete(1), .insert([0])]))
+    #expect(try outcome { $0.delete(1); $0.duplicate(15); $0.duplicate(15) } == .fallback(.light))
+    // A full log.
     #expect(try outcome {
         $0.delete(1); $0.duplicate(5)
         $0.document.sourceStructuralEdits = SourceSceneEditLog(Array(repeating: .unordered(.move), count: SourceSceneEditLog.capacity + 1))
     } == .fallback(.overflow))
-    for reason in [SourceSceneOrderFallback.noLog, .move, .routePoints, .addThenDelete, .light, .overflow, .mismatch, .legacyBones] {
+    for reason in [SourceSceneOrderFallback.noLog, .move, .routePoints, .addThenDelete, .light, .overflow, .mismatch, .legacyBones, .lightAtLoad] {
         #expect(!reason.reason.isEmpty)
     }
+}
+
+// MARK: - Lights (#316)
+
+/// Both policies' decision for the operations `build` makes on `scene`.
+private func decided(_ scene: TopologyScene = fixture(), _ build: (inout Session) -> Void) throws
+    -> (vanilla: SourceSceneExportValidation.Order, unlimited: SourceSceneExportValidation.Order) {
+    var session = try Session(scene); build(&session)
+    return (try session.order().order, try session.order(.unlimitedMapLights).order)
+}
+private func unlimitedLights(_ edits: inout SourceSceneEdits) { edits.lightLimit = .unlimitedMapLights }
+
+/// #316: lights replay like any record (`SourceSceneStage.replay`). Fixture a
+/// holds one light, L 15, so the session counts one. Under
+/// KK_Fix_UnlimitedMapLights every light is built, so each order replays and
+/// is written with the bytes `TopologyScene` predicts. Under CharaStudio
+/// 1.0.4.2 an order replays only while each light it builds finds fewer than
+/// two counted (`vanillaLightDrop`); otherwise it keeps the set-based keys.
+@Test func sourceSceneOrderReplaysLightsWhereCharaStudioBuildsThem() throws {
+    let a = fixture()
+    // delete-duplicate-light: deleting V1 frees keys 1 and 6 and root slot 1;
+    // L's copy is the second light, built under both: key 1 in V1's place.
+    let one = try decided { $0.delete(1); $0.duplicate(15) }
+    #expect(one.vanilla == .replayed([.delete(1), .insert([0])]))
+    #expect(one.unlimited == one.vanilla)
+    #expect(try export(a, [.init(.duplicate(of: 15))], deletions: [1], order: [.delete(1), .insert([0])])
+            == expected([folderF, .light(1), m1, m3, routeR, cameraC, lightL], copies: [1: 15]))
+    // delete-duplicate-light-twice: the second copy finds two lights, and
+    // CharaStudio 1.0.4.2's Import drops it (SceneInfo.cs:483). The fix
+    // builds it under key 6, appended.
+    let two = try decided { $0.delete(1); $0.duplicate(15); $0.duplicate(15) }
+    #expect(two.vanilla == .fallback(.light))
+    #expect(two.unlimited == .replayed([.delete(1), .insert([0]), .insert([1])]))
+    let copies = [SourceSceneInsertion(.duplicate(of: 15)), .init(.duplicate(of: 15))]
+    #expect(try export(a, copies, deletions: [1], order: [.delete(1), .insert([0]), .insert([1])], unlimitedLights)
+            == expected([folderF, .light(1), m1, m3, routeR, cameraC, lightL, .light(6)], copies: [1: 15, 6: 15]))
+    // delete-light-add-light-twice: deleting L uncounts it
+    // (OILightInfo.DeleteKey), so both new lights are built under both: 15
+    // in L's place, then 16, appended.
+    let added = try decided { $0.delete(15); $0.addLight(); $0.addLight() }
+    #expect(added.vanilla == .replayed([.delete(15), .insert([0]), .insert([1])]))
+    #expect(added.unlimited == added.vanilla)
+    let point = SourceSceneNewLight(no: 1)
+    #expect(try export(a, [.init(.light(point)), .init(.light(point))], deletions: [15], order: [.delete(15), .insert([0]), .insert([1])])
+            == expected([folderF, v1(), m1, m3, routeR, cameraC, .light(15), .light(16)], copies: [:]) {
+                $0.lights = [15: point, 16: point]; $0.transforms = [15: identity, 16: identity]
+            })
+    // With L kept, the second new light finds two: the Add Light menu
+    // refuses it in CharaStudio 1.0.4.2 (Studio.cs:297–301).
+    let refused = try decided { $0.delete(1); $0.addLight(); $0.addLight() }
+    #expect(refused.vanilla == .fallback(.light))
+    #expect(refused.unlimited == .replayed([.delete(1), .insert([0]), .insert([1])]))
+}
+
+/// Fixture a with light L2 21 inside folder F, read before L at load: two
+/// counted lights, one nested.
+private let folderWithLight = TopologyNode.folder(0, [.item(3, []), .item(4, []), .light(21)])
+private let rootsB: [TopologyNode] = [folderWithLight, v1(), m1, m3, routeR, cameraC, lightL]
+
+/// #316: a delete uncounts every light in its subtree (the `DeleteKey`
+/// recursion), and a copied subtree's lights are counted in load order, each
+/// checked as `ObjectInfoAssist.LoadChild` checks it.
+@Test func sourceSceneOrderFollowsNestedLightsThroughDeletesAndCopies() throws {
+    let b = fixture(rootsB)
+    // Deleting F uncounts L2 (OIFolderInfo.DeleteKey), so a new light is
+    // built under both: key 0 in F's place.
+    let deleted = try decided(b) { $0.delete(0); $0.addLight() }
+    #expect(deleted.vanilla == .replayed([.delete(0), .insert([0])]))
+    #expect(deleted.unlimited == deleted.vanilla)
+    let point = SourceSceneNewLight(no: 1)
+    #expect(try export(b, [.init(.light(point))], deletions: [0], order: [.delete(0), .insert([0])])
+            == expected([.light(0), v1(), m1, m3, routeR, cameraC, lightL], copies: [:]) {
+                $0.lights = [0: point]; $0.transforms = [0: identity]
+            })
+    // F copied after V1's delete: the copy's L2 finds two lights, and
+    // CharaStudio 1.0.4.2's nested load drops it (ObjectInfoAssist.cs:30–44).
+    // The fix builds the copy: F' 1 in V1's place, then 6, 16 and L2' 17.
+    let copied = try decided(b) { $0.delete(1); $0.duplicateSubtree(0) }
+    #expect(copied.vanilla == .fallback(.light))
+    #expect(copied.unlimited == .replayed([.delete(1), .insert([0, 1, 2, 3])]))
+    let subtree = [SourceSceneInsertion(.duplicate(of: 0)), .init(.duplicate(of: 3), parent: .inserted(0)),
+                   .init(.duplicate(of: 4), parent: .inserted(0)), .init(.duplicate(of: 21), parent: .inserted(0))]
+    #expect(try export(b, subtree, deletions: [1], order: [.delete(1), .insert([0, 1, 2, 3])], unlimitedLights)
+            == expected([folderWithLight, .folder(1, [.item(6, []), .item(16, []), .light(17)]), m1, m3, routeR, cameraC, lightL],
+                        copies: [1: 0, 6: 3, 16: 4, 17: 21]))
+    // The same copy after L's delete: one light counted, so L2' is built under both.
+    let room = try decided(b) { $0.delete(15); $0.duplicateSubtree(0) }
+    #expect(room.vanilla == .replayed([.delete(15), .insert([0, 1, 2, 3])]))
+    #expect(room.unlimited == room.vanilla)
+}
+
+/// #316: a source whose CharaStudio 1.0.4.2 load drops a nested light
+/// (`lightAtLoad`): that load frees the light's key, which this export keeps.
+/// The load order decides: root lights are built unchecked
+/// (SceneInfo.cs:323–352), a nested one only while fewer than two are counted.
+@Test func sourceSceneOrderNamesASourceLightCharaStudioDropsAtLoad() throws {
+    // L 15 and L3 22 at the root before F: L2 21 is read third and dropped.
+    let late = fixture([lightL, .light(22), folderWithLight, v1(), m1, m3, routeR, cameraC])
+    let dropped = try decided(late) { $0.delete(1); $0.duplicate(5) }
+    #expect(dropped.vanilla == .fallback(.lightAtLoad))
+    #expect(dropped.unlimited == .replayed([.delete(1), .insert([0])]))
+    // L2 21 read first: it is counted, and the two root lights after it load
+    // unchecked. Three lights, none dropped, and no light added.
+    let early = fixture(rootsB + [.light(22)])
+    let kept = try decided(early) { $0.delete(1); $0.duplicate(5) }
+    #expect(kept.vanilla == .replayed([.delete(1), .insert([0])]))
+    #expect(kept.unlimited == kept.vanilla)
+}
+
+/// The export status names the light fallback's reason, then #320's note
+/// for more than two lights.
+@Test func sourceSceneOrderStatusNamesTheLightReasons() throws {
+    let source = try KoikatsuSceneReader.decodeDocument(fixture().data)
+    let light = SourceSceneExportValidation.exportStatus(fileName: "a.png", source: source, order: .fallback(.light), lights: 2)
+    #expect(light == "Exported edited original scene to a.png. Added objects took keys after the scene's own, which can differ from "
+            + "CharaStudio's for these edits: " + SourceSceneOrderFallback.light.reason)
+    let three = SourceSceneExportValidation.exportStatus(fileName: "a.png", source: source, order: .replayed([]), lights: 3)
+    #expect(three == "Exported edited original scene to a.png. 3 lights: a CharaStudio without KK_Fix_UnlimitedMapLights loads every "
+            + "root light but drops each nested light loaded after the second")
+    let both = SourceSceneExportValidation.exportStatus(fileName: "a.png", source: source, order: .fallback(.lightAtLoad), lights: 3)
+    #expect(both.hasSuffix(SourceSceneOrderFallback.lightAtLoad.reason + ". 3 lights: a CharaStudio without KK_Fix_UnlimitedMapLights "
+            + "loads every root light but drops each nested light loaded after the second"))
 }
 
 // MARK: - A legacy scene (ST-T05a)

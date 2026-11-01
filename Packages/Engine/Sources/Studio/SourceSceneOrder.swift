@@ -20,7 +20,7 @@ public enum SourceSceneStructuralEdit: Codable, Sendable, Equatable {
 /// and root order of its added records may differ from CharaStudio's for the
 /// same operations.
 public enum SourceSceneOrderFallback: String, Codable, Sendable, Equatable {
-    case noLog, move, routePoints, addThenDelete, light, overflow, mismatch, legacyBones
+    case noLog, move, routePoints, addThenDelete, light, overflow, mismatch, legacyBones, lightAtLoad
 
     public var reason: String {
         switch self {
@@ -28,10 +28,11 @@ public enum SourceSceneOrderFallback: String, Codable, Sendable, Equatable {
         case .move: return "an object was moved to another parent, which also changes CharaStudio's root order"
         case .routePoints: return "route points were added or deleted, which also take and free keys"
         case .addThenDelete: return "an added or copied object was deleted again"
-        case .light: return "a light was added or copied (CharaStudio drops a light while two exist)"
+        case .light: return "a light was added or copied while two existed, which CharaStudio 1.0.4.2 drops or refuses (SceneInfo.isLightCheck)"
         case .overflow: return "more than \(SourceSceneEditLog.capacity) structural edits were recorded"
         case .mismatch: return "objects were added or removed by an operation that is not recorded (a plug-in or a merged scene)"
         case .legacyBones: return "a character from an older CharaStudio scene gains FK bones when CharaStudio loads it, under keys this export cannot know"
+        case .lightAtLoad: return "the scene holds a nested light that CharaStudio 1.0.4.2 drops when it loads the scene, which frees that light's key"
         }
     }
 }
@@ -121,7 +122,11 @@ extension SourceSceneStage {
         var before: [Int] = [], after: [Int] = []
         /// The sub-info keys the stage gave each insertion, before then after.
         var subKeys: [[Int32]] = []
+        /// Whether each insertion is itself a light (a new light or a copy of one).
         var lights: [Bool] = []
+        /// #316: the source's lights in CharaStudio's load order
+        /// (`SourceSceneTopology.Tree.loadOrder`).
+        var sourceLights: [Int32] = []
     }
 
     /// The keys and root order the ordered operations give the insertions.
@@ -150,9 +155,11 @@ extension SourceSceneStage {
     ///   is added by `Import` and removed again by `OnLoadAttach`, which leaves
     ///   the order unchanged. `Resize` only runs with no free slot (the
     ///   touched slots never exceed its threshold), so the free list survives it.
+    /// - #316: a light takes its key like any record. Where CharaStudio builds
+    ///   every light, as with KK_Fix_UnlimitedMapLights, these are its keys;
+    ///   `vanillaLightDrop` finds the orders CharaStudio 1.0.4.2 cannot make.
     func replay(_ steps: [SourceSceneInsertion.Step]) throws -> Replay {
         func fail(_ reason: String) -> SourceSceneTopologyError { .unsupported("Ordered export: " + reason) }
-        guard !layout.lights.contains(true) else { throw fail("lights are not replayed (SceneInfo.isLightCheck).") }
         let tree = SourceSceneTopology.Tree(source.snapshot)
         var free = FreeKeys(Set(SourceSceneInsertionPlan.usedKeys(source.snapshot)))
         var alive = Set(tree.records.keys), deleted = Set<Int32>()
@@ -210,6 +217,70 @@ extension SourceSceneStage {
             throw fail("insertion \(index)'s sub-info keys differ from its stage.")
         }
         return Replay(keys: keys, subKeys: subKeys, roots: slots.compactMap { $0 }, deleted: deleted)
+    }
+
+    /// Where CharaStudio 1.0.4.2 would not build a light of the ordered
+    /// operations (#316).
+    enum VanillaLightDrop: Sendable, Equatable {
+        /// The load drops this nested source light, which frees its key.
+        case source(Int32)
+        /// Import or the Add Light menu drops or refuses this insertion.
+        case insertion(Int)
+    }
+
+    /// #316: the first light CharaStudio 1.0.4.2 would drop or refuse while
+    /// it loads the source and makes `steps`, or nil when it builds each one.
+    /// `lightCount` follows the session (SceneInfo.cs:229–236):
+    ///
+    /// - The `OILightInfo` constructor counts a light (OILightInfo.cs:38) and
+    ///   its `DeleteKey` uncounts it (OILightInfo.cs:67–71), which every
+    ///   delete of a subtree reaches (OIFolderInfo.cs:41–47,
+    ///   OIItemInfo.cs:176–182, OICharInfo.cs:342–353, OIRouteInfo.cs:101–106).
+    /// - `SceneInfo.Load` builds every root light (SceneInfo.cs:323–352), and
+    ///   `ObjectInfoAssist.LoadChild` drops a nested one once two are counted
+    ///   (:30–44), after `ObjectInfo.Load` registered its saved key (ObjectInfo.cs:45).
+    /// - Duplicate's `SceneInfo.Import` (:483, :496–502) and the nested load
+    ///   read `isLightCheck` before they build a light and drop it while two
+    ///   are counted. The dropped light's key is taken and freed again, so
+    ///   it takes no key and no root slot. The Add Light menu refuses before
+    ///   it takes a key (Studio.cs:297–301).
+    func vanillaLightDrop(_ steps: [SourceSceneInsertion.Step]) -> VanillaLightDrop? {
+        let tree = SourceSceneTopology.Tree(source.snapshot)
+        var counted = Set<Int32>()
+        for key in layout.sourceLights {
+            if tree.parent[key] == .some(nil) || counted.count < 2 { counted.insert(key) } else { return .source(key) }
+        }
+        var count = counted.count, alive = Set(tree.records.keys)
+        func release(_ record: KoikatsuObjectRecord) {
+            guard alive.remove(record.sourceKey) != nil else { return }
+            if counted.contains(record.sourceKey) { count -= 1 }
+            record.children.forEach(release)
+            for children in (record.character?.accessoryChildren ?? [:]).values { children.forEach(release) }
+        }
+        for step in steps {
+            switch step {
+            case .delete(let key):
+                if let record = tree.records[key] { release(record) }
+            case .insert(let members):
+                let set = Set(members)
+                // The replay's visit order: each record, then its children.
+                func visit(_ index: Int) -> Int? {
+                    if layout.lights[index] {
+                        if count >= 2 { return index }
+                        count += 1
+                    }
+                    for child in layout.children[index] where set.contains(child) {
+                        if let dropped = visit(child) { return dropped }
+                    }
+                    return nil
+                }
+                for index in members {
+                    if case .inserted(let parent) = layout.insertions[index].parent, set.contains(parent) { continue }
+                    if let dropped = visit(index) { return .insertion(dropped) }
+                }
+            }
+        }
+        return nil
     }
 
     /// `body` (the edited stage, with its stage keys and root order) with each
@@ -337,8 +408,15 @@ public extension SourceSceneExportValidation {
     /// set-based keys and appended roots are CharaStudio's, and the export
     /// is unchanged. A document without a log falls back only when it
     /// deletes, since nothing else shows it needed the order.
+    ///
+    /// #316: lights replay like any record. Under `.charaStudio` an order in
+    /// which CharaStudio 1.0.4.2 would drop or refuse a light, or a source
+    /// whose load drops one (`vanillaLightDrop`), keeps the set-based keys:
+    /// that CharaStudio cannot make the exported scene with these operations.
+    /// Under `.unlimitedMapLights` (KK_Fix_UnlimitedMapLights) every light is
+    /// built, so the replayed keys are CharaStudio's.
     static func order(_ document: StudioDocument, staged: Staged, deletions: Set<Int32>,
-                      reparents: [SourceSceneEdits.Reparent]) -> Order {
+                      reparents: [SourceSceneEdits.Reparent], lightLimit: SourceSceneLightLimit = .charaStudio) -> Order {
         guard !staged.objects.isEmpty else { return .unneeded }
         guard let log = document.sourceStructuralEdits else { return deletions.isEmpty ? .unneeded : .fallback(.noLog) }
         if log.edits.contains(.unordered(.overflow)) { return .fallback(.overflow) }
@@ -383,7 +461,10 @@ public extension SourceSceneExportValidation {
         guard needed else { return .unneeded }
         if let unordered { return .fallback(unordered) }
         if !reparents.isEmpty { return .fallback(.move) }
-        if staged.stage.layout.lights.contains(true) { return .fallback(.light) }
+        if lightLimit == .charaStudio, let dropped = staged.stage.vanillaLightDrop(steps) {
+            if case .source = dropped { return .fallback(.lightAtLoad) }
+            return .fallback(.light)
+        }
         if staged.legacyCharacters, !legacyReplayIsExact(staged, steps) { return .fallback(.legacyBones) }
         return .replayed(steps)
     }
@@ -413,8 +494,9 @@ public extension SourceSceneExportValidation {
     /// The status after an original-scene export: ST-T05a's note for a scene
     /// from an older CharaStudio, ST-T03i's plug-in data no installed plug-in
     /// reads, then #278's reason when added objects kept the set-based keys.
-    /// A replayed order adds nothing: its keys are CharaStudio's.
-    static func exportStatus(fileName: String, source: KoikatsuSceneDocument, order: Order) -> String {
+    /// A replayed order adds nothing: its keys are CharaStudio's. Last,
+    /// #320's note when the exported scene has more than two `lights`.
+    static func exportStatus(fileName: String, source: KoikatsuSceneDocument, order: Order, lights: Int = 0) -> String {
         // ST-T03i: entries no installed plug-in reads travel verbatim; that
         // is CharaStudio's behavior only while no installed plug-in owns them.
         let orphans = source.orphanPluginIDs
@@ -426,6 +508,12 @@ public extension SourceSceneExportValidation {
             + (orphans.isEmpty ? "" : ". It keeps plug-in data no installed plug-in reads, unchanged: \(orphans.joined(separator: ", "))")
         if case .fallback(let reason) = order {
             status += ". Added objects took keys after the scene's own, which can differ from CharaStudio's for these edits: \(reason.reason)"
+        }
+        // #320: a CharaStudio without KK_Fix_UnlimitedMapLights loads every
+        // root light (SceneInfo.Load) but drops each nested light loaded once
+        // two are counted (ObjectInfoAssist.LoadChild).
+        if lights > 2 {
+            status += ". \(lights) lights: a CharaStudio without KK_Fix_UnlimitedMapLights loads every root light but drops each nested light loaded after the second"
         }
         return status
     }

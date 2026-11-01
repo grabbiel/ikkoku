@@ -456,6 +456,10 @@ struct SourceSceneInsertionPlan {
         var layout = SourceSceneStage.Layout()
         layout.insertions = insertions
         layout.children = insertions.indices.map(ordered)
+        // #316: the source's lights as CharaStudio loads them, accessory
+        // groups in byte order (`vanillaLightDrop`).
+        layout.sourceLights = SourceSceneTopology.loadOrder(lists: tree.lists, records: tree.records, slots: spans.topology.slots)
+            .filter { tree.records[$0]?.kind == .light }
         for (index, insertion) in insertions.enumerated() {
             var before = 0, after = 0, light = false
             switch insertion.record {
