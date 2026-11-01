@@ -5053,3 +5053,104 @@ Private receipts remain under
 `.local/codex-resume-2026-10-30/materials-runtime-acceptance/`, with the combined
 gates in `integration-main-1031/`. The rejected quiet result SHA-256 remains
 `3e2d4f4474a8702b354fa4433f706c7f0e6819061dfc9977cea671b93161b2f0`.
+
+## Maker initial-load rig seeding and reference skip (#192, 2026-11-01)
+
+[PR #314](https://github.com/grabbiel/ikkoku/pull/314) makes a successful
+source-card import seed the Maker's decoded-rig reuse session. Imports also
+stop decoding the reference avatar model they used to discard. The change is
+described in
+[maker-assets.md](character/maker-assets.md#initial-load-rig-seeding-and-reference-skip-192-2026-11-01).
+
+**Setup.** Release base `899b777b` (merge base, binary `644195a7…`) against
+head `881caebc` (binary `f191e32d…`), run in a coordinator quiet window. Each
+sex used its head-0 scenario card, in ABBA order per sex for two cycles. Each
+unit is two fresh processes: a `maker-idle` perf trace for the startup marks,
+idle main-thread time and footprint, then a selection scenario that picks heads
+200, 0 and 201 in turn. All 28 attempts passed every scenario step.
+
+**Validity.** Each unit has `vm.loadavg` and top-5 CPU snapshots before and
+after each process. Outside processes over 20% invalidate it.
+
+- plugin-container (the user's Firefox) is a noted background process below
+  45%. It read 1.9–31.5% in valid base units and 21.8–32.0% in valid head units.
+- BiomeAgent, launchd and runningboardd are noted launch-induced load up to
+  30%. BiomeAgent rose after our own launches in both arms: 7.0–24.0% in valid
+  base units and 10.9–25.1% in valid head units.
+- Reruns waited until corespotlightd had stayed below 20% for 10 s. It spiked
+  to 132–338% about every five minutes.
+
+Of the 28 attempts, 16 are valid, four per cell. Twelve are invalid:
+
+| Attempt | Cause |
+| --- | --- |
+| cycle 1 female head (slot 3) | corespotlightd 313%, firefox 20.1% |
+| cycle 1 female base (slot 4) | corespotlightd 132% |
+| cycle 1 male head (slot 4) | BiomeAgent 37.3% |
+| cycle 2 female head (slot 1) | corespotlightd 140–338% |
+| cycle 2 female base (slot 2) | corespotlightd 338% |
+| cycle 2 male head (slot 3) | corespotlightd 278–325% |
+| cycle 2 male base (slot 4) | corespotlightd 325%, BiomeAgent 30.1% |
+| rerun 1, cycle 1 female head (slot 3) | BiomeAgent 31.1% |
+| rerun 1, cycle 1 male head (slot 4) | corespotlightd 140% |
+| rerun 1, cycle 2 female head (slot 1) | plugin-container 63% |
+| rerun 1, cycle 2 male head (slot 3) | launchd 31.1% |
+| rerun 1, cycle 2 female base (slot 2) | spotlightknowledged.updater 22.6% |
+
+Every slot ended with a valid attempt within two reruns.
+
+**Display.** The only display was 1920×1080 at 60 Hz with scale 1, and the
+window was not composited: each idle trace rendered 301 frames and presented
+none. The rows below are labelled by how they depend on that:
+
+- **Independent of presentation:** card import, `makerReady`, `appStateReady`
+  and the selection rows. These are wall-clock intervals on the main thread or
+  the preparation worker.
+- **Rendered, not presented:** `contentAppeared` and `firstDraw`. The first is
+  SwiftUI appearance; the second is the end of the first rendered draw. Neither
+  waits for a presented frame, but both depend on the 1199×946 drawable size.
+- **Measured without presentation (display 1920x1080@60, scale 1):** idle
+  main-thread busy time, `makerTick` p50 and peak footprint. A rerun with
+  presentation waits for the user's usual display.
+
+Median (min–max), n = 4 valid units per cell. Peak footprint covers all
+attempts: female base 7, female head 8, male base 5, male head 8.
+
+| Metric | Female base | Female head | Male base | Male head |
+| --- | --- | --- | --- | --- |
+| Card import (ms) | 1,206.1 (1,199.4–1,245.1) | 702.3 (694.1–724.3) | 1,266.5 (1,246.0–1,278.3) | 741.7 (736.9–762.9) |
+| `makerReady` (s) | 0.966 (0.964–0.986) | 0.964 (0.958–0.968) | 0.973 (0.955–0.982) | 0.955 (0.942–0.963) |
+| `appStateReady` (s) | 2.172 (2.164–2.232) | 1.666 (1.654–1.693) | 2.241 (2.202–2.260) | 1.697 (1.688–1.719) |
+| `contentAppeared` (s) | 2.401 (2.396–2.467) | 1.898 (1.878–1.914) | 2.476 (2.438–2.503) | 1.926 (1.915–1.956) |
+| `firstDraw` (s) | 2.467 (2.430–2.555) | 1.957 (1.938–1.973) | 2.521 (2.490–2.562) | 2.002 (1.974–2.015) |
+| First selection, head 200 (ms) | 724.8 (715.4–736.3), 0/10 | 422.0 (414.6–424.3), 9/1 | 762.4 (756.5–766.9), 0/10 | 430.9 (420.8–432.7), 9/1 |
+| Then head 0 (ms) | 327.9 (325.9–330.9), 9/1 | 101.1 (100.7–102.9), 10/0 | 328.4 (327.6–341.7), 9/1 | 100.9 (100.7–103.3), 10/0 |
+| Then head 201 (ms) | 355.1 (353.0–358.4), 9/1 | 354.8 (352.2–357.6), 9/1 | 359.4 (353.8–361.9), 9/1 | 355.8 (353.5–362.1), 9/1 |
+| Idle main busy (ms/s), without presentation | 53.9 (51.7–60.5) | 53.6 (48.2–56.2) | 12.7 (9.7–15.8) | 7.8 (7.2–9.1) |
+| `makerTick` p50 (ms), without presentation | 1.70 (1.67–1.88) | 1.63 (1.57–1.65) | 0.007 (0.007–0.008) | 0.008 (0.005–0.008) |
+| Peak footprint (MiB), without presentation | 703.8 (701.5–709.4) | 691.7 (690.2–694.3) | 748.0 (746.9–750.5) | 737.6 (735.2–739.9) |
+
+Selection rows show API time with rig hits/misses.
+
+**Reading.**
+
+- **Import.** Card import is 504 ms (41.8%) faster for the female card and
+  525 ms (41.4%) for the male. App state is ready, content appears and the
+  first frame renders about 0.5 s earlier.
+- **Maker ready.** `makerReady` does not move; it precedes the card import.
+- **Selections.** The first head selection after a load drops by 303 ms
+  (female) and 332 ms (male), because nine of its ten rigs come from the seed.
+  The return to head 0 then reuses all ten. Head 201 still decodes one new rig
+  in both arms and is unchanged.
+- **Idle and memory.** Idle main-thread time does not regress; the male
+  cell's median is lower, without presentation. Peak footprint is 10–12 MiB
+  lower.
+- **Saving.** The import saving is mostly the skipped reference-model decode
+  (nine files, 32.16 MB). The seed's byte hashing adds about 13 ms back.
+  Reimports over a cached session decline the seed, so they skip both the
+  hashing and the reference decode.
+
+These numbers come from one machine, two cards and a non-compositing display.
+They show no FPS, live-animation or broad hardware result. Raw reports,
+snapshots, the scripts and the summary stay under
+`.local/cxm1-maker-rig-seed/timing/run1/`.
