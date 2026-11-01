@@ -2071,7 +2071,11 @@ it would only move the limit. The rule is in
 [performance](performance.md#the-pool-rule).
 
 **Identical results.** The in-line loader reproduces MetalKit's pixel
-format, size, mip count, usage, storage mode and every byte of every level.
+format, size, mip count, usage, storage mode and every byte of every level,
+for every input the tests below cover. Until #313 that did not hold for
+baseline JPEGs of 1024² and more: ImageIO picks their decoder by how the
+pixels are first reached, and the loader reached them another way than
+MetalKit ([JPEG decode route](#jpeg-decode-route-290-2026-11-01)).
 MetalKit treats two kinds of image differently, and the loader knows which
 it has from where the image came from, never from its description:
 - **Decoded by ImageIO** (`Source.imageIO(type:)`). `texture(url:)` and
@@ -2181,9 +2185,20 @@ MetalKit, then in line:
   - 19 synthetic files from decoders ImageIO cannot write
     (`Fixtures/texture-identity`: JPEG XL, AVIF from another encoder and at
     10 and 12 bits, an AVIF sequence, HEIF, WebP, PSD, SGI, ICNS, CUR, BMP
-    v5, TGA and both TIFF alpha kinds).
+    v5, TGA and both TIFF alpha kinds);
+  - since #313, JPEGs that each loader decodes on its own
+    (`InlineTextureLoaderJPEGRouteTests`): sRGB, untagged (no ICC or Exif
+    segment), Display P3, progressive, EXIF orientation 6, grey and CMYK, at
+    37×23, 1024² and 2048², from the file and from a fresh ImageIO image.
 
-  Every comparison matches. The suite also checks container rejection on
+  Every comparison matches. Two limits made the earlier comparisons blind
+  to the JPEG decode route: the layout comparisons hand one `CGImage` to
+  both loaders, and its first decode fills ImageIO's cache for the other;
+  the encoded files are all 37×23. MetalKit's URL load rejects the
+  EXIF-rotated JPEG ("Unsupported image orientation"); the in-line loader
+  loads it unrotated, as both do from a decoded image, and
+  `ResourceStore.texture(url:)` has done so since #288. CMYK is checked for
+  agreement only. The suite also checks container rejection on
   each entry point.
 - `InlineTextureLoaderCorpusTests` (strict, `IKKOKU_TEXTURE_CORPUS_ROOT`)
   checks captured Engine/Studio/Maker loads by content hash. Every file must
@@ -2234,7 +2249,9 @@ Maker selection/reload scenarios also pass. These focused integration checks
 are separate from the historical full suites and image comparisons; see the
 [validation identities and limitations](performance.md#texture-loading-candidate-validation-288-2026-10-31).
 They establish neither a loader speedup nor broader image-format or source-game
-parity. JPEG/HEIC costs remain tracked in [#290](https://github.com/grabbiel/ikkoku/issues/290).
+parity. The JPEG cost tracked in [#290](https://github.com/grabbiel/ikkoku/issues/290)
+was traced to the decode route in #313
+([JPEG decode route](#jpeg-decode-route-290-2026-11-01)).
 
 ### ImageIO eager-cache correctness probe (#290, 2026-11-01)
 
@@ -2336,88 +2353,139 @@ identity checks before any qualified cost comparison. The audit and seven
 source pins are retained under the private `loader-accounting-1/` directory
 alongside the preceding #290 evidence; audit hash begins `06b04152f3025da1`.
 
-The subsequent local candidate `efa0802c1dae92f986aef069ac5f350d76339e65`
-adds an optional caller-owned observer for allocation, permit wait, provider,
-staging, conversion, submission and completion boundaries. The public aggregate
-sample remains unchanged; source review preserves permit and callback ordering.
-Its incremental Release test build, with testability enabled and four build jobs,
-passes with raw, ownership and wrapper exits zero. All 412 pins match; the fresh
-binary `8ca8dc2c2ad53c0e5f7f04f877441137ab4f3b347307b7f97128f93486273836`
-matches its complete 89-entry retained Products tree, and three prior product
-archives remain unchanged. All ten observed compiler processes released.
+### Load-stage observer (2026-11-01)
 
-This establishes compilation and artifact provenance only. Test discovery, the
-six CPU/four native observer controls, every-mip identity and runtime/lifetime
-checks have not run at this checkpoint; nil-path overhead and performance are
-unmeasured. Evidence is under `loader-observer-build-1/release-build-1/` beside
-the accounting audit; result hash begins `e67665af9667ef53`.
+The optional per-call observer proposed above landed in a smaller form
+(#313). Codex's closure-wrapping candidate (`efa0802c`, with the paired
+readback draft `2061357b`) was not merged. It wrapped seven stages in
+closures; in a Release build one of them, the completion wait, stayed out
+of line, so a load without an observer made an extra call per strip, and
+the loader's machine code grew by 28%.
 
-Separate metadata discovery finds 1,139 unique IDs: 1,118 Engine and 21 CoreMath,
-including all ten observer controls. All 436 pins and 366 source members match;
-no test-body markers occur, though static registration may initialize Metal.
-The current and accepted 89-entry Products trees and four preserved archives
-remain unchanged. Evidence is `loader-observer-controls-1/discovery-1/`; result
-hash begins `1f1b8cfe0568fddd`, inventory `6e27016c406ebf71`.
+- `InlineTextureLoadObservations` is internal, for tests and measurements;
+  nothing in the app sets one. `InlineTextureLoader.texture` takes an
+  optional observer and marks the end of each stage with
+  `observations?.lap(_:)`. A lap adds the time since the previous mark to
+  its stage, so the stages of one load add up to the whole call:
+  - destination allocation (layout, descriptor and texture);
+  - permit wait, with the autorelease pool's push (no wait on the main
+    thread);
+  - decode: ImageIO decodes here, into a bitmap or the provider's copy
+    (`decodedPixels(_:)`);
+  - staging allocation, with the pixel-length check;
+  - per strip: conversion, encode and submit, completion wait;
+  - cleanup: the `didComplete` callback, then releasing the pixels, the
+    staging buffer, the pool and the permit.
 
-All six separately selected CPU controls and all four native controls then pass,
-with zero failures or skips. CPU coverage includes nil-observer body/error behavior,
-fixed-size aggregation, supplied permit timing, main-thread bypass and worker
-permit release after error. Native coverage checks uncached registration, cache
-hits without nested work, short final-strip conversion/submission/completion and
-single final mip encoding/callback, plus pre-upload errors without registration.
-The native controls use ImageIO and Metal; they perform no pixel readbacks.
+  Times are wall time between marks, not CPU decode or GPU execution time
+  alone. `UploadPermits`, `ResourceStore` and `ResourceTextureLoadTimings`
+  are unchanged.
+- Without an observer the loader is the earlier code plus nine marks, each
+  one branch past it. In the Release build (`swift build -c release
+  --target Renderer`, Swift 6.4), all 15 mark sites of the specialized
+  `texture` (the start and 14 laps across its main-thread and permit
+  copies) sit behind a `cbz` on the observer register. No closure is
+  outlined, and the call graph otherwise equals `899b777b`'s.
+  `InlineTextureLoader.o` has 12,244 bytes of `__text` against 11,940
+  (+2.5%; the closure candidate had 15,332). Those figures are for the
+  observer alone (`e310f52a`). With the JPEG route below, `__text` is
+  12,952 bytes (+8.5%; its two functions add 708). A `cbz` on the
+  observer still sends a load without an observer past every lap: the
+  optimizer keeps one copy of the decode with its two laps and one without
+  them. CI's Swift 6.3.3 Release package build passes; its code was not
+  disassembled.
+- `InlineTextureLoadObservationTests`:
+  - a fake-clock lap control;
+  - a three-strip load on a plain thread (the permit path) that laps every
+    stage, once per strip where it repeats, and equals an unobserved load;
+  - a rejected layout that throws before the first lap;
+  - the paired readback: the copy and ImageIO channel-swap conversions,
+    both colour flags and a short last strip, observed against unobserved
+    on the main thread. Descriptors and every mip are equal (eight
+    uploads).
 
-Raw, ownership and wrapper exits are zero for all three phases. The CPU/native
-450/464 pins match, all retained Products remain unchanged, and all five/six/five
-observed processes respectively release. CPU result/log hashes begin
-`5a87d5da5792838f` / `fa26078119e67672`; native hashes begin
-`39e7ffb458aad2ed` / `333248bc720b38e4`, in sibling `cpu-1/` and `native-1/`.
-This confirms the tested observer behavior. These ten controls alone do not
-establish strict every-mip pixel identity, wider upload/lifetime behavior or
-nil-path overhead; fake-clock assertions and wrapper elapsed values are not
-performance measurements.
+  Removing the conversion mark fails two of them (five issues).
+- Cost without an observer: `stripUploadTiming` (three warm-ups, 16
+  alternating rounds per path, medians) in Release test builds of
+  `899b777b` and #313, ABBA three times in one quiet window (12 runs).
+  Median of the run medians, `899b777b` against #313: a 2048² PNG in four
+  strips 12.50 against 12.49 ms, in one strip 13.05 against 13.12 ms; a
+  1024² PNG 4.09 against 4.10 ms (staged) and 4.06 against 4.08 ms (one
+  strip). Every difference is under 0.6% and inside either side's run
+  spread. Eleven of the 12 runs broke the window's rule because the user's
+  browser was at 45.0–50.8% of a core; the ABBA order puts that load on
+  both builds
+  ([performance](performance.md#texture-load-observer-and-jpeg-decode-route-313-2026-11-01)).
 
-The candidate's separate strict corpus gate then passes one exact test with no
-skips: all 138 positive entries match MetalKit's descriptors and every mip,
-and the pinned 12-byte invalid image is the one expected rejection. No positive
-entry is classified as unsupported. All 635 pins, 140 input files, current and
-accepted 89-entry Products and four preserved archives remain unchanged; raw,
-ownership and wrapper exits are zero and all observed processes release.
-Evidence is `loader-observer-strict-gates-1/corpus-1/`; result hash begins
-`b5da9f6f8c7325a9`, raw report `fcc2d8aefe3968cb`. This test uses the default
-nil observer. This corpus does not cover observed-versus-nil pixel equivalence,
-wider identity/upload/lifetime gates or qualified overhead measurements.
+### JPEG decode route (#290, 2026-11-01)
 
-Five separately selected default-nil identity tests then pass with no failures
-or skips: layouts with both colour flags, encoded-file routes, alpha rounding,
-19 decoder fixtures and strip-versus-one-strip uploads including the short tail.
-The raw reports record 2,016 layout/flag combinations, 1,060 rejected by both
-loaders, and 281 encoded files, with zero mismatches. The synthetic unsupported
-cases retain their established meaning; they are not positive-corpus successes.
-All 495 pins and the 19-file fixture membership match; current/accepted Products
-and four prior archives remain unchanged. Raw, ownership and wrapper exits are
-zero, and all six observed processes release. Evidence is the sibling
-`identity-1/`; result hash begins `da996c0f547c0e9e`, layout/file reports
-`0af38138c15d4694` / `c6ea094488fb5d3a`. Upload/lifetime gates, observed-versus-nil
-pixel equivalence and qualified overhead measurements remain open.
+ImageIO picks a baseline JPEG's decoder by how its pixels are first reached.
+`CGDataProviderCopyData`, which the in-line loader used since #288, gets one
+decoder. A draw into a bitmap of the image's own layout and colour space
+gets another, and that one gives MetalKit's pixels. Up to 768² the two agree.
+From 1024² on they differ on about half the bytes, by up to 23–29 levels.
+Progressive, grey and CMYK JPEGs agree at every size measured. The first
+access also fills the image's cache, so a second loader on the same
+`CGImage` gets the first one's pixels.
 
-An unapplied test draft now specifies a direct observed-versus-nil comparison
-for two public 3×5 fixtures (copy and ImageIO channel-swap paths), both colour
-flags and a short final strip: eight uploads with exact descriptors and all mip
-bytes. Static review and patch checks pass, but no source is applied and no new
-build or test runs. Evidence is `loader-observer-paired-draft-1/`; patch hash
-begins `5641c01abcace554`. Existing upload/lifetime gates and separate build/test
-grants remain prerequisites; this draft establishes no pixel or overhead result.
+Measured on synthetic JPEGs (quality 0.9) with independent decodes:
 
-The existing seven-test upload gate subsequently passes with zero failures or
-skips: shared queue identity, completion and call order, cross-queue readback,
-permit bounds, main-thread bypass, concurrent loads and cooperative-pool stores.
-All 495 pins, current/accepted 89-entry Products and four prior archives remain
-unchanged; raw, ownership and wrapper exits are zero, with observed processes
-released. Evidence is `loader-observer-strict-gates-1/upload-1/`; result hash begins
-`09e1962322885e1d`. These tests use the default nil observer and establish no
-comparative timing or observed-versus-nil pixel result. Lifetime checks remain
-separate, and the paired test is still unapplied.
+| JPEG | Provider copy against MetalKit | Draw into RGBX against MetalKit |
+| --- | --- | --- |
+| 37×23 to 768², baseline | identical | identical |
+| 1024², gradient with noise (test) | 2,171,828 of 4,194,304 bytes, up to 23 | identical |
+| 2048², gradient with noise (test) | 8,691,947 of 16,777,216 bytes, up to 27 | identical |
+| 1024², waves with noise (probe) | 2,232,106 of 3,145,728 RGB bytes, up to 25 | identical |
+| 2048², waves with noise (probe) | 8,998,095 of 12,582,912 RGB bytes, up to 29 | identical |
+| progressive, grey, CMYK, 1024² and 2048² | identical | not drawn |
+
+Opaque PNGs (RGB) agree on both routes at 37×23, 1024² and 2048²; PNGs
+with alpha cannot be drawn without premultiplying.
+
+`InlineTextureLoader.decodedPixels(_:)` therefore draws JPEGs that ImageIO
+decoded as opaque 8-bit RGB (`noneSkipLast`, default or 32-bit big-endian
+order, an RGB colour space), 1:1 with no interpolation and the copy blend
+mode, into a buffer with the image's own row stride. The existing red/blue
+swap follows. This happens inside the upload permit, where the provider's
+copy was, in a buffer of the same size. Every other image keeps the
+provider's copy, opaque PNGs included: their routes agree, and the draw is
+no faster for them (below).
+
+On `899b777b`, `InlineTextureLoaderJPEGRouteTests` reports 28 problems in
+84 comparisons: the sRGB, untagged and Display P3 baseline JPEGs at 1024²
+and 2048², with either colour flag, from the file and from an image (24),
+and the EXIF-rotated one from an image (4; MetalKit rejects it from the
+file). At #313's head it reports none.
+
+Load time, from Release test builds in the same quiet window
+(`formatLoadStages`: three warm-ups, 16 rotating rounds, medians):
+
+- the 1024² JPEG went from 5.84 ms (MetalKit 4.01) on `899b777b` to
+  4.00–4.06 ms (MetalKit 3.79–3.89);
+- the 2048² JPEG went from 16.01 ms (12.60) to 12.07–12.20 ms (12.28–12.50).
+
+In #313's stage split, the decode (now the draw) takes 2.61–2.63 ms and
+9.15–9.27 ms of those loads. HEIC and PNG keep their route and their times.
+
+Peak footprint of a 2048² JPEG load above its start, one fresh process per
+run, 11 runs each:
+
+- 41.7–42.2 MiB on `899b777b`;
+- 41.8–47.4 MiB on #313, six of them at 43.1–47.4.
+
+With the image and texture still held, both are at 41.7–42.2 MiB. So the
+draw keeps no second decoded copy next to its buffer. It adds a peak of up
+to 5.5 MiB that is gone before the load returns, about a third of one
+decoded image. The peak falls inside the upload permit, so at most eight
+worker loads (plus one from the main thread) can hold it at once.
+
+The footprint does not drop when the image is released (41.7–42.1 MiB with
+only the texture), so these figures bound the memory rather than itemize it
+([performance](performance.md#texture-load-observer-and-jpeg-decode-route-313-2026-11-01)).
+
+No load in the app uses JPEG today: the measured lanes load 3,749 PNG
+textures and 91 BC uploads, and no JPEG or HEIC (#288). The change matters
+for user content shipped as JPEG.
 
 ## Checked math, legacy skeletons and cameras (R4)
 
