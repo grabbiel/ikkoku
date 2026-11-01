@@ -72,6 +72,9 @@ struct SourceMapVanishRuntime {
     let model: SourceStudioMapVanish.CapsuleModel
     /// The latest scheduled re-show step; an earlier one finds it changed.
     var timer = 0
+    /// The last view (camera, pivot) and the rows it touched: the request's
+    /// map transform, sun type and option are fixed for the runtime's life.
+    var lastView: (camera: SIMD3<Double>, pivot: SIMD3<Double>, touched: [Bool])?
 
     static func model(_ environment: [String: String] = ProcessInfo.processInfo.environment) -> SourceStudioMapVanish.CapsuleModel? {
         switch environment["IKKOKU_STUDIO_MAP_VANISH"] {
@@ -208,34 +211,43 @@ extension StudioModel {
         guard var runtime = sourceMapVanish, let asset = sourceMapAsset, let vanish = asset.vanish,
               let request = sourceMapRequest, request.converted?.file == asset.url, sourceMapItems != nil,
               activeSourceCamera == nil, let root = try? SourceStudioMapPlacement.mapRootMatrix(request.transform) else { return false }
-        let camera = doc.camera
-        func double(_ v: Float3) -> SIMD3<Double> { SIMD3<Double>(v) }
-        let rootMatrix = simd_double4x4(columns: (SIMD4<Double>(root.columns.0), SIMD4<Double>(root.columns.1),
-                                                  SIMD4<Double>(root.columns.2), SIMD4<Double>(root.columns.3)))
-        let touched = vanish.touchedRows(camera: double(camera.position), pivot: double(camera.target), mapRoot: rootMatrix,
-                                         sunTypeKey: SourceStudioMapPlacement.sunTypeKey(request.sunLightType),
-                                         mapOption: request.mapOption, model: runtime.model)
-        let changed = runtime.state.update(touched: touched, time: ProcessInfo.processInfo.systemUptime)
-        if changed {
-            do {
-                sourceMapItems = try asset.items(transform: request.transform, sunLightType: request.sunLightType,
-                                                 mapOption: request.mapOption, vanishEnabled: runtime.state.setEnabled)
-            } catch {
-                sourceMapFailure = error
+        return PerfTrace.measure(.studioMapVanish, "StudioMapVanish") { () -> Bool in
+            let camera = SIMD3<Double>(doc.camera.position), pivot = SIMD3<Double>(doc.camera.target)
+            let touched: [Bool]
+            if let last = runtime.lastView, last.camera == camera, last.pivot == pivot {
+                touched = last.touched
+            } else {
+                let rootMatrix = simd_double4x4(columns: (SIMD4<Double>(root.columns.0), SIMD4<Double>(root.columns.1),
+                                                          SIMD4<Double>(root.columns.2), SIMD4<Double>(root.columns.3)))
+                touched = vanish.touchedRows(camera: camera, pivot: pivot, mapRoot: rootMatrix,
+                                             sunTypeKey: SourceStudioMapPlacement.sunTypeKey(request.sunLightType),
+                                             mapOption: request.mapOption, model: runtime.model)
+                runtime.lastView = (camera, pivot, touched)
             }
-        }
-        if let wait = runtime.state.secondsToNextShow {
-            runtime.timer += 1
-            let timer = runtime.timer
-            DispatchQueue.main.asyncAfter(deadline: .now() + wait + 0.001) { [weak self] in
-                MainActor.assumeIsolated {
-                    guard let self, self.sourceMapVanish?.timer == timer else { return }
-                    self.refresh()
+            let changed = runtime.state.update(touched: touched, time: ProcessInfo.processInfo.systemUptime)
+            if changed {
+                do {
+                    sourceMapItems = try asset.items(transform: request.transform, sunLightType: request.sunLightType,
+                                                     mapOption: request.mapOption, vanishEnabled: runtime.state.setEnabled)
+                } catch {
+                    sourceMapFailure = error
+                }
+                let hidden = runtime.state.rowVisible.filter { !$0 }.count
+                print("[ikkoku] source map vanish: \(hidden) of \(vanish.rows.count) rows hidden, \(sourceMapItems?.count ?? 0) draws")
+            }
+            if let wait = runtime.state.secondsToNextShow {
+                runtime.timer += 1
+                let timer = runtime.timer
+                DispatchQueue.main.asyncAfter(deadline: .now() + wait + 0.001) { [weak self] in
+                    MainActor.assumeIsolated {
+                        guard let self, self.sourceMapVanish?.timer == timer else { return }
+                        self.refresh()
+                    }
                 }
             }
+            sourceMapVanish = runtime
+            return changed
         }
-        sourceMapVanish = runtime
-        return changed
     }
 
     /// The map draws `refresh()` adds: only for the scene the request belongs

@@ -66,6 +66,10 @@ final class PerfTrace {
         /// Computing and comparing the Object tab's state and the inspector's
         /// diagnostics at each Studio refresh (R7 phase 2, item 7).
         case studioInspectorState
+        /// The source map's vanish step at a Studio refresh (ST-A11d PR B), only
+        /// while `IKKOKU_STUDIO_MAP_VANISH` is on: with it off the step returns
+        /// before this phase and records nothing.
+        case studioMapVanish
         /// The synthetic main-thread load (`IKKOKU_PERF_MAIN_LOAD_MS`); not model time.
         case mainLoad
         /// The main thread blocked on a Studio live step still running off it
