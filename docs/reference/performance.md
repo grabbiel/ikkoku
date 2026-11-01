@@ -5697,35 +5697,53 @@ refresh in head.
 
 ### Correctness (item 7 follow-ups)
 
-- **Captures** (`.local/r7l-inspector-followups/captures/m1`). Base:
-  `main` `189e5b8c` (Release); head: `49cd842d` (C4 and C3; the later
-  commits change only scenarios and docs). Each capture ran as a pair,
-  base and head under one hold of the app lock, with a clean `IKKOKU_*`
-  environment and `IKKOKU_SOURCE_TREE_FALLBACKS=0`:
-  - the eight `IKKOKU_AUTOCAPTURE` renders of item 7 (live opt-in OFF and
-    ON): all 11 products byte-identical;
-  - item 7's 17 `IKKOKU_CAPTURE_UI` window captures plus three for C3
-    (`IKKOKU_CAPTURE_UI_SELECT` folder then character, character to folder
-    and back, character to nothing and back), twice, base first and then
-    head first. All 40 UI reports match base byte for byte. 19 of 20 window
-    PNGs match in the first pass and 17 of 20 in the second; each
-    difference is the pose picker's sizing variant (1,325 pixels at
-    x 473–637, y 71–90), in both directions. Base alone produces both
-    sizes of the same window from one run to the next.
+- **Window captures** (`.local/r7l-inspector-followups/captures/final`).
+  Base: `main` `189e5b8c` (Release); head: `2f7fac44` (C4 only, with
+  `main` `29718788` merged). Each capture ran as a pair, base and head
+  under one hold of the app lock, with a clean `IKKOKU_*` environment and
+  `IKKOKU_SOURCE_TREE_FALLBACKS=0`, on the external display at 2× (windows
+  of 3,200 × 1,996 pixels). Item 7's 17 `IKKOKU_CAPTURE_UI` window
+  captures ran twice, base first and then head first. All 34 UI reports
+  match base byte for byte. 13 of 17 window PNGs match in the first pass
+  and 16 of 17 in the second. To tell variants from changes, the two
+  windows that differed in the inspector were captured again, for 6 and 16
+  runs per build. Each difference:
+  - `ui-pose` (first pass): the Pose tab's eye-look readout is shown in
+    base's image only. This timing variant has been known since item 3.
+  - `ui-sel-back` (first pass) and `ui-sel-chars` (second pass): the pose
+    picker's sizing variant (4,700 pixels at x 945–1274, y 142–181). The
+    segmented control is drawn either at its content's width, centred in
+    its frame, or filling the frame, depending on when it was last
+    measured. Both builds produce both sizes; item 7 saw the same.
+  - `ui-sel-clothes` (first pass, head): the Clothes tab's content is laid
+    out wider than the inspector and clipped at its left edge (165,983
+    pixels). This exists in base too: over 6 runs per build, base drew it
+    3 times and head 5 times, and the 12 reports are identical. See
+    [What remains](#what-remains-after-the-item-7-follow-ups).
+  - `ui-sel-chars` (first pass, head): the Object tab's content below the
+    compatibility row sits 3 points higher. It happened once in 16 head
+    runs and in none of 16 base runs, with all 32 reports identical. C4
+    does not change the inspector, and one occurrence cannot be
+    attributed.
+
+  The eight `IKKOKU_AUTOCAPTURE` renders of item 7 (live opt-in OFF and
+  ON) were compared earlier against head `49cd842d` (C4 and C3), and all 11
+  products were byte-identical to base. The renders draw no toolbar, so
+  dropping C3 does not reach them.
 - **Scenarios.** `inspector-kept-views` passes `--strict` on the head Debug
-  build (77 steps), with the Debug check of the published state after
-  every run-loop turn. Its new steps check that the workspace row follows
-  a rename typed mid-session and a visibility toggle (C4), and that the
-  hidden pose picker is absent from the accessibility tree and the Tab
-  loop (C3). On the Debug build of `32ad7cd8`, under the app lock, the
-  strict Studio lane passed 87/87 (0 skipped, 1,349.1 s) and the strict
-  Maker lane 10/10 (178.3 s).
-- **Suites.** The strict Engine suite with the shared map (127 `IKKOKU_*`
-  keys): 1,150 tests in 18 suites and 21 more pass, with only the 13
-  opt-in timing and corpus probes skipped. Python: `Tools/verification`
-  (201 tests), `Tools/reverse` (648, 6 skipped) and
-  `Tools/reverse/analysis` pass; `doctor.py --require public` and the
-  site check pass.
+  build of `2f7fac44` (69 steps, 42 s), with the Debug check of the
+  published state after every run-loop turn. Its new steps check that the
+  workspace row follows a rename typed mid-session and a visibility toggle
+  (C4). On the same build, under the app lock, the strict Studio lane
+  passed 88/88 (0 skipped, 1,413.7 s), after 87/87 on `32ad7cd8` and the
+  strict Maker lane 10/10 (178.3 s).
+- **Suites.** On `32ad7cd8`, the strict Engine suite with the shared map
+  (127 `IKKOKU_*` keys): 1,150 tests in 18 suites and 21 more pass, with
+  only the 13 opt-in timing and corpus probes skipped. Python:
+  `Tools/verification` (201 tests), `Tools/reverse` (648, 6 skipped) and
+  `Tools/reverse/analysis` pass; `doctor.py --require public` and the site
+  check pass. On `2f7fac44`, CI's four jobs pass, including the Engine
+  suite and the Python suites.
 
 ### What remains after the item 7 follow-ups
 
@@ -5739,6 +5757,12 @@ refresh in head.
   a hidden kept section, run the scenario with Full Keyboard Access on,
   measure only with a composited window, and keep it off by default behind
   a control until it is proven.
+- **The Clothes tab drawn wider than the inspector.** After a select of
+  character 0, folder 622 and character 963 on the Clothes tab
+  (`ui-sel-clothes`), the tab's content is sometimes laid out wider than
+  the inspector and clipped at its left edge: in 3 of 6 base runs and 5 of
+  6 head runs. This exists in `main` and is outside these follow-ups. Its
+  cause is not established.
 - **Two differences left unattributed.** In the composited window the
   head's FK drag had 9.0 (6–11) hitches per 15 s run against base's
   6.5 (5–7); the same binary's C4 pair has 5.5 (5–6) in both modes. An
