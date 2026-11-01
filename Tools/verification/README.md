@@ -1106,12 +1106,12 @@ declares it, so the runner gives no other check a map.
 - `source-map34` (`IKKOKU_SOURCE_SCENE` from `IKKOKU_STUDIO_MAP34_SCENE`,
   Map 34 alone, moved, with the day sun, saved by the original player; 15
   steps) runs the same steps on map 34. The map is drawn before the first step:
-  53 draws (29 lightmapped, 1 particle, 1 sky; `particleDraws`, `skyDraws`;
-  54 and 30 until slice 4 dropped a shadow-only renderer),
-  54 images as BC blocks, and the exact label, `Map 34 空き教室 (akikyoushitu):
-  baked lightmaps on 29 of 56 draws (the rest as items), cubemap sky,
-  particles (no soft-particle fade or per-renderer sorting); approximated: …`.
-  Two map points pick nothing. The View toggle hides and restores all 53
+  54 draws (29 lightmapped, 2 particle, 1 sky; `particleDraws`, `skyDraws`;
+  slice 4 dropped a shadow-only renderer, 54 → 53, and drew each particle
+  renderer alone, 53 → 54), 54 images as BC blocks, and the exact label,
+  `Map 34 空き教室 (akikyoushitu): baked lightmaps on 29 of 56 draws (the rest
+  as items), cubemap sky, particles (no soft-particle fade); approximated: …`.
+  Two map points pick nothing. The View toggle hides and restores all 54
   draws, sky included. The exports are byte-identical, and reimport, New Scene
   and undo restore the map.
 - `source-map41` (`IKKOKU_SOURCE_SCENE` from `IKKOKU_STUDIO_MAP41_SCENE`,
@@ -1121,7 +1121,9 @@ declares it, so the runner gives no other check a map.
   29 draws (27 lightmapped; no particle, sky, unlit, silhouette or option
   draws), 28 images as BC blocks with no PNG copies, and the exact label,
   `Map 41 備品倉庫 (Warehouse): baked lightmaps on 27 of 29 draws (the rest as
-  items); approximated: …`. Two map points pick nothing. The View toggle
+  items); approximated: … · 24308 triangles, 29 draws; not reproduced:
+  realtime GI (Enlighten dynamic lightmaps on 21 renderers)`. Two map points
+  pick nothing. The View toggle
   hides and restores all 29 draws. The exports are byte-identical, and
   reimport, New Scene and undo restore the map.
 - `source-map-none` (`IKKOKU_STUDIO_SCENARIO_SCENE`, `koikatu_cs0002591.png`,
