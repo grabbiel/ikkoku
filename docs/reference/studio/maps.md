@@ -708,47 +708,47 @@ Scenes counts the user's installed scenes that name the map: 120 of their 182 sc
 | No. | Map | Scenes | Triangles | Parts (lightmapped) | Also drawn | Not reproduced | Metal textures (MB) | Export (MB) |
 | ---: | --- | ---: | ---: | ---: | --- | --- | ---: | ---: |
 | 0 | 自室 (`MyRoom`) | 0 | 23,302 | 101 (79) | – | – | 56.8 | 70.7 |
-| 1 | 1F (`1F`) | 0 | 67,975 | 185 (106) | sky, 8 particle | – | 235.8 | 241.4 |
-| 2 | 2F (`2F`) | 0 | 62,477 | 180 (110) | sky, 8 particle | – | 110.0 | 116.0 |
-| 3 | 3F (`3F`) | 0 | 57,523 | 130 (46) | sky, 8 particle | – | 121.2 | 126.8 |
-| 4 | 教室1-1 (`1-1`) | 0 | 56,980 | 57 (29) | sky, 1 particle | – | 61.8 | 66.2 |
-| 5 | 教室2-1 (`2-1`) | 0 | 56,980 | 57 (26) | sky, 1 particle | – | 59.0 | 66.2 |
-| 6 | 教室2-2 (`2-2`) | 0 | 56,805 | 62 (29) | sky, 1 particle | – | 60.6 | 65.0 |
-| 7 | 教室3-1 (`3-1`) | 0 | 56,980 | 57 (26) | sky, 1 particle | – | 59.0 | 66.2 |
+| 1 | 1F (`1F`) | 0 | 67,975 | 195 (106) | sky, 18 particle | – | 235.8 | 241.5 |
+| 2 | 2F (`2F`) | 0 | 62,477 | 190 (110) | sky, 18 particle | – | 110.0 | 116.0 |
+| 3 | 3F (`3F`) | 0 | 57,523 | 140 (46) | sky, 18 particle | – | 121.2 | 126.8 |
+| 4 | 教室1-1 (`1-1`) | 0 | 56,980 | 58 (29) | sky, 2 particle | – | 61.8 | 66.2 |
+| 5 | 教室2-1 (`2-1`) | 0 | 56,980 | 58 (26) | sky, 2 particle | – | 59.0 | 66.2 |
+| 6 | 教室2-2 (`2-2`) | 0 | 56,805 | 63 (29) | sky, 2 particle | – | 60.6 | 65.0 |
+| 7 | 教室3-1 (`3-1`) | 0 | 56,980 | 58 (26) | sky, 2 particle | – | 59.0 | 66.2 |
 | 8 | 1F女子トイレ (`1FToilet`) | 0 | 12,459 | 32 (25) | – | mirror (1 renderer); animated objects (drawn in their authored pose): 5 | 34.1 | 35.3 |
 | 9 | 2F女子トイレ (`2FToilet`) | 0 | 12,447 | 31 (25) | – | mirror (1 renderer); animated objects (drawn in their authored pose): 5 | 34.1 | 35.3 |
 | 10 | 3F女子トイレ (`3FToilet`) | 0 | 12,447 | 31 (25) | – | mirror (1 renderer); animated objects (drawn in their authored pose): 5 | 34.1 | 35.3 |
-| 11 | 職員室 (`StaffAdultRoom`) | 2 | 90,458 | 168 (72) | sky, 5 particle | – | 113.6 | 124.6 |
+| 11 | 職員室 (`StaffAdultRoom`) | 2 | 90,458 | 194 (72) | sky, 31 particle | – | 113.6 | 124.6 |
 | 12 | 職員トイレ(男) (`ToiletMale`) | 0 | 10,304 | 29 (22) | – | mirror (1 renderer); animated objects (drawn in their authored pose): 4 | 34.0 | 35.0 |
-| 13 | 保健室 (`HealthRoom`) | 0 | 34,895 | 125 (63) | sky, 5 particle | – | 90.6 | 94.0 |
-| 14 | 図書室 (`LibraryRoom`) | 0 | 48,928 | 105 (37) | sky, 5 particle | – | 78.0 | 83.2 |
-| 15 | 部室 (`StaffRoom`) | 1 | 36,655 | 136 (66) | sky, 5 particle | animated objects (drawn in their authored pose): 2 | 112.3 | 115.7 |
+| 13 | 保健室 (`HealthRoom`) | 0 | 34,895 | 151 (63) | sky, 31 particle | – | 90.6 | 94.1 |
+| 14 | 図書室 (`LibraryRoom`) | 0 | 48,928 | 131 (37) | sky, 31 particle | – | 78.0 | 83.2 |
+| 15 | 部室 (`StaffRoom`) | 1 | 36,655 | 162 (66) | sky, 31 particle | animated objects (drawn in their authored pose): 2 | 112.3 | 115.8 |
 | 16 | 漫研 (`StaffComicResearchRoom`) | 0 | 19,778 | 59 (46) | – | mirror (1 renderer) | 36.8 | 38.7 |
 | 17 | 和室 (`JapaneseStyleRoom`) | 0 | 3,879 | 11 (11) | – | animated objects (drawn in their authored pose): 2 | 13.9 | 14.3 |
 | 18 | 体育倉庫 (`GymnasiumWarehouse`) | 0 | 11,192 | 29 (21) | – | animated objects (drawn in their authored pose): 2 | 19.3 | 20.4 |
 | 19 | 体育館 (`Gymnasium`) | 2 | 11,608 | 59 (53) | – | – | 52.6 | 56.6 |
-| 20 | 中庭 (`Courtyard`) | 0 | 78,668 | 86 (none) | sky, 6 particle | – | 61.0 | 68.0 |
-| 21 | グラウンド (`Ground`) | 3 | 50,949 | 139 (52) | sky, 10 particle | – | 97.9 | 102.6 |
-| 22 | 屋上 (`Rooftop`) | 2 | 56,317 | 119 (none) | sky, 7 particle | – | 81.4 | 86.7 |
+| 20 | 中庭 (`Courtyard`) | 0 | 78,668 | 102 (none) | sky, 22 particle | – | 61.0 | 68.0 |
+| 21 | グラウンド (`Ground`) | 3 | 50,949 | 165 (52) | sky, 36 particle | – | 97.9 | 102.7 |
+| 22 | 屋上 (`Rooftop`) | 2 | 56,317 | 153 (none) | sky, 41 particle | – | 81.4 | 86.8 |
 | 23 | プール (`Pool`) | 0 | 14,846 | 70 (60) | – | heat distortion (1 renderer); animated objects (drawn in their authored pose): 8; particle systems: 8; skinned renderers: 4 | 57.6 | 61.8 |
 | 24 | 食堂 (`DiningRoom`) | 0 | 37,125 | 83 (66) | – | animated objects (drawn in their authored pose): 1 | 86.2 | 100.7 |
 | 25 | シャワールーム (`ShawerRoom`) | 1 | 11,530 | 24 (16) | – | animated objects (drawn in their authored pose): 7 | 19.6 | 20.8 |
 | 26 | ロッカールーム (`LockerRoom`) | 0 | 8,378 | 24 (18) | – | mirror (1 renderer); animated objects (drawn in their authored pose): 2 | 17.5 | 18.4 |
-| 27 | 裏庭 (`Backyard`) | 0 | 45,319 | 83 (none) | sky, 8 particle, Particles/Anim Alpha Blended | – | 60.4 | 64.6 |
+| 27 | 裏庭 (`Backyard`) | 0 | 45,319 | 118 (none) | sky, 43 particle, Particles/Anim Alpha Blended | – | 60.4 | 64.7 |
 | 28 | ライブステージ (`LiveStage`) | 1 | 68,158 | 62 (none) | Custom/StandardDouble | render-texture screens (1 renderer); stage effects (189 renderers); animated objects (drawn in their authored pose): 61; particle systems: 1 | 17.0 | 24.2 |
 | 29 | 体育館ライブ (`GymnasiumLive`) | 2 | 13,642 | 50 (47) | – | – | 42.8 | 47.2 |
-| 30 | 女子トイレ個室 (`Toilet_nozoki`) | 0 | 2,593 | 16 (13) | – | animated objects (drawn in their authored pose): 1; legacy animations (drawn in their authored pose): 3 | 25.9 | 26.2 |
+| 30 | 女子トイレ個室 (`Toilet_nozoki`) | 0 | 2,593 | 16 (13) | – | animated objects (drawn in their authored pose): 1; legacy animations (drawn in their authored pose): 3; realtime GI (Enlighten dynamic lightmaps on 11 renderers) | 25.9 | 26.2 |
 | 31 | シャワールーム個室 (`ShawerRoom_nozoki`) | 0 | 2,599 | 13 (9) | – | animated objects (drawn in their authored pose): 1 | 27.1 | 27.3 |
-| 32 | ロッカールーム個室 (`LockerRoom_nozoki`) | 0 | 5,227 | 16 (12) | – | animated objects (drawn in their authored pose): 1 | 17.1 | 17.6 |
+| 32 | ロッカールーム個室 (`LockerRoom_nozoki`) | 0 | 5,227 | 16 (12) | – | animated objects (drawn in their authored pose): 1; realtime GI (Enlighten dynamic lightmaps on 18 renderers) | 17.1 | 17.6 |
 | 33 | 空き部室 (`bushitu`) | 0 | 1,440 | 7 (7) | – | animated objects (drawn in their authored pose): 1 | 10.2 | 13.2 |
-| 34 | 空き教室 (`akikyoushitu`) | 1 | 26,293 | 60 (29) | sky, 1 particle | – | 59.6 | 79.2 |
+| 34 | 空き教室 (`akikyoushitu`) | 1 | 26,293 | 61 (29) | sky, 2 particle | – | 59.6 | 79.2 |
 | 35 | ラブホテル (`LoveHotel`) | 0 | 28,058 | 78 (64) | Shader Forge/main_item | heat distortion (1 renderer); mirror (1 renderer) | 46.2 | 48.4 |
 | 36 | カラオケ (`Karaoke`) | 0 | 13,235 | 70 (59) | – | – | 59.8 | 60.8 |
-| 37 | 教会 (`Church`) | 0 | 50,800 | 66 (59) | – | – | 79.1 | 86.0 |
+| 37 | 教会 (`Church`) | 0 | 50,800 | 66 (59) | – | realtime GI (Enlighten dynamic lightmaps on 48 renderers) | 79.1 | 86.0 |
 | 38 | 満員電車 (`TrainCrowded`) | 2 | 563,355 | 104 (27) | 70 silhouette (option) | animated objects (drawn in their authored pose): 1 | 58.4 | 83.7 |
 | 39 | 電車 (`Train`) | 0 | 199,795 | 55 (27) | 21 silhouette (option) | animated objects (drawn in their authored pose): 1 | 58.4 | 68.5 |
-| 40 | 公園 (`Park`) | 2 | 67,741 | 21 (4) | 1 unlit | heat distortion (1 renderer) | 22.4 | 26.2 |
-| 41 | 備品倉庫 (`Warehouse`) | 4 | 24,308 | 29 (27) | – | – | 16.5 | 18.8 |
+| 40 | 公園 (`Park`) | 2 | 67,741 | 21 (4) | 1 unlit | heat distortion (1 renderer); realtime GI (Enlighten dynamic lightmaps on 8 renderers) | 22.4 | 26.2 |
+| 41 | 備品倉庫 (`Warehouse`) | 4 | 24,308 | 29 (27) | – | realtime GI (Enlighten dynamic lightmaps on 21 renderers) | 16.5 | 18.8 |
 
 All 42 maps load in the Engine fixture test (`everyConvertedMapLoadsItsBlockImagesByteForByte`, which prints this census). Every block image reads back byte for byte, and every block-only map is refused by the decoded switch by name. The 40 new folders take 2.57 GB, and the whole private export 2.66 GB. The largest is map 1, whose four RGBA32 lightmaps (light and direction, eight files) take 137 MB.
 
@@ -798,7 +798,7 @@ The converter now writes each submesh of each particle renderer as its own draw 
 - `ikkokuMap.sortSubmesh`: the submesh index;
 - `ikkokuParticle.renderQueue` on the material: its `m_CustomRenderQueue`, or the shader's `Queue` tag when that is −1.
 
-The app gives such a draw order 100 + its submesh, and sorts transparent draws by render queue, then camera distance to the sort centre, back to front, then order and mesh id. The loader refuses a sort centre on anything but a particle draw of one renderer, a sort centre without its submesh, and a queue outside the transparent range (2501–5000), by name. Every other draw has queue 3000 and no sort centre, so it sorts exactly as before: the distance is to its mesh's bounds centre, and the extra key is equal for all of them. The status line says `particles (no soft-particle fade)`. PARTICLECOUNTS
+The app gives such a draw order 100 + its submesh, and sorts transparent draws by render queue, then camera distance to the sort centre, back to front, then order and mesh id. The loader refuses a sort centre on anything but a particle draw of one renderer, a sort centre without its submesh, and a queue outside the transparent range (2501–5000), by name. Every other draw has queue 3000 and no sort centre, so it sorts exactly as before: the distance is to its mesh's bounds centre, and the extra key is equal for all of them. The status line says `particles (no soft-particle fade)`. The split adds draws only to the 16 maps with particle renderers: +1 in maps 4–7 and 34, +10 in maps 1–3, +16 in map 20, +26 in maps 11, 13, 14, 15 and 21, +34 in map 22 and +35 in map 27 (83 → 118 parts). Every particle material is in the Transparent queue (3000) but two: map 27's `mm_koi_map47_kusa00` (4099) and map 21's `mm_koi_map02_eda01_01` (5000).
 
 ### Evidence (the maps phase)
 
@@ -821,7 +821,7 @@ Every map but 33 now uses a far plane of 1000 m for the depth-normals images, on
 
 #### The gates
 
-`compare_original_map.py` compared all 21 cases with the tolerances unchanged. GATERUN The gates are:
+`compare_original_map.py` compared all 21 cases with the tolerances unchanged. The captures are the Release build of `06eef4d7` (the runtime is unchanged since) on the re-exported catalog, with every particle renderer drawn alone (`.local/sta11d-map-coverage/ours4/`, `cmp-ours4/comparison.json`). The gates are:
 
 - geometry IoU ≥ 0.999;
 - depth p99 ≤ two `EncodeFloatRG` steps (2 × far / 65025, 0.031 m at 1000 m);
@@ -829,26 +829,53 @@ Every map but 33 now uses a far plane of 1000 m for the depth-normals images, on
 - the sky and the silhouettes: the same, with a coverage or footprint IoU of 0.999 and 0.98;
 - particles and unlit draws: mean ≤ 2⁻⁶ and p99 ≤ 2⁻³, with a floor of 2⁻⁶ and a footprint IoU of 0.98.
 
-The record, rule, placement and camera checks pass in all 21 cases, and every control fails as it should.
+The record, rule, placement and camera checks pass in all 21 cases. Every control fails as it should, except the depth control in map 21's and 22's outside views (below).
 
-GATETABLE
+| Case | Geometry IoU | Depth p99 (m) | Irradiance mean / p99 | Sky mean / p99, IoU | Particles mean / p99, IoU | Silhouettes mean / p99, IoU | All gates |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| map01 | 1.0000 | 0 | 5.8e-04 / 9.0e-04 | 6.0e-04 / 8.3e-04, 1.000 | 0.0006 / 0.003, 1.000 | – | pass |
+| map01-outside | 1.0000 | 0 | 5.3e-04 / 9.0e-04 | 5.5e-04 / 8.2e-04, 1.000 | – | – | pass |
+| map11 | 1.0000 | 0 | 4.7e-04 / 8.8e-04 | 5.6e-04 / 8.3e-04, 1.000 | 0.0010 / 0.006, 1.000 | – | pass |
+| map11-outside | 1.0000 | 0 | 5.1e-04 / 9.0e-04 | 5.8e-04 / 8.3e-04, 1.000 | – | – | pass |
+| map15 | 1.0000 | 0 | 5.4e-04 / 9.0e-04 | 5.9e-04 / 8.3e-04, 1.000 | 0.0004 / 0.001, 1.000 | – | pass |
+| map15-outside | 1.0000 | 0 | 5.6e-04 / 9.1e-04 | 5.9e-04 / 8.3e-04, 1.000 | 0.0009 / 0.007, 1.000 | – | pass |
+| map19 | 1.0000 | 0 | 5.5e-04 / 9.3e-04 | – | – | – | pass |
+| map19-outside | **FAIL** 0.6742 (225,185 px) | 0 | 5.6e-04 / 9.2e-04 | – | – | – | **fail** |
+| map21 | 1.0000 | 0 | 5.6e-04 / 9.3e-04 | 4.9e-04 / 7.8e-04, 1.000 | 0.0009 / 0.005, 1.000 | – | pass |
+| map21-outside | 1.0000 | 0 | 5.6e-04 / 8.1e-04 | 5.1e-04 / 7.7e-04, 1.000 | **FAIL** 0.0091 / 0.176, 0.999 | – | **fail** (depth control) |
+| map22 | 1.0000 | 0 | – | 5.9e-04 / 8.3e-04, 1.000 | 0.0014 / 0.014, 1.000 | – | pass |
+| map22-outside | 1.0000 | 0 | – | 4.9e-04 / 7.9e-04, 1.000 | 0.0014 / 0.020, 1.000 | – | **fail** (depth control) |
+| map25 | 1.0000 | 0 | 5.6e-04 / 9.4e-04 | – | – | – | pass |
+| map25-outside | **FAIL** 0.9936 (4,432 px) | 0 | 5.4e-04 / 9.1e-04 | – | – | – | **fail** |
+| map27 | 1.0000 | **FAIL** 0.077 | – | 5.6e-04 / 9.1e-04, 1.000 | 0.0046 / 0.086, 1.000 | – | **fail** |
+| map27-outside | 1.0000 | 0 | – | 5.4e-04 / 8.2e-04, 1.000 | – | – | pass |
+| map29 | 1.0000 | 0 | 4.9e-04 / 9.2e-04 | – | – | – | pass |
+| map38 | 1.0000 | 0 | 5.7e-04 / 9.3e-04 | – | – | 0.0e+00 / 0.0e+00, 1.000 | pass |
+| map40 | 1.0000 | 0 | – | – | – | – | pass |
+| map41 | 1.0000 | 0 | **FAIL** 1.0e-03 / 2.2e-03 | – | – | – | **fail** |
+| map41-showoff | 1.0000 | 0 | **FAIL** 3.5e-02 / 2.0e-01 | – | – | – | **fail** |
+
+A case passes when every gated check passes and every control fails. "Depth control" marks a case whose depth check passes but whose one-pixel-shift control does not fail (below).
 
 The verdicts:
 
 - **Map 29 passes every gate.** The first pass's failure was the MSAA resolve and the shadow shell (below).
 - **Map 38 passes every gate.** Its 70 mob silhouettes match exactly: mean and p99 0, footprint IoU 1.
-- **Map 41 fails irradiance by a known missing term (Enlighten dynamic lightmap).** Its bundle bakes realtime GI: `m_EnableRealtimeLightmaps` is true, the environment lighting is realtime (`m_EnvironmentLightingMode` 1), `m_IndirectOutputScale` is 0.02, and 22 of its 24 drawn renderers carry a dynamic lightmap (`m_LightmapIndexDynamic`). Unity adds `DecodeRealtimeLightmap(unity_DynamicLightmap)` to the indirect diffuse. That lightmap is computed at runtime by Enlighten, so no export can carry it. The evidence:
+- **Map 41 fails irradiance by a known missing term (Enlighten dynamic lightmap).** Its bundle bakes realtime GI: `m_EnableRealtimeLightmaps` is true, the environment lighting is realtime (`m_EnvironmentLightingMode` 1), `m_IndirectOutputScale` is 0.02, and 21 of its 23 drawn renderers carry a dynamic lightmap (`m_LightmapIndexDynamic`). Unity adds `DecodeRealtimeLightmap(unity_DynamicLightmap)` to the indirect diffuse. That lightmap is computed at runtime by Enlighten, so no export can carry it. The evidence:
   - Unity is brighter on 99.8% of the over-tolerance pixels in both cases. In the passing maps the sign splits about 50/50.
   - The difference is additive, about 5e-4 to 1.4e-3 per channel. The median is 1.2e-3 in the map41 view and 5.4e-4 in the showoff view, and it holds across three orders of magnitude of irradiance.
   - Adding the per-channel median to our image makes map41 pass (mean 4.9e-4, p99 9.6e-4). The showoff view still fails (1.1e-2 / 0.17): there the term varies across the room, and on the nearest surfaces (0.8–0.9 m from the camera, a quarter of the pixels) the relative error averages 0.11.
   - The over-tolerance pixels face the camera; they are not grazing angles. Without the grazing pixels the numbers do not change (map41 1.0e-3 / 2.1e-3).
   - Maps 19 and 29 have realtime lightmaps off. Map 38 has them on, but none of its renderers has a dynamic lightmap, and both pass.
 
-  The converter records the term in `provenance.json` (`realtimeGI`: the renderers, the three settings and the rule), and the catalog's `notDrawn` adds `realtime GI (Enlighten dynamic lightmaps on N renderer(s))`, so the status line names it. REALTIMEGIMAPS
+  The converter records the term in `provenance.json` (`realtimeGI`: the renderers, the three settings and the rule), and the catalog's `notDrawn` adds `realtime GI (Enlighten dynamic lightmaps on N renderer(s))`, so the status line names it. Maps 30, 32, 37 and 40 also carry dynamic lightmaps (on 11, 18, 48 and 8 drawn renderers), with baked environment lighting; their status lines name the term too. None of them has a VM case.
 - **Map 40** passes geometry and depth. Its irradiance is reported, not gated (above).
 - **Geometry in map 19's and 25's outside views fails on the oracle's culling mask.** The oracle draws every layer (`cullingMask ~0`), so it draws `mo_koi_mi_balckback`, a black `Standard` backdrop on layer 0 that no Studio camera draws and the converter leaves out. Rasterizing that one mesh from the first export (12 triangles, with the probe camera at the pixel centres) predicts the failure exactly: every original-only pixel is in its coverage minus ours, and every such pixel is original-only (map19-outside 225,185 pixels, IoU 0.674; map25-outside 4,432 pixels, IoU 0.9936). Ours-only is 0 in both. In map 29, the 8 meshes that hold its 71 layer-0 renderers add no pixel outside our coverage.
 - **Depth in map 27 fails on the oracle's renderer classes.** The oracle's map-only passes draw a renderer only when every one of its materials is opaque, so they leave out the whole renderer when one submesh is a particle or a blended material. Our probe draws the opaque submeshes. All 3,529 pixels over two steps lie in the coverage of the 14 opaque submeshes of the map's 12 mixed renderers (1,800 triangles), and ours is nearer on every one. Outside that coverage the depth p99 is 0 m (326,397 pixels).
-PARTICLEVERDICT
+- **Particles pass in every case but map 21's outside view.** With each renderer drawn alone, map 11 goes from p99 0.261 to 0.006, map 21 from 1.17 to 0.005, map 22 from 0.33 to 0.014 and its outside view from 0.64 to 0.020, and map 27 from 0.79 to 0.086 (the first pass's numbers, on the same build without the split). Maps 1 and 15 passed before and are unchanged.
+- **Map 21's outside view fails the particle p99 at grazing angles,** a known difference: mean 0.0091 (gate 0.0156), p99 0.176 (gate 0.125), footprint IoU 0.999. Its particle image is byte-identical before and after the split, so the order is not the cause. 94 of its 107 pixels over 2⁻³ lie on one card seen nearly edge-on, 78–87° from its normal (|cos| 0.05–0.2); the other 13 are on a card that faces the camera. Leaving out the pixels below |cos| 0.1 gives a p99 of 0.106, but that figure only locates the error; the gate is not refiltered. The likely cause, not tested, is texture filtering at grazing angles: the mip choice and anisotropy of Metal against D3D11 (`particle_grazing.py`, `analysis/map21-outside-particle-grazing.json`).
+- **The depth control does not discriminate in map 21's and 22's outside views.** The depth gate's control shifts our depth image by one pixel and must then fail. These two views look mostly at distant ground at a 1000 m far plane, where neighbouring pixels differ by less than two steps, so the shifted image passes (p99 0.031 and 0.015 m against 0.031 m). No gate is changed and the cases count as failed. Geometry IoU is 1.0 in both, and that is the registration check that holds there.
+- **The split changes only what it should.** Recaptured on the same build, the 10 cases without particles are byte-identical, image for image. In the particle cases, every changed pixel of the particle image lies where two or more particle renderers overlap. In the colour image, the changed pixels also lie where a particle renderer overlaps a blended `Standard` draw, whose order against the particle draw now follows the renderer's centre; one pixel, at (405, 220) in map 22, is neither, a change of one level in red next to the particle coverage, at a rasterizer edge (`particle_order_change.py`). Map 34's four views change no pixel at all, and its gates are slice 3's.
 
 The analyses are in `.local/sta11d-map-coverage/analysis/` (`map19-outside-layer0.json`, `map25-outside-layer0.json`, `map29-layer0.json`, `map27-mixed-depth.json`, `map41-irradiance-error.json`, `irradiance-offset.json`), and the scripts in `tools/`.
 
@@ -887,7 +914,7 @@ Every number holds or improves. The sky holds (day 5.6e-4 / 8.3e-4, IoU 1.0), an
 - Map 33 (`Map/p_koi_stu_map49_00/mo_koi_stu_map49_shadow00`): 8 → 7 draws, all lightmapped; 1,492 → 1,440 triangles; 2,526 → 2,438 vertices. Its catalog row now also counts one animated object.
 - Map 34 (`Map/p_o_koi_map09_99/o_koi_map08_01`): 61 → 60 parts; 26,293 mesh triangles (was 26,355), 28,597 drawn across the sun types (was 28,659); 36 lightmapped renderers (was 37). The day view draws 53 (was 54, 29 lightmapped), evening 52, night 49, showoff 53. Its 54 images are unchanged.
 
-The shell sat inside or behind the visible surfaces: maps 33 and 34's colour captures are byte-identical before and after. The scenarios `studio-scenario-source-map`, `-source-map34` and the reload pair expect the new counts.
+The shell sat inside or behind the visible surfaces: maps 33 and 34's colour captures are byte-identical before and after. Drawing map 34's two particle renderers apart ([particles](#particles-slice-4)) then adds one part and one draw: 61 parts, 54 draws in the day view, with the label `particles (no soft-particle fade)`, and again no pixel changes. The scenarios `studio-scenario-source-map`, `-source-map34` and the reload pair expect the new counts.
 
 **Vanish.** Each outside case looks at the pivot from twice the distance of the nearest live listed collider (`h/list`'s `map_col_XX` rows, layer `Map`), so the camera's view capsule crosses that collider whichever way the capsule's height is read. The trace confirms the capsule: `CameraUpdate` sets its height to `distance.z`, which is negative, and its bounds span the camera to the pivot. Even so, in all eight cases the player's `listCollider` was empty and no row hid a renderer, with `isConfigVanish` true. In this probe's timing the original never vanished anything, so the app does not vanish either. Vanish is the next change; it needs a small VM phase that records `Time.timeScale`, the camera's layer, the layer collision matrix and a few physics steps, and finds a case where the original does hide a wall.
 
@@ -1000,7 +1027,9 @@ Slice 3 (map 34, the sky and block images), Release, in one quiet window ([perfo
 - **Map 40's irradiance.** Its Standard materials all carry keywords, so the oracle had no keyword-free template, and its lightmaps are not gated. The next VM phase builds the template from `Shader.Find("Standard")`.
 - **The oracle's culling mask.** The oracle's geometry, depth-normals, irradiance and class passes draw every layer (`cullingMask ~0`). So they draw layer-0 solids that no Studio camera draws: `mo_koi_mi_balckback` (a black backdrop, `Standard`, no lightmap) in maps 19, 25 and 29, and a pot in map 15's outside view. The slice-4 converter leaves them out, as Studio does, and map 19's and 25's outside views fail geometry by exactly that backdrop ([the gates](#the-gates)). The next VM phase renders those passes with `Camera.main`'s mask (536874000).
 - **The oracle's renderer classes.** The oracle's map-only passes disable a whole renderer when any of its materials is not opaque, so map 27's 12 mixed renderers lose their opaque submeshes there and its depth gate fails ([the gates](#the-gates)). The next VM phase hides only the non-opaque submeshes (an empty material in their slot), not the whole renderer.
-- **Realtime GI.** Map 41 bakes Enlighten realtime GI, which Unity adds to the indirect diffuse from a dynamic lightmap computed at runtime; the export cannot carry it, and map 41 fails irradiance by that term ([the gates](#the-gates)). REALTIMEGIREMAINS One option for the next VM phase is to read back each such map's runtime dynamic lightmap once and export it as a static input. Running Enlighten itself is out of scope.
+- **Realtime GI.** Map 41 bakes Enlighten realtime GI, which Unity adds to the indirect diffuse from a dynamic lightmap computed at runtime; the export cannot carry it, and map 41 fails irradiance by that term ([the gates](#the-gates)). Maps 30, 32, 37 and 40 carry dynamic lightmaps too, without a VM case. One option for the next VM phase is to read back each such map's runtime dynamic lightmap once and export it as a static input. Running Enlighten itself is out of scope.
+- **Particles at grazing angles.** Map 21's outside view fails the particle p99 on one card seen 78–87° from its normal ([the gates](#the-gates)). The next change tests the texture filtering and anisotropy hypothesis, Metal against D3D11.
+- **A depth control for far views.** The one-pixel-shift control cannot fail in views of distant ground at a 1000 m far plane (map 21's and 22's outside views). A better control, for example a near-field region or a larger shift, is the next VM phase's.
 - **Particle submeshes alone.** The oracle's particle pass enables whole renderers, so the comparison leaves out the pixels their `Standard` submeshes cover. The next VM phase adds a pass that enables only the particle submeshes. It also adds a map 40 camera that sees the map's three `Unlit/Transparent` renderers, which no slice-4 view covers.
 - **What the converter skips.** Mirrors, heat distortion, the live stage's effects and screen, vertex-lit particles, and every particle system, sprite and skinned renderer (map 23's option objects among them). Animated objects draw in their authored pose. Each map's catalog row and status line name them.
 - **Shader programs not compared.** `Custom/StandardDouble` (map 28) is drawn with Standard's formula on both faces, and `Shader Forge/main_item` (map 35) as an item; their own programs are not compared, and the catalog lists the dropped terms. Neither map has a VM case.
