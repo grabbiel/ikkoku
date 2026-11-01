@@ -224,10 +224,10 @@ public sealed class OriginalPluginRewriteProbe:BaseUnityPlugin {
         row["saved"]=Save(name);row["savedSHA256"]=FileHash(Path.Combine(folder,name));
         var afterSave=OrderedSnapshot();row["afterSave"]=afterSave;
         load=Load(Path.Combine(folder,name));while(load.MoveNext())yield return load.Current;
-        var reloaded=OrderedSnapshot();row["reloaded"]=reloaded;SameOrderedStructure(afterSave,reloaded,label+" reload");
+        var reloaded=OrderedSnapshot();row["reloaded"]=reloaded;row["leakedAtReload"]=SameOrderedStructure(afterSave,reloaded,label+" reload",true);
         row["resaved"]=Save("resave-"+name);
         row["resavedSHA256"]=FileHash(Path.Combine(folder,"resave-"+name));
-        var afterResave=OrderedSnapshot();row["afterResave"]=afterResave;SameOrderedStructure(afterSave,afterResave,label+" resave");
+        var afterResave=OrderedSnapshot();row["afterResave"]=afterResave;SameOrderedStructure(reloaded,afterResave,label+" resave");
     }
     // The toolbar's Add folder (Studio.AddFolder -> AddObjectFolder.Add): the keys it added.
     List<object> AddFolder() {
@@ -239,10 +239,20 @@ public sealed class OriginalPluginRewriteProbe:BaseUnityPlugin {
         if(list.Count!=1)throw new Exception("Studio.AddFolder added "+list.Count+" objects");
         return list;
     }
-    static void SameOrderedStructure(Dictionary<string,object> before,Dictionary<string,object> after,string stage) {
-        // No key/order normalization: changing even one allocation or root ordinal is a failed oracle.
-        foreach(var field in new[]{"usedKeys","rootEnumeration","objects"})
+    // No key/order normalization: changing even one allocation or root ordinal is a failed oracle. A reload
+    // rebuilds SceneInfo.hashIndex from the saved records alone, so the keys DeleteKey left behind (item FK
+    // bones, route point aids) drop out and nothing is added: `reload` allows exactly that and returns the
+    // dropped keys.
+    static List<object> SameOrderedStructure(Dictionary<string,object> before,Dictionary<string,object> after,string stage,bool reload=false) {
+        foreach(var field in new[]{"rootEnumeration","objects"})
             if(J(before[field])!=J(after[field]))throw new Exception(stage+" changed "+field);
+        var leaked=new List<object>();
+        if(!reload){if(J(before["usedKeys"])!=J(after["usedKeys"]))throw new Exception(stage+" changed usedKeys");return leaked;}
+        var kept=new HashSet<int>((List<int>)after["usedKeys"]);
+        foreach(var key in (List<int>)before["usedKeys"])if(!kept.Contains(key))leaked.Add(key);
+        var saved=new HashSet<int>((List<int>)before["usedKeys"]);
+        foreach(var key in kept)if(!saved.Contains(key))throw new Exception(stage+" added used key "+key);
+        return leaked;
     }
     Dictionary<string,object> OrderedSnapshot() {
         // SceneInfo.hashIndex is private; read it, never write it. Root rows are the

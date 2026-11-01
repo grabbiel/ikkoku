@@ -275,6 +275,7 @@ class OrderedOracleTests(unittest.TestCase):
         # Both of #278's orders, a delete after a duplicate, and a case on each fixture.
         self.assertEqual(rows[0][2:], ['delete:V1', 'duplicate:M3']); self.assertEqual(rows[1][2:], ['duplicate:M3', 'delete:V1'])
         self.assertEqual({row[1] for row in rows}, {'a', 'c'})
+        self.assertEqual(tuple(row[0] for row in rows if row[1] == 'c'), probe.ORDERED_FIXTURE_C)
 
     def test_one_profile_keeps_the_core_plugin_set_and_no_survey(self):
         body = ordered()
@@ -453,7 +454,7 @@ class OrderedOracleTests(unittest.TestCase):
             self.assertEqual(transport.call_args.kwargs, {'runtime_pins': runtime_pins(), 'control_seconds': 180})
 
     def accept(self, tmp, drop=None, differ=None, control_code=probe.SHUTDOWN_FAULT, code=probe.SHUTDOWN_FAULT,
-               wrong_runtime=False, control_error=None, phases=('OB', 'OA')):
+               wrong_runtime=False, control_error=None, phases=('OB', 'OA'), replace=None):
         local = Path(tmp) / '.local'; local.mkdir(); output = local / 'output'
         files = {'fixture.png': b'original', 'fixture.sha256': b'expected', 'fixture-c.png': b'original c',
                  'fixture-c.sha256': b'expected c', 'phase.txt': b'OB'}
@@ -467,6 +468,7 @@ class OrderedOracleTests(unittest.TestCase):
             for save in saves:
                 members[save + '.png'] = members['resave-' + save + '.png'] = b'saved ' + save.encode()
             if differ: members[differ] = b'different bytes'
+            members.update(replace or {})
             for name, data in members.items():
                 if name != drop: z.writestr(name, data)
         payload = archive.getvalue()
@@ -505,6 +507,26 @@ class OrderedOracleTests(unittest.TestCase):
             self.assertLess(body.index('Remove-Item -LiteralPath $root'), body.index('$r.runtimeAfter=VerifyRuntime'))
         with tempfile.TemporaryDirectory() as tmp:
             self.assertTrue(self.accept(tmp, control_code=0, code=0)[1]['accepted'])
+        # Sideloader's per-session LocalSlot is the only difference the control may show.
+        slot = probe.LOCAL_SLOT
+        saved = b'scene ' + slot + b'\x05\xf5\xe1\x84 tail ' + slot + b'\x05\xf5\xe1\x85'
+        session = dict(zip(('control-fixture.png', 'control-resave-fixture.png'), 2 * [saved.replace(b'\xe1\x84', b'\xe2\xaa')]))
+        session.update({'fixture.png': saved, 'resave-fixture.png': saved})
+        with tempfile.TemporaryDirectory() as tmp:
+            _, result = self.accept(tmp, replace=session)
+            self.assertTrue(result['accepted']); self.assertTrue(result['fixedPoints']['control-fixture'])
+            self.assertEqual(result['controlBaselineDifferences'], [saved.index(slot) + len(slot) + 2, saved.index(slot) + len(slot) + 3])
+            self.assertEqual(len(result['controlLocalSlotOffsets']), 8)
+        elsewhere = dict(session, **{'control-fixture.png': saved.replace(b'scene', b'scenE'), 'control-resave-fixture.png': saved.replace(b'scene', b'scenE')})
+        with tempfile.TemporaryDirectory() as tmp:
+            self.assertFalse(self.accept(tmp, replace=elsewhere)[1]['controlMatchesBaseline'])
+        # Phase C's rows (character live state) are recorded with their offsets and left to the Engine parity test.
+        for row in ('fixture-c',) + tuple('edit-' + label for label in probe.ORDERED_FIXTURE_C):
+            with self.subTest(row=row), tempfile.TemporaryDirectory() as tmp:
+                _, result = self.accept(tmp, replace={'resave-' + row + '.png': b'saved ' + row[:-1].encode() + b'X'})
+                self.assertTrue(result['accepted']); self.assertFalse(result['fixedPoints'][row])
+                self.assertEqual(result['saveResaveDifferences'], {row: [len(b'saved ' + row.encode()) - 1]})
+                self.assertIn(row, result['liveStateRows'])
         rejected = (dict(drop='edit-duplicate-delete.png'), dict(drop='control-status.json'), dict(drop='resave-fixture-c.png'),
                     dict(differ='resave-edit-delete-add-folder.png'), dict(differ='control-resave-fixture.png'),
                     dict(differ='control-fixture.png'), dict(control_code=0), dict(code=0),

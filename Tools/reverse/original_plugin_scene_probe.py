@@ -78,8 +78,10 @@ two players in the same private root under one process-owner envelope:
 2. the oracle (OA, at most --wait-seconds): both baselines, then every ORDERED_CASES row in order (the real
    Delete, Duplicate and Add folder operations, with SceneInfo.hashIndex and root enumeration snapshots).
 
-The run is accepted only with both statuses error-free, every output present, every save equal to its resave,
-the control's save equal to OA's baseline save, both players exited with the same exit code (0, or the
+The run is accepted only with both statuses error-free, every output present, every save of phase A's fixture
+equal to its resave (phase C's: recorded, compared by the Engine parity test apart from each character's live
+state), the control's save equal to OA's baseline save apart from Sideloader's per-session LocalSlot values,
+both players exited with the same exit code (0, or the
 original player's 0xC0000005 shutdown fault, which the no-edit control shows is not caused by the edits), the
 root removed with no game process left, unchanged junction targets, runtime pins and errno-24 count, and matching
 guest source and input hashes.
@@ -120,6 +122,9 @@ SOURCES_B = ('PluginSceneRules.cs', 'PluginSceneRuleParity.cs', 'PluginSceneSurv
 ORDERED_CASES = ('delete-duplicate', 'duplicate-delete', 'delete-delete-duplicate', 'child-delete-duplicate',
                  'route-delete-duplicate-folder', 'delete-duplicate-duplicate', 'delete-add-folder',
                  'character-delete-duplicate', 'delete-duplicate-character')
+# The rows on phase C's fixture (character W): their saves differ from their resaves in each character's live
+# state, which the Engine parity test masks (liveStateMasked, #287); every other row is a raw fixed point.
+ORDERED_FIXTURE_C = ('character-delete-duplicate', 'delete-duplicate-character')
 ORDERED_CONTROL_SECONDS = 180  # bound on the no-edit control player (OB)
 ORDERED_MAX_SECONDS = 600      # bound on the oracle player (OA)
 SHUTDOWN_FAULT = -1073741819   # 0xC0000005: the original player's access violation after Application.Quit
@@ -750,6 +755,23 @@ def run_rewrite(vm, output, errno_baseline, phase, files, zipmod, collider, host
     return result
 
 
+LOCAL_SLOT = b'\xa9LocalSlot\xce'
+
+
+def local_slot_values(data):
+    """The offsets of each Sideloader LocalSlot uint32 value (msgpack key, 0xce, four bytes). The slot is the one
+    the saving session resolved (UniversalAutoResolver.cs:591-670); no load or import reads it."""
+    offsets, at = [], data.find(LOCAL_SLOT)
+    while at >= 0:
+        offsets += range(at + len(LOCAL_SLOT), at + len(LOCAL_SLOT) + 4); at = data.find(LOCAL_SLOT, at + 1)
+    return offsets
+
+
+def differing(a, b):
+    """Byte offsets where two same-length files differ, or None when their lengths differ."""
+    return None if len(a) != len(b) else [i for i in range(len(a)) if a[i] != b[i]]
+
+
 def ordered_acceptance(output, names, guest, status, record, input_hashes, runtime_pins):
     """Main's #278 rule: the 0xC0000005 quit is accepted only when the no-edit control ends the same way."""
     pairs = {'control-fixture': ('control-fixture.png', 'control-resave-fixture.png')}
@@ -758,16 +780,28 @@ def ordered_acceptance(output, names, guest, status, record, input_hashes, runti
     required = {'plugin-scene-trace.json', 'status.json', 'control-plugin-scene-trace.json', 'control-status.json'}
     for pair in pairs.values(): required.update(pair)
     present = set(names)
-    def sha(name): return digest((output / name).read_bytes()) if name in present and (output / name).is_file() else None
-    fixed = {save: sha(saved) is not None and sha(saved) == sha(resaved) for save, (saved, resaved) in pairs.items()}
+    def read(name): return (output / name).read_bytes() if name in present and (output / name).is_file() else None
+    fixed, differences = {}, {}
+    for save, (saved, resaved) in pairs.items():
+        a, b = read(saved), read(resaved)
+        fixed[save] = a is not None and a == b
+        if a is not None and b is not None and a != b: differences[save] = differing(a, b)
+    # Phase C's rows are compared apart from live state by the Engine parity test; the rest must be raw.
+    live = {'fixture-c'} | {'edit-' + label for label in ORDERED_FIXTURE_C}
+    raw = all(ok for save, ok in fixed.items() if save not in live)
+    control_fixture, baseline = read('control-fixture.png'), read('fixture.png')
+    slot_offsets = local_slot_values(baseline) if baseline is not None else []
+    control_diff = differing(control_fixture, baseline) if control_fixture is not None and baseline is not None else None
+    # Apart from Sideloader's per-session LocalSlot values, at the same offsets in both saves.
+    control_matches = (control_diff is not None and set(control_diff) <= set(slot_offsets)
+                       and slot_offsets == local_slot_values(control_fixture))
     control = guest.get('control') or {}
     control_status = json.loads((output / 'control-status.json').read_text()) if 'control-status.json' in present else None
     codes = [control.get('playerExitCode'), guest.get('playerExitCode')]
     same_exit = (control.get('exited') is True and guest.get('exited') is True and codes[0] == codes[1]
                  and codes[1] in (0, SHUTDOWN_FAULT))
-    control_matches = sha('control-fixture.png') is not None and sha('control-fixture.png') == sha('fixture.png')
     def clean(s, phase): return bool(s and s.get('phase') == phase and 'error' in s and s['error'] is None)
-    accepted = (clean(control_status, 'OB') and clean(status, 'OA') and required <= present and all(fixed.values())
+    accepted = (clean(control_status, 'OB') and clean(status, 'OA') and required <= present and raw
         and control_matches and same_exit and guest.get('phases') == ['OB', 'OA'] and guest.get('removed') is True
         and guest.get('remainingGameProcesses') == [] and guest.get('junctionTargetsChanged') is False
         and not any(guest.get(k) for k in ('error', 'cleanupError', 'runtimeError', 'partialUploadError'))
@@ -775,7 +809,10 @@ def ordered_acceptance(output, names, guest, status, record, input_hashes, runti
         and guest.get('sources') == record['sources'] and guest.get('inputs') == input_hashes
         and record.get('hostGroupReleased') is True and record['errnoBefore'] == record['errnoAfter'])
     return dict(accepted=bool(accepted), playerExitCodes=codes, shutdownFault=same_exit and codes[1] == SHUTDOWN_FAULT,
-                fixedPoints=fixed, controlMatchesBaseline=control_matches, missingOutputs=sorted(required - present),
+                fixedPoints=fixed, saveResaveDifferences=differences, liveStateRows=sorted(live),
+                liveStateCheck='EngineTests sourceSceneOrderedOracleParity (liveStateMasked)',
+                controlMatchesBaseline=control_matches, controlBaselineDifferences=control_diff,
+                controlLocalSlotOffsets=slot_offsets, missingOutputs=sorted(required - present),
                 controlStatusError=(control_status or {}).get('error'))
 
 
