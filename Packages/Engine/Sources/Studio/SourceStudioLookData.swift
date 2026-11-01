@@ -16,21 +16,13 @@ public enum SourceStudioLookData {
     }
 
     /// EyeLookCalc.LoadAngle reads the four angle floats only when the scene
-    /// data version is at least 0.0.8; short versions are padded with zeros.
+    /// data version is at least 0.0.8, compared as `System.Version`
+    /// (`KoikatsuSceneVersion`; "0.0" is 0.0.-1, below 0.0.8).
     static func readsSavedEyeAngles(sceneVersion: String) throws -> Bool {
-        let parts = sceneVersion.split(separator: ".", omittingEmptySubsequences: false)
-        var numbers: [Int] = []
-        guard !parts.isEmpty, parts.count <= 4 else {
+        guard let version = KoikatsuSceneVersion(parsing: sceneVersion) else {
             throw KoikatsuReadError.invalidValue(offset: 0, description: "unparsable scene data version '\(sceneVersion)'")
         }
-        for part in parts {
-            guard let number = Int(part) else {
-                throw KoikatsuReadError.invalidValue(offset: 0, description: "unparsable scene data version '\(sceneVersion)'")
-            }
-            numbers.append(number)
-        }
-        while numbers.count < 3 { numbers.append(0) }
-        return numbers[0] > 0 || numbers[1] > 0 || numbers[2] >= 8
+        return version >= KoikatsuSceneVersion(0, 0, 8)
     }
 }
 

@@ -1,0 +1,77 @@
+{
+  "steps": [
+    {
+      "op": "captureRender",
+      "name": "legacy",
+      "path": ".local/verification/renders/legacy-scene.png"
+    },
+    {
+      "op": "setFK",
+      "key": 0,
+      "bone": 112,
+      "rotation": [
+        0,
+        20,
+        0
+      ]
+    },
+    {
+      "op": "assert",
+      "fk": {
+        "key": 0,
+        "bone": 112,
+        "rotation": [
+          0,
+          20,
+          0
+        ]
+      }
+    },
+    {
+      "op": "exportRejected",
+      "path": ".local/verification/scenario-exports/legacy-scene-fk.png",
+      "errorContains": "Export cannot save FK bone 112 of "
+    },
+    {
+      "op": "exportRejected",
+      "path": ".local/verification/scenario-exports/legacy-scene-fk.png",
+      "errorContains": "the scene does not save that bone, and an export cannot add an FK record."
+    },
+    {
+      "op": "undo"
+    },
+    {
+      "op": "assert",
+      "render": {
+        "from": "legacy",
+        "changedPixelsAtMost": 0,
+        "maxChannelDeltaAtMost": 0
+      }
+    },
+    {
+      "op": "export",
+      "path": ".local/verification/scenario-exports/legacy-scene.png"
+    },
+    {
+      "op": "assert",
+      "statusContains": "saved as 1.0.4.2 from CharaStudio 0.0.7, as CharaStudio does"
+    },
+    {
+      "op": "assertRejected",
+      "exportIdenticalToSource": ".local/verification/scenario-exports/legacy-scene.png",
+      "errorContains": "differs from initial source SHA256"
+    },
+    {
+      "op": "reimport",
+      "path": ".local/verification/scenario-exports/legacy-scene.png"
+    },
+    {
+      "op": "assert",
+      "render": {
+        "from": "legacy",
+        "changedPixelsAtMost": 0,
+        "maxChannelDeltaAtMost": 0
+      }
+    }
+  ]
+}
