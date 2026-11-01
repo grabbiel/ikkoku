@@ -387,7 +387,7 @@ private func sideloader(_ items: [Record], _ patterns: [Record] = [], map: Bool 
         let written = try KoikatsuSceneReader.decodeDocument(plain.editedData(edits)).snapshot
         let route = try #require(written.roots.first { $0.sourceKey == 6 }?.route)
         #expect(written.roots.last?.sourceKey == (hole ? 12 : 13))
-        #expect(route.points.map(\.bone.sourceKey) == [7, 9, 14] && route.points.map(\.aid.sourceKey) == [8, 10, 15])
+        #expect(route.points.map(\.bone.sourceKey) == [7, 9, 14] && route.points.map(\.aidKey) == [8, 10, 15])
         let result = verdict(pluginScene(constraints(8), hole: hole), edits)
         if hole {
             // Character 13 is index 9 after the folder at 12.
