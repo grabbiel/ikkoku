@@ -1027,6 +1027,27 @@ The two-pixel diagonal shift fails every case with margin, so it is the gated co
 
 Tests (`test_compare_original_map.py`): a floor whose depth changes only by row passes the case with the horizontal shift not failing and the diagonal one failing; a wall facing the camera, the same depth everywhere, fails the case, because no shift can tell it apart.
 
+### The probe for PR B's VM phase
+
+`OriginalMapProbe.cs`'s maps mode changes for PR B's VM phase. The other modes are unchanged. The probe compiles locally with C# 5 against CharaStudio's own `UnityEngine.dll` and BepInEx, the language level of the guest's .NET Framework 4 `csc.exe`.
+
+- **Culling mask.** The map-only passes and the oracle draw with Camera.main's culling mask (layers 4, 10, 11 and 29 in the slice-4 trace), not every layer. Each renderer record says whether that mask holds its layer (`drawnByMain`), and the comparator leaves a sky renderer out where it does not.
+- **Classes per slot.** Each material slot is classed on its own, and a pass draws only its own slots. Every other slot gets a hidden material: `Hidden/Internal-Colored` with blend (Zero, One), no depth write and a RenderType no depth-normals subshader has. The depth-normals pass replaces by `RenderType` in this mode, and the white material is tagged `Opaque`. Each case first renders every slot hidden and records the pixels drawn (`hiddenCheck`); the comparator fails a case where either count is not 0.
+- **Map 40's template.** Where no keyword-free opaque Standard material exists, the irradiance template is a new material on the shader of the first opaque Standard material, with no keywords. The albedo copies also neutralise what a keyword variant would read: metallic-gloss and detail masks black, no normal, parallax, emission or detail maps, occlusion strength 0. Where both templates exist, the oracle renders the irradiance with each and records the largest difference (`fallbackTemplateCheck`).
+- **Particles alone.** The particle pass draws only the particle slots, so the `Standard` submeshes of a particle renderer no longer cover pixels the comparison has to leave out. The sky, silhouette and unlit passes do the same.
+- **Realtime GI.** For a map with Enlighten dynamic lightmaps:
+  - the oracle renders the irradiance once more with every baked colour lightmap black, which leaves the dynamic term alone (`oracle-<case>-irradiance-dynamic.f32`), and then checks that the restored lightmaps give the first irradiance again;
+  - each renderer's `realtimeLightmapIndex` and `realtimeLightmapScaleOffset`, and `unity_DynamicLightmap_HDR`, are recorded;
+  - the loaded textures whose names suggest a dynamic lightmap are read back as linear floats, digested again 120 frames later to show whether Enlighten had settled, and read again for the other two sun types; unnamed runtime textures are listed, so a later run can name them.
+- **Vanish.** Each case's vanish record adds:
+  - the camera's layer and its row of the layer collision matrix;
+  - the time scale and fixed step;
+  - the camera's rigidbody and the `LateUpdate` gate;
+  - the Map-layer colliders the view capsule overlaps by `Physics.OverlapCapsule`.
+
+  After the images, the probe waits five physics steps and records the vanish state again. It then runs a trigger experiment: kinematic trigger capsules like the view capsule, on the camera's layer and on layer 0, with the raw and the absolute height. Every wait counts fixed steps for at most 3 real seconds, because none runs while `Time.timeScale` is 0. In that case the probe records the vanish state once more with the time scale at 1. The player's physics settings file is not on this machine or in the archive, so the collision matrix is read at run time.
+- **Four new cases.** Maps 30, 32 and 37 carry dynamic lightmaps and had no case. Their cameras use the pivot (0, 1.1, 0), pitch 8° and 3 m, with the yaw that leaves the most free room behind the pivot on the exported glTF: 165°, 60° and 180°. A second map 40 camera looks down at 35° from 5 m over its densest cluster of `Unlit/Transparent` road shadows, and 95% of a 32×24 ray grid lands on them. The maps mode now has 24 cases and the showoff case.
+
 ## Performance
 
 Release, on the reference machine, in one quiet window. The full tables are in [performance: ST-A11](../performance.md#st-a11-original-studio-maps).

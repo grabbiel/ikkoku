@@ -113,7 +113,9 @@
 //   Map-layer colliders the view capsule overlaps by Physics.OverlapCapsule). After the case's images the
 //   probe waits TriggerSteps fixed steps and records the vanish state again ("vanishAfterFixedSteps"), then
 //   runs the trigger experiment ("triggerExperiment": test capsules like the view capsule on the camera's
-//   layer and on layer 0, and what their own trigger callbacks saw).
+//   layer and on layer 0, and what their own trigger callbacks saw). Every such wait counts fixed steps for
+//   at most FixedStepTimeout real seconds, since none runs while Time.timeScale is 0; in that case the
+//   vanish state is recorded once more with the time scale at 1 for those steps ("vanishWithTimeScale1").
 using System;
 using System.Collections;
 using System.Collections.Generic;
@@ -132,6 +134,7 @@ public sealed class OriginalMapProbe:BaseUnityPlugin {
     const string Map34Upload="reload-map34-showoff.png",MapsUpload="reload-maps-showoff.png";
     const float OutsideMinimum=1f;
     const int TriggerSteps=5; // fixed steps the vanish re-record and the trigger experiment wait (PR B)
+    const float FixedStepTimeout=3f; // real seconds those waits allow: no fixed step runs while Time.timeScale is 0
     const int RealtimeSettleFrames=120; // frames between the two reads of the dynamic lightmaps (PR B)
     static readonly Vector3 MapPos=new Vector3(0.3f,-0.05f,-0.5f),MapRot=new Vector3(4f,25f,-3f);
     // A mapRoot-local point near the middle of map 33's room (the converted geometry spans x -2.17..1.46,
@@ -439,6 +442,16 @@ public sealed class OriginalMapProbe:BaseUnityPlugin {
         foreach(var c in colliders)if(c!=null)list.Add(K("path",TPath(c.transform),"layer",c.gameObject.layer,"type",c.GetType().Name,"isTrigger",c.isTrigger));
         return list;
     }
+    // Frames until `steps` fixed steps have run, at most FixedStepTimeout seconds of real time (WaitForFixedUpdate
+    // never returns while Time.timeScale is 0); records the steps seen, the real time and the time scale.
+    IEnumerator FixedSteps(int steps,Dictionary<string,object> into) {
+        var go=new GameObject("IkkokuFixedStepCounter");var counter=go.AddComponent<IkkokuTriggerTest>();
+        float start=Time.realtimeSinceStartup;
+        while(counter.fixedSteps<steps&&Time.realtimeSinceStartup-start<FixedStepTimeout)yield return null;
+        into["fixedSteps"]=counter.fixedSteps;into["timedOut"]=counter.fixedSteps<steps;
+        into["realSeconds"]=Time.realtimeSinceStartup-start;into["timeScale"]=Time.timeScale;
+        Destroy(go);
+    }
     // The trigger experiment (PR B): kinematic trigger capsules like Studio's view capsule, at its pose, on the
     // camera's layer and on layer 0, with the capsule's own (negative) height and with its absolute value, held
     // for TriggerSteps fixed steps; what each one's OnTriggerEnter/OnTriggerStay saw. It runs after the case's
@@ -456,7 +469,15 @@ public sealed class OriginalMapProbe:BaseUnityPlugin {
             var body=go.AddComponent<Rigidbody>();body.useGravity=false;body.isKinematic=true;
             var test=go.AddComponent<IkkokuTriggerTest>();test.layer=layer;test.rawHeight=negative;tests.Add(test);
         }
-        for(int i=0;i<TriggerSteps;i++)yield return new WaitForFixedUpdate();
+        // Frames until every test has seen TriggerSteps fixed steps, at most FixedStepTimeout seconds of real time
+        // (WaitForFixedUpdate never returns while Time.timeScale is 0).
+        float start=Time.realtimeSinceStartup;
+        while(Time.realtimeSinceStartup-start<FixedStepTimeout) {
+            int fewest=int.MaxValue;foreach(var test in tests)fewest=Math.Min(fewest,test.fixedSteps);
+            if(fewest>=TriggerSteps)break;
+            yield return null;
+        }
+        result["realSeconds"]=Time.realtimeSinceStartup-start;result["timeScale"]=Time.timeScale;
         var records=new List<object>();
         foreach(var test in tests) {
             var capsule=test.GetComponent<CapsuleCollider>();
@@ -540,12 +561,23 @@ public sealed class OriginalMapProbe:BaseUnityPlugin {
         }
         if(mapsMode) {
             // The vanish state again after explicit physics steps and a LateUpdate, then the trigger experiment.
-            for(int i=0;i<TriggerSteps;i++)yield return new WaitForFixedUpdate();
+            var wait=new Dictionary<string,object>();var steps=FixedSteps(TriggerSteps,wait);
+            while(steps.MoveNext())yield return steps.Current;
             yield return null;yield return new WaitForEndOfFrame();
-            record["vanishAfterFixedSteps"]=VanishRecord();
+            var after=VanishRecord();after["wait"]=wait;record["vanishAfterFixedSteps"]=after;
             var experiment=new Dictionary<string,object>();var run=TriggerExperiment(experiment);
             while(run.MoveNext())yield return run.Current;
             record["triggerExperiment"]=experiment;
+            // With Time.timeScale 0 no physics step runs, so no trigger can fire: then the same re-record with the
+            // time scale at 1 for those steps, and 0 again after it.
+            if(Time.timeScale==0f) {
+                Time.timeScale=1f;var scaledWait=new Dictionary<string,object>();var scaledSteps=FixedSteps(TriggerSteps,scaledWait);
+                while(scaledSteps.MoveNext())yield return scaledSteps.Current;
+                yield return null;yield return new WaitForEndOfFrame();
+                var scaled=VanishRecord();scaled["wait"]=scaledWait;
+                Time.timeScale=0f;
+                record["vanishWithTimeScale1"]=scaled;
+            }
         }
         cases[label]=record;
     }
