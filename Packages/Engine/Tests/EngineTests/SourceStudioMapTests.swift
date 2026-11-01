@@ -176,7 +176,7 @@ struct SourceStudioMapAssetTests {
 
         let amount = KoikatsuChangeAmount(position: Float3(1, 2, 3), rotationDegrees: Float3(0, 90, 0), scale: Float3(9, 9, 9))
         let root = try SourceStudioMapPlacement.mapRootMatrix(amount)
-        let evening = try asset.items(transform: amount, sunLightType: 1)
+        let evening = try asset.items(transform: amount, sunLightType: 1, mapOption: true)
         #expect(evening.count == 2)
         let mapRoot = try #require(evening.first { $0.mesh == asset.parts.first { $0.role == .mapRoot }!.mesh })
         let scene = try #require(evening.first { $0.mesh == asset.parts.first { $0.role == .scene }!.mesh })
@@ -191,8 +191,8 @@ struct SourceStudioMapAssetTests {
         }
         // Day shows the map-root geometry only; a saved type with no
         // SunLightInfo entry keeps the authored state (-1).
-        #expect(try asset.items(transform: amount, sunLightType: 0).map(\.mesh) == [mapRoot.mesh])
-        #expect(try asset.items(transform: amount, sunLightType: 7).map(\.mesh) == [mapRoot.mesh])
+        #expect(try asset.items(transform: amount, sunLightType: 0, mapOption: true).map(\.mesh) == [mapRoot.mesh])
+        #expect(try asset.items(transform: amount, sunLightType: 7, mapOption: true).map(\.mesh) == [mapRoot.mesh])
 
         // Release is deferred (R6): the handles resolve until a later frame.
         let before = resources.statistics()

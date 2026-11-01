@@ -3785,6 +3785,157 @@ Offscreen benchmark at 1996×1824, median (range) of three runs of 60 frames:
   are not attributed.
 - No M1 run.
 
+### Slice 4: all maps
+
+Added 2026-11-01 with the fourth maps slice
+([maps: slice 4](studio/maps.md#all-maps-slice-4)). Three changes affect cost:
+
+- the other 40 maps convert and draw, with unlit, silhouette and
+  animated-particle draws;
+- each particle renderer's submesh is its own draw (the split), so the
+  particle maps have more draws;
+- transparent draws sort by render queue, then distance to the sort centre,
+  then order. Every non-map item keeps queue 3000 and no sort centre.
+
+The probe's pixel-centre HDR capture runs only in the probe.
+
+**Measurement.** Release builds, in one quiet window the orchestrator
+granted (2026-11-01, 14:39:16–14:53:56, capped at 20 minutes):
+
+- Every launch ran under the app lock, one at a time, with the other agents
+  paused and no Swift build or test running.
+- **The window was not composited.** The built-in display was off, and the
+  only screen was a virtual 1920×1080 at 60 Hz. So the startup marks are the
+  app's own, from launches that presented no frame, and the benchmarks render
+  offscreen. Every figure in this section is **measured without
+  presentation**.
+- Before each scene and each rerun, a gate waited for 10 s with no indexing
+  daemon (`corespotlightd`, `mds_stores`, `mediaanalysisd`,
+  `spotlightknowledged`) above 20%. The gate never timed out.
+- The load average and the top 5 processes were logged before and after every
+  run. The 1-minute load average was 4.4 at the start and 2.5 at the end.
+- A run was repeated, at most twice, when an outside process was over its
+  limit. 32 of 81 attempts were repeated, most for Firefox's
+  `plugin-container` at 45.1–47.6%. Seven runs were still over after two
+  reruns. They are marked ‡ in the tables, with the process on their last
+  attempt:
+  - bench map 34 day, before the split, round 1: `plugin-container` 45.7%;
+  - bench maps 29, 38 and 41, round 1: `plugin-container` 46.0%, 47.4% and
+    46.6%;
+  - bench map 15, before the split, round 2: `plugin-container` 45.4%;
+  - bench map 1, round 2: `mds_stores` 28.6% and `mds` 23.2%;
+  - startup of the showoff scene with map 33, head, round 2:
+    `plugin-container` 46.0%.
+
+There were two alternating rounds; a third would not have fit in the cap.
+Each figure is the **mean of the 2 rounds**, with their range. `startup` ran
+once per scene and build per round. The offscreen benchmark
+(`IKKOKU_BENCHMARK_OUTPUT`, 1996×1824, 60 measured frames) ran once per case
+per round. The map scenes are the probe's, with no characters. The reports
+are in `.local/sta11d-map-coverage/perf/window/`, and the summary is
+`perf/summary.json`.
+
+| Label | Commit | Export |
+| --- | --- | --- |
+| base | `189e5b8c` (`main`, #292) | slice 3 (the shared fixture) |
+| head | this change merged with it (`b4db76cb`) | slice 3, slice 4, or slice 4 before the split (the 16 particle maps with their merged particle draws, otherwise the same files) |
+
+Startup, seconds since process start, measured without presentation, mean
+(range) of 2 rounds:
+
+| Scene | Build | Export | Scene ready s | Import call ms | First draw s | Map ready s | Main thread until ready: busy of window ms | Longest busy period ms | Peak footprint MB | Peak Metal MB | Map load on the worker ms |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| showoff, no map | base | slice 3 | 0.91 (0.89–0.92) | 7.6 (7.5–7.8) | 0.33 (0.30–0.37) | – | 551 of 958 (532–571) | 347 (335–359) | 865 (864–865) | 258.5 | – |
+| showoff, no map | head | slice 3 | 0.88 (0.88–0.89) | 7.8 (7.6–7.9) | 0.32 (0.32–0.33) | – | 548 of 929 (540–556) | 343 (334–352) | 861 (854–868) | 258.5 | – |
+| showoff with map 33 | base | slice 3 | 0.90 (0.88–0.93) | 9.0 (7.8–10.2) | 0.34 (0.32–0.36) | 0.90 (0.88–0.92) | 545 of 947 (538–551) | 304 (268–339) | 871 (867–875) | 268.9 | 16.4 (12.5–20.3) |
+| showoff with map 33 ‡ | head | slice 4 | 0.89 (0.88–0.90) | 8.5 (8.3–8.8) | 0.32 (0.30–0.35) | 0.89 (0.88–0.89) | 540 of 942 (539–540) | 348 (345–351) | 875 (874–876) | 268.9 | 16.0 (12.2–19.8) |
+| map 21 | head | slice 4 before the split | 0.16 (0.16–0.17) | 6.0 (5.5–6.4) | 0.36 (0.35–0.36) | 0.41 (0.40–0.41) | 333 of 333 (332–334) | 333 (332–334) | 326 (324–327) | 176.3 | 117.4 (114.0–120.8) |
+| map 21 | head | slice 4 | 0.17 (0.16–0.17) | 5.2 (5.2–5.3) | 0.33 (0.33–0.34) | 0.41 (0.41–0.42) | 334 of 334 (329–338) | 334 (329–338) | 330 (329–330) | 178.3 (176.6–180.1) | 115.9 (113.8–118.0) |
+
+- **Import is unchanged.** Without a map, scene ready, the import call, the
+  first draw and the main thread's busy time are within the rounds' ranges,
+  and peak Metal is identical. With map 33, it is ready at 0.89 s against
+  0.90 s, with one shell fewer (7 draws against 8). Peak Metal is identical.
+- **The split costs no startup time.** Map 21 is ready at 0.41 s with or
+  without it. The worker's load is 116 against 117 ms.
+
+Offscreen benchmark at 1996×1824, measured without presentation, mean
+(range) of 2 rounds of 60 frames. The draws are the frame's items, which for a
+map scene are the map's draws:
+
+| Scene | Build | Export | Draws | CPU encode ms | GPU ms p50 | Completion ms | Metal bytes | Map load on the worker ms |
+| --- | --- | --- | ---: | --- | --- | --- | ---: | --- |
+| showoff, no map | base | slice 3 | 141 | 0.438 (0.433–0.443) | 1.558 (1.556–1.560) | 2.400 (2.391–2.409) | 454,131,712 | – |
+| showoff, no map | head | slice 3 | 141 | 0.436 (0.435–0.437) | 1.559 (1.557–1.561) | 2.403 (2.401–2.405) | 454,131,712 | – |
+| map 1 | head | slice 4 before the split | 178 | 0.280 (0.278–0.282) | 0.507 (0.502–0.512) | 1.122 (1.114–1.131) | 560,513,024 | 218.4 (193.3–243.4) |
+| map 1 ‡ | head | slice 4 | 188 | 0.292 (0.289–0.294) | 0.515 (0.470–0.559) | 1.135 (1.109–1.162) | 560,513,024 | 196.9 (192.8–200.9) |
+| map 11 | head | slice 4 before the split | 161 | 0.269 (0.268–0.271) | 0.613 (0.612–0.613) | 1.216 (1.214–1.217) | 439,844,864 | 145.3 (123.7–166.9) |
+| map 11 | head | slice 4 | 187 | 0.302 (0.300–0.303) | 0.716 (0.699–0.733) | 1.348 (1.339–1.356) | 439,910,400 | 127.1 (124.8–129.4) |
+| map 15 ‡ | head | slice 4 before the split | 129 | 0.237 (0.236–0.239) | 0.463 (0.458–0.469) | 1.019 (1.013–1.025) | 433,012,736 | 125.8 (106.2–145.5) |
+| map 15 | head | slice 4 | 155 | 0.284 (0.272–0.295) | 0.473 (0.463–0.483) | 1.071 (1.056–1.085) | 433,078,272 | 113.2 (107.7–118.6) |
+| map 21 | head | slice 4 before the split | 131 | 0.240 (0.240–0.241) | 0.459 (0.459–0.459) | 1.028 (1.023–1.033) | 420,429,824 | 102.4 (102.0–102.8) |
+| map 21 | head | slice 4 | 157 | 0.277 (0.276–0.277) | 0.485 (0.480–0.490) | 1.086 (1.077–1.095) | 420,315,136 | 104.8 (103.2–106.5) |
+| map 22 | head | slice 4 before the split | 112 | 0.204 (0.203–0.204) | 0.555 (0.555–0.555) | 1.091 (1.087–1.094) | 404,324,352 | 109.8 (92.7–127.0) |
+| map 22 | head | slice 4 | 146 | 0.252 (0.251–0.252) | 0.557 (0.553–0.560) | 1.146 (1.133–1.159) | 404,373,504 | 96.2 (94.5–98.0) |
+| map 27 | head | slice 4 before the split | 72 | 0.155 (0.155–0.155) | 0.652 (0.650–0.655) | 1.160 (1.160–1.160) | 382,173,184 | 80.2 (68.0–92.3) |
+| map 27 | head | slice 4 | 107 | 0.200 (0.200–0.201) | 0.655 (0.655–0.656) | 1.192 (1.180–1.203) | 382,287,872 | 72.3 (70.3–74.3) |
+| map 34 day ‡ | head | slice 4 before the split | 53 | 0.134 (0.134–0.135) | 0.487 (0.487–0.488) | 0.951 (0.934–0.967) | 378,978,304 | 58.0 (57.5–58.5) |
+| map 34 day | head | slice 4 | 54 | 0.136 (0.136–0.136) | 0.486 (0.485–0.488) | 0.950 (0.939–0.962) | 378,978,304 | 59.1 (57.4–60.8) |
+| map 19 | head | slice 4 | 52 | 0.130 (0.130–0.130) | 0.454 (0.451–0.458) | 0.910 (0.899–0.921) | 371,064,832 | 50.2 (42.1–58.3) |
+| map 25 | head | slice 4 | 24 | 0.097 (0.097–0.097) | 0.420 (0.404–0.435) | 0.866 (0.846–0.886) | 338,018,304 | 24.1 (20.3–28.0) |
+| map 29 ‡ | head | slice 4 | 50 | 0.125 (0.125–0.126) | 0.449 (0.445–0.452) | 0.904 (0.890–0.918) | 361,758,720 | 37.6 (37.5–37.7) |
+| map 38 ‡ | head | slice 4 | 104 | 0.196 (0.193–0.198) | 0.735 (0.732–0.737) | 1.263 (1.256–1.269) | 406,093,824 | 128.2 (127.6–128.9) |
+| map 40 | head | slice 4 | 21 | 0.096 (0.095–0.096) | 0.433 (0.431–0.435) | 0.873 (0.867–0.878) | 344,113,152 | 31.4 (31.1–31.7) |
+| map 41 ‡ | head | slice 4 | 29 | 0.102 (0.102–0.103) | 0.437 (0.436–0.437) | 0.883 (0.874–0.891) | 336,429,056 | 23.6 (23.4–23.9) |
+
+- **No map: unchanged.** In the showoff scene's 141 items, CPU encode, GPU,
+  completion and Metal bytes are the same within the rounds' ranges, and
+  Metal is identical to the byte. The queue sort costs nothing measurable
+  where every item is at queue 3000.
+- **The split adds 1–35 draws and up to 0.048 ms of CPU encode per frame.**
+  The added draws cost about 1.2–1.8 µs each:
+  - map 1, +10 draws: +0.012 ms;
+  - map 11, +26: +0.033 ms;
+  - map 15, +26: +0.047 ms;
+  - map 21, +26: +0.037 ms;
+  - map 22, +34: +0.048 ms, the largest;
+  - map 27, +35, the most draws added: +0.045 ms (0.155 → 0.200);
+  - map 34, +1: +0.002 ms.
+- **GPU.**
+  - Maps 1, 15, 22, 27 and 34 are flat within their ranges.
+  - Map 21 is 0.026 ms slower, and the ranges do not overlap.
+  - **Map 11 is 0.10 ms slower (0.613 → 0.716),** and the ranges do not
+    overlap. That is not attributed. No Metal System Trace was recorded, and
+    maps 22 and 27, which add more draws, are flat. So the per-draw cost is
+    not the explanation by itself. A composited recheck with a trace is in
+    [what remains](studio/maps.md#what-remains).
+- **Memory.** The split changes Metal bytes by at most 114,688 bytes, down in
+  map 21 and up in map 27, and leaves the textures alone. The worker's load is the
+  same within the ranges.
+- **The other new maps** take 0.42–0.74 ms of GPU and 0.096–0.196 ms of CPU
+  encode per frame. The most expensive is map 38: 104 draws, 70 of them mob
+  silhouettes, and 563,355 triangles.
+
+**Scaling to a base M1 (estimates, scaled and not measured),** with the
+method above (GPU × about 4.75, CPU × 1.25):
+
+- **CPU.** The split adds at most about 0.06 ms of encode per frame (map 22).
+- **GPU.** The new maps take about 2.0–3.5 ms per frame filling the window,
+  with map 38 the highest at about 3.5 ms. If map 11's +0.10 ms is real, it
+  is about +0.5 ms there.
+- **Startup.** As before, the map loads on a worker, and the split does not
+  change the load.
+
+**Limits.**
+
+- Two rounds per case, not three.
+- Nothing was presented, so there are no presentation, pacing or idle
+  metrics. A composited startup recheck is in
+  [what remains](studio/maps.md#what-remains).
+- No Metal System Trace was recorded, so map 11's GPU difference is not
+  attributed.
+- No `studio-idle` or orbit runs, and no M1 run.
+
 ## ST-T03i: scene plug-in data rewrites
 
 Added 2026-10-26 with the second plug-in data change ([plug-in data](studio/scene-editing.md#plug-in-data-st-t03i)).
@@ -3973,7 +4124,8 @@ What the numbers show:
   `jsonVector`, which reads each colour and UV vector with
   `JSONSerialization`, at 87.4% of `decodeDocument`. Each item has 14
   vectors, so this scene has about 26,500. That cost predates this change;
-  a follow-up change reads these vectors directly.
+  [scene JSON vectors read directly](#scene-json-vectors-read-directly)
+  removes it.
 
 ### Second window (2026-11-01)
 
@@ -4017,7 +4169,8 @@ Each cell is the median of the runs' medians (each run takes 60 calls after
   The 1–5 ms of the first window does not reappear.
 - **Showoff is within 0.05 ms.** The ranges overlap.
 - **The legacy paths, in this window** (after-build only: the four full-probe
-  runs of the round against the follow-up JSON vector change, all invalid by
+  runs of the round against the follow-up
+  [JSON vector change](#scene-json-vectors-read-directly), all invalid by
   the rule above, so indicative):
   - the largest legacy scene decodes in 79.92 ms (78.93–80.66);
   - its unedited export takes 160.63 ms (159.01–161.67), and `upgraded()`
@@ -4056,6 +4209,105 @@ This uses the CPU factor of [scaling to the low end](#scaling-to-the-low-end-bas
 - The first window has two runs per build. The second has 3 valid before-runs
   and 4 valid after-runs, plus 13 runs that macOS daemons made invalid; they
   are reported, labelled.
+- Engine timing only. The app's import and export were not timed.
+- No M1 run.
+
+## Scene JSON vectors read directly
+
+Added 2026-10-26, after the [ST-T05a timing](#st-t05a-older-scene-versions)
+found it. A scene stores each item colour and UV vector as Unity
+`JsonUtility` text: 14 per item, plus a few per character, route and the
+settings. `KoikatsuBinaryReader.jsonVector` parsed every one with
+`JSONSerialization`, then cast the result to `[String: Any]` and each value to
+`NSNumber`. A `sample` of the Release decode of the largest legacy scene
+(1,894 items) put `jsonVector` at 87.4% of `decodeDocument`. Most of that was
+the parser and the bridging casts.
+
+The reader now reads the exact form `JsonUtility` writes directly
+(`unityJSONVector`; see [binary contracts](studio/binary-contracts.md)), to
+the Float `JSONSerialization` gives it. Every other form goes to
+`JSONSerialization` as before.
+
+### Correctness
+
+- **The fuzz.** `unityJSONVectorNumbersReadAsJSONSerialization` reads 27,995
+  number forms in each position and with both name sets, 111,980 readings in
+  all. The forms include random Floats printed 5 ways, long fractions,
+  integers up to 21 digits, exponents, negative zeros, NaN, booleans and
+  strings. 34,708 readings take the direct path. Every reading gives the same
+  Float bits as `JSONSerialization`, or the same error.
+- **Malformed and other layouts.** `unityJSONVectorOtherFormsReadAsJSONSerialization`
+  checks 435 more strings the same way: whitespace, BOM, other order, missing,
+  extra or duplicate names, escapes, wrong value types, trailing bytes, every
+  prefix of a plain vector, and every one-byte change of it to 12 characters.
+- **The corpus.** `unityJSONVectorReadsTheCorpusAsJSONSerialization` (opt-in)
+  finds every vector string in the user's 182 scenes by its framing:
+  678,678 vectors, 678,573 of them on the direct path, and 0 that differ.
+  `koikatsuSceneCorpusDigest` gives every one of the 175 distinct scenes the
+  same digest of every decoded field and the same export as before the
+  change.
+- **Lanes and the Engine suite.** On this change (Debug, `--strict`): the
+  Engine suite passed 1,075 tests, with only the opt-in probes skipped. After
+  the merge of #291's head with main `7cb4f995` (head `213eecfb`): the Engine
+  suite 1,134 tests with 0 failures (strict, the shared map), only the 11
+  opt-in probes skipped, and `studio-scenarios` 87/87 (Debug, `--strict`, 0
+  skipped). The fuzz and the other-layout check run in the default suite.
+  The corpus check, re-run on that head, again found 0 differences in
+  678,678 vectors.
+
+### Measurement
+
+The ST-T05a timing probe (`KoikatsuLegacyScenePerformanceTests`, full, not
+`CURRENT_ONLY`) on the scenes of the [ST-T05a timing](#st-t05a-older-scene-versions).
+
+- **Builds.** Before is the legacy-scene change (`fd1fb85a`), after is this
+  change merged with it (`213eecfb`), both Release (`swift build -c release
+  --build-tests -Xswiftc -enable-testing`).
+- **Window.** It ran in the [second ST-T05a window](#second-window-2026-11-01),
+  one round of before, after, after, before in each of its two attempts
+  (11:40:43–11:42:15 and 11:46:28–11:47:58), one process per run.
+- **Validity.** 7 of the 8 runs are invalid by the window rule. macOS daemons
+  ran above 20% CPU during each of them: `corespotlightd` (up to 349%),
+  `mediaanalysisd`, `spotlightknowledged`, `mds_stores`, `contactsd`,
+  `launchd`, `runningboardd` and WD Discovery. No agent build, test or app was
+  running. The one valid run is an after-run of the second attempt (1.0.4.2
+  form 20.16 ms, legacy decode 20.44 ms, unedited export 41.16 ms, showoff
+  1.66 ms). The numbers are therefore indicative, but the effect is far
+  larger than the noise. In ABBA order, background load slows both builds
+  alike, and each cell's spread is under 1 ms on the large scene against a
+  59 ms difference.
+- **Evidence.** `.local/stt05a-legacy-scenes/logs/finish/window-attempt1/`
+  and `window-rerun1/`, runs `r4a`–`r4d`.
+
+Each cell is the median of the 4 runs' medians (each run takes 60 calls
+after 10 warmups) and their range.
+
+| Scene, step | Before ms | After ms | After / before |
+| --- | --- | --- | --- |
+| showoff, `decodeDocument` | 2.37 (2.27–2.40) | 1.67 (1.63–1.70) | 0.70 |
+| largest legacy as 1.0.4.2, `decodeDocument` | 79.89 (79.73–80.78) | 20.25 (19.99–20.57) | 0.25 |
+| largest legacy, `decodeDocument` | 79.92 (78.93–80.66) | 20.40 (20.04–20.47) | 0.26 |
+| largest legacy, `editedData`, no edit | 160.63 (159.01–161.67) | 41.29 (40.95–42.02) | 0.26 |
+| largest legacy, `upgraded()` | 160.68 (158.22–163.85) | 41.36 (40.77–41.73) | 0.26 |
+| largest legacy, readback record compare | 0.40 (0.38–0.41) | 0.38 (0.37–0.40) | — |
+
+- **The item-heavy decode is about 3.9× faster.** The largest scene, legacy
+  or as 1.0.4.2, decodes in about 20 ms instead of 80 ms. Its unedited
+  export, which is two decodes and the upgrade's splice, falls from 161 to
+  41 ms.
+- **Showoff decodes 0.7 ms faster.** It has fewer vectors (7 characters and
+  their items).
+- **What is left (estimate).** The `sample` put 87.4% of the before-build's
+  decode in `jsonVector`, which leaves about 10 ms of other work in the 80 ms.
+  The direct reader then takes about the other 10 ms, or roughly 0.4 µs for
+  each of the scene's about 26,500 vectors.
+- **Scaling to a base M1 (estimate,** × 1.25, as in the ST-T05a section): the
+  largest scene decodes in about 25 ms and exports unedited in about 52 ms.
+
+### Limits
+
+- One round per attempt. 7 of the 8 runs are invalid by the window rule; all
+  are reported, as indicative.
 - Engine timing only. The app's import and export were not timed.
 - No M1 run.
 

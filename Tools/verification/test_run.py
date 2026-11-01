@@ -829,7 +829,7 @@ class StudioScenarioLaneTests(unittest.TestCase):
                       and not name.startswith(("maker-", "gameplay-")))
 
     def test_lane_validates_and_covers_every_scenario(self):
-        self.assertEqual(len(self.checks), 87)
+        self.assertEqual(len(self.checks), 88)
         referenced = set()
         for check in self.checks:
             scenario = check["env"]["IKKOKU_STUDIO_SCENARIO"]
@@ -1104,12 +1104,14 @@ class StudioScenarioLaneTests(unittest.TestCase):
                         # ST-A11: `none`, or census fields; pick points are two viewport fractions.
                         source_map = step["sourceMap"]
                         self.assertTrue(set(source_map) <= {"none", "map", "draws", "lightmappedDraws", "particleDraws", "skyDraws", "blockImages",
+                                                            "unlitDraws", "silhouetteDraws", "optionDraws",
                                                             "loading", "lineContains", "lineAbsent", "pickNothingAt", "pickSomethingAt"},
                                         "unknown sourceMap field: %s" % path)
                         self.assertTrue(source_map, "a sourceMap assert must name what it checks: %s" % path)
                         if source_map.get("none"):
                             self.assertEqual(set(source_map), {"none"}, "no map has no census to compare: %s" % path)
-                        for name in ("map", "draws", "lightmappedDraws", "particleDraws", "skyDraws", "blockImages"):
+                        for name in ("map", "draws", "lightmappedDraws", "particleDraws", "skyDraws", "blockImages",
+                                     "unlitDraws", "silhouetteDraws", "optionDraws"):
                             if name in source_map:
                                 self.assertIs(type(source_map[name]), int)
                         for name in ("pickNothingAt", "pickSomethingAt"):
