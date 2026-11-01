@@ -3973,7 +3973,8 @@ What the numbers show:
   `jsonVector`, which reads each colour and UV vector with
   `JSONSerialization`, at 87.4% of `decodeDocument`. Each item has 14
   vectors, so this scene has about 26,500. That cost predates this change;
-  a follow-up change reads these vectors directly.
+  [scene JSON vectors read directly](#scene-json-vectors-read-directly)
+  removes it.
 
 ### Second window (2026-11-01)
 
@@ -4017,7 +4018,8 @@ Each cell is the median of the runs' medians (each run takes 60 calls after
   The 1–5 ms of the first window does not reappear.
 - **Showoff is within 0.05 ms.** The ranges overlap.
 - **The legacy paths, in this window** (after-build only: the four full-probe
-  runs of the round against the follow-up JSON vector change, all invalid by
+  runs of the round against the follow-up
+  [JSON vector change](#scene-json-vectors-read-directly), all invalid by
   the rule above, so indicative):
   - the largest legacy scene decodes in 79.92 ms (78.93–80.66);
   - its unedited export takes 160.63 ms (159.01–161.67), and `upgraded()`
@@ -4056,6 +4058,105 @@ This uses the CPU factor of [scaling to the low end](#scaling-to-the-low-end-bas
 - The first window has two runs per build. The second has 3 valid before-runs
   and 4 valid after-runs, plus 13 runs that macOS daemons made invalid; they
   are reported, labelled.
+- Engine timing only. The app's import and export were not timed.
+- No M1 run.
+
+## Scene JSON vectors read directly
+
+Added 2026-10-26, after the [ST-T05a timing](#st-t05a-older-scene-versions)
+found it. A scene stores each item colour and UV vector as Unity
+`JsonUtility` text: 14 per item, plus a few per character, route and the
+settings. `KoikatsuBinaryReader.jsonVector` parsed every one with
+`JSONSerialization`, then cast the result to `[String: Any]` and each value to
+`NSNumber`. A `sample` of the Release decode of the largest legacy scene
+(1,894 items) put `jsonVector` at 87.4% of `decodeDocument`. Most of that was
+the parser and the bridging casts.
+
+The reader now reads the exact form `JsonUtility` writes directly
+(`unityJSONVector`; see [binary contracts](studio/binary-contracts.md)), to
+the Float `JSONSerialization` gives it. Every other form goes to
+`JSONSerialization` as before.
+
+### Correctness
+
+- **The fuzz.** `unityJSONVectorNumbersReadAsJSONSerialization` reads 27,995
+  number forms in each position and with both name sets, 111,980 readings in
+  all. The forms include random Floats printed 5 ways, long fractions,
+  integers up to 21 digits, exponents, negative zeros, NaN, booleans and
+  strings. 34,708 readings take the direct path. Every reading gives the same
+  Float bits as `JSONSerialization`, or the same error.
+- **Malformed and other layouts.** `unityJSONVectorOtherFormsReadAsJSONSerialization`
+  checks 435 more strings the same way: whitespace, BOM, other order, missing,
+  extra or duplicate names, escapes, wrong value types, trailing bytes, every
+  prefix of a plain vector, and every one-byte change of it to 12 characters.
+- **The corpus.** `unityJSONVectorReadsTheCorpusAsJSONSerialization` (opt-in)
+  finds every vector string in the user's 182 scenes by its framing:
+  678,678 vectors, 678,573 of them on the direct path, and 0 that differ.
+  `koikatsuSceneCorpusDigest` gives every one of the 175 distinct scenes the
+  same digest of every decoded field and the same export as before the
+  change.
+- **Lanes and the Engine suite.** On this change (Debug, `--strict`): the
+  Engine suite passed 1,075 tests, with only the opt-in probes skipped. After
+  the merge of #291's head with main `7cb4f995` (head `213eecfb`): the Engine
+  suite 1,134 tests with 0 failures (strict, the shared map), only the 11
+  opt-in probes skipped, and `studio-scenarios` 87/87 (Debug, `--strict`, 0
+  skipped). The fuzz and the other-layout check run in the default suite.
+  The corpus check, re-run on that head, again found 0 differences in
+  678,678 vectors.
+
+### Measurement
+
+The ST-T05a timing probe (`KoikatsuLegacyScenePerformanceTests`, full, not
+`CURRENT_ONLY`) on the scenes of the [ST-T05a timing](#st-t05a-older-scene-versions).
+
+- **Builds.** Before is the legacy-scene change (`fd1fb85a`), after is this
+  change merged with it (`213eecfb`), both Release (`swift build -c release
+  --build-tests -Xswiftc -enable-testing`).
+- **Window.** It ran in the [second ST-T05a window](#second-window-2026-11-01),
+  one round of before, after, after, before in each of its two attempts
+  (11:40:43–11:42:15 and 11:46:28–11:47:58), one process per run.
+- **Validity.** 7 of the 8 runs are invalid by the window rule. macOS daemons
+  ran above 20% CPU during each of them: `corespotlightd` (up to 349%),
+  `mediaanalysisd`, `spotlightknowledged`, `mds_stores`, `contactsd`,
+  `launchd`, `runningboardd` and WD Discovery. No agent build, test or app was
+  running. The one valid run is an after-run of the second attempt (1.0.4.2
+  form 20.16 ms, legacy decode 20.44 ms, unedited export 41.16 ms, showoff
+  1.66 ms). The numbers are therefore indicative, but the effect is far
+  larger than the noise. In ABBA order, background load slows both builds
+  alike, and each cell's spread is under 1 ms on the large scene against a
+  59 ms difference.
+- **Evidence.** `.local/stt05a-legacy-scenes/logs/finish/window-attempt1/`
+  and `window-rerun1/`, runs `r4a`–`r4d`.
+
+Each cell is the median of the 4 runs' medians (each run takes 60 calls
+after 10 warmups) and their range.
+
+| Scene, step | Before ms | After ms | After / before |
+| --- | --- | --- | --- |
+| showoff, `decodeDocument` | 2.37 (2.27–2.40) | 1.67 (1.63–1.70) | 0.70 |
+| largest legacy as 1.0.4.2, `decodeDocument` | 79.89 (79.73–80.78) | 20.25 (19.99–20.57) | 0.25 |
+| largest legacy, `decodeDocument` | 79.92 (78.93–80.66) | 20.40 (20.04–20.47) | 0.26 |
+| largest legacy, `editedData`, no edit | 160.63 (159.01–161.67) | 41.29 (40.95–42.02) | 0.26 |
+| largest legacy, `upgraded()` | 160.68 (158.22–163.85) | 41.36 (40.77–41.73) | 0.26 |
+| largest legacy, readback record compare | 0.40 (0.38–0.41) | 0.38 (0.37–0.40) | — |
+
+- **The item-heavy decode is about 3.9× faster.** The largest scene, legacy
+  or as 1.0.4.2, decodes in about 20 ms instead of 80 ms. Its unedited
+  export, which is two decodes and the upgrade's splice, falls from 161 to
+  41 ms.
+- **Showoff decodes 0.7 ms faster.** It has fewer vectors (7 characters and
+  their items).
+- **What is left (estimate).** The `sample` put 87.4% of the before-build's
+  decode in `jsonVector`, which leaves about 10 ms of other work in the 80 ms.
+  The direct reader then takes about the other 10 ms, or roughly 0.4 µs for
+  each of the scene's about 26,500 vectors.
+- **Scaling to a base M1 (estimate,** × 1.25, as in the ST-T05a section): the
+  largest scene decodes in about 25 ms and exports unedited in about 52 ms.
+
+### Limits
+
+- One round per attempt. 7 of the 8 runs are invalid by the window rule; all
+  are reported, as indicative.
 - Engine timing only. The app's import and export were not timed.
 - No M1 run.
 
@@ -5827,3 +5928,104 @@ Of #290's two claims:
   Its time is ImageIO's decode, so there is nothing in the loader to change.
 
 No load in the app uses JPEG or HEIC today (#288).
+
+## Maker initial-load rig seeding and reference skip (#192, 2026-11-01)
+
+[PR #314](https://github.com/grabbiel/ikkoku/pull/314) makes a successful
+source-card import seed the Maker's decoded-rig reuse session. Imports also
+stop decoding the reference avatar model they used to discard. The change is
+described in
+[maker-assets.md](character/maker-assets.md#initial-load-rig-seeding-and-reference-skip-192-2026-11-01).
+
+**Setup.** Release base `899b777b` (merge base, binary `644195a7…`) against
+head `881caebc` (binary `f191e32d…`), run in a coordinator quiet window. Each
+sex used its head-0 scenario card, in ABBA order per sex for two cycles. Each
+unit is two fresh processes: a `maker-idle` perf trace for the startup marks,
+idle main-thread time and footprint, then a selection scenario that picks heads
+200, 0 and 201 in turn. All 28 attempts passed every scenario step.
+
+**Validity.** Each unit has `vm.loadavg` and top-5 CPU snapshots before and
+after each process. Outside processes over 20% invalidate it.
+
+- plugin-container (the user's Firefox) is a noted background process below
+  45%. It read 1.9–31.5% in valid base units and 21.8–32.0% in valid head units.
+- BiomeAgent, launchd and runningboardd are noted launch-induced load up to
+  30%. BiomeAgent rose after our own launches in both arms: 7.0–24.0% in valid
+  base units and 10.9–25.1% in valid head units.
+- Reruns waited until corespotlightd had stayed below 20% for 10 s. It spiked
+  to 132–338% about every five minutes.
+
+Of the 28 attempts, 16 are valid, four per cell. Twelve are invalid:
+
+| Attempt | Cause |
+| --- | --- |
+| cycle 1 female head (slot 3) | corespotlightd 313%, firefox 20.1% |
+| cycle 1 female base (slot 4) | corespotlightd 132% |
+| cycle 1 male head (slot 4) | BiomeAgent 37.3% |
+| cycle 2 female head (slot 1) | corespotlightd 140–338% |
+| cycle 2 female base (slot 2) | corespotlightd 338% |
+| cycle 2 male head (slot 3) | corespotlightd 278–325% |
+| cycle 2 male base (slot 4) | corespotlightd 325%, BiomeAgent 30.1% |
+| rerun 1, cycle 1 female head (slot 3) | BiomeAgent 31.1% |
+| rerun 1, cycle 1 male head (slot 4) | corespotlightd 140% |
+| rerun 1, cycle 2 female head (slot 1) | plugin-container 63% |
+| rerun 1, cycle 2 male head (slot 3) | launchd 31.1% |
+| rerun 1, cycle 2 female base (slot 2) | spotlightknowledged.updater 22.6% |
+
+Every slot ended with a valid attempt within two reruns.
+
+**Display.** The only display was 1920×1080 at 60 Hz with scale 1, and the
+window was not composited: each idle trace rendered 301 frames and presented
+none. The rows below are labelled by how they depend on that:
+
+- **Independent of presentation:** card import, `makerReady`, `appStateReady`
+  and the selection rows. These are wall-clock intervals on the main thread or
+  the preparation worker.
+- **Rendered, not presented:** `contentAppeared` and `firstDraw`. The first is
+  SwiftUI appearance; the second is the end of the first rendered draw. Neither
+  waits for a presented frame, but both depend on the 1199×946 drawable size.
+- **Measured without presentation (display 1920x1080@60, scale 1):** idle
+  main-thread busy time, `makerTick` p50 and peak footprint. A rerun with
+  presentation waits for the user's usual display.
+
+Median (min–max), n = 4 valid units per cell. Peak footprint covers all
+attempts: female base 7, female head 8, male base 5, male head 8.
+
+| Metric | Female base | Female head | Male base | Male head |
+| --- | --- | --- | --- | --- |
+| Card import (ms) | 1,206.1 (1,199.4–1,245.1) | 702.3 (694.1–724.3) | 1,266.5 (1,246.0–1,278.3) | 741.7 (736.9–762.9) |
+| `makerReady` (s) | 0.966 (0.964–0.986) | 0.964 (0.958–0.968) | 0.973 (0.955–0.982) | 0.955 (0.942–0.963) |
+| `appStateReady` (s) | 2.172 (2.164–2.232) | 1.666 (1.654–1.693) | 2.241 (2.202–2.260) | 1.697 (1.688–1.719) |
+| `contentAppeared` (s) | 2.401 (2.396–2.467) | 1.898 (1.878–1.914) | 2.476 (2.438–2.503) | 1.926 (1.915–1.956) |
+| `firstDraw` (s) | 2.467 (2.430–2.555) | 1.957 (1.938–1.973) | 2.521 (2.490–2.562) | 2.002 (1.974–2.015) |
+| First selection, head 200 (ms) | 724.8 (715.4–736.3), 0/10 | 422.0 (414.6–424.3), 9/1 | 762.4 (756.5–766.9), 0/10 | 430.9 (420.8–432.7), 9/1 |
+| Then head 0 (ms) | 327.9 (325.9–330.9), 9/1 | 101.1 (100.7–102.9), 10/0 | 328.4 (327.6–341.7), 9/1 | 100.9 (100.7–103.3), 10/0 |
+| Then head 201 (ms) | 355.1 (353.0–358.4), 9/1 | 354.8 (352.2–357.6), 9/1 | 359.4 (353.8–361.9), 9/1 | 355.8 (353.5–362.1), 9/1 |
+| Idle main busy (ms/s), without presentation | 53.9 (51.7–60.5) | 53.6 (48.2–56.2) | 12.7 (9.7–15.8) | 7.8 (7.2–9.1) |
+| `makerTick` p50 (ms), without presentation | 1.70 (1.67–1.88) | 1.63 (1.57–1.65) | 0.007 (0.007–0.008) | 0.008 (0.005–0.008) |
+| Peak footprint (MiB), without presentation | 703.8 (701.5–709.4) | 691.7 (690.2–694.3) | 748.0 (746.9–750.5) | 737.6 (735.2–739.9) |
+
+Selection rows show API time with rig hits/misses.
+
+**Reading.**
+
+- **Import.** Card import is 504 ms (41.8%) faster for the female card and
+  525 ms (41.4%) for the male. App state is ready, content appears and the
+  first frame renders about 0.5 s earlier.
+- **Maker ready.** `makerReady` does not move; it precedes the card import.
+- **Selections.** The first head selection after a load drops by 303 ms
+  (female) and 332 ms (male), because nine of its ten rigs come from the seed.
+  The return to head 0 then reuses all ten. Head 201 still decodes one new rig
+  in both arms and is unchanged.
+- **Idle and memory.** Idle main-thread time does not regress; the male
+  cell's median is lower, without presentation. Peak footprint is 10–12 MiB
+  lower.
+- **Saving.** The import saving is mostly the skipped reference-model decode
+  (nine files, 32.16 MB). The seed's byte hashing adds about 13 ms back.
+  Reimports over a cached session decline the seed, so they skip both the
+  hashing and the reference decode.
+
+These numbers come from one machine, two cards and a non-compositing display.
+They show no FPS, live-animation or broad hardware result. Raw reports,
+snapshots, the scripts and the summary stay under
+`.local/cxm1-maker-rig-seed/timing/run1/`.

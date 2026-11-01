@@ -24,6 +24,18 @@ public struct SourceAvatarManifest: Decodable, Sendable {
     public let head: Component
     public let clothes: [Component]
     public let hair: [Component]
+
+    /// The manifest gate shared by `SourceAvatar.load` and the Maker import's
+    /// selected-geometry path: schema version 1, a normal female or male avatar
+    /// kind, and a `sex` that agrees with that kind when present.
+    @discardableResult
+    public func validated() throws -> SourceAvatarManifest {
+        guard schemaVersion == 1, ["koikatsu-female-avatar", "koikatsu-male-avatar"].contains(kind),
+              sex == nil || sex == (kind == "koikatsu-male-avatar" ? 0 : 1) else {
+            throw RigError.invalid("Unsupported source avatar manifest.")
+        }
+        return self
+    }
 }
 
 /// Reproduces the observed parenting, local-transform copy and palette rebind
@@ -40,11 +52,7 @@ public enum SourceAvatar {
         }
     }
     public static func load(url: URL) throws -> SourceRig {
-        let manifest = try JSONDecoder().decode(SourceAvatarManifest.self, from: Data(contentsOf: url))
-        guard manifest.schemaVersion == 1, ["koikatsu-female-avatar", "koikatsu-male-avatar"].contains(manifest.kind),
-              manifest.sex == nil || manifest.sex == (manifest.kind == "koikatsu-male-avatar" ? 0 : 1) else {
-            throw RigError.invalid("Unsupported source avatar manifest.")
-        }
+        let manifest = try JSONDecoder().decode(SourceAvatarManifest.self, from: Data(contentsOf: url)).validated()
         let directory = url.deletingLastPathComponent().resolvingSymlinksInPath()
         func read(_ path: String) throws -> SourceRig {
             guard !path.hasPrefix("/"), !path.isEmpty else { throw RigError.invalid("Avatar asset paths must be relative.") }

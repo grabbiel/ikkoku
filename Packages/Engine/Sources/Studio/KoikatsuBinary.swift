@@ -311,6 +311,12 @@ struct KoikatsuBinaryReader {
         return try Self.jsonVector(try string(), names, offset: start)
     }
     static func jsonVector(_ json: String, _ names: [String], offset: Int) throws -> SIMD4<Float> {
+        if let vector = unityJSONVector(json, names) { return vector }
+        return try serializedJSONVector(json, names, offset: offset)
+    }
+    /// The JSONSerialization reading every vector took before
+    /// `unityJSONVector`, and the one any vector it does not take still gets.
+    static func serializedJSONVector(_ json: String, _ names: [String], offset: Int) throws -> SIMD4<Float> {
         guard let bytes = json.data(using: .utf8),
               let object = try? JSONSerialization.jsonObject(with: bytes) as? [String: Any] else {
             throw KoikatsuReadError.invalidValue(offset: offset, description: "invalid vector JSON")
@@ -324,6 +330,66 @@ struct KoikatsuBinaryReader {
             values.append(number.floatValue)
         }
         return SIMD4(values[0], values[1], values[2], values[3])
+    }
+    /// Unity's JsonUtility writes a colour or a vector as
+    /// `{"r":0.5,"g":1,"b":0.25,"a":1}`: the four names in order, no
+    /// whitespace, plain numbers. JSONSerialization took about 3 µs per
+    /// vector, 14 per item. This reads that form directly, to the value
+    /// JSONSerialization gives it: a number with a fraction is the nearest
+    /// Double (Swift's `Double(_:)`, correctly rounded like `strtod`), an
+    /// integer is an Int64, and `NSNumber.floatValue` rounds either to Float.
+    /// Any other form returns nil and takes `serializedJSONVector`, so it
+    /// reads, or fails, exactly as before: other spacing, order or names,
+    /// exponents, a negative zero, a number longer than 24 characters, and
+    /// malformed input. `KoikatsuJSONVectorTests` fuzzes the two readings
+    /// against each other.
+    static func unityJSONVector(_ json: String, _ names: [String]) -> SIMD4<Float>? {
+        guard names.count == 4 else { return nil }
+        var json = json
+        return json.withUTF8 { bytes -> SIMD4<Float>? in
+            let zero = UInt8(ascii: "0"), nine = UInt8(ascii: "9")
+            var i = 0, values = SIMD4<Float>()
+            func take(_ byte: UInt8) -> Bool {
+                guard i < bytes.count, bytes[i] == byte else { return false }
+                i += 1; return true
+            }
+            func digits() -> Int {
+                let start = i
+                while i < bytes.count, bytes[i] >= zero, bytes[i] <= nine { i += 1 }
+                return i - start
+            }
+            guard take(UInt8(ascii: "{")) else { return nil }
+            for (index, name) in names.enumerated() {
+                guard index == 0 || take(UInt8(ascii: ",")), take(UInt8(ascii: "\"")) else { return nil }
+                for byte in name.utf8 { guard take(byte) else { return nil } }
+                guard take(UInt8(ascii: "\"")), take(UInt8(ascii: ":")) else { return nil }
+                // A JSON number without an exponent: -?(0|[1-9][0-9]*)(\.[0-9]+)?
+                let start = i, negative = take(UInt8(ascii: "-")), integerStart = i, integerDigits = digits()
+                guard integerDigits > 0, integerDigits == 1 || bytes[integerStart] != zero else { return nil }
+                var fractionDigits = 0
+                if take(UInt8(ascii: ".")) {
+                    fractionDigits = digits()
+                    guard fractionDigits > 0 else { return nil }
+                }
+                guard i - start <= 24 else { return nil }
+                let value: Float
+                if fractionDigits == 0 {
+                    // An integer NSNumber; JSONSerialization reads "-0" as 0.
+                    guard integerDigits <= 18, !(negative && integerDigits == 1 && bytes[integerStart] == zero) else { return nil }
+                    var integer: Int64 = 0
+                    for index in integerStart..<i { integer = integer * 10 + Int64(bytes[index] - zero) }
+                    value = Float(negative ? -integer : integer)
+                } else {
+                    guard let double = Double(String(decoding: UnsafeBufferPointer(rebasing: bytes[start..<i]), as: UTF8.self)),
+                          double != 0 || !negative else { return nil }
+                    value = Float(double)
+                }
+                guard value.isFinite else { return nil }
+                values[index] = value
+            }
+            guard take(UInt8(ascii: "}")), i == bytes.count else { return nil }
+            return values
+        }
     }
 
     mutating func pattern() throws -> KoikatsuPatternRecord {

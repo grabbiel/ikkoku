@@ -112,6 +112,47 @@ private func reuseCandidate(_ input: SourceMakerRigReuse.Input, data: Data) thro
     withExtendedLifetime((replacement, replacement.input, unused)) { #expect(ledger.counts == .init()) }
 }
 
+// CXM1: a reimport over a cached session cannot fit its seed beside the old
+// entries. The guard declines it before any hashing; the unguarded seed hashes
+// every file, admits part and publishes the same empty session.
+@MainActor @Test func sourceRigReplacementSeedingInputDeclinesSeedsTheLiveLedgerCannotAdmit() throws {
+    let ledger = SourceRigReuseAdmission(maximumEntries: 4, maximumSnapshots: 2), session = SourceMakerRigReuse(admission: ledger)
+    let rigs = try ["a", "b", "c", "d", "e", "f"].map { try reuseEncodedRig($0) }
+    let first = session.prospectiveReplacement()
+    #expect(session.seedingInput(for: first, entries: 5) == nil && session.seedingInput(for: first, entries: -1) == nil)
+    #expect(session.seedingInput(for: SourceMakerRigReuse().prospectiveReplacement(), entries: 0) == nil) // Foreign ledger.
+    do {
+        let worker = SourceRigReuseWorker(try #require(session.seedingInput(for: first, entries: 4)))
+        for data in rigs[0..<3] { _ = try worker.decode(data, timings: nil) }
+        #expect(session.commitReplacement(first, candidate: worker.finish().0))
+    }
+    #expect(ledger.counts.entries == 3 && ledger.counts.snapshots == 1)
+    let reimport = session.prospectiveReplacement()
+    #expect(session.seedingInput(for: reimport, entries: 3) == nil)
+    #expect(session.seedingInput(for: reimport, entries: 1) != nil)
+    do {
+        // Unguarded control: three SHA operations and one admission for a clear.
+        let control = SourceRigReuseWorker(reimport.input), timings = SourceMakerPreparationTimings()
+        for data in rigs[3..<6] { _ = try control.decode(data, timings: timings) }
+        let sample = control.finish().1
+        #expect(sample.admitted == 1 && sample.capacityBypasses == 2 && sample.clearOnCommit && sample.retainedEntries == 0)
+        #expect(timings.sample.intervals["rigReuseSHA"]?.calls == 3)
+    }
+    #expect(ledger.counts.entries == 3 && ledger.counts.snapshots == 1) // The control's staged entry is gone.
+    #expect(try reuseIsHit(session, data: rigs[0])) // The current session serves until the commit.
+    // The guarded import publishes the same empty session with no seed.
+    #expect(session.commitReplacement(reimport, candidate: nil))
+    #expect(ledger.counts == .init())
+    #expect(try !reuseIsHit(session, data: rigs[0]))
+    #expect(session.seedingInput(for: session.prospectiveReplacement(), entries: 4) != nil)
+    // A spent snapshot budget declines too, whatever the entry count.
+    let held = try (reuseCandidate(session.input(), data: rigs[0]), reuseCandidate(session.input(), data: rigs[1]))
+    withExtendedLifetime(held) {
+        #expect(ledger.counts.snapshots == 2)
+        #expect(session.seedingInput(for: session.prospectiveReplacement(), entries: 0) == nil)
+    }
+}
+
 @MainActor @Test func sourceRigReplacementRejectsForeignStaleAndMismatchedResults() throws {
     let ledger = SourceRigReuseAdmission(), session = SourceMakerRigReuse(admission: ledger)
     let other = SourceMakerRigReuse(), sameLedgerOwner = SourceMakerRigReuse(admission: ledger)
