@@ -639,11 +639,7 @@ public enum SourceMakerImportGeometry {
             do {
                 // The reference model's manifest gate (SourceAvatar.load) still
                 // applies; its failure falls back, so the import fails as before.
-                let manifest = try JSONDecoder().decode(SourceAvatarManifest.self, from: Data(contentsOf: baseURL))
-                guard manifest.schemaVersion == 1, ["koikatsu-female-avatar", "koikatsu-male-avatar"].contains(manifest.kind),
-                      manifest.sex == nil || manifest.sex == (manifest.kind == "koikatsu-male-avatar" ? 0 : 1) else {
-                    throw RigError.invalid("Unsupported source avatar manifest.")
-                }
+                try JSONDecoder().decode(SourceAvatarManifest.self, from: Data(contentsOf: baseURL)).validated()
                 let selected = try library.prepare(card: card, coordinate: coordinate, baseURL: baseURL,
                                                    timings: timings, seeding: seeding)
                 return Loaded(source: selected.prepared.source, prepared: selected.prepared, outcome: .selectedAssets,
