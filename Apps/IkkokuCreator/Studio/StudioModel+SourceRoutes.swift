@@ -152,7 +152,10 @@ extension StudioModel {
         guard value != doc.objects[i].sourceRoute else { return true }
         if pushHistory { pushUndo(force: true) }
         if setting == .delete, playing { sourceRoutePlayState[id] = (playing: false, start: 0) }
-        doc.objects[i].sourceRoute = value
+        // #278: an added or deleted point takes or frees keys outside the export's replay.
+        if setting == .addPoint || setting == .delete {
+            doc.recordingSourceEdit(.unordered(.routePoints)) { $0.objects[i].sourceRoute = value }
+        } else { doc.objects[i].sourceRoute = value }
         return true
     }
 

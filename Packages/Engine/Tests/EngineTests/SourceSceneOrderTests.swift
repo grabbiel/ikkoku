@@ -285,6 +285,14 @@ private struct Session {
     var plain = legacy; plain.sourceStructuralEdits = SourceSceneEditLog(); plain.objects = [source]
     plain.removeRecordingSourceEdit(source.id)
     #expect(plain.sourceStructuralEdits?.edits == [.delete(sourceKey: 3)])
+    // A recorded write applies the change, then logs it; a failed one logs nothing.
+    struct Refused: Error {}
+    plain.recordingSourceEdit(.insert([folder.id])) { $0.objects.append(folder) }
+    #expect(plain.objects.map(\.id) == [folder.id] && plain.sourceStructuralEdits?.edits.last == .insert([folder.id]))
+    #expect(throws: Refused.self) { try plain.recordingSourceEdit(.unordered(.move)) { _ in throw Refused() } }
+    #expect(plain.sourceStructuralEdits?.edits.count == 2)
+    native.recordingSourceEdit(.insert([folder.id])) { $0.objects.append(folder) }
+    #expect(native.objects.count == 1 && native.sourceStructuralEdits == nil)
 }
 
 @Test func sourceSceneEditLogIsCappedAndDecodesLeniently() throws {

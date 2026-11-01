@@ -82,6 +82,13 @@ public extension StudioDocument {
         sourceStructuralEdits!.append(edit)
     }
 
+    /// `change`, then `edit` appended to the log, as one mutation: the app
+    /// refreshes once per document write.
+    mutating func recordingSourceEdit(_ edit: SourceSceneStructuralEdit, _ change: (inout StudioDocument) throws -> Void) rethrows {
+        try change(&self)
+        recordSourceEdit(edit)
+    }
+
     /// `remove(id)`, recorded as the delete of a source subtree.
     mutating func removeRecordingSourceEdit(_ id: UUID) {
         if sourceSceneSHA256 != nil, sourceStructuralEdits != nil, let top = object(id) {
