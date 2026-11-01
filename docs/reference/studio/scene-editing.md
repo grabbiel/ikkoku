@@ -664,6 +664,19 @@ Private evidence is under the same evidence root at
 the `ready-review.json` SHA-256 is
 `304c2d6c081db9714abb081519fdcb5f0629fbedfc4e9b573a970498434b8852`.
 
+#### Fault-capture tool metadata (2026-11-01)
+
+One bounded, read-only VM query checked 32 paths: the retained player hash
+matched, while 31 debugger/decoder candidates were unavailable at those paths.
+Another 35 candidates were excluded by the cap, so this is not a global absence
+claim. The target is an x64 PE image on ARM64 Windows; the current user's
+ProcDump EULA key/value was absent. No candidate tool was executed or license accepted.
+The query exited 0 and its host/guest owners released. This establishes only
+bounded metadata completeness, not capture/decoder suitability, a fault module
+or stack, or lifecycle acceptance. Private evidence is under the same root at
+`shutdown-fault-capture-proposal-1/tool-preflight-1/`; raw stdout SHA-256 is
+`c6b6ec309f0cbc8ee6f1a063695c37598c3eededb41d677c9fdbd233b9545527`.
+
 ### Plug-in data rewrites
 
 Reviewed 2026-10-26 (ST-T03i, second change). `SourceScenePluginRewrites` (`Packages/Engine/Sources/Studio/SourceScenePluginRewrites.swift`) rewrites the KKPE, MaterialEditor and NodesConstraints entries after a delete or a copy, as CharaStudio's save writes them after the same interactive edit.

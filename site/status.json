@@ -1,6 +1,6 @@
 {
-  "reviewed": "2026-10-31",
-  "revision": "3eb26b2edd8895448b06c7a9ef84a327ce780aad",
+  "reviewed": "2026-11-01",
+  "revision": "2eaf84ae3ba6d3fe8184ba239b9390c8c98cafbb",
   "components": [
     {
       "id": "character-maker",
@@ -116,9 +116,9 @@
       "group": "Priority",
       "stage": "Mid-stage",
       "summary": "Native toon rendering and an opt-in source-shader path are usable.",
-      "available": "Metal rendering, explicit toon fallbacks, resource ownership and caching, and live translated source shaders in selected Studio scenes. The translated vertex path includes a host-validated correction for derivative quads crossing shared-vertex primitives. Selected original maps use baked lightmaps and compressed texture blocks.",
-      "remaining": "Remaining material dispatch, original scene effects, resource limits, broader hardware validation and representative displayed-scene performance acceptance.",
-      "evidence": "The derivative correction restores exact repeated frames and own-triangle derivatives on the tested M2 Ultra/macOS host. It adds about 0.06 ms GPU time to the controlled 20 translated draws; default rendering is unaffected because the source-shader path remains opt-in. Map-specific costs and omissions have separate evidence.",
+      "available": "Metal rendering, explicit toon fallbacks, resource ownership and caching, and live translated source shaders in selected Studio scenes. The translated vertex path includes a host-validated correction for derivative quads crossing shared-vertex primitives. Selected original maps use baked lightmaps and compressed texture blocks. Inline ImageIO decoding and a shared per-device upload queue avoid the cooperative-thread pool starvation caused by synchronous MetalKit loads; textures return after upload and mip generation complete.",
+      "remaining": "Remaining material dispatch, original scene effects, resource limits, broader hardware validation and representative displayed-scene performance acceptance. JPEG/HEIC decode costs remain open, GPU texture containers remain unsupported by this loader, and no loader speedup has been established.",
+      "evidence": "The derivative correction restores exact repeated frames and own-triangle derivatives on the tested M2 Ultra/macOS host. It adds about 0.06 ms GPU time to the controlled 20 translated draws; default rendering is unaffected because the source-shader path remains opt-in. Map-specific costs and omissions have separate evidence. Texture-loading checkpoint 95ee1773 passed 1,095 Release tests with seven named performance-probe skips, 281 Maker and 1,250 Studio operations, and six exact native image pairs. Combined checkpoint 4f5f2504 separately passed 20 CPU tests, nine GPU tests (including the strict 139-input corpus), and 124 Maker selection/export/reload operations. The startup comparison failed its quiet-window requirements; it supports no speed or FPS claim.",
       "docs": [
         [
           "Renderer contract and evidence",
@@ -135,6 +135,14 @@
         [
           "Original maps",
           "docs/reference/studio/maps.md"
+        ],
+        [
+          "Texture upload contract",
+          "docs/reference/renderer.md#texture-loading-without-worker-threads-2026-10-26"
+        ],
+        [
+          "Scoped texture validation",
+          "docs/reference/performance.md#texture-loading-candidate-validation-288-2026-10-31"
         ]
       ]
     },

@@ -180,6 +180,9 @@ acceptance boundary; their old “next” steps are historical, not a live queue
   reproduces that exit while omitting the probe's scene load/save and edit operations.
   Evidence completeness and resource release are confirmed separately;
   original-player lifecycle remains unaccepted, with no added export support.
+  A [bounded tool-metadata query](../reference/studio/scene-editing.md#fault-capture-tool-metadata-2026-11-01)
+  found no collector/decoder in its checked subset; capture suitability and the
+  shutdown fault module/stack remain unverified.
   General plugin compatibility remains outside the supported subset.
 
 Use the linked issue/PR state for work in review, and the owning reference for
