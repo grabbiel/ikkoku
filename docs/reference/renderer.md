@@ -2401,6 +2401,24 @@ zero, and all six observed processes release. Evidence is the sibling
 `0af38138c15d4694` / `c6ea094488fb5d3a`. Upload/lifetime gates, observed-versus-nil
 pixel equivalence and qualified overhead measurements remain open.
 
+An unapplied test draft now specifies a direct observed-versus-nil comparison
+for two public 3×5 fixtures (copy and ImageIO channel-swap paths), both colour
+flags and a short final strip: eight uploads with exact descriptors and all mip
+bytes. Static review and patch checks pass, but no source is applied and no new
+build or test runs. Evidence is `loader-observer-paired-draft-1/`; patch hash
+begins `5641c01abcace554`. Existing upload/lifetime gates and separate build/test
+grants remain prerequisites; this draft establishes no pixel or overhead result.
+
+The existing seven-test upload gate subsequently passes with zero failures or
+skips: shared queue identity, completion and call order, cross-queue readback,
+permit bounds, main-thread bypass, concurrent loads and cooperative-pool stores.
+All 495 pins, current/accepted 89-entry Products and four prior archives remain
+unchanged; raw, ownership and wrapper exits are zero, with observed processes
+released. Evidence is `loader-observer-strict-gates-1/upload-1/`; result hash begins
+`09e1962322885e1d`. These tests use the default nil observer and establish no
+comparative timing or observed-versus-nil pixel result. Lifetime checks remain
+separate, and the paired test is still unapplied.
+
 ## Checked math, legacy skeletons and cameras (R4)
 
 The unchecked CoreMath helpers (`normalize`, `simd_quatf.rotation(from:to:)`,

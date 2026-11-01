@@ -1061,6 +1061,40 @@ Evidence is `app-collection-plan-3/control-functional/`; launch result begins
 `03542a338a25c417`, failed review `ba1c26ef0558f053`, retention receipt
 `72b5826d841c26fa`.
 
+A separately preserved checker correction adds only the source-defined ordinary
+import event at reload step 5. Ten synthetic controls pass with zero failures
+or skips, including both arms/sexes and missing, misplaced, duplicate or wrongly
+bound samples. All 17 pins and eight loaded-source receipts match; raw, owned-wait
+and final exits are zero, and the worker PID/group and observed parent release.
+Evidence is `reload-contract-correction-1/synthetic-controls-1/`; readiness hash
+begins `c7dee31a59deab76`, raw result `61fa8bb919c0ae08`. The original failed
+review and native proof remain unchanged; retained-data re-review is separate.
+
+The separately granted offline re-review then accepts all 124 retained control
+checks across four runs, including eight initial-load samples, four exports and
+eight PNG payloads. All 621 pins, 14 loaded-source receipts and 30 retained
+artifacts remain exact. It reads 11 unique original input descriptors (101,206
+bytes), with 38 bounded read calls; captured outputs come only from retained
+copies. Raw, owned-wait and final exits are zero and the observed worker/group
+and parent release. Evidence is `reload-contract-correction-1/retained-review-1/`;
+review hash begins `20bd7b9bcd16708c`, summary `2241e0428aee31c1`. This accepts
+the control cohort under the explicit source-derived correction, preserving the
+original failed review. No app is rerun, and candidate acceptance and comparative
+performance remain open.
+
+A separate candidate-functional cohort then runs all four apps and passes the
+corrected offline verifier: 124 checks, eight initial-load samples and four
+exports. The sibling proof binds the accepted control evidence separately;
+it does not relabel the earlier native proof or failed review. All 167 fixed
+pins, 462 source descriptors, both 218-entry archives and 30 retained artifacts
+(6,327,278 bytes) remain exact. Both runtime snapshots match the same 3,698
+files/aliases and 37 absences. Raw app/outer/wait and offline-review exits are
+zero; all nine observed processes and five groups release. Evidence is
+`app-collection-plan-4/candidate-functional/`; proof hash begins `29d7b1df8b92a814`,
+review `c7e1ab73de383d33`, summary `31c027fc1fb82d42`. This establishes the
+candidate cohort's own semantic checks. Cross-arm comparison, targeted failure
+cohorts and qualified performance measurements remain separate open gates.
+
 ### Per-component appearance attribution (#192)
 
 The optional owner-local collector now labels the existing base, ordered component

@@ -134,7 +134,11 @@ acceptance boundary; their old “next” steps are historical, not a live queue
   absences. The corrected four-app control cohort reports 124 passing rows and
   releases naturally, but offline acceptance fails because the checker omits
   reload step 5's successful reimport sample. The failed review is retained;
-  fidelity, candidate behavior and performance remain unaccepted.
+  the original fidelity review remains failed. The separate one-event checker
+  correction passes ten synthetic controls, and offline re-review accepts the
+  retained control cohort's 124 checks without rerunning apps. A separate four-app
+  candidate cohort also passes 124 checks. Cross-arm comparison, targeted failure
+  cohorts and comparative performance remain open.
   Per-component diagnostics now place about 52 ms of the tested repeat-cycle
   card-appearance work in six compositor wait/view intervals; batching across
   components remains a proposal. See the [attribution evidence](../reference/character/maker-assets.md#per-component-appearance-attribution-192).
@@ -166,7 +170,9 @@ acceptance boundary; their old “next” steps are historical, not a live queue
   six CPU and four native controls pass. The strict default-nil corpus passes
   all 138 positive entries and one expected rejection. Five wider identity tests
   also pass with zero mismatches; their synthetic unsupported cases remain explicit.
-  Observed-versus-nil pixels, wider lifetime checks and overhead remain open.
+  Seven existing upload/queue/permit tests also pass. Observed-versus-nil pixels,
+  wider lifetime checks and overhead remain open;
+  a limited paired-pixel test is drafted but unapplied.
   The [sampling investigation](../reference/renderer.md#translated-sampling-repeatability-investigation-188)
   distinguishes diagnostic controls from production behavior; reductions are
   evidence, not fixes or added material coverage. The latest controlled split
@@ -225,9 +231,12 @@ acceptance boundary; their old “next” steps are historical, not a live queue
   The corrected native attempt compiles and runs two callback-policy controls,
   then refuses a breakpoint opcode before target creation. Archive validation
   also fails; separate review proves release without accepting the native gate.
-  Thirteen synthetic ZIP consumer/interchange controls pass; actual corrected
-  producer execution and native capture remain unverified. Eighteen synthetic
-  disk-export witness controls pass, with no Windows query or live-memory proof.
+  Thirteen synthetic ZIP consumer/interchange controls pass. A later actual
+  memory-producer query passes the unchanged strict consumer for four literal
+  payloads plus their manifest; filesystem-wrapper and native capture remain
+  unverified. Eighteen synthetic disk-export witness controls pass, with no
+  disk query or live-memory proof. Ten further synthetic envelope controls
+  keep failed-query process closure separate from disk-witness acceptance.
   General plugin compatibility remains outside the supported subset.
 
 Use the linked issue/PR state for work in review, and the owning reference for
