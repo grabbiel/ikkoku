@@ -14,6 +14,8 @@ public enum SourceSceneExportValidation {
     public struct Staged: Sendable {
         public let stage: SourceSceneStage
         public let keys: [UUID: Int32]
+        /// The document object each insertion is written for, by insertion index.
+        public let objects: [UUID]
     }
 
     /// ST-T03 / ST-S09 / ST-D03: the records the document adds, parents
@@ -76,7 +78,7 @@ public enum SourceSceneExportValidation {
         var keys: [UUID: Int32] = [:]
         for object in document.objects { if let key = object.sourceObjectKey { keys[object.id] = key } }
         for (index, id) in objects.enumerated() { keys[id] = stage.keys[index] }
-        return Staged(stage: stage, keys: keys)
+        return Staged(stage: stage, keys: keys, objects: objects)
     }
 
     /// Every object's key when the document adds nothing: each object must
