@@ -153,3 +153,28 @@ private func avatarMatrixEqual(_ a: float4x4, _ b: float4x4) {
         }
     }
 }
+
+@Test func sourceAvatarManifestGateAcceptsNormalKindsAndRejectsOtherSchemasKindsAndSexes() throws {
+    // The one gate behind SourceAvatar.load and SourceMakerImportGeometry.load.
+    func manifest(schema: Int = 1, kind: String = "koikatsu-female-avatar", sex: Int? = nil) throws -> SourceAvatarManifest {
+        var json: [String: Any] = ["schemaVersion": schema, "kind": kind, "name": "gate", "bodySkeleton": "body-master.json",
+                                   "headSkeleton": "head-master.json", "body": ["file": "body.json"],
+                                   "head": ["file": "head.json"], "clothes": [], "hair": []]
+        if let sex { json["sex"] = sex }
+        return try JSONDecoder().decode(SourceAvatarManifest.self, from: JSONSerialization.data(withJSONObject: json))
+    }
+    let accepted: [(String, Int?)] = [("koikatsu-female-avatar", nil), ("koikatsu-female-avatar", 1),
+                                      ("koikatsu-male-avatar", nil), ("koikatsu-male-avatar", 0)]
+    for (kind, sex) in accepted {
+        let checked = try manifest(kind: kind, sex: sex).validated()
+        #expect(checked.kind == kind && checked.sex == sex)
+    }
+    let rejected = [try manifest(schema: 2), try manifest(schema: 0), try manifest(kind: "koikatsu-special-avatar"),
+                    try manifest(kind: "koikatsu-female-avatar", sex: 0), try manifest(kind: "koikatsu-male-avatar", sex: 1)]
+    for candidate in rejected {
+        do {
+            try candidate.validated()
+            Issue.record("Accepted schema \(candidate.schemaVersion), kind \(candidate.kind), sex \(String(describing: candidate.sex))")
+        } catch RigError.invalid(let reason) { #expect(reason == "Unsupported source avatar manifest.") }
+    }
+}

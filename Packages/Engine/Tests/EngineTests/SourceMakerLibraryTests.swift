@@ -183,6 +183,12 @@ private enum MakerLibraryFixture {
             Issue.record("Reuse bypassed an unused reference path check")
         } catch RigError.invalid(let reason) { #expect(reason == "Base component escapes its folder.") }
         #expect(timings.sample.intervals["rigReuseSHA"] == nil && timings.sample.intervals["rigDecode"] == nil)
+        let seedOwner = SourceMakerRigReuse(), token = seedOwner.prospectiveReplacement(), seedTimings = SourceMakerPreparationTimings()
+        do {
+            _ = try library.prepare(card: card, coordinate: 0, baseURL: manifest, timings: seedTimings, seeding: token.input)
+            Issue.record("Initial seeding bypassed an unused reference path check")
+        } catch RigError.invalid(let reason) { #expect(reason == "Base component escapes its folder.") }
+        #expect(seedTimings.sample.intervals["rigRead"] == nil && seedTimings.sample.intervals["rigReuseSHA"] == nil)
     }
     // The missing reference is unused, but a selected converted rig must still
     // pass its original byte hash before any geometry is accepted.
@@ -200,6 +206,12 @@ private enum MakerLibraryFixture {
         Issue.record("Reuse bypassed a selected asset hash failure")
     } catch RigError.invalid(let reason) { #expect(reason == "Changed or oversized converted Maker asset: selected.json.") }
     #expect(timings.sample.intervals["rigRead"] == nil && timings.sample.intervals["rigReuseSHA"] == nil)
+    let seedOwner = SourceMakerRigReuse(), token = seedOwner.prospectiveReplacement(), seedTimings = SourceMakerPreparationTimings()
+    do {
+        _ = try changed.prepare(card: card, coordinate: 0, baseURL: manifest, timings: seedTimings, seeding: token.input)
+        Issue.record("Initial seeding bypassed selected asset byte verification")
+    } catch RigError.invalid(let reason) { #expect(reason == "Changed or oversized converted Maker asset: selected.json.") }
+    #expect(seedTimings.sample.intervals["rigRead"] == nil && seedTimings.sample.intervals["rigReuseSHA"] == nil)
 }
 
 private struct MakerSelectionCases: Decodable {
@@ -786,6 +798,12 @@ func sourceMakerPreparedAppearanceEnforcesAggregateBudgetAndExactComponentContex
     let reference = failure { _ = try SourceRig.load(url: first) }
     #expect(reference["kind"] == "dataCorrupted")
     #expect(failure { _ = try library.prepare(card: card, coordinate: 0, baseURL: url) } == reference)
+    let nilSeedTimings = SourceMakerPreparationTimings()
+    #expect(failure { _ = try library.prepare(card: card, coordinate: 0, baseURL: url, timings: nilSeedTimings, seeding: nil) } == reference)
+    #expect(nilSeedTimings.sample.intervals["rigReuseSHA"] == nil && nilSeedTimings.sample.intervals["rigDecode"]?.failures == 1)
+    let seedOwner = SourceMakerRigReuse(), seedToken = seedOwner.prospectiveReplacement(), seedTimings = SourceMakerPreparationTimings()
+    #expect(failure { _ = try library.prepare(card: card, coordinate: 0, baseURL: url, timings: seedTimings, seeding: seedToken.input) } == reference)
+    #expect(seedTimings.sample.intervals["rigReuseSHA"]?.calls == 1 && seedTimings.sample.intervals["rigDecode"]?.failures == 1)
     let timings = SourceMakerPreparationTimings()
     #expect(failure { _ = try library.prepare(card: card, coordinate: 0, baseURL: url, timings: timings) } == reference)
     #expect(timings.sample.bytesRead["rigRead"] == malformed.count)
@@ -808,6 +826,10 @@ func sourceMakerPreparedAppearanceEnforcesAggregateBudgetAndExactComponentContex
         timings: reuseMissing, rigReuse: worker) } == failure { _ = try SourceRig.load(url: first) })
     #expect(reuseMissing.sample.intervals["rigRead"]?.failures == 1)
     #expect(reuseMissing.sample.intervals["rigReuseSHA"] == nil && reuseMissing.sample.intervals["rigDecode"] == nil)
+    let seedMissing = SourceMakerPreparationTimings()
+    #expect(failure { _ = try library.prepare(card: card, coordinate: 0, baseURL: url, timings: seedMissing, seeding: seedToken.input) }
+        == failure { _ = try SourceRig.load(url: first) })
+    #expect(seedMissing.sample.intervals["rigRead"]?.failures == 1 && seedMissing.sample.intervals["rigReuseSHA"] == nil)
 }
 
 /// Records the content of every rig file a preparation decodes, in order.
@@ -845,4 +867,331 @@ func sourceMakerLibraryRigFilesNameEveryDecodeOfThePreparationInItsOrder() throw
         }
     }
     #expect(checked > 0)
+}
+
+// Initial imported-card seeding uses the same byte/assembly boundary as normal
+// preparation. The fixture tests are CPU-only; no preview or Metal allocation.
+private func expectSeededPreparationMatches(_ actual: SourceMakerLibrary.Prepared, _ expected: SourceMakerLibrary.Prepared) throws {
+    try expectReusedSourceMatches(actual.source, expected.source)
+    #expect(actual.diagnostics == expected.diagnostics && actual.geometryChanged == expected.geometryChanged)
+    #expect(actual.clothingSlots == expected.clothingSlots && actual.referenceClothingSlots == expected.referenceClothingSlots)
+    try #require(actual.selections.count == expected.selections.count)
+    for (a, e) in zip(actual.selections, expected.selections) {
+        #expect(a.property == e.property && a.category == e.category && a.savedID == e.savedID && a.sourceID == e.sourceID)
+        #expect(a.modGUID == e.modGUID && a.status == e.status && a.entry?.name == e.entry?.name)
+        #expect(a.entry?.rig?.file == e.entry?.rig?.file && a.entry?.rig?.sha256 == e.entry?.rig?.sha256)
+    }
+}
+
+private final class SeedChargeDecoder: SourceRigDecoding {
+    private(set) var charges: [SourceRigReuseKey: Int] = [:]
+    func decode(_ data: Data, timings: SourceMakerPreparationTimings?) throws -> SourceRig {
+        let rig = try SourceRig.decode(data)
+        let key = try #require(SourceRigReuseKey(sha256: OriginalCardFixture.hash(data), byteCount: data.count))
+        charges[key] = try #require(SourceRigReuseEntry.charge(rig: rig, key: key))
+        return rig
+    }
+}
+
+@Test(.enabled(if: SourceFixtureSupport.shouldRun(["IKKOKU_MAKER_SELECTION_FIXTURES"]), "Requires IKKOKU_MAKER_SELECTION_FIXTURES"))
+@MainActor func sourceMakerInitialSeedMatchesNilGeometryAndReusesNineFirstHeadComponents() throws {
+    let (fixtures, directory) = try MakerSelectionCases.load()
+    let library = try SourceMakerLibrary.load(url: URL(fileURLWithPath: fixtures.library))
+    for sex in [1, 0] {
+        let sample = try #require(fixtures.fixtures.first { $0.sex == sex && $0.headID == 0 && $0.boneType == 0 })
+        let card = try SourceCharacterCard.load(url: directory.appendingPathComponent(sample.file))
+        let cardBytes = card.preservedData, base = URL(fileURLWithPath: sex == 1 ? fixtures.femaleBase : fixtures.maleBase)
+        #expect(OriginalCardFixture.hash(cardBytes) == sample.sha256)
+        let referenceDecoder = SeedChargeDecoder()
+        let reference = try library.prepare(card: card, coordinate: 0, baseURL: base, wear: false, timings: nil, rigReuse: referenceDecoder)
+        let nilTimings = SourceMakerPreparationTimings()
+        let unseeded = try library.prepare(card: card, coordinate: 0, baseURL: base, timings: nilTimings, seeding: nil)
+        try expectSeededPreparationMatches(unseeded.prepared, reference)
+        #expect(unseeded.candidate == nil && unseeded.sample == nil)
+        #expect(nilTimings.sample.intervals["rigReuseSHA"] == nil && nilTimings.sample.intervals["rigDecode"]?.calls == 10)
+        let reuse = SourceMakerRigReuse(), token = reuse.prospectiveReplacement(), timings = SourceMakerPreparationTimings()
+        let seeded = try library.prepare(card: card, coordinate: 0, baseURL: base, timings: timings, seeding: token.input)
+        try expectSeededPreparationMatches(seeded.prepared, reference)
+        let initial = try #require(seeded.sample)
+        #expect(initial.hits == 0 && initial.misses == 10 && initial.admitted == 10 && initial.retainedEntries == 10)
+        #expect(!initial.clearOnCommit && initial.capacityBypasses == 0 && initial.intrinsicBypasses == 0)
+        #expect(referenceDecoder.charges.count == 10 && initial.logicalEntryBytes == referenceDecoder.charges.values.reduce(0, +))
+        #expect(initial.logicalEntryBytes <= 64 * 1024 * 1024 && initial.liveEntries <= 16 && initial.liveSnapshots <= 4)
+        #expect(timings.sample.intervals["rigRead"]?.calls == 10 && timings.sample.intervals["rigReuseSHA"]?.calls == 10)
+        #expect(timings.sample.intervals["rigDecode"]?.calls == 10)
+        #expect(timings.sample.bytesRead["rigRead"] == timings.sample.bytesHashed["rigReuseSHA"])
+        #expect(reuse.commitReplacement(token, candidate: seeded.candidate))
+        let nextCard = try SourceCharacterCard.decode(card.selectingVanillaHead(200)), firstTimings = SourceMakerPreparationTimings()
+        let independent = try SourceMakerHeadPreparation.prepare(card: nextCard, library: library, coordinate: 0, baseURL: base)
+        let first = try SourceMakerHeadPreparation.prepare(card: nextCard, library: library, coordinate: 0, baseURL: base,
+            timings: firstTimings, rigReuse: reuse.input())
+        try expectSeededPreparationMatches(first.assets, independent.assets)
+        let firstSample = try #require(first.rigReuseSample)
+        #expect(firstSample.hits == 9 && firstSample.misses == 1 && firstSample.admitted == 1 && firstSample.retainedEntries == 11)
+        #expect(firstTimings.sample.intervals["rigRead"]?.calls == 10 && firstTimings.sample.intervals["rigReuseSHA"]?.calls == 10)
+        #expect(firstTimings.sample.intervals["rigDecode"]?.calls == 1 && !firstSample.clearOnCommit)
+        #expect(reuse.commit(first.rigReuseCandidate))
+        let warmTimings = SourceMakerPreparationTimings()
+        let warm = try SourceMakerHeadPreparation.prepare(card: nextCard, library: library, coordinate: 0, baseURL: base,
+            timings: warmTimings, rigReuse: reuse.input())
+        try expectSeededPreparationMatches(warm.assets, independent.assets)
+        #expect(warm.rigReuseSample?.hits == 10 && warm.rigReuseSample?.misses == 0 && warmTimings.sample.intervals["rigDecode"] == nil)
+        #expect(card.preservedData == cardBytes)
+        let readBytes = timings.sample.bytesRead["rigRead"] ?? -1
+        print("sourceMakerInitialSeed sex=\(sex) entries=\(initial.retainedEntries) logicalBytes=\(initial.logicalEntryBytes) referenceBytes=\(initial.logicalReferenceBytes) readBytes=\(readBytes) firstHits=\(firstSample.hits) firstMisses=\(firstSample.misses)")
+    }
+}
+
+@Test(.enabled(if: SourceFixtureSupport.shouldRun(["IKKOKU_MAKER_SELECTION_FIXTURES"]), "Requires IKKOKU_MAKER_SELECTION_FIXTURES"))
+@MainActor func sourceMakerInitialSeedSaturationPreservesGeometryAndRecoversAfterOldHolders() throws {
+    let (fixtures, directory) = try MakerSelectionCases.load()
+    let library = try SourceMakerLibrary.load(url: URL(fileURLWithPath: fixtures.library))
+    let fixture = try #require(fixtures.fixtures.first { $0.sex == 1 && $0.headID == 0 && $0.boneType == 0 })
+    let card = try SourceCharacterCard.load(url: directory.appendingPathComponent(fixture.file))
+    let base = URL(fileURLWithPath: fixtures.femaleBase)
+    let reference = try library.prepare(card: card, coordinate: 0, baseURL: base)
+    for snapshotLimit in [1, 4] {
+        let ledger = SourceRigReuseAdmission(maximumEntries: snapshotLimit == 1 ? 16 : 10, maximumSnapshots: snapshotLimit)
+        let reuse = SourceMakerRigReuse(admission: ledger)
+        var held: SourceMakerRigReuse.Candidate?
+        func establish() throws {
+            if snapshotLimit == 1 {
+                // Consume only a snapshot permit so the new ten-entry seed
+                // reaches snapshot admission without first saturating entries.
+                held = SourceRigReuseWorker(reuse.input()).finish().0
+                #expect(reuse.commit(held))
+                return
+            }
+            let token = reuse.prospectiveReplacement(), value = try library.prepare(card: card, coordinate: 0, baseURL: base, seeding: token.input)
+            held = value.candidate
+            #expect(reuse.commitReplacement(token, candidate: held))
+        }
+        try establish()
+        let before = ledger.counts
+        func saturatedReplacement() throws {
+            let token = reuse.prospectiveReplacement(), value = try library.prepare(card: card, coordinate: 0, baseURL: base, seeding: token.input)
+            try expectSeededPreparationMatches(value.prepared, reference)
+            let sample = try #require(value.sample)
+            #expect(sample.clearOnCommit && sample.retainedEntries == 0)
+            #expect(sample.liveEntries <= 16 && sample.liveSnapshots <= snapshotLimit && sample.liveLogicalEntryBytes <= 64 * 1024 * 1024)
+            if snapshotLimit == 1 { #expect(sample.admitted == 10 && sample.capacityBypasses == 0) }
+            else { #expect(sample.admitted == 0 && sample.capacityBypasses == 10) }
+            #expect(reuse.commitReplacement(token, candidate: value.candidate))
+            #expect(!reuse.commit(held))
+        }
+        try saturatedReplacement()
+        withExtendedLifetime(held) { #expect(ledger.counts == before) }
+        held = nil
+        #expect(ledger.counts == .init())
+        let token = reuse.prospectiveReplacement(), recovered = try library.prepare(card: card, coordinate: 0, baseURL: base, seeding: token.input)
+        #expect(recovered.sample?.retainedEntries == 10 && recovered.sample?.clearOnCommit == false)
+        #expect(reuse.commitReplacement(token, candidate: recovered.candidate))
+        try expectSeededPreparationMatches(recovered.prepared, reference)
+    }
+}
+
+@MainActor @Test func sourceMakerInitialSeedLateDecodeFailureDropsStagedEntriesAndKeepsCurrentCache() throws {
+    let directory = try MakerLibraryFixture.directory(); defer { try? FileManager.default.removeItem(at: directory) }
+    let library = try MakerLibraryFixture.library([], directory: directory)
+    typealias F = OriginalCardFixture
+    let custom = try #require(try AppearanceTestFixture.card().block(named: "Custom")?.data)
+    let clothes = F.pack(F.map([("version", .string("0.0.1")), ("parts", .array([]))]))
+    let accessory = F.pack(F.map([("version", .string("0.0.2")), ("parts", .array([]))]))
+    let outfit = F.lengthData(clothes) + F.lengthData(accessory) + Data([0]) + F.lengthData(F.pack(F.map([("version", .string("0.0.0"))])))
+    var blocks = F.blocks(custom: custom)
+    blocks.append(.init(name: "Coordinate", version: "0.0.0", data: F.pack(.array(Array(repeating: .binary(outfit), count: 7)))))
+    let card = try SourceCharacterCard.decode(F.card(blocks: blocks))
+    func rigBytes(_ name: String) throws -> Data {
+        try JSONSerialization.data(withJSONObject: ["schemaVersion": 1, "coordinateSpace": "unity-left-handed-y-up",
+            "matrixLayout": "column-major", "uvConvention": "unity-source", "sourcePrefab": name,
+            "nodes": [["name": "root", "sourceID": "root", "translation": [0,0,0], "rotation": [0,0,0,1], "scale": [1,1,1]]],
+            "skins": [], "meshes": []] as [String: Any], options: .sortedKeys)
+    }
+    let oldData = try rigBytes("old"), newData = try rigBytes("new")
+    let first = directory.appendingPathComponent("first.json"), second = directory.appendingPathComponent("second.json")
+    try newData.write(to: first); try Data("bad later rig".utf8).write(to: second)
+    let manifest = directory.appendingPathComponent("source-avatar.json")
+    try JSONSerialization.data(withJSONObject: ["schemaVersion": 1, "kind": "koikatsu-female-avatar", "name": "fixture", "sex": 1, "headID": 0,
+        "bodySkeleton": "first.json", "headSkeleton": "second.json", "body": ["file": "../not-reached.json"],
+        "head": ["file": "missing.json"], "clothes": [], "hair": []] as [String: Any]).write(to: manifest)
+    let ledger = SourceRigReuseAdmission(), reuse = SourceMakerRigReuse(admission: ledger)
+    func establish() throws {
+        let worker = SourceRigReuseWorker(reuse.input()); _ = try worker.decode(oldData, timings: nil)
+        #expect(reuse.commit(worker.finish().0))
+    }
+    try establish()
+    let before = ledger.counts, token = reuse.prospectiveReplacement(), timings = SourceMakerPreparationTimings()
+    do {
+        _ = try library.prepare(card: card, coordinate: 0, baseURL: manifest, timings: timings, seeding: token.input)
+        Issue.record("Late decode failure was accepted")
+    } catch { #expect(error is DecodingError) }
+    #expect(timings.sample.intervals["rigRead"]?.calls == 2 && timings.sample.intervals["rigDecode"]?.calls == 2)
+    #expect(timings.sample.intervals["rigDecode"]?.failures == 1 && timings.sample.intervals["assembly"] == nil)
+    #expect(ledger.counts == before) // The completed first seed entry was discarded on throw.
+    let check = SourceRigReuseWorker(reuse.input()), checkTimings = SourceMakerPreparationTimings()
+    _ = try check.decode(oldData, timings: checkTimings)
+    #expect(checkTimings.sample.intervals["rigDecode"] == nil)
+    // Only an overall successful reference fallback would publish this empty
+    // replacement. The failed owner path drops the token instead.
+}
+
+// CXM1: a card import decodes the reference model only on a fallback path. A
+// base copy whose replaced reference parts are corrupt cannot load as a
+// reference model, so only the selected path can succeed on it.
+@Test(.enabled(if: SourceFixtureSupport.shouldRun(["IKKOKU_MAKER_SELECTION_FIXTURES"]), "Requires IKKOKU_MAKER_SELECTION_FIXTURES"))
+@MainActor func sourceMakerImportGeometryLoadsTheReferenceModelOnlyOnFallbackPaths() throws {
+    let (fixtures, directory) = try MakerSelectionCases.load()
+    let library = try SourceMakerLibrary.load(url: URL(fileURLWithPath: fixtures.library))
+    func card(sex: Int) throws -> SourceCharacterCard {
+        let fixture = try #require(fixtures.fixtures.first { $0.sex == sex && $0.headID == 0 && $0.boneType == 0 })
+        return try SourceCharacterCard.load(url: directory.appendingPathComponent(fixture.file))
+    }
+    let female = try card(sex: 1), male = try card(sex: 0), base = URL(fileURLWithPath: fixtures.femaleBase)
+    let manifestBytes = try Data(contentsOf: base)
+    let manifest = try JSONDecoder().decode(SourceAvatarManifest.self, from: manifestBytes)
+    let folder = base.deletingLastPathComponent().resolvingSymlinksInPath()
+    let decoded = Set(library.rigFiles(card: female, coordinate: 0, baseURL: base, wear: false))
+    let copy = try MakerLibraryFixture.directory(); defer { try? FileManager.default.removeItem(at: copy) }
+    var replaced: [String] = []
+    for path in [manifest.bodySkeleton, manifest.headSkeleton, manifest.body.file, manifest.head.file]
+        + manifest.hair.map(\.file) + manifest.clothes.map(\.file) {
+        let source = folder.appendingPathComponent(path).resolvingSymlinksInPath(), target = copy.appendingPathComponent(path)
+        try FileManager.default.createDirectory(at: target.deletingLastPathComponent(), withIntermediateDirectories: true)
+        if decoded.contains(source) { try FileManager.default.copyItem(at: source, to: target) }
+        else { try Data("{}".utf8).write(to: target); replaced.append(path) }
+    }
+    // Only reference hair/clothes are ever replaced; skeletons, body and head always decode.
+    try #require(!replaced.isEmpty && replaced.allSatisfy { path in (manifest.hair + manifest.clothes).contains { $0.file == path } })
+    let copied = copy.appendingPathComponent(base.lastPathComponent)
+    try manifestBytes.write(to: copied)
+    func failureText(_ action: () throws -> Void) -> String? {
+        do { try action(); return nil } catch { return String(describing: error) }
+    }
+    let referenceError = try #require(failureText { _ = try SourceRig.loadModel(url: copied) })
+    // The selected assets assemble without the unloadable reference parts.
+    let expected = try library.prepare(card: female, coordinate: 0, baseURL: base)
+    let selected = try SourceMakerImportGeometry.load(baseURL: copied, card: female, library: library, coordinate: 0)
+    #expect(selected.outcome == .selectedAssets && !selected.referenceLoaded && selected.selectionError == nil)
+    try expectSeededPreparationMatches(try #require(selected.prepared), expected)
+    try expectReusedSourceMatches(selected.source, expected.source)
+    // Every fallback path loads the reference model, so on the copy each ends in its error.
+    #expect(failureText { _ = try SourceMakerImportGeometry.load(baseURL: copied, card: nil, library: library, coordinate: 0) } == referenceError)
+    #expect(failureText { _ = try SourceMakerImportGeometry.load(baseURL: copied, card: female, library: nil, coordinate: 0) } == referenceError)
+    #expect(failureText { _ = try SourceMakerImportGeometry.load(baseURL: copied, card: male, library: library, coordinate: 0) } == referenceError)
+    // On the intact base a fallback returns the reference model itself.
+    let reference = try SourceRig.loadModel(url: base)
+    let noCard = try SourceMakerImportGeometry.load(baseURL: base, card: nil, library: library, coordinate: 0)
+    #expect(noCard.outcome == .referenceNoCard && noCard.referenceLoaded && noCard.prepared == nil)
+    try expectReusedSourceMatches(noCard.source, reference)
+    let reuse = SourceMakerRigReuse(), token = reuse.prospectiveReplacement()
+    let rejected = try SourceMakerImportGeometry.load(baseURL: base, card: male, library: library, coordinate: 0, seeding: token.input)
+    #expect(rejected.outcome == .referenceAfterSelectionFailure && rejected.prepared == nil)
+    #expect(rejected.rigReuseCandidate == nil && rejected.rigReuseSample == nil)
+    #expect(rejected.selectionError.map { String(describing: $0).contains("identities differ") } == true)
+    try expectReusedSourceMatches(rejected.source, reference)
+    // The reference manifest gate still applies to the selected path: an
+    // unsupported manifest that `prepare` alone accepts fails as it did before.
+    var wrong = try #require(try JSONSerialization.jsonObject(with: manifestBytes) as? [String: Any])
+    wrong["schemaVersion"] = 2
+    let wrongURL = copy.appendingPathComponent("unsupported-avatar.json")
+    try JSONSerialization.data(withJSONObject: wrong).write(to: wrongURL)
+    #expect((try? library.prepare(card: female, coordinate: 0, baseURL: wrongURL)) != nil)
+    #expect(failureText { _ = try SourceMakerImportGeometry.load(baseURL: wrongURL, card: female, library: library, coordinate: 0) }
+        == failureText { _ = try SourceRig.loadModel(url: wrongURL) })
+    print("sourceMakerImportGeometry replaced=\(replaced.count) decoded=\(decoded.count)")
+}
+
+/// MakerModel.openSourceRig's owner flow for one imported card: the seeding
+/// guard, the import geometry, then the replacement commit when every later
+/// owner gate passes (`commit` false stands for a gate that failed after it).
+@MainActor private func importCard(_ card: SourceCharacterCard, base: URL, library: SourceMakerLibrary,
+                                   reuse: SourceMakerRigReuse, commit: Bool) throws
+    -> (sample: SourceMakerRigReuse.Sample?, declined: Bool, timings: SourceMakerPreparationTimings.Sample, prepared: SourceMakerLibrary.Prepared) {
+    let token = reuse.prospectiveReplacement()
+    let seeding = reuse.seedingInput(for: token, entries: library.rigFiles(card: card, coordinate: 0, baseURL: base, wear: false).count)
+    let timings = SourceMakerPreparationTimings()
+    let loaded = try SourceMakerImportGeometry.load(baseURL: base, card: card, library: library, coordinate: 0,
+                                                    timings: timings, seeding: seeding)
+    #expect(loaded.outcome == .selectedAssets)
+    if commit { #expect(reuse.commitReplacement(token, candidate: loaded.rigReuseCandidate)) }
+    return (loaded.rigReuseSample, seeding == nil, timings.sample, try #require(loaded.prepared))
+}
+
+// CXM1 failure and card cohorts over the real selection fixtures: a gate that
+// fails after a seeded preparation leaves the current cache and epoch as they
+// were; a reimport over a cached session declines its seed (no hashing) and
+// publishes empty; cards with another head, body type or sex seed by bytes.
+@Test(.enabled(if: SourceFixtureSupport.shouldRun(["IKKOKU_MAKER_SELECTION_FIXTURES"]), "Requires IKKOKU_MAKER_SELECTION_FIXTURES"))
+@MainActor func sourceMakerImportSeedingSurvivesFailedImportsAndDeclinesFullLedgers() throws {
+    let (fixtures, directory) = try MakerSelectionCases.load()
+    let library = try SourceMakerLibrary.load(url: URL(fileURLWithPath: fixtures.library))
+    func fixture(sex: Int, head: Int, bone: Int) throws -> (card: SourceCharacterCard, base: URL) {
+        let entry = try #require(fixtures.fixtures.first { $0.sex == sex && $0.headID == head && $0.boneType == bone && !$0.moved && !$0.materials })
+        let card = try SourceCharacterCard.load(url: directory.appendingPathComponent(entry.file))
+        // importSourceCardSettings' base: the sex's normal base, else the head's assembly.
+        let base = head == 0 ? URL(fileURLWithPath: sex == 1 ? fixtures.femaleBase : fixtures.maleBase)
+            : try #require(try library.assemblyURL(for: card.customization()))
+        return (card, base)
+    }
+    let ledger = SourceRigReuseAdmission(), reuse = SourceMakerRigReuse(admission: ledger)
+    let oldRig = try JSONSerialization.data(withJSONObject: ["schemaVersion": 1, "coordinateSpace": "unity-left-handed-y-up",
+        "matrixLayout": "column-major", "uvConvention": "unity-source", "sourcePrefab": "old",
+        "nodes": [["name": "root", "sourceID": "root", "translation": [0, 0, 0], "rotation": [0, 0, 0, 1], "scale": [1, 1, 1]]],
+        "skins": [], "meshes": []] as [String: Any], options: .sortedKeys)
+    func oldRigHits() throws -> Bool {
+        let timings = SourceMakerPreparationTimings(), worker = SourceRigReuseWorker(reuse.input())
+        _ = try worker.decode(oldRig, timings: timings)
+        return timings.sample.intervals["rigDecode"] == nil
+    }
+    do {
+        let worker = SourceRigReuseWorker(reuse.input()); _ = try worker.decode(oldRig, timings: nil)
+        #expect(reuse.commit(worker.finish().0))
+    }
+    let female = try fixture(sex: 1, head: 0, bone: 0)
+    let files = library.rigFiles(card: female.card, coordinate: 0, baseURL: female.base, wear: false).count
+    // 1. The seed fits beside one entry, then a later owner gate fails.
+    let before = ledger.counts
+    do {
+        let failed = try importCard(female.card, base: female.base, library: library, reuse: reuse, commit: false)
+        #expect(!failed.declined && failed.sample?.retainedEntries == files && failed.sample?.clearOnCommit == false)
+        #expect(failed.sample?.liveEntries == before.entries + files) // Staged at worker finish, never published.
+    }
+    #expect(ledger.counts == before)
+    #expect(try oldRigHits())
+    #expect(reuse.commit(SourceRigReuseWorker(reuse.input()).finish().0)) // The epoch did not rotate.
+    // 2. A successful import replaces the session with its seed.
+    let seeded = try importCard(female.card, base: female.base, library: library, reuse: reuse, commit: true)
+    #expect(!seeded.declined && seeded.sample?.retainedEntries == files && seeded.timings.intervals["rigReuseSHA"]?.calls == files)
+    #expect(ledger.counts.entries == files && ledger.counts.snapshots == 1)
+    #expect(try !oldRigHits())
+    // 3. Reimporting the same card cannot fit a second seed beside the first.
+    let token = reuse.prospectiveReplacement()
+    do {
+        let control = try library.prepare(card: female.card, coordinate: 0, baseURL: female.base, seeding: token.input)
+        let sample = try #require(control.sample) // Unguarded: the result Codex's app runs saw.
+        #expect(sample.clearOnCommit && sample.retainedEntries == 0 && sample.admitted + sample.capacityBypasses == files)
+        #expect(sample.admitted == ledger.maximumEntries - files)
+    }
+    #expect(reuse.seedingInput(for: token, entries: files) == nil)
+    let reimported = try importCard(female.card, base: female.base, library: library, reuse: reuse, commit: true)
+    #expect(reimported.declined && reimported.sample == nil && reimported.timings.intervals["rigReuseSHA"] == nil)
+    #expect(reimported.timings.intervals["rigDecode"]?.calls == files)
+    try expectSeededPreparationMatches(reimported.prepared, seeded.prepared)
+    #expect(ledger.counts == .init()) // Published empty; the first seed released.
+    // 4. Another head and body type seeds its own bytes; a full ledger then
+    //    declines the other sex, whose geometry is unaffected.
+    let variant = try fixture(sex: 1, head: 200, bone: 1)
+    let variantFiles = library.rigFiles(card: variant.card, coordinate: 0, baseURL: variant.base, wear: false).count
+    let variantSeeded = try importCard(variant.card, base: variant.base, library: library, reuse: reuse, commit: true)
+    #expect(!variantSeeded.declined && variantSeeded.sample?.retainedEntries == variantFiles)
+    try expectSeededPreparationMatches(variantSeeded.prepared,
+        try library.prepare(card: variant.card, coordinate: 0, baseURL: variant.base))
+    let male = try fixture(sex: 0, head: 201, bone: 1)
+    let maleDeclined = try importCard(male.card, base: male.base, library: library, reuse: reuse, commit: true)
+    #expect(maleDeclined.declined && maleDeclined.timings.intervals["rigReuseSHA"] == nil && ledger.counts == .init())
+    try expectSeededPreparationMatches(maleDeclined.prepared, try library.prepare(card: male.card, coordinate: 0, baseURL: male.base))
+    // 5. With the old holders gone the next import seeds again.
+    let maleSeeded = try importCard(male.card, base: male.base, library: library, reuse: reuse, commit: true)
+    #expect(!maleSeeded.declined && (maleSeeded.sample?.retainedEntries ?? 0) > 0)
+    print("sourceMakerImportSeeding files=\(files) variantFiles=\(variantFiles) controlAdmitted=\(ledger.maximumEntries - files)")
 }
