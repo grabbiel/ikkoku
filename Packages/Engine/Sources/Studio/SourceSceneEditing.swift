@@ -112,6 +112,10 @@ public struct SourceSceneEdits: Sendable {
     /// call allocates; every other edit addresses inserted records by those
     /// keys and may delete or move them like source records.
     public var insertions: [SourceSceneInsertion]
+    /// #320: the light limit of the CharaStudio the export is for. The
+    /// default, `.charaStudio`, refuses an export that adds or copies a light
+    /// and leaves more than two; `.unlimitedMapLights` writes any number.
+    public var lightLimit: SourceSceneLightLimit = .charaStudio
     public struct Reparent: Sendable, Equatable {
         public var object: Int32, parent: Int32?
         public init(object: Int32, parent: Int32?) { self.object = object; self.parent = parent }

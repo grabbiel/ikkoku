@@ -28,7 +28,7 @@ struct StudioScenario: Decodable {
         /// `"setAutomaticBlink"`, `"addCharacter"`, `"setIKEnabled"`, `"setIKTarget"`,
         /// `"captureIKPose"`, `"editDuringAdvance"`, `"backgroundBuild"`, `"delete"`, `"setParent"`, `"duplicate"`,
         /// `"addFolder"`, `"addCamera"`, `"addLight"`, `"export"`, `"exportRejected"`, `"reimport"`,
-        /// `"focus"`, `"selectRoutePoint"`, `"dragRoutePoint"`, `"editRoute"`, `"captureRoute"`, `"setShowSourceMap"`,
+        /// `"focus"`, `"selectRoutePoint"`, `"dragRoutePoint"`, `"editRoute"`, `"captureRoute"`, `"setShowSourceMap"`, `"setUnlimitedLights"`,
         /// `"assert"`, `"assertRejected"`.
         let op: String
         let key: Int32?
@@ -96,7 +96,7 @@ struct StudioScenario: Decodable {
         let no: Int32?
         /// setAnimationSpeed: the inspector speed rate (finite and >= 0).
         let speed: Float?
-        /// setForceLoop / setFKEnabled: the flag to set.
+        /// setForceLoop / setFKEnabled / setUnlimitedLights: the flag to set.
         let on: Bool?
         /// setFK / captureBone: the pose-contract catalog bone id whose world
         /// guide the edit or the capture addresses.
@@ -2685,6 +2685,11 @@ struct StudioScenario: Decodable {
                 }
                 studio.orbitCamera(dx: dx, dy: dy)
                 record(step, true, "orbit dx=\(dx) dy=\(dy): yaw \(studio.doc.camera.yaw), pitch \(studio.doc.camera.pitch)")
+            case "setUnlimitedLights":
+                // #320, File ▸ Original Scene Export Keeps Unlimited Lights, for this run only.
+                guard let on = step.on else { record(step, false, "setUnlimitedLights: on is required"); continue }
+                studio.sourceExportUnlimitedLights = on
+                record(step, true, "original scene export keeps unlimited lights \(on)")
             case "setShowSourceMap":
                 // View ▸ Show Source Map (ST-A11): runtime only, the document never changes.
                 guard let on = step.on else { record(step, false, "setShowSourceMap: on is required"); continue }
