@@ -63,7 +63,8 @@
 //                                    alpha 0; RGB is the blended radiance over black).
 //
 // The maps mode (ST-A11 slice 4), when reload-maps-showoff.png is uploaded: one run authors, reads back,
-// captures and measures MapCases (phases B and C per case, like map 34) across twelve maps, then
+// captures and measures MapCases (phases B and C per case, like map 34) across fifteen maps (twelve until
+// slice 4 PR B added maps 30, 32 and 37 and a second map 40 view), then
 // "map41-showoff" (the uploaded character scene with map 41 added). An inside case puts the saved camera at
 // a map-local pivot near the map root's origin with the table's yaw, pitch and distance (chosen offline from
 // the converted geometry so the camera has room behind it). An outside case keeps the pivot and moves the
@@ -174,7 +175,14 @@ public sealed class OriginalMapProbe:BaseUnityPlugin {
         new MapCase("map15-outside",15,0,false,true,true,Pivot,0f,0f,0f),
         new MapCase("map25-outside",25,0,false,true,true,Pivot,0f,0f,0f),
         new MapCase("map01-outside",1,0,false,true,true,Pivot,0f,0f,0f),
-        new MapCase("map27-outside",27,0,false,true,true,Pivot,0f,0f,0f)};
+        new MapCase("map27-outside",27,0,false,true,true,Pivot,0f,0f,0f),
+        // PR B: the realtime-GI maps without a case (pivot and yaw by .local/sta11d-pr-b/tools/choose_cameras.py:
+        // the yaw with the most free room behind the pivot), and a map 40 view over its Unlit/Transparent road
+        // shadows (the densest 4 m cluster of them; 95 % of a 32x24 ray grid lands on them).
+        new MapCase("map30",30,0,false,false,true,Pivot,8f,165f,3f),
+        new MapCase("map32",32,0,false,false,true,Pivot,8f,60f,3f),
+        new MapCase("map37",37,0,false,false,true,Pivot,8f,180f,3f),
+        new MapCase("map40-unlit",40,0,false,false,true,new Vector3(13.06f,1.1f,-25.22f),35f,75f,5f)};
     // Shaders export_map_scene.py skips (MAP_SKIPPED_SHADERS): not drawn by the app.
     static readonly string[] SkippedShaders={"FX/MirrorReflection_Transparent","Xffect/heat_distortion","Shader Forge/electricLight",
         "Shader Forge/spotLaser","Shader Forge/spotLight_beam","Shader Forge/spotLight_glow","Shader Forge/volumeLight",
@@ -225,7 +233,7 @@ public sealed class OriginalMapProbe:BaseUnityPlugin {
         File.WriteAllText(Path.Combine(folder,"status.json"),J(K("error",errors.Count==0?null:String.Join(" | ",errors.ToArray()),"errors",errors,
             "unity",Application.unityVersion,"device",SystemInfo.graphicsDeviceName,"colorSpace",QualitySettings.activeColorSpace.ToString(),
             "voiceRepair",voiceRepair,"cases",new List<string>(cases.Keys),
-            "scope","Original CharaStudio 1.0.4.2 map "+(mapsMode?"(maps mode: "+MapCases.Length+" cases across twelve maps, and map41-showoff)":mapNo.ToString())+" fixtures authored with the player's own writer (Studio.AddMap, caMap through MapCtrl.Reflect, Studio.sceneInfo.Save) and read back through Studio.LoadSceneCoroutine; per case the player's Camera.main colour image, the map scene's renderers as a white silhouette and as Unity depth-normals (linear depth over "+depthFar+" m) from Camera.main's pose and field of view, and a trace of the map root, renderers, lights, lightmaps, RenderSettings, SunLightInfo and cameras; no installed cards, saves or media"+
+            "scope","Original CharaStudio 1.0.4.2 map "+(mapsMode?"(maps mode: "+MapCases.Length+" cases across fifteen maps, and map41-showoff)":mapNo.ToString())+" fixtures authored with the player's own writer (Studio.AddMap, caMap through MapCtrl.Reflect, Studio.sceneInfo.Save) and read back through Studio.LoadSceneCoroutine; per case the player's Camera.main colour image, the map scene's renderers as a white silhouette and as Unity depth-normals (linear depth over "+depthFar+" m) from Camera.main's pose and field of view, and a trace of the map root, renderers, lights, lightmaps, RenderSettings, SunLightInfo and cameras; no installed cards, saves or media"+
             (oracles.Length>0||withOracle?". Oracle"+(withOracle?" (in the same run, per case)":" mode: the uploaded records read back")+": a clean colour frame, Unity's decoded lightmap irradiance per pixel (white minus black albedo over 0.96, lights at 0 and as authored), the solid renderers' lightmap classes, and the sky and particle renderers alone as linear float radiance":""))));
         Application.Quit();
         for(int i=0;i<3600;i++){yield return null;if(i%30==29)Application.Quit();}

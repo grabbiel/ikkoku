@@ -50,13 +50,15 @@ scene-map34-night.png (reset transform) and scene-map34-showoff.png (map 34 adde
 scene), reads each back, and writes per case the phase B images and the oracle images, including
 oracle-<case>-classes.png, -sky.rgba.f32 and -particles.rgba.f32, all traced in map-trace.json.
 
-`maps` (ST-A11 slice 4) is the same for twelve more maps in one exec: --showoff is uploaded as
-reload-maps-showoff.png, which selects the probe's maps mode (its MapCase table: twelve inside cases
-scene-mapNN.png, eight outside cases scene-mapNN-outside.png whose camera crosses one of the map's
-vanish colliders, and scene-map41-showoff.png). Each case also records the vanish state (renderer
-enabled flags, the view capsule and the colliders it overlaps) and the map option; the oracle adds
+`maps` (ST-A11 slice 4) is the same for fifteen more maps in one exec: --showoff is uploaded as
+reload-maps-showoff.png, which selects the probe's maps mode (its MapCase table: fifteen inside cases
+scene-mapNN.png and scene-map40-unlit.png, eight outside cases scene-mapNN-outside.png whose camera
+crosses one of the map's vanish colliders, and scene-map41-showoff.png). Each case also records the
+vanish state (renderer enabled flags, the view capsule and the colliders it overlaps, and since slice 4
+PR B the trigger's physics inputs and a trigger experiment) and the map option; the oracle adds
 -silhouettes.rgba.f32 and -unlit.rgba.f32 where a map has them and skips the irradiance pair, with the
-reason recorded, where a map has no lightmaps.
+reason recorded, where a map has no lightmaps. Since PR B, maps with Enlighten dynamic lightmaps also
+get -irradiance-dynamic.f32 and the candidate dynamic lightmaps (-realtime[-sun<type>]-<n>.rgba.f32).
 """
 from __future__ import annotations
 import argparse, fnmatch, gzip, hashlib, http.server, io, json, re, subprocess, threading, uuid, zipfile
@@ -460,7 +462,7 @@ def map34(args):
 
 
 def maps(args):
-    """Slice 4's phases B and C across twelve maps in one `prlctl exec` (see the module docstring)."""
+    """Slice 4's phases B and C across fifteen maps in one `prlctl exec` (see the module docstring)."""
     return showoff_phase(args, 'maps', MAPS_UPLOAD)
 
 
@@ -548,7 +550,7 @@ def main():
     m.add_argument('--errno-baseline', type=int, required=True, help='Parallels errno-24 count that must hold before the exec')
     m.add_argument('--host-address', default='10.211.55.2', help="the Mac's address on the VM's host-only network")
     m.add_argument('--wait-seconds', type=int, default=1800, help='bound on the player run')
-    s = commands.add_parser('maps', help='author, capture and measure the slice 4 cases across twelve maps in the original player (phases B and C)')
+    s = commands.add_parser('maps', help='author, capture and measure the slice 4 cases across fifteen maps in the original player (phases B and C)')
     s.add_argument('--vm', default='Windows 11'); s.add_argument('--output', type=Path, required=True)
     s.add_argument('--showoff', type=Path, required=True, help='a character scene record without a map; the player adds map 41 to it')
     s.add_argument('--errno-baseline', type=int, required=True, help='Parallels errno-24 count that must hold before the exec')

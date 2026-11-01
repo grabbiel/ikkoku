@@ -585,11 +585,14 @@ class MapsTests(unittest.TestCase):
         source = probe.MAP_PROBE.read_text()
         self.assertIn('MapsUpload="reload-maps-showoff.png"', source)
         cases = re.findall(r'new MapCase\("([a-z0-9-]+)",(\d+),(\d),(true|false),(true|false),', source)
-        self.assertEqual(len(cases), 20)
+        self.assertEqual(len(cases), 24)
         inside = [c for c in cases if c[4] == 'false']; outside = [c for c in cases if c[4] == 'true']
-        self.assertEqual(sorted(int(c[1]) for c in inside), [1, 11, 15, 19, 21, 22, 25, 27, 29, 38, 40, 41])
+        # Slice 4 PR B adds the realtime-GI maps 30, 32 and 37 and a second map 40 view (its unlit road shadows).
+        self.assertEqual(sorted(int(c[1]) for c in inside), [1, 11, 15, 19, 21, 22, 25, 27, 29, 30, 32, 37, 38, 40, 40, 41])
         self.assertEqual(sorted(int(c[1]) for c in outside), [1, 11, 15, 19, 21, 22, 25, 27])
-        self.assertTrue(all(c[0] == f'map{int(c[1]):02d}' + ('-outside' if c[4] == 'true' else '') for c in cases))
+        self.assertTrue(all(c[0] == f'map{int(c[1]):02d}' + ('-outside' if c[4] == 'true' else '-unlit' if c[0].endswith('-unlit') else '')
+                            for c in cases))
+        self.assertEqual(len({c[0] for c in cases}), len(cases))
         self.assertEqual({c[2] for c in inside}, {'0', '1', '2'})  # every sun type
         self.assertIn('Guard("map41-showoff"', source)
         self.assertIn('depthFar=no==33?DepthFar33:DepthFar34', source)
