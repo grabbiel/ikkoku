@@ -314,7 +314,7 @@ public enum SourceSceneTopology {
                 withUnsafeBytes(of: &bits) { result.append(contentsOf: $0) }
             }
             func record(_ key: Int32, depth: Int) throws {
-                guard depth <= 64 else { throw KoikatsuReadError.limitExceeded("hierarchy depth exceeds 64") }
+                try KoikatsuBinaryReader.checkDepth(depth)
                 guard let span = spans.records[key] else { throw SourceSceneTopologyError.unsupported("Scene record \(key) has no byte span.") }
                 var cursor = span.lowerBound
                 for slot in spans.slots[key] ?? [] {

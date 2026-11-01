@@ -13,6 +13,9 @@ except ImportError:
     from card_contract import blank_png, dotnet_string, fixture_bytes, parse_card, png_end, Limits
 
 REPO = Path(__file__).resolve().parents[3]
+# The most nesting levels a scene may have: the Swift reader's
+# KoikatsuBinaryReader.maximumLevels (#326). Roots are depth 0.
+MAX_LEVELS = 200
 
 
 class Writer:
@@ -127,7 +130,7 @@ class Reader:
         raw = self.data[start:self.pos]; parse_card(raw)
         return {"bytes": len(raw), "sha256": hashlib.sha256(raw).hexdigest()}
     def obj(self, depth=0):
-        if depth > 64: raise ValueError("excessive depth")
+        if depth >= MAX_LEVELS: raise ValueError(f"objects nested more than {MAX_LEVELS} levels deep")
         result = {"kind": self.i(), "key": self.i(), "transform": self.transform(), "treeState": self.i(), "visible": self.b()}
         kind = result["kind"]
         if kind == 0:

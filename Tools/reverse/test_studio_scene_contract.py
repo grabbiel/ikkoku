@@ -1,5 +1,13 @@
 import unittest
-from analysis.studio_scene_contract import scene_fixture, inspect_scene
+from analysis.studio_scene_contract import MAX_LEVELS, Reader, Writer, scene_fixture, inspect_scene
+
+
+def nested_folders(levels):
+    """Folder 0 holding folder 1, and so on down to folder levels - 1."""
+    w = Writer()
+    for key in range(levels):
+        w.header(3, key); w.s("Synthetic folder"); w.i(0 if key == levels - 1 else 1)
+    return bytes(w.data)
 
 
 class StudioSceneContractTests(unittest.TestCase):
@@ -33,6 +41,16 @@ class StudioSceneContractTests(unittest.TestCase):
         result = inspect_scene(data)
         self.assertEqual(result["trailingBytes"], 14)
         self.assertTrue(result["roots"]["10"]["enableFK"] and result["roots"]["10"]["enableIK"])
+
+
+    def test_the_depth_cap_matches_the_swift_reader(self):
+        # #326: KoikatsuBinaryReader.maximumLevels, roots at depth 0.
+        self.assertEqual(MAX_LEVELS, 200)
+        level, depth = Reader(nested_folders(MAX_LEVELS)).obj(), 1
+        while level["children"]: level, depth = level["children"][0], depth + 1
+        self.assertEqual(depth, MAX_LEVELS)
+        with self.assertRaisesRegex(ValueError, "objects nested more than 200 levels deep"):
+            Reader(nested_folders(MAX_LEVELS + 1)).obj()
 
 
 if __name__ == "__main__": unittest.main()
