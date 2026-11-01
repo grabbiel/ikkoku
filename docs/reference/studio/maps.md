@@ -925,10 +925,12 @@ The shell sat inside or behind the visible surfaces: maps 33 and 34's colour cap
   - two silhouette meshes through the renderer: one renderer blends once (blue 0.5), two overlapping renderers twice (0.75); without the depth pass the test fails;
   - RGBA32 lightmaps upload uncompressed and parse;
   - a block-only map loads with zero decoder calls, draws its new parts and prints the slice-4 status line; what the loader cannot draw (a silhouette outside an option root, an animated particle without its UVs, a block-only image without its file, a non-PNG image) is refused by name and registers nothing;
-  - the probe variants change only their own term.
+  - the probe variants change only their own term;
+  - transparent draws sort by render queue, then distance to the sort centre, then order (`transparentDrawsSortByQueueThenSortCentreDistance`): two screen-filling particle quads blend far-first whichever centre, order or queue each has, and order never beats distance;
+  - a particle renderer keeps its sort centre, submesh and queue through the loader, and a sort centre on anything but a one-renderer particle draw, a centre without its submesh, or a queue outside 2501–5000 is refused by name (`particleRenderersKeepTheirSortCentreAndQueue`).
 - **Engine fixture** (`everyConvertedMapLoadsItsBlockImagesByteForByte`): all 42 maps of the private catalog, as above.
 - **Python:**
-  - `test_export_map_scene.py`: the new rules, skips, options, RGBA32 lightmaps and block-only images;
+  - `test_export_map_scene.py`: the new rules, skips, options, RGBA32 lightmaps and block-only images, one draw per particle renderer and submesh with its centre and queue, and the realtime GI record (written only when a drawn renderer has a dynamic lightmap);
   - `test_compare_original_map.py`: the per-case map and far plane, the skipped irradiance, the silhouette and unlit gates and their controls;
   - `test_original_map_probe.py`: the maps subcommand and its scans, and the probe's case table.
 - **Scenario.** `studio-scenario-source-map41` checks map 41 on `scene-map41.png` (`IKKOKU_STUDIO_MAP41_SCENE`).
