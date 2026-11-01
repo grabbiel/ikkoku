@@ -250,12 +250,22 @@ struct StudioToolbarControls: View, Equatable {
                 Image(systemName: "arrow.triangle.2.circlepath").tag(GizmoMode.rotate)
                 Image(systemName: "arrow.up.left.and.arrow.down.right").tag(GizmoMode.scale)
             }.pickerStyle(.segmented).frame(width: 120).help("Gizmo: T / R / S")
-            Toggle(isOn: Binding(get: { state.localSpace }, set: { model.localSpace = $0 })) { Text(state.localSpace ? "Local" : "World").frame(width: 42) }.toggleStyle(.button)
-            if state.selectedIsCharacter {
-                Divider().frame(height: 18)
-                Picker("", selection: Binding(get: { state.poseMode }, set: { model.poseMode = $0 })) { ForEach(PoseMode.allCases) { Text($0.rawValue).tag($0) } }.pickerStyle(.segmented).frame(width: 150)
-                if state.poseMode == .fk {
-                    Picker("", selection: Binding(get: { state.fkGroup }, set: { model.fkGroup = $0 })) { ForEach(FKGroup.allCases) { Text($0.rawValue).tag($0) } }.frame(width: 120)
+            // The pose-mode pickers follow the Local toggle with no row
+            // spacing of their own, so while they are kept hidden (C3,
+            // `StudioPosePickerMounting`) they add no gap; shown, they sit
+            // 8 points after it as before.
+            HStack(spacing: 0) {
+                Toggle(isOn: Binding(get: { state.localSpace }, set: { model.localSpace = $0 })) { Text(state.localSpace ? "Local" : "World").frame(width: 42) }.toggleStyle(.button)
+                if state.selectedIsCharacter || StudioPosePickerMounting.current.keeps {
+                    HStack(spacing: 8) {
+                        Divider().frame(height: 18)
+                        Picker("", selection: Binding(get: { state.poseMode }, set: { model.poseMode = $0 })) { ForEach(PoseMode.allCases) { Text($0.rawValue).tag($0) } }.pickerStyle(.segmented).frame(width: 150)
+                        if state.poseMode == .fk {
+                            Picker("", selection: Binding(get: { state.fkGroup }, set: { model.fkGroup = $0 })) { ForEach(FKGroup.allCases) { Text($0.rawValue).tag($0) } }.frame(width: 120)
+                        }
+                    }
+                    .padding(.leading, state.selectedIsCharacter ? 8 : 0)
+                    .studioToolbarHidden(!state.selectedIsCharacter)
                 }
             }
             Divider().frame(height: 18)

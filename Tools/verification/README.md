@@ -1275,7 +1275,10 @@ is a measurement control of the same kind. `document` has the workspace
 tree, the toolbar and the timeline bar read the document in their bodies,
 as before the item 7 follow-ups, so every document write (each FK drag
 frame) re-evaluates them; the Debug check above then skips those three
-values.
+values. `IKKOKU_PERF_POSE_PICKER` (`built` or `kept`, default `kept`) is
+another: `built` has the toolbar build its pose-mode pickers when a
+character is selected and drop them when it is not, as before, and `kept`
+keeps them, hidden, in between.
 
 ### Plug-in data rewrites (ST-T03i)
 

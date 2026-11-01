@@ -452,6 +452,7 @@ extension CaptureRequest {
         ScopedOption("IKKOKU_PERF_INSPECTOR_TAB", [.perfTrace]),
         ScopedOption("IKKOKU_PERF_KEEP_MOUNTED", [.perfTrace]),
         ScopedOption("IKKOKU_PERF_PANEL_STATE", [.perfTrace]),
+        ScopedOption("IKKOKU_PERF_POSE_PICKER", [.perfTrace]),
     ]
 
     /// Options read only by the window capture.
@@ -599,6 +600,9 @@ extension CaptureRequest {
         // what they show (item 7 follow-ups, C4): each body as before, or the
         // state the model publishes (the default).
         ValueRule("IKKOKU_PERF_PANEL_STATE", .oneOf(["document", "published"])),
+        // Whether the toolbar builds its pose-mode pickers for each character
+        // selection, as before, or keeps them hidden in between (C3, the default).
+        ValueRule("IKKOKU_PERF_POSE_PICKER", .oneOf(["built", "kept"])),
     ]
 
     /// `IKKOKU_PERF_WORKLOAD` values, in the order `docs/reference/performance.md` lists them.

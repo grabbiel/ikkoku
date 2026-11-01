@@ -173,6 +173,11 @@ Other options:
   workspace tree, the toolbar and the timeline bar read the document in
   their bodies, as before, and `published` has them read what the model
   publishes when it changes. The app reads it once at launch.
+- `IKKOKU_PERF_POSE_PICKER` (`built` or `kept`, the default), a measurement
+  control for the same follow-ups: `built` builds the toolbar's pose-mode
+  pickers when a character is selected and drops them when it is not, as
+  before, and `kept` keeps them mounted, hidden, in between. The app reads
+  it once at launch.
 - Measurement controls for the
   [item 6 follow-up](#phase-2-item-6-follow-up-route-copies-prefetch-and-kept-donations),
   all defaulting to the shipped behavior:
