@@ -748,6 +748,27 @@ ran. Evidence is `native-gate-4/argument-controls-2/output/`; result hash begins
 `ed47e26cd428b4d3` and guest receipt `5bb24acad7eed13b`. Native capture and original
 lifecycle/pair acceptance remain open.
 
+The corrected public native attempt subsequently compiled its observer with
+exit 0. The normal observer executed both C# callback-policy controls, then
+refused setup with `Unproven breakpoint opcode` before `CreateProcess`; it exited
+1 without creating a target. The crash phase, debugger loop and dump writer were
+not reached. No failing OS opcode or module hash was retained, so the exact cause
+of that refusal remains unknown.
+
+Transport, inner process and wrapper exits remain 1. The strict host archive
+validator also rejected two Windows-style ZIP entry names before evaluating
+closure. A separate root review read the 13 exact entries in memory, checked
+all CRCs and 12 manifest hashes, and explicitly mapped only those two names for
+evidence comparison. It did not relax the validator or change its failed result.
+The observer report, source ordering and matching archived/final process
+identities establish that no target was created. Compiler and observer release,
+all six HTTP owners, host groups and final guest-root removal were separately
+verified. Raw runner resource closure remains false; this supplemental review
+establishes release only. Evidence is under `native-gate-4/`; archive hash begins
+`c4d622d2d0679206`, observer report `4e5685851327ddb5`, and raw wrapper
+`bca5f88f8b8dd3bc`. Native capture and original lifecycle/pair outcomes remain
+unaccepted; no retry follows automatically.
+
 ### Plug-in data rewrites
 
 Reviewed 2026-10-26 (ST-T03i, second change). `SourceScenePluginRewrites` (`Packages/Engine/Sources/Studio/SourceScenePluginRewrites.swift`) rewrites the KKPE, MaterialEditor and NodesConstraints entries after a delete or a copy, as CharaStudio's save writes them after the same interactive edit.
