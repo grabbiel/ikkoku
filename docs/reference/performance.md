@@ -6175,8 +6175,10 @@ Selection rows show API time with rig hits/misses.
   lower.
 - **Saving.** The import saving is mostly the skipped reference-model decode
   (nine files, 32.16 MB). The seed's byte hashing adds about 13 ms back.
-  Reimports over a cached session decline the seed, so they skip both the
-  hashing and the reference decode.
+  Reimports over a cached session declined the seed, so they skipped both the
+  hashing and the reference decode. The
+  [reimport rig carry](character/maker-assets.md#reimport-rig-carry-192-c-2026-11-01)
+  now seeds them from the replaced session's rigs instead.
 
 These numbers come from one machine, two cards and a non-compositing display.
 They show no FPS, live-animation or broad hardware result. Raw reports,
