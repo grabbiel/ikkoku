@@ -4018,7 +4018,8 @@ Each cell is the median of the runs' medians (each run takes 60 calls after
   The 1–5 ms of the first window does not reappear.
 - **Showoff is within 0.05 ms.** The ranges overlap.
 - **The legacy paths, in this window** (after-build only: the four full-probe
-  runs of the round against the follow-up JSON vector change, all invalid by
+  runs of the round against the follow-up
+  [JSON vector change](#scene-json-vectors-read-directly), all invalid by
   the rule above, so indicative):
   - the largest legacy scene decodes in 79.92 ms (78.93–80.66);
   - its unedited export takes 160.63 ms (159.01–161.67), and `upgraded()`
@@ -4105,8 +4106,59 @@ the Float `JSONSerialization` gives it. Every other form goes to
 
 ### Measurement
 
-Pending the orchestrator's next quiet window: one round of before, after,
-after, before with the ST-T05a probe, before being the legacy-scene change.
+The ST-T05a timing probe (`KoikatsuLegacyScenePerformanceTests`, full, not
+`CURRENT_ONLY`) on the scenes of the [ST-T05a timing](#st-t05a-older-scene-versions).
+
+- **Builds.** Before is the legacy-scene change (`fd1fb85a`), after is this
+  change merged with it (`213eecfb`), both Release (`swift build -c release
+  --build-tests -Xswiftc -enable-testing`).
+- **Window.** It ran in the [second ST-T05a window](#second-window-2026-11-01),
+  one round of before, after, after, before in each of its two attempts
+  (11:40:43–11:42:15 and 11:46:28–11:47:58), one process per run.
+- **Validity.** 7 of the 8 runs are invalid by the window rule. macOS daemons
+  ran above 20% CPU during each of them: `corespotlightd` (up to 349%),
+  `mediaanalysisd`, `spotlightknowledged`, `mds_stores`, `contactsd`,
+  `launchd`, `runningboardd` and WD Discovery. No agent build, test or app was
+  running. The one valid run is an after-run of the second attempt (1.0.4.2
+  form 20.16 ms, legacy decode 20.44 ms, unedited export 41.16 ms, showoff
+  1.66 ms). The numbers are therefore indicative, but the effect is far
+  larger than the noise. In ABBA order, background load slows both builds
+  alike, and each cell's spread is under 1 ms on the large scene against a
+  59 ms difference.
+- **Evidence.** `.local/stt05a-legacy-scenes/logs/finish/window-attempt1/`
+  and `window-rerun1/`, runs `r4a`–`r4d`.
+
+Each cell is the median of the 4 runs' medians (each run takes 60 calls
+after 10 warmups) and their range.
+
+| Scene, step | Before ms | After ms | After / before |
+| --- | --- | --- | --- |
+| showoff, `decodeDocument` | 2.37 (2.27–2.40) | 1.67 (1.63–1.70) | 0.70 |
+| largest legacy as 1.0.4.2, `decodeDocument` | 79.89 (79.73–80.78) | 20.25 (19.99–20.57) | 0.25 |
+| largest legacy, `decodeDocument` | 79.92 (78.93–80.66) | 20.40 (20.04–20.47) | 0.26 |
+| largest legacy, `editedData`, no edit | 160.63 (159.01–161.67) | 41.29 (40.95–42.02) | 0.26 |
+| largest legacy, `upgraded()` | 160.68 (158.22–163.85) | 41.36 (40.77–41.73) | 0.26 |
+| largest legacy, readback record compare | 0.40 (0.38–0.41) | 0.38 (0.37–0.40) | — |
+
+- **The item-heavy decode is about 3.9× faster.** The largest scene, legacy
+  or as 1.0.4.2, decodes in about 20 ms instead of 80 ms. Its unedited
+  export, which is two decodes and the upgrade's splice, falls from 161 to
+  41 ms.
+- **Showoff decodes 0.7 ms faster.** It has fewer vectors (7 characters and
+  their items).
+- **What is left (estimate).** The `sample` put 87.4% of the before-build's
+  decode in `jsonVector`, which leaves about 10 ms of other work in the 80 ms.
+  The direct reader then takes about the other 10 ms, or roughly 0.4 µs for
+  each of the scene's about 26,500 vectors.
+- **Scaling to a base M1 (estimate,** × 1.25, as in the ST-T05a section): the
+  largest scene decodes in about 25 ms and exports unedited in about 52 ms.
+
+### Limits
+
+- One round per attempt. 7 of the 8 runs are invalid by the window rule; all
+  are reported, as indicative.
+- Engine timing only. The app's import and export were not timed.
+- No M1 run.
 
 ## Phase 2, item 6 follow-up: route copies, prefetch and kept donations
 
