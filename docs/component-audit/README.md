@@ -156,7 +156,9 @@ acceptance boundary; their old “next” steps are historical, not a live queue
   A source-only [phase accounting audit](../reference/renderer.md#texture-load-phase-accounting-290-2026-11-01)
   explains why existing intervals cannot isolate decode, conversion or upload waits.
   The optional loader observer candidate compiles in Release with retained
-  artifacts; correctness, pixel identity and overhead checks remain pending.
+  artifacts. Separate discovery finds all ten observer controls in a 1,139-ID inventory;
+  six CPU and four native controls pass. Pixel identity, wider lifetime checks
+  and overhead remain unverified on this candidate.
   The [sampling investigation](../reference/renderer.md#translated-sampling-repeatability-investigation-188)
   distinguishes diagnostic controls from production behavior; reductions are
   evidence, not fixes or added material coverage. The latest controlled split

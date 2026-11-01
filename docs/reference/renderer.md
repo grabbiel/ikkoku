@@ -2352,6 +2352,31 @@ checks have not run at this checkpoint; nil-path overhead and performance are
 unmeasured. Evidence is under `loader-observer-build-1/release-build-1/` beside
 the accounting audit; result hash begins `e67665af9667ef53`.
 
+Separate metadata discovery finds 1,139 unique IDs: 1,118 Engine and 21 CoreMath,
+including all ten observer controls. All 436 pins and 366 source members match;
+no test-body markers occur, though static registration may initialize Metal.
+The current and accepted 89-entry Products trees and four preserved archives
+remain unchanged. Evidence is `loader-observer-controls-1/discovery-1/`; result
+hash begins `1f1b8cfe0568fddd`, inventory `6e27016c406ebf71`.
+
+All six separately selected CPU controls and all four native controls then pass,
+with zero failures or skips. CPU coverage includes nil-observer body/error behavior,
+fixed-size aggregation, supplied permit timing, main-thread bypass and worker
+permit release after error. Native coverage checks uncached registration, cache
+hits without nested work, short final-strip conversion/submission/completion and
+single final mip encoding/callback, plus pre-upload errors without registration.
+The native controls use ImageIO and Metal; they perform no pixel readbacks.
+
+Raw, ownership and wrapper exits are zero for all three phases. The CPU/native
+450/464 pins match, all retained Products remain unchanged, and all five/six/five
+observed processes respectively release. CPU result/log hashes begin
+`5a87d5da5792838f` / `fa26078119e67672`; native hashes begin
+`39e7ffb458aad2ed` / `333248bc720b38e4`, in sibling `cpu-1/` and `native-1/`.
+This confirms the tested observer behavior. Strict every-mip pixel identity,
+wider upload/lifetime checks and nil-path overhead remain unverified on this
+candidate; fake-clock assertions and wrapper elapsed values are not performance
+measurements.
+
 ## Checked math, legacy skeletons and cameras (R4)
 
 The unchecked CoreMath helpers (`normalize`, `simd_quatf.rotation(from:to:)`,
