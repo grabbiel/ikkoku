@@ -267,6 +267,11 @@ public final class SourceStudioMapAsset: @unchecked Sendable {
         /// The vanish set (`vanishSets`) of the rows that hide this part's
         /// renderers (PR B: `ikkokuMap.vanishRows`); nil when no row names them.
         public var vanishSet: Int? = nil
+        /// The Enlighten dynamic lightmap a GI-lit part's renderers read
+        /// (PR B: `ikkokuMap.dynamicLightmapIndex`), by its TEXCOORD_2 with
+        /// the renderer's dynamic ST applied. Not drawn: Enlighten computes
+        /// the lightmap at runtime.
+        public var dynamicLightmapIndex: Int? = nil
     }
 
     /// The decoder for a map image that is not block-only (its PNG or JPEG):
@@ -483,9 +488,22 @@ public final class SourceStudioMapAsset: @unchecked Sendable {
                     }
                     vanishSet = vanishSetIndex[rows] ?? { vanishSets.append(rows); vanishSetIndex[rows] = vanishSets.count - 1; return vanishSets.count - 1 }()
                 }
+                var dynamicLightmap: Int?
+                if let value = info["dynamicLightmapIndex"] {
+                    guard let index = value.doubleValue.flatMap({ Int(exactly: $0) }), index >= 0,
+                          resources.mesh(part.mesh)?.carriesUV2 == true else {
+                        throw RigError.invalid("\(url.lastPathComponent): mesh \(part.meshName) names a dynamic lightmap without its TEXCOORD_2.")
+                    }
+                    dynamicLightmap = index
+                }
                 // Every branch below appends this part once (or throws).
                 let partCount = parts.count
-                defer { if parts.count > partCount { parts[parts.count - 1].vanishSet = vanishSet } }
+                defer {
+                    if parts.count > partCount {
+                        parts[parts.count - 1].vanishSet = vanishSet
+                        parts[parts.count - 1].dynamicLightmapIndex = dynamicLightmap
+                    }
+                }
                 // The role must match the node the mesh hangs under.
                 var node: Int? = part.nodeIndex, underMap = false
                 while let current = node { if current == mapNode { underMap = true }; node = gltf.nodes[current].parent }

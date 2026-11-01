@@ -495,6 +495,15 @@ class CatalogTests(unittest.TestCase):
         self.assertEqual(maps.not_drawn_notes(provenance)[-1], 'realtime GI (Enlighten dynamic lightmaps on 22 renderers)')
         self.assertEqual(maps.not_drawn_notes({'realtimeGI': {'renderers': 1}}), ['realtime GI (Enlighten dynamic lightmaps on 1 renderer)'])
 
+    def test_the_dynamic_lightmap_reads_uv2_else_the_lightmap_uv_else_uv0(self):
+        handler = lambda **uvs: SimpleNamespace(**{f'm_UV{i}': uvs.get(f'uv{i}') for i in range(3)})
+        self.assertEqual(maps.dynamic_lightmap_uv(handler(uv0=[[0, 0]], uv1=[[1, 1]], uv2=[[2, 2]])), ([[2, 2]], 'uv2'))
+        self.assertEqual(maps.dynamic_lightmap_uv(handler(uv0=[[0, 0]], uv1=[[1, 1]])), ([[1, 1]], 'uv1'))
+        self.assertEqual(maps.dynamic_lightmap_uv(handler(uv0=[[0, 0]])), ([[0, 0]], 'uv0'))
+        self.assertEqual(maps.dynamic_lightmap_uv(handler()), (None, None))
+        # The ST applies before the origin flip, as for the baked lightmap.
+        self.assertEqual(maps.lightmap_uv([0.5, 0.25], [0.5, 0.5, 0.25, 0.125]), [0.5, 1 - 0.25])
+
     def test_realtime_gi_is_recorded_only_when_a_drawn_renderer_has_a_dynamic_lightmap(self):
         class Reader:
             def read_typetree(self):

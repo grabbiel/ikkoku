@@ -61,7 +61,11 @@ mesh, placed by an engine-basis matrix), and every part whose renderers a row hi
 
 Realtime GI (slice 4): Unity adds a renderer's Enlighten dynamic lightmap to the baked one. It is
 computed at runtime, so it is not exported; the provenance's `realtimeGI` counts the drawn
-renderers that carry one, and the catalog row's `notDrawn` names it.
+renderers that carry one, and the catalog row's `notDrawn` names it. PR B writes what a draw of it
+needs from the scene: a GI-lit renderer with a dynamic lightmap is merged only with renderers of the
+same dynamic lightmap index (`ikkokuMap.dynamicLightmapIndex`), and its TEXCOORD_2 is the dynamic
+lightmap UV (dynamic_lightmap_uv) with its `m_LightmapTilingOffsetDynamic` applied and V flipped
+like TEXCOORD_1.
 
 Proprietary output belongs in .local, never in the repository.
 """
@@ -331,6 +335,20 @@ def normal_matrix(m):
 def lightmap_uv(uv, scale_offset):
     """Unity's lightmap UV (uv * ST.xy + ST.zw, bottom-up), then the UV0 origin flip."""
     return convert_uv([uv[0] * scale_offset[0] + scale_offset[2], uv[1] * scale_offset[1] + scale_offset[3]])
+
+
+# UnityCG's vertex input for the dynamic lightmap is TEXCOORD2 (`v.texcoord2`, o.lmap.zw =
+# texcoord2 * unity_DynamicLightmapST.xy + .zw). Enlighten's realtime UVs are the mesh's UV2 (uv3)
+# when it has one, else its lightmap UV (UV1), else UV0; no converted map's GI-lit renderer has a
+# UV2 or an Enlighten vertex stream (`m_EnlightenVertexStream`), so the fallback is what they use
+# (`tools/realtime_gi_survey.py`: maps 30, 32, 37, 41 UV1, map 40 UV0). Not checked against a
+# capture of the player's dynamic lightmaps yet.
+def dynamic_lightmap_uv(handler):
+    """(the UV stream the dynamic lightmap reads, its name)."""
+    for name, uv in (("uv2", handler.m_UV2), ("uv1", handler.m_UV1), ("uv0", handler.m_UV0)):
+        if uv:
+            return uv, name
+    return None, None
 
 
 def tiled_uv(uv, scale, offset):
@@ -1870,6 +1888,7 @@ def export(bundles, scene, map_no, output, max_texture=None, builtin_resources=N
     map_root_world_inverse = inverse_affine(map_scene.world[map_scene.map_root])
     groups, skipped, skies = {}, [], []
     dynamic_gi = set()  # drawn renderers with a realtime-GI (dynamic) lightmap
+    dynamic_sources = {}  # their submeshes by the UV stream TEXCOORD_2 is taken from
     lightmap_sources = {"renderer": 0, "LightmapPrefab": 0}
     handlers = {}
     # Map options (slice 4): `visibleOption` sets each option object active to the scene's
@@ -1985,10 +2004,18 @@ def export(bundles, scene, map_no, output, max_texture=None, builtin_resources=N
             # centre and its submesh index.
             particle = name in PARTICLE_SHADERS
             separate = pid if draw == "silhouette" else (pid, submesh) if particle else None
-            group_key = (role, material_index, tuple(keys), group_lightmap, option, separate, membership.get(host, ()))
             # Only the GI-lit shaders (Standard's family, Legacy Diffuse) read the dynamic lightmap.
+            dynamic_index = -1
             if (name in STANDARD_SHADERS or name == "Legacy Shaders/Diffuse") and getattr(renderer, "m_LightmapIndexDynamic", 0xFFFF) < 0xFFFE:
                 dynamic_gi.add(pid)
+                dynamic_index = renderer.m_LightmapIndexDynamic
+                dynamic_uv, dynamic_source = dynamic_lightmap_uv(handler)
+                if dynamic_uv is None:
+                    raise ValueError(f"{path}: a dynamic lightmap without any UV stream to read it by")
+                st = renderer.m_LightmapTilingOffsetDynamic
+                dynamic_offset = [st.x, st.y, st.z, st.w]
+                dynamic_sources[dynamic_source] = dynamic_sources.get(dynamic_source, 0) + 1
+            group_key = (role, material_index, tuple(keys), group_lightmap, option, separate, membership.get(host, ()), dynamic_index)
             group = groups.setdefault(group_key, {"positions": [], "normals": [], "tangents": [], "uv0": [], "uv1": [], "uv2": [],
                                                   "colors": [], "indices": [], "renderers": [], "vertexColor": vertex_color})
             if particle:
@@ -2019,6 +2046,8 @@ def export(bundles, scene, map_no, output, max_texture=None, builtin_resources=N
                 elif group_lightmap != NO_LIGHTMAP:
                     source_uv = handler.m_UV1 if handler.m_UV1 else handler.m_UV0
                     group["uv1"].append(lightmap_uv(source_uv[old], lm_offset))
+                if dynamic_index >= 0:
+                    group["uv2"].append(lightmap_uv(dynamic_uv[old], dynamic_offset))
                 if vertex_color and handler.m_Colors:
                     group["colors"].append(list(handler.m_Colors[old]))
             converted = convert_triangles([[remap[i] for i in triangle] for triangle in triangles[submesh]], len(group["positions"]))
@@ -2028,6 +2057,9 @@ def export(bundles, scene, map_no, output, max_texture=None, builtin_resources=N
             group["renderers"].append({"path": path, "submesh": submesh, "vertices": len(used), "triangles": len(triangles[submesh]),
                                        "lightmapIndex": group_lightmap, "lightmapScaleOffset": lm_offset if group_lightmap != NO_LIGHTMAP else None,
                                        "lightmapSource": lm_source, "mirrored": mirrored})
+            if dynamic_index >= 0:
+                group["renderers"][-1].update(dynamicLightmapIndex=dynamic_index, dynamicLightmapScaleOffset=dynamic_offset,
+                                              dynamicLightmapUV=dynamic_source)
     # glTF: node 0 "Map" (mapRoot's authored scale; the app replaces translation and rotation
     # with the record's map transform), node 1 "Scene" (identity, scene-space geometry).
     root_scale = map_scene.local_trs(map_scene.transforms[map_scene.map_root])[2]
@@ -2039,8 +2071,8 @@ def export(bundles, scene, map_no, output, max_texture=None, builtin_resources=N
     def separate_key(value):  # a silhouette's renderer id, a particle's (renderer id, submesh)
         return value if isinstance(value, tuple) else (value or 0,)
     vanish_names = {}
-    for group_key in sorted(groups, key=lambda k: (k[0], k[1], k[2], k[3], k[4], separate_key(k[5]), k[6])):
-        role, material_index, keys, lm_index, option, separate, vanish_set = group_key
+    for group_key in sorted(groups, key=lambda k: (k[0], k[1], k[2], k[3], k[4], separate_key(k[5]), k[6], k[7])):
+        role, material_index, keys, lm_index, option, separate, vanish_set, dynamic_index = group_key
         group = groups[group_key]
         count = len(group["positions"])
         attributes = {"POSITION": exporter.accessor(group["positions"], "VEC3", bounds=True)}
@@ -2066,6 +2098,9 @@ def export(bundles, scene, map_no, output, max_texture=None, builtin_resources=N
         if vanish_set:
             extras["ikkokuMap"]["vanishRows"] = list(vanish_set)
             suffix += f"_v{vanish_names.setdefault(vanish_set, len(vanish_names))}"
+        if dynamic_index >= 0:
+            extras["ikkokuMap"]["dynamicLightmapIndex"] = dynamic_index
+            suffix += f"_d{dynamic_index}"
         mesh_index = len(exporter.gltf["meshes"])
         exporter.gltf["meshes"].append({"name": f"{role}_{material_index}_{'_'.join(map(str, keys))}_{lm_index}{suffix}",
                                         "primitives": [{"attributes": attributes, "mode": 4, "material": material_index,
@@ -2158,6 +2193,9 @@ def export(bundles, scene, map_no, output, max_texture=None, builtin_resources=N
         provenance["conversion"]["merge"] += "; split by the vanish rows a renderer belongs to (ikkokuMap.vanishRows)"
     realtime_gi = realtime_gi_of(map_scene, dynamic_gi)
     if realtime_gi:
+        realtime_gi.update(uvSources=dynamic_sources,
+                           texcoord=("TEXCOORD_2 of the parts with ikkokuMap.dynamicLightmapIndex: the mesh's UV2, else UV1, else UV0, "
+                                     "times m_LightmapTilingOffsetDynamic.xy plus .zw, V flipped (sampled at (u, 1 - v))"))
         provenance["realtimeGI"] = realtime_gi
     if block_only_images:
         provenance["conversion"]["blockImages"] = ("BC1/BC3 images as their serialized blocks only, every mip, block and pixel "

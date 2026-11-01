@@ -109,7 +109,9 @@ private struct MapFixture {
     var url: URL { root.appendingPathComponent("map.gltf") }
 
     /// `vanishRows` go on the mapRoot mesh; `vanish` adds a one-row list (PR B).
-    init(mapNode: Bool = true, vanishRows: [Int]? = nil, vanish: Bool = false) throws {
+    /// `dynamicLightmap` names dynamic lightmap 0 on the mapRoot mesh, with a
+    /// TEXCOORD_2 when `uv2`.
+    init(mapNode: Bool = true, vanishRows: [Int]? = nil, vanish: Bool = false, dynamicLightmap: Bool = false, uv2: Bool = false) throws {
         root = FileManager.default.temporaryDirectory.appendingPathComponent("ikkoku-map-\(UUID().uuidString)", isDirectory: true)
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
         var buffer = Data()
@@ -121,9 +123,13 @@ private struct MapFixture {
         try Self.rgbaPNG().write(to: root.appendingPathComponent("0_tex.png"))
         func mesh(_ role: String, _ keys: [Int]) -> [String: Any] {
             var info: [String: Any] = ["role": role, "visibleFor": keys, "lightmapIndex": 0, "renderers": 1]
-            if role == "mapRoot", let vanishRows { info["vanishRows"] = vanishRows }
-            return ["name": role, "primitives": [["attributes": ["POSITION": 0, "TEXCOORD_0": 1], "material": 0]],
-                    "extras": ["ikkokuMap": info]]
+            var attributes = ["POSITION": 0, "TEXCOORD_0": 1]
+            if role == "mapRoot" {
+                if let vanishRows { info["vanishRows"] = vanishRows }
+                if dynamicLightmap { info["dynamicLightmapIndex"] = 0 }
+                if uv2 { attributes["TEXCOORD_2"] = 1 }
+            }
+            return ["name": role, "primitives": [["attributes": attributes, "material": 0]], "extras": ["ikkokuMap": info]]
         }
         var gltf: [String: Any] = [
             "asset": ["version": "2.0"],
@@ -244,6 +250,22 @@ struct SourceStudioMapAssetTests {
             }
             #expect(failure?.contains("names vanish rows the map does not list") == true, "\(failure ?? "loaded")")
         }
+    }
+
+    @Test func aDynamicLightmapIndexNeedsItsTexcoord2() async throws {
+        let device = try #require(MTLCreateSystemDefaultDevice())
+        let resources = ResourceStore(device: device)
+        let good = try MapFixture(dynamicLightmap: true, uv2: true), bad = try MapFixture(dynamicLightmap: true)
+        defer { good.remove(); bad.remove() }
+        let (goodURL, goodRoot, badURL, badRoot) = (good.url, good.root, bad.url, bad.root)
+        let asset = try await liveTickOffPool { try SourceStudioMapAsset.load(url: goodURL, packageRoot: goodRoot, resources: resources) }
+        defer { asset.release() }
+        #expect(asset.parts.map(\.dynamicLightmapIndex) == [0, nil])
+        let failure = try await liveTickOffPool { () -> String? in
+            do { _ = try SourceStudioMapAsset.load(url: badURL, packageRoot: badRoot, resources: resources); return nil }
+            catch { return "\(error)" }
+        }
+        #expect(failure?.contains("names a dynamic lightmap without its TEXCOORD_2") == true, "\(failure ?? "loaded")")
     }
 
     @Test func aFileThatIsNotAConvertedMapFailsByNameAndRegistersNothing() async throws {
