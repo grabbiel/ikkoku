@@ -353,7 +353,7 @@ Reviewed 2026-11-01. When one export both deletes source records and adds record
 - **Root order.** `dicObject`, the root dictionary, is a Mono `Dictionary`. After `LoadScene` (Studio.cs:507), slot i holds the i-th root of the file. `Remove` pushes the root's slot onto a last-in, first-out free list (mono-dictionary.cs:954). `Add` takes the last freed slot or appends (:811). Enumeration, and so `SceneInfo.Save`, walks the slots in order (:118). `Resize` runs only when no slot is free, so it keeps the free list.
 - **Copies and additions.** `Import` adds each root copy with `dicObject.Add` (SceneInfo.cs:502). A child copy is added and removed again by its parent's `OnLoadAttach` (`DeleteInfo` without `_delKey`, OCIItem.cs:234, OCIFolder.cs:61), so it does not change the root order. Add Folder, Add Camera and Add Light take `GetNewIndex()` and add a root the same way.
 - **Reload.** `LoadScene` rebuilds `hashIndex` from the file. Item FK keys and route aid keys a delete left taken are free again after a reload, so a reloaded scene uses only the keys its file holds.
-- **Lights.** Whether a light is built depends on the session's light count (`isLightCheck`, SceneInfo.cs:109; `Import`'s check, SceneInfo.cs:483 and ObjectInfoAssist.cs:32). The replay does not model that count ([#316](https://github.com/grabbiel/ikkoku/issues/320)).
+- **Lights.** Whether a light is built depends on the session's light count (`isLightCheck`, SceneInfo.cs:109; `Import`'s check, SceneInfo.cs:483 and ObjectInfoAssist.cs:32). The replay does not model that count ([#316](https://github.com/grabbiel/ikkoku/issues/316)).
 
 **App translation.**
 
@@ -385,9 +385,10 @@ Reviewed 2026-11-01. When one export both deletes source records and adds record
   | `move` | An object was moved to another parent. A move removes and adds roots, which takes and frees slots outside the replay. |
   | `routePoints` | Route points were added or deleted. `AddPoint` takes keys and a delete frees them. |
   | `addThenDelete` | An added or copied object was deleted again. The replay does not model the keys it held. |
-  | `light` | A light was added or copied ([#316](https://github.com/grabbiel/ikkoku/issues/320)). |
+  | `light` | A light was added or copied ([#316](https://github.com/grabbiel/ikkoku/issues/316)). |
   | `overflow` | More than 4,096 structural edits. |
   | `mismatch` | Objects were added or removed by an operation the log does not hold: a merged scene, a plug-in, or an entry this version cannot read. |
+  | `legacyBones` | A scene from an older CharaStudio with a character, when the replay would take a key no earlier delete freed, or copies a character. CharaStudio's load gives such a character the catalog FK bones its record lacks (finding 2 under [Known differences from CharaStudio's save](#known-differences-from-charastudios-save)). It runs `AddObjectAssist.LoadChild` after `SceneInfo.Load` has registered every saved key (Studio.cs:515–519), so `InitBone` and `InitHairBone` (AddObjectAssist.cs:42, :110) take the smallest keys free at load. The upgrade does not hold those keys. A key an earlier delete freed is below all of them, so a replay that takes only such keys is still CharaStudio's. A character copy carries its hidden bones in CharaStudio and takes more keys. |
 
 **Original player.** `Tools/reverse/original_plugin_scene_probe.py --phase oa` makes each operation order in CharaStudio from phase A's fixture and phase C's (all three plug-ins and a character), saves it, and reloads and saves it again. `fixtures/OriginalPluginRewriteProbe.cs` lists the orders (`OrderedCases`).
 
@@ -396,7 +397,7 @@ Reviewed 2026-11-01. When one export both deletes source records and adds record
 
 **Evidence.**
 
-- **Engine.** `SourceSceneOrderTests` (10 tests) mirror phase A's fixture with the independent `TopologyScene` builder. They cover:
+- **Engine.** `SourceSceneOrderTests` (11 tests) mirror phase A's fixture with the independent `TopologyScene` builder. They cover:
   - every oracle operation order, each against its set-based negative control;
   - a character delete followed by a copy, and a character copy's FK, IK, accessory child and look-at keys after a delete;
   - steps that free nothing (the export is the set-based one);
@@ -404,6 +405,8 @@ Reviewed 2026-11-01. When one export both deletes source records and adds record
   - the replay steps and the fallback reasons, built from a document's log;
   - the log: only imported scenes record, the capacity is kept, entries decode leniently, the log travels with a native save, and an old save loads;
   - `FreeKeys` handing out the smallest free key.
+
+  `sourceSceneOrderReplaysALegacySceneOnItsUpgrade` (strict, `IKKOKU_STUDIO_LEGACY_SCENE`, #291's 0.0.7 fixture) deletes item 153 and then copies item 156. The test walks the file's records for its keys (0–158, so 159 is the first key free at load) and applies the rules above. The copy is key 153 in slot 4, and every other root is the upgrade's own record. The export is 1.0.4.2 and equals the same operations' export of the upgraded scene. The set-based negative control appends 159. A second copy, or a copy of the character, gives the `legacyBones` fallback on the legacy scene, while its upgrade replays. Disabling that check fails those cases. `SourceSceneExportValidation.exportStatus`, the app's status line, puts the legacy note first and the reason after it. A replayed order adds no reason.
 
   `SourceScenePluginRewriteTests` adds ordered rewrites: MaterialEditor copies after a delete, in operation order, KKPE's items in key order, and NodesConstraints' indices.
 - **Lanes.**
@@ -418,7 +421,7 @@ Reviewed 2026-11-01. When one export both deletes source records and adds record
 
 **Not verified:**
 
-- Light replay ([#316](https://github.com/grabbiel/ikkoku/issues/320)) and the other fallback cases keep the set-based keys.
+- Light replay ([#316](https://github.com/grabbiel/ikkoku/issues/316)) and the other fallback cases keep the set-based keys.
 - Card links with a delete and a copy stay refused.
 
 ## Route points and settings (ST-T11, ST-T03)

@@ -16,6 +16,10 @@ public enum SourceSceneExportValidation {
         public let keys: [UUID: Int32]
         /// The document object each insertion is written for, by insertion index.
         public let objects: [UUID]
+        /// Whether the source is a scene from an older CharaStudio with a
+        /// character, whose load-time FK bones hold keys the stage does not
+        /// see (`SourceSceneExportValidation.order`).
+        public let legacyCharacters: Bool
     }
 
     /// ST-T03 / ST-S09 / ST-D03: the records the document adds, parents
@@ -78,7 +82,8 @@ public enum SourceSceneExportValidation {
         var keys: [UUID: Int32] = [:]
         for object in document.objects { if let key = object.sourceObjectKey { keys[object.id] = key } }
         for (index, id) in objects.enumerated() { keys[id] = stage.keys[index] }
-        return Staged(stage: stage, keys: keys, objects: objects)
+        return Staged(stage: stage, keys: keys, objects: objects,
+                      legacyCharacters: source.isLegacy && SourceSceneTopology.Tree(source.snapshot).records.values.contains { $0.character != nil })
     }
 
     /// Every object's key when the document adds nothing: each object must

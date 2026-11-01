@@ -173,14 +173,21 @@ private struct Session {
     var document = StudioDocument()
 
     init(_ scene: TopologyScene = fixture()) throws {
-        source = try KoikatsuSceneReader.decodeDocument(scene.data)
+        self.init(source: try KoikatsuSceneReader.decodeDocument(scene.data))
+    }
+
+    init(source: KoikatsuSceneDocument) {
+        self.source = source
         document.sourceSceneFile = "/fixture/a.png"; document.sourceSceneSHA256 = String(repeating: "a", count: 64)
         document.sourceStructuralEdits = SourceSceneEditLog()
-        func append(_ record: KoikatsuObjectRecord, parent: UUID?) {
+        func append(_ record: KoikatsuObjectRecord, parent: UUID?, point: Int32? = nil) {
             var object = StudioObject(name: record.name ?? "Source \(record.sourceKey)", kind: .folder)
-            object.sourceObjectKey = record.sourceKey; object.parent = parent
+            object.sourceObjectKey = record.sourceKey; object.parent = parent; object.sourceAttachmentPoint = point
             document.objects.append(object)
             for child in record.children { append(child, parent: object.id) }
+            for (point, children) in (record.character?.accessoryChildren ?? [:]).sorted(by: { $0.key < $1.key }) {
+                for child in children { append(child, parent: object.id, point: point) }
+            }
         }
         for root in source.snapshot.roots { append(root, parent: nil) }
     }
@@ -258,9 +265,115 @@ private struct Session {
         $0.delete(1); $0.duplicate(5)
         $0.document.sourceStructuralEdits = SourceSceneEditLog(Array(repeating: .unordered(.move), count: SourceSceneEditLog.capacity + 1))
     } == .fallback(.overflow))
-    for reason in [SourceSceneOrderFallback.noLog, .move, .routePoints, .addThenDelete, .light, .overflow, .mismatch] {
+    for reason in [SourceSceneOrderFallback.noLog, .move, .routePoints, .addThenDelete, .light, .overflow, .mismatch, .legacyBones] {
         #expect(!reason.reason.isEmpty)
     }
+}
+
+// MARK: - A legacy scene (ST-T05a)
+
+/// #291's 0.0.7 fixture (`legacy-0.0.7-f64181bf3ded.png`): character 0 with
+/// sub-info keys 1...148 and accessory item 149, lights 150 and 151, root
+/// items 152...158. Every key 0...158 is taken, so the first key free at
+/// load is 159. CharaStudio's load then gives the character the FK bones its
+/// record lacks (10 back-hair bones, finding 2) under the smallest free
+/// keys, after every saved key (Studio.cs:515–519, AddObjectAssist.cs:42,
+/// :110): 159...168, which the upgrade does not hold. The expected keys and
+/// roots below come from this file's records and those rules, never from
+/// the writer.
+@Test(.enabled(if: SourceFixtureSupport.shouldRun(["IKKOKU_STUDIO_LEGACY_SCENE"]), "Requires IKKOKU_STUDIO_LEGACY_SCENE (a 0.0.7 scene)"))
+func sourceSceneOrderReplaysALegacySceneOnItsUpgrade() throws {
+    let legacy = try KoikatsuSceneReader.decodeDocument(Data(contentsOf: URL(fileURLWithPath: try SourceFixtureSupport.require("IKKOKU_STUDIO_LEGACY_SCENE"))))
+    let upgraded = try legacy.upgraded()
+    #expect(legacy.snapshot.version == "0.0.7" && legacy.isLegacy && !upgraded.isLegacy && legacy.orphanPluginIDs.isEmpty)
+    // The scene's keys, walked here: records, a character's FK bones, IK
+    // targets and look-at target, an item's FK bones, route points and aids.
+    var used = Set<Int32>()
+    func walk(_ record: KoikatsuObjectRecord) {
+        used.insert(record.sourceKey)
+        if let character = record.character {
+            character.bones.values.forEach { used.insert($0.sourceKey) }
+            character.ikTargets.values.forEach { used.insert($0.sourceKey) }
+            used.insert(character.lookAtTarget.sourceKey)
+            character.accessoryChildren.values.joined().forEach(walk)
+        }
+        record.item?.bones.values.forEach { used.insert($0.sourceKey) }
+        for point in record.route?.points ?? [] { used.insert(point.bone.sourceKey); if let aid = point.aidKey { used.insert(aid) } }
+        record.children.forEach(walk)
+    }
+    legacy.snapshot.roots.forEach(walk)
+    let firstFreeAtLoad = (Int32(0)...).first { !used.contains($0) }!
+    let roots = legacy.snapshot.roots.map(\.sourceKey)
+    #expect(firstFreeAtLoad == 159 && roots == [0, 150, 151, 152, 153, 154, 155, 156, 157, 158])
+    let deleted = try #require(legacy.snapshot.roots.first { $0.sourceKey == 153 })
+    let template = try #require(legacy.snapshot.roots.first { $0.sourceKey == 156 })
+    #expect(deleted.kind == .item && template.kind == .item && deleted.children.isEmpty && template.children.isEmpty)
+    #expect(deleted.item?.bones.isEmpty == true && template.item?.bones.isEmpty == true)
+    #expect(deleted.item != template.item || deleted.transform != template.transform)   // the copy is visible
+
+    // Delete 153, then duplicate 156. DeleteKey frees 153 alone; GetNewIndex
+    // gives the copy the smallest free key, 153 (below 159, so no load-time
+    // bone holds it); the copy's root takes the slot 153 left (slot 4).
+    let expectedKey: Int32 = 153, expectedSlot = roots.firstIndex(of: 153)!
+    #expect(expectedKey < firstFreeAtLoad)
+    var expectedRoots = roots; expectedRoots[expectedSlot] = expectedKey
+    func session(_ source: KoikatsuSceneDocument, _ build: (inout Session) -> Void) throws
+        -> (order: SourceSceneExportValidation.Order, staged: SourceSceneExportValidation.Staged, deletions: Set<Int32>) {
+        var session = Session(source: source); build(&session); return try session.order()
+    }
+    var exports: [Data] = []
+    for source in [legacy, upgraded] {
+        let (order, staged, deletions) = try session(source) { $0.delete(153); $0.duplicate(156) }
+        #expect(order == .replayed([.delete(153), .insert([0])]))
+        #expect(staged.legacyCharacters == source.isLegacy)
+        guard case .replayed(let steps) = order else { continue }
+        var edits = SourceSceneEdits(deletions: deletions); edits.order = steps
+        exports.append(try staged.stage.editedData(edits))
+        // The set-based keys append the copy as 159: the negative control.
+        let setBased = try KoikatsuSceneReader.decodeDocument(staged.stage.editedData(SourceSceneEdits(deletions: deletions)))
+        #expect(setBased.snapshot.roots.map(\.sourceKey) == roots.filter { $0 != 153 } + [159])
+        #expect(setBased.snapshot.roots.map(\.sourceKey) != expectedRoots)
+    }
+    try #require(exports.count == 2)
+    // The legacy export is the export of its upgrade, saved as 1.0.4.2.
+    #expect(exports[0] == exports[1])
+    let exported = try KoikatsuSceneReader.decodeDocument(exports[0])
+    #expect(exported.snapshot.version == "1.0.4.2" && !exported.isLegacy)
+    var reader = try KoikatsuBinaryReader(exports[0]); try reader.skipPNG()
+    #expect(try reader.string() == "1.0.4.2")
+    #expect(exported.snapshot.roots.map(\.sourceKey) == expectedRoots)
+    let copy = exported.snapshot.roots[expectedSlot], upgradedTemplate = try #require(upgraded.snapshot.roots.first { $0.sourceKey == 156 })
+    #expect(copy.sourceKey == expectedKey && copy.rootDictionaryKey == expectedKey)
+    #expect(copy.kind == .item && copy.item == upgradedTemplate.item && copy.transform == upgradedTemplate.transform && copy.name == upgradedTemplate.name)
+    // Every other root is the upgrade's own record.
+    for (index, root) in exported.snapshot.roots.enumerated() where index != expectedSlot {
+        #expect(root == upgraded.snapshot.roots.first { $0.sourceKey == root.sourceKey })
+    }
+    // The status carries the legacy note, and a replayed order adds no reason.
+    let replayedStatus = SourceSceneExportValidation.exportStatus(fileName: "legacy-ordered.png", source: legacy, order: .replayed([.delete(153), .insert([0])]))
+    #expect(replayedStatus == "Exported edited original scene to legacy-ordered.png, saved as 1.0.4.2 from CharaStudio 0.0.7, as CharaStudio does")
+
+    // A second copy needs a key nothing freed: 159 here, which CharaStudio's
+    // load gave a back-hair bone, so its copy would take 169. The legacy
+    // export keeps the set-based keys and names why; its upgrade, a 1.0.4.2
+    // scene whose records hold every bone, replays.
+    let (second, secondStaged, secondDeletions) = try session(legacy) { $0.delete(153); $0.duplicate(156); $0.duplicate(157) }
+    #expect(second == .fallback(.legacyBones))
+    _ = try secondStaged.stage.editedData(SourceSceneEdits(deletions: secondDeletions))   // no refusal
+    #expect(try session(upgraded) { $0.delete(153); $0.duplicate(156); $0.duplicate(157) }.order == .replayed([.delete(153), .insert([0]), .insert([1])]))
+    // A copy of the legacy character takes its hidden bones' keys too, even
+    // when its own key was freed.
+    #expect(try session(legacy) { $0.delete(153); $0.duplicate(0) }.order == .fallback(.legacyBones))
+    // Without a delete the set-based keys stand (the replay is not needed).
+    #expect(try session(legacy) { $0.duplicate(156) }.order == .unneeded)
+    // The legacy note comes first, then the reason.
+    let fallbackStatus = SourceSceneExportValidation.exportStatus(fileName: "legacy-ordered.png", source: legacy, order: second)
+    let note = try #require(fallbackStatus.range(of: ", saved as 1.0.4.2 from CharaStudio 0.0.7, as CharaStudio does"))
+    let reason = try #require(fallbackStatus.range(of: ". Added objects took keys after the scene's own, which can differ from CharaStudio's for these edits: "
+                                                    + SourceSceneOrderFallback.legacyBones.reason))
+    #expect(note.upperBound <= reason.lowerBound && fallbackStatus.hasSuffix(SourceSceneOrderFallback.legacyBones.reason))
+    // A current scene's status carries neither.
+    #expect(SourceSceneExportValidation.exportStatus(fileName: "a.png", source: upgraded, order: .unneeded) == "Exported edited original scene to a.png")
 }
 
 // MARK: - The log

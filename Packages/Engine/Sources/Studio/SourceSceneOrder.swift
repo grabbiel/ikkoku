@@ -20,7 +20,7 @@ public enum SourceSceneStructuralEdit: Codable, Sendable, Equatable {
 /// and root order of its added records may differ from CharaStudio's for the
 /// same operations.
 public enum SourceSceneOrderFallback: String, Codable, Sendable, Equatable {
-    case noLog, move, routePoints, addThenDelete, light, overflow, mismatch
+    case noLog, move, routePoints, addThenDelete, light, overflow, mismatch, legacyBones
 
     public var reason: String {
         switch self {
@@ -31,6 +31,7 @@ public enum SourceSceneOrderFallback: String, Codable, Sendable, Equatable {
         case .light: return "a light was added or copied (CharaStudio drops a light while two exist)"
         case .overflow: return "more than \(SourceSceneEditLog.capacity) structural edits were recorded"
         case .mismatch: return "objects were added or removed by an operation that is not recorded (a plug-in or a merged scene)"
+        case .legacyBones: return "a character from an older CharaStudio scene gains FK bones when CharaStudio loads it, under keys this export cannot know"
         }
     }
 }
@@ -383,6 +384,49 @@ public extension SourceSceneExportValidation {
         if let unordered { return .fallback(unordered) }
         if !reparents.isEmpty { return .fallback(.move) }
         if staged.stage.layout.lights.contains(true) { return .fallback(.light) }
+        if staged.legacyCharacters, !legacyReplayIsExact(staged, steps) { return .fallback(.legacyBones) }
         return .replayed(steps)
+    }
+
+    /// ST-T05a with #278: a legacy character (`Staged.legacyCharacters`)
+    /// gains, at CharaStudio's load, each catalog FK bone its record lacks,
+    /// under a key `GetNewIndex` takes after every saved key is registered
+    /// (`LoadScene` runs `AddObjectAssist.LoadChild` after `SceneInfo.Load`,
+    /// Studio.cs:515–519; `InitBone` :42, `InitHairBone` :110). Those keys
+    /// are the smallest that were free at load, and the upgrade does not hold
+    /// them. The replay is still CharaStudio's while every key it takes is
+    /// one an earlier delete freed: such a key is below every key free at
+    /// load, so no hidden bone holds it, and CharaStudio takes it too. A copy
+    /// of a legacy character takes more keys in CharaStudio (its hidden bones
+    /// travel with it), so any copy of a character is not exact.
+    private static func legacyReplayIsExact(_ staged: Staged, _ steps: [SourceSceneInsertion.Step]) -> Bool {
+        let tree = SourceSceneTopology.Tree(staged.stage.source.snapshot)
+        for insertion in staged.stage.layout.insertions {
+            if case .duplicate(let template) = insertion.record, tree.records[template]?.character != nil { return false }
+        }
+        // A replay that fails refuses the export with its own reason.
+        guard let replay = try? staged.stage.replay(steps) else { return true }
+        let used = Set(SourceSceneInsertionPlan.usedKeys(staged.stage.source.snapshot))
+        return (replay.keys + replay.subKeys.joined()).allSatisfy(used.contains)
+    }
+
+    /// The status after an original-scene export: ST-T05a's note for a scene
+    /// from an older CharaStudio, ST-T03i's plug-in data no installed plug-in
+    /// reads, then #278's reason when added objects kept the set-based keys.
+    /// A replayed order adds nothing: its keys are CharaStudio's.
+    static func exportStatus(fileName: String, source: KoikatsuSceneDocument, order: Order) -> String {
+        // ST-T03i: entries no installed plug-in reads travel verbatim; that
+        // is CharaStudio's behavior only while no installed plug-in owns them.
+        let orphans = source.orphanPluginIDs
+        // ST-T05a: a scene from an older CharaStudio is written the way
+        // CharaStudio 1.0.4.2 saves it, so even an unedited export changes
+        // its bytes.
+        var status = "Exported edited original scene to \(fileName)"
+            + (source.isLegacy ? ", saved as 1.0.4.2 from CharaStudio \(source.snapshot.version), as CharaStudio does" : "")
+            + (orphans.isEmpty ? "" : ". It keeps plug-in data no installed plug-in reads, unchanged: \(orphans.joined(separator: ", "))")
+        if case .fallback(let reason) = order {
+            status += ". Added objects took keys after the scene's own, which can differ from CharaStudio's for these edits: \(reason.reason)"
+        }
+        return status
     }
 }

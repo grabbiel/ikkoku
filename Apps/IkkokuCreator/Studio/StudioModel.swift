@@ -3164,18 +3164,9 @@ final class StudioModel: ViewportInputHandler, LivePacedHandler {
             edits.thumbnailData = try CaptureOutput.pngData(image)
         }
         try staged.stage.editedData(edits).write(to: url, options: .atomic)
-        // ST-T03i: entries no installed plug-in reads travel verbatim; that
-        // is CharaStudio's behavior only while no installed plug-in owns them.
-        let orphans = source.orphanPluginIDs
-        // ST-T05a: a scene from an older CharaStudio is written the way
-        // CharaStudio 1.0.4.2 saves it, so even an unedited export changes
-        // its bytes.
-        status = "Exported edited original scene to \(url.lastPathComponent)"
-            + (source.isLegacy ? ", saved as 1.0.4.2 from CharaStudio \(source.snapshot.version), as CharaStudio does" : "")
-            + (orphans.isEmpty ? "" : ". It keeps plug-in data no installed plug-in reads, unchanged: \(orphans.joined(separator: ", "))")
-        if case .fallback(let reason) = order {
-            status += ". Added objects took keys after the scene's own, which can differ from CharaStudio's for these edits: \(reason.reason)"
-        }
+        // ST-T05a's legacy note, ST-T03i's orphaned plug-in data and #278's
+        // fallback reason, in that order.
+        status = SourceSceneExportValidation.exportStatus(fileName: url.lastPathComponent, source: source, order: order)
     }
 
     /// Deterministic integration input using original object/bone IDs. This
