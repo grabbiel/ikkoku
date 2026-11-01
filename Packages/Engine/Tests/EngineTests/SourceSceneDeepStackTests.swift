@@ -115,25 +115,32 @@ func theDeepestScenesFirstHalfNeedsMoreThanAGCDWorkersStack() async throws {
     let resources = ResourceStore(device: try #require(MTLCreateSystemDefaultDevice()))
     let folder = try temporaryFolder()
     defer { try? FileManager.default.removeItem(at: folder) }
-    var taken: [DeepChain: (decode: Int, firstHalf: Int, outcome: String)] = [:]
+    var taken: [DeepChain: (decode: Int, release: Int, firstHalf: Int, outcome: String)] = [:]
     for chain in DeepChain.allCases {
-        taken[chain] = try await liveTickOffPool { () -> (decode: Int, firstHalf: Int, outcome: String) in
+        taken[chain] = try await liveTickOffPool { () -> (decode: Int, release: Int, firstHalf: Int, outcome: String) in
             let data = deepScene(levels: deepestLevels, chain: chain)
             let reference = try deepReference(data, chain: chain, in: folder)
-            let decode = try stackTaken { _ = try KoikatsuSceneReader.decodeDocument(data) }
+            // The decode alone (its result is kept), then the release alone.
+            var document: KoikatsuSceneDocument?
+            let decode = try stackTaken { document = try KoikatsuSceneReader.decodeDocument(data) }
+            let release = stackTaken { document = nil }
             var outcome = "assembled"
             let firstHalf = stackTaken {
                 do { _ = try SourceStudioCharacterPreview.assemble(reference: reference, resources: resources) }
                 catch { outcome = String(describing: error) }
             }
-            return (decode, firstHalf, outcome)
+            return (decode, release, firstHalf, outcome)
         }
         let measured = try #require(taken[chain])
         print("[#321 deep stack] \(deepestLevels) nested \(chain.rawValue): the decode took \(measured.decode / 1024) KiB of stack, "
-              + "the first half \(measured.firstHalf / 1024) KiB")
+              + "its release \(measured.release / 1024) KiB, the first half \(measured.firstHalf / 1024) KiB")
         #expect(measured.outcome == "Source character record is missing.", "\(chain.rawValue)")
         // The batch's workers hold it with room to spare.
         #expect(measured.firstHalf < SourceStudioCharacterBatch.stackSize / 4, "\(chain.rawValue): \(measured.firstHalf) bytes")
+        // Releasing the tree recurses too, but far less: a decoded document or
+        // character record dropped on a GCD queue (the Studio's build queue)
+        // is safe at this depth.
+        #expect(measured.release < gcdWorkerStack / 4, "\(chain.rawValue): \(measured.release) bytes")
     }
     #if DEBUG
     let deepest = taken.values.map { $0.firstHalf }.max() ?? 0
