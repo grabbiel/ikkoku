@@ -167,6 +167,8 @@ acceptance boundary; their old “next” steps are historical, not a live queue
   identifies an allocation/root-order mismatch and preserves both plugin-rich
   refusals. An [instrumented baseline-only control](../reference/studio/scene-editing.md#baseline-only-shutdown-control-2026-11-01)
   also reaches the probe's own quit callback and exits with an access violation.
+  A [ready-only control](../reference/studio/scene-editing.md#ready-only-shutdown-control-2026-11-01)
+  reproduces that exit while omitting the probe's scene load/save and edit operations.
   Evidence completeness and resource release are confirmed separately;
   original-player lifecycle remains unaccepted, with no added export support.
   General plugin compatibility remains outside the supported subset.
