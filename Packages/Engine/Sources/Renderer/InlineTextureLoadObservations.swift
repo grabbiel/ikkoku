@@ -19,8 +19,9 @@ final class InlineTextureLoadObservations {
         /// Waiting for an upload permit (no wait on the main thread), and the
         /// autorelease pool's push.
         case permitWait
-        /// The image's provider data: ImageIO decodes here, then copies.
-        case providerAccess
+        /// The decoded pixels (`InlineTextureLoader.decodedPixels`): ImageIO
+        /// decodes here, into a bitmap or the provider's copy.
+        case decode
         /// The pixel-length check and the staging buffer.
         case stagingAllocation
         /// Per strip: converting into staging.

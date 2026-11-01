@@ -85,9 +85,10 @@ final class UploadPermits: @unchecked Sendable {
 /// on its own command buffers, so it needs no worker thread from any pool.
 ///
 /// It reproduces MetalKit's results exactly: pixel format, size, mip count,
-/// usage, storage mode and every texel of every level
-/// (`InlineTextureLoaderIdentityTests`). MetalKit treats two kinds of image
-/// differently:
+/// usage, storage mode and every texel of every level, as far as measured
+/// (`InlineTextureLoaderIdentityTests`, `docs/reference/renderer.md`). Large
+/// JPEGs depend on how the pixels are first reached (`decodedPixels(_:)`).
+/// MetalKit treats two kinds of image differently:
 /// - Images ImageIO decoded from a file (`Source.imageIO`): the `srgb` flag
 ///   picks the sRGB variant of 8-bit formats, 8-bit colour becomes BGRA
 ///   (premultiplied colour is unpremultiplied; HEIF and JPEG XL straight
@@ -291,8 +292,8 @@ enum InlineTextureLoader {
         // at once, plus one from the main thread, which never waits for a permit.
         try UploadPermits.shared.withPermit { try autoreleasepool {
             observations?.lap(.permitWait)
-            guard let data = image.dataProvider?.data else { throw Failure.decode(describe(image)) }
-            observations?.lap(.providerAccess)
+            guard let data = decodedPixels(source) else { throw Failure.decode(describe(image)) }
+            observations?.lap(.decode)
             try withExtendedLifetime(data) {
                 guard let pixels = CFDataGetBytePtr(data),
                       CFDataGetLength(data) >= image.bytesPerRow * (height - 1) + width * (image.bitsPerPixel / 8) else {
@@ -403,6 +404,44 @@ enum InlineTextureLoader {
               let type = CGImageSourceGetType(source) as String?,
               let image = CGImageSourceCreateImageAtIndex(source, 0, nil) else { return nil }
         return Image(cgImage: image, source: .imageIO(type: type))
+    }
+
+    /// The decoded pixels of `source`, with the image's own row stride.
+    ///
+    /// ImageIO picks a large JPEG's decoder by how its pixels are first
+    /// reached. The provider's copy gets one decoder. A draw into a bitmap of
+    /// the image's own layout and colour space gets another, which gives
+    /// MetalKit's pixels. Up to 768² the two agree; from 1024² on, most bytes
+    /// differ by up to 25–29 levels (`docs/reference/renderer.md`). JPEGs
+    /// that ImageIO decoded as opaque 8-bit RGB (`drawsDecodedPixels`) are
+    /// therefore drawn, 1:1 with no interpolation or blending. Every other
+    /// image keeps the provider's copy: opaque PNGs, whose two routes agree,
+    /// included.
+    static func decodedPixels(_ source: Image) -> CFData? {
+        let image = source.cgImage
+        guard drawsDecodedPixels(source), let space = image.colorSpace,
+              let pixels = NSMutableData(length: image.bytesPerRow * image.height),
+              let context = CGContext(data: pixels.mutableBytes, width: image.width, height: image.height, bitsPerComponent: 8,
+                                      bytesPerRow: image.bytesPerRow, space: space,
+                                      bitmapInfo: CGImageAlphaInfo.noneSkipLast.rawValue) else {
+            return image.dataProvider?.data
+        }
+        context.interpolationQuality = .none
+        context.setBlendMode(.copy)
+        context.draw(image, in: CGRect(x: 0, y: 0, width: image.width, height: image.height))
+        return pixels as CFData
+    }
+
+    /// Whether `decodedPixels` draws `source`: a JPEG that ImageIO decoded
+    /// as opaque 8-bit RGB in the `noneSkipLast` layout. Grey and CMYK
+    /// JPEGs, other file types and images not from ImageIO are not drawn.
+    static func drawsDecodedPixels(_ source: Image) -> Bool {
+        guard source.source == .imageIO(type: "public.jpeg") else { return false }
+        let image = source.cgImage
+        let order = CGBitmapInfo(rawValue: image.bitmapInfo.rawValue & CGBitmapInfo.byteOrderMask.rawValue)
+        return image.bitsPerComponent == 8 && image.bitsPerPixel == 32 && image.alphaInfo == .noneSkipLast
+            && !image.bitmapInfo.contains(.floatComponents) && (order == [] || order == .byteOrder32Big)
+            && image.colorSpace?.model == .rgb
     }
 
     /// A GPU texture container, by its magic bytes. `ResourceStore` rejects

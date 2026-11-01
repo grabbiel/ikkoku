@@ -37,15 +37,15 @@ private func steppedLaps(_ calls: [Int]) -> [Aggregate] { calls.map { Aggregate(
         let clock = ObservationClock { times[$0] }
         let observer = InlineTextureLoadObservations(clock: clock.now)
         observer.start()
-        observer.lap(.providerAccess)
+        observer.lap(.decode)
         observer.lap(.conversion)
         observer.lap(.conversion)
         observer.start() // The 7.75 s between loads count nowhere.
         observer.lap(.cleanup)
-        #expect(observer[.providerAccess] == Aggregate(calls: 1, milliseconds: 500))
+        #expect(observer[.decode] == Aggregate(calls: 1, milliseconds: 500))
         #expect(observer[.conversion] == Aggregate(calls: 2, milliseconds: 1750))
         #expect(observer[.cleanup] == Aggregate(calls: 1, milliseconds: 125))
-        #expect(Stage.allCases.filter { observer[$0].calls > 0 } == [.providerAccess, .conversion, .cleanup])
+        #expect(Stage.allCases.filter { observer[$0].calls > 0 } == [.decode, .conversion, .cleanup])
         #expect(observer.milliseconds == 2375 && clock.reads == 6)
     }
 }
@@ -161,9 +161,10 @@ private func steppedLaps(_ calls: [Int]) -> [Aggregate] { calls.map { Aggregate(
 /// `newTexture(data:)`; ours, `image(data:)` then `texture`, without an
 /// observer; the same with an observer, for the stage split; and MetalKit's
 /// `newTexture(cgImage:)` on a fresh ImageIO image, which shows how fast
-/// MetalKit reaches decoded pixels. A second provider access on the observed
-/// image afterwards separates the copy from the decode. Medians of 16 rounds
-/// after 3 warm-ups; the stage medians need not add up to the median whole.
+/// MetalKit reaches decoded pixels. A provider access on the observed image
+/// afterwards shows whether ImageIO kept a decoded copy in the image (then it
+/// costs a copy) or decodes again. Medians of 16 rounds after 3 warm-ups; the
+/// stage medians need not add up to the median whole.
 @Suite struct InlineTextureLoadFormatTiming {
     /// Photo-like content: smooth waves with a little noise, so JPEG and
     /// HEIC compress it as they would a texture, not as noise.
@@ -205,7 +206,7 @@ private func steppedLaps(_ calls: [Int]) -> [Aggregate] { calls.map { Aggregate(
         let specs: [(name: String, side: Int, alpha: Bool, type: String, quality: Double?)] = [
             ("jpeg-1024", 1024, false, "public.jpeg", 0.9), ("jpeg-2048", 2048, false, "public.jpeg", 0.9),
             ("heic-rgba-1024", 1024, true, "public.heic", 0.9), ("heic-rgba-2048", 2048, true, "public.heic", 0.9),
-            ("png-rgba-1024", 1024, true, "public.png", nil),
+            ("png-rgba-1024", 1024, true, "public.png", nil), ("png-rgb-1024", 1024, false, "public.png", nil),
         ]
         var files: [(name: String, data: Data)] = []
         for spec in specs {
@@ -279,5 +280,60 @@ private func steppedLaps(_ calls: [Int]) -> [Aggregate] { calls.map { Aggregate(
             try (lines.joined(separator: "\n") + "\n").write(toFile: path, atomically: true, encoding: .utf8)
         }
         #expect(lines.allSatisfy { !$0.contains("failures") })
+    }
+
+    /// Opt-in footprint, Release, one run per process (`--filter
+    /// jpegLoadFootprint` with `IKKOKU_TEXTURE_FOOTPRINT=1`): the physical
+    /// footprint one 2048² JPEG load adds at its peak, on a plain thread, and
+    /// what remains while the decoded image is still held (any decoded copy
+    /// ImageIO keeps in it, beside the texture), then after it is released.
+    @Test(.enabled(if: (ProcessInfo.processInfo.environment["IKKOKU_TEXTURE_FOOTPRINT"] ?? "") == "1" && MTLCreateSystemDefaultDevice() != nil,
+                   "Opt-in footprint probe: IKKOKU_TEXTURE_FOOTPRINT=1 and a Metal device"))
+    func jpegLoadFootprint() async throws {
+        let small = try #require(Self.image(side: 64, alpha: false).flatMap { Self.encode($0, as: "public.jpeg", quality: 0.9) })
+        let large = try #require(Self.image(side: 2048, alpha: false).flatMap { Self.encode($0, as: "public.jpeg", quality: 0.9) })
+        let line = await onOwnThread { () -> String in
+            let device = MTLCreateSystemDefaultDevice()!, queue = device.makeCommandQueue()!
+            typealias Reset = @convention(c) (Int32) -> Int32
+            typealias Usage = @convention(c) (Int32, Int32, UnsafeMutableRawPointer) -> Int32
+            let any = UnsafeMutableRawPointer(bitPattern: -2) // RTLD_DEFAULT
+            guard let resetSymbol = dlsym(any, "proc_reset_footprint_interval"), let usageSymbol = dlsym(any, "proc_pid_rusage") else {
+                return "no footprint interval"
+            }
+            let reset = unsafeBitCast(resetSymbol, to: Reset.self), usage = unsafeBitCast(usageSymbol, to: Usage.self)
+            func peak() -> UInt64 {
+                var info = rusage_info_v4()
+                return usage(getpid(), RUSAGE_INFO_V4, &info) == 0 ? info.ri_interval_max_phys_footprint : 0
+            }
+            func footprint() -> UInt64 {
+                var info = task_vm_info_data_t()
+                var count = mach_msg_type_number_t(MemoryLayout<task_vm_info_data_t>.size / MemoryLayout<natural_t>.size)
+                let result = withUnsafeMutablePointer(to: &info) {
+                    $0.withMemoryRebound(to: integer_t.self, capacity: Int(count)) { task_info(mach_task_self_, task_flavor_t(TASK_VM_INFO), $0, &count) }
+                }
+                return result == KERN_SUCCESS ? info.phys_footprint : 0
+            }
+            func mib(_ bytes: UInt64, _ base: UInt64) -> String { String(format: "%.1f MiB", (Double(bytes) - Double(base)) / 1_048_576) }
+            // Warm ImageIO, Metal and the permits with a small load first.
+            guard let warm = InlineTextureLoader.image(data: small),
+                  (try? InlineTextureLoader.texture(warm, srgb: true, device: device, queue: queue)) != nil else { return "warm-up failed" }
+            var decoded = InlineTextureLoader.image(data: large)
+            guard let draws = decoded.map(InlineTextureLoader.drawsDecodedPixels) else { return "decode failed" }
+            let before = footprint()
+            _ = reset(getpid())
+            // Held: the readings are taken while the decoded image is still alive.
+            let (texture, top, held) = withExtendedLifetime(decoded) {
+                (decoded.flatMap { try? InlineTextureLoader.texture($0, srgb: true, device: device, queue: queue) }, peak(), footprint())
+            }
+            decoded = nil
+            let released = footprint()
+            guard let texture else { return "load failed" }
+            return withExtendedLifetime(texture) {
+                "jpeg-2048 (\(large.count / 1024) KB, draw route \(draws)): peak \(mib(top, before)) above the start; "
+                    + "image and texture held \(mib(held, before)); texture only \(mib(released, before))"
+            }
+        }
+        print("[texture-footprint] \(line)")
+        #expect(line.hasPrefix("jpeg-2048"))
     }
 }

@@ -602,3 +602,200 @@ enum TextureIdentityCases {
         #expect(lines.allSatisfy { !$0.contains("nan") })
     }
 }
+
+// MARK: - JPEG decode route (#290)
+
+extension TextureIdentityCases {
+    /// JPEG files that differ in what a decoder must handle.
+    enum JPEGVariant: String, CaseIterable, Sendable {
+        case srgb, untagged, displayP3, progressive, rotated, grey, cmyk
+    }
+
+    /// A gradient with a little noise: opaque RGBX, 8-bit grey or CMYK.
+    static func jpegSource(_ variant: JPEGVariant, width: Int, height: Int) -> CGImage? {
+        let channels = variant == .grey ? 1 : 4
+        var bytes = [UInt8](repeating: 255, count: width * height * channels), seed: UInt32 = 0x9e37_79b9
+        for y in 0..<height {
+            for x in 0..<width {
+                let i = (y * width + x) * channels
+                for k in 0..<min(channels, 3) {
+                    seed = seed &* 1_664_525 &+ 1_013_904_223
+                    let ramp = k == 0 ? x * 255 / max(1, width - 1) : k == 1 ? y * 255 / max(1, height - 1) : (x + y) * 255 / max(1, width + height - 2)
+                    bytes[i + k] = UInt8(clamping: ramp + Int(seed >> 27) - 16)
+                }
+                if variant == .cmyk { bytes[i + 3] = UInt8(truncatingIfNeeded: (x * 3 + y) & 63) }
+            }
+        }
+        let space: CGColorSpace?, info: CGImageAlphaInfo
+        switch variant {
+        case .grey: space = CGColorSpace(name: CGColorSpace.genericGrayGamma2_2); info = .none
+        case .cmyk: space = CGColorSpace(name: CGColorSpace.genericCMYK); info = .none
+        case .displayP3: space = CGColorSpace(name: CGColorSpace.displayP3); info = .noneSkipLast
+        default: space = CGColorSpace(name: CGColorSpace.sRGB); info = .noneSkipLast
+        }
+        guard let space, let provider = CGDataProvider(data: Data(bytes) as CFData) else { return nil }
+        return CGImage(width: width, height: height, bitsPerComponent: 8, bitsPerPixel: 8 * channels, bytesPerRow: width * channels,
+                       space: space, bitmapInfo: CGBitmapInfo(rawValue: info.rawValue), provider: provider, decode: nil,
+                       shouldInterpolate: false, intent: .defaultIntent)
+    }
+
+    /// `variant` written as a JPEG of quality 0.9.
+    static func jpeg(_ variant: JPEGVariant, width: Int, height: Int) -> Data? {
+        guard let image = jpegSource(variant, width: width, height: height) else { return nil }
+        var properties: [CFString: Any] = [kCGImageDestinationLossyCompressionQuality: 0.9]
+        if variant == .progressive { properties[kCGImagePropertyJFIFDictionary] = [kCGImagePropertyJFIFIsProgressive: true] }
+        if variant == .rotated { properties[kCGImagePropertyOrientation] = 6 }
+        let data = NSMutableData()
+        guard let destination = CGImageDestinationCreateWithData(data, "public.jpeg" as CFString, 1, nil) else { return nil }
+        CGImageDestinationAddImage(destination, image, properties as CFDictionary)
+        guard CGImageDestinationFinalize(destination), data.length > 0 else { return nil }
+        // ImageIO tags every JPEG it writes (an ICC profile and Exif's colour
+        // space), so the untagged one loses both segments.
+        return variant == .untagged ? withoutColourTags(data as Data) : data as Data
+    }
+
+    /// The marker segments of `jpeg` before its first scan, or nil if malformed.
+    static func headerSegments(_ jpeg: Data) -> [(marker: UInt8, range: Range<Int>)]? {
+        let bytes = [UInt8](jpeg)
+        guard bytes.count > 4, bytes[0] == 0xFF, bytes[1] == 0xD8 else { return nil }
+        var segments: [(marker: UInt8, range: Range<Int>)] = [], at = 2
+        while at + 4 <= bytes.count, bytes[at] == 0xFF, bytes[at + 1] != 0xDA {
+            let end = at + 2 + (Int(bytes[at + 2]) << 8 | Int(bytes[at + 3]))
+            guard end <= bytes.count else { return nil }
+            segments.append((bytes[at + 1], at..<end)); at = end
+        }
+        return segments
+    }
+
+    /// Whether a segment is an ICC profile (APP2 `ICC_PROFILE`) or Exif (APP1 `Exif`).
+    static func isColourTag(_ jpeg: Data, _ segment: (marker: UInt8, range: Range<Int>)) -> Bool {
+        let payload = [UInt8](jpeg[(segment.range.lowerBound + 4)..<segment.range.upperBound])
+        return (segment.marker == 0xE2 && payload.starts(with: Array("ICC_PROFILE".utf8)))
+            || (segment.marker == 0xE1 && payload.starts(with: Array("Exif".utf8)))
+    }
+
+    /// `jpeg` without its ICC profile and Exif segments; the rest is unchanged.
+    static func withoutColourTags(_ jpeg: Data) -> Data {
+        guard let segments = headerSegments(jpeg) else { return jpeg }
+        var out = Data(jpeg.prefix(2))
+        for segment in segments where !isColourTag(jpeg, segment) { out += jpeg[segment.range] }
+        return out + jpeg[(segments.last?.range.upperBound ?? 2)...]
+    }
+
+    /// Whether the encoded file shows what `variant` stands for, or why not.
+    static func jpegProblem(_ variant: JPEGVariant, _ data: Data) -> String? {
+        guard let source = CGImageSourceCreateWithData(data as CFData, nil), CGImageSourceGetType(source) as String? == "public.jpeg",
+              let image = CGImageSourceCreateImageAtIndex(source, 0, nil),
+              let properties = CGImageSourceCopyPropertiesAtIndex(source, 0, nil) as? [CFString: Any] else { return "not a JPEG" }
+        let profile = properties[kCGImagePropertyProfileName] as? String
+        let model = image.colorSpace?.model
+        switch variant {
+        case .srgb: return model == .rgb && profile != nil ? nil : "sRGB: model \(String(describing: model)) profile \(profile ?? "none")"
+        case .untagged:
+            let tags = headerSegments(data)?.filter { isColourTag(data, $0) }.count
+            return model == .rgb && tags == 0 ? nil : "untagged: \(String(describing: tags)) colour tag segments"
+        case .displayP3:
+            return image.colorSpace?.name == CGColorSpace.displayP3 ? nil : "P3: space \(image.colorSpace?.name as String? ?? "none")"
+        case .progressive:
+            let jfif = properties[kCGImagePropertyJFIFDictionary] as? [CFString: Any]
+            return jfif?[kCGImagePropertyJFIFIsProgressive] as? Bool == true ? nil : "not progressive: \(String(describing: jfif))"
+        case .rotated: return properties[kCGImagePropertyOrientation] as? Int == 6 ? nil : "orientation \(String(describing: properties[kCGImagePropertyOrientation]))"
+        case .grey: return model == .monochrome ? nil : "grey: model \(String(describing: model))"
+        case .cmyk: return model == .cmyk ? nil : "CMYK: model \(String(describing: model))"
+        }
+    }
+}
+
+/// ImageIO picks a large JPEG's decoder by how its pixels are first reached
+/// (`InlineTextureLoader.decodedPixels`). A comparison on one shared image, or
+/// of small files only, cannot tell the routes apart, so here MetalKit and the
+/// in-line loader each decode their own copy, as the app's loads do: from the
+/// file (MetalKit's URL load, `ResourceStore.texture(url:)` before #288) and
+/// from a fresh ImageIO image of the bytes (MetalKit's `newTexture(cgImage:)`,
+/// `texture(data:)` before #288).
+@Suite struct InlineTextureLoaderJPEGRouteTests {
+    static let sizes = [(37, 23), (1024, 1024), (2048, 2048)]
+
+    @Test("Independently decoded JPEGs match MetalKit at 37×23, 1024² and 2048²: sRGB, untagged, Display P3, progressive, EXIF orientation 6, grey and CMYK")
+    func independentlyDecodedJPEGsMatchMetalKit() async throws {
+        let device = try #require(MTLCreateSystemDefaultDevice())
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent("jpeg-route-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        var files: [(name: String, url: URL, mustLoad: Bool)] = []
+        for (width, height) in Self.sizes {
+            for variant in TextureIdentityCases.JPEGVariant.allCases {
+                let name = "\(variant.rawValue) \(width)x\(height)"
+                let data = try #require(TextureIdentityCases.jpeg(variant, width: width, height: height), "\(name) encode")
+                #expect(TextureIdentityCases.jpegProblem(variant, data) == nil, "\(name): \(TextureIdentityCases.jpegProblem(variant, data) ?? "")")
+                let url = directory.appendingPathComponent("\(variant.rawValue)-\(width)x\(height).jpg")
+                try data.write(to: url)
+                // CMYK is checked for agreement only: both loaders may reject it.
+                files.append((name, url, variant != .cmyk))
+            }
+        }
+        let snapshot = files
+        let mismatches = await onOwnThread { () -> [String] in
+            let loader = MTKTextureLoader(device: device), queue = device.makeCommandQueue()!
+            func record(_ make: () throws -> any MTLTexture) -> Result<TextureIdentityRecord, any Error> {
+                Result { try TextureIdentityRecord(try make(), device: device, queue: queue) }
+            }
+            return snapshot.flatMap { name, url, mustLoad -> [String] in
+                [true, false].flatMap { srgb -> [String] in
+                    var problems: [String] = []
+                    // MetalKit's URL load rejects an EXIF orientation; the in-line loader ignores it.
+                    if name.hasPrefix("rotated") {
+                        let metalKit = record { try loader.newTexture(URL: url, options: TextureIdentityComparison.options(srgb)) }
+                        let inline = record {
+                            let image = try InlineTextureLoader.image(data: Data(contentsOf: url)).orThrow(name)
+                            return try InlineTextureLoader.texture(image, srgb: srgb, device: device, queue: queue)
+                        }
+                        if case .success = metalKit { problems.append("\(name) srgb \(srgb) url: MetalKit loaded an EXIF-rotated JPEG") }
+                        if case .failure(let error) = inline { problems.append("\(name) srgb \(srgb) url: in-line failed: \(error)") }
+                    } else if let mismatch = TextureIdentityComparison.compare(name: "\(name) srgb \(srgb) url", image: nil, url: url, srgb: srgb,
+                                                                              device: device, loader: loader, queue: queue, requireSuccess: mustLoad) {
+                        problems.append(mismatch.description)
+                    }
+                    // Two fresh images of the same bytes, one per loader.
+                    guard let data = try? Data(contentsOf: url) else { return problems + ["\(name): unreadable"] }
+                    let metalKit = record {
+                        try loader.newTexture(cgImage: try InlineTextureLoader.image(data: data).orThrow(name).cgImage,
+                                              options: TextureIdentityComparison.options(srgb))
+                    }
+                    let inline = record {
+                        try InlineTextureLoader.texture(try InlineTextureLoader.image(data: data).orThrow(name), srgb: srgb, device: device, queue: queue)
+                    }
+                    if let mismatch = TextureIdentityComparison.compareRecords(name: "\(name) srgb \(srgb) image", metalKit: metalKit,
+                                                                               inline: inline, requireSuccess: mustLoad) {
+                        problems.append(mismatch.description)
+                    }
+                    return problems
+                }
+            }
+        }
+        #expect(files.count == 21)
+        #expect(mismatches.isEmpty, "\(mismatches.count) problems in \(files.count * 4) comparisons:\n\(mismatches.joined(separator: "\n"))")
+    }
+
+    @Test("Only JPEGs ImageIO decodes as opaque 8-bit RGB take the draw route; grey, CMYK and opaque PNGs keep the provider's copy")
+    func drawRouteCoversOnlyOpaqueRGBJPEGs() throws {
+        for variant in TextureIdentityCases.JPEGVariant.allCases {
+            let data = try #require(TextureIdentityCases.jpeg(variant, width: 37, height: 23))
+            let image = try #require(InlineTextureLoader.image(data: data))
+            #expect(InlineTextureLoader.drawsDecodedPixels(image) == ![.grey, .cmyk].contains(variant), "\(variant)")
+        }
+        let opaque = try #require(TextureIdentityCases.jpegSource(.srgb, width: 37, height: 23))
+        let encoded = try #require(TextureIdentityCases.encode(opaque, as: "public.png"))
+        let png = try #require(InlineTextureLoader.image(data: encoded))
+        try #require(png.cgImage.alphaInfo == .noneSkipLast)
+        #expect(!InlineTextureLoader.drawsDecodedPixels(png))
+        #expect(!InlineTextureLoader.drawsDecodedPixels(.init(cgImage: opaque, source: .data)))
+    }
+}
+
+private extension Optional {
+    func orThrow(_ what: String) throws -> Wrapped {
+        guard let self else { throw InlineTextureLoader.Failure.decode(what) }
+        return self
+    }
+}
