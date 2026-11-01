@@ -173,11 +173,6 @@ Other options:
   workspace tree, the toolbar and the timeline bar read the document in
   their bodies, as before, and `published` has them read what the model
   publishes when it changes. The app reads it once at launch.
-- `IKKOKU_PERF_POSE_PICKER` (`built` or `kept`, the default), a measurement
-  control for the same follow-ups: `built` builds the toolbar's pose-mode
-  pickers when a character is selected and drops them when it is not, as
-  before, and `kept` keeps them mounted, hidden, in between. The app reads
-  it once at launch.
 - Measurement controls for the
   [item 6 follow-up](#phase-2-item-6-follow-up-route-copies-prefetch-and-kept-donations),
   all defaulting to the shipped behavior:
@@ -5444,15 +5439,15 @@ per-frame main-thread time does not grow.
 ## Phase 2, item 7 follow-ups
 
 Follow-ups to [item 7](#phase-2-item-7-selection-and-the-inspector), from
-its [What remains](#what-remains-after-item-7) list (#319). Two of them
-change the app: the workspace tree, the toolbar and the timeline bar read
-state the model publishes (C4), and the toolbar keeps its pose-mode
-pickers mounted (C3). A kept hidden section during an FK drag (C2) needed
-no change once C4 landed. Hiding a kept view's controls (C1) was measured
-and left for a follow-up, and the rest of a select between two characters
-(C5) was left as it is. Each change has a measurement control that keeps
-the shipped behaviour by default (`IKKOKU_PERF_PANEL_STATE`,
-`IKKOKU_PERF_POSE_PICKER`).
+its [What remains](#what-remains-after-item-7) list (#319). One of them
+changes the app: the workspace tree, the toolbar and the timeline bar read
+state the model publishes (C4), with a measurement control that keeps the
+shipped behaviour by default (`IKKOKU_PERF_PANEL_STATE`). Keeping the
+toolbar's pose-mode pickers mounted (C3) was tried and dropped, because its
+gain stayed within the noise. A kept hidden section during an FK drag (C2)
+needed no change once C4 landed. Hiding a kept view's controls (C1) was
+measured and left for a follow-up, and the rest of a select between two
+characters (C5) was left as it is.
 
 The step-1 profiles ran on base `189e5b8c` (Release) while the only
 display was a virtual 60 Hz screen and the window presented no frame, so
@@ -5487,30 +5482,42 @@ change that reaches a panel without a refresh, or an input missing from
 the workspace key, fails the Studio lanes. `IKKOKU_PERF_PANEL_STATE=document`
 restores the old reads for measurement.
 
-### C3: the toolbar keeps its pose-mode pickers
+### C3: keeping the toolbar's pose-mode pickers (tried and dropped)
 
-The toolbar built its pose-mode pickers (the Object / FK / IK segmented
-control, and the FK group picker in FK mode) when a character was selected
-and dropped them when the selection became another kind or nothing:
-building the segmented control took about 7 ms and dropping it 2.7–2.8 ms
-in the step-1 profile (without presentation). They now stay mounted while
-the selection is not a character, hidden with `studioToolbarHidden`: their
-size is fixed and framed to zero in both directions, they are transparent,
-take no clicks, are disabled (so they leave the Tab loop) and are out of
-the accessibility tree. They follow the Local toggle with no row spacing
-of their own, so hidden they add no gap, and shown they sit 8 points after
-it as before. `IKKOKU_PERF_POSE_PICKER=built` builds and drops them as
-before.
+The toolbar builds its pose-mode pickers (the Object / FK / IK segmented
+control, and the FK group picker in FK mode) when a character is selected
+and drops them when the selection becomes another kind or nothing. In the
+step-1 profile (without presentation), building the segmented control took
+about 7 ms and dropping it 2.7–2.8 ms. C3 kept them mounted while the
+selection was not a character, hidden: their size was fixed and framed to
+zero, and they were transparent, took no clicks, were disabled (so they
+left the Tab loop) and were out of the accessibility tree. A measurement
+control built and dropped them as before. The gain did not hold up:
 
-The segmented control is drawn in one of two sizes, in base as in head:
-at its content's width (142 points, centred in its 150-point frame) or
-filling the frame with equal segments. Which one depends on when it was
-last measured after launch, so it varies from run to run in both builds
-(item 7 saw the same variant). Offering the hidden pickers no width, so
-that showing them would measure them again as a rebuild does, did not
-make it deterministic either, so it was not kept. In the window captures
-below, every difference between base and head is this variant, in both
-directions.
+- **One loaded run per mode, without presentation.** A select from nothing
+  took 49.9 (48.6–51.6) ms with the pickers built and 27.0 (26.5–47.9) ms
+  with them kept, 12 warm samples each. That run misled. The two runs
+  were not interleaved, and the outside load differed between them:
+  another agent's Swift build ran at 78% through both, and the Spotlight
+  indexer ran at up to 143% before the built run and after the kept one.
+  Under outside load the main thread runs faster (see the frequency
+  caveat under [Measurements](#measurements-item-7-follow-ups)), so the
+  same select took 27–52 ms there, against 46–80 ms in quiet runs. The
+  kept run's own samples reached the built run's level.
+- **The quiet window without presentation (window 1).** With 4 ABBA runs
+  per mode, every kept run's median (69.7–70.8 ms) was below every built
+  run's (73.1–75.0 ms), so the pickers saved about 4 ms, with the pooled
+  ranges overlapping (table below). A select from a character to a folder
+  was 2 ms slower kept, within the noise.
+- **The composited window (window 2).** Base against a head that still
+  had C3: a select from nothing took 68.1 (44.0–76.9) ms against
+  65.6 (40.5–73.7) ms, 2.5 ms faster, within each other's ranges.
+
+A few milliseconds inside the noise do not pay for a kept hidden control
+and the focus and accessibility guarantees it needs, so the toolbar builds
+and drops the pickers as in base. C3's removal restores base's toolbar, so
+the composited base against head cells, timed with C3 in the head, stand
+for C4 alone within the noise.
 
 ### C2: a kept hidden section during an FK drag (no change)
 
@@ -5552,7 +5559,141 @@ Access). So it is left for a follow-up; see
 
 ### Measurements (item 7 follow-ups)
 
-TODO(r7l) ABBA table.
+**Composited (window 2, the primary result).** 2026-11-01, 16:43–17:06,
+on the external display (M32UC, 1920 × 1080 points at 120 Hz, the main
+display, recorded at the start and the end of the window), with the window
+composited and presenting. Release builds: base `189e5b8c`; head the code
+of `32ad7cd8` (C4, and C3 before it was dropped, before `main` was merged
+in, so the comparison leaves out the renderer changes that merge brought). Each run went under
+the app lock after a 10 s gate with no outside process over 20%; a run
+with an outside process over 20% afterwards was rerun, at most twice (8
+reruns, all for the Spotlight indexer). Firefox's `plugin-container` ran
+steadily at 48–53% through the whole window, in every run of both arms,
+over the 45% at which a run is usually noted; it is balanced background
+across each ABBA round, so those runs were kept, not rerun. Medians
+(min–max). All 20 FK drag runs presented 118.4–119.7 frames a second.
+
+Base against head, `studio-select` (characters 0 and 963), `studio-redo`
+and the showoff FK drag (15 s each), two ABBA rounds, 4 runs per cell,
+warm actions pooled:
+
+| | base | head |
+| --- | ---: | ---: |
+| FK drag main busy (ms/s) | 310.6 (306.6–313.3) | 256.8 (256.5–260.1) |
+| FK drag other (ms/s) | 141.8 (136.5–143.7) | 3.2 (3.1–3.3) |
+| FK drag workspace, toolbar and timeline bodies (/s) | 359.9 | 0 |
+| FK drag `studioRefresh` (ms/s) | 158.9 (157.6–160.3) | 239.7 (239.2–243.1) |
+| FK drag `studioRefresh` per refresh (ms) | 1.31–1.34 | 1.99–2.03 |
+| FK drag presented FPS | 119.6 (119.5–119.7) | 119.4 (119.3–119.6) |
+| FK drag hitches per run | 6.5 (5–7) | 9.0 (6–11) |
+| select from nothing (ms), n=36 | 68.1 (44.0–76.9) | 65.6 (40.5–73.7) |
+| character to character (ms), n=32 | 31.9 (24.8–39.8) | 31.6 (21.5–35.9) |
+| deselect (ms), n=32 | 58.4 (47.5–62.4) | 60.5 (50.8–65.0) |
+| duplicate (ms), n=16 | 47.3 (36.6–50.4) | 48.5 (44.7–51.1) |
+| undo (ms), n=12 | 91.4 (85.5–100.1) | 93.5 (86.1–99.3) |
+| redo (ms), n=12 | 99.0 (90.6–102.7) | 97.2 (94.4–101.5) |
+| undo of the redo (ms), n=12 | 89.6 (81.8–98.1) | 89.7 (84.3–100.5) |
+| `studio-select` main busy (ms/s) | 125.1 (124.1–126.3) | 125.4 (124.7–125.7) |
+| `studio-redo` main busy (ms/s) | 134.9 (131.8–135.7) | 134.2 (133.4–136.2) |
+
+During an FK drag the head takes 54 ms/s (17%) less main-thread time, at
+the display's full rate in both builds. The selects, undo and redo are
+within each other's ranges: the 4 ms a select from nothing gained without
+presentation is 2.5 ms here, and the undo's 7 ms rise without presentation
+(below) is 2 ms with overlapping ranges. The head's FK drag had 2.5 more
+hitches per 15 s run (about 0.2 a second); the same binary's `document`
+and `published` runs below have 5.5 each, so it does not come with C4, and
+with 4 runs it is not attributed. Neither is the undo's 2 ms. The head here
+still had C3, whose removal restores base's toolbar; see
+[C3](#c3-keeping-the-toolbars-pose-mode-pickers-tried-and-dropped).
+
+C4, head, showoff FK drag (10 s), one ABBA round, 2 runs per cell:
+
+| | `document` | `published` |
+| --- | ---: | ---: |
+| main busy (ms/s) | 301.6 (300.6–302.6) | 250.3 (249.9–250.7) |
+| other main-thread time (ms/s) | 138.3 (137.2–139.5) | 3.0 (3.0–3.1) |
+| workspace, toolbar and timeline bodies (/s) | 359.9 | 0 |
+| `studioRefresh` (ms/s) | 153.0 (151.0–155.1) | 233.3 (232.9–233.7) |
+| `studioPanelState` (ms/s) | 0 | 1.9 |
+| `studioRefresh` per refresh (ms) | 1.26–1.29 | 1.94–1.95 |
+| presented FPS | 119.4 (119.4–119.5) | 119.4 (119.4–119.5) |
+| hitches per run | 5.5 (5–6) | 5.5 (5–6) |
+
+The main-load control, head, `published`, showoff FK drag (10 s), alone
+and with 1 ms of busy-wait on the main thread 120 times a second
+(`--main-load-ms 1 --main-load-hz 120`), two ABBA rounds, 4 runs per cell:
+
+| | alone | with 1 ms at 120 Hz |
+| --- | ---: | ---: |
+| main busy (ms/s) | 244.0 (236.0–250.2) | 299.8 (293.0–310.0), 120 of it the load |
+| model time (ms/s) | 241.0 (232.9–247.1) | 176.3 (169.3–186.2) |
+| `studioRefresh` (ms/s) | 227.5 (219.3–233.1) | 166.3 (159.7–175.8) |
+| `studioRefresh` per refresh (ms) | 1.90 (1.83–1.94) | 1.39 (1.33–1.47) |
+| presented FPS | 119.3 (118.4–119.5) | 119.4 (119.3–119.5) |
+
+**Without presentation (window 1).** 2026-11-01, 15:36–16:11, while the
+only display was the virtual 60 Hz screen and the window presented no
+frame (from about 16:01 an external display was attached; the three runs
+that presented frames are left out here). Release builds: base `189e5b8c`,
+head `32ad7cd8` (C4 and C3). Each run went under the app lock after a 10 s gate with no
+outside process over 20%; a run with an outside process over 20% or
+Firefox over 45% afterwards was rerun, at most twice. Medians (min–max).
+
+C4, head, showoff FK drag (10 s), 4 runs per cell:
+
+| | `document` | `published` |
+| --- | ---: | ---: |
+| main busy (ms/s) | 338.9 (328.2–342.3) | 276.7 (258.7–309.0) |
+| other main-thread time (ms/s) | 140.9 (137.1–142.4) | 3.4 (2.7–3.8) |
+| workspace, toolbar and timeline bodies (/s) | 359.9 | 0 |
+| `studioRefresh` (ms/s) | 186.2 (179.9–189.2) | 258.6 (242.6–288.4) |
+| `studioPanelState` (ms/s) | 0 | 1.9 (1.8–2.1) |
+| `studioRefresh` per refresh, p50 (ms) | 1.47–1.63 | 2.03–2.23 |
+
+C3 (dropped), head, `studio-select` over character 0 and folder 622, 4 runs
+per cell, warm actions pooled (ms):
+
+| action | `built` | `kept` |
+| --- | ---: | ---: |
+| select a character from nothing | 74.4 (47.2–80.0), n=48 | 70.3 (46.0–77.4), n=48 |
+| character to folder | 53.0 (43.9–59.7), n=44 | 55.1 (44.2–59.2), n=44 |
+| deselect from a folder | 49.0 (28.4–53.3), n=44 | 50.3 (24.8–55.4), n=44 |
+
+Base against head, `studio-select` (characters 0 and 963), `studio-redo`
+and the showoff FK drag (15 s each), one ABBA round, 2 runs per cell:
+
+| | base | head |
+| --- | ---: | ---: |
+| FK drag main busy (ms/s) | 330.3 (325.9–334.8) | 273.7 (264.9–282.5) |
+| FK drag other (ms/s) | 133.9 | 2.8 |
+| FK drag `studioRefresh` (ms/s) | 185.5 | 257.1 |
+| select from nothing (ms) | 68.5 (47.5–76.3) | 63.8 (46.1–68.8) |
+| character to character (ms) | 31.6 (22.2–37.3) | 34.8 (30.1–39.4) |
+| deselect (ms) | 59.1 (44.8–63.0) | 60.6 (50.5–65.6) |
+| duplicate (ms) | 48.5 (46.4–50.7) | 47.9 (46.3–48.8) |
+| undo (ms) | 84.1 (78.4–91.8) | 91.3 (85.4–93.7) |
+| redo (ms) | 90.6 (82.0–99.1) | 92.2 (78.3–98.5) |
+| undo of the redo (ms) | 83.0 (80.3–87.9) | 86.9 (81.7–88.9) |
+
+**Refresh time follows the main thread's load.** With C4, `studioRefresh`
+takes longer per refresh (1.31–1.34 ms in base against 1.99–2.03 in head
+composited, and the same without presentation) although it computes the
+same frame; the panel state it now publishes costs 1.9 ms/s, about
+0.02 ms per refresh. The main-load control shows the cause in one binary
+and one mode: with 1 ms of busy-wait added to every frame, the same
+refresh takes 1.39 ms instead of 1.90, and model time falls by 65 ms/s for
+the same work. A main thread that idles more often runs its work more
+slowly, because the processor's clock and the core it is scheduled on
+follow the load, so part of a saving in busy time comes back as slower
+refreshes. About 0.1 ms per refresh is left against `document` (1.39
+against 1.28); the load's shape, one 1 ms block per frame, is not that of
+the SwiftUI work it stands in for, so the remainder is not attributed
+further. The main busy totals above already include the effect; times per
+refresh or per action that are compared across modes or builds whose
+main-thread load differs carry this caveat. The effect is not new: an FK
+drag run while another process loaded the machine took 0.90 ms per
+refresh in head.
 
 ### Correctness (item 7 follow-ups)
 
@@ -5598,12 +5739,12 @@ TODO(r7l) ABBA table.
   a hidden kept section, run the scenario with Full Keyboard Access on,
   measure only with a composited window, and keep it off by default behind
   a control until it is proven.
-- **A composited recheck.** The follow-ups' timing ran while the only
-  display was a virtual screen and the window presented no frame. The view
-  body counts and main-thread busy time stand as measured, but the base
-  against head select, redo and FK drag cells should be timed again with a
-  composited window, which adds Core Animation commits, display-link
-  pacing and the layout that drawing causes.
+- **Two differences left unattributed.** In the composited window the
+  head's FK drag had 9.0 (6–11) hitches per 15 s run against base's
+  6.5 (5–7); the same binary's C4 pair has 5.5 (5–6) in both modes. An
+  undo took 93.5 (86.1–99.3) ms against base's 91.4 (85.5–100.1); without
+  presentation the gap was 91.3 (85.4–93.7) against 84.1 (78.4–91.8). With
+  4 runs per cell neither is attributed, and neither was chased.
 - **The rest of a select between two characters (C5).** It costs
   28–35 ms composited (item 7). Without presentation it is 17 ms: a 13 ms
   SwiftUI graph update that sets the shown values (text fields' intrinsic
