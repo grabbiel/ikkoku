@@ -470,6 +470,24 @@ final class StudioModel: ViewportInputHandler, LivePacedHandler {
     internal(set) var sourceMapLine: String?
     /// View ▸ Show Source Map: hides the drawn map without unloading it.
     var showSourceMap = true { didSet { if oldValue != showSourceMap { publishSourceMapLine(); refresh() } } }
+    /// #320, File ▸ Original Scene Export Keeps Unlimited Lights: whether the
+    /// CharaStudio an export is for has KK_Fix_UnlimitedMapLights (the user's
+    /// install) and keeps any number of lights. Off, an export follows
+    /// CharaStudio 1.0.4.2's two-light limit. On by default; an automated run
+    /// ignores the saved choice (`EngineHost.savedSelectionApplies`), so a
+    /// lane starts on and a scenario sets it with `setUnlimitedLights`.
+    var sourceExportUnlimitedLights = StudioModel.savedSourceExportUnlimitedLights
+    static let sourceExportUnlimitedLightsKey = "sourceSceneExportUnlimitedLights"
+    static var savedSourceExportUnlimitedLights: Bool {
+        guard EngineHost.savedSelectionApplies, UserDefaults.standard.object(forKey: sourceExportUnlimitedLightsKey) != nil else { return true }
+        return UserDefaults.standard.bool(forKey: sourceExportUnlimitedLightsKey)
+    }
+    /// The menu's setter: the choice is saved for later launches, except in
+    /// an automated run.
+    func setSourceExportUnlimitedLights(_ on: Bool) {
+        sourceExportUnlimitedLights = on
+        if EngineHost.savedSelectionApplies { UserDefaults.standard.set(on, forKey: Self.sourceExportUnlimitedLightsKey) }
+    }
     /// Imported camera objects (`KoikatsuObjectKind.camera`), keyed by the
     /// placeholder entry's id. Runtime-only like `sourceSceneLight`: the
     /// placeholder stays a `.folder` and `doc.camera` keeps the saved scene
@@ -3042,10 +3060,15 @@ final class StudioModel: ViewportInputHandler, LivePacedHandler {
         // placement is written by the transform edit below.
         let topology = try SourceSceneExportValidation.topologyEdits(doc, against: stage.snapshot, keys: staged.keys)
         var edits = SourceSceneEdits(deletions: topology.deletions, reparents: topology.reparents)
+        edits.lightLimit = sourceExportUnlimitedLights ? .unlimitedMapLights : .charaStudio
+        // #320: every exported record is one document object, so the
+        // exported scene's lights are counted here.
+        var lights = 0
         for object in doc.objects {
             guard let key = staged.keys[object.id], let original = records[key] else {
                 throw RigError.invalid("Original-scene export contains an unknown source object.")
             }
+            if original.kind == .light { lights += 1 }
             // A new folder, camera or light was written whole from the object.
             guard object.sourceRecordKey != nil else { continue }
             if object.visible != original.visible { edits.visibility[key] = object.visible }
@@ -3233,6 +3256,12 @@ final class StudioModel: ViewportInputHandler, LivePacedHandler {
         status = "Exported edited original scene to \(url.lastPathComponent)"
             + (source.isLegacy ? ", saved as 1.0.4.2 from CharaStudio \(source.snapshot.version), as CharaStudio does" : "")
             + (orphans.isEmpty ? "" : ". It keeps plug-in data no installed plug-in reads, unchanged: \(orphans.joined(separator: ", "))")
+        // #320: a CharaStudio without KK_Fix_UnlimitedMapLights loads every
+        // root light (SceneInfo.Load) but drops each nested light loaded once
+        // two are counted (ObjectInfoAssist.LoadChild).
+        if lights > 2 {
+            status += ". \(lights) lights: a CharaStudio without KK_Fix_UnlimitedMapLights loads every root light but drops each nested light loaded after the second"
+        }
     }
 
     /// Deterministic integration input using original object/bone IDs. This

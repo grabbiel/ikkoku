@@ -637,7 +637,8 @@ SCENARIO_OPS = {"select", "setVisible", "rename", "toggleCamera", "toggleRoute",
                 "addCharacter", "setIKEnabled", "setIKTarget", "captureIKPose",
                 "export", "reimport", "assert", "assertRejected", "loadNativePlugin", "unloadPlugins", "measureAccessoryLabels",
                 "delete", "setParent", "exportRejected", "duplicate", "addFolder", "addCamera", "addLight",
-                "focus", "selectRoutePoint", "dragRoutePoint", "captureRoute", "editRoute", "setShowSourceMap"}
+                "focus", "selectRoutePoint", "dragRoutePoint", "captureRoute", "editRoute", "setShowSourceMap",
+                "setUnlimitedLights"}
 
 # R7 phase 2, item 7: the window-run inspector checks (`"inspectorUI": {"steps": [...]}`).
 INSPECTOR_UI_OPS = {"select", "deselect", "focus", "type", "delete", "undo", "redo", "cycle",
@@ -829,7 +830,7 @@ class StudioScenarioLaneTests(unittest.TestCase):
                       and not name.startswith(("maker-", "gameplay-")))
 
     def test_lane_validates_and_covers_every_scenario(self):
-        self.assertEqual(len(self.checks), 88)
+        self.assertEqual(len(self.checks), 89)
         referenced = set()
         for check in self.checks:
             scenario = check["env"]["IKKOKU_STUDIO_SCENARIO"]
@@ -1060,7 +1061,7 @@ class StudioScenarioLaneTests(unittest.TestCase):
                     self.assertIn(type(step["parent"]), (int, type(None)))
                 if op == "exportRejected":
                     self.assertTrue(step["errorContains"], "a refused export needs a specific diagnostic")
-                if op == "setShowSourceMap":
+                if op in ("setShowSourceMap", "setUnlimitedLights"):
                     self.assertIs(type(step["on"]), bool)
                 if op == "focus":
                     self.assertIs(type(step["key"]), int)

@@ -2647,7 +2647,9 @@ In short:
   - a re-import of the loaded scene;
   - a route character.
 - **Background builds (S1).** `SourceStudioCharacterBatch` runs the first
-  halves on GCD workers, as many as the active processor count less two. It
+  halves on threads of its own with 8 MiB stacks (#321; GCD workers have
+  512 KiB, too little for a deep scene's decode), as many as the active
+  processor count less two. It
   runs the second halves one at a time, in request order. Interactive and
   performance-trace runs use it in the background:
   - **A scene import** (`beginSourceSceneImport`) prepares on the main
