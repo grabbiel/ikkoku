@@ -788,6 +788,18 @@ Nothing hands block bytes to an image decoder:
 - An Engine test loads a block-only map with a counting decoder and asserts zero decoder calls for its images.
 - No Python reader under `Tools/` decodes a map's glTF images: the converter writes them, and the comparison and probe scripts read only the probe images.
 
+### Particles (slice 4)
+
+Unity orders transparent renderers by sorting layer, then order in layer, then render queue, then the camera's distance to each renderer's `Renderer.bounds` centre, back to front; a renderer's submeshes draw in index order. Every particle renderer in the 42 maps has sorting layer 0 and order 0. Slice 3 merged a map's particle renderers per material into one draw, so their blend order was the mesh's triangle order. Map 34 has two, and passed; in slice 4's first comparison, six cases with more failed the particle gate with a footprint IoU of 1 (11, 21, 21-outside, 22, 22-outside, 27).
+
+The converter now writes each submesh of each particle renderer as its own draw (`ikkokuMap.renderers` 1), with:
+
+- `ikkokuMap.sortCenter`: the renderer's bounds centre in map space (`m_LocalAABB`'s centre through the renderer's matrix), since a mesh baked into map space no longer has it;
+- `ikkokuMap.sortSubmesh`: the submesh index;
+- `ikkokuParticle.renderQueue` on the material: its `m_CustomRenderQueue`, or the shader's `Queue` tag when that is −1.
+
+The app gives such a draw order 100 + its submesh, and sorts transparent draws by render queue, then camera distance to the sort centre, back to front, then order and mesh id. The loader refuses a sort centre on anything but a particle draw of one renderer, a sort centre without its submesh, and a queue outside the transparent range (2501–5000), by name. Every other draw has queue 3000 and no sort centre, so it sorts exactly as before: the distance is to its mesh's bounds centre, and the extra key is equal for all of them. The status line says `particles (no soft-particle fade)`. PARTICLECOUNTS
+
 ### Evidence (the maps phase)
 
 **One VM phase** (`original_map_probe.py maps`, `OriginalMapProbe.cs`'s maps mode) ran under main's grant, as one `prlctl exec` of 21 cases.
@@ -807,7 +819,38 @@ The output is `.local/sta11d-map-coverage/vm-maps/` (163 MB, 192 files). The cas
 
 Every map but 33 now uses a far plane of 1000 m for the depth-normals images, on both sides (`UseMap`, `AppState.sourceMapProbeDepthFar`). Map 38's case keeps the map option on, so its 70 mob silhouettes draw. The player's `mobColor` was the default (0, 0, 1, 0.5). The oracle renders the silhouettes and the unlit draws alone, like the sky (`oracle-<case>-silhouettes.rgba.f32`, `-unlit.rgba.f32`). It skips the irradiance pair, recording why, for maps 22 and 27 (no baked lightmaps) and map 40, whose Standard materials all carry keywords, so there is no keyword-free template to copy. Map 40 draws with its three lightmaps on 8 renderers in the player too, so its irradiance is reported, not gated.
 
-GATES
+#### The gates
+
+`compare_original_map.py` compared all 21 cases with the tolerances unchanged. GATERUN The gates are:
+
+- geometry IoU ≥ 0.999;
+- depth p99 ≤ two `EncodeFloatRG` steps (2 × far / 65025, 0.031 m at 1000 m);
+- irradiance mean ≤ 2⁻¹⁰ and p99 ≤ 2⁻⁹, relative, with a floor of 1e-3;
+- the sky and the silhouettes: the same, with a coverage or footprint IoU of 0.999 and 0.98;
+- particles and unlit draws: mean ≤ 2⁻⁶ and p99 ≤ 2⁻³, with a floor of 2⁻⁶ and a footprint IoU of 0.98.
+
+The record, rule, placement and camera checks pass in all 21 cases, and every control fails as it should.
+
+GATETABLE
+
+The verdicts:
+
+- **Map 29 passes every gate.** The first pass's failure was the MSAA resolve and the shadow shell (below).
+- **Map 38 passes every gate.** Its 70 mob silhouettes match exactly: mean and p99 0, footprint IoU 1.
+- **Map 41 fails irradiance by a known missing term (Enlighten dynamic lightmap).** Its bundle bakes realtime GI: `m_EnableRealtimeLightmaps` is true, the environment lighting is realtime (`m_EnvironmentLightingMode` 1), `m_IndirectOutputScale` is 0.02, and 22 of its 24 drawn renderers carry a dynamic lightmap (`m_LightmapIndexDynamic`). Unity adds `DecodeRealtimeLightmap(unity_DynamicLightmap)` to the indirect diffuse. That lightmap is computed at runtime by Enlighten, so no export can carry it. The evidence:
+  - Unity is brighter on 99.8% of the over-tolerance pixels in both cases. In the passing maps the sign splits about 50/50.
+  - The difference is additive, about 5e-4 to 1.4e-3 per channel. The median is 1.2e-3 in the map41 view and 5.4e-4 in the showoff view, and it holds across three orders of magnitude of irradiance.
+  - Adding the per-channel median to our image makes map41 pass (mean 4.9e-4, p99 9.6e-4). The showoff view still fails (1.1e-2 / 0.17): there the term varies across the room, and on the nearest surfaces (0.8–0.9 m from the camera, a quarter of the pixels) the relative error averages 0.11.
+  - The over-tolerance pixels face the camera; they are not grazing angles. Without the grazing pixels the numbers do not change (map41 1.0e-3 / 2.1e-3).
+  - Maps 19 and 29 have realtime lightmaps off. Map 38 has them on, but none of its renderers has a dynamic lightmap, and both pass.
+
+  The converter records the term in `provenance.json` (`realtimeGI`: the renderers, the three settings and the rule), and the catalog's `notDrawn` adds `realtime GI (Enlighten dynamic lightmaps on N renderer(s))`, so the status line names it. REALTIMEGIMAPS
+- **Map 40** passes geometry and depth. Its irradiance is reported, not gated (above).
+- **Geometry in map 19's and 25's outside views fails on the oracle's culling mask.** The oracle draws every layer (`cullingMask ~0`), so it draws `mo_koi_mi_balckback`, a black `Standard` backdrop on layer 0 that no Studio camera draws and the converter leaves out. Rasterizing that one mesh from the first export (12 triangles, with the probe camera at the pixel centres) predicts the failure exactly: every original-only pixel is in its coverage minus ours, and every such pixel is original-only (map19-outside 225,185 pixels, IoU 0.674; map25-outside 4,432 pixels, IoU 0.9936). Ours-only is 0 in both. In map 29, the 8 meshes that hold its 71 layer-0 renderers add no pixel outside our coverage.
+- **Depth in map 27 fails on the oracle's renderer classes.** The oracle's map-only passes draw a renderer only when every one of its materials is opaque, so they leave out the whole renderer when one submesh is a particle or a blended material. Our probe draws the opaque submeshes. All 3,529 pixels over two steps lie in the coverage of the 14 opaque submeshes of the map's 12 mixed renderers (1,800 triangles), and ours is nearer on every one. Outside that coverage the depth p99 is 0 m (326,397 pixels).
+PARTICLEVERDICT
+
+The analyses are in `.local/sta11d-map-coverage/analysis/` (`map19-outside-layer0.json`, `map25-outside-layer0.json`, `map29-layer0.json`, `map27-mixed-depth.json`, `map41-irradiance-error.json`, `irradiance-offset.json`), and the scripts in `tools/`.
 
 #### Why the first pass failed the irradiance gate
 
@@ -948,14 +991,16 @@ Slice 3 (map 34, the sky and block images), Release, in one quiet window ([perfo
 
   In map33 the phase-C oracle shows the sun adding up to 0.70 of irradiance on 15,692 pixels, where it comes through the windows (`irradianceLit`).
 - **The rest of `Standard`.** Not drawn: specular and the reflection probe, normal maps, per-texel `_MetallicGlossMap` and detail maps.
-- **Particles.** Soft particles (the fade where the cards meet geometry) and per-renderer sorting. Map 34's two particle renderers are one draw, so their blend order is the mesh's triangle order.
+- **Particles.** Soft particles (the fade where the cards meet geometry) are not drawn. Particle renderers sort as Unity's do (see [particles, slice 4](#particles-slice-4)), but blended `Standard` and `Unlit/Transparent` materials are still merged across renderers, so their blend order within a draw is the mesh's triangle order.
 - **The sky's far plane.** The player's main camera clips at 1000 m, inside parts of map 34's sky spheres (about 450–1,200 m). Our infinite projection draws the whole sphere, so the full frame differs where the player shows black.
 - **Fog and camera effects.** RenderSettings fog was off at runtime in every phase-C and map 34 scene. The per-sun-type fog of `SunLightInfo` and CharaStudio's camera image effects are not drawn.
 - **The PNG copies of maps 33 and 34.** The 40 slice-4 maps have no PNG copies of their block images. Maps 33 and 34 keep theirs, which `IKKOKU_SOURCE_MAP_DECODED_TEXTURES` decodes; map 34's take 17 MB of its export.
 - **Forced anisotropy for characters and items.** The original forces anisotropy on every texture, character and item textures included. Only map textures sample that way here. Matching it elsewhere is a separate fidelity item with its own gates.
 - **Vanish.** `Studio.CameraControl` hides the walls the camera's view capsule crosses (`isConfigVanish`, on by default). In the slice-4 phase the player hid nothing from eight outside cameras, so the app does not either. The next change records what the trigger needs (the time scale, the camera's layer, the collision matrix, physics steps) and a case where the original does hide a wall.
 - **Map 40's irradiance.** Its Standard materials all carry keywords, so the oracle had no keyword-free template, and its lightmaps are not gated. The next VM phase builds the template from `Shader.Find("Standard")`.
-- **The oracle's culling mask.** The oracle's geometry, depth-normals, irradiance and class passes draw every layer (`cullingMask ~0`). So they draw layer-0 solids that no Studio camera draws: `mo_koi_mi_balckback` (a black backdrop, `Standard`, no lightmap) in maps 19, 25 and 29, and a pot in map 15's outside view. The slice-4 converter leaves them out, as Studio does. The next VM phase renders those passes with `Camera.main`'s mask (536874000).
+- **The oracle's culling mask.** The oracle's geometry, depth-normals, irradiance and class passes draw every layer (`cullingMask ~0`). So they draw layer-0 solids that no Studio camera draws: `mo_koi_mi_balckback` (a black backdrop, `Standard`, no lightmap) in maps 19, 25 and 29, and a pot in map 15's outside view. The slice-4 converter leaves them out, as Studio does, and map 19's and 25's outside views fail geometry by exactly that backdrop ([the gates](#the-gates)). The next VM phase renders those passes with `Camera.main`'s mask (536874000).
+- **The oracle's renderer classes.** The oracle's map-only passes disable a whole renderer when any of its materials is not opaque, so map 27's 12 mixed renderers lose their opaque submeshes there and its depth gate fails ([the gates](#the-gates)). The next VM phase hides only the non-opaque submeshes (an empty material in their slot), not the whole renderer.
+- **Realtime GI.** Map 41 bakes Enlighten realtime GI, which Unity adds to the indirect diffuse from a dynamic lightmap computed at runtime; the export cannot carry it, and map 41 fails irradiance by that term ([the gates](#the-gates)). REALTIMEGIREMAINS One option for the next VM phase is to read back each such map's runtime dynamic lightmap once and export it as a static input. Running Enlighten itself is out of scope.
 - **Particle submeshes alone.** The oracle's particle pass enables whole renderers, so the comparison leaves out the pixels their `Standard` submeshes cover. The next VM phase adds a pass that enables only the particle submeshes. It also adds a map 40 camera that sees the map's three `Unlit/Transparent` renderers, which no slice-4 view covers.
 - **What the converter skips.** Mirrors, heat distortion, the live stage's effects and screen, vertex-lit particles, and every particle system, sprite and skinned renderer (map 23's option objects among them). Animated objects draw in their authored pose. Each map's catalog row and status line name them.
 - **Shader programs not compared.** `Custom/StandardDouble` (map 28) is drawn with Standard's formula on both faces, and `Shader Forge/main_item` (map 35) as an item; their own programs are not compared, and the catalog lists the dropped terms. Neither map has a VM case.
