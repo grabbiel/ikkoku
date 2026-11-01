@@ -52,6 +52,10 @@ own draw, with the renderer's bounds centre in `ikkokuMap.sortCenter`, the subme
 app can order them as Unity orders transparent renderers (queue, then distance to the bounds
 centre, back to front, then one renderer's submeshes in index order).
 
+Realtime GI (slice 4): Unity adds a renderer's Enlighten dynamic lightmap to the baked one. It is
+computed at runtime, so it is not exported; the provenance's `realtimeGI` counts the drawn
+renderers that carry one, and the catalog row's `notDrawn` names it.
+
 Proprietary output belongs in .local, never in the repository.
 """
 from __future__ import annotations
@@ -1252,6 +1256,25 @@ def shader_info(material):
             "fallback": form.m_FallbackName or None}
 
 
+def realtime_gi_of(map_scene, renderers):
+    """Realtime GI (Enlighten, slice 4): Unity adds each drawn renderer's dynamic lightmap
+    (`m_LightmapIndexDynamic`, 0xFFFF/0xFFFE none) to `gi.indirect.diffuse`, baked lightmap or
+    not. Enlighten computes it at runtime from the scene's precomputed data, so the converter
+    cannot export it. `renderers` are the drawn renderers that carry one; None when none does
+    (the provenance then has no `realtimeGI` record)."""
+    if not renderers:
+        return None
+    settings = {}
+    for _, reader in map_scene.of_type("LightmapSettings"):
+        gi = reader.read_typetree().get("m_GISettings") or {}
+        settings = {"enableRealtimeLightmaps": bool(gi.get("m_EnableRealtimeLightmaps")),
+                    "environmentLightingMode": gi.get("m_EnvironmentLightingMode"),
+                    "indirectOutputScale": gi.get("m_IndirectOutputScale")}
+        break
+    return {"renderers": len(renderers), **settings,
+            "rule": "UnityGI_Base adds DecodeRealtimeLightmap(unity_DynamicLightmap) to gi.indirect.diffuse; not drawn"}
+
+
 def lightmap_settings_of(map_scene):
     """LightmapSettings' mode, shadow-mask use and the light probe count (0 when the
     LightProbes asset is empty or absent)."""
@@ -1608,7 +1631,8 @@ def not_drawn_components(map_scene, active):
 
 def not_drawn_notes(provenance):
     """The catalog's "not drawn" list (the app's "not reproduced"): skipped shader classes with
-    renderer counts, then the components the converter does not read, as "label: count"."""
+    renderer counts, then the components the converter does not read, as "label: count", then
+    realtime GI where drawn renderers carry a dynamic lightmap (slice 4)."""
     notes, classes = [], {}
     for entry in provenance.get("skipped", []):
         if "shader" in entry:
@@ -1617,6 +1641,9 @@ def not_drawn_notes(provenance):
         notes.append(f"{reason} ({len(paths)} renderer{'s' if len(paths) != 1 else ''})")
     for label, count in sorted((provenance.get("notDrawn") or {}).get("components", {}).items()):
         notes.append(f"{label}: {count}")
+    if provenance.get("realtimeGI"):
+        count = provenance["realtimeGI"]["renderers"]
+        notes.append(f"realtime GI (Enlighten dynamic lightmaps on {count} renderer{'s' if count != 1 else ''})")
     return notes
 
 
@@ -1632,6 +1659,7 @@ def export(bundles, scene, map_no, output, max_texture=None, builtin_resources=N
     exporter = MapExporter(map_scene.environment, output, stem, max_texture, block_only_images)
     map_root_world_inverse = inverse_affine(map_scene.world[map_scene.map_root])
     groups, skipped, skies = {}, [], []
+    dynamic_gi = set()  # drawn renderers with a realtime-GI (dynamic) lightmap
     lightmap_sources = {"renderer": 0, "LightmapPrefab": 0}
     handlers = {}
     # Map options (slice 4): `visibleOption` sets each option object active to the scene's
@@ -1745,6 +1773,9 @@ def export(bundles, scene, map_no, output, max_texture=None, builtin_resources=N
             particle = name in PARTICLE_SHADERS
             separate = pid if draw == "silhouette" else (pid, submesh) if particle else None
             group_key = (role, material_index, tuple(keys), group_lightmap, option, separate)
+            # Only the GI-lit shaders (Standard's family, Legacy Diffuse) read the dynamic lightmap.
+            if (name in STANDARD_SHADERS or name == "Legacy Shaders/Diffuse") and getattr(renderer, "m_LightmapIndexDynamic", 0xFFFF) < 0xFFFE:
+                dynamic_gi.add(pid)
             group = groups.setdefault(group_key, {"positions": [], "normals": [], "tangents": [], "uv0": [], "uv1": [], "uv2": [],
                                                   "colors": [], "indices": [], "renderers": [], "vertexColor": vertex_color})
             if particle:
@@ -1890,6 +1921,9 @@ def export(bundles, scene, map_no, output, max_texture=None, builtin_resources=N
     components = not_drawn_components(map_scene, active)
     if components:
         provenance["notDrawn"] = {"components": components}
+    realtime_gi = realtime_gi_of(map_scene, dynamic_gi)
+    if realtime_gi:
+        provenance["realtimeGI"] = realtime_gi
     if block_only_images:
         provenance["conversion"]["blockImages"] = ("BC1/BC3 images as their serialized blocks only, every mip, block and pixel "
                                                    "rows reversed to top-down (lossless; the top level decodes to the PNG's pixels, "

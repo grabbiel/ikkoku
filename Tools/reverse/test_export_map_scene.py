@@ -489,6 +489,23 @@ class CatalogTests(unittest.TestCase):
         self.assertEqual(maps.not_drawn_notes(provenance), ['mirror (1 renderer)', 'stage effects (2 renderers)',
                                                             'animated objects (drawn in their authored pose): 2', 'skinned renderers: 4'])
         self.assertEqual(maps.not_drawn_notes({}), [])
+        # Slice 4: realtime GI (Enlighten dynamic lightmaps on drawn renderers) comes last.
+        provenance['realtimeGI'] = {'renderers': 22, 'enableRealtimeLightmaps': True, 'environmentLightingMode': 1,
+                                    'indirectOutputScale': 0.02}
+        self.assertEqual(maps.not_drawn_notes(provenance)[-1], 'realtime GI (Enlighten dynamic lightmaps on 22 renderers)')
+        self.assertEqual(maps.not_drawn_notes({'realtimeGI': {'renderers': 1}}), ['realtime GI (Enlighten dynamic lightmaps on 1 renderer)'])
+
+    def test_realtime_gi_is_recorded_only_when_a_drawn_renderer_has_a_dynamic_lightmap(self):
+        class Reader:
+            def read_typetree(self):
+                return {'m_GISettings': {'m_EnableRealtimeLightmaps': 1, 'm_EnvironmentLightingMode': 1, 'm_IndirectOutputScale': 0.02}}
+        class Scene:
+            def of_type(self, name):
+                return [(1, Reader())] if name == 'LightmapSettings' else []
+        self.assertIsNone(maps.realtime_gi_of(Scene(), set()))
+        record = maps.realtime_gi_of(Scene(), {5, 7})
+        self.assertEqual({k: record[k] for k in ('renderers', 'enableRealtimeLightmaps', 'environmentLightingMode', 'indirectOutputScale')},
+                         {'renderers': 2, 'enableRealtimeLightmaps': True, 'environmentLightingMode': 1, 'indirectOutputScale': 0.02})
 
     def test_gpu_bytes_counts_rgba8_with_a_full_mip_chain(self):
         self.assertEqual(maps.gpu_bytes(4, 2), 4 * 2 * 4 + 2 * 1 * 4 + 1 * 1 * 4)
