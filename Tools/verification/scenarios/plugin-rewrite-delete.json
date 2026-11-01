@@ -18,8 +18,8 @@
     {"op": "assert", "children": {"parent": 1, "keys": [6]}},
     {"op": "reimport", "path": ".local/verification/scenario-exports/plugin-rewrite-delete-duplicate.png"},
     {"op": "assert", "children": {"keys": [0, 1, 2, 5, 7, 14, 15, 16]}},
-    {"op": "assert", "position": {"key": 2, "from": "m3", "within": 0.0005, "rotationWithin": 0.05}},
     {"op": "assertRejected", "position": {"key": 2, "from": "m1", "within": 0.0005}, "errorContains": "expected it held within"},
-    {"op": "assertRejected", "children": {"keys": [0, 1, 5, 7, 14, 15, 16, 159]}, "errorContains": "assert children"}
+    {"op": "assertRejected", "children": {"keys": [0, 1, 5, 7, 14, 15, 16, 159]}, "errorContains": "assert children"},
+    {"op": "assert", "position": {"key": 2, "from": "m3", "within": 0.0005, "rotationWithin": 0.05}}
   ]
 }
