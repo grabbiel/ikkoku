@@ -28,7 +28,8 @@ final class AppState {
     let host: EngineHost?
     /// Async Maker and Studio checklists outlive init. Keep scenario execution
     /// headless: no interactive views retaining previews or starting a viewport.
-    let runsHeadlessEditorScenario: Bool
+    /// Inspector UI scenarios (R7 phase 2, item 7) turn it off: they need the editor drawn.
+    private(set) var runsHeadlessEditorScenario: Bool
     var maker: MakerModel?
     var studio: StudioModel?
     /// S4 (R7 phase 2 item 6): a launch straight into a source scene creates
@@ -46,6 +47,11 @@ final class AppState {
     /// and the poll tracker while a capture is armed.
     @ObservationIgnored private var uiCaptureContentAppeared = false
     @ObservationIgnored private var uiCaptureTracker: UICaptureReadiness.Tracker?
+    /// `IKKOKU_CAPTURE_UI_SELECT` (R7 phase 2, item 7): the selections still to make before the
+    /// capture, one per readiness poll; `nil` deselects. `uiCaptureContentPrepared` keeps a
+    /// second `onAppear` from queueing them again.
+    @ObservationIgnored private var uiCapturePendingSelections: [UUID?] = []
+    @ObservationIgnored private var uiCaptureContentPrepared = false
 
     init() {
         let env = ProcessInfo.processInfo.environment
@@ -56,6 +62,9 @@ final class AppState {
         do { request = try CaptureRequest.validate(env) }
         catch { print("[ikkoku] \(error)"); exit(1) }
         runsHeadlessEditorScenario = request.mode == .makerScenario || request.mode == .studioScenario
+        // R7 phase 2, item 7: whether the inspector keeps hidden views
+        // mounted, read once here (`IKKOKU_PERF_KEEP_MOUNTED`).
+        _ = StudioInspectorMounting.current
         // R7: the performance trace records startup marks from here on.
         PerfTrace.startIfRequested(env)
         // A-T01: the gameplay host scenario is its own headless mode. It needs
@@ -221,12 +230,29 @@ final class AppState {
                     // Fresh-load checklists may have no startup scene to select
                     // Studio. Use the real mode path before interactive steps.
                     mode = .studio
-                    let report = StudioScenario.run(scenario, studio: studio)
-                    let reportURL = URL(fileURLWithPath: reportPath)
-                    try FileManager.default.createDirectory(at: reportURL.deletingLastPathComponent(), withIntermediateDirectories: true)
-                    try CaptureOutput.writeJSON(report.json(), to: reportURL)
-                    print("[ikkoku] studio scenario: \(report.passed) passed, \(report.failed) failed")
-                    exit(report.failed == 0 ? 0 : 1)
+                    if let inspector = scenario.inspectorUI {
+                        // The inspector checks need the window: startup goes on and
+                        // they run once it is up.
+                        guard scenario.steps.isEmpty else { throw RigError.invalid("Inspector UI checks cannot ignore ordinary Studio steps.") }
+                        runsHeadlessEditorScenario = false
+                        Task { @MainActor in
+                            let report = await inspector.run(studio: studio)
+                            do {
+                                let url = URL(fileURLWithPath: reportPath)
+                                try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+                                try CaptureOutput.writeJSON(report.json(), to: url)
+                                print("[ikkoku] inspector UI scenario: \(report.passed) passed, \(report.failed) failed")
+                                exit(report.failed == 0 ? 0 : 1)
+                            } catch { print("[ikkoku] inspector UI scenario failed: \(error)"); exit(1) }
+                        }
+                    } else {
+                        let report = StudioScenario.run(scenario, studio: studio)
+                        let reportURL = URL(fileURLWithPath: reportPath)
+                        try FileManager.default.createDirectory(at: reportURL.deletingLastPathComponent(), withIntermediateDirectories: true)
+                        try CaptureOutput.writeJSON(report.json(), to: reportURL)
+                        print("[ikkoku] studio scenario: \(report.passed) passed, \(report.failed) failed")
+                        exit(report.failed == 0 ? 0 : 1)
+                    }
                 } catch { print("[ikkoku] studio scenario failed: \(error)"); exit(1) }
             }
             AppState.sharedStudio = studio
@@ -959,7 +985,8 @@ final class AppState {
     /// content as appeared for the readiness poll armed by `startUICaptureIfRequested`.
     func snapshotWindowIfRequested() {
         let env = ProcessInfo.processInfo.environment
-        guard env["IKKOKU_CAPTURE_UI"] != nil, !uiCaptureContentAppeared else { return }
+        guard env["IKKOKU_CAPTURE_UI"] != nil, !uiCaptureContentAppeared, !uiCaptureContentPrepared else { return }
+        uiCaptureContentPrepared = true
         if let tabText = env["IKKOKU_CAPTURE_UI_TAB"] {
             guard let tab = MakerTab(rawValue: tabText.capitalized) else {
                 print("[ikkoku] unknown IKKOKU_CAPTURE_UI_TAB '\(tabText)'")
@@ -983,6 +1010,22 @@ final class AppState {
                         exit(1)
                     }
                     studio.inspectorTab = tab
+                }
+                if let text = env["IKKOKU_CAPTURE_UI_SELECT"] {
+                    let tree = studio.doc.flattened().map(\.object)
+                    var selections: [UUID?] = []
+                    for token in text.split(separator: ",", omittingEmptySubsequences: false) {
+                        if token == "none" { selections.append(nil); continue }
+                        guard let key = Int32(token), let object = tree.first(where: { $0.sourceObjectKey == key }) else {
+                            print("[ikkoku] IKKOKU_CAPTURE_UI_SELECT: no source object with key \(token)")
+                            exit(1)
+                        }
+                        selections.append(object.id)
+                    }
+                    // The readiness poll makes them one at a time, so SwiftUI commits each
+                    // selection before the next, as successive clicks do.
+                    uiCapturePendingSelections = selections
+                    return
                 }
             }
         }
@@ -1015,6 +1058,11 @@ final class AppState {
     private func pollUICapture(elapsed: Double) {
         let env = ProcessInfo.processInfo.environment
         guard var tracker = uiCaptureTracker, let out = env["IKKOKU_CAPTURE_UI"] else { return }
+        if !uiCapturePendingSelections.isEmpty, let studio {
+            studio.selection = uiCapturePendingSelections.removeFirst()
+            if uiCapturePendingSelections.isEmpty { uiCaptureContentAppeared = true }
+            return
+        }
         let window = NSApp?.windows.first(where: { $0.isVisible && $0.contentView != nil })
         let view = window?.contentView
         view?.layoutSubtreeIfNeeded()
