@@ -392,7 +392,7 @@ public extension SourceSceneExportValidation {
     /// gains, at CharaStudio's load, each catalog FK bone its record lacks,
     /// under a key `GetNewIndex` takes after every saved key is registered
     /// (`LoadScene` runs `AddObjectAssist.LoadChild` after `SceneInfo.Load`,
-    /// Studio.cs:515–519; `InitBone` :42, `InitHairBone` :110). Those keys
+    /// Studio.cs:515–519; `InitBone` :44, `InitHairBone` :111). Those keys
     /// are the smallest that were free at load, and the upgrade does not hold
     /// them. The replay is still CharaStudio's while every key it takes is
     /// one an earlier delete freed: such a key is below every key free at

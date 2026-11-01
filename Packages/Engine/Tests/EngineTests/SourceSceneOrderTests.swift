@@ -277,8 +277,8 @@ private struct Session {
 /// items 152...158. Every key 0...158 is taken, so the first key free at
 /// load is 159. CharaStudio's load then gives the character the FK bones its
 /// record lacks (10 back-hair bones, finding 2) under the smallest free
-/// keys, after every saved key (Studio.cs:515–519, AddObjectAssist.cs:42,
-/// :110): 159...168, which the upgrade does not hold. The expected keys and
+/// keys, after every saved key (Studio.cs:515–519, AddObjectAssist.cs:44,
+/// :111): 159...168, which the upgrade does not hold. The expected keys and
 /// roots below come from this file's records and those rules, never from
 /// the writer.
 @Test(.enabled(if: SourceFixtureSupport.shouldRun(["IKKOKU_STUDIO_LEGACY_SCENE"]), "Requires IKKOKU_STUDIO_LEGACY_SCENE (a 0.0.7 scene)"))

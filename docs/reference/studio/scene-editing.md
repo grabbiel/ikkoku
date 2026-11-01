@@ -388,7 +388,7 @@ Reviewed 2026-11-01. When one export both deletes source records and adds record
   | `light` | A light was added or copied ([#316](https://github.com/grabbiel/ikkoku/issues/316)). |
   | `overflow` | More than 4,096 structural edits. |
   | `mismatch` | Objects were added or removed by an operation the log does not hold: a merged scene, a plug-in, or an entry this version cannot read. |
-  | `legacyBones` | A scene from an older CharaStudio with a character, when the replay would take a key no earlier delete freed, or copies a character. CharaStudio's load gives such a character the catalog FK bones its record lacks (finding 2 under [Known differences from CharaStudio's save](#known-differences-from-charastudios-save)). It runs `AddObjectAssist.LoadChild` after `SceneInfo.Load` has registered every saved key (Studio.cs:515–519), so `InitBone` and `InitHairBone` (AddObjectAssist.cs:42, :110) take the smallest keys free at load. The upgrade does not hold those keys. A key an earlier delete freed is below all of them, so a replay that takes only such keys is still CharaStudio's. A character copy carries its hidden bones in CharaStudio and takes more keys. |
+  | `legacyBones` | A scene from an older CharaStudio with a character, when the replay would take a key no earlier delete freed, or copies a character. CharaStudio's load gives such a character the catalog FK bones its record lacks (finding 2 under [Known differences from CharaStudio's save](#known-differences-from-charastudios-save)). It runs `AddObjectAssist.LoadChild` after `SceneInfo.Load` has registered every saved key (Studio.cs:515–519), so `InitBone` and `InitHairBone` (AddObjectAssist.cs:44, :111) take the smallest keys free at load. The upgrade does not hold those keys. A key an earlier delete freed is below all of them, so a replay that takes only such keys is still CharaStudio's. A character copy carries its hidden bones in CharaStudio and takes more keys. The set-based keys have the same gap ([#318](https://github.com/grabbiel/ikkoku/issues/318)). |
 
 **Original player.** `Tools/reverse/original_plugin_scene_probe.py --phase oa` makes each operation order in CharaStudio from phase A's fixture and phase C's (all three plug-ins and a character), saves it, and reloads and saves it again. `fixtures/OriginalPluginRewriteProbe.cs` lists the orders (`OrderedCases`).
 
@@ -423,6 +423,7 @@ Reviewed 2026-11-01. When one export both deletes source records and adds record
 
 - Light replay ([#316](https://github.com/grabbiel/ikkoku/issues/316)) and the other fallback cases keep the set-based keys.
 - Card links with a delete and a copy stay refused.
+- On a legacy scene with a character, any added object takes a key below the keys CharaStudio's load gives the character's missing FK bones: on the 0.0.7 fixture, a copy is 159 where CharaStudio's would be 169, with or without a delete ([#318](https://github.com/grabbiel/ikkoku/issues/318)). The file still loads, since every saved key is unique. The ordered path's `legacyBones` fallback is its counterpart.
 
 ## Route points and settings (ST-T11, ST-T03)
 
@@ -1293,6 +1294,11 @@ them changes the export.
      that hair's front bones (112–118, 124, 131), which the record does not
      save, at zero. It shows none of the 10 back-hair bones CharaStudio adds.
      Every body bone the view shows is saved.
+   - An added or copied object takes a key below those bones' keys: on the
+     0.0.7 fixture, CharaStudio's load gives them 159–168, so its copy is 169,
+     while ours is 159 ([#318](https://github.com/grabbiel/ikkoku/issues/318)).
+     Our file loads, since every saved key is unique, and the bones then take
+     160–169. Only the keys differ from CharaStudio's.
    - Exporting an edit of any bone the record does not save, shown or not, is
      refused, naming the bone. The app says "Export cannot save FK bone *id*
      of "*character*" (key *k*): the scene does not save that bone, and an
