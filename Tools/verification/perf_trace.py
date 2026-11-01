@@ -50,11 +50,12 @@ import sys
 WORKLOADS = ["studio-idle", "studio-orbit", "studio-fk-drag", "studio-hover",
              "maker-slider", "maker-idle", "studio-native", "viewport-lifecycle", "startup",
              "studio-static", "studio-orbit-bursts", "studio-duplicate", "studio-undo-delete", "studio-timeline",
-             "studio-outfit", "studio-export", "studio-redo", "studio-load"]
+             "studio-outfit", "studio-export", "studio-redo", "studio-load", "studio-select"]
 
 # The workloads that time Studio commands until their background work is done
 # (`details.actions`, R7 phase 2, item 6).
-ACTION_WORKLOADS = {"studio-duplicate", "studio-undo-delete", "studio-redo", "studio-outfit", "studio-export", "studio-load"}
+ACTION_WORKLOADS = {"studio-duplicate", "studio-undo-delete", "studio-redo", "studio-outfit", "studio-export", "studio-load",
+                    "studio-select"}
 
 # Fixture variables each workload family reads, by their environment.json
 # names. `IKKOKU_SOURCE_SCENE` comes from the scenario scene, the Maker card
@@ -233,7 +234,7 @@ def row(name, report):
     def stat(entry, field):
         return "%.2f" % entry[field] if entry and field in entry else "-"
 
-    model = [k for k in ("studioTick", "studioRefresh", "studioCameraRefresh", "studioHoverPick", "makerTick", "makerRefresh", "input")
+    model = [k for k in ("studioTick", "studioRefresh", "studioCameraRefresh", "studioHoverPick", "studioInspectorState", "makerTick", "makerRefresh", "input")
              if k in phases]
     model_text = ", ".join("%s %s/%s ×%.0f/s" % (k, phase(k), phase(k, "p95"), phases[k]["perSecond"]) for k in model) or "-"
     build = report["build"]
@@ -622,9 +623,16 @@ def action_problem(report):
     return None
 
 
+def frames_at_120(stall_ms):
+    """The 120 Hz refresh periods a main-thread stall of `stall_ms` covers, so no new frame reaches them: a 100 ms stall
+    drops 12 (R7 phase 2, item 7)."""
+    return int(stall_ms * 120 // 1000)
+
+
 def action_stats(report):
     """The action workloads (R7 phase 2, item 6): per measured action name, the medians of its call, ready, busy and longest
-    stall times in ms, with the sample count; {} for other reports."""
+    stall times in ms, with the sample count, and the 120 Hz frames the median and the longest stall drop; {} for other
+    reports."""
     actions = [a for a in report.get("details", {}).get("actions") or [] if a.get("measured")]
     result = {}
     for name in sorted({a["name"] for a in actions}):
@@ -637,6 +645,8 @@ def action_stats(report):
         result[name] = {"count": len(rows), "callMs": median("callMs"), "readyMs": median("readyMs"),
                         "busyMs": median("busyMs"), "longestStallMs": median("longestStallMs"),
                         "maxStallMs": max(a["longestStallMs"] for a in rows)}
+        result[name]["frames120"] = frames_at_120(result[name]["longestStallMs"])
+        result[name]["maxFrames120"] = frames_at_120(result[name]["maxStallMs"])
     return result
 
 
@@ -644,8 +654,9 @@ def actions_line(label, report):
     stats = action_stats(report)
     if not stats:
         return None
-    parts = ["%s x%d call %.1f, ready %.1f, main busy %.1f, longest stall %.1f (max %.1f)" % (
-        name, entry["count"], entry["callMs"], entry["readyMs"], entry["busyMs"], entry["longestStallMs"], entry["maxStallMs"])
+    parts = ["%s x%d call %.1f, ready %.1f, main busy %.1f, longest stall %.1f (max %.1f), 120 Hz frames dropped %d (max %d)" % (
+        name, entry["count"], entry["callMs"], entry["readyMs"], entry["busyMs"], entry["longestStallMs"], entry["maxStallMs"],
+        entry["frames120"], entry["maxFrames120"])
         for name, entry in stats.items()]
     return "[perf] %s: actions, medians in ms: %s" % (label, "; ".join(parts))
 
