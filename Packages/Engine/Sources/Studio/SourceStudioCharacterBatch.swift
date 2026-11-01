@@ -30,10 +30,10 @@ import Renderer
 /// blocking work stays off the cooperative pool (`docs/reference/performance.md`,
 /// the pool rule). Not GCD workers either (#321): `assemble` decodes the whole
 /// scene, and the decode recurses once per nesting level, up to the reader's
-/// 65. In Debug, a first half on a 65-level scene takes 525 KiB of stack
-/// through nested folders and 1,152 KiB through nested characters, more
-/// than a GCD worker's 512 KiB (Release: 153 and 211 KiB;
-/// `SourceSceneDeepStackTests`). The workers
+/// `KoikatsuBinaryReader.maximumLevels` (200, #326). In Debug, a first half
+/// on a 200-level scene takes 1,552 KiB of stack through nested folders and
+/// 3,449 KiB through nested characters, several times a GCD worker's
+/// 512 KiB (`SourceSceneDeepStackTests`). The workers
 /// get `stackSize`, the main thread's 8 MiB, where the Studio's other scene
 /// decodes run.
 public final class SourceStudioCharacterBatch: @unchecked Sendable {

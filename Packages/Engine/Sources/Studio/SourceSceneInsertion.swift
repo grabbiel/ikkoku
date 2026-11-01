@@ -447,7 +447,7 @@ struct SourceSceneInsertionPlan {
             int32(header.treeState); bool(header.visible)
         }
         func original(_ key: Int32, depth: Int) throws {
-            guard depth <= 64 else { throw KoikatsuReadError.limitExceeded("hierarchy depth exceeds 64") }
+            try KoikatsuBinaryReader.checkDepth(depth)
             guard let span = spans.topology.records[key] else { throw SourceSceneTopologyError.unsupported("Scene record \(key) has no byte span.") }
             guard touched.contains(key) else { return try copy(span) }
             var cursor = span.lowerBound
@@ -462,7 +462,7 @@ struct SourceSceneInsertionPlan {
             try copy(cursor..<span.upperBound)
         }
         func inserted(_ index: Int, depth: Int) throws {
-            guard depth <= 64 else { throw KoikatsuReadError.limitExceeded("hierarchy depth exceeds 64") }
+            try KoikatsuBinaryReader.checkDepth(depth)
             let key = keys[index]
             switch insertions[index].record {
             case .duplicate(let template):
