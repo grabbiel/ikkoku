@@ -2227,6 +2227,15 @@ MetalKit, then in line:
   pool is saturated. The main-thread test bounds itself instead of using a
   time limit, which would also count its wait for the main actor.
 
+At combined candidate `4f5f2504`, all seven upload gates, the strict corpus
+and the optimized material-group lifetime test pass: nine exact tests, no
+skips. Twenty affected shape/Maker preparation tests and four fresh Release
+Maker selection/reload scenarios also pass. These focused integration checks
+are separate from the historical full suites and image comparisons; see the
+[validation identities and limitations](performance.md#texture-loading-candidate-validation-288-2026-10-31).
+They establish neither a loader speedup nor broader image-format or source-game
+parity. JPEG/HEIC costs remain tracked in [#290](https://github.com/grabbiel/ikkoku/issues/290).
+
 ## Checked math, legacy skeletons and cameras (R4)
 
 The unchecked CoreMath helpers (`normalize`, `simd_quatf.rotation(from:to:)`,

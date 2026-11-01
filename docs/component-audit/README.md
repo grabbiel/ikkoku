@@ -130,6 +130,12 @@ acceptance boundary; their old “next” steps are historical, not a live queue
   neighbouring triangles; translated pipelines now prevent it, and repeated live captures are bit-identical
   ([cause and correction](../reference/renderer.md#cause-and-correction-cross-primitive-derivative-quads-2026-10-25)).
   The history below predates that correction.
+  The unmerged [texture-loading candidate](../reference/performance.md#texture-loading-candidate-validation-288-2026-10-31)
+  retains historical full Release, Maker/Studio and paired-image acceptance.
+  Combined checkpoint `4f5f2504` adds 20 affected CPU tests, nine GPU tests and
+  four Release Maker selection/reload checks (124 operations). Its historical
+  startup cohort fails the frozen background-activity limits; no comparative
+  speed claim follows. Original harness/build failures remain recorded.
   The [sampling investigation](../reference/renderer.md#translated-sampling-repeatability-investigation-188)
   distinguishes diagnostic controls from production behavior; reductions are
   evidence, not fixes or added material coverage. The latest controlled split

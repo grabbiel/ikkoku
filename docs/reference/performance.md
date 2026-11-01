@@ -4991,3 +4991,57 @@ section.
 - **The drawable is not a full 4K frame.** It is 1996×1824 pixels, the
   window's viewport on a 4K display at scale 2. A full-screen viewport on
   that display has about 2.2× the pixels, which matters for GPU time only.
+
+## Texture-loading candidate validation (#288, 2026-10-31)
+
+The unmerged [PR #288](https://github.com/grabbiel/ikkoku/pull/288) retains
+historical acceptance at `95ee1773`: 1,095 full Release passes with seven named
+performance-probe skips, all seven upload gates and a strict corpus of 138
+successful inputs plus one pinned rejection. Three preceding full Debug runs
+passed against the same production loader code. The fresh Release app passed
+ten Maker checks (281 operations), 81 Studio checks (1,250 operations), and six
+control/candidate capture pairs with exact encoded and decoded pixels. These
+results keep their original source/binary identities; they are not executions
+of the later combined head.
+
+Combined checkpoint `4f5f2504` merges that candidate with accepted main
+`c80dc0da`. All 1,050 non-shared paths retain their owning parent's exact
+blobs/modes; only audit documentation was reconciled. A fresh linked Release
+test bundle discovers 1,100 Engine and 21 CoreMath identities. The approved
+focused checks execute 20 affected shape/Maker preparation tests and nine GPU
+tests, all passing with zero skips. The nine comprise the material-group
+lifetime regression, all seven upload/concurrency gates and the strict corpus:
+139 inputs read and hashed, 138 successful pairs, one pinned rejection, zero
+failures. Discovery of 1,121 identities is not a new full-suite execution.
+
+The combined Release app `68a131b8…` passes four existing female/male head
+selection and fresh-process reload scenarios: 55/7/55/7 successful operations,
+124 total, with eight retained artifacts and two fresh export/reload hash
+dependencies. All 921 consumed inputs and the complete 217-entry app archive
+remain unchanged. These focused combined-head gates do not relabel the earlier
+Studio and image comparisons or establish additional source-game visual parity.
+
+The combined CPU process exited zero with 20 passes, but its original private
+checker counted framework header/summary rows as test names. That failure and
+raw log remain intact; independent offline review accepted the existing
+execution without a rerun. A separate GPU-only checker passed 14 synthetic
+controls and requires every actual named start/pass. Both historical and
+combined app build wrappers retain exit 126 after `BUILD SUCCEEDED` because an
+owned compiler service remained at postflight. Those services exited naturally;
+separate no-rebuild archive inspections accepted the exact fresh products. The
+build leaders' separate exit codes were not recorded. The earlier optimized
+test-owned lease failure and its first compile correction also remain retained.
+
+The historical six-process showoff startup comparison completed all reports
+with matching configuration, display and machine context. Its frozen quiet
+rule rejects comparative interpretation: 93 unrelated-process intervals exceed
+20% of one logical CPU, and 19 departing processes have unobserved final CPU
+tails. No speed or FPS claim follows, and no timing cohort was rerun during this
+integration. Functional checks may overlap another owner's compilation. These
+limits do not invalidate the separately accepted functional/image checks;
+[JPEG/HEIC costs](https://github.com/grabbiel/ikkoku/issues/290) remain separate.
+
+Private receipts remain under
+`.local/codex-resume-2026-10-30/materials-runtime-acceptance/`, with the combined
+gates in `integration-main-1031/`. The rejected quiet result SHA-256 remains
+`3e2d4f4474a8702b354fa4433f706c7f0e6819061dfc9977cea671b93161b2f0`.
