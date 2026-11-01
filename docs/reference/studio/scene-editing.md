@@ -793,6 +793,27 @@ cannot prove a whole-file hash, full export-name uniqueness or the historical
 observer's identity. Evidence is `ntdll-opcode-query-source-1/local-controls-1/`;
 raw result hash begins `1435c772596e69e8`, report `3fa74e09048aca78`.
 
+The subsequent one-shot PowerShell/.NET memory-producer query passes the
+unchanged strict consumer: four independent literal payloads plus their manifest
+form exactly five canonical entries in an 875-byte ZIP, with valid CRCs and exact
+payload bytes/hashes. All 63 pins match; raw transport, owned-wait and final exits
+are zero. The typed guest PID/birth/path stamp matches its completion envelope;
+all host processes, the one HTTP request owner and accept thread release naturally.
+The query writes no guest files and launches no compiler or target. This accepts
+the limited in-memory producer interchange, not the filesystem wrapper, native
+capture or original lifecycle. Evidence is `zip-producer-interop-1/output/`;
+result hash begins `146978bc17d0b9dd`, ZIP `e4caeb502a6e7ed6`.
+
+Ten additional generated transport-envelope controls pass with zero skips,
+failures or errors. They preserve typed failed-query completion separately from
+successful disk-witness acceptance; a completion envelope cannot bypass the
+unchanged PE parser. All 46 pins and three loaded modules match, with raw/wait/
+wrapper exits zero. The worker PID/group is absent after a successful wait;
+this short run has no sampled birth/parent row. Evidence is
+`ntdll-disk-query-transport-1/local-controls-1/`; raw hash begins
+`23d5809a06497bc2`, report `cd122ef1f52703f7`. These are synthetic host controls;
+the proposed disk-only Windows query has not run at this checkpoint.
+
 ### Plug-in data rewrites
 
 Reviewed 2026-10-26 (ST-T03i, second change). `SourceScenePluginRewrites` (`Packages/Engine/Sources/Studio/SourceScenePluginRewrites.swift`) rewrites the KKPE, MaterialEditor and NodesConstraints entries after a delete or a copy, as CharaStudio's save writes them after the same interactive edit.
