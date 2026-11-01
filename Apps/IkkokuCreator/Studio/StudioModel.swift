@@ -123,6 +123,20 @@ final class StudioModel: ViewportInputHandler, LivePacedHandler {
     @ObservationIgnored private var inspectorDiagnosticsStorage: [String] = []
     var inspectorDiagnostics: [String] { access(keyPath: \.inspectorDiagnostics); return inspectorDiagnosticsStorage }
 
+    /// What the workspace tree, the toolbar and the timeline bar show from
+    /// the document, published the same way (item 7 follow-ups, C4;
+    /// `StudioPanelState.swift`), so an FK drag frame, which writes the
+    /// document but changes none of it, re-evaluates none of them. Computed
+    /// with the Object tab's state, unless `IKKOKU_PERF_PANEL_STATE=document`.
+    @ObservationIgnored private var workspaceStateStorage = StudioWorkspaceState()
+    var workspaceState: StudioWorkspaceState { access(keyPath: \.workspaceState); return workspaceStateStorage }
+    @ObservationIgnored private var toolbarDocumentStateStorage = StudioToolbarDocumentState()
+    var toolbarDocumentState: StudioToolbarDocumentState { access(keyPath: \.toolbarDocumentState); return toolbarDocumentStateStorage }
+    @ObservationIgnored private var timelineDocumentStateStorage = StudioTimelineDocumentState()
+    var timelineDocumentState: StudioTimelineDocumentState { access(keyPath: \.timelineDocumentState); return timelineDocumentStateStorage }
+    /// The inputs `workspaceStateStorage` was last built from; nil before the first build.
+    @ObservationIgnored private var workspaceStateKey: StudioWorkspaceKey?
+
     /// The Object tab's state as the model is now: nil when nothing in the
     /// document is selected.
     func currentObjectInspectorState() -> ObjectInspectorState? {
@@ -138,6 +152,26 @@ final class StudioModel: ViewportInputHandler, LivePacedHandler {
             if state != objectInspectorStateStorage { withMutation(keyPath: \.objectInspectorState) { objectInspectorStateStorage = state } }
             let diagnostics = compatibilityDiagnostics
             if diagnostics != inspectorDiagnosticsStorage { withMutation(keyPath: \.inspectorDiagnostics) { inspectorDiagnosticsStorage = diagnostics } }
+        }
+        if StudioPanelStateMode.current.publishes { refreshPanelState() }
+    }
+
+    /// Publishes the workspace, toolbar and timeline states (C4), each only
+    /// when it differs. The workspace rows are rebuilt only when their inputs
+    /// changed (`workspaceKey`): building them copies every object, about
+    /// 0.1 ms a refresh in a 32-object scene.
+    private func refreshPanelState() {
+        PerfTrace.measure(.studioPanelState, "StudioPanelState") {
+            let key = workspaceKey()
+            if key != workspaceStateKey {
+                workspaceStateKey = key
+                let workspace = StudioWorkspaceState(model: self)
+                if workspace != workspaceStateStorage { withMutation(keyPath: \.workspaceState) { workspaceStateStorage = workspace } }
+            }
+            let toolbar = StudioToolbarDocumentState(model: self)
+            if toolbar != toolbarDocumentStateStorage { withMutation(keyPath: \.toolbarDocumentState) { toolbarDocumentStateStorage = toolbar } }
+            let timeline = StudioTimelineDocumentState(model: self)
+            if timeline != timelineDocumentStateStorage { withMutation(keyPath: \.timelineDocumentState) { timelineDocumentStateStorage = timeline } }
         }
     }
 
@@ -163,6 +197,18 @@ final class StudioModel: ViewportInputHandler, LivePacedHandler {
         let diagnostics = compatibilityDiagnostics
         assert(diagnostics == inspectorDiagnosticsStorage,
                "inspectorDiagnostics is stale: published \(inspectorDiagnosticsStorage), now \(diagnostics)")
+        guard StudioPanelStateMode.current.publishes else { return }
+        // C4: also checks that the workspace key covers every input of the
+        // rows, since the rows are rebuilt only when the key changes.
+        let workspace = StudioWorkspaceState(model: self)
+        assert(workspace == workspaceStateStorage,
+               "workspaceState is stale: published \(workspaceStateStorage), now \(workspace)")
+        let toolbar = StudioToolbarDocumentState(model: self)
+        assert(toolbar == toolbarDocumentStateStorage,
+               "toolbarDocumentState is stale: published \(toolbarDocumentStateStorage), now \(toolbar)")
+        let timeline = StudioTimelineDocumentState(model: self)
+        assert(timeline == timelineDocumentStateStorage,
+               "timelineDocumentState is stale: published \(timelineDocumentStateStorage), now \(timeline)")
     }
     #endif
 
@@ -527,6 +573,25 @@ final class StudioModel: ViewportInputHandler, LivePacedHandler {
         }
         return (SourceStudioCameraLabel.title(name: object.name, key: entry.objectKey),
                 SourceStudioCameraLabel.keyDetail(name: object.name, key: entry.objectKey), true)
+    }
+    /// The inputs of `StudioWorkspaceState` (see `StudioWorkspaceKey`), read
+    /// in place from the document without copying its objects.
+    func workspaceKey() -> StudioWorkspaceKey {
+        let objects = documentStorage.objects
+        var key = StudioWorkspaceKey()
+        key.items.reserveCapacity(objects.count)
+        for index in objects.indices {
+            let id = objects[index].id
+            let camera = sourceCameras[id]
+            key.items.append(.init(id: id, parent: objects[index].parent, name: objects[index].name, kind: objects[index].kind,
+                                   visible: objects[index].visible, sourceObjectKey: objects[index].sourceObjectKey,
+                                   sourceDuplicateOf: objects[index].sourceDuplicateOf,
+                                   cameraSceneSHA256: camera?.sceneSHA256, cameraObjectKey: camera?.objectKey))
+        }
+        key.selection = selection
+        key.sceneSHA256 = documentStorage.sourceSceneSHA256
+        key.activeCamera = activeSourceCameraView
+        return key
     }
     /// The camera after "source camera" in a status message:
     /// `"IKKOKU-MIRROR" (camera 2)`, from the object's current name.

@@ -1252,18 +1252,30 @@ The Tab walk of `keyLoop` commits rounded values as it passes the fields
 checks assert an unchanged document before a walk, not across one.
 
 The Object tab reads its state from the model (`StudioModel.objectInspectorState`),
-and the compatibility details read `StudioModel.inspectorDiagnostics`. The
+and the compatibility details read `StudioModel.inspectorDiagnostics`. Since
+the item 7 follow-ups, the workspace tree, the toolbar and the timeline bar
+also read what they show from the document through published values
+(`workspaceState`, `toolbarDocumentState`, `timelineDocumentState`). The
 model publishes each only when it changes. In Debug builds the model checks,
-after every main run-loop turn, that both published values equal a fresh
+after every main run-loop turn, that every published value equals a fresh
 computation, and fails an assertion if not. So every Studio check also
-checks that no change reaches the inspector without the refresh that
-publishes it.
+checks that no change reaches the inspector or those panels without the
+refresh that publishes it, and that the workspace rows' key
+(`StudioWorkspaceKey`, which decides when the rows are rebuilt) covers
+every input of the rows.
 
 `IKKOKU_PERF_KEEP_MOUNTED` (`off`, `tab` or `on`, default `on`) is a
 measurement control only. The app reads it once at launch, `CaptureRequest`
 accepts it only with `IKKOKU_PERF_TRACE`, and no lane sets it. `off` builds
 and drops the inspector's views as before item 7. `tab` keeps the Object
 tab, and `on` also keeps each kind's section once it has been shown.
+
+`IKKOKU_PERF_PANEL_STATE` (`document` or `published`, default `published`)
+is a measurement control of the same kind. `document` has the workspace
+tree, the toolbar and the timeline bar read the document in their bodies,
+as before the item 7 follow-ups, so every document write (each FK drag
+frame) re-evaluates them; the Debug check above then skips those three
+values.
 
 ### Plug-in data rewrites (ST-T03i)
 

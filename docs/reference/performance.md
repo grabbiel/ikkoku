@@ -167,6 +167,12 @@ Other options:
   drops the inspector's Object tab and its sections as before item 7, `tab`
   keeps the Object tab mounted while nothing is selected, and `on` also
   keeps each kind's section once shown. The app reads it once at launch.
+- `IKKOKU_PERF_PANEL_STATE` (`document` or `published`, the default), a
+  measurement control for the
+  [item 7 follow-ups](#phase-2-item-7-follow-ups): `document` has the
+  workspace tree, the toolbar and the timeline bar read the document in
+  their bodies, as before, and `published` has them read what the model
+  publishes when it changes. The app reads it once at launch.
 - Measurement controls for the
   [item 6 follow-up](#phase-2-item-6-follow-up-route-copies-prefetch-and-kept-donations),
   all defaulting to the shipped behavior:
@@ -5272,6 +5278,40 @@ With the [scaling method](#scaling-to-the-low-end-base-m1-8-gb) (serial CPU
 15), and a redo for about 0.085–0.12 s instead of 0.13–0.17 s (10–14 frames
 instead of 15–20). A deselect costs up to about 0.02 s more. An FK drag's
 per-frame main-thread time does not grow.
+
+## Phase 2, item 7 follow-ups
+
+Follow-ups to [item 7](#phase-2-item-7-selection-and-the-inspector), from
+its [What remains](#what-remains-after-item-7) list. Work in progress:
+the measurements are added as each part lands.
+
+### C4: the workspace, toolbar and timeline read published state
+
+During an FK drag every frame writes the document, and the workspace tree
+(`StudioWorkspacePanel`), the toolbar (`StudioToolbar`) and the timeline
+bar (`StudioTimelineBar`) read the document in their bodies, so each was
+evaluated on every frame (120 bodies a second each) and the window was
+laid out again, although nothing they show had changed. The model now
+publishes what each shows (`StudioPanelState.swift`), the way it publishes
+the Object tab's state, and writes each value only when it differs:
+
+- **`workspaceState`**: the rows (name, kind, visibility, depth, selection,
+  the source camera's label and marker) and the object count. The rows are
+  rebuilt only when `StudioWorkspaceKey` changes: per object its id,
+  parent, name, kind, visibility and what its source camera label reads,
+  then the selection, the scene identity and the active source camera's
+  view. Building the key reads the objects in place.
+- **`toolbarDocumentState`**: whether the selection is a character, the
+  filled camera slots, whether there are source routes, and the grid.
+- **`timelineDocumentState`**: the timeline's length and loop, the
+  selection's keys, the key count and whether anything is selected.
+
+The model computes all three after each refresh, with the Object tab's
+state. The Debug check that compares published state with a fresh
+computation after every run-loop turn covers the three new values, so a
+change that reaches a panel without a refresh, or an input missing from
+the workspace key, fails the Studio lanes. `IKKOKU_PERF_PANEL_STATE=document`
+restores the old reads for measurement.
 
 ## Texture loads without worker threads (2026-10-26)
 
