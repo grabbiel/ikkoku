@@ -111,6 +111,7 @@ struct MakerScenario: Decodable {
             let detail: String
             let selectionMilliseconds: Double?
             let selectionStages: MakerModel.SourceSelectionTiming?
+            let initialLoad: MakerModel.SourceInitialLoadTiming?
             let mainActorMaximumGapMilliseconds: Double?
             let mainActorHeartbeatCount: Int?
             let resourcesBefore: ResourceStore.Statistics?
@@ -119,6 +120,9 @@ struct MakerScenario: Decodable {
         let steps: [StepResult]
         let passed: Int
         let failed: Int
+        /// Captured before scenario edits/reimports; later successful reloads
+        /// have their own step samples, and failures cannot reuse this value.
+        let startupInitialLoad: MakerModel.SourceInitialLoadTiming?
 
         func json() throws -> Data {
             let encoder = JSONEncoder()
@@ -137,6 +141,7 @@ struct MakerScenario: Decodable {
     /// detail and the run continues; a failed `export`/`reimport` stops it,
     /// because every later step depends on the file they were to write.
     static func run(_ scenario: MakerScenario, maker: MakerModel, app: AppState) async -> Report {
+        let startupInitialLoad = maker.sourceInitialLoadTiming
         var results: [Report.StepResult] = []
         var heldSelection: (task: Task<Void, Error>, gate: MakerSelectionGate)?
         defer { heldSelection?.gate.release(); heldSelection?.task.cancel() }
@@ -198,10 +203,12 @@ struct MakerScenario: Decodable {
         var resourcesBefore: ResourceStore.Statistics?
         var resourceSnapshots: [String: ResourceStore.Statistics] = [:]
         @discardableResult
-        func record(_ step: Step, _ ok: Bool, _ detail: String) -> Bool {
+        func record(_ step: Step, _ ok: Bool, _ detail: String,
+                    initialLoad: MakerModel.SourceInitialLoadTiming? = nil) -> Bool {
             results.append(Report.StepResult(op: step.op, ok: ok, detail: detail,
                 selectionMilliseconds: step.op == "selectAsset" ? (ProcessInfo.processInfo.systemUptime - stepStart) * 1000 : nil,
                 selectionStages: ["selectAsset", "finishSelection"].contains(step.op) ? maker.sourceSelectionTiming : nil,
+                initialLoad: initialLoad,
                 mainActorMaximumGapMilliseconds: heartbeat?.maximumGapMilliseconds,
                 mainActorHeartbeatCount: heartbeat?.count,
                 resourcesBefore: resourcesBefore,
@@ -422,7 +429,10 @@ struct MakerScenario: Decodable {
                 record(step, maker.sourceRigPreview == nil && maker.sourceSelectionPending == nil, "closed source preview")
             case "reloadCard":
                 guard let path = heldCardPath else { record(step, false, "reloadCard has no imported path"); continue }
-                do { try maker.importSourceCardSettings(url: URL(fileURLWithPath: path)); record(step, true, "reloaded committed input") }
+                do {
+                    try maker.importSourceCardSettings(url: URL(fileURLWithPath: path), recordInitialLoad: true)
+                    record(step, true, "reloaded committed input", initialLoad: maker.sourceInitialLoadTiming)
+                }
                 catch { record(step, false, "reloadCard: \(error)") }
             case "clearModLibrary":
                 do { try maker.setModLibrary(nil); record(step, true, "replaced mod library") }
@@ -494,9 +504,9 @@ struct MakerScenario: Decodable {
                     break scenarioLoop
                 }
                 do {
-                    try maker.importSourceCardSettings(url: url)
+                    try maker.importSourceCardSettings(url: url, recordInitialLoad: true)
                     heldCardPath = url.path
-                    record(step, true, "reimported \(path): \(maker.status)")
+                    record(step, true, "reimported \(path): \(maker.status)", initialLoad: maker.sourceInitialLoadTiming)
                 } catch {
                     record(step, false, "reimport failed, stopping: \(error)")
                     break scenarioLoop
@@ -586,7 +596,7 @@ struct MakerScenario: Decodable {
             }
         }
         let passed = results.filter(\.ok).count
-        return Report(steps: results, passed: passed, failed: results.count - passed)
+        return Report(steps: results, passed: passed, failed: results.count - passed, startupInitialLoad: startupInitialLoad)
     }
 }
 

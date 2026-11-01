@@ -392,6 +392,19 @@ public struct SourceMakerLibrary: Sendable {
     public func prepare(card: SourceCharacterCard, coordinate: Int, baseURL: URL, wear: Bool = false, timings: SourceMakerPreparationTimings? = nil) throws -> Prepared {
         try prepare(card: card, coordinate: coordinate, baseURL: baseURL, wear: wear, timings: timings, rigReuse: nil)
     }
+    /// Explicit initial-session opt-in. The caller keeps the prospective token
+    /// and publishes this candidate only after all owner load gates succeed.
+    /// A thrown preparation returns no partial candidate. Nil adds no worker,
+    /// actual-byte hashing or ledger work to the existing preparation path.
+    public func prepare(card: SourceCharacterCard, coordinate: Int, baseURL: URL, wear: Bool = false,
+                        timings: SourceMakerPreparationTimings? = nil, seeding input: SourceMakerRigReuse.Input?) throws
+        -> (prepared: Prepared, candidate: SourceMakerRigReuse.Candidate?, sample: SourceMakerRigReuse.Sample?) {
+        let worker = input.map(SourceRigReuseWorker.init)
+        let prepared = try prepare(card: card, coordinate: coordinate, baseURL: baseURL,
+                                   wear: wear, timings: timings, rigReuse: worker)
+        let finished = worker?.finish()
+        return (prepared, finished?.0, finished?.1)
+    }
     /// The same preparation with every converted rig file decoded through
     /// `rigs` (R7 phase 2 item 6): a Studio batch decodes each distinct file
     /// once across its characters. The result equals the unshared `prepare`.

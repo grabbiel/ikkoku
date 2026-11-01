@@ -145,7 +145,10 @@ final class AppState {
                 catch { startupInputFailed("IKKOKU_BONE_MODIFIERS", path, "Could not load bone modifiers", error, automated: automated) }
             }
             if let path = env["IKKOKU_SOURCE_CARD"] {
-                do { try PerfTrace.step("sourceCardImport") { try maker?.importSourceCardSettings(url: URL(fileURLWithPath: path)) } }
+                do { try PerfTrace.step("sourceCardImport") {
+                    try maker?.importSourceCardSettings(url: URL(fileURLWithPath: path),
+                        recordInitialLoad: env["IKKOKU_MAKER_SCENARIO"] != nil)
+                } }
                 catch {
                     startupInputFailed("IKKOKU_SOURCE_CARD", path, "Could not import source card settings", error, automated: automated)
                 }
