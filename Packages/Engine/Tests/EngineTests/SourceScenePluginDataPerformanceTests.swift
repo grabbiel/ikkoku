@@ -41,6 +41,12 @@ private func pluginPerfExport(_ label: String, _ document: KoikatsuSceneDocument
         pluginPerfMedian("\(label) editedData (refused)") { _ = try? document.editedData(edits) }
         return
     }
+    // #278: an ordered export rekeys the staged scene before its plug-in
+    // step, so only the whole export is timed.
+    if edits.order != nil {
+        try pluginPerfMedian("\(label) editedData") { _ = try document.editedData(edits) }
+        return
+    }
     let stage = try document.inserting(edits.insertions)
     var rest = edits; rest.insertions = []
     let (body, final) = try stage.document.editedBody(rest)
@@ -125,5 +131,10 @@ func sourceScenePluginDataPerformance() throws {
         try pluginPerfExport("large delete item", large, .init(deletions: [item]))
         try pluginPerfExport("large duplicate item", large, .init(insertions: [.init(.duplicate(of: item))]))
         try pluginPerfExport("large move item to the root", large, .init(reparents: [.init(object: item, parent: nil)]))
+        // #278: that delete, then a copy of the next item, in that order.
+        let next = try #require(items.filter { $0 != item }.max())
+        var ordered = SourceSceneEdits(deletions: [item], insertions: [.init(.duplicate(of: next))])
+        ordered.order = [.delete(item), .insert([0])]
+        try pluginPerfExport("large delete item then duplicate another", large, ordered)
     }
 }
