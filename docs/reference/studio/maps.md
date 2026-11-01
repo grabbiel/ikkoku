@@ -762,7 +762,7 @@ All 42 maps load in the Engine fixture test (`everyConvertedMapLoadsItsBlockImag
   - the colour capture is not a flat colour;
   - the log names no refusal or error.
 
-  The check is `structural_captures.py`, and the captures are in `.local/sta11d-map-coverage/structural/captures-merge2/` (28 MB).
+  The check is `structural_captures.py`, and the captures are in `.local/sta11d-map-coverage/structural/captures-merge3/` (28 MB).
 
 ### Converter (slice 4)
 
@@ -833,7 +833,7 @@ Every map but 33 now uses a far plane of 1000 m for the depth-normals images, on
 
 #### The gates
 
-`compare_original_map.py` compared all 21 cases with the tolerances unchanged. The captures are the Release build of `06eef4d7` (the runtime is unchanged since) on the re-exported catalog, with every particle renderer drawn alone (`.local/sta11d-map-coverage/ours4/`, `cmp-ours4/comparison.json`). The gates are:
+`compare_original_map.py` compared all 21 cases with the tolerances unchanged. The captures are the Release build of `06eef4d7` on the re-exported catalog, with every particle renderer drawn alone (`.local/sta11d-map-coverage/ours4/`, `cmp-ours4/comparison.json`). The merged head's Release build (`b4db76cb`) recaptured all 21 cases byte-identically, every image and `native-map.json` apart from its timings (`same_captures.py`). The gates are:
 
 - geometry IoU ≥ 0.999;
 - depth p99 ≤ two `EncodeFloatRG` steps (2 × far / 65025, 0.031 m at 1000 m);
@@ -982,7 +982,28 @@ mkdir -p "$H/slice4-33-34" && mv "$M/33-bushitu" "$M/34-akikyoushitu" "$M/catalo
 
 Once the change has merged and the lanes pass on the shared fixture, `$B` (the slice-3 maps 33 and 34, 89 MB) can be deleted.
 
-MAINSAFE
+#### Captures (slice 4)
+
+Release captures, 17 per set: slice 3's 16 and map 41's scene. They come from `main` (`189e5b8c`) and from this change merged with it (`b4db76cb`). Each binary ran on the slice-3 export (the shared fixture) and on the slice-4 export: `.local/sta11d-map-coverage/captures/{base,head}-{shared,new}-merge3/captures.json`, compared by `compare_sets.py`.
+
+- **This change and `main` are byte-identical in all 17 captures** on either export, with the live source-shader opt-in OFF and ON, and so are the six live reports. The pixel-centre capture, the queue sort and the new shader paths change no picture that `main` draws.
+- **The slice-4 export changes only map 41's capture,** on both binaries. Maps 33 and 34 draw byte-identical pictures on both exports:
+  - map 33: 8 → 7 draws, 1,492 → 1,440 triangles;
+  - map 34: 54 draws, now with 2 particle draws instead of 1, and 28,659 → 28,597 triangles.
+
+  The slice-3 catalog's row for map 41 has no file, so on that export map 41's scene shows no map. On the slice-4 export it draws 29 parts.
+
+**Safe for branches still on `main`, but install after the merge.** `main`'s binary reads the slice-4 export:
+
+- **The 17 captures** are byte-identical to this change's, as above. Map 41 draws from its blocks.
+- **The 40 structural scenes** (`.local/sta11d-map-coverage/structural/base-captures-merge3/`):
+  - 34 maps draw byte-identical colour captures to this change's.
+  - Two draw differently, with identical geometry:
+    - map 21's particle cards blend in `main`'s order, which has no render queue or sort centre: MAE 0.04 on 0.9% of the pixels;
+    - map 40's `Unlit/Transparent` part is lit as an item: MAE 0.26 on 1.0%.
+  - Four are refused by name, because `main` reads no RGBA32 lightmaps: maps 1, 24, 38 and 39. Their status line says, for example, `Map 1 1F (1F): not loaded (1F.gltf lightmaps: the light map is incomplete.); no map shown`.
+- **Scenes.** No scene in `environment.json` names a map other than 33, 34 and 41. The others name none, and the legacy scene prints no map line.
+- **Lanes.** `main`'s scenario files expect the slice-3 counts: map 33's 8 draws, and map 34's 30 lightmapped draws and 1 particle draw. So `source-map`, `-source-map34` and the reload pair would fail on the slice-4 export (inferred from the files; `main`'s lane was not run on it). Install it only once this change has merged, and merge `main` into branches that run the Studio lane.
 
 ## Performance
 
