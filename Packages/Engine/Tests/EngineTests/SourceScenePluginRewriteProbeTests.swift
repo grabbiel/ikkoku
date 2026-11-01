@@ -27,9 +27,10 @@ private let phaseBVariable = "IKKOKU_PLUGIN_SCENE_PROBE_B"
 private let rewriteEdits = ["delete", "delete-folder", "delete-character", "delete-parent", "duplicate",
                             "duplicate-subtree", "duplicate-character", "delete-duplicate"]
 private let colliderEdits = ["lc-delete-character", "lc-delete-collider", "lc-duplicate-collider", "lc-duplicate-character"]
-/// Edits our writer refuses: a delete with an item copy (#278), and a copy of
-/// a controller a lone collider names (DynamicBonesEditor.cs:1799).
-private let refusedEdits = ["delete-duplicate": "KKPE", "lc-duplicate-character": "KKPE"]
+/// Edits our writer refuses: a copy of a controller a lone collider names
+/// (DynamicBonesEditor.cs:1799). The delete with an item copy is written in
+/// the order CharaStudio made it (#278).
+private let refusedEdits = ["lc-duplicate-character": "KKPE"]
 
 /// Diagnostic only (#278): both source operation orders collapse to the same
 /// unordered export request today. Retain all four observations before emitting
@@ -342,7 +343,11 @@ private func rewriteProbeEdits(_ label: String, keys: [String: Int32], source: K
         return .init(insertions: [.init(.duplicate(of: 0)), .init(.duplicate(of: 3), parent: .inserted(0)),
                                   .init(.duplicate(of: 4), parent: .inserted(0))])
     case "duplicate-character", "lc-duplicate-character": return .init(insertions: [.init(.duplicate(of: w))])
-    case "delete-duplicate": return .init(deletions: [1], insertions: [.init(.duplicate(of: 5))])
+    case "delete-duplicate":
+        // OriginalPluginRewriteProbe.cs: Delete(V1), then Duplicate(M3).
+        var edits = SourceSceneEdits(deletions: [1], insertions: [.init(.duplicate(of: 5))])
+        edits.order = [.delete(1), .insert([0])]
+        return edits
     case "lc-delete-collider": return .init(deletions: [try #require(keys["LC"])])
     case "lc-duplicate-collider": return .init(insertions: [.init(.duplicate(of: try #require(keys["LC"])))])
     default: throw SourceFixtureError.missing("probe edit \(label)")

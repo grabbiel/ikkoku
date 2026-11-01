@@ -2770,7 +2770,7 @@
         "IKKOKU_STUDIO_SCENARIO_REPORT": ".local/verification/reports/studio-scenario-plugin-rewrite-delete.json"
       },
       "referenceTier": "app-smoke",
-      "tolerance": "ST-T03i plug-in data rewrites, delete: on the original player's phase C fixture (KKPE, MaterialEditor and NodesConstraints data on its items, female and camera; IKKOKU_PLUGIN_REWRITE_SCENE) delete mod item 2, which has data in all three plug-ins, through the workspace Delete path. A delete together with an item copy must be refused before any byte is written (#278: KKPE's positional items). The delete alone exports and reimports with root [0, 1, 5, 7, 14, 15, 16], key 2 absent and both folders' children kept. A negative control proves the tree check fails on the source's keys. The export's scene bytes after the PNG are compared with the Engine's export of the same edit, which phases C and D tie to CharaStudio's; see docs/reference/studio/scene-editing.md.",
+      "tolerance": "ST-T03i plug-in data rewrites, delete: on the original player's phase C fixture (KKPE, MaterialEditor and NodesConstraints data on its items, female and camera; IKKOKU_PLUGIN_REWRITE_SCENE) delete mod item 2, which has data in all three plug-ins, through the workspace Delete path, then duplicate mod item 5. That export replays the recorded order (#278), names no fallback, and reimports with the copy at key 2 in item 2's root slot, root [0, 1, 2, 5, 7, 14, 15, 16], holding item 5's world pose within 5e-4 m and 0.05 degrees (CharaStudio's GetNewIndex and dictionary slot reuse; the set-based export would append key 159). After one undo the delete alone exports and reimports with root [0, 1, 5, 7, 14, 15, 16], key 2 absent and both folders' children kept. Negative controls prove the tree check fails on the source's keys and on the set-based keys, and the position check fails on item 2's pose. The export's scene bytes after the PNG are compared with the Engine's export of the same edit, which phases C and D tie to CharaStudio's; see docs/reference/studio/scene-editing.md.",
       "artifacts": [
         {
           "path": ".local/verification/reports/studio-scenario-plugin-rewrite-delete.json",
@@ -2778,6 +2778,10 @@
         },
         {
           "path": ".local/verification/scenario-exports/plugin-rewrite-delete.png",
+          "kind": "exported-scene"
+        },
+        {
+          "path": ".local/verification/scenario-exports/plugin-rewrite-delete-duplicate.png",
           "kind": "exported-scene"
         }
       ],

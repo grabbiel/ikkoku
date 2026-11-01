@@ -225,7 +225,7 @@ Citations are `file:line` under `.local/reverse/managed-recovery/902b9a23…/774
 
 The writer works in two phases. `KoikatsuSceneDocument.inserting(_:)` writes the insertions into a staged scene and decodes it. Then the staged scene's `editedData` applies the deletions, moves and leaf edits, keyed by the staged keys, with the topology writer above.
 
-- **Keys.** Allocation follows `Import`: the smallest key that no record or sub-info of the source file uses, deleted records included, taken in the copy's byte order. So a deleted record's key is never reused within one export. After an interactive delete, CharaStudio may hand out other numbers; keys only need to be unique.
+- **Keys.** Allocation follows `Import`: the smallest key that no record or sub-info of the source file uses, deleted records included, taken in the copy's byte order, and a root copy is appended. That is CharaStudio's result when nothing freed a key or a root slot before the addition. When the export also deletes, the app replays the operations in the order they were made, so a freed key and its root slot are reused as CharaStudio reuses them ([operation order](#operation-order-278)). The cases the replay does not follow keep these set-based keys, and the status says why.
 - **A copy** is its template's own bytes: the header, name, card, pose, and the item and light data. The writer patches the record key and every sub-info key in place, and forces a camera copy's `active` byte to 0. The template's children are not copied with it. A copied subtree is one insertion per record, each under the copy of its parent, so a copy whose child was deleted or moved is written as the document shows it.
 - **Parents.** An insertion goes at the root (under its own key), into a source or inserted folder, or, for a copy, into its template's own list: an item's child list or the same character accessory group, either the original owner or that owner's copy.
 - **New records** are serialized like the `ObjectInfo` defaults, closed, with the app's name, transform (Unity basis, Euler degrees) and visibility. A new camera is written inactive. A new light writes the app light's number, color, intensity, range, spot angle, shadow and enable flags, with draw-target on.
@@ -339,6 +339,81 @@ Reproduce the VM run from the repository root:
 - Lights: the reloaded scenes had one light, the new one. The two-light limit follows the recovered code and was not reloaded.
 - A new record inside a folder, and a copy inside a character's accessory group, are covered by the Engine tests only, without a reload in the original player.
 - Rendering in the original player. The capture records state and mesh counts, not pixels.
+
+### Operation order (#278)
+
+Reviewed 2026-11-01. When one export both deletes source records and adds records, CharaStudio's keys and root order for the added records depend on the order of the operations. A copy made after a delete can take the key the delete freed, in the deleted root's place. The app records the order of its structural edits and the writer replays it ([#278](https://github.com/grabbiel/ikkoku/issues/278)). Exports without a delete, or with nothing freed before an addition, are unchanged.
+
+**Recovered rules.** Citations are `file:line` under the same `Studio/` project as above. The dictionary lines are Mono's `Dictionary<TKey, TValue>` from the game's `mscorlib.dll` (`37e0d42a…`), recovered privately.
+
+- **Free keys.** `SceneInfo.hashIndex` holds every key the session has taken. `GetNewIndex` (SceneInfo.cs:194) returns the smallest key not in it and adds it. A delete (`Studio.DeleteInfo`, Studio.cs:714) releases keys through each record's `DeleteKey`:
+  - an item: its own key and its children's, but not its FK bones (OIItemInfo.cs:176);
+  - a route: its own key, its children's and its point keys (OIRouteInfo.cs:101). A point releases its own key, not its aid's (OIRoutePointInfo.cs:84);
+  - a character: its own key, its FK bones, IK targets, children and look-at target (OICharInfo.cs:342).
+- **Root order.** `dicObject`, the root dictionary, is a Mono `Dictionary`. After `LoadScene` (Studio.cs:507), slot i holds the i-th root of the file. `Remove` pushes the root's slot onto a last-in, first-out free list (mono-dictionary.cs:954). `Add` takes the last freed slot or appends (:811). Enumeration, and so `SceneInfo.Save`, walks the slots in order (:118). `Resize` runs only when no slot is free, so it keeps the free list.
+- **Copies and additions.** `Import` adds each root copy with `dicObject.Add` (SceneInfo.cs:502). A child copy is added and removed again by its parent's `OnLoadAttach` (`DeleteInfo` without `_delKey`, OCIItem.cs:234, OCIFolder.cs:61), so it does not change the root order. Add Folder, Add Camera and Add Light take `GetNewIndex()` and add a root the same way.
+- **Reload.** `LoadScene` rebuilds `hashIndex` from the file. Item FK keys and route aid keys a delete left taken are free again after a reload, so a reloaded scene uses only the keys its file holds.
+- **Lights.** Whether a light is built depends on the session's light count (`isLightCheck`, SceneInfo.cs:109; `Import`'s check, SceneInfo.cs:483 and ObjectInfoAssist.cs:32). The replay does not model that count ([#316](https://github.com/grabbiel/ikkoku/issues/320)).
+
+**App translation.**
+
+- **The log.** `StudioDocument.sourceStructuralEdits` (`SourceSceneEditLog`, `Packages/Engine/Sources/Studio/SourceSceneOrder.swift`) lists the structural edits of an imported scene in the order they were made. An import starts an empty log. Each edit is one document write, so the app refreshes once per operation:
+  - Delete records the source key of the deleted subtree's top. A subtree that holds an added object records no key.
+  - Duplicate and Add record the objects they added, each before its children.
+  - Set Parent on an imported scene, and adding or deleting a route point, record that the replay cannot follow them.
+- **Undo, redo and save.** Undo and redo restore the log with the objects. A native save keeps it as a plain array of at most 4,096 entries; the last one then marks an overflow. An entry this version cannot read loads as a mismatch. A save from before the log loads without one.
+- **Export.** `SourceSceneExportValidation.order` checks the log against the staged scene. Every addition and every deleted source record must appear in it exactly once. The result is one of:
+  - **unneeded**: nothing freed a key or a root slot before an addition, so the set-based keys are CharaStudio's and the export is unchanged;
+  - **replayed**: the steps go to the writer (`SourceSceneEdits.order`);
+  - **fallback**: the set-based keys, with a reason.
+
+**Writer behavior.**
+
+- **Replay.** `SourceSceneStage.replay` starts from every key the source file uses and applies the steps in order. A delete frees the keys above and its root's slot. An insertion takes keys in the copy's byte order (the [recovered rules](#recovered-rules-1)) and, at the root, a slot. The staged scene is then rekeyed and its roots written in slot order. Child order, leaf edits and the rest of the export are as before.
+- **Plug-in data.** The rewrites read the written document, so they follow the replay:
+  - Sideloader walks the roots in order;
+  - KKPE and NodesConstraints index objects in key order;
+  - MaterialEditor lists each copy's records after the kept ones, copy by copy, in operation order and then by key within one Duplicate (`OnObjectsCopied`, KK_Plugins.MaterialEditor/SceneController.cs:725–855).
+
+  So KKPE, MaterialEditor and NodesConstraints no longer refuse a delete with a copy when the order is replayed. The card fallback still refuses a delete with a copy when any card has steps: links name keys, and a freed key can become the copy's.
+- **Refused.** Steps that do not match the export (an insertion missing or listed twice, a delete of a record that is still there) and a step under a deleted record are refused, naming the step.
+- **Fallback.** These cases keep the set-based keys. The scene is valid and loads the same way; only the added records' keys and root order can differ from CharaStudio's. The status names the reason after "Added objects took keys after the scene's own, which can differ from CharaStudio's for these edits:".
+
+  | Reason | Case |
+  | --- | --- |
+  | `noLog` | A document without a log, imported or saved before this change, that deletes. |
+  | `move` | An object was moved to another parent. A move removes and adds roots, which takes and frees slots outside the replay. |
+  | `routePoints` | Route points were added or deleted. `AddPoint` takes keys and a delete frees them. |
+  | `addThenDelete` | An added or copied object was deleted again. The replay does not model the keys it held. |
+  | `light` | A light was added or copied ([#316](https://github.com/grabbiel/ikkoku/issues/320)). |
+  | `overflow` | More than 4,096 structural edits. |
+  | `mismatch` | Objects were added or removed by an operation the log does not hold: a merged scene, a plug-in, or an entry this version cannot read. |
+
+**Original player.** `Tools/reverse/original_plugin_scene_probe.py --phase oa` makes each operation order in CharaStudio from phase A's fixture and phase C's (all three plug-ins and a character), saves it, and reloads and saves it again. `fixtures/OriginalPluginRewriteProbe.cs` lists the orders (`OrderedCases`).
+
+- **Shutdown fault.** The player exits with access violation `0xC0000005` at quit, after it has written every output. The baseline-only control in the [diagnostic](#ordered-deletecopy-diagnostic-278-2026-10-31) shows the same exit without any edit. A run counts when its status has no error, every output is present and hashed, each phase A save is byte-identical to its resave and each phase C save is under `liveStateMasked`, and the control's save equals the baseline under Sideloader's `LocalSlot` mask. The quit exit is then recorded as this known fault.
+- **Comparison.** Phase A rows must be byte-identical. Phase C rows are compared under `liveStateMasked` (the characters' neck, eye and animator time bytes), and also with KKPE's instance IDs renamed (`pluginProbeComparable`) when a row copies an item with KKPE data. The report lists every masked offset per row. Reloaded keys must be a subset of the saved session's keys; the difference is the leaked FK and aid keys above.
+
+**Evidence.**
+
+- **Engine.** `SourceSceneOrderTests` (10 tests) mirror phase A's fixture with the independent `TopologyScene` builder. They cover:
+  - every oracle operation order, each against its set-based negative control;
+  - a character delete followed by a copy, and a character copy's FK, IK, accessory child and look-at keys after a delete;
+  - steps that free nothing (the export is the set-based one);
+  - mismatched steps, which are refused;
+  - the replay steps and the fallback reasons, built from a document's log;
+  - the log: only imported scenes record, the capacity is kept, entries decode leniently, the log travels with a native save, and an old save loads;
+  - `FreeKeys` handing out the smallest free key.
+
+  `SourceScenePluginRewriteTests` adds ordered rewrites: MaterialEditor copies after a delete, in operation order, KKPE's items in key order, and NodesConstraints' indices.
+- **Lanes.**
+  - `topology-delete-duplicate.json` (koikatu_cs0002591) deletes character 65, then duplicates item 1540 and folder 962, with three undos and redos. After export and reimport, 1540's copy is key 65 in the character's root slot, and 962's copy is key 66 appended, with children 67, 251, 252 and 253. An independent Python walk of the rules above predicts those keys. Each copy holds its original's world pose within 5e-4 m and 0.05°. A second export after a Set Parent names the `move` fallback. Negative controls reject the set-based roots (113 and 114 appended) and a wrong pose.
+  - `plugin-rewrite-delete.json` (phase C fixture) deletes item 2 and copies item 5, which has data in all three plug-ins. The copy reimports at key 2 in item 2's root slot; the set-based export would append 159.
+
+**Not verified:**
+
+- Light replay ([#316](https://github.com/grabbiel/ikkoku/issues/320)) and the other fallback cases keep the set-based keys.
+- Card links with a delete and a copy stay refused.
 
 ## Route points and settings (ST-T11, ST-T03)
 
@@ -590,6 +665,8 @@ The plug-ins are the installed DLLs of the [installed inventory](../mods/plugin-
 
 ### Ordered delete/copy diagnostic (#278, 2026-10-31)
 
+Superseded on 2026-11-01 by the replayed [operation order](#operation-order-278). This section keeps the diagnostic's history.
+
 A private four-case diagnostic compares the unchanged native writer with
 retained original saves, including independent native parsing of serialized
 root keys. In the plain fixture, deleting first lets the original reuse key 1
@@ -840,7 +917,7 @@ Reviewed 2026-10-26 (ST-T03i, second change). `SourceScenePluginRewrites` (`Pack
   - **Refused:**
     - an added item: CharaStudio writes a default element for it, which this writer does not;
     - a copy of an object a lone collider names. Every controller with dynamic bones registers them with each lone collider (DynamicBonesEditor.cs:1799, BoobsEditor.cs:401), so CharaStudio adds entries for the copy;
-    - a delete together with an item copy: the copies' keys can differ from CharaStudio's ([#278](https://github.com/grabbiel/ikkoku/issues/278));
+    - a delete together with an item copy when the export does not replay the operation order ([fallback](#operation-order-278)): the copies' keys can differ from CharaStudio's ([#278](https://github.com/grabbiel/ikkoku/issues/278));
     - a dropped reference whose controller ID more than one object has;
     - a copied character whose KKPE data is in a legacy ExtendedSave trailer rather than the card's current block;
     - a copied character, or a deleted one while a lone collider names any controller, whose card's `kkpe` entry has no `characterInfo` string with a non-zero `uniqueId`;
@@ -858,7 +935,7 @@ Reviewed 2026-10-26 (ST-T03i, second change). `SourceScenePluginRewrites` (`Pack
   - **Textures.** Only the Bundled form is read: an int-to-bytes map (`SaveBundled`, KK_Plugins.MaterialEditor/TextureSaveHandler.cs:80–88). KKAPI picks the form from `Local Textures/Scene Save Type`, Bundled by default (KKAPI `7f4f50e1…`, KKAPI.Studio/SceneLocalTextures.cs:52–60, :89). The installed `marco.kkapi.cfg` sets Bundled (read in phase C). A Deduped or Local key refuses.
   - **Refused:**
     - version 0 data that needs a rewrite (CharaStudio writes version 1);
-    - a delete together with a copy of an item that has records (#278);
+    - a delete together with a copy of an item that has records, when the order is not replayed (#278);
     - a purge when Timeline data has texture tracks;
     - a record key the writer does not know.
 - **NodesConstraints 1.6.2.1** (`817fd940…`, `nodesConstraints`).
@@ -871,7 +948,7 @@ Reviewed 2026-10-26 (ST-T03i, second change). `SourceScenePluginRewrites` (`Pack
   - **Writer.** The kept constraints, in order, with their ends' new indices and their new positions.
   - **Refused:**
     - a copy of both ends of a constraint before the first camera-parented one: this writer does not write constraint copies;
-    - a delete together with a copy while any constraint is kept (#278);
+    - a delete together with a copy while any constraint is kept, when the order is not replayed (#278);
     - removed or renumbered constraints when Timeline data mentions NodesConstraints, whose tracks address constraints by number;
     - two constraints between the same transforms;
     - an index the scene does not have.
@@ -903,7 +980,7 @@ Reviewed 2026-10-26 (ST-T03i, second change). `SourceScenePluginRewrites` (`Pack
   - **Refused when** the edit:
     - deletes a live target. On reload the fallback throws there and drops the character's later links, which CharaStudio's export would restore from its `nodesConstraints` data;
     - copies a linked character together with a live target. NodesConstraints' duplicate patch gives the copy a constraint to the copied target, while the copy's card still names the original;
-    - both deletes and copies, when any card has steps. The copies' keys can differ from CharaStudio's (#278), and links name keys;
+    - both deletes and copies, when any card has steps. Links name keys, and with the [replayed order](#operation-order-278) a key the delete freed can become the copy's (#278), so this stays refused;
     - writes a character whose card names the data but does not decode here. A decoder difference must not hide live links.
 
     The reason names NodesConstraints and the character and object.
@@ -916,7 +993,7 @@ Reviewed 2026-10-26 (ST-T03i, second change). `SourceScenePluginRewrites` (`Pack
     A scene whose links the edit does not touch exports byte-identical to the same edit without plug-in data.
 - **Bytes.** Kept entries keep their bytes. The map header is written as MessagePack-CSharp 1.x writes it (shortest forms), and so are the rewritten Sideloader records. A trailer with nothing to change is returned as it was.
 - **Verification.** The written trailer is parsed again. It must have the source's framing and the planned entries in order with the planned bytes. The Sideloader records must decode to their planned keys and positions.
-- **Keys.** Insertions take the smallest free keys, then added route points take theirs. Keys freed in the same export are not reused, unlike CharaStudio after an interactive delete ([#278](https://github.com/grabbiel/ikkoku/issues/278)).
+- **Keys.** Insertions take the smallest free keys, then added route points take theirs. With deletes, the replayed [operation order](#operation-order-278) reuses freed keys as CharaStudio does ([#278](https://github.com/grabbiel/ikkoku/issues/278)); the fallback cases do not.
 
 **Before ST-T03i**, delete, duplicate and route point add and delete were refused in any scene whose KKEx map held an entry, nil entries included. Additions were accepted in every scene, with the trailer kept verbatim. That was a latent bug: a new folder below the highest key shifts NodesConstraints' and Timeline's indices. Additions now follow the rules above. In scenes without plug-in data, deletes and copies were accepted. Now the card fallback check refuses only a delete of a live link's target, a copy of a linked character together with its target, or a delete with a copy when a card has steps. After the first ST-T03i change and before the rewrites, KKPE data, MaterialEditor records on an affected item and non-empty NodesConstraints data refused every delete and copy that touched them.
 
@@ -1046,16 +1123,16 @@ The refusal is the engine's message, which names each plug-in and its reason. Th
   - **Fixes found by the probe (second change).** Card decode hashed every card's bytes, and every scene decode reads every card. It now computes `sourceSHA256` when read. On the largest scene that halves each export: a delete took 172 ms, a copy 187 ms and a move 125 ms. KKPE's used-ID scan searched the whole scene with `memmem` on every plan. It now makes one `memchr` pass, only when a plan needs a fresh ID.
   - **Import.** Nothing on the import path runs these rules. The lazy card hash speeds it up: the Engine decodes the largest scene in 24.6 ms instead of 55.1 ms, and showoff in 2.45 ms instead of 2.64 ms.
 - **Lanes and the Engine suite.** These ran on the Debug build of `256147d`, with `main` `ca91cda` merged, under the app lock with `--strict` and 0 skipped. `studio-scenarios` passed 81/81 and `maker-scenarios` passed 10/10. Two checks are new ([plug-in data rewrites](../../../Tools/verification/README.md#plug-in-data-rewrites-st-t03i)):
-  - `plugin-rewrite-delete` deletes item 2 and exports. The same delete together with a copy is refused (#278).
+  - `plugin-rewrite-delete` deletes item 2 and exports. The same delete together with a copy was refused then (#278); since 2026-11-01 it exports in the [replayed order](#operation-order-278).
   - `plugin-rewrite-duplicate` copies the female and then item 5. Each reimport holds the copy at key 159, at its original's world position. The female's FK bones, IK targets and look-at target hold keys 17–158, and CharaStudio's own copies take 159 too.
 
   The three exports' bytes after the PNG equal the Engine's exports of the same edits. The strict Engine suite with the shared fixture map passed 1,052 tests. The 6 skipped tests are the opt-in timing probes.
 
 **Limits:**
 
-- Keys freed by a delete in the same export are not reused, so a delete with a duplicate gives the copy a different key than CharaStudio after the same interactive edit (#278). The scene loads the same way, and the Sideloader records follow the key.
+- A delete with a duplicate gives the copy CharaStudio's key and root slot when the app replays the [operation order](#operation-order-278) (#278). In the fallback cases the copy takes a key after the scene's own; the scene loads the same way, and the Sideloader records follow the key.
 - KKPE, MaterialEditor and NodesConstraints data are rewritten after deletes and copies. Some cases are still refused, by name ([rewrites](#plug-in-data-rewrites)):
-  - a delete together with a copy (#278);
+  - a delete together with a copy when the order is not replayed (#278);
   - an added item, in a scene with KKPE data;
   - a copy of an object a KKPE lone collider names;
   - a constraint copy NodesConstraints would make;
