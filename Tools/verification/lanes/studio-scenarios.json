@@ -3201,7 +3201,7 @@
         "IKKOKU_STUDIO_SCENARIO_REPORT": ".local/verification/reports/studio-scenario-inspector-kept-views.json"
       },
       "referenceTier": "app-smoke",
-      "tolerance": "R7 phase 2, item 7, in the window: the Object tab kept while nothing is selected. Its hidden fields take no click, no focus and no typing, and the accessibility tree and the Tab key-view loop show only the placeholder. A field shown again shows the document's value. A collapsed Transform section stays collapsed from one character to the next and is expanded again after nothing was selected, as when the tab was built anew. Selection cycles leave the document and the undo stack unchanged. Item 7 follow-ups: the workspace row follows a mid-session rename and a visibility toggle (C4), and the toolbar's pose-mode picker kept hidden for a folder or nothing is absent from the accessibility tree and the Tab loop (C3).",
+      "tolerance": "R7 phase 2, item 7, in the window: the Object tab kept while nothing is selected. Its hidden fields take no click, no focus and no typing, and the accessibility tree and the Tab key-view loop show only the placeholder. A field shown again shows the document's value. A collapsed Transform section stays collapsed from one character to the next and is expanded again after nothing was selected, as when the tab was built anew. Selection cycles leave the document and the undo stack unchanged. Item 7 follow-ups: the workspace row follows a mid-session rename and a visibility toggle (C4).",
       "artifacts": [
         {
           "path": ".local/verification/reports/studio-scenario-inspector-kept-views.json",

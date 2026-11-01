@@ -68,8 +68,6 @@ final class AppState {
         // Item 7 follow-ups (C4): where the workspace, toolbar and timeline
         // read the document (`IKKOKU_PERF_PANEL_STATE`), also read once here.
         _ = StudioPanelStateMode.current
-        // C3: whether the toolbar keeps its pose-mode pickers (`IKKOKU_PERF_POSE_PICKER`).
-        _ = StudioPosePickerMounting.current
         // R7: the performance trace records startup marks from here on.
         PerfTrace.startIfRequested(env)
         // A-T01: the gameplay host scenario is its own headless mode. It needs

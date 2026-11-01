@@ -1260,10 +1260,7 @@ get wrong:
   rename typed mid-session ("Source character 0 K W") shows in the
   workspace row while the Name field is still being edited, and the
   inspector's Visible toggle turns the row's eye button from "Show" to
-  "Hide" and back (C4). The toolbar's pose-mode picker ("FK", "IK") is
-  absent from the accessibility tree while folder 622 or nothing is
-  selected and the Tab loop then has no view outside the window, and it
-  shows again for character 0 (C3).
+  "Hide" and back (C4).
 - `inspector-kept-route` (`IKKOKU_STUDIO_HALF_STATE_SCENE`). The route's
   "Line colour" well, active when the selection clears, is no longer active.
   A route point's position x, still being edited when the selection
@@ -1305,10 +1302,7 @@ is a measurement control of the same kind. `document` has the workspace
 tree, the toolbar and the timeline bar read the document in their bodies,
 as before the item 7 follow-ups, so every document write (each FK drag
 frame) re-evaluates them; the Debug check above then skips those three
-values. `IKKOKU_PERF_POSE_PICKER` (`built` or `kept`, default `kept`) is
-another: `built` has the toolbar build its pose-mode pickers when a
-character is selected and drop them when it is not, as before, and `kept`
-keeps them, hidden, in between.
+values.
 
 ### Plug-in data rewrites (ST-T03i)
 

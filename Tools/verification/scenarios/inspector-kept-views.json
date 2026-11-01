@@ -408,51 +408,6 @@
         "axAbsent": [
           "AXButton: Hide"
         ]
-      },
-      {
-        "op": "select",
-        "key": 622
-      },
-      {
-        "op": "assert",
-        "key": 622,
-        "inspectorView": "ObjectInspector",
-        "axAbsent": [
-          "AXRadioButton: FK",
-          "AXRadioButton: IK"
-        ]
-      },
-      {
-        "op": "keyLoop",
-        "hiddenKeyViews": 0
-      },
-      {
-        "op": "select",
-        "key": 0
-      },
-      {
-        "op": "assert",
-        "key": 0,
-        "axContains": [
-          "AXRadioButton: FK",
-          "AXRadioButton: IK"
-        ]
-      },
-      {
-        "op": "deselect"
-      },
-      {
-        "op": "assert",
-        "inspectorView": "none",
-        "axAbsent": [
-          "AXRadioButton: FK",
-          "AXRadioButton: IK"
-        ]
-      },
-      {
-        "op": "keyLoop",
-        "keyViews": 2,
-        "hiddenKeyViews": 0
       }
     ]
   }

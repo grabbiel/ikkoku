@@ -547,7 +547,6 @@ private struct CaptureRecipe {
 @Test func captureRequestScopesTheInspectorFollowUpControls() throws {
     let controls: [(variable: String, values: [String], rejected: [String])] = [
         ("IKKOKU_PERF_PANEL_STATE", ["document", "published"], ["Published", "on", ""]),
-        ("IKKOKU_PERF_POSE_PICKER", ["built", "kept"], ["Kept", "on", ""]),
     ]
     for control in controls {
         let outside: [[String]] = [[control.variable]]

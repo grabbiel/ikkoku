@@ -21,21 +21,6 @@ enum StudioInspectorMounting: String, Sendable {
     var keepsSections: Bool { self == .on }
 }
 
-/// Whether the toolbar keeps its pose-mode pickers mounted while the
-/// selection is not a character (item 7 follow-ups, C3), so a select between
-/// a character and another kind neither builds nor drops them.
-/// `IKKOKU_PERF_POSE_PICKER` is a measurement control, read once at launch:
-/// "built" builds and drops them as before, and "kept" (the default) keeps
-/// them, hidden.
-enum StudioPosePickerMounting: String, Sendable {
-    case built, kept
-
-    static let current: StudioPosePickerMounting =
-        ProcessInfo.processInfo.environment["IKKOKU_PERF_POSE_PICKER"].flatMap(Self.init(rawValue:)) ?? .kept
-
-    var keeps: Bool { self == .kept }
-}
-
 extension View {
     /// Hides a kept inspector view in a `ZStack(alignment: .top)` of kept
     /// views. Its height is fixed, as a scroll view's content is, and framed
@@ -55,20 +40,6 @@ extension View {
             // the child laid out at the proposal as before; with no minimum
             // the frame takes the child's size.
             .frame(minWidth: hidden ? 0 : nil, alignment: .topLeading)
-            .opacity(hidden ? 0 : 1)
-            .allowsHitTesting(!hidden)
-            .disabled(hidden)
-    }
-
-    /// Hides a kept group in the toolbar's row, as `inspectorHidden` does in
-    /// the inspector: its size is fixed and framed to zero in both directions
-    /// while hidden, so it keeps its layout but takes no space and moves
-    /// nothing that is shown. At zero opacity SwiftUI does not draw it and
-    /// leaves it out of the accessibility tree; it takes no clicks, and
-    /// disabled, its controls leave the Tab key-view loop.
-    func studioToolbarHidden(_ hidden: Bool) -> some View {
-        fixedSize()
-            .frame(width: hidden ? 0 : nil, height: hidden ? 0 : nil, alignment: .leading)
             .opacity(hidden ? 0 : 1)
             .allowsHitTesting(!hidden)
             .disabled(hidden)

@@ -741,7 +741,6 @@ final class PerfTrace {
                 "inspectorTab": configuration.inspectorTab.map { $0 as Any } ?? NSNull(),
                 "keepMounted": StudioInspectorMounting.current.rawValue,
                 "panelState": StudioPanelStateMode.current.rawValue,
-                "posePicker": StudioPosePickerMounting.current.rawValue,
             ] as [String: Any],
             "build": PerfTrace.buildDescription(),
             "machine": PerfTrace.machineDescription(device: device),
