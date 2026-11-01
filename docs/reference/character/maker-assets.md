@@ -959,7 +959,8 @@ test sources were unchanged. The failed attempt is preserved.
 This is an API and lifetime foundation only. Maker and library call sites do not
 yet seed the cache during initial loading. No app, source-fidelity or performance
 benefit is established by these CPU tests; initial-load seeding and its startup
-cost remain separate work under #192.
+cost remain separate work under #192. That seeding is now integrated; see
+[Initial-load rig seeding and reference skip](#initial-load-rig-seeding-and-reference-skip-192-2026-11-01).
 
 ### Initial-load verifier controls (#192, 2026-11-01)
 
@@ -1094,6 +1095,120 @@ zero; all nine observed processes and five groups release. Evidence is
 review `c7e1ab73de383d33`, summary `31c027fc1fb82d42`. This establishes the
 candidate cohort's own semantic checks. Cross-arm comparison, targeted failure
 cohorts and qualified performance measurements remain separate open gates.
+
+### Initial-load rig seeding and reference skip (#192, 2026-11-01)
+
+A successful source-card import now fills the Maker's decoded-rig reuse
+session. Before this change, every import started with an empty session. The
+first head selection after a load therefore decoded all ten rigs (0 hits / 10
+misses).
+
+**What changed.**
+
+- **Seeding.** `MakerModel.openSourceRig` prepares the card's selected geometry
+  through a prospective replacement token. It publishes the staged candidate at
+  the existing successful commit. The first later head selection then decodes
+  only the new head rig and reuses the other nine.
+- **No discarded reference decode.**
+  `SourceMakerImportGeometry.load` decodes the reference avatar model only
+  when there is no card or no Maker library, or when card asset selection
+  throws. Before, every import decoded the full reference model (nine files,
+  32.16 MB) and then discarded it whenever selection succeeded. The reference
+  manifest gate still runs before selection, so an unsupported manifest still
+  fails the import the same way. Both loads call the one shared
+  `SourceAvatarManifest.validated()`.
+- **Full-ledger guard.** `SourceMakerRigReuse.seedingInput(for:entries:)`
+  returns no input when the live ledger cannot admit the card's rig files,
+  counted as an upper bound, or when its snapshot budget is spent. Reimporting
+  over a cached session is the common case: the old entries stay live until the
+  commit, and the per-entry epoch rule keeps them from being reused. Without
+  the guard, that import would hash ten rigs, admit part of them, overflow and
+  publish an empty session anyway. With it, the import does no hashing and
+  publishes an empty session (`emptyLedgerFull`). The worker keeps its own
+  limits.
+- **Report fields.** The initial-load sample now records `geometryOutcome`
+  (`selectedAssets`, `referenceAfterSelectionFailure`, `referenceNoLibrary`,
+  `referenceNoCard`), `referenceLoad` (`skipped` or `loaded`),
+  `cachePublication` (`seeded`, `empty`, `emptyLedgerFull`,
+  `emptyStaleFallback`) and the inclusive `geometryMilliseconds`.
+
+**Behavior change.** A reference rig part that the card replaces is no longer
+decoded. A missing or malformed copy of such a part therefore no longer fails an
+import whose selection succeeds. Reference parts the card keeps are still decoded and
+validated by the selected preparation. Failure paths still load the full
+reference model.
+
+**Tests.** Seven new Engine tests: three from the Codex commits plus four new
+ones.
+
+- Initial-seed equivalence with nil-input geometry and nine-of-ten first-head
+  reuse.
+- Saturation recovery after the old holders release.
+- A late decode failure that drops its staged entries and keeps the current
+  cache.
+- `sourceMakerImportGeometryLoadsTheReferenceModelOnlyOnFallbackPaths`. It
+  corrupts the five reference parts the card replaces in a temporary copy. The
+  selected path still succeeds and matches `prepare`. The no-card, no-library
+  and selection-throws (male card on the female reference) paths still read the
+  reference and fail on the corrupt parts. A schema-version-2 manifest still
+  fails, as `SourceRig.loadModel` does.
+- `sourceMakerImportSeedingSurvivesFailedImportsAndDeclinesFullLedgers`. A
+  failed import stages and then drops its seed, leaving the ledger, epoch and
+  old hits intact. A successful import seeds ten entries. A same-card reimport
+  is declined by the guard; the unguarded control admits six and clears. A
+  female head 200 / body type 1 card then seeds its own ten entries and
+  matches `prepare`. A male head 201 / body type 1 import is declined while the
+  ledger is full, and its geometry still matches `prepare`. The next male
+  import seeds again.
+- `sourceRigReplacementSeedingInputDeclinesSeedsTheLiveLedgerCannotAdmit`, a
+  synthetic ledger test with foreign-ledger and spent-snapshot cases.
+- `sourceAvatarManifestGateAcceptsNormalKindsAndRejectsOtherSchemasKindsAndSexes`,
+  a synthetic test of the shared manifest gate.
+
+Mutation controls fail the three new import and ledger tests. The two controls are: load the
+reference before selection, and let the guard always allow the seed.
+
+The full strict Engine suite passes (1,114 Engine tests in 14 suites plus 21
+CoreMath; the seven skips are opt-in timing probes). The strict Maker lane
+passes 10/10 on both base and head, and the strict Studio lane passes 81/81
+with no skips. The four head scenarios now assert the following:
+
+- Startup seeds the session (`selectedAssets`, `referenceLoad: skipped`,
+  `seeded`).
+- The first selection after load reuses nine rigs (9 hits / 1 miss).
+- Returning to head 0 reuses all ten (10 / 0).
+- The reimport publishes `emptyLedgerFull`: step 53 in the selection scenarios,
+  step 5 in the reload scenarios.
+
+All 11 lane exports are byte-identical between base `899b777b` and head.
+
+Offscreen Debug Maker captures are also byte-identical PNGs between the two
+arms. The four inputs are the female and male head-0 scenario cards and the
+two cards exported by the selection scenarios. The captures show a static
+frame, not a running animation.
+
+**Timing.** A Release comparison against base `899b777b` uses ABBA order with
+n = 4 valid units per sex and arm, medians:
+
+- Card import: 1,206 → 702 ms (female) and 1,267 → 742 ms (male).
+- `firstDraw`: 2.47 → 1.96 s and 2.52 → 2.00 s.
+- First head selection after load: 725 → 422 ms and 762 → 431 ms (0/10 → 9/1
+  hits/misses).
+- The following head 0: 328 → 101 ms (9/1 → 10/0).
+- Head 201: unchanged.
+
+Peak footprint is 10–12 MiB lower, and idle main-thread time does not
+regress. The idle rows were measured on a display that did not composite the
+window. The [timing record](../performance.md#maker-initial-load-rig-seeding-and-reference-skip-192-2026-11-01)
+lists every row's dependence on presentation, the invalid attempts and the
+noted background processes.
+
+**Not covered.** Live animated viewport equivalence is not compared
+separately. Reuse across reimports would change #300's per-entry epoch rule and
+is a follow-up. The guard counts the card's rig files as an upper bound, so it
+also declines a seed that would only partly fit. No Maker lane scenario combines
+a seeded startup with a later expected import failure; the Engine test covers
+that order.
 
 ### Per-component appearance attribution (#192)
 

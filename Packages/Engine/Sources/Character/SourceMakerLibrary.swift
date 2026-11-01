@@ -392,6 +392,19 @@ public struct SourceMakerLibrary: Sendable {
     public func prepare(card: SourceCharacterCard, coordinate: Int, baseURL: URL, wear: Bool = false, timings: SourceMakerPreparationTimings? = nil) throws -> Prepared {
         try prepare(card: card, coordinate: coordinate, baseURL: baseURL, wear: wear, timings: timings, rigReuse: nil)
     }
+    /// Explicit initial-session opt-in. The caller keeps the prospective token
+    /// and publishes this candidate only after all owner load gates succeed.
+    /// A thrown preparation returns no partial candidate. Nil adds no worker,
+    /// actual-byte hashing or ledger work to the existing preparation path.
+    public func prepare(card: SourceCharacterCard, coordinate: Int, baseURL: URL, wear: Bool = false,
+                        timings: SourceMakerPreparationTimings? = nil, seeding input: SourceMakerRigReuse.Input?) throws
+        -> (prepared: Prepared, candidate: SourceMakerRigReuse.Candidate?, sample: SourceMakerRigReuse.Sample?) {
+        let worker = input.map(SourceRigReuseWorker.init)
+        let prepared = try prepare(card: card, coordinate: coordinate, baseURL: baseURL,
+                                   wear: wear, timings: timings, rigReuse: worker)
+        let finished = worker?.finish()
+        return (prepared, finished?.0, finished?.1)
+    }
     /// The same preparation with every converted rig file decoded through
     /// `rigs` (R7 phase 2 item 6): a Studio batch decodes each distinct file
     /// once across its characters. The result equals the unshared `prepare`.
@@ -591,6 +604,52 @@ public struct SourceMakerLibrary: Sendable {
         return Prepared(source: source, selections: selections, diagnostics: diagnostics,
             clothingSlots: clothesBySlot.keys.sorted(), referenceClothingSlots: Set(clothesBySlot.keys).subtracting(convertedSlots),
             indoorShoes: indoorShoes, components: materials, bodyMask: bodyMask, clearBodyMask: clearBodyMask)
+    }
+}
+
+/// A card import's geometry (CXM1, #192). The card's selected assets replace
+/// the whole reference model, so the reference model is read and decoded only
+/// on a fallback path: no card, no Maker library, or a selected preparation
+/// that throws. Before CXM1 the Maker decoded the reference model (nine files,
+/// 32 MB of JSON for the female base) ahead of every import and discarded it
+/// when the selection succeeded; `prepare` itself already skips parsing the
+/// reference parts the selection replaces. A thrown selection still ends in
+/// the reference model's own error when that model cannot load either.
+public enum SourceMakerImportGeometry {
+    public enum Outcome: String, Sendable, Encodable {
+        case selectedAssets, referenceAfterSelectionFailure, referenceNoLibrary, referenceNoCard
+    }
+    public struct Loaded {
+        public let source: SourceRig
+        public let prepared: SourceMakerLibrary.Prepared?
+        public let outcome: Outcome
+        /// The selected preparation's error, for the reference fallback's diagnostic.
+        public let selectionError: (any Error)?
+        /// The staged seed of a successful seeded preparation; a thrown
+        /// preparation stages none.
+        public let rigReuseCandidate: SourceMakerRigReuse.Candidate?
+        public let rigReuseSample: SourceMakerRigReuse.Sample?
+        public var referenceLoaded: Bool { outcome != .selectedAssets }
+    }
+    public static func load(baseURL: URL, card: SourceCharacterCard?, library: SourceMakerLibrary?, coordinate: Int,
+                            timings: SourceMakerPreparationTimings? = nil,
+                            seeding: SourceMakerRigReuse.Input? = nil) throws -> Loaded {
+        var selectionError: (any Error)?
+        if let card, let library {
+            do {
+                // The reference model's manifest gate (SourceAvatar.load) still
+                // applies; its failure falls back, so the import fails as before.
+                try JSONDecoder().decode(SourceAvatarManifest.self, from: Data(contentsOf: baseURL)).validated()
+                let selected = try library.prepare(card: card, coordinate: coordinate, baseURL: baseURL,
+                                                   timings: timings, seeding: seeding)
+                return Loaded(source: selected.prepared.source, prepared: selected.prepared, outcome: .selectedAssets,
+                    selectionError: nil, rigReuseCandidate: selected.candidate, rigReuseSample: selected.sample)
+            } catch { selectionError = error }
+        }
+        let source = try SourceRig.loadModel(url: baseURL)
+        let outcome: Outcome = card == nil ? .referenceNoCard : library == nil ? .referenceNoLibrary : .referenceAfterSelectionFailure
+        return Loaded(source: source, prepared: nil, outcome: outcome, selectionError: selectionError,
+                      rigReuseCandidate: nil, rigReuseSample: nil)
     }
 }
 

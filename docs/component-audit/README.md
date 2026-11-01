@@ -119,8 +119,8 @@ acceptance boundary; their old “next” steps are historical, not a live queue
   16–25 ms more, retains about 39 MB of logical rig payload and leaves owner
   stalls. See the [reuse evidence and limits](../reference/character/maker-assets.md#bounded-decoded-rig-reuse-192).
   A [prospective session-replacement foundation](../reference/character/maker-assets.md#prospective-rig-session-replacement-foundation-192)
-  passes 24 synthetic checks in both Debug and Release. Initial-load seeding is
-  not integrated; these lifetime checks establish no performance benefit.
+  passes 24 synthetic checks in both Debug and Release. Initial-load seeding was
+  not integrated then; these lifetime checks establish no performance benefit.
   The [initial-load verifier](../reference/character/maker-assets.md#initial-load-verifier-controls-192-2026-11-01)
   passes 111 isolated controls; actual app-pair acceptance remains separate.
   Another 22 collection-envelope controls pass; execution was then held for
@@ -138,7 +138,16 @@ acceptance boundary; their old “next” steps are historical, not a live queue
   correction passes ten synthetic controls, and offline re-review accepts the
   retained control cohort's 124 checks without rerunning apps. A separate four-app
   candidate cohort also passes 124 checks. Cross-arm comparison, targeted failure
-  cohorts and comparative performance remain open.
+  cohorts and comparative performance remain open for that verifier cohort.
+  [Initial-load seeding](../reference/character/maker-assets.md#initial-load-rig-seeding-and-reference-skip-192-2026-11-01)
+  is now integrated. A successful card import seeds the reuse session and no
+  longer decodes the reference model it discards. A guard skips seeding when
+  the ledger is full, as on reimport. Failure-cohort Engine tests and both
+  strict Maker lanes pass, and exports are identical. In a Release ABBA
+  comparison, card import falls about 42% (1,206 → 702 ms female, 1,267 →
+  742 ms male), the first frame renders 0.5 s sooner, and the first head
+  selection after load is 303–332 ms faster; see the
+  [timing record](../reference/performance.md#maker-initial-load-rig-seeding-and-reference-skip-192-2026-11-01).
   Per-component diagnostics now place about 52 ms of the tested repeat-cycle
   card-appearance work in six compositor wait/view intervals; batching across
   components remains a proposal. See the [attribution evidence](../reference/character/maker-assets.md#per-component-appearance-attribution-192).

@@ -42,6 +42,14 @@ struct MakerScenario: Decodable {
         let selection: SelectionValue?
         let expectFailure: Bool?, unchanged: Bool?
         let resourcesAtMost: String?
+        /// Any step: the decoded-rig hits and misses of the head selection it
+        /// committed (`SourceSelectionTiming.headRigReuse`).
+        let rigReuse: RigReuseValue?
+        /// Any step: outcomes of the current initial-load sample, the startup
+        /// import's until a reimport or reload records its own (CXM1).
+        let initialLoad: InitialLoadValue?
+        struct RigReuseValue: Decodable { let hits: Int, misses: Int }
+        struct InitialLoadValue: Decodable { let geometry: String?, referenceLoad: String?, cachePublication: String? }
         struct SelectionValue: Decodable {
             let kind: String, slot: Int, sourceID: Int
             let coordinate: Int?
@@ -73,7 +81,7 @@ struct MakerScenario: Decodable {
 
         private enum CodingKeys: String, CodingKey {
             case op, on, index, value, id, rgba, path, coordinate, face, body, color,
-                 colorApplied, diagnosticContains, selection, expectFailure, unchanged, resourcesAtMost
+                 colorApplied, diagnosticContains, selection, expectFailure, unchanged, resourcesAtMost, rigReuse, initialLoad
         }
 
         init(from decoder: Decoder) throws {
@@ -99,6 +107,8 @@ struct MakerScenario: Decodable {
             expectFailure = try c.decodeIfPresent(Bool.self, forKey: .expectFailure)
             unchanged = try c.decodeIfPresent(Bool.self, forKey: .unchanged)
             resourcesAtMost = try c.decodeIfPresent(String.self, forKey: .resourcesAtMost)
+            rigReuse = try c.decodeIfPresent(RigReuseValue.self, forKey: .rigReuse)
+            initialLoad = try c.decodeIfPresent(InitialLoadValue.self, forKey: .initialLoad)
         }
     }
 
@@ -111,6 +121,7 @@ struct MakerScenario: Decodable {
             let detail: String
             let selectionMilliseconds: Double?
             let selectionStages: MakerModel.SourceSelectionTiming?
+            let initialLoad: MakerModel.SourceInitialLoadTiming?
             let mainActorMaximumGapMilliseconds: Double?
             let mainActorHeartbeatCount: Int?
             let resourcesBefore: ResourceStore.Statistics?
@@ -119,6 +130,9 @@ struct MakerScenario: Decodable {
         let steps: [StepResult]
         let passed: Int
         let failed: Int
+        /// Captured before scenario edits/reimports; later successful reloads
+        /// have their own step samples, and failures cannot reuse this value.
+        let startupInitialLoad: MakerModel.SourceInitialLoadTiming?
 
         func json() throws -> Data {
             let encoder = JSONEncoder()
@@ -135,8 +149,10 @@ struct MakerScenario: Decodable {
 
     /// Runs the steps against the imported card. A failing step records its
     /// detail and the run continues; a failed `export`/`reimport` stops it,
-    /// because every later step depends on the file they were to write.
+    /// because every later step depends on the file they were to write. An
+    /// explicitly expected, atomically unchanged reimport failure can continue.
     static func run(_ scenario: MakerScenario, maker: MakerModel, app: AppState) async -> Report {
+        let startupInitialLoad = maker.sourceInitialLoadTiming
         var results: [Report.StepResult] = []
         var heldSelection: (task: Task<Void, Error>, gate: MakerSelectionGate)?
         defer { heldSelection?.gate.release(); heldSelection?.task.cancel() }
@@ -198,15 +214,37 @@ struct MakerScenario: Decodable {
         var resourcesBefore: ResourceStore.Statistics?
         var resourceSnapshots: [String: ResourceStore.Statistics] = [:]
         @discardableResult
-        func record(_ step: Step, _ ok: Bool, _ detail: String) -> Bool {
-            results.append(Report.StepResult(op: step.op, ok: ok, detail: detail,
+        func record(_ step: Step, _ ok: Bool, _ detail: String,
+                    initialLoad: MakerModel.SourceInitialLoadTiming? = nil) -> Bool {
+            var problems: [String] = []
+            if let expected = step.rigReuse {
+                if let sample = maker.sourceSelectionTiming?.headRigReuse {
+                    if sample.hits != expected.hits || sample.misses != expected.misses {
+                        problems.append("rigReuse \(sample.hits)/\(sample.misses), expected \(expected.hits)/\(expected.misses)")
+                    }
+                } else { problems.append("rigReuse: no head selection sample") }
+            }
+            if let expected = step.initialLoad {
+                if let sample = (initialLoad ?? maker.sourceInitialLoadTiming)?.preparation {
+                    for (name, actual, wanted) in [("geometry", sample.geometryOutcome.rawValue, expected.geometry),
+                                                   ("referenceLoad", sample.referenceLoad.rawValue, expected.referenceLoad),
+                                                   ("cachePublication", sample.cachePublication.rawValue, expected.cachePublication)]
+                    where wanted != nil && wanted != actual {
+                        problems.append("initialLoad \(name) \(actual), expected \(wanted!)")
+                    }
+                } else { problems.append("initialLoad: no sample") }
+            }
+            let passed = ok && problems.isEmpty
+            let shown = problems.isEmpty ? detail : detail + "; " + problems.joined(separator: "; ")
+            results.append(Report.StepResult(op: step.op, ok: passed, detail: shown,
                 selectionMilliseconds: step.op == "selectAsset" ? (ProcessInfo.processInfo.systemUptime - stepStart) * 1000 : nil,
                 selectionStages: ["selectAsset", "finishSelection"].contains(step.op) ? maker.sourceSelectionTiming : nil,
+                initialLoad: initialLoad,
                 mainActorMaximumGapMilliseconds: heartbeat?.maximumGapMilliseconds,
                 mainActorHeartbeatCount: heartbeat?.count,
                 resourcesBefore: resourcesBefore,
-                resources: ["selectAsset", "captureResources", "beginSelection", "finishSelection"].contains(step.op) || step.resourcesAtMost != nil ? maker.host.renderer.resources.statistics() : nil))
-            return ok
+                resources: ["selectAsset", "captureResources", "beginSelection", "finishSelection"].contains(step.op) || step.resourcesAtMost != nil || resourcesBefore != nil ? maker.host.renderer.resources.statistics() : nil))
+            return passed
         }
         func insideLocal(_ path: String) -> URL? {
             let fm = FileManager.default
@@ -422,7 +460,10 @@ struct MakerScenario: Decodable {
                 record(step, maker.sourceRigPreview == nil && maker.sourceSelectionPending == nil, "closed source preview")
             case "reloadCard":
                 guard let path = heldCardPath else { record(step, false, "reloadCard has no imported path"); continue }
-                do { try maker.importSourceCardSettings(url: URL(fileURLWithPath: path)); record(step, true, "reloaded committed input") }
+                do {
+                    try maker.importSourceCardSettings(url: URL(fileURLWithPath: path), recordInitialLoad: true)
+                    record(step, true, "reloaded committed input", initialLoad: maker.sourceInitialLoadTiming)
+                }
                 catch { record(step, false, "reloadCard: \(error)") }
             case "clearModLibrary":
                 do { try maker.setModLibrary(nil); record(step, true, "replaced mod library") }
@@ -493,13 +534,54 @@ struct MakerScenario: Decodable {
                     record(step, false, "reimport: path must stay under .local/: \(step.path ?? "<missing>")")
                     break scenarioLoop
                 }
-                do {
-                    try maker.importSourceCardSettings(url: url)
-                    heldCardPath = url.path
-                    record(step, true, "reimported \(path): \(maker.status)")
-                } catch {
-                    record(step, false, "reimport failed, stopping: \(error)")
+                let expectsFailure = step.expectFailure == true
+                // Fault controls are explicit and static. Ordinary reimports
+                // retain their stop-on-error behavior and add no snapshots.
+                if expectsFailure && (step.unchanged != true || maker.liveAnimation || step.diagnosticContains?.isEmpty != false) {
+                    record(step, false, "expected-failure reimport needs unchanged, static animation and an error substring")
                     break scenarioLoop
+                }
+                let before = expectsFailure ? selectionState() : nil
+                let beforeFrame = expectsFailure ? maker.host.renderer.currentFrame() : nil
+                let beforeClock = expectsFailure ? maker.sourceAnimationTime : nil
+                let beforeResources = expectsFailure ? maker.host.renderer.resources.statistics() : nil
+                let hadInitialSample = maker.sourceInitialLoadTiming != nil
+                resourcesBefore = beforeResources
+                do {
+                    try maker.importSourceCardSettings(url: url, recordInitialLoad: true)
+                    if expectsFailure {
+                        record(step, false, "expected-failure reimport unexpectedly succeeded; stopping",
+                               initialLoad: maker.sourceInitialLoadTiming)
+                        break scenarioLoop
+                    }
+                    heldCardPath = url.path
+                    record(step, true, "reimported \(path): \(maker.status)", initialLoad: maker.sourceInitialLoadTiming)
+                } catch {
+                    guard expectsFailure, let before, let beforeFrame, let beforeClock, let beforeResources else {
+                        record(step, false, "reimport failed, stopping: \(error)")
+                        break scenarioLoop
+                    }
+                    let afterResources = maker.host.renderer.resources.statistics()
+                    let resourcesSame = beforeResources.meshes == afterResources.meshes
+                        && beforeResources.textures == afterResources.textures
+                        && beforeResources.deformBuffers == afterResources.deformBuffers
+                        && beforeResources.hiddenBuffers == afterResources.hiddenBuffers
+                        && beforeResources.meshBufferBytes == afterResources.meshBufferBytes
+                        && beforeResources.deformBufferBytes == afterResources.deformBufferBytes
+                        && beforeResources.hiddenBufferBytes == afterResources.hiddenBufferBytes
+                        && beforeResources.retiring == afterResources.retiring
+                    // The identical preview owns immutable shape/expression
+                    // contracts; selectionState also checks rig URL/card bytes.
+                    let stateSame = before == selectionState()
+                    let frameSame = sameStaticFrame(beforeFrame, maker.host.renderer.currentFrame())
+                    let clockSame = beforeClock == maker.sourceAnimationTime
+                    let sampleCleared = maker.sourceInitialLoadTiming == nil
+                    let expectedError = step.diagnosticContains.map { String(describing: error).contains($0) } == true
+                    let passed = expectedError && stateSame && frameSame && clockSame && resourcesSame
+                        && sampleCleared && maker.sourceSelectionPending == nil
+                    record(step, passed,
+                        "expected reimport failure: \(error); contextSame=\(stateSame), frameSame=\(frameSame), clockSame=\(clockSame), resourcesSame=\(resourcesSame), priorSample=\(hadInitialSample), sampleCleared=\(sampleCleared)")
+                    if !passed { break scenarioLoop }
                 }
             case "assert":
                 var problems: [String] = []
@@ -586,7 +668,7 @@ struct MakerScenario: Decodable {
             }
         }
         let passed = results.filter(\.ok).count
-        return Report(steps: results, passed: passed, failed: results.count - passed)
+        return Report(steps: results, passed: passed, failed: results.count - passed, startupInitialLoad: startupInitialLoad)
     }
 }
 
