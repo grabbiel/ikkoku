@@ -83,7 +83,7 @@ private func appearanceValue<T>(_ value: T?, _ reason: String) throws -> T {
     return value
 }
 
-/// MetalKit's synchronous texture loads may wait for dispatch work. Keep the
+/// Texture loads block their thread. Keep the
 /// complete non-Sendable transaction on one dedicated thread, as in the live
 /// tick fixture tests, and report every observation on the calling test task.
 private func appearanceLoadChecks(_ body: @escaping @Sendable () throws -> [(String, Bool)]) async throws {
@@ -175,7 +175,7 @@ func sourcePreviewAppearanceLoadDiagnosticsRetainFailuresAndRollBackOnlyPrivateT
             ("Corrupt image rejects the entire load", rejected && sample.loadAttempts == 1 && sample.loadFailures == 1),
             ("Successful reads precede the image-creation failure", sample.calls["textureFileRead"] == 3 && sample.encodedTextureBytesRead == fixture.png.count * 2 + corrupt.count && sample.failures.isEmpty),
             ("Failed image API is counted even though it throws", sample.textureLoads.calls["imageCreation"] == 2 && sample.textureLoads.failures["imageCreation"] == 1),
-            ("Corrupt image never reaches MetalKit or registration", sample.textureLoads.calls["metalTextureLoad"] == 1 && sample.textureLoads.registeredTextures == 1),
+            ("Corrupt image never reaches the texture upload or registration", sample.textureLoads.calls["metalTextureLoad"] == 1 && sample.textureLoads.registeredTextures == 1),
             ("Partial private allocation is rolled back", resources.statistics().textures == baseline && resources.lookup(key: fixture.key("candidate.png")) == nil),
             ("Prior shared appearance and cache survive", resources.texture(shared) != nil && resources.lookup(key: fixture.key("shared.png")) == shared),
         ]

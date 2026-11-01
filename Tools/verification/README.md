@@ -1545,6 +1545,20 @@ and `head-materials/contract.json` under the body slice's
 `retained-native-inputs/`); see [the #188 correction](../../docs/reference/renderer.md#cause-and-correction-cross-primitive-derivative-quads-2026-10-25).
 The gate's bounds, counts and hash are unchanged.
 
+### Texture identity corpus
+
+`inlineTextureLoaderMatchesMetalKitForTheCorpus` compares the in-line texture
+loader with MetalKit (see [texture loading without worker
+threads](../../docs/reference/renderer.md#texture-loading-without-worker-threads-2026-10-26))
+for every texture the strict Engine suite and the strict Studio and Maker lanes
+load. It reads `IKKOKU_TEXTURE_CORPUS_ROOT` (a directory, optional in
+`private-source.json`): `index.tsv` has one line per file, entry point (`url` or
+`data`) and sRGB flag, and `files/` holds the bytes named by SHA-256. The
+captured corpus has 139 entries in 24 MiB, inside the runner's tree bounds.
+Outside strict mode the test runs only when the key is set, so CI skips it.
+`IKKOKU_TEXTURE_CORPUS_REPORT` optionally names a file for the entry, undecodable
+and mismatch counts.
+
 ### Selected skirt dynamics fixtures
 
 The private Engine suite additionally accepts `IKKOKU_SKIRT_DYNAMICS_FIXTURE`,

@@ -50,6 +50,13 @@ There is deliberately no whole-game completion percentage: a complete original
 feature inventory and a common denominator across installed assets, DLC and mods
 have not been established. Current catalog counts state their actual denominators.
 
+**2026-10-31 — texture corpus validation:** Local `46a94326` closes a false-pass
+path where missing or undecodable captured textures could count as matching
+failures. Eleven focused tests pass: 138 positive corpus loads must create and
+read back both textures, while one exact synthetic negative stays explicit.
+Runtime behavior and pixel tolerances are unchanged. Final-runtime acceptance
+for the in-line loader remains separate; see the [renderer contract](../reference/renderer.md).
+
 ## Component-level assessment
 
 | Component | Overall stage | Main remaining boundary |
@@ -126,10 +133,12 @@ acceptance boundary; their old “next” steps are historical, not a live queue
   neighbouring triangles; translated pipelines now prevent it, and repeated live captures are bit-identical
   ([cause and correction](../reference/renderer.md#cause-and-correction-cross-primitive-derivative-quads-2026-10-25)).
   The history below predates that correction.
-  The unmerged [texture-loading checkpoint](../reference/performance.md#texture-loading-candidate-validation-288-2026-10-31)
-  passes full Release, Maker/Studio and paired-image checks. Its startup cohort
-  fails the frozen background-activity limits, so no comparative speed claim or
-  current-main integration acceptance follows from those results.
+  The [texture-loading validation](../reference/performance.md#texture-loading-candidate-validation-288-2026-10-31)
+  retains historical full Release, Maker/Studio and paired-image acceptance.
+  Combined checkpoint `4f5f2504` adds 20 affected CPU tests, nine GPU tests and
+  four Release Maker selection/reload checks (124 operations). Its historical
+  startup cohort fails the frozen background-activity limits; no comparative
+  speed claim follows. Original harness/build failures remain recorded.
   The [sampling investigation](../reference/renderer.md#translated-sampling-repeatability-investigation-188)
   distinguishes diagnostic controls from production behavior; reductions are
   evidence, not fixes or added material coverage. The latest controlled split

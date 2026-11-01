@@ -14,7 +14,7 @@ the ST-T07 eye look reference and solver-port files, the ST-T07s eye look
 Studio preview runtime files, the ST-T07u iris rendering files and the ST-T04
 studio item shader contract and record color files and the ST-T08 first-slice
 original motion capture/replay files. The 2026-10-23 ST-T08e skirt slice updates runtime, exporter, fixture, test and reference files and adds its paired
-Studio save/load scenarios; it does not represent a new code audit. The 2026-10-25 ST-T03i plug-in data slice adds its rule, test, rule-parity, survey and original-player probe files. It lists every present Git-visible
+Studio save/load scenarios; it does not represent a new code audit. The 2026-10-25 ST-T03i plug-in data slice adds its rule, test, rule-parity, survey and original-player probe files. The 2026-10-26 texture-loading slice (the parallel-test pool deadlock) adds the in-line texture loader, its identity, corpus and upload tests, and 19 synthetic decoder fixtures. It lists every present Git-visible
 tracked/untracked non-ignored repository file outside
 `docs/component-audit/`. It excludes private `.local/`, dependency/build caches
 and ignored intermediate assets. Binary assets are inventoried, not reviewed as
@@ -23,15 +23,19 @@ branch was tested or every asset matches the original game. Feature status,
 specific comments and pending tasks are in the linked reports. Shared behavior
 may be discussed in more than one report; one primary owner is listed here.
 
-**1022 files indexed; 1022 assigned; 0 unassigned.**
+**1045 files indexed; 1045 assigned; 0 unassigned.**
+
+Counts include the website and clothes-group additions listed below. Runtime and
+test totals include their specialized role descriptions; this is inventory
+bookkeeping, not a new full source audit.
 
 | Primary report | Files |
 | --- | ---: |
 | [App / gameplay / plugins](app-gameplay-and-plugins.md) | 110 |
-| [Character / Maker / mods](character-and-mods.md) | 130 |
+| [Character / Maker / mods](character-and-mods.md) | 132 |
 | [Studio / IK / animation](studio.md) | 235 |
-| [Renderer / foundation / assets](renderer-and-foundation.md) | 335 |
-| [Toolchain / verification / historical docs](toolchain-and-verification.md) | 202 |
+| [Renderer / foundation / assets](renderer-and-foundation.md) | 358 |
+| [Toolchain / verification / historical docs](toolchain-and-verification.md) | 210 |
 
 | File role | Files |
 | --- | ---: |
@@ -39,10 +43,11 @@ may be discussed in more than one report; one primary owner is listed here.
 | Build / repository configuration | 9 |
 | Conversion / recovery / verification tool | 238 |
 | Documentation / historical evidence | 65 |
-| Generated asset / catalog / fixture | 205 |
+| Generated asset / catalog / fixture | 224 |
 | Reference host / controlled fixture | 36 |
-| Runtime / shared shader declaration | 227 |
-| Test / validation | 213 |
+| Runtime / shared shader declaration | 236 |
+| Test / validation | 220 |
+| Public synthetic body/face input fixture | 1 |
 
 ## App / gameplay / plugins
 
@@ -765,6 +770,7 @@ Feature assessment: [renderer-and-foundation.md](renderer-and-foundation.md).
 | [Packages/Engine/Sources/GPU/GPUContext.swift](../../Packages/Engine/Sources/GPU/GPUContext.swift) | Runtime / shared shader declaration |
 | [Packages/Engine/Sources/Renderer/DeformContent.swift](../../Packages/Engine/Sources/Renderer/DeformContent.swift) | Runtime / shared shader declaration |
 | [Packages/Engine/Sources/Renderer/DisplayLinkRatePolicy.swift](../../Packages/Engine/Sources/Renderer/DisplayLinkRatePolicy.swift) | Runtime / shared shader declaration |
+| [Packages/Engine/Sources/Renderer/InlineTextureLoader.swift](../../Packages/Engine/Sources/Renderer/InlineTextureLoader.swift) | Runtime / in-line texture decode, staging and upload with MetalKit-identical formats, mips and texels |
 | [Packages/Engine/Sources/Renderer/LatestPickQueue.swift](../../Packages/Engine/Sources/Renderer/LatestPickQueue.swift) | Runtime / shared shader declaration |
 | [Packages/Engine/Sources/Renderer/LiveStepPacer.swift](../../Packages/Engine/Sources/Renderer/LiveStepPacer.swift) | Runtime / shared shader declaration |
 | [Packages/Engine/Sources/Renderer/OriginalFrameDiagnostics.swift](../../Packages/Engine/Sources/Renderer/OriginalFrameDiagnostics.swift) | Runtime / shared shader declaration |
@@ -777,7 +783,7 @@ Feature assessment: [renderer-and-foundation.md](renderer-and-foundation.md).
 | [Packages/Engine/Sources/Renderer/Renderer+SourceShaderLive.swift](../../Packages/Engine/Sources/Renderer/Renderer+SourceShaderLive.swift) | Runtime / shared shader declaration |
 | [Packages/Engine/Sources/Renderer/RenderPresentationSample.swift](../../Packages/Engine/Sources/Renderer/RenderPresentationSample.swift) | Runtime / shared shader declaration |
 | [Packages/Engine/Sources/Renderer/Renderer.swift](../../Packages/Engine/Sources/Renderer/Renderer.swift) | Runtime / shared shader declaration |
-| [Packages/Engine/Sources/Renderer/ResourceStore.swift](../../Packages/Engine/Sources/Renderer/ResourceStore.swift) | Runtime / shared shader declaration |
+| [Packages/Engine/Sources/Renderer/ResourceStore.swift](../../Packages/Engine/Sources/Renderer/ResourceStore.swift) | Runtime / resource handles, in-line texture loads, per-device upload queue and texture-container rejection |
 | [Packages/Engine/Sources/Renderer/SourceShaderBindingComparison.swift](../../Packages/Engine/Sources/Renderer/SourceShaderBindingComparison.swift) | Runtime / shared shader declaration |
 | [Packages/Engine/Sources/Renderer/SourceShaderBindingFrameSubstitution.swift](../../Packages/Engine/Sources/Renderer/SourceShaderBindingFrameSubstitution.swift) | Runtime / shared shader declaration |
 | [Packages/Engine/Sources/Renderer/SourceShaderBindingSet.swift](../../Packages/Engine/Sources/Renderer/SourceShaderBindingSet.swift) | Runtime / shared shader declaration |
@@ -802,6 +808,25 @@ Feature assessment: [renderer-and-foundation.md](renderer-and-foundation.md).
 | [Packages/Engine/Tests/EngineTests/CharacterLifetimeTests.swift](../../Packages/Engine/Tests/EngineTests/CharacterLifetimeTests.swift) | Test / validation |
 | [Packages/Engine/Tests/EngineTests/DeformationSafetyTests.swift](../../Packages/Engine/Tests/EngineTests/DeformationSafetyTests.swift) | Test / validation |
 | [Packages/Engine/Tests/EngineTests/DisplayLinkRatePolicyTests.swift](../../Packages/Engine/Tests/EngineTests/DisplayLinkRatePolicyTests.swift) | Test / validation |
+| [Packages/Engine/Tests/EngineTests/Fixtures/texture-identity/opaque-10.avif](../../Packages/Engine/Tests/EngineTests/Fixtures/texture-identity/opaque-10.avif) | Generated asset / catalog / fixture (synthetic texture-identity decoder input) |
+| [Packages/Engine/Tests/EngineTests/Fixtures/texture-identity/opaque-12.avif](../../Packages/Engine/Tests/EngineTests/Fixtures/texture-identity/opaque-12.avif) | Generated asset / catalog / fixture (synthetic texture-identity decoder input) |
+| [Packages/Engine/Tests/EngineTests/Fixtures/texture-identity/straight-10.avif](../../Packages/Engine/Tests/EngineTests/Fixtures/texture-identity/straight-10.avif) | Generated asset / catalog / fixture (synthetic texture-identity decoder input) |
+| [Packages/Engine/Tests/EngineTests/Fixtures/texture-identity/straight-16.jxl](../../Packages/Engine/Tests/EngineTests/Fixtures/texture-identity/straight-16.jxl) | Generated asset / catalog / fixture (synthetic texture-identity decoder input) |
+| [Packages/Engine/Tests/EngineTests/Fixtures/texture-identity/straight-assoc.tiff](../../Packages/Engine/Tests/EngineTests/Fixtures/texture-identity/straight-assoc.tiff) | Generated asset / catalog / fixture (synthetic texture-identity decoder input) |
+| [Packages/Engine/Tests/EngineTests/Fixtures/texture-identity/straight-avifenc.avif](../../Packages/Engine/Tests/EngineTests/Fixtures/texture-identity/straight-avifenc.avif) | Generated asset / catalog / fixture (synthetic texture-identity decoder input) |
+| [Packages/Engine/Tests/EngineTests/Fixtures/texture-identity/straight-branded.heif](../../Packages/Engine/Tests/EngineTests/Fixtures/texture-identity/straight-branded.heif) | Generated asset / catalog / fixture (synthetic texture-identity decoder input) |
+| [Packages/Engine/Tests/EngineTests/Fixtures/texture-identity/straight-lossless.jxl](../../Packages/Engine/Tests/EngineTests/Fixtures/texture-identity/straight-lossless.jxl) | Generated asset / catalog / fixture (synthetic texture-identity decoder input) |
+| [Packages/Engine/Tests/EngineTests/Fixtures/texture-identity/straight-lossless.webp](../../Packages/Engine/Tests/EngineTests/Fixtures/texture-identity/straight-lossless.webp) | Generated asset / catalog / fixture (synthetic texture-identity decoder input) |
+| [Packages/Engine/Tests/EngineTests/Fixtures/texture-identity/straight-lossy.jxl](../../Packages/Engine/Tests/EngineTests/Fixtures/texture-identity/straight-lossy.jxl) | Generated asset / catalog / fixture (synthetic texture-identity decoder input) |
+| [Packages/Engine/Tests/EngineTests/Fixtures/texture-identity/straight-lossy.webp](../../Packages/Engine/Tests/EngineTests/Fixtures/texture-identity/straight-lossy.webp) | Generated asset / catalog / fixture (synthetic texture-identity decoder input) |
+| [Packages/Engine/Tests/EngineTests/Fixtures/texture-identity/straight-magick.tga](../../Packages/Engine/Tests/EngineTests/Fixtures/texture-identity/straight-magick.tga) | Generated asset / catalog / fixture (synthetic texture-identity decoder input) |
+| [Packages/Engine/Tests/EngineTests/Fixtures/texture-identity/straight-seq.avifs](../../Packages/Engine/Tests/EngineTests/Fixtures/texture-identity/straight-seq.avifs) | Generated asset / catalog / fixture (synthetic texture-identity decoder input) |
+| [Packages/Engine/Tests/EngineTests/Fixtures/texture-identity/straight-unassoc.tiff](../../Packages/Engine/Tests/EngineTests/Fixtures/texture-identity/straight-unassoc.tiff) | Generated asset / catalog / fixture (synthetic texture-identity decoder input) |
+| [Packages/Engine/Tests/EngineTests/Fixtures/texture-identity/straight-v5.bmp](../../Packages/Engine/Tests/EngineTests/Fixtures/texture-identity/straight-v5.bmp) | Generated asset / catalog / fixture (synthetic texture-identity decoder input) |
+| [Packages/Engine/Tests/EngineTests/Fixtures/texture-identity/straight.cur](../../Packages/Engine/Tests/EngineTests/Fixtures/texture-identity/straight.cur) | Generated asset / catalog / fixture (synthetic texture-identity decoder input) |
+| [Packages/Engine/Tests/EngineTests/Fixtures/texture-identity/straight.icns](../../Packages/Engine/Tests/EngineTests/Fixtures/texture-identity/straight.icns) | Generated asset / catalog / fixture (synthetic texture-identity decoder input) |
+| [Packages/Engine/Tests/EngineTests/Fixtures/texture-identity/straight.psd](../../Packages/Engine/Tests/EngineTests/Fixtures/texture-identity/straight.psd) | Generated asset / catalog / fixture (synthetic texture-identity decoder input) |
+| [Packages/Engine/Tests/EngineTests/Fixtures/texture-identity/straight.sgi](../../Packages/Engine/Tests/EngineTests/Fixtures/texture-identity/straight.sgi) | Generated asset / catalog / fixture (synthetic texture-identity decoder input) |
 | [Packages/Engine/Tests/EngineTests/LiveStepPacerTests.swift](../../Packages/Engine/Tests/EngineTests/LiveStepPacerTests.swift) | Test / validation |
 | [Packages/Engine/Tests/EngineTests/GLTFImportTests.swift](../../Packages/Engine/Tests/EngineTests/GLTFImportTests.swift) | Test / validation |
 | [Packages/Engine/Tests/EngineTests/GLTFPackageContainmentTests.swift](../../Packages/Engine/Tests/EngineTests/GLTFPackageContainmentTests.swift) | Test / validation |
@@ -810,6 +835,9 @@ Feature assessment: [renderer-and-foundation.md](renderer-and-foundation.md).
 | [Packages/Engine/Tests/EngineTests/OriginalFrameNormalTests.swift](../../Packages/Engine/Tests/EngineTests/OriginalFrameNormalTests.swift) | Test / validation |
 | [Packages/Engine/Tests/EngineTests/PickTests.swift](../../Packages/Engine/Tests/EngineTests/PickTests.swift) | Test / validation |
 | [Packages/Engine/Tests/EngineTests/InteractiveFrameTests.swift](../../Packages/Engine/Tests/EngineTests/InteractiveFrameTests.swift) | Test / validation |
+| [Packages/Engine/Tests/EngineTests/InlineTextureLoaderCorpusTests.swift](../../Packages/Engine/Tests/EngineTests/InlineTextureLoaderCorpusTests.swift) | Test / strict identity with MetalKit for every texture the suite and the app load |
+| [Packages/Engine/Tests/EngineTests/InlineTextureLoaderIdentityTests.swift](../../Packages/Engine/Tests/EngineTests/InlineTextureLoaderIdentityTests.swift) | Test / identity with MetalKit for every image layout, encoded file and decoder fixture; texture-container rejection |
+| [Packages/Engine/Tests/EngineTests/ResourceStoreUploadTests.swift](../../Packages/Engine/Tests/EngineTests/ResourceStoreUploadTests.swift) | Test / upload queue registry, completion before handout, call order and many-store saturation |
 | [Packages/Engine/Tests/EngineTests/RendererLimitsTests.swift](../../Packages/Engine/Tests/EngineTests/RendererLimitsTests.swift) | Test / validation |
 | [Packages/Engine/Tests/EngineTests/RigTests.swift](../../Packages/Engine/Tests/EngineTests/RigTests.swift) | Test / validation |
 | [Packages/Engine/Tests/EngineTests/SourceAvatarTests.swift](../../Packages/Engine/Tests/EngineTests/SourceAvatarTests.swift) | Test / validation |
@@ -1121,7 +1149,7 @@ a dated summary of the owning references, not a new application acceptance run.
 ### Bounded Maker clothes groups — 2026-10-24
 
 These two additions belong to the Character / Maker / mods report (CM-17).
-The original inventory totals above remain the dated audit snapshot.
+They are included in the inventory totals above, without changing the dated audit.
 
 | File | Role |
 | --- | --- |

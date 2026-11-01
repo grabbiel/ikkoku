@@ -326,6 +326,11 @@
           "optional": true
         },
         {
+          "env": "IKKOKU_TEXTURE_CORPUS_ROOT",
+          "kind": "directory",
+          "optional": true
+        },
+        {
           "env": "IKKOKU_COMPOSITE_COLOUR_PROBE",
           "kind": "directory",
           "optional": true
