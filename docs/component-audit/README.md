@@ -139,6 +139,10 @@ acceptance boundary; their old “next” steps are historical, not a live queue
   four Release Maker selection/reload checks (124 operations). Its historical
   startup cohort fails the frozen background-activity limits; no comparative
   speed claim follows. Original harness/build failures remain recorded.
+  A [2026-11-01 ImageIO option probe](../reference/renderer.md#imageio-eager-cache-correctness-probe-290-2026-11-01)
+  rejects eager caching as an exact substitution for one synthetic JPEG; its
+  PNG control matches. No production change or comparative timing follows,
+  and JPEG/HEIC cost issue #290 remains open.
   The [sampling investigation](../reference/renderer.md#translated-sampling-repeatability-investigation-188)
   distinguishes diagnostic controls from production behavior; reductions are
   evidence, not fixes or added material coverage. The latest controlled split

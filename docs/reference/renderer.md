@@ -2236,6 +2236,65 @@ are separate from the historical full suites and image comparisons; see the
 They establish neither a loader speedup nor broader image-format or source-game
 parity. JPEG/HEIC costs remain tracked in [#290](https://github.com/grabbiel/ikkoku/issues/290).
 
+### ImageIO eager-cache correctness probe (#290, 2026-11-01)
+
+A private CPU-only probe rejects eager ImageIO caching as an exact replacement
+for the current decode options on one synthetic JPEG. This is a correctness
+counterexample, not an explanation of [#290](https://github.com/grabbiel/ikkoku/issues/290)'s
+historical cost difference. The production loader and its upload permits are
+unchanged; no timing, Metal texture or mip comparison was performed.
+
+The probe uses fresh ImageIO source/image objects on one dedicated plain thread,
+with equal provider-data and autorelease lifetimes. The only variant is image0
+creation with nil options versus `kCGImageSourceShouldCacheImmediately: true`;
+source creation keeps nil options. Four repetitions per option on each of two
+encoded formats produce 16 successful decodes. Both malformed-input negatives
+return nil at the existing source/type/image boundary. Twenty-three asset-free
+controls independently exercise row bounds, short final padding, checked
+arithmetic, metadata/byte drift and the exact observation inventory.
+
+The single source is a deterministic 1024×1024 sRGB RGBX8 image with fourth byte
+255, encoded once as JPEG (quality 0.9) and PNG. It uses UInt32 wrapping LCG seed
+`0xa5a5a5a5`, multiplier 1,664,525 and increment 1,013,904,223; RGB comes from
+bits 24/16/8 of each successive state. Native source review stayed at checkpoint `2449b834`. The standalone Swift 6
+probe was built with Xcode 27.0 (27A266a), Swift 6.4
+(swiftlang-6.4.0.34.1), macOS 27.0.1 (26A434), arm64, `-O` and whole-module
+optimization. SHA-256 identities are:
+
+| Identity | SHA-256 prefix |
+| --- | --- |
+| Probe source | `65558d3d86aefec2` |
+| Probe executable | `f5e9e14c28849219` |
+| Canonical RGBX bytes | `c82470332a5689e8` |
+| Encoded JPEG | `1a2b42c9055be018` |
+| Encoded PNG | `561bd642981dd0e2` |
+| Complete result report | `b24e455d5aaa8a60` |
+
+Both options report identical metadata within each format: RGBX8,
+`noneSkipLast`, default byte order, sRGB profile identity, dimensions, stride
+and the remaining recorded image/source fields. Every provider has 4,194,304
+bytes, stride 4,096 and no row padding. Nevertheless, each eager JPEG differs
+from the default JPEG at 907,940 pixels and 2,450,959 RGB bytes, with a maximum
+absolute byte difference of 168. The copied fourth byte never differs. Each
+option repeats exactly across its four JPEG observations. All eight PNG
+observations are byte-identical, including the fourth byte, and equal the
+canonical source bytes.
+
+The exact-equality gate therefore exits 1; its failed report and independent
+raw-plane audit remain preserved. All 81 output files and 85 pinned source, tool, fixture and proof files
+were independently verified. No retry or tolerance change was made. Equal
+metadata does not establish equal decode bytes, and these observations identify
+neither the responsible ImageIO operation nor behavior for other JPEGs, HEIC,
+other systems or GPU upload paths. They support no performance claim.
+
+Eager image creation would also materialize decoded storage before the current
+`UploadPermits` boundary if added directly to `image(data:)`. This rejected
+option is not adopted, and no new ownership or scheduling behavior is implied.
+Any later decode-path design must retain exact pixels, error handling and the
+permit's memory/progress constraints. Private full hashes, raw planes and
+failure receipts are retained under
+`.local/codex-resume-2026-10-30/materials-runtime-acceptance/issue290-source-review/probe/`.
+
 ## Checked math, legacy skeletons and cameras (R4)
 
 The unchecked CoreMath helpers (`normalize`, `simd_quatf.rotation(from:to:)`,
