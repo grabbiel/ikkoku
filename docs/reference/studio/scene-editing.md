@@ -1093,7 +1093,11 @@ Reviewed 2026-11-01. On 2026-10-26 the user decided that exports should drop sta
   - The writer refuses none of the 51 scenes for Sideloader.
 - **Deep scenes.** The tally runs its decodes on an 8 MiB thread. A Debug decode of the deepest installed scene (65 levels, 292 objects) needs 448 to 512 KiB of stack, a GCD worker's whole stack, and the app's character builds decode scenes on GCD workers (#321).
 - **A vanilla install** (without KK_Fix_UnlimitedMapLights). CharaStudio itself drops the nested lights past two at load: 27 lights in 6 of the 8 files, named by 25 Sideloader records. Sideloader's load then stops at the first of those records (UniversalAutoResolver.cs:1342), and later records stay unresolved. That is CharaStudio's behaviour, not ours. Our decode keeps every light, as the user's install does.
-- **Survey 4 (prediction).** Survey 4 is survey 3 with the light count reset per scene and KK_Fix_UnlimitedMapLights in the player root, SHA-checked. Its `nestedLightsKept` and `nestedLightsDropped` counts are the control. The prediction comes from the Swift writer, judged on plug-in rules only, as the survey judges them. The VM phase is to confirm it.
+- **Survey 4 (prediction).** Survey 4 is survey 3 with the light count reset per scene and KK_Fix_UnlimitedMapLights in the player root, SHA-checked. Its `nestedLightsKept` and `nestedLightsDropped` counts are the control. The prediction comes from the Swift writer, judged on plug-in rules only, as the survey judges them. The original-player phase E (`Tools/reverse/original_light_fix_probe.py`, `fixtures/OriginalLightFixProbe.cs`; not yet run) is to confirm it. In one exec it:
+  - loads the 8 files with the fix and then without it, and counts the Sideloader records the load reached and resolved through Harmony patches on Sideloader's resolvers;
+  - saves CharaStudio's load-then-save of one file without the fix, inside the private root;
+  - runs survey 4 after the parity check, with the fix;
+  - counts the survey's nested lights kept and dropped without the fix, as the control.
 
   | Edit kind (all/some/none of 61) | Survey 3 | Survey 4, predicted |
   | --- | --- | --- |
@@ -1104,7 +1108,7 @@ Reviewed 2026-11-01. On 2026-10-26 the user decided that exports should drop sta
   | Add a camera | 51/0/10 | 58/0/3 |
 
   - The Sideloader blocker goes from 8 scenes to 0.
-  - **The 8 files** (`UserPluginSceneTallyTests`, `IKKOKU_USER_PLUGIN_SCENES_JUDGE=1`, Release, 155 s).
+  - **The 8 files** (`UserPluginSceneTallyTests`, `IKKOKU_USER_PLUGIN_SCENES_JUDGE=1`, Release, 155–200 s).
     - Deletes and copies: 7 files move from "none" to "some", and 1 stays "none".
     - Each addition: 7 move to "all", and 1 stays "none". Timeline object indices refuse that file's additions.
     - Refused edits by reason, numbers masked: MaterialEditor version 0 data 778, Timeline object indices 35 (3 of them that file's additions) and ItemLayerEdit 4. Sideloader refuses none.

@@ -21,9 +21,14 @@ import Character
 // are skipped. Only counts and 12-digit SHA-256 prefixes are printed or
 // asserted, never a file name. IKKOKU_USER_PLUGIN_SCENES_REPORT=<path> also
 // writes the counts and per-scene rows (full SHA-256) as JSON to a private
-// path. IKKOKU_USER_PLUGIN_SCENES_JUDGE=1 judges every single-target edit of
-// the scenes whose records name nested lights, as the survey enumerates them
-// (about 150 s with -c release).
+// path (the original-player phase E reads it: original_light_fix_probe.py).
+// IKKOKU_USER_PLUGIN_SCENES_JUDGE=1 judges every single-target edit of the
+// scenes whose records name nested lights, as the survey enumerates them.
+//
+// Cost over the 182 installed scenes (2026-11-01, M-series host): the tally
+// takes about 16 s in Debug, and the test process peaks at about 1 GB RSS.
+// The judge takes about 155-200 s with -c release and peaks at about 7 GB RSS,
+// so it is not run by default.
 
 private enum UserPluginScenes {
     static let key = "IKKOKU_USER_PLUGIN_SCENES"
@@ -71,6 +76,9 @@ private struct SceneTally {
     var records = [String: Int](), recordsNamingNoObject = 0, wrongKind = 0, duplicates = 0, orderMismatches = 0, slotMismatches = 0
     var recordsNamingNestedLights = 0, recordsNamingVanillaDroppedLights = 0
     var sideloaderEntry = false, sideloaderRefusals = 0
+    /// The records' mod GUIDs, for the private report only (the original-player
+    /// phase copies those mods into its root): never printed or asserted.
+    var guids = Set<String>()
 
     init(_ document: KoikatsuSceneDocument, trailer: SourceSceneKKEx) throws {
         let walk = SourceSceneInsertionPlan.records(document.snapshot)
@@ -110,6 +118,7 @@ private struct SceneTally {
             for value in list {
                 guard let bytes = value.binaryValue else { continue }
                 let map = try SourceMessagePack.decode(bytes).stringKeyedMap()
+                if let guid = map["ModID"]?.stringValue { guids.insert(guid) }
                 let key = map["SceneDicKey"]?.integerValue ?? Int.min
                 if !seen.insert(key).inserted { duplicates += 1 }
                 guard let object = Int32(exactly: key).flatMap({ objects[$0] }) else { recordsNamingNoObject += 1; continue }
@@ -176,10 +185,13 @@ func installedScenesSideloaderRecordsNameLoadedObjects() throws {
             if tally.recordsNamingVanillaDroppedLights > 0 { add("scenesWithRecordsNamingVanillaDroppedLights") }
             if tally.recordsNamingNoObject + tally.wrongKind + tally.duplicates > 0 { result.stale.append(String(hash.prefix(12))) }
             if tally.sideloaderRefusals > 0 { result.refused.append(String(hash.prefix(12))) }
-            result.rows.append(["sha256": hash, "objects": tally.objects, "depth": tally.depth, "nestedLights": tally.nestedLights,
-                                "vanillaDroppedLights": tally.vanillaDroppedLights, "records": tally.records,
-                                "recordsNamingNestedLights": tally.recordsNamingNestedLights,
-                                "recordsNamingVanillaDroppedLights": tally.recordsNamingVanillaDroppedLights])
+            // Built in steps: one heterogeneous literal is slow to type-check on Swift 6.3.3.
+            var row: [String: Any] = ["sha256": hash, "bytes": data.count, "objects": tally.objects, "depth": tally.depth]
+            row["nestedLights"] = tally.nestedLights; row["vanillaDroppedLights"] = tally.vanillaDroppedLights
+            row["records"] = tally.records; row["recordsNamingNestedLights"] = tally.recordsNamingNestedLights
+            row["recordsNamingVanillaDroppedLights"] = tally.recordsNamingVanillaDroppedLights
+            row["sideloaderGUIDs"] = tally.guids.sorted()
+            result.rows.append(row)
         }
         for url in UserPluginScenes.files() { try autoreleasepool { try scene(url) } }
         // What survey 3's walk held: every nested light dropped.

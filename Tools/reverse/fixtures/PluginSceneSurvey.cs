@@ -18,7 +18,8 @@
 // and the Sideloader records naming those lights looked stale. The light counts are the control: "unlimitedLights"
 // says whether the check passed with two lights counted; "nestedLightsKept" counts the nested lights in the walks,
 // and "nestedLightsDropped" the nested lights a load dropped (a scene that counted two lights or more is read again
-// with the check forced to pass, and the difference counted). Character cards load through ChaFileControl.LoadCharaFile, whose ExtendedSave hook keeps
+// with the check forced to pass, and the difference counted). Character cards load through
+// ChaFileControl.LoadCharaFile, whose ExtendedSave hook keeps
 // each card's plug-in data, which is where KKAnimationController links are read. The session is not saved after
 // this survey.
 //
@@ -72,6 +73,9 @@ public sealed class PluginSceneSurvey {
     readonly double seconds;readonly long bound;
     readonly Stopwatch watch=Stopwatch.StartNew();
     public bool Truncated;
+    // False: model each scene (walk, keys, cards and the light counts) without judging its edits, as phase E's
+    // light control does.
+    public bool JudgeEdits=true;
     readonly SortedDictionary<string,long> counts=new SortedDictionary<string,long>(StringComparer.Ordinal);
     readonly SortedDictionary<string,SortedDictionary<string,long>> after=new SortedDictionary<string,SortedDictionary<string,long>>(StringComparer.Ordinal);
     readonly SortedDictionary<string,SortedDictionary<string,long>> before=new SortedDictionary<string,SortedDictionary<string,long>>(StringComparer.Ordinal);
@@ -154,7 +158,7 @@ public sealed class PluginSceneSurvey {
             s.Scenes++;Bump(s.Forms,form[1]);
             if(form[2].Length>0)Bump(orphanShapes,form[0]+" "+form[2]);
         }
-        Judge(scene);
+        if(JudgeEdits)Judge(scene);
     }
 
     // A scene with no entry: only NodesConstraints' card check can refuse it, and only a delete or a copy.
