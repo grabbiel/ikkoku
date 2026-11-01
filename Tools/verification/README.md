@@ -1233,7 +1233,14 @@ get wrong:
   12-view Tab loops, and five selection cycles leave the document and undo
   depths unchanged. Then an undo of a rename shows the earlier name in the
   Name field, and outfit 1 and back to outfit 0 leave the Object tab's
-  name and position fields as they were.
+  name and position fields as they were. Since the item 7 follow-ups, a
+  rename typed mid-session ("Source character 0 K W") shows in the
+  workspace row while the Name field is still being edited, and the
+  inspector's Visible toggle turns the row's eye button from "Show" to
+  "Hide" and back (C4). The toolbar's pose-mode picker ("FK", "IK") is
+  absent from the accessibility tree while folder 622 or nothing is
+  selected and the Tab loop then has no view outside the window, and it
+  shows again for character 0 (C3).
 - `inspector-kept-route` (`IKKOKU_STUDIO_HALF_STATE_SCENE`). The route's
   "Line colour" well, active when the selection clears, is no longer active.
   A route point's position x, still being edited when the selection
