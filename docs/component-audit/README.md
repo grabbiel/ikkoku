@@ -187,6 +187,9 @@ acceptance boundary; their old “next” steps are historical, not a live queue
   A [bounded tool-metadata query](../reference/studio/scene-editing.md#fault-capture-tool-metadata-2026-11-01)
   found no collector/decoder in its checked subset; capture suitability and the
   shutdown fault module/stack remain unverified.
+  [Public synthetic dump-reader controls](../reference/studio/scene-editing.md#public-synthetic-dump-reader-controls-2026-11-01)
+  pass 18 local Python methods after a preserved pre-discovery import failure;
+  Windows/native capture and original-player lifecycle remain unaccepted.
   General plugin compatibility remains outside the supported subset.
 
 Use the linked issue/PR state for work in review, and the owning reference for

@@ -677,6 +677,26 @@ or stack, or lifecycle acceptance. Private evidence is under the same root at
 `shutdown-fault-capture-proposal-1/tool-preflight-1/`; raw stdout SHA-256 is
 `c6b6ec309f0cbc8ee6f1a063695c37598c3eededb41d677c9fdbd233b9545527`.
 
+#### Public synthetic dump-reader controls (2026-11-01)
+
+Eighteen local public synthetic Python test methods pass with zero skips. They
+cover deterministic PE instruction/layout oracles, independent bounded minidump
+module/RVA/context parsing, malformed stream and complete string-record overlap
+rejection, typed identity/callback-report fields, and safe ZIP/manifest binding.
+The first local attempt exited 1 before discovery because its import audit rejected
+a bytecode-cache lookup; that failure and zero executed tests remain preserved.
+The corrected loader executes only four hash-pinned source modules; all 18 method
+names, raw log/result, unchanged inputs and released process group were reviewed.
+
+This validates Python synthetic-byte controls only. The two actual C# callback
+policy controls are still uncompiled, and no Windows debugger, native synthetic
+target or OS dump writer has run. AMD64-on-ARM64 context/API compatibility, native
+capture and decoder suitability, the original fault module/stack, and all original
+lifecycle/pair outcomes remain unaccepted. No export behavior changed.
+Private evidence is under the same root at
+`shutdown-public-dump-gate-1/synthetic-controls-3/`; test-result SHA-256 is
+`3ccecc9b216c06fa98f6fdb276274cc2ab03f136329e1d45fcd6770a5b61f48c`.
+
 ### Plug-in data rewrites
 
 Reviewed 2026-10-26 (ST-T03i, second change). `SourceScenePluginRewrites` (`Packages/Engine/Sources/Studio/SourceScenePluginRewrites.swift`) rewrites the KKPE, MaterialEditor and NodesConstraints entries after a delete or a copy, as CharaStudio's save writes them after the same interactive edit.
