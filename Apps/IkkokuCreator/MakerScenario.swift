@@ -52,7 +52,12 @@ struct MakerScenario: Decodable {
         /// import's until a reimport or reload records its own (CXM1).
         let initialLoad: InitialLoadValue?
         struct RigReuseValue: Decodable { let hits: Int, misses: Int }
-        struct InitialLoadValue: Decodable { let geometry: String?, referenceLoad: String?, cachePublication: String? }
+        struct InitialLoadValue: Decodable {
+            let geometry: String?, referenceLoad: String?, cachePublication: String?
+            /// The staged seed's rigs carried from the replaced session and
+            /// decoded anew (#192-C, `stagedRigReuse`).
+            let carried: Int?, misses: Int?
+        }
         struct SelectionValue: Decodable {
             let kind: String, slot: Int, sourceID: Int
             let coordinate: Int?
@@ -236,6 +241,11 @@ struct MakerScenario: Decodable {
                                                    ("cachePublication", sample.cachePublication.rawValue, expected.cachePublication)]
                     where wanted != nil && wanted != actual {
                         problems.append("initialLoad \(name) \(actual), expected \(wanted!)")
+                    }
+                    for (name, actual, wanted) in [("carried", sample.stagedRigReuse?.carried, expected.carried),
+                                                   ("misses", sample.stagedRigReuse?.misses, expected.misses)]
+                    where wanted != nil && wanted != actual {
+                        problems.append("initialLoad \(name) \(actual.map(String.init) ?? "none"), expected \(wanted!)")
                     }
                 } else { problems.append("initialLoad: no sample") }
             }

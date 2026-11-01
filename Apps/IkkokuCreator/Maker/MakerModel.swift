@@ -97,8 +97,9 @@ final class MakerModel: ViewportInputHandler, LivePacedHandler {
 
         struct Preparation: Encodable {
             enum AppearanceOutcome: String, Encodable { case applied, referenceAfterAppearanceFailure, unavailable }
-            /// `emptyLedgerFull`: the old session's entries left no room, so
-            /// no seed was hashed or staged (`seedingInput`).
+            /// `emptyLedgerFull`: the old session's entries left no room for
+            /// the rigs the seed could not carry, so no seed was hashed or
+            /// staged (`seedingInput`). A carried seed is `seeded`.
             enum CachePublication: String, Encodable { case seeded, empty, emptyLedgerFull, emptyStaleFallback }
             /// Whether the reference model was read and decoded (CXM1: only
             /// on a fallback geometry outcome).
@@ -506,10 +507,11 @@ final class MakerModel: ViewportInputHandler, LivePacedHandler {
         if let imported, let makerLibrary {
             let prospective = sourceRigReuse.prospectiveReplacement()
             replacement = prospective
-            // A reimport over a cached session cannot fit a seed beside the old
-            // entries: skip its hashing instead of staging part and publishing empty.
-            seeding = sourceRigReuse.seedingInput(for: prospective,
-                entries: makerLibrary.rigFiles(card: imported, coordinate: 0, baseURL: url, wear: false).count)
+            // A reimport carries the cached session's entries and re-stamps the
+            // rigs whose bytes it already holds (#192-C). A seed whose other
+            // rigs cannot fit beside the old entries is declined unhashed.
+            let files = makerLibrary.rigFiles(card: imported, coordinate: 0, baseURL: url, wear: false)
+            seeding = sourceRigReuse.seedingInput(for: prospective, fileSizes: SourceMakerRigReuse.fileSizes(files))
             seedDeclined = seeding == nil
         }
         let geometryStart = recordInitialLoad ? ProcessInfo.processInfo.systemUptime : nil
