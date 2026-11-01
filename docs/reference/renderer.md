@@ -2295,6 +2295,26 @@ permit's memory/progress constraints. Private full hashes, raw planes and
 failure receipts are retained under
 `.local/codex-resume-2026-10-30/materials-runtime-acceptance/issue290-source-review/probe/`.
 
+A subsequent byte-only audit on the same date passed 68 asset-free controls for
+bounded marker/entropy-scan framing, restart ordering, ICC/Exif extents and raw
+coordinate-bin accounting. It then attempted to inspect the same retained JPEG
+and default/eager repetition-0 planes, without an image decoder or new fixture.
+That one attempt stopped with `Unsupported: nested-ifd-unsupported`: the parser
+supports only Exif IFD0 and refuses nested IFD pointers. The input-file identities
+were checked, but no complete JPEG structure or pixel/block correlation report
+was produced. In particular, this attempt establishes no sampling-factor,
+quantization-table or decoder-operation explanation for the earlier RGB change.
+An unsupported parser scope does not establish that the JPEG is malformed.
+
+The parser source hash begins `bfc27ef58f181ec6`; the 68-control report is
+`8d97650c5670f274`, and the unsupported analysis report is `b8f4eb71abc89569`
+(checkpoint `ed2daea4a2846425`). The child, ownership assessment and wrapper each
+exit 1 for the analysis, and its 224 pins remain unchanged. The original red
+ImageIO result is retained. No parser expansion, repeat analysis, production
+option change or performance conclusion follows. These separate receipts are
+under the sibling `jpeg-offline-2/` evidence directory; even a later spatial
+correlation would not establish causation.
+
 ## Checked math, legacy skeletons and cameras (R4)
 
 The unchecked CoreMath helpers (`normalize`, `simd_quatf.rotation(from:to:)`,
