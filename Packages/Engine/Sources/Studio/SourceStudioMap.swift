@@ -264,6 +264,9 @@ public final class SourceStudioMapAsset: @unchecked Sendable {
         public var sortCenter: Float3? = nil
         public var sortSubmesh: Int = 0
         public var renderQueue: Int = 3000
+        /// The vanish set (`vanishSets`) of the rows that hide this part's
+        /// renderers (PR B: `ikkokuMap.vanishRows`); nil when no row names them.
+        public var vanishSet: Int? = nil
     }
 
     /// The decoder for a map image that is not block-only (its PNG or JPEG):
@@ -311,6 +314,11 @@ public final class SourceStudioMapAsset: @unchecked Sendable {
     public let decodedImages: Int
     public let imageSource: ImageSource
     public let triangles: Int
+    /// The map's vanish rows and colliders (PR B), nil for a map without.
+    public let vanish: SourceStudioMapVanish?
+    /// The distinct row sets the parts' renderers belong to, in first-seen
+    /// order (`Part.vanishSet` indexes them).
+    public let vanishSets: [[Int]]
     /// Wall time of `load` on its worker.
     public let loadSeconds: Double
     private let resources: ResourceStore
@@ -319,7 +327,7 @@ public final class SourceStudioMapAsset: @unchecked Sendable {
 
     private init(url: URL, parts: [Part], textures: [TextureHandle], textureBytes: Int, lightmapBytes: Int, lightmapTextures: Int,
                  cubeBytes: Int, cubeTextures: Int, blockImages: Int, decodedImages: Int, imageSource: ImageSource,
-                 loadSeconds: Double, resources: ResourceStore) {
+                 vanish: SourceStudioMapVanish?, vanishSets: [[Int]], loadSeconds: Double, resources: ResourceStore) {
         self.url = url; self.parts = parts; self.textures = textures; self.textureBytes = textureBytes
         self.lightmapBytes = lightmapBytes; self.lightmapTextures = lightmapTextures
         self.lightmappedParts = parts.filter { $0.draw == .lightmapped }.count
@@ -331,6 +339,7 @@ public final class SourceStudioMapAsset: @unchecked Sendable {
         self.cubeBytes = cubeBytes; self.cubeTextures = cubeTextures
         self.blockImages = blockImages; self.decodedImages = decodedImages; self.imageSource = imageSource
         self.triangles = parts.reduce(0) { $0 + $1.triangles }
+        self.vanish = vanish; self.vanishSets = vanishSets
         self.loadSeconds = loadSeconds; self.resources = resources
     }
 
@@ -360,6 +369,9 @@ public final class SourceStudioMapAsset: @unchecked Sendable {
             let lightmaps = try SourceStudioLightmapSet.parse(gltf.extras, label: url.lastPathComponent)
             // Slice 3: nil for an export without block files.
             let blocks = try SourceStudioBlockImages.parse(gltf.extras, label: url.lastPathComponent)
+            // PR B: nil for an export without a vanish list.
+            let vanish = try SourceStudioMapVanish.parse(gltf.extras, label: url.lastPathComponent)
+            var vanishSets: [[Int]] = [], vanishSetIndex: [[Int]: Int] = [:]
             let directory = url.deletingLastPathComponent()
             /// Private (uncached) registration of one glTF image: the asset owns it.
             /// Its BC blocks when the converter wrote them (sampled as `srgb`
@@ -461,6 +473,19 @@ public final class SourceStudioMapAsset: @unchecked Sendable {
                       let keys = info["visibleFor"]?.arrayValue else {
                     throw RigError.invalid("\(url.lastPathComponent): mesh \(part.meshName) has no ikkokuMap role and visibility.")
                 }
+                // The vanish rows of the part's renderers (ascending, each a row of the list).
+                var vanishSet: Int?
+                if let list = info["vanishRows"]?.arrayValue {
+                    let rows = list.compactMap { $0.doubleValue.flatMap { Int(exactly: $0) } }
+                    guard let vanish, !rows.isEmpty, rows.count == list.count, rows.allSatisfy(vanish.rows.indices.contains),
+                          zip(rows, rows.dropFirst()).allSatisfy({ $0 < $1 }) else {
+                        throw RigError.invalid("\(url.lastPathComponent): mesh \(part.meshName) names vanish rows the map does not list.")
+                    }
+                    vanishSet = vanishSetIndex[rows] ?? { vanishSets.append(rows); vanishSetIndex[rows] = vanishSets.count - 1; return vanishSets.count - 1 }()
+                }
+                // Every branch below appends this part once (or throws).
+                let partCount = parts.count
+                defer { if parts.count > partCount { parts[parts.count - 1].vanishSet = vanishSet } }
                 // The role must match the node the mesh hangs under.
                 var node: Int? = part.nodeIndex, underMap = false
                 while let current = node { if current == mapNode { underMap = true }; node = gltf.nodes[current].parent }
@@ -547,7 +572,7 @@ public final class SourceStudioMapAsset: @unchecked Sendable {
                                         lightmapBytes: bytes(lightmapHandleList), lightmapTextures: lightmapHandleList.count,
                                         cubeBytes: bytes(cubes), cubeTextures: cubes.count, blockImages: blockImageCount,
                                         decodedImages: decodedImageCount, imageSource: imageSource,
-                                        loadSeconds: seconds, resources: resources)
+                                        vanish: vanish, vanishSets: vanishSets, loadSeconds: seconds, resources: resources)
         } catch {
             for part in loaded.parts { resources.unregister(mesh: part.mesh) }
             for handle in registered { resources.unregister(texture: handle) }
@@ -563,11 +588,18 @@ public final class SourceStudioMapAsset: @unchecked Sendable {
     /// outline, no shadow casting; drawn after the characters (order 100), so
     /// early depth rejects the map pixels they cover. A particle submesh
     /// drawn alone keeps its sort centre and render queue, and orders by its
-    /// submesh after them (slice 4).
-    public func items(transform: KoikatsuChangeAmount, sunLightType: Int32, mapOption: Bool) throws -> [RenderItem] {
+    /// submesh after them (slice 4). `vanishEnabled` (PR B) is a
+    /// `SourceStudioMapVanishState.setEnabled`: a part whose vanish set it
+    /// disables is left out; nil draws every part.
+    public func items(transform: KoikatsuChangeAmount, sunLightType: Int32, mapOption: Bool,
+                      vanishEnabled: [Bool]? = nil) throws -> [RenderItem] {
         let root = try SourceStudioMapPlacement.mapRootMatrix(transform)
         let key = SourceStudioMapPlacement.sunTypeKey(sunLightType)
-        return parts.filter { $0.visibleFor.contains(key) && (mapOption || !$0.option) }.map { part in
+        func enabled(_ part: Part) -> Bool {
+            guard let set = part.vanishSet, let vanishEnabled, vanishEnabled.indices.contains(set) else { return true }
+            return vanishEnabled[set]
+        }
+        return parts.filter { $0.visibleFor.contains(key) && (mapOption || !$0.option) && enabled($0) }.map { part in
             var item = RenderItem(mesh: part.mesh, material: part.material,
                                   model: part.role == .mapRoot ? root * part.local : part.local, objectID: 0)
             item.castsShadow = false

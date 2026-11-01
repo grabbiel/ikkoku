@@ -414,6 +414,9 @@ final class StudioModel: ViewportInputHandler, LivePacedHandler {
     @ObservationIgnored var sourceMapAsset: SourceStudioMapAsset?
     @ObservationIgnored var sourceMapLoad: SourceStudioMapLoad?
     @ObservationIgnored var sourceMapItems: [RenderItem]?
+    /// PR B: the vanish emulation for the applied asset, when switched on
+    /// (`SourceMapVanishRuntime`); nil otherwise.
+    @ObservationIgnored var sourceMapVanish: SourceMapVanishRuntime?
     @ObservationIgnored var sourceMapFailure: Error?
     @ObservationIgnored var sourceMapInstallSeconds: Double = 0
     /// What `sourceMapLine` was last built from, so `refresh()` rebuilds it
@@ -3419,6 +3422,9 @@ final class StudioModel: ViewportInputHandler, LivePacedHandler {
     /// reports a problem, so the full rebuild reports it as before.
     private func refreshCamera() -> Bool {
         guard isCameraDrag, let reuse = cameraReuse else { return false }
+        // The reused frame holds the map draws: a vanish row that hides or
+        // shows rebuilds it (PR B).
+        if stepSourceMapVanish() { return false }
         return PerfTrace.measure(.studioCameraRefresh, "StudioCameraRefresh") {
             let writes = statusWrites
             var gizmos: [GizmoBatch] = []
@@ -3786,7 +3792,9 @@ final class StudioModel: ViewportInputHandler, LivePacedHandler {
             routeGuides = guides
         }
         // ST-A11: the scene's map, placed once per request; it never grows
-        // `bounds`, which fit the character shadow map.
+        // `bounds`, which fit the character shadow map. PR B: the vanish rows
+        // step first, and re-place the draws when a row hides or shows.
+        stepSourceMapVanish()
         let mapItems = currentSourceMapItems
         if !mapItems.isEmpty { items += mapItems }
         if bounds.isEmpty { bounds = AABB(min: Float3(-1, 0, -1), max: Float3(1, 2, 1)) }

@@ -587,6 +587,109 @@ class SurveyTests(unittest.TestCase):
                                  'maps': {'-1': dict(scenes=1, sceneIDs=['b' * 12]), '34': dict(scenes=2, sceneIDs=['a' * 12, 'c' * 12])}})
 
 
+class VanishTests(unittest.TestCase):
+    """Studio.CameraControl's vanish list, the rows' members and the collider shapes."""
+
+    @staticmethod
+    def scene(tree, names, layers=None):
+        """A fake MapScene: `tree` {id: [children]}, root 1 is mapRoot, `names` {id: name}."""
+        parents = {child: parent for parent, children in tree.items() for child in children}
+        parents.setdefault(1, None)
+        transforms = {t: SimpleNamespace(m_Children=[SimpleNamespace(path_id=c) for c in tree.get(t, [])]) for t in names}
+        scene = SimpleNamespace(map_root=1, transforms=transforms, parents=parents, name=lambda t: names[t])
+        def path(t):
+            parts = []
+            while t is not None:
+                parts.append(names[t]); t = parents.get(t)
+            return '/'.join(reversed(parts))
+        scene.path = path
+        scene.under_map_root = lambda t: t in names and (t == 1 or path(t).startswith(names[1] + '/'))
+        return scene
+
+    def test_rows_split_on_newlines_and_tabs_and_stop_at_the_first_empty_cell(self):
+        rows = maps.vanish_rows('col_a\tnode1\tnode2\r\ncol_b\t\tnode3\ncol_c\tnode4\t\n')
+        self.assertEqual(rows, [('col_a', ['node1', 'node2']), ('col_b', []), ('col_c', ['node4'])])
+        self.assertEqual(maps.vanish_rows(''), [])
+
+    def test_membership_is_every_node_under_a_found_name_with_its_rows(self):
+        scene = self.scene({1: [2], 2: [3, 4], 4: [5]}, {1: 'map', 2: 'A', 3: 'B', 4: 'C', 5: 'D'})
+        member, found = maps.vanish_membership(scene, [('c0', ['C']), ('c1', ['D', 'missing']), ('c2', ['A'])])
+        self.assertEqual(member, {2: (2,), 3: (2,), 4: (0, 2), 5: (0, 1, 2)})
+        self.assertEqual(found[1], [{'name': 'D', 'path': 'map/A/C/D'}, {'name': 'missing', 'path': None}])
+
+    def test_box_corners_take_the_size_magnitude(self):
+        corners = maps.box_corners([1, 2, 3], [2, 4, -6])
+        self.assertEqual(len(corners), 8)
+        self.assertEqual(sorted({tuple(c) for c in corners}), sorted((x, y, z) for x in (0, 2) for y in (0, 4) for z in (0, 6)))
+
+    def test_hull_points_are_the_support_points_of_some_direction(self):
+        self.assertEqual([len(maps.icosphere_directions(level)) for level in (0, 1, 2)], [12, 42, 162])
+        for d in maps.icosphere_directions(2):
+            self.assertAlmostEqual(math.sqrt(sum(x * x for x in d)), 1.0, places=12)
+        cube = [[x, y, z] for x in (-1, 1) for y in (-1, 1) for z in (-1, 1)]
+        inner = [[0.5, 0.2, -0.3], [0, 0, 0], [0.99, 0.99, 0.99]]
+        # A duplicated corner keeps its first index; interior points and face midpoints are dropped.
+        points = inner + cube + [[1, 1, 1], [1, 0, 0]]
+        self.assertEqual(maps.support_points(points, maps.icosphere_directions(3), chunk=100), list(range(3, 11)))
+
+    def test_extras_keep_map_layer_enabled_active_colliders_by_row_name(self):
+        tree = {1: [2, 3, 4, 5, 6, 7]}
+        names = {1: 'map', 2: 'col_a', 3: 'col_a', 4: 'col_a', 5: 'col_b', 6: 'col_c', 7: 'col_a'}
+        scene = self.scene(tree, names)
+        layer = {2: 11, 3: 12, 4: 11, 5: 11, 6: 11, 7: 11}
+        enabled = {2: 1, 3: 1, 4: 0, 5: 1, 6: 1, 7: 1}
+        vector = lambda x, y, z: SimpleNamespace(x=x, y=y, z=z)
+        mesh = SimpleNamespace(path_id=9, read=lambda: SimpleNamespace(m_Name='chair'))
+        def collider(t, kind):
+            game_object = SimpleNamespace(m_Name=names[t], m_Layer=layer[t])
+            base = dict(m_GameObject=SimpleNamespace(path_id=100 + t, read=lambda g=game_object: g),
+                        m_Enabled=enabled[t], m_IsTrigger=1 if kind == 'MeshCollider' else 0)
+            if kind == 'BoxCollider':
+                base.update(m_Center=vector(0, 0.5, 0), m_Size=vector(1, 1, 2))
+            elif kind == 'MeshCollider':
+                base.update(m_Convex=t == 5, m_Mesh=mesh)
+            else:
+                base.update(m_Center=vector(0, 0, 0), m_Radius=0.5)
+            return SimpleNamespace(type=SimpleNamespace(name=kind), read=lambda b=base: SimpleNamespace(**b))
+        kinds = {2: 'BoxCollider', 3: 'BoxCollider', 4: 'BoxCollider', 5: 'MeshCollider', 6: 'SphereCollider', 7: 'MeshCollider'}
+        objects = {200 + t: collider(t, kind) for t, kind in kinds.items()}
+        scene.of_type = lambda kind: [(pid, r) for pid, r in objects.items() if r.type.name == kind]
+        scene.transform_of_object = {100 + t: t for t in names}
+        identity = [[1, 0, 0, 0], [0, 1, 0, 0], [0, 0, 1, 0], [0, 0, 0, 1]]
+        scene.world = {t: [[1, 0, 0, t], [0, 1, 0, 0], [0, 0, 1, 0], [0, 0, 0, 1]] for t in names}
+        active = {0: {t: True for t in names}, 1: {t: t != 2 for t in names}}
+        hull = SimpleNamespace(m_Vertices=[[x, y, z] for x in (0, 1) for y in (0, 1) for z in (0, 1)])
+        with patch.object(maps, 'key', lambda pointer: ('file', pointer.path_id)):
+            extras, record = maps.vanish_extras(scene, [('col_a', ['n']), ('col_b', []), ('col_c', []), ('col_d', [])],
+                                                {}, active, identity, lambda pointer: hull)
+        self.assertEqual((extras['kind'], extras['version'], extras['radius'], extras['delaySeconds'], extras['mapLayer']),
+                         ('ikkoku.studioMapVanish', 1, 0.05, 0.3, 11))
+        self.assertEqual([r['collider'] for r in extras['rows']], ['col_a', 'col_b', 'col_c', 'col_d'])
+        colliders = extras['colliders']
+        self.assertEqual([(c['path'], c['type'], c['trigger'], c['visibleFor'], c['option']) for c in colliders],
+                         [('map/col_a', 'BoxCollider', False, [0], False), ('map/col_b', 'MeshCollider', True, [0, 1], False)])
+        self.assertEqual([r['colliders'] for r in extras['rows']], [[0], [1], [], []])
+        self.assertEqual([s['type'] for s in extras['shapes']], ['box', 'convexMesh'])
+        self.assertEqual((extras['shapes'][1]['mesh'], extras['shapes'][1]['vertices'], len(extras['shapes'][1]['points'])),
+                         ('chair', 8, 8))
+        # Corners in object space with Z reflected: centre (0, 0.5, 0), size (1, 1, 2).
+        self.assertEqual(sorted(map(tuple, extras['shapes'][0]['points'])),
+                         sorted((x, y, z) for x in (-0.5, 0.5) for y in (0.0, 1.0) for z in (-1.0, 1.0)))
+        self.assertEqual(colliders[0]['matrix'][12:15], [2, 0, 0])
+        self.assertEqual(record['skippedColliders'], {'otherLayer': 1, 'disabled': 1, 'inactive': 0})
+        self.assertEqual([(n['path'], n['reason']) for n in record['notModelled']],
+                         [('map/col_a', 'concave MeshCollider'), ('map/col_c', 'SphereCollider not modelled')])
+        self.assertEqual((record['rows'], record['rowsWithColliders'], record['colliders']), (4, 2, 2))
+        # A mapRoot collider's matrix carries the Map node's authored scale (the app's map transform is rigid).
+        with patch.object(maps, 'key', lambda pointer: ('file', pointer.path_id)):
+            scaled, _ = maps.vanish_extras(scene, [('col_a', [])], {}, active, identity, lambda pointer: hull, (2.0, 2.0, 0.5))
+        self.assertEqual([scaled['colliders'][0]['matrix'][i] for i in (0, 5, 10, 12, 14)], [2.0, 2.0, 0.5, 4.0, 0.0])
+        # Under a map option root: shown only with mapOption on.
+        with patch.object(maps, 'key', lambda pointer: ('file', pointer.path_id)):
+            optional, _ = maps.vanish_extras(scene, [('col_a', [])], {}, active, identity, lambda pointer: hull, option_roots={2})
+        self.assertTrue(optional['colliders'][0]['option'])
+
+
 class PrivateOutputTests(unittest.TestCase):
     def test_outputs_must_resolve_into_local_or_a_link_placed_in_it(self):
         with tempfile.TemporaryDirectory() as tmp:
