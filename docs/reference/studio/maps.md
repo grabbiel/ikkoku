@@ -1094,6 +1094,61 @@ Slice 4 (all maps), Release, in one quiet window ([performance: slice 4](../perf
 - **Map 33** in the showoff scene, with one shell fewer, is ready at 0.89 s against 0.90 s, with the same peak Metal.
 - **Base M1 (estimates, scaled, not measured):** at most +0.06 ms of encode per frame from the split, about 2.0–3.5 ms of GPU for a new map filling the window, and about +0.5 ms in map 11 if its difference is real.
 
+### Particles at grazing angles (slice 4 PR B)
+
+The hypothesis was that map 21's outside view fails the particle p99 because Metal and D3D11 filter the edge-on card differently: the anisotropy level or the mip choice. It is refuted as a sampler setting. Nine variants of `map_fragment`'s particle sampler were compiled with the Release build's own `metal` command, linked with that build's other `.air` files into APFS clones of the app, and captured against the map21-outside oracle. The control's linked `metallib` is byte-identical to the build's, so the pipeline reproduces it (`.local/sta11d-pr-b/tools/grazing_variants.py`, `analysis/map21-outside-particle-sampler-variants.json`). Mean, p99 and pixels over 2⁻³, on the whole particle image and on the edge-on card:
+
+| Particle sampler | Mean | p99 | Over | Edge-on card (mean / p99 / over) |
+| --- | ---: | ---: | ---: | --- |
+| **shipped: anisotropy 9, linear mips** | **0.0091** | **0.176** | **107** | **0.035 / 0.62 / 94** |
+| anisotropy 1 | 0.440 | 4.48 | 5,292 | 0.68 / 5.40 / 1,245 |
+| anisotropy 2 | 0.163 | 2.43 | 1,970 | 0.37 / 3.13 / 969 |
+| anisotropy 4 | 0.067 | 1.08 | 1,045 | 0.18 / 1.54 / 576 |
+| anisotropy 8 | 0.023 | 0.376 | 301 | 0.063 / 0.86 / 179 |
+| anisotropy 16 | identical to 9 | | | |
+| nearest mip | 0.099 | 0.524 | 1,973 | 0.062 / 0.67 / 129 |
+| LOD bias −0.5 | 0.111 | 0.557 | 2,188 | 0.075 / 0.65 / 174 |
+| LOD bias +0.5 | 0.144 | 0.847 | 2,932 | 0.089 / 0.77 / 216 |
+| LOD bias +1 | 0.283 | 1.61 | 4,775 | 0.15 / 1.35 / 487 |
+
+Every variant is worse than the shipped sampler, on the whole image and on the card, so none is adopted. The colour captures are byte-identical across the variants: at 8 bits the colour pass shows no particle pixel that the sampler changes. The residual on the edge-on card stays a known difference, not attributed further.
+
+### Vanish (slice 4 PR B)
+
+`Studio.CameraControl` hides the walls and furniture between the camera and its pivot (recovered, CharaStudio 1.0.4.2):
+
+- **The capsule.** The camera carries a kinematic rigidbody and a trigger `CapsuleCollider`: radius 0.05, direction Z, height `cameraData.distance.z` (negative), centre halfway to the pivot.
+- **The list.** `OnTriggerEnter` and `OnTriggerStay` add a collider on the Map layer (mask 2048, layer 11) unless one of the same name is listed; `OnTriggerExit` clears the whole list.
+- **The rows.** `Studio.SetupMap` calls `LoadVanish` with the catalog row's vanish file (`h/list` `map_col_XX`): `GlobalMethod.LoadAllListText` joins the text asset of that name from every bundle of the folder, in sorted order. Each row is a collider name, then node names found with `FindLoop` under the map root, whose MeshRenderers (inactive ones too) the row hides.
+- **`VanishProc`**, each `LateUpdate`, walks the rows in order. A row whose collider name no listed collider carries counts its delay up by the frame time while hidden, and shows its renderers once the delay reaches 0.3 s. A listed row that is visible hides them at once and resets the delay to 0. Nothing else resets it. A renderer in several rows takes the last row that acted on it, so one row's show re-enables a renderer another row still touches.
+- **Gates.** `LateUpdate` returns early while a scene is added, during a loading fade, or while B is held. `Studio.ChangeCamera` disables the component while a camera object is looked through, so the state holds. `Manager.Config.EtcData.Shield` (default true) turns it off.
+
+In the slice-4 phase the player hid nothing from eight outside cameras, and `overlapping` was empty in all 21 cases although the outside cases' boxes hold the capsule's midpoint. The VM phase records why ([the probe](#the-probe-for-pr-bs-vm-phase)), so the app's vanish is built but off by default.
+
+**Converter.** `export_map_scene.py --vanish-folder <abdata/h/list> --vanish-file <map_col_XX>` writes the list as the glTF's top-level `ikkokuVanish` extras:
+
+- the rows in list order, each with the colliders of its name;
+- each collider on layer 11 that is enabled and active for some sun type, with its role, sun-type keys, map-option flag and an engine-basis matrix. A mapRoot collider's matrix includes the Map node's authored scale, so the app's rigid map transform alone places it;
+- each shape as points in object space: a box's 8 corners; a convex `MeshCollider`'s hull points. Concave mesh colliders, spheres and capsules are listed as not modelled; none of the 31 maps' rows names a sphere or capsule.
+
+Parts are split by the set of rows that hide their renderers (`ikkokuMap.vanishRows`, mesh suffix `_v<n>`), so a row hides exactly its renderers. The hull points are every vertex that is farthest in some direction of a level-6 icosphere. On the 12 convex meshes the rows name (460–821 vertices), level 5 already keeps 24–74 points and leaves the dropped vertices within 0.8 mm of the reduced hull (`tools/hull_reduce.py`). PhysX's 255-vertex cook limit is not reached. A first model, the k-DOP of 162 support planes, reached up to 5.8 cm past the hull, the size of the capsule's radius (`tools/kdop_excess.py`), and was dropped.
+
+The split adds draws on furniture maps (test exports, triangles and every per-key total unchanged):
+
+| Map | Rows | Colliders | Meshes |
+| --- | ---: | --- | --- |
+| 21 `Ground` | 10 | 10 boxes (8 same-named layer-12 boxes skipped) | 165 → 168 |
+| 4 `1-1` | 57 | 7 boxes, 50 convex meshes (desks 24 points, chairs 56) | 58 → 124 |
+| 30 `Toilet_nozoki` | 13 | 13 boxes | 16 → 44 |
+
+**Runtime.** `SourceStudioMapVanish` (`Packages/Engine/Sources/Studio/SourceStudioMapVanish.swift`) parses the list and tests the capsule against each active collider: the exact distance from the capsule's axis to the collider's hull (GJK), at most the radius. A bounding sphere rejects the far colliders first. The axis runs from `radius` past the camera to `radius` short of the pivot, since a Unity capsule's height includes its caps. Which reading of the negative height the player's PhysX uses is the VM trigger experiment's question, so both are built: `segment`, from camera to pivot, which the slice-4 trace's capsule bounds suggest, and `midpointSphere`, with the height clamped to the diameter. `SourceStudioMapVanishState` is `VanishProc` row by row, per vanish set. The asset carries `vanish`, `vanishSets` and `Part.vanishSet`, and `items(…, vanishEnabled:)` leaves the disabled sets out.
+
+The app (`StudioModel+SourceMap.swift`) steps the state in each refresh with the document camera's position and pivot. The time since the last step passes under the rows touched then, which hold until the camera or the map changes. A timer refreshes for the 0.3 s re-show. During an orbit or pan drag, a row that hides or shows rebuilds the reused frame. It runs only with `IKKOKU_STUDIO_MAP_VANISH=segment` (or `midpoint`); without it every part is drawn as before.
+
+### Realtime GI, converter side (slice 4 PR B)
+
+UnityCG reads the dynamic lightmap at TEXCOORD2 (`o.lmap.zw = v.texcoord2.xy * unity_DynamicLightmapST.xy + unity_DynamicLightmapST.zw`). The converter now writes what a draw of it needs. A GI-lit renderer (the Standard family, Legacy Diffuse) with a dynamic lightmap is merged only with renderers of the same dynamic lightmap index (`ikkokuMap.dynamicLightmapIndex`, suffix `_d<n>`). Its TEXCOORD_2 is the dynamic lightmap UV with `m_LightmapTilingOffsetDynamic` applied and V flipped, as for TEXCOORD_1. Enlighten's realtime UVs are the mesh's UV2 when it has one, else the lightmap UV, else UV0. No GI renderer of a converted map has a UV2 or an Enlighten vertex stream: maps 30, 32, 37 and 41 read UV1 and map 40 UV0 (`tools/realtime_gi_survey.py`). The provenance's `realtimeGI` record names the sources. The loader keeps the index (`Part.dynamicLightmapIndex`) and refuses one without its TEXCOORD_2. Nothing draws it yet; the dynamic lightmaps come from the VM phase's read-back.
+
 ## What remains
 
 - **Light-probe-lit parts.** Map 34's 32 `Standard` renderers without a lightmap (17,701 triangles) are drawn as items. Unity lights them with light probes and the realtime sun. They cover 77,159, 72,567 and 92,296 of the 691,200 pixels in the day, evening and night views (11–13%), and none in the showoff view. Drawing them needs the scene's light probes (spherical harmonics per probe, and the tetrahedral interpolation) and the sun term below.
@@ -1109,12 +1164,12 @@ Slice 4 (all maps), Release, in one quiet window ([performance: slice 4](../perf
 - **Fog and camera effects.** RenderSettings fog was off at runtime in every phase-C and map 34 scene. The per-sun-type fog of `SunLightInfo` and CharaStudio's camera image effects are not drawn.
 - **The PNG copies of maps 33 and 34.** The 40 slice-4 maps have no PNG copies of their block images. Maps 33 and 34 keep theirs, which `IKKOKU_SOURCE_MAP_DECODED_TEXTURES` decodes; map 34's take 17 MB of its export.
 - **Forced anisotropy for characters and items.** The original forces anisotropy on every texture, character and item textures included. Only map textures sample that way here. Matching it elsewhere is a separate fidelity item with its own gates.
-- **Vanish.** `Studio.CameraControl` hides the walls the camera's view capsule crosses (`isConfigVanish`, on by default). In the slice-4 phase the player hid nothing from eight outside cameras, so the app does not either. The next change records what the trigger needs (the time scale, the camera's layer, the collision matrix, physics steps) and a case where the original does hide a wall.
+- **Vanish.** `Studio.CameraControl` hides the walls the camera's view capsule crosses (`isConfigVanish`, on by default). In the slice-4 phase the player hid nothing from eight outside cameras. PR B builds it, off by default ([vanish](#vanish-slice-4-pr-b)); the VM phase records what the trigger needs (the time scale, the camera's layer, the collision matrix, physics steps) and decides the capsule model and the default.
 - **Map 40's irradiance.** Its Standard materials all carry keywords, so the oracle had no keyword-free template, and its lightmaps are not gated. The next VM phase builds the template from `Shader.Find("Standard")`.
 - **The oracle's culling mask.** The oracle's geometry, depth-normals, irradiance and class passes draw every layer (`cullingMask ~0`). So they draw layer-0 solids that no Studio camera draws: `mo_koi_mi_balckback` (a black backdrop, `Standard`, no lightmap) in maps 19, 25 and 29, and a pot in map 15's outside view. The slice-4 converter leaves them out, as Studio does, and map 19's and 25's outside views fail geometry by exactly that backdrop ([the gates](#the-gates)). The next VM phase renders those passes with `Camera.main`'s mask (536874000).
 - **The oracle's renderer classes.** The oracle's map-only passes disable a whole renderer when any of its materials is not opaque, so map 27's 12 mixed renderers lose their opaque submeshes there and its depth gate fails ([the gates](#the-gates)). The next VM phase hides only the non-opaque submeshes (an empty material in their slot), not the whole renderer.
-- **Realtime GI.** Map 41 bakes Enlighten realtime GI, which Unity adds to the indirect diffuse from a dynamic lightmap computed at runtime; the export cannot carry it, and map 41 fails irradiance by that term ([the gates](#the-gates)). Maps 30, 32, 37 and 40 carry dynamic lightmaps too, without a VM case. One option for the next VM phase is to read back each such map's runtime dynamic lightmap once and export it as a static input. Running Enlighten itself is out of scope.
-- **Particles at grazing angles.** Map 21's outside view fails the particle p99 on one card seen 78–87° from its normal ([the gates](#the-gates)). The next change tests the texture filtering and anisotropy hypothesis, Metal against D3D11.
+- **Realtime GI.** Map 41 bakes Enlighten realtime GI, which Unity adds to the indirect diffuse from a dynamic lightmap computed at runtime; the export cannot carry it, and map 41 fails irradiance by that term ([the gates](#the-gates)). Maps 30, 32, 37 and 40 carry dynamic lightmaps too, without a VM case. One option for the next VM phase is to read back each such map's runtime dynamic lightmap once and export it as a static input. Running Enlighten itself is out of scope. PR B writes the UVs and merge key that draw needs ([realtime GI, converter side](#realtime-gi-converter-side-slice-4-pr-b)).
+- **Particles at grazing angles.** Map 21's outside view fails the particle p99 on one card seen 78–87° from its normal ([the gates](#the-gates)). PR B tested the filtering hypothesis: no anisotropy level, mip choice or LOD bias does better than the shipped sampler ([particles at grazing angles](#particles-at-grazing-angles-slice-4-pr-b)). It stays a known difference.
 - **A depth control for far views.** Done in PR B: a two-pixel diagonal shift ([the depth control](#the-depth-control-slice-4-pr-b)).
 - **Particle submeshes alone.** The oracle's particle pass enables whole renderers, so the comparison leaves out the pixels their `Standard` submeshes cover. The next VM phase adds a pass that enables only the particle submeshes. It also adds a map 40 camera that sees the map's three `Unlit/Transparent` renderers, which no slice-4 view covers.
 - **What the converter skips.** Mirrors, heat distortion, the live stage's effects and screen, vertex-lit particles, and every particle system, sprite and skinned renderer (map 23's option objects among them). Animated objects draw in their authored pose. Each map's catalog row and status line name them.
