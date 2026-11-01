@@ -588,6 +588,82 @@ The plug-ins are the installed DLLs of the [installed inventory](../mods/plugin-
   - StudioCharaLightLinkedToCamera (`26c4d1e6…`, KK_StudioCharaLightLinkedToCamera/Patches.cs:90–92). It writes and accepts only version 3 (:129, :136).
 - **Orphan IDs.** `KKVMDPlayExtSave`, `rendererEditor`, `com.rskoi.particleeditor`, `vnge_kfa` and `vnge_sss` occur in installed scenes. None of the 243 installed DLLs contains any of them as ASCII/UTF-8 or UTF-16LE, and no script host is installed. The scan is `.local/stt03i-plugin-data/inventory/orphan-scan.json` (coverage index SHA-256 `e146e45a…`, corpus digest `d81258cc…`). Nothing in this install reads or writes these entries, so CharaStudio's save carries them verbatim through any edit. **Parity holds for this pinned install only.** Once a plug-in that owns one is installed, its data may name objects the export changed.
 
+### Ordered delete/copy diagnostic (#278, 2026-10-31)
+
+A private four-case diagnostic compares the unchanged native writer with
+retained original saves, including independent native parsing of serialized
+root keys. In the plain fixture, deleting first lets the original reuse key 1
+and its serialized root position; the native export instead allocates key 16 and appends it.
+Copying first and then deleting produces byte-identical exports for that one
+fixture. With MaterialEditor, NodesConstraints and KKPE data, both orders still
+refuse export under the existing mixed-delete/copy guards. The diagnostic's
+nonzero result records one mismatch and two refusals; it is not a passing
+production gate or an implementation of ordered edit history.
+
+The run completed the existing fixed-point and negative controls, using the
+existing comparator without new masks. Both original-player processes
+produced their artifacts but exited with an access violation, so their lifecycle
+and the original pair remain unaccepted. The diagnostic identifies remaining writer work without
+expanding supported plugin edits. Private evidence is retained under
+`.local/codex-continue-2026-10-24/wave-three/plugins/ordered-export-278/`;
+the four-row report SHA-256 is
+`3b2f49db3aed538140e5a001b145890905743b1e0c57c5def02f05ee48172fe8`.
+
+#### Baseline-only shutdown control (2026-11-01)
+
+One instrumented control omitted both ordered edit sequences while retaining
+the same input and baseline load/save/reload/resave code. Its saved and resaved
+bytes matched within that process. Four process/artifact-bound markers recorded
+status/trace publication, entry to the existing quit call, its return, and this
+probe's own `OnApplicationQuit` callback. The player still exited with access
+violation `0xC0000005`, so the failure also occurs without the ordered edits.
+This does not identify a fault module or prove completion of other plugins' or
+Unity's teardown. Synchronous marker I/O can affect shutdown, and these baseline
+bytes are not claimed identical to the earlier original process.
+
+The first assessor incorrectly expected an array for the producer's Boolean
+`compilerRemaining` field. That failed assessment is preserved. A separately
+versioned offline correction requires literal `false`, rejects missing, true,
+array and numeric values, and passes 24 synthetic checks with zero skips. It
+confirms complete retained evidence and resource release while leaving the
+baseline lifecycle and original pair unaccepted. The original wrapper exit 1
+and player access violation remain failures; no player rerun or production
+export change was made.
+
+Private follow-up evidence is under the same evidence root at
+`shutdown-baseline-control-1/launch-1/`. The raw `capture/run.json` SHA-256 is
+`5e756e28931acbba49e912fcdce07053cc7f17c54592dc66d61b3e5236bc12f4`;
+the separate `offline-assessment-2/assessment.json` SHA-256 is
+`6371e43f9a8583a5c67714a3eb6ce5f9ac86c14cebcb302c1d615f3d0bdba51f`.
+
+#### Ready-only shutdown control (2026-11-01)
+
+A second instrumented control retained readiness, the existing 60-frame wait,
+plugin checks, voice repair and normal quit path, but omitted the probe's scene
+load/save/reload/resave and ordered edits. Its trace contains an empty case
+object. The capture has no saved scene outputs and retains four
+process/artifact-bound shutdown markers with a literal zero case count.
+It still exited naturally with `0xC0000005`
+after reaching the probe's own `OnApplicationQuit` callback. Thus this failure
+also occurs without those probe scene operations. This is not a claim that
+startup performs no scene or engine I/O, nor does it identify the fault module,
+establish causality, or prove complete teardown. Marker I/O remains a perturbation.
+
+The frozen assessor passed 61 synthetic controls before the single original run.
+Independent review verifies all 107 plan pins, 125 runtime pins, 17 manifest
+entries, seven transport archive entries and all four markers. The compiler
+exited 0; host and guest owners released without forced stops, and the private
+probe root was removed. Evidence completeness and resource closure pass, while
+the wrapper exit 1 and player access violation remain failures. Ready-only,
+baseline and historical ordered-pair lifecycle acceptance remain false. No retry
+or production export change followed.
+
+Private evidence is under the same evidence root at
+`shutdown-ready-control-1/launch-1/`. The raw `capture/run.json` SHA-256 is
+`2b33ef5fc037b1b01ff6b9ab63589b0be69ac6efe05f82c8cac882acec377db5`;
+the `ready-review.json` SHA-256 is
+`304c2d6c081db9714abb081519fdcb5f0629fbedfc4e9b573a970498434b8852`.
+
 ### Plug-in data rewrites
 
 Reviewed 2026-10-26 (ST-T03i, second change). `SourceScenePluginRewrites` (`Packages/Engine/Sources/Studio/SourceScenePluginRewrites.swift`) rewrites the KKPE, MaterialEditor and NodesConstraints entries after a delete or a copy, as CharaStudio's save writes them after the same interactive edit.

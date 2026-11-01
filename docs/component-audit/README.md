@@ -1,7 +1,7 @@
 # Component audit and implementation backlog
 
 **Baseline review: 2026-09-25 · commit `2cfb859` and that review's working tree.
-Scoped acceptance updates through 2026-10-24 appear below.** Later entries update
+Scoped acceptance updates through 2026-10-31 appear below.** Later entries update
 only their named behavior and evidence; the original audit was not rerun in full. The
 [documentation index](../README.md) links maintained guides and technical contracts. Older rebuild/checkpoint
 documents remain useful evidence of individual milestones, but their completion
@@ -118,6 +118,9 @@ acceptance boundary; their old “next” steps are historical, not a live queue
   selection falls from 667–701 ms to 159–161 ms; the first selection costs
   16–25 ms more, retains about 39 MB of logical rig payload and leaves owner
   stalls. See the [reuse evidence and limits](../reference/character/maker-assets.md#bounded-decoded-rig-reuse-192).
+  A [prospective session-replacement foundation](../reference/character/maker-assets.md#prospective-rig-session-replacement-foundation-192)
+  passes 24 synthetic checks in both Debug and Release. Initial-load seeding is
+  not integrated; these lifetime checks establish no performance benefit.
   Per-component diagnostics now place about 52 ms of the tested repeat-cycle
   card-appearance work in six compositor wait/view intervals; batching across
   components remains a proposal. See the [attribution evidence](../reference/character/maker-assets.md#per-component-appearance-attribution-192).
@@ -130,7 +133,7 @@ acceptance boundary; their old “next” steps are historical, not a live queue
   neighbouring triangles; translated pipelines now prevent it, and repeated live captures are bit-identical
   ([cause and correction](../reference/renderer.md#cause-and-correction-cross-primitive-derivative-quads-2026-10-25)).
   The history below predates that correction.
-  The unmerged [texture-loading candidate](../reference/performance.md#texture-loading-candidate-validation-288-2026-10-31)
+  The [texture-loading validation](../reference/performance.md#texture-loading-candidate-validation-288-2026-10-31)
   retains historical full Release, Maker/Studio and paired-image acceptance.
   Combined checkpoint `4f5f2504` adds 20 affected CPU tests, nine GPU tests and
   four Release Maker selection/reload checks (124 operations). Its historical
@@ -169,6 +172,14 @@ acceptance boundary; their old “next” steps are historical, not a live queue
   across replacement, rejected loads and repeated unload/remount, with exact
   state/resource retention and explicit unload changes. Real OS focus and
   multiple-window ownership still need separate acceptance.
+  An [ordered delete/copy diagnostic](../reference/studio/scene-editing.md#ordered-deletecopy-diagnostic-278-2026-10-31)
+  identifies an allocation/root-order mismatch and preserves both plugin-rich
+  refusals. An [instrumented baseline-only control](../reference/studio/scene-editing.md#baseline-only-shutdown-control-2026-11-01)
+  also reaches the probe's own quit callback and exits with an access violation.
+  A [ready-only control](../reference/studio/scene-editing.md#ready-only-shutdown-control-2026-11-01)
+  reproduces that exit while omitting the probe's scene load/save and edit operations.
+  Evidence completeness and resource release are confirmed separately;
+  original-player lifecycle remains unaccepted, with no added export support.
   General plugin compatibility remains outside the supported subset.
 
 Use the linked issue/PR state for work in review, and the owning reference for

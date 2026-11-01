@@ -4994,7 +4994,7 @@ section.
 
 ## Texture-loading candidate validation (#288, 2026-10-31)
 
-The unmerged [PR #288](https://github.com/grabbiel/ikkoku/pull/288) retains
+[PR #288](https://github.com/grabbiel/ikkoku/pull/288) retains
 historical acceptance at `95ee1773`: 1,095 full Release passes with seven named
 performance-probe skips, all seven upload gates and a strict corpus of 138
 successful inputs plus one pinned rejection. Three preceding full Debug runs
@@ -5020,6 +5020,14 @@ selection and fresh-process reload scenarios: 55/7/55/7 successful operations,
 dependencies. All 921 consumed inputs and the complete 217-entry app archive
 remain unchanged. These focused combined-head gates do not relabel the earlier
 Studio and image comparisons or establish additional source-game visual parity.
+
+The final source-reviewed integration also includes main `31834b7f` and
+[#300](https://github.com/grabbiel/ikkoku/pull/300)'s unused prospective rig-session
+replacement API and regressions. It adds no production callers and changes no
+existing methods or stored fields; the foundation has its own 24-test Debug
+and 24-test Release acceptance. The runs above remain labeled `4f5f2504`, not
+fresh executions of the final merge. Public CI checks the final integration
+separately.
 
 The combined CPU process exited zero with 20 passes, but its original private
 checker counted framework header/summary rows as test names. That failure and
