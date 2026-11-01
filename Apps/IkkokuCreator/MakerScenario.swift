@@ -139,7 +139,8 @@ struct MakerScenario: Decodable {
 
     /// Runs the steps against the imported card. A failing step records its
     /// detail and the run continues; a failed `export`/`reimport` stops it,
-    /// because every later step depends on the file they were to write.
+    /// because every later step depends on the file they were to write. An
+    /// explicitly expected, atomically unchanged reimport failure can continue.
     static func run(_ scenario: MakerScenario, maker: MakerModel, app: AppState) async -> Report {
         let startupInitialLoad = maker.sourceInitialLoadTiming
         var results: [Report.StepResult] = []
@@ -212,7 +213,7 @@ struct MakerScenario: Decodable {
                 mainActorMaximumGapMilliseconds: heartbeat?.maximumGapMilliseconds,
                 mainActorHeartbeatCount: heartbeat?.count,
                 resourcesBefore: resourcesBefore,
-                resources: ["selectAsset", "captureResources", "beginSelection", "finishSelection"].contains(step.op) || step.resourcesAtMost != nil ? maker.host.renderer.resources.statistics() : nil))
+                resources: ["selectAsset", "captureResources", "beginSelection", "finishSelection"].contains(step.op) || step.resourcesAtMost != nil || resourcesBefore != nil ? maker.host.renderer.resources.statistics() : nil))
             return ok
         }
         func insideLocal(_ path: String) -> URL? {
@@ -503,13 +504,54 @@ struct MakerScenario: Decodable {
                     record(step, false, "reimport: path must stay under .local/: \(step.path ?? "<missing>")")
                     break scenarioLoop
                 }
+                let expectsFailure = step.expectFailure == true
+                // Fault controls are explicit and static. Ordinary reimports
+                // retain their stop-on-error behavior and add no snapshots.
+                if expectsFailure && (step.unchanged != true || maker.liveAnimation || step.diagnosticContains?.isEmpty != false) {
+                    record(step, false, "expected-failure reimport needs unchanged, static animation and an error substring")
+                    break scenarioLoop
+                }
+                let before = expectsFailure ? selectionState() : nil
+                let beforeFrame = expectsFailure ? maker.host.renderer.currentFrame() : nil
+                let beforeClock = expectsFailure ? maker.sourceAnimationTime : nil
+                let beforeResources = expectsFailure ? maker.host.renderer.resources.statistics() : nil
+                let hadInitialSample = maker.sourceInitialLoadTiming != nil
+                resourcesBefore = beforeResources
                 do {
                     try maker.importSourceCardSettings(url: url, recordInitialLoad: true)
+                    if expectsFailure {
+                        record(step, false, "expected-failure reimport unexpectedly succeeded; stopping",
+                               initialLoad: maker.sourceInitialLoadTiming)
+                        break scenarioLoop
+                    }
                     heldCardPath = url.path
                     record(step, true, "reimported \(path): \(maker.status)", initialLoad: maker.sourceInitialLoadTiming)
                 } catch {
-                    record(step, false, "reimport failed, stopping: \(error)")
-                    break scenarioLoop
+                    guard expectsFailure, let before, let beforeFrame, let beforeClock, let beforeResources else {
+                        record(step, false, "reimport failed, stopping: \(error)")
+                        break scenarioLoop
+                    }
+                    let afterResources = maker.host.renderer.resources.statistics()
+                    let resourcesSame = beforeResources.meshes == afterResources.meshes
+                        && beforeResources.textures == afterResources.textures
+                        && beforeResources.deformBuffers == afterResources.deformBuffers
+                        && beforeResources.hiddenBuffers == afterResources.hiddenBuffers
+                        && beforeResources.meshBufferBytes == afterResources.meshBufferBytes
+                        && beforeResources.deformBufferBytes == afterResources.deformBufferBytes
+                        && beforeResources.hiddenBufferBytes == afterResources.hiddenBufferBytes
+                        && beforeResources.retiring == afterResources.retiring
+                    // The identical preview owns immutable shape/expression
+                    // contracts; selectionState also checks rig URL/card bytes.
+                    let stateSame = before == selectionState()
+                    let frameSame = sameStaticFrame(beforeFrame, maker.host.renderer.currentFrame())
+                    let clockSame = beforeClock == maker.sourceAnimationTime
+                    let sampleCleared = maker.sourceInitialLoadTiming == nil
+                    let expectedError = step.diagnosticContains.map { String(describing: error).contains($0) } == true
+                    let passed = expectedError && stateSame && frameSame && clockSame && resourcesSame
+                        && sampleCleared && maker.sourceSelectionPending == nil
+                    record(step, passed,
+                        "expected reimport failure: \(error); contextSame=\(stateSame), frameSame=\(frameSame), clockSame=\(clockSame), resourcesSame=\(resourcesSame), priorSample=\(hadInitialSample), sampleCleared=\(sampleCleared)")
+                    if !passed { break scenarioLoop }
                 }
             case "assert":
                 var problems: [String] = []
