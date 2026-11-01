@@ -67,6 +67,22 @@ phase. See the probe source for what each phase does.
     the upload as largest-kkpe.png (for the export-time measurement), with its SHA-256 and size; no name is kept.
 - Phase D's inputs are phase C's scenes, our exports (ours-*.png) and card-link-fixint.png from --inputs, the rule
   corpus, and survey.txt. Phase C's collider zipmod, when it had one, is copied in again by name and hash.
+
+The ordered phase (--phase oa; #278) runs the same probe with phase A's plug-ins (PLUGINS) and zipmod only, from
+the exact retained inputs: phase A's fixture.png and phase C's fixture.png (sent as fixture-c.png), each with its
+expected SHA-256, and an independently acquired runtime-pins.json that is verified before and after. One exec runs
+two players in the same private root under one process-owner envelope:
+
+1. the control (OB, at most --control-seconds): phase A's fixture loaded, saved, reloaded and saved again, with no
+   edit. Its outputs are renamed control-* in the upload;
+2. the oracle (OA, at most --wait-seconds): both baselines, then every ORDERED_CASES row in order (the real
+   Delete, Duplicate and Add folder operations, with SceneInfo.hashIndex and root enumeration snapshots).
+
+The run is accepted only with both statuses error-free, every output present, every save equal to its resave,
+the control's save equal to OA's baseline save, both players exited with the same exit code (0, or the
+original player's 0xC0000005 shutdown fault, which the no-edit control shows is not caused by the edits), the
+root removed with no game process left, unchanged junction targets, runtime pins and errno-24 count, and matching
+guest source and input hashes.
 """
 from __future__ import annotations
 import argparse, json, os, re, signal, subprocess
@@ -100,6 +116,13 @@ PLUGINS_B = (
     ('KK_Plugins\\KK_MaterialEditor.dll', 'dde57f4f65161aa5374a283619791c77e89ce4a014c28d4b00e70cf9905ab596', 718848),
 )
 SOURCES_B = ('PluginSceneRules.cs', 'PluginSceneRuleParity.cs', 'PluginSceneSurvey.cs')
+# OriginalPluginRewriteProbe.OrderedCases labels, in order (a test holds them equal to the C#).
+ORDERED_CASES = ('delete-duplicate', 'duplicate-delete', 'delete-delete-duplicate', 'child-delete-duplicate',
+                 'route-delete-duplicate-folder', 'delete-duplicate-duplicate', 'delete-add-folder',
+                 'character-delete-duplicate', 'delete-duplicate-character')
+ORDERED_CONTROL_SECONDS = 180  # bound on the no-edit control player (OB)
+ORDERED_MAX_SECONDS = 600      # bound on the oracle player (OA)
+SHUTDOWN_FAULT = -1073741819   # 0xC0000005: the original player's access violation after Application.Quit
 
 
 def local_roots():
@@ -203,7 +226,7 @@ foreach($e in $i.EnumerateFileSystemInfos('*',[IO.SearchOption]::AllDirectories)
 function Targets{try{[ordered]@{abdata=(Tree "$original\abdata");CharaStudio_Data=(Tree "$original\CharaStudio_Data")}}catch{[ordered]@{error=$_.ToString()}}}
 """
 
-# Used only by OA/OC. Paths describe recorded instances; they never select a
+# Used only by OA. Paths describe recorded instances; they never select a
 # process for termination by themselves. The independent compiler is also
 # retained immediately so the outer finally can clean up after later errors.
 ORDERED_ENVELOPE = r'''function OrderedStamp($stage){
@@ -396,20 +419,24 @@ def zipmod_record(record):
 
 
 def rewrite_script(root, base, phase, wait_seconds, zipmod, inputs, collider=None, survey_seconds=900,
-                   survey_file_bytes=512 * 1024 * 1024, scan_seconds=180):
-    """Phase C or D as run.ps1: the player with phase B's plug-ins and zipmod, the rewrite probe and its inputs."""
+                   survey_file_bytes=512 * 1024 * 1024, scan_seconds=180, control_seconds=None):
+    """Phase C, D or OA as run.ps1: the player with phase B's plug-ins (OA: phase A's) and zipmod, the rewrite
+    probe and its inputs. OA runs the no-edit control player (OB, control_seconds) before the oracle player."""
     if not re.fullmatch(PLAYER_ROOT, root): raise ValueError('Unknown private player root')
-    if phase not in ('C', 'D', 'OA', 'OC'): raise ValueError('Unknown phase')
+    if phase not in ('C', 'D', 'OA'): raise ValueError('Unknown phase')
     for value in (wait_seconds, survey_seconds, survey_file_bytes, scan_seconds):
         if not isinstance(value, int) or value <= 0: raise ValueError('Bounds must be positive integers')
     zipmod_record(zipmod)
     if collider is not None and phase == 'C': raise ValueError('Phase C finds its own collider zipmod')
     if collider is not None: zipmod_record(collider)
     if not all(re.fullmatch(r'[A-Za-z0-9.-]+', name) for name in inputs): raise ValueError('Unexpected input name')
-    ordered = phase in ('OA', 'OC')
-    if ordered and (wait_seconds > 180 or collider is not None):
-        raise ValueError('Ordered phases allow at most 180 player seconds and no collider scan/copy')
-    plugins = ','.join("@('%s','%s',%d)" % entry for entry in PLUGINS + (() if phase == 'OA' else PLUGINS_B))
+    ordered = phase == 'OA'
+    if ordered and (wait_seconds > ORDERED_MAX_SECONDS or collider is not None or type(control_seconds) is not int
+                    or not 1 <= control_seconds <= ORDERED_CONTROL_SECONDS):
+        raise ValueError('The ordered phase allows at most %d oracle and %d control player seconds and no collider scan/copy'
+                         % (ORDERED_MAX_SECONDS, ORDERED_CONTROL_SECONDS))
+    if not ordered and control_seconds is not None: raise ValueError('Only the ordered phase runs a control player')
+    plugins = ','.join("@('%s','%s',%d)" % entry for entry in PLUGINS + (() if ordered else PLUGINS_B))
     names = ','.join("'%s'" % name for name in inputs)
     sources = ('OriginalPluginRewriteProbe.cs',) + SOURCES_B
     head = ("$ErrorActionPreference='Stop';$root='" + root + "';$base='" + base + "';$r=[ordered]@{root=$root;phase='" + phase + "'}\n"
@@ -550,6 +577,16 @@ OrderedStamp 'player-complete' '''
         tail = tail.replace(old_wait, new_wait, 1)
         tail = tail.replace('$x=Start-Process', "OrderedStamp 'player-start'\n$x=Start-Process", 1)
         tail = tail.replace('$left=Own;$left|Stop-Process -Force;$r.stopped=@($left|ForEach-Object{$_.Id});', "OrderedStamp 'player-drain';$r.stopped=StopPlayerOwners;", 1)
+        # The no-edit control (OB) first, in its own player under the same owner envelope and private root;
+        # then the oracle (OA). A shutdown fault both share is the player's, not the edits'.
+        start = tail.index("OrderedStamp 'player-start'")
+        end = tail.index('Start-Sleep -Seconds 2\n', start) + len('Start-Sleep -Seconds 2\n')
+        launch = tail[start:end]
+        bound = '$playerWatch.Elapsed.TotalSeconds -lt ' + str(wait_seconds) + '){'
+        if launch.count(bound) != 1 or 'StopPlayerOwners' not in launch: raise AssertionError('Ordered launch block changed')
+        control = launch.replace(bound, '$playerWatch.Elapsed.TotalSeconds -lt ' + str(control_seconds) + '){', 1)
+        control = control.replace("OrderedStamp 'player-", "OrderedStamp 'control-player-")
+        tail = tail[:start] + control + ORDERED_CONTROL_HANDOFF + tail[start:]
         tail = tail.replace("foreach($n in @('unity.log'", "OrderedStamp 'capture-logs'\nforeach($n in @('unity.log'", 1)
         tail = tail.replace('$z="$root\\reload.zip";', "OrderedStamp 'capture-archive'\n$z=\"$root\\reload.zip\";", 1)
         tail = tail.replace('Invoke-WebRequest -UseBasicParsing -Method Put', 'Invoke-WebRequest -UseBasicParsing -TimeoutSec 30 -Method Put')
@@ -603,12 +640,26 @@ if([IO.Path]::GetFileName($path) -ceq $name){$m+=Get-Item -LiteralPath $path}}''
     return head + middle + tail
 
 
+# After the control player (OB) exits and its owners are drained: keep its record, move its logs and outputs to
+# control-* (flat names, as extract requires), and point the probe at OA for the second player.
+ORDERED_CONTROL_HANDOFF = r'''if(-not $r.exited){throw 'Control player did not exit within its bound'}
+$r.control=[ordered]@{phase='OB';processID=$r.processID;playerStartUTC=$r.playerStartUTC;playerIdentity=$r.playerIdentity;
+playerExecutableSHA256=$r.playerExecutableSHA256;exited=$r.exited;playerExitCode=$r.playerExitCode;stopped=$r.stopped}
+OrderedStamp 'control-capture'
+foreach($log in @('unity.log','BepInEx\LogOutput.log')){if(Test-Path -LiteralPath "$root\$log"){Move-Item -LiteralPath "$root\$log" -Destination "$out\control-$(Split-Path $log -Leaf)"}}
+foreach($f in @(Get-ChildItem -LiteralPath $out -File)){if($f.Name -notlike 'compile.*' -and $f.Name -notlike 'control-*'){Rename-Item -LiteralPath $f.FullName -NewName ('control-'+$f.Name)}}
+[IO.File]::WriteAllText("$in\phase.txt",'OA');$r.phases=@('OB','OA')
+$r.processID=$null;$r.playerStartUTC=$null;$r.playerIdentity=$null;$r.playerExecutableSHA256=$null;$r.exited=$null;$r.playerExitCode=$null;$r.stopped=$null
+OrderedStamp 'control-complete'
+'''
+
+
 def run_rewrite(vm, output, errno_baseline, phase, files, zipmod, collider, host_address, wait_seconds,
                 survey_seconds=900, survey_file_bytes=512 * 1024 * 1024, scan_seconds=180,
-                runtime_pins=None):
-    """One-exec phase C or D into a new output folder: run.json, run.ps1, the probe's outputs, source/ and manifest.json."""
+                runtime_pins=None, control_seconds=None):
+    """One-exec phase C, D or OA into a new output folder: run.json, run.ps1, the probe's outputs, source/ and manifest.json."""
     if not any(output.resolve().is_relative_to(root) for root in local_roots()): raise ValueError('Outputs must stay under .local')
-    ordered = phase in ('OA', 'OC')
+    ordered = phase == 'OA'
     if ordered:
         if output.exists(): raise RuntimeError('Ordered output must be a new directory, including failed starts')
         runtime_check = ordered_runtime_check(runtime_pins)
@@ -621,19 +672,20 @@ def run_rewrite(vm, output, errno_baseline, phase, files, zipmod, collider, host
     record = dict(vm=vm, root=root, phase=phase, sources={n: digest(b) for n, b in sources.items()}, inputs=input_hashes,
                   zipmod=dict(name=zipmod['name'], sha256=zipmod['sha256']),
                   collider=None if collider is None else dict(name=collider['name'], sha256=collider['sha256']),
-                  plugins=[dict(path=p, sha256=h, bytes=n) for p, h, n in PLUGINS + (() if phase == 'OA' else PLUGINS_B)],
+                  plugins=[dict(path=p, sha256=h, bytes=n) for p, h, n in PLUGINS + (() if ordered else PLUGINS_B)],
                   errnoBaseline=errno_baseline, errnoBefore=guarded(errno_baseline),
                   transport='one prlctl exec; run.ps1 over a host-only HTTP endpoint')
     dump(output / 'run.json', record)
     if ordered:
-        record['runtimePins'] = runtime_pins
+        record['runtimePins'] = runtime_pins; record['controlSeconds'] = control_seconds; record['waitSeconds'] = wait_seconds
         dump(output / 'run.json', record)
         (output / 'source-fixture.png').write_bytes(files['fixture.png'])
+        (output / 'source-fixture-c.png').write_bytes(files['fixture-c.png'])
     served = dict(files); served.update(sources)
-    timeout = wait_seconds + 420 if ordered else wait_seconds + survey_seconds + 2 * scan_seconds + 1800
+    timeout = control_seconds + wait_seconds + 480 if ordered else wait_seconds + survey_seconds + 2 * scan_seconds + 1800
     with Endpoint(host_address, served, upload='reload.zip') as endpoint:
         script = rewrite_script(root, endpoint.base, phase, wait_seconds, zipmod, list(files), collider, survey_seconds,
-                                survey_file_bytes, scan_seconds)
+                                survey_file_bytes, scan_seconds, control_seconds)
         if ordered:
             # The existing private-player setup stays intact. Reject changed runtime,
             # producer or input bytes before the compiler/player starts. The original
@@ -681,7 +733,7 @@ def run_rewrite(vm, output, errno_baseline, phase, files, zipmod, collider, host
         names = extract(upload, output)
     (output / 'source').mkdir(exist_ok=True)
     for name, data in sources.items(): (output / 'source' / name).write_bytes(data)
-    retained = ['run.json', 'run.ps1'] + (['source-fixture.png', 'exec.stdout', 'exec.stderr'] if ordered else [])
+    retained = ['run.json', 'run.ps1'] + (['source-fixture.png', 'source-fixture-c.png', 'exec.stdout', 'exec.stderr'] if ordered else [])
     if ordered and upload is not None: retained.append('transport-upload.zip')
     provenance = [dict(file=str(p.relative_to(output)), sha256=digest(p.read_bytes()), bytes=p.stat().st_size)
                   for p in sorted([output / n for n in set(names + retained)] + list((output / 'source').iterdir())) if p.is_file()]
@@ -693,19 +745,38 @@ def run_rewrite(vm, output, errno_baseline, phase, files, zipmod, collider, host
                 configs=guest.get('configs'), largestKKPE=guest.get('largestKKPE'),
                 errno=[record['errnoBefore'], record['errnoAfter']], files=len(provenance), statusError=(status or {}).get('error'))
     if ordered:
-        required_outputs = {'fixture.png', 'resave-fixture.png', 'plugin-scene-trace.json', 'status.json'}
-        for label in ('delete-duplicate', 'duplicate-delete'):
-            required_outputs.update(('edit-' + label + '.png', 'resave-edit-' + label + '.png'))
-        result['accepted'] = bool(status and status.get('phase') == phase and 'error' in status and status['error'] is None
-            and required_outputs <= set(names)
-            and guest.get('exited') is True and guest.get('playerExitCode') == 0 and guest.get('removed') is True
-            and guest.get('remainingGameProcesses') == [] and guest.get('junctionTargetsChanged') is False
-            and not any(guest.get(k) for k in ('error', 'cleanupError', 'runtimeError', 'partialUploadError'))
-            and guest.get('runtimeBefore') == runtime_pins == guest.get('runtimeAfter')
-            and guest.get('sources') == record['sources'] and guest.get('inputs') == input_hashes
-            and record.get('hostGroupReleased') is True and record['errnoBefore'] == record['errnoAfter'])
+        result.update(ordered_acceptance(output, names, guest, status, record, input_hashes, runtime_pins))
         dump(output / 'summary.json', result)
     return result
+
+
+def ordered_acceptance(output, names, guest, status, record, input_hashes, runtime_pins):
+    """Main's #278 rule: the 0xC0000005 quit is accepted only when the no-edit control ends the same way."""
+    pairs = {'control-fixture': ('control-fixture.png', 'control-resave-fixture.png')}
+    for save in ['fixture', 'fixture-c'] + ['edit-' + label for label in ORDERED_CASES]:
+        pairs[save] = (save + '.png', 'resave-' + save + '.png')
+    required = {'plugin-scene-trace.json', 'status.json', 'control-plugin-scene-trace.json', 'control-status.json'}
+    for pair in pairs.values(): required.update(pair)
+    present = set(names)
+    def sha(name): return digest((output / name).read_bytes()) if name in present and (output / name).is_file() else None
+    fixed = {save: sha(saved) is not None and sha(saved) == sha(resaved) for save, (saved, resaved) in pairs.items()}
+    control = guest.get('control') or {}
+    control_status = json.loads((output / 'control-status.json').read_text()) if 'control-status.json' in present else None
+    codes = [control.get('playerExitCode'), guest.get('playerExitCode')]
+    same_exit = (control.get('exited') is True and guest.get('exited') is True and codes[0] == codes[1]
+                 and codes[1] in (0, SHUTDOWN_FAULT))
+    control_matches = sha('control-fixture.png') is not None and sha('control-fixture.png') == sha('fixture.png')
+    def clean(s, phase): return bool(s and s.get('phase') == phase and 'error' in s and s['error'] is None)
+    accepted = (clean(control_status, 'OB') and clean(status, 'OA') and required <= present and all(fixed.values())
+        and control_matches and same_exit and guest.get('phases') == ['OB', 'OA'] and guest.get('removed') is True
+        and guest.get('remainingGameProcesses') == [] and guest.get('junctionTargetsChanged') is False
+        and not any(guest.get(k) for k in ('error', 'cleanupError', 'runtimeError', 'partialUploadError'))
+        and guest.get('runtimeBefore') == runtime_pins == guest.get('runtimeAfter')
+        and guest.get('sources') == record['sources'] and guest.get('inputs') == input_hashes
+        and record.get('hostGroupReleased') is True and record['errnoBefore'] == record['errnoAfter'])
+    return dict(accepted=bool(accepted), playerExitCodes=codes, shutdownFault=same_exit and codes[1] == SHUTDOWN_FAULT,
+                fixedPoints=fixed, controlMatchesBaseline=control_matches, missingOutputs=sorted(required - present),
+                controlStatusError=(control_status or {}).get('error'))
 
 
 def ordered_transport(command, output, record, seconds):
@@ -781,20 +852,25 @@ return $result}
 '''
 
 
-def run_ordered(vm, output, errno_baseline, profile, fixture, fixture_sha256, retained_run,
-                runtime_pins, host_address='10.211.55.2', wait_seconds=180):
-    """#278: exact A/C input, matching isolated plug-ins, two real operation orders."""
-    if profile not in ('a', 'c'): raise ValueError('Ordered profile must be a or c')
-    if not re.fullmatch('[0-9a-f]{64}', fixture_sha256 or ''): raise ValueError('Expected fixture SHA256 is required')
-    if type(wait_seconds) is not int or not 1 <= wait_seconds <= 180: raise ValueError('Ordered player bound must be 1..180 seconds')
+def run_ordered(vm, output, errno_baseline, fixture, fixture_sha256, fixture_c, fixture_c_sha256, retained_run,
+                runtime_pins, host_address='10.211.55.2', wait_seconds=300, control_seconds=ORDERED_CONTROL_SECONDS):
+    """#278: phase A's and C's exact inputs with phase A's plug-ins; the no-edit control (OB), then every
+    ORDERED_CASES row (OA), in one exec."""
+    for expected in (fixture_sha256, fixture_c_sha256):
+        if not re.fullmatch('[0-9a-f]{64}', expected or ''): raise ValueError('Expected fixture SHA256 values are required')
+    if type(wait_seconds) is not int or not 1 <= wait_seconds <= ORDERED_MAX_SECONDS:
+        raise ValueError('Ordered player bound must be 1..%d seconds' % ORDERED_MAX_SECONDS)
+    if type(control_seconds) is not int or not 1 <= control_seconds <= ORDERED_CONTROL_SECONDS:
+        raise ValueError('Control player bound must be 1..%d seconds' % ORDERED_CONTROL_SECONDS)
     ordered_runtime_check(runtime_pins)  # Validate before reading or invoking any VM transport.
     if output.exists(): raise RuntimeError('Ordered output must be a new directory, including failed starts')
-    data = fixture.read_bytes()
-    if digest(data) != fixture_sha256: raise ValueError('Retained fixture digest differs')
+    data, data_c = fixture.read_bytes(), fixture_c.read_bytes()
+    if digest(data) != fixture_sha256 or digest(data_c) != fixture_c_sha256: raise ValueError('Retained fixture digest differs')
     run = json.loads(retained_run.read_text()); zipmod = zipmod_record(run['guest']['zipmod'])
-    files = {'fixture.png': data, 'fixture.sha256': fixture_sha256.encode(), 'phase.txt': ('O' + profile.upper()).encode()}
-    return run_rewrite(vm, output, errno_baseline, 'O' + profile.upper(), files, zipmod, None,
-                       host_address, wait_seconds, runtime_pins=runtime_pins)
+    files = {'fixture.png': data, 'fixture.sha256': fixture_sha256.encode(), 'fixture-c.png': data_c,
+             'fixture-c.sha256': fixture_c_sha256.encode(), 'phase.txt': b'OB'}
+    return run_rewrite(vm, output, errno_baseline, 'OA', files, zipmod, None, host_address, wait_seconds,
+                       runtime_pins=runtime_pins, control_seconds=control_seconds)
 
 
 def run_c(vm, output, errno_baseline, phase_a, host_address='10.211.55.2', wait_seconds=1800, scan_seconds=180,
@@ -935,11 +1011,14 @@ def run_b(vm, output, errno_baseline, inputs, corpus, phase_a, host_address='10.
 def main():
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument('--vm', default='Windows 11')
-    p.add_argument('--phase', choices=('a', 'b', 'c', 'd', 'oa', 'oc'), default='a')
-    p.add_argument('--fixture', type=Path, help='ordered phases: the exact retained source fixture')
-    p.add_argument('--fixture-sha256', help='ordered phases: expected source fixture SHA256')
-    p.add_argument('--retained-run', type=Path, help='ordered phases: original run.json pinning the copied zipmod')
-    p.add_argument('--runtime-pins', type=Path, help='ordered phases: independently acquired complete runtime-pins.json')
+    p.add_argument('--phase', choices=('a', 'b', 'c', 'd', 'oa'), default='a')
+    p.add_argument('--fixture', type=Path, help="phase oa: phase A's exact retained fixture.png")
+    p.add_argument('--fixture-sha256', help="phase oa: its expected SHA256")
+    p.add_argument('--fixture-c', type=Path, help="phase oa: phase C's exact retained fixture.png (character W)")
+    p.add_argument('--fixture-c-sha256', help="phase oa: its expected SHA256")
+    p.add_argument('--retained-run', type=Path, help="phase oa: phase A's run.json pinning the copied zipmod")
+    p.add_argument('--runtime-pins', type=Path, help='phase oa: independently acquired complete runtime-pins.json')
+    p.add_argument('--control-seconds', type=int, default=ORDERED_CONTROL_SECONDS, help='phase oa: bound on the no-edit control player')
     p.add_argument('--output', type=Path, help='new output folder (default .local/stt03i-plugin-data/phase-<a|b>, '
                                                '.local/stt03j-plugin-rewrites/phase-<c|d>)')
     p.add_argument('--phase-c', type=Path, default=ROOT / '.local/stt03j-plugin-rewrites/phase-c', help='phase D: the phase-C output folder')
@@ -955,12 +1034,13 @@ def main():
     p.add_argument('--zipmod-max-bytes', type=int, default=8 * 1024 * 1024, help='largest zipmod considered for the fixture')
     a = p.parse_args()
     output = a.output or ROOT / (f'.local/stt03i-plugin-data/phase-{a.phase}' if a.phase in 'ab' else f'.local/stt03j-plugin-rewrites/phase-{a.phase}')
-    if a.phase in ('oa', 'oc'):
-        if not all((a.output, a.fixture, a.fixture_sha256, a.retained_run, a.runtime_pins)):
-            p.error('ordered phases require --output, --fixture, --fixture-sha256, --retained-run and --runtime-pins')
-        result = run_ordered(a.vm, output, a.errno_baseline, a.phase[1], a.fixture, a.fixture_sha256,
+    if a.phase == 'oa':
+        if not all((a.output, a.fixture, a.fixture_sha256, a.fixture_c, a.fixture_c_sha256, a.retained_run, a.runtime_pins)):
+            p.error('phase oa requires --output, --fixture, --fixture-sha256, --fixture-c, --fixture-c-sha256, '
+                    '--retained-run and --runtime-pins')
+        result = run_ordered(a.vm, output, a.errno_baseline, a.fixture, a.fixture_sha256, a.fixture_c, a.fixture_c_sha256,
                              a.retained_run, json.loads(a.runtime_pins.read_text()), a.host_address,
-                             180 if a.wait_seconds is None else a.wait_seconds)
+                             300 if a.wait_seconds is None else a.wait_seconds, a.control_seconds)
         print(json.dumps(result, indent=2))
         if not result['accepted']: raise SystemExit(1)
     elif a.phase == 'c':
