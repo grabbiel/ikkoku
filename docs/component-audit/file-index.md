@@ -35,13 +35,13 @@ bookkeeping, not a new full source audit.
 | [Character / Maker / mods](character-and-mods.md) | 130 |
 | [Studio / IK / animation](studio.md) | 250 |
 | [Renderer / foundation / assets](renderer-and-foundation.md) | 360 |
-| [Toolchain / verification / historical docs](toolchain-and-verification.md) | 209 |
+| [Toolchain / verification / historical docs](toolchain-and-verification.md) | 210 |
 
 | File role | Files |
 | --- | ---: |
 | App resource metadata / icon | 16 |
 | Build / repository configuration | 9 |
-| Conversion / recovery / verification tool | 246 |
+| Conversion / recovery / verification tool | 247 |
 | Documentation / historical evidence | 65 |
 | Generated asset / catalog / fixture | 205 |
 | Reference host / controlled fixture | 37 |
@@ -1137,6 +1137,7 @@ Feature assessment: [toolchain-and-verification.md](toolchain-and-verification.m
 | [Tools/verification/scenarios/reload-load-duplicate.json](../../Tools/verification/scenarios/reload-load-duplicate.json) | Conversion / recovery / verification tool |
 | [Tools/verification/scenarios/reload-save-duplicate.json](../../Tools/verification/scenarios/reload-save-duplicate.json) | Conversion / recovery / verification tool |
 | [Tools/verification/scenarios/topology-duplicate.json](../../Tools/verification/scenarios/topology-duplicate.json) | Conversion / recovery / verification tool |
+| [Tools/verification/scenarios/light-limit.json](../../Tools/verification/scenarios/light-limit.json) | Conversion / recovery / verification tool |
 | [Tools/verification/scenarios/plugin-rewrite-delete.json](../../Tools/verification/scenarios/plugin-rewrite-delete.json) | Conversion / recovery / verification tool |
 | [Tools/verification/scenarios/plugin-rewrite-duplicate.json](../../Tools/verification/scenarios/plugin-rewrite-duplicate.json) | Conversion / recovery / verification tool |
 | [Tools/verification/scenarios/topology-insert-refused.json](../../Tools/verification/scenarios/topology-insert-refused.json) | Conversion / recovery / verification tool |
