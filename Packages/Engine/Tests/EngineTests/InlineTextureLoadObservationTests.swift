@@ -4,197 +4,104 @@ import Metal
 import Testing
 @testable import Renderer
 
-private enum ObservationProbeError: Error { case sentinel }
+/// A clock for observations: read `n` returns `time(n)`, by default 0.25 s
+/// after the read before.
 private final class ObservationClock {
-    var reads = 0
-    var value = 0.0
+    private(set) var reads = 0
+    private let time: (Int) -> Double
+    init(_ time: @escaping (Int) -> Double = { Double($0) * 0.25 }) { self.time = time }
     func now() -> Double {
-        reads += 1
-        defer { value += 0.25 }
-        return value
+        defer { reads += 1 }
+        return time(reads)
     }
 }
+
+private typealias Stage = InlineTextureLoadObservations.Stage
+private typealias Aggregate = InlineTextureLoadObservations.Aggregate
+
+/// Laps per stage, in `Stage.allCases` order, of one load of a 3×5 RGBA8
+/// image staged two rows at a time: three strips, the last of one row.
+private let threeStripLaps = [1, 1, 1, 1, 3, 3, 3, 1]
+/// Staging for two rows of a 3-pixel RGBA8 image.
+private let twoRowStaging = 3 * 4 * 2
+
+private func laps(_ observer: InlineTextureLoadObservations) -> [Aggregate] { Stage.allCases.map { observer[$0] } }
+
+/// The expected aggregates when every lap of the stepping clock is 250 ms.
+private func steppedLaps(_ calls: [Int]) -> [Aggregate] { calls.map { Aggregate(calls: $0, milliseconds: Double($0) * 250) } }
 
 @Suite struct InlineTextureLoadObservationCPUTests {
-    @Test func nilObserverRunsBodiesOnceAndPreservesErrorWithoutClockWork() throws {
-        let clock = ObservationClock()
-        let unused = InlineTextureLoadObservations(clock: clock.now)
-        var bodies = 0
-        let result = InlineTextureLoadObservations.measure(nil, .conversion) { bodies += 1; return 17 }
-        #expect(result == 17 && bodies == 1)
-        do {
-            try InlineTextureLoadObservations.measure(nil, .completionWait) { () throws -> Void in
-                bodies += 1
-                throw ObservationProbeError.sentinel
-            }
-            Issue.record("Nil observations swallowed the original error.")
-        } catch ObservationProbeError.sentinel {}
-        #expect(bodies == 2 && clock.reads == 0 && unused.sample.stages.isEmpty)
-        #expect(ResourceTextureLoadTimings().inlineObservations == nil)
-    }
-
-    @Test func fakeClockRecordsSuccessFailureAndPartialPriorStages() throws {
-        let clock = ObservationClock()
+    @Test func lapsCountFromThePreviousMarkAndStartResetsIt() {
+        let times = [10.0, 10.5, 12.0, 12.25, 20.0, 20.125]
+        let clock = ObservationClock { times[$0] }
         let observer = InlineTextureLoadObservations(clock: clock.now)
-        let result = InlineTextureLoadObservations.measure(observer, .providerAccess) { 23 }
-        #expect(result == 23)
-        do {
-            try InlineTextureLoadObservations.measure(observer, .conversion) { () throws -> Void in
-                throw ObservationProbeError.sentinel
-            }
-            Issue.record("Observed body error was swallowed.")
-        } catch ObservationProbeError.sentinel {}
-        let sample = observer.sample
-        #expect(clock.reads == 4)
-        #expect(sample.stages[.providerAccess] == InlineTextureLoadObservations.Aggregate(calls: 1, failures: 0, milliseconds: 250))
-        #expect(sample.stages[.conversion] == InlineTextureLoadObservations.Aggregate(calls: 1, failures: 1, milliseconds: 250))
-        #expect(sample.stages[.encodeSubmit] == nil && sample.convertedRows == 0)
-    }
-
-    @Test func repeatedStagesStayAggregatedWithoutPerStripRecords() {
-        let clock = ObservationClock()
-        let observer = InlineTextureLoadObservations(clock: clock.now)
-        for _ in 0..<64 {
-            InlineTextureLoadObservations.measure(observer, .conversion) {}
-            observer.recordConvertedRows(2)
-        }
-        observer.recordMipmapEncode()
-        let sample = observer.sample
-        #expect(sample.stages.count == 1 && sample.stages.count <= InlineTextureLoadObservations.Stage.allCases.count)
-        #expect(sample.stages[.conversion] == InlineTextureLoadObservations.Aggregate(calls: 64, failures: 0, milliseconds: 16_000))
-        #expect(sample.convertedRows == 128 && sample.mipmapEncodes == 1 && clock.reads == 128)
-    }
-
-    @Test func permitObservationReusesSuppliedDurationWithoutObserverClock() {
-        let clock = ObservationClock()
-        let observer = InlineTextureLoadObservations(clock: clock.now)
-        observer.recordPermitWait(seconds: 0.125)
-        observer.recordPermitWait(seconds: 0.25)
-        #expect(observer.sample.stages[.permitWait] == InlineTextureLoadObservations.Aggregate(calls: 2, failures: 0, milliseconds: 375))
-        #expect(clock.reads == 0 && observer.sample.mainThreadBypasses == 0)
-    }
-
-    @Test @MainActor func mainThreadBypassIsDistinctAndKeepsThrownError() throws {
-        try #require(Thread.isMainThread)
-        let clock = ObservationClock()
-        let observer = InlineTextureLoadObservations(clock: clock.now)
-        let permits = UploadPermits(limit: 1)
-        let result = permits.withPermit(observations: observer) { 7 }
-        do {
-            try permits.withPermit(observations: observer) { () throws -> Void in
-                throw ObservationProbeError.sentinel
-            }
-            Issue.record("Main-thread permit bypass swallowed an error.")
-        } catch ObservationProbeError.sentinel {}
-        #expect(result == 7 && observer.sample.mainThreadBypasses == 2)
-        #expect(observer.sample.stages[.permitWait] == nil && clock.reads == 0)
-        #expect(permits.resetStats().mainThreadLoads == 2)
-    }
-
-    @Test func workerPermitObservationsKeepReleaseAfterError() async {
-        // The observer is created/used on one caller thread, never shared.
-        let result = await onOwnThread { () -> (Bool, Int, InlineTextureLoadObservations.Sample) in
-            let clock = ObservationClock()
-            let observer = InlineTextureLoadObservations(clock: clock.now)
-            let permits = UploadPermits(limit: 1)
-            var originalError = false
-            do {
-                try permits.withPermit(observations: observer) { () throws -> Void in
-                    throw ObservationProbeError.sentinel
-                }
-            } catch ObservationProbeError.sentinel { originalError = true }
-            catch {}
-            // A leaked first permit blocks this second call; the future frozen
-            // test runner needs an outer bound, as for existing permit tests.
-            let second = permits.withPermit(observations: observer) { 11 }
-            return (originalError && second == 11 && !Thread.isMainThread, clock.reads, observer.sample)
-        }
-        #expect(result.0 && result.1 == 0)
-        #expect(result.2.mainThreadBypasses == 0)
-        #expect(result.2.stages[.permitWait]?.calls == 2 && result.2.stages[.permitWait]?.failures == 0)
-        // No duration assertion on the real semaphore clock: functional only.
+        observer.start()
+        observer.lap(.providerAccess)
+        observer.lap(.conversion)
+        observer.lap(.conversion)
+        observer.start() // The 7.75 s between loads count nowhere.
+        observer.lap(.cleanup)
+        #expect(observer[.providerAccess] == Aggregate(calls: 1, milliseconds: 500))
+        #expect(observer[.conversion] == Aggregate(calls: 2, milliseconds: 1750))
+        #expect(observer[.cleanup] == Aggregate(calls: 1, milliseconds: 125))
+        #expect(Stage.allCases.filter { observer[$0].calls > 0 } == [.providerAccess, .conversion, .cleanup])
+        #expect(observer.milliseconds == 2375 && clock.reads == 6)
     }
 }
 
-/// Native gates must not be included in a CPU grant. Event/lifecycle controls
-/// and the paired descriptor/mip control below have separate acceptance scopes.
+/// The marks in `InlineTextureLoader.texture`, with ImageIO and Metal.
 @Suite struct InlineTextureLoadObservationNativeTests {
-    private var png: Data {
-        // Existing public synthetic 1x1 PNG used by SourcePreviewAppearanceTests.
-        Data(base64Encoded: "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=")!
-    }
-
-    @Test @MainActor func uncachedDataCreatesOnceAndKeepsPublicPhaseNames() throws {
-        let device = try #require(MTLCreateSystemDefaultDevice())
-        let resources = ResourceStore(device: device)
-        let clock = ObservationClock()
-        let observer = InlineTextureLoadObservations(clock: clock.now)
-        let timings = ResourceTextureLoadTimings(inlineObservations: observer)
-        var created: [TextureHandle] = []
-        let handle = try resources.texture(data: png, key: "observed-private", cacheNew: false,
-                                          timings: timings, didCreate: { created.append($0) })
-        let publicSample = timings.sample, nested = observer.sample
-        #expect(created == [handle] && resources.lookup(key: "observed-private#true") == nil)
-        #expect(resources.texture(handle) != nil && publicSample.registeredTextures == 1)
-        #expect(publicSample.calls == ["dataCacheLookup": 1, "imageCreation": 1, "imageCacheLookup": 1,
-                                      "metalTextureLoad": 1, "registration": 1])
-        #expect(publicSample.failures.isEmpty && nested.mainThreadBypasses == 1)
-        for stage in InlineTextureLoadObservations.Stage.allCases where stage != .permitWait {
-            #expect(nested.stages[stage] == InlineTextureLoadObservations.Aggregate(calls: 1, failures: 0, milliseconds: 250))
-        }
-        #expect(nested.stages[.permitWait] == nil && nested.convertedRows == 1 && nested.mipmapEncodes == 0)
-        #expect(clock.reads == 12)
-        #expect(resources.cacheTextureIfAbsent(handle, key: "observed-private#true"))
-        #expect(resources.lookup(key: "observed-private#true") == handle)
-    }
-
-    @Test @MainActor func sharedDataAndImageCacheHitsHaveNoNestedWorkOrCreation() throws {
-        let resources = ResourceStore(device: try #require(MTLCreateSystemDefaultDevice()))
-        let prior = try resources.texture(data: png, key: "observed-warm")
-        let clock = ObservationClock()
-        let observer = InlineTextureLoadObservations(clock: clock.now)
-        let dataTimings = ResourceTextureLoadTimings(inlineObservations: observer)
-        var creations = 0
-        let warm = try resources.texture(data: Data("invalid image".utf8), key: "observed-warm",
-                                         timings: dataTimings, didCreate: { _ in creations += 1 })
-        let image = try #require(TextureIdentityCases.plain(bpc: 8, components: 4, alpha: .last,
-                                                          order: [], float: false, width: 3, height: 5))
-        let imageTimings = ResourceTextureLoadTimings(inlineObservations: observer)
-        let imageHit = try resources.texture(cgImage: image, key: "observed-warm#true",
-                                             timings: imageTimings, didCreate: { _ in creations += 1 })
-        #expect(warm == prior && imageHit == prior && creations == 0)
-        #expect(dataTimings.sample.calls == ["dataCacheLookup": 1] && dataTimings.sample.dataCacheHits == 1)
-        #expect(imageTimings.sample.calls == ["imageCacheLookup": 1] && imageTimings.sample.imageCacheHits == 1)
-        #expect(observer.sample.stages.isEmpty && observer.sample.mainThreadBypasses == 0 && clock.reads == 0)
-    }
-
-    @Test @MainActor func shortLastStripCountsConversionSubmitCompletionAndFinalMipOnce() throws {
-        let device = try #require(MTLCreateSystemDefaultDevice())
-        let resources = ResourceStore(device: device)
-        let image = try #require(TextureIdentityCases.plain(bpc: 8, components: 4, alpha: .last,
-                                                          order: [], float: false, width: 3, height: 5))
-        let clock = ObservationClock()
-        let observer = InlineTextureLoadObservations(clock: clock.now)
-        var callbacks = 0
-        var status: MTLCommandBufferStatus?
-        var completedCallsAtCallback = 0
-        let texture = try InlineTextureLoader.texture(.init(cgImage: image, source: .data), srgb: true,
-            device: device, queue: resources.uploadQueue, observations: observer, stagingLimit: 3 * 4 * 2) { command in
-                callbacks += 1; status = command.status
-                completedCallsAtCallback = observer.sample.stages[.completionWait]?.calls ?? 0
+    /// One 3-strip load on a plain thread, which takes an upload permit,
+    /// laps every stage, and its texture equals a load without an observer.
+    @Test func workerThreadLoadLapsEveryStageAndMatchesANilLoad() async throws {
+        let outcome = await onOwnThread { () -> (laps: [Aggregate], reads: Int, completedAtCallback: Int, cleanedAtCallback: Int,
+                                                main: Bool, same: Bool?)? in
+            guard let device = MTLCreateSystemDefaultDevice(), let queue = device.makeCommandQueue(),
+                  let image = TextureIdentityCases.plain(bpc: 8, components: 4, alpha: .last, order: [], float: false,
+                                                         width: 3, height: 5) else { return nil }
+            let clock = ObservationClock()
+            let observer = InlineTextureLoadObservations(clock: clock.now)
+            var completedAtCallback = -1, cleanedAtCallback = -1
+            let source = InlineTextureLoader.Image(cgImage: image, source: .data)
+            let observed = try? InlineTextureLoader.texture(source, srgb: true, device: device, queue: queue, observations: observer,
+                                                            stagingLimit: twoRowStaging) { _ in
+                completedAtCallback = observer[.completionWait].calls; cleanedAtCallback = observer[.cleanup].calls
             }
-        let sample = observer.sample
-        #expect(texture.width == 3 && texture.height == 5 && texture.mipmapLevelCount == 3)
-        #expect(callbacks == 1 && status == .completed && completedCallsAtCallback == 3)
-        for stage in [InlineTextureLoadObservations.Stage.conversion, .encodeSubmit, .completionWait] {
-            #expect(sample.stages[stage] == InlineTextureLoadObservations.Aggregate(calls: 3, failures: 0, milliseconds: 750))
+            let plain = try? InlineTextureLoader.texture(source, srgb: true, device: device, queue: queue, stagingLimit: twoRowStaging)
+            var same: Bool?
+            if let observed, let plain,
+               let a = try? TextureIdentityRecord(observed, device: device, queue: queue),
+               let b = try? TextureIdentityRecord(plain, device: device, queue: queue) { same = a == b && a.levels.count == 3 }
+            return (laps(observer), clock.reads, completedAtCallback, cleanedAtCallback, Thread.isMainThread, same)
         }
-        #expect(sample.stages[.providerAccess]?.calls == 1 && sample.stages[.stagingAllocation]?.calls == 1)
-        #expect(sample.convertedRows == 5 && sample.mipmapEncodes == 1 && sample.mainThreadBypasses == 1)
-        #expect(clock.reads == 24)
+        let result = try #require(outcome, "no Metal device, queue or image")
+        #expect(!result.main)
+        #expect(result.laps == steppedLaps(threeStripLaps) && result.reads == 15)
+        // `didComplete` runs after the last completion lap, inside cleanup.
+        #expect(result.completedAtCallback == 3 && result.cleanedAtCallback == 0)
+        #expect(result.same == true)
     }
 
-    /// Exact paired readback for two conversions only; not an overhead benchmark.
+    /// A layout the loader rejects throws before the first lap.
+    @Test func rejectedLayoutThrowsBeforeTheFirstLap() throws {
+        let device = try #require(MTLCreateSystemDefaultDevice()), queue = try #require(device.makeCommandQueue())
+        let unsupported = try #require(TextureIdentityCases.plain(bpc: 8, components: 3, alpha: .none, order: [], float: false,
+                                                                width: 3, height: 5))
+        let clock = ObservationClock()
+        let observer = InlineTextureLoadObservations(clock: clock.now)
+        do {
+            _ = try InlineTextureLoader.texture(.init(cgImage: unsupported, source: .data), srgb: true, device: device,
+                                                queue: queue, observations: observer)
+            Issue.record("Unsupported data-image layout unexpectedly loaded.")
+        } catch InlineTextureLoader.Failure.unsupportedLayout(let detail) {
+            #expect(detail == InlineTextureLoader.describe(unsupported))
+        }
+        #expect(laps(observer) == steppedLaps(Array(repeating: 0, count: Stage.allCases.count)) && clock.reads == 1)
+    }
+
+    /// Exact paired readback: the copy and ImageIO channel-swap conversions,
+    /// both colour flags and a short last strip, each loaded without and with
+    /// an observer on the main thread (no permit). Not a cost measurement.
     @Test @MainActor func observedAndNilTexturesMatchEveryMipForCopyAndSwap() throws {
         try #require(Thread.isMainThread)
         let device = try #require(MTLCreateSystemDefaultDevice())
@@ -202,91 +109,46 @@ private final class ObservationClock {
         let queue = resources.uploadQueue
         let plain = try #require(TextureIdentityCases.plain(bpc: 8, components: 4, alpha: .last,
                                                           order: [], float: false, width: 3, height: 5))
-        try #require(plain.bytesPerRow == 15) // Twelve logical bytes plus three padding bytes.
+        try #require(plain.bytesPerRow == 15) // Twelve bytes of pixels plus three of padding.
         let encoded = try #require(TextureIdentityCases.encode(plain, as: "public.png"))
         let decoded = try #require(InlineTextureLoader.image(data: encoded))
         try #require(decoded.source == .imageIO(type: "public.png"))
         let fixtures: [(image: InlineTextureLoader.Image, conversion: InlineTextureLoader.Conversion)] = [
             (.init(cgImage: plain, source: .data), .copy), (decoded, .swapRedBlue),
         ]
-        // Retain the encoder source, encoded bytes and both decoded/provider owners,
-        // including on a thrown load/readback. Never access provider.data here.
-        defer { withExtendedLifetime((plain, encoded, fixtures, resources)) {} }
         var uploads = 0
         for fixture in fixtures {
             let image = fixture.image.cgImage
-            let provider = try #require(image.dataProvider)
             try #require(image.width == 3 && image.height == 5 && image.bitsPerComponent == 8 && image.bitsPerPixel == 32)
             for srgb in [false, true] {
                 let layout = try #require(InlineTextureLoader.layout(for: fixture.image, srgb: srgb))
                 try #require(layout.conversion == fixture.conversion && layout.bytesPerPixel == 4)
-                let stagingLimit = image.width * layout.bytesPerPixel * 2
-                var nilCallbacks = 0, observedCallbacks = 0, completedCallsAtCallback = 0
+                var nilCallbacks = 0, observedCallbacks = 0, completedAtCallback = 0
                 var nilStatus: MTLCommandBufferStatus?, observedStatus: MTLCommandBufferStatus?
                 var nilLabel: String?, observedLabel: String?
                 let nilTexture = try InlineTextureLoader.texture(fixture.image, srgb: srgb, device: device,
-                    queue: queue, observations: nil, stagingLimit: stagingLimit) { command in
+                    queue: queue, observations: nil, stagingLimit: twoRowStaging) { command in
                         nilCallbacks += 1; nilStatus = command.status; nilLabel = command.label
                     }
                 uploads += 1
                 let clock = ObservationClock()
                 let observer = InlineTextureLoadObservations(clock: clock.now)
                 let observedTexture = try InlineTextureLoader.texture(fixture.image, srgb: srgb, device: device,
-                    queue: queue, observations: observer, stagingLimit: stagingLimit) { command in
+                    queue: queue, observations: observer, stagingLimit: twoRowStaging) { command in
                         observedCallbacks += 1; observedStatus = command.status; observedLabel = command.label
-                        completedCallsAtCallback = observer.sample.stages[.completionWait]?.calls ?? 0
+                        completedAtCallback = observer[.completionWait].calls
                     }
                 uploads += 1
-                let records = try withExtendedLifetime((fixture.image, provider, nilTexture, observedTexture)) {
-                    () throws -> (TextureIdentityRecord, TextureIdentityRecord) in
-                    let baseline = try TextureIdentityRecord(nilTexture, device: device, queue: queue)
-                    let observed = try TextureIdentityRecord(observedTexture, device: device, queue: queue)
-                    return (baseline, observed)
-                }
-                #expect(records.0.descriptor == records.1.descriptor)
-                #expect(records.0.levels == records.1.levels)
-                #expect(records.0.levels.map(\.count) == [60, 8, 4]) // 3x5, 1x2, 1x1 at four bytes per pixel.
+                let baseline = try TextureIdentityRecord(nilTexture, device: device, queue: queue)
+                let observed = try TextureIdentityRecord(observedTexture, device: device, queue: queue)
+                #expect(baseline.descriptor == observed.descriptor)
+                #expect(baseline.levels == observed.levels)
+                #expect(baseline.levels.map(\.count) == [60, 8, 4]) // 3×5, 1×2, 1×1 at four bytes per pixel.
                 #expect(nilCallbacks == 1 && observedCallbacks == 1 && nilStatus == .completed && observedStatus == .completed)
-                #expect(nilLabel == "InlineTextureLoader strip 3/3" && observedLabel == nilLabel && completedCallsAtCallback == 3)
-                let sample = observer.sample
-                for stage in [InlineTextureLoadObservations.Stage.destinationAllocation, .providerAccess, .stagingAllocation] {
-                    #expect(sample.stages[stage] == InlineTextureLoadObservations.Aggregate(calls: 1, failures: 0, milliseconds: 250))
-                }
-                for stage in [InlineTextureLoadObservations.Stage.conversion, .encodeSubmit, .completionWait] {
-                    #expect(sample.stages[stage] == InlineTextureLoadObservations.Aggregate(calls: 3, failures: 0, milliseconds: 750))
-                }
-                #expect(sample.stages.count == 6 && sample.stages[.permitWait] == nil && sample.mainThreadBypasses == 1)
-                #expect(sample.convertedRows == 5 && sample.mipmapEncodes == 1 && clock.reads == 24)
+                #expect(nilLabel == "InlineTextureLoader strip 3/3" && observedLabel == nilLabel && completedAtCallback == 3)
+                #expect(laps(observer) == steppedLaps(threeStripLaps) && clock.reads == 15)
             }
         }
         #expect(uploads == 8)
-    }
-
-    @Test @MainActor func originalPreUploadErrorsKeepPartialPhasesAndNeverRegister() throws {
-        let resources = ResourceStore(device: try #require(MTLCreateSystemDefaultDevice()))
-        let clock = ObservationClock()
-        let observer = InlineTextureLoadObservations(clock: clock.now)
-        let timings = ResourceTextureLoadTimings(inlineObservations: observer)
-        var creations = 0
-        do {
-            _ = try resources.texture(data: Data("invalid image".utf8), key: "observed-invalid", timings: timings,
-                                      didCreate: { _ in creations += 1 })
-            Issue.record("Invalid image unexpectedly loaded.")
-        } catch ResourceError.imageDecode(let key) { #expect(key == "observed-invalid") }
-        #expect(timings.sample.failures == ["imageCreation": 1] && observer.sample.stages.isEmpty)
-        let unsupported = try #require(TextureIdentityCases.plain(bpc: 8, components: 3, alpha: .none,
-                                                                order: [], float: false, width: 3, height: 5))
-        do {
-            _ = try resources.texture(cgImage: unsupported, key: "observed-layout", timings: timings,
-                                      didCreate: { _ in creations += 1 })
-            Issue.record("Unsupported data-image layout unexpectedly loaded.")
-        } catch InlineTextureLoader.Failure.unsupportedLayout(let detail) {
-            #expect(detail == InlineTextureLoader.describe(unsupported))
-        }
-        #expect(timings.sample.failures == ["imageCreation": 1, "metalTextureLoad": 1])
-        #expect(observer.sample.stages[.destinationAllocation] == InlineTextureLoadObservations.Aggregate(calls: 1, failures: 1, milliseconds: 250))
-        #expect(observer.sample.stages.count == 1 && observer.sample.mainThreadBypasses == 0)
-        #expect(clock.reads == 2 && creations == 0 && timings.sample.registeredTextures == 0)
-        #expect(resources.lookup(key: "observed-invalid#true") == nil && resources.lookup(key: "observed-layout") == nil)
     }
 }

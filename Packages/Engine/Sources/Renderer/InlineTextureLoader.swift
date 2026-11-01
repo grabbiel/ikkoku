@@ -40,19 +40,17 @@ final class UploadPermits: @unchecked Sendable {
     init(limit: Int) { semaphore = DispatchSemaphore(value: limit) }
 
     /// Runs `body` holding a permit, or at once without one on the main thread.
-    func withPermit<T>(observations: InlineTextureLoadObservations? = nil,
-                       _ body: () throws -> T) rethrows -> T {
+    func withPermit<T>(_ body: () throws -> T) rethrows -> T {
         if Thread.isMainThread {
             lock.lock(); stats.mainThreadLoads += 1; lock.unlock()
-            observations?.recordMainThreadBypass()
             return try body()
         }
-        acquire(observations: observations)
+        acquire()
         defer { release() }
         return try body()
     }
 
-    func acquire(observations: InlineTextureLoadObservations? = nil) {
+    func acquire() {
         let start = DispatchTime.now().uptimeNanoseconds
         semaphore.wait()
         let waited = Double(DispatchTime.now().uptimeNanoseconds - start) / 1e9
@@ -61,7 +59,6 @@ final class UploadPermits: @unchecked Sendable {
         stats.mostHolders = max(stats.mostHolders, holders)
         stats.longestWait = max(stats.longestWait, waited)
         lock.unlock()
-        observations?.recordPermitWait(seconds: waited)
     }
 
     func release() {
@@ -272,79 +269,68 @@ enum InlineTextureLoader {
     /// no caller ever holds a texture the GPU is still writing. `didComplete`
     /// sees that command buffer as the texture is handed out, and a small
     /// `stagingLimit` forces strips on small images (tests only).
+    /// `observations` times each stage of the load (tests and measurements);
+    /// without one, each mark below is one predictable branch past it.
     static func texture(_ source: Image, srgb: Bool, device: any MTLDevice, queue: any MTLCommandQueue,
                         observations: InlineTextureLoadObservations? = nil,
                         stagingLimit: Int = stagingLimit,
                         didComplete: ((any MTLCommandBuffer) -> Void)? = nil) throws -> any MTLTexture {
+        observations?.start()
         let image = source.cgImage
-        let destination: (layout: Layout, width: Int, height: Int, rowBytes: Int, texture: any MTLTexture) =
-            try InlineTextureLoadObservations.measure(observations, .destinationAllocation) {
-                guard let layout = layout(for: source, srgb: srgb) else {
-                    throw Failure.unsupportedLayout(describe(image))
-                }
-                let width = image.width, height = image.height, rowBytes = width * layout.bytesPerPixel
-                let descriptor = MTLTextureDescriptor.texture2DDescriptor(pixelFormat: layout.pixelFormat, width: width, height: height, mipmapped: false)
-                descriptor.mipmapLevelCount = mipLevelCount(width: width, height: height)
-                descriptor.usage = .shaderRead
-                descriptor.storageMode = .private
-                guard let texture = device.makeTexture(descriptor: descriptor) else { throw Failure.gpu("texture \(describe(image))") }
-                return (layout, width, height, rowBytes, texture)
-            }
-        let (layout, width, height, rowBytes, texture) = destination
+        guard let layout = layout(for: source, srgb: srgb) else {
+            throw Failure.unsupportedLayout(describe(image))
+        }
+        let width = image.width, height = image.height, rowBytes = width * layout.bytesPerPixel
+        let descriptor = MTLTextureDescriptor.texture2DDescriptor(pixelFormat: layout.pixelFormat, width: width, height: height, mipmapped: false)
+        descriptor.mipmapLevelCount = mipLevelCount(width: width, height: height)
+        descriptor.usage = .shaderRead
+        descriptor.storageMode = .private
+        guard let texture = device.makeTexture(descriptor: descriptor) else { throw Failure.gpu("texture \(describe(image))") }
+        observations?.lap(.destinationAllocation)
         // At most `UploadPermits.limit` loads hold decoded pixels and staging
         // at once, plus one from the main thread, which never waits for a permit.
-        try UploadPermits.shared.withPermit(observations: observations) { try autoreleasepool {
-            let data = try InlineTextureLoadObservations.measure(observations, .providerAccess) {
-                guard let data = image.dataProvider?.data else { throw Failure.decode(describe(image)) }
-                return data
-            }
+        try UploadPermits.shared.withPermit { try autoreleasepool {
+            observations?.lap(.permitWait)
+            guard let data = image.dataProvider?.data else { throw Failure.decode(describe(image)) }
+            observations?.lap(.providerAccess)
             try withExtendedLifetime(data) {
                 guard let pixels = CFDataGetBytePtr(data),
                       CFDataGetLength(data) >= image.bytesPerRow * (height - 1) + width * (image.bitsPerPixel / 8) else {
                     throw Failure.decode(describe(image))
                 }
                 let stripRows = max(1, min(height, stagingLimit / rowBytes))
-                let staging = try InlineTextureLoadObservations.measure(observations, .stagingAllocation) {
-                    guard let staging = device.makeBuffer(length: stripRows * rowBytes, options: [.storageModeShared, .cpuCacheModeWriteCombined]) else {
-                        throw Failure.gpu("staging buffer of \(stripRows * rowBytes) bytes")
-                    }
-                    return staging
+                guard let staging = device.makeBuffer(length: stripRows * rowBytes, options: [.storageModeShared, .cpuCacheModeWriteCombined]) else {
+                    throw Failure.gpu("staging buffer of \(stripRows * rowBytes) bytes")
                 }
+                observations?.lap(.stagingAllocation)
                 let strips = (height + stripRows - 1) / stripRows
                 for strip in 0..<strips {
                     let top = strip * stripRows, rows = min(stripRows, height - top), last = strip == strips - 1
-                    try InlineTextureLoadObservations.measure(observations, .conversion) {
-                        try convert(image, pixels: pixels + top * image.bytesPerRow, rows: rows, layout: layout, into: staging.contents())
+                    try convert(image, pixels: pixels + top * image.bytesPerRow, rows: rows, layout: layout, into: staging.contents())
+                    observations?.lap(.conversion)
+                    guard let command = queue.makeCommandBuffer(), let blit = command.makeBlitCommandEncoder() else {
+                        throw Failure.gpu("command buffer for \(describe(image))")
                     }
-                    observations?.recordConvertedRows(rows)
-                    let command = try InlineTextureLoadObservations.measure(observations, .encodeSubmit) {
-                        guard let command = queue.makeCommandBuffer(), let blit = command.makeBlitCommandEncoder() else {
-                            throw Failure.gpu("command buffer for \(describe(image))")
-                        }
-                        command.label = "InlineTextureLoader strip \(strip + 1)/\(strips)"
-                        blit.copy(from: staging, sourceOffset: 0, sourceBytesPerRow: rowBytes, sourceBytesPerImage: rowBytes * rows,
-                                  sourceSize: MTLSize(width: width, height: rows, depth: 1), to: texture, destinationSlice: 0,
-                                  destinationLevel: 0, destinationOrigin: MTLOrigin(x: 0, y: top, z: 0))
-                        if last && texture.mipmapLevelCount > 1 {
-                            blit.generateMipmaps(for: texture)
-                            observations?.recordMipmapEncode()
-                        }
-                        blit.endEncoding()
-                        command.commit()
-                        return command
-                    }
+                    command.label = "InlineTextureLoader strip \(strip + 1)/\(strips)"
+                    blit.copy(from: staging, sourceOffset: 0, sourceBytesPerRow: rowBytes, sourceBytesPerImage: rowBytes * rows,
+                              sourceSize: MTLSize(width: width, height: rows, depth: 1), to: texture, destinationSlice: 0,
+                              destinationLevel: 0, destinationOrigin: MTLOrigin(x: 0, y: top, z: 0))
+                    if last && texture.mipmapLevelCount > 1 { blit.generateMipmaps(for: texture) }
+                    blit.endEncoding()
+                    command.commit()
+                    observations?.lap(.encodeSubmit)
                     // The next strip overwrites the staging buffer only after
                     // the GPU has read this one.
-                    try InlineTextureLoadObservations.measure(observations, .completionWait) {
-                        command.waitUntilCompleted()
-                        if command.status != .completed {
-                            throw Failure.gpu("\(describe(image)): \(command.error.map { "\($0)" } ?? "status \(command.status.rawValue)")")
-                        }
+                    command.waitUntilCompleted()
+                    if command.status != .completed {
+                        throw Failure.gpu("\(describe(image)): \(command.error.map { "\($0)" } ?? "status \(command.status.rawValue)")")
                     }
+                    observations?.lap(.completionWait)
                     if last { didComplete?(command) }
                 }
             }
         } }
+        observations?.lap(.cleanup)
         return texture
     }
 

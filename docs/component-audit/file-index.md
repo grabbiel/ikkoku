@@ -23,7 +23,7 @@ branch was tested or every asset matches the original game. Feature status,
 specific comments and pending tasks are in the linked reports. Shared behavior
 may be discussed in more than one report; one primary owner is listed here.
 
-**1045 files indexed; 1045 assigned; 0 unassigned.**
+**1047 files indexed; 1047 assigned; 0 unassigned.**
 
 Counts include the website and clothes-group additions listed below. Runtime and
 test totals include their specialized role descriptions; this is inventory
@@ -34,7 +34,7 @@ bookkeeping, not a new full source audit.
 | [App / gameplay / plugins](app-gameplay-and-plugins.md) | 110 |
 | [Character / Maker / mods](character-and-mods.md) | 132 |
 | [Studio / IK / animation](studio.md) | 235 |
-| [Renderer / foundation / assets](renderer-and-foundation.md) | 358 |
+| [Renderer / foundation / assets](renderer-and-foundation.md) | 360 |
 | [Toolchain / verification / historical docs](toolchain-and-verification.md) | 210 |
 
 | File role | Files |
@@ -45,8 +45,8 @@ bookkeeping, not a new full source audit.
 | Documentation / historical evidence | 65 |
 | Generated asset / catalog / fixture | 224 |
 | Reference host / controlled fixture | 36 |
-| Runtime / shared shader declaration | 236 |
-| Test / validation | 220 |
+| Runtime / shared shader declaration | 237 |
+| Test / validation | 221 |
 | Public synthetic body/face input fixture | 1 |
 
 ## App / gameplay / plugins
@@ -770,6 +770,7 @@ Feature assessment: [renderer-and-foundation.md](renderer-and-foundation.md).
 | [Packages/Engine/Sources/GPU/GPUContext.swift](../../Packages/Engine/Sources/GPU/GPUContext.swift) | Runtime / shared shader declaration |
 | [Packages/Engine/Sources/Renderer/DeformContent.swift](../../Packages/Engine/Sources/Renderer/DeformContent.swift) | Runtime / shared shader declaration |
 | [Packages/Engine/Sources/Renderer/DisplayLinkRatePolicy.swift](../../Packages/Engine/Sources/Renderer/DisplayLinkRatePolicy.swift) | Runtime / shared shader declaration |
+| [Packages/Engine/Sources/Renderer/InlineTextureLoadObservations.swift](../../Packages/Engine/Sources/Renderer/InlineTextureLoadObservations.swift) | Runtime / opt-in per-stage load times for the in-line texture loader (tests and measurements) |
 | [Packages/Engine/Sources/Renderer/InlineTextureLoader.swift](../../Packages/Engine/Sources/Renderer/InlineTextureLoader.swift) | Runtime / in-line texture decode, staging and upload with MetalKit-identical formats, mips and texels |
 | [Packages/Engine/Sources/Renderer/LatestPickQueue.swift](../../Packages/Engine/Sources/Renderer/LatestPickQueue.swift) | Runtime / shared shader declaration |
 | [Packages/Engine/Sources/Renderer/LiveStepPacer.swift](../../Packages/Engine/Sources/Renderer/LiveStepPacer.swift) | Runtime / shared shader declaration |
@@ -835,6 +836,7 @@ Feature assessment: [renderer-and-foundation.md](renderer-and-foundation.md).
 | [Packages/Engine/Tests/EngineTests/OriginalFrameNormalTests.swift](../../Packages/Engine/Tests/EngineTests/OriginalFrameNormalTests.swift) | Test / validation |
 | [Packages/Engine/Tests/EngineTests/PickTests.swift](../../Packages/Engine/Tests/EngineTests/PickTests.swift) | Test / validation |
 | [Packages/Engine/Tests/EngineTests/InteractiveFrameTests.swift](../../Packages/Engine/Tests/EngineTests/InteractiveFrameTests.swift) | Test / validation |
+| [Packages/Engine/Tests/EngineTests/InlineTextureLoadObservationTests.swift](../../Packages/Engine/Tests/EngineTests/InlineTextureLoadObservationTests.swift) | Test / texture-load stage laps, and observed loads equal unobserved ones in every mip |
 | [Packages/Engine/Tests/EngineTests/InlineTextureLoaderCorpusTests.swift](../../Packages/Engine/Tests/EngineTests/InlineTextureLoaderCorpusTests.swift) | Test / strict identity with MetalKit for every texture the suite and the app load |
 | [Packages/Engine/Tests/EngineTests/InlineTextureLoaderIdentityTests.swift](../../Packages/Engine/Tests/EngineTests/InlineTextureLoaderIdentityTests.swift) | Test / identity with MetalKit for every image layout, encoded file and decoder fixture; texture-container rejection |
 | [Packages/Engine/Tests/EngineTests/ResourceStoreUploadTests.swift](../../Packages/Engine/Tests/EngineTests/ResourceStoreUploadTests.swift) | Test / upload queue registry, completion before handout, call order and many-store saturation |

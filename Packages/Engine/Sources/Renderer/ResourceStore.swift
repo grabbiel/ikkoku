@@ -26,12 +26,7 @@ public final class ResourceTextureLoadTimings {
     private var dataRequests = 0, encodedBytesPresented = 0
     private var dataCacheHits = 0, dataCacheMisses = 0, imageCacheHits = 0, imageCacheMisses = 0
     private var registeredTextures = 0
-    // Internal diagnostic entry only. Public Sample and its five phases stay unchanged.
-    let inlineObservations: InlineTextureLoadObservations?
-    public init() { inlineObservations = nil }
-    init(inlineObservations: InlineTextureLoadObservations) {
-        self.inlineObservations = inlineObservations
-    }
+    public init() {}
     public var sample: Sample {
         Sample(milliseconds: milliseconds, calls: calls, failures: failures,
             dataRequests: dataRequests, encodedBytesPresented: encodedBytesPresented,
@@ -508,12 +503,11 @@ public final class ResourceStore: @unchecked Sendable {
     /// Every texture made from an image goes through here, on the calling
     /// thread (`InlineTextureLoader`). An image ImageIO decoded from a GPU
     /// texture container is rejected by name, whichever entry point it took.
-    func makeTexture(_ image: InlineTextureLoader.Image, srgb: Bool, name: String,
-                     observations: InlineTextureLoadObservations? = nil) throws -> any MTLTexture {
+    func makeTexture(_ image: InlineTextureLoader.Image, srgb: Bool, name: String) throws -> any MTLTexture {
         if case .imageIO(let type) = image.source, let container = InlineTextureLoader.container(ofType: type) {
             throw ResourceError.unsupportedTextureContainer(container, name)
         }
-        return try InlineTextureLoader.texture(image, srgb: srgb, device: device, queue: uploadQueue, observations: observations)
+        return try InlineTextureLoader.texture(image, srgb: srgb, device: device, queue: uploadQueue)
     }
 
     public func texture(data: Data, key: String, srgb: Bool = true, cacheNew: Bool = true,
@@ -548,9 +542,7 @@ public final class ResourceStore: @unchecked Sendable {
         let cached = ResourceTextureLoadTimings.measure(timings, .imageCacheLookup) { lookup(key: key) }
         timings?.recordLookup(image: true, hit: cached != nil)
         if let cached { return cached }
-        let t = try ResourceTextureLoadTimings.measure(timings, .metalTextureLoad) {
-            try makeTexture(image, srgb: srgb, name: key, observations: timings?.inlineObservations)
-        }
+        let t = try ResourceTextureLoadTimings.measure(timings, .metalTextureLoad) { try makeTexture(image, srgb: srgb, name: key) }
         t.label = key
         let handle = ResourceTextureLoadTimings.measure(timings, .registration) {
             register(texture: t, key: cacheNew ? key : nil)

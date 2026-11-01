@@ -1,73 +1,66 @@
 import Foundation
 
-/// Private diagnostic proposal: one synchronous caller owns this observer.
-/// Never share it across callers or retain it in a store/queue/Metal command.
-/// Children sit inside metalTextureLoad; do not add them to that parent again.
-/// Cleanup, pointer/span validation and observer overhead remain unassigned.
-/// Durations are elapsed call boundaries, not CPU decode or GPU execution time.
+/// Opt-in stage times of `InlineTextureLoader.texture`, for tests and
+/// measurements; nothing in the app sets one. One caller owns it and uses it
+/// on the loading thread, one load at a time, and may reuse it across loads to
+/// sum them.
+///
+/// The loader calls `start()` as a load begins and `lap(_:)` as each stage
+/// ends. A lap adds the time since the previous mark to its stage, so the
+/// stages of one load add up to the whole call, cleanup included. Without an
+/// observer, every mark is one predictable branch past it: no clock read,
+/// call, lock or allocation. Times are wall time between marks, not CPU
+/// decode or GPU execution time alone. A load that throws keeps the laps it
+/// finished.
 final class InlineTextureLoadObservations {
-    enum Stage: CaseIterable, Hashable, Sendable {
-        case destinationAllocation, permitWait, providerAccess, stagingAllocation
-        case conversion, encodeSubmit, completionWait
-    }
-    struct Aggregate: Equatable, Sendable {
-        var calls = 0
-        var failures = 0
-        var milliseconds = 0.0
-    }
-    struct Sample: Equatable, Sendable {
-        let stages: [Stage: Aggregate]
-        let mainThreadBypasses: Int
-        let convertedRows: Int
-        let mipmapEncodes: Int
+    enum Stage: Int, CaseIterable, Sendable {
+        /// Layout choice, descriptor and texture allocation.
+        case destinationAllocation
+        /// Waiting for an upload permit (no wait on the main thread), and the
+        /// autorelease pool's push.
+        case permitWait
+        /// The image's provider data: ImageIO decodes here, then copies.
+        case providerAccess
+        /// The pixel-length check and the staging buffer.
+        case stagingAllocation
+        /// Per strip: converting into staging.
+        case conversion
+        /// Per strip: command buffer, blit (with the mips on the last strip)
+        /// and commit.
+        case encodeSubmit
+        /// Per strip: waiting for the GPU and checking the status.
+        case completionWait
+        /// After the last strip: `didComplete`, then releasing the decoded
+        /// pixels, the staging buffer, the autorelease pool and the permit.
+        case cleanup
     }
 
-    // Fixed stage vocabulary; no per-load/per-strip event arrays or labels.
-    private var stages: [Stage: Aggregate] = [:]
-    private var mainThreadBypasses = 0
-    private var convertedRows = 0
-    private var mipmapEncodes = 0
+    struct Aggregate: Equatable, Sendable {
+        var calls = 0
+        var milliseconds = 0.0
+    }
+
+    private var aggregates = [Aggregate](repeating: Aggregate(), count: Stage.allCases.count)
+    private var mark = 0.0
     private let clock: () -> Double
 
     init(clock: @escaping () -> Double = { ProcessInfo.processInfo.systemUptime }) {
         self.clock = clock
     }
 
-    var sample: Sample {
-        Sample(stages: stages, mainThreadBypasses: mainThreadBypasses,
-               convertedRows: convertedRows, mipmapEncodes: mipmapEncodes)
-    }
+    subscript(stage: Stage) -> Aggregate { aggregates[stage.rawValue] }
 
-    static func measure<T>(_ observer: InlineTextureLoadObservations?, _ stage: Stage,
-                           _ body: () throws -> T) rethrows -> T {
-        // Nil means no new clock, counters, labels or diagnostic allocation.
-        // This is a source property, not a measured zero-overhead claim.
-        guard let observer else { return try body() }
-        let start = observer.clock()
-        var succeeded = false
-        defer {
-            let elapsed = observer.clock() - start
-            observer.record(stage, seconds: elapsed, succeeded: succeeded)
-        }
-        let result = try body()
-        succeeded = true
-        return result
-    }
+    /// All stages' milliseconds together.
+    var milliseconds: Double { aggregates.reduce(0) { $0 + $1.milliseconds } }
 
-    private func record(_ stage: Stage, seconds: Double, succeeded: Bool) {
-        var aggregate = stages[stage, default: Aggregate()]
-        aggregate.calls += 1
-        if !succeeded { aggregate.failures += 1 }
-        aggregate.milliseconds += seconds * 1000
-        stages[stage] = aggregate
-    }
+    /// A load begins: the next lap counts from here, not from the last load.
+    func start() { mark = clock() }
 
-    // Reuse the existing acquire() timestamps. Do not add a second wait clock
-    // or derive one request from resettable global UploadPermits statistics.
-    func recordPermitWait(seconds: Double) {
-        record(.permitWait, seconds: seconds, succeeded: true)
+    /// `stage` ends: it gains the time since the previous mark.
+    func lap(_ stage: Stage) {
+        let now = clock()
+        aggregates[stage.rawValue].calls += 1
+        aggregates[stage.rawValue].milliseconds += (now - mark) * 1000
+        mark = now
     }
-    func recordMainThreadBypass() { mainThreadBypasses += 1 }
-    func recordConvertedRows(_ rows: Int) { convertedRows += rows }
-    func recordMipmapEncode() { mipmapEncodes += 1 }
 }
