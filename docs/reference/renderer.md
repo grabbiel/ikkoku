@@ -2315,6 +2315,27 @@ option change or performance conclusion follows. These separate receipts are
 under the sibling `jpeg-offline-2/` evidence directory; even a later spatial
 correlation would not establish causation.
 
+### Texture-load phase accounting (#290, 2026-11-01)
+
+A source-only audit of `2449b834ca7a1e779d9640428e2f78e81c1b5e78` confirms that
+`ResourceTextureLoadTimings` records elapsed API boundaries. `imageCreation`
+includes container inspection and ImageIO object creation; it does not prove
+that all decoding has finished. `metalTextureLoad` includes layout and texture
+allocation before the permit, then permit wait, provider access, staging,
+conversion, command submission, completion waits and cleanup. Neither phase
+isolates CPU decoding or GPU execution. The global permit maximum-wait statistic
+cannot attribute a particular load's wait under concurrency.
+
+The Data route records supplied bytes even on cache hits and has two lookups;
+the URL route has no collector and one lookup, while the CGImage route starts
+with the image lookup. Transaction reuse can bypass ResourceStore entirely.
+Do not sum nested phases with their parent or treat presented bytes as file I/O.
+This audit collected no timings and justifies no production change. A proposed
+optional per-call observer would need separate correctness and every-mip
+identity checks before any qualified cost comparison. The audit and seven
+source pins are retained under the private `loader-accounting-1/` directory
+alongside the preceding #290 evidence; audit hash begins `06b04152f3025da1`.
+
 ## Checked math, legacy skeletons and cameras (R4)
 
 The unchecked CoreMath helpers (`normalize`, `simd_quatf.rotation(from:to:)`,

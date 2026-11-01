@@ -961,6 +961,25 @@ yet seed the cache during initial loading. No app, source-fidelity or performanc
 benefit is established by these CPU tests; initial-load seeding and its startup
 cost remain separate work under #192.
 
+### Initial-load verifier controls (#192, 2026-11-01)
+
+At candidate source `123ac115e67b7bc5d47dc90450d648a77acfa308`, 111 isolated
+Python controls pass with zero skips, errors or failures. They check the planned
+initial-load report, seed and failure contracts; native card boundaries; PNG
+chunk sequencing and independent filter vectors; and bounded raw-file retention.
+Close/write failures charge attempted bytes without claiming a verified partial
+file hash. Expected size fields reject Boolean and floating-point values.
+
+The runner executes verified source bytes, including the shared card parser,
+without consulting local bytecode caches. All 37 pins and 12 loaded-source
+receipts match; raw and ownership exits are zero and the process group is gone.
+Earlier unexecuted verifier versions remain preserved. Evidence is under
+`.local/codex-continue-2026-10-24/rolling/maker-initial-rig-reuse/app-verifier-attempt-3/`;
+readiness hash begins `d2c81988f8cd4eb3` and raw result `8ebfb48aa85d8d45`.
+These synthetic controls validate the checker, not actual candidate/control app
+reports. Collection-adapter integration, app fidelity and startup costs remain
+separate acceptance work; no performance benefit follows.
+
 ### Per-component appearance attribution (#192)
 
 The optional owner-local collector now labels the existing base, ordered component

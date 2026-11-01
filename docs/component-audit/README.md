@@ -121,6 +121,8 @@ acceptance boundary; their old “next” steps are historical, not a live queue
   A [prospective session-replacement foundation](../reference/character/maker-assets.md#prospective-rig-session-replacement-foundation-192)
   passes 24 synthetic checks in both Debug and Release. Initial-load seeding is
   not integrated; these lifetime checks establish no performance benefit.
+  The [initial-load verifier](../reference/character/maker-assets.md#initial-load-verifier-controls-192-2026-11-01)
+  passes 111 isolated controls; actual app-pair acceptance remains separate.
   Per-component diagnostics now place about 52 ms of the tested repeat-cycle
   card-appearance work in six compositor wait/view intervals; batching across
   components remains a proposal. See the [attribution evidence](../reference/character/maker-assets.md#per-component-appearance-attribution-192).
@@ -145,6 +147,8 @@ acceptance boundary; their old “next” steps are historical, not a live queue
   and JPEG/HEIC cost issue #290 remains open. A follow-on byte-only audit passes
   68 asset-free controls but stops at an unsupported nested Exif IFD in that
   JPEG; it produces no complete structure or pixel/block correlation result.
+  A source-only [phase accounting audit](../reference/renderer.md#texture-load-phase-accounting-290-2026-11-01)
+  explains why existing intervals cannot isolate decode, conversion or upload waits.
   The [sampling investigation](../reference/renderer.md#translated-sampling-repeatability-investigation-188)
   distinguishes diagnostic controls from production behavior; reductions are
   evidence, not fixes or added material coverage. The latest controlled split
@@ -192,6 +196,10 @@ acceptance boundary; their old “next” steps are historical, not a live queue
   [Public synthetic dump-reader controls](../reference/studio/scene-editing.md#public-synthetic-dump-reader-controls-2026-11-01)
   pass 18 local Python methods after a preserved pre-discovery import failure;
   Windows/native capture and original-player lifecycle remain unaccepted.
+  Twenty additional host-lifecycle controls pass; they do not execute Windows/C#
+  or establish native capture suitability.
+  The first public native attempt stops on a compiler output-path error before
+  any observer or target runs; its failure and verified cleanup are retained.
   General plugin compatibility remains outside the supported subset.
 
 Use the linked issue/PR state for work in review, and the owning reference for
