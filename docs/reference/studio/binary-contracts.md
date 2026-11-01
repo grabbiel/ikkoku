@@ -155,8 +155,9 @@ remain separate and are not substitutes for those source adapters.
 - Limits of 256 MiB per input, 1 MiB per string, 100,000 objects per scene or
   entries per collection, and 200 nesting levels (roots are level 1).
 - The level cap is one constant, `KoikatsuBinaryReader.maximumLevels` (#326).
-  The reader, the topology and insertion writers and the Python contract
-  (`studio_scene_contract.py`, `MAX_LEVELS`) all use it. A deeper scene is
+  The reader and the topology and insertion writers share it, and the Python
+  contract mirrors it (`studio_scene_contract.py`, `MAX_LEVELS`, tested at
+  200 and 201 levels). A deeper scene is
   refused with an error that names the cap: "objects nested more than 200
   levels deep (Ikkoku reads at most 200)". Before #326 the reader stopped at
   65 levels, and its message said "hierarchy depth exceeds 64".
