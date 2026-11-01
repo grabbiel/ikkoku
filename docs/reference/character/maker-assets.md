@@ -1114,8 +1114,9 @@ misses).
   when there is no card or no Maker library, or when card asset selection
   throws. Before, every import decoded the full reference model (nine files,
   32.16 MB) and then discarded it whenever selection succeeded. The reference
-  manifest gate from `SourceAvatar.load` still runs before selection, so an
-  unsupported manifest still fails the import the same way.
+  manifest gate still runs before selection, so an unsupported manifest still
+  fails the import the same way. Both loads call the one shared
+  `SourceAvatarManifest.validated()`.
 - **Full-ledger guard.** `SourceMakerRigReuse.seedingInput(for:entries:)`
   returns no input when the live ledger cannot admit the card's rig files,
   counted as an upper bound, or when its snapshot budget is spent. Reimporting
@@ -1137,7 +1138,7 @@ import whose selection succeeds. Reference parts the card keeps are still decode
 validated by the selected preparation. Failure paths still load the full
 reference model.
 
-**Tests.** Six new Engine tests: three from the Codex commits plus three new
+**Tests.** Seven new Engine tests: three from the Codex commits plus four new
 ones.
 
 - Initial-seed equivalence with nil-input geometry and nine-of-ten first-head
@@ -1161,8 +1162,10 @@ ones.
   import seeds again.
 - `sourceRigReplacementSeedingInputDeclinesSeedsTheLiveLedgerCannotAdmit`, a
   synthetic ledger test with foreign-ledger and spent-snapshot cases.
+- `sourceAvatarManifestGateAcceptsNormalKindsAndRejectsOtherSchemasKindsAndSexes`,
+  a synthetic test of the shared manifest gate.
 
-Mutation controls fail all three new tests. The two controls are: load the
+Mutation controls fail the three new import and ledger tests. The two controls are: load the
 reference before selection, and let the guard always allow the seed.
 
 The full strict Engine suite passes (1,114 Engine tests in 14 suites plus 21
