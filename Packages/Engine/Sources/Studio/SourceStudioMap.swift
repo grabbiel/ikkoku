@@ -317,7 +317,7 @@ public final class SourceStudioMapAsset: @unchecked Sendable {
     }
 
     /// Reads, validates and registers a converted map. Blocking: file reads,
-    /// SHA-256 checks, BC uploads, PNG decodes and MetalKit texture loads. Run
+    /// SHA-256 checks, BC uploads, PNG decodes and texture uploads. Run
     /// it on a GCD worker, never on the main thread or the Swift concurrency
     /// pool. A failure releases everything it registered. `imageSource` is
     /// read once here (default: the environment's measurement switch).
@@ -345,7 +345,7 @@ public final class SourceStudioMapAsset: @unchecked Sendable {
             let directory = url.deletingLastPathComponent()
             /// Private (uncached) registration of one glTF image: the asset owns it.
             /// Its BC blocks when the converter wrote them (sampled as `srgb`
-            /// asks, like the PNG), else the PNG decoded by MetalKit. A block-only
+            /// asks, like the PNG), else the PNG through `texture(data:)`. A block-only
             /// image (slice 4: `image/x-ikkoku-bc*`, no PNG) is its BC file,
             /// already read by the glTF loader through its uri; the measurement
             /// switch cannot decode it and refuses it by name.

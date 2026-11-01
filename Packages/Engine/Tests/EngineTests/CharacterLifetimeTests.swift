@@ -20,8 +20,9 @@ private let bundledAssets = URL(fileURLWithPath: #filePath).deletingLastPathComp
 
 /// A copy of the bundled female body and the bundled garments that embed no
 /// image, with the bundled catalog and without `Textures/`. Building these
-/// characters therefore never calls `MTKTextureLoader`: on CI, two tests making
-/// synchronous texture loads at once stalled the whole parallel Engine suite.
+/// characters therefore loads no texture: on CI, two tests making synchronous
+/// MetalKit texture loads at once stalled the whole parallel Engine suite
+/// (texture loads have not used MetalKit since; `InlineTextureLoader`).
 /// Shared with `PickTests`.
 struct UntexturedCharacterAssets {
     static var garments: [(slot: ClothSlot, id: String)] {

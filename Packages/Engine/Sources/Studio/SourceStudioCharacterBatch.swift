@@ -26,8 +26,9 @@ import Renderer
 /// drops it (`SourceRigPreview.deinit`).
 ///
 /// GCD threads, not the Swift concurrency pool: the builds block on file
-/// reads and on each other's rig decodes, and MetalKit's synchronous
-/// texture loads must not run on the cooperative pool.
+/// reads, on each other's rig decodes and on texture uploads, and blocking
+/// work stays off the cooperative pool (`docs/reference/performance.md`,
+/// the pool rule).
 public final class SourceStudioCharacterBatch: @unchecked Sendable {
     public struct Request: Sendable {
         public let reference: SourceStudioCharacterReference

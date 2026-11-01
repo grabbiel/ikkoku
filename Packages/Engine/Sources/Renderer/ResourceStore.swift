@@ -1,6 +1,5 @@
 import Foundation
 import Metal
-import MetalKit
 import CoreGraphics
 import ImageIO
 import simd
@@ -11,8 +10,8 @@ import ShaderTypes
 
 /// Optional observations for a caller's synchronous texture-loading interval. The
 /// caller owns this collector; ResourceStore never retains or shares it.
-/// Image creation may defer decoding into MetalKit's texture load. Neither
-/// interval is a measurement of CPU decoding or GPU execution alone.
+/// Image creation may defer decoding into the texture load. Neither interval
+/// is a measurement of CPU decoding or GPU execution alone.
 public final class ResourceTextureLoadTimings {
     enum Phase: String { case dataCacheLookup, imageCreation, imageCacheLookup, metalTextureLoad, registration }
     public struct Sample: Encodable {
@@ -100,7 +99,43 @@ public final class GPUMesh: @unchecked Sendable {
     }
 }
 
-public enum ResourceError: Error { case bufferAllocation, imageDecode(String), invalidSkin(String), invalidUV(String) }
+/// The texture upload queue for each device, shared by every `ResourceStore`.
+/// The GPU driver gives a process a limited number of command queues: with a
+/// queue per store, 256 stores loading at once failed about 100 uploads with
+/// `IOGPUCommandQueueErrorDomain` 518. Uploads need no order between stores.
+/// Past the queue's 64 command buffers in flight, `makeCommandBuffer` waits
+/// for one to complete on the GPU, which needs no worker thread.
+final class UploadQueues: @unchecked Sendable {
+    static let shared = UploadQueues()
+    private let lock = NSLock()
+    private var queues: [UInt64: any MTLCommandQueue] = [:]
+
+    func queue(for device: any MTLDevice) -> any MTLCommandQueue {
+        lock.lock(); defer { lock.unlock() }
+        if let queue = queues[device.registryID] { return queue }
+        let queue = device.makeCommandQueue()!
+        queue.label = "ResourceStore texture uploads"
+        queues[device.registryID] = queue
+        return queue
+    }
+}
+
+public enum ResourceError: Error, CustomStringConvertible {
+    case bufferAllocation, imageDecode(String), invalidSkin(String), invalidUV(String)
+    /// A GPU texture container (KTX, KTX2, PVR, ASTC, DDS, ATX) and its file
+    /// or key. Textures load from images only (`InlineTextureLoader`).
+    case unsupportedTextureContainer(String, String)
+
+    public var description: String {
+        switch self {
+        case .bufferAllocation: return "Buffer allocation failed"
+        case .imageDecode(let key): return "Image decode failed: \(key)"
+        case .invalidSkin(let detail): return "Invalid skin: \(detail)"
+        case .invalidUV(let detail): return "Invalid UV: \(detail)"
+        case .unsupportedTextureContainer(let container, let path): return "\(container) texture containers are not supported: \(path)"
+        }
+    }
+}
 
 /// Checks the CPU boundary before malformed influences can reach a GPU buffer.
 struct ValidatedSkinInfluences {
@@ -151,7 +186,10 @@ public final class ResourceStore: @unchecked Sendable {
     /// them. The interactive draw shows an unchanged frame again only while
     /// this value is unchanged (R7 phase 2, item 4; `Renderer.DrawnFrame`).
     private var generationValue: UInt64 = 0
-    let textureLoader: MTKTextureLoader
+    /// Texture uploads only, never the renderer's frame queue: an upload
+    /// neither interleaves with nor waits behind frame command buffers. One
+    /// queue per device serves every store (`UploadQueues`).
+    let uploadQueue: any MTLCommandQueue
 
     public let whiteTexture: any MTLTexture
     public let blackTexture: any MTLTexture
@@ -164,7 +202,7 @@ public final class ResourceStore: @unchecked Sendable {
     public init(device: any MTLDevice) {
         self.device = device
         self.translatedPipelines = TranslatedSourcePipelineCache(device: device)
-        self.textureLoader = MTKTextureLoader(device: device)
+        self.uploadQueue = UploadQueues.shared.queue(for: device)
         whiteTexture = ResourceStore.makeSolid(device: device, rgba: [255, 255, 255, 255], label: "White")
         blackTexture = ResourceStore.makeSolid(device: device, rgba: [0, 0, 0, 0], label: "Black")
         flatNormalTexture = ResourceStore.makeSolid(device: device, rgba: [128, 128, 255, 255], label: "FlatNormal")
@@ -450,12 +488,26 @@ public final class ResourceStore: @unchecked Sendable {
     public func lookup(key: String) -> TextureHandle? { lock.lock(); defer { lock.unlock() }; return textureKeys[key] }
 
     /// Loads (or returns the cached) texture for a file. `srgb` marks colour data.
+    /// Image files only: GPU texture containers are rejected by name.
     public func texture(url: URL, srgb: Bool = true) throws -> TextureHandle {
         let key = "\(url.path)#\(srgb)"
         if let h = lookup(key: key) { return h }
-        let t = try textureLoader.newTexture(URL: url, options: [.SRGB: srgb, .generateMipmaps: true, .textureUsage: MTLTextureUsage.shaderRead.rawValue, .textureStorageMode: MTLStorageMode.private.rawValue])
+        let data = try Data(contentsOf: url, options: .mappedIfSafe)
+        if let container = InlineTextureLoader.container(of: data) { throw ResourceError.unsupportedTextureContainer(container, url.path) }
+        guard let image = InlineTextureLoader.image(data: data) else { throw ResourceError.imageDecode(url.path) }
+        let t = try makeTexture(image, srgb: srgb, name: url.path)
         t.label = url.lastPathComponent
         return register(texture: t, key: key)
+    }
+
+    /// Every texture made from an image goes through here, on the calling
+    /// thread (`InlineTextureLoader`). An image ImageIO decoded from a GPU
+    /// texture container is rejected by name, whichever entry point it took.
+    func makeTexture(_ image: InlineTextureLoader.Image, srgb: Bool, name: String) throws -> any MTLTexture {
+        if case .imageIO(let type) = image.source, let container = InlineTextureLoader.container(ofType: type) {
+            throw ResourceError.unsupportedTextureContainer(container, name)
+        }
+        return try InlineTextureLoader.texture(image, srgb: srgb, device: device, queue: uploadQueue)
     }
 
     public func texture(data: Data, key: String, srgb: Bool = true, cacheNew: Bool = true,
@@ -466,26 +518,31 @@ public final class ResourceStore: @unchecked Sendable {
         let cached = ResourceTextureLoadTimings.measure(timings, .dataCacheLookup) { lookup(key: fullKey) }
         timings?.recordLookup(image: false, hit: cached != nil)
         if let cached { return cached }
-        let cg = try ResourceTextureLoadTimings.measure(timings, .imageCreation) {
-            guard let src = CGImageSourceCreateWithData(data as CFData, nil), let cg = CGImageSourceCreateImageAtIndex(src, 0, nil) else {
-                throw ResourceError.imageDecode(key)
-            }
-            return cg
+        let image = try ResourceTextureLoadTimings.measure(timings, .imageCreation) {
+            if let container = InlineTextureLoader.container(of: data) { throw ResourceError.unsupportedTextureContainer(container, key) }
+            guard let image = InlineTextureLoader.image(data: data) else { throw ResourceError.imageDecode(key) }
+            return image
         }
-        return try texture(cgImage: cg, key: fullKey, srgb: srgb, cacheNew: cacheNew, timings: timings, didCreate: didCreate)
+        return try texture(image, key: fullKey, srgb: srgb, cacheNew: cacheNew, timings: timings, didCreate: didCreate)
     }
 
     /// Candidate loads can defer cache publication. The callback reports only a
-    /// handle registered by this call, never a shared cache hit.
+    /// handle registered by this call, never a shared cache hit. An image that
+    /// ImageIO decoded keeps its `utType` and loads as `texture(data:)` would
+    /// load its file; a crop of one loses it (`InlineTextureLoader.source(of:)`).
     public func texture(cgImage: CGImage, key: String, srgb: Bool = true, cacheNew: Bool = true,
                         timings: ResourceTextureLoadTimings? = nil,
                         didCreate: ((TextureHandle) -> Void)? = nil) throws -> TextureHandle {
+        try texture(InlineTextureLoader.Image(cgImage: cgImage, source: InlineTextureLoader.source(of: cgImage)), key: key, srgb: srgb,
+                    cacheNew: cacheNew, timings: timings, didCreate: didCreate)
+    }
+
+    func texture(_ image: InlineTextureLoader.Image, key: String, srgb: Bool, cacheNew: Bool,
+                 timings: ResourceTextureLoadTimings?, didCreate: ((TextureHandle) -> Void)?) throws -> TextureHandle {
         let cached = ResourceTextureLoadTimings.measure(timings, .imageCacheLookup) { lookup(key: key) }
         timings?.recordLookup(image: true, hit: cached != nil)
         if let cached { return cached }
-        let t = try ResourceTextureLoadTimings.measure(timings, .metalTextureLoad) {
-            try textureLoader.newTexture(cgImage: cgImage, options: [.SRGB: srgb, .generateMipmaps: true, .textureUsage: MTLTextureUsage.shaderRead.rawValue, .textureStorageMode: MTLStorageMode.private.rawValue])
-        }
+        let t = try ResourceTextureLoadTimings.measure(timings, .metalTextureLoad) { try makeTexture(image, srgb: srgb, name: key) }
         t.label = key
         let handle = ResourceTextureLoadTimings.measure(timings, .registration) {
             register(texture: t, key: cacheNew ? key : nil)

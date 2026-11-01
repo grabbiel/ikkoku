@@ -749,7 +749,9 @@ or accessories, so no texture is loaded. A first version that drew the fully
 textured bundled characters passed when each test ran alone on CI. In the
 parallel suite, however, its two tests stalled together in their first
 `build`, the first synchronous `MTKTextureLoader` loads, and the Engine run
-exceeded the lane's 600 s timeout. The cause was not isolated further. The GPU
+exceeded the lane's 600 s timeout. The cause was not isolated then. It was
+MetalKit's own queues finding no thread once the pool was blocked, and texture
+loads no longer use them ([texture loading](#texture-loading-without-worker-threads-2026-10-26)). The GPU
 tests now also run one at a time (`@Suite(.serialized)`).
 
 The stall did not reproduce on the reference Mac (24 cores; Xcode 27.0, Swift
@@ -1333,7 +1335,8 @@ characters and steps them on a thread of its own (`liveTickOffPool`), and its
 checks run in the test's task. Building a preview blocks its thread in
 MetalKit's synchronous texture load. When these tests ran on the test pool,
 a parallel `swift test` hung with every pool thread blocked there (see
-[performance](performance.md#correctness-2)).
+[performance](performance.md#correctness-2)). Since 2026-10-26 texture loads
+wait on no pool ([texture loading](#texture-loading-without-worker-threads-2026-10-26)); the tests keep their own threads.
 The Studio scenario check `studio-scenario-live-step-edit` lands document,
 FK, undo and redo edits while a step is in flight in the app. ThreadSanitizer
 runs the Engine tests with `swift test --sanitize=thread --filter
@@ -2034,7 +2037,8 @@ touched only by the main actor and by `run`'s main-actor callbacks.
   (`liveTickOffPool`), and the test's task reports their checks. A build
   blocks its thread in MetalKit's synchronous texture load. On the test
   pool, they were among the tests holding all 24 pool threads blocked there
-  when a parallel suite hung.
+  when a parallel suite hung. Since 2026-10-26 texture loads wait on no pool
+  ([texture loading](#texture-loading-without-worker-threads-2026-10-26)).
 
 In the app, the strict Studio lane's `studio-scenario-background-build`
 check runs `Tools/verification/scenarios/background-build.json`. Its
@@ -2076,6 +2080,467 @@ the source runtime drew the frame before the rehydrated route previews
 existed, so a redone route copy showed without its character until
 something else refreshed. `applyHistoryDocument` now refreshes once more
 after a rehydration.
+
+### Texture loading without worker threads (2026-10-26)
+
+`ResourceStore` loads every texture in line, on the calling thread
+(`InlineTextureLoader`). ImageIO decodes the image, its pixels go into a
+shared staging buffer in the texture's layout, and one blit command buffer
+copies them into a private texture and generates its mipmaps. The caller
+waits for that command buffer and nothing else. The three entry points keep
+their signatures and stay synchronous: `texture(url:)`, `texture(data:)` and
+`texture(cgImage:)`.
+
+**Why not MetalKit.** `MTKTextureLoader`'s synchronous calls hand the
+decode, upload and completion to MetalKit's own concurrent queues
+(`com.apple.mtktextureloader*`) and block the caller on a semaphore. Those
+queues target GCD's default-QoS global pool, which is constrained. When
+every Swift cooperative thread is blocked in such a call (24 on the
+reference M2 Ultra), the kernel grants that pool no new thread at default
+QoS or below. MetalKit's blocks then never run, and the callers wait
+forever. This is the parallel `swift test` hang described under
+[source character builds](#source-character-builds-r7-phase-2-item-6) and
+[live step threads](#studio-live-step-threads-r7-phase-2-item-3). Evidence
+(private, `.local/rmat-pool-deadlock/root-cause/`):
+- An lldb dump of a hung suite found 39 threads waiting in
+  `newTextureWithCGImage`: all 24 cooperative threads and 15 threads the
+  tests had started themselves. Each of the 39 loaders had its decode block
+  queued with no thread running it, while its own three-load limit was
+  still free. A test on its own thread is therefore not safe either, once
+  other loads have taken the pool.
+- With 64 cooperative tasks blocked in MetalKit loads, blocks sent to the
+  global default, utility and private concurrent default queues did not
+  run within 3 s. Blocks on the userInitiated, userInteractive and serial
+  (overcommit) queues ran at once.
+- In a minimal reproduction, cooperative tasks loading 512² images through
+  MetalKit hung in every run at 48 and 64 tasks and in one of four at 32.
+  Up to 28 tasks always finished, as did 64 loads from GCD workers or from
+  plain threads.
+
+The app never loads textures on the cooperative pool: on the main actor,
+on serial userInitiated queues (Maker preparation, source builds, plug-in
+preparation) or on GCD workers (character batches, maps, rig prefetch, the
+live tick). So the deadlock was latent there; the in-line loader removes it
+for every caller anyway. Raising the QoS of the waiting work was rejected:
+it would only move the limit. The rule is in
+[performance](performance.md#the-pool-rule).
+
+**Identical results.** The in-line loader reproduces MetalKit's pixel
+format, size, mip count, usage, storage mode and every byte of every level,
+for every input the tests below cover. Until #313 that did not hold for
+baseline JPEGs of 1024² and more: ImageIO picks their decoder by how the
+pixels are first reached, and the loader reached them another way than
+MetalKit ([JPEG decode route](#jpeg-decode-route-290-2026-11-01)).
+MetalKit treats two kinds of image differently, and the loader knows which
+it has from where the image came from, never from its description:
+- **Decoded by ImageIO** (`Source.imageIO(type:)`). `texture(url:)` and
+  `texture(data:)` decode the bytes themselves and pass the ImageIO type
+  (`CGImageSourceGetType`) down. `texture(cgImage:)` reads the image's
+  `utType`. Here the `srgb` flag picks the sRGB variant of 8-bit formats,
+  8-bit gray becomes R8 and gray-alpha RG8, and 8-bit colour becomes BGRA8.
+  Premultiplied colour is unpremultiplied. For straight alpha, the HEIF
+  family and JPEG XL are premultiplied (HEIC, HEICS, HEIF, AVIF, AVIF
+  sequences and JPEG XL, measured per decoder). PNG, TIFF, BMP, TGA,
+  ICO/CUR, ICNS, PSD, SGI, GIF, PICT and WebP stay straight. AVCI shares
+  the HEIF decoder and is in the premultiplied set unverified: no AVC-HEIF
+  encoder was available to make a file. 16-bit and float colour keep their
+  depth and gain an opaque alpha channel when they have none.
+- **Anything else** (`Source.data`: CGContext, Core Image and hand-built
+  images). The bytes are uploaded as they are: 8-bit gray as R8, and any
+  32-bit pixel as RGBA8 or BGRA8 by where its alpha sits. The `srgb` flag is
+  ignored. Every other layout is rejected, as MetalKit rejects it.
+
+A crop of a decoded image (`CGImage.cropping(to:)`) loses its `utType`, so
+`texture(cgImage:)` treats it as a data image. MetalKit would still have
+reached ImageIO's pixels through it and made BGRA8 where the in-line loader
+makes RGBA8. Nothing in the repository passes a crop; this is a documented
+limit with a test (`croppedDecodedImageIsADataImage`).
+
+**GPU texture containers are not supported.** KTX, KTX2, PVR, ASTC, DDS and
+ATX are rejected on every entry point with
+`ResourceError.unsupportedTextureContainer`, whose message names the
+container, for example "DDS texture containers are not supported:
+<file or key>". Bytes are checked by their magic numbers before decoding,
+and an image ImageIO decoded from one is rejected by its type. A mod or
+plug-in asset in one of these formats therefore fails with that message.
+They cannot be matched:
+- MetalKit parses some of them itself rather than through ImageIO. A 37×23
+  DXT5 DDS became a block-padded 40×24 texture.
+- Through ImageIO, MetalKit's result for an uncompressed DDS changes from
+  call to call. In one process all 12 loads of a file failed. In another,
+  the same file failed on one call and loaded on the next.
+
+No file in the repository or the private fixtures is a container.
+
+**One upload queue per device.** Uploads go to a command queue that only
+texture uploads use, never the renderer's frame queue, so an upload neither
+waits behind nor interleaves with frame command buffers. Every
+`ResourceStore` on a device shares that queue (`UploadQueues`, a
+lock-protected registry keyed by the device's registry ID). The GPU driver
+gives a process a limited number of command queues: with a queue per store,
+256 stores loading at once failed 98 of 256 uploads with
+`IOGPUCommandQueueErrorDomain` 518. Past the queue's 64 command buffers in
+flight, `makeCommandBuffer` waits until one completes on the GPU. That wait
+needs no worker thread from any pool. Each load commits its command buffer
+and waits for it before returning, so a texture is never handed out while
+the GPU still writes it, and one caller's loads complete in call order. Each
+staging buffer is released as soon as its copy completes. Staging buffers are
+write-combined: the CPU only writes them, in order, and nothing reads one
+back. The readback test compares the texture with the decoded pixels, not
+with the staging buffer.
+
+ImageIO decodes PNG with alpha to straight RGBA8, and PNG without alpha and
+JPEG to RGBX8, so the common app inputs only swap red and blue
+(`vImagePermuteChannels_ARGB8888`). Premultiplied decodes (TIFF with
+associated alpha, for one) are unpremultiplied, and the HEIF family, AVIF
+and JPEG XL with alpha are premultiplied, both with vImage
+(`vImageUnpremultiplyData_RGBA8888`, `vImagePremultiplyData_RGBA8888`) in
+strips through a small cached buffer before the swap. vImage rounds as
+MetalKit does for all 65,536 colour and alpha pairs; scalar loops did the
+same work about 150 times slower in a debug build.
+
+**At most eight loads at once.** A plain counting semaphore
+(`UploadPermits`, 8 permits) bounds how many loads hold decoded pixels and a
+staging buffer at the same time. The invariant is that a holder makes
+progress without any pool thread: it decodes and stages on its own thread
+and waits only for its own command buffer, which the GPU completes. So a
+caller waiting for a permit always gets one, however many cooperative
+threads are blocked.
+
+The main thread never waits for a permit. `texture(data:)` and
+`texture(url:)` are called from the main thread as well as from workers,
+and MetalKit's per-call wait never queued a main-thread load behind other
+loads. A load from the main thread therefore runs at
+once, as one holder over the limit, which leaves the cache bound at nine
+decode buffers. Without the bound, every load in flight left its freed
+4 MB decode buffer (for 1024²) in malloc's cache: 116–128 MB after 64
+concurrent loads, against none for MetalKit. Malloc's bytes in use did not
+grow over repeated batches, so this was a cache, not a leak. MetalKit
+allowed three loads per loader, and the app has one store, so eight does
+not slow any app path. Measured for 64 concurrent 1024² loads, first
+MetalKit, then in line:
+- staging at the peak (Metal allocations above the textures): 226–297 MB
+  against 24–32 MB;
+- process footprint at the peak: 675–681 MB against 691–703 MB. The
+  in-line excess is at most 60 MB of cached decode buffers (eight
+  permits' worth);
+- after four such batches: 1,675 MB against 1,724–1,728 MB of footprint,
+  with malloc bytes in use 10.0 MB against 4.9–5.0 MB.
+
+**Tests.**
+- `InlineTextureLoaderIdentityTests` compares the in-line loader with
+  MetalKit (kept in the tests only) at every level and with both colour
+  flags:
+  - 2,016 synthetic layouts (8, 16 and 32-bit; 1 to 4 components; every
+    alpha and byte order; colour spaces; indexed and 1/2/4-bit gray;
+    CGContext and Core Image output);
+  - the same layouts as 281 files from every ImageIO encoder;
+  - every colour and alpha pair, un- and premultiplied, against the
+    formulas and, through a TIFF with associated alpha, against MetalKit;
+  - 19 synthetic files from decoders ImageIO cannot write
+    (`Fixtures/texture-identity`: JPEG XL, AVIF from another encoder and at
+    10 and 12 bits, an AVIF sequence, HEIF, WebP, PSD, SGI, ICNS, CUR, BMP
+    v5, TGA and both TIFF alpha kinds);
+  - since #313, JPEGs that each loader decodes on its own
+    (`InlineTextureLoaderJPEGRouteTests`): sRGB, untagged (no ICC or Exif
+    segment), Display P3, progressive, EXIF orientation 6, grey and CMYK, at
+    37×23, 1024² and 2048², from the file and from a fresh ImageIO image.
+
+  Every comparison matches. Two limits made the earlier comparisons blind
+  to the JPEG decode route: the layout comparisons hand one `CGImage` to
+  both loaders, and its first decode fills ImageIO's cache for the other;
+  the encoded files are all 37×23. MetalKit's URL load rejects the
+  EXIF-rotated JPEG ("Unsupported image orientation"); the in-line loader
+  loads it unrotated, as both do from a decoded image, and
+  `ResourceStore.texture(url:)` has done so since #288. CMYK is checked for
+  agreement only. The suite also checks container rejection on
+  each entry point.
+- `InlineTextureLoaderCorpusTests` (strict, `IKKOKU_TEXTURE_CORPUS_ROOT`)
+  checks captured Engine/Studio/Maker loads by content hash. Every file must
+  exist and match its SHA-256 filename. URL cases use private snapshots of
+  those verified bytes. All 138 positive cases must create both textures and
+  complete every mip readback before descriptor/byte comparison; matching
+  errors cannot pass. The 139-entry, 24 MiB corpus has 117 data and 22 URL
+  rows. Its one negative is the exact data/sRGB `Data("not an image".utf8)`
+  from the appearance rollback test, independently read, hashed and rejected.
+  Unrelated corruption fails. Synthetic layouts rejected by both loaders stay
+  separate. Container inputs remain excluded because `ResourceStore` refuses
+  them before decode.
+
+  At `46a94326` (2026-10-31), five CPU regressions, the strict corpus test and
+  five shared identity tests pass with zero skips. The corpus records 138
+  successful pairs, one pinned rejection and zero failures; 2,016 synthetic
+  layouts (1,060 rejected by both) and 281 encoded files have zero mismatches.
+  The first test-macro compile failure is retained separately. This test-only
+  change leaves runtime code and pixel tolerances unchanged; it does not replace
+  final-runtime suite, app, capture or comparative-performance acceptance.
+- `ResourceStoreUploadTests`:
+  - many threads get one queue for a device;
+  - an upload has completed when its texture is handed out, and one
+    store's uploads run in call order;
+  - a texture reads back whole from another queue right away;
+  - 256 stores load at once from the cooperative pool, every load counted;
+  - the permits never admit more holders than their limit, and 64
+    concurrent loads stay within it;
+  - a load from the main thread completes while a plain thread holds
+    every permit.
+
+  Removing the upload's wait makes the handout test fail (status not
+  completed, and the call order broken); the readback test still passes,
+  because Metal orders the readback after the upload by itself. Removing
+  the main-thread bypass makes the main-thread test fail: its load waits
+  until the holder gives up after 20 s.
+
+  The permit tests hold up in the unrestricted parallel suite, where a test
+  can queue for minutes before its body runs. Their holders are plain
+  threads, because GCD grants `concurrentPerform` no extra worker while the
+  pool is saturated. The main-thread test bounds itself instead of using a
+  time limit, which would also count its wait for the main actor.
+
+At combined candidate `4f5f2504`, all seven upload gates, the strict corpus
+and the optimized material-group lifetime test pass: nine exact tests, no
+skips. Twenty affected shape/Maker preparation tests and four fresh Release
+Maker selection/reload scenarios also pass. These focused integration checks
+are separate from the historical full suites and image comparisons; see the
+[validation identities and limitations](performance.md#texture-loading-candidate-validation-288-2026-10-31).
+They establish neither a loader speedup nor broader image-format or source-game
+parity. The JPEG cost tracked in [#290](https://github.com/grabbiel/ikkoku/issues/290)
+was traced to the decode route in #313
+([JPEG decode route](#jpeg-decode-route-290-2026-11-01)).
+
+### ImageIO eager-cache correctness probe (#290, 2026-11-01)
+
+A private CPU-only probe rejects eager ImageIO caching as an exact replacement
+for the current decode options on one synthetic JPEG. This is a correctness
+counterexample, not an explanation of [#290](https://github.com/grabbiel/ikkoku/issues/290)'s
+historical cost difference. The production loader and its upload permits are
+unchanged; no timing, Metal texture or mip comparison was performed.
+
+The probe uses fresh ImageIO source/image objects on one dedicated plain thread,
+with equal provider-data and autorelease lifetimes. The only variant is image0
+creation with nil options versus `kCGImageSourceShouldCacheImmediately: true`;
+source creation keeps nil options. Four repetitions per option on each of two
+encoded formats produce 16 successful decodes. Both malformed-input negatives
+return nil at the existing source/type/image boundary. Twenty-three asset-free
+controls independently exercise row bounds, short final padding, checked
+arithmetic, metadata/byte drift and the exact observation inventory.
+
+The single source is a deterministic 1024×1024 sRGB RGBX8 image with fourth byte
+255, encoded once as JPEG (quality 0.9) and PNG. It uses UInt32 wrapping LCG seed
+`0xa5a5a5a5`, multiplier 1,664,525 and increment 1,013,904,223; RGB comes from
+bits 24/16/8 of each successive state. Native source review stayed at checkpoint `2449b834`. The standalone Swift 6
+probe was built with Xcode 27.0 (27A266a), Swift 6.4
+(swiftlang-6.4.0.34.1), macOS 27.0.1 (26A434), arm64, `-O` and whole-module
+optimization. SHA-256 identities are:
+
+| Identity | SHA-256 prefix |
+| --- | --- |
+| Probe source | `65558d3d86aefec2` |
+| Probe executable | `f5e9e14c28849219` |
+| Canonical RGBX bytes | `c82470332a5689e8` |
+| Encoded JPEG | `1a2b42c9055be018` |
+| Encoded PNG | `561bd642981dd0e2` |
+| Complete result report | `b24e455d5aaa8a60` |
+
+Both options report identical metadata within each format: RGBX8,
+`noneSkipLast`, default byte order, sRGB profile identity, dimensions, stride
+and the remaining recorded image/source fields. Every provider has 4,194,304
+bytes, stride 4,096 and no row padding. Nevertheless, each eager JPEG differs
+from the default JPEG at 907,940 pixels and 2,450,959 RGB bytes, with a maximum
+absolute byte difference of 168. The copied fourth byte never differs. Each
+option repeats exactly across its four JPEG observations. All eight PNG
+observations are byte-identical, including the fourth byte, and equal the
+canonical source bytes.
+
+The exact-equality gate therefore exits 1; its failed report and independent
+raw-plane audit remain preserved. All 81 output files and 85 pinned source, tool, fixture and proof files
+were independently verified. No retry or tolerance change was made. Equal
+metadata does not establish equal decode bytes, and these observations identify
+neither the responsible ImageIO operation nor behavior for other JPEGs, HEIC,
+other systems or GPU upload paths. They support no performance claim.
+
+Eager image creation would also materialize decoded storage before the current
+`UploadPermits` boundary if added directly to `image(data:)`. This rejected
+option is not adopted, and no new ownership or scheduling behavior is implied.
+Any later decode-path design must retain exact pixels, error handling and the
+permit's memory/progress constraints. Private full hashes, raw planes and
+failure receipts are retained under
+`.local/codex-resume-2026-10-30/materials-runtime-acceptance/issue290-source-review/probe/`.
+
+A subsequent byte-only audit on the same date passed 68 asset-free controls for
+bounded marker/entropy-scan framing, restart ordering, ICC/Exif extents and raw
+coordinate-bin accounting. It then attempted to inspect the same retained JPEG
+and default/eager repetition-0 planes, without an image decoder or new fixture.
+That one attempt stopped with `Unsupported: nested-ifd-unsupported`: the parser
+supports only Exif IFD0 and refuses nested IFD pointers. The input-file identities
+were checked, but no complete JPEG structure or pixel/block correlation report
+was produced. In particular, this attempt establishes no sampling-factor,
+quantization-table or decoder-operation explanation for the earlier RGB change.
+An unsupported parser scope does not establish that the JPEG is malformed.
+
+The parser source hash begins `bfc27ef58f181ec6`; the 68-control report is
+`8d97650c5670f274`, and the unsupported analysis report is `b8f4eb71abc89569`
+(checkpoint `ed2daea4a2846425`). The child, ownership assessment and wrapper each
+exit 1 for the analysis, and its 224 pins remain unchanged. The original red
+ImageIO result is retained. No parser expansion, repeat analysis, production
+option change or performance conclusion follows. These separate receipts are
+under the sibling `jpeg-offline-2/` evidence directory; even a later spatial
+correlation would not establish causation.
+
+### Texture-load phase accounting (#290, 2026-11-01)
+
+A source-only audit of `2449b834ca7a1e779d9640428e2f78e81c1b5e78` confirms that
+`ResourceTextureLoadTimings` records elapsed API boundaries. `imageCreation`
+includes container inspection and ImageIO object creation; it does not prove
+that all decoding has finished. `metalTextureLoad` includes layout and texture
+allocation before the permit, then permit wait, provider access, staging,
+conversion, command submission, completion waits and cleanup. Neither phase
+isolates CPU decoding or GPU execution. The global permit maximum-wait statistic
+cannot attribute a particular load's wait under concurrency.
+
+The Data route records supplied bytes even on cache hits and has two lookups;
+the URL route has no collector and one lookup, while the CGImage route starts
+with the image lookup. Transaction reuse can bypass ResourceStore entirely.
+Do not sum nested phases with their parent or treat presented bytes as file I/O.
+This audit collected no timings and justifies no production change. A proposed
+optional per-call observer would need separate correctness and every-mip
+identity checks before any qualified cost comparison. The audit and seven
+source pins are retained under the private `loader-accounting-1/` directory
+alongside the preceding #290 evidence; audit hash begins `06b04152f3025da1`.
+
+### Load-stage observer (2026-11-01)
+
+The optional per-call observer proposed above landed in a smaller form
+(#313). Codex's closure-wrapping candidate (`efa0802c`, with the paired
+readback draft `2061357b`) was not merged. It wrapped seven stages in
+closures; in a Release build one of them, the completion wait, stayed out
+of line, so a load without an observer made an extra call per strip, and
+the loader's machine code grew by 28%.
+
+- `InlineTextureLoadObservations` is internal, for tests and measurements;
+  nothing in the app sets one. `InlineTextureLoader.texture` takes an
+  optional observer and marks the end of each stage with
+  `observations?.lap(_:)`. A lap adds the time since the previous mark to
+  its stage, so the stages of one load add up to the whole call:
+  - destination allocation (layout, descriptor and texture);
+  - permit wait, with the autorelease pool's push (no wait on the main
+    thread);
+  - decode: ImageIO decodes here, into a bitmap or the provider's copy
+    (`decodedPixels(_:)`);
+  - staging allocation, with the pixel-length check;
+  - per strip: conversion, encode and submit, completion wait;
+  - cleanup: the `didComplete` callback, then releasing the pixels, the
+    staging buffer, the pool and the permit.
+
+  Times are wall time between marks, not CPU decode or GPU execution time
+  alone. `UploadPermits`, `ResourceStore` and `ResourceTextureLoadTimings`
+  are unchanged.
+- Without an observer the loader is the earlier code plus nine marks, each
+  one branch past it. In the Release build (`swift build -c release
+  --target Renderer`, Swift 6.4), all 15 mark sites of the specialized
+  `texture` (the start and 14 laps across its main-thread and permit
+  copies) sit behind a `cbz` on the observer register. No closure is
+  outlined, and the call graph otherwise equals `899b777b`'s.
+  `InlineTextureLoader.o` has 12,244 bytes of `__text` against 11,940
+  (+2.5%; the closure candidate had 15,332). Those figures are for the
+  observer alone (`e310f52a`). With the JPEG route below, `__text` is
+  12,952 bytes (+8.5%; its two functions add 708). A `cbz` on the
+  observer still sends a load without an observer past every lap: the
+  optimizer keeps one copy of the decode with its two laps and one without
+  them. CI's Swift 6.3.3 Release package build passes; its code was not
+  disassembled.
+- `InlineTextureLoadObservationTests`:
+  - a fake-clock lap control;
+  - a three-strip load on a plain thread (the permit path) that laps every
+    stage, once per strip where it repeats, and equals an unobserved load;
+  - a rejected layout that throws before the first lap;
+  - the paired readback: the copy and ImageIO channel-swap conversions,
+    both colour flags and a short last strip, observed against unobserved
+    on the main thread. Descriptors and every mip are equal (eight
+    uploads).
+
+  Removing the conversion mark fails two of them (five issues).
+- Cost without an observer: `stripUploadTiming` (three warm-ups, 16
+  alternating rounds per path, medians) in Release test builds of
+  `899b777b` and #313, ABBA three times in one quiet window (12 runs).
+  Median of the run medians, `899b777b` against #313: a 2048² PNG in four
+  strips 12.50 against 12.49 ms, in one strip 13.05 against 13.12 ms; a
+  1024² PNG 4.09 against 4.10 ms (staged) and 4.06 against 4.08 ms (one
+  strip). Every difference is under 0.6% and inside either side's run
+  spread. Eleven of the 12 runs broke the window's rule because the user's
+  browser was at 45.0–50.8% of a core; the ABBA order puts that load on
+  both builds
+  ([performance](performance.md#texture-load-observer-and-jpeg-decode-route-313-2026-11-01)).
+
+### JPEG decode route (#290, 2026-11-01)
+
+ImageIO picks a baseline JPEG's decoder by how its pixels are first reached.
+`CGDataProviderCopyData`, which the in-line loader used since #288, gets one
+decoder. A draw into a bitmap of the image's own layout and colour space
+gets another, and that one gives MetalKit's pixels. Up to 768² the two agree.
+From 1024² on they differ on about half the bytes, by up to 23–29 levels.
+Progressive, grey and CMYK JPEGs agree at every size measured. The first
+access also fills the image's cache, so a second loader on the same
+`CGImage` gets the first one's pixels.
+
+Measured on synthetic JPEGs (quality 0.9) with independent decodes:
+
+| JPEG | Provider copy against MetalKit | Draw into RGBX against MetalKit |
+| --- | --- | --- |
+| 37×23 to 768², baseline | identical | identical |
+| 1024², gradient with noise (test) | 2,171,828 of 4,194,304 bytes, up to 23 | identical |
+| 2048², gradient with noise (test) | 8,691,947 of 16,777,216 bytes, up to 27 | identical |
+| 1024², waves with noise (probe) | 2,232,106 of 3,145,728 RGB bytes, up to 25 | identical |
+| 2048², waves with noise (probe) | 8,998,095 of 12,582,912 RGB bytes, up to 29 | identical |
+| progressive, grey, CMYK, 1024² and 2048² | identical | not drawn |
+
+Opaque PNGs (RGB) agree on both routes at 37×23, 1024² and 2048²; PNGs
+with alpha cannot be drawn without premultiplying.
+
+`InlineTextureLoader.decodedPixels(_:)` therefore draws JPEGs that ImageIO
+decoded as opaque 8-bit RGB (`noneSkipLast`, default or 32-bit big-endian
+order, an RGB colour space), 1:1 with no interpolation and the copy blend
+mode, into a buffer with the image's own row stride. The existing red/blue
+swap follows. This happens inside the upload permit, where the provider's
+copy was, in a buffer of the same size. Every other image keeps the
+provider's copy, opaque PNGs included: their routes agree, and the draw is
+no faster for them (below).
+
+On `899b777b`, `InlineTextureLoaderJPEGRouteTests` reports 28 problems in
+84 comparisons: the sRGB, untagged and Display P3 baseline JPEGs at 1024²
+and 2048², with either colour flag, from the file and from an image (24),
+and the EXIF-rotated one from an image (4; MetalKit rejects it from the
+file). At #313's head it reports none.
+
+Load time, from Release test builds in the same quiet window
+(`formatLoadStages`: three warm-ups, 16 rotating rounds, medians):
+
+- the 1024² JPEG went from 5.84 ms (MetalKit 4.01) on `899b777b` to
+  4.00–4.06 ms (MetalKit 3.79–3.89);
+- the 2048² JPEG went from 16.01 ms (12.60) to 12.07–12.20 ms (12.28–12.50).
+
+In #313's stage split, the decode (now the draw) takes 2.61–2.63 ms and
+9.15–9.27 ms of those loads. HEIC and PNG keep their route and their times.
+
+Peak footprint of a 2048² JPEG load above its start, one fresh process per
+run, 11 runs each:
+
+- 41.7–42.2 MiB on `899b777b`;
+- 41.8–47.4 MiB on #313, six of them at 43.1–47.4.
+
+With the image and texture still held, both are at 41.7–42.2 MiB. So the
+draw keeps no second decoded copy next to its buffer. It adds a peak of up
+to 5.5 MiB that is gone before the load returns, about a third of one
+decoded image. The peak falls inside the upload permit, so at most eight
+worker loads (plus one from the main thread) can hold it at once.
+
+The footprint does not drop when the image is released (41.7–42.1 MiB with
+only the texture), so these figures bound the memory rather than itemize it
+([performance](performance.md#texture-load-observer-and-jpeg-decode-route-313-2026-11-01)).
+
+No load in the app uses JPEG today: the measured lanes load 3,749 PNG
+textures and 91 BC uploads, and no JPEG or HEIC (#288). The change matters
+for user content shipped as JPEG.
 
 ## Checked math, legacy skeletons and cameras (R4)
 

@@ -119,10 +119,16 @@ struct SectionBox<Content: View>: View {
     let title: String
     @ViewBuilder var content: () -> Content
     @State private var expanded = true
+    /// Kept inspector views expand their collapsed sections again when they
+    /// are hidden, as sections built anew start expanded (R7 phase 2, item 7).
+    @Environment(\.inspectorSectionExpansion) private var expansion
+    @State private var token = UUID()
     var body: some View {
         DisclosureGroup(isExpanded: $expanded) {
             VStack(alignment: .leading, spacing: 6) { content() }.padding(.top, 4)
         } label: { Text(title).font(.headline) }
+            .onChange(of: expanded) { _, now in expansion?.note(token, expanded: now, binding: $expanded) }
+            .onDisappear { expansion?.forget(token) }
     }
 }
 

@@ -88,9 +88,37 @@ final class PerfWorkloadDriver {
         app.host?.renderer.skipsUnchangedFrames = configuration.frameSkip
         configureWindow()
         whenSourceSceneReady {
-            do { try self.prepare() } catch { self.fail("\(self.configuration.workload): \(error)") }
-            DispatchQueue.main.asyncAfter(deadline: .now() + self.configuration.warmupSeconds) { self.record() }
+            self.preselect {
+                do { try self.prepare() } catch { self.fail("\(self.configuration.workload): \(error)") }
+                DispatchQueue.main.asyncAfter(deadline: .now() + self.configuration.warmupSeconds) { self.record() }
+            }
         }
+    }
+
+    /// `IKKOKU_PERF_SELECT_KEYS` for a workload other than `studio-select`
+    /// (R7 phase 2, item 7): those objects are selected in turn, 0.3 s apart,
+    /// before the workload prepares, so the inspector has built what they
+    /// show (its kept sections, for example) when the workload's own
+    /// selection replaces them.
+    private func preselect(then body: @escaping () -> Void) {
+        guard configuration.workload != "studio-select", let keys = configuration.selectKeys, !keys.isEmpty,
+              let studio = app.studio else { body(); return }
+        app.mode = .studio
+        let tree = studio.doc.flattened().map(\.object)
+        var ids: [UUID] = []
+        for key in keys {
+            guard let object = tree.first(where: { $0.sourceObjectKey == key }) else {
+                fail("IKKOKU_PERF_SELECT_KEYS: no source object with key \(key)")
+            }
+            ids.append(object.id)
+        }
+        trace.details["preselectedSourceKeys"] = keys.map { Int($0) }
+        func step(_ index: Int) {
+            guard index < ids.count else { body(); return }
+            studio.selection = ids[index]
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { step(index + 1) }
+        }
+        step(0)
     }
 
     /// Runs `body` once the Studio's source scene import has installed its
@@ -210,6 +238,7 @@ final class PerfWorkloadDriver {
         case "studio-outfit": try prepareStudioOutfit()
         case "studio-export": try prepareStudioExport()
         case "studio-load": try prepareStudioLoad()
+        case "studio-select": try prepareStudioSelect()
         default: throw RigError.invalid("unknown workload \(workload)")
         }
     }
@@ -316,7 +345,7 @@ final class PerfWorkloadDriver {
     /// The `fk-mouse-drag` scenario's grab (source key 65, bone 19, z ring),
     /// then a continuous circular drag of the ring for the whole recording.
     private func prepareStudioFKDrag() throws {
-        let key: Int32 = 65, boneID = 19
+        let key: Int32 = configuration.actionKey ?? 65, boneID = 19
         let studio = try prepareStudioSource(selectKey: key)
         guard let id = studio.selection, let preview = studio.sourceShapePreview(for: id),
               let target = preview.controller.targets.first(where: { $0.bone.id == boneID && $0.hasGuide }) else {
@@ -576,6 +605,61 @@ final class PerfWorkloadDriver {
         actionSteps = [("new scene", false, { studio.newScene() }),
                        ("load", true, { [weak self] in self?.app.openScene(at: scene, importing: false) })]
         trace.details["gesture"] = "File ▸ New Scene, then File ▸ Open of the source scene saved as an Ikkoku scene, repeated; live animation on"
+    }
+
+    /// `studio-select` (R7 phase 2, item 7): the selection a click makes
+    /// (`selection = id`, the call of a workspace row's tap and of a viewport
+    /// click on an object; a click on empty space sets nil) through a fixed
+    /// list of objects, repeated, with live animation on: nothing selected,
+    /// then each object of the list in order. The list is the source keys of
+    /// `IKKOKU_PERF_SELECT_KEYS`, else the first object of each kind the
+    /// Object tab shows differently, in workspace order (`selectKind`). The
+    /// inspector shows `IKKOKU_PERF_INSPECTOR_TAB` (default Object). Each
+    /// action is named for what it selects ("select route", "select
+    /// character from nothing", "deselect"), and its main-thread time is the
+    /// busy period it ran in, which holds SwiftUI's update of the panels.
+    private func prepareStudioSelect() throws {
+        let studio = try prepareStudioSource(selectKey: nil)
+        let tree = studio.doc.flattened().map(\.object)
+        let objects: [StudioObject]
+        if let keys = configuration.selectKeys {
+            objects = try keys.map { key in
+                guard let object = tree.first(where: { $0.sourceObjectKey == key }) else {
+                    throw RigError.invalid("IKKOKU_PERF_SELECT_KEYS: no source object with key \(key)")
+                }
+                return object
+            }
+        } else {
+            var kinds = Set<String>()
+            objects = tree.filter { kinds.insert(selectKind(studio, $0)).inserted }
+        }
+        guard !objects.isEmpty else { throw RigError.invalid("studio-select needs an object to select") }
+        if let tabName = configuration.inspectorTab {
+            guard let tab = StudioModel.InspectorTab.allCases.first(where: { $0.rawValue.lowercased() == tabName }) else {
+                throw RigError.invalid("IKKOKU_PERF_INSPECTOR_TAB: no tab \(tabName)")
+            }
+            studio.inspectorTab = tab
+        }
+        var steps: [(name: String, measured: Bool, run: () -> Void)] = [("deselect", true, { studio.selection = nil })]
+        for (index, object) in objects.enumerated() {
+            let id = object.id, kind = selectKind(studio, object)
+            steps.append((index == 0 ? "select \(kind) from nothing" : "select \(kind)", true, { studio.selection = id }))
+        }
+        actionSteps = steps
+        trace.details["inspectorTab"] = studio.inspectorTab.rawValue
+        trace.details["selectObjects"] = objects.map { object -> [String: Any] in
+            ["sourceKey": Int(object.sourceObjectKey ?? -1), "kind": selectKind(studio, object), "name": object.name]
+        }
+        trace.details["gesture"] = "nothing selected, then \(objects.count) objects selected in turn as a click selects them, repeated; live animation on"
+    }
+
+    /// What the Object tab shows for `object`: its kind, or a source
+    /// character, route or source camera, whose sections differ.
+    private func selectKind(_ studio: StudioModel, _ object: StudioObject) -> String {
+        if studio.sourceRouteRuntime(id: object.id, document: studio.doc) != nil { return "route" }
+        if studio.workspaceLabel(of: object, sceneSHA256: studio.doc.sourceSceneSHA256).sourceCamera { return "source camera" }
+        if object.kind == .character, object.sourceCharacter != nil { return "source character" }
+        return "\(object.kind)"
     }
 
     private func runNextAction() {
