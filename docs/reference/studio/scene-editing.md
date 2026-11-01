@@ -603,12 +603,38 @@ production gate or an implementation of ordered edit history.
 The run completed the existing fixed-point and negative controls, using the
 existing comparator without new masks. Both original-player processes
 produced their artifacts but exited with an access violation, so their lifecycle
-and the original pair remain unaccepted. A baseline-only shutdown control is
-still pending. The diagnostic therefore identifies remaining writer work without
+and the original pair remain unaccepted. The diagnostic identifies remaining writer work without
 expanding supported plugin edits. Private evidence is retained under
 `.local/codex-continue-2026-10-24/wave-three/plugins/ordered-export-278/`;
 the four-row report SHA-256 is
 `3b2f49db3aed538140e5a001b145890905743b1e0c57c5def02f05ee48172fe8`.
+
+#### Baseline-only shutdown control (2026-11-01)
+
+One instrumented control omitted both ordered edit sequences while retaining
+the same input and baseline load/save/reload/resave code. Its saved and resaved
+bytes matched within that process. Four process/artifact-bound markers recorded
+status/trace publication, entry to the existing quit call, its return, and this
+probe's own `OnApplicationQuit` callback. The player still exited with access
+violation `0xC0000005`, so the failure also occurs without the ordered edits.
+This does not identify a fault module or prove completion of other plugins' or
+Unity's teardown. Synchronous marker I/O can affect shutdown, and these baseline
+bytes are not claimed identical to the earlier original process.
+
+The first assessor incorrectly expected an array for the producer's Boolean
+`compilerRemaining` field. That failed assessment is preserved. A separately
+versioned offline correction requires literal `false`, rejects missing, true,
+array and numeric values, and passes 24 synthetic checks with zero skips. It
+confirms complete retained evidence and resource release while leaving the
+baseline lifecycle and original pair unaccepted. The original wrapper exit 1
+and player access violation remain failures; no player rerun or production
+export change was made.
+
+Private follow-up evidence is under the same evidence root at
+`shutdown-baseline-control-1/launch-1/`. The raw `capture/run.json` SHA-256 is
+`5e756e28931acbba49e912fcdce07053cc7f17c54592dc66d61b3e5236bc12f4`;
+the separate `offline-assessment-2/assessment.json` SHA-256 is
+`6371e43f9a8583a5c67714a3eb6ce5f9ac86c14cebcb302c1d615f3d0bdba51f`.
 
 ### Plug-in data rewrites
 
