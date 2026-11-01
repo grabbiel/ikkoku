@@ -154,6 +154,21 @@ final class SourceRigReuseSnapshot: Sendable {
     public func prospectiveReplacement() -> Replacement {
         .init(admission: admission, expectedEpoch: epoch, epoch: .init())
     }
+    /// The replacement's seeding input, or nil when the live ledger cannot
+    /// admit `entries` more decoded rigs and one snapshot now (CXM1). A
+    /// reimport over a cached session is that case: the old entries hold
+    /// their permits until the replacement commits, so the seed would hash
+    /// every file, admit part, overflow and publish an empty session anyway.
+    /// `entries` is an upper bound (distinct files; equal bytes share one
+    /// entry). The worker keeps its own limits, so a low count only costs the
+    /// wasted work this check avoids; it never changes the published result.
+    public func seedingInput(for replacement: Replacement, entries: Int) -> Input? {
+        guard replacement.admission === admission, entries >= 0 else { return nil }
+        let live = admission.counts
+        guard entries <= admission.maximumEntries - live.entries,
+              live.snapshots < admission.maximumSnapshots else { return nil }
+        return replacement.input
+    }
     /// Call only at successful new-session publication, after all owner gates.
     /// A nil candidate publishes an empty session (including reference fallback);
     /// failed preparation must instead drop the token without calling this method.

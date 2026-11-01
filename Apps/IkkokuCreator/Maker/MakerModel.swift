@@ -87,6 +87,38 @@ final class MakerModel: ViewportInputHandler, LivePacedHandler {
         }
     }
     @ObservationIgnored private(set) var sourceSelectionTiming: SourceSelectionTiming?
+    /// Requested only by the existing scenario/report path. Failed imports
+    /// clear the previous sample; no diagnostic clocks/hashes for nil callers.
+    struct SourceInitialLoadTiming: Encodable {
+        let importMilliseconds: Double
+        let cardURL: URL, cardSHA256: String
+        let sex: Int, headID: Int, boneType: Int, exType: Int
+        let preparation: Preparation
+
+        struct Preparation: Encodable {
+            enum AppearanceOutcome: String, Encodable { case applied, referenceAfterAppearanceFailure, unavailable }
+            /// `emptyLedgerFull`: the old session's entries left no room, so
+            /// no seed was hashed or staged (`seedingInput`).
+            enum CachePublication: String, Encodable { case seeded, empty, emptyLedgerFull, emptyStaleFallback }
+            /// Whether the reference model was read and decoded (CXM1: only
+            /// on a fallback geometry outcome).
+            enum ReferenceLoad: String, Encodable { case skipped, loaded }
+            let manifestURL: URL, sourcePrefab: String
+            let nodeCount: Int, skinCount: Int, partCount: Int
+            let geometryOutcome: SourceMakerImportGeometry.Outcome, referenceLoad: ReferenceLoad
+            let appearanceOutcome: AppearanceOutcome
+            let cachePublication: CachePublication, publishedEntries: Int
+            /// Inclusive geometry wall time: the selected preparation, plus the
+            /// reference model when it fell back. Worker intervals are nested,
+            /// not additive; a failed selection's stages are partial.
+            let geometryMilliseconds: Double?
+            let selectedPreparationStages: SourceMakerPreparationTimings.Sample?
+            /// Candidate/live-ledger values at worker finish, not post-commit
+            /// resources, heap usage or an admission timer.
+            let stagedRigReuse: SourceMakerRigReuse.Sample?
+        }
+    }
+    @ObservationIgnored private(set) var sourceInitialLoadTiming: SourceInitialLoadTiming?
     var sourceAssetSelections: [SourceMakerLibrary.Selection] = []
     struct SourceSelectionRow: Identifiable {
         struct Choice: Identifiable { let id: Int; let name: String }
@@ -447,11 +479,13 @@ final class MakerModel: ViewportInputHandler, LivePacedHandler {
         }
     }
 
-    func load(card: CharacterCard) { cancelSourceSelection(); sourceRigReuse.reset(); sourceShapeReuse.reset(); importedSourceCard = nil; importedSourceCardURL = nil; sourceRigPreview = nil; self.card = card }
+    func load(card: CharacterCard) { cancelSourceSelection(); sourceInitialLoadTiming = nil; sourceRigReuse.reset(); sourceShapeReuse.reset(); importedSourceCard = nil; importedSourceCardURL = nil; sourceRigPreview = nil; self.card = card }
 
-    func openSourceRig(url: URL) throws { try openSourceRig(url: url, importing: nil, cardURL: nil) }
+    func openSourceRig(url: URL) throws { _ = try openSourceRig(url: url, importing: nil, cardURL: nil) }
 
-    private func openSourceRig(url: URL, importing imported: SourceCharacterCard?, cardURL: URL?) throws {
+    private func openSourceRig(url: URL, importing imported: SourceCharacterCard?, cardURL: URL?,
+                               recordInitialLoad: Bool = false) throws -> SourceInitialLoadTiming.Preparation? {
+        sourceInitialLoadTiming = nil
         cancelSourceSelection()
         let manifest = try? JSONDecoder().decode(SourceAvatarManifest.self, from: Data(contentsOf: url))
         let sex = manifest?.sex ?? (manifest?.kind == "koikatsu-male-avatar" ? 0 : 1)
@@ -465,14 +499,30 @@ final class MakerModel: ViewportInputHandler, LivePacedHandler {
             correctionData = try Data(contentsOf: correction)
         } else { correctionData = nil }
         let options = try SourceMakerAssemblyOptions.body(sex: sex, exType: identity?.exType ?? 0, boneType: boneType, correctionData: correctionData)
-        var source = try SourceRig.loadModel(url: url)
         let makerLibrary = try EngineHost.locateMakerLibrary()
-        var prepared: SourceMakerLibrary.Prepared?, selectionDiagnostics: [String] = []
+        var replacement: SourceMakerRigReuse.Replacement?, seeding: SourceMakerRigReuse.Input?
+        var seedDeclined = false
+        let selectedTimings = recordInitialLoad && imported != nil && makerLibrary != nil ? SourceMakerPreparationTimings() : nil
         if let imported, let makerLibrary {
-            do {
-                prepared = try makerLibrary.prepare(card: imported, coordinate: 0, baseURL: url)
-                source = prepared!.source
-            } catch { selectionDiagnostics.append("Card asset selection retained the reference assembly: \(error)") }
+            let prospective = sourceRigReuse.prospectiveReplacement()
+            replacement = prospective
+            // A reimport over a cached session cannot fit a seed beside the old
+            // entries: skip its hashing instead of staging part and publishing empty.
+            seeding = sourceRigReuse.seedingInput(for: prospective,
+                entries: makerLibrary.rigFiles(card: imported, coordinate: 0, baseURL: url, wear: false).count)
+            seedDeclined = seeding == nil
+        }
+        let geometryStart = recordInitialLoad ? ProcessInfo.processInfo.systemUptime : nil
+        // CXM1: the reference model loads only when the card's selected assets
+        // cannot replace it. A thrown selection stages no partial candidate.
+        let geometry = try SourceMakerImportGeometry.load(baseURL: url, card: imported, library: makerLibrary,
+            coordinate: 0, timings: selectedTimings, seeding: seeding)
+        let geometryMilliseconds = geometryStart.map { (ProcessInfo.processInfo.systemUptime - $0) * 1000 }
+        let source = geometry.source, prepared = geometry.prepared
+        let seed = geometry.rigReuseCandidate, seedSample = geometry.rigReuseSample
+        var selectionDiagnostics: [String] = []
+        if let error = geometry.selectionError {
+            selectionDiagnostics.append("Card asset selection retained the reference assembly: \(error)")
         }
         let contractURL = url.deletingLastPathComponent().appendingPathComponent("character-shape-contract.json")
         let contract = FileManager.default.fileExists(atPath: contractURL.path)
@@ -489,14 +539,20 @@ final class MakerModel: ViewportInputHandler, LivePacedHandler {
         }
         var draft: SourceCardAppearance?, application: SourcePreviewAppearance.CardApplication?
         var appearanceDiagnostics = selectionDiagnostics
+        var appearanceOutcome = SourceInitialLoadTiming.Preparation.AppearanceOutcome.unavailable
         if let imported {
             do {
                 draft = try SourceCardAppearance(card: imported)
                 if let base = appearance, let draft {
                     application = try applyCardAppearance(draft, base: base, url: url, prepared: prepared, modLibrary: sourceModLibrary)
                     appearance = application?.appearance ?? base
+                    if application != nil { appearanceOutcome = .applied }
                 }
-            } catch { appearanceDiagnostics.append("Appearance retained as reference: \(error)") }
+            } catch {
+                // Valid selected geometry can survive an appearance fallback.
+                appearanceOutcome = .referenceAfterAppearanceFailure
+                appearanceDiagnostics.append("Appearance retained as reference: \(error)")
+            }
         }
         let preview = try SourceRigPreview(source: source, contract: contract, resources: host.renderer.resources,
             appearance: appearance, expressionContract: expressions, bodyOptions: options, lateCorrectionOptions: .init(),
@@ -531,7 +587,18 @@ final class MakerModel: ViewportInputHandler, LivePacedHandler {
         applySourceCustomization = false
         sourceBoneModifiers = nil
         importedSourceCard = imported
-        sourceRigReuse.reset(); sourceShapeReuse.reset()
+        let cachePublication: SourceInitialLoadTiming.Preparation.CachePublication
+        if let replacement {
+            if sourceRigReuse.commitReplacement(replacement, candidate: seed) {
+                cachePublication = seedDeclined ? .emptyLedgerFull : (seedSample?.retainedEntries ?? 0) > 0 ? .seeded : .empty
+            } else {
+                // This new-load transaction has no await. Unexpected staleness
+                // keeps the previous successful-load empty reset behavior;
+                // stale candidate values must never replace the cache.
+                sourceRigReuse.reset(); cachePublication = .emptyStaleFallback
+            }
+        } else { sourceRigReuse.reset(); cachePublication = .empty }
+        sourceShapeReuse.reset()
         sourceMakerLibrary = makerLibrary; sourcePreparedAssets = prepared
         sourceAssetSelections = prepared?.selections ?? []
         sourceSelectionRows = selectionRows(card: imported, library: makerLibrary, coordinate: 0,
@@ -570,9 +637,17 @@ final class MakerModel: ViewportInputHandler, LivePacedHandler {
         applySourceCustomization = preview.supportsBodyCustomization || preview.supportsFaceCustomization
         status = "\(source.rig.nodes.count) nodes · \(source.rig.skins.count) skin bindings · \(preview.hasSourceAppearance ? "texture preview" : "neutral material")"
         frameSourceRig()
+        guard recordInitialLoad else { return nil }
+        return .init(manifestURL: url, sourcePrefab: source.sourcePrefab,
+            nodeCount: source.rig.nodes.count, skinCount: source.rig.skins.count, partCount: source.parts.count,
+            geometryOutcome: geometry.outcome, referenceLoad: geometry.referenceLoaded ? .loaded : .skipped,
+            appearanceOutcome: appearanceOutcome, cachePublication: cachePublication,
+            publishedEntries: cachePublication == .seeded ? (seedSample?.retainedEntries ?? 0) : 0,
+            geometryMilliseconds: geometryMilliseconds, selectedPreparationStages: selectedTimings?.sample,
+            stagedRigReuse: seedSample)
     }
 
-    func closeSourceRig() { cancelSourceSelection(); sourceRigReuse.reset(); sourceShapeReuse.reset(); sourceSelectionRows = []; sourceHeadChoices = []; sourceNormalBaseURL = nil; importedSourceCard = nil; importedSourceCardURL = nil; sourceRigPreview = nil; resetCamera(); refresh(); status = "Character Maker" }
+    func closeSourceRig() { cancelSourceSelection(); sourceInitialLoadTiming = nil; sourceRigReuse.reset(); sourceShapeReuse.reset(); sourceSelectionRows = []; sourceHeadChoices = []; sourceNormalBaseURL = nil; importedSourceCard = nil; importedSourceCardURL = nil; sourceRigPreview = nil; resetCamera(); refresh(); status = "Character Maker" }
 
     func setModLibrary(_ library: SourceModLibrary?, catalog: SourceModCatalog? = nil,
                        contract: SourceModCatalogContract? = nil) throws {
@@ -657,7 +732,9 @@ final class MakerModel: ViewportInputHandler, LivePacedHandler {
 
     func clearBoneModifiers() { sourceBoneModifiers = nil; refresh(); status = "Bone modifiers cleared" }
 
-    func importSourceCardSettings(url: URL) throws {
+    func importSourceCardSettings(url: URL, recordInitialLoad: Bool = false) throws {
+        sourceInitialLoadTiming = nil
+        let start = recordInitialLoad ? ProcessInfo.processInfo.systemUptime : nil
         cancelSourceSelection()
         let imported = try SourceCharacterCard.load(url: url)
         try SourceMakerLibrary.validateAssemblyIdentity(card: imported)
@@ -675,8 +752,17 @@ final class MakerModel: ViewportInputHandler, LivePacedHandler {
         }
         // Asset loading, identity checks, material recipes and pose evaluation all
         // happen before replacing the current Maker state.
-        try openSourceRig(url: urlForRig, importing: imported, cardURL: url)
+        let preparation = try openSourceRig(url: urlForRig, importing: imported, cardURL: url,
+            recordInitialLoad: recordInitialLoad)
         status = "Imported card · \(sourceAppearanceAppliedFields.count) appearance fields · \(sourceBoneModifiers?.count ?? 0) bone modifiers"
+        if let start, let preparation {
+            // The binding hash is inside the inclusive import interval. It is
+            // diagnostic overhead, distinct from the selected rig SHA counters.
+            let hash = imported.sourceSHA256
+            sourceInitialLoadTiming = .init(importMilliseconds: (ProcessInfo.processInfo.systemUptime - start) * 1000,
+                cardURL: url, cardSHA256: hash, sex: identity.sex, headID: identity.headID,
+                boneType: identity.boneType, exType: identity.exType, preparation: preparation)
+        }
     }
 
     private func applyCardAppearance(_ draft: SourceCardAppearance, base: SourcePreviewAppearance, url: URL,
