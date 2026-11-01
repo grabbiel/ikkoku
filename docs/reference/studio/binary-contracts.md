@@ -90,7 +90,8 @@ whitespace, and plain numbers without an exponent. A number with a fraction
 becomes the nearest Double and an integer an Int64, each then rounded to Float,
 which is the value `JSONSerialization` and `NSNumber.floatValue` give. Every
 other form goes to `JSONSerialization` as before, so it reads, or is refused,
-exactly as it was. `KoikatsuJSONVectorTests` holds the two readings to the
+exactly as it was, with the error at the offset where the string starts.
+`KoikatsuJSONVectorTests` holds the two readings to the
 same Float bits or the same error: a fuzz of number forms and malformed
 strings, and, opt-in, every vector string in the user's scenes.
 
