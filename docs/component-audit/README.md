@@ -165,8 +165,10 @@ acceptance boundary; their old “next” steps are historical, not a live queue
   multiple-window ownership still need separate acceptance.
   An [ordered delete/copy diagnostic](../reference/studio/scene-editing.md#ordered-deletecopy-diagnostic-278-2026-10-31)
   identifies an allocation/root-order mismatch and preserves both plugin-rich
-  refusals. Original-player shutdown failures remain unresolved; this adds no
-  supported export behavior.
+  refusals. An [instrumented baseline-only control](../reference/studio/scene-editing.md#baseline-only-shutdown-control-2026-11-01)
+  also reaches the probe's own quit callback and exits with an access violation.
+  Evidence completeness and resource release are confirmed separately;
+  original-player lifecycle remains unaccepted, with no added export support.
   General plugin compatibility remains outside the supported subset.
 
 Use the linked issue/PR state for work in review, and the owning reference for
