@@ -979,10 +979,10 @@ The refusal is the engine's message, which names each plug-in and its reason. Th
 
     - **Blockers.** A second read-only run (`run-2`) counted refusal reasons per scene, with numbers masked. Its counts equal the first run's.
       - KKPE refuses deletes and copies in 51 scenes, MaterialEditor's item-keyed data in 23, LightSettings an added or copied light in 3, non-empty NodesConstraints and Timeline data in 3 each, and ItemLayerEdit in 2. No scene is refused only by unknown IDs.
-      - Sideloader refuses every edit kind in 8 scenes, all for one reason: a record names an object the scene does not have. This is not a gap in recognizing the data.
-        - This Sideloader's save never writes such a record. It rebuilds the lists from the same objects our walk visits, by each object's own `dicKey` (StudioObjectSearch.cs, UniversalAutoResolver.cs:560–775).
+      - Sideloader refused every edit kind in 8 scenes, all for one reason: a record named an object the survey's walk did not have.
+        - **Corrected 2026-11-01 (ST-T03k).** Those records name nested lights that the survey itself dropped. The scenes have them, and so does CharaStudio in this install. See [survey 3's stale Sideloader records](#survey-3s-stale-sideloader-records-st-t03k).
+        - The recovered rules still hold. This Sideloader's save never writes such a record: it rebuilds the lists from the same objects our walk visits, by each object's own `dicKey` (StudioObjectSearch.cs, UniversalAutoResolver.cs:560–773).
         - Its load throws at the first such record (`dictionary[item2.DicKey]`, :1342). ExtendedSave catches that per subscriber (ExtensibleSaveFormat/ExtendedSave.cs:1381–1395). Every later record then stays unresolved, and so do the map, filter, ramp and BGM (:474–481).
-        - So these scenes already load partly unresolved in CharaStudio with this install. Its next save drops the unresolved items' records, and those items lose their mod identity. There is no faithful output to match, and the export is refused.
     - **Card links.** No character card in the 182 loaded scenes names KKAnimationController `Links` or `Eyes`, so the card check refuses nothing. The detection reads each card's ExtendedSave data as `OICharInfo.Load` loads it (OICharInfo.cs:250–251). It had no positive control on the player.
 
 - **Rewrites, Engine.** Two more test files cover the [rewrites](#plug-in-data-rewrites):
@@ -1032,7 +1032,7 @@ The refusal is the engine's message, which names each plug-in and its reason. Th
   | Add a camera | 50/0/11 | 51/0/10 |
   | Route point add or delete | none of the 61 has a route | — |
 
-  - **Blockers** (scenes per reason, numbers masked): MaterialEditor version 0 data 23, a stale Sideloader record 8, Timeline object indices 3, LightSettings 3, ItemLayerEdit 2, a KKPE pose entry without a controller ID 1, and a NodesConstraints constraint copy 1. KKPE refused deletes and copies in 51 scenes in survey 2. Each add count rose by one: NodesConstraints' rewrite now renumbers constraints after an add, and survey 2 refused that in one scene nothing else blocks.
+  - **Blockers** (scenes per reason, numbers masked): MaterialEditor version 0 data 23, a stale Sideloader record 8 (a survey artifact, [below](#survey-3s-stale-sideloader-records-st-t03k)), Timeline object indices 3, LightSettings 3, ItemLayerEdit 2, a KKPE pose entry without a controller ID 1, and a NodesConstraints constraint copy 1. KKPE refused deletes and copies in 51 scenes in survey 2. Each add count rose by one: NodesConstraints' rewrite now renumbers constraints after an add, and survey 2 refused that in one scene nothing else blocks.
   - **KKPE cards.** 794 characters carry KKPE card data, none in a legacy trailer. 52 of them have a `kkpe` entry without a `characterInfo` string or without a non-zero `uniqueId`. Every character duplicate in every scene was judged, and none was refused for its card, so none of the 52 is in a scene with a `kkpe` entry. The writer reads cards only there. In such a scene, a copy of such a character is refused by name.
   - **Card links.** No installed scene's cards name KKAnimationController links, as in survey 2.
 
@@ -1066,11 +1066,48 @@ The refusal is the engine's message, which names each plug-in and its reason. Th
 - The orphan rule holds for the pinned install only.
 - KKPE writes per-session instance IDs, so an export of a scene with KKPE data matches CharaStudio's only up to those IDs, as CharaStudio's own saves match each other.
 - In a scene with a character, CharaStudio's save also refreshes the character's neck look bytes, eye angles and animator time from the running character (`OCIChar.OnSavePreprocessing`, OCIChar.cs:586–600). Our export keeps the loaded values, so it matches CharaStudio's save only up to those fields, as two CharaStudio saves do.
-- A Sideloader record that names an object the scene does not have refuses every export that adds, deletes or copies objects or edits route points. Such records are stale: this install's Sideloader neither writes them nor loads past them. Eight installed scenes have one.
+- A Sideloader record that names an object the scene does not have refuses every export that adds, deletes or copies objects or edits route points. Such records are stale: this install's Sideloader neither writes them nor loads past them. No installed scene has one. Survey 3's eight were a survey artifact ([below](#survey-3s-stale-sideloader-records-st-t03k)). Dropping them on export is filed as hardening (#322).
+- An export that adds or copies a light is refused when the scene would then hold more than two lights. That is CharaStudio 1.0.4.2's limit (`isLightCheck`). The installed KK_Fix_UnlimitedMapLights lifts it, so in this install CharaStudio keeps any number (#320).
 - No installed scene's cards name KKAnimationController links (surveys 2 and 3). The card rule rests on synthetic cards, the parity gate and phase D's live and inert controls.
 - A KKPE lone collider was not added on the player: the install's only collider item names an asset bundle manifest the install does not have. Its rules rest on the Engine tests and the parity gate.
 - 52 installed characters carry KKPE card data without a controller ID. They are all in scenes without a `kkpe` entry, where no card is read. In a scene with one, a copy of such a character is refused.
-- What survey 3 still refuses: MaterialEditor version 0 data (23 scenes), stale Sideloader records (8), Timeline object indices (3), LightSettings on an added or copied light (3), ItemLayerEdit deletes and copies (2), a KKPE pose entry without a controller ID (1) and a NodesConstraints constraint copy (1).
+- What survey 3 still refuses: MaterialEditor version 0 data (23 scenes), stale Sideloader records (8, a survey artifact; survey 4 is predicted to refuse none for Sideloader), Timeline object indices (3), LightSettings on an added or copied light (3), ItemLayerEdit deletes and copies (2), a KKPE pose entry without a controller ID (1) and a NodesConstraints constraint copy (1).
+
+### Survey 3's stale Sideloader records (ST-T03k)
+
+Reviewed 2026-11-01. On 2026-10-26 the user decided that exports should drop stale Sideloader records, so the mod items in the affected scenes load. That decision rested on survey 3's count of 8 scenes with a record naming an object the scene does not have. **Those 8 are a survey artifact. In the user's install no record is stale, and no repair is needed.** The repair stays filed as hardening (#322).
+
+- **Cause 1: the light count.** `PluginSceneSurvey.Model` cleared `SceneInfo.hashIndex` before each scene, but not its light count.
+  - A load starts from a new `SceneInfo` (`Studio.LoadScene`, Studio.cs:514), so its count starts at 0.
+  - `ObjectInfoAssist.LoadChild` reads a nested light only while `Studio.IsLightCheck()` holds (ObjectInfoAssist.cs:30–44, Studio.cs:826–829). That is `lightCount < 2` (SceneInfo.cs:109). The `OILightInfo` constructor counts each light (OILightInfo.cs:27–39), and a dropped one uncounts itself (`DeleteKey`, :67–71). Root lights are not checked (SceneInfo.cs:323–352).
+  - So after the survey session's second light, every nested light in every later scene dropped out of the walk.
+- **Cause 2: the player root.** The root lacked KK_Fix_UnlimitedMapLights 22.1 (IllusionFixes/KK_Fix_UnlimitedMapLights.dll, `23051ec9…`), which the user's install has.
+  - Its Harmony postfixes on the getters make `isLightCheck` return true and `isLightLimitOver` false (IllusionFixes/UnlimitedMapLights.cs:40–52).
+  - So the install's CharaStudio keeps every nested light.
+- **What the scenes hold.** `UserPluginSceneTallyTests` reads the installed scenes with the writer's own decode, which keeps every light (opt-in, `IKKOKU_USER_PLUGIN_SCENES`, counts and hash prefixes only).
+  - The 61 scenes with entries hold 26,438 objects. 40 of them are nested lights, all in 8 files. Survey 3 counted 26,398 objects, which is 26,438 − 40. Its largest scene had 3,765, which is 3,769 − 4.
+  - The 51 scenes with a Sideloader entry hold 2,780 `itemInfo` and 41 `patternInfo` records.
+    - No record names a missing object, one of the wrong kind or an object twice.
+    - Every record's `SceneObjectOrder` and `Slot` match its object.
+  - 34 records name nested lights. They are in the same 8 files (7 distinct; SHA-256 prefixes `47c2df53` twice, `be7be6e1`, `4b87a4f4`, `5c449f10`, `b18f40d9`, `b39ac5e0`, `d7931e7c`).
+  - The writer refuses none of the 51 scenes for Sideloader.
+- **Deep scenes.** The tally runs its decodes on an 8 MiB thread. A Debug decode of the deepest installed scene (65 levels, 292 objects) needs 448 to 512 KiB of stack, a GCD worker's whole stack, and the app's character builds decode scenes on GCD workers (#321).
+- **A vanilla install** (without KK_Fix_UnlimitedMapLights). CharaStudio itself drops the nested lights past two at load: 27 lights in 6 of the 8 files, named by 25 Sideloader records. Sideloader's load then stops at the first of those records (UniversalAutoResolver.cs:1342), and later records stay unresolved. That is CharaStudio's behaviour, not ours. Our decode keeps every light, as the user's install does.
+- **Survey 4 (prediction).** Survey 4 is survey 3 with the light count reset per scene and KK_Fix_UnlimitedMapLights in the player root, SHA-checked. Its `nestedLightsKept` and `nestedLightsDropped` counts are the control. The prediction comes from the Swift writer, judged on plug-in rules only, as the survey judges them. The VM phase is to confirm it.
+
+  | Edit kind (all/some/none of 61) | Survey 3 | Survey 4, predicted |
+  | --- | --- | --- |
+  | Delete | 36/14/11 | 36/21/4 |
+  | Duplicate | 35/15/11 | 35/22/4 |
+  | Add a folder | 51/0/10 | 58/0/3 |
+  | Add a light | 48/0/13 | 55/0/6 |
+  | Add a camera | 51/0/10 | 58/0/3 |
+
+  - The Sideloader blocker goes from 8 scenes to 0.
+  - **The 8 files** (`UserPluginSceneTallyTests`, `IKKOKU_USER_PLUGIN_SCENES_JUDGE=1`, Release, 155 s).
+    - Deletes and copies: 7 files move from "none" to "some", and 1 stays "none".
+    - Each addition: 7 move to "all", and 1 stays "none". Timeline object indices refuse that file's additions.
+    - Refused edits by reason, numbers masked: MaterialEditor version 0 data 778, Timeline object indices 35 (3 of them that file's additions) and ItemLayerEdit 4. Sideloader refuses none.
 
 ## Older scene versions: saved as 1.0.4.2
 
