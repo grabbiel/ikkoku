@@ -3964,11 +3964,10 @@ What the numbers show:
 - **An unedited export of a legacy scene takes about two decodes.** The
   upgrade decodes its result to check it, and every export decodes the
   written scene to verify it.
-- **The 1.0.4.2 form: pending a second window.** The after-runs are 1.0 to
-  4.7 ms slower than the before-runs, but the two before-runs differ by
-  3.1 ms. Three more rounds of before, after, after, before, timing only the
-  showoff and 1.0.4.2 decodes (`IKKOKU_LEGACY_SCENE_PERF_CURRENT_ONLY=1`),
-  are pending the orchestrator's next window.
+- **The 1.0.4.2 form is unchanged** ([second window](#second-window-2026-11-01)).
+  In the first window the after-runs were 1.0 to 4.7 ms slower, within the
+  before-runs' own 3.1 ms spread. In the second window, the medians of the
+  valid runs differ by 0.04 ms.
 - **Where the decode time goes.** The 85 ms of the largest scene's decode,
   in both builds, is its item colours: a `sample` of the before-build shows
   `jsonVector`, which reads each colour and UV vector with
@@ -3976,16 +3975,72 @@ What the numbers show:
   vectors, so this scene has about 26,500. That cost predates this change;
   a follow-up change reads these vectors directly.
 
+### Second window (2026-11-01)
+
+The three rounds the first window left open, with
+`IKKOKU_LEGACY_SCENE_PERF_CURRENT_ONLY=1`, which times only the showoff and
+1.0.4.2 decodes.
+
+- **Builds.** Before is main `7cb4f995`, with the probe file copied in
+  without its last two timings, which use APIs main lacks. After is this
+  change merged with it (`fd1fb85a`). Both are Release (`swift build -c
+  release --build-tests -Xswiftc -enable-testing`). The scenes are those of
+  the first window.
+- **Window.** The orchestrator granted a quiet window (11:39–11:42) and a
+  rerun (11:45–11:48). Each attempt ran before, after, after, before per
+  round, one process per run. The load average stayed at 1.9–6.3.
+- **Validity.** A 1 s watcher logged every other process above 20% CPU. A run
+  is invalid when any process outside this work passes 20%, except
+  WindowServer, the Claude app and its agents, and Firefox's
+  `plugin-container`, which stayed at 20–39%. macOS daemons made 13 of the 20
+  runs invalid: `corespotlightd` (up to 347%), and briefly `mds_stores`,
+  `mdworker`, `launchd`, `airportd` and the Codex app's daemon. No agent build,
+  test or app was running. The valid runs are round 2 and runs 2–4 of round
+  1, all from the first attempt.
+- **Evidence.** `.local/stt05a-legacy-scenes/logs/finish/window-attempt1/`
+  and `window-rerun1/` (one log per run with the load and top five processes
+  before and after it, the watcher's lines, and `validity.txt`), and
+  `window-tables.txt`.
+
+Each cell is the median of the runs' medians (each run takes 60 calls after
+10 warmups), their range, and the number of runs.
+
+| Scene, step | Runs | Before ms | After ms |
+| --- | --- | --- | --- |
+| showoff, `decodeDocument` | valid | 2.33 (2.30–2.36), n=3 | 2.36 (2.31–2.38), n=4 |
+| showoff, `decodeDocument` | all, invalid included | 2.31 (2.25–2.36), n=10 | 2.33 (2.23–2.42), n=10 |
+| largest legacy as 1.0.4.2, `decodeDocument` | valid | 79.67 (79.59–80.19), n=3 | 79.63 (79.44–79.82), n=4 |
+| largest legacy as 1.0.4.2, `decodeDocument` | all, invalid included | 79.27 (77.30–80.56), n=10 | 79.37 (78.47–80.53), n=10 |
+
+- **The 1.0.4.2 decode is the same in both builds.** The valid medians differ
+  by 0.04 ms, with overlapping ranges. Over all 20 runs they differ by 0.1 ms.
+  The 1–5 ms of the first window does not reappear.
+- **Showoff is within 0.05 ms.** The ranges overlap.
+- **The legacy paths, in this window** (after-build only: the four full-probe
+  runs of the round against the follow-up JSON vector change, all invalid by
+  the rule above, so indicative):
+  - the largest legacy scene decodes in 79.92 ms (78.93–80.66);
+  - its unedited export takes 160.63 ms (159.01–161.67), and `upgraded()`
+    alone 160.68 ms (158.22–163.85);
+  - the readback's record compare takes 0.40 ms (0.38–0.41).
+
+  The export is the upgrade, which decodes the legacy scene again for its
+  patches and decodes the result to check it. Its record compare is 0.4 ms.
+
 ### Correctness
 
 - **The corpus.** On the user's 182 scenes, the 120 current files decode to
   the same digest of every field in both builds, and their empty edits still
   export the input bytes. All 62 legacy files open and upgrade
-  ([corpus](studio/scene-records.md#corpus)).
+  ([corpus](studio/scene-records.md#corpus)). After the merge of main
+  `7cb4f995`, both builds print the same 182 lines as before it.
 - **Lanes and the Engine suite.** On `7562962d` (Debug, `--strict`, 0
   skipped): `studio-scenarios` passed 82/82 with the new
-  `studio-scenario-legacy-scene`, `maker-scenarios` (pending), and the Engine
-  suite 1,072 tests, with only the opt-in probes skipped.
+  `studio-scenario-legacy-scene`, and the Engine suite 1,072 tests, with only
+  the opt-in probes skipped. After the merge of main `7cb4f995` (head
+  `fd1fb85a`): `studio-scenarios` 87/87 and `maker-scenarios` 10/10 (Debug,
+  `--strict`, 0 skipped), and the Engine suite 1,131 tests with 0 failures
+  (strict, the shared map), only the 10 opt-in probes skipped.
 
 ### Scaling to a base M1 (estimate)
 
@@ -3998,7 +4053,9 @@ This uses the CPU factor of [scaling to the low end](#scaling-to-the-low-end-bas
 
 ### Limits
 
-- Two runs per build in one window, until the pending rounds.
+- The first window has two runs per build. The second has 3 valid before-runs
+  and 4 valid after-runs, plus 13 runs that macOS daemons made invalid; they
+  are reported, labelled.
 - Engine timing only. The app's import and export were not timed.
 - No M1 run.
 
