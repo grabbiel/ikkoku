@@ -886,7 +886,7 @@ The verdicts:
 - **Depth in map 27 fails on the oracle's renderer classes.** The oracle's map-only passes draw a renderer only when every one of its materials is opaque, so they leave out the whole renderer when one submesh is a particle or a blended material. Our probe draws the opaque submeshes. All 3,529 pixels over two steps lie in the coverage of the 14 opaque submeshes of the map's 12 mixed renderers (1,800 triangles), and ours is nearer on every one. Outside that coverage the depth p99 is 0 m (326,397 pixels).
 - **Particles pass in every case but map 21's outside view.** With each renderer drawn alone, map 11 goes from p99 0.261 to 0.006, map 21 from 1.17 to 0.005, map 22 from 0.33 to 0.014 and its outside view from 0.64 to 0.020, and map 27 from 0.79 to 0.086 (the first pass's numbers, on the same build without the split). Maps 1 and 15 passed before and are unchanged.
 - **Map 21's outside view fails the particle p99 at grazing angles,** a known difference: mean 0.0091 (gate 0.0156), p99 0.176 (gate 0.125), footprint IoU 0.999. Its particle image is byte-identical before and after the split, so the order is not the cause. 94 of its 107 pixels over 2⁻³ lie on one card seen nearly edge-on, 78–87° from its normal (|cos| 0.05–0.2); the other 13 are on a card that faces the camera. Leaving out the pixels below |cos| 0.1 gives a p99 of 0.106, but that figure only locates the error; the gate is not refiltered. The likely cause, not tested, is texture filtering at grazing angles: the mip choice and anisotropy of Metal against D3D11 (`particle_grazing.py`, `analysis/map21-outside-particle-grazing.json`).
-- **The depth control does not discriminate in map 21's and 22's outside views.** The depth gate's control shifts our depth image by one pixel and must then fail. These two views look mostly at distant ground at a 1000 m far plane, where neighbouring pixels differ by less than two steps, so the shifted image passes (p99 0.031 and 0.015 m against 0.031 m). No gate is changed and the cases count as failed. Geometry IoU is 1.0 in both, and that is the registration check that holds there.
+- **The depth control does not discriminate in map 21's and 22's outside views.** The depth gate's control shifts our depth image by one pixel and must then fail. These two views look mostly at distant ground at a 1000 m far plane, where neighbouring pixels differ by less than two steps, so the shifted image passes (p99 0.031 and 0.015 m against 0.031 m). No gate is changed and the cases count as failed. Geometry IoU is 1.0 in both, and that is the registration check that holds there. PR B replaces the control ([the depth control](#the-depth-control-slice-4-pr-b)).
 - **The split changes only what it should.** Recaptured on the same build, the 10 cases without particles are byte-identical, image for image. In the particle cases, every changed pixel of the particle image lies where two or more particle renderers overlap. In the colour image, the changed pixels also lie where a particle renderer overlaps a blended `Standard` draw, whose order against the particle draw now follows the renderer's centre; one pixel, at (405, 220) in map 22, is neither, a change of one level in red next to the particle coverage, at a rasterizer edge (`particle_order_change.py`). Map 34's four views change no pixel at all, and its gates are slice 3's.
 
 The analyses are in `.local/sta11d-map-coverage/analysis/` (`map19-outside-layer0.json`, `map25-outside-layer0.json`, `map29-layer0.json`, `map27-mixed-depth.json`, `map41-irradiance-error.json`, `irradiance-offset.json`), and the scripts in `tools/`.
@@ -1005,6 +1005,28 @@ Release captures, 17 per set: slice 3's 16 and map 41's scene. They come from `m
 - **Scenes.** No scene in `environment.json` names a map other than 33, 34 and 41. The others name none, and the legacy scene prints no map line.
 - **Lanes.** `main`'s scenario files expect the slice-3 counts: map 33's 8 draws, and map 34's 30 lightmapped draws and 1 particle draw. So `source-map`, `-source-map34` and the reload pair would fail on the slice-4 export (inferred from the files; `main`'s lane was not run on it). Install it only once this change has merged, and merge `main` into branches that run the Studio lane.
 
+## Slice 4 PR B
+
+PR B takes the items slice 4 left for its next change: the depth control, the oracle's culling mask and renderer classes, map 40's irradiance template, realtime GI, particles at grazing angles, vanish and a composited perf recheck.
+
+### The depth control (slice 4 PR B)
+
+The depth gate's control is now our depth-normals image shifted **two pixels along both axes** (`DEPTH_SHIFT_PIXELS`, `diagonalShiftControl`), and it must fail. The one-pixel horizontal shift is still reported (`onePixelShiftControl`, not gated).
+
+The old control could not fail where the view holds smooth surfaces. A horizontal shift leaves unchanged a surface whose depth changes only from row to row, and at the 1000 m far plane one quantization step is 1.5 cm. The far-view framing was wrong: map 22's outside view is a roof 3.7–4.7 m away. On the 21 slice-4 cases (`.local/sta11d-pr-b/tools/depth_controls.py`, `analysis/depth-controls.json`), the p99 in quantization steps, with the normal p99 in channel bytes; the gate allows 2 and 2:
+
+| Control | Fails | Weakest case |
+| --- | ---: | --- |
+| one pixel, horizontal (slice 4) | 19 of 21 | passes map21-outside (2 steps, 0 bytes) and map22-outside (1, 0) |
+| one pixel, vertical | 20 | passes map01-outside (2, 1) |
+| one pixel, diagonal | 21 | map22-outside: 3 steps, 1 byte |
+| **two pixels, diagonal** | **21** | **map22-outside: 6 steps, 68 bytes** |
+| the near field (within 10 m), one pixel horizontal | – | map22-outside lies wholly within 10 m and still passes |
+
+The two-pixel diagonal shift fails every case with margin, so it is the gated control. Rerun with it, the slice-4 comparison passes 15 of 21 cases (14 before): map22-outside now passes. The six that fail are the other PR-B items: map 19's and 25's outside views (the culling mask), map 27 (mixed renderers), map 41 and its showoff view (realtime GI), and map 21's outside view (particles at grazing angles).
+
+Tests (`test_compare_original_map.py`): a floor whose depth changes only by row passes the case with the horizontal shift not failing and the diagonal one failing; a wall facing the camera, the same depth everywhere, fails the case, because no shift can tell it apart.
+
 ## Performance
 
 Release, on the reference machine, in one quiet window. The full tables are in [performance: ST-A11](../performance.md#st-a11-original-studio-maps).
@@ -1072,7 +1094,7 @@ Slice 4 (all maps), Release, in one quiet window ([performance: slice 4](../perf
 - **The oracle's renderer classes.** The oracle's map-only passes disable a whole renderer when any of its materials is not opaque, so map 27's 12 mixed renderers lose their opaque submeshes there and its depth gate fails ([the gates](#the-gates)). The next VM phase hides only the non-opaque submeshes (an empty material in their slot), not the whole renderer.
 - **Realtime GI.** Map 41 bakes Enlighten realtime GI, which Unity adds to the indirect diffuse from a dynamic lightmap computed at runtime; the export cannot carry it, and map 41 fails irradiance by that term ([the gates](#the-gates)). Maps 30, 32, 37 and 40 carry dynamic lightmaps too, without a VM case. One option for the next VM phase is to read back each such map's runtime dynamic lightmap once and export it as a static input. Running Enlighten itself is out of scope.
 - **Particles at grazing angles.** Map 21's outside view fails the particle p99 on one card seen 78–87° from its normal ([the gates](#the-gates)). The next change tests the texture filtering and anisotropy hypothesis, Metal against D3D11.
-- **A depth control for far views.** The one-pixel-shift control cannot fail in views of distant ground at a 1000 m far plane (map 21's and 22's outside views). A better control, for example a near-field region or a larger shift, is the next VM phase's.
+- **A depth control for far views.** Done in PR B: a two-pixel diagonal shift ([the depth control](#the-depth-control-slice-4-pr-b)).
 - **Particle submeshes alone.** The oracle's particle pass enables whole renderers, so the comparison leaves out the pixels their `Standard` submeshes cover. The next VM phase adds a pass that enables only the particle submeshes. It also adds a map 40 camera that sees the map's three `Unlit/Transparent` renderers, which no slice-4 view covers.
 - **What the converter skips.** Mirrors, heat distortion, the live stage's effects and screen, vertex-lit particles, and every particle system, sprite and skinned renderer (map 23's option objects among them). Animated objects draw in their authored pose. Each map's catalog row and status line name them.
 - **Shader programs not compared.** `Custom/StandardDouble` (map 28) is drawn with Standard's formula on both faces, and `Shader Forge/main_item` (map 35) as an item; their own programs are not compared, and the catalog lists the dropped terms. Neither map has a VM case.
