@@ -432,13 +432,9 @@ Reviewed 2026-11-01. When one export both deletes source records and adds record
 - **Shutdown fault.** The player exits with access violation `0xC0000005` at quit, after it has written every output. The baseline-only control in the [diagnostic](#ordered-deletecopy-diagnostic-278-2026-10-31) shows the same exit without any edit. A run counts when its status has no error, every output is present and hashed, each phase A save is byte-identical to its resave and each phase C save is under `liveStateMasked`, and the control's save equals the baseline under Sideloader's `LocalSlot` mask. The quit exit is then recorded as this known fault.
 - **Comparison.** Phase A rows must be byte-identical. Phase C rows are compared under `liveStateMasked` (the characters' neck, eye and animator time bytes), and also with KKPE's instance IDs renamed (`pluginProbeComparable`) when a row copies an item with KKPE data. The report lists every masked offset per row. Reloaded keys must be a subset of the saved session's keys; the difference is the leaked FK and aid keys above.
 
-**Light phase** ([#316](https://github.com/grabbiel/ikkoku/issues/316), [#320](https://github.com/grabbiel/ikkoku/issues/320)). `--phase ol` is the same exec on phase A's fixture, with two players in one private root: vanilla CharaStudio 1.0.4.2, then the same root with KK_Fix_UnlimitedMapLights copied in from the install. Not run yet. The copy follows three rules:
+**Light phase** ([#316](https://github.com/grabbiel/ikkoku/issues/316), [#320](https://github.com/grabbiel/ikkoku/issues/320)). `--phase ol` is the same exec on phase A's fixture, with two players in one private root: vanilla CharaStudio 1.0.4.2, then the same root with KK_Fix_UnlimitedMapLights copied in from the install. Not run yet.
 
-  - The install's file must match the pinned SHA-256 and size before anything is copied, and the copy is checked again.
-  - The vanilla player starts only once a sweep of the root, by size and hash whatever the name, finds no copy of the fix.
-  - The copy leaves with the root, and the run checks that it is gone.
-
-
+- **The fix.** The install's file must match the pinned SHA-256 and size before anything is copied, and the copy is checked again. The vanilla player starts only once a sweep of the root, by size and hash whatever the name, finds no copy. The copy leaves with the root, and the run checks that it is gone.
 - **Steps.** Each player runs the four `LightCases` (a copy and two adds within two lights, then a copy and an add past the second), and loads and saves two of our exports with three lights. `sourceSceneLightProbeWritesItsInputs` writes them: three root lights, and two root lights before a new folder that holds the third.
 - **Records.** Every snapshot adds `SceneInfo.lightCount` and both getters, read through reflection so that a Harmony patch answers. The trace lists every Harmony patch on `SceneInfo`. Before the players, a counts-only byte scan reads the install's plug-in DLLs: how many hold each getter name, and which of them the fix holds.
 - **Comparison.** `sourceSceneLightExportsMatchCharaStudio` (opt-in, `IKKOKU_LIGHT_ORACLE`) requires:
