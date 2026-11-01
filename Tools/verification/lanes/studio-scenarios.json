@@ -2712,6 +2712,40 @@
       "timeout": 600
     },
     {
+      "id": "studio-scenario-light-limit",
+      "argv": [
+        ".local/build/Build/Products/Debug/Ikkoku.app/Contents/MacOS/Ikkoku"
+      ],
+      "fixtures": [
+        {
+          "env": "IKKOKU_SOURCE_SCENE",
+          "kind": "file",
+          "from": "IKKOKU_STUDIO_SCENARIO_SCENE"
+        },
+        {
+          "env": "IKKOKU_SOURCE_AVATAR",
+          "kind": "file"
+        }
+      ],
+      "env": {
+        "IKKOKU_STUDIO_SCENARIO": "Tools/verification/scenarios/light-limit.json",
+        "IKKOKU_STUDIO_SCENARIO_REPORT": ".local/verification/reports/studio-scenario-light-limit.json"
+      },
+      "referenceTier": "app-smoke",
+      "tolerance": "#320 light limit on koikatu_cs0002591 (no lights): add a point, a spot and a directional light at the root. With the export setting off (CharaStudio 1.0.4.2's two-light limit, SceneInfo.isLightCheck) the export is refused with the light count 3 and no file is written; with it on (KK_Fix_UnlimitedMapLights) the export writes all three lights and the status names the three lights and what a CharaStudio without the fix drops. After reimport the lights carry keys 113, 114 and 115 (the first free keys) after the eight source roots. A negative control proves the child-order check fails without key 115.",
+      "artifacts": [
+        {
+          "path": ".local/verification/reports/studio-scenario-light-limit.json",
+          "kind": "scenario-report"
+        },
+        {
+          "path": ".local/verification/scenario-exports/light-limit.png",
+          "kind": "exported-scene"
+        }
+      ],
+      "timeout": 600
+    },
+    {
       "id": "studio-scenario-plugin-rewrite-delete",
       "argv": [
         ".local/build/Build/Products/Debug/Ikkoku.app/Contents/MacOS/Ikkoku"
