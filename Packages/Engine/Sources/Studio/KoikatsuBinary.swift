@@ -188,8 +188,8 @@ struct KoikatsuBinaryReader {
     /// sets none: `ObjectInfoAssist.LoadChild` counts no depth, so its only
     /// bound is its main thread's stack. Ours is the decode's: every scene
     /// decode runs on an 8 MiB stack (the main thread, or the character
-    /// batch's workers, #321), and 200 levels take about 3.5 MiB in Debug
-    /// through nested characters, the deepest chain per level
+    /// batch's workers, #321), and a decode of 200 levels takes 3.4 MiB in
+    /// Debug through nested characters, the deepest chain per level
     /// (`SourceSceneDeepStackTests`). The installed scenes go 65 levels deep
     /// at most. Before #326 the reader stopped at 65.
     static let maximumLevels = 200

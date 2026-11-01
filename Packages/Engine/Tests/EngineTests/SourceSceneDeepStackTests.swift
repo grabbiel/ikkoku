@@ -176,26 +176,26 @@ func theCharacterBatchDecodesTheDeepestScenesOnItsOwnStack() async throws {
 
 /// The main thread's scene paths on the deepest scenes the reader accepts,
 /// measured on an 8 MiB thread (the main thread's size): the export's
-/// read walk, its topology writer and read-backs (a rename of the deepest
+/// read walk, its topology writer and read-backs (a move of the deepest
 /// object, and a deletion of the deepest folder or the root character), the
-/// insertion writer and read-back (a folder one level above the cap, and
-/// its refusal at the cap), the layout import (folders only; it imports
+/// insertion writer and read-back (a record at the cap, and a folder's
+/// refusal one level past it), the layout import (folders only; it imports
 /// folders and items), and the record walks of the import and export.
 @Test func theMainThreadPathsHoldTheDeepestScenes() async throws {
     let deepest = Int32(deepestLevels - 1)
     for chain in DeepChain.allCases {
         // Checks stay in the test's task: the thread returns what they compare.
-        let (taken, counts, refusal) = try await liveTickOffPool { () -> ([String: Int], [String: Int], String) in
+        let (taken, counts, refusal) = try await liveTickOffPool { () -> ([String: Int], [String: Int], String?) in
             let data = deepScene(levels: deepestLevels, chain: chain)
             let document = try KoikatsuSceneReader.decodeDocument(data)
-            let point: Int32? = chain == .characters ? 0 : nil
             var taken: [String: Int] = [:], counts: [String: Int] = [:]
             func exported(_ edits: SourceSceneEdits) throws -> Int {
                 let edited = try document.editedData(edits)
                 return SourceSceneInsertionPlan.records(try KoikatsuSceneReader.decodeDocument(edited).snapshot).count
             }
-            taken["export (rename the deepest)"] = try stackTaken {
-                counts["export (rename)"] = try exported(.init(names: [deepest: "Renamed"]))
+            let moved = KoikatsuChangeAmount(position: SIMD3(1, 2, 3), rotationDegrees: .zero, scale: .one)
+            taken["export (move the deepest)"] = try stackTaken {
+                counts["export (move)"] = try exported(.init(transforms: [.init(.object(deepest), transform: moved)]))
             }
             // The export refuses to delete a character's accessory child on
             // its own, so the nested characters go from the root down.
@@ -203,14 +203,23 @@ func theCharacterBatchDecodesTheDeepestScenesOnItsOwnStack() async throws {
             taken["export (delete \(chain == .folders ? "the deepest" : "the root"))"] = try stackTaken {
                 counts["export (delete)"] = try exported(.init(deletions: [deletion]))
             }
-            taken["insertion (a folder at the cap)"] = try stackTaken {
-                let stage = try document.inserting([.init(.folder(name: "New"), parent: .source(deepest - 1), attachment: point)])
+            // The export adds nothing onto a character's accessory point but
+            // a duplicate beside its original, so the nested characters take
+            // a copy of the deepest, and only a folder can pass the cap.
+            let atTheCap: SourceSceneInsertion = chain == .folders
+                ? .init(.folder(name: "New"), parent: .source(deepest - 1))
+                : .init(.duplicate(of: deepest), parent: .source(deepest - 1), attachment: 0)
+            taken["insertion (at the cap)"] = try stackTaken {
+                let stage = try document.inserting([atTheCap])
                 counts["insertion"] = SourceSceneInsertionPlan.records(stage.document.snapshot).count
             }
-            var refusal = "inserted"
-            taken["insertion (a folder past the cap)"] = stackTaken {
-                do { _ = try document.inserting([.init(.folder(name: "New"), parent: .source(deepest), attachment: point)]) }
-                catch { refusal = String(describing: error) }
+            var refusal: String?
+            if chain == .folders {
+                refusal = "inserted"
+                taken["insertion (a folder past the cap)"] = stackTaken {
+                    do { _ = try document.inserting([.init(.folder(name: "New"), parent: .source(deepest))]) }
+                    catch { refusal = String(describing: error) }
+                }
             }
             taken["record walks"] = stackTaken {
                 counts["records"] = SourceSceneInsertionPlan.records(document.snapshot).count
@@ -232,11 +241,12 @@ func theCharacterBatchDecodesTheDeepestScenesOnItsOwnStack() async throws {
             print("[#326 deep stack] \(deepestLevels) nested \(chain.rawValue), \(path): \(bytes / 1024) KiB of stack")
             #expect(bytes < SourceStudioCharacterBatch.stackSize / 2, "\(chain.rawValue), \(path): \(bytes) bytes")
         }
-        var expected = ["export (rename)": deepestLevels, "export (delete)": chain == .folders ? deepestLevels - 1 : 0,
+        var expected = ["export (move)": deepestLevels, "export (delete)": chain == .folders ? deepestLevels - 1 : 0,
                         "insertion": deepestLevels + 1, "records": deepestLevels]
         if chain == .folders { expected["layout import"] = deepestLevels }
         #expect(counts == expected, "\(chain.rawValue)")
-        #expect(refusal == #"limitExceeded("objects nested more than 200 levels deep (Ikkoku reads at most 200)")"#, "\(chain.rawValue)")
+        let capRefusal = #"limitExceeded("objects nested more than 200 levels deep (Ikkoku reads at most 200)")"#
+        #expect(refusal == (chain == .folders ? capRefusal : nil), "\(chain.rawValue)")
     }
 }
 
