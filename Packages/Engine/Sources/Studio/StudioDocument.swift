@@ -176,6 +176,12 @@ public struct StudioDocument: Codable, Sendable, Equatable {
     /// Documents saved before this field existed, and documents with no file
     /// reference, decode it as nil; see `StudioResourceReferences.swift`.
     public var resourceBinding: ResourceBinding?
+    /// #278: an imported original scene's deletes and additions in the order
+    /// they were made (`SourceSceneEditLog`), so its export can give added
+    /// records CharaStudio's keys. Set empty at import; documents saved
+    /// before this field existed decode it as nil, and their exports name
+    /// that as the reason the order was not replayed.
+    public var sourceStructuralEdits: SourceSceneEditLog?
 
     public init() {
         camera.target = Float3(0, 0.9, 0); camera.distance = 3.4; camera.yaw = 0.35; camera.pitch = 0.12

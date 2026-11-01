@@ -1957,7 +1957,7 @@ final class StudioModel: ViewportInputHandler, LivePacedHandler {
         // and friends load with no parent); an imported scene follows it, so
         // the new record's transform is its world placement.
         if doc.sourceSceneSHA256 == nil, let sel = selectedObject, sel.kind == .folder { o.parent = sel.id }
-        doc.objects.append(o)
+        doc.recordingSourceEdit(.insert([o.id])) { $0.objects.append(o) }
         if select { selection = o.id }
         status = "Added \(o.name)"
     }
@@ -2013,7 +2013,7 @@ final class StudioModel: ViewportInputHandler, LivePacedHandler {
             return
         }
         pushUndo(force: true)
-        doc.remove(id)
+        doc.removeRecordingSourceEdit(id)
         // The document's refresh already released the instances of the object and
         // its descendants; this keeps the delete path explicit.
         releaseInstances { $0 == id }
@@ -2027,7 +2027,7 @@ final class StudioModel: ViewportInputHandler, LivePacedHandler {
         o.id = UUID()
         o.name += " copy"
         o.transform.position.x += 0.5
-        doc.objects.append(o)
+        doc.recordingSourceEdit(.insert([o.id])) { $0.objects.append(o) }
         selection = o.id
     }
 
@@ -2077,7 +2077,7 @@ final class StudioModel: ViewportInputHandler, LivePacedHandler {
         // that follows already treats objects attached to a route character
         // copy as waiting for its build.
         startSourceRouteCharacterBuilds(routeCharacterBuilds)
-        doc.objects += copies
+        doc.recordingSourceEdit(.insert(copies.map(\.id))) { $0.objects += copies }
         if let active = activeSourceCamera, let copy = remap[active] { activeSourceCamera = copy }
         selection = remap[id]
         status = subtree.count == 1 ? "Duplicated \(top.name)" : "Duplicated \(top.name) with \(subtree.count - 1) child objects"
@@ -2122,7 +2122,7 @@ final class StudioModel: ViewportInputHandler, LivePacedHandler {
                 // order, so the record moves to the end in one write.
                 var objects = doc.objects
                 objects.remove(at: i); objects.append(moved)
-                doc.objects = objects
+                doc.recordingSourceEdit(.unordered(.move)) { $0.objects = objects }
             } catch {
                 status = "Reparent failed: \(error)"
             }
@@ -2223,6 +2223,7 @@ final class StudioModel: ViewportInputHandler, LivePacedHandler {
         imported.sourceNativePlugins = doc.sourceNativePlugins
         imported.name = sceneURL.deletingPathExtension().lastPathComponent + " — source preview"
         imported.sourceSceneFile = sceneURL.path; imported.sourceSceneSHA256 = hash
+        imported.sourceStructuralEdits = SourceSceneEditLog()
         imported.sourceVoiceCatalogFile = ProcessInfo.processInfo.environment["IKKOKU_STUDIO_VOICE_CATALOG"]
         var diagnostics = ["Source scene preview uses converted card selections, shape settings, static ABMX, expressions and saved FK. Missing assets and unimplemented consumers remain listed below."]
         var sceneLightOverride: MainLight?
@@ -2977,6 +2978,10 @@ final class StudioModel: ViewportInputHandler, LivePacedHandler {
         // placement is written by the transform edit below.
         let topology = try SourceSceneExportValidation.topologyEdits(doc, against: stage.snapshot, keys: staged.keys)
         var edits = SourceSceneEdits(deletions: topology.deletions, reparents: topology.reparents)
+        // #278: replayed in the order they were made, deletes and additions
+        // give each added record CharaStudio's key and root position.
+        let order = SourceSceneExportValidation.order(doc, staged: staged, deletions: topology.deletions, reparents: topology.reparents)
+        if case .replayed(let steps) = order { edits.order = steps }
         for object in doc.objects {
             guard let key = staged.keys[object.id], let original = records[key] else {
                 throw RigError.invalid("Original-scene export contains an unknown source object.")
@@ -3159,15 +3164,9 @@ final class StudioModel: ViewportInputHandler, LivePacedHandler {
             edits.thumbnailData = try CaptureOutput.pngData(image)
         }
         try staged.stage.editedData(edits).write(to: url, options: .atomic)
-        // ST-T03i: entries no installed plug-in reads travel verbatim; that
-        // is CharaStudio's behavior only while no installed plug-in owns them.
-        let orphans = source.orphanPluginIDs
-        // ST-T05a: a scene from an older CharaStudio is written the way
-        // CharaStudio 1.0.4.2 saves it, so even an unedited export changes
-        // its bytes.
-        status = "Exported edited original scene to \(url.lastPathComponent)"
-            + (source.isLegacy ? ", saved as 1.0.4.2 from CharaStudio \(source.snapshot.version), as CharaStudio does" : "")
-            + (orphans.isEmpty ? "" : ". It keeps plug-in data no installed plug-in reads, unchanged: \(orphans.joined(separator: ", "))")
+        // ST-T05a's legacy note, ST-T03i's orphaned plug-in data and #278's
+        // fallback reason, in that order.
+        status = SourceSceneExportValidation.exportStatus(fileName: url.lastPathComponent, source: source, order: order)
     }
 
     /// Deterministic integration input using original object/bone IDs. This

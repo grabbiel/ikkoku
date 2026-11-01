@@ -2712,6 +2712,44 @@
       "timeout": 600
     },
     {
+      "id": "studio-scenario-topology-delete-duplicate",
+      "argv": [
+        ".local/build/Build/Products/Debug/Ikkoku.app/Contents/MacOS/Ikkoku"
+      ],
+      "fixtures": [
+        {
+          "env": "IKKOKU_SOURCE_SCENE",
+          "kind": "file",
+          "from": "IKKOKU_STUDIO_SCENARIO_SCENE"
+        },
+        {
+          "env": "IKKOKU_SOURCE_AVATAR",
+          "kind": "file"
+        }
+      ],
+      "env": {
+        "IKKOKU_STUDIO_SCENARIO": "Tools/verification/scenarios/topology-delete-duplicate.json",
+        "IKKOKU_STUDIO_SCENARIO_REPORT": ".local/verification/reports/studio-scenario-topology-delete-duplicate.json"
+      },
+      "referenceTier": "app-smoke",
+      "tolerance": "#278 operation order on koikatu_cs0002591 through the workspace Delete and Duplicate paths: delete root character 65 (its key, 121 FK keys, 13 IK keys and look-at key free again), then duplicate root item 1540 and folder 962 with its character and three items; three undos restore the tree and three redos repeat it. The export replays the recorded order, so after reimport the copies carry the keys and root slots an independent Python walk of GetNewIndex (the smallest free key) and Mono Dictionary slot reuse (Remove frees the slot, Add takes the last freed one) gives: 1540's copy is key 65 in character 65's root slot, 962's copy is key 66 appended at the end with children 67, 251, 252 and 253, and every copy holds its original's world pose within 5e-4 m and 0.05 degrees. The status names no fallback. A second export after a reparent names the move fallback in the status. Negative controls prove the root-order check fails on the set-based keys (113, 114 appended) and the position check fails on the wrong original.",
+      "artifacts": [
+        {
+          "path": ".local/verification/reports/studio-scenario-topology-delete-duplicate.json",
+          "kind": "scenario-report"
+        },
+        {
+          "path": ".local/verification/scenario-exports/topology-delete-duplicate.png",
+          "kind": "exported-scene"
+        },
+        {
+          "path": ".local/verification/scenario-exports/topology-delete-duplicate-moved.png",
+          "kind": "exported-scene"
+        }
+      ],
+      "timeout": 600
+    },
+    {
       "id": "studio-scenario-plugin-rewrite-delete",
       "argv": [
         ".local/build/Build/Products/Debug/Ikkoku.app/Contents/MacOS/Ikkoku"
@@ -2732,7 +2770,7 @@
         "IKKOKU_STUDIO_SCENARIO_REPORT": ".local/verification/reports/studio-scenario-plugin-rewrite-delete.json"
       },
       "referenceTier": "app-smoke",
-      "tolerance": "ST-T03i plug-in data rewrites, delete: on the original player's phase C fixture (KKPE, MaterialEditor and NodesConstraints data on its items, female and camera; IKKOKU_PLUGIN_REWRITE_SCENE) delete mod item 2, which has data in all three plug-ins, through the workspace Delete path. A delete together with an item copy must be refused before any byte is written (#278: KKPE's positional items). The delete alone exports and reimports with root [0, 1, 5, 7, 14, 15, 16], key 2 absent and both folders' children kept. A negative control proves the tree check fails on the source's keys. The export's scene bytes after the PNG are compared with the Engine's export of the same edit, which phases C and D tie to CharaStudio's; see docs/reference/studio/scene-editing.md.",
+      "tolerance": "ST-T03i plug-in data rewrites, delete: on the original player's phase C fixture (KKPE, MaterialEditor and NodesConstraints data on its items, female and camera; IKKOKU_PLUGIN_REWRITE_SCENE) delete mod item 2, which has data in all three plug-ins, through the workspace Delete path, then duplicate mod item 5. That export replays the recorded order (#278), names no fallback, and reimports with the copy at key 2 in item 2's root slot, root [0, 1, 2, 5, 7, 14, 15, 16], holding item 5's world pose within 5e-4 m and 0.05 degrees (CharaStudio's GetNewIndex and dictionary slot reuse; the set-based export would append key 159). After one undo the delete alone exports and reimports with root [0, 1, 5, 7, 14, 15, 16], key 2 absent and both folders' children kept. Negative controls prove the tree check fails on the source's keys and on the set-based keys, and the position check fails on item 2's pose. The export's scene bytes after the PNG are compared with the Engine's export of the same edit, which phases C and D tie to CharaStudio's; see docs/reference/studio/scene-editing.md.",
       "artifacts": [
         {
           "path": ".local/verification/reports/studio-scenario-plugin-rewrite-delete.json",
@@ -2740,6 +2778,10 @@
         },
         {
           "path": ".local/verification/scenario-exports/plugin-rewrite-delete.png",
+          "kind": "exported-scene"
+        },
+        {
+          "path": ".local/verification/scenario-exports/plugin-rewrite-delete-duplicate.png",
           "kind": "exported-scene"
         }
       ],

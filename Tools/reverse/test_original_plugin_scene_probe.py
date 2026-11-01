@@ -1,5 +1,5 @@
 """Plug-in scene probe driver framing (phase B); VM calls are mocked, so no VM or private data is needed."""
-import hashlib, json, re, subprocess, tempfile, unittest
+import hashlib, io, json, re, subprocess, tempfile, unittest, zipfile
 from pathlib import Path
 from unittest.mock import patch
 import original_plugin_scene_probe as probe
@@ -245,6 +245,363 @@ class RunCDTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             record, _ = self.run_phase(tmp, 'D', lone_collider=False)
             self.assertIsNone(record['collider']); self.assertNotIn('fixture-lc.png', record['inputs'])
+
+
+def runtime_pins():
+    return {name: {'sha256': 'a' * 64, 'bytes': 1} for name in (
+        'CharaStudio.exe', 'winhttp.dll', 'doorstop_config.ini', 'BepInEx/core/BepInEx.dll',
+        'CharaStudio_Data/Managed/Assembly-CSharp.dll', 'CharaStudio_Data/Managed/UnityEngine.dll',
+        'CharaStudio_Data/Managed/mscorlib.dll', '@compiler')}
+
+
+ORDERED_INPUTS = ['fixture.png', 'fixture.sha256', 'fixture-c.png', 'fixture-c.sha256', 'phase.txt']
+PROBE_SOURCE = Path(probe.__file__).with_name('fixtures') / 'OriginalPluginRewriteProbe.cs'
+
+
+def ordered(**changes):
+    return rewrite('OA', **dict(dict(wait_seconds=300, collider=None, inputs=ORDERED_INPUTS, control_seconds=180), **changes))
+
+
+class OrderedOracleTests(unittest.TestCase):
+    def test_cases_match_the_probe(self):
+        source = PROBE_SOURCE.read_text()
+        table = source.split('OrderedCases={', 1)[1].split('};', 1)[0]
+        rows = [re.findall(r'"([^"]*)"', row) for row in re.findall(r'new\[\]\{([^}]*)\}', table)]
+        self.assertEqual(tuple(row[0] for row in rows), probe.ORDERED_CASES)
+        for row in rows:
+            with self.subTest(row=row[0]):
+                self.assertIn(row[1], ('a', 'c'))
+                self.assertTrue(all(re.fullmatch(r'(delete|duplicate):[A-Z][A-Z0-9]*|add-folder:', op) for op in row[2:]), row)
+        # Both of #278's orders, a delete after a duplicate, and a case on each fixture.
+        self.assertEqual(rows[0][2:], ['delete:V1', 'duplicate:M3']); self.assertEqual(rows[1][2:], ['duplicate:M3', 'delete:V1'])
+        self.assertEqual({row[1] for row in rows}, {'a', 'c'})
+        self.assertEqual(tuple(row[0] for row in rows if row[1] == 'c'), probe.ORDERED_FIXTURE_C)
+
+    def test_one_profile_keeps_the_core_plugin_set_and_no_survey(self):
+        body = ordered()
+        self.assertIn('OriginalPluginRewriteProbe.cs', body)
+        self.assertNotIn('survey.txt', body); self.assertNotIn('largestKKPE', body)
+        self.assertNotIn('$r.collider', body); self.assertNotIn('$r.configs', body)
+        for path, _, _ in probe.PLUGINS_B:
+            self.assertNotIn(path, body)
+        self.assertIn('$c.WaitForExit(60000)', body)
+        self.assertIn('$process.StartTime.ToUniversalTime().Ticks -ne $identity.startTicks', body)
+        self.assertIn('$process.Path -cne $identity.path', body)
+        self.assertIn('$script:orderedCompiler=$c;$r.compiler=', body)
+        self.assertIn('$script:orderedCompilerIdentity=ProcessIdentity $c', body)
+        self.assertNotIn('function Own{', body); self.assertNotIn('$left=Own', body)
+        self.assertEqual(body.count('ObservePlayerChildren;[void]$x.WaitForExit(250)'), 2)
+        self.assertIn("try{OrderedStamp 'cleanup-compiler';StopOwnedCompiler}catch", body)
+        self.assertIn("try{OrderedStamp 'cleanup-player';$r.stoppedAtCleanup=StopPlayerOwners}catch", body)
+        self.assertIn('$r.compiler.exitCode', body); self.assertIn('$r.playerStartUTC', body)
+        self.assertIn('200000', body); self.assertIn('20000', body)
+        self.assertNotIn('KKPE.dll', body)
+
+    def test_the_control_player_runs_first_with_its_own_bound_and_hands_over(self):
+        body = ordered()
+        self.assertEqual(body.count('$x=Start-Process -FilePath "$root\\CharaStudio.exe"'), 2)
+        order = [body.index(text) for text in (
+            "OrderedStamp 'control-player-start'", '$playerWatch.Elapsed.TotalSeconds -lt 180){', "OrderedStamp 'control-player-drain'",
+            "if(-not $r.exited){throw 'Control player did not exit within its bound'}", '$r.control=[ordered]@{phase=\'OB\'',
+            "[IO.File]::WriteAllText(\"$in\\phase.txt\",'OA')", "OrderedStamp 'control-complete'", "OrderedStamp 'player-start'",
+            '$playerWatch.Elapsed.TotalSeconds -lt 300){', "OrderedStamp 'player-drain'", "OrderedStamp 'capture-logs'",
+            "OrderedStamp 'capture-archive'")]
+        self.assertEqual(order, sorted(order))
+        handoff = body[body.index("OrderedStamp 'control-capture'"):body.index("OrderedStamp 'control-complete'")]
+        # The control's outputs and logs move into the upload under control-* flat names, and only there.
+        self.assertEqual(re.findall(r'-Destination "([^"]+)"', handoff), [r'$out\control-$(Split-Path $log -Leaf)'])
+        self.assertIn("-notlike 'compile.*' -and $f.Name -notlike 'control-*'", handoff)
+        self.assertIn("Rename-Item -LiteralPath $f.FullName -NewName ('control-'+$f.Name)", handoff)
+        for name in ('processID', 'playerStartUTC', 'playerIdentity', 'exited', 'playerExitCode', 'stopped'):
+            self.assertIn('$r.%s=$null' % name, handoff)
+        own = body.replace(PLAYER_SETUP, '')
+        self.assertEqual(re.findall(r'WriteAllText\("([^"]+)"', own), [r'$in\phase.txt'])
+        self.assertEqual(re.findall(r'Remove-Item -LiteralPath (\S+)', body), ['$root'])
+
+    def test_ordered_compiler_keeps_references_separate_and_retains_exit_handles(self):
+        body = ordered()
+        # csc treats a quote around an entire comma list as one metadata
+        # filename (the retained CS0006). Each DLL needs its own option.
+        self.assertIn("$referenceArguments=@($refs|ForEach-Object{('/reference:\"'+$_+'\"')})", body)
+        self.assertIn('+$referenceArguments+@(', body)
+        self.assertNotIn("('/reference:\"'+($refs -join ',')+'\"')", body)
+        self.assertLess(body.index('[void]$c.Handle'), body.index('$c.WaitForExit(60000)'))
+        self.assertNotIn('$c.Refresh()', body)
+        self.assertIn("if($null -eq $c.ExitCode){throw 'Owned compiler exit code is unavailable'}", body)
+        self.assertLess(body.index('[void]$x.Handle'), body.index('$x.WaitForExit(250)'))
+        self.assertEqual(body.count("if($null -eq $x.ExitCode){throw 'Owned player exit code is unavailable'}"), 2)
+
+    def test_ordered_lifecycle_stamps_survive_cleanup_and_unknown_owners_retain_root(self):
+        body = ordered()
+        for start, pid, identity, wait in [
+            ('$c=Start-Process', "OrderedStamp 'compiler-pid'", "OrderedStamp 'compiler-identity-read'", '$c.WaitForExit(60000)'),
+            ('$x=Start-Process', "OrderedStamp 'control-player-pid'", "OrderedStamp 'control-player-identity-read'", '$x.WaitForExit(250)'),
+            ("OrderedStamp 'player-start'", "OrderedStamp 'player-pid'", "OrderedStamp 'player-identity-read'", 'Elapsed.TotalSeconds -lt 300')]:
+            offsets = [body.index(text) for text in [start, pid, identity, wait]]
+            self.assertEqual(offsets, sorted(offsets))
+        # The primary failure is recorded before cleanup and cannot be
+        # overwritten by a root-removal/late verification exception.
+        primary = body.index('$r.errorStage=$r.stage;$r.error=$_.ToString()')
+        cleanup = body.index("OrderedStamp 'cleanup-compiler'", primary)
+        proof = body.index('$r.rootRemovalReady=RootRemovalReady', cleanup)
+        refusal = body.index("throw 'Root retained: exact owner exit or detached-child drain is unproven'", proof)
+        removal = body.index('Remove-Item -LiteralPath $root', refusal)
+        final = body.index("[Console]::Error.WriteLine('ORDERED_FINAL:'", removal)
+        self.assertEqual([primary, cleanup, proof, refusal, removal, final], sorted([primary, cleanup, proof, refusal, removal, final]))
+        self.assertNotIn('$r.error=', body[cleanup:])
+        self.assertIn('}catch{OrderedCleanupFailure $_}finally{', body)
+        self.assertIn('$script:orderedOwners.ContainsKey([int]$_.ParentProcessId)', body)
+        self.assertIn('$r.unresolvedPlayerOwners.Count', body)
+        self.assertNotIn('ORDERED_FINAL:', rewrite('C'))
+        self.assertNotIn('ORDERED_FINAL:', rewrite('D'))
+
+    def test_ordered_handoff_drains_the_control_crash_report_before_oa_and_never_stops_it(self):
+        # oracle-2: the control's shutdown fault started WerFault and a reflected
+        # CharaStudio child, and OA launched into it. OA now starts only after
+        # they are gone; a timeout ends the probe before the OA launch.
+        body = ordered()
+        drained = body.index("OrderedStamp 'control-player-drain'")
+        drain = body.index("OrderedStamp 'control-crash-drain'", drained)
+        timeout = body.index("throw 'Control crash reporting did not drain within 120 seconds; OA not launched'", drain)
+        complete = body.index("OrderedStamp 'control-complete'", timeout)
+        launch = body.index("OrderedStamp 'player-start'", complete)
+        self.assertEqual([drained, drain, timeout, complete, launch], sorted([drained, drain, timeout, complete, launch]))
+        block = body[drain:timeout]
+        self.assertIn("while($drain.Elapsed.TotalSeconds -lt 120)", block)
+        self.assertIn("$_.Name -ieq 'WerFault.exe'", block)
+        self.assertIn("CreationDate.ToUniversalTime().Ticks -ge $since", block)
+        self.assertIn("$_.Name -in @('CharaStudio.exe','Koikatu.exe')", block)
+        self.assertIn("$parents -contains [int]$_.ParentProcessId", block)
+        self.assertIn("$r.controlCrashDrain=", block)
+        for stop in ('Stop-Process', '.Kill(', 'taskkill'):
+            self.assertNotIn(stop, block)
+        # The control only: phases C and D have no handoff.
+        self.assertEqual(body.count("OrderedStamp 'control-crash-drain'"), 1)
+        self.assertNotIn('control-crash-drain', rewrite('C') + rewrite('D'))
+
+    def test_ordered_identity_rereads_an_unreadable_path_and_adopts_only_the_private_player(self):
+        body = ordered()
+        start = body.index('function RememberPlayer($process){')
+        end = body.index("OrderedStamp 'player-owner-recorded'", start)
+        block = body[start:end]
+        # Same PID and start time, a fresh object per read, bounded at 30 s.
+        self.assertIn('$live=Get-Process -Id $process.Id -ErrorAction SilentlyContinue', block)
+        self.assertIn('$live.StartTime.ToUniversalTime().Ticks -eq $ticks -and $live.Path', block)
+        self.assertIn('$watch.Elapsed.TotalSeconds -ge 30', block)
+        self.assertIn('if($process.HasExited -or', block)
+        self.assertLess(block.index("throw 'Owned process executable path is unavailable'"),
+                        block.index("throw 'Owned process executable is not the private player'"))
+        self.assertIn('$identity.path -ine "$root\\CharaStudio.exe"', block)
+        self.assertNotIn('Stop-Process', block)
+
+    def test_ordered_cleanup_proves_its_own_launches_by_their_held_objects(self):
+        body = ordered()
+        # Both launches are held before any identity read can throw.
+        holds = [i for i in range(len(body)) if body.startswith('$script:orderedLaunched+=@($x);$r.processID=$x.Id;', i)]
+        self.assertEqual(len(holds), 2)
+        for hold, stamp in zip(holds, ("OrderedStamp 'control-player-identity-read'", "OrderedStamp 'player-identity-read'")):
+            launch = body.rindex('$x=Start-Process', 0, hold)
+            self.assertLess(hold, body.index(stamp, hold))
+            self.assertNotIn('OrderedStamp', body[launch:hold].split('\n', 1)[1] if '\n' in body[launch:hold] else '')
+        self.assertIn('$script:orderedLaunched=@();', body)
+        # Cleanup kills a still-running launch through its object (its handle rules
+        # out PID reuse); it never stops an unrecorded process by PID or path.
+        stop = body.index('function StopPlayerOwners{')
+        stop_end = body.index('function StopOwnedCompiler{', stop)
+        cleanup = body[stop:stop_end]
+        self.assertIn('foreach($launched in @($script:orderedLaunched)){', cleanup)
+        self.assertIn('if(-not $launched.HasExited){$launched.Kill()', cleanup)
+        self.assertIn('$r.launchedRemaining.Count', cleanup)
+        self.assertNotIn('Get-Process CharaStudio', cleanup)
+        # Root removal: a launch still alive retains the root; one whose path was
+        # never read counts as proven gone only through its held object, and
+        # its children veto removal like an owner's.
+        proof = body[body.index('function RootRemovalReady{'):]
+        self.assertLess(proof.index('if($r.launchedRemaining.Count){return $false}'),
+                        proof.index('-not ($launchedIDs -contains [int]$r.processID)'))
+        self.assertIn('($launchedIDs -contains [int]$_.ParentProcessId)', proof)
+        self.assertNotIn('orderedLaunched', rewrite('C') + rewrite('D'))
+
+    def test_ordered_transport_failure_retains_upload_without_accepting_or_extracting_it(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            local = Path(tmp) / '.local'; local.mkdir(); output = local / 'output'
+            # Retention must also work without valid ZIP/JSON. No unverified
+            # bytes may reach extraction after an incomplete guest envelope.
+            payload = b'partial uploaded evidence'
+            class UploadedEndpoint(FakeEndpoint):
+                def __init__(self, *args, **kwargs): super().__init__(*args, **kwargs); self.upload = payload
+            done = subprocess.CompletedProcess([], 1, '', 'late cleanup failed')
+            with patch.object(probe, 'local_roots', return_value=[local.resolve()]), patch.object(probe, 'Endpoint', UploadedEndpoint),\
+                 patch.object(probe, 'guarded', return_value=0), patch.object(probe, 'errno_count', return_value=0),\
+                 patch.object(probe, 'fresh_root', return_value=ROOT_A), patch.object(probe, 'ordered_transport', return_value=done),\
+                 patch.object(probe, 'extract') as extract:
+                with self.assertRaisesRegex(RuntimeError, 'VM exec failed: late cleanup failed'):
+                    probe.run_rewrite('vm', output, 0, 'OA', {'fixture.png': b'original', 'fixture-c.png': b'original c'}, ZIPMOD,
+                                      None, 'host', 300, runtime_pins=runtime_pins(), control_seconds=180)
+            self.assertEqual((output / 'transport-upload.zip').read_bytes(), payload)
+            record = json.loads((output / 'run.json').read_text())
+            self.assertEqual(record['unverifiedUpload'], {'file': 'transport-upload.zip', 'bytes': len(payload),
+                                                         'sha256': hashlib.sha256(payload).hexdigest()})
+            self.assertEqual(record['execError'], 'late cleanup failed')
+            self.assertEqual((record['controlSeconds'], record['waitSeconds']), (180, 300))
+            self.assertNotIn('guest', record); self.assertFalse((output / 'summary.json').exists())
+            extract.assert_not_called()
+
+    def test_ordered_null_child_fields_and_reparented_unresolved_instances_fail_closed(self):
+        body = ordered()
+        observer = body.split('function ObservePlayerChildren{', 1)[1].split('function StopPlayerOwners{', 1)[0]
+        guard = observer.index("-not ($childStart -is [DateTime]) -or -not $rowBirth")
+        self.assertLess(guard, observer.index('$childStart.ToUniversalTime()'))
+        self.assertNotIn('$row.CreationDate.ToUniversalTime()', observer)
+        self.assertNotIn('$child.StartTime.ToUniversalTime()', observer)
+        self.assertIn("'Live child identity read failed'", observer)
+        self.assertIn("'Missing child path or birth'", observer)
+        self.assertIn("'Child live/CIM identity differs'", observer)
+        self.assertNotIn('RememberPlayer $child', observer)  # No second, racy identity read after validation.
+        self.assertIn('$script:orderedUnresolved.ContainsKey($key)', body)
+        self.assertIn('$script:orderedUnresolved.Count -ge 32', body)
+        self.assertIn('unresolvedChildren=$r.unresolvedChildObservations', body)
+        veto = body.split('$r.unresolvedRecordedInstances=@(', 1)[1].split('$r.unresolvedPlayerOwners=', 1)[0]
+        self.assertIn('[int]$row.ProcessId -ne $observation.pid', veto)
+        self.assertIn('-not $observation.birth -or -not $birth -or $birth -ceq $observation.birth', veto)
+        for forbidden in ('ParentProcessId', 'ExecutablePath', 'Stop-Process', 'RememberPlayer'):
+            self.assertNotIn(forbidden, veto)
+        self.assertIn('$r.unresolvedRecordedInstances.Count -or $r.childObservationOverflow', body)
+
+    def test_ordered_runtime_requires_complete_exact_bounded_pins(self):
+        pins = runtime_pins(); body = probe.ordered_runtime_check(pins)
+        self.assertIn('Compare-Object -CaseSensitive', body)
+        self.assertIn('Runtime contains a reparse point', body)
+        self.assertIn('Get-Item -Force -LiteralPath $path', body)
+        for bad in (None, {}, {k:v for k,v in pins.items() if k != '@compiler'},
+                    dict(pins, **{'CharaStudio_Data/../outside.dll': {'sha256':'a'*64,'bytes':1}}),
+                    dict(pins, **{'charastudio.exe': {'sha256':'a'*64,'bytes':1}}),
+                    dict(pins, **{'CharaStudio_Data/too-big': {'sha256':'a'*64,'bytes':512*1024*1024+1}})):
+            with self.subTest(bad=bad), self.assertRaises(ValueError): probe.ordered_runtime_check(bad)
+        # Complete inventories can contain empty/hidden files; neither is omitted.
+        pins['CharaStudio_Data/._app.info'] = {'sha256':'b'*64,'bytes':0}
+        self.assertIn('._app.info', probe.ordered_runtime_check(pins))
+
+    def fixtures(self, root):
+        fixture = root / 'fixture.png'; fixture.write_bytes(b'exact fixture')
+        fixture_c = root / 'fixture-c.png'; fixture_c.write_bytes(b'exact fixture c')
+        run = root / 'run.json'; run.write_text(json.dumps({'guest': {'zipmod': ZIPMOD}}))
+        return ['vm', root / 'output', 0, fixture, hashlib.sha256(b'exact fixture').hexdigest(),
+                fixture_c, hashlib.sha256(b'exact fixture c').hexdigest(), run, runtime_pins()]
+
+    def test_ordered_bounds_reject_before_any_transport(self):
+        for kwargs in ({'wait_seconds': 601}, {'control_seconds': 181}, {'control_seconds': 0}, {'control_seconds': None},
+                       {'collider': COLLIDER}):
+            with self.subTest(kwargs=kwargs), self.assertRaises(ValueError): ordered(**kwargs)
+        with self.assertRaises(ValueError): rewrite('C', control_seconds=180)
+        with self.assertRaises(ValueError): rewrite('OC', wait_seconds=180, collider=None, inputs=ORDERED_INPUTS)
+        with tempfile.TemporaryDirectory() as tmp, patch.object(probe, 'run_rewrite') as transport:
+            root = Path(tmp); args = self.fixtures(root)
+            for index, value in ((4, '0' * 64), (6, '0' * 64), (6, None), (8, {})):
+                changed = list(args); changed[index] = value
+                with self.subTest(index=index), self.assertRaises(ValueError): probe.run_ordered(*changed)
+            for kwargs in ({'wait_seconds': 601}, {'wait_seconds': 0}, {'control_seconds': 181}):
+                with self.subTest(kwargs=kwargs), self.assertRaises(ValueError): probe.run_ordered(*args, **kwargs)
+            (root / 'output').mkdir(); (root / 'output' / 'partial.log').write_text('retain failed start')
+            with self.assertRaisesRegex(RuntimeError, 'new directory'): probe.run_ordered(*args)
+            self.assertEqual((root / 'output' / 'partial.log').read_text(), 'retain failed start')
+            transport.assert_not_called()
+
+    def test_ordered_sends_original_input_identity_without_reauthoring(self):
+        with tempfile.TemporaryDirectory() as tmp, patch.object(probe, 'run_rewrite', return_value={'accepted': True}) as transport:
+            args = self.fixtures(Path(tmp))
+            probe.run_ordered(*args)
+            sent = transport.call_args.args
+            self.assertEqual(sent[3], 'OA')
+            self.assertEqual(sent[4], {'fixture.png': b'exact fixture', 'fixture.sha256': args[4].encode(),
+                                       'fixture-c.png': b'exact fixture c', 'fixture-c.sha256': args[6].encode(),
+                                       'phase.txt': b'OB'})
+            self.assertEqual(sorted(sent[4]), sorted(ORDERED_INPUTS))
+            self.assertIsNone(sent[6]); self.assertEqual(sent[8], 300)
+            self.assertEqual(transport.call_args.kwargs, {'runtime_pins': runtime_pins(), 'control_seconds': 180})
+
+    def accept(self, tmp, drop=None, differ=None, control_code=probe.SHUTDOWN_FAULT, code=probe.SHUTDOWN_FAULT,
+               wrong_runtime=False, control_error=None, phases=('OB', 'OA'), replace=None):
+        local = Path(tmp) / '.local'; local.mkdir(); output = local / 'output'
+        files = {'fixture.png': b'original', 'fixture.sha256': b'expected', 'fixture-c.png': b'original c',
+                 'fixture-c.sha256': b'expected c', 'phase.txt': b'OB'}
+        saves = ['fixture', 'fixture-c'] + ['edit-' + label for label in probe.ORDERED_CASES]
+        archive = io.BytesIO()
+        with zipfile.ZipFile(archive, 'w') as z:
+            members = {'status.json': json.dumps({'phase': 'OA', 'error': None}), 'plugin-scene-trace.json': '{}',
+                       'control-status.json': json.dumps({'phase': 'OB', 'error': control_error}),
+                       'control-plugin-scene-trace.json': '{}', 'control-fixture.png': b'saved fixture',
+                       'control-resave-fixture.png': b'saved fixture'}
+            for save in saves:
+                members[save + '.png'] = members['resave-' + save + '.png'] = b'saved ' + save.encode()
+            if differ: members[differ] = b'different bytes'
+            members.update(replace or {})
+            for name, data in members.items():
+                if name != drop: z.writestr(name, data)
+        payload = archive.getvalue()
+        class UploadedEndpoint(FakeEndpoint):
+            def __init__(self, *args, **kwargs): super().__init__(*args, **kwargs); self.upload = payload
+        def execute(command, out, record, seconds):
+            record['hostGroupReleased'] = True
+            (out / 'exec.stdout').write_text('mock'); (out / 'exec.stderr').write_text('')
+            guest = {'exited': True, 'playerExitCode': code, 'phases': list(phases),
+                     'control': {'phase': 'OB', 'exited': True, 'playerExitCode': control_code}, 'removed': True,
+                     'remainingGameProcesses': [], 'junctionTargetsChanged': False, 'runtimeBefore': runtime_pins(),
+                     'runtimeAfter': {} if wrong_runtime else runtime_pins(), 'sources': record['sources'],
+                     'inputs': record['inputs'], 'zipSHA256': hashlib.sha256(payload).hexdigest(), 'zipBytes': len(payload)}
+            return subprocess.CompletedProcess(command, 0, json.dumps(guest), '')
+        with patch.object(probe, 'local_roots', return_value=[local.resolve()]), patch.object(probe, 'Endpoint', UploadedEndpoint),\
+             patch.object(probe, 'guarded', return_value=0), patch.object(probe, 'errno_count', return_value=0),\
+             patch.object(probe, 'fresh_root', return_value=ROOT_A), patch.object(probe, 'ordered_transport', side_effect=execute):
+            result = probe.run_rewrite('vm', output, 0, 'OA', files, ZIPMOD, None, 'host', 300, runtime_pins=runtime_pins(),
+                                       control_seconds=180)
+        return output, result
+
+    def test_ordered_acceptance_requires_the_control_fixed_points_outputs_and_runtime_proof(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            output, result = self.accept(tmp)
+            self.assertTrue(result['accepted']); self.assertTrue(result['shutdownFault'])
+            self.assertEqual(result['playerExitCodes'], [probe.SHUTDOWN_FAULT, probe.SHUTDOWN_FAULT])
+            self.assertEqual(len(result['fixedPoints']), 3 + len(probe.ORDERED_CASES)); self.assertTrue(all(result['fixedPoints'].values()))
+            self.assertEqual(result['missingOutputs'], [])
+            self.assertEqual((output / 'source-fixture.png').read_bytes(), b'original')
+            self.assertEqual((output / 'source-fixture-c.png').read_bytes(), b'original c')
+            manifest = {row['file'] for row in json.loads((output / 'manifest.json').read_text())['files']}
+            self.assertLessEqual({'source-fixture.png', 'source-fixture-c.png', 'control-status.json', 'control-fixture.png'}, manifest)
+            body = (output / 'run.ps1').read_text()
+            self.assertLess(body.index('$r.runtimeBefore=VerifyRuntime'), body.index(PLAYER_SETUP))
+            self.assertLess(body.index('Input digest mismatch:'), body.index('$c=Start-Process'))
+            self.assertLess(body.index('Remove-Item -LiteralPath $root'), body.index('$r.runtimeAfter=VerifyRuntime'))
+        with tempfile.TemporaryDirectory() as tmp:
+            self.assertTrue(self.accept(tmp, control_code=0, code=0)[1]['accepted'])
+        # Sideloader's per-session LocalSlot is the only difference the control may show.
+        slot = probe.LOCAL_SLOT
+        saved = b'scene ' + slot + b'\x05\xf5\xe1\x84 tail ' + slot + b'\x05\xf5\xe1\x85'
+        session = dict(zip(('control-fixture.png', 'control-resave-fixture.png'), 2 * [saved.replace(b'\xe1\x84', b'\xe2\xaa')]))
+        session.update({'fixture.png': saved, 'resave-fixture.png': saved})
+        with tempfile.TemporaryDirectory() as tmp:
+            _, result = self.accept(tmp, replace=session)
+            self.assertTrue(result['accepted']); self.assertTrue(result['fixedPoints']['control-fixture'])
+            self.assertEqual(result['controlBaselineDifferences'], [saved.index(slot) + len(slot) + 2, saved.index(slot) + len(slot) + 3])
+            self.assertEqual(len(result['controlLocalSlotOffsets']), 8)
+        elsewhere = dict(session, **{'control-fixture.png': saved.replace(b'scene', b'scenE'), 'control-resave-fixture.png': saved.replace(b'scene', b'scenE')})
+        with tempfile.TemporaryDirectory() as tmp:
+            self.assertFalse(self.accept(tmp, replace=elsewhere)[1]['controlMatchesBaseline'])
+        # Phase C's rows (character live state) are recorded with their offsets and left to the Engine parity test.
+        for row in ('fixture-c',) + tuple('edit-' + label for label in probe.ORDERED_FIXTURE_C):
+            with self.subTest(row=row), tempfile.TemporaryDirectory() as tmp:
+                _, result = self.accept(tmp, replace={'resave-' + row + '.png': b'saved ' + row[:-1].encode() + b'X'})
+                self.assertTrue(result['accepted']); self.assertFalse(result['fixedPoints'][row])
+                self.assertEqual(result['saveResaveDifferences'], {row: [len(b'saved ' + row.encode()) - 1]})
+                self.assertIn(row, result['liveStateRows'])
+        rejected = (dict(drop='edit-duplicate-delete.png'), dict(drop='control-status.json'), dict(drop='resave-fixture-c.png'),
+                    dict(differ='resave-edit-delete-add-folder.png'), dict(differ='control-resave-fixture.png'),
+                    dict(differ='control-fixture.png'), dict(control_code=0), dict(code=0),
+                    dict(control_code=1, code=1), dict(wrong_runtime=True), dict(control_error='baseline: failed'),
+                    dict(phases=('OA',)))
+        for changes in rejected:
+            with self.subTest(changes=changes), tempfile.TemporaryDirectory() as tmp:
+                self.assertFalse(self.accept(tmp, **changes)[1]['accepted'])
 
 
 if __name__ == '__main__':

@@ -45,6 +45,14 @@
 //   survey      last, nothing is saved after it: rule parity on reload-input\corpus.txt with this player's compiler,
 //               then survey 3 over the install's scene folder (reload-input\survey.txt) into survey3.json.
 // Only the private root's files and the probe's own scenes are read or written.
+// Ordered phases (#278), core plug-ins only, exact retained inputs instead of authoring:
+//   OB  control: phase A's fixture loaded, saved, reloaded and saved again; no edit. Run in its own
+//       player before OA so a shutdown fault of the player itself is told apart from one the edits cause.
+//   OA  the same baseline for phase A's fixture (fixture.png) and phase C's (fixture-c.png, with
+//       character W), then every OrderedCases row from its fixture's baseline: the real Delete
+//       (TreeNodeCtrl.DeleteNode), Duplicate (Studio.Duplicate) and Add folder (Studio.AddFolder) in
+//       order, with SceneInfo.hashIndex and the root dictionary's enumeration before and after each,
+//       then the save, its reload and the save again.
 using System;
 using System.Collections;
 using System.Collections.Generic;
@@ -67,6 +75,17 @@ public sealed class OriginalPluginRewriteProbe:BaseUnityPlugin {
         "com.joan6694.kkplugins.kkpe","com.joan6694.illusionplugins.nodesconstraints","com.deathweasel.bepinex.materialeditor"};
     public static readonly string[] Edits={"delete","delete-folder","delete-character","delete-parent","duplicate","duplicate-subtree","duplicate-character","delete-duplicate"};
     public static readonly string[] ColliderEdits={"lc-delete-character","lc-delete-collider","lc-duplicate-collider","lc-duplicate-character"};
+    // Label, fixture (a: phase A's, c: phase C's) and the operations in order, each "operation:object".
+    public static readonly string[][] OrderedCases={
+        new[]{"delete-duplicate","a","delete:V1","duplicate:M3"},
+        new[]{"duplicate-delete","a","duplicate:M3","delete:V1"},
+        new[]{"delete-delete-duplicate","a","delete:V1","delete:R","duplicate:M3"},
+        new[]{"child-delete-duplicate","a","delete:M4","duplicate:M3"},
+        new[]{"route-delete-duplicate-folder","a","delete:R","duplicate:F"},
+        new[]{"delete-duplicate-duplicate","a","delete:V1","duplicate:M3","duplicate:M1"},
+        new[]{"delete-add-folder","a","delete:V1","add-folder:"},
+        new[]{"character-delete-duplicate","c","delete:W","duplicate:M3"},
+        new[]{"delete-duplicate-character","c","delete:V1","duplicate:W"}};
     static readonly object[] FixtureKeys={"F",0,"V1",1,"M1",2,"M2",3,"V2",4,"M3",5,"M4",6,"R",7,"C",14,"L",15};
     static readonly string[] FixtureKinds={"F","OIFolderInfo","V1","OIItemInfo","M1","OIItemInfo","M2","OIItemInfo","V2","OIItemInfo","M3","OIItemInfo","M4","OIItemInfo","R","OIRouteInfo","C","OICameraInfo","L","OILightInfo"};
     static readonly string[] FloatProperties={"Metallic","Glossiness","Smoothness","Cutoff","SpecularPower","rimpower","ShadowExtend","LineWidthS","alpha"};
@@ -83,7 +102,8 @@ public sealed class OriginalPluginRewriteProbe:BaseUnityPlugin {
         input=Path.Combine(here,"reload-input");
         string error=null;
         try{phase=File.ReadAllText(Path.Combine(input,"phase.txt")).Trim();}catch(Exception e){error="phase.txt: "+e.Message;}
-        if(error==null&&phase!="C"&&phase!="D")error="unknown phase "+phase;
+        if(error==null&&phase!="C"&&phase!="D"&&phase!="OA"&&phase!="OB")error="unknown phase "+phase;
+        bool ordered=phase=="OA"||phase=="OB";
         int waited=0;
         for(;waited<3600;waited++){if(Ready())break;yield return null;}
         if(error==null&&waited>=3600)error="Studio, the scene container, cameraCtrl or Camera.main were not ready within 3600 frames";
@@ -91,7 +111,10 @@ public sealed class OriginalPluginRewriteProbe:BaseUnityPlugin {
         studio=Singleton<Studio.Studio>.Instance;
         var plugins=new Dictionary<string,object>();
         foreach(var entry in BepInEx.Bootstrap.Chainloader.PluginInfos)plugins[entry.Key]=entry.Value.Metadata.Version.ToString();
-        foreach(var id in Required)if(error==null&&!plugins.ContainsKey(id))error="required plug-in "+id+" did not load";
+        for(int i=0;i<(ordered?5:Required.Length);i++)
+            if(error==null&&!plugins.ContainsKey(Required[i]))error="required plug-in "+Required[i]+" did not load";
+        if(ordered)for(int i=5;i<Required.Length;i++)
+            if(error==null&&plugins.ContainsKey(Required[i]))error="unexpected full-set plug-in in "+phase+": "+Required[i];
         if(error==null){try{voiceRepair=RepairVoice();}catch(Exception e){error="voice repair: "+e;}}
         for(int i=0;i<FixtureKeys.Length;i+=2)keys[(string)FixtureKeys[i]]=(int)FixtureKeys[i+1];
         var steps=new List<KeyValuePair<string,Func<IEnumerator>>>();
@@ -101,6 +124,12 @@ public sealed class OriginalPluginRewriteProbe:BaseUnityPlugin {
             steps.Add(new KeyValuePair<string,Func<IEnumerator>>("collider",Collider));
             steps.Add(new KeyValuePair<string,Func<IEnumerator>>("card-link",CardLink));
             steps.Add(new KeyValuePair<string,Func<IEnumerator>>("resave",Resaves));
+        } else if(ordered) {
+            steps.Add(new KeyValuePair<string,Func<IEnumerator>>("baseline",()=>OrderedBaseline("a")));
+            if(phase=="OA") {
+                steps.Add(new KeyValuePair<string,Func<IEnumerator>>("baseline-c",()=>OrderedBaseline("c")));
+                foreach(var row in OrderedCases){var r=row;steps.Add(new KeyValuePair<string,Func<IEnumerator>>(r[0],()=>OrderedEdit(r)));}
+            }
         } else {
             steps.Add(new KeyValuePair<string,Func<IEnumerator>>("readback",Readback));
             steps.Add(new KeyValuePair<string,Func<IEnumerator>>("card-link",CardLinkControl));
@@ -124,7 +153,9 @@ public sealed class OriginalPluginRewriteProbe:BaseUnityPlugin {
         try{File.WriteAllText(Path.Combine(folder,"plugin-scene-trace.json"),J(K("schemaVersion",1,"phase",phase,"plugins",plugins,"keys",keys,"colliderItem",colliderItem,"cases",cases)));}
         catch(Exception e){if(error==null)error="trace write: "+e;}
         File.WriteAllText(Path.Combine(folder,"status.json"),J(K("error",error,"unity",Application.unityVersion,"plugins",plugins,"phase",phase,"voiceRepair",voiceRepair,
-            "scope",phase=="C"?"phase C: a fixture with KKPE, MaterialEditor and NodesConstraints data on items, a character and the camera, CharaStudio's own saves of delete and duplicate edits of it (and of a lone-collider variant when the catalog has one), a card-link scene, and the load-then-save of every saved scene"
+            "scope",phase=="OB"?"ordered export control (#278): phase A's exact input loaded, saved, reloaded and saved again, no edit; it tells a player shutdown fault apart from one the edits cause"
+                :phase=="OA"?"ordered export oracle (#278): phase A's and C's exact inputs loaded and saved, then each ordered case's real Delete, Duplicate and Add folder operations with SceneInfo.hashIndex and root enumeration snapshots, its save, reload and save again; no scene authoring or survey"
+                :phase=="C"?"phase C: a fixture with KKPE, MaterialEditor and NodesConstraints data on items, a character and the camera, CharaStudio's own saves of delete and duplicate edits of it (and of a lone-collider variant when the catalog has one), a card-link scene, and the load-then-save of every saved scene"
                 :"phase D: per-object KKPE, MaterialEditor and NodesConstraints state of phase C's scenes and of our exports after a load, the load-then-save of our exports, the card-link controls, and last the counts-only scene survey 3")));
         Application.Quit();
         for(int i=0;i<3600;i++){yield return null;if(i%30==29)Application.Quit();}
@@ -148,6 +179,99 @@ public sealed class OriginalPluginRewriteProbe:BaseUnityPlugin {
     }
 
     // ---- Phase C ----
+    // fixture "a": phase A's scene; "c": phase C's, which adds character W (key 16) at the root.
+    IEnumerator OrderedBaseline(string fixture) {
+        string name=fixture=="a"?"fixture.png":"fixture-c.png",label=fixture=="a"?"baseline":"baseline-c";
+        string path=Path.Combine(input,name);
+        string expected=File.ReadAllText(Path.Combine(input,Path.GetFileNameWithoutExtension(name)+".sha256")).Trim();
+        if(expected!=FileHash(path))throw new Exception("ordered input "+name+" hash differs");
+        var load=Load(path);while(load.MoveNext())yield return load.Current;
+        foreach(var target in new[]{"V1","M1","M3"})if(!(Ctrl(target) is OCIItem)||Ctrl(target).parentInfo!=null)
+            throw new Exception("ordered fixture target is not a root item: "+target);
+        if(Ctrl("M4").parentInfo!=Ctrl("V1"))throw new Exception("ordered fixture child 6 is not under source 1");
+        if(!(Ctrl("F") is OCIFolder)||!(Ctrl("R") is OCIRoute)||Ctrl("F").parentInfo!=null||Ctrl("R").parentInfo!=null)
+            throw new Exception("ordered fixture folder 0 or route 7 is not a root folder or route");
+        if(fixture=="c"){keys["W"]=16;if(!(Ctrl("W") is OCIChar)||Ctrl("W").parentInfo!=null)throw new Exception("ordered fixture C key 16 is not a root character");}
+        var loaded=OrderedSnapshot();var row=K("input",name,"inputSHA256",expected,"loaded",loaded);cases[label]=row;
+        row["saved"]=Save(name);row["savedSHA256"]=FileHash(Path.Combine(folder,name));
+        var afterSave=OrderedSnapshot();row["afterSave"]=afterSave;SameOrderedStructure(loaded,afterSave,label+" save");
+        load=Load(Path.Combine(folder,name));while(load.MoveNext())yield return load.Current;
+        var reloaded=OrderedSnapshot();row["reloaded"]=reloaded;SameOrderedStructure(loaded,reloaded,label+" reload");
+        row["resaved"]=Save("resave-"+name);
+        row["resavedSHA256"]=FileHash(Path.Combine(folder,"resave-"+name));
+        var afterResave=OrderedSnapshot();row["afterResave"]=afterResave;SameOrderedStructure(loaded,afterResave,label+" resave");
+    }
+    // One OrderedCases row, from its fixture's saved baseline: each operation through the workspace's own
+    // path, a snapshot before, right after and after the settle frames, then save, reload and save again.
+    IEnumerator OrderedEdit(string[] spec) {
+        string label=spec[0],source=spec[1]=="a"?"fixture.png":"fixture-c.png",baseline=spec[1]=="a"?"baseline":"baseline-c";
+        var load=Load(Path.Combine(folder,source));while(load.MoveNext())yield return load.Current;
+        var actions=new List<object>();
+        var loaded=OrderedSnapshot();var row=K("label",label,"fixture",spec[1],"source",source,"loaded",loaded,"actions",actions);cases[label]=row;
+        SameOrderedStructure((Dictionary<string,object>)((Dictionary<string,object>)cases[baseline])["loaded"],loaded,label+" baseline");
+        for(int i=2;i<spec.Length;i++) {
+            string operation=spec[i].Substring(0,spec[i].IndexOf(':')),target=spec[i].Substring(spec[i].IndexOf(':')+1);
+            var step=K("operation",operation,"name",target,"target",target.Length==0?(object)null:keys[target],"before",OrderedSnapshot());actions.Add(step);
+            if(operation=="delete")Delete(Ctrl(target));
+            else if(operation=="duplicate")step["copies"]=Duplicate(Ctrl(target));
+            else if(operation=="add-folder")step["added"]=AddFolder();
+            else throw new Exception("unknown ordered operation "+operation);
+            step["afterImmediate"]=OrderedSnapshot();
+            for(int f=0;f<Settle;f++)yield return null;
+            step["afterSettled"]=OrderedSnapshot();
+        }
+        string name="edit-"+label+".png";
+        row["saved"]=Save(name);row["savedSHA256"]=FileHash(Path.Combine(folder,name));
+        var afterSave=OrderedSnapshot();row["afterSave"]=afterSave;
+        load=Load(Path.Combine(folder,name));while(load.MoveNext())yield return load.Current;
+        var reloaded=OrderedSnapshot();row["reloaded"]=reloaded;row["leakedAtReload"]=SameOrderedStructure(afterSave,reloaded,label+" reload",true);
+        row["resaved"]=Save("resave-"+name);
+        row["resavedSHA256"]=FileHash(Path.Combine(folder,"resave-"+name));
+        var afterResave=OrderedSnapshot();row["afterResave"]=afterResave;SameOrderedStructure(reloaded,afterResave,label+" resave");
+    }
+    // The toolbar's Add folder (Studio.AddFolder -> AddObjectFolder.Add): the keys it added.
+    List<object> AddFolder() {
+        var before=new HashSet<int>(studio.dicObjectCtrl.Keys);
+        studio.AddFolder();
+        var added=new List<int>();
+        foreach(var key in studio.dicObjectCtrl.Keys)if(!before.Contains(key))added.Add(key);
+        added.Sort();var list=new List<object>();foreach(var key in added)list.Add(key);
+        if(list.Count!=1)throw new Exception("Studio.AddFolder added "+list.Count+" objects");
+        return list;
+    }
+    // No key/order normalization: changing even one allocation or root ordinal is a failed oracle. A reload
+    // rebuilds SceneInfo.hashIndex from the saved records alone, so the keys DeleteKey left behind (item FK
+    // bones, route point aids) drop out and nothing is added: `reload` allows exactly that and returns the
+    // dropped keys.
+    static List<object> SameOrderedStructure(Dictionary<string,object> before,Dictionary<string,object> after,string stage,bool reload=false) {
+        foreach(var field in new[]{"rootEnumeration","objects"})
+            if(J(before[field])!=J(after[field]))throw new Exception(stage+" changed "+field);
+        var leaked=new List<object>();
+        if(!reload){if(J(before["usedKeys"])!=J(after["usedKeys"]))throw new Exception(stage+" changed usedKeys");return leaked;}
+        var kept=new HashSet<int>((List<int>)after["usedKeys"]);
+        foreach(var key in (List<int>)before["usedKeys"])if(!kept.Contains(key))leaked.Add(key);
+        var saved=new HashSet<int>((List<int>)before["usedKeys"]);
+        foreach(var key in kept)if(!saved.Contains(key))throw new Exception(stage+" added used key "+key);
+        return leaked;
+    }
+    Dictionary<string,object> OrderedSnapshot() {
+        // SceneInfo.hashIndex is private; read it, never write it. Root rows are the
+        // root dictionary's enumeration order (the order SceneInfo.Save writes), not
+        // private Dictionary slot indices; the before/after rows show slot reuse.
+        var field=typeof(SceneInfo).GetField("hashIndex",BindingFlags.NonPublic|BindingFlags.Instance);
+        var used=field==null?null:field.GetValue(studio.sceneInfo) as HashSet<int>;
+        if(used==null)throw new Exception("SceneInfo.hashIndex is unavailable");
+        var allocated=new List<int>(used);allocated.Sort();
+        var roots=new List<object>();int ordinal=0;
+        foreach(var entry in studio.sceneInfo.dicObject)roots.Add(K("ordinal",ordinal++,"key",entry.Key));
+        return K("usedKeys",allocated,"rootEnumeration",roots,"objects",Objects(),"extendedSave",Extended());
+    }
+    static string FileHash(string path) {
+        using(var stream=File.OpenRead(path))using(var sha=SHA256.Create()) {
+            var b=new StringBuilder();foreach(var value in sha.ComputeHash(stream))b.Append(value.ToString("x2"));return b.ToString();
+        }
+    }
+
     IEnumerator Author() {
         var load=Load(Path.Combine(input,"fixture.png"));while(load.MoveNext())yield return load.Current;
         for(int i=0;i<FixtureKinds.Length;i+=2){var kind=Ctrl(FixtureKinds[i]).objectInfo.GetType().Name;if(kind!=FixtureKinds[i+1])throw new Exception("phase A key of "+FixtureKinds[i]+" holds "+kind);}

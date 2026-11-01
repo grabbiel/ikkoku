@@ -101,11 +101,15 @@ public struct SourceSceneStage: Sendable {
     /// (`SourceScenePluginData`).
     let source: KoikatsuSceneDocument
     let copies: [Int32: Int32]
+    /// What the ordered replay (`replay`) needs of each insertion.
+    var layout = Layout()
 
     /// The final scene: `edits` (leaf edits keyed by stage keys, deletions
     /// and moves) applied to the staged document. Inserted lights must leave
     /// at most two lights: CharaStudio drops a nested light once two exist
-    /// (`SceneInfo.isLightCheck`), so a third would not reload.
+    /// (`SceneInfo.isLightCheck`), so a third would not reload. With
+    /// `edits.order` (#278) each insertion then takes the key and root
+    /// position that order of operations gives it in CharaStudio (`replay`).
     public func editedData(_ edits: SourceSceneEdits) throws -> Data {
         guard edits.insertions.isEmpty else {
             throw SourceSceneTopologyError.unsupported("The staged scene already carries its insertions.")
@@ -118,7 +122,30 @@ public struct SourceSceneStage: Sendable {
                 throw SourceSceneTopologyError.unsupported("CharaStudio keeps at most two lights (SceneInfo.isLightCheck); the edited scene would have \(lights.count).")
             }
         }
-        return try document.editedData(edits, source: source, copies: copies)
+        guard let order = edits.order else { return try document.editedData(edits, source: source, copies: copies) }
+        guard edits.reparents.isEmpty else { throw SourceSceneTopologyError.unsupported("Ordered export: moves are not replayed.") }
+        // Kept route points only: an added or deleted point takes or frees a key outside the replay.
+        for (key, state) in edits.routes {
+            let record = SourceSceneInsertionPlan.records(document.snapshot).first { $0.sourceKey == key }?.route
+            guard let record, state.points.map(\.sourceIndex) == Array(record.points.indices) else {
+                throw SourceSceneTopologyError.unsupported("Ordered export: route \(key)'s added or deleted points are not replayed.")
+            }
+        }
+        let replay = try replay(order)
+        let deleted = edits.deletions.isEmpty ? [] : try SourceSceneTopology.plan(document.snapshot, deletions: edits.deletions, reparents: []).deleted
+        guard deleted == replay.deleted else {
+            throw SourceSceneTopologyError.unsupported("Ordered export: the replayed deletes differ from the document's (\(deleted.count) planned, \(replay.deleted.count) replayed).")
+        }
+        let (body, final) = try document.editedBody(edits)
+        let (result, ordered) = try reordered(body, final: final, replay: replay)
+        var moved: [Int32: Int32] = [:], steps: [Int32: Int] = [:]
+        for (index, key) in keys.enumerated() { moved[key] = replay.keys[index] }
+        for (step, operation) in order.enumerated() {
+            if case .insert(let members) = operation { for member in members { steps[replay.keys[member]] = step } }
+        }
+        return try SourceScenePluginData.rewrite(result, final: ordered, source: source,
+                                                 copies: Dictionary(uniqueKeysWithValues: copies.map { (moved[$0.key]!, $0.value) }),
+                                                 moved: false, ordered: steps)
     }
 }
 
@@ -143,7 +170,9 @@ public extension KoikatsuSceneDocument {
         }
         // Plug-in data follows the copies when the final scene is written
         // (`SourceSceneStage.editedData`); the stage keeps the source trailer.
-        return SourceSceneStage(document: staged, keys: plan.keys, addsLights: plan.addsLights, source: self, copies: copies)
+        var stage = SourceSceneStage(document: staged, keys: plan.keys, addsLights: plan.addsLights, source: self, copies: copies)
+        stage.layout = plan.layout
+        return stage
     }
 }
 
@@ -394,6 +423,26 @@ struct SourceSceneInsertionPlan {
         guard case .duplicate(let key) = insertions[index].record, let slots = spans.topology.slots[key],
               slots.contains(where: { $0.point != nil }) else { return children[index] }
         return slots.flatMap { slot in children[index].filter { insertions[$0].attachment == slot.point } }
+    }
+
+    /// The replay's view of the insertions (`SourceSceneStage.Layout`).
+    var layout: SourceSceneStage.Layout {
+        var layout = SourceSceneStage.Layout()
+        layout.insertions = insertions
+        layout.children = insertions.indices.map(ordered)
+        for (index, insertion) in insertions.enumerated() {
+            var before = 0, after = 0, light = false
+            switch insertion.record {
+            case .duplicate(let key):
+                before = spans.topology.subKeys[key]?.before.count ?? 0; after = spans.topology.subKeys[key]?.after.count ?? 0
+                light = tree.records[key]?.kind == .light
+            case .light: light = true
+            case .folder, .camera: break
+            }
+            layout.before.append(before); layout.after.append(after); layout.lights.append(light)
+            layout.subKeys.append(allocatedSubKeys[index] ?? [])
+        }
+        return layout
     }
 
     // MARK: Bytes
