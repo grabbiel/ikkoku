@@ -153,7 +153,20 @@ remain separate and are not substitutes for those source adapters.
   length prefix). Before ST-T05a the error named the byte after the string
   (`vectorJSONErrorsPointAtTheStartOfTheString`).
 - Limits of 256 MiB per input, 1 MiB per string, 100,000 objects per scene or
-  entries per collection, and hierarchy depth 64.
+  entries per collection, and 200 nesting levels (roots are level 1).
+- The level cap is one constant, `KoikatsuBinaryReader.maximumLevels` (#326).
+  The reader, the topology and insertion writers and the Python contract
+  (`studio_scene_contract.py`, `MAX_LEVELS`) all use it. A deeper scene is
+  refused with an error that names the cap: "objects nested more than 200
+  levels deep (Ikkoku reads at most 200)". Before #326 the reader stopped at
+  65 levels, and its message said "hierarchy depth exceeds 64".
+- CharaStudio itself has no depth cap. `ObjectInfoAssist.LoadChild`
+  (ObjectInfoAssist.cs:9–62) takes no depth and recurses once per level,
+  through each kind's `Load` (OIFolderInfo.cs:34, OIItemInfo.cs:117,
+  OIRouteInfo.cs:73, OICharInfo.cs:246). Its only limit is the stack of
+  Unity's main thread. Ours is the decode's stack: every scene decode runs on
+  an 8 MiB stack (#321), and 200 levels fit with room to spare
+  (`SourceSceneDeepStackTests`, synthetic scenes).
 
 The binary reader never follows paths in a source Pattern record, loads assets
 or executes source code. `KoikatsuSceneDocument.extensions()` separately exposes

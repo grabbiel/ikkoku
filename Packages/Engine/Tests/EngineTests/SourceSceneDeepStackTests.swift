@@ -6,23 +6,26 @@ import Testing
 import Renderer
 @testable import Studio
 
-// #321: a scene decode (`KoikatsuSceneReader.decodeDocument`) recurses once
-// per nesting level, and the reader accepts at most 65 levels
-// (`KoikatsuBinaryReader.object`, depth 0...64). A Debug decode of the
-// 65-level installed scene needs 448 to 512 KiB of stack, a GCD worker's
-// whole stack, and the Studio's character builds decoded their scene on GCD
-// workers (`SourceStudioCharacterPreview.assemble`). The batch's workers now
-// have the main thread's 8 MiB (`SourceStudioCharacterBatch.stackSize`).
+// #321 / #326: a scene decode (`KoikatsuSceneReader.decodeDocument`)
+// recurses once per nesting level, and so do the export's topology writer,
+// the insertion writer and the layout import. The reader accepts
+// `KoikatsuBinaryReader.maximumLevels` (200 since #326; 65 before). A Debug
+// decode of the 65-level installed scene needs 448 to 512 KiB of stack, a
+// GCD worker's whole stack, and the Studio's character builds decoded their
+// scene on GCD workers (`SourceStudioCharacterPreview.assemble`). The
+// batch's workers now have the main thread's 8 MiB
+// (`SourceStudioCharacterBatch.stackSize`), where every other scene path
+// runs.
 //
 // The scenes here are synthetic, written by `TopologyScene`, never a user
-// scene: 65 nested folders, and 65 characters each held by the previous
+// scene: nested folders, and nested characters each held by the previous
 // one's accessory point (a character level adds `character(depth:)`'s
-// frame). Writing and releasing them recurse too, so the tests do both on a
-// thread of their own with 8 MiB (`liveTickOffPool`), never on the Swift
-// concurrency pool's 512 KiB.
+// frame, the deepest chain per level). Writing and releasing them recurse
+// too, so the tests do both on a thread of their own with 8 MiB
+// (`liveTickOffPool`), never on the Swift concurrency pool's 512 KiB.
 
 /// The deepest scene the reader accepts.
-private let deepestLevels = 65
+private let deepestLevels = KoikatsuBinaryReader.maximumLevels
 private let gcdWorkerStack = 512 * 1024
 
 private enum DeepChain: String, CaseIterable { case folders, characters }
@@ -96,15 +99,15 @@ private final class Observed: @unchecked Sendable {
     }
 }
 
-@Test func theReaderRefusesAScenePast65Levels() async throws {
+@Test func theReaderReadsItsLevelCapAndRefusesOneLevelMore() async throws {
     let (deepest, refusal) = try await liveTickOffPool { () -> (Int, String) in
         var depth = 0, level = try KoikatsuSceneReader.decodeDocument(deepScene(levels: deepestLevels, chain: .folders)).snapshot.roots
         while let object = level.first { depth += 1; level = object.children }
         do { _ = try KoikatsuSceneReader.decodeDocument(deepScene(levels: deepestLevels + 1, chain: .folders)); return (depth, "decoded") }
         catch { return (depth, String(describing: error)) }
     }
-    #expect(deepest == deepestLevels)
-    #expect(refusal == #"limitExceeded("hierarchy depth exceeds 64")"#)
+    #expect(deepest == deepestLevels && deepestLevels == 200)
+    #expect(refusal == #"limitExceeded("objects nested more than 200 levels deep (Ikkoku reads at most 200)")"#)
 }
 
 /// The negative control: the stack the first half takes on the deepest
@@ -132,15 +135,15 @@ func theDeepestScenesFirstHalfNeedsMoreThanAGCDWorkersStack() async throws {
             return (decode, release, firstHalf, outcome)
         }
         let measured = try #require(taken[chain])
-        print("[#321 deep stack] \(deepestLevels) nested \(chain.rawValue): the decode took \(measured.decode / 1024) KiB of stack, "
+        print("[#326 deep stack] \(deepestLevels) nested \(chain.rawValue): the decode took \(measured.decode / 1024) KiB of stack, "
               + "its release \(measured.release / 1024) KiB, the first half \(measured.firstHalf / 1024) KiB")
         #expect(measured.outcome == "Source character record is missing.", "\(chain.rawValue)")
-        // The batch's workers hold it with room to spare.
-        #expect(measured.firstHalf < SourceStudioCharacterBatch.stackSize / 4, "\(chain.rawValue): \(measured.firstHalf) bytes")
+        // The batch's workers hold it with half their stack to spare.
+        #expect(measured.firstHalf < SourceStudioCharacterBatch.stackSize / 2, "\(chain.rawValue): \(measured.firstHalf) bytes")
         // Releasing the tree recurses too, but far less: a decoded document or
         // character record dropped on a GCD queue (the Studio's build queue)
         // is safe at this depth.
-        #expect(measured.release < gcdWorkerStack / 4, "\(chain.rawValue): \(measured.release) bytes")
+        #expect(measured.release < gcdWorkerStack / 2, "\(chain.rawValue): \(measured.release) bytes")
     }
     #if DEBUG
     let deepest = taken.values.map { $0.firstHalf }.max() ?? 0
@@ -169,6 +172,72 @@ func theCharacterBatchDecodesTheDeepestScenesOnItsOwnStack() async throws {
     #expect(outcomes == Array(repeating: "Source character record is missing.", count: references.count))
     #expect(observed.stackSizes.count == references.count
             && observed.stackSizes.allSatisfy { $0 >= SourceStudioCharacterBatch.stackSize }, "\(observed.stackSizes)")
+}
+
+/// The main thread's scene paths on the deepest scenes the reader accepts,
+/// measured on an 8 MiB thread (the main thread's size): the export's
+/// read walk, its topology writer and read-backs (a rename of the deepest
+/// object, and a deletion of the deepest folder or the root character), the
+/// insertion writer and read-back (a folder one level above the cap, and
+/// its refusal at the cap), the layout import (folders only; it imports
+/// folders and items), and the record walks of the import and export.
+@Test func theMainThreadPathsHoldTheDeepestScenes() async throws {
+    let deepest = Int32(deepestLevels - 1)
+    for chain in DeepChain.allCases {
+        // Checks stay in the test's task: the thread returns what they compare.
+        let (taken, counts, refusal) = try await liveTickOffPool { () -> ([String: Int], [String: Int], String) in
+            let data = deepScene(levels: deepestLevels, chain: chain)
+            let document = try KoikatsuSceneReader.decodeDocument(data)
+            let point: Int32? = chain == .characters ? 0 : nil
+            var taken: [String: Int] = [:], counts: [String: Int] = [:]
+            func exported(_ edits: SourceSceneEdits) throws -> Int {
+                let edited = try document.editedData(edits)
+                return SourceSceneInsertionPlan.records(try KoikatsuSceneReader.decodeDocument(edited).snapshot).count
+            }
+            taken["export (rename the deepest)"] = try stackTaken {
+                counts["export (rename)"] = try exported(.init(names: [deepest: "Renamed"]))
+            }
+            // The export refuses to delete a character's accessory child on
+            // its own, so the nested characters go from the root down.
+            let deletion: Int32 = chain == .folders ? deepest : 0
+            taken["export (delete \(chain == .folders ? "the deepest" : "the root"))"] = try stackTaken {
+                counts["export (delete)"] = try exported(.init(deletions: [deletion]))
+            }
+            taken["insertion (a folder at the cap)"] = try stackTaken {
+                let stage = try document.inserting([.init(.folder(name: "New"), parent: .source(deepest - 1), attachment: point)])
+                counts["insertion"] = SourceSceneInsertionPlan.records(stage.document.snapshot).count
+            }
+            var refusal = "inserted"
+            taken["insertion (a folder past the cap)"] = stackTaken {
+                do { _ = try document.inserting([.init(.folder(name: "New"), parent: .source(deepest), attachment: point)]) }
+                catch { refusal = String(describing: error) }
+            }
+            taken["record walks"] = stackTaken {
+                counts["records"] = SourceSceneInsertionPlan.records(document.snapshot).count
+                _ = SourceSceneInsertionPlan.usedKeys(document.snapshot)
+                _ = SourceStudioCameraObjects.activeAtLoad(document.snapshot)
+                _ = SourceStudioRoutePlayback.samples(in: document.snapshot, elapsed: 0)
+            }
+            if chain == .folders {
+                let catalog = try JSONDecoder().decode(KoikatsuAssetCatalog.self, from: Data(#"{"version": 1, "items": []}"#.utf8))
+                taken["layout import"] = try stackTaken {
+                    let imported = try KoikatsuLayoutImporter.convert(document.snapshot, catalog: catalog,
+                                                                      catalogDirectory: FileManager.default.temporaryDirectory)
+                    counts["layout import"] = imported.objects.count
+                }
+            }
+            return (taken, counts, refusal)
+        }
+        for (path, bytes) in taken.sorted(by: { $0.key < $1.key }) {
+            print("[#326 deep stack] \(deepestLevels) nested \(chain.rawValue), \(path): \(bytes / 1024) KiB of stack")
+            #expect(bytes < SourceStudioCharacterBatch.stackSize / 2, "\(chain.rawValue), \(path): \(bytes) bytes")
+        }
+        var expected = ["export (rename)": deepestLevels, "export (delete)": chain == .folders ? deepestLevels - 1 : 0,
+                        "insertion": deepestLevels + 1, "records": deepestLevels]
+        if chain == .folders { expected["layout import"] = deepestLevels }
+        #expect(counts == expected, "\(chain.rawValue)")
+        #expect(refusal == #"limitExceeded("objects nested more than 200 levels deep (Ikkoku reads at most 200)")"#, "\(chain.rawValue)")
+    }
 }
 
 /// The cost of the batch's own threads (#321) against the GCD workers they

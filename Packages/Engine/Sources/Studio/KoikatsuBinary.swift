@@ -182,6 +182,25 @@ struct KoikatsuBinaryReader {
     var lastBoneKeyOffset = 0
     static let maximumCount = 100_000
     static let maximumStringBytes = 1_048_576
+    /// The most nesting levels a scene may have (#326), shared by the reader,
+    /// the topology and insertion writers, and the Python contract
+    /// (Tools/reverse/analysis/studio_scene_contract.py). CharaStudio's load
+    /// sets none: `ObjectInfoAssist.LoadChild` counts no depth, so its only
+    /// bound is its main thread's stack. Ours is the decode's: every scene
+    /// decode runs on an 8 MiB stack (the main thread, or the character
+    /// batch's workers, #321), and 200 levels take about 3.5 MiB in Debug
+    /// through nested characters, the deepest chain per level
+    /// (`SourceSceneDeepStackTests`). The installed scenes go 65 levels deep
+    /// at most. Before #326 the reader stopped at 65.
+    static let maximumLevels = 200
+
+    /// Refuses an object `depth` levels below a root (roots are depth 0)
+    /// once the scene would pass `maximumLevels`.
+    static func checkDepth(_ depth: Int) throws {
+        guard depth < maximumLevels else {
+            throw KoikatsuReadError.limitExceeded("objects nested more than \(maximumLevels) levels deep (Ikkoku reads at most \(maximumLevels))")
+        }
+    }
 
     init(_ data: Data) throws {
         guard data.count <= 256 * 1_048_576 else { throw KoikatsuReadError.limitExceeded("file size exceeds 256 MiB") }
@@ -436,7 +455,7 @@ struct KoikatsuBinaryReader {
     }
 
     mutating func object(depth: Int, rootKey: Int32?) throws -> KoikatsuObjectRecord {
-        guard depth <= 64 else { throw KoikatsuReadError.limitExceeded("hierarchy depth exceeds 64") }
+        try Self.checkDepth(depth)
         objectCount += 1
         guard objectCount <= Self.maximumCount else { throw KoikatsuReadError.limitExceeded("scene exceeds \(Self.maximumCount) objects") }
         let recordStart = offset, rawKind = try int32()
