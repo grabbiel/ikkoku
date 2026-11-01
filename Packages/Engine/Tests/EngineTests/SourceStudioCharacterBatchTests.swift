@@ -211,8 +211,9 @@ private func batchScene(_ previews: [SourceStudioCharacterPreview], renderer: Re
 }
 
 /// The three fixture tests build previews, and a build blocks its thread in
-/// MetalKit's synchronous texture load. A parallel `swift test` hung with
-/// every test-pool thread blocked there, these tests among them. They run one
+/// synchronous texture loads. While those went through MetalKit, a parallel
+/// `swift test` hung with every test-pool thread blocked there, these tests
+/// among them. They run one
 /// at a time, each on a thread of its own (`liveTickOffPool`), so they hold no
 /// pool thread; the test's task reports their checks.
 @Suite(.serialized) struct SourceStudioCharacterBatchFixtureTests {

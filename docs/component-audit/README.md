@@ -1,7 +1,7 @@
 # Component audit and implementation backlog
 
 **Baseline review: 2026-09-25 · commit `2cfb859` and that review's working tree.
-Scoped acceptance updates through 2026-10-24 appear below.** Later entries update
+Scoped acceptance updates through 2026-10-31 appear below.** Later entries update
 only their named behavior and evidence; the original audit was not rerun in full. The
 [documentation index](../README.md) links maintained guides and technical contracts. Older rebuild/checkpoint
 documents remain useful evidence of individual milestones, but their completion
@@ -50,6 +50,13 @@ There is deliberately no whole-game completion percentage: a complete original
 feature inventory and a common denominator across installed assets, DLC and mods
 have not been established. Current catalog counts state their actual denominators.
 
+**2026-10-31 — texture corpus validation:** Local `46a94326` closes a false-pass
+path where missing or undecodable captured textures could count as matching
+failures. Eleven focused tests pass: 138 positive corpus loads must create and
+read back both textures, while one exact synthetic negative stays explicit.
+Runtime behavior and pixel tolerances are unchanged. Final-runtime acceptance
+for the in-line loader remains separate; see the [renderer contract](../reference/renderer.md).
+
 ## Component-level assessment
 
 | Component | Overall stage | Main remaining boundary |
@@ -92,7 +99,17 @@ acceptance boundary; their old “next” steps are historical, not a live queue
   and reduces the selected case from 16 waits to six;
   its small timing comparison retains mixed owner-thread results. See
   [#208](https://github.com/grabbiel/ikkoku/issues/208); remaining stalls stay
-  tracked in [#192](https://github.com/grabbiel/ikkoku/issues/192). New base-load
+  tracked in [#192](https://github.com/grabbiel/ikkoku/issues/192).
+  [Shape-domain validation](../reference/character/contracts.md#validate-decoded-domains-once)
+  now avoids a second traversal of immutable decoded domains. Focused tests and
+  matched Maker checks preserve behavior; the quiet pair shows no consistent
+  selection-latency improvement.
+  [Decoded-contract reuse](../reference/character/contracts.md#bounded-decoded-contract-reuse)
+  passes 20 CPU checks and 248 fresh Maker functional checks, preserving matching
+  card exports and resource counts. Its small Release pair reduces mean repeated
+  head selection from about 103 to 81 ms, with first use 2.4–2.6 ms slower.
+  Fresh static full-body/face thumbnails match exactly; live animated viewport
+  equivalence is outside this comparison. New base-load
   diagnostics attribute most cold base-appearance time to MetalKit texture
   loading. A separately validated worker diagnostic attributes 88–90% of the
   selected preparation operation to rig decoding, validation and conversion.
@@ -101,6 +118,27 @@ acceptance boundary; their old “next” steps are historical, not a live queue
   selection falls from 667–701 ms to 159–161 ms; the first selection costs
   16–25 ms more, retains about 39 MB of logical rig payload and leaves owner
   stalls. See the [reuse evidence and limits](../reference/character/maker-assets.md#bounded-decoded-rig-reuse-192).
+  A [prospective session-replacement foundation](../reference/character/maker-assets.md#prospective-rig-session-replacement-foundation-192)
+  passes 24 synthetic checks in both Debug and Release. Initial-load seeding is
+  not integrated; these lifetime checks establish no performance benefit.
+  The [initial-load verifier](../reference/character/maker-assets.md#initial-load-verifier-controls-192-2026-11-01)
+  passes 111 isolated controls; actual app-pair acceptance remains separate.
+  Another 22 collection-envelope controls pass; execution was then held for
+  a timeout ownership gap found during source review.
+  Eighteen further synthetic closure controls pass for conservative failure holds;
+  those controls alone do not verify actual app cleanup or fidelity.
+  The first collection stops before app launch on an input alias/absence conflict;
+  that failed prerequisite and separate cleanup review are preserved.
+  Seventeen synthetic input-closure controls pass for the exact nine-alias
+  correction. A read-only preflight verifies all 3,698 files/aliases and 37
+  absences. The corrected four-app control cohort reports 124 passing rows and
+  releases naturally, but offline acceptance fails because the checker omits
+  reload step 5's successful reimport sample. The failed review is retained;
+  the original fidelity review remains failed. The separate one-event checker
+  correction passes ten synthetic controls, and offline re-review accepts the
+  retained control cohort's 124 checks without rerunning apps. A separate four-app
+  candidate cohort also passes 124 checks. Cross-arm comparison, targeted failure
+  cohorts and comparative performance remain open.
   Per-component diagnostics now place about 52 ms of the tested repeat-cycle
   card-appearance work in six compositor wait/view intervals; batching across
   components remains a proposal. See the [attribution evidence](../reference/character/maker-assets.md#per-component-appearance-attribution-192).
@@ -113,6 +151,28 @@ acceptance boundary; their old “next” steps are historical, not a live queue
   neighbouring triangles; translated pipelines now prevent it, and repeated live captures are bit-identical
   ([cause and correction](../reference/renderer.md#cause-and-correction-cross-primitive-derivative-quads-2026-10-25)).
   The history below predates that correction.
+  The [texture-loading validation](../reference/performance.md#texture-loading-candidate-validation-288-2026-10-31)
+  retains historical full Release, Maker/Studio and paired-image acceptance.
+  Combined checkpoint `4f5f2504` adds 20 affected CPU tests, nine GPU tests and
+  four Release Maker selection/reload checks (124 operations). Its historical
+  startup cohort fails the frozen background-activity limits; no comparative
+  speed claim follows. Original harness/build failures remain recorded.
+  A [2026-11-01 ImageIO option probe](../reference/renderer.md#imageio-eager-cache-correctness-probe-290-2026-11-01)
+  rejects eager caching as an exact substitution for one synthetic JPEG; its
+  PNG control matches. No production change or comparative timing follows,
+  and JPEG/HEIC cost issue #290 remains open. A follow-on byte-only audit passes
+  68 asset-free controls but stops at an unsupported nested Exif IFD in that
+  JPEG; it produces no complete structure or pixel/block correlation result.
+  A source-only [phase accounting audit](../reference/renderer.md#texture-load-phase-accounting-290-2026-11-01)
+  explains why existing intervals cannot isolate decode, conversion or upload waits.
+  The optional loader observer candidate compiles in Release with retained
+  artifacts. Separate discovery finds all ten observer controls in a 1,139-ID inventory;
+  six CPU and four native controls pass. The strict default-nil corpus passes
+  all 138 positive entries and one expected rejection. Five wider identity tests
+  also pass with zero mismatches; their synthetic unsupported cases remain explicit.
+  Seven existing upload/queue/permit tests also pass. Observed-versus-nil pixels,
+  wider lifetime checks and overhead remain open;
+  a limited paired-pixel test is drafted but unapplied.
   The [sampling investigation](../reference/renderer.md#translated-sampling-repeatability-investigation-188)
   distinguishes diagnostic controls from production behavior; reductions are
   evidence, not fixes or added material coverage. The latest controlled split
@@ -146,6 +206,37 @@ acceptance boundary; their old “next” steps are historical, not a live queue
   across replacement, rejected loads and repeated unload/remount, with exact
   state/resource retention and explicit unload changes. Real OS focus and
   multiple-window ownership still need separate acceptance.
+  An [ordered delete/copy diagnostic](../reference/studio/scene-editing.md#ordered-deletecopy-diagnostic-278-2026-10-31)
+  identifies an allocation/root-order mismatch and preserves both plugin-rich
+  refusals. An [instrumented baseline-only control](../reference/studio/scene-editing.md#baseline-only-shutdown-control-2026-11-01)
+  also reaches the probe's own quit callback and exits with an access violation.
+  A [ready-only control](../reference/studio/scene-editing.md#ready-only-shutdown-control-2026-11-01)
+  reproduces that exit while omitting the probe's scene load/save and edit operations.
+  Evidence completeness and resource release are confirmed separately;
+  original-player lifecycle remains unaccepted, with no added export support.
+  A [bounded tool-metadata query](../reference/studio/scene-editing.md#fault-capture-tool-metadata-2026-11-01)
+  found no collector/decoder in its checked subset; capture suitability and the
+  shutdown fault module/stack remain unverified.
+  [Public synthetic dump-reader controls](../reference/studio/scene-editing.md#public-synthetic-dump-reader-controls-2026-11-01)
+  pass 18 local Python methods after a preserved pre-discovery import failure;
+  Windows/native capture and original-player lifecycle remain unaccepted.
+  Twenty additional host-lifecycle controls pass; they do not execute Windows/C#
+  or establish native capture suitability.
+  The first public native attempt stops on a compiler output-path error before
+  any observer or target runs; its failure and verified cleanup are retained.
+  Nine local stderr-envelope controls pass after source review caught a mismatch
+  with the lock wrapper output. A separate PowerShell query confirms that parentheses repair
+  output-argument construction in two literal cases; compiler acceptance and
+  native capture remain unverified.
+  The corrected native attempt compiles and runs two callback-policy controls,
+  then refuses a breakpoint opcode before target creation. Archive validation
+  also fails; separate review proves release without accepting the native gate.
+  Thirteen synthetic ZIP consumer/interchange controls pass. A later actual
+  memory-producer query passes the unchanged strict consumer for four literal
+  payloads plus their manifest; filesystem-wrapper and native capture remain
+  unverified. Eighteen synthetic disk-export witness controls pass, with no
+  disk query or live-memory proof. Ten further synthetic envelope controls
+  keep failed-query process closure separate from disk-witness acceptance.
   General plugin compatibility remains outside the supported subset.
 
 Use the linked issue/PR state for work in review, and the owning reference for
@@ -739,6 +830,15 @@ pending roots, with no descendant expansion or new file access; no timing or
 general compatibility benefit is claimed. The
 [plugin reference](../reference/mods/plugin-execution.md#saved-scenes-and-migration)
 records schema compatibility, exact producer hashes and the preserved failing pair.
+
+**2026-10-31 — pending roots with attachment reads, #267:** Native open/undo/redo
+now restore unchanged saved roots unrelated to attachment parents/readers.
+Checkpoint `53db6d7` passes 39 Engine invocations and 320 app checks, including
+24 restored continuations and 44 exact rejection/rollback pairs. Constructor
+destruction, overlapping subtrees and malformed roots remain rejected. A
+candidate-only membership index bounds repeated queries; no timing improvement
+is claimed. The [execution reference](../reference/mods/plugin-execution.md#saved-pending-roots-with-attachment-reads-267)
+retains the earlier `3cd9612` reproduction separately and defines the support boundary.
 
 **Completed before this wave:** ST-T02/A-T04 passed local acceptance at PR #2
 (head `93e6b06`, merge `aa4bcb9`). Both configurations retained identities and

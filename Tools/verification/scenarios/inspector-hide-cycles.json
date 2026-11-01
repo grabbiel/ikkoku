@@ -1,0 +1,106 @@
+{
+  "steps": [],
+  "inspectorUI": {
+    "steps": [
+      {
+        "op": "select",
+        "key": 0
+      },
+      {
+        "op": "snapshot"
+      },
+      {
+        "op": "cycle",
+        "keys": [
+          0,
+          -1,
+          963,
+          622,
+          -1,
+          0
+        ],
+        "count": 5
+      },
+      {
+        "op": "assert",
+        "unchanged": true,
+        "inspectorView": "ObjectInspector"
+      },
+      {
+        "op": "assert",
+        "axContains": [
+          "Reset transform",
+          "Play playlist"
+        ],
+        "axAbsent": [
+          "Nothing selected"
+        ]
+      },
+      {
+        "op": "keyLoop",
+        "hiddenKeyViews": 0,
+        "keyViews": 12
+      },
+      {
+        "op": "deselect"
+      },
+      {
+        "op": "assert",
+        "inspectorView": "none",
+        "axContains": [
+          "Nothing selected"
+        ],
+        "axAbsent": [
+          "Reset transform",
+          "Position",
+          "Rotation",
+          "Scale",
+          "Play playlist",
+          "Repeat",
+          "Locked",
+          "Visible"
+        ],
+        "undoCount": 3
+      },
+      {
+        "op": "keyLoop",
+        "hiddenKeyViews": 0,
+        "keyViews": 2
+      },
+      {
+        "op": "select",
+        "key": 622
+      },
+      {
+        "op": "assert",
+        "inspectorView": "ObjectInspector",
+        "axContains": [
+          "Reset transform"
+        ],
+        "axAbsent": [
+          "Play playlist",
+          "Repeat",
+          "Original character",
+          "Nothing selected"
+        ],
+        "undoCount": 3
+      },
+      {
+        "op": "keyLoop",
+        "hiddenKeyViews": 0,
+        "keyViews": 12
+      },
+      {
+        "op": "select",
+        "key": 0
+      },
+      {
+        "op": "assert",
+        "axContains": [
+          "Play playlist"
+        ],
+        "undoCount": 5
+      }
+    ]
+  }
+}

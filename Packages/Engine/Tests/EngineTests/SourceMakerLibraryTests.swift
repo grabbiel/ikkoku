@@ -367,6 +367,8 @@ func sourceMakerClothesGroupOptInKeepsSelectedMaterialPixelsAndDefaultPath() asy
     // controllers; this is CPU preparation, without preview/GPU allocation.
     for sample in fixtures.fixtures.prefix(6) {
         let reuse = SourceMakerRigReuse()
+        let shapeReuse = SourceMakerShapeReuse()
+        let contractEncoder = JSONEncoder(); contractEncoder.outputFormatting = [.sortedKeys]
         let original = try SourceCharacterCard.load(url: directory.appendingPathComponent(sample.file))
         let base = URL(fileURLWithPath: sample.sex == 1 ? fixtures.femaleBase : fixtures.maleBase)
         for id in [0, 200, 201] {
@@ -398,16 +400,33 @@ func sourceMakerClothesGroupOptInKeepsSelectedMaterialPixelsAndDefaultPath() asy
             _ = try SourceFaceShapePose.make(rig: value.assets.source.rig, domain: face)
             #expect(try !value.expressions.weights(source: value.assets.source, inputs: value.expressions.defaults).isEmpty)
             #expect(value.rigReuseCandidate == nil && value.rigReuseSample == nil)
+            #expect(value.shapeReuseCandidate == nil && value.shapeReuseSample == nil)
+            #expect(value.workerStages?.intervals["shapeReuseSHA"] == nil && value.workerStages?.intervals["shapeReuseAdmission"] == nil)
+            let coldTimings = SourceMakerPreparationTimings()
             let cached = try SourceMakerHeadPreparation.prepare(card: card, library: library, coordinate: 1, baseURL: base,
-                rigReuse: reuse.input())
+                timings: coldTimings, rigReuse: reuse.input(), shapeReuse: shapeReuse.input())
             try expectReusedSourceMatches(cached.assets.source, value.assets.source)
             #expect(cached.sex == value.sex && cached.headID == value.headID && cached.boneType == value.boneType)
             #expect(cached.appearanceInputs.byteCount == value.appearanceInputs.byteCount)
             #expect(reuse.commit(cached.rigReuseCandidate))
+            let cachedContract = try contractEncoder.encode(cached.contract), referenceContract = try contractEncoder.encode(value.contract)
+            #expect(cachedContract == referenceContract)
+            let shapeSample = try #require(cached.shapeReuseSample)
+            #expect(shapeSample.misses == 1 && shapeSample.hits == 0 && shapeSample.admitted == 1 && !shapeSample.clearOnCommit)
+            #expect(coldTimings.sample.intervals["shapeRead"]?.calls == 1 && coldTimings.sample.intervals["shapeDecode"]?.calls == 1)
+            #expect(coldTimings.sample.intervals["shapeReuseSHA"]?.calls == 1 && coldTimings.sample.intervals["shapeReuseAdmission"]?.calls == 1)
+            #expect(coldTimings.sample.bytesHashed["shapeReuseSHA"] == coldTimings.sample.bytesRead["shapeRead"])
+            for domainID in ["body", "face"] {
+                let actualDomain = try #require(cached.contract.domain(domainID)), expectedDomain = try #require(value.contract.domain(domainID))
+                let rates = Array(repeating: Float(0.25), count: expectedDomain.valueCount)
+                let actualState = try actualDomain.makeState(values: rates), expectedState = try expectedDomain.makeState(values: rates)
+                #expect(actualState == expectedState)
+            }
+            #expect(shapeReuse.commit(cached.shapeReuseCandidate))
             if id == 201 {
                 let warmTimings = SourceMakerPreparationTimings()
                 let warm = try SourceMakerHeadPreparation.prepare(card: card, library: library, coordinate: 1, baseURL: base,
-                    timings: warmTimings, rigReuse: reuse.input())
+                    timings: warmTimings, rigReuse: reuse.input(), shapeReuse: shapeReuse.input())
                 try expectReusedSourceMatches(warm.assets.source, value.assets.source)
                 let warmSample = try #require(warm.rigReuseSample)
                 #expect(warmSample.hits > 0 && warmSample.misses == 0 && !warmSample.clearOnCommit)
@@ -416,7 +435,15 @@ func sourceMakerClothesGroupOptInKeepsSelectedMaterialPixelsAndDefaultPath() asy
                 #expect(warmTimings.sample.intervals["rigReuseSHA"]?.calls == warmSample.hits)
                 #expect(warmSample.retainedEntries <= 16 && warmSample.logicalEntryBytes <= 64 * 1024 * 1024)
                 #expect(warmSample.liveEntries <= 16 && warmSample.liveLogicalEntryBytes <= 64 * 1024 * 1024 && warmSample.liveSnapshots <= 4)
+                let warmShape = try #require(warm.shapeReuseSample), warmContract = try contractEncoder.encode(warm.contract)
+                #expect(warmContract == referenceContract && warmShape.hits == 1 && warmShape.misses == 0 && warmShape.admitted == 0)
+                #expect(warmTimings.sample.intervals["shapeRead"]?.calls == 1 && warmTimings.sample.intervals["shapeDecode"] == nil)
+                #expect(warmTimings.sample.intervals["shapeReuseSHA"]?.calls == 1 && warmTimings.sample.intervals["shapeReuseAdmission"] == nil)
+                #expect(warmTimings.sample.bytesHashed["shapeReuseSHA"] == warmTimings.sample.bytesRead["shapeRead"])
+                #expect(warmShape.retainedEntries <= 6 && warmShape.logicalEntryBytes <= 8 * 1024 * 1024)
+                #expect(warmShape.liveEntries <= 6 && warmShape.liveLogicalEntryBytes <= 8 * 1024 * 1024 && warmShape.liveSnapshots <= 4)
                 print("sourceMakerRigReuseFixture sex=\(sample.sex) bone=\(sample.boneType) entries=\(warmSample.retainedEntries) logicalBytes=\(warmSample.logicalEntryBytes) hits=\(warmSample.hits)")
+                print("sourceMakerShapeReuseFixture sex=\(sample.sex) bone=\(sample.boneType) entries=\(warmShape.retainedEntries) logicalBytes=\(warmShape.logicalEntryBytes) hits=\(warmShape.hits)")
             }
             #expect(card.preservedData == bytes)
         }

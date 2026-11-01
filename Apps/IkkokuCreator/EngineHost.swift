@@ -201,13 +201,37 @@ final class EngineHost {
     static func locateMakerLibrary() throws -> SourceMakerLibrary? {
         let override = ProcessInfo.processInfo.environment["IKKOKU_MAKER_LIBRARY"]
         if override == "none" { return nil }
-        if let override { return try SourceMakerLibrary.load(url: URL(fileURLWithPath: override)) }
-        if let selected = selectedManifest(.makerLibrary) { return try SourceMakerLibrary.load(url: selected) }
+        if let override { return try loadMakerLibrary(url: URL(fileURLWithPath: override)) }
+        if let selected = selectedManifest(.makerLibrary) { return try loadMakerLibrary(url: selected) }
         guard sourceTreeFallbacksEnabled else { return nil }
         let url = sourceTreeRoot.appendingPathComponent(".local/reverse/maker-library/library.json")
         guard FileManager.default.fileExists(atPath: url.path) else { return nil }
         print("[ikkoku] source-tree fallback: Maker library \(url.path)")
-        return try SourceMakerLibrary.load(url: url)
+        return try loadMakerLibrary(url: url)
+    }
+
+    /// The last Maker library decoded, by its file (R7 phase 2, item 7). Every
+    /// source rehydration and Maker rebuild asks for the library, and decoding
+    /// and checking its JSON again took ~3.7 ms each time. A file whose resolved
+    /// path, size or modification date changed decodes again; a failure is
+    /// never kept.
+    private static var makerLibraryCache: (file: MakerLibraryFile, library: SourceMakerLibrary)?
+    private struct MakerLibraryFile: Equatable {
+        let path: String, size: UInt64, modified: Date
+    }
+
+    private static func loadMakerLibrary(url: URL) throws -> SourceMakerLibrary {
+        let path = url.resolvingSymlinksInPath().path
+        let attributes = try? FileManager.default.attributesOfItem(atPath: path)
+        let file = attributes.flatMap { attributes -> MakerLibraryFile? in
+            guard let size = (attributes[.size] as? NSNumber)?.uint64Value,
+                  let modified = attributes[.modificationDate] as? Date else { return nil }
+            return MakerLibraryFile(path: path, size: size, modified: modified)
+        }
+        if let file, let cached = makerLibraryCache, cached.file == file { return cached.library }
+        let library = try SourceMakerLibrary.load(url: url)
+        makerLibraryCache = file.map { ($0, library) }
+        return library
     }
 
     /// A cheap configuration snapshot for asynchronous preparation. Unlike
