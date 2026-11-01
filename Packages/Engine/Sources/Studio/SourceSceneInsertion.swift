@@ -73,6 +73,30 @@ public struct SourceSceneInsertion: Sendable, Equatable {
     }
 }
 
+/// #320: how many lights the target CharaStudio keeps.
+public enum SourceSceneLightLimit: Sendable, Equatable {
+    /// CharaStudio 1.0.4.2. `SceneInfo.isLightCheck` is `lightCount < 2`
+    /// (SceneInfo.cs:109). The `OILightInfo` constructor counts a light and
+    /// `DeleteKey` uncounts it. Once two are counted:
+    /// - the Add Light menu refuses a light (Studio.cs:297–301);
+    /// - `SceneInfo.Import`, which Duplicate and Import Scene run, drops a
+    ///   root light (SceneInfo.cs:483);
+    /// - `ObjectInfoAssist.LoadChild` drops a nested light, at load and at
+    ///   import alike (:30–44), under a folder, an item, a route or an
+    ///   accessory point.
+    ///
+    /// Root lights load unchecked (`SceneInfo.Load`, SceneInfo.cs:323–352),
+    /// so only an install without the limit can author a third light.
+    case charaStudio
+    /// CharaStudio with KK_Fix_UnlimitedMapLights 22.1, the user's install.
+    /// Its two getter postfixes force one result to true and the other to
+    /// false (IllusionFixes/UnlimitedMapLights.cs:40–52); that they make
+    /// `isLightCheck` true and `isLightLimitOver` false is inferred from the
+    /// forced values, because ILSpy could not decode the attribute arguments.
+    /// So no light is refused or dropped.
+    case unlimitedMapLights
+}
+
 /// A new `OILightInfo` record. `no` is the `Light_00` catalog entry
 /// (abdata/studio/info/00.unity3d): 0 directional, 1 point, 2 spot. The
 /// defaults are the constructor's (`OILightInfo(int, int)`).
@@ -105,16 +129,18 @@ public struct SourceSceneStage: Sendable {
     var layout = Layout()
 
     /// The final scene: `edits` (leaf edits keyed by stage keys, deletions
-    /// and moves) applied to the staged document. Inserted lights must leave
-    /// at most two lights: CharaStudio drops a nested light once two exist
-    /// (`SceneInfo.isLightCheck`), so a third would not reload. With
-    /// `edits.order` (#278) each insertion then takes the key and root
-    /// position that order of operations gives it in CharaStudio (`replay`).
+    /// and moves) applied to the staged document. Under `.charaStudio`
+    /// (`SourceSceneEdits.lightLimit`), inserted lights must leave at most
+    /// two lights, the most CharaStudio 1.0.4.2 lets a session hold
+    /// (`SourceSceneLightLimit`). Under `.unlimitedMapLights` any number is
+    /// written. With `edits.order` (#278) each insertion then takes the key
+    /// and root position that order of operations gives it in CharaStudio
+    /// (`replay`).
     public func editedData(_ edits: SourceSceneEdits) throws -> Data {
         guard edits.insertions.isEmpty else {
             throw SourceSceneTopologyError.unsupported("The staged scene already carries its insertions.")
         }
-        if addsLights {
+        if addsLights, edits.lightLimit == .charaStudio {
             let deleted = edits.deletions.isEmpty && edits.reparents.isEmpty ? []
                 : try SourceSceneTopology.plan(document.snapshot, deletions: edits.deletions, reparents: edits.reparents).deleted
             let lights = SourceSceneInsertionPlan.records(document.snapshot).filter { $0.kind == .light && !deleted.contains($0.sourceKey) }

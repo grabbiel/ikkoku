@@ -129,6 +129,68 @@ private let identity: [Float] = [0, 0, 0, 0, 0, 0, 1, 1, 1]
     #expect(attached.document.preservedData == attachedExpected.data)
 }
 
+/// #320: `.charaStudio` (the default) keeps CharaStudio 1.0.4.2's two
+/// lights, and `.unlimitedMapLights` (KK_Fix_UnlimitedMapLights, the user's
+/// install) writes any number. Each case that adds or copies a light past two
+/// is written under the fix with the bytes `TopologyScene` predicts, and
+/// refused under the default with the count it would leave: the negative
+/// control. Cases that stay within two lights, or add no light, are the same
+/// export under both.
+@Test func sourceSceneInsertionLightLimitFollowsTheTargetInstall() throws {
+    #expect(SourceSceneEdits().lightLimit == .charaStudio)
+    func check(_ source: TopologyScene, _ edits: SourceSceneEdits, _ expected: TopologyScene, refusedWith lights: Int?,
+               _ location: SourceLocation = #_sourceLocation) throws {
+        let document = try decoded(source)
+        var unlimited = edits; unlimited.lightLimit = .unlimitedMapLights
+        #expect(try document.editedData(unlimited) == expected.data, sourceLocation: location)
+        if let lights {
+            let text = reason { try document.editedData(edits) }
+            #expect(text.contains("CharaStudio keeps at most two lights") && text.contains("would have \(lights)."), "\(text)", sourceLocation: location)
+        } else {
+            #expect(try document.editedData(edits) == expected.data, sourceLocation: location)
+        }
+    }
+    let point = SourceSceneNewLight(no: 1), spot = SourceSceneNewLight(no: 2)
+    // The scene holds light 5. Two new root lights take keys 13 and 14 (Add
+    // Light, AddObjectLight.Add): three lights.
+    var added = scene([camera0, folder1(), folder6(), route8, character10(), item12, .light(13), .light(14)])
+    added.lights = [13: point, 14: spot]; added.transforms = [13: identity, 14: identity]
+    try check(scene(), SourceSceneEdits(insertions: [.init(.light(point)), .init(.light(spot))]), added, refusedWith: 3)
+    // Two copies of light 5 beside it (Duplicate, SceneInfo.Import).
+    var copied = scene([camera0, folder1([.light(13), .light(14)]), folder6(), route8, character10(), item12])
+    copied.copies = [13: 5, 14: 5]
+    try check(scene(), SourceSceneEdits(insertions: [.init(.duplicate(of: 5), parent: .source(1)), .init(.duplicate(of: 5), parent: .source(1))]),
+              copied, refusedWith: 3)
+    // A folder holding a light, copied into a scene that already holds two
+    // (5 and 14): its nested light is the third (ObjectInfoAssist.LoadChild).
+    let holder = TopologyNode.folder(13, [.light(14)])
+    var nested = scene([camera0, folder1(), folder6(), route8, character10(), item12, holder, .folder(15, [.light(16)])])
+    nested.copies = [15: 13, 16: 14]
+    try check(scene([camera0, folder1(), folder6(), route8, character10(), item12, holder]),
+              SourceSceneEdits(insertions: [.init(.duplicate(of: 13)), .init(.duplicate(of: 14), parent: .inserted(0))]), nested, refusedWith: 3)
+    // Lights under a route, an accessory point and an item, each copied
+    // beside its original: every child list loads through LoadChild.
+    let children = scene([camera0, folder1(), folder6(), .route(8, [.folder(9, []), .light(13)]),
+                          character10([.folder(11, []), .light(14)]), .item(12, [.light(15)])])
+    var childCopies = scene([camera0, folder1(), folder6(), .route(8, [.folder(9, []), .light(13), .light(16)]),
+                             character10([.folder(11, []), .light(14), .light(17)]), .item(12, [.light(15), .light(18)])])
+    childCopies.copies = [16: 13, 17: 14, 18: 15]
+    try check(children, SourceSceneEdits(insertions: [.init(.duplicate(of: 13), parent: .source(8)),
+                                                      .init(.duplicate(of: 14), parent: .source(10), attachment: 7),
+                                                      .init(.duplicate(of: 15), parent: .source(12))]), childCopies, refusedWith: 7)
+    // Deleting light 5 makes room: two lights under both.
+    var replaced = scene([camera0, .folder(1, [.camera(2, active: true), .item(3, [.folder(4, [])])]), folder6(), route8, character10(), item12,
+                          .light(13), .light(14)])
+    replaced.lights = [13: point, 14: spot]; replaced.transforms = [13: identity, 14: identity]
+    try check(scene(), SourceSceneEdits(deletions: [5], insertions: [.init(.light(point)), .init(.light(spot))]), replaced, refusedWith: nil)
+    // A scene with three root lights, from an install without the limit,
+    // takes a folder under both: only an added or copied light is checked.
+    let three = scene([camera0, folder1(), folder6(), route8, character10(), item12, .light(13), .light(14)])
+    var folder = scene([camera0, folder1(), folder6(), route8, character10(), item12, .light(13), .light(14), .folder(15, [])])
+    folder.names[15] = "x"; folder.transforms[15] = identity
+    try check(three, SourceSceneEdits(insertions: [.init(.folder(name: "x"))]), folder, refusedWith: nil)
+}
+
 @Test func sourceSceneInsertionWritesNewFoldersCamerasAndLights() throws {
     let original = try decoded(scene())
     // AddObjectFolder/Camera/Light defaults: zero placement, unit scale,

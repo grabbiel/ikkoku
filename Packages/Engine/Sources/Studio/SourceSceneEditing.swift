@@ -119,6 +119,10 @@ public struct SourceSceneEdits: Sendable {
     /// are allocated after every source key and inserted roots are appended.
     /// Moves and added or deleted route points are not replayed.
     public var order: [SourceSceneInsertion.Step]?
+    /// #320: the light limit of the CharaStudio the export is for. The
+    /// default, `.charaStudio`, refuses an export that adds or copies a light
+    /// and leaves more than two; `.unlimitedMapLights` writes any number.
+    public var lightLimit: SourceSceneLightLimit = .charaStudio
     public struct Reparent: Sendable, Equatable {
         public var object: Int32, parent: Int32?
         public init(object: Int32, parent: Int32?) { self.object = object; self.parent = parent }
