@@ -1,0 +1,360 @@
+{
+  "steps": [],
+  "inspectorUI": {
+    "steps": [
+      {
+        "op": "select",
+        "key": 0
+      },
+      {
+        "op": "assert",
+        "field": "name",
+        "fieldText": "Source character 0",
+        "inspectorView": "ObjectInspector",
+        "editing": false
+      },
+      {
+        "op": "assert",
+        "field": "vector0",
+        "fieldText": "0.139"
+      },
+      {
+        "op": "probe",
+        "field": "name"
+      },
+      {
+        "op": "assert",
+        "probeHit": true
+      },
+      {
+        "op": "focus",
+        "field": "name"
+      },
+      {
+        "op": "type",
+        "text": " K"
+      },
+      {
+        "op": "snapshot"
+      },
+      {
+        "op": "deselect"
+      },
+      {
+        "op": "assert",
+        "key": 0,
+        "name": "Source character 0 K",
+        "unchanged": true,
+        "editing": false,
+        "inspectorView": "none",
+        "probeHit": false,
+        "probeFocusable": false,
+        "activeWells": 0,
+        "axContains": [
+          "Nothing selected"
+        ],
+        "axAbsent": [
+          "Parent",
+          "Reset transform",
+          "Position",
+          "Visible",
+          "Locked",
+          "Play playlist",
+          "Cursor Arrow"
+        ]
+      },
+      {
+        "op": "type",
+        "text": "Q"
+      },
+      {
+        "op": "assert",
+        "key": 0,
+        "name": "Source character 0 K",
+        "unchanged": true,
+        "editing": false
+      },
+      {
+        "op": "keyLoop",
+        "keyViews": 2,
+        "hiddenKeyViews": 0
+      },
+      {
+        "op": "select",
+        "key": 0
+      },
+      {
+        "op": "assert",
+        "key": 0,
+        "field": "name",
+        "fieldText": "Source character 0 K",
+        "unchanged": true,
+        "editing": false,
+        "inspectorView": "ObjectInspector",
+        "axContains": [
+          "Parent",
+          "Reset transform",
+          "Position"
+        ],
+        "axAbsent": [
+          "Nothing selected",
+          "Cursor Arrow"
+        ]
+      },
+      {
+        "op": "focus",
+        "field": "vector0"
+      },
+      {
+        "op": "type",
+        "text": "2.25",
+        "replace": true
+      },
+      {
+        "op": "assert",
+        "key": 0,
+        "positionX": 2.25,
+        "editing": true
+      },
+      {
+        "op": "snapshot"
+      },
+      {
+        "op": "deselect"
+      },
+      {
+        "op": "assert",
+        "key": 0,
+        "positionX": 2.25,
+        "unchanged": true,
+        "editing": false,
+        "inspectorView": "none"
+      },
+      {
+        "op": "select",
+        "key": 0
+      },
+      {
+        "op": "assert",
+        "key": 0,
+        "field": "vector0",
+        "fieldText": "2.250",
+        "positionX": 2.25,
+        "unchanged": true,
+        "editing": false
+      },
+      {
+        "op": "press",
+        "label": "Transform"
+      },
+      {
+        "op": "assert",
+        "axAbsent": [
+          "Reset transform"
+        ],
+        "axContains": [
+          "Parent"
+        ]
+      },
+      {
+        "op": "select",
+        "key": 963
+      },
+      {
+        "op": "assert",
+        "key": 963,
+        "axAbsent": [
+          "Reset transform"
+        ],
+        "axContains": [
+          "Play playlist"
+        ]
+      },
+      {
+        "op": "deselect"
+      },
+      {
+        "op": "select",
+        "key": 963
+      },
+      {
+        "op": "assert",
+        "key": 963,
+        "axContains": [
+          "Reset transform",
+          "Position",
+          "Play playlist"
+        ]
+      },
+      {
+        "op": "press",
+        "label": "Character"
+      },
+      {
+        "op": "assert",
+        "key": 963,
+        "axAbsent": [
+          "Original character:"
+        ],
+        "axContains": [
+          "Play playlist"
+        ]
+      },
+      {
+        "op": "select",
+        "key": 0
+      },
+      {
+        "op": "assert",
+        "key": 0,
+        "axAbsent": [
+          "Original character:"
+        ],
+        "axContains": [
+          "Play playlist"
+        ]
+      },
+      {
+        "op": "select",
+        "key": 622
+      },
+      {
+        "op": "assert",
+        "key": 622,
+        "axAbsent": [
+          "Original character:",
+          "Play playlist"
+        ]
+      },
+      {
+        "op": "keyLoop",
+        "hiddenKeyViews": 0
+      },
+      {
+        "op": "select",
+        "key": 963
+      },
+      {
+        "op": "assert",
+        "key": 963,
+        "axContains": [
+          "Original character:",
+          "Play playlist"
+        ]
+      },
+      {
+        "op": "select",
+        "key": 622
+      },
+      {
+        "op": "keyLoop",
+        "keyViews": 12,
+        "hiddenKeyViews": 0
+      },
+      {
+        "op": "select",
+        "key": 0
+      },
+      {
+        "op": "keyLoop",
+        "keyViews": 12,
+        "hiddenKeyViews": 0
+      },
+      {
+        "op": "snapshot"
+      },
+      {
+        "op": "cycle",
+        "keys": [
+          0,
+          -1,
+          963,
+          -1,
+          622,
+          -1,
+          0
+        ],
+        "count": 5
+      },
+      {
+        "op": "assert",
+        "unchanged": true,
+        "editing": false,
+        "inspectorView": "ObjectInspector"
+      },
+      {
+        "op": "select",
+        "key": 0
+      },
+      {
+        "op": "focus",
+        "field": "name"
+      },
+      {
+        "op": "type",
+        "text": "R"
+      },
+      {
+        "op": "assert",
+        "key": 0,
+        "name": "Source character 0 KR",
+        "editing": true
+      },
+      {
+        "op": "deselect"
+      },
+      {
+        "op": "select",
+        "key": 0
+      },
+      {
+        "op": "assert",
+        "key": 0,
+        "field": "name",
+        "fieldText": "Source character 0 KR",
+        "editing": false
+      },
+      {
+        "op": "undo"
+      },
+      {
+        "op": "assert",
+        "key": 0,
+        "name": "Source character 0 K",
+        "field": "name",
+        "fieldText": "Source character 0 K",
+        "editing": false,
+        "inspectorView": "ObjectInspector"
+      },
+      {
+        "op": "outfit",
+        "index": 1
+      },
+      {
+        "op": "assert",
+        "key": 0,
+        "field": "name",
+        "fieldText": "Source character 0 K",
+        "editing": false,
+        "inspectorView": "ObjectInspector"
+      },
+      {
+        "op": "assert",
+        "key": 0,
+        "field": "vector0",
+        "fieldText": "2.250"
+      },
+      {
+        "op": "outfit",
+        "index": 0
+      },
+      {
+        "op": "assert",
+        "key": 0,
+        "field": "name",
+        "fieldText": "Source character 0 K",
+        "inspectorView": "ObjectInspector"
+      }
+    ]
+  }
+}

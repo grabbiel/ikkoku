@@ -921,6 +921,180 @@ Warm candidate worker execution remains 78.665–89.667 ms and owner commit 75.8
 
 First/second cycle labels do not imply filesystem-cache eviction, and only the first process selection has an empty decoded-rig cache. Read/hash volumes are API bytes, not disk traffic. No FPS, heap/RSS, fresh original-player accuracy or broad hardware claim follows from this small pair. Immutable sources, binaries, original failed attempts, fixture/input proofs, all raw reports and offline analyses are retained under `.local/codex-continue-2026-10-24/rolling/maker-rig-cache/`.
 
+### Prospective rig-session replacement foundation (#192)
+
+Local foundation acceptance **2026-11-01**, tested source `ae7242c9`: a
+`SourceMakerRigReuse` replacement token carries the current expected epoch, a
+fresh prospective epoch and the existing admission ledger. Creating it leaves
+the committed cache intact, retains no old snapshot and reserves no empty
+snapshot. Preparation through its input can stage a new candidate without
+invalidating current work.
+
+`commitReplacement` is reserved for successful owner publication. It checks the
+token's ledger and expected epoch, plus a supplied candidate's ledger and new
+epoch, before replacing the owner state. A nil or capacity-cleared candidate can
+publish an empty session. Failed preparation instead drops its token and staged
+candidate. Foreign or stale tokens, mismatched candidates and replayed replacement
+tokens cannot publish; a successful replacement also rejects delayed work from
+the old epoch. Reference replacement occurs outside the counter locks, so
+final-holder destruction can return permits safely.
+
+The existing 16-entry / 64 MiB logical-entry / four-snapshot limits are unchanged.
+Old input, worker and delivered-candidate holders keep their reservations across
+replacement and cancellation. Saturation still permits valid uncached work;
+after successful empty publication and final old-holder release, a later fitting
+candidate can be admitted. Logical retention accounting remains distinct from
+ordinary native value copies, allocator costs and heap/RSS.
+
+All 24 public synthetic boundary tests pass in both Debug and optimized Release,
+with exact test-name checks, zero skips and unchanged complete Products closures
+(88 Debug entries; 91 Release entries). Eight new tests cover abandonment,
+seeded/empty publication, identity guards, entry/snapshot saturation recovery,
+delayed old work and cancellation-held credits. The initial Release build failed
+module compatibility checks because its build command omitted explicit
+testability. A separately retained fresh build added
+`-Xswiftc -enable-testing` while retaining Release optimization; production and
+test sources were unchanged. The failed attempt is preserved.
+
+This is an API and lifetime foundation only. Maker and library call sites do not
+yet seed the cache during initial loading. No app, source-fidelity or performance
+benefit is established by these CPU tests; initial-load seeding and its startup
+cost remain separate work under #192.
+
+### Initial-load verifier controls (#192, 2026-11-01)
+
+At candidate source `123ac115e67b7bc5d47dc90450d648a77acfa308`, 111 isolated
+Python controls pass with zero skips, errors or failures. They check the planned
+initial-load report, seed and failure contracts; native card boundaries; PNG
+chunk sequencing and independent filter vectors; and bounded raw-file retention.
+Close/write failures charge attempted bytes without claiming a verified partial
+file hash. Expected size fields reject Boolean and floating-point values.
+
+The runner executes verified source bytes, including the shared card parser,
+without consulting local bytecode caches. All 37 pins and 12 loaded-source
+receipts match; raw and ownership exits are zero and the process group is gone.
+Earlier unexecuted verifier versions remain preserved. Evidence is under
+`.local/codex-continue-2026-10-24/rolling/maker-initial-rig-reuse/app-verifier-attempt-3/`;
+readiness hash begins `d2c81988f8cd4eb3` and raw result `8ebfb48aa85d8d45`.
+These synthetic controls validate the checker, not actual candidate/control app
+reports. Collection-adapter integration, app fidelity and startup costs remain
+separate acceptance work; no performance benefit follows.
+
+Twenty-two separate collection-adapter controls also pass with zero skips,
+failures or errors. They cover the four-process envelope, source/product/role
+identity, recorded ownership and raw-versus-wait exits, and verified empty logs;
+empty semantic reports and cards still fail. All 19 pins and 13 loaded-source
+receipts match; raw, wait and final acceptance exits are zero, and the observed
+worker PID/birth and process-group release were checked. The earlier unexecuted
+runner could report success beyond its stated total time limit; its preserved
+sibling derives acceptance after postflight and rejects an observed total above
+90 seconds without claiming a hard watchdog. Evidence is under
+`app-collection-plan-1/adapter-controls-2/` beside the verifier evidence; readiness
+hash begins `59d5cfc83a54dc89` and raw result `4d23fc37a8ec596c`.
+
+These 22 controls do not exercise full card/fixture binding or native collection.
+At that checkpoint, app execution was held: source review found that a forced outer timeout
+could miss a newly spawned app in a separate process group. An empty ancestry
+sample therefore cannot establish complete cleanup in that failure case.
+
+A preserved sibling now keeps app ownership unresolved after every abnormal
+outer stop, even with four completion receipts and empty path scans. Natural
+closure additionally requires four ordered, unique PID/birth start-and-completion
+pairs, exact archived executable identities and two empty bounded path scans.
+The lock holder's release is recorded separately; path matches never authorize
+signals, and an empty scan cannot resolve a child still before native execution.
+Eighteen pure synthetic decision/path-matching controls pass with zero skips,
+errors or failures; all 22 pins and 14 loaded-source receipts match, raw/wait/final
+exits are zero, and the worker and group released. These checks do not prove
+real app cleanup or candidate/control fidelity. Native collection is unexecuted
+at this checkpoint. Evidence is `app-collection-plan-2/closure-controls-1/`;
+readiness hash begins `efd3cf31fdb8dbfb` and raw result `b7c249f4dfd9969c`.
+
+The subsequent control-functional collection attempt stopped during runtime
+input verification, before the app loop: a missing optional dynamics path was
+listed both as an existing alias and as absent. Nine paths have that overlap in
+the frozen input record. Both runtime receipts fail before file hashing, with
+zero app checks, starts or output artifacts; outer and wait exits are 1. The
+conservative runner retains its unresolved-ownership result. Separate review of source ordering, empty archive-path scans and released host
+PID/group evidence establish that no app launched. No fixtures were created and no retry occurred.
+Evidence is `app-collection-plan-2/control-functional/`; raw result begins
+`90502c6a0555decc`. This is a failed collection prerequisite, not app behavior.
+
+A corrected sibling removes exactly those nine contradictory aliases while
+preserving all 3,698 file descriptors and 37 declared absences. It validates
+alias/file/absence disjointness and target coverage before filesystem access,
+then retains strict alias resolution, exact file hashes and absence/non-symlink
+checks. Seventeen isolated synthetic controls pass with zero skips, failures or
+errors; all 14 pins and five loaded-source receipts match. Raw, ownership and
+final exits are zero, and the observed worker PID/group and parent release.
+These controls cover metadata contradictions, changed/missing files and newly
+appearing optional files or dangling symlinks; they do not validate the real
+input closure or app behavior. Evidence is `app-collection-plan-3/input-controls-1/`;
+readiness hash begins `709e7b5f98a3c011`, raw result `25a093ea9e48c9f8`.
+
+A separate read-only preflight then verifies all 3,698 declared file hashes
+(3,117,878,561 bytes), 3,698 strict aliases and 37 absent/non-symlink paths against
+that corrected closure. All 477 pins and four loaded-source receipts match;
+raw, owned-wait and final exits are zero, with worker/group/parent release verified.
+It neither decodes images/cards nor launches an app or alters fixtures. This
+resolves the declared input prerequisite only; app fidelity remains a separate gate.
+Evidence is `app-collection-plan-3/input-preflight-1/`; raw result begins
+`80397d1307a7bcc2`, input receipt `e836e85221047e34`.
+
+The first corrected control cohort runs all four apps successfully: the female
+and male selected-card scenarios each report 55 passing rows, and their fresh
+reloads each report seven, for 124 passes and no failed rows. All app, owned-wait
+and outer exits are zero. Four matching PID/birth start/completion pairs and
+empty postflight path scans establish natural resource release. The 109 fixed
+pins, 462 source files, both 218-entry app archives and 30 retained raw artifacts
+are unchanged; all runtime inputs still match before and after execution.
+
+Offline acceptance nevertheless fails with `missing/extra/misplaced initial
+sample`. The frozen reload scenarios explicitly reimport their exported card at
+step 5, and `MakerScenario` records an initial-load sample for successful
+reimports; the checker contract omits that step for reloads. The raw reports
+contain startup plus step 53 samples for selected-card scenarios and startup
+plus step 5 samples for reloads. The failed review remains preserved while a
+separate source-derived checker correction is prepared. These app exits and
+row counts do not establish semantic fidelity, candidate behavior or speed.
+Evidence is `app-collection-plan-3/control-functional/`; launch result begins
+`03542a338a25c417`, failed review `ba1c26ef0558f053`, retention receipt
+`72b5826d841c26fa`.
+
+A separately preserved checker correction adds only the source-defined ordinary
+import event at reload step 5. Ten synthetic controls pass with zero failures
+or skips, including both arms/sexes and missing, misplaced, duplicate or wrongly
+bound samples. All 17 pins and eight loaded-source receipts match; raw, owned-wait
+and final exits are zero, and the worker PID/group and observed parent release.
+Evidence is `reload-contract-correction-1/synthetic-controls-1/`; readiness hash
+begins `c7dee31a59deab76`, raw result `61fa8bb919c0ae08`. The original failed
+review and native proof remain unchanged; retained-data re-review is separate.
+
+The separately granted offline re-review then accepts all 124 retained control
+checks across four runs, including eight initial-load samples, four exports and
+eight PNG payloads. All 621 pins, 14 loaded-source receipts and 30 retained
+artifacts remain exact. It reads 11 unique original input descriptors (101,206
+bytes), with 38 bounded read calls; captured outputs come only from retained
+copies. Raw, owned-wait and final exits are zero and the observed worker/group
+and parent release. Evidence is `reload-contract-correction-1/retained-review-1/`;
+review hash begins `20bd7b9bcd16708c`, summary `2241e0428aee31c1`. This accepts
+the control cohort under the explicit source-derived correction, preserving the
+original failed review. No app is rerun, and candidate acceptance and comparative
+performance remain open.
+
+A separate candidate-functional cohort then runs all four apps and passes the
+corrected offline verifier: 124 checks, eight initial-load samples and four
+exports. The sibling proof binds the accepted control evidence separately;
+it does not relabel the earlier native proof or failed review. All 167 fixed
+pins, 462 source descriptors, both 218-entry archives and 30 retained artifacts
+(6,327,278 bytes) remain exact. Both runtime snapshots match the same 3,698
+files/aliases and 37 absences. Raw app/outer/wait and offline-review exits are
+zero; all nine observed processes and five groups release. Evidence is
+`app-collection-plan-4/candidate-functional/`; proof hash begins `29d7b1df8b92a814`,
+review `c7e1ab73de383d33`, summary `31c027fc1fb82d42`. This establishes the
+candidate cohort's own semantic checks. Cross-arm comparison, targeted failure
+cohorts and qualified performance measurements remain separate open gates.
+
 ### Per-component appearance attribution (#192)
 
 The optional owner-local collector now labels the existing base, ordered component

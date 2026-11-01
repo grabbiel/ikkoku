@@ -40,6 +40,205 @@ private func reuseEncodedRig(_ name: String = "fixture") throws -> Data {
     ] as [String: Any], options: .sortedKeys)
 }
 
+private func reuseCandidate(_ input: SourceMakerRigReuse.Input, data: Data) throws -> SourceMakerRigReuse.Candidate {
+    let worker = SourceRigReuseWorker(input)
+    _ = try worker.decode(data, timings: nil)
+    return worker.finish().0
+}
+
+@MainActor private func reuseIsHit(_ session: SourceMakerRigReuse, data: Data) throws -> Bool {
+    let timings = SourceMakerPreparationTimings(), worker = SourceRigReuseWorker(session.input())
+    _ = try worker.decode(data, timings: timings)
+    return timings.sample.intervals["rigDecode"] == nil
+}
+
+@MainActor @Test func sourceRigReplacementCreationAndFailedWorkLeaveCurrentSessionUnchanged() throws {
+    let ledger = SourceRigReuseAdmission(), session = SourceMakerRigReuse(admission: ledger)
+    let old = try reuseEncodedRig("old"), next = try reuseEncodedRig("next")
+    let current = try reuseCandidate(session.input(), data: old)
+    #expect(session.commit(current))
+    let before = ledger.counts
+    func failedPreparation() throws {
+        let replacement = session.prospectiveReplacement()
+        #expect(ledger.counts == before)
+        let worker = SourceRigReuseWorker(replacement.input)
+        _ = try worker.decode(next, timings: nil)
+        do { _ = try worker.decode(Data("invalid JSON".utf8), timings: nil); Issue.record("Malformed seed was accepted") }
+        catch { #expect(error is DecodingError) }
+        // No finish/publication follows the failed selected preparation.
+    }
+    try failedPreparation()
+    #expect(ledger.counts == before)
+    #expect(session.commit(current)) // Creating/abandoning the token did not rotate the owner epoch.
+    let oldHits = try reuseIsHit(session, data: old), newHits = try reuseIsHit(session, data: next)
+    #expect(oldHits && !newHits)
+    #expect(ledger.counts == before)
+}
+
+@MainActor @Test func sourceRigReplacementPublishesOnlyItsFreshEpochCandidate() throws {
+    let ledger = SourceRigReuseAdmission(), session = SourceMakerRigReuse(admission: ledger)
+    let old = try reuseEncodedRig("old"), next = try reuseEncodedRig("next")
+    let oldCandidate = try reuseCandidate(session.input(), data: old)
+    #expect(session.commit(oldCandidate))
+    let replacement = session.prospectiveReplacement()
+    let competing = session.prospectiveReplacement()
+    let candidate = try reuseCandidate(replacement.input, data: next)
+    #expect(!session.commit(candidate)) // A prospective seed is not an ordinary current-session result.
+    #expect(session.commitReplacement(replacement, candidate: candidate))
+    #expect(!session.commit(oldCandidate))
+    #expect(!session.commitReplacement(replacement, candidate: candidate)) // Cannot replay a committed token.
+    #expect(!session.commitReplacement(competing, candidate: nil)) // A sibling token cannot replace the new session.
+    let oldHits = try reuseIsHit(session, data: old), newHits = try reuseIsHit(session, data: next)
+    #expect(!oldHits && newHits)
+    #expect(session.commit(candidate)) // Ordinary work now belongs to the new epoch.
+    withExtendedLifetime((oldCandidate, candidate)) { #expect(ledger.counts.entries == 2 && ledger.counts.snapshots == 2) }
+}
+
+@MainActor @Test func sourceRigReplacementEmptyCommitRotatesWithoutSnapshotReservation() throws {
+    let ledger = SourceRigReuseAdmission(maximumSnapshots: 1), session = SourceMakerRigReuse(admission: ledger)
+    let data = try reuseEncodedRig()
+    var old: SourceMakerRigReuse.Candidate? = try reuseCandidate(session.input(), data: data)
+    #expect(session.commit(old))
+    let before = ledger.counts
+    let replacement = session.prospectiveReplacement()
+    let unused = (0..<8).map { _ in session.prospectiveReplacement() }
+    withExtendedLifetime(unused) { #expect(ledger.counts == before) }
+    #expect(session.commitReplacement(replacement, candidate: nil))
+    #expect(!session.commit(old))
+    #expect(!session.commitReplacement(replacement, candidate: nil))
+    withExtendedLifetime(old) { #expect(ledger.counts == before) }
+    old = nil
+    #expect(ledger.counts == .init()) // Token/input own no hidden old or empty snapshot.
+    withExtendedLifetime((replacement, replacement.input, unused)) { #expect(ledger.counts == .init()) }
+}
+
+@MainActor @Test func sourceRigReplacementRejectsForeignStaleAndMismatchedResults() throws {
+    let ledger = SourceRigReuseAdmission(), session = SourceMakerRigReuse(admission: ledger)
+    let other = SourceMakerRigReuse(), sameLedgerOwner = SourceMakerRigReuse(admission: ledger)
+    let data = try reuseEncodedRig(), initial = try reuseCandidate(session.input(), data: data)
+    #expect(session.commit(initial))
+    let first = session.prospectiveReplacement(), second = session.prospectiveReplacement()
+    let candidate = try reuseCandidate(first.input, data: data)
+    let foreignToken = other.prospectiveReplacement()
+    let foreignCandidate = try reuseCandidate(foreignToken.input, data: data)
+    let before = ledger.counts
+    #expect(!session.commitReplacement(foreignToken, candidate: nil))
+    #expect(!sameLedgerOwner.commitReplacement(first, candidate: candidate))
+    #expect(!session.commitReplacement(first, candidate: foreignCandidate))
+    #expect(!session.commitReplacement(second, candidate: candidate))
+    #expect(!session.commitReplacement(first, candidate: initial))
+    #expect(ledger.counts == before)
+    let hit = try reuseIsHit(session, data: data)
+    #expect(hit)
+    session.reset()
+    #expect(!session.commitReplacement(first, candidate: candidate))
+    #expect(!session.commitReplacement(second, candidate: nil))
+    let newToken = session.prospectiveReplacement()
+    #expect(session.commitReplacement(newToken, candidate: nil))
+}
+
+@MainActor @Test func sourceRigReplacementEntrySaturationKeepsOldHoldersUntilRecovery() throws {
+    let ledger = SourceRigReuseAdmission(maximumEntries: 1), session = SourceMakerRigReuse(admission: ledger)
+    let oldData = try reuseEncodedRig("old"), newData = try reuseEncodedRig("next")
+    var held: SourceMakerRigReuse.Candidate? = try reuseCandidate(session.input(), data: oldData)
+    #expect(session.commit(held))
+    func saturatedCommit() throws {
+        let replacement = session.prospectiveReplacement(), worker = SourceRigReuseWorker(replacement.input)
+        let value = try worker.decode(newData, timings: nil)
+        #expect(value.sourcePrefab == "next")
+        let (candidate, sample) = worker.finish()
+        #expect(sample.capacityBypasses == 1 && sample.clearOnCommit && sample.retainedEntries == 0)
+        let oldHit = try reuseIsHit(session, data: oldData)
+        #expect(oldHit) // Staged saturation did not evict the committed snapshot.
+        #expect(session.commitReplacement(replacement, candidate: candidate))
+        #expect(!session.commit(held))
+    }
+    try saturatedCommit()
+    withExtendedLifetime(held) { #expect(ledger.counts.entries == 1 && ledger.counts.snapshots == 1) }
+    held = nil
+    #expect(ledger.counts == .init())
+    let replacement = session.prospectiveReplacement(), candidate = try reuseCandidate(replacement.input, data: newData)
+    #expect(session.commitReplacement(replacement, candidate: candidate))
+    let recovered = try reuseIsHit(session, data: newData)
+    #expect(recovered && ledger.counts.entries == 1 && ledger.counts.snapshots == 1)
+}
+
+@MainActor @Test func sourceRigReplacementSnapshotSaturationKeepsOldHoldersUntilRecovery() throws {
+    let ledger = SourceRigReuseAdmission(maximumSnapshots: 1), session = SourceMakerRigReuse(admission: ledger)
+    let oldData = try reuseEncodedRig("old"), newData = try reuseEncodedRig("next")
+    var held: SourceMakerRigReuse.Candidate? = try reuseCandidate(session.input(), data: oldData)
+    #expect(session.commit(held))
+    func saturatedCommit() throws {
+        let replacement = session.prospectiveReplacement(), worker = SourceRigReuseWorker(replacement.input)
+        _ = try worker.decode(newData, timings: nil)
+        let (candidate, sample) = worker.finish()
+        #expect(sample.admitted == 1 && sample.capacityBypasses == 0 && sample.clearOnCommit && sample.retainedEntries == 0)
+        #expect(sample.liveEntries == 2 && sample.liveSnapshots == 1)
+        #expect(session.commitReplacement(replacement, candidate: candidate))
+    }
+    try saturatedCommit() // New unsnapshotted entries release when the local worker dies.
+    withExtendedLifetime(held) { #expect(ledger.counts.entries == 1 && ledger.counts.snapshots == 1) }
+    held = nil
+    #expect(ledger.counts == .init())
+    let replacement = session.prospectiveReplacement(), candidate = try reuseCandidate(replacement.input, data: newData)
+    #expect(session.commitReplacement(replacement, candidate: candidate))
+    let recovered = try reuseIsHit(session, data: newData)
+    #expect(recovered && ledger.counts.entries == 1 && ledger.counts.snapshots == 1)
+}
+
+@MainActor @Test func sourceRigReplacementDelayedOldWorkerCannotPublishAfterCommit() async throws {
+    let session = SourceMakerRigReuse(), data = try reuseEncodedRig("old"), next = try reuseEncodedRig("next")
+    let initial = try reuseCandidate(session.input(), data: data)
+    #expect(session.commit(initial))
+    let queue = SourceMakerPreparationQueue<SourceMakerRigReuse.Candidate?>(), barrier = RigReuseBarrier()
+    defer { barrier.release() }
+    let input = session.input()
+    let delayed = Task {
+        try await queue.prepare {
+            let candidate = Result { try reuseCandidate(input, data: data) }
+            barrier.waitOnWorker()
+            return try candidate.get()
+        }
+    }
+    await barrier.arrival()
+    let replacement = session.prospectiveReplacement(), candidate = try reuseCandidate(replacement.input, data: next)
+    #expect(session.commitReplacement(replacement, candidate: candidate))
+    barrier.release()
+    let stale = try await delayed.value
+    #expect(!session.commit(stale))
+    let hit = try reuseIsHit(session, data: next)
+    #expect(hit)
+    await queue.drain()
+}
+
+@MainActor @Test func sourceRigReplacementCancelledWorkerKeepsCreditsUntilDrain() async throws {
+    let ledger = SourceRigReuseAdmission(), session = SourceMakerRigReuse(admission: ledger)
+    let data = try reuseEncodedRig("old"), next = try reuseEncodedRig("next")
+    let initial = try reuseCandidate(session.input(), data: data)
+    #expect(session.commit(initial))
+    let before = ledger.counts, replacement = session.prospectiveReplacement(), barrier = RigReuseBarrier()
+    let queue = SourceMakerPreparationQueue<SourceMakerRigReuse.Candidate?>()
+    defer { barrier.release() }
+    let running = Task {
+        try await queue.prepare {
+            let candidate = Result { try reuseCandidate(replacement.input, data: next) }
+            barrier.waitOnWorker()
+            return try candidate.get()
+        }
+    }
+    await barrier.arrival()
+    running.cancel()
+    do { _ = try await running.value; Issue.record("Cancelled prospective work returned a candidate") }
+    catch { #expect(error is CancellationError) }
+    #expect(ledger.counts.entries == 2 && ledger.counts.snapshots == 2)
+    let hit = try reuseIsHit(session, data: data)
+    #expect(hit)
+    barrier.release()
+    await queue.drain()
+    let delivered = try await queue.prepare { nil }
+    #expect(delivered == nil && ledger.counts == before)
+}
+
 /// Only the worker waits. Arrival resumes the test without blocking MainActor.
 /// Hold until explicit release: a wall-clock timeout could drain the worker while
 /// the full suite delays MainActor. The test process watchdog bounds deadlocks.

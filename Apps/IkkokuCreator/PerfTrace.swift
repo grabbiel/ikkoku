@@ -63,6 +63,9 @@ final class PerfTrace {
         /// Applying finished hover picks on the main actor (R7 phase 2, item 5),
         /// including the refresh when the highlight changes.
         case studioHoverPick
+        /// Computing and comparing the Object tab's state and the inspector's
+        /// diagnostics at each Studio refresh (R7 phase 2, item 7).
+        case studioInspectorState
         /// The synthetic main-thread load (`IKKOKU_PERF_MAIN_LOAD_MS`); not model time.
         case mainLoad
         /// The main thread blocked on a Studio live step still running off it
@@ -114,7 +117,7 @@ final class PerfTrace {
     enum ViewBody: Int, CaseIterable {
         case appCommands, contentView
         case studioWindow, studioWorkspace, studioWorkspaceRow, studioToolbar, studioTimeline, studioInspector, studioStatus
-        case objectInspector, poseInspector, sourcePoseInspector, sourceAnimationInspector, faceInspector, clothesInspector, sceneInspector
+        case objectInspector, objectInspectorContent, objectInspectorSection, poseInspector, sourcePoseInspector, sourceAnimationInspector, faceInspector, clothesInspector, sceneInspector
         case makerWindow, makerRigPanel, makerShapeRow
 
         var name: String { String(describing: self) }
@@ -158,7 +161,8 @@ final class PerfTrace {
         let livePacing: String
         /// `IKKOKU_PERF_ACTION_KEY`: the source key of the object the action
         /// workloads (`studio-duplicate`, `studio-undo-delete`) act on, such
-        /// as a route; nil keeps their default character.
+        /// as a route, and the character `studio-fk-drag` drags; nil keeps
+        /// their default character.
         let actionKey: Int32?
         /// `IKKOKU_PERF_RIG_PREFETCH`: "on" (default) or "off", which leaves a
         /// Studio character build's rig decodes where its preparation asks for
@@ -176,6 +180,15 @@ final class PerfTrace {
         /// selects before selecting the shown one back; nil takes the first
         /// other outfit the card saves.
         let outfit: Int?
+        /// `IKKOKU_PERF_SELECT_KEYS`: the source keys `studio-select` selects
+        /// in turn (R7 phase 2, item 7); nil takes the first object of each
+        /// kind the Object tab shows differently. Any other workload selects
+        /// them in turn before it prepares.
+        let selectKeys: [Int32]?
+        /// `IKKOKU_PERF_INSPECTOR_TAB`: the inspector tab `studio-select`
+        /// shows, lowercased ("object", the default, "pose", "face",
+        /// "clothes" or "scene").
+        let inspectorTab: String?
 
         /// Reads `IKKOKU_PERF_*`; `CaptureRequest.validate` already checked the values.
         static func from(_ env: [String: String]) -> Configuration? {
@@ -202,7 +215,9 @@ final class PerfTrace {
                 rigPrefetch: env["IKKOKU_PERF_RIG_PREFETCH"] != "off",
                 donations: env["IKKOKU_PERF_DONATIONS"] != "off",
                 installRefresh: env["IKKOKU_PERF_INSTALL_REFRESH"] ?? "step",
-                outfit: env["IKKOKU_PERF_OUTFIT"].flatMap { Int($0) })
+                outfit: env["IKKOKU_PERF_OUTFIT"].flatMap { Int($0) },
+                selectKeys: env["IKKOKU_PERF_SELECT_KEYS"].map { $0.split(separator: ",").compactMap { Int32($0) } },
+                inspectorTab: env["IKKOKU_PERF_INSPECTOR_TAB"])
         }
     }
 
@@ -719,6 +734,9 @@ final class PerfTrace {
                 "livePacing": configuration.livePacing,
                 "rigPrefetch": configuration.rigPrefetch, "donations": configuration.donations,
                 "installRefresh": configuration.installRefresh, "outfit": configuration.outfit ?? -1,
+                "selectKeys": configuration.selectKeys.map { $0.map { Int($0) } as Any } ?? NSNull(),
+                "inspectorTab": configuration.inspectorTab.map { $0 as Any } ?? NSNull(),
+                "keepMounted": StudioInspectorMounting.current.rawValue,
             ] as [String: Any],
             "build": PerfTrace.buildDescription(),
             "machine": PerfTrace.machineDescription(device: device),

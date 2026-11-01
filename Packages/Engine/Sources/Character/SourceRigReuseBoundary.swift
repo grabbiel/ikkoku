@@ -128,6 +128,14 @@ final class SourceRigReuseSnapshot: Sendable {
         /// nil is an explicit clear-on-success intent, not a failed preparation.
         fileprivate let snapshot: SourceRigReuseSnapshot?
     }
+    /// A prospective new session, separate from ordinary selection publication.
+    /// It retains only the ledger and epoch identities, not the old snapshot or
+    /// an empty replacement snapshot. Creation does not invalidate current work.
+    public struct Replacement: Sendable {
+        fileprivate let admission: SourceRigReuseAdmission
+        fileprivate let expectedEpoch: SourceRigReuseEpoch, epoch: SourceRigReuseEpoch
+        public var input: Input { .init(admission: admission, epoch: epoch, snapshot: nil) }
+    }
     public struct Sample: Sendable, Encodable {
         public let hits: Int, misses: Int, admitted: Int, intrinsicBypasses: Int, capacityBypasses: Int
         /// Candidate snapshot only; clear intent carries no candidate payload.
@@ -143,6 +151,22 @@ final class SourceRigReuseSnapshot: Sendable {
     init(admission: SourceRigReuseAdmission) { self.admission = admission }
     public func input() -> Input { .init(admission: admission, epoch: epoch, snapshot: snapshot) }
     public func reset() { epoch = SourceRigReuseEpoch(); snapshot = nil }
+    public func prospectiveReplacement() -> Replacement {
+        .init(admission: admission, expectedEpoch: epoch, epoch: .init())
+    }
+    /// Call only at successful new-session publication, after all owner gates.
+    /// A nil candidate publishes an empty session (including reference fallback);
+    /// failed preparation must instead drop the token without calling this method.
+    /// Old holders keep their permits; no counter lock surrounds ARC replacement.
+    @discardableResult public func commitReplacement(_ replacement: Replacement, candidate: Candidate?) -> Bool {
+        guard replacement.admission === admission, replacement.expectedEpoch == epoch else { return false }
+        if let candidate {
+            guard candidate.admission === admission, candidate.epoch == replacement.epoch else { return false }
+        }
+        epoch = replacement.epoch
+        snapshot = candidate?.snapshot
+        return true
+    }
     /// Call only after the selection's existing validation/transaction succeeds.
     @discardableResult public func commit(_ candidate: Candidate?) -> Bool {
         guard let candidate, candidate.admission === admission, candidate.epoch == epoch else { return false }

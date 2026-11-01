@@ -14,6 +14,9 @@ public final class SourceStudioPluginWorld: SourceAPIEventWorld {
     public private(set) var cloneSerial: UInt64
     public var sourceActivationChanged: (() -> Void)?
     public var sourceObjectsCloned: (([(any SourceAPIObject, any SourceAPIObject)]) throws -> Void)?
+    // Session construction temporarily observes requests, including a requeue
+    // of an existing root. Cleared before the prepared session can escape.
+    var restoringDestructionRequested: (() -> Void)?
     private let attachment: AttachmentResolver?
     private var handles: [UUID: Object] = [:], pending = Set<UUID>()
     private var fault: (any Error)?
@@ -119,6 +122,7 @@ public final class SourceStudioPluginWorld: SourceAPIEventWorld {
     }
     public func destroy(_ object: any SourceAPIObject) {
         guard let handle = owned(object), document.object(handle.id) != nil else { return }
+        restoringDestructionRequested?()
         pending.insert(handle.id)
         sourceActivationChanged?()
     }

@@ -588,6 +588,232 @@ The plug-ins are the installed DLLs of the [installed inventory](../mods/plugin-
   - StudioCharaLightLinkedToCamera (`26c4d1e6…`, KK_StudioCharaLightLinkedToCamera/Patches.cs:90–92). It writes and accepts only version 3 (:129, :136).
 - **Orphan IDs.** `KKVMDPlayExtSave`, `rendererEditor`, `com.rskoi.particleeditor`, `vnge_kfa` and `vnge_sss` occur in installed scenes. None of the 243 installed DLLs contains any of them as ASCII/UTF-8 or UTF-16LE, and no script host is installed. The scan is `.local/stt03i-plugin-data/inventory/orphan-scan.json` (coverage index SHA-256 `e146e45a…`, corpus digest `d81258cc…`). Nothing in this install reads or writes these entries, so CharaStudio's save carries them verbatim through any edit. **Parity holds for this pinned install only.** Once a plug-in that owns one is installed, its data may name objects the export changed.
 
+### Ordered delete/copy diagnostic (#278, 2026-10-31)
+
+A private four-case diagnostic compares the unchanged native writer with
+retained original saves, including independent native parsing of serialized
+root keys. In the plain fixture, deleting first lets the original reuse key 1
+and its serialized root position; the native export instead allocates key 16 and appends it.
+Copying first and then deleting produces byte-identical exports for that one
+fixture. With MaterialEditor, NodesConstraints and KKPE data, both orders still
+refuse export under the existing mixed-delete/copy guards. The diagnostic's
+nonzero result records one mismatch and two refusals; it is not a passing
+production gate or an implementation of ordered edit history.
+
+The run completed the existing fixed-point and negative controls, using the
+existing comparator without new masks. Both original-player processes
+produced their artifacts but exited with an access violation, so their lifecycle
+and the original pair remain unaccepted. The diagnostic identifies remaining writer work without
+expanding supported plugin edits. Private evidence is retained under
+`.local/codex-continue-2026-10-24/wave-three/plugins/ordered-export-278/`;
+the four-row report SHA-256 is
+`3b2f49db3aed538140e5a001b145890905743b1e0c57c5def02f05ee48172fe8`.
+
+#### Baseline-only shutdown control (2026-11-01)
+
+One instrumented control omitted both ordered edit sequences while retaining
+the same input and baseline load/save/reload/resave code. Its saved and resaved
+bytes matched within that process. Four process/artifact-bound markers recorded
+status/trace publication, entry to the existing quit call, its return, and this
+probe's own `OnApplicationQuit` callback. The player still exited with access
+violation `0xC0000005`, so the failure also occurs without the ordered edits.
+This does not identify a fault module or prove completion of other plugins' or
+Unity's teardown. Synchronous marker I/O can affect shutdown, and these baseline
+bytes are not claimed identical to the earlier original process.
+
+The first assessor incorrectly expected an array for the producer's Boolean
+`compilerRemaining` field. That failed assessment is preserved. A separately
+versioned offline correction requires literal `false`, rejects missing, true,
+array and numeric values, and passes 24 synthetic checks with zero skips. It
+confirms complete retained evidence and resource release while leaving the
+baseline lifecycle and original pair unaccepted. The original wrapper exit 1
+and player access violation remain failures; no player rerun or production
+export change was made.
+
+Private follow-up evidence is under the same evidence root at
+`shutdown-baseline-control-1/launch-1/`. The raw `capture/run.json` SHA-256 is
+`5e756e28931acbba49e912fcdce07053cc7f17c54592dc66d61b3e5236bc12f4`;
+the separate `offline-assessment-2/assessment.json` SHA-256 is
+`6371e43f9a8583a5c67714a3eb6ce5f9ac86c14cebcb302c1d615f3d0bdba51f`.
+
+#### Ready-only shutdown control (2026-11-01)
+
+A second instrumented control retained readiness, the existing 60-frame wait,
+plugin checks, voice repair and normal quit path, but omitted the probe's scene
+load/save/reload/resave and ordered edits. Its trace contains an empty case
+object. The capture has no saved scene outputs and retains four
+process/artifact-bound shutdown markers with a literal zero case count.
+It still exited naturally with `0xC0000005`
+after reaching the probe's own `OnApplicationQuit` callback. Thus this failure
+also occurs without those probe scene operations. This is not a claim that
+startup performs no scene or engine I/O, nor does it identify the fault module,
+establish causality, or prove complete teardown. Marker I/O remains a perturbation.
+
+The frozen assessor passed 61 synthetic controls before the single original run.
+Independent review verifies all 107 plan pins, 125 runtime pins, 17 manifest
+entries, seven transport archive entries and all four markers. The compiler
+exited 0; host and guest owners released without forced stops, and the private
+probe root was removed. Evidence completeness and resource closure pass, while
+the wrapper exit 1 and player access violation remain failures. Ready-only,
+baseline and historical ordered-pair lifecycle acceptance remain false. No retry
+or production export change followed.
+
+Private evidence is under the same evidence root at
+`shutdown-ready-control-1/launch-1/`. The raw `capture/run.json` SHA-256 is
+`2b33ef5fc037b1b01ff6b9ab63589b0be69ac6efe05f82c8cac882acec377db5`;
+the `ready-review.json` SHA-256 is
+`304c2d6c081db9714abb081519fdcb5f0629fbedfc4e9b573a970498434b8852`.
+
+#### Fault-capture tool metadata (2026-11-01)
+
+One bounded, read-only VM query checked 32 paths: the retained player hash
+matched, while 31 debugger/decoder candidates were unavailable at those paths.
+Another 35 candidates were excluded by the cap, so this is not a global absence
+claim. The target is an x64 PE image on ARM64 Windows; the current user's
+ProcDump EULA key/value was absent. No candidate tool was executed or license accepted.
+The query exited 0 and its host/guest owners released. This establishes only
+bounded metadata completeness, not capture/decoder suitability, a fault module
+or stack, or lifecycle acceptance. Private evidence is under the same root at
+`shutdown-fault-capture-proposal-1/tool-preflight-1/`; raw stdout SHA-256 is
+`c6b6ec309f0cbc8ee6f1a063695c37598c3eededb41d677c9fdbd233b9545527`.
+
+#### Public synthetic dump-reader controls (2026-11-01)
+
+Eighteen local public synthetic Python test methods pass with zero skips. They
+cover deterministic PE instruction/layout oracles, independent bounded minidump
+module/RVA/context parsing, malformed stream and complete string-record overlap
+rejection, typed identity/callback-report fields, and safe ZIP/manifest binding.
+The first local attempt exited 1 before discovery because its import audit rejected
+a bytecode-cache lookup; that failure and zero executed tests remain preserved.
+The corrected loader executes only four hash-pinned source modules; all 18 method
+names, raw log/result, unchanged inputs and released process group were reviewed.
+
+This validates Python synthetic-byte controls only. At that checkpoint, the two
+actual C# callback policy controls were uncompiled, and no Windows debugger,
+native synthetic target or OS dump writer had run. AMD64-on-ARM64 context/API compatibility, native
+capture and decoder suitability, the original fault module/stack, and all original
+lifecycle/pair outcomes remain unaccepted. No export behavior changed.
+Private evidence is under the same root at
+`shutdown-public-dump-gate-1/synthetic-controls-3/`; test-result SHA-256 is
+`3ccecc9b216c06fa98f6fdb276274cc2ab03f136329e1d45fcd6770a5b61f48c`.
+
+Twenty additional local host-lifecycle controls pass with zero skips, errors or
+failures. They cover registration before thread start, delayed bootstrap/setup,
+held-worker cleanup, sticky socket-close failures, bounded admission/shared joins,
+and postflight deadline rejection. A later exact closure can prove release while
+the earlier failure still prevents success; missing thread identity never proves
+that a failed start created no worker. Raw child, wait and wrapper exits are zero;
+all 29 pins match and no owned process group or test thread remains. The fast
+child exited before a birth observation, which is retained as a limitation.
+These are host controls, not Windows/C# execution. Their separate evidence is
+`native-gate-3/host-controls-2/output/` under the same root; report hash begins
+`2f7513a9077b7fdf` and run receipt `cca0d59666f22b24`.
+
+The subsequent public native attempt on the same date stopped at compilation:
+the existing pinned compiler exited 1 with `CS2021`, reporting an invalid output
+filename containing leading and trailing spaces. No observer product, callback
+control, target process, debugger event or dump writer was reached. Transport,
+inner process and wrapper also exited 1; failure was not reclassified as success.
+The retained archive has eight verified files. All six HTTP request owners and
+host process groups were released; the final guest envelope confirms compiler
+release and temporary-root removal. The earlier archived receipt predates that
+removal and remains unchanged. Evidence is under `native-gate-3/`; archive hash
+begins `b9f87f3c2d3f2a52` and compiler-output hash `0eb1b5f998997d80`. An argument-
+construction correction requires separate review; no retry or original capture
+is implied by the successful cleanup.
+
+The separate argument-only plan was held before execution because its stderr
+parser expected one guest line while the shared lock wrapper emits two prefixes.
+A preserved sibling now requires the exact lock path, ordered waiting/acquired
+lines with valid clocks, and one type-checked guest identity stamp. Nine local
+synthetic methods pass with no failures or skips, including unexpected, missing,
+duplicate and reordered lines, wrong paths, invalid clocks and a Boolean PID.
+All 37 pins match; raw child, wait and wrapper exits are zero and the process
+group is released. These checks cover parsing only; PowerShell argument vectors
+and compiler acceptance remain unverified at this checkpoint. Evidence is
+`native-gate-4/argument-controls-2/local-controls-1/output/`; report hash begins
+`336c8f5472683f4f` and run receipt `03c2f968`.
+
+The separately granted argument-only query then passed on PowerShell
+`5.1.26100.9711`. Both synthetic literal path cases, including spaces, matched
+all eight expected vectors and joined strings: the old expression creates
+10 initial/13 full entries and joins the output switch as `/out:" <path> "`;
+parentheses produce 8/11 entries with `/out:"<path>"`. This confirms the expression
+and string-joining explanation for the earlier invalid filename, not actual
+compiler child arguments or compiler acceptance. Transport, wait and wrapper
+exits are zero; all 106 pins and four output artifacts match. The typed guest
+stamp matches the final envelope, synchronous completion is confirmed, and the
+host group and single HTTP owner are released. No compiler, observer or target
+ran. Evidence is `native-gate-4/argument-controls-2/output/`; result hash begins
+`ed47e26cd428b4d3` and guest receipt `5bb24acad7eed13b`. Native capture and original
+lifecycle/pair acceptance remain open.
+
+The corrected public native attempt subsequently compiled its observer with
+exit 0. The normal observer executed both C# callback-policy controls, then
+refused setup with `Unproven breakpoint opcode` before `CreateProcess`; it exited
+1 without creating a target. The crash phase, debugger loop and dump writer were
+not reached. No failing OS opcode or module hash was retained, so the exact cause
+of that refusal remains unknown.
+
+Transport, inner process and wrapper exits remain 1. The strict host archive
+validator also rejected two Windows-style ZIP entry names before evaluating
+closure. A separate root review read the 13 exact entries in memory, checked
+all CRCs and 12 manifest hashes, and explicitly mapped only those two names for
+evidence comparison. It did not relax the validator or change its failed result.
+The observer report, source ordering and matching archived/final process
+identities establish that no target was created. Compiler and observer release,
+all six HTTP owners, host groups and final guest-root removal were separately
+verified. Raw runner resource closure remains false; this supplemental review
+establishes release only. Evidence is under `native-gate-4/`; archive hash begins
+`c4d622d2d0679206`, observer report `4e5685851327ddb5`, and raw wrapper
+`bca5f88f8b8dd3bc`. Native capture and original lifecycle/pair outcomes remain
+unaccepted; no retry follows automatically.
+
+A proposed producer correction writes explicit canonical ZIP entry names while
+leaving the strict host consumer unchanged. Thirteen isolated Python controls
+pass with zero skips, failures or errors: exact root/nested/empty payloads and
+rejection of backslashes, aliases, noncanonical paths, manifest mismatches, bad
+CRC, symlinks and bounds violations. The aggregate-bound subcase uses mocked
+read counts; the remaining archive cases use small generated ZIP buffers.
+All four local and 36 external pins match; raw, ownership and wrapper exits are
+zero, with worker, parent and group release verified. These are consumer/interchange
+checks, not execution of the PowerShell/.NET producer or native-gate acceptance.
+Evidence is `zip-producer-correction-source-1/local-controls-1/output/`; raw result
+hash begins `6238ba408248f80e`, test report `46c5d87f83afddd4`.
+
+Eighteen separately isolated synthetic PE-witness/envelope controls also pass
+with zero skips, failures or errors. They cover bounded section/export mapping,
+forwarders, ordinals, opcode-field binding, typed identity/stderr evidence and
+complete non-`CC` observations without native-gate acceptance. All 35 pins and
+two loaded-module receipts match; raw, wait and wrapper exits are zero. The
+exact worker PID/group is absent after a successful wait, although the short run
+produced no sampled birth/parent row. These generated controls execute no
+PowerShell query and read no real DLL or live memory. Selected returned slices
+cannot prove a whole-file hash, full export-name uniqueness or the historical
+observer's identity. Evidence is `ntdll-opcode-query-source-1/local-controls-1/`;
+raw result hash begins `1435c772596e69e8`, report `3fa74e09048aca78`.
+
+The subsequent one-shot PowerShell/.NET memory-producer query passes the
+unchanged strict consumer: four independent literal payloads plus their manifest
+form exactly five canonical entries in an 875-byte ZIP, with valid CRCs and exact
+payload bytes/hashes. All 63 pins match; raw transport, owned-wait and final exits
+are zero. The typed guest PID/birth/path stamp matches its completion envelope;
+all host processes, the one HTTP request owner and accept thread release naturally.
+The query writes no guest files and launches no compiler or target. This accepts
+the limited in-memory producer interchange, not the filesystem wrapper, native
+capture or original lifecycle. Evidence is `zip-producer-interop-1/output/`;
+result hash begins `146978bc17d0b9dd`, ZIP `e4caeb502a6e7ed6`.
+
+Ten additional generated transport-envelope controls pass with zero skips,
+failures or errors. They preserve typed failed-query completion separately from
+successful disk-witness acceptance; a completion envelope cannot bypass the
+unchanged PE parser. All 46 pins and three loaded modules match, with raw/wait/
+wrapper exits zero. The worker PID/group is absent after a successful wait;
+this short run has no sampled birth/parent row. Evidence is
+`ntdll-disk-query-transport-1/local-controls-1/`; raw hash begins
+`23d5809a06497bc2`, report `cd122ef1f52703f7`. These are synthetic host controls;
+the proposed disk-only Windows query has not run at this checkpoint.
+
 ### Plug-in data rewrites
 
 Reviewed 2026-10-26 (ST-T03i, second change). `SourceScenePluginRewrites` (`Packages/Engine/Sources/Studio/SourceScenePluginRewrites.swift`) rewrites the KKPE, MaterialEditor and NodesConstraints entries after a delete or a copy, as CharaStudio's save writes them after the same interactive edit.

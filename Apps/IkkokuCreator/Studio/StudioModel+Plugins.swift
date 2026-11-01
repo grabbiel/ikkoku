@@ -98,11 +98,13 @@ extension StudioModel {
             if attachments != nil { _ = try session?.savedDocument() }
             // Native open historically commits the input scene, not constructor
             // mutations. Newly supported attachment reads must not leave the
-            // staged runtime paired with another topology/visibility or a future
-            // pending destruction. Attachment-free restore keeps its old policy.
+            // staged runtime paired with another topology/visibility or new
+            // destruction requests. Unchanged saved roots may belong to an
+            // unrelated subtree. Attachment-free restore keeps its old policy.
             if attachments?.didReadAttachment == true, let session {
                 guard session.world.document == document, session.world.cloneSerial == saved.cloneSerial,
-                      session.world.pendingSourceDestruction().isEmpty else {
+                      !session.initializationRequestedDestruction,
+                      Set(session.world.pendingSourceDestructionRoots()) == Set(saved.pendingDestructionRoots ?? []) else {
                     throw SourcePluginError.invalid("Attachment-reading restoration cannot mutate the candidate scene, clone objects, or schedule destruction during initialization.")
                 }
             }
@@ -183,7 +185,8 @@ extension StudioModel {
             if attachments?.didReadAttachment == true, let session {
                 guard session.world.document == baseline,
                       session.world.cloneSerial == baseline.sourcePluginState?.cloneSerial,
-                      session.world.pendingSourceDestruction().isEmpty else {
+                      !session.initializationRequestedDestruction,
+                      Set(session.world.pendingSourceDestructionRoots()) == Set(baseline.sourcePluginState?.pendingDestructionRoots ?? []) else {
                     throw SourcePluginError.invalid("Attachment-reading restoration cannot mutate the candidate scene, clone objects, or schedule destruction during initialization.")
                 }
             }
