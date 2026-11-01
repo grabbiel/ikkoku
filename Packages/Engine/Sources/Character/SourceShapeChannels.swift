@@ -263,6 +263,7 @@ public struct SourceShapeContract: Codable, Sendable {
         coordinateSystem = try container.decode(String.self, forKey: .coordinateSystem)
         rotationUnit = try container.decode(String.self, forKey: .rotationUnit)
         valueRange = try container.decode([Float].self, forKey: .valueRange)
+        // Each immutable domain validates its complete payload in init(from:).
         domains = try container.decode([SourceShapeDomain].self, forKey: .domains)
         guard schemaVersion == 1, coordinateSystem == "UnityLeftHandedYUp", rotationUnit == "degrees", valueRange == [0, 1] else {
             throw SourceShapeError.invalidContract("unsupported schema or coordinate convention")
@@ -270,6 +271,5 @@ public struct SourceShapeContract: Codable, Sendable {
         guard !domains.isEmpty, domains.count <= 16, Set(domains.map(\.id)).count == domains.count else {
             throw SourceShapeError.invalidContract("invalid or duplicate domains")
         }
-        for domain in domains { try domain.validate() }
     }
 }
