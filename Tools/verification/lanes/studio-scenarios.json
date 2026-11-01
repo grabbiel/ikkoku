@@ -2784,6 +2784,44 @@
       "timeout": 600
     },
     {
+      "id": "studio-scenario-ordered-light",
+      "argv": [
+        ".local/build/Build/Products/Debug/Ikkoku.app/Contents/MacOS/Ikkoku"
+      ],
+      "fixtures": [
+        {
+          "env": "IKKOKU_SOURCE_SCENE",
+          "kind": "file",
+          "from": "IKKOKU_STUDIO_SCENARIO_SCENE"
+        },
+        {
+          "env": "IKKOKU_SOURCE_AVATAR",
+          "kind": "file"
+        }
+      ],
+      "env": {
+        "IKKOKU_STUDIO_SCENARIO": "Tools/verification/scenarios/ordered-light.json",
+        "IKKOKU_STUDIO_SCENARIO_REPORT": ".local/verification/reports/studio-scenario-ordered-light.json"
+      },
+      "referenceTier": "app-smoke",
+      "tolerance": "#316 light replay on koikatu_cs0002591: two added point lights are exported and reimported as root lights 113 and 114, then root character 65 is deleted (its key and root slot free again), light 113 is duplicated and light 114 deleted, which leaves two lights. With the export setting on (KK_Fix_UnlimitedMapLights) the export replays the recorded order: after reimport the copy is key 65 in character 65's root slot (the smallest free key and the last freed slot, as for topology-delete-duplicate) and the status names no fallback. With it off (CharaStudio 1.0.4.2), the copy found two lights, which SceneInfo.Import drops, so the export keeps the set-based keys (the copy 115, the first key after the scene's own, appended) and the status names that reason. A negative control proves the child-order check fails on the vanilla keys.",
+      "artifacts": [
+        {
+          "path": ".local/verification/reports/studio-scenario-ordered-light.json",
+          "kind": "scenario-report"
+        },
+        {
+          "path": ".local/verification/scenario-exports/ordered-light.png",
+          "kind": "exported-scene"
+        },
+        {
+          "path": ".local/verification/scenario-exports/ordered-light-vanilla.png",
+          "kind": "exported-scene"
+        }
+      ],
+      "timeout": 600
+    },
+    {
       "id": "studio-scenario-plugin-rewrite-delete",
       "argv": [
         ".local/build/Build/Products/Debug/Ikkoku.app/Contents/MacOS/Ikkoku"

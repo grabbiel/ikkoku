@@ -274,8 +274,10 @@ The app's setting is File ▸ Original Scene Export Keeps Unlimited Lights. It i
 
 Our reader keeps every nested light, which is what an install with the fix loads. The vanilla load-time drop of a nested light past the second is not modelled.
 
-- **Oracle.** The export follows the recovered rules and the fix's patches. No CharaStudio has loaded an export with more than two lights yet: that is a later original-player phase with the fix installed (Add Light and Duplicate), which will also count, read only, the installed plug-in DLLs that name either getter, and confirm the fix's targets from its own attribute bytes.
-- **Plug-in references.** `Tools/translation/plugin_inventory.py` over the plug-in DLLs on this host (3 in `reverse/mods`, 4 in `reverse/plugin-execution`) and the 6 recovered CharaStudio assemblies found no member reference to `get_isLightCheck` or `get_isLightLimitOver`. No plug-in DLL has either name in its bytes; only the Assembly-CSharp that defines the getters does. The 243 installed plug-in DLLs are only on the VM, so their count is pending the phase above.
+- **Oracle.** The export follows the recovered rules and the fix's patches. No CharaStudio has loaded an export with more than two lights yet: that is a later original-player phase with the fix installed (Add Light and Duplicate, and the [light replay](#operation-order-278) rows), which will also count, read only, the installed plug-in DLLs that name either getter, and confirm the fix's targets from its own attribute bytes.
+- **Plug-in references.** `Tools/translation/plugin_inventory.py` over the plug-in DLLs on this host (3 in `reverse/mods`, 4 in `reverse/plugin-execution`) and the 6 recovered CharaStudio assemblies found no member reference to `get_isLightCheck` or `get_isLightLimitOver`. No plug-in DLL has either name in its bytes; only the Assembly-CSharp that defines the getters does.
+  - All 243 installed plug-in DLLs: the private installed-plug-in inventory (`.local/codex-continue-2026-10-24/wave-three/plugins/installed-inventory`, `plugin_inventory.py` reports of `C:\Illusion\Koikatsu\BepInEx\plugins`, complete, read only) has every DLL's member references. 242 have metadata and 1 is native. None references `get_isLightCheck`, `get_isLightLimitOver` or `Studio.IsLightCheck`. Only KK_Fix_UnlimitedMapLights itself references `SceneInfo.lightCount`, for its warning.
+  - A Harmony patch names its target in an attribute string, not a member reference, so the read-only byte scan of the installed DLLs for either name stays in the original-player phase above.
 - **Performance.** No new work. Under `.unlimitedMapLights` the writer skips the light count; under `.charaStudio` it runs the same count as before. The status count is one comparison per object inside the export loop that already visits every object. No timing was taken.
 - **Evidence.** `sourceSceneInsertionLightLimitFollowsTheTargetInstall` compares every byte with the `TopologyScene` builder under `.unlimitedMapLights` and checks the refusal under the default:
   - two new root lights (3 lights);
@@ -381,7 +383,12 @@ Reviewed 2026-11-01. When one export both deletes source records and adds record
 - **Root order.** `dicObject`, the root dictionary, is a Mono `Dictionary`. After `LoadScene` (Studio.cs:507), slot i holds the i-th root of the file. `Remove` pushes the root's slot onto a last-in, first-out free list (mono-dictionary.cs:954). `Add` takes the last freed slot or appends (:811). Enumeration, and so `SceneInfo.Save`, walks the slots in order (:118). `Resize` runs only when no slot is free, so it keeps the free list.
 - **Copies and additions.** `Import` adds each root copy with `dicObject.Add` (SceneInfo.cs:502). A child copy is added and removed again by its parent's `OnLoadAttach` (`DeleteInfo` without `_delKey`, OCIItem.cs:234, OCIFolder.cs:61), so it does not change the root order. Add Folder, Add Camera and Add Light take `GetNewIndex()` and add a root the same way.
 - **Reload.** `LoadScene` rebuilds `hashIndex` from the file. Item FK keys and route aid keys a delete left taken are free again after a reload, so a reloaded scene uses only the keys its file holds.
-- **Lights.** Whether a light is built depends on the session's light count (`isLightCheck`, SceneInfo.cs:109; `Import`'s check, SceneInfo.cs:483 and ObjectInfoAssist.cs:32). The replay does not model that count ([#316](https://github.com/grabbiel/ikkoku/issues/316)).
+- **Lights** ([#316](https://github.com/grabbiel/ikkoku/issues/316)). Whether a light is built depends on the session's `lightCount` (SceneInfo.cs:229–236; `isLightCheck` is `lightCount < 2`, :109):
+  - The `OILightInfo` constructor counts a light (OILightInfo.cs:38). Its `DeleteKey` frees the key and uncounts the light (OILightInfo.cs:67–71). A delete reaches it through every child list (OIFolderInfo.cs:41–47, OIItemInfo.cs:176–182, OICharInfo.cs:342–353, OIRouteInfo.cs:101–106), so deleting a subtree uncounts each light in it.
+  - `Import` reads the check before it builds a root light, builds it with `GetNewIndex()` all the same, and on a failed check `DeleteKey`s it and skips `dicObject.Add` (SceneInfo.cs:483, :496–502). `ObjectInfoAssist.LoadChild` does the same for a nested light, at load and at import (:30–44). A dropped light therefore takes no key (the smallest free key is taken and freed again) and no root slot.
+  - The Add Light menu refuses before `AddObjectLight.Add` takes a key (Studio.cs:297–301).
+  - At load, `ObjectInfo.Load` registers each saved key (ObjectInfo.cs:45) and `SceneInfo.Load` builds every root light unchecked. A nested light the load drops frees its saved key.
+  - With KK_Fix_UnlimitedMapLights, `isLightCheck` is always true ([the light limit](#the-light-limit-320)), so every light is built and takes its key like any record.
 
 **App translation.**
 
@@ -398,6 +405,7 @@ Reviewed 2026-11-01. When one export both deletes source records and adds record
 **Writer behavior.**
 
 - **Replay.** `SourceSceneStage.replay` starts from every key the source file uses and applies the steps in order. A delete frees the keys above and its root's slot. An insertion takes keys in the copy's byte order (the [recovered rules](#recovered-rules-1)) and, at the root, a slot. The staged scene is then rekeyed and its roots written in slot order. Child order, leaf edits and the rest of the export are as before.
+- **Lights.** A light takes its key like any record. Under `.unlimitedMapLights` (`SourceSceneEdits.lightLimit`) every order replays. Under `.charaStudio`, `SourceSceneStage.vanillaLightDrop` follows `lightCount` through the source load (`SourceSceneTopology.loadOrder`, accessory groups in byte order) and the steps, each light in the replay's visit order. When CharaStudio 1.0.4.2 would drop or refuse a light, that CharaStudio cannot make the exported scene with these operations, so the export keeps the set-based keys (`light`, or `lightAtLoad` for a source whose load drops a nested light). #320's final count still refuses more than two lights under `.charaStudio`.
 - **Plug-in data.** The rewrites read the written document, so they follow the replay:
   - Sideloader walks the roots in order;
   - KKPE and NodesConstraints index objects in key order;
@@ -413,7 +421,8 @@ Reviewed 2026-11-01. When one export both deletes source records and adds record
   | `move` | An object was moved to another parent. A move removes and adds roots, which takes and frees slots outside the replay. |
   | `routePoints` | Route points were added or deleted. `AddPoint` takes keys and a delete frees them. |
   | `addThenDelete` | An added or copied object was deleted again. The replay does not model the keys it held. |
-  | `light` | A light was added or copied ([#316](https://github.com/grabbiel/ikkoku/issues/316)). |
+  | `light` | Under `.charaStudio`, a light was added or copied while two existed, which CharaStudio 1.0.4.2 drops or refuses ([#316](https://github.com/grabbiel/ikkoku/issues/316)). |
+  | `lightAtLoad` | Under `.charaStudio`, the source holds a nested light that CharaStudio 1.0.4.2's load drops, which frees that light's key. |
   | `overflow` | More than 4,096 structural edits. |
   | `mismatch` | Objects were added or removed by an operation the log does not hold: a merged scene, a plug-in, or an entry this version cannot read. |
   | `legacyBones` | A scene from an older CharaStudio with a character, when the replay would take a key no earlier delete freed, or copies a character. CharaStudio's load gives such a character the catalog FK bones its record lacks (finding 2 under [Known differences from CharaStudio's save](#known-differences-from-charastudios-save)). It runs `AddObjectAssist.LoadChild` after `SceneInfo.Load` has registered every saved key (Studio.cs:515–519), so `InitBone` and `InitHairBone` (AddObjectAssist.cs:44, :111) take the smallest keys free at load. The upgrade does not hold those keys. A key an earlier delete freed is below all of them, so a replay that takes only such keys is still CharaStudio's. A character copy carries its hidden bones in CharaStudio and takes more keys. The set-based keys have the same gap ([#318](https://github.com/grabbiel/ikkoku/issues/318)). |
@@ -425,12 +434,13 @@ Reviewed 2026-11-01. When one export both deletes source records and adds record
 
 **Evidence.**
 
-- **Engine.** `SourceSceneOrderTests` (11 tests) mirror phase A's fixture with the independent `TopologyScene` builder. They cover:
+- **Engine.** `SourceSceneOrderTests` (15 tests) mirror phase A's fixture with the independent `TopologyScene` builder. They cover:
   - every oracle operation order, each against its set-based negative control;
   - a character delete followed by a copy, and a character copy's FK, IK, accessory child and look-at keys after a delete;
   - steps that free nothing (the export is the set-based one);
   - mismatched steps, which are refused;
   - the replay steps and the fallback reasons, built from a document's log;
+  - lights under both policies ([#316](https://github.com/grabbiel/ikkoku/issues/316)): a copy of L after V1's delete takes key 1 in V1's slot under both; a second copy, or a second new light with L kept, finds two lights and keeps the set-based keys under `.charaStudio`, while the fix replays it (the second copy key 6, appended); deleting L, or a folder holding a light, makes room for new lights under both; a folder copy whose nested light finds two lights; a source whose load drops a nested light (`lightAtLoad`) against the same lights in the other load order; and the status text. Removing the decrement on delete, the count on build, the policy check or the load-time drop each fails these tests;
   - the log: only imported scenes record, the capacity is kept, entries decode leniently, the log travels with a native save, and an old save loads;
   - `FreeKeys` handing out the smallest free key.
 
@@ -449,7 +459,8 @@ Reviewed 2026-11-01. When one export both deletes source records and adds record
 
 **Not verified:**
 
-- Light replay ([#316](https://github.com/grabbiel/ikkoku/issues/316)) and the other fallback cases keep the set-based keys.
+- Light replay ([#316](https://github.com/grabbiel/ikkoku/issues/316)) follows the recovered rules and the fix's patches. Its original-player rows, in a vanilla root and in one with KK_Fix_UnlimitedMapLights, wait for the with-fix phase; OA's rows have no light.
+- The other fallback cases keep the set-based keys.
 - Card links with a delete and a copy stay refused.
 - On a legacy scene with a character, any added object takes a key below the keys CharaStudio's load gives the character's missing FK bones: on the 0.0.7 fixture, a copy is 159 where CharaStudio's would be 169, with or without a delete ([#318](https://github.com/grabbiel/ikkoku/issues/318)). The file still loads, since every saved key is unique. The ordered path's `legacyBones` fallback is its counterpart.
 

@@ -1,0 +1,153 @@
+{
+  "steps": [
+    {
+      "op": "setUnlimitedLights",
+      "on": true
+    },
+    {
+      "op": "addLight",
+      "mode": "point",
+      "name": "A"
+    },
+    {
+      "op": "addLight",
+      "mode": "point",
+      "name": "B"
+    },
+    {
+      "op": "export",
+      "path": ".local/verification/scenario-exports/ordered-light-source.png"
+    },
+    {
+      "op": "reimport",
+      "path": ".local/verification/scenario-exports/ordered-light-source.png"
+    },
+    {
+      "op": "assert",
+      "children": {
+        "keys": [
+          622,
+          65,
+          962,
+          626,
+          1130,
+          794,
+          1298,
+          1540,
+          113,
+          114
+        ]
+      }
+    },
+    {
+      "op": "delete",
+      "key": 65
+    },
+    {
+      "op": "duplicate",
+      "key": 113
+    },
+    {
+      "op": "delete",
+      "key": 114
+    },
+    {
+      "op": "assert",
+      "absent": [
+        65,
+        114
+      ],
+      "children": {
+        "labels": [
+          "622",
+          "962",
+          "626",
+          "1130",
+          "794",
+          "1298",
+          "1540",
+          "113",
+          "copy:113"
+        ]
+      }
+    },
+    {
+      "op": "export",
+      "path": ".local/verification/scenario-exports/ordered-light.png"
+    },
+    {
+      "op": "assertRejected",
+      "statusContains": "Added objects took keys",
+      "errorContains": "does not contain"
+    },
+    {
+      "op": "setUnlimitedLights",
+      "on": false
+    },
+    {
+      "op": "export",
+      "path": ".local/verification/scenario-exports/ordered-light-vanilla.png"
+    },
+    {
+      "op": "assert",
+      "statusContains": "Added objects took keys after the scene's own, which can differ from CharaStudio's for these edits: a light was added or copied while two existed, which CharaStudio 1.0.4.2 drops or refuses (SceneInfo.isLightCheck)"
+    },
+    {
+      "op": "reimport",
+      "path": ".local/verification/scenario-exports/ordered-light-vanilla.png"
+    },
+    {
+      "op": "assert",
+      "children": {
+        "keys": [
+          622,
+          962,
+          626,
+          1130,
+          794,
+          1298,
+          1540,
+          113,
+          115
+        ]
+      }
+    },
+    {
+      "op": "reimport",
+      "path": ".local/verification/scenario-exports/ordered-light.png"
+    },
+    {
+      "op": "assertRejected",
+      "children": {
+        "keys": [
+          622,
+          962,
+          626,
+          1130,
+          794,
+          1298,
+          1540,
+          113,
+          115
+        ]
+      },
+      "errorContains": "assert children"
+    },
+    {
+      "op": "assert",
+      "children": {
+        "keys": [
+          622,
+          65,
+          962,
+          626,
+          1130,
+          794,
+          1298,
+          1540,
+          113
+        ]
+      }
+    }
+  ]
+}
