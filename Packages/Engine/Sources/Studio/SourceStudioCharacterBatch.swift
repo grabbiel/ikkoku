@@ -7,9 +7,9 @@ import Renderer
 ///
 /// The first half of every build (`SourceStudioCharacterPreview.assemble`:
 /// file reads, the scene record, the converted Maker assembly with its rig
-/// decodes, the contracts) starts at once on GCD worker threads, at most
-/// `width` at a time, in request order. It registers nothing, so it may run
-/// concurrently. Characters that read the same converted rig file share one
+/// decodes, the contracts) starts at once on worker threads of the batch's
+/// own, at most `width` at a time, in request order. It registers nothing,
+/// so it may run concurrently. Characters that read the same converted rig file share one
 /// decode (`rigs`), and each first half starts every decode its card selects
 /// at once (`SourceRigDecodeShare.prefetch`).
 ///
@@ -25,10 +25,16 @@ import Renderer
 /// the owner already built releases its meshes and buffers when the owner
 /// drops it (`SourceRigPreview.deinit`).
 ///
-/// GCD threads, not the Swift concurrency pool: the builds block on file
-/// reads, on each other's rig decodes and on texture uploads, and blocking
-/// work stays off the cooperative pool (`docs/reference/performance.md`,
-/// the pool rule).
+/// Threads of its own, not the Swift concurrency pool: the builds block on
+/// file reads, on each other's rig decodes and on texture uploads, and
+/// blocking work stays off the cooperative pool (`docs/reference/performance.md`,
+/// the pool rule). Not GCD workers either (#321): `assemble` decodes the whole
+/// scene, and the decode recurses once per nesting level, up to the reader's
+/// 65. In Debug, a first half on a 65-level scene takes 525 KiB of stack
+/// through nested folders and 1,152 KiB through nested characters, more
+/// than a GCD worker's 512 KiB (`SourceSceneDeepStackTests`). The workers
+/// get `stackSize`, the main thread's 8 MiB, where the Studio's other scene
+/// decodes run.
 public final class SourceStudioCharacterBatch: @unchecked Sendable {
     public struct Request: Sendable {
         public let reference: SourceStudioCharacterReference
@@ -64,9 +70,29 @@ public final class SourceStudioCharacterBatch: @unchecked Sendable {
         self.assembled = assembled
         assemblies = Array(repeating: nil, count: requests.count)
         let workers = min(max(1, width), requests.count)
-        for _ in 0..<workers {
-            DispatchQueue.global(qos: qos).async { [self] in work() }
+        guard workers > 0 else { return }
+        // The calling thread (the main thread in the Studio) starts one
+        // worker, which starts the others: a thread start costs about 15 µs,
+        // a GCD dispatch about 1 µs.
+        Self.startWorker(1, of: workers, qos: qos) { [self] in
+            for index in stride(from: 2, through: workers, by: 1) {
+                Self.startWorker(index, of: workers, qos: qos) { [self] in work() }
+            }
+            work()
         }
+    }
+
+    /// Each worker's stack (#321): the main thread's 8 MiB, not a GCD
+    /// worker's 512 KiB.
+    public static let stackSize = 8 << 20
+
+    private static func startWorker(_ index: Int, of count: Int, qos: DispatchQoS.QoSClass,
+                                    _ body: @escaping @Sendable () -> Void) {
+        let thread = Thread(block: body)
+        thread.stackSize = stackSize
+        thread.qualityOfService = QualityOfService(qos)
+        thread.name = "Ikkoku character assembly \(index) of \(count)"
+        thread.start()
     }
 
     /// The worker count: the performance cores less one for the main thread
@@ -193,6 +219,20 @@ public final class SourceStudioCharacterBatch: @unchecked Sendable {
             condition.broadcast()
             condition.unlock()
             assembled?(index)
+        }
+    }
+}
+
+private extension QualityOfService {
+    /// The thread QoS of a GCD QoS class, as the global queue of that class runs it.
+    init(_ qos: DispatchQoS.QoSClass) {
+        switch qos {
+        case .userInteractive: self = .userInteractive
+        case .userInitiated: self = .userInitiated
+        case .utility: self = .utility
+        case .background: self = .background
+        case .default, .unspecified: self = .default
+        @unknown default: self = .default
         }
     }
 }

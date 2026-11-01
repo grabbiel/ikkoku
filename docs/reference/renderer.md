@@ -1781,11 +1781,23 @@ keeps nothing (measurement control).
 
 **Batches.** `SourceStudioCharacterBatch` runs the builds of one operation:
 
-- The first halves start at once on GCD worker threads, at most `width` at
-  a time (the active processor count less two, at least two; QoS
-  user-initiated), in request order. GCD threads are used, not the Swift
-  concurrency pool, because the builds block on file reads, on each other's
+- The first halves start at once on worker threads of the batch's own, at
+  most `width` at a time (the active processor count less two, at least
+  two; QoS user-initiated), in request order. They stay off the Swift
+  concurrency pool because the builds block on file reads, on each other's
   rig decodes and on MetalKit's synchronous texture loads.
+- Each worker has an 8 MiB stack (`SourceStudioCharacterBatch.stackSize`,
+  #321), not a GCD worker's 512 KiB. A first half decodes the whole scene,
+  and the decode recurses once per nesting level, up to the reader's limit
+  of 65 levels. In Debug, a first half on the deepest scene the reader
+  accepts takes 525 KiB through nested folders and 1,152 KiB through
+  nested characters (`SourceSceneDeepStackTests`, synthetic scenes). The
+  65-level installed scene needs 144 KiB in Release. Every other scene
+  decode and record walk in the Studio runs on the main thread, which
+  also has 8 MiB.
+- The init starts one worker, which starts the others, so the calling
+  thread pays one thread start: 26 µs for a 22-wide batch against 18 µs
+  for the GCD dispatches before #321 (Debug, medians of 50).
 - The owner runs the second halves one at a time, in request order, on a
   thread it chooses: `build(_:)` on the calling thread, or
   `run(_:on:main:built:finished:)` on a serial queue. `run` can also
