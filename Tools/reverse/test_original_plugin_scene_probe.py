@@ -355,6 +355,73 @@ class OrderedOracleTests(unittest.TestCase):
         self.assertNotIn('ORDERED_FINAL:', rewrite('C'))
         self.assertNotIn('ORDERED_FINAL:', rewrite('D'))
 
+    def test_ordered_handoff_drains_the_control_crash_report_before_oa_and_never_stops_it(self):
+        # oracle-2: the control's shutdown fault started WerFault and a reflected
+        # CharaStudio child, and OA launched into it. OA now starts only after
+        # they are gone; a timeout ends the probe before the OA launch.
+        body = ordered()
+        drained = body.index("OrderedStamp 'control-player-drain'")
+        drain = body.index("OrderedStamp 'control-crash-drain'", drained)
+        timeout = body.index("throw 'Control crash reporting did not drain within 120 seconds; OA not launched'", drain)
+        complete = body.index("OrderedStamp 'control-complete'", timeout)
+        launch = body.index("OrderedStamp 'player-start'", complete)
+        self.assertEqual([drained, drain, timeout, complete, launch], sorted([drained, drain, timeout, complete, launch]))
+        block = body[drain:timeout]
+        self.assertIn("while($drain.Elapsed.TotalSeconds -lt 120)", block)
+        self.assertIn("$_.Name -ieq 'WerFault.exe'", block)
+        self.assertIn("CreationDate.ToUniversalTime().Ticks -ge $since", block)
+        self.assertIn("$_.Name -in @('CharaStudio.exe','Koikatu.exe')", block)
+        self.assertIn("$parents -contains [int]$_.ParentProcessId", block)
+        self.assertIn("$r.controlCrashDrain=", block)
+        for stop in ('Stop-Process', '.Kill(', 'taskkill'):
+            self.assertNotIn(stop, block)
+        # The control only: phases C and D have no handoff.
+        self.assertEqual(body.count("OrderedStamp 'control-crash-drain'"), 1)
+        self.assertNotIn('control-crash-drain', rewrite('C') + rewrite('D'))
+
+    def test_ordered_identity_rereads_an_unreadable_path_and_adopts_only_the_private_player(self):
+        body = ordered()
+        start = body.index('function RememberPlayer($process){')
+        end = body.index("OrderedStamp 'player-owner-recorded'", start)
+        block = body[start:end]
+        # Same PID and start time, a fresh object per read, bounded at 30 s.
+        self.assertIn('$live=Get-Process -Id $process.Id -ErrorAction SilentlyContinue', block)
+        self.assertIn('$live.StartTime.ToUniversalTime().Ticks -eq $ticks -and $live.Path', block)
+        self.assertIn('$watch.Elapsed.TotalSeconds -ge 30', block)
+        self.assertIn('if($process.HasExited -or', block)
+        self.assertLess(block.index("throw 'Owned process executable path is unavailable'"),
+                        block.index("throw 'Owned process executable is not the private player'"))
+        self.assertIn('$identity.path -ine "$root\\CharaStudio.exe"', block)
+        self.assertNotIn('Stop-Process', block)
+
+    def test_ordered_cleanup_proves_its_own_launches_by_their_held_objects(self):
+        body = ordered()
+        # Both launches are held before any identity read can throw.
+        holds = [i for i in range(len(body)) if body.startswith('$script:orderedLaunched+=@($x);$r.processID=$x.Id;', i)]
+        self.assertEqual(len(holds), 2)
+        for hold, stamp in zip(holds, ("OrderedStamp 'control-player-identity-read'", "OrderedStamp 'player-identity-read'")):
+            launch = body.rindex('$x=Start-Process', 0, hold)
+            self.assertLess(hold, body.index(stamp, hold))
+            self.assertNotIn('OrderedStamp', body[launch:hold].split('\n', 1)[1] if '\n' in body[launch:hold] else '')
+        self.assertIn('$script:orderedLaunched=@();', body)
+        # Cleanup kills a still-running launch through its object (its handle rules
+        # out PID reuse); it never stops an unrecorded process by PID or path.
+        stop = body.index('function StopPlayerOwners{')
+        stop_end = body.index('function StopOwnedCompiler{', stop)
+        cleanup = body[stop:stop_end]
+        self.assertIn('foreach($launched in @($script:orderedLaunched)){', cleanup)
+        self.assertIn('if(-not $launched.HasExited){$launched.Kill()', cleanup)
+        self.assertIn('$r.launchedRemaining.Count', cleanup)
+        self.assertNotIn('Get-Process CharaStudio', cleanup)
+        # Root removal: a launch still alive retains the root; one whose path was
+        # never read counts as proven gone only through its held object, and
+        # its children veto removal like an owner's.
+        proof = body[body.index('function RootRemovalReady{'):]
+        self.assertLess(proof.index('if($r.launchedRemaining.Count){return $false}'),
+                        proof.index('-not ($launchedIDs -contains [int]$r.processID)'))
+        self.assertIn('($launchedIDs -contains [int]$_.ParentProcessId)', proof)
+        self.assertNotIn('orderedLaunched', rewrite('C') + rewrite('D'))
+
     def test_ordered_transport_failure_retains_upload_without_accepting_or_extracting_it(self):
         with tempfile.TemporaryDirectory() as tmp:
             local = Path(tmp) / '.local'; local.mkdir(); output = local / 'output'

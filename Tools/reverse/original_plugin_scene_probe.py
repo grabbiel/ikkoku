@@ -249,7 +249,7 @@ $r.cleanupErrors=@();$r.guestPID=$PID;OrderedStamp 'bootstrap-pid'
 $r.guestStartUTC=(Get-Process -Id $PID).StartTime.ToUniversalTime().ToString('o');OrderedStamp 'bootstrap-identity'
 '''
 
-ORDERED_OWNERS = r'''$script:orderedOwners=@{};$script:orderedUnresolved=@{};$script:orderedCompiler=$null;$script:orderedCompilerIdentity=$null
+ORDERED_OWNERS = r'''$script:orderedOwners=@{};$script:orderedLaunched=@();$script:orderedUnresolved=@{};$script:orderedCompiler=$null;$script:orderedCompilerIdentity=$null
 function RowBirth($row){if($row.CreationDate -is [DateTime]){return $row.CreationDate.ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ss.ffffff')};return $null}
 function RememberUnresolved($row,$reason,$livePath=$null,$liveStart=$null){
 $cimBirth=RowBirth $row;$liveBirth=$null
@@ -269,9 +269,20 @@ $process=Get-Process -Id $identity.pid -ErrorAction SilentlyContinue
 if(-not $process){return $null}
 if($process.StartTime.ToUniversalTime().Ticks -ne $identity.startTicks -or $process.Path -cne $identity.path){return $null}
 return $process}
+# A player just started may not have its main module readable yet (its path
+# reads null), longer while Windows Error Reporting handles an earlier crash.
+# The path is read again from a fresh object of the same PID and start time,
+# bounded; a process is never adopted without its exact private-root path.
 function RememberPlayer($process){
-$identity=ProcessIdentity $process
-if(-not $identity.path){throw 'Owned process executable path is unavailable'}
+$ticks=$process.StartTime.ToUniversalTime().Ticks;$identity=$null;$watch=[Diagnostics.Stopwatch]::StartNew();$reads=0
+while($true){$reads++
+$live=Get-Process -Id $process.Id -ErrorAction SilentlyContinue
+if($live -and $live.StartTime.ToUniversalTime().Ticks -eq $ticks -and $live.Path){$identity=[ordered]@{pid=$live.Id;startTicks=$ticks;path=$live.Path};break}
+if($process.HasExited -or $watch.Elapsed.TotalSeconds -ge 30){break}
+Start-Sleep -Milliseconds 250}
+$r.playerIdentityReads=$reads;$r.playerIdentityMilliseconds=[int]$watch.Elapsed.TotalMilliseconds
+if(-not $identity){throw 'Owned process executable path is unavailable'}
+if($identity.path -ine "$root\CharaStudio.exe"){throw 'Owned process executable is not the private player'}
 if($script:orderedOwners.Count -ge 32){throw 'Ordered process-owner bound exceeded'}
 $script:orderedOwners[[int]$identity.pid]=$identity
 $r.observedOwners=@($script:orderedOwners.Values)
@@ -311,9 +322,13 @@ $process=MatchingProcess $identity
 if($process){$process|Stop-Process -Force;$stopped+=$identity.pid
 if(-not $process.WaitForExit(5000)){throw 'Recorded player owner did not exit within cleanup bound'}}
 }catch{$errors+=$_.ToString()}}
+foreach($launched in @($script:orderedLaunched)){
+try{if(-not $launched.HasExited){$launched.Kill();$stopped+=$launched.Id
+if(-not $launched.WaitForExit(5000)){throw 'Launched player did not exit within cleanup bound'}}}catch{$errors+=$_.ToString()}}
 $r.ownerCleanupErrors=$errors
 $r.ownersRemaining=@($script:orderedOwners.Values|Where-Object{MatchingProcess $_})
-if($r.ownersRemaining.Count -or $errors.Count){throw 'Recorded player owner cleanup incomplete'}
+$r.launchedRemaining=@($script:orderedLaunched|Where-Object{-not $_.HasExited}|ForEach-Object{$_.Id})
+if($r.ownersRemaining.Count -or $r.launchedRemaining.Count -or $errors.Count){throw 'Recorded player owner cleanup incomplete'}
 return ,$stopped}
 function StopOwnedCompiler{
 if(-not $script:orderedCompiler){return}
@@ -326,7 +341,10 @@ if(-not $process.WaitForExit(5000)){throw 'Recorded compiler did not exit within
 $r.compilerRemaining=[bool](MatchingProcess $identity)
 if($r.compilerRemaining){throw 'Recorded compiler remains'}}
 function RootRemovalReady{
-if(($r.processID -and -not $r.playerIdentity.path) -or ($script:orderedCompiler -and -not $script:orderedCompilerIdentity.path)){return $false}
+$launchedIDs=@($script:orderedLaunched|ForEach-Object{[int]$_.Id})
+$r.launchedRemaining=@($script:orderedLaunched|Where-Object{-not $_.HasExited}|ForEach-Object{$_.Id})
+if($r.launchedRemaining.Count){return $false}
+if(($r.processID -and -not $r.playerIdentity.path -and -not ($launchedIDs -contains [int]$r.processID)) -or ($script:orderedCompiler -and -not $script:orderedCompilerIdentity.path)){return $false}
 $r.ownersRemaining=@($script:orderedOwners.Values|Where-Object{MatchingProcess $_})
 $r.compilerRemaining=if($script:orderedCompilerIdentity){[bool](MatchingProcess $script:orderedCompilerIdentity)}else{$false}
 # This inventory only vetoes deletion. It never adopts or stops an unknown
@@ -340,7 +358,7 @@ $birth=RowBirth $row
 if(-not $observation.birth -or -not $birth -or $birth -ceq $observation.birth){$observation}}})
 $r.unresolvedPlayerOwners=@($table|Where-Object{
 ($_.ExecutablePath -and $_.ExecutablePath.StartsWith($root+'\',[StringComparison]::OrdinalIgnoreCase)) -or
-($_.Name -in @('CharaStudio.exe','Koikatu.exe')) -or $script:orderedOwners.ContainsKey([int]$_.ParentProcessId)
+($_.Name -in @('CharaStudio.exe','Koikatu.exe')) -or $script:orderedOwners.ContainsKey([int]$_.ParentProcessId) -or ($launchedIDs -contains [int]$_.ParentProcessId)
 }|ForEach-Object{[ordered]@{pid=$_.ProcessId;parent=$_.ParentProcessId;path=$_.ExecutablePath;birth=(RowBirth $_)}})
 return -not($r.ownersRemaining.Count -or $r.compilerRemaining -or $r.unresolvedPlayerOwners.Count -or $r.unresolvedRecordedInstances.Count -or $r.childObservationOverflow)}
 '''
@@ -567,7 +585,7 @@ OrderedStamp 'compiler-complete'
 if($c.ExitCode -ne 0){throw 'Compile failed; see retained compiler logs'}
 ''') + tail[end:]
         old_wait = '$r.processID=$x.Id;$r.exited=$x.WaitForExit(' + str(wait_seconds * 1000) + ')'
-        new_wait = r'''$r.processID=$x.Id;OrderedStamp 'player-pid'
+        new_wait = r'''$script:orderedLaunched+=@($x);$r.processID=$x.Id;OrderedStamp 'player-pid'
 [void]$x.Handle;OrderedStamp 'player-birth-read';$r.playerStartUTC=$x.StartTime.ToUniversalTime().ToString('o')
 OrderedStamp 'player-identity-read';$r.playerIdentity=RememberPlayer $x
 OrderedStamp 'player-executable-hash'
@@ -648,6 +666,17 @@ if([IO.Path]::GetFileName($path) -ceq $name){$m+=Get-Item -LiteralPath $path}}''
 # After the control player (OB) exits and its owners are drained: keep its record, move its logs and outputs to
 # control-* (flat names, as extract requires), and point the probe at OA for the second player.
 ORDERED_CONTROL_HANDOFF = r'''if(-not $r.exited){throw 'Control player did not exit within its bound'}
+# The control's shutdown fault starts Windows Error Reporting (WerFault and a
+# reflected CharaStudio child). OA starts only once that is gone: this waits
+# and records, it never stops a process, and a timeout ends the probe here.
+OrderedStamp 'control-crash-drain';$drain=[Diagnostics.Stopwatch]::StartNew();$since=$r.playerIdentity.startTicks
+$parents=@($script:orderedOwners.Keys|ForEach-Object{[int]$_})+@($script:orderedLaunched|ForEach-Object{[int]$_.Id})
+do{$table=@(Get-CimInstance Win32_Process -OperationTimeoutSec 5)
+$pending=@($table|Where-Object{($_.Name -ieq 'WerFault.exe' -and $_.CreationDate -is [DateTime] -and $_.CreationDate.ToUniversalTime().Ticks -ge $since) -or
+($_.Name -in @('CharaStudio.exe','Koikatu.exe')) -or ($parents -contains [int]$_.ParentProcessId)})
+if(-not $pending.Count){break};Start-Sleep -Milliseconds 500}while($drain.Elapsed.TotalSeconds -lt 120)
+$r.controlCrashDrain=[ordered]@{milliseconds=[int]$drain.Elapsed.TotalMilliseconds;pending=@($pending|ForEach-Object{[ordered]@{pid=$_.ProcessId;name=$_.Name;parent=$_.ParentProcessId;birth=(RowBirth $_)}})}
+if($pending.Count){throw 'Control crash reporting did not drain within 120 seconds; OA not launched'}
 $r.control=[ordered]@{phase='OB';processID=$r.processID;playerStartUTC=$r.playerStartUTC;playerIdentity=$r.playerIdentity;
 playerExecutableSHA256=$r.playerExecutableSHA256;exited=$r.exited;playerExitCode=$r.playerExitCode;stopped=$r.stopped}
 OrderedStamp 'control-capture'
