@@ -997,6 +997,29 @@ App execution remains held: source review found that a forced outer timeout
 could miss a newly spawned app in a separate process group. An empty ancestry
 sample therefore cannot establish complete cleanup in that failure case.
 
+A preserved sibling now keeps app ownership unresolved after every abnormal
+outer stop, even with four completion receipts and empty path scans. Natural
+closure additionally requires four ordered, unique PID/birth start-and-completion
+pairs, exact archived executable identities and two empty bounded path scans.
+The lock holder's release is recorded separately; path matches never authorize
+signals, and an empty scan cannot resolve a child still before native execution.
+Eighteen pure synthetic decision/path-matching controls pass with zero skips,
+errors or failures; all 22 pins and 14 loaded-source receipts match, raw/wait/final
+exits are zero, and the worker and group released. These checks do not prove
+real app cleanup or candidate/control fidelity. Native collection is unexecuted
+at this checkpoint. Evidence is `app-collection-plan-2/closure-controls-1/`;
+readiness hash begins `efd3cf31fdb8dbfb` and raw result `b7c249f4dfd9969c`.
+
+The subsequent control-functional collection attempt stopped during runtime
+input verification, before the app loop: a missing optional dynamics path was
+listed both as an existing alias and as absent. Nine paths have that overlap in
+the frozen input record. Both runtime receipts fail before file hashing, with
+zero app checks, starts or output artifacts; outer and wait exits are 1. The
+conservative runner retains its unresolved-ownership result. Separate review of source ordering, empty archive-path scans and released host
+PID/group evidence establish that no app launched. No fixtures were created and no retry occurred.
+Evidence is `app-collection-plan-2/control-functional/`; raw result begins
+`90502c6a0555decc`. This is a failed collection prerequisite, not app behavior.
+
 ### Per-component appearance attribution (#192)
 
 The optional owner-local collector now labels the existing base, ordered component

@@ -125,6 +125,10 @@ acceptance boundary; their old “next” steps are historical, not a live queue
   passes 111 isolated controls; actual app-pair acceptance remains separate.
   Another 22 collection-envelope controls pass; app execution remains held for
   a timeout ownership gap found during source review.
+  Eighteen further synthetic closure controls pass for conservative failure holds;
+  actual app cleanup and fidelity remain unverified.
+  The first collection stops before app launch on an input alias/absence conflict;
+  that failed prerequisite and separate cleanup review are preserved.
   Per-component diagnostics now place about 52 ms of the tested repeat-cycle
   card-appearance work in six compositor wait/view intervals; batching across
   components remains a proposal. See the [attribution evidence](../reference/character/maker-assets.md#per-component-appearance-attribution-192).
@@ -151,6 +155,8 @@ acceptance boundary; their old “next” steps are historical, not a live queue
   JPEG; it produces no complete structure or pixel/block correlation result.
   A source-only [phase accounting audit](../reference/renderer.md#texture-load-phase-accounting-290-2026-11-01)
   explains why existing intervals cannot isolate decode, conversion or upload waits.
+  The optional loader observer candidate compiles in Release with retained
+  artifacts; correctness, pixel identity and overhead checks remain pending.
   The [sampling investigation](../reference/renderer.md#translated-sampling-repeatability-investigation-188)
   distinguishes diagnostic controls from production behavior; reductions are
   evidence, not fixes or added material coverage. The latest controlled split
@@ -206,6 +212,9 @@ acceptance boundary; their old “next” steps are historical, not a live queue
   with the lock wrapper output. A separate PowerShell query confirms that parentheses repair
   output-argument construction in two literal cases; compiler acceptance and
   native capture remain unverified.
+  The corrected native attempt compiles and runs two callback-policy controls,
+  then refuses a breakpoint opcode before target creation. Archive validation
+  also fails; separate review proves release without accepting the native gate.
   General plugin compatibility remains outside the supported subset.
 
 Use the linked issue/PR state for work in review, and the owning reference for

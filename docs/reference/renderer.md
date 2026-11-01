@@ -2336,6 +2336,22 @@ identity checks before any qualified cost comparison. The audit and seven
 source pins are retained under the private `loader-accounting-1/` directory
 alongside the preceding #290 evidence; audit hash begins `06b04152f3025da1`.
 
+The subsequent local candidate `efa0802c1dae92f986aef069ac5f350d76339e65`
+adds an optional caller-owned observer for allocation, permit wait, provider,
+staging, conversion, submission and completion boundaries. The public aggregate
+sample remains unchanged; source review preserves permit and callback ordering.
+Its incremental Release test build, with testability enabled and four build jobs,
+passes with raw, ownership and wrapper exits zero. All 412 pins match; the fresh
+binary `8ca8dc2c2ad53c0e5f7f04f877441137ab4f3b347307b7f97128f93486273836`
+matches its complete 89-entry retained Products tree, and three prior product
+archives remain unchanged. All ten observed compiler processes released.
+
+This establishes compilation and artifact provenance only. Test discovery, the
+six CPU/four native observer controls, every-mip identity and runtime/lifetime
+checks have not run at this checkpoint; nil-path overhead and performance are
+unmeasured. Evidence is under `loader-observer-build-1/release-build-1/` beside
+the accounting audit; result hash begins `e67665af9667ef53`.
+
 ## Checked math, legacy skeletons and cameras (R4)
 
 The unchecked CoreMath helpers (`normalize`, `simd_quatf.rotation(from:to:)`,
