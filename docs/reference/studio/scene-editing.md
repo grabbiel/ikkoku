@@ -1129,8 +1129,9 @@ The upgrade refuses, with the reason, in two cases:
    targets its load adds. The message is "This CharaStudio *v* scene cannot be
    saved as 1.0.4.2: route *k* point *n* saves no aid, and CharaStudio
    allocates its key at load (AddObjectRoute.InitAid) from state this reader
-   does not model". No scene in the user's corpus has a route older than
-   1.0.4.1.
+   does not model". None of the user's 62 legacy scenes has a route point
+   (`legacyCorpusScenesUpgradeAndReadBack` counts 0 in every version), so
+   this refusal never fires on that corpus.
 2. Eye data in a scene older than 0.0.8 is not 32 bytes. `LoadAngle` reads
    exactly two quaternions there, so other lengths would not load in
    CharaStudio.
