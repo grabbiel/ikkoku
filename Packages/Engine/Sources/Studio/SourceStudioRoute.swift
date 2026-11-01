@@ -147,7 +147,7 @@ public struct SourceStudioRoute: Sendable, Equatable {
                 ? Self.routeLocalAid(pointPosition: SIMD3<Double>(point.bone.transform.position),
                                 pointEuler: SIMD3<Double>(point.bone.transform.rotationDegrees),
                                 pointScale: SIMD3<Double>(point.bone.transform.scale),
-                                aidLocal: SIMD3<Double>(point.aid.transform.position))
+                                aidLocal: SIMD3<Double>(point.aidTransform.position))
                 : nil
             points.append(Point(position: SIMD3<Double>(point.bone.transform.position), aid: aid,
                                 connection: connection, linked: point.linked,

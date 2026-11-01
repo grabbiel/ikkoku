@@ -89,6 +89,12 @@ do {
         return arguments[index + 1]
     }
     let supplementPath = takeOption("--supplement"), substitutedFramePath = takeOption("--write-frame")
+    // `scene-document <scene.png> --write-upgraded <out.png>`: a legacy
+    // scene's 1.0.4.2 export, the bytes our writer saves.
+    var upgradedPath: String?
+    if arguments.count == 4, arguments[0] == "scene-document", arguments[2] == "--write-upgraded" {
+        upgradedPath = arguments[3]; arguments.removeSubrange(2...3)
+    }
     let eyeLookPath = takeOption("--eye-look"), eyeLookRates = takeOption("--eye-look-rates")
     let inspecting = arguments.count == 2 && ["scene", "model", "camera", "change-amount", "rig", "mod", "mod-library", "card", "draw-overlays"].contains(arguments[0])
     let modCatalog = arguments.count == 3 && arguments[0] == "mod-catalog"
@@ -116,7 +122,7 @@ do {
                    ikkoku-inspect card-mods <card.png> <library.json> <catalog-contract.json>
                    ikkoku-inspect <blink-trace|gameplay-trace> <trace.json>
                    ikkoku-inspect <fixed-event-trace|adv-trace> <trace.json>
-                   ikkoku-inspect scene-document <source-scene.png>
+                   ikkoku-inspect scene-document <source-scene.png> [--write-upgraded <scene-1.0.4.2.png>]
                    ikkoku-inspect route-playback <source-scene.png> <seconds>
                    ikkoku-inspect route-steps <source-scene.png> <deltas.json> [play-delta]
                    ikkoku-inspect animation-library <animation.json>
@@ -140,7 +146,7 @@ do {
     case "gameplay-trace": report.merge(try inspectGameplayTrace(url: url)) { _, new in new }
     case "fixed-event-trace": report.merge(try inspectFixedEventExecution(url: url)) { _, new in new }
     case "adv-trace": report.merge(try inspectADVExecution(url: url)) { _, new in new }
-    case "scene-document": report.merge(try inspectStudioScene(url: url)) { _, new in new }
+    case "scene-document": report.merge(try inspectStudioScene(url: url, writingUpgradeTo: upgradedPath.map { URL(fileURLWithPath: $0) })) { _, new in new }
     case "look-data":
         report.merge(try inspectStudioLookData(url: url,
             settingsURL: arguments.count == 3 ? URL(fileURLWithPath: arguments[2]).standardizedFileURL : nil)) { _, new in new }

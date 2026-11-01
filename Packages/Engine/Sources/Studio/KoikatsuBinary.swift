@@ -129,30 +129,26 @@ public enum KoikatsuReadError: Error, LocalizedError, Sendable, Equatable {
         case .invalidPNG: return "The file has no valid PNG container."
         case let .truncated(offset, count): return "CharaStudio data is truncated at byte \(offset) (needs \(count) bytes)."
         case let .invalidValue(offset, description): return "Invalid CharaStudio data at byte \(offset): \(description)."
-        case let .unsupportedVersion(version): return "CharaStudio data version \(version) is not supported; this reader supports 1.0.4.2 scenes and version 2 camera records."
+        case let .unsupportedVersion(version):
+            if version.hasPrefix("camera:") {
+                return "CharaStudio camera data version \(version.dropFirst(7)) is not supported; this reader supports camera records of versions 2 and, in scenes older than 1.0.4.2, 1."
+            }
+            let reason = KoikatsuSceneVersion.refusal(version) ?? "it is not supported"
+            return "CharaStudio scene data version \(version) is not read: \(reason). This reader reads scene versions \(KoikatsuSceneVersion.oldestSupported) through \(KoikatsuSceneVersion.current) with CharaStudio 1.0.4.2's load rules."
         case let .unsupportedObjectKind(kind): return "CharaStudio object kind \(kind) is not supported; records cannot be safely skipped."
         case let .limitExceeded(description): return "CharaStudio import limit exceeded: \(description)."
         }
     }
 }
 
-/// Read-only interoperability with the observed CharaStudio 1.0.4.2 writer.
-/// Records are variable-length; unknown kinds fail rather than attempting unsafe skipping.
+/// Read-only interoperability with the observed CharaStudio 1.0.4.2 writer
+/// and, through its load branches, the scene versions 0.0.5 through 1.0.4.1
+/// it still loads (KoikatsuLegacyScenes.swift). Records are variable-length;
+/// unknown kinds fail rather than attempting unsafe skipping.
 public enum KoikatsuSceneReader {
     public static func decode(_ data: Data) throws -> KoikatsuSceneSnapshot {
         var reader = try KoikatsuBinaryReader(data)
-        try reader.skipPNG()
-        let version = try reader.string()
-        guard version == "1.0.4.2" else { throw KoikatsuReadError.unsupportedVersion(version) }
-        let count = try reader.count()
-        var roots: [KoikatsuObjectRecord] = []
-        var rootKeys = Set<Int32>()
-        for _ in 0..<count {
-            let key = try reader.int32()
-            guard rootKeys.insert(key).inserted else { throw reader.invalid("duplicate root dictionary key") }
-            roots.append(try reader.object(depth: 0, rootKey: key))
-        }
-        return KoikatsuSceneSnapshot(version: version, roots: roots, objectSectionEndOffset: reader.offset)
+        return try reader.snapshot()
     }
 
     /// Decode an isolated 36-byte ChangeAmount. Input must contain exactly this record.
@@ -192,7 +188,30 @@ struct KoikatsuBinaryReader {
         self.data = data
     }
 
+    /// The load branches of the scene being read (`sceneVersion()`).
+    var layout = KoikatsuSceneLayout.current
+    /// A legacy scene's 1.0.4.2 upgrade, in byte order, and why it cannot
+    /// be written (`KoikatsuSceneDocument.upgraded`). Empty for 1.0.4.2.
+    var upgrade: [KoikatsuSceneUpgradePatch] = []
+    var upgradeRefusals: [String] = []
+
     func invalid(_ description: String) -> KoikatsuReadError { .invalidValue(offset: offset, description: description) }
+
+    /// The PNG, the version and the object section (`SceneInfo.Load` up to
+    /// the map settings).
+    mutating func snapshot() throws -> KoikatsuSceneSnapshot {
+        try skipPNG()
+        let version = try sceneVersion()
+        let count = try self.count()
+        var roots: [KoikatsuObjectRecord] = []
+        var rootKeys = Set<Int32>()
+        for _ in 0..<count {
+            let key = try int32()
+            guard rootKeys.insert(key).inserted else { throw invalid("duplicate root dictionary key") }
+            roots.append(try object(depth: 0, rootKey: key))
+        }
+        return KoikatsuSceneSnapshot(version: version, roots: roots, objectSectionEndOffset: offset)
+    }
 
     mutating func take(_ count: Int) throws -> Data {
         guard count >= 0, count <= data.count - offset else { throw KoikatsuReadError.truncated(offset: offset, expectedBytes: count) }
@@ -288,14 +307,19 @@ struct KoikatsuBinaryReader {
     }
 
     mutating func jsonVector(_ names: [String]) throws -> SIMD4<Float> {
-        let json = try string()
+        let start = offset
+        return try Self.jsonVector(try string(), names, offset: start)
+    }
+    static func jsonVector(_ json: String, _ names: [String], offset: Int) throws -> SIMD4<Float> {
         guard let bytes = json.data(using: .utf8),
-              let object = try? JSONSerialization.jsonObject(with: bytes) as? [String: Any] else { throw invalid("invalid vector JSON") }
+              let object = try? JSONSerialization.jsonObject(with: bytes) as? [String: Any] else {
+            throw KoikatsuReadError.invalidValue(offset: offset, description: "invalid vector JSON")
+        }
         var values: [Float] = []
         for name in names {
             guard let number = object[name] as? NSNumber,
                   CFGetTypeID(number) != CFBooleanGetTypeID(), number.floatValue.isFinite else {
-                throw invalid("missing or invalid JSON component \(name)")
+                throw KoikatsuReadError.invalidValue(offset: offset, description: "missing or invalid JSON component \(name)")
             }
             values.append(number.floatValue)
         }
@@ -313,8 +337,19 @@ struct KoikatsuBinaryReader {
         for _ in 0..<8 { colors.append(try jsonVector(["r", "g", "b", "a"])) }
         for _ in 0..<3 { patterns.append(try pattern()) }
         let alpha = try float(), lineColor = try jsonVector(["r", "g", "b", "a"]), lineWidth = try float()
-        let emissionColor = try jsonVector(["r", "g", "b", "a"]), emissionPower = try float(), lightCancel = try float()
-        let panel = try pattern(), enableFK = try bool(), boneCount = try count()
+        // OIItemInfo.Load: a version without emission (0.0.7, :150) or the
+        // panel (0.0.6, :156) keeps the constructor's values (:67, :73).
+        let emissionColor: SIMD4<Float>, emissionPower: Float, lightCancel: Float, panel: KoikatsuPatternRecord
+        if layout.itemEmission {
+            emissionColor = try jsonVector(["r", "g", "b", "a"]); emissionPower = try float(); lightCancel = try float()
+        } else {
+            emissionColor = KoikatsuLegacyDefaults.white; emissionPower = 0; lightCancel = 0
+            upgradeInsert(KoikatsuLegacyDefaults.string(KoikatsuLegacyDefaults.whiteJSON) + KoikatsuLegacyDefaults.float(0) + KoikatsuLegacyDefaults.float(0))
+        }
+        if layout.itemPanel { panel = try pattern() } else {
+            panel = KoikatsuLegacyDefaults.pattern; upgradeInsert(KoikatsuLegacyDefaults.patternBytes())
+        }
+        let enableFK = try bool(), boneCount = try count()
         var bones: [String: KoikatsuBoneRecord] = [:], subKeys: [Int] = []
         for _ in 0..<boneCount {
             let name = try string()
@@ -324,11 +359,14 @@ struct KoikatsuBinaryReader {
         }
         // OIItemInfo.Load allocates the FK bones before the child list.
         editSpans.topology.subKeys[objectKey] = .init(before: subKeys, after: [])
+        // Before 1.0.1 (:168) enableDynamicBone keeps its initializer, true (:34).
+        let dynamicBone: Bool
+        if layout.itemDynamicBone { dynamicBone = try bool() } else { dynamicBone = true; upgradeInsert(Data([1])) }
         return KoikatsuItemRecord(group: group, category: category, no: no, animationSpeed: speed,
                                  colors: colors, patterns: patterns, alpha: alpha, lineColor: lineColor,
                                  lineWidth: lineWidth, emissionColor: emissionColor, emissionPower: emissionPower,
                                  lightCancel: lightCancel, panel: panel, enableFK: enableFK, bones: bones,
-                                 enableDynamicBone: try bool(), animationNormalizedTime: try float())
+                                 enableDynamicBone: dynamicBone, animationNormalizedTime: try float())
     }
 
     mutating func object(depth: Int, rootKey: Int32?) throws -> KoikatsuObjectRecord {

@@ -246,7 +246,7 @@ public enum SourceStudioRoutePlayback {
             // The aid transform is Point-local (its localPosition under the
             // route point), so it composes through the point's local matrix.
             let aid = point.aidInitialized
-                ? unityWorldPosition(routeWorld * locals[index] * localMatrix(point.aid.transform)) : nil
+                ? unityWorldPosition(routeWorld * locals[index] * localMatrix(point.aidTransform)) : nil
             points.append(.init(position: position, aid: aid, connection: connection,
                                 linked: point.linked, speed: Double(point.speed), easeType: easeType))
         }

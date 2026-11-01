@@ -63,7 +63,7 @@ private func state(_ document: KoikatsuSceneDocument, _ key: Int32 = 8) throws -
 @Test func sourceSceneRouteEditBuilderAndStateMatchTheReader() throws {
     let input = scene(), original = try decoded(input)
     let record = try #require(route(8, in: original))
-    #expect(record.points.map(\.bone.sourceKey) == [13, 15, 17] && record.points.map(\.aid.sourceKey) == [14, 16, 18])
+    #expect(record.points.map(\.bone.sourceKey) == [13, 15, 17] && record.points.map(\.aidKey) == [14, 16, 18])
     #expect(record.points[1].speed == 3 && record.points[1].easeType == 0 && record.active && record.loop)
     let unchanged = SourceStudioRouteState(record: record)
     #expect(unchanged.record(authored: record) == record)
@@ -90,7 +90,7 @@ private func state(_ document: KoikatsuSceneDocument, _ key: Int32 = 8) throws -
     // Independent read-back of the destination.
     let back = try #require(route(8, in: KoikatsuSceneReader.decodeDocument(result)))
     #expect(back.points[2].bone.transform.position == SIMD3(1.5, 0.25, 2) && back.points[2].bone.sourceKey == 17)
-    #expect(back.points[1].aid.transform.position == SIMD3(0.5, 1, -0.5) && back.points[1].aidInitialized && back.points[1].connection == 1)
+    #expect(back.points[1].aidTransform.position == SIMD3(0.5, 1, -0.5) && back.points[1].aidInitialized && back.points[1].connection == 1)
     // Editing back to the saved values returns the original bytes.
     var revert = edit
     try revert.movePoint(2, to: SIMD3(1, 0, 2)); try revert.rotateStart(to: SIMD3(0, 30, 0))
@@ -113,8 +113,8 @@ private func state(_ document: KoikatsuSceneDocument, _ key: Int32 = 8) throws -
     expected.routePoints[8] = [points8()[0], points8()[2], TopologyRoutePoint(key: 19, position: SIMD3(0, 0, 2), aidKey: 20)]
     #expect(result == expected.data)
     let back = try #require(route(8, in: KoikatsuSceneReader.decodeDocument(result)))
-    #expect(back.points.map(\.bone.sourceKey) == [13, 17, 19] && back.points.map(\.aid.sourceKey) == [14, 18, 20])
-    #expect(back.points[2].speed == 2 && back.points[2].easeType == 21 && back.points[2].aid.transform.position == SIMD3(1, 1, 1))
+    #expect(back.points.map(\.bone.sourceKey) == [13, 17, 19] && back.points.map(\.aidKey) == [14, 18, 20])
+    #expect(back.points[2].speed == 2 && back.points[2].easeType == 21 && back.points[2].aidTransform.position == SIMD3(1, 1, 1))
     // A deleted point's keys are not reused in the same export, and an added
     // point allocates after every insertion of the export.
     var again = try state(original)
@@ -123,7 +123,7 @@ private func state(_ document: KoikatsuSceneDocument, _ key: Int32 = 8) throws -
     #expect(staged.keys == [19])
     let combined = try staged.editedData(.init(routes: [8: again]))
     let read = try #require(route(8, in: KoikatsuSceneReader.decodeDocument(combined)))
-    #expect(read.points.map(\.bone.sourceKey) == [13, 15, 20] && read.points.map(\.aid.sourceKey) == [14, 16, 21])
+    #expect(read.points.map(\.bone.sourceKey) == [13, 15, 20] && read.points.map(\.aidKey) == [14, 16, 21])
 }
 
 @Test func sourceSceneRouteEditWritesPointAndRouteSettings() throws {
