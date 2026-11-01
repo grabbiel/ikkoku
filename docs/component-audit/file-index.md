@@ -46,7 +46,7 @@ bookkeeping, not a new full source audit.
 | Generated asset / catalog / fixture | 205 |
 | Reference host / controlled fixture | 37 |
 | Runtime / shared shader declaration | 231 |
-| Test / validation | 223 |
+| Test / validation | 220 |
 | Public synthetic body/face input fixture | 1 |
 
 ## App / gameplay / plugins
