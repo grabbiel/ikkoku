@@ -107,6 +107,9 @@ typedef IK_ENUM(IKUInt, MaterialFlags) {
     MaterialFlagMapDirectionalLightmap = 1u << 19, // MaterialKindMap: a CombinedDirectional direction map is bound
     MaterialFlagMapParticle     = 1u << 20, // MaterialKindMap: Particles/Alpha Blended (2 * vertex colour * baseColor * base texture)
     MaterialFlagSkyRowsFlipped  = 1u << 21, // MaterialKindSky: the map probe's negative control only (every cube face sampled with its rows flipped); the loader never sets it
+    MaterialFlagMapUnlit        = 1u << 22, // MaterialKindMap: Unlit/Transparent (base texture * baseColor, no lighting)
+    MaterialFlagMapParticleAnim = 1u << 23, // MaterialKindMap with MapParticle: Particles/Anim Alpha Blended (texture lerp to UV2 by UV1.x)
+    MaterialFlagMapSilhouette   = 1u << 24, // MaterialKindMap: Custom/Silhouette (a depth prepass, then baseColor blended)
 };
 
 #define DrawFlagHasHiddenBuffer 0x80000000u

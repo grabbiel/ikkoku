@@ -46,6 +46,16 @@ six faces are written verbatim (`cube-<k>-<name>.<format>`, D3D/Metal face order
 checked by the face seams). Particles/Alpha Blended materials carry `ikkokuParticle` (the
 linearized _TintColor) for the app's particle draw.
 
+Particle renderers (slice 4, `PARTICLE_SHADERS`): each particle submesh of each renderer is its
+own draw, with the renderer's bounds centre in `ikkokuMap.sortCenter`, the submesh index in
+`ikkokuMap.sortSubmesh` and its material's render queue in `ikkokuParticle.renderQueue`, so the
+app can order them as Unity orders transparent renderers (queue, then distance to the bounds
+centre, back to front, then one renderer's submeshes in index order).
+
+Realtime GI (slice 4): Unity adds a renderer's Enlighten dynamic lightmap to the baked one. It is
+computed at runtime, so it is not exported; the provenance's `realtimeGI` counts the drawn
+renderers that carry one, and the catalog row's `notDrawn` names it.
+
 Proprietary output belongs in .local, never in the repository.
 """
 from __future__ import annotations
@@ -88,18 +98,138 @@ MAP_SHADER_RULES = {
         "parity": "approximated",
         # Unity built-in (Particle Alpha Blend.shader v5.6.2f1): 2 * vertex color * _TintColor * _MainTex,
         # Blend SrcAlpha OneMinusSrcAlpha, ColorMask RGB, Cull Off, ZWrite Off, no lighting, fog.
-        # The app draws that formula (map_fragment's particle flag, ST-A11 slice 3); the merged mesh
-        # sorts as one draw instead of per renderer.
-        "dropped": ["soft particles", "fog", "per-renderer transparency sorting"],
+        # The app draws that formula (map_fragment's particle flag, ST-A11 slice 3). Slice 4: each
+        # renderer is its own draw, sorted as Unity sorts it (`PARTICLE_SHADERS`).
+        "dropped": ["soft particles", "fog"],
+    },
+    # Slice 4. Each rule's pass state is read from the shader's serialized ShaderLab state
+    # (`pass_states`), not assumed; `draw` names the app's draw.
+    "Custom/StandardDouble": {
+        "parity": "approximated", "draw": "standard",
+        # The game's shader: Standard's properties and passes, its own programs (not compared with
+        # Standard's). The LOD 300 subshader's FORWARD pass is Cull Off, so both faces draw.
+        "dropped": ["PBR lighting (metallic/smoothness)", "normal maps", "occlusion", "emission", "detail maps",
+                    "reflection probes", "its own programs (drawn with Standard's formula)"],
+        "droppedLightmapped": ["realtime lights and their shadows", "specular and reflection probes", "normal maps",
+                               "per-texel metallic (the _MetallicGlossMap mean is used)", "occlusion maps", "detail maps",
+                               "its own programs (drawn with Standard's formula)"],
+    },
+    "Legacy Shaders/Diffuse": {
+        "parity": "approximated", "draw": "legacyDiffuse",
+        # Normal-Diffuse.shader v5.6.2f1: `surface surf Lambert`, albedo = _MainTex * _Color.
+        # Lightmapped, LightingLambert adds albedo * gi.indirect.diffuse (the same decoded lightmap
+        # as Standard, without Standard's oneMinusReflectivity), which the app draws.
+        "dropped": ["Lambert lighting by the realtime lights", "fog"],
+        "droppedLightmapped": ["realtime lights and their shadows", "fog"],
+    },
+    "Unlit/Transparent": {
+        "parity": "verified", "draw": "unlit",
+        # Unlit-Alpha.shader v5.6.2f1; the bundle's DX11 fragment is `sample o0, uv, _MainTex`.
+        # Blend SrcAlpha OneMinusSrcAlpha, ZWrite Off, Cull Back (serialized state).
+        "dropped": ["fog"],
+    },
+    "Particles/Anim Alpha Blended": {
+        "parity": "approximated", "draw": "particleAnim",
+        # Particle AnimAlphaBlend.shader v5.6.2f1, checked against the bundle's DX11 programs:
+        # 2 * color * _TintColor * lerp(tex(uv.xy), tex(uv.zw), TEXCOORD1.x), both UVs through
+        # _MainTex_ST; a 2D mesh UV0 reads (u, v, 0, 1), so uv.zw = (0, 1).
+        "dropped": ["soft particles", "fog"],
+    },
+    "Shader Forge/main_item": {
+        "parity": "approximated", "draw": "item",
+        # The game's map item shader: drawn as the app's item with _MainTex * _Color.
+        "dropped": ["colour masks (_Color2, _Color3)", "normal map", "toon ramp, rim and specular", "outline"],
+    },
+    "Custom/Silhouette": {
+        "parity": "verified", "draw": "silhouette",
+        # The game's mob shader (maps 38/39, `Studio.Map.Reserve`): pass 0 writes depth only
+        # (ColorMask 0), pass 1 blends _Color (its DX11 fragment is `mov o0, _Color`), both
+        # Cull Back and ZTest LEqual, queue Transparent. Studio sets _Color to the config's mobColor.
+        "dropped": ["the user's mobColor setting (its default is drawn)"],
     },
 }
+# Shaders whose renderers the app does not draw, with the reason the catalog and status line give.
+MAP_SKIPPED_SHADERS = {
+    "FX/MirrorReflection_Transparent": "mirror",
+    "Xffect/heat_distortion": "heat distortion",
+    "Shader Forge/electricLight": "stage effects",
+    "Shader Forge/spotLaser": "stage effects",
+    "Shader Forge/spotLight_beam": "stage effects",
+    "Shader Forge/spotLight_glow": "stage effects",
+    "Shader Forge/volumeLight": "stage effects",
+    "UnlitMosaicTextureShader": "stage effects",
+    "Particles/VertexLit Blended": "vertex-lit particles",
+}
+# Why each skipped class is not drawn (provenance).
+MAP_SKIPPED_REASONS = {
+    "mirror": "a planar reflection drawn by the MirrorReflection script's camera",
+    "heat distortion": "a grab-pass screen distortion",
+    "stage effects": "the stage's Shader Forge light effects and mosaic screen",
+    "vertex-lit particles": "Particles/VertexLit Blended (per-vertex realtime lighting)",
+    "render-texture screens": "a screen showing a RenderTexture that another camera renders at run time",
+}
+# Studio.Map.Reserve: the map options (`lstOption`, shown when the scene's mapOption is on).
+# For these map numbers `FindLoop` (depth-first, the node itself first) finds the named node under
+# mapRoot; map 23 lists its children, maps 38 and 39 the node itself, whose Renderers
+# (GetComponentsInChildren) get _Color = Config.AddData.mobColor through a MaterialPropertyBlock.
+MAP_OPTIONS = {23: ("pool_mob", "children"), 38: ("MapMobGroup", "node"), 39: ("MapMobGroup", "node")}
+MOB_COLOR_MAPS = {38, 39}
+# What Studio's cameras draw (slice 4; the maps phase recorded the same cameras in all 21 cases):
+# Camera.main (`Studio.CameraControl`) has cullingMask 536874000 (layers 4, 10, 11 and 29), a
+# depth-0 camera that clears only depth has 1476395008 (layers 27, 28 and 30), and the background
+# camera 0. A map renderer on another layer (the maps put helpers on 0 and 14) is drawn by no
+# camera. One on the front camera's layers would draw over everything; no map has one, so it is
+# refused by name.
+STUDIO_MAIN_CAMERA_MASK = 536874000
+STUDIO_FRONT_CAMERA_MASK = 1476395008
+# Renderer.shadowCastingMode ShadowsOnly (m_CastShadows 3): drawn only into shadow maps, never
+# by a camera (the maps' `*_shadow`/`*_kage` stand-ins for walls and pillars).
+SHADOWS_ONLY = 3
+
+
+def undrawn_reason(renderer, game_object, path):
+    """Why no Studio camera draws this renderer, or None when Camera.main draws it."""
+    if getattr(renderer, "m_CastShadows", 1) == SHADOWS_ONLY:
+        return "shadows only (drawn only into shadow maps)"
+    layer = game_object.m_Layer
+    if (STUDIO_FRONT_CAMERA_MASK >> layer) & 1:
+        raise ValueError(f"{path}: on layer {layer}, which Studio's front camera draws over the scene; no verified map has one")
+    if not (STUDIO_MAIN_CAMERA_MASK >> layer) & 1:
+        return f"layer {layer} (no Studio camera draws it)"
+    return None
+# AdditionalFunctionsSystem.mobColor's default (Config/AdditionalFunctionsSystem.cs); 0 and 1
+# are unchanged by a Linear player's conversion.
+DEFAULT_MOB_COLOR = [0.0, 0.0, 1.0, 0.5]
+# Scene components that draw something the converter does not (counted per map for the catalog);
+# lighting inputs (reflection probes, light probe groups) are named by the lighting labels instead.
+NOT_DRAWN_COMPONENTS = {"SkinnedMeshRenderer": "skinned renderers", "ParticleSystem": "particle systems",
+                        "SpriteRenderer": "sprites", "LineRenderer": "line renderers", "TrailRenderer": "trail renderers",
+                        "BillboardRenderer": "billboards", "Terrain": "terrains", "Cloth": "cloths", "Projector": "projectors",
+                        "LensFlare": "lens flares", "Halo": "halos", "Animator": "animated objects (drawn in their authored pose)",
+                        "Animation": "legacy animations (drawn in their authored pose)"}
 # Shaders the map scene references that draw nothing as merged map geometry. Skybox/Cubemap
 # renderers are exported separately as the sky (`MapExporter.sky`, slice 3); Skybox/Procedural
 # is only RenderSettings.skybox, which Studio's colour-cleared camera never draws.
 NON_GEOMETRY_SHADERS = {"Skybox/Procedural", "Skybox/Cubemap"}
+# Particle shaders (slice 4): each renderer is its own draw, as Unity 5.6 draws it. Unity orders
+# transparent renderers by sorting layer, order in layer, render queue, then camera distance to the
+# renderer's bounds centre (back to front), and draws one renderer's submeshes in index order.
+# Every particle renderer in the maps has sorting layer 0 and order 0 (checked per map), so the app
+# sorts by the material's render queue (`ikkokuParticle.renderQueue`), then by distance to the
+# bounds centre the converter writes (`ikkokuMap.sortCenter`), then by submesh
+# (`ikkokuMap.sortSubmesh`, the renderer's draws sharing that centre exactly). Merged, the
+# renderers would blend in the mesh's triangle order wherever their cards overlap.
+PARTICLE_SHADERS = ("Particles/Alpha Blended", "Particles/Anim Alpha Blended")
+# ShaderLab queue names (Unity 5.6 `Queue` tag).
+RENDER_QUEUES = {"Background": 1000, "Geometry": 2000, "AlphaTest": 2450, "Transparent": 3000, "Overlay": 4000}
+# Render queues above this are sorted back to front (Unity's transparent range).
+TRANSPARENT_QUEUE_MIN = 2501
 SKYBOX_CUBEMAP = "Skybox/Cubemap"
 # Shaders the app draws by their recovered formula (the catalog does not list them as approximated).
-DRAWN_SHADERS = {"Standard", "Skybox/Cubemap", "Particles/Alpha Blended"}
+DRAWN_SHADERS = {"Standard", "Skybox/Cubemap", "Particles/Alpha Blended", "Legacy Shaders/Diffuse", "Unlit/Transparent",
+                 "Particles/Anim Alpha Blended", "Custom/Silhouette"}
+# Shaders drawn through the Standard material paths (item, or the baked-lightmap subset).
+STANDARD_SHADERS = ("Standard", "Custom/StandardDouble")
 # What the app's sky pass leaves out of Skybox/Cubemap: nothing in the fragment (the shader has
 # no fog or lighting); the sky gate compares its radiance with the original player's.
 SKY_DROPPED = []
@@ -113,6 +243,11 @@ LDR_DECODE_INSTRUCTIONS = [1.0, 1.0, 0.0, 0.0]
 PLAYER_COLOR_SPACE = "Linear"
 # Unity TextureFormat values whose serialized data the app uploads as block textures.
 BLOCK_FORMATS = {10: ("BC1", 8), 12: ("BC3", 16)}  # DXT1, DXT5
+# Uncompressed lightmaps (slice 4): RGBA32 (TextureFormat 4), bytes R, G, B, A per texel,
+# uploaded as RGBA8 with every mip as serialized.
+RAW_LIGHTMAP_FORMATS = {4: ("RGBA8", 4)}
+# The glTF image mimeType of a block-only image (slice 4: no PNG copy; only the app reads it).
+BLOCK_IMAGE_MIME = {"BC1": "image/x-ikkoku-bc1", "BC3": "image/x-ikkoku-bc3"}
 # Cubemaps are uploaded as serialized (never row-flipped), so BC7 is fine there too.
 CUBE_FORMATS = {10: ("BC1", 8), 12: ("BC3", 16), 25: ("BC7", 16)}
 # LightmapSettings.m_LightmapsMode values the app draws.
@@ -301,12 +436,27 @@ def block_level_bytes(width, height, mip_count, block_bytes):
     return sizes
 
 
+def raw_level_bytes(width, height, mip_count, texel_bytes):
+    """Bytes of each mip level of an uncompressed texture, largest first."""
+    sizes, w, h = [], width, height
+    for _ in range(mip_count):
+        sizes.append(w * h * texel_bytes)
+        w, h = max(1, w // 2), max(1, h // 2)
+    return sizes
+
+
 def lightmap_file_entry(record, file, data):
-    """The `ikkokuLightmaps` entry for one serialized lightmap texture written verbatim."""
+    """The `ikkokuLightmaps` entry for one serialized lightmap texture written verbatim: DXT1/DXT5
+    blocks, or RGBA32 texels (slice 4)."""
     fmt = BLOCK_FORMATS.get(record["textureFormat"])
+    raw = RAW_LIGHTMAP_FORMATS.get(record["textureFormat"])
+    if fmt is None and raw is None:
+        raise ValueError(f"{record['name']}: TextureFormat {record['textureFormat']} is not a format the app uploads")
     if fmt is None:
-        raise ValueError(f"{record['name']}: TextureFormat {record['textureFormat']} is not a block format the app uploads")
-    expected = sum(block_level_bytes(record["width"], record["height"], record["mipCount"], fmt[1]))
+        fmt = raw
+        expected = sum(raw_level_bytes(record["width"], record["height"], record["mipCount"], raw[1]))
+    else:
+        expected = sum(block_level_bytes(record["width"], record["height"], record["mipCount"], fmt[1]))
     if len(data) != expected:
         raise ValueError(f"{record['name']}: {len(data)} serialized bytes, {fmt[0]} with {record['mipCount']} mips needs {expected}")
     return {"name": record["name"], "file": file, "format": fmt[0], "width": record["width"], "height": record["height"],
@@ -443,11 +593,86 @@ def particle_contract(colors):
             "alphaMode": "BLEND", "doubleSided": True, "unlit": True, "vertexColor": True}
 
 
-def map_material_contract(shader_name, colors, floats, keywords):
+def queue_value(tag):
+    """A ShaderLab `Queue` tag ("Transparent", "Transparent+1", "Geometry-10") as its number."""
+    match = re.fullmatch(r"\s*([A-Za-z]+)\s*(?:([+-])\s*(\d+))?\s*", tag or "")
+    names = {name.lower(): value for name, value in RENDER_QUEUES.items()}  # ShaderLab ignores case
+    if not match or match.group(1).lower() not in names:
+        raise ValueError(f"Unknown shader queue tag {tag!r}")
+    base = names[match.group(1).lower()]
+    return base + (int(match.group(3)) * (1 if match.group(2) == "+" else -1) if match.group(2) else 0)
+
+
+def particle_render_queue(custom_queue, shader_tags, label):
+    """A particle material's render queue: its m_CustomRenderQueue, else its shader's Queue tag
+    (-1 means "the shader's"). A particle material outside Unity's transparent range would be
+    sorted front to back with the opaque draws, which no verified map has: refused by name."""
+    if custom_queue is not None and custom_queue >= 0:
+        queue = int(custom_queue)
+    else:
+        tags = {k.upper(): v for k, v in (shader_tags or {}).items()}
+        if "QUEUE" not in tags:
+            raise ValueError(f"{label}: neither the material nor its shader names a render queue")
+        queue = queue_value(tags["QUEUE"])
+    if queue < TRANSPARENT_QUEUE_MIN:
+        raise ValueError(f"{label}: render queue {queue} is not transparent; its draw order is not verified")
+    return queue
+
+
+def renderer_sort_center(matrix, local_center):
+    """The renderer's bounds centre in the glTF frame of its role: Unity's Renderer.bounds is the
+    world box around the mesh's local AABB, whose centre is the matrix applied to the local centre
+    (an affine map keeps a box's centre), then Z-reflected like every exported point."""
+    return reflect(apply_point(matrix, list(local_center)))
+
+
+def legacy_diffuse_inputs(colors):
+    """`ikkokuStandard` for Legacy Shaders/Diffuse: albedo = _MainTex * _Color (linearized) and
+    LightingLambert's indirect term albedo * gi.indirect.diffuse, so oneMinusReflectivity is 1 and
+    there is no emission."""
+    color = colors.get("_Color", [1, 1, 1, 1])
+    return {"albedoLinear": [gamma_to_linear_exact(c) for c in color[:3]] + [color[3]], "oneMinusReflectivity": 1.0}
+
+
+def silhouette_extras(state):
+    """`ikkokuSilhouette`: Studio's mob colour (the config default; `Map.ReflectMobColor` sets it
+    through a MaterialPropertyBlock) and the verified pass state the app draws."""
+    return {"kind": "ikkoku.unitySilhouette", "version": 1, "colorLinear": list(DEFAULT_MOB_COLOR),
+            "colorSource": "AdditionalFunctionsSystem.mobColor default (0, 0, 1, 0.5); the user's config is not read",
+            "passes": state["passes"], "queue": state["queue"], "fragment": state["fragment"]}
+
+
+def map_material_contract(shader_name, colors, floats, keywords, cull=None):
+    """The glTF base-colour contract of a map material. `cull` is the forward pass's serialized
+    Cull for the slice-4 shaders (their doubleSided); Standard and Particles/Alpha Blended keep
+    their slice 1-3 contracts (Cull Back and Off, as their state reads)."""
     rule = MAP_SHADER_RULES.get(shader_name)
     if rule is None:
         raise ValueError(f"No map mapping for shader {shader_name!r}")
-    contract = standard_contract(colors, floats, keywords) if shader_name == "Standard" else particle_contract(colors)
+    draw = rule.get("draw")
+    if shader_name == "Standard":
+        contract = standard_contract(colors, floats, keywords)
+    elif shader_name == "Particles/Alpha Blended":
+        contract = particle_contract(colors)
+    else:
+        if cull not in CULL_MODES.values():
+            raise ValueError(f"{shader_name}: the forward pass's Cull ({cull}) was not read")
+        color = colors.get("_Color", [1, 1, 1, 1])
+        if draw == "standard":
+            contract = standard_contract(colors, floats, keywords)
+        elif draw == "legacyDiffuse":
+            contract = {"baseColorFactor": [color[0], color[1], color[2], 1], "alphaMode": "OPAQUE"}
+        elif draw == "unlit":
+            contract = {"baseColorFactor": [1, 1, 1, 1], "alphaMode": "BLEND", "unlit": True}
+        elif draw == "particleAnim":
+            contract = particle_contract(colors)
+        elif draw == "item":
+            contract = {"baseColorFactor": [color[0], color[1], color[2], 1], "alphaMode": "OPAQUE"}
+        elif draw == "silhouette":
+            contract = {"baseColorFactor": list(DEFAULT_MOB_COLOR), "alphaMode": "BLEND", "unlit": True}
+        else:
+            raise ValueError(f"{shader_name}: no contract for draw {draw!r}")
+        contract["doubleSided"] = cull == "Off"
     contract.update(shaderParity=rule["parity"], dropped=list(rule["dropped"]))
     return contract
 
@@ -679,6 +904,186 @@ def shader_name(material):
     return shader.m_Name or getattr(getattr(shader, "m_ParsedForm", None), "m_Name", "")
 
 
+# ---------------------------------------------------------------- serialized shader state (slice 4)
+
+# Unity 5.6 ShaderLab enums as Shader.m_ParsedForm serializes them.
+CULL_MODES = {0: "Off", 1: "Front", 2: "Back"}
+COMPARE_FUNCTIONS = {0: "Disabled", 1: "Never", 2: "Less", 3: "Equal", 4: "LEqual", 5: "Greater", 6: "NotEqual",
+                     7: "GEqual", 8: "Always"}
+BLEND_FACTORS = {0: "Zero", 1: "One", 2: "DstColor", 3: "SrcColor", 4: "OneMinusDstColor", 5: "SrcAlpha",
+                 6: "OneMinusSrcColor", 7: "DstAlpha", 8: "OneMinusDstAlpha", 9: "SrcAlphaSaturate", 10: "OneMinusSrcAlpha"}
+
+
+def state_value(value, floats=None):
+    """A serialized ShaderLab state value: its constant, or the material float a `[_Prop]` binding
+    names (resolved from `floats`; "[_Prop]" when unresolved)."""
+    name = getattr(value, "name", "") or ""
+    if name and name != "<noninit>":
+        if floats is None or name not in floats:
+            return f"[{name}]"
+        return int(floats[name]) if float(floats[name]).is_integer() else floats[name]
+    return int(value.val) if float(value.val).is_integer() else value.val
+
+
+def color_mask_name(mask):
+    if not isinstance(mask, int):
+        return mask
+    return "".join(c for bit, c in ((8, "R"), (4, "G"), (2, "B"), (1, "A")) if mask & bit) or "0"
+
+
+def pass_states(shader, floats=None):
+    """Every subshader's passes with their render state (cull, depth, blend, colour mask) read from
+    the shader's serialized parsed form, `[_Prop]` bindings resolved against `floats`."""
+    form = getattr(shader, "m_ParsedForm", None)
+    if form is None:
+        return None
+    named = lambda table, value: table.get(value, value) if isinstance(value, int) else value
+    result = []
+    for sub in form.m_SubShaders:
+        passes = []
+        for p in sub.m_Passes:
+            state, blend = p.m_State, p.m_State.rtBlend0
+            tags = dict(getattr(state.m_Tags, "tags", None) or [])
+            passes.append({"name": state.m_Name or p.m_Name or "", "lightMode": tags.get("LIGHTMODE", ""),
+                           "cull": named(CULL_MODES, state_value(state.culling, floats)),
+                           "zWrite": state_value(state.zWrite, floats),
+                           "zTest": named(COMPARE_FUNCTIONS, state_value(state.zTest, floats)),
+                           "blend": [named(BLEND_FACTORS, state_value(v, floats))
+                                     for v in (blend.srcBlend, blend.destBlend, blend.srcBlendAlpha, blend.destBlendAlpha)],
+                           "colorMask": color_mask_name(state_value(blend.colMask, floats))})
+        result.append({"lod": sub.m_LOD, "tags": dict(getattr(sub.m_Tags, "tags", None) or []), "passes": passes})
+    return result
+
+
+def forward_passes(states):
+    """The passes Unity 5.6's forward path draws for the first subshader (the player keeps every
+    LOD): FORWARDBASE, or every pass without a LightMode ("Always")."""
+    if not states:
+        return []
+    passes = states[0]["passes"]
+    base = [p for p in passes if p["lightMode"] == "FORWARDBASE"]
+    return base or [p for p in passes if p["lightMode"] in ("", "ALWAYS")]
+
+
+# Shader Model 4 opcodes and operand types the slice-4 checks read (d3d11TokenizedProgramFormat).
+SM4_OPCODES = {0x00: "add", 0x32: "mad", 0x36: "mov", 0x38: "mul", 0x3e: "ret", 0x45: "sample", 0x59: "dcl_constantbuffer",
+               0x5a: "dcl_sampler", 0x58: "dcl_resource", 0x62: "dcl_input_ps", 0x64: "dcl_input_ps_siv", 0x65: "dcl_output",
+               0x68: "dcl_temps", 0x6a: "dcl_globalFlags"}
+SM4_OPERANDS = {0: "r", 1: "v", 2: "o", 4: "l", 6: "s", 7: "t", 8: "cb"}
+
+
+def sm4_operand(tokens, i):
+    """One operand at tokens[i]: (text, next index). Immediate indices only."""
+    import struct
+    token = tokens[i]; i += 1
+    components, mode, select = token & 3, (token >> 2) & 3, (token >> 4) & 0xFF
+    kind, dimension = (token >> 12) & 0xFF, (token >> 20) & 3
+    prefix = ""
+    if token >> 31:
+        prefix = {1: "-", 2: "|", 3: "-|"}.get((tokens[i] >> 6) & 0xFF, ""); i += 1
+    if kind == 4:
+        count = 4 if components == 2 else 1
+        values = [struct.unpack("<f", struct.pack("<I", tokens[i + k]))[0] for k in range(count)]
+        return "l(" + ", ".join(f"{v:g}" for v in values) + ")", i + count
+    indices = list(tokens[i:i + dimension]); i += dimension
+    swizzle = ""
+    if components == 2:
+        if mode == 0:
+            swizzle = "." + "".join("xyzw"[k] for k in range(4) if select >> k & 1)
+        elif mode == 1:
+            swizzle = "." + "".join("xyzw"[(select >> (2 * k)) & 3] for k in range(4))
+        else:
+            swizzle = "." + "xyzw"[select & 3]
+    name = SM4_OPERANDS.get(kind, f"t{kind}") + (str(indices[0]) if indices else "") + "".join(f"[{x}]" for x in indices[1:])
+    return prefix + name + swizzle + ("|" if "|" in prefix else ""), i
+
+
+def sm4_instructions(program):
+    """The SHDR instructions of a DXBC program as (opcode, [operands]); declarations without
+    operands the checks read keep an empty list."""
+    import struct
+    start = program.index(b"DXBC")
+    data = program[start:]
+    count = struct.unpack_from("<I", data, 28)[0]
+    for offset in struct.unpack_from(f"<{count}I", data, 32):
+        if data[offset:offset + 4] not in (b"SHDR", b"SHEX"):
+            continue
+        size = struct.unpack_from("<I", data, offset + 4)[0]
+        tokens = struct.unpack_from(f"<{size // 4}I", data, offset + 8)
+        result, i = [], 2
+        while i < len(tokens):
+            token = tokens[i]
+            length = (token >> 24) & 0x7F
+            name = SM4_OPCODES.get(token & 0x7FF, hex(token & 0x7FF)) + ("_sat" if token >> 13 & 1 else "")
+            operands = []
+            if name in ("add", "mad", "mov", "mul", "sample", "dcl_constantbuffer", "dcl_output", "dcl_input_ps"):
+                j = i + 1
+                while j < i + length:
+                    text, j = sm4_operand(tokens, j)
+                    operands.append(text)
+            result.append((name, operands))
+            i += length
+        return result
+    raise ValueError("The DXBC program has no SHDR chunk")
+
+
+def shader_programs(shader):
+    """The shader's compiled programs (the decompressed blob of its first platform), by blob index."""
+    from UnityPy.export.ShaderConverter import ShaderProgram
+    from UnityPy.helpers import CompressionHelper
+    from UnityPy.streams import EndianBinaryReader
+    first = lambda value: value[0] if isinstance(value, list) else value
+    compressed, decompressed = first(shader.compressedLengths[0]), first(shader.decompressedLengths[0])
+    blob = CompressionHelper.decompress_lz4(bytes(shader.compressedBlob)[:compressed], decompressed)
+    return [bytes(p.m_ProgramCode) for p in ShaderProgram(EndianBinaryReader(blob, endian="<"), (5, 6, 2, 0)).m_SubPrograms]
+
+
+def pass_fragments(shader, sub_index, pass_index):
+    """[(keywords, constants {name: (buffer, byte offset)}, instructions)] of one pass's fragment
+    programs, constant names resolved through the pass's name table."""
+    form = shader.m_ParsedForm
+    serialized = form.m_SubShaders[sub_index].m_Passes[pass_index]
+    names = {index: name for name, index in serialized.m_NameIndices}
+    programs = shader_programs(shader)
+    result = []
+    for sub in serialized.progFragment.m_SubPrograms:
+        constants = {}
+        for buffer in sub.m_ConstantBuffers:
+            for vector in buffer.m_VectorParams:
+                constants[names.get(vector.m_NameIndex)] = (names.get(buffer.m_NameIndex), vector.m_Index)
+        result.append(([names.get(k, k) for k in sub.m_KeywordIndices], constants, sm4_instructions(programs[sub.m_BlobIndex])))
+    return result
+
+
+def silhouette_state(shader):
+    """Custom/Silhouette as the slice-4 runtime draws it, checked against the bundle: two passes,
+    pass 0 a depth-only prepass (ZWrite On, ColorMask 0) and pass 1 the colour (ZWrite Off,
+    Blend SrcAlpha OneMinusSrcAlpha) whose only fragment program writes `_Color` unchanged; both
+    Cull Back, ZTest LEqual. Anything else is refused by name."""
+    states = pass_states(shader)
+    if not states or len(states[0]["passes"]) != 2:
+        raise ValueError("Custom/Silhouette: expected one subshader with two passes")
+    depth, color = states[0]["passes"]
+    expected_depth = {"cull": "Back", "zWrite": 1, "zTest": "LEqual", "colorMask": "0"}
+    expected_color = {"cull": "Back", "zWrite": 0, "zTest": "LEqual", "colorMask": "RGBA",
+                      "blend": ["SrcAlpha", "OneMinusSrcAlpha", "SrcAlpha", "OneMinusSrcAlpha"]}
+    for label, state, expected in (("pass 0", depth, expected_depth), ("pass 1", color, expected_color)):
+        differs = {k: state[k] for k, v in expected.items() if state[k] != v}
+        if differs:
+            raise ValueError(f"Custom/Silhouette {label}: state {differs} is not the verified depth prepass / colour pass")
+    fragments = pass_fragments(shader, 0, 1)
+    if len(fragments) != 1:
+        raise ValueError(f"Custom/Silhouette: {len(fragments)} colour-pass fragment programs (one verified)")
+    keywords, constants, instructions = fragments[0]
+    location = constants.get("_Color")
+    body = [(name, operands) for name, operands in instructions if not name.startswith("dcl_")]
+    if keywords or location is None or location[1] % 16 or \
+            body != [("mov", ["o0.xyzw", f"cb0[{location[1] // 16}].xyzw"]), ("ret", [])]:
+        raise ValueError(f"Custom/Silhouette: the colour fragment {body} is not `mov o0, _Color`")
+    return {"passes": [depth, color], "queue": states[0]["tags"].get("QUEUE"),
+            "fragment": f"mov o0.xyzw, _Color ({location[0]} byte {location[1]})"}
+
+
 # ---------------------------------------------------------------- inventory
 
 def inventory(bundles, scene, builtin_resources=None):
@@ -687,7 +1092,7 @@ def inventory(bundles, scene, builtin_resources=None):
     map_scene = MapScene(bundles, scene, builtin_resources)
     sun_tree, infos = map_scene.sun_light_info()
     active = sun_type_active(map_scene.authored_active(), infos)
-    renderers, materials, textures, meshes, unsupported = [], {}, {}, {}, {}
+    renderers, materials, textures, meshes, unsupported, shader_infos = [], {}, {}, {}, {}, {}
     prefab_lightmaps = map_scene.lightmap_prefab_parameters()
     draw_groups = set()
     for pid, reader in map_scene.of_type("MeshRenderer"):
@@ -703,6 +1108,7 @@ def inventory(bundles, scene, builtin_resources=None):
                 raise
             mesh = None  # the default resources file was not supplied
         triangles = None if builtin and mesh is None else 0
+        per_material = None
         if mesh is not None:
             identity = key(mesh_pointer)
             if identity not in meshes:
@@ -711,7 +1117,14 @@ def inventory(bundles, scene, builtin_resources=None):
                 tris = handler.get_triangles()
                 meshes[identity] = {"name": mesh.m_Name, "vertices": len(handler.m_Vertices or []),
                                     "submeshTriangles": [len(t) for t in tris], "uv1": bool(handler.m_UV1)}
-            triangles = sum(meshes[identity]["submeshTriangles"][:len(renderer.m_Materials)])
+            batch = renderer.m_StaticBatchInfo
+            if batch is not None and batch.subMeshCount > 0:
+                # A static batch draws its own submeshes of the combined mesh (one per material).
+                first = batch.firstSubMesh
+                per_material = meshes[identity]["submeshTriangles"][first:first + batch.subMeshCount]
+            else:
+                per_material = meshes[identity]["submeshTriangles"][:len(renderer.m_Materials)]
+            triangles = sum(per_material)
         names = []
         for pointer in renderer.m_Materials:
             if not pointer.path_id:
@@ -734,6 +1147,7 @@ def inventory(bundles, scene, builtin_resources=None):
                             textures[tid]["slots"].add(slot)
                 floats = dict(material.m_SavedProperties.m_Floats)
                 colors = colors_of(material)
+                shader_infos.setdefault(shader_name(material), shader_info(material))
                 materials[identity] = {"name": material.m_Name, "shader": shader_name(material),
                                        "keywords": keywords_of(material), "textures": textures_bound,
                                        "mainTexST": [xyz2(e.m_Scale) + xyz2(e.m_Offset) for s, e in dict(material.m_SavedProperties.m_TexEnvs).items() if s == "_MainTex"],
@@ -744,15 +1158,20 @@ def inventory(bundles, scene, builtin_resources=None):
         static_batch = renderer.m_StaticBatchInfo
         keys = visibility_keys(host, map_scene.parents, active)
         lm_index, _, lm_source = effective_lightmap(renderer.m_LightmapIndex, [0, 0, 0, 0], prefab_lightmaps.get(pid))
-        if renderer.m_Enabled and keys:
+        undrawn = undrawn_reason(renderer, renderer.m_GameObject.read(), map_scene.path(host))
+        if renderer.m_Enabled and keys and not undrawn:
             for pointer in renderer.m_Materials:
                 if pointer.path_id and materials[key(pointer)]["shader"] not in NON_GEOMETRY_SHADERS:
                     draw_groups.add((map_scene.under_map_root(host), key(pointer), tuple(keys), lm_index))
-        renderers.append({"path": map_scene.path(host), "enabled": bool(renderer.m_Enabled), "materials": names,
+        renderers.append({"path": map_scene.path(host), "enabled": bool(renderer.m_Enabled), "undrawn": undrawn, "materials": names,
                           "triangles": triangles, "builtinMesh": builtin, "underMapRoot": map_scene.under_map_root(host),
                           "visibleFor": keys, "lightmapIndex": renderer.m_LightmapIndex,
                           "effectiveLightmapIndex": lm_index, "lightmapSource": lm_source,
-                          "staticBatch": [static_batch.firstSubMesh, static_batch.subMeshCount] if static_batch else None})
+                          "staticBatch": [static_batch.firstSubMesh, static_batch.subMeshCount] if static_batch else None,
+                          "staticBatchRoot": str(renderer.m_StaticBatchRoot.path_id) if getattr(renderer, "m_StaticBatchRoot", None)
+                          and renderer.m_StaticBatchRoot.path_id else None,
+                          "mesh": meshes[key(mesh_pointer)]["name"] if mesh is not None else None,
+                          "trianglesPerMaterial": per_material})
     for pid, reader in map_scene.objects.items():
         name = reader.type.name
         if name in {"Transform", "GameObject", "MeshRenderer", "MeshFilter"}:
@@ -815,7 +1234,74 @@ def inventory(bundles, scene, builtin_resources=None):
         "lights": lights_of(map_scene, active), "renderSettings": render_settings_of(map_scene),
         "otherComponents": dict(sorted(unsupported.items())),
         "lightmapPrefabRenderers": len(map_scene.lightmap_prefab_parameters()),
+        "shaderInfo": dict(sorted(shader_infos.items())),
+        "lightmapSettings": lightmap_settings_of(map_scene),
+        "ambientProbe": ambient_probe_of(map_scene),
     }
+
+
+def shader_info(material):
+    """What the survey needs from a material's shader: its properties, the passes' LightMode
+    tags and the subshader's queue and RenderType (Unity's serialized parsed form)."""
+    shader = material.m_Shader.read()
+    form = getattr(shader, "m_ParsedForm", None)
+    if form is None:
+        return {"parsed": False}
+    tags = lambda tag_map: dict(getattr(tag_map, "tags", None) or [])
+    subshaders = []
+    for sub in form.m_SubShaders:
+        sub_tags = tags(sub.m_Tags)
+        subshaders.append({"tags": sub_tags, "passes": [tags(p.m_State.m_Tags).get("LIGHTMODE", "") or p.m_Name or "" for p in sub.m_Passes]})
+    return {"parsed": True, "properties": [p.m_Name for p in form.m_PropInfo.m_Props], "subShaders": subshaders,
+            "fallback": form.m_FallbackName or None}
+
+
+def realtime_gi_of(map_scene, renderers):
+    """Realtime GI (Enlighten, slice 4): Unity adds each drawn renderer's dynamic lightmap
+    (`m_LightmapIndexDynamic`, 0xFFFF/0xFFFE none) to `gi.indirect.diffuse`, baked lightmap or
+    not. Enlighten computes it at runtime from the scene's precomputed data, so the converter
+    cannot export it. `renderers` are the drawn renderers that carry one; None when none does
+    (the provenance then has no `realtimeGI` record)."""
+    if not renderers:
+        return None
+    settings = {}
+    for _, reader in map_scene.of_type("LightmapSettings"):
+        gi = reader.read_typetree().get("m_GISettings") or {}
+        settings = {"enableRealtimeLightmaps": bool(gi.get("m_EnableRealtimeLightmaps")),
+                    "environmentLightingMode": gi.get("m_EnvironmentLightingMode"),
+                    "indirectOutputScale": gi.get("m_IndirectOutputScale")}
+        break
+    return {"renderers": len(renderers), **settings,
+            "rule": "UnityGI_Base adds DecodeRealtimeLightmap(unity_DynamicLightmap) to gi.indirect.diffuse; not drawn"}
+
+
+def lightmap_settings_of(map_scene):
+    """LightmapSettings' mode, shadow-mask use and the light probe count (0 when the
+    LightProbes asset is empty or absent)."""
+    for _, reader in map_scene.of_type("LightmapSettings"):
+        settings = reader.read()
+        probes = 0
+        pointer = settings.m_LightProbes
+        if pointer is not None and pointer.path_id:
+            probes = len(pointer.read().m_Data.m_Positions)
+        return {"mode": settings.m_LightmapsMode, "lightmaps": len(settings.m_Lightmaps), "lightProbes": probes,
+                "useShadowmask": getattr(settings, "m_UseShadowmask", None), "shadowMaskMode": getattr(settings, "m_ShadowMaskMode", None)}
+    return None
+
+
+def ambient_probe_of(map_scene):
+    """RenderSettings' baked ambient SH (the ambient probe Unity lights a renderer with when no
+    light probe reaches it): its 27 coefficients and the L0 RGB."""
+    for _, reader in map_scene.of_type("RenderSettings"):
+        tree = reader.read_typetree()
+        # Serialized as {"sh[ 0]": ..., "sh[26]": ...}: red 0-8, green 9-17, blue 18-26.
+        sh = lambda probe: [(probe or {}).get(f"sh[{i:2d}]") for i in range(27)]
+        coefficients = sh(tree.get("m_AmbientProbe"))
+        if any(c is None for c in coefficients):
+            return {"coefficients": None, "l0": None, "ambientMode": tree.get("m_AmbientMode")}
+        return {"coefficients": coefficients, "l0": coefficients[0:27:9], "ambientMode": tree.get("m_AmbientMode"),
+                "ambientIntensity": tree.get("m_AmbientIntensity")}
+    return None
 
 
 def summarize_sun(map_scene, tree, infos):
@@ -869,9 +1355,13 @@ def render_settings_of(map_scene):
 class MapExporter(Exporter):
     """export_prefab's Exporter with merged map geometry and the map shader rules."""
 
-    def __init__(self, environment, output, stem, max_texture=None):
+    def __init__(self, environment, output, stem, max_texture=None, block_only=False):
         super().__init__(environment, output, stem)
         self.max_texture = max_texture
+        # Slice 4: a BC1/BC3 image is written as its blocks only (no PNG); the glTF image names
+        # the block file with an image/x-ikkoku-bc* mimeType that only the app reads.
+        self.block_only = block_only
+        self.builtin_shaders = set()
         self.gltf["generator"] = "Ikkoku CharaStudio map-scene exporter"
         self.source = {"materials": [], "textures": [], "groups": [], "cubes": []}
         self.block_images, self.cubes, self.cube_cache = [], [], {}
@@ -987,15 +1477,27 @@ class MapExporter(Exporter):
             if reduction > 1:
                 image = image.reduce(reduction)  # box filter: the next mip level(s)
         name = f"{len(self.texture_cache)}_{safe_name(texture.m_Name)}.png"
-        image.save(self.output / name)
+        if not self.block_only:
+            image.save(self.output / name)
         index = len(self.gltf["textures"])
-        self.gltf["images"].append({"uri": name, "name": texture.m_Name})
+        entry = {"uri": name, "name": texture.m_Name}
+        self.gltf["images"].append(entry)
         self.gltf["textures"].append({"source": index})
         self.texture_cache[identity] = index
         record = texture_record(texture, pointer, decode=False)
+        block = self.block_image(texture, len(self.gltf["images"]) - 1, name, image, reduction)
+        if self.block_only:
+            if "file" in block:
+                # The blocks are the image: no PNG copy (the block check above decoded them to
+                # exactly the PNG's pixels in memory).
+                entry.update(uri=block["file"], mimeType=BLOCK_IMAGE_MIME[block["format"]])
+                name = block["file"]
+            else:
+                image.save(self.output / name)
         record.update(output=name, reduction=reduction, outputWidth=image.width, outputHeight=image.height,
-                      outputSHA256=hashlib.sha256((self.output / name).read_bytes()).hexdigest(),
-                      blockImage=self.block_image(texture, len(self.gltf["images"]) - 1, name, image, reduction))
+                      outputSHA256=hashlib.sha256((self.output / name).read_bytes()).hexdigest(), blockImage=block)
+        if self.block_only:
+            record["png"] = "file" not in block
         self.source["textures"].append(record)
         return index
 
@@ -1007,7 +1509,15 @@ class MapExporter(Exporter):
         properties = material.m_SavedProperties
         floats, envs = dict(properties.m_Floats), dict(properties.m_TexEnvs)
         name = shader_name(material)
-        contract = map_material_contract(name, colors_of(material), floats, keywords_of(material))
+        shader_file = key(material.m_Shader)[0]
+        if shader_file in ("unity_builtin_extra", "unity default resources"):
+            # A built-in shader (Legacy Diffuse) read from the player's resources beside --builtin-resources.
+            self.builtin_shaders.add(f"{name} ({shader_file})")
+        rule = MAP_SHADER_RULES.get(name, {})
+        states = pass_states(material.m_Shader.read(), floats) if "draw" in rule else None
+        forward = forward_passes(states)
+        contract = map_material_contract(name, colors_of(material), floats, keywords_of(material),
+                                         cull=forward[-1]["cull"] if forward else None)
         main = envs.get("_MainTex")
         result = {"name": material.m_Name,
                   "pbrMetallicRoughness": {"baseColorFactor": contract["baseColorFactor"], "metallicFactor": 0, "roughnessFactor": 1},
@@ -1019,15 +1529,26 @@ class MapExporter(Exporter):
         if contract.get("unlit"):
             result["extensions"] = {"KHR_materials_unlit": {}}
             result["extras"]["unlit"] = True
-        if name == "Particles/Alpha Blended":
+        if name in PARTICLE_SHADERS:
             # baseColorFactor stays the clamped 2 * _TintColor an item draw uses; the app's
             # particle draw takes the tint from here and doubles it in the shader instead.
             result["extras"]["ikkokuParticle"] = particle_extras(colors_of(material))
+            shader_states = pass_states(material.m_Shader.read(), floats)
+            result["extras"]["ikkokuParticle"]["renderQueue"] = particle_render_queue(
+                getattr(material, "m_CustomRenderQueue", -1), shader_states[0]["tags"] if shader_states else None,
+                f"particle material {material.m_Name}")
+            if name == "Particles/Anim Alpha Blended":
+                # lerp(tex(TEXCOORD_0), tex(TEXCOORD_2), TEXCOORD_1.x), as the mesh export writes them.
+                result["extras"]["ikkokuParticle"]["animBlend"] = True
+        if rule.get("draw") == "unlit":
+            result["extras"]["ikkokuUnlit"] = {"kind": "ikkoku.unityUnlitTransparent", "version": 1}
+        if rule.get("draw") == "silhouette":
+            result["extras"]["ikkokuSilhouette"] = silhouette_extras(silhouette_state(material.m_Shader.read()))
         tiling = ([1.0, 1.0], [0.0, 0.0])
         if main and main.m_Texture.path_id:
             result["pbrMetallicRoughness"]["baseColorTexture"] = {"index": self.texture(main.m_Texture)}
             tiling = (xyz2(main.m_Scale), xyz2(main.m_Offset))
-        if name == "Standard":
+        if name in STANDARD_SHADERS:
             emission_map = envs.get("_EmissionMap")
             image, srgb = None, True
             # Standard samples _EmissionMap at i.tex.xy, the _MainTex_ST UV already baked into
@@ -1039,16 +1560,94 @@ class MapExporter(Exporter):
             if "_METALLICGLOSSMAP" in keywords_of(material) and metallic_map and metallic_map.m_Texture.path_id:
                 mean = texture_channel_mean(metallic_map.m_Texture.read(), 0)
             result["extras"]["ikkokuStandard"] = standard_inputs(colors_of(material), floats, keywords_of(material), image, srgb, mean)
+        if rule.get("draw") == "legacyDiffuse":
+            result["extras"]["ikkokuStandard"] = legacy_diffuse_inputs(colors_of(material))
         index = len(self.gltf["materials"])
         self.material_cache[identity] = (index, tiling, bool(contract.get("vertexColor")))
         self.gltf["materials"].append(result)
-        self.source["materials"].append({"pathID": str(identity[1]), "name": material.m_Name, "shaderName": name,
-                                         "keywords": keywords_of(material), "mainTexST": [*tiling[0], *tiling[1]],
-                                         "serialized": pointer.read_typetree()})
+        record = {"pathID": str(identity[1]), "name": material.m_Name, "shaderName": name,
+                  "keywords": keywords_of(material), "mainTexST": [*tiling[0], *tiling[1]], "serialized": pointer.read_typetree()}
+        if states is not None:
+            record["passStates"] = states
+        self.source["materials"].append(record)
         return self.material_cache[identity]
 
 
-def export(bundles, scene, map_no, output, max_texture=None, builtin_resources=None):
+def find_loop(map_scene, transform_id, name):
+    """`TransformFindEx.FindLoop`: the node itself, then each child's subtree in child order."""
+    if map_scene.name(transform_id) == name:
+        return transform_id
+    for child in map_scene.transforms[transform_id].m_Children:
+        found = find_loop(map_scene, child.path_id, name)
+        if found is not None:
+            return found
+    return None
+
+
+def map_option_roots(map_scene, map_no):
+    """`Studio.Map.Reserve`'s option objects (`lstOption`) for `map_no`: [] for maps without."""
+    if map_no not in MAP_OPTIONS:
+        return []
+    name, kind = MAP_OPTIONS[map_no]
+    node = find_loop(map_scene, map_scene.map_root, name)
+    if node is None:
+        return []
+    return [child.path_id for child in map_scene.transforms[node].m_Children] if kind == "children" else [node]
+
+
+def under_any(map_scene, transform_id, roots):
+    current = transform_id
+    while current is not None:
+        if current in roots:
+            return True
+        current = map_scene.parents[current]
+    return False
+
+
+# The NOT_DRAWN_COMPONENTS a camera draws by their own object's layer (and, for a renderer, its
+# shadow-casting mode): one that no Studio camera draws is not counted (`undrawn_reason`).
+CAMERA_DRAWN_COMPONENTS = {"SkinnedMeshRenderer", "ParticleSystem", "SpriteRenderer", "LineRenderer", "TrailRenderer",
+                           "BillboardRenderer", "Terrain", "LensFlare", "Halo"}
+
+
+def not_drawn_components(map_scene, active):
+    """{label: count} of the scene's components that draw something the converter does not
+    (NOT_DRAWN_COMPONENTS), counting enabled ones on objects active for some sun type that a
+    Studio camera draws."""
+    counts = {}
+    for type_name, label in NOT_DRAWN_COMPONENTS.items():
+        for _, reader in map_scene.of_type(type_name):
+            component = reader.read()
+            if getattr(component, "m_Enabled", 1) in (0, False):
+                continue
+            host = map_scene.transform_of_object.get(component.m_GameObject.path_id)
+            if host is None or not visibility_keys(host, map_scene.parents, active):
+                continue
+            if type_name in CAMERA_DRAWN_COMPONENTS and undrawn_reason(component, component.m_GameObject.read(), map_scene.path(host)):
+                continue
+            counts[label] = counts.get(label, 0) + 1
+    return counts
+
+
+def not_drawn_notes(provenance):
+    """The catalog's "not drawn" list (the app's "not reproduced"): skipped shader classes with
+    renderer counts, then the components the converter does not read, as "label: count", then
+    realtime GI where drawn renderers carry a dynamic lightmap (slice 4)."""
+    notes, classes = [], {}
+    for entry in provenance.get("skipped", []):
+        if "shader" in entry:
+            classes.setdefault(entry["reason"], set()).add(entry["path"])
+    for reason, paths in sorted(classes.items()):
+        notes.append(f"{reason} ({len(paths)} renderer{'s' if len(paths) != 1 else ''})")
+    for label, count in sorted((provenance.get("notDrawn") or {}).get("components", {}).items()):
+        notes.append(f"{label}: {count}")
+    if provenance.get("realtimeGI"):
+        count = provenance["realtimeGI"]["renderers"]
+        notes.append(f"realtime GI (Enlighten dynamic lightmaps on {count} renderer{'s' if count != 1 else ''})")
+    return notes
+
+
+def export(bundles, scene, map_no, output, max_texture=None, builtin_resources=None, block_only_images=False):
     import UnityPy
     from UnityPy.helpers.MeshHelper import MeshHandler
     map_scene = MapScene(bundles, scene, builtin_resources)
@@ -1057,18 +1656,31 @@ def export(bundles, scene, map_no, output, max_texture=None, builtin_resources=N
     prefab_lightmaps = map_scene.lightmap_prefab_parameters()
     stem = safe_name(scene)
     output.mkdir(parents=True, exist_ok=True)
-    exporter = MapExporter(map_scene.environment, output, stem, max_texture)
+    exporter = MapExporter(map_scene.environment, output, stem, max_texture, block_only_images)
     map_root_world_inverse = inverse_affine(map_scene.world[map_scene.map_root])
     groups, skipped, skies = {}, [], []
+    dynamic_gi = set()  # drawn renderers with a realtime-GI (dynamic) lightmap
     lightmap_sources = {"renderer": 0, "LightmapPrefab": 0}
     handlers = {}
+    # Map options (slice 4): `visibleOption` sets each option object active to the scene's
+    # mapOption after the sun type is applied, so an option renderer's keys are computed with its
+    # option object active; the app draws it only while mapOption is on.
+    option_roots = set(map_option_roots(map_scene, map_no))
+    if option_roots:
+        active = {key_: {**states, **{node: True for node in option_roots}} for key_, states in active.items()}
+    option_counts = {"renderers": 0, "triangles": 0}
     for pid, reader in sorted(map_scene.of_type("MeshRenderer")):
         renderer = reader.read()
         host = map_scene.transform_of_object[renderer.m_GameObject.path_id]
         path = map_scene.path(host)
         keys = visibility_keys(host, map_scene.parents, active)
+        option = bool(option_roots) and under_any(map_scene, host, option_roots)
         if not renderer.m_Enabled or not keys:
             skipped.append({"path": path, "reason": "disabled renderer" if not renderer.m_Enabled else "never active"})
+            continue
+        undrawn = undrawn_reason(renderer, renderer.m_GameObject.read(), path)
+        if undrawn:
+            skipped.append({"path": path, "reason": undrawn})
             continue
         batch = renderer.m_StaticBatchInfo
         if batch is not None and batch.subMeshCount > 0:
@@ -1077,6 +1689,9 @@ def export(bundles, scene, map_no, output, max_texture=None, builtin_resources=N
         if "MeshFilter" not in components:
             raise ValueError(f"{path}: MeshRenderer lacks MeshFilter")
         mesh_pointer = components["MeshFilter"].read().m_Mesh
+        if not mesh_pointer.path_id:
+            skipped.append({"path": path, "reason": "MeshFilter without a mesh"})  # Unity draws nothing
+            continue
         try:
             mesh = mesh_pointer.read()
         except FileNotFoundError:
@@ -1092,8 +1707,21 @@ def export(bundles, scene, map_no, output, max_texture=None, builtin_resources=N
             handler.process()
             handlers[identity] = (handler, handler.get_triangles())
         handler, triangles = handlers[identity]
-        if len(renderer.m_Materials) > len(triangles):
-            raise ValueError(f"{path}: more materials than submeshes (extra passes are unsupported)")
+        materials = list(renderer.m_Materials)
+        for slot in range(len(triangles), len(materials)):
+            # Unity draws the last submesh again with each extra material (slice 4: accepted only
+            # where that draws nothing or redraws the same opaque pixels).
+            pointer, last = materials[slot], materials[len(triangles) - 1] if triangles else None
+            if not pointer.path_id:
+                skipped.append({"path": path, "submesh": slot, "reason": "extra material slot without a material"})
+            elif last is not None and last.path_id and key(pointer) == key(last) and shader_name(pointer.read()) in STANDARD_SHADERS \
+                    and standard_contract(colors_of(pointer.read()), dict(pointer.read().m_SavedProperties.m_Floats),
+                                          keywords_of(pointer.read()))["alphaMode"] == "OPAQUE":
+                skipped.append({"path": path, "submesh": slot,
+                                "reason": "extra material slot redraws the last submesh with its own opaque material (pixel-identical)"})
+            else:
+                raise ValueError(f"{path}: material slot {slot} has no submesh (Unity redraws the last submesh with it; unsupported)")
+        materials = materials[:len(triangles)]
         role = "mapRoot" if map_scene.under_map_root(host) else "scene"
         world = map_scene.world[host]
         matrix = matmul(map_root_world_inverse, world) if role == "mapRoot" else world
@@ -1103,11 +1731,28 @@ def export(bundles, scene, map_no, output, max_texture=None, builtin_resources=N
             [renderer.m_LightmapTilingOffset.x, renderer.m_LightmapTilingOffset.y,
              renderer.m_LightmapTilingOffset.z, renderer.m_LightmapTilingOffset.w], prefab_lightmaps.get(pid))
         lightmap_sources[lm_source] += 1
-        for submesh, pointer in enumerate(renderer.m_Materials):
+        for submesh, pointer in enumerate(materials):
             if not pointer.path_id:
                 skipped.append({"path": path, "submesh": submesh, "reason": "no material"})
                 continue
-            if shader_name(pointer.read()) == SKYBOX_CUBEMAP:
+            name = shader_name(pointer.read())
+            if name in MAP_SKIPPED_SHADERS:
+                skipped.append({"path": path, "submesh": submesh, "reason": MAP_SKIPPED_SHADERS[name], "shader": name,
+                                "triangles": len(triangles[submesh])})
+                continue
+            if any(env.m_Texture.path_id and env.m_Texture.type.name == "RenderTexture"
+                   for env in dict(pointer.read().m_SavedProperties.m_TexEnvs).values()):
+                skipped.append({"path": path, "submesh": submesh, "reason": "render-texture screens", "shader": name,
+                                "triangles": len(triangles[submesh])})
+                continue
+            draw = MAP_SHADER_RULES.get(name, {}).get("draw")
+            # Studio sets _Color on every Renderer under the mob group: only the verified
+            # silhouette draws it, and only there.
+            if option and map_no in MOB_COLOR_MAPS and draw != "silhouette":
+                raise ValueError(f"{path}: a {name} renderer under the mob group (its _Color would be the mob colour)")
+            if draw == "silhouette" and not (option and map_no in MOB_COLOR_MAPS):
+                raise ValueError(f"{path}: Custom/Silhouette outside a mob group (its _Color is not the verified mob colour)")
+            if name == SKYBOX_CUBEMAP:
                 # Drawn by the app's sky pass: its own mesh in object space, placed by its node.
                 skies.append({"path": path, "submesh": submesh, "role": role, "keys": list(keys), "matrix": matrix,
                               "mesh": identity, "pointer": pointer, "mirrored": mirrored})
@@ -1116,9 +1761,30 @@ def export(bundles, scene, map_no, output, max_texture=None, builtin_resources=N
                 skipped.append({"path": path, "submesh": submesh, "reason": "skybox shader on a mesh"})
                 continue
             material_index, (scale, offset), vertex_color = exporter.map_material(pointer)
-            group_key = (role, material_index, tuple(keys), lm_index)
-            group = groups.setdefault(group_key, {"positions": [], "normals": [], "tangents": [], "uv0": [], "uv1": [],
+            group_lightmap = lm_index
+            if draw in ("particleAnim", "unlit", "silhouette"):
+                group_lightmap = NO_LIGHTMAP  # these shaders sample no lightmap
+            if draw == "particleAnim" and not handler.m_UV1:
+                raise ValueError(f"{path}: Particles/Anim Alpha Blended blends by TEXCOORD1.x, which the mesh lacks")
+            # A silhouette renderer is its own draw: Unity sorts and draws each renderer's depth
+            # prepass and colour pass in turn, so overlapping mobs blend over each other. So is a
+            # particle submesh (`PARTICLE_SHADERS`), placed in the sort by its renderer's bounds
+            # centre and its submesh index.
+            particle = name in PARTICLE_SHADERS
+            separate = pid if draw == "silhouette" else (pid, submesh) if particle else None
+            group_key = (role, material_index, tuple(keys), group_lightmap, option, separate)
+            # Only the GI-lit shaders (Standard's family, Legacy Diffuse) read the dynamic lightmap.
+            if (name in STANDARD_SHADERS or name == "Legacy Shaders/Diffuse") and getattr(renderer, "m_LightmapIndexDynamic", 0xFFFF) < 0xFFFE:
+                dynamic_gi.add(pid)
+            group = groups.setdefault(group_key, {"positions": [], "normals": [], "tangents": [], "uv0": [], "uv1": [], "uv2": [],
                                                   "colors": [], "indices": [], "renderers": [], "vertexColor": vertex_color})
+            if particle:
+                local = mesh.m_LocalAABB.m_Center
+                group["sortCenter"] = renderer_sort_center(matrix, [local.x, local.y, local.z])
+                group["sortSubmesh"] = submesh
+            if option:
+                option_counts["renderers"] += 1
+                option_counts["triangles"] += len(triangles[submesh])
             used = sorted({i for triangle in triangles[submesh] for i in triangle})
             remap = {old: len(group["positions"]) + new for new, old in enumerate(used)}
             for old in used:
@@ -1131,7 +1797,13 @@ def export(bundles, scene, map_no, output, max_texture=None, builtin_resources=N
                     group["tangents"].append(convert_tangent(direction + [t[3] * (-1 if mirrored else 1)]))
                 if handler.m_UV0:
                     group["uv0"].append(tiled_uv(handler.m_UV0[old], scale, offset))
-                if lm_index != NO_LIGHTMAP:
+                if draw == "particleAnim":
+                    # The blend factor (TEXCOORD1.x, unflipped) and uv.zw: a mesh UV0 with fewer
+                    # than four components reads D3D's defaults (0, 0, 0, 1) for the rest.
+                    group["uv1"].append([handler.m_UV1[old][0], 0.0])
+                    full = list(handler.m_UV0[old]) + [0.0, 0.0, 0.0, 1.0][len(handler.m_UV0[old]):]
+                    group["uv2"].append(tiled_uv(full[2:4], scale, offset))
+                elif group_lightmap != NO_LIGHTMAP:
                     source_uv = handler.m_UV1 if handler.m_UV1 else handler.m_UV0
                     group["uv1"].append(lightmap_uv(source_uv[old], lm_offset))
                 if vertex_color and handler.m_Colors:
@@ -1141,8 +1813,8 @@ def export(bundles, scene, map_no, output, max_texture=None, builtin_resources=N
                 converted = [converted[i + j] for i in range(0, len(converted), 3) for j in (0, 2, 1)]
             group["indices"].extend(converted)
             group["renderers"].append({"path": path, "submesh": submesh, "vertices": len(used), "triangles": len(triangles[submesh]),
-                                       "lightmapIndex": lm_index, "lightmapScaleOffset": lm_offset, "lightmapSource": lm_source,
-                                       "mirrored": mirrored})
+                                       "lightmapIndex": group_lightmap, "lightmapScaleOffset": lm_offset if group_lightmap != NO_LIGHTMAP else None,
+                                       "lightmapSource": lm_source, "mirrored": mirrored})
     # glTF: node 0 "Map" (mapRoot's authored scale; the app replaces translation and rotation
     # with the record's map transform), node 1 "Scene" (identity, scene-space geometry).
     root_scale = map_scene.local_trs(map_scene.transforms[map_scene.map_root])[2]
@@ -1150,22 +1822,35 @@ def export(bundles, scene, map_no, output, max_texture=None, builtin_resources=N
                               {"name": "Scene", "children": [], "extras": {"ikkokuMapRole": "scene"}}]
     exporter.gltf["scenes"] = [{"nodes": [0, 1]}]
     totals = {"vertices": 0, "triangles": 0}
-    for group_key in sorted(groups, key=lambda k: (k[0], k[1], k[2], k[3])):
-        role, material_index, keys, lm_index = group_key
+    separate_names = {}
+    def separate_key(value):  # a silhouette's renderer id, a particle's (renderer id, submesh)
+        return value if isinstance(value, tuple) else (value or 0,)
+    for group_key in sorted(groups, key=lambda k: (k[0], k[1], k[2], k[3], k[4], separate_key(k[5]))):
+        role, material_index, keys, lm_index, option, separate = group_key
         group = groups[group_key]
         count = len(group["positions"])
         attributes = {"POSITION": exporter.accessor(group["positions"], "VEC3", bounds=True)}
         for semantic, values, shape in [("NORMAL", group["normals"], "VEC3"), ("TANGENT", group["tangents"], "VEC4"),
                                         ("TEXCOORD_0", group["uv0"], "VEC2"), ("TEXCOORD_1", group["uv1"], "VEC2"),
-                                        ("COLOR_0", group["colors"], "VEC4")]:
+                                        ("TEXCOORD_2", group["uv2"], "VEC2"), ("COLOR_0", group["colors"], "VEC4")]:
             if values:
                 if len(values) != count:
                     raise ValueError(f"Merged {semantic} count differs from the vertex count (mixed source streams)")
                 attributes[semantic] = exporter.accessor(values, shape)
         extras = {"ikkokuMap": {"role": role, "visibleFor": list(keys), "lightmapIndex": lm_index,
                                 "renderers": len(group["renderers"])}}
+        if "sortCenter" in group:
+            extras["ikkokuMap"]["sortCenter"] = group["sortCenter"]
+            extras["ikkokuMap"]["sortSubmesh"] = group["sortSubmesh"]
+        suffix = ""
+        if option:
+            extras["ikkokuMap"]["option"] = True
+            suffix += "_option"
+        if separate is not None:
+            separate_names[separate] = len(separate_names)
+            suffix += f"_r{separate_names[separate]}"
         mesh_index = len(exporter.gltf["meshes"])
-        exporter.gltf["meshes"].append({"name": f"{role}_{material_index}_{'_'.join(map(str, keys))}_{lm_index}",
+        exporter.gltf["meshes"].append({"name": f"{role}_{material_index}_{'_'.join(map(str, keys))}_{lm_index}{suffix}",
                                         "primitives": [{"attributes": attributes, "mode": 4, "material": material_index,
                                                         "indices": exporter.accessor(group["indices"], "SCALAR", integer=True)}],
                                         "extras": extras})
@@ -1181,7 +1866,9 @@ def export(bundles, scene, map_no, output, max_texture=None, builtin_resources=N
         raise ValueError("The map scene has no drawable static meshes")
     if any(m.get("extensions", {}).get("KHR_materials_unlit") is not None for m in exporter.gltf["materials"]):
         exporter.gltf["extensionsUsed"] = ["KHR_materials_unlit"]
-    lightmaps, lightmap_mode, lightmap_export = export_lightmaps(map_scene, output)
+    lights = lights_of(map_scene, active)
+    mixed_lights = sum(1 for light in lights if light["enabled"] and light["visibleFor"] and LIGHT_MODES.get(light["lightmapping"]) == "mixed")
+    lightmaps, lightmap_mode, lightmap_export = export_lightmaps(map_scene, output, mixed_lights)
     lightmap_extras = lightmap_export.pop("extras", None)
     lightmap_export["drawn"] = lightmap_extras is not None
     extras = {}
@@ -1204,7 +1891,9 @@ def export(bundles, scene, map_no, output, max_texture=None, builtin_resources=N
         "conversion": {"basis": "Z reflection, LH Y-up to RH Y-up", "triangles": "i0,i2,i1 (again reversed under a mirroring transform)",
                        "uv0": "_MainTex_ST baked, then u,1-v", "uv1": "lightmap UV (mesh UV1, else UV0) * ST.xy + ST.zw, then u,1-v",
                        "tangent": "x,y,-z,w (w negated again under a mirroring transform)",
-                       "merge": "per (role, material, visibility class, lightmap index); role mapRoot in mapRoot's local frame, role scene in world space",
+                       "merge": "per (role, material, visibility class, lightmap index); role mapRoot in mapRoot's local frame, role scene in world space"
+                                + ("; particle renderers one draw per submesh (the renderer's bounds centre as ikkokuMap.sortCenter, "
+                                   "the submesh as ikkokuMap.sortSubmesh)" if any(isinstance(k[5], tuple) for k in groups) else ""),
                        "lightmaps": "serialized image_data written verbatim (BC blocks, all mips, rows bottom-up); sampled at (u, 1 - v) of TEXCOORD_1",
                        "images": "UnityPy PNG (top-down)" + (f"; reduced by powers of two to <= {max_texture} px" if max_texture else ""),
                        "blockImages": "BC1/BC3 images also as their serialized blocks, every mip, block and pixel rows reversed to "
@@ -1219,7 +1908,7 @@ def export(bundles, scene, map_no, output, max_texture=None, builtin_resources=N
         "textureGPUBytesRGBA8Mips": sum(gpu_bytes(t["outputWidth"], t["outputHeight"]) for t in exporter.source["textures"]),
         "shaders": shaders, "droppedTerms": dropped, "skipped": skipped, "lightmapUVSources": lightmap_sources,
         "lightmapsMode": lightmap_mode if lightmaps else None, "lightmaps": lightmaps, "lightmapExport": lightmap_export,
-        "sunLightInfo": summarize_sun(map_scene, sun_tree, infos), "lights": lights_of(map_scene, active),
+        "sunLightInfo": summarize_sun(map_scene, sun_tree, infos), "lights": lights,
         "renderSettings": render_settings_of(map_scene),
         "builtinResources": file_record(map_scene.builtin_resources) if map_scene.builtin_resources else None,
         "blockImages": {"images": len(exporter.block_images), "bytes": sum(e["bytes"] for e in exporter.block_images),
@@ -1227,6 +1916,26 @@ def export(bundles, scene, map_no, output, max_texture=None, builtin_resources=N
                                     if "skipped" in t["blockImage"]]},
         "cubes": exporter.cubes, "sky": sky_records, "lightmapCoverage": lightmap_coverage(exporter),
     }
+    # Slice 4 records, present only when there is something to record (the slice 1-3 exports
+    # of maps 33 and 34 keep their provenance otherwise).
+    components = not_drawn_components(map_scene, active)
+    if components:
+        provenance["notDrawn"] = {"components": components}
+    realtime_gi = realtime_gi_of(map_scene, dynamic_gi)
+    if realtime_gi:
+        provenance["realtimeGI"] = realtime_gi
+    if block_only_images:
+        provenance["conversion"]["blockImages"] = ("BC1/BC3 images as their serialized blocks only, every mip, block and pixel "
+                                                   "rows reversed to top-down (lossless; the top level decodes to the PNG's pixels, "
+                                                   "checked in memory); the image uri names the block file, mimeType "
+                                                   "image/x-ikkoku-bc1|bc3, and no PNG is written")
+    if exporter.builtin_shaders:
+        provenance["builtinShaders"] = sorted(exporter.builtin_shaders)
+    if option_roots:
+        provenance["options"] = {"roots": sorted(map_scene.path(n) for n in option_roots), **option_counts,
+                                 "rule": "Studio.Map.Reserve: drawn while the scene's mapOption is on"}
+        if map_no in MOB_COLOR_MAPS:
+            provenance["options"]["mobColor"] = list(DEFAULT_MOB_COLOR)
     (output / "provenance.json").write_text(json.dumps(provenance, indent=2, ensure_ascii=False) + "\n")
     return provenance
 
@@ -1274,12 +1983,14 @@ def export_skies(exporter, skies, handlers):
 
 
 def lightmap_coverage(exporter):
-    """Standard renderers (by path) and their triangles drawn with and without a baked lightmap."""
+    """Standard renderers (by path) and their triangles drawn with and without a baked lightmap.
+    Slice 4 counts the shaders drawn through the same material paths with them (StandardDouble,
+    Legacy Diffuse)."""
     paths = {"lightmapped": set(), "unlightmappedStandard": set()}
     triangles = {"lightmapped": 0, "unlightmappedStandard": 0}
     for group in exporter.source["groups"]:
         material = exporter.gltf["materials"][group["material"]]
-        if material["extras"]["unityShader"] != "Standard":
+        if material["extras"]["unityShader"] not in STANDARD_SHADERS + ("Legacy Shaders/Diffuse",):
             continue
         prefix = "lightmapped" if group["lightmapIndex"] != NO_LIGHTMAP else "unlightmappedStandard"
         paths[prefix].update(r["path"] for r in group["renderers"])
@@ -1293,7 +2004,6 @@ def lightmapped_dropped_terms(gltf):
     the app's baked-lightmap material, which leaves out fewer terms than the item material: its
     droppedTerms become the rule's droppedLightmapped (plus the item terms when the material is
     also drawn on a mesh without a lightmap)."""
-    rule = MAP_SHADER_RULES["Standard"]
     lit = {}
     for mesh in gltf["meshes"]:
         lightmapped = mesh["extras"]["ikkokuMap"]["lightmapIndex"] >= 0
@@ -1301,7 +2011,8 @@ def lightmapped_dropped_terms(gltf):
             lit.setdefault(primitive["material"], set()).add(lightmapped)
     for index, material in enumerate(gltf["materials"]):
         extras = material["extras"]
-        if extras["unityShader"] != "Standard" or "ikkokuStandard" not in extras or True not in lit.get(index, ()):
+        rule = MAP_SHADER_RULES.get(extras["unityShader"], {})
+        if "droppedLightmapped" not in rule or "ikkokuStandard" not in extras or True not in lit.get(index, ()):
             continue
         terms = list(rule["droppedLightmapped"])
         if False in lit[index]:
@@ -1318,11 +2029,11 @@ def texture_settings(texture):
             if hasattr(settings, k)}
 
 
-def export_lightmaps(map_scene, output):
+def export_lightmaps(map_scene, output, mixed_lights=None):
     """Records every LightmapSettings entry and writes each light/direction map's serialized
     data verbatim. Returns (records, mode, export summary); the summary's "extras" is the glTF's
     `ikkokuLightmaps`, absent when the lightmaps cannot be drawn (the reason is recorded)."""
-    records, mode, entries, problems = [], None, [], []
+    records, mode, entries, problems, shadow_masks = [], None, [], [], []
     for _, reader in map_scene.of_type("LightmapSettings"):
         settings = reader.read()
         mode = settings.m_LightmapsMode
@@ -1336,13 +2047,20 @@ def export_lightmaps(map_scene, output):
                 record[field[2:]] = texture_record(texture, pointer)
                 record[field[2:]]["textureSettings"] = texture_settings(texture)
                 if field == "m_ShadowMask":
-                    problems.append(f"lightmap {index}: a shadow mask is not drawn")
+                    # Shadowmask mixed lighting stores the Mixed lights' occlusion; only a Mixed
+                    # light samples it (slice 4). Without one nothing reads the mask: it is
+                    # recorded, not written. `mixed_lights` None (the slice 1-3 callers) refuses it.
+                    if mixed_lights == 0:
+                        shadow_masks.append(index)
+                    else:
+                        problems.append(f"lightmap {index}: a shadow mask is not drawn")
                     continue
                 if field == "m_Lightmap" and record["Lightmap"]["lightmapFormat"] != RGBM_LIGHTMAP_FORMAT:
                     problems.append(f"lightmap {index}: m_LightmapFormat {record['Lightmap']['lightmapFormat']} is not RGBM")
                     continue
                 raw = bytes(texture.image_data)
-                fmt = BLOCK_FORMATS.get(int(texture.m_TextureFormat), ("raw", 0))[0].lower()
+                fmt = (BLOCK_FORMATS.get(int(texture.m_TextureFormat)) or RAW_LIGHTMAP_FORMATS.get(int(texture.m_TextureFormat))
+                       or ("raw", 0))[0].lower()
                 name = f"lightmap-{index}-{'light' if field == 'm_Lightmap' else 'dir'}.{fmt}"
                 try:
                     entry = lightmap_file_entry(record[field[2:]], name, raw)
@@ -1361,6 +2079,8 @@ def export_lightmaps(map_scene, output):
                 problems.append(f"lightmap {index}: no light map written")
     summary = {"written": [name for _, light, direction in entries for name in [light["file"]] + ([direction["file"]] if direction else [])],
                "problems": problems}
+    if shadow_masks:
+        summary["shadowMasks"] = {"lightmaps": shadow_masks, "drawn": False, "reason": "no enabled Mixed light samples them"}
     if entries and not problems:
         try:
             summary["extras"] = lightmaps_extras(mode, entries)
@@ -1391,8 +2111,13 @@ def approximations(provenance):
         return notes
     notes = ["no baked lightmaps", "map lights", "sun-type lighting", "fog", "ambient"]
     if provenance.get("droppedTerms"):
-        shaders = [shader for shader in provenance["shaders"] if shader != SKYBOX_CUBEMAP]
-        notes.append("shaders approximated (" + ", ".join(shaders) + ")")
+        # Without lightmaps the Standard family draws as items; the other slice 3-4 shaders keep
+        # their formulas (slice 1 listed every shader but the sky).
+        item_drawn = STANDARD_SHADERS + ("Legacy Shaders/Diffuse",)
+        shaders = [shader for shader in provenance["shaders"]
+                   if shader != SKYBOX_CUBEMAP and (shader not in DRAWN_SHADERS or shader in item_drawn)]
+        if shaders:
+            notes.append("shaders approximated (" + ", ".join(shaders) + ")")
     return notes
 
 
@@ -1415,6 +2140,10 @@ def write_catalog(info_bundles, converted, output):
                              conversion={k: provenance[k] for k in ("meshes", "materials", "textures", "vertices", "triangles",
                                                                      "textureGPUBytesRGBA8Mips", "shaders", "droppedTerms")},
                              provenanceSHA256=hashlib.sha256((directory / "provenance.json").read_bytes()).hexdigest())
+        # Slice 4: what the map has that the app does not draw (status line), present when any.
+        not_drawn = not_drawn_notes(provenance)
+        if not_drawn:
+            by_no[number]["notDrawn"] = not_drawn
     for row in rows:
         row.setdefault("file", None)
     catalog = {"version": 1, "kind": "ikkoku.sourceStudioMapCatalog",
@@ -1422,6 +2151,211 @@ def write_catalog(info_bundles, converted, output):
                "sources": sources, "maps": rows}
     output.write_text(json.dumps(catalog, indent=2, ensure_ascii=False) + "\n")
     return catalog
+
+
+# ---------------------------------------------------------------- survey (ST-A11 slice 4)
+
+# Unity TextureFormat names the survey reports (UnityEngine.TextureFormat, 5.6).
+TEXTURE_FORMATS = {1: "Alpha8", 3: "RGB24", 4: "RGBA32", 5: "ARGB32", 7: "RGB565", 10: "DXT1", 12: "DXT5", 13: "RGBA4444",
+                   14: "BGRA32", 24: "BC6H", 25: "BC7", 26: "BC4", 27: "BC5", 28: "DXT1Crunched", 29: "DXT5Crunched"}
+# Light.m_Type and m_Lightmapping (LightmapBakeType) in Unity 5.6.
+LIGHT_TYPES = {0: "spot", 1: "directional", 2: "point", 3: "area"}
+LIGHT_MODES = {1: "mixed", 2: "baked", 4: "realtime"}
+# Scene components the converter does not draw or animate (export only reads MeshRenderer +
+# MeshFilter): the survey counts them so every renderer is accounted for.
+UNCONVERTED_COMPONENTS = ("SkinnedMeshRenderer", "ParticleSystem", "ParticleSystemRenderer", "LineRenderer", "TrailRenderer",
+                          "BillboardRenderer", "SpriteRenderer", "Terrain", "Cloth", "Projector", "Animator", "Animation",
+                          "LightProbeGroup", "ReflectionProbe", "LensFlare", "Halo")
+BUILTIN_SHADER_PREFIXES = ("Legacy Shaders/", "Unlit/", "Particles/", "Skybox/", "Mobile/", "Nature/", "UI/", "Sprites/",
+                           "Hidden/", "GUI/", "FX/", "Self-Illumin/", "Reflective/", "Transparent/", "VertexLit", "Diffuse",
+                           "Bumped", "Specular", "Parallax")
+
+
+def shader_family(name):
+    """The survey's shader classes: Standard, Standard (Specular setup), Unity's other built-in
+    families by name prefix, else the game's own shader."""
+    if name in ("Standard", "Standard (Specular setup)"):
+        return name
+    for prefix in BUILTIN_SHADER_PREFIXES:
+        if name.startswith(prefix):
+            return prefix.rstrip("/") if prefix.endswith("/") else "Legacy Shaders"
+    return "game shader"
+
+
+def survey_summary(inventory_result, rules=None):
+    """One map's survey row from its `inventory`: renderers, triangles and materials per shader,
+    lightmaps and whether slice 2 reproduces them, probes, skies, textures by format, lights, the
+    sun types and what the converter would refuse or leave out, each with its reason."""
+    rules = MAP_SHADER_RULES if rules is None else rules
+    materials = {}
+    for material in inventory_result["materials"]:
+        materials.setdefault(material["name"], material)
+    drawn = [r for r in inventory_result["renderers"] if r["enabled"] and r["visibleFor"] and not r.get("undrawn")]
+    shaders, refusals, notes = {}, [], []
+    batched = 0
+    for renderer in drawn:
+        per_material = renderer.get("trianglesPerMaterial") or []
+        if (renderer.get("staticBatch") or [0, 0])[1] > 0:
+            batched += 1
+        if per_material and len(renderer["materials"]) > len(per_material) and not (renderer.get("staticBatch") or [0, 0])[1]:
+            refusals.append(f"{renderer['path']}: more materials than submeshes")
+        for slot, name in enumerate(renderer["materials"]):
+            if name is None:
+                continue
+            shader = materials[name]["shader"]
+            entry = shaders.setdefault(shader, {"family": shader_family(shader), "renderers": set(), "materials": set(), "triangles": 0,
+                                                "lightmappedRenderers": set()})
+            entry["renderers"].add(renderer["path"]); entry["materials"].add(name)
+            entry["triangles"] += per_material[slot] if slot < len(per_material) else 0
+            if renderer["effectiveLightmapIndex"] >= 0:
+                entry["lightmappedRenderers"].add(renderer["path"])
+    for shader in sorted(shaders):
+        if shader not in rules and shader not in NON_GEOMETRY_SHADERS and shader not in MAP_SKIPPED_SHADERS:
+            entry = shaders[shader]
+            refusals.append(f"shader {shader!r} has no map rule ({len(entry['renderers'])} renderers, {entry['triangles']} triangles)")
+    if batched:
+        refusals.append(f"{batched} static-batched renderers: their placement under the map transform needs evidence")
+    settings = inventory_result.get("lightmapSettings") or {}
+    lightmaps = inventory_result.get("lightmaps") or []
+    problems = []
+    if lightmaps:
+        if settings.get("mode") not in LIGHTMAPS_MODES:
+            problems.append(f"LightmapsMode {settings.get('mode')}")
+        for entry in lightmaps:
+            light = entry.get("Lightmap")
+            if light is None:
+                problems.append(f"lightmap {entry['index']}: no light map")
+                continue
+            if light.get("lightmapFormat") != RGBM_LIGHTMAP_FORMAT:
+                problems.append(f"lightmap {entry['index']}: m_LightmapFormat {light.get('lightmapFormat')} is not RGBM")
+            for field in ("Lightmap", "DirLightmap"):
+                if field in entry and entry[field]["textureFormat"] not in BLOCK_FORMATS and entry[field]["textureFormat"] not in RAW_LIGHTMAP_FORMATS:
+                    problems.append(f"lightmap {entry['index']} {field}: TextureFormat {entry[field]['textureFormat']}")
+            if "ShadowMask" in entry:
+                problems.append(f"lightmap {entry['index']}: a shadow mask")
+            if LIGHTMAPS_MODES.get(settings.get("mode")) == "CombinedDirectional" and "DirLightmap" not in entry:
+                problems.append(f"lightmap {entry['index']}: no direction map")
+    other = inventory_result.get("otherComponents") or {}
+    unconverted = {name: other[name] for name in UNCONVERTED_COMPONENTS if other.get(name)}
+    for name, count in unconverted.items():
+        notes.append(f"{count} {name} not converted")
+    formats = {}
+    for texture in inventory_result.get("textures") or []:
+        label = TEXTURE_FORMATS.get(texture["textureFormat"], str(texture["textureFormat"]))
+        entry = formats.setdefault(label, {"textures": 0, "bytes": 0})
+        entry["textures"] += 1; entry["bytes"] += texture["serializedBytes"]
+    lights = {}
+    for light in inventory_result.get("lights") or []:
+        if not light["enabled"] or not light["visibleFor"]:
+            continue
+        label = f"{LIGHT_TYPES.get(light['type'], light['type'])} {LIGHT_MODES.get(light['lightmapping'], light['lightmapping'])}"
+        lights[label] = lights.get(label, 0) + 1
+    sun = inventory_result.get("sunLightInfo") or {}
+    standard = [s for s in ("Standard", "Standard (Specular setup)") if s in shaders]
+    standard_renderers = set().union(*(shaders[s]["renderers"] for s in standard)) if standard else set()
+    lightmapped = set().union(*(shaders[s]["lightmappedRenderers"] for s in standard)) if standard else set()
+    return {
+        "renderers": len(inventory_result["renderers"]), "drawnRenderers": len(drawn), "triangles": inventory_result["triangles"],
+        "materials": inventory_result["materialCount"],
+        "shaders": {name: {"family": e["family"], "renderers": len(e["renderers"]), "materials": len(e["materials"]),
+                           "triangles": e["triangles"], "lightmappedRenderers": len(e["lightmappedRenderers"])}
+                    for name, e in sorted(shaders.items())},
+        "lightmaps": {"count": len(lightmaps), "mode": LIGHTMAPS_MODES.get(settings.get("mode"), settings.get("mode")),
+                      "encodings": sorted({str((e.get("Lightmap") or {}).get("lightmapFormat")) for e in lightmaps}),
+                      "reproduced": bool(lightmaps) and not problems, "problems": problems},
+        "standardRenderers": len(standard_renderers), "lightmappedStandardRenderers": len(lightmapped),
+        "lightProbes": settings.get("lightProbes"), "reflectionProbes": other.get("ReflectionProbe", 0),
+        "ambient": {k: (inventory_result.get("ambientProbe") or {}).get(k) for k in ("ambientMode", "l0")},
+        "skies": sorted(s for s in shaders if s.startswith("Skybox/")),
+        "renderSettingsSkybox": (inventory_result.get("renderSettings") or {}).get("skyboxMaterial"),
+        "fog": (inventory_result.get("renderSettings") or {}).get("fog"),
+        "textureFormats": dict(sorted(formats.items())),
+        "textureBytes": sum(e["bytes"] for e in formats.values()),
+        "lights": dict(sorted(lights.items())),
+        "sunTypes": sorted(e["type"] for e in sun.get("entries", [])),
+        "unconverted": unconverted, "refusals": refusals, "notes": notes,
+        "monoBehaviours": sorted(k.split(":", 1)[1] for k in other if k.startswith("MonoBehaviour:")),
+    }
+
+
+APPLE_DOUBLE = "appleDouble"
+
+
+def scene_usage(scene_maps):
+    """Per map number, how many scenes name it and their IDs (the first 12 hex digits of each
+    scene file's SHA-256; no names). scene_maps: [(sha256, map number, None if unreadable, or
+    APPLE_DOUBLE for a macOS '._' metadata file, which is not a scene)]."""
+    maps, unreadable, apple_double = {}, 0, 0
+    for sha, number in scene_maps:
+        if number == APPLE_DOUBLE:
+            apple_double += 1
+            continue
+        if number is None:
+            unreadable += 1
+            continue
+        entry = maps.setdefault(int(number), {"scenes": 0, "sceneIDs": []})
+        entry["scenes"] += 1
+        entry["sceneIDs"].append(sha[:12])
+    for entry in maps.values():
+        entry["sceneIDs"].sort()
+    return {"scenes": len(scene_maps) - apple_double, "unreadable": unreadable, "appleDouble": apple_double,
+            "maps": {str(k): maps[k] for k in sorted(maps)}}
+
+
+def read_scene_maps(scenes, inspect):
+    """[(sha256, map)] for every *.png under `scenes` (recursively), read with
+    `ikkoku-inspect scene-document` (the engine's scene parser); None when it cannot read one."""
+    import subprocess
+    result = []
+    for path in sorted(p for p in Path(scenes).rglob("*") if p.is_file() and p.suffix.lower() == ".png"):
+        sha = hashlib.sha256(path.read_bytes()).hexdigest()
+        if path.name.startswith("._"):
+            result.append((sha, APPLE_DOUBLE))
+            continue
+        run = subprocess.run([str(inspect), "scene-document", str(path)], capture_output=True, text=True)
+        number = None
+        if run.returncode == 0:
+            try:
+                number = json.loads(run.stdout).get("map")
+            except json.JSONDecodeError:
+                number = None
+        result.append((sha, number))
+    return result
+
+
+def survey(catalog, bundle_root, output, builtin_resources=None, usage=None, numbers=None):
+    """Inventory every catalog row's bundle under `bundle_root` (<root>/abdata/<bundlePath>), write
+    each inventory to <output>/inventory/ and the survey rows to <output>/survey.json."""
+    rows = json.loads(Path(catalog).read_text())["maps"]
+    usage_maps = (usage or {}).get("maps", {})
+    (output / "inventory").mkdir(parents=True, exist_ok=True)
+    result = []
+    for row in rows:
+        if numbers and row["no"] not in numbers:
+            continue
+        bundle = Path(bundle_root) / "abdata" / row["bundlePath"]
+        entry = {"no": row["no"], "name": row["name"], "scene": row["scene"], "bundlePath": row["bundlePath"],
+                 "converted": row.get("file") is not None, "vanish": row.get("vanish"),
+                 "usage": usage_maps.get(str(row["no"]), {}).get("scenes", 0)}
+        if not bundle.is_file():
+            entry["status"] = "bundle not fetched"
+            result.append(entry)
+            continue
+        entry["bundleBytes"] = bundle.stat().st_size
+        try:
+            found = inventory([bundle], row["scene"], builtin_resources)
+        except Exception as error:  # the survey records why a map cannot be read
+            entry["status"] = f"inventory failed: {type(error).__name__}: {error}"[:500]
+            result.append(entry)
+            continue
+        (output / "inventory" / f"{row['no']:02d}-{safe_name(row['scene'])}.json").write_text(
+            json.dumps(found, indent=2, ensure_ascii=False) + "\n")
+        entry.update(status="surveyed", **survey_summary(found))
+        result.append(entry)
+    document = {"kind": "ikkoku.sourceStudioMapSurvey", "version": 1, "catalog": str(catalog),
+                "catalogSHA256": hashlib.sha256(Path(catalog).read_bytes()).hexdigest(), "maps": result}
+    (output / "survey.json").write_text(json.dumps(document, indent=2, ensure_ascii=False) + "\n")
+    return document
 
 
 def local_roots():
@@ -1455,6 +2389,19 @@ def main():
     exp.add_argument("--max-texture", type=int, help="reduce base textures by powers of two to at most this size")
     exp.add_argument("--builtin-resources", type=Path,
                      help="the player's 'unity default resources' file (built-in meshes such as a sky Sphere)")
+    exp.add_argument("--block-only-images", action="store_true",
+                     help="write BC1/BC3 images as their blocks only, without PNG copies (slice 4; the app reads them)")
+    sur = commands.add_parser("survey", help="inventory every catalog row's bundle and summarize it (slice 4)")
+    sur.add_argument("--catalog", type=Path, required=True)
+    sur.add_argument("--bundle-root", type=Path, required=True, help="the folder holding abdata/<bundlePath>")
+    sur.add_argument("--output", type=Path, required=True)
+    sur.add_argument("--builtin-resources", type=Path, help="the player's 'unity default resources' file")
+    sur.add_argument("--usage", type=Path, help="a scene-usage JSON (counts per map)")
+    sur.add_argument("--map", type=int, action="append", help="only these map numbers")
+    use = commands.add_parser("scene-usage", help="count the scenes naming each map (IDs are hashes; no names)")
+    use.add_argument("--scenes", type=Path, required=True)
+    use.add_argument("--inspect", type=Path, required=True, help="the ikkoku-inspect executable")
+    use.add_argument("--output", type=Path, required=True)
     cat = commands.add_parser("catalog", help="write the runtime map catalog")
     cat.add_argument("--info-bundle", type=Path, action="append", required=True)
     cat.add_argument("--converted", type=Path, action="append", default=[], help="an export directory (repeatable)")
@@ -1467,9 +2414,20 @@ def main():
         print(json.dumps({k: result[k] for k in ("scene", "rendererCount", "drawnRendererCount", "triangles", "meshes",
                                                  "materialCount", "textureCount", "baseTextureGPUBytes", "shaders")}, indent=2))
     elif args.command == "export":
-        result = export(args.bundle, args.scene, args.map_no, private(args.output), args.max_texture, args.builtin_resources)
+        result = export(args.bundle, args.scene, args.map_no, private(args.output), args.max_texture, args.builtin_resources,
+                        args.block_only_images)
         print(json.dumps({k: result[k] for k in ("mapNo", "scene", "meshes", "materials", "textures", "vertices", "triangles",
                                                  "textureGPUBytesRGBA8Mips", "shaders", "droppedTerms")}, indent=2, ensure_ascii=False))
+    elif args.command == "survey":
+        usage = json.loads(args.usage.read_text()) if args.usage else None
+        document = survey(args.catalog, args.bundle_root, private(args.output), args.builtin_resources, usage, set(args.map or []))
+        print(json.dumps({"maps": len(document["maps"]), "surveyed": sum(m.get("status") == "surveyed" for m in document["maps"])}))
+    elif args.command == "scene-usage":
+        result = scene_usage(read_scene_maps(args.scenes, args.inspect))
+        private(args.output).parent.mkdir(parents=True, exist_ok=True)
+        args.output.write_text(json.dumps(result, indent=2) + "\n")
+        print(json.dumps({"scenes": result["scenes"], "unreadable": result["unreadable"], "appleDouble": result["appleDouble"],
+                          "maps": {k: v["scenes"] for k, v in result["maps"].items()}}))
     else:
         catalog = write_catalog(args.info_bundle, args.converted, private(args.output))
         print(json.dumps({"maps": len(catalog["maps"]), "converted": [m["no"] for m in catalog["maps"] if m["file"]]}, indent=2))
