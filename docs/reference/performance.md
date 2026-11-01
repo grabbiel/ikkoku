@@ -5174,6 +5174,12 @@ document write):
 
 ### What remains after item 7
 
+The [item 7 follow-ups](#phase-2-item-7-follow-ups) removed the other
+per-frame readers of the document (C4), kept the toolbar's pose-mode
+picker (C3), and found the kept hidden section during an FK drag needs no
+change after C4 (C2). What is still open is listed under
+[What remains after the item 7 follow-ups](#what-remains-after-the-item-7-follow-ups).
+
 - **The 30 ms target is not met.** A select from nothing still takes
   52–71 ms and a redo 68–96 ms. What is left of them:
   - **A section's first build.** A kind's section is built the first time
@@ -5287,8 +5293,20 @@ per-frame main-thread time does not grow.
 ## Phase 2, item 7 follow-ups
 
 Follow-ups to [item 7](#phase-2-item-7-selection-and-the-inspector), from
-its [What remains](#what-remains-after-item-7) list. Work in progress:
-the measurements are added as each part lands.
+its [What remains](#what-remains-after-item-7) list (#319). Two of them
+change the app: the workspace tree, the toolbar and the timeline bar read
+state the model publishes (C4), and the toolbar keeps its pose-mode
+pickers mounted (C3). A kept hidden section during an FK drag (C2) needed
+no change once C4 landed. Hiding a kept view's controls (C1) was measured
+and left for a follow-up, and the rest of a select between two characters
+(C5) was left as it is. Each change has a measurement control that keeps
+the shipped behaviour by default (`IKKOKU_PERF_PANEL_STATE`,
+`IKKOKU_PERF_POSE_PICKER`).
+
+The step-1 profiles ran on base `189e5b8c` (Release) while the only
+display was a virtual 60 Hz screen and the window presented no frame, so
+every number marked "without presentation" leaves out Core Animation
+commits, display-link pacing and the AppKit layout that drawing causes.
 
 ### C4: the workspace, toolbar and timeline read published state
 
@@ -5317,6 +5335,132 @@ computation after every run-loop turn covers the three new values, so a
 change that reaches a panel without a refresh, or an input missing from
 the workspace key, fails the Studio lanes. `IKKOKU_PERF_PANEL_STATE=document`
 restores the old reads for measurement.
+
+### C3: the toolbar keeps its pose-mode pickers
+
+The toolbar built its pose-mode pickers (the Object / FK / IK segmented
+control, and the FK group picker in FK mode) when a character was selected
+and dropped them when the selection became another kind or nothing:
+building the segmented control took about 7 ms and dropping it 2.7–2.8 ms
+in the step-1 profile (without presentation). They now stay mounted while
+the selection is not a character, hidden with `studioToolbarHidden`: their
+size is fixed and framed to zero in both directions, they are transparent,
+take no clicks, are disabled (so they leave the Tab loop) and are out of
+the accessibility tree. They follow the Local toggle with no row spacing
+of their own, so hidden they add no gap, and shown they sit 8 points after
+it as before. `IKKOKU_PERF_POSE_PICKER=built` builds and drops them as
+before.
+
+The segmented control is drawn in one of two sizes, in base as in head:
+at its content's width (142 points, centred in its 150-point frame) or
+filling the frame with equal segments. Which one depends on when it was
+last measured after launch, so it varies from run to run in both builds
+(item 7 saw the same variant). Offering the hidden pickers no width, so
+that showing them would measure them again as a rebuild does, did not
+make it deterministic either, so it was not kept. In the window captures
+below, every difference between base and head is this variant, in both
+directions.
+
+### C2: a kept hidden section during an FK drag (no change)
+
+Item 7 left a route's section, kept hidden behind the dragged character,
+adding 12–24 ms/s of invalidation during an FK drag. After C4, on the
+fixture scene with route 20 then character 10 selected and character 10
+dragged (single runs without presentation, on a loaded machine), "other"
+main-thread time is 1.9 ms/s with the sections kept against 1.3 ms/s
+without, and no view body runs in either. In step 1 both had about
+65 ms/s. The hidden section's invalidation came with the panels' document
+reads that C4 removed, so no hide-time snapshot was added.
+
+### C1: hiding costs more than destroying (measured, not changed)
+
+A hidden kept view is disabled, so its controls leave the Tab key-view
+loop and refuse focus. An ablation build, with `.disabled` dropped from
+`inspectorHidden` and everything else as shipped, measured what that costs
+(head `49cd842d`, the same binary for all three columns, single runs
+without presentation on a loaded machine; warm medians in ms):
+
+| action | kept (shipped) | kept, not disabled | `off` |
+| --- | ---: | ---: | ---: |
+| deselect (from a character) | 37.7 (36.6–40.7) | 28.3 (28.1–29.6) | 29.9 |
+| select from nothing | 43.4 (26.4–44.7) | 37.5 (36.8–38.4) | 43.6 |
+| character to character | 16.6 | 16.8 | 16.6 |
+| undo | 70.1 | 64.0 | 59.9 |
+| redo | 73.9 | 66.5 | 113.8 |
+| undo of the redo | 70.3 | 63.1 | 60.7 |
+
+Disabling costs about 9 ms per deselect, 6 ms per select from nothing and
+6–7 ms per undo or redo; without it, kept views deselect as cheaply as
+`off`. The cost lies in AppKit layout and the SwiftUI graph update inside
+it, which may change once the window is composited, and no SwiftUI-level
+replacement keeps hidden controls out of the AppKit key-view loop
+(`.focusable(false)` acts on SwiftUI's focus system, and disabling only
+the text fields leaves buttons and pickers in the loop under Full Keyboard
+Access). So it is left for a follow-up; see
+[What remains](#what-remains-after-the-item-7-follow-ups).
+
+### Measurements (item 7 follow-ups)
+
+TODO(r7l) ABBA table.
+
+### Correctness (item 7 follow-ups)
+
+- **Captures** (`.local/r7l-inspector-followups/captures/m1`). Base:
+  `main` `189e5b8c` (Release); head: `49cd842d` (C4 and C3; the later
+  commits change only scenarios and docs). Each capture ran as a pair,
+  base and head under one hold of the app lock, with a clean `IKKOKU_*`
+  environment and `IKKOKU_SOURCE_TREE_FALLBACKS=0`:
+  - the eight `IKKOKU_AUTOCAPTURE` renders of item 7 (live opt-in OFF and
+    ON): all 11 products byte-identical;
+  - item 7's 17 `IKKOKU_CAPTURE_UI` window captures plus three for C3
+    (`IKKOKU_CAPTURE_UI_SELECT` folder then character, character to folder
+    and back, character to nothing and back), twice, base first and then
+    head first. All 40 UI reports match base byte for byte. 19 of 20 window
+    PNGs match in the first pass and 17 of 20 in the second; each
+    difference is the pose picker's sizing variant (1,325 pixels at
+    x 473–637, y 71–90), in both directions. Base alone produces both
+    sizes of the same window from one run to the next.
+- **Scenarios.** `inspector-kept-views` passes `--strict` on the head Debug
+  build (77 steps), with the Debug check of the published state after
+  every run-loop turn. Its new steps check that the workspace row follows
+  a rename typed mid-session and a visibility toggle (C4), and that the
+  hidden pose picker is absent from the accessibility tree and the Tab
+  loop (C3). On the Debug build of `32ad7cd8`, under the app lock, the
+  strict Studio lane passed 87/87 (0 skipped, 1,349.1 s) and the strict
+  Maker lane 10/10 (178.3 s).
+- **Suites.** The strict Engine suite with the shared map (127 `IKKOKU_*`
+  keys): 1,150 tests in 18 suites and 21 more pass, with only the 13
+  opt-in timing and corpus probes skipped. Python: `Tools/verification`
+  (201 tests), `Tools/reverse` (648, 6 skipped) and
+  `Tools/reverse/analysis` pass; `doctor.py --require public` and the
+  site check pass.
+
+### What remains after the item 7 follow-ups
+
+- **Hiding without disabling (C1).** Prototype first a container `NSView`
+  per kept section that is set hidden while the section is: hidden views
+  leave the key-view loop and the accessibility tree whatever SwiftUI
+  builds inside them. Fall back to marking the section's controls
+  `refusesFirstResponder` only if the container fails the captures or
+  costs more than it saves. Either way, add a Debug check that after each
+  run-loop turn no key-eligible view and no accessibility element lies in
+  a hidden kept section, run the scenario with Full Keyboard Access on,
+  measure only with a composited window, and keep it off by default behind
+  a control until it is proven.
+- **A composited recheck.** The follow-ups' timing ran while the only
+  display was a virtual screen and the window presented no frame. The view
+  body counts and main-thread busy time stand as measured, but the base
+  against head select, redo and FK drag cells should be timed again with a
+  composited window, which adds Core Animation commits, display-link
+  pacing and the layout that drawing causes.
+- **The rest of a select between two characters (C5).** It costs
+  28–35 ms composited (item 7). Without presentation it is 17 ms: a 13 ms
+  SwiftUI graph update that sets the shown values (text fields' intrinsic
+  size 2.7 ms, stack sizing 3.4 ms) and 0.4 ms of model refresh. The other
+  11–18 ms appear only with presentation.
+- From item 7's list, still open: the 30 ms target (a select from nothing
+  and a redo are still above it), a section's first build, the redo's
+  rehydration, and section expansion not being remembered.
 
 ## Texture loads without worker threads (2026-10-26)
 
