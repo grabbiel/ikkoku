@@ -4607,8 +4607,11 @@ invalidates nothing under it. In Release on the reference machine:
 
 - a select from nothing takes 52–71 ms instead of 102–105 ms;
 - a redo takes 68–96 ms instead of 106–136 ms;
-- an FK drag costs no more main-thread time than base
-  (CONFIRM_FK_SUMMARY).
+- an FK drag in the showoff scene takes 19 ms/s less main-thread time
+  than base (282 against 301 ms/s). With a route's section kept hidden
+  behind the dragged character, it takes 21–24 ms/s more than the same
+  build with the kept views off, about 0.2 ms a frame, with no added
+  hitches.
 
 The 30 ms target is not met. The remaining costs are listed with numbers in
 [what remains](#what-remains-after-item-7).
@@ -4785,7 +4788,7 @@ than 20% CPU, and was run again.
   the captures.
 - **Base, the confirm window and the captures:** a Release build of
   `main` `899b777b` with the same two harness commits cherry-picked
-  (CAPBASE_LINE), so it is current `main`'s code apart from the harness.
+  (`5cf10611`, local only; Release executable `bf278bea…457b19c96`), so it is current `main`'s code apart from the harness.
 - **Window 2** (11:10–11:25, 34 runs, 0 invalid, 1-minute load 1.86–5.16)
   compared base with the C2 head (`886a6664`) in each mode, to decide C1
   (`tab` against `off`) and C2 (`on` against `tab`).
@@ -4793,9 +4796,12 @@ than 20% CPU, and was run again.
   the model-state head (`99d8d3ed`). Three runs were invalid (a Spotlight
   indexer twice, the Claude desktop app once) and were run again; one of
   them was in a first start that was restarted.
-- **The confirm window** (CONFIRM_WINDOW_LINE) measured the final head
-  (CONFIRM_HEAD_SHA), which adds the published diagnostics and the width
-  clamp.
+- **The confirm window** (09:20–09:23 on 2026-11-01, 7 runs, 0 invalid,
+  1-minute load 2.11–5.05) measured the final head (`e311bffc`, Release
+  executable `933bf0a1…499c1cc4`), which adds the published diagnostics
+  and the width clamp. Firefox's `plugin-container`, the user's, used
+  22–28% CPU throughout; it was logged before and after each run and not
+  counted against them. Nothing else outside this work passed 20%.
 
 **Window 2, median main busy ms per action** (base / `off` / `tab` / `on`):
 
@@ -4870,8 +4876,8 @@ document write):
 | Window 2, C2: fixture, route 20 then character 10 preselected | — | 249.5 | 265.2 (tab 260.0) |
 | Window 3, model state: showoff | 297.0 | 288.7 | 290.2 |
 | Window 3, model state: fixture, preselected | — | 237.8 | 250.0 |
-| Confirm, final head: showoff | CONFIRM_FK_SHOWOFF_BASE | — | CONFIRM_FK_SHOWOFF_ON |
-| Confirm, final head: fixture, preselected (two pairs, alternated) | — | CONFIRM_FK_FIX_OFF | CONFIRM_FK_FIX_ON |
+| Confirm, final head: showoff | 300.7 | — | 281.9 |
+| Confirm, final head: fixture, preselected (two pairs, alternated) | — | 206.5, 213.4 | 227.6, 237.0 |
 
 - With C2 alone, a hidden route section made the fixture drag 10–16 ms/s
   dearer than `off`. Time Profiler put the difference in SwiftUI's
@@ -4885,17 +4891,28 @@ document write):
 - With the diagnostics published too, three exploratory Time Profiler pairs
   (outside a window, load 4.9–10.5) gave `propagate_dirty` 22.1, 29.9 and
   13.6 ms/s with `off` and 22.3, 28.5 and 32.8 with `on`; the last `on` run
-  had three compiler processes beside it. CONFIRM_FK_PARAGRAPH
+  had three compiler processes beside it. In the confirm window the
+  alternated fixture pairs gave 206.5 and 213.4 ms/s with `off` and 227.6
+  and 237.0 with `on`. A hidden route section still adds to a drag of the
+  character in front of it: 12–16 ms/s in windows 2 and 3, 21–24 ms/s here,
+  about 0.2 ms a frame. The presented rate (119.5–119.7 fps) and hitches
+  (0.20–0.47 a second) are the same. Publishing the diagnostics did not
+  remove it; it is listed under what remains. The showoff drag, with
+  nothing kept hidden, was 18.8 ms/s below base.
 - The computation cost (window 3, the Object tab's state only) was
   0.043 ms per refresh in the showoff scene (p95 0.049 ms), 5.1 ms/s at
   120 refreshes a second during a drag, and 0.010 ms in the fixture
-  (1.2 ms/s). CONFIRM_PHASE Base evaluated the same state inside
-  `ObjectInspector`'s body on every frame. Selects spend 0.3–1.4 ms/s on
-  it.
+  (1.2 ms/s). With the diagnostics as well, the confirm window measured
+  5.3 ms/s in the showoff drag (0.044 ms a refresh, p95 0.049 ms) and
+  1.2–1.3 ms/s in the fixture (0.010–0.011 ms). Base evaluated the same
+  state inside `ObjectInspector`'s body on every frame. Selects spend
+  0.3–1.4 ms/s on it.
 - Orbit (fixture, preselected, `on`) stays at 10.7 ms/s (9.5–10.5 in
   window 2): the camera is observed on its own.
 - The character-to-character select, the case most sensitive to a stale or
-  extra recompute, CONFIRM_CHARS_LINE.
+  extra recompute, took 31.3 ms (3 frames) on the final head, against
+  base's 33.0 in window 3. In the same run the select from nothing took
+  68.2 ms (8 frames) and the deselect 60.0 ms (7 frames), as in window 3.
 
 ### What remains after item 7
 
@@ -4925,6 +4942,13 @@ document write):
   predates item 7. `ObjectInspector` was the fourth such reader (cause 6:
   1,800 bodies per 15 s, 0.024 ms each, 2.9 ms/s plus the propagation
   under it); the published state removes it.
+- **A kept hidden section during an FK drag.** Observation marks every
+  attribute under a changed value dirty, hidden views included, so a
+  route's section kept behind the dragged character adds 12–24 ms/s of
+  invalidation (about 0.2 ms a frame) against `off`, with no body
+  evaluated and no added hitches. The section's inputs would have to stop
+  changing while it is hidden (for example, a snapshot taken when it
+  hides) to remove it.
 - **Section expansion is not remembered.** As in base, a collapsed section
   opens again after another kind. Keeping it collapsed would be a behaviour
   change, so it is left as an option.
@@ -4967,7 +4991,12 @@ document write):
   and the strict `maker-scenarios` lane 10 of 10, none skipped, on the
   Debug build of `e311bffc`. The five inspector checks are part of the
   Studio lane (42, 24, 15, 61 and 57 steps).
-- **Engine suite** (strict, `IKKOKU_REQUIRE_SOURCE_FIXTURES=1`): ENGINE_LINE
+- **Engine suite** (strict, `IKKOKU_REQUIRE_SOURCE_FIXTURES=1`): 1,109
+  tests on `e311bffc`, 1,101 passed and 7 skipped (opt-in timing probes).
+  One test that came with #297
+  (`sourceShapeReuseRepresentativeNativeChargesFitProvisionalBound`) needed
+  a fixture key the local fixture map did not have yet; once the key was
+  added, it passed on its own in strict mode.
 - **Python suites:** `Tools/mods` 40, `Tools/translation` 61 (2 skipped),
   `Tools/verification` 201, its checks 11, `Tools/reverse` 634 (6
   skipped), `Tools/reverse/analysis` 280, all passing; `doctor.py --require
