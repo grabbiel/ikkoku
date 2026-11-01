@@ -88,6 +88,16 @@ public struct RenderItem: Sendable {
     /// pick or hover over its pixels selects nothing. Gizmos still draw on top.
     /// false (the default) leaves an id-0 item out of the pick pass, as before.
     public var pickOccluder: Bool = false
+    /// The model-space point whose camera distance orders this item among the
+    /// transparent draws (ST-A11 slice 4: a map particle renderer's Unity
+    /// `Renderer.bounds` centre, which a mesh baked into map space no longer
+    /// has). nil (the default) uses the mesh's bounds centre, as before.
+    public var sortCenter: Float3? = nil
+    /// Unity's render queue for a transparent draw: transparent draws sort by
+    /// it first (lower first), then back to front. Every item is 3000 (the
+    /// "Transparent" queue) unless set, so the order is unchanged without it;
+    /// map particle materials carry their own (slice 4).
+    public var renderQueue: Int = 3000
 
     public init(mesh: MeshHandle, material: MaterialState, model: float4x4, objectID: UInt32,
                 deformKey: UInt64? = nil, skinSet: UInt64? = nil, morphWeights: [(index: Int, weight: Float)] = []) {

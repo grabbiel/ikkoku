@@ -46,10 +46,11 @@ six faces are written verbatim (`cube-<k>-<name>.<format>`, D3D/Metal face order
 checked by the face seams). Particles/Alpha Blended materials carry `ikkokuParticle` (the
 linearized _TintColor) for the app's particle draw.
 
-Particle renderers (slice 4, `PARTICLE_SHADERS`): each particle renderer is its own draw, like
-each silhouette renderer, with its bounds centre in `ikkokuMap.sortCenter` and its material's
-render queue in `ikkokuParticle.renderQueue`, so the app can order them as Unity orders
-transparent renderers (queue, then distance to the bounds centre, back to front).
+Particle renderers (slice 4, `PARTICLE_SHADERS`): each particle submesh of each renderer is its
+own draw, with the renderer's bounds centre in `ikkokuMap.sortCenter`, the submesh index in
+`ikkokuMap.sortSubmesh` and its material's render queue in `ikkokuParticle.renderQueue`, so the
+app can order them as Unity orders transparent renderers (queue, then distance to the bounds
+centre, back to front, then one renderer's submeshes in index order).
 
 Proprietary output belongs in .local, never in the repository.
 """
@@ -208,11 +209,12 @@ NOT_DRAWN_COMPONENTS = {"SkinnedMeshRenderer": "skinned renderers", "ParticleSys
 NON_GEOMETRY_SHADERS = {"Skybox/Procedural", "Skybox/Cubemap"}
 # Particle shaders (slice 4): each renderer is its own draw, as Unity 5.6 draws it. Unity orders
 # transparent renderers by sorting layer, order in layer, render queue, then camera distance to the
-# renderer's bounds centre (back to front), and draws one renderer's submesh in index order. Every
-# particle renderer in the maps has sorting layer 0 and order 0 (checked per map), so the app sorts
-# by the material's render queue (`ikkokuParticle.renderQueue`) and then by distance to the
-# bounds centre the converter writes (`ikkokuMap.sortCenter`). Merged, the renderers would blend
-# in the mesh's triangle order wherever their cards overlap.
+# renderer's bounds centre (back to front), and draws one renderer's submeshes in index order.
+# Every particle renderer in the maps has sorting layer 0 and order 0 (checked per map), so the app
+# sorts by the material's render queue (`ikkokuParticle.renderQueue`), then by distance to the
+# bounds centre the converter writes (`ikkokuMap.sortCenter`), then by submesh
+# (`ikkokuMap.sortSubmesh`, the renderer's draws sharing that centre exactly). Merged, the
+# renderers would blend in the mesh's triangle order wherever their cards overlap.
 PARTICLE_SHADERS = ("Particles/Alpha Blended", "Particles/Anim Alpha Blended")
 # ShaderLab queue names (Unity 5.6 `Queue` tag).
 RENDER_QUEUES = {"Background": 1000, "Geometry": 2000, "AlphaTest": 2450, "Transparent": 3000, "Overlay": 4000}
@@ -1738,15 +1740,17 @@ def export(bundles, scene, map_no, output, max_texture=None, builtin_resources=N
                 raise ValueError(f"{path}: Particles/Anim Alpha Blended blends by TEXCOORD1.x, which the mesh lacks")
             # A silhouette renderer is its own draw: Unity sorts and draws each renderer's depth
             # prepass and colour pass in turn, so overlapping mobs blend over each other. So is a
-            # particle renderer (`PARTICLE_SHADERS`), placed in the sort by its bounds centre.
+            # particle submesh (`PARTICLE_SHADERS`), placed in the sort by its renderer's bounds
+            # centre and its submesh index.
             particle = name in PARTICLE_SHADERS
-            separate = pid if draw == "silhouette" or particle else None
+            separate = pid if draw == "silhouette" else (pid, submesh) if particle else None
             group_key = (role, material_index, tuple(keys), group_lightmap, option, separate)
             group = groups.setdefault(group_key, {"positions": [], "normals": [], "tangents": [], "uv0": [], "uv1": [], "uv2": [],
                                                   "colors": [], "indices": [], "renderers": [], "vertexColor": vertex_color})
             if particle:
                 local = mesh.m_LocalAABB.m_Center
                 group["sortCenter"] = renderer_sort_center(matrix, [local.x, local.y, local.z])
+                group["sortSubmesh"] = submesh
             if option:
                 option_counts["renderers"] += 1
                 option_counts["triangles"] += len(triangles[submesh])
@@ -1788,7 +1792,9 @@ def export(bundles, scene, map_no, output, max_texture=None, builtin_resources=N
     exporter.gltf["scenes"] = [{"nodes": [0, 1]}]
     totals = {"vertices": 0, "triangles": 0}
     separate_names = {}
-    for group_key in sorted(groups, key=lambda k: (k[0], k[1], k[2], k[3], k[4], k[5] or 0)):
+    def separate_key(value):  # a silhouette's renderer id, a particle's (renderer id, submesh)
+        return value if isinstance(value, tuple) else (value or 0,)
+    for group_key in sorted(groups, key=lambda k: (k[0], k[1], k[2], k[3], k[4], separate_key(k[5]))):
         role, material_index, keys, lm_index, option, separate = group_key
         group = groups[group_key]
         count = len(group["positions"])
@@ -1804,6 +1810,7 @@ def export(bundles, scene, map_no, output, max_texture=None, builtin_resources=N
                                 "renderers": len(group["renderers"])}}
         if "sortCenter" in group:
             extras["ikkokuMap"]["sortCenter"] = group["sortCenter"]
+            extras["ikkokuMap"]["sortSubmesh"] = group["sortSubmesh"]
         suffix = ""
         if option:
             extras["ikkokuMap"]["option"] = True
@@ -1854,8 +1861,8 @@ def export(bundles, scene, map_no, output, max_texture=None, builtin_resources=N
                        "uv0": "_MainTex_ST baked, then u,1-v", "uv1": "lightmap UV (mesh UV1, else UV0) * ST.xy + ST.zw, then u,1-v",
                        "tangent": "x,y,-z,w (w negated again under a mirroring transform)",
                        "merge": "per (role, material, visibility class, lightmap index); role mapRoot in mapRoot's local frame, role scene in world space"
-                                + ("; silhouette and particle renderers one draw each (their bounds centre as ikkokuMap.sortCenter)"
-                                   if any(k[5] is not None for k in groups) else ""),
+                                + ("; particle renderers one draw per submesh (the renderer's bounds centre as ikkokuMap.sortCenter, "
+                                   "the submesh as ikkokuMap.sortSubmesh)" if any(isinstance(k[5], tuple) for k in groups) else ""),
                        "lightmaps": "serialized image_data written verbatim (BC blocks, all mips, rows bottom-up); sampled at (u, 1 - v) of TEXCOORD_1",
                        "images": "UnityPy PNG (top-down)" + (f"; reduced by powers of two to <= {max_texture} px" if max_texture else ""),
                        "blockImages": "BC1/BC3 images also as their serialized blocks, every mip, block and pixel rows reversed to "

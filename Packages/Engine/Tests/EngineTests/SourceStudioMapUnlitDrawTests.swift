@@ -243,6 +243,64 @@ func silhouettesBlendOncePerRendererAndCoverTheirDepthPass() throws {
     #expect(twice.allSatisfy { abs($0.z - 0.75) < 2e-3 }, "\(twice.prefix(4))")
 }
 
+// MARK: - Particle renderers in Unity's transparent order
+
+/// Slice 4 draws every particle renderer alone, ordered as Unity orders
+/// transparent renderers: by render queue, then back to front by the camera
+/// distance to `sortCenter` (the renderer's bounds centre) when set, else to
+/// the mesh's bounds centre (every draw before slice 4, and still every
+/// non-map draw). Two screen-filling blended quads 0.1 apart: whichever
+/// blends last dominates its colour channel.
+@Test(.enabled(if: MTLCreateSystemDefaultDevice() != nil))
+func transparentDrawsSortByQueueThenSortCentreDistance() throws {
+    let renderer = try makeSourceShaderRenderer()
+    let resources = renderer.resources
+    var camera = OrbitCamera(); camera.pitch = 0; camera.yaw = 0
+    let t = camera.target
+    func quad(_ z: Float) -> MeshData {
+        let positions = [Float3(t.x - 50, t.y - 50, t.z + z), Float3(t.x + 50, t.y - 50, t.z + z),
+                         Float3(t.x + 50, t.y + 50, t.z + z), Float3(t.x - 50, t.y + 50, t.z + z)]
+        return MeshData(name: "particle", positions: positions, normals: Array(repeating: Float3(0, 0, 1), count: 4), indices: [0, 1, 2, 0, 2, 3])
+    }
+    let far = try resources.register(mesh: quad(-0.05)), near = try resources.register(mesh: quad(0.05))
+    defer { resources.unregister(mesh: far); resources.unregister(mesh: near) }
+    let red = SourceStudioParticleInputs(tint: Float4(0.25, 0, 0, 0.25)).material(base: nil)
+    let green = SourceStudioParticleInputs(tint: Float4(0, 0.25, 0, 0.25)).material(base: nil)
+    var effects = SceneEffects(); effects.transparentBackground = true; effects.showGrid = false
+    /// The far quad red, the near one green; true when every pixel is mostly red (red blended last).
+    func redLast(_ farCenter: Float3? = nil, _ farQueue: Int = 3000, _ nearCenter: Float3? = nil, _ nearQueue: Int = 3000,
+                 orders: (far: Int, near: Int) = (100, 100)) throws -> Bool {
+        var items: [RenderItem] = []
+        for (mesh, material, center, queue, order) in [(far, red, farCenter, farQueue, orders.far), (near, green, nearCenter, nearQueue, orders.near)] {
+            var item = RenderItem(mesh: mesh, material: material, model: matrix_identity_float4x4, objectID: 0)
+            item.castsShadow = false; item.outline = false; item.order = order
+            item.sortCenter = center; item.renderQueue = queue
+            items.append(item)
+        }
+        let bits = try #require(renderer.captureSceneHDR(frame: RenderFrame(camera: camera, items: items, effects: effects), width: 8, height: 8))
+        let pixels = (0..<64).map { i in Float4(float16(bits[i * 4]), float16(bits[i * 4 + 1]), float16(bits[i * 4 + 2]), float16(bits[i * 4 + 3])) }
+        #expect(pixels.allSatisfy { $0.x > 0.05 && $0.y > 0.05 }, "both quads blend: \(pixels.prefix(2))")
+        let reds = pixels.filter { $0.x > $0.y * 1.5 }.count, greens = pixels.filter { $0.y > $0.x * 1.5 }.count
+        #expect(reds == 64 || greens == 64, "\(pixels.prefix(2))")
+        return reds == 64
+    }
+    // The defaults: back to front by the meshes' centres, the near quad last.
+    #expect(try !redLast())
+    // A sort centre behind the far quad sends the near quad first; one in front of the near quad, the far quad last.
+    #expect(try redLast(nil, 3000, t - Float3(0, 0, 10)))
+    #expect(try redLast(t + Float3(0, 0, 1)))
+    // Both set: the centres alone decide, the nearer centre last.
+    #expect(try !redLast(t - Float3(0, 0, 0.2), 3000, t - Float3(0, 0, 0.1)))
+    // One renderer's submeshes share its centre: the order (map draws' 100 + submesh) decides, the higher last.
+    #expect(try redLast(t, 3000, t, orders: (101, 100)) && !redLast(t, 3000, t, orders: (100, 101)))
+    // The order never beats the distance.
+    #expect(try !redLast(orders: (101, 100)))
+    // The queue goes first: a later queue draws last however far, an earlier one first however near.
+    #expect(try redLast(nil, 3001))
+    #expect(try !redLast(t + Float3(0, 0, 1), 2999))
+    #expect(try redLast(nil, 4099, nil, 3000) && !redLast(nil, 5000, nil, 5000))
+}
+
 // MARK: - The probe's pixel-centre samples
 
 /// The map probe's HDR images are measured against an oracle that renders into a
@@ -336,7 +394,11 @@ private struct Slice4MapFixture {
     var url: URL { root.appendingPathComponent("map.gltf") }
     static let image = Data(bc1Block(red: 31, green: 0, blue: 0))
 
-    enum Variant { case normal, noBlockEntry, animWithoutUV2, silhouetteOutsideOption, garbageImage }
+    enum Variant {
+        case normal, noBlockEntry, animWithoutUV2, silhouetteOutsideOption, garbageImage
+        /// The particle renderer drawn alone (slice 4): its bounds centre and render queue.
+        case sortedParticle, sortCenterOnWall, sortCenterOfMerge, sortCenterWithoutSubmesh, opaqueParticleQueue
+    }
 
     init(_ variant: Variant = .normal) throws {
         root = FileManager.default.temporaryDirectory.appendingPathComponent("ikkoku-slice4map-\(UUID().uuidString)", isDirectory: true)
@@ -353,16 +415,26 @@ private struct Slice4MapFixture {
         try buffer.write(to: root.appendingPathComponent("map.bin"))
         try Self.image.write(to: root.appendingPathComponent("0_tex.bc1"))
         try Data("not an image".utf8).write(to: root.appendingPathComponent("1_garbage.dat"))
-        func mesh(_ name: String, material: Int, uv1: Bool = false, uv2: Bool = false, option: Bool = false) -> [String: Any] {
+        func mesh(_ name: String, material: Int, uv1: Bool = false, uv2: Bool = false, option: Bool = false,
+                  sortCenter: [Double]? = nil, sortSubmesh: Int? = nil, renderers: Int = 1) -> [String: Any] {
             var attributes: [String: Int] = ["POSITION": 0, "TEXCOORD_0": 1]
             if uv1 { attributes["TEXCOORD_1"] = 2 }
             if uv2 { attributes["TEXCOORD_2"] = 3 }
-            var info: [String: Any] = ["role": "mapRoot", "visibleFor": [-1, 0, 1, 2], "lightmapIndex": -1, "renderers": 1]
+            var info: [String: Any] = ["role": "mapRoot", "visibleFor": [-1, 0, 1, 2], "lightmapIndex": -1, "renderers": renderers]
             if option { info["option"] = true }
+            if let sortCenter { info["sortCenter"] = sortCenter }
+            if let sortSubmesh { info["sortSubmesh"] = sortSubmesh }
             return ["name": name, "primitives": [["attributes": attributes, "material": material]], "extras": ["ikkokuMap": info]]
         }
         let standard: [String: Any] = ["albedoLinear": [1, 1, 1, 1], "metallic": 0, "oneMinusReflectivity": 0.96,
                                        "metallicSource": "_Metallic", "emission": NSNull()]
+        var particle: [String: Any] = ["tintLinear": [0.5, 0.5, 0.5, 0.5], "animBlend": true]
+        switch variant {
+        case .sortedParticle, .sortCenterOnWall, .sortCenterOfMerge, .sortCenterWithoutSubmesh: particle["renderQueue"] = 4099
+        case .opaqueParticleQueue: particle["renderQueue"] = 2450
+        default: break
+        }
+        let particleCenter: [Double]? = [.sortedParticle, .sortCenterOfMerge, .sortCenterWithoutSubmesh].contains(variant) ? [0.5, 0.5, 0] : nil
         var images: [[String: Any]] = [["uri": "0_tex.bc1", "mimeType": "image/x-ikkoku-bc1"]]
         if variant == .garbageImage { images.append(["uri": "1_garbage.dat"]) }
         let blockEntry: [String: Any] = ["image": 0, "name": "tex", "file": "0_tex.bc1", "format": "BC1", "width": 4, "height": 4,
@@ -382,15 +454,20 @@ private struct Slice4MapFixture {
                            "extras": ["ikkokuUnlit": ["kind": "ikkoku.unityUnlitTransparent", "version": 1]]],
                           ["name": "grass", "alphaMode": "BLEND", "doubleSided": true,
                            "pbrMetallicRoughness": ["baseColorTexture": ["index": 0], "baseColorFactor": [1, 1, 1, 1]],
-                           "extras": ["ikkokuParticle": ["tintLinear": [0.5, 0.5, 0.5, 0.5], "animBlend": true]]],
+                           "extras": ["ikkokuParticle": particle]],
                           ["name": "wall", "pbrMetallicRoughness": ["baseColorTexture": ["index": variant == .garbageImage ? 1 : 0],
                                                                     "baseColorFactor": [1, 1, 1, 1]],
                            "extras": ["ikkokuStandard": standard]],
                           ["name": "mob", "alphaMode": "BLEND", "doubleSided": false,
                            "pbrMetallicRoughness": ["baseColorFactor": [0, 0, 1, 0.5]],
                            "extras": ["ikkokuSilhouette": silhouetteState()]]],
-            "meshes": [mesh("shadow", material: 0), mesh("grass", material: 1, uv1: true, uv2: variant != .animWithoutUV2),
-                       mesh("wall", material: 2), mesh("mob", material: 3, option: variant != .silhouetteOutsideOption)],
+            "meshes": [mesh("shadow", material: 0),
+                       mesh("grass", material: 1, uv1: true, uv2: variant != .animWithoutUV2, sortCenter: particleCenter,
+                            sortSubmesh: particleCenter != nil && variant != .sortCenterWithoutSubmesh ? 2 : nil,
+                            renderers: variant == .sortCenterOfMerge ? 2 : 1),
+                       mesh("wall", material: 2, sortCenter: variant == .sortCenterOnWall ? [0, 0, 0] : nil,
+                            sortSubmesh: variant == .sortCenterOnWall ? 0 : nil),
+                       mesh("mob", material: 3, option: variant != .silhouetteOutsideOption)],
             "nodes": [["name": "Map", "children": [2, 3, 4, 5], "extras": ["ikkokuMapRole": "mapRoot"]],
                       ["name": "Scene", "children": [], "extras": ["ikkokuMapRole": "scene"]],
                       ["name": "a", "mesh": 0], ["name": "b", "mesh": 1], ["name": "c", "mesh": 2], ["name": "d", "mesh": 3]],
@@ -449,6 +526,9 @@ struct SourceStudioSlice4MapTests {
         #expect(resources.texture(try #require(bases.first))?.pixelFormat == .bc1_rgba_srgb)
         let grass = try #require(shown.first { $0.material.uniforms.flags & MaterialFlagMapParticleAnim.rawValue != 0 })
         #expect(grass.material.transparent && grass.pickOccluder)
+        // An earlier export's particles: merged, no sort centre, the Transparent queue.
+        #expect(grass.sortCenter == nil && grass.renderQueue == 3000 && !asset.particlesSortedPerRenderer)
+        #expect(shown.allSatisfy { $0.sortCenter == nil && $0.renderQueue == 3000 && $0.order == 100 })
         let entry = try JSONDecoder().decode(SourceStudioMapCatalog.Entry.self, from: JSONSerialization.data(withJSONObject: [
             "no": 38, "name": "電車(満員)", "bundlePath": "studio/map/m38.unity3d", "scene": "m38", "file": "map.gltf",
             "notDrawn": ["stage effects (2 renderers)", "animated objects (drawn in their authored pose): 1"]]))
@@ -463,11 +543,53 @@ struct SourceStudioSlice4MapTests {
         #expect(resources.statistics().textures == before.textures && resources.statistics().meshes == before.meshes)
     }
 
+    /// A particle submesh drawn alone (slice 4 exports): the part keeps its
+    /// renderer's bounds centre, its submesh and its material's render queue,
+    /// its draw carries them (the submesh after map draws' order 100), every
+    /// other draw keeps the defaults, and the status line no longer says the
+    /// particles are unsorted.
+    @Test func particleRenderersKeepTheirSortCentreAndQueue() async throws {
+        let device = try #require(MTLCreateSystemDefaultDevice())
+        let resources = ResourceStore(device: device)
+        let fixture = try Slice4MapFixture(.sortedParticle)
+        defer { fixture.remove() }
+        let (url, root) = (fixture.url, fixture.root)
+        let asset = try await liveTickOffPool {
+            try SourceStudioMapAsset.load(url: url, packageRoot: root, resources: resources, imageSource: .blocks)
+        }
+        defer { asset.release() }
+        let particle = try #require(asset.parts.first { $0.draw == .particle })
+        #expect(particle.sortCenter == Float3(0.5, 0.5, 0) && particle.sortSubmesh == 2 && particle.renderQueue == 4099)
+        #expect(asset.particlesSortedPerRenderer)
+        #expect(asset.parts.filter { $0.draw != .particle }.allSatisfy { $0.sortCenter == nil && $0.sortSubmesh == 0 && $0.renderQueue == 3000 })
+        let amount = KoikatsuChangeAmount(position: .zero, rotationDegrees: .zero, scale: .one)
+        let items = try asset.items(transform: amount, sunLightType: 0, mapOption: true)
+        let grass = try #require(items.first { SourceStudioMapAsset.Draw($0.material) == .particle })
+        #expect(grass.sortCenter == Float3(0.5, 0.5, 0) && grass.renderQueue == 4099 && grass.order == 102)
+        #expect(items.filter { SourceStudioMapAsset.Draw($0.material) != .particle }
+            .allSatisfy { $0.sortCenter == nil && $0.renderQueue == 3000 && $0.order == 100 })
+        let entry = try JSONDecoder().decode(SourceStudioMapCatalog.Entry.self, from: JSONSerialization.data(withJSONObject: [
+            "no": 38, "name": "電車(満員)", "bundlePath": "studio/map/m38.unity3d", "scene": "m38", "file": "map.gltf"]))
+        let line = SourceStudioMapStatus.loaded(entry, asset: asset)
+        #expect(line.contains("; \(SourceStudioMapStatus.sortedParticlesLabel); ") && !line.contains("per-renderer sorting"), "\(line)")
+        // The parser: the Transparent queue when absent, refused outside the transparent queues or when not an integer.
+        let tint: [String: Any] = ["tintLinear": [1, 1, 1, 1]]
+        #expect(try SourceStudioParticleInputs.parse(try json(["ikkokuParticle": tint]))?.renderQueue == 3000)
+        #expect(try SourceStudioParticleInputs.parse(try json(["ikkokuParticle": tint.merging(["renderQueue": 5000]) { $1 }]))?.renderQueue == 5000)
+        let refused: [Any] = [2500, 5001, 3000.5, "3000"]
+        for bad in refused {
+            #expect(throws: (any Error).self, "\(bad)") {
+                try SourceStudioParticleInputs.parse(try json(["ikkokuParticle": tint.merging(["renderQueue": bad]) { $1 }]))
+            }
+        }
+    }
+
     /// The measurement switch cannot decode a block-only image: refused by
     /// name, nothing decoded or left registered. So are a block-only image the
     /// map lists no block file for, bytes that are not a PNG or JPEG, an
-    /// animated particle without its second UV set and a silhouette outside
-    /// an option root.
+    /// animated particle without its second UV set, a silhouette outside an
+    /// option root, a sort centre on anything but one particle renderer and
+    /// a particle queue outside the transparent queues.
     @Test func whatTheLoaderCannotDrawIsRefusedByNameAndRegistersNothing() async throws {
         let device = try #require(MTLCreateSystemDefaultDevice())
         let resources = ResourceStore(device: device)
@@ -478,6 +600,10 @@ struct SourceStudioSlice4MapTests {
             (.garbageImage, .blocks, "image 1 (no mimeType) is not a PNG or JPEG; it is not decoded"),
             (.animWithoutUV2, .blocks, "is an animated particle but lacks TEXCOORD_1 or TEXCOORD_2"),
             (.silhouetteOutsideOption, .blocks, "is not under a map option root"),
+            (.sortCenterOnWall, .blocks, "mesh wall has a sortCenter but is not a particle draw"),
+            (.sortCenterOfMerge, .blocks, "mesh grass has a sortCenter that is not three numbers of one renderer"),
+            (.sortCenterWithoutSubmesh, .blocks, "mesh grass has a sortCenter without its sortSubmesh index"),
+            (.opaqueParticleQueue, .blocks, "renderQueue is not a transparent queue (2501-5000)"),
         ]
         for (variant, source, reason) in cases {
             let fixture = try Slice4MapFixture(variant)

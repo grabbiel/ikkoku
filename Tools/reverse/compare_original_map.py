@@ -518,7 +518,10 @@ def compare_case(trace, case, original, ours, oracle=None, oracle_trace=None):
              ("approximated shading: the converted map draws with the item toon material under the scene light; "
               "baked lightmaps, map lights, sun-type lighting, fog, ambient and the original image effects are not reproduced")
     if census.get("skyDraws") or census.get("particleDraws"):
-        reason += "; the cube sky and particles are drawn (no soft-particle fade or per-renderer sorting), light-probe-lit parts as items"
+        # Slice 4 exports draw each particle renderer alone, in Unity's order; the status line says which.
+        unsorted = "per-renderer sorting" in (census.get("line") or "per-renderer sorting")
+        reason += ("; the cube sky and particles are drawn (no soft-particle fade"
+                   + (" or per-renderer sorting" if unsorted else "") + "), light-probe-lit parts as items")
     result["color"] = dict(gated=False, lightmappedDraws=census.get("lightmappedDraws"), reason=reason, **color_error(oc, nc))
     gated = ["record", "rule", "placement", "camera", "geometry", "depthNormals"]
     if oracle is not None:

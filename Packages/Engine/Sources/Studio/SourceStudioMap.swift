@@ -121,8 +121,12 @@ public enum SourceStudioMapStatus {
         }
     }
 
-    /// What the particle draws leave out of Particles/Alpha Blended (slice 3).
+    /// What the particle draws leave out of Particles/Alpha Blended (slice 3:
+    /// one draw per material, unsorted among its renderers).
     public static let particlesLabel = "particles (no soft-particle fade or per-renderer sorting)"
+    /// The same once every particle renderer is its own draw, ordered by its
+    /// render queue and bounds centre as Unity orders it (slice 4).
+    public static let sortedParticlesLabel = "particles (no soft-particle fade)"
     /// Unlit/Transparent draws (slice 4): the texture alone, blended.
     public static let unlitLabel = "unlit textures"
     /// Custom/Silhouette draws (slice 4): Studio's mob colour is a user
@@ -138,7 +142,7 @@ public enum SourceStudioMapStatus {
         let standard = asset.parts.count - asset.skyParts - asset.particleParts - asset.unlitParts - asset.silhouetteParts
         var drawn = ""
         if asset.skyParts > 0 { drawn += ", cubemap sky" }
-        if asset.particleParts > 0 { drawn += ", \(particlesLabel)" }
+        if asset.particleParts > 0 { drawn += ", \(asset.particlesSortedPerRenderer ? sortedParticlesLabel : particlesLabel)" }
         if asset.unlitParts > 0 { drawn += ", \(unlitLabel)" }
         if asset.silhouetteParts > 0 { drawn += ", \(silhouetteLabel)" }
         let label: String
@@ -251,6 +255,15 @@ public final class SourceStudioMapAsset: @unchecked Sendable {
         /// Under one of `Studio.Map`'s option roots (slice 4): shown only while
         /// the scene's `mapOption` is on (`Map.visibleOption`).
         public let option: Bool
+        /// A particle part that is one submesh of one renderer (slice 4): the
+        /// renderer's Unity bounds centre in the part's frame, which orders it
+        /// among the transparent draws, the submesh index, which orders the
+        /// renderer's own draws (they share the centre), and its material's
+        /// render queue. nil, 0 and 3000 for every other part, and for
+        /// particles merged by an earlier export.
+        public var sortCenter: Float3? = nil
+        public var sortSubmesh: Int = 0
+        public var renderQueue: Int = 3000
     }
 
     /// The decoder for a map image that is not block-only (its PNG or JPEG):
@@ -279,6 +292,11 @@ public final class SourceStudioMapAsset: @unchecked Sendable {
     public let lightmappedParts: Int
     /// Particles/Alpha Blended parts and Skybox/Cubemap parts (slice 3).
     public let particleParts: Int
+    /// Every particle part is one renderer's submesh with its sort centre
+    /// (slice 4 exports); false without particles or for an earlier export's merge.
+    public var particlesSortedPerRenderer: Bool {
+        particleParts > 0 && parts.allSatisfy { $0.draw != .particle || $0.sortCenter != nil }
+    }
     public let skyParts: Int
     /// Unlit/Transparent and Custom/Silhouette parts, and the parts under an
     /// option root (slice 4).
@@ -422,6 +440,20 @@ public final class SourceStudioMapAsset: @unchecked Sendable {
                   simd_length(root.rotation.vector - simd_quatf.identity.vector) < 1e-6 else {
                 throw RigError.invalid("\(url.lastPathComponent): the \"Map\" node must carry no translation or rotation.")
             }
+            // A particle submesh drawn alone (slice 4) carries its renderer's
+            // Unity bounds centre and its submesh index; only a one-renderer
+            // part can.
+            func sortKey(_ info: JSONValue, _ mesh: String) throws -> (center: Float3, submesh: Int)? {
+                guard let value = info["sortCenter"], value != .null else { return nil }
+                guard let xyz = value.arrayValue?.compactMap(\.doubleValue), xyz.count == 3, xyz.allSatisfy(\.isFinite),
+                      info["renderers"]?.doubleValue == 1 else {
+                    throw RigError.invalid("\(url.lastPathComponent): mesh \(mesh) has a sortCenter that is not three numbers of one renderer.")
+                }
+                guard let submesh = info["sortSubmesh"]?.doubleValue.flatMap({ Int(exactly: $0) }), (0..<1024).contains(submesh) else {
+                    throw RigError.invalid("\(url.lastPathComponent): mesh \(mesh) has a sortCenter without its sortSubmesh index.")
+                }
+                return (Float3(Float(xyz[0]), Float(xyz[1]), Float(xyz[2])), submesh)
+            }
             var parts: [Part] = []
             for part in loaded.parts {
                 guard let info = part.meshExtras?["ikkokuMap"],
@@ -445,6 +477,9 @@ public final class SourceStudioMapAsset: @unchecked Sendable {
                 let mesh = resources.mesh(part.mesh)
                 let indexCount = mesh?.indexCount ?? 0
                 let option = info["option"]?.boolValue == true
+                guard info["sortCenter"] == nil || part.material.extras?["ikkokuParticle"] != nil else {
+                    throw RigError.invalid("\(url.lastPathComponent): mesh \(part.meshName) has a sortCenter but is not a particle draw.")
+                }
                 if let sky = try SourceStudioSkyInputs.parse(part.material.extras) {
                     guard info["sky"]?.boolValue == true else {
                         throw RigError.invalid("\(url.lastPathComponent): mesh \(part.meshName) has a sky material but is not a sky mesh.")
@@ -472,8 +507,10 @@ public final class SourceStudioMapAsset: @unchecked Sendable {
                     if particle.animBlend, mesh?.carriesUV1 != true || mesh?.carriesUV2 != true {
                         throw RigError.invalid("\(url.lastPathComponent): mesh \(part.meshName) is an animated particle but lacks TEXCOORD_1 or TEXCOORD_2.")
                     }
+                    let key = try sortKey(info, part.meshName)
                     parts.append(Part(mesh: part.mesh, material: particle.material(base: base), local: part.worldMatrix, role: role,
-                                      visibleFor: visible, triangles: indexCount / 3, draw: .particle, option: option))
+                                      visibleFor: visible, triangles: indexCount / 3, draw: .particle, option: option,
+                                      sortCenter: key?.center, sortSubmesh: key?.submesh ?? 0, renderQueue: particle.renderQueue))
                     continue
                 }
                 if try SourceStudioUnlitInputs.parse(part.material.extras) != nil {
@@ -524,7 +561,9 @@ public final class SourceStudioMapAsset: @unchecked Sendable {
     /// while `mapOption` is on (`Map.visibleOption`, applied after the sun
     /// type). Unpickable but occluding picks (objectID 0, `pickOccluder`), no
     /// outline, no shadow casting; drawn after the characters (order 100), so
-    /// early depth rejects the map pixels they cover.
+    /// early depth rejects the map pixels they cover. A particle submesh
+    /// drawn alone keeps its sort centre and render queue, and orders by its
+    /// submesh after them (slice 4).
     public func items(transform: KoikatsuChangeAmount, sunLightType: Int32, mapOption: Bool) throws -> [RenderItem] {
         let root = try SourceStudioMapPlacement.mapRootMatrix(transform)
         let key = SourceStudioMapPlacement.sunTypeKey(sunLightType)
@@ -535,7 +574,11 @@ public final class SourceStudioMapAsset: @unchecked Sendable {
             item.outline = false
             // The sky is drawn in its own group behind everything and never picked.
             item.pickOccluder = part.draw != .sky
-            item.order = 100
+            // One renderer's particle submeshes tie on the centre: in index order, after the queue
+            // and the distance (`order` comes after both among transparent draws).
+            item.order = 100 + part.sortSubmesh
+            item.sortCenter = part.sortCenter
+            item.renderQueue = part.renderQueue
             return item
         }
     }

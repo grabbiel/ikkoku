@@ -179,12 +179,21 @@ public enum SourceStudioSkyMaterial {
 /// Linear player uploads it. Slice 4: `animBlend` marks Particles/Anim Alpha
 /// Blended (Particle AnimAlphaBlend.shader v5.6.2f1: the same formula with the
 /// texture lerped from TEXCOORD_0 to TEXCOORD_2 by TEXCOORD_1.x, as the
-/// converter writes the mesh).
+/// converter writes the mesh). `renderQueue` is the material's Unity render
+/// queue (its custom queue, else the shader's Queue tag; slice 4), absent in
+/// earlier exports, which draw at 3000 ("Transparent").
 public struct SourceStudioParticleInputs: Sendable, Equatable {
     public let tint: Float4
     public let animBlend: Bool
+    public let renderQueue: Int
 
-    public init(tint: Float4, animBlend: Bool = false) { self.tint = tint; self.animBlend = animBlend }
+    /// Unity's transparent queues: above "AlphaTest" (2450) up to the largest
+    /// queue a material can carry.
+    public static let transparentQueues = 2501...5000
+
+    public init(tint: Float4, animBlend: Bool = false, renderQueue: Int = 3000) {
+        self.tint = tint; self.animBlend = animBlend; self.renderQueue = renderQueue
+    }
 
     public static func parse(_ extras: JSONValue?) throws -> SourceStudioParticleInputs? {
         guard let value = extras?["ikkokuParticle"] else { return nil }
@@ -196,7 +205,15 @@ public struct SourceStudioParticleInputs: Sendable, Equatable {
             guard let on = flag.boolValue else { throw RigError.invalid("A map particle material's animBlend is not a boolean.") }
             anim = on
         }
-        return SourceStudioParticleInputs(tint: Float4(Float(tint[0]), Float(tint[1]), Float(tint[2]), Float(tint[3])), animBlend: anim)
+        var queue = 3000
+        if let entry = value["renderQueue"], entry != .null {
+            guard let number = entry.doubleValue.flatMap({ Int(exactly: $0) }), transparentQueues.contains(number) else {
+                throw RigError.invalid("A map particle material's renderQueue is not a transparent queue (\(transparentQueues.lowerBound)-\(transparentQueues.upperBound)).")
+            }
+            queue = number
+        }
+        return SourceStudioParticleInputs(tint: Float4(Float(tint[0]), Float(tint[1]), Float(tint[2]), Float(tint[3])), animBlend: anim,
+                                          renderQueue: queue)
     }
 
     /// `MaterialKindMap` with `MaterialFlagMapParticle`: 2 * vertex colour *

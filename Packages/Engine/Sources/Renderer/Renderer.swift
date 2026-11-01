@@ -1141,7 +1141,7 @@ public final class Renderer: @unchecked Sendable {
             if frame.texture(item.material.bodyMask, resources: resources) == nil { mu.flags &= ~MaterialFlagHasBodyMask.rawValue }
             if mesh.colors != nil { mu.flags |= MaterialFlagHasVertexColor.rawValue } else { mu.flags &= ~MaterialFlagHasVertexColor.rawValue }
             let materialUniforms = try frameRing.allocate(mu)
-            let c = item.model.transformPoint(mesh.bounds.center)
+            let c = item.model.transformPoint(item.sortCenter ?? mesh.bounds.center)
             let rec = DrawRecord(item: item, mesh: mesh, vertexBuffer: vb, hiddenBuffer: hb, draw: drawUniforms,
                                  material: materialUniforms, distance: length(c - cp))
             if isSky { sky.append(rec); continue }
@@ -1197,8 +1197,11 @@ public final class Renderer: @unchecked Sendable {
         }
     }
 
+    /// Unity's order for transparent draws: render queue, then camera distance
+    /// to the sort centre (back to front); then our draw order and mesh id.
     static func sortedTransparent(_ records: [DrawRecord]) -> [DrawRecord] {
         records.sorted {
+            if $0.item.renderQueue != $1.item.renderQueue { return $0.item.renderQueue < $1.item.renderQueue }
             if $0.distance != $1.distance { return $0.distance > $1.distance }
             if $0.item.order != $1.item.order { return $0.item.order < $1.item.order }
             return $0.item.mesh.id < $1.item.mesh.id
