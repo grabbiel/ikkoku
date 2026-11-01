@@ -752,6 +752,18 @@ Scenes counts the user's installed scenes that name the map: 120 of their 182 sc
 
 All 42 maps load in the Engine fixture test (`everyConvertedMapLoadsItsBlockImagesByteForByte`, which prints this census). Every block image reads back byte for byte, and every block-only map is refused by the decoded switch by name. The 40 new folders take 2.57 GB, and the whole private export 2.66 GB. The largest is map 1, whose four RGBA32 lightmaps (light and direction, eight files) take 137 MB.
 
+**Structural checks** stand in for the original where no VM case looks at a map. They are not gated against the original:
+
+- **Every renderer is accounted for.** The structural census (`structural_census.py`) checks each of the 42 maps against the bundle's renderer inventory. A renderer the export leaves out is in its provenance's `skipped`, with a reason. The rest are drawn: the export's glTF triangles equal those of their drawable material slots. No map has a problem.
+- **Every map draws in the app.** The 40 maps other than 33 and 34 each ran one Release launch under the app lock, on the slice-4 catalog. Each scene is a copy of the probe's map 38 scene with only the map number changed (`patch_scene_map.py`, day sun). All 40 launches exited 0, and in each:
+  - the map registered exactly the parts of its sun type, 2,964 draws in all;
+  - the status line names the catalog's not-reproduced terms;
+  - the map-only geometry covers 26–100% of the frame;
+  - the colour capture is not a flat colour;
+  - the log names no refusal or error.
+
+  The check is `structural_captures.py`, and the captures are in `.local/sta11d-map-coverage/structural/captures-merge2/` (28 MB).
+
 ### Converter (slice 4)
 
 `export_map_scene.py export --block-only-images` converted each map from its bundle in `.local/sta11d-map-coverage/fetch/source/abdata/`. Each new shader rule reads the pass state from the shader's serialized ShaderLab state (`pass_states`), not from assumptions:
