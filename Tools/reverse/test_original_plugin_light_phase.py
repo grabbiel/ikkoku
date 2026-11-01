@@ -79,13 +79,36 @@ class LightPhaseTests(unittest.TestCase):
         self.assertLess(body.index("OrderedStamp 'vanilla-player-complete'"), copy)
         self.assertLess(body.index("OrderedStamp 'vanilla-crash-drain'"), copy)
         self.assertLess(copy, body.index("OrderedStamp 'player-start'"))
-        self.assertIn("$dst=Join-Path $p '%s'" % path, body)
-        self.assertIn("if($h -ne '%s' -or $n -ne %d){throw" % (digest, size), body)
+        self.assertIn("$dst=Join-Path $root '%s'" % probe.LIGHT_FIX_IN_ROOT, body)
+        self.assertEqual(probe.LIGHT_FIX_IN_ROOT, 'BepInEx\\plugins\\' + path)
+        # The install's file is checked before anything is copied, and the copy again after.
+        self.assertEqual(body.count("if($h -ne '%s' -or $n -ne %d){throw" % (digest, size)), 2)
+        check, refuse = body.index("OrderedStamp 'light-fix-check'"), body.index("light fix differs from the inventory: $h $n; nothing copied")
+        exists, fix_copy = body.index("if(Test-Path -LiteralPath $dst){throw"), body.rindex('Copy-Item -LiteralPath $src -Destination $dst;')
+        self.assertLess(check, body.index('$h=Sha $src;$n=(Get-Item -LiteralPath $src).Length'))
+        self.assertTrue(check < refuse < exists < copy < fix_copy, (check, refuse, exists, copy, fix_copy))
+        self.assertLess(fix_copy, body.index('Light fix copy differs from the inventory'))
         self.assertIn("""[IO.File]::WriteAllText("$in\\phase.txt",'OU');$r.phases=@('OL','OU')""", body)
         self.assertIn("('vanilla-'+$f.Name)", body); self.assertIn("$r.vanilla=[ordered]@{phase='OL';", body)
         self.assertNotIn('control-', body); self.assertNotIn("'OA'", body); self.assertNotIn("'OB'", body)
         self.assertEqual(body.count('ObservePlayerChildren;[void]$x.WaitForExit(250)'), 2)
         self.assertIn('$playerWatch.Elapsed.TotalSeconds -lt 300){', body)
+
+    def test_the_vanilla_player_needs_a_root_without_any_copy_of_the_fix_and_the_copy_leaves_with_it(self):
+        body, sweep = light(), probe.LIGHT_FIX_SWEEP
+        self.assertEqual(body.count('function LightFixCopies'), 1); self.assertIn(sweep, body)
+        self.assertLess(body.index("OrderedStamp 'vanilla-fix-sweep';$r.vanillaFixSweep=LightFixCopies"), body.index("OrderedStamp 'vanilla-player-start'"))
+        self.assertIn("if($r.vanillaFixSweep.matches.Count -or $r.vanillaFixSweep.files -lt 1){throw", body)
+        # By size and hash, whatever the name: the sweep names no file, skips junctions (they lead into the install) and is bounded.
+        self.assertNotIn('UnlimitedMapLights', sweep); self.assertNotIn('.dll', sweep)
+        self.assertIn("-eq %d -and (Sha $path) -ceq '%s'" % (probe.LIGHT_FIX[2], probe.LIGHT_FIX[1]), sweep)
+        self.assertIn('if($attributes -band [IO.FileAttributes]::ReparsePoint){continue}', sweep)
+        self.assertIn("$seen -gt 8192 -or $watch.Elapsed.TotalSeconds -gt 60){throw", sweep)
+        for verb in ('Copy-Item', 'Move-Item', 'Remove-Item', 'WriteAll', 'New-Item'): self.assertNotIn(verb, sweep)
+        gone = body.index(";$r.lightFixGone=-not(Test-Path -LiteralPath (Join-Path $root '%s'))" % probe.LIGHT_FIX_IN_ROOT)
+        self.assertLess(body.index("OrderedStamp 'root-removal'"), gone)
+        self.assertLess(gone, body.index("OrderedStamp 'final-envelope'"))
+        self.assertNotIn('LightFixCopies', ordered()); self.assertNotIn('lightFixGone', ordered())
 
     def test_writes_only_into_the_private_root(self):
         body = light(); own = body.replace(PLAYER_SETUP, '')
@@ -161,7 +184,7 @@ class LightPhaseTests(unittest.TestCase):
             transport.assert_not_called()
 
     def accept(self, tmp, drop=None, differ=None, vanilla_code=probe.SHUTDOWN_FAULT, code=probe.SHUTDOWN_FAULT,
-               vanilla_error=None, phases=('OL', 'OU'), replace=None, fix=None, scan=None):
+               vanilla_error=None, phases=('OL', 'OU'), replace=None, fix=None, scan=None, sweep=None, gone=True):
         local = Path(tmp) / '.local'; local.mkdir(); output = local / 'output'
         files = {'fixture.png': b'original', 'fixture.sha256': b'expected', 'ours-light-roots.png': b'roots',
                  'ours-light-nested.png': b'nested', 'phase.txt': b'OL'}
@@ -191,6 +214,7 @@ class LightPhaseTests(unittest.TestCase):
             guest = {'exited': True, 'playerExitCode': code, 'phases': list(phases),
                      'vanilla': {'phase': 'OL', 'exited': True, 'playerExitCode': vanilla_code}, 'removed': True,
                      'lightFix': fix if fix is not None else {'path': path, 'sha256': digest, 'bytes': size}, 'lightScan': light_scan,
+                     'vanillaFixSweep': sweep if sweep is not None else {'files': 40, 'matches': []}, **({} if gone is None else {'lightFixGone': gone}),
                      'remainingGameProcesses': [], 'junctionTargetsChanged': False, 'runtimeBefore': runtime_pins(),
                      'runtimeAfter': runtime_pins(), 'sources': record['sources'],
                      'inputs': record['inputs'], 'zipSHA256': hashlib.sha256(payload).hexdigest(), 'zipBytes': len(payload)}
@@ -208,6 +232,7 @@ class LightPhaseTests(unittest.TestCase):
             self.assertTrue(result['accepted']); self.assertTrue(result['shutdownFault'])
             self.assertEqual(len(result['fixedPoints']), 2 * (1 + len(probe.LIGHT_CASES))); self.assertTrue(all(result['fixedPoints'].values()))
             self.assertEqual(result['missingOutputs'], []); self.assertTrue(result['lightFixCopied']); self.assertTrue(result['lightScanComplete'])
+            self.assertTrue(result['vanillaRootClean']); self.assertIs(result['lightFixGone'], True)
             self.assertEqual((output / 'source-fixture.png').read_bytes(), b'original')
             self.assertFalse((output / 'source-fixture-c.png').exists())
             manifest = {row['file'] for row in json.loads((output / 'manifest.json').read_text())['files']}
@@ -237,7 +262,8 @@ class LightPhaseTests(unittest.TestCase):
                     dict(scan=dict(full, truncated=True)), dict(scan=dict(full, errors=1)), dict(scan=dict(full, oversize=1)),
                     dict(scan=dict(full, dlls=0)), dict(scan=dict(full, fix=None)),
                     dict(scan=dict(full, enumerationError='System.UnauthorizedAccessException')),
-                    dict(scan={}))
+                    dict(scan={}), dict(sweep={'files': 40, 'matches': ['BepInEx\\plugins\\copy.dll']}), dict(sweep={'files': 0, 'matches': []}),
+                    dict(sweep={}), dict(gone=False), dict(gone=None))
         for changes in rejected:
             with self.subTest(changes=changes), tempfile.TemporaryDirectory() as tmp:
                 self.assertFalse(self.accept(tmp, **changes)[1]['accepted'])

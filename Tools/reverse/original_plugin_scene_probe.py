@@ -92,15 +92,17 @@ runtime pins, from phase A's exact fixture.png and our exports with more than tw
 LIGHT_NAMES entry (UTF-8 and UTF-16LE), and which of them KK_Fix_UnlimitedMapLights itself holds; no DLL is named,
 copied or hashed apart from that one. Then two players run in one private root:
 
-1. vanilla (OL, at most --vanilla-seconds): phase A's baseline, every LIGHT_CASES row (the real Delete, Duplicate
+1. vanilla (OL, at most --vanilla-seconds), which starts only once a sweep of the root (every regular file, by size
+   and SHA-256, whatever its name; junctions not followed) finds no copy of LIGHT_FIX: phase A's baseline, every LIGHT_CASES row (the real Delete, Duplicate
    and Add Light, with SceneInfo.lightCount and both light getters in every snapshot) and the load and save of each
    input. Its outputs are renamed vanilla-* in the upload;
-2. LIGHT_FIX is copied from the install's plug-ins into the root's own, and must match its SHA-256 and size;
+2. LIGHT_FIX is checked in the install's plug-ins (SHA-256 and size; nothing is copied on a mismatch or when the
+   root already holds its path), copied into the root's own plug-ins, and the copy checked again;
 3. with the fix (OU, at most --wait-seconds): the same steps.
 
 The run is accepted only with both statuses error-free, every output present, every save of the fixture and of a
 row equal to its resave, the vanilla baseline equal to the fix's apart from Sideloader's LocalSlot values, the fix
-copy matching, the byte scan complete, both players exited with the same exit code (0 or the shutdown fault), and
+copy matching, the sweep clean, the copy gone with the root, the byte scan complete, both players exited with the same exit code (0 or the shutdown fault), and
 the ordered phase's root, process, junction, runtime, errno and hash checks. The Engine light parity test
 (sourceSceneLightExportsMatchCharaStudio) compares the files.
 """
@@ -155,6 +157,8 @@ LIGHT_INPUTS = ('ours-light-roots.png', 'ours-light-nested.png')
 LIGHT_FIX = ('IllusionFixes\\KK_Fix_UnlimitedMapLights.dll', '23051ec9d3e6779b0dd612208dd381beb3c8855ecad5caada6075a7a0272e40e', 13312)
 # The counts-only byte scan of the install's plug-in DLLs: each name in UTF-8 (metadata and attribute strings)
 # and UTF-16LE (user strings). A Harmony patch names its target in an attribute string, not a member reference.
+# Where the second player's copy lives, relative to the private root: under its own plug-ins, never a junction.
+LIGHT_FIX_IN_ROOT = 'BepInEx\\plugins\\' + LIGHT_FIX[0]
 LIGHT_NAMES = ('isLightCheck', 'isLightLimitOver', 'get_isLightCheck', 'get_isLightLimitOver', 'IsLightCheck', 'lightCount')
 LIGHT_SCAN_SECONDS = 180       # bound on the byte scan
 LIGHT_SCAN_FILE_BYTES = 64 * 1024 * 1024  # DLLs larger than this are counted, not read
@@ -642,6 +646,10 @@ OrderedStamp 'player-complete' '''
         if launch.count(bound) != 1 or 'StopPlayerOwners' not in launch: raise AssertionError('Ordered launch block changed')
         control = launch.replace(bound, '$playerWatch.Elapsed.TotalSeconds -lt ' + str(control_seconds) + '){', 1)
         control = control.replace("OrderedStamp 'player-", "OrderedStamp '%s-player-" % ('vanilla' if light else 'control'))
+        if light:
+            control = (r"""OrderedStamp 'vanilla-fix-sweep';$r.vanillaFixSweep=LightFixCopies
+if($r.vanillaFixSweep.matches.Count -or $r.vanillaFixSweep.files -lt 1){throw 'The root holds a light fix copy, or nothing, before the vanilla player'}
+""") + control
         tail = tail[:start] + control + (light_handoff() if light else ORDERED_CONTROL_HANDOFF) + tail[start:]
         tail = tail.replace("foreach($n in @('unity.log'", "OrderedStamp 'capture-logs'\nforeach($n in @('unity.log'", 1)
         tail = tail.replace('$z="$root\\reload.zip";', "OrderedStamp 'capture-archive'\n$z=\"$root\\reload.zip\";", 1)
@@ -682,6 +690,11 @@ OrderedStamp 'final-envelope';[Console]::Error.WriteLine('ORDERED_FINAL:'+($r|Co
 }
 [PSCustomObject]$r|ConvertTo-Json -Compress -Depth 6
 '''
+        if light:
+            # The copied fix leaves with the root: checked after the removal, whatever stopped the run.
+            old_removed = "try{OrderedStamp 'remaining-processes';$r.removed=-not(Test-Path -LiteralPath $root)"
+            if tail.count(old_removed) != 1: raise AssertionError('Ordered removal check changed')
+            tail = tail.replace(old_removed, old_removed + ";$r.lightFixGone=-not(Test-Path -LiteralPath (Join-Path $root '" + LIGHT_FIX_IN_ROOT + "'))", 1)
         head = head.replace('Invoke-WebRequest -UseBasicParsing -Uri', 'Invoke-WebRequest -UseBasicParsing -TimeoutSec 30 -Uri')
         # Bound the inherited target-metadata and exact-zipmod traversal too.
         head = head.replace('$f=0;$d=0;$t=$i.LastWriteTimeUtc', '$f=0;$d=0;$t=$i.LastWriteTimeUtc;$watch=[Diagnostics.Stopwatch]::StartNew()')
@@ -722,12 +735,25 @@ OrderedStamp 'control-complete'
 
 
 
+
+# Phase OL: every regular file under the private root (junctions not followed: they lead into the install, which the
+# runtime pins cover) whose size and SHA-256 are LIGHT_FIX's, by hash, whatever its name. Bounded.
+LIGHT_FIX_SWEEP = (r"""function LightFixCopies{$found=@();$files=0;$stack=New-Object 'System.Collections.Generic.Stack[string]';$stack.Push($root)
+$watch=[Diagnostics.Stopwatch]::StartNew();$seen=0
+while($stack.Count){foreach($path in [IO.Directory]::EnumerateFileSystemEntries($stack.Pop())){
+$seen++;if($seen -gt 8192 -or $watch.Elapsed.TotalSeconds -gt 60){throw 'Light fix sweep exceeded its bound'}
+$attributes=[IO.File]::GetAttributes($path);if($attributes -band [IO.FileAttributes]::ReparsePoint){continue}
+if($attributes -band [IO.FileAttributes]::Directory){$stack.Push($path);continue};$files++
+if((New-Object IO.FileInfo $path).Length -eq """ + str(LIGHT_FIX[2]) + r""" -and (Sha $path) -ceq '""" + LIGHT_FIX[1] + r"""'){$found+=$path.Substring($root.Length+1)}}}
+return [ordered]@{files=$files;matches=@($found)}}
+""")
+
 def light_scan(seconds):
     """Phase OL's counts-only byte scan of the install's plug-in DLLs, read only and bounded: how many hold each
     LIGHT_NAMES entry, and LIGHT_FIX's own hash, size and hits. No other DLL is named or hashed."""
     if not isinstance(seconds, int) or not 1 <= seconds <= LIGHT_SCAN_SECONDS: raise ValueError('Light scan bound')
     names = ','.join("'%s'" % name for name in LIGHT_NAMES)
-    return (r"""OrderedStamp 'light-scan'
+    return (LIGHT_FIX_SWEEP + r"""OrderedStamp 'light-scan'
 $w=[Diagnostics.Stopwatch]::StartNew();$latin=[Text.Encoding]::GetEncoding(28591);$wide=[Text.Encoding]::Unicode
 $fix=Join-Path "$original\BepInEx\plugins" '""" + LIGHT_FIX[0] + r"""';$names=@(""" + names + r""")
 $r.lightScan=[ordered]@{dlls=0;bytes=0;oversize=0;errors=0;truncated=$false;utf8=[ordered]@{};utf16=[ordered]@{};fix=$null}
@@ -750,8 +776,13 @@ def light_handoff():
     outputs renamed vanilla-*, then LIGHT_FIX copied from the install into the root's own plug-ins and checked, and
     phase.txt set to OU for the second player."""
     path, sha, size = LIGHT_FIX
-    copy = (r"""OrderedStamp 'light-fix-copy'
-$src=Join-Path "$original\BepInEx\plugins" '""" + path + r"""';$dst=Join-Path $p '""" + path + r"""'
+    copy = (r"""OrderedStamp 'light-fix-check'
+$src=Join-Path "$original\BepInEx\plugins" '""" + path + r"""';$dst=Join-Path $root '""" + LIGHT_FIX_IN_ROOT + r"""'
+if(-not(Test-Path -LiteralPath $src -PathType Leaf)){throw 'The install has no light fix at its inventory path; nothing copied'}
+$h=Sha $src;$n=(Get-Item -LiteralPath $src).Length
+if($h -ne '""" + sha + "' -or $n -ne " + str(size) + r"""){throw "The install's light fix differs from the inventory: $h $n; nothing copied"}
+if(Test-Path -LiteralPath $dst){throw 'The root already holds the light fix path; nothing copied'}
+OrderedStamp 'light-fix-copy'
 New-Item -ItemType Directory (Split-Path $dst) -Force|Out-Null;Copy-Item -LiteralPath $src -Destination $dst;$h=Sha $dst;$n=(Get-Item -LiteralPath $dst).Length
 if($h -ne '""" + sha + "' -or $n -ne " + str(size) + r"""){throw "Light fix copy differs from the inventory: $h $n"}
 $r.lightFix=[ordered]@{path='""" + path + r"""';sha256=$h;bytes=$n}
@@ -1066,9 +1097,12 @@ def light_acceptance(output, names, guest, status, record, input_hashes, runtime
                      and type(scan.get('dlls')) is int and scan['dlls'] > 0 and not scan.get('enumerationError')
                      and own.get('sha256') == LIGHT_FIX[1] and own.get('bytes') == LIGHT_FIX[2])
     fix_copied = guest.get('lightFix') == dict(path=LIGHT_FIX[0], sha256=LIGHT_FIX[1], bytes=LIGHT_FIX[2])
+    sweep = guest.get('vanillaFixSweep') or {}
+    vanilla_clean = sweep.get('matches') == [] and type(sweep.get('files')) is int and sweep['files'] > 0
     def clean(s, phase): return bool(s and s.get('phase') == phase and 'error' in s and s['error'] is None)
     accepted = (clean(vanilla_status, 'OL') and clean(status, 'OU') and required <= present and all(fixed.values())
         and baselines_match and same_exit and guest.get('phases') == ['OL', 'OU'] and fix_copied and scan_complete
+        and vanilla_clean and guest.get('lightFixGone') is True
         and guest.get('removed') is True and guest.get('remainingGameProcesses') == []
         and guest.get('junctionTargetsChanged') is False
         and not any(guest.get(k) for k in ('error', 'cleanupError', 'runtimeError', 'partialUploadError'))
@@ -1079,6 +1113,7 @@ def light_acceptance(output, names, guest, status, record, input_hashes, runtime
                 fixedPoints=fixed, saveResaveDifferences=differences, baselinesMatch=baselines_match,
                 baselineDifferences=baseline_diff, localSlotOffsets=slot_offsets, missingOutputs=sorted(required - present),
                 vanillaStatusError=(vanilla_status or {}).get('error'), lightFixCopied=fix_copied,
+                vanillaFixSweep=sweep, vanillaRootClean=vanilla_clean, lightFixGone=guest.get('lightFixGone'),
                 lightScan=scan, lightScanComplete=scan_complete,
                 parityCheck='EngineTests sourceSceneLightExportsMatchCharaStudio')
 
