@@ -2372,10 +2372,34 @@ Raw, ownership and wrapper exits are zero for all three phases. The CPU/native
 observed processes respectively release. CPU result/log hashes begin
 `5a87d5da5792838f` / `fa26078119e67672`; native hashes begin
 `39e7ffb458aad2ed` / `333248bc720b38e4`, in sibling `cpu-1/` and `native-1/`.
-This confirms the tested observer behavior. Strict every-mip pixel identity,
-wider upload/lifetime checks and nil-path overhead remain unverified on this
-candidate; fake-clock assertions and wrapper elapsed values are not performance
-measurements.
+This confirms the tested observer behavior. These ten controls alone do not
+establish strict every-mip pixel identity, wider upload/lifetime behavior or
+nil-path overhead; fake-clock assertions and wrapper elapsed values are not
+performance measurements.
+
+The candidate's separate strict corpus gate then passes one exact test with no
+skips: all 138 positive entries match MetalKit's descriptors and every mip,
+and the pinned 12-byte invalid image is the one expected rejection. No positive
+entry is classified as unsupported. All 635 pins, 140 input files, current and
+accepted 89-entry Products and four preserved archives remain unchanged; raw,
+ownership and wrapper exits are zero and all observed processes release.
+Evidence is `loader-observer-strict-gates-1/corpus-1/`; result hash begins
+`b5da9f6f8c7325a9`, raw report `fcc2d8aefe3968cb`. This test uses the default
+nil observer. This corpus does not cover observed-versus-nil pixel equivalence,
+wider identity/upload/lifetime gates or qualified overhead measurements.
+
+Five separately selected default-nil identity tests then pass with no failures
+or skips: layouts with both colour flags, encoded-file routes, alpha rounding,
+19 decoder fixtures and strip-versus-one-strip uploads including the short tail.
+The raw reports record 2,016 layout/flag combinations, 1,060 rejected by both
+loaders, and 281 encoded files, with zero mismatches. The synthetic unsupported
+cases retain their established meaning; they are not positive-corpus successes.
+All 495 pins and the 19-file fixture membership match; current/accepted Products
+and four prior archives remain unchanged. Raw, ownership and wrapper exits are
+zero, and all six observed processes release. Evidence is the sibling
+`identity-1/`; result hash begins `da996c0f547c0e9e`, layout/file reports
+`0af38138c15d4694` / `c6ea094488fb5d3a`. Upload/lifetime gates, observed-versus-nil
+pixel equivalence and qualified overhead measurements remain open.
 
 ## Checked math, legacy skeletons and cameras (R4)
 

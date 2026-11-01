@@ -993,7 +993,7 @@ sibling derives acceptance after postflight and rejects an observed total above
 hash begins `59d5cfc83a54dc89` and raw result `4d23fc37a8ec596c`.
 
 These 22 controls do not exercise full card/fixture binding or native collection.
-App execution remains held: source review found that a forced outer timeout
+At that checkpoint, app execution was held: source review found that a forced outer timeout
 could miss a newly spawned app in a separate process group. An empty ancestry
 sample therefore cannot establish complete cleanup in that failure case.
 
@@ -1019,6 +1019,47 @@ conservative runner retains its unresolved-ownership result. Separate review of 
 PID/group evidence establish that no app launched. No fixtures were created and no retry occurred.
 Evidence is `app-collection-plan-2/control-functional/`; raw result begins
 `90502c6a0555decc`. This is a failed collection prerequisite, not app behavior.
+
+A corrected sibling removes exactly those nine contradictory aliases while
+preserving all 3,698 file descriptors and 37 declared absences. It validates
+alias/file/absence disjointness and target coverage before filesystem access,
+then retains strict alias resolution, exact file hashes and absence/non-symlink
+checks. Seventeen isolated synthetic controls pass with zero skips, failures or
+errors; all 14 pins and five loaded-source receipts match. Raw, ownership and
+final exits are zero, and the observed worker PID/group and parent release.
+These controls cover metadata contradictions, changed/missing files and newly
+appearing optional files or dangling symlinks; they do not validate the real
+input closure or app behavior. Evidence is `app-collection-plan-3/input-controls-1/`;
+readiness hash begins `709e7b5f98a3c011`, raw result `25a093ea9e48c9f8`.
+
+A separate read-only preflight then verifies all 3,698 declared file hashes
+(3,117,878,561 bytes), 3,698 strict aliases and 37 absent/non-symlink paths against
+that corrected closure. All 477 pins and four loaded-source receipts match;
+raw, owned-wait and final exits are zero, with worker/group/parent release verified.
+It neither decodes images/cards nor launches an app or alters fixtures. This
+resolves the declared input prerequisite only; app fidelity remains a separate gate.
+Evidence is `app-collection-plan-3/input-preflight-1/`; raw result begins
+`80397d1307a7bcc2`, input receipt `e836e85221047e34`.
+
+The first corrected control cohort runs all four apps successfully: the female
+and male selected-card scenarios each report 55 passing rows, and their fresh
+reloads each report seven, for 124 passes and no failed rows. All app, owned-wait
+and outer exits are zero. Four matching PID/birth start/completion pairs and
+empty postflight path scans establish natural resource release. The 109 fixed
+pins, 462 source files, both 218-entry app archives and 30 retained raw artifacts
+are unchanged; all runtime inputs still match before and after execution.
+
+Offline acceptance nevertheless fails with `missing/extra/misplaced initial
+sample`. The frozen reload scenarios explicitly reimport their exported card at
+step 5, and `MakerScenario` records an initial-load sample for successful
+reimports; the checker contract omits that step for reloads. The raw reports
+contain startup plus step 53 samples for selected-card scenarios and startup
+plus step 5 samples for reloads. The failed review remains preserved while a
+separate source-derived checker correction is prepared. These app exits and
+row counts do not establish semantic fidelity, candidate behavior or speed.
+Evidence is `app-collection-plan-3/control-functional/`; launch result begins
+`03542a338a25c417`, failed review `ba1c26ef0558f053`, retention receipt
+`72b5826d841c26fa`.
 
 ### Per-component appearance attribution (#192)
 
