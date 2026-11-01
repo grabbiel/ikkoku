@@ -1043,6 +1043,14 @@ Slice 3 (map 34, the sky and block images), Release, in one quiet window ([perfo
   - 75–85 ms of worker load instead of about 0.5 s;
   - about 220 MB of peak Metal for map 34's scene instead of 450 MB.
 
+Slice 4 (all maps), Release, in one quiet window ([performance: slice 4](../performance.md#slice-4-all-maps)), against `main` (`189e5b8c`) and against the slice-4 export before the particle split. The display was off, so every figure is measured without presentation, and each is the mean of 2 rounds:
+
+- **No map: unchanged.** The showoff scene's CPU encode (0.438 → 0.436 ms), GPU (1.558 → 1.559 ms), Metal bytes (identical) and startup (scene ready 0.91 → 0.88 s) are within the rounds' ranges.
+- **The particle split** adds 1–35 draws per map and at most 0.048 ms of CPU encode per frame, about 1.2–1.8 µs per draw. Map 22 adds the most time (+34 draws, 0.204 → 0.252 ms) and map 27 the most draws (+35, 0.155 → 0.200 ms). GPU is flat within the ranges in maps 1, 15, 22, 27 and 34. It is 0.026 ms higher in map 21 and 0.10 ms higher in map 11 (0.613 → 0.716); map 11's difference is not attributed, since no Metal System Trace was recorded. The split leaves startup and the worker's load unchanged (map 21 ready at 0.41 s either way).
+- **The new maps** take 0.42–0.74 ms of GPU and 0.096–0.196 ms of CPU encode per frame at 1996×1824. Map 38 is the most expensive, with its 70 mob silhouettes.
+- **Map 33** in the showoff scene, with one shell fewer, is ready at 0.89 s against 0.90 s, with the same peak Metal.
+- **Base M1 (estimates, scaled, not measured):** at most +0.06 ms of encode per frame from the split, about 2.0–3.5 ms of GPU for a new map filling the window, and about +0.5 ms in map 11 if its difference is real.
+
 ## What remains
 
 - **Light-probe-lit parts.** Map 34's 32 `Standard` renderers without a lightmap (17,701 triangles) are drawn as items. Unity lights them with light probes and the realtime sun. They cover 77,159, 72,567 and 92,296 of the 691,200 pixels in the day, evening and night views (11–13%), and none in the showoff view. Drawing them needs the scene's light probes (spherical harmonics per probe, and the tetrahedral interpolation) and the sun term below.
@@ -1071,5 +1079,6 @@ Slice 3 (map 34, the sky and block images), Release, in one quiet window ([perfo
 - **The user's mob colour.** Silhouettes draw `mobColor`'s default (0, 0, 1, 0.5); the user's config is not read.
 - **RGBA32 lightmap memory.** Maps 1, 24, 38 and 39 upload their lightmaps uncompressed, as stored: 137 MB for map 1. Compressing them would change the decoded values and needs its own gate.
 - **Map 38's mob cost.** Its 70 silhouette draws are 519,000 of its 563,000 triangles, drawn twice (depth, then colour). See [performance](#performance) for what they cost.
+- **A composited perf recheck.** The slice-4 window ran with the display off, so its figures are measured without presentation. Recheck startup on a composited display, and record a Metal System Trace of map 11 before and after the particle split to attribute its +0.10 ms of GPU ([performance](#performance)).
 - **Mods.** Rows that mods add are not evaluated.
 - **Character fidelity.** The showoff captures' character differences are the existing character-fidelity work, outside this slice.

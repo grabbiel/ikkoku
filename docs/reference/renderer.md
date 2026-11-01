@@ -477,6 +477,20 @@ probe gates and the numbers are in [maps: slice 4](studio/maps.md#all-maps-slice
   of the load (`ImageDecoder`, `ResourceStore` by default). An Engine test
   loads a block-only map with a counting decoder and asserts zero decoder
   calls for its images. `ResourceStore` is unchanged.
+- **Transparent order.** `RenderItem` carries a `renderQueue` (3000 unless
+  set) and an optional model-space `sortCenter`. `sortedTransparent` orders
+  the transparent draws by render queue (lower first), then by camera
+  distance to the sort centre, back to front, then by order, then by mesh id.
+  An item without a sort centre uses its mesh's bounds centre, as before.
+  That is Unity 5.6's order within one sorting layer: queue, then distance to
+  `Renderer.bounds`' centre, then the renderer's submeshes. Each map particle
+  draw is one renderer's submesh, with that renderer's bounds centre, its
+  material's queue and order 100 + submesh. Every other item keeps queue
+  3000 and no sort centre, so its order is unchanged: the 17-capture set is
+  byte-identical to `main`'s
+  ([captures, slice 4](studio/maps.md#captures-slice-4)). The test is
+  `transparentDrawsSortByQueueThenSortCentreDistance`. The cost is in
+  [performance: slice 4](performance.md#slice-4-all-maps).
 - **Single-sample probe images.** `captureSceneHDR(frame:width:height:pixelCentreSamples:)`
   can put all four MSAA samples of the main pass at the pixel centre
   (`MTLRenderPassDescriptor.setSamplePositions`). Each pixel then takes the one
