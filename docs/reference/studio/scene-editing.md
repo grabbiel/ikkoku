@@ -274,7 +274,7 @@ The app's setting is File ▸ Original Scene Export Keeps Unlimited Lights. It i
 
 Our reader keeps every nested light, which is what an install with the fix loads. The vanilla load-time drop of a nested light past the second is not modelled.
 
-- **Oracle.** The export follows the recovered rules and the fix's patches. No CharaStudio has loaded an export with more than two lights yet: that is a later original-player phase with the fix installed (Add Light and Duplicate, and the [light replay](#operation-order-278) rows), which will also count, read only, the installed plug-in DLLs that name either getter, and confirm the fix's targets from its own attribute bytes.
+- **Oracle.** The export follows the recovered rules and the fix's patches. No CharaStudio has loaded an export with more than two lights yet. The [light phase](#operation-order-278) of the plug-in scene probe will: load two of ours in a vanilla root and in one with the fix; run Add Light and Duplicate past two lights; record which getters the fix patches and what they return; and count, read only, the installed plug-in DLLs that name either getter. It has not run.
 - **Plug-in references.** `Tools/translation/plugin_inventory.py` over the plug-in DLLs on this host (3 in `reverse/mods`, 4 in `reverse/plugin-execution`) and the 6 recovered CharaStudio assemblies found no member reference to `get_isLightCheck` or `get_isLightLimitOver`. No plug-in DLL has either name in its bytes; only the Assembly-CSharp that defines the getters does.
   - All 243 installed plug-in DLLs: the private installed-plug-in inventory (`.local/codex-continue-2026-10-24/wave-three/plugins/installed-inventory`, `plugin_inventory.py` reports of `C:\Illusion\Koikatsu\BepInEx\plugins`, complete, read only) has every DLL's member references. 242 have metadata and 1 is native. None references `get_isLightCheck`, `get_isLightLimitOver` or `Studio.IsLightCheck`. Only KK_Fix_UnlimitedMapLights itself references `SceneInfo.lightCount`, for its warning.
   - A Harmony patch names its target in an attribute string, not a member reference, so the read-only byte scan of the installed DLLs for either name stays in the original-player phase above.
@@ -432,6 +432,17 @@ Reviewed 2026-11-01. When one export both deletes source records and adds record
 - **Shutdown fault.** The player exits with access violation `0xC0000005` at quit, after it has written every output. The baseline-only control in the [diagnostic](#ordered-deletecopy-diagnostic-278-2026-10-31) shows the same exit without any edit. A run counts when its status has no error, every output is present and hashed, each phase A save is byte-identical to its resave and each phase C save is under `liveStateMasked`, and the control's save equals the baseline under Sideloader's `LocalSlot` mask. The quit exit is then recorded as this known fault.
 - **Comparison.** Phase A rows must be byte-identical. Phase C rows are compared under `liveStateMasked` (the characters' neck, eye and animator time bytes), and also with KKPE's instance IDs renamed (`pluginProbeComparable`) when a row copies an item with KKPE data. The report lists every masked offset per row. Reloaded keys must be a subset of the saved session's keys; the difference is the leaked FK and aid keys above.
 
+**Light phase** ([#316](https://github.com/grabbiel/ikkoku/issues/316), [#320](https://github.com/grabbiel/ikkoku/issues/320)). `--phase ol` is the same exec on phase A's fixture, with two players in one private root: vanilla CharaStudio 1.0.4.2, then the same root with KK_Fix_UnlimitedMapLights copied in from the install. The copy must match the pinned SHA-256 and size, and it never leaves that root. Not run yet.
+
+- **Steps.** Each player runs the four `LightCases` (a copy and two adds within two lights, then a copy and an add past the second), and loads and saves two of our exports with three lights. `sourceSceneLightProbeWritesItsInputs` writes them: three root lights, and two root lights before a new folder that holds the third.
+- **Records.** Every snapshot adds `SceneInfo.lightCount` and both getters, read through reflection so that a Harmony patch answers. The trace lists every Harmony patch on `SceneInfo`. Before the players, a counts-only byte scan reads the install's plug-in DLLs: how many hold each getter name, and which of them the fix holds.
+- **Comparison.** `sourceSceneLightExportsMatchCharaStudio` (opt-in, `IKKOKU_LIGHT_ORACLE`) requires:
+  - our export of the steps the player performed to be its file, and our export of every step to be refused where vanilla dropped or refused one;
+  - vanilla's getters to follow `lightCount`, and the fix's to be forced (`isLightCheck` true, `isLightLimitOver` false) up to three lights, with a postfix of the fix's own on each;
+  - vanilla to load every root light of ours and drop the nested light it reads after two, and the fix to load all three;
+  - the fix to leave the one-light baseline save unchanged apart from `LocalSlot`.
+- **OA unchanged.** The probe's light code sits in `// OL begin` … `// OL end` blocks. `test_original_plugin_light_phase.py` holds OA's `run.ps1`, the probe without those blocks and `OrderedCases` to their hashes from before the light phase.
+
 **Evidence.**
 
 - **Engine.** `SourceSceneOrderTests` (15 tests) mirror phase A's fixture with the independent `TopologyScene` builder. They cover:
@@ -459,7 +470,7 @@ Reviewed 2026-11-01. When one export both deletes source records and adds record
 
 **Not verified:**
 
-- Light replay ([#316](https://github.com/grabbiel/ikkoku/issues/316)) follows the recovered rules and the fix's patches. Its original-player rows, in a vanilla root and in one with KK_Fix_UnlimitedMapLights, wait for the with-fix phase; OA's rows have no light.
+- Light replay ([#316](https://github.com/grabbiel/ikkoku/issues/316)) follows the recovered rules and the fix's patches. Its original-player rows (the light phase above, in a vanilla root and in one with KK_Fix_UnlimitedMapLights) have not run; OA's rows have no light.
 - The other fallback cases keep the set-based keys.
 - Card links with a delete and a copy stay refused.
 - On a legacy scene with a character, any added object takes a key below the keys CharaStudio's load gives the character's missing FK bones: on the 0.0.7 fixture, a copy is 159 where CharaStudio's would be 169, with or without a delete ([#318](https://github.com/grabbiel/ikkoku/issues/318)). The file still loads, since every saved key is unique. The ordered path's `legacyBones` fallback is its counterpart.

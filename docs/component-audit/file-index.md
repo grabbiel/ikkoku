@@ -23,7 +23,7 @@ branch was tested or every asset matches the original game. Feature status,
 specific comments and pending tasks are in the linked reports. Shared behavior
 may be discussed in more than one report; one primary owner is listed here.
 
-**1074 files indexed; 1074 assigned; 0 unassigned.**
+**1076 files indexed; 1076 assigned; 0 unassigned.**
 
 Counts include the website and clothes-group additions listed below. Runtime and
 test totals include their specialized role descriptions; this is inventory
@@ -33,7 +33,7 @@ bookkeeping, not a new full source audit.
 | --- | ---: |
 | [App / gameplay / plugins](app-gameplay-and-plugins.md) | 110 |
 | [Character / Maker / mods](character-and-mods.md) | 130 |
-| [Studio / IK / animation](studio.md) | 252 |
+| [Studio / IK / animation](studio.md) | 254 |
 | [Renderer / foundation / assets](renderer-and-foundation.md) | 360 |
 | [Toolchain / verification / historical docs](toolchain-and-verification.md) | 212 |
 
@@ -46,7 +46,7 @@ bookkeeping, not a new full source audit.
 | Generated asset / catalog / fixture | 205 |
 | Reference host / controlled fixture | 37 |
 | Runtime / shared shader declaration | 232 |
-| Test / validation | 222 |
+| Test / validation | 224 |
 | Public synthetic body/face input fixture | 1 |
 
 ## App / gameplay / plugins
@@ -409,6 +409,7 @@ Feature assessment: [studio.md](studio.md).
 | [Packages/Engine/Tests/EngineTests/SourceSceneEditingTests.swift](../../Packages/Engine/Tests/EngineTests/SourceSceneEditingTests.swift) | Test / validation |
 | [Packages/Engine/Tests/EngineTests/SourceSceneExportValidationTests.swift](../../Packages/Engine/Tests/EngineTests/SourceSceneExportValidationTests.swift) | Test / validation |
 | [Packages/Engine/Tests/EngineTests/SourceSceneInsertionTests.swift](../../Packages/Engine/Tests/EngineTests/SourceSceneInsertionTests.swift) | Test / validation |
+| [Packages/Engine/Tests/EngineTests/SourceSceneLightProbeTests.swift](../../Packages/Engine/Tests/EngineTests/SourceSceneLightProbeTests.swift) | Test / validation |
 | [Packages/Engine/Tests/EngineTests/SourceSceneOrderTests.swift](../../Packages/Engine/Tests/EngineTests/SourceSceneOrderTests.swift) | Test / validation |
 | [Packages/Engine/Tests/EngineTests/SourceScenePluginDataPerformanceTests.swift](../../Packages/Engine/Tests/EngineTests/SourceScenePluginDataPerformanceTests.swift) | Test / validation |
 | [Packages/Engine/Tests/EngineTests/SourceScenePluginDataProbeTests.swift](../../Packages/Engine/Tests/EngineTests/SourceScenePluginDataProbeTests.swift) | Test / validation |
@@ -552,6 +553,7 @@ Feature assessment: [studio.md](studio.md).
 | [Tools/reverse/test_original_dynamics_probe.py](../../Tools/reverse/test_original_dynamics_probe.py) | Test / validation |
 | [Tools/reverse/test_original_legacy_scene_probe.py](../../Tools/reverse/test_original_legacy_scene_probe.py) | Test / validation |
 | [Tools/reverse/test_original_map_probe.py](../../Tools/reverse/test_original_map_probe.py) | Test / validation |
+| [Tools/reverse/test_original_plugin_light_phase.py](../../Tools/reverse/test_original_plugin_light_phase.py) | Test / validation |
 | [Tools/reverse/test_original_plugin_scene_probe.py](../../Tools/reverse/test_original_plugin_scene_probe.py) | Test / validation |
 | [Tools/reverse/test_original_scene_reload_probe.py](../../Tools/reverse/test_original_scene_reload_probe.py) | Test / validation |
 | [Tools/reverse/test_studio_animation.py](../../Tools/reverse/test_studio_animation.py) | Test / validation |
