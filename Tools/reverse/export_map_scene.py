@@ -46,6 +46,11 @@ six faces are written verbatim (`cube-<k>-<name>.<format>`, D3D/Metal face order
 checked by the face seams). Particles/Alpha Blended materials carry `ikkokuParticle` (the
 linearized _TintColor) for the app's particle draw.
 
+Particle renderers (slice 4, `PARTICLE_SHADERS`): each particle renderer is its own draw, like
+each silhouette renderer, with its bounds centre in `ikkokuMap.sortCenter` and its material's
+render queue in `ikkokuParticle.renderQueue`, so the app can order them as Unity orders
+transparent renderers (queue, then distance to the bounds centre, back to front).
+
 Proprietary output belongs in .local, never in the repository.
 """
 from __future__ import annotations
@@ -88,9 +93,9 @@ MAP_SHADER_RULES = {
         "parity": "approximated",
         # Unity built-in (Particle Alpha Blend.shader v5.6.2f1): 2 * vertex color * _TintColor * _MainTex,
         # Blend SrcAlpha OneMinusSrcAlpha, ColorMask RGB, Cull Off, ZWrite Off, no lighting, fog.
-        # The app draws that formula (map_fragment's particle flag, ST-A11 slice 3); the merged mesh
-        # sorts as one draw instead of per renderer.
-        "dropped": ["soft particles", "fog", "per-renderer transparency sorting"],
+        # The app draws that formula (map_fragment's particle flag, ST-A11 slice 3). Slice 4: each
+        # renderer is its own draw, sorted as Unity sorts it (`PARTICLE_SHADERS`).
+        "dropped": ["soft particles", "fog"],
     },
     # Slice 4. Each rule's pass state is read from the shader's serialized ShaderLab state
     # (`pass_states`), not assumed; `draw` names the app's draw.
@@ -123,7 +128,7 @@ MAP_SHADER_RULES = {
         # Particle AnimAlphaBlend.shader v5.6.2f1, checked against the bundle's DX11 programs:
         # 2 * color * _TintColor * lerp(tex(uv.xy), tex(uv.zw), TEXCOORD1.x), both UVs through
         # _MainTex_ST; a 2D mesh UV0 reads (u, v, 0, 1), so uv.zw = (0, 1).
-        "dropped": ["soft particles", "fog", "per-renderer transparency sorting"],
+        "dropped": ["soft particles", "fog"],
     },
     "Shader Forge/main_item": {
         "parity": "approximated", "draw": "item",
@@ -201,6 +206,18 @@ NOT_DRAWN_COMPONENTS = {"SkinnedMeshRenderer": "skinned renderers", "ParticleSys
 # renderers are exported separately as the sky (`MapExporter.sky`, slice 3); Skybox/Procedural
 # is only RenderSettings.skybox, which Studio's colour-cleared camera never draws.
 NON_GEOMETRY_SHADERS = {"Skybox/Procedural", "Skybox/Cubemap"}
+# Particle shaders (slice 4): each renderer is its own draw, as Unity 5.6 draws it. Unity orders
+# transparent renderers by sorting layer, order in layer, render queue, then camera distance to the
+# renderer's bounds centre (back to front), and draws one renderer's submesh in index order. Every
+# particle renderer in the maps has sorting layer 0 and order 0 (checked per map), so the app sorts
+# by the material's render queue (`ikkokuParticle.renderQueue`) and then by distance to the
+# bounds centre the converter writes (`ikkokuMap.sortCenter`). Merged, the renderers would blend
+# in the mesh's triangle order wherever their cards overlap.
+PARTICLE_SHADERS = ("Particles/Alpha Blended", "Particles/Anim Alpha Blended")
+# ShaderLab queue names (Unity 5.6 `Queue` tag).
+RENDER_QUEUES = {"Background": 1000, "Geometry": 2000, "AlphaTest": 2450, "Transparent": 3000, "Overlay": 4000}
+# Render queues above this are sorted back to front (Unity's transparent range).
+TRANSPARENT_QUEUE_MIN = 2501
 SKYBOX_CUBEMAP = "Skybox/Cubemap"
 # Shaders the app draws by their recovered formula (the catalog does not list them as approximated).
 DRAWN_SHADERS = {"Standard", "Skybox/Cubemap", "Particles/Alpha Blended", "Legacy Shaders/Diffuse", "Unlit/Transparent",
@@ -568,6 +585,39 @@ def particle_contract(colors):
     tint = colors.get("_TintColor", [0.5, 0.5, 0.5, 0.5])
     return {"baseColorFactor": [min(2 * tint[0], 1), min(2 * tint[1], 1), min(2 * tint[2], 1), min(2 * tint[3], 1)],
             "alphaMode": "BLEND", "doubleSided": True, "unlit": True, "vertexColor": True}
+
+
+def queue_value(tag):
+    """A ShaderLab `Queue` tag ("Transparent", "Transparent+1", "Geometry-10") as its number."""
+    match = re.fullmatch(r"\s*([A-Za-z]+)\s*(?:([+-])\s*(\d+))?\s*", tag or "")
+    names = {name.lower(): value for name, value in RENDER_QUEUES.items()}  # ShaderLab ignores case
+    if not match or match.group(1).lower() not in names:
+        raise ValueError(f"Unknown shader queue tag {tag!r}")
+    base = names[match.group(1).lower()]
+    return base + (int(match.group(3)) * (1 if match.group(2) == "+" else -1) if match.group(2) else 0)
+
+
+def particle_render_queue(custom_queue, shader_tags, label):
+    """A particle material's render queue: its m_CustomRenderQueue, else its shader's Queue tag
+    (-1 means "the shader's"). A particle material outside Unity's transparent range would be
+    sorted front to back with the opaque draws, which no verified map has: refused by name."""
+    if custom_queue is not None and custom_queue >= 0:
+        queue = int(custom_queue)
+    else:
+        tags = {k.upper(): v for k, v in (shader_tags or {}).items()}
+        if "QUEUE" not in tags:
+            raise ValueError(f"{label}: neither the material nor its shader names a render queue")
+        queue = queue_value(tags["QUEUE"])
+    if queue < TRANSPARENT_QUEUE_MIN:
+        raise ValueError(f"{label}: render queue {queue} is not transparent; its draw order is not verified")
+    return queue
+
+
+def renderer_sort_center(matrix, local_center):
+    """The renderer's bounds centre in the glTF frame of its role: Unity's Renderer.bounds is the
+    world box around the mesh's local AABB, whose centre is the matrix applied to the local centre
+    (an affine map keeps a box's centre), then Z-reflected like every exported point."""
+    return reflect(apply_point(matrix, list(local_center)))
 
 
 def legacy_diffuse_inputs(colors):
@@ -1454,10 +1504,14 @@ class MapExporter(Exporter):
         if contract.get("unlit"):
             result["extensions"] = {"KHR_materials_unlit": {}}
             result["extras"]["unlit"] = True
-        if name in ("Particles/Alpha Blended", "Particles/Anim Alpha Blended"):
+        if name in PARTICLE_SHADERS:
             # baseColorFactor stays the clamped 2 * _TintColor an item draw uses; the app's
             # particle draw takes the tint from here and doubles it in the shader instead.
             result["extras"]["ikkokuParticle"] = particle_extras(colors_of(material))
+            shader_states = pass_states(material.m_Shader.read(), floats)
+            result["extras"]["ikkokuParticle"]["renderQueue"] = particle_render_queue(
+                getattr(material, "m_CustomRenderQueue", -1), shader_states[0]["tags"] if shader_states else None,
+                f"particle material {material.m_Name}")
             if name == "Particles/Anim Alpha Blended":
                 # lerp(tex(TEXCOORD_0), tex(TEXCOORD_2), TEXCOORD_1.x), as the mesh export writes them.
                 result["extras"]["ikkokuParticle"]["animBlend"] = True
@@ -1683,11 +1737,16 @@ def export(bundles, scene, map_no, output, max_texture=None, builtin_resources=N
             if draw == "particleAnim" and not handler.m_UV1:
                 raise ValueError(f"{path}: Particles/Anim Alpha Blended blends by TEXCOORD1.x, which the mesh lacks")
             # A silhouette renderer is its own draw: Unity sorts and draws each renderer's depth
-            # prepass and colour pass in turn, so overlapping mobs blend over each other.
-            separate = pid if draw == "silhouette" else None
+            # prepass and colour pass in turn, so overlapping mobs blend over each other. So is a
+            # particle renderer (`PARTICLE_SHADERS`), placed in the sort by its bounds centre.
+            particle = name in PARTICLE_SHADERS
+            separate = pid if draw == "silhouette" or particle else None
             group_key = (role, material_index, tuple(keys), group_lightmap, option, separate)
             group = groups.setdefault(group_key, {"positions": [], "normals": [], "tangents": [], "uv0": [], "uv1": [], "uv2": [],
                                                   "colors": [], "indices": [], "renderers": [], "vertexColor": vertex_color})
+            if particle:
+                local = mesh.m_LocalAABB.m_Center
+                group["sortCenter"] = renderer_sort_center(matrix, [local.x, local.y, local.z])
             if option:
                 option_counts["renderers"] += 1
                 option_counts["triangles"] += len(triangles[submesh])
@@ -1743,6 +1802,8 @@ def export(bundles, scene, map_no, output, max_texture=None, builtin_resources=N
                 attributes[semantic] = exporter.accessor(values, shape)
         extras = {"ikkokuMap": {"role": role, "visibleFor": list(keys), "lightmapIndex": lm_index,
                                 "renderers": len(group["renderers"])}}
+        if "sortCenter" in group:
+            extras["ikkokuMap"]["sortCenter"] = group["sortCenter"]
         suffix = ""
         if option:
             extras["ikkokuMap"]["option"] = True
@@ -1792,7 +1853,9 @@ def export(bundles, scene, map_no, output, max_texture=None, builtin_resources=N
         "conversion": {"basis": "Z reflection, LH Y-up to RH Y-up", "triangles": "i0,i2,i1 (again reversed under a mirroring transform)",
                        "uv0": "_MainTex_ST baked, then u,1-v", "uv1": "lightmap UV (mesh UV1, else UV0) * ST.xy + ST.zw, then u,1-v",
                        "tangent": "x,y,-z,w (w negated again under a mirroring transform)",
-                       "merge": "per (role, material, visibility class, lightmap index); role mapRoot in mapRoot's local frame, role scene in world space",
+                       "merge": "per (role, material, visibility class, lightmap index); role mapRoot in mapRoot's local frame, role scene in world space"
+                                + ("; silhouette and particle renderers one draw each (their bounds centre as ikkokuMap.sortCenter)"
+                                   if any(k[5] is not None for k in groups) else ""),
                        "lightmaps": "serialized image_data written verbatim (BC blocks, all mips, rows bottom-up); sampled at (u, 1 - v) of TEXCOORD_1",
                        "images": "UnityPy PNG (top-down)" + (f"; reduced by powers of two to <= {max_texture} px" if max_texture else ""),
                        "blockImages": "BC1/BC3 images also as their serialized blocks, every mip, block and pixel rows reversed to "

@@ -147,6 +147,34 @@ class MaterialTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, f'Map/front: on layer {n}'):
                 maps.undrawn_reason(renderer(1), layer(n), 'Map/front')
 
+    def test_particle_renderers_sort_by_queue_and_bounds_centre(self):
+        # Slice 4: per-renderer sorting is drawn, so neither particle rule lists it as dropped.
+        for shader in maps.PARTICLE_SHADERS:
+            self.assertNotIn('per-renderer transparency sorting', maps.MAP_SHADER_RULES[shader]['dropped'])
+            self.assertIn('soft particles', maps.MAP_SHADER_RULES[shader]['dropped'])
+        self.assertEqual([maps.queue_value(t) for t in ('Transparent', 'Transparent+1', 'Geometry-10', 'AlphaTest', 'overlay')],
+                         [3000, 3001, 1990, 2450, 4000])
+        with self.assertRaisesRegex(ValueError, "Unknown shader queue tag 'Later'"):
+            maps.queue_value('Later')
+        # The material's custom queue wins; -1 reads the shader's Queue tag (any case).
+        self.assertEqual(maps.particle_render_queue(-1, {'QUEUE': 'Transparent'}, 'm'), 3000)
+        self.assertEqual(maps.particle_render_queue(-1, {'Queue': 'Transparent+2'}, 'm'), 3002)
+        self.assertEqual(maps.particle_render_queue(5000, {'QUEUE': 'Transparent'}, 'm'), 5000)
+        self.assertEqual(maps.particle_render_queue(4099, None, 'm'), 4099)
+        with self.assertRaisesRegex(ValueError, 'particle material leaf: render queue 2450 is not transparent'):
+            maps.particle_render_queue(2450, {'QUEUE': 'Transparent'}, 'particle material leaf')
+        with self.assertRaisesRegex(ValueError, 'leaf: neither the material nor its shader names a render queue'):
+            maps.particle_render_queue(-1, {}, 'leaf')
+        # Renderer.bounds' centre: the world box around the rotated local box has the matrix applied
+        # to the local centre as its centre, then the glTF Z reflection.
+        angle = math.radians(30)
+        matrix = [[math.cos(angle), 0, math.sin(angle), 2], [0, 1, 0, 3], [-math.sin(angle), 0, math.cos(angle), 4], [0, 0, 0, 1]]
+        center, extent = [0.5, 1.0, -0.25], [1.0, 2.0, 0.5]
+        corners = [maps.apply_point(matrix, [center[i] + sx * extent[i] for i, sx in enumerate(signs)])
+                   for signs in [(a, b, c) for a in (-1, 1) for b in (-1, 1) for c in (-1, 1)]]
+        box = [(min(p[i] for p in corners) + max(p[i] for p in corners)) / 2 for i in range(3)]
+        close(self, maps.renderer_sort_center(matrix, center), [box[0], box[1], -box[2]])
+
     def test_skipped_shaders_are_not_mapped_and_every_class_has_a_reason(self):
         self.assertFalse(set(maps.MAP_SKIPPED_SHADERS) & set(maps.MAP_SHADER_RULES))
         # Render-texture screens are skipped by their material's texture, whatever the shader.
