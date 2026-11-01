@@ -4780,10 +4780,12 @@ than 20% CPU, and was run again.
   `main` `ca91cda5` plus the harness and check commits and nothing else
   (executable `35182d6a…7439dd46`). The head merged `main` `890b1468`
   (#287) before window 3; #287 changes card decoding, scene editing and
-  plug-in data rewrites, none of which a select, redo or FK drag runs.
+  plug-in data rewrites, none of which a select, redo or FK drag runs. It
+  merged `main` `899b777b` (#288, #293–#312) before the confirm window and
+  the captures.
 - **Base, the confirm window and the captures:** a Release build of
-  `main` `890b1468` with the same two harness commits cherry-picked
-  (CAPBASE2_LINE), so it is current `main`'s code apart from the harness.
+  `main` `899b777b` with the same two harness commits cherry-picked
+  (CAPBASE_LINE), so it is current `main`'s code apart from the harness.
 - **Window 2** (11:10–11:25, 34 runs, 0 invalid, 1-minute load 1.86–5.16)
   compared base with the C2 head (`886a6664`) in each mode, to decide C1
   (`tab` against `off`) and C2 (`on` against `tab`).
@@ -4792,7 +4794,8 @@ than 20% CPU, and was run again.
   indexer twice, the Claude desktop app once) and were run again; one of
   them was in a first start that was restarted.
 - **The confirm window** (CONFIRM_WINDOW_LINE) measured the final head
-  (`3b83be1f`), which adds the published diagnostics and the width clamp.
+  (CONFIRM_HEAD_SHA), which adds the published diagnostics and the width
+  clamp.
 
 **Window 2, median main busy ms per action** (base / `off` / `tab` / `on`):
 
@@ -4928,7 +4931,51 @@ document write):
 
 ### Correctness (item 7)
 
-CORRECTNESS_TBD
+- **Captures** (`.local/r7k-swiftui-select/captures/m1`). Base: `main`
+  `899b777b` plus the two harness commits (Release executable
+  `bf278bea…457b19c96`); head: `e311bffc` (`933bf0a1…499c1cc4`). Each
+  capture ran as a pair, base and head under one hold of the app lock, with
+  a clean `IKKOKU_*` environment and `IKKOKU_SOURCE_TREE_FALLBACKS=0`:
+  - eight `IKKOKU_AUTOCAPTURE` renders: the showoff, fixture and routes
+    scenes, the native scene and the Maker card with the live source-shader
+    opt-in OFF, and the showoff, fixture and Maker with it ON (7, 1 and 0
+    live draws). All eight PNGs and the three live reports are
+    byte-identical;
+  - 17 `IKKOKU_CAPTURE_UI` window captures with their UI reports, twice,
+    base first and then head first: the five inspector tabs; selection
+    sequences (`IKKOKU_CAPTURE_UI_SELECT`) that hide and show the kept
+    views, including a return to the first character after a folder and a
+    deselect; the fixture's route, character and folder, with a hidden view
+    wider than the panel behind a narrower shown one (`ui-fix-char`) and the
+    reverse (`ui-fix-route-last`); the routes scene; the Maker.
+
+  All 34 UI reports match base byte for byte. 16 of 17 window PNGs match in
+  the first pass and 15 of 17 in the second. Each difference is a variant
+  that both builds produce: the toolbar's pose-mode picker (4,700 pixels,
+  `ui-sel-chars` and `ui-sel-back`, second pass), and the routes scene's
+  inspector tab row drawn about 9 points wider, out to the window's edge,
+  in base's first pass only (base matched head in the second pass and in
+  the earlier captures). The width
+  captures match in both passes.
+
+  These captures found one real difference on the way: before the width
+  clamp, a hidden kept view kept its own width, so the shown folder's
+  fields were cut off when a wider route section was kept behind it
+  (`ui-fix-folder`), and the compatibility row moved 1 point
+  (`ui-sel-none`).
+- **Lanes:** the strict `studio-scenarios` lane passed 86 of 86 checks
+  and the strict `maker-scenarios` lane 10 of 10, none skipped, on the
+  Debug build of `e311bffc`. The five inspector checks are part of the
+  Studio lane (42, 24, 15, 61 and 57 steps).
+- **Engine suite** (strict, `IKKOKU_REQUIRE_SOURCE_FIXTURES=1`): ENGINE_LINE
+- **Python suites:** `Tools/mods` 40, `Tools/translation` 61 (2 skipped),
+  `Tools/verification` 201, its checks 11, `Tools/reverse` 634 (6
+  skipped), `Tools/reverse/analysis` 280, all passing; `doctor.py --require
+  public` 5/5 and `site/build.py --check` pass.
+- **`viewport-lifecycle`** on the Release head: 210 frames rendered, none
+  failed, no warnings.
+- **CI** passes on `e311bffc` (Debug build, Release package inspection,
+  public lane, reverse tools).
 
 ### Limits
 
