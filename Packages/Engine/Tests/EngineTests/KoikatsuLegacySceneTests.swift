@@ -405,6 +405,21 @@ private func decode(_ scene: LegacyScene) throws -> KoikatsuSceneDocument { try 
     #expect(throws: SourceSceneTopologyError.self) { try document.editedBody(edits) }
 }
 
+/// A vector's error names the byte where its string starts (the length
+/// prefix), not the byte after the string as before ST-T05a. The bad
+/// strings keep the good one's length, so every other offset is unchanged.
+@Test func vectorJSONErrorsPointAtTheStartOfTheString() throws {
+    let color = #"{"r":0,"g":0.25,"b":0.5,"a":1}"#
+    for (bad, description) in [(#"{"r":0,"q":0.25,"b":0.5,"a":1}"#, "missing or invalid JSON component g"),
+                               (#"{"r":0,"g":0.25,"b":0.5,"a":1]"#, "invalid vector JSON")] {
+        var scene = LegacyScene("1.0.4.2"); scene.roots(1); scene.out.i(4); scene.item(4); scene.tail()
+        let text = try #require(scene.out.data.range(of: Data(color.utf8)))
+        #expect(scene.out.data[text.lowerBound - 1] == UInt8(color.utf8.count))
+        scene.out.data.replaceSubrange(text, with: Data(bad.utf8))
+        #expect(throws: KoikatsuReadError.invalidValue(offset: text.lowerBound - 1, description: description)) { try decode(scene) }
+    }
+}
+
 // MARK: - The corpus fixture
 
 @Test(.enabled(if: SourceFixtureSupport.shouldRun(["IKKOKU_STUDIO_LEGACY_SCENE"]), "Requires IKKOKU_STUDIO_LEGACY_SCENE (a 0.0.7 scene)"))
@@ -526,20 +541,31 @@ func legacyCharacterFKShowsUnsavedBonesAtZeroAndRefusesTheirExport() throws {
 /// `koikatsuSceneCorpusDigest`): every legacy scene decodes and upgrades,
 /// and the upgrade reads back as the same scene. Every decoded field is
 /// equal, apart from the eye bytes below 0.0.8, which gain the four zero
-/// angles. Prints one line per version: scenes, upgraded, refusals.
+/// angles. Prints one line per version: scenes, upgraded, the scenes with
+/// route points and their points (a point saved before 1.0.4.1 has no aid,
+/// so its upgrade is refused), refusals.
 @Test(.enabled(if: !(ProcessInfo.processInfo.environment["IKKOKU_SCENE_CORPUS"] ?? "").isEmpty,
                "Opt-in corpus check: IKKOKU_SCENE_CORPUS names a folder of scenes"))
 func legacyCorpusScenesUpgradeAndReadBack() throws {
     let root = URL(fileURLWithPath: ProcessInfo.processInfo.environment["IKKOKU_SCENE_CORPUS"]!)
     let files = try #require(FileManager.default.enumerator(at: root, includingPropertiesForKeys: nil))
         .compactMap { $0 as? URL }.filter { $0.pathExtension.lowercased() == "png" && !$0.lastPathComponent.hasPrefix("._") }
-    var counts: [String: (scenes: Int, upgraded: Int, refusals: [String])] = [:]
+    var counts: [String: (scenes: Int, upgraded: Int, routeScenes: Int, routePoints: Int, refusals: [String])] = [:]
     for url in files {
         let data = try Data(contentsOf: url), id = String(OriginalCardFixture.hash(data).prefix(12))
         let document = try KoikatsuSceneReader.decodeDocument(data)
         guard document.isLegacy else { continue }
         let version = document.snapshot.version
-        counts[version, default: (0, 0, [])].scenes += 1
+        counts[version, default: (0, 0, 0, 0, [])].scenes += 1
+        var points = 0
+        func countPoints(_ record: KoikatsuObjectRecord) {
+            points += record.route?.points.count ?? 0
+            record.children.forEach(countPoints)
+            record.character?.accessoryChildren.values.forEach { $0.forEach(countPoints) }
+        }
+        document.snapshot.roots.forEach(countPoints)
+        counts[version]!.routePoints += points
+        counts[version]!.routeScenes += points > 0 ? 1 : 0
         let upgraded: KoikatsuSceneDocument
         do { upgraded = try document.upgraded() } catch {
             counts[version]!.refusals.append("\(id): \(error.localizedDescription)"); continue
@@ -566,7 +592,8 @@ func legacyCorpusScenesUpgradeAndReadBack() throws {
         counts[version]!.upgraded += 1
     }
     for (version, count) in counts.sorted(by: { KoikatsuSceneVersion(parsing: $0.key)! < KoikatsuSceneVersion(parsing: $1.key)! }) {
-        print("[legacy-corpus] \(version): \(count.scenes) scenes, \(count.upgraded) upgraded" + count.refusals.map { "; refused \($0)" }.joined())
+        print("[legacy-corpus] \(version): \(count.scenes) scenes, \(count.upgraded) upgraded, \(count.routeScenes) with route points"
+              + " (\(count.routePoints) points)" + count.refusals.map { "; refused \($0)" }.joined())
     }
     #expect(!counts.isEmpty)
 }

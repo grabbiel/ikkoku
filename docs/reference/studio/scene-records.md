@@ -372,9 +372,12 @@ Two opt-in checks read the user's 182 installed scenes in place
 (`IKKOKU_SCENE_CORPUS`). The files hold 175 distinct scenes, since 7 are
 copies. `koikatsuSceneCorpusDigest` prints, per scene, a digest of every
 decoded field and whether an empty edit exports the input bytes. It ran in
-the base build (`890b1468`) and in this change (`48b48017`, Debug).
+the base build (`890b1468`) and in this change (`48b48017`, Debug), and again
+after the merge of main: its 182 lines are the same in main `7cb4f995` as in
+`890b1468`, and the same in this change's merged head as in `48b48017`.
 `legacyCorpusScenesUpgradeAndReadBack` checks that each legacy scene's upgrade
-reads back as the same scene.
+reads back as the same scene, and prints per version the scenes with route
+points and their count.
 
 | Version | Files | Base | This change |
 | --- | --- | --- | --- |
@@ -391,9 +394,11 @@ reads back as the same scene.
 - **Every legacy scene opens and upgrades.** The upgrade reads back with every
   decoded field equal. The only exception is the eye bytes below 0.0.8, which
   gain the four zero angles.
-- **Neither refusal fires on the corpus.** No legacy scene has a route, a
-  version-1 camera or a plug-in trailer, and all their pre-0.0.8 eye data is
-  32 bytes.
+- **Neither refusal fires on the corpus.** None of the 62 legacy files has a
+  route point (0 in every version), so none has a point saved before 1.0.4.1
+  without an aid; the dry run found no route record at all. No legacy scene
+  has a version-1 camera or a plug-in trailer, and all their pre-0.0.8 eye
+  data is 32 bytes.
 - **The app writes the Engine's upgrade.** The lane check
   `studio-scenario-legacy-scene` exports the 0.0.7 fixture without an edit,
   and its file is byte-identical to the Engine's upgrade (SHA-256 begins
