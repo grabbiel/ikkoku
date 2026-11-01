@@ -390,11 +390,29 @@ fragment float4 map_fragment(
     texture2d<float> lightmapDirection [[texture(TextureIndexLightmapDirection)]],
     texture2d<float> emissionTex [[texture(TextureIndexEmission)]])
 {
+    if (mat.flags & MaterialFlagMapSilhouette) {
+        // Custom/Silhouette's colour pass (the game's shader; its DX11 fragment is `mov o0, _Color`):
+        // baseColor is the mob colour Studio sets. The renderer draws the depth prepass first.
+        return mat.baseColor;
+    }
+    if (mat.flags & MaterialFlagMapUnlit) {
+        // Unlit/Transparent (Unlit-Alpha.shader v5.6.2f1; the bundle's DX11 fragment is one sample):
+        // col = tex2D(_MainTex, uv), blended; baseColor stays white. No lighting, lightmap or fog.
+        float4 texel = (mat.flags & MaterialFlagHasBaseTexture) ? baseTex.sample(mapForcedAnisoRepeat, in.uv) : float4(1.0);
+        return texel * mat.baseColor;
+    }
     if (mat.flags & MaterialFlagMapParticle) {
         // Particles/Alpha Blended (Particle Alpha Blend.shader v5.6.2f1): o.color = v.color * _TintColor,
         // col = 2 * i.color * tex2D(_MainTex); no lighting, lightmap or fog term is read. baseColor is
         // _TintColor as a Linear player uploads it; a mesh without colours reads white (fetchVertex).
         float4 texel = (mat.flags & MaterialFlagHasBaseTexture) ? baseTex.sample(mapForcedAnisoRepeat, in.uv) : float4(1.0);
+        if (mat.flags & MaterialFlagMapParticleAnim) {
+            // Particles/Anim Alpha Blended (Particle AnimAlphaBlend.shader v5.6.2f1, checked against the
+            // bundle's DX11 program): lerp(tex(uv.xy), tex(uv.zw), blend), uv.zw in TEXCOORD_2 and the
+            // blend in TEXCOORD_1.x as the converter writes them.
+            float4 second = (mat.flags & MaterialFlagHasBaseTexture) ? baseTex.sample(mapForcedAnisoRepeat, in.uv2) : float4(1.0);
+            texel = mix(texel, second, in.uv1.x);
+        }
         return 2.0 * in.color * mat.baseColor * texel;
     }
     float4 albedo = mat.baseColor;

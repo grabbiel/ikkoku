@@ -687,14 +687,30 @@ public final class Renderer: @unchecked Sendable {
                        bitmapInfo: info, provider: provider, decode: nil, shouldInterpolate: false, intent: .defaultIntent)
     }
 
+    /// Whether `captureSceneHDR(pixelCentreSamples: true)` can run here: the GPU
+    /// has programmable sample positions.
+    public var supportsPixelCentreSamples: Bool { gpu.device.areProgrammableSamplePositionsSupported }
+
     /// `capture`'s pass graph, returning the resolved linear scene colour
     /// (`RenderTargets.hdr`: the main passes after their MSAA resolve, before
     /// bloom, grading and the sRGB composite) as RGBA float16 bit patterns,
     /// rows top-down. ST-A11 evidence (the map probe's irradiance image); nil
     /// when the capture fails.
-    public func captureSceneHDR(frame: RenderFrame, width: Int, height: Int) -> [UInt16]? {
+    ///
+    /// `pixelCentreSamples` puts all of the main pass's MSAA samples at the pixel
+    /// centre (programmable sample positions). Each pixel then holds the one
+    /// surface that covers its centre, shaded there, as a single-sample render
+    /// does: no partial coverage at edges and no fragment of a second triangle
+    /// shaded at a centre outside it. The original player's oracle renders into a
+    /// single-sample target (ST-A11 slice 4). Nil when the device has no
+    /// programmable sample positions.
+    public func captureSceneHDR(frame: RenderFrame, width: Int, height: Int, pixelCentreSamples: Bool = false) -> [UInt16]? {
+        if pixelCentreSamples && !supportsPixelCentreSamples { return nil }
         var hdr: (any MTLTexture)?
-        guard capture(frame: frame, width: width, height: height, configureTargets: { hdr = $0.hdr }) != nil, let hdr else { return nil }
+        guard capture(frame: frame, width: width, height: height, configureTargets: {
+            hdr = $0.hdr
+            $0.pixelCentreSamples = pixelCentreSamples
+        }) != nil, let hdr else { return nil }
         let bytesPerRow = width * 8
         guard let buffer = gpu.device.makeBuffer(length: bytesPerRow * height, options: .storageModeShared),
               let cb = gpu.commandQueue.makeCommandBuffer(), let blit = cb.makeBlitCommandEncoder() else { return nil }
@@ -1125,7 +1141,7 @@ public final class Renderer: @unchecked Sendable {
             if frame.texture(item.material.bodyMask, resources: resources) == nil { mu.flags &= ~MaterialFlagHasBodyMask.rawValue }
             if mesh.colors != nil { mu.flags |= MaterialFlagHasVertexColor.rawValue } else { mu.flags &= ~MaterialFlagHasVertexColor.rawValue }
             let materialUniforms = try frameRing.allocate(mu)
-            let c = item.model.transformPoint(mesh.bounds.center)
+            let c = item.model.transformPoint(item.sortCenter ?? mesh.bounds.center)
             let rec = DrawRecord(item: item, mesh: mesh, vertexBuffer: vb, hiddenBuffer: hb, draw: drawUniforms,
                                  material: materialUniforms, distance: length(c - cp))
             if isSky { sky.append(rec); continue }
@@ -1181,8 +1197,11 @@ public final class Renderer: @unchecked Sendable {
         }
     }
 
+    /// Unity's order for transparent draws: render queue, then camera distance
+    /// to the sort centre (back to front); then our draw order and mesh id.
     static func sortedTransparent(_ records: [DrawRecord]) -> [DrawRecord] {
         records.sorted {
+            if $0.item.renderQueue != $1.item.renderQueue { return $0.item.renderQueue < $1.item.renderQueue }
             if $0.distance != $1.distance { return $0.distance > $1.distance }
             if $0.item.order != $1.item.order { return $0.item.order < $1.item.order }
             return $0.item.mesh.id < $1.item.mesh.id
@@ -1364,6 +1383,13 @@ public final class Renderer: @unchecked Sendable {
         pass.depthAttachment.loadAction = .clear
         pass.depthAttachment.storeAction = .dontCare
         pass.depthAttachment.clearDepth = 0
+        if targets.pixelCentreSamples {
+            // Every sample at the centre: coverage and depth are all or nothing per pixel, so the
+            // resolve equals a single-sample render (captureSceneHDR(pixelCentreSamples:)). The positions
+            // belong to this pass's own descriptor, so no later pass or frame inherits them.
+            let centre = [MTLSamplePosition](repeating: MTLSamplePosition(x: 0.5, y: 0.5), count: Pipelines.sampleCount)
+            pass.setSamplePositions(centre)
+        }
         // Live source-shader draws need stencil; frames without them keep the
         // depth-only attachment and pipelines unchanged.
         var main = pipelines.depthOnlyMainPass
@@ -1450,10 +1476,24 @@ public final class Renderer: @unchecked Sendable {
                 let material = rec.item.material.uniforms
                 let nativeEye = material.kind == UInt32(MaterialKindEye.rawValue) && (material.flags & MaterialFlagSourceIrisHighlights.rawValue) == 0
                 let isMap = material.kind == UInt32(MaterialKindMap.rawValue)
-                enc.setRenderPipelineState(isMap ? main.mapBlend : nativeEye ? main.eyeBlend : main.toonBlend)
                 bindDraw(enc, rec)
                 bindTextures(enc, rec.item.material, frame: ctx.frame)
                 enc.setCullMode((rec.item.material.uniforms.flags & MaterialFlagDoubleSided.rawValue) != 0 ? .none : .back)
+                if isMap, (material.flags & MaterialFlagMapSilhouette.rawValue) != 0 {
+                    // Custom/Silhouette, per renderer as Unity draws it: pass 1 writes
+                    // depth only (ColorMask 0, ZWrite On, ZTest LEqual), pass 2 blends
+                    // the colour where pass 1 left the nearest depth (ZWrite Off,
+                    // ZTest LEqual), so a renderer's overlapping faces blend once.
+                    enc.setRenderPipelineState(main.mapDepthOnly)
+                    enc.setDepthStencilState(pipelines.depthWriteLEqual)
+                    drawIndexed(enc, rec.mesh)
+                    enc.setRenderPipelineState(main.mapBlend)
+                    enc.setDepthStencilState(pipelines.depthTestLEqual)
+                    drawIndexed(enc, rec.mesh)
+                    enc.setDepthStencilState(pipelines.depthTest)
+                    continue
+                }
+                enc.setRenderPipelineState(isMap ? main.mapBlend : nativeEye ? main.eyeBlend : main.toonBlend)
                 drawIndexed(enc, rec.mesh)
             }
             enc.popDebugGroup()

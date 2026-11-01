@@ -61,6 +61,26 @@
 //                                    and coverage (alpha), float32 RGBA;
 //   oracle-<case>-particles.rgba.f32 only the active particle renderers, the same way (ColorMask RGB leaves
 //                                    alpha 0; RGB is the blended radiance over black).
+//
+// The maps mode (ST-A11 slice 4), when reload-maps-showoff.png is uploaded: one run authors, reads back,
+// captures and measures MapCases (phases B and C per case, like map 34) across twelve maps, then
+// "map41-showoff" (the uploaded character scene with map 41 added). An inside case puts the saved camera at
+// a map-local pivot near the map root's origin with the table's yaw, pitch and distance (chosen offline from
+// the converted geometry so the camera has room behind it). An outside case keeps the pivot and moves the
+// camera through one of the map's vanish colliders (Studio.CameraControl.LoadVanish, h/list map_col_XX):
+// the nearest listed, enabled collider on the Map/MapNoShadow layers in the map scene at least
+// OutsideMinimum from the pivot, the camera looking at the pivot from twice that collider's bounds centre,
+// so both the camera-to-pivot segment and its midpoint (CameraUpdate sets the view capsule's height to
+// distance.z, which is negative) pass through the centre.
+// Every case records the vanish state as the player holds it (CameraControl's config switch, its view
+// capsule, the colliders it overlaps, and each list row's renderers with renderer.enabled) and the map
+// option (Map.visibleOption, and Manager.Config.AddData.mobColor where the map has mob silhouettes). Every
+// map but 33 uses DepthFar34. Renderer classes in the maps mode also separate the converter's skipped
+// shaders and render-texture screens ("skipped"), renderers the converter does not read ("unconverted":
+// skinned, sprite, particle-system, line, trail and billboard renderers), Particles/Anim Alpha Blended
+// (a particle), Custom/Silhouette ("silhouette") and Unlit/Transparent ("unlit"); the oracle renders the
+// last two alone like the sky (oracle-<case>-silhouettes.rgba.f32, -unlit.rgba.f32) and skips the
+// irradiance pair when the map has no lightmaps or no keyword-free opaque Standard material (recorded).
 using System;
 using System.Collections;
 using System.Collections.Generic;
@@ -76,7 +96,8 @@ using UnityEngine.SceneManagement;
 public sealed class OriginalMapProbe:BaseUnityPlugin {
     const int Width=960,Height=720,SettleFrames=30,LoadFrames=3600;
     const float DepthFar33=25f,DepthFar34=1000f,SkyFar=10000f;
-    const string Map34Upload="reload-map34-showoff.png";
+    const string Map34Upload="reload-map34-showoff.png",MapsUpload="reload-maps-showoff.png";
+    const float OutsideMinimum=1f;
     static readonly Vector3 MapPos=new Vector3(0.3f,-0.05f,-0.5f),MapRot=new Vector3(4f,25f,-3f);
     // A mapRoot-local point near the middle of map 33's room (the converted geometry spans x -2.17..1.46,
     // y 0..3.44, Unity z -1.64..4.19): the saved camera's pivot, so the camera stays inside the room.
@@ -92,7 +113,39 @@ public sealed class OriginalMapProbe:BaseUnityPlugin {
         new Map34Case("map34-day",0,true,new Vector3(0.5f,1.3f,0.2f),-4f,-70f,2.5f),
         new Map34Case("map34-evening",1,false,new Vector3(0.5f,1.3f,-0.8f),-6f,-105f,2.5f),
         new Map34Case("map34-night",2,false,new Vector3(0.3f,1.4f,0.6f),-8f,-80f,2f)};
-    int mapNo=33;float depthFar=DepthFar33;bool withOracle;
+    // The maps mode's cases (see the header): map, sun type, MapPos/MapRot or reset, inside or outside,
+    // map option, map-local pivot, pitch, yaw relative to the map and distance (inside cases).
+    sealed class MapCase {
+        public string label;public int no,sunType;public bool transformed,outside,option;public Vector3 pivot;public float pitch,yaw,distance;
+        public MapCase(string l,int n,int s,bool t,bool o,bool opt,Vector3 p,float pitchDegrees,float yawDegrees,float d){label=l;no=n;sunType=s;transformed=t;outside=o;option=opt;pivot=p;pitch=pitchDegrees;yaw=yawDegrees;distance=d;}
+    }
+    static readonly Vector3 Pivot=new Vector3(0f,1.1f,0f);
+    static readonly MapCase[] MapCases={
+        new MapCase("map41",41,0,true,false,true,Pivot,8f,315f,3f),
+        new MapCase("map21",21,1,false,false,true,Pivot,8f,240f,3f),
+        new MapCase("map11",11,0,false,false,true,Pivot,8f,315f,3f),
+        new MapCase("map19",19,2,true,false,true,Pivot,8f,30f,3f),
+        new MapCase("map22",22,0,false,false,true,Pivot,8f,120f,3f),
+        new MapCase("map29",29,1,false,false,true,Pivot,8f,180f,3f),
+        new MapCase("map38",38,0,false,false,true,Pivot,8f,90f,3f),
+        new MapCase("map40",40,2,true,false,true,Pivot,8f,150f,3f),
+        new MapCase("map15",15,0,false,false,true,Pivot,8f,135f,3f),
+        new MapCase("map25",25,1,true,false,true,Pivot,8f,270f,3f),
+        new MapCase("map01",1,0,false,false,true,Pivot,8f,75f,3f),
+        new MapCase("map27",27,2,false,false,true,Pivot,8f,0f,3f),
+        new MapCase("map21-outside",21,0,false,true,true,Pivot,0f,0f,0f),
+        new MapCase("map11-outside",11,0,false,true,true,Pivot,0f,0f,0f),
+        new MapCase("map19-outside",19,0,false,true,true,Pivot,0f,0f,0f),
+        new MapCase("map22-outside",22,1,false,true,true,Pivot,0f,0f,0f),
+        new MapCase("map15-outside",15,0,false,true,true,Pivot,0f,0f,0f),
+        new MapCase("map25-outside",25,0,false,true,true,Pivot,0f,0f,0f),
+        new MapCase("map01-outside",1,0,false,true,true,Pivot,0f,0f,0f),
+        new MapCase("map27-outside",27,0,false,true,true,Pivot,0f,0f,0f)};
+    // Shaders export_map_scene.py skips (MAP_SKIPPED_SHADERS): not drawn by the app.
+    static readonly string[] SkippedShaders={"FX/MirrorReflection_Transparent","Xffect/heat_distortion","Shader Forge/electricLight",
+        "Shader Forge/spotLaser","Shader Forge/spotLight_beam","Shader Forge/spotLight_glow","Shader Forge/volumeLight",
+        "UnlitMosaicTextureShader","Particles/VertexLit Blended"};
+    int mapNo=33;float depthFar=DepthFar33;bool withOracle,mapsMode;
     string folder,voiceRepair;
     Studio.Studio studio;
     Map map;
@@ -110,7 +163,7 @@ public sealed class OriginalMapProbe:BaseUnityPlugin {
             try{voiceRepair=RepairVoice();}catch(Exception e){errors.Add("voice repair: "+e);}
         }
         var oracles=Directory.GetFiles(dir,"reload-oracle-*.png");Array.Sort(oracles,StringComparer.Ordinal);
-        var map34=Path.Combine(dir,Map34Upload);
+        var map34=Path.Combine(dir,Map34Upload);var maps=Path.Combine(dir,MapsUpload);
         if(oracles.Length>0) {
             foreach(var scene in oracles) {
                 if(errors.Count!=0)break;
@@ -118,6 +171,10 @@ public sealed class OriginalMapProbe:BaseUnityPlugin {
                 UseMap(label.StartsWith("map34")?34:33);
                 yield return StartCoroutine(Guard(label,LoadAndOracle(scene,label)));
             }
+        } else if(File.Exists(maps)) {
+            withOracle=true;mapsMode=true;
+            foreach(var c in MapCases)if(errors.Count==0){UseMap(c.no);yield return StartCoroutine(Guard(c.label,AuthorMapCase(c)));}
+            if(errors.Count==0){UseMap(41);yield return StartCoroutine(Guard("map41-showoff",AuthorShowoff(maps,"map41-showoff")));}
         } else if(File.Exists(map34)) {
             UseMap(34);withOracle=true;
             foreach(var c in Map34Cases)if(errors.Count==0)yield return StartCoroutine(Guard(c.label,AuthorMap34(c)));
@@ -128,12 +185,13 @@ public sealed class OriginalMapProbe:BaseUnityPlugin {
             var showoff=Path.Combine(dir,"reload-showoff.png");
             if(errors.Count==0&&File.Exists(showoff))yield return StartCoroutine(Guard("map33-showoff",AuthorShowoff(showoff,"map33-showoff")));
         }
-        try{File.WriteAllText(Path.Combine(folder,oracles.Length>0?"oracle-trace.json":"map-trace.json"),J(K("schemaVersion",1,"mapNo",mapNo,"width",Width,"height",Height,"depthFar",depthFar,"cases",cases)));}
+        try{File.WriteAllText(Path.Combine(folder,oracles.Length>0?"oracle-trace.json":"map-trace.json"),J(K("schemaVersion",1,"mapNo",mapsMode?null:(object)mapNo,
+            "width",Width,"height",Height,"depthFar",mapsMode?null:(object)depthFar,"mode",mapsMode?"maps":null,"cases",cases)));}
         catch(Exception e){errors.Add("trace write: "+e);}
         File.WriteAllText(Path.Combine(folder,"status.json"),J(K("error",errors.Count==0?null:String.Join(" | ",errors.ToArray()),"errors",errors,
             "unity",Application.unityVersion,"device",SystemInfo.graphicsDeviceName,"colorSpace",QualitySettings.activeColorSpace.ToString(),
             "voiceRepair",voiceRepair,"cases",new List<string>(cases.Keys),
-            "scope","Original CharaStudio 1.0.4.2 map "+mapNo+" fixtures authored with the player's own writer (Studio.AddMap, caMap through MapCtrl.Reflect, Studio.sceneInfo.Save) and read back through Studio.LoadSceneCoroutine; per case the player's Camera.main colour image, the map scene's renderers as a white silhouette and as Unity depth-normals (linear depth over "+depthFar+" m) from Camera.main's pose and field of view, and a trace of the map root, renderers, lights, lightmaps, RenderSettings, SunLightInfo and cameras; no installed cards, saves or media"+
+            "scope","Original CharaStudio 1.0.4.2 map "+(mapsMode?"(maps mode: "+MapCases.Length+" cases across twelve maps, and map41-showoff)":mapNo.ToString())+" fixtures authored with the player's own writer (Studio.AddMap, caMap through MapCtrl.Reflect, Studio.sceneInfo.Save) and read back through Studio.LoadSceneCoroutine; per case the player's Camera.main colour image, the map scene's renderers as a white silhouette and as Unity depth-normals (linear depth over "+depthFar+" m) from Camera.main's pose and field of view, and a trace of the map root, renderers, lights, lightmaps, RenderSettings, SunLightInfo and cameras; no installed cards, saves or media"+
             (oracles.Length>0||withOracle?". Oracle"+(withOracle?" (in the same run, per case)":" mode: the uploaded records read back")+": a clean colour frame, Unity's decoded lightmap irradiance per pixel (white minus black albedo over 0.96, lights at 0 and as authored), the solid renderers' lightmap classes, and the sky and particle renderers alone as linear float radiance":""))));
         Application.Quit();
         for(int i=0;i<3600;i++){yield return null;if(i%30==29)Application.Quit();}
@@ -153,7 +211,7 @@ public sealed class OriginalMapProbe:BaseUnityPlugin {
         var s=Singleton<Studio.Studio>.Instance;var scene=Singleton<Manager.Scene>.Instance;
         return scene.commonSpace!=null&&s.sceneInfo!=null&&s.cameraCtrl!=null&&Camera.main!=null&&scene.AddSceneName==string.Empty&&!scene.IsNowLoadingFade;
     }
-    void UseMap(int no){mapNo=no;depthFar=no==34?DepthFar34:DepthFar33;}
+    void UseMap(int no){mapNo=no;depthFar=no==33?DepthFar33:DepthFar34;}
     bool Loaded(){return map.no==mapNo&&!map.isLoading&&map.mapRoot!=null&&studio.sceneInfo.map==mapNo;}
     // The reload probe's environment repair: this player copy's Manager.Voice.Awake() threw during start-up,
     // so a character load's range check throws on the null voice table unless it is replaced by an empty one.
@@ -214,6 +272,97 @@ public sealed class OriginalMapProbe:BaseUnityPlugin {
         var reload=ReloadAndCapture(scene,c.label,authored);
         while(reload.MoveNext())yield return reload.Current;
     }
+    // The maps mode: one case (see the header).
+    IEnumerator AuthorMapCase(MapCase c) {
+        studio.InitScene(false);
+        for(int i=0;i<3;i++)yield return null;
+        if(studio.dicObjectCtrl.Count!=0)throw new Exception(c.label+" expects an empty scene after InitScene(false), found "+studio.dicObjectCtrl.Count+" objects");
+        float start=Time.realtimeSinceStartup;int frames=0;
+        studio.AddMap(mapNo,false,false,true);
+        for(;frames<LoadFrames&&!Loaded();frames++)yield return null;
+        if(!Loaded())throw new Exception("map "+mapNo+" did not load within "+LoadFrames+" frames (no "+map.no+", isLoading "+map.isLoading+")");
+        var added=MapRecord();
+        if(c.transformed){var ca=studio.sceneInfo.caMap;ca.pos=MapPos;ca.rot=MapRot;Singleton<MapCtrl>.Instance.Reflect();}
+        map.sunType=(SunLightInfo.Info.Type)c.sunType;
+        if(map.isOption)map.visibleOption=c.option;
+        var root=map.mapRoot.transform;var target=root.TransformPoint(c.pivot);
+        var view=new Studio.CameraControl.CameraData();view.pos=target;view.parse=45f;
+        object outside=null;
+        if(c.outside) {
+            var candidates=new List<object>();Collider pick=null;string row=null;float best=float.MaxValue;int layers=LayerMask.GetMask("Map","MapNoShadow");
+            foreach(var entry in VanishRows()) {
+                var name=(string)Field(entry,"nameCollider");var renderers=Field(entry,"listRender") as IList;
+                foreach(var collider in MapColliders(name)) {
+                    var offset=collider.bounds.center-target;float distance=offset.magnitude;
+                    bool live=collider.enabled&&collider.gameObject.activeInHierarchy&&(layers&(1<<collider.gameObject.layer))!=0;
+                    candidates.Add(K("row",name,"path",TPath(collider.transform),"layer",collider.gameObject.layer,"live",live,"center",V(collider.bounds.center),
+                        "size",V(collider.bounds.size),"distance",distance,"renderers",renderers==null?0:renderers.Count));
+                    if(live&&renderers!=null&&renderers.Count>0&&distance>=OutsideMinimum&&distance<best){best=distance;pick=collider;row=name;}
+                }
+            }
+            if(pick==null)throw new Exception(c.label+": no live listed vanish collider in the map scene at least "+OutsideMinimum+" m from the pivot ("+candidates.Count+" candidates)");
+            var centre=pick.bounds.center;var camera=target+2f*(centre-target);
+            var euler=Quaternion.LookRotation(target-camera).eulerAngles;
+            view.rotate=new Vector3(euler.x,euler.y,0f);view.distance=new Vector3(0f,0f,-(target-camera).magnitude);
+            outside=K("row",row,"collider",TPath(pick.transform),"colliderCenter",V(centre),"camera",V(camera),"rule","camera = pivot + 2 (centre - pivot)",
+                "minimum",OutsideMinimum,"candidates",candidates);
+        } else {
+            view.rotate=new Vector3(c.pitch,(c.transformed?MapRot.y:0f)+c.yaw,0f);view.distance=new Vector3(0f,0f,-c.distance);
+        }
+        studio.cameraCtrl.Import(view);
+        for(int i=0;i<2;i++)yield return new WaitForEndOfFrame();
+        var authored=K("mapNo",c.no,"addMapFrames",frames,"addMapSeconds",Time.realtimeSinceStartup-start,"afterAddMap",added,"reflected",MapRecord(),
+            "requestedPosition",c.transformed?V(MapPos):V(Vector3.zero),"requestedRotation",c.transformed?V(MapRot):V(Vector3.zero),
+            "requestedSunType",c.sunType,"requestedMapOption",c.option,"isOption",map.isOption,"mobColor",MobColor(),
+            "pivot",V(c.pivot),"target",V(target),"outside",outside,"activeSkies",ActivePaths("sky"),
+            "savedCameraData",K("pos",V(view.pos),"rotate",V(view.rotate),"distance",V(view.distance),"parse",view.parse));
+        var scene=SaveScene("scene-"+c.label+".png");
+        var reload=ReloadAndCapture(scene,c.label,authored);
+        while(reload.MoveNext())yield return reload.Current;
+    }
+    // CameraControl's vanish rows (LoadVanish): private, read by reflection.
+    IList VanishRows(){var rows=Field(studio.cameraCtrl,"lstMapVanish") as IList;return rows??new List<object>();}
+    // The map scene's colliders named `name` (any layer; the trace records the layer).
+    List<Collider> MapColliders(string name) {
+        var found=new List<Collider>();
+        foreach(var collider in Resources.FindObjectsOfTypeAll<Collider>())
+            if(collider!=null&&collider.name==name&&collider.gameObject.scene==map.mapRoot.scene)found.Add(collider);
+        return found;
+    }
+    static object Field(object o,string name) {
+        if(o==null)return null;
+        for(var t=o.GetType();t!=null;t=t.BaseType) {
+            var f=t.GetField(name,System.Reflection.BindingFlags.Public|System.Reflection.BindingFlags.NonPublic|System.Reflection.BindingFlags.Instance);
+            if(f!=null)return f.GetValue(o);
+            var p=t.GetProperty(name,System.Reflection.BindingFlags.Public|System.Reflection.BindingFlags.NonPublic|System.Reflection.BindingFlags.Instance);
+            if(p!=null&&p.GetIndexParameters().Length==0)return p.GetValue(o,null);
+        }
+        return null;
+    }
+    static object MobColor(){try{return C(Manager.Config.AddData.mobColor);}catch(Exception e){return "unreadable: "+e.Message;}}
+    // The vanish state as the player holds it now (see the header).
+    Dictionary<string,object> VanishRecord() {
+        var ctrl=studio.cameraCtrl;var view=Field(ctrl,"viewCollider") as CapsuleCollider;
+        var overlapping=new List<object>();var listed=Field(ctrl,"listCollider") as IList;
+        if(listed!=null)foreach(var o in listed){var col=o as Collider;overlapping.Add(col==null?null:K("name",col.name,"path",TPath(col.transform),"layer",col.gameObject.layer));}
+        var rows=new List<object>();int hidden=0;
+        foreach(var entry in VanishRows()) {
+            var renderers=new List<object>();var list=Field(entry,"listRender") as IList;
+            if(list!=null)foreach(var o in list){var r=o as Renderer;if(r==null){renderers.Add(null);continue;}if(!r.enabled)hidden++;
+                renderers.Add(K("path",TPath(r.transform),"enabled",r.enabled,"active",r.gameObject.activeInHierarchy));}
+            var colliders=new List<object>();
+            foreach(var col in MapColliders((string)Field(entry,"nameCollider")))colliders.Add(K("path",TPath(col.transform),"layer",col.gameObject.layer,
+                "type",col.GetType().Name,"isTrigger",col.isTrigger,"enabled",col.enabled,"active",col.gameObject.activeInHierarchy,
+                "boundsMin",V(col.bounds.min),"boundsMax",V(col.bounds.max)));
+            rows.Add(K("nameCollider",Field(entry,"nameCollider"),"isVisible",Field(entry,"isVisible"),"delay",Field(entry,"delay"),
+                "renderers",renderers,"colliders",colliders));
+        }
+        return K("configVanish",ctrl.isConfigVanish,"mapLayer",Field(ctrl,"mapLayer"),"isLimitDir",ctrl.isLimitDir,"limitDir",ctrl.limitDir,
+            "isLimitPos",ctrl.isLimitPos,"limitPos",ctrl.limitPos,"hiddenRenderers",hidden,"overlapping",overlapping,"rows",rows,
+            "viewCollider",view==null?null:K("enabled",view.enabled,"isTrigger",view.isTrigger,"center",V(view.center),"height",view.height,"radius",view.radius,
+                "direction",view.direction,"boundsMin",V(view.bounds.min),"boundsMax",V(view.bounds.max),"position",V(view.transform.position),
+                "rotation",Q(view.transform.rotation),"lossyScale",V(view.transform.lossyScale)));
+    }
     IEnumerator AuthorShowoff(string source,string label) {
         studio.InitScene(false);
         for(int i=0;i<3;i++)yield return null;
@@ -255,10 +404,12 @@ public sealed class OriginalMapProbe:BaseUnityPlugin {
         var afterLoad=MapRecord();
         for(int i=0;i<SettleFrames;i++)yield return null;
         yield return new WaitForEndOfFrame();
+        var vanish=mapsMode?VanishRecord():null; // as the colour frame shows it
         var capture=Capture(label);
-        var record=K("label",label,"scene",Path.GetFileName(scene),"sceneSHA256",Sha256File(scene),"authored",authored,"released",released,
+        var record=K("label",label,"mapNo",mapNo,"depthFar",depthFar,"scene",Path.GetFileName(scene),"sceneSHA256",Sha256File(scene),"authored",authored,"released",released,
             "loadFrames",frames,"loadSeconds",seconds,"afterLoad",afterLoad,"settled",MapRecord(),"objects",studio.dicObjectCtrl.Count,
             "loadedCameraData",CameraData(studio.cameraCtrl.Export()),"capture",capture);
+        if(mapsMode)record["vanish"]=vanish;
         if(withOracle)record["oracle"]=Oracle(label);
         cases[label]=record;
     }
@@ -342,6 +493,7 @@ public sealed class OriginalMapProbe:BaseUnityPlugin {
         var mapScene=map.mapRoot.scene;
         var mapRenderers=new List<Renderer>();var hidden=new List<Renderer>();
         var skies=new List<Renderer>();var particles=new List<Renderer>();var others=new List<Renderer>();
+        var silhouettes=new List<Renderer>();var unlits=new List<Renderer>();
         var saved=new Dictionary<Renderer,Material[]>();
         var lights=FindObjectsOfType<Light>();var intensities=new float[lights.Length];for(int i=0;i<lights.Length;i++)intensities[i]=lights[i].intensity;
         bool runtimeFog=RenderSettings.fog;
@@ -360,7 +512,7 @@ public sealed class OriginalMapProbe:BaseUnityPlugin {
                     if(!(r.enabled&&r.gameObject.activeInHierarchy))continue;
                     var kind=RendererClass(r);
                     if(kind=="solid")mapRenderers.Add(r);
-                    else{r.enabled=false;(kind=="sky"?skies:kind=="particle"?particles:others).Add(r);}
+                    else{r.enabled=false;(kind=="sky"?skies:kind=="particle"?particles:kind=="silhouette"?silhouettes:kind=="unlit"?unlits:others).Add(r);}
                 }
                 else if(r.enabled){r.enabled=false;hidden.Add(r);}
             }
@@ -369,23 +521,26 @@ public sealed class OriginalMapProbe:BaseUnityPlugin {
             foreach(var r in mapRenderers)foreach(var m in r.sharedMaterials)
                 if(m!=null&&m.shader!=null&&m.shader.name=="Standard"&&NoKeywords(m)&&m.renderQueue<=2500&&m.HasProperty("_Mode")&&m.GetFloat("_Mode")==0f
                    &&(template==null||String.CompareOrdinal(m.name,template.name)<0))template=m;
-            if(template==null)throw new Exception("no keyword-free opaque Standard material on the map's renderers to copy");
-            white=Albedo(template,Color.white);black=Albedo(template,Color.black);
+            int bakedMaps=LightmapSettings.lightmaps==null?0:LightmapSettings.lightmaps.Length;
+            string irradianceSkipped=bakedMaps==0?"the map has no baked lightmaps":template==null?"no keyword-free opaque Standard material on the map's renderers to copy":null;
+            if(irradianceSkipped!=null&&!mapsMode)throw new Exception(irradianceSkipped);
+            if(irradianceSkipped==null){white=Albedo(template,Color.white);black=Albedo(template,Color.black);}
             foreach(var r in mapRenderers)saved[r]=r.sharedMaterials;
             cam.CopyFrom(main);cam.enabled=false;cam.aspect=(float)Width/Height;
             cam.clearFlags=CameraClearFlags.SolidColor;cam.backgroundColor=Color.black;cam.allowHDR=true;cam.allowMSAA=false;cam.cullingMask=~0;
             cam.renderingPath=RenderingPath.Forward;cam.useOcclusionCulling=false;
             var probeRecord=CameraRecord(cam);
-            for(int i=0;i<lights.Length;i++)lights[i].intensity=0f;
-            var unlitStats=new Dictionary<string,object>();
-            var gi=Difference(cam,hdr,mapRenderers,white,black,unlitStats);
-            var repeat=Difference(cam,hdr,mapRenderers,white,black,new Dictionary<string,object>());
-            double repeatMax=0;for(int i=0;i<gi.Length;i++)repeatMax=Math.Max(repeatMax,Math.Abs((double)gi[i]-repeat[i]));
-            WriteFloats(gi,"oracle-"+label+"-irradiance.f32");
-            for(int i=0;i<lights.Length;i++)lights[i].intensity=intensities[i];
-            var litStats=new Dictionary<string,object>();
-            var lit=Difference(cam,hdr,mapRenderers,white,black,litStats);
-            WriteFloats(lit,"oracle-"+label+"-irradiance-lit.f32");
+            var unlitStats=new Dictionary<string,object>();var litStats=new Dictionary<string,object>();double repeatMax=0;
+            if(irradianceSkipped==null) {
+                for(int i=0;i<lights.Length;i++)lights[i].intensity=0f;
+                var gi=Difference(cam,hdr,mapRenderers,white,black,unlitStats);
+                var repeat=Difference(cam,hdr,mapRenderers,white,black,new Dictionary<string,object>());
+                for(int i=0;i<gi.Length;i++)repeatMax=Math.Max(repeatMax,Math.Abs((double)gi[i]-repeat[i]));
+                WriteFloats(gi,"oracle-"+label+"-irradiance.f32");
+                for(int i=0;i<lights.Length;i++)lights[i].intensity=intensities[i];
+                var lit=Difference(cam,hdr,mapRenderers,white,black,litStats);
+                WriteFloats(lit,"oracle-"+label+"-irradiance-lit.f32");
+            }
             // Which solid pixels the irradiance gate may compare: Standard on a baked lightmap.
             var lightmapped=ClassMaterial(Color.white,classMaterials);var probeLit=ClassMaterial(Color.red,classMaterials);var other=ClassMaterial(Color.green,classMaterials);
             int lightmapCount=LightmapSettings.lightmaps==null?0:LightmapSettings.lightmaps.Length;
@@ -393,7 +548,8 @@ public sealed class OriginalMapProbe:BaseUnityPlugin {
             foreach(var r in mapRenderers) {
                 bool baked=r.lightmapIndex>=0&&r.lightmapIndex<lightmapCount;
                 var m=new Material[r.sharedMaterials.Length];
-                for(int i=0;i<m.Length;i++){var source=saved[r][i];bool standard=source!=null&&source.shader!=null&&source.shader.name=="Standard";
+                for(int i=0;i<m.Length;i++){var source=saved[r][i];bool standard=source!=null&&source.shader!=null&&(source.shader.name=="Standard"
+                    ||(mapsMode&&(source.shader.name=="Custom/StandardDouble"||source.shader.name=="Legacy Shaders/Diffuse")));
                     m[i]=standard?(baked?lightmapped:probeLit):other;if(!standard)otherSlots++;}
                 if(baked)lightmappedRenderers++;else probeLitRenderers++;
                 r.sharedMaterials=m;
@@ -406,8 +562,8 @@ public sealed class OriginalMapProbe:BaseUnityPlugin {
             var groups=new Dictionary<string,object>();
             cam.backgroundColor=new Color(0f,0f,0f,0f);cam.farClipPlane=SkyFar;
             foreach(var r in mapRenderers)r.enabled=false;
-            foreach(var pass in new[]{"sky","particles"}) {
-                var set=pass=="sky"?skies:particles;
+            foreach(var pass in new[]{"sky","particles","silhouettes","unlit"}) {
+                var set=pass=="sky"?skies:pass=="particles"?particles:pass=="silhouettes"?silhouettes:unlits;
                 if(set.Count==0){groups[pass]=K("written",false);continue;}
                 foreach(var r in set)r.enabled=true;
                 var rgba=RenderAlone(cam,hdr);
@@ -423,18 +579,20 @@ public sealed class OriginalMapProbe:BaseUnityPlugin {
                 if(t!=null)lightmapTextures.Add(K("name",t.name,"filterMode",t.filterMode.ToString(),"anisoLevel",t.anisoLevel,"wrapMode",t.wrapMode.ToString(),
                     "mipMapBias",t.mipMapBias,"mipmapCount",t.mipmapCount,"format",t.format.ToString()));
             return K("clean",K("camera",cleanRecord,"image","oracle-"+label+"-clean-color.png"),
-                "probe",probeRecord,"template",K("name",template.name,"shader",template.shader.name,"keywords",template.shaderKeywords,"renderQueue",template.renderQueue),
-                "overrides",K("albedo","_Color and _MainTex white or black","metallic",0,"glossiness",0,"keywords",white.shaderKeywords),
+                "probe",probeRecord,"template",template==null?null:K("name",template.name,"shader",template.shader.name,"keywords",template.shaderKeywords,"renderQueue",template.renderQueue),
+                "overrides",white==null?null:K("albedo","_Color and _MainTex white or black","metallic",0,"glossiness",0,"keywords",white.shaderKeywords),
+                "irradianceSkipped",irradianceSkipped,
                 "mapRenderers",mapRenderers.Count,"hiddenRenderers",hidden.Count,
-                "excludedRenderers",K("sky",skies.Count,"particle",particles.Count,"nonOpaque",others.Count),
+                "excludedRenderers",K("sky",skies.Count,"particle",particles.Count,"nonOpaque",others.Count,"silhouette",silhouettes.Count,"unlit",unlits.Count,"other",mapsMode?ClassCounts(others):null),
                 "runtimeFog",fogRecord,"measurementFog",false,
                 "lights",Lights(),"lightIntensities",intensities,
-                "irradiance",K("file","oracle-"+label+"-irradiance.f32","layout","float32 little-endian RGB, rows top-down","width",Width,"height",Height,
+                "irradiance",irradianceSkipped!=null?K("written",false,"reason",irradianceSkipped):K("written",true,"file","oracle-"+label+"-irradiance.f32","layout","float32 little-endian RGB, rows top-down","width",Width,"height",Height,
                     "lights","all at intensity 0","divisor",OneMinusDielectricSpec,"stats",unlitStats,"repeatMaximumDifference",repeatMax),
-                "irradianceLit",K("file","oracle-"+label+"-irradiance-lit.f32","lights","as authored","stats",litStats),
-                "classes",K("image","oracle-"+label+"-classes.png","white","Standard on a baked lightmap","red","Standard without a lightmap (light probes)",
+                "irradianceLit",irradianceSkipped!=null?K("written",false,"reason",irradianceSkipped):K("written",true,"file","oracle-"+label+"-irradiance-lit.f32","lights","as authored","stats",litStats),
+                "classes",K("image","oracle-"+label+"-classes.png","white",(mapsMode?"Standard, Custom/StandardDouble or Legacy Shaders/Diffuse":"Standard")+" on a baked lightmap",
+                    "red",(mapsMode?"one of those":"Standard")+" without a lightmap (light probes)",
                     "green","another shader","lightmaps",lightmapCount,"counts",classCounts),
-                "sky",groups["sky"],"particles",groups["particles"],
+                "sky",groups["sky"],"particles",groups["particles"],"silhouettes",groups["silhouettes"],"unlit",groups["unlit"],
                 "quality",K("softParticles",QualitySettings.softParticles,"anisotropicFiltering",QualitySettings.anisotropicFiltering.ToString()),
                 "mainDepthTextureMode",main.depthTextureMode.ToString(),"mainFarClipPlane",main.farClipPlane,
                 "unity_Lightmap_HDR",V4(Shader.GetGlobalVector("unity_Lightmap_HDR")),
@@ -446,24 +604,38 @@ public sealed class OriginalMapProbe:BaseUnityPlugin {
             for(int i=0;i<lights.Length;i++)if(lights[i]!=null)lights[i].intensity=intensities[i];
             RenderSettings.fog=runtimeFog;
             foreach(var r in mapRenderers)if(r!=null)r.enabled=true;
-            foreach(var set in new[]{hidden,skies,particles,others})foreach(var r in set)if(r!=null)r.enabled=true;
+            foreach(var set in new[]{hidden,skies,particles,silhouettes,unlits,others})foreach(var r in set)if(r!=null)r.enabled=true;
             cam.targetTexture=null;Destroy(probeObject);ldr.Release();Destroy(ldr);hdr.Release();Destroy(hdr);
             if(white!=null)Destroy(white);if(black!=null)Destroy(black);
             foreach(var m in classMaterials)Destroy(m);
         }
     }
     // A renderer's class for the map-only passes (see the header): "sky", "particle", "solid" (every material
-    // RenderType=Opaque) or "nonOpaque".
-    static string RendererClass(Renderer r) {
-        bool sky=false,particle=false,opaque=r.sharedMaterials.Length>0;
+    // RenderType=Opaque) or "nonOpaque"; in the maps mode also "unconverted" (not a MeshRenderer), "skipped"
+    // (a shader the converter skips, or a render-texture screen), "silhouette" and "unlit".
+    string RendererClass(Renderer r) {
+        if(!mapsMode) {
+            bool sky0=false,particle0=false,opaque0=r.sharedMaterials.Length>0;
+            foreach(var m in r.sharedMaterials) {
+                if(m==null||m.shader==null){opaque0=false;continue;}
+                if(m.shader.name=="Skybox/Cubemap")sky0=true;else if(m.shader.name=="Particles/Alpha Blended")particle0=true;
+                if(m.GetTag("RenderType",true)!="Opaque")opaque0=false;
+            }
+            return sky0?"sky":particle0?"particle":opaque0?"solid":"nonOpaque";
+        }
+        if(!(r is MeshRenderer))return "unconverted";
+        bool sky=false,particle=false,silhouette=false,unlit=false,skipped=false,opaque=r.sharedMaterials.Length>0;
         foreach(var m in r.sharedMaterials) {
             if(m==null||m.shader==null){opaque=false;continue;}
-            if(m.shader.name=="Skybox/Cubemap")sky=true;else if(m.shader.name=="Particles/Alpha Blended")particle=true;
+            var name=m.shader.name;
+            if(Array.IndexOf(SkippedShaders,name)>=0||(m.HasProperty("_MainTex")&&m.GetTexture("_MainTex") is RenderTexture))skipped=true;
+            else if(name=="Skybox/Cubemap")sky=true;else if(name=="Particles/Alpha Blended"||name=="Particles/Anim Alpha Blended")particle=true;
+            else if(name=="Custom/Silhouette")silhouette=true;else if(name=="Unlit/Transparent")unlit=true;
             if(m.GetTag("RenderType",true)!="Opaque")opaque=false;
         }
-        return sky?"sky":particle?"particle":opaque?"solid":"nonOpaque";
+        return skipped?"skipped":sky?"sky":particle?"particle":silhouette?"silhouette":unlit?"unlit":opaque?"solid":"nonOpaque";
     }
-    static Dictionary<string,object> ClassCounts(List<Renderer> renderers) {
+    Dictionary<string,object> ClassCounts(List<Renderer> renderers) {
         var d=new Dictionary<string,object>();
         foreach(var r in renderers){var k=RendererClass(r);d[k]=(d.ContainsKey(k)?(int)d[k]:0)+1;}
         return d;
@@ -558,7 +730,7 @@ public sealed class OriginalMapProbe:BaseUnityPlugin {
         if(root!=null){var t=root.transform;rootRecord=K("name",root.name,"scene",root.scene.name,"parent",t.parent==null?null:t.parent.name,
             "localPosition",V(t.localPosition),"localRotation",Q(t.localRotation),"localEulerAngles",V(t.localEulerAngles),"localScale",V(t.localScale),
             "position",V(t.position),"rotation",Q(t.rotation),"lossyScale",V(t.lossyScale),"localToWorld",M(t.localToWorldMatrix));}
-        return K("no",map.no,"isLoading",map.isLoading,"sceneInfoMap",studio.sceneInfo.map,"sunLightType",studio.sceneInfo.sunLightType,"mapOption",studio.sceneInfo.mapOption,
+        return K("no",map.no,"isLoading",map.isLoading,"sceneInfoMap",studio.sceneInfo.map,"sunLightType",studio.sceneInfo.sunLightType,"mapOption",studio.sceneInfo.mapOption,"isOption",map.isOption,
             "caMap",K("pos",V(ca.pos),"rot",V(ca.rot),"scale",V(ca.scale)),"expectedRotation",Q(Quaternion.Euler(ca.rot)),"mapRoot",rootRecord,
             "activeScene",SceneManager.GetActiveScene().name);
     }
