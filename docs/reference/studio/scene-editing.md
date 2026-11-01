@@ -688,14 +688,39 @@ a bytecode-cache lookup; that failure and zero executed tests remain preserved.
 The corrected loader executes only four hash-pinned source modules; all 18 method
 names, raw log/result, unchanged inputs and released process group were reviewed.
 
-This validates Python synthetic-byte controls only. The two actual C# callback
-policy controls are still uncompiled, and no Windows debugger, native synthetic
-target or OS dump writer has run. AMD64-on-ARM64 context/API compatibility, native
+This validates Python synthetic-byte controls only. At that checkpoint, the two
+actual C# callback policy controls were uncompiled, and no Windows debugger,
+native synthetic target or OS dump writer had run. AMD64-on-ARM64 context/API compatibility, native
 capture and decoder suitability, the original fault module/stack, and all original
 lifecycle/pair outcomes remain unaccepted. No export behavior changed.
 Private evidence is under the same root at
 `shutdown-public-dump-gate-1/synthetic-controls-3/`; test-result SHA-256 is
 `3ccecc9b216c06fa98f6fdb276274cc2ab03f136329e1d45fcd6770a5b61f48c`.
+
+Twenty additional local host-lifecycle controls pass with zero skips, errors or
+failures. They cover registration before thread start, delayed bootstrap/setup,
+held-worker cleanup, sticky socket-close failures, bounded admission/shared joins,
+and postflight deadline rejection. A later exact closure can prove release while
+the earlier failure still prevents success; missing thread identity never proves
+that a failed start created no worker. Raw child, wait and wrapper exits are zero;
+all 29 pins match and no owned process group or test thread remains. The fast
+child exited before a birth observation, which is retained as a limitation.
+These are host controls, not Windows/C# execution. Their separate evidence is
+`native-gate-3/host-controls-2/output/` under the same root; report hash begins
+`2f7513a9077b7fdf` and run receipt `cca0d59666f22b24`.
+
+The subsequent public native attempt on the same date stopped at compilation:
+the existing pinned compiler exited 1 with `CS2021`, reporting an invalid output
+filename containing leading and trailing spaces. No observer product, callback
+control, target process, debugger event or dump writer was reached. Transport,
+inner process and wrapper also exited 1; failure was not reclassified as success.
+The retained archive has eight verified files. All six HTTP request owners and
+host process groups were released; the final guest envelope confirms compiler
+release and temporary-root removal. The earlier archived receipt predates that
+removal and remains unchanged. Evidence is under `native-gate-3/`; archive hash
+begins `b9f87f3c2d3f2a52` and compiler-output hash `0eb1b5f998997d80`. An argument-
+construction correction requires separate review; no retry or original capture
+is implied by the successful cleanup.
 
 ### Plug-in data rewrites
 
