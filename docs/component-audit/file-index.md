@@ -23,7 +23,7 @@ branch was tested or every asset matches the original game. Feature status,
 specific comments and pending tasks are in the linked reports. Shared behavior
 may be discussed in more than one report; one primary owner is listed here.
 
-**1069 files indexed; 1069 assigned; 0 unassigned.**
+**1070 files indexed; 1070 assigned; 0 unassigned.**
 
 Counts include the website and clothes-group additions listed below. Runtime and
 test totals include their specialized role descriptions; this is inventory
