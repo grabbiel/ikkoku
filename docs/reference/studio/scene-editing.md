@@ -636,6 +636,34 @@ Private follow-up evidence is under the same evidence root at
 the separate `offline-assessment-2/assessment.json` SHA-256 is
 `6371e43f9a8583a5c67714a3eb6ce5f9ac86c14cebcb302c1d615f3d0bdba51f`.
 
+#### Ready-only shutdown control (2026-11-01)
+
+A second instrumented control retained readiness, the existing 60-frame wait,
+plugin checks, voice repair and normal quit path, but omitted the probe's scene
+load/save/reload/resave and ordered edits. Its trace contains an empty case
+object. The capture has no saved scene outputs and retains four
+process/artifact-bound shutdown markers with a literal zero case count.
+It still exited naturally with `0xC0000005`
+after reaching the probe's own `OnApplicationQuit` callback. Thus this failure
+also occurs without those probe scene operations. This is not a claim that
+startup performs no scene or engine I/O, nor does it identify the fault module,
+establish causality, or prove complete teardown. Marker I/O remains a perturbation.
+
+The frozen assessor passed 61 synthetic controls before the single original run.
+Independent review verifies all 107 plan pins, 125 runtime pins, 17 manifest
+entries, seven transport archive entries and all four markers. The compiler
+exited 0; host and guest owners released without forced stops, and the private
+probe root was removed. Evidence completeness and resource closure pass, while
+the wrapper exit 1 and player access violation remain failures. Ready-only,
+baseline and historical ordered-pair lifecycle acceptance remain false. No retry
+or production export change followed.
+
+Private evidence is under the same evidence root at
+`shutdown-ready-control-1/launch-1/`. The raw `capture/run.json` SHA-256 is
+`2b33ef5fc037b1b01ff6b9ab63589b0be69ac6efe05f82c8cac882acec377db5`;
+the `ready-review.json` SHA-256 is
+`304c2d6c081db9714abb081519fdcb5f0629fbedfc4e9b573a970498434b8852`.
+
 ### Plug-in data rewrites
 
 Reviewed 2026-10-26 (ST-T03i, second change). `SourceScenePluginRewrites` (`Packages/Engine/Sources/Studio/SourceScenePluginRewrites.swift`) rewrites the KKPE, MaterialEditor and NodesConstraints entries after a delete or a copy, as CharaStudio's save writes them after the same interactive edit.
