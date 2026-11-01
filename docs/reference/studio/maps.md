@@ -59,7 +59,7 @@ Outputs are refused outside the ignored `.local` directory. A symlink placed dir
 | --- | --- |
 | Converted map 33 | `.local/reverse/exports/maps/33-bushitu/`: 8 meshes, 8 materials, 8 PNGs, 2 lightmap files, 2,526 vertices, 1,492 triangles. The slice-4 export drops its `ShadowsOnly` mesh: 7 meshes, 7 materials, 2,438 vertices, 1,440 triangles. Until the slice-2 export is installed (see [installing the slice-2 export](#installing-the-slice-2-export)), this is the first slice's export (7 PNGs, no lightmaps), and the private copy is `.local/sta11b-lightmaps/exports/maps/` |
 | Converted map 34 | `33-bushitu/`'s sibling `34-akikyoushitu/`: 61 meshes, 56 materials, 54 PNGs with their 54 BC files, 4 lightmap files, 3 sky cubes; 27,530 vertices, 26,355 triangles (slice 4, without its `ShadowsOnly` mesh: 60 meshes, 55 materials, 27,445 vertices, 26,293 triangles). It is in the slice-3 export, private until it is installed (see [installing the slice-3 export](#installing-the-slice-3-export)): `.local/sta11c-map34/exports/maps/` |
-| Converted maps 0–32 and 35–41 | The slice-4 export, private until it is installed (see [installing the slice-4 export](#installing-the-slice-4-export)): `.local/sta11d-map-coverage/exports/maps/`, one folder per map (`NN-<scene name>/`), maps 33 and 34 included. The 40 new maps' DXT1/DXT5 images are BC files only (see [block-only images](#block-only-images)) |
+| Converted maps 0–32 and 35–41 | The slice-4 export, private until it is installed (see [installing the slice-4 export](#installing-the-slice-4-export)): `.local/sta11d-map-coverage/exports2/maps/`, one folder per map (`NN-<scene name>/`), maps 33 and 34 included. The 40 new maps' DXT1/DXT5 images are BC files only (see [block-only images](#block-only-images)) |
 | Catalog | `.local/reverse/exports/maps/catalog.json`: 42 rows (0–41) from 23 info bundles; 33 and 34 converted. The slice-4 catalog converts all 42 |
 | Source bundles | `.local/reverse/source/abdata/` (`studio/map/bushitu.unity3d`, `studio/map/akikyoushitu.unity3d`, `studio/info/*.unity3d`, `abdata`), each with a `.provenance.json`. To save disk space, `akikyoushitu.unity3d` (26.9 MB, used only for Map 34's inventory) is a symlink into the external archive (`/Volumes/My Book/ikkoku-archive/local/sta11a-maps/`), with the same SHA-256 |
 | Authored scenes | `.local/reverse/studio-scenes/maps/scene-map33.png` and `scene-map33-showoff.png`, with `provenance.json`. Map 34's four scenes are in `.local/sta11c-map34/phase-map34/` (`scene-map34-{day,evening,night,showoff}.png`). Map 41's scene for its lane is `scene-map41.png` beside them (`IKKOKU_STUDIO_MAP41_SCENE`), and the slice-4 phase's 21 scenes are in `.local/sta11d-map-coverage/vm-maps/` |
@@ -908,14 +908,14 @@ The shell sat inside or behind the visible surfaces: maps 33 and 34's colour cap
 
 ### Installing the slice-4 export
 
-The shared fixture (`.local/reverse/exports/maps/`) keeps the slice-3 export until this change merges. The slice-4 export is built privately in `.local/sta11d-map-coverage/exports/maps/`: all 42 maps and the catalog. Maps 33 and 34 were exported again too, since they lose their `ShadowsOnly` renderer (above), so the whole export moves. They keep their PNG copies. The hashes are in `.local/sta11d-map-coverage/new-export.sha256` (every file of the private export) and `old-export.sha256` (the slice-3 export). Both trees are on the same volume, so every `mv` below is an atomic rename.
+The shared fixture (`.local/reverse/exports/maps/`) keeps the slice-3 export until this change merges. The slice-4 export is built privately in `.local/sta11d-map-coverage/exports2/maps/`: all 42 maps and the catalog. Maps 33 and 34 were exported again too, since they lose their `ShadowsOnly` renderer (above), so the whole export moves. They keep their PNG copies. The hashes are in `.local/sta11d-map-coverage/new-export.sha256` (every file of the private export) and `old-export.sha256` (the slice-3 export). Both trees are on the same volume, so every `mv` below is an atomic rename.
 
 Install it from the main checkout, with no app run or lane using the map:
 
 ```sh
 cd /Users/rumpology/code/repo/ikkoku
 M=$PWD/.local/reverse/exports/maps                 # the shared fixture (environment.json names $M/catalog.json)
-N=$PWD/.local/sta11d-map-coverage/exports/maps     # the slice-4 export
+N=$PWD/.local/sta11d-map-coverage/exports2/maps    # the slice-4 export
 B=$PWD/.local/sta11d-map-coverage/old-export       # the backup of the slice-3 export
 H=$PWD/.local/sta11d-map-coverage                  # the two hash manifests
 # 0. Both trees are what the manifests say.
@@ -928,7 +928,7 @@ mv "$N"/[0-9][0-9]-* "$N/catalog.json" "$M/"
 # 3. Check the result.
 (cd "$M" && shasum -a 256 -q -c "$H/new-export.sha256")
 (cd "$B" && shasum -a 256 -q -c "$H/old-export.sha256")
-rmdir "$N" "$H/exports"
+rmdir "$N" "$H/exports2"
 ```
 
 `IKKOKU_STUDIO_MAP41_SCENE` is already in `environment.json` (`.local/reverse/studio-scenes/maps/scene-map41.png`).
