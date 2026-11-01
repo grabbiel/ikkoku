@@ -111,6 +111,9 @@ acceptance boundary; their old “next” steps are historical, not a live queue
   selection falls from 667–701 ms to 159–161 ms; the first selection costs
   16–25 ms more, retains about 39 MB of logical rig payload and leaves owner
   stalls. See the [reuse evidence and limits](../reference/character/maker-assets.md#bounded-decoded-rig-reuse-192).
+  A [prospective session-replacement foundation](../reference/character/maker-assets.md#prospective-rig-session-replacement-foundation-192)
+  passes 24 synthetic checks in both Debug and Release. Initial-load seeding is
+  not integrated; these lifetime checks establish no performance benefit.
   Per-component diagnostics now place about 52 ms of the tested repeat-cycle
   card-appearance work in six compositor wait/view intervals; batching across
   components remains a proposal. See the [attribution evidence](../reference/character/maker-assets.md#per-component-appearance-attribution-192).

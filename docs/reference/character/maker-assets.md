@@ -921,6 +921,46 @@ Warm candidate worker execution remains 78.665–89.667 ms and owner commit 75.8
 
 First/second cycle labels do not imply filesystem-cache eviction, and only the first process selection has an empty decoded-rig cache. Read/hash volumes are API bytes, not disk traffic. No FPS, heap/RSS, fresh original-player accuracy or broad hardware claim follows from this small pair. Immutable sources, binaries, original failed attempts, fixture/input proofs, all raw reports and offline analyses are retained under `.local/codex-continue-2026-10-24/rolling/maker-rig-cache/`.
 
+### Prospective rig-session replacement foundation (#192)
+
+Local foundation acceptance **2026-11-01**, tested source `ae7242c9`: a
+`SourceMakerRigReuse` replacement token carries the current expected epoch, a
+fresh prospective epoch and the existing admission ledger. Creating it leaves
+the committed cache intact, retains no old snapshot and reserves no empty
+snapshot. Preparation through its input can stage a new candidate without
+invalidating current work.
+
+`commitReplacement` is reserved for successful owner publication. It checks the
+token's ledger and expected epoch, plus a supplied candidate's ledger and new
+epoch, before replacing the owner state. A nil or capacity-cleared candidate can
+publish an empty session. Failed preparation instead drops its token and staged
+candidate. Foreign or stale tokens, mismatched candidates and replayed replacement
+tokens cannot publish; a successful replacement also rejects delayed work from
+the old epoch. Reference replacement occurs outside the counter locks, so
+final-holder destruction can return permits safely.
+
+The existing 16-entry / 64 MiB logical-entry / four-snapshot limits are unchanged.
+Old input, worker and delivered-candidate holders keep their reservations across
+replacement and cancellation. Saturation still permits valid uncached work;
+after successful empty publication and final old-holder release, a later fitting
+candidate can be admitted. Logical retention accounting remains distinct from
+ordinary native value copies, allocator costs and heap/RSS.
+
+All 24 public synthetic boundary tests pass in both Debug and optimized Release,
+with exact test-name checks, zero skips and unchanged complete Products closures
+(88 Debug entries; 91 Release entries). Eight new tests cover abandonment,
+seeded/empty publication, identity guards, entry/snapshot saturation recovery,
+delayed old work and cancellation-held credits. The initial Release build failed
+module compatibility checks because its build command omitted explicit
+testability. A separately retained fresh build added
+`-Xswiftc -enable-testing` while retaining Release optimization; production and
+test sources were unchanged. The failed attempt is preserved.
+
+This is an API and lifetime foundation only. Maker and library call sites do not
+yet seed the cache during initial loading. No app, source-fidelity or performance
+benefit is established by these CPU tests; initial-load seeding and its startup
+cost remain separate work under #192.
+
 ### Per-component appearance attribution (#192)
 
 The optional owner-local collector now labels the existing base, ordered component
