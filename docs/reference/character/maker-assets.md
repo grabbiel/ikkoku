@@ -980,6 +980,23 @@ These synthetic controls validate the checker, not actual candidate/control app
 reports. Collection-adapter integration, app fidelity and startup costs remain
 separate acceptance work; no performance benefit follows.
 
+Twenty-two separate collection-adapter controls also pass with zero skips,
+failures or errors. They cover the four-process envelope, source/product/role
+identity, recorded ownership and raw-versus-wait exits, and verified empty logs;
+empty semantic reports and cards still fail. All 19 pins and 13 loaded-source
+receipts match; raw, wait and final acceptance exits are zero, and the observed
+worker PID/birth and process-group release were checked. The earlier unexecuted
+runner could report success beyond its stated total time limit; its preserved
+sibling derives acceptance after postflight and rejects an observed total above
+90 seconds without claiming a hard watchdog. Evidence is under
+`app-collection-plan-1/adapter-controls-2/` beside the verifier evidence; readiness
+hash begins `59d5cfc83a54dc89` and raw result `4d23fc37a8ec596c`.
+
+These 22 controls do not exercise full card/fixture binding or native collection.
+App execution remains held: source review found that a forced outer timeout
+could miss a newly spawned app in a separate process group. An empty ancestry
+sample therefore cannot establish complete cleanup in that failure case.
+
 ### Per-component appearance attribution (#192)
 
 The optional owner-local collector now labels the existing base, ordered component
