@@ -96,16 +96,22 @@ final class MakerModel: ViewportInputHandler, LivePacedHandler {
         let preparation: Preparation
 
         struct Preparation: Encodable {
-            enum GeometryOutcome: String, Encodable { case selectedAssets, referenceAfterSelectionFailure, referenceNoLibrary }
             enum AppearanceOutcome: String, Encodable { case applied, referenceAfterAppearanceFailure, unavailable }
-            enum CachePublication: String, Encodable { case seeded, empty, emptyStaleFallback }
+            /// `emptyLedgerFull`: the old session's entries left no room, so
+            /// no seed was hashed or staged (`seedingInput`).
+            enum CachePublication: String, Encodable { case seeded, empty, emptyLedgerFull, emptyStaleFallback }
+            /// Whether the reference model was read and decoded (CXM1: only
+            /// on a fallback geometry outcome).
+            enum ReferenceLoad: String, Encodable { case skipped, loaded }
             let manifestURL: URL, sourcePrefab: String
             let nodeCount: Int, skinCount: Int, partCount: Int
-            let geometryOutcome: GeometryOutcome, appearanceOutcome: AppearanceOutcome
+            let geometryOutcome: SourceMakerImportGeometry.Outcome, referenceLoad: ReferenceLoad
+            let appearanceOutcome: AppearanceOutcome
             let cachePublication: CachePublication, publishedEntries: Int
-            /// Inclusive selected-preparation wall time; worker intervals are
-            /// nested, not additive. Failed fallback stages are partial.
-            let selectedPreparationMilliseconds: Double?
+            /// Inclusive geometry wall time: the selected preparation, plus the
+            /// reference model when it fell back. Worker intervals are nested,
+            /// not additive; a failed selection's stages are partial.
+            let geometryMilliseconds: Double?
             let selectedPreparationStages: SourceMakerPreparationTimings.Sample?
             /// Candidate/live-ledger values at worker finish, not post-commit
             /// resources, heap usage or an admission timer.
@@ -493,31 +499,30 @@ final class MakerModel: ViewportInputHandler, LivePacedHandler {
             correctionData = try Data(contentsOf: correction)
         } else { correctionData = nil }
         let options = try SourceMakerAssemblyOptions.body(sex: sex, exType: identity?.exType ?? 0, boneType: boneType, correctionData: correctionData)
-        var source = try SourceRig.loadModel(url: url)
         let makerLibrary = try EngineHost.locateMakerLibrary()
-        var prepared: SourceMakerLibrary.Prepared?, selectionDiagnostics: [String] = []
-        var replacement: SourceMakerRigReuse.Replacement?, seed: SourceMakerRigReuse.Candidate?
-        var seedSample: SourceMakerRigReuse.Sample?
-        var selectedTimings: SourceMakerPreparationTimings?
-        var selectedMilliseconds: Double?
-        var geometryOutcome = SourceInitialLoadTiming.Preparation.GeometryOutcome.referenceNoLibrary
+        var replacement: SourceMakerRigReuse.Replacement?, seeding: SourceMakerRigReuse.Input?
+        var seedDeclined = false
+        let selectedTimings = recordInitialLoad && imported != nil && makerLibrary != nil ? SourceMakerPreparationTimings() : nil
         if let imported, let makerLibrary {
-            selectedTimings = recordInitialLoad ? SourceMakerPreparationTimings() : nil
             let prospective = sourceRigReuse.prospectiveReplacement()
             replacement = prospective
-            let start = recordInitialLoad ? ProcessInfo.processInfo.systemUptime : nil
-            defer { if let start { selectedMilliseconds = (ProcessInfo.processInfo.systemUptime - start) * 1000 } }
-            do {
-                let loaded = try makerLibrary.prepare(card: imported, coordinate: 0, baseURL: url,
-                    timings: selectedTimings, seeding: prospective.input)
-                prepared = loaded.prepared; seed = loaded.candidate; seedSample = loaded.sample
-                source = loaded.prepared.source
-                geometryOutcome = .selectedAssets
-            } catch {
-                // No partial candidate escapes a failed selected preparation.
-                geometryOutcome = .referenceAfterSelectionFailure
-                selectionDiagnostics.append("Card asset selection retained the reference assembly: \(error)")
-            }
+            // A reimport over a cached session cannot fit a seed beside the old
+            // entries: skip its hashing instead of staging part and publishing empty.
+            seeding = sourceRigReuse.seedingInput(for: prospective,
+                entries: makerLibrary.rigFiles(card: imported, coordinate: 0, baseURL: url, wear: false).count)
+            seedDeclined = seeding == nil
+        }
+        let geometryStart = recordInitialLoad ? ProcessInfo.processInfo.systemUptime : nil
+        // CXM1: the reference model loads only when the card's selected assets
+        // cannot replace it. A thrown selection stages no partial candidate.
+        let geometry = try SourceMakerImportGeometry.load(baseURL: url, card: imported, library: makerLibrary,
+            coordinate: 0, timings: selectedTimings, seeding: seeding)
+        let geometryMilliseconds = geometryStart.map { (ProcessInfo.processInfo.systemUptime - $0) * 1000 }
+        let source = geometry.source, prepared = geometry.prepared
+        let seed = geometry.rigReuseCandidate, seedSample = geometry.rigReuseSample
+        var selectionDiagnostics: [String] = []
+        if let error = geometry.selectionError {
+            selectionDiagnostics.append("Card asset selection retained the reference assembly: \(error)")
         }
         let contractURL = url.deletingLastPathComponent().appendingPathComponent("character-shape-contract.json")
         let contract = FileManager.default.fileExists(atPath: contractURL.path)
@@ -585,7 +590,7 @@ final class MakerModel: ViewportInputHandler, LivePacedHandler {
         let cachePublication: SourceInitialLoadTiming.Preparation.CachePublication
         if let replacement {
             if sourceRigReuse.commitReplacement(replacement, candidate: seed) {
-                cachePublication = (seedSample?.retainedEntries ?? 0) > 0 ? .seeded : .empty
+                cachePublication = seedDeclined ? .emptyLedgerFull : (seedSample?.retainedEntries ?? 0) > 0 ? .seeded : .empty
             } else {
                 // This new-load transaction has no await. Unexpected staleness
                 // keeps the previous successful-load empty reset behavior;
@@ -635,10 +640,10 @@ final class MakerModel: ViewportInputHandler, LivePacedHandler {
         guard recordInitialLoad else { return nil }
         return .init(manifestURL: url, sourcePrefab: source.sourcePrefab,
             nodeCount: source.rig.nodes.count, skinCount: source.rig.skins.count, partCount: source.parts.count,
-            geometryOutcome: geometryOutcome, appearanceOutcome: appearanceOutcome,
-            cachePublication: cachePublication,
+            geometryOutcome: geometry.outcome, referenceLoad: geometry.referenceLoaded ? .loaded : .skipped,
+            appearanceOutcome: appearanceOutcome, cachePublication: cachePublication,
             publishedEntries: cachePublication == .seeded ? (seedSample?.retainedEntries ?? 0) : 0,
-            selectedPreparationMilliseconds: selectedMilliseconds, selectedPreparationStages: selectedTimings?.sample,
+            geometryMilliseconds: geometryMilliseconds, selectedPreparationStages: selectedTimings?.sample,
             stagedRigReuse: seedSample)
     }
 

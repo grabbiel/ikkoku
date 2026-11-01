@@ -42,6 +42,14 @@ struct MakerScenario: Decodable {
         let selection: SelectionValue?
         let expectFailure: Bool?, unchanged: Bool?
         let resourcesAtMost: String?
+        /// Any step: the decoded-rig hits and misses of the head selection it
+        /// committed (`SourceSelectionTiming.headRigReuse`).
+        let rigReuse: RigReuseValue?
+        /// Any step: outcomes of the current initial-load sample, the startup
+        /// import's until a reimport or reload records its own (CXM1).
+        let initialLoad: InitialLoadValue?
+        struct RigReuseValue: Decodable { let hits: Int, misses: Int }
+        struct InitialLoadValue: Decodable { let geometry: String?, referenceLoad: String?, cachePublication: String? }
         struct SelectionValue: Decodable {
             let kind: String, slot: Int, sourceID: Int
             let coordinate: Int?
@@ -73,7 +81,7 @@ struct MakerScenario: Decodable {
 
         private enum CodingKeys: String, CodingKey {
             case op, on, index, value, id, rgba, path, coordinate, face, body, color,
-                 colorApplied, diagnosticContains, selection, expectFailure, unchanged, resourcesAtMost
+                 colorApplied, diagnosticContains, selection, expectFailure, unchanged, resourcesAtMost, rigReuse, initialLoad
         }
 
         init(from decoder: Decoder) throws {
@@ -99,6 +107,8 @@ struct MakerScenario: Decodable {
             expectFailure = try c.decodeIfPresent(Bool.self, forKey: .expectFailure)
             unchanged = try c.decodeIfPresent(Bool.self, forKey: .unchanged)
             resourcesAtMost = try c.decodeIfPresent(String.self, forKey: .resourcesAtMost)
+            rigReuse = try c.decodeIfPresent(RigReuseValue.self, forKey: .rigReuse)
+            initialLoad = try c.decodeIfPresent(InitialLoadValue.self, forKey: .initialLoad)
         }
     }
 
@@ -206,7 +216,27 @@ struct MakerScenario: Decodable {
         @discardableResult
         func record(_ step: Step, _ ok: Bool, _ detail: String,
                     initialLoad: MakerModel.SourceInitialLoadTiming? = nil) -> Bool {
-            results.append(Report.StepResult(op: step.op, ok: ok, detail: detail,
+            var problems: [String] = []
+            if let expected = step.rigReuse {
+                if let sample = maker.sourceSelectionTiming?.headRigReuse {
+                    if sample.hits != expected.hits || sample.misses != expected.misses {
+                        problems.append("rigReuse \(sample.hits)/\(sample.misses), expected \(expected.hits)/\(expected.misses)")
+                    }
+                } else { problems.append("rigReuse: no head selection sample") }
+            }
+            if let expected = step.initialLoad {
+                if let sample = (initialLoad ?? maker.sourceInitialLoadTiming)?.preparation {
+                    for (name, actual, wanted) in [("geometry", sample.geometryOutcome.rawValue, expected.geometry),
+                                                   ("referenceLoad", sample.referenceLoad.rawValue, expected.referenceLoad),
+                                                   ("cachePublication", sample.cachePublication.rawValue, expected.cachePublication)]
+                    where wanted != nil && wanted != actual {
+                        problems.append("initialLoad \(name) \(actual), expected \(wanted!)")
+                    }
+                } else { problems.append("initialLoad: no sample") }
+            }
+            let passed = ok && problems.isEmpty
+            let shown = problems.isEmpty ? detail : detail + "; " + problems.joined(separator: "; ")
+            results.append(Report.StepResult(op: step.op, ok: passed, detail: shown,
                 selectionMilliseconds: step.op == "selectAsset" ? (ProcessInfo.processInfo.systemUptime - stepStart) * 1000 : nil,
                 selectionStages: ["selectAsset", "finishSelection"].contains(step.op) ? maker.sourceSelectionTiming : nil,
                 initialLoad: initialLoad,
@@ -214,7 +244,7 @@ struct MakerScenario: Decodable {
                 mainActorHeartbeatCount: heartbeat?.count,
                 resourcesBefore: resourcesBefore,
                 resources: ["selectAsset", "captureResources", "beginSelection", "finishSelection"].contains(step.op) || step.resourcesAtMost != nil || resourcesBefore != nil ? maker.host.renderer.resources.statistics() : nil))
-            return ok
+            return passed
         }
         func insideLocal(_ path: String) -> URL? {
             let fm = FileManager.default

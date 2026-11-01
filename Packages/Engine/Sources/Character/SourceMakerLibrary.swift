@@ -607,6 +607,56 @@ public struct SourceMakerLibrary: Sendable {
     }
 }
 
+/// A card import's geometry (CXM1, #192). The card's selected assets replace
+/// the whole reference model, so the reference model is read and decoded only
+/// on a fallback path: no card, no Maker library, or a selected preparation
+/// that throws. Before CXM1 the Maker decoded the reference model (nine files,
+/// 32 MB of JSON for the female base) ahead of every import and discarded it
+/// when the selection succeeded; `prepare` itself already skips parsing the
+/// reference parts the selection replaces. A thrown selection still ends in
+/// the reference model's own error when that model cannot load either.
+public enum SourceMakerImportGeometry {
+    public enum Outcome: String, Sendable, Encodable {
+        case selectedAssets, referenceAfterSelectionFailure, referenceNoLibrary, referenceNoCard
+    }
+    public struct Loaded {
+        public let source: SourceRig
+        public let prepared: SourceMakerLibrary.Prepared?
+        public let outcome: Outcome
+        /// The selected preparation's error, for the reference fallback's diagnostic.
+        public let selectionError: (any Error)?
+        /// The staged seed of a successful seeded preparation; a thrown
+        /// preparation stages none.
+        public let rigReuseCandidate: SourceMakerRigReuse.Candidate?
+        public let rigReuseSample: SourceMakerRigReuse.Sample?
+        public var referenceLoaded: Bool { outcome != .selectedAssets }
+    }
+    public static func load(baseURL: URL, card: SourceCharacterCard?, library: SourceMakerLibrary?, coordinate: Int,
+                            timings: SourceMakerPreparationTimings? = nil,
+                            seeding: SourceMakerRigReuse.Input? = nil) throws -> Loaded {
+        var selectionError: (any Error)?
+        if let card, let library {
+            do {
+                // The reference model's manifest gate (SourceAvatar.load) still
+                // applies; its failure falls back, so the import fails as before.
+                let manifest = try JSONDecoder().decode(SourceAvatarManifest.self, from: Data(contentsOf: baseURL))
+                guard manifest.schemaVersion == 1, ["koikatsu-female-avatar", "koikatsu-male-avatar"].contains(manifest.kind),
+                      manifest.sex == nil || manifest.sex == (manifest.kind == "koikatsu-male-avatar" ? 0 : 1) else {
+                    throw RigError.invalid("Unsupported source avatar manifest.")
+                }
+                let selected = try library.prepare(card: card, coordinate: coordinate, baseURL: baseURL,
+                                                   timings: timings, seeding: seeding)
+                return Loaded(source: selected.prepared.source, prepared: selected.prepared, outcome: .selectedAssets,
+                    selectionError: nil, rigReuseCandidate: selected.candidate, rigReuseSample: selected.sample)
+            } catch { selectionError = error }
+        }
+        let source = try SourceRig.loadModel(url: baseURL)
+        let outcome: Outcome = card == nil ? .referenceNoCard : library == nil ? .referenceNoLibrary : .referenceAfterSelectionFailure
+        return Loaded(source: source, prepared: nil, outcome: outcome, selectionError: selectionError,
+                      rigReuseCandidate: nil, rigReuseSample: nil)
+    }
+}
+
 private enum SourceAccessoryMove {
     static func overrides(fields: [String: SourceMessagePackValue], rig: SourceRig,
                           attachment: SourceMakerLibrary.Attachment) throws -> [String: RigDefinition.Node] {
