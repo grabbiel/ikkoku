@@ -171,6 +171,25 @@ controller whose save throws also keeps its loaded entry.
   - **What we do.** We drop the records of deleted objects. We refuse a scene
     whose records name an object it does not have, or one of the wrong kind.
     Copied records keep their template's `LocalSlot`.
+  - **None in this install (2026-11-01).** No installed scene has such a record.
+    Survey 3 counted 8, but the records it called stale name nested lights
+    that the survey itself had dropped
+    ([survey 3's stale Sideloader records](../studio/scene-editing.md#survey-3s-stale-sideloader-records-st-t03k)).
+    Dropping stale records on export is filed as hardening ([#322](https://github.com/grabbiel/ikkoku/issues/322)).
+- **KK_Fix_UnlimitedMapLights lifts CharaStudio's two-light limit.**
+  CharaStudio 1.0.4.2 drops a nested light at load once two lights are
+  counted (`ObjectInfoAssist.LoadChild`, `SceneInfo.isLightCheck`), and its
+  Add Light menu refuses a third. IllusionFixes' KK_Fix_UnlimitedMapLights 22.1
+  (`23051ec9…`, IllusionFixes/UnlimitedMapLights.cs:40–52) patches both light
+  getters so nothing is dropped or refused. The user's install has it.
+  - **Without it.** A vanilla install loads 6 of the 8 installed scenes with
+    nested lights without some of those lights: 27 lights, named by 25
+    Sideloader records. Sideloader's load then stops at the first of those
+    records, so later mod objects stay unresolved. That is CharaStudio's
+    behaviour, not ours.
+  - **What we do.** Our decode keeps every light, as the installed fix does.
+    The writer still refuses an added or copied light past two, CharaStudio
+    1.0.4.2's limit ([#320](https://github.com/grabbiel/ikkoku/issues/320)).
 - **NodesConstraints adopts card links on every load.** No installed DLL
   declares KK_AnimationController, so `NodesConstraints.OnSceneLoad`
   (`817fd940…`, NodesConstraints/NodesConstraints.cs:2061–2068) runs

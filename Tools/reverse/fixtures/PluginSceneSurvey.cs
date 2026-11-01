@@ -10,7 +10,16 @@
 // SceneInfo.Load itself, so ExtendedSave's SceneInfo.Load hook does not raise SceneBeingLoaded and no plug-in
 // acts on the scene. ObjectInfo.Load registers every key (objects and sub-infos) in Studio.sceneInfo's hashIndex
 // through Studio.SetNewIndex, exactly as a load does; that set is cleared before each scene and read afterwards as
-// the scene's used keys. Character cards load through ChaFileControl.LoadCharaFile, whose ExtendedSave hook keeps
+// the scene's used keys. SceneInfo's light count is reset to 0 before each scene too, as a load starts from a new
+// SceneInfo (Studio.LoadScene, Studio.cs:514): a nested light is read only while ObjectInfoAssist.LoadChild's
+// Studio.IsLightCheck() holds (fewer than two lights counted, SceneInfo.isLightCheck), unless KK_Fix_UnlimitedMapLights
+// (in the user's install, and in the survey's player root since survey 4) makes the check always pass. Survey 3 never
+// reset the count and its root lacked the fix, so it dropped every nested light after the session's second light,
+// and the Sideloader records naming those lights looked stale. The light counts are the control: "unlimitedLights"
+// says whether the check passed with two lights counted; "nestedLightsKept" counts the nested lights in the walks,
+// and "nestedLightsDropped" the nested lights a load dropped (a scene that counted two lights or more is read again
+// with the check forced to pass, and the difference counted). Character cards load through
+// ChaFileControl.LoadCharaFile, whose ExtendedSave hook keeps
 // each card's plug-in data, which is where KKAnimationController links are read. The session is not saved after
 // this survey.
 //
@@ -58,10 +67,15 @@ public sealed class PluginSceneSurvey {
     }
     readonly Studio.Studio studio;
     readonly HashSet<int> hashIndex;
+    readonly FieldInfo lightCount;
+    readonly bool unlimitedLights;
     readonly MethodInfo cardData;
     readonly double seconds;readonly long bound;
     readonly Stopwatch watch=Stopwatch.StartNew();
     public bool Truncated;
+    // False: model each scene (walk, keys, cards and the light counts) without judging its edits, as phase E's
+    // light control does.
+    public bool JudgeEdits=true;
     readonly SortedDictionary<string,long> counts=new SortedDictionary<string,long>(StringComparer.Ordinal);
     readonly SortedDictionary<string,SortedDictionary<string,long>> after=new SortedDictionary<string,SortedDictionary<string,long>>(StringComparer.Ordinal);
     readonly SortedDictionary<string,SortedDictionary<string,long>> before=new SortedDictionary<string,SortedDictionary<string,long>>(StringComparer.Ordinal);
@@ -83,6 +97,12 @@ public sealed class PluginSceneSurvey {
         this.studio=studio;this.seconds=seconds;this.bound=bound;
         hashIndex=typeof(SceneInfo).GetField("hashIndex",BindingFlags.NonPublic|BindingFlags.Instance).GetValue(studio.sceneInfo) as HashSet<int>;
         if(hashIndex==null)throw new Exception("SceneInfo.hashIndex not found");
+        lightCount=typeof(SceneInfo).GetField("lightCount",BindingFlags.NonPublic|BindingFlags.Instance);
+        if(lightCount==null||lightCount.FieldType!=typeof(int))throw new Exception("SceneInfo.lightCount not found");
+        // ObjectInfoAssist.LoadChild's own check, with two lights counted: true only under KK_Fix_UnlimitedMapLights.
+        object saved=lightCount.GetValue(studio.sceneInfo);
+        lightCount.SetValue(studio.sceneInfo,2);unlimitedLights=Studio.Studio.IsLightCheck();
+        lightCount.SetValue(studio.sceneInfo,saved);
         Type save=null;
         foreach(var asm in AppDomain.CurrentDomain.GetAssemblies()){var t=asm.GetType("ExtensibleSaveFormat.ExtendedSave",false);if(t!=null)save=t;}
         if(save==null)throw new Exception("ExtendedSave not found");
@@ -92,7 +112,8 @@ public sealed class PluginSceneSurvey {
                                   "loaded","loadError","remappedRoots","judgedEdits",
                                   "cardLinkScenes","cardLinkCharacters","cardStepScenes","cardLiveScenes","cardRefusedEdits",
                                   "withoutEntriesLoaded","withoutEntriesLoadError","withoutEntriesWithSteps",
-                                  "kkpeCardCharacters","kkpeLegacyCards","kkpeUnreadableCards","kkpeCardMarkerMismatch"})counts[name]=0;
+                                  "kkpeCardCharacters","kkpeLegacyCards","kkpeUnreadableCards","kkpeCardMarkerMismatch",
+                                  "nestedLightScenes","nestedLightsKept","nestedLightsDropped","lightRecounts"})counts[name]=0;
         foreach(var kind in EditKinds){after[kind]=Outcomes();before[kind]=Outcomes();unknownOnly[kind]=0;}
         withoutEntries["delete"]=Outcomes();withoutEntries["duplicate"]=Outcomes();
         cardHits["delete"]=0;cardHits["duplicate"]=0;
@@ -137,7 +158,7 @@ public sealed class PluginSceneSurvey {
             s.Scenes++;Bump(s.Forms,form[1]);
             if(form[2].Length>0)Bump(orphanShapes,form[0]+" "+form[2]);
         }
-        Judge(scene);
+        if(JudgeEdits)Judge(scene);
     }
 
     // A scene with no entry: only NodesConstraints' card check can refuse it, and only a delete or a copy.
@@ -178,7 +199,7 @@ public sealed class PluginSceneSurvey {
 
     // The scene's walk, used keys and card-link steps.
     PluginSceneModel Model(byte[] data,byte[] trailer) {
-        hashIndex.Clear();studio.dicChangeAmount.Clear();routes.Clear();namedLinks=0;
+        hashIndex.Clear();studio.dicChangeAmount.Clear();lightCount.SetValue(studio.sceneInfo,0);routes.Clear();namedLinks=0;
         var roots=new List<KeyValuePair<int,ObjectInfo>>();
         int objectsStart,objectsEnd;
         using(var stream=new MemoryStream(data,false))
@@ -188,17 +209,8 @@ public sealed class PluginSceneSurvey {
             var version=new Version(reader.ReadString());
             int count=reader.ReadInt32();
             for(int i=0;i<count;i++) {
-                int key=reader.ReadInt32(),kind=reader.ReadInt32();
-                ObjectInfo info;
-                switch(kind) {
-                case 0:info=new OICharInfo(null,-1);break;
-                case 1:info=new OIItemInfo(-1,-1,-1,-1);break;
-                case 2:info=new OILightInfo(-1,-1);break;
-                case 3:info=new OIFolderInfo(-1);break;
-                case 4:info=new OIRouteInfo(-1);break;
-                case 5:info=new OICameraInfo(-1);break;
-                default:throw new FormatException("object kind "+kind);
-                }
+                int key=reader.ReadInt32();
+                var info=Root(reader.ReadInt32());
                 info.Load(reader,version,false);
                 hashIndex.Add(key);
                 if(info.dicKey!=key)counts["remappedRoots"]++;
@@ -216,7 +228,61 @@ public sealed class PluginSceneSurvey {
         foreach(var card in scene.KkpeCards.Values)if(card!=null&&card[1]==0)counts["kkpeLegacyCards"]++;
         foreach(var key in hashIndex)scene.Used.Add(key);
         PluginSceneRules.KkpeIdsIn(data,scene.KkpeIds);
+        int kept=0;
+        for(int i=0;i<scene.Keys.Count;i++)if(scene.Kinds[i]==2&&scene.Parents[i]>=0)kept++;
+        // A nested light is dropped only while two lights are counted, and a kept light stays counted.
+        int dropped=0;
+        if((int)lightCount.GetValue(studio.sceneInfo)>=2){counts["lightRecounts"]++;dropped=NestedLightsInFile(data)-kept;}
+        if(kept+dropped>0)counts["nestedLightScenes"]++;
+        counts["nestedLightsKept"]+=kept;counts["nestedLightsDropped"]+=dropped;
         return scene;
+    }
+
+    // SceneInfo.Load's root record for an object kind (SceneInfo.cs:323-352).
+    static ObjectInfo Root(int kind) {
+        switch(kind) {
+        case 0:return new OICharInfo(null,-1);
+        case 1:return new OIItemInfo(-1,-1,-1,-1);
+        case 2:return new OILightInfo(-1,-1);
+        case 3:return new OIFolderInfo(-1);
+        case 4:return new OIRouteInfo(-1);
+        case 5:return new OICameraInfo(-1);
+        default:throw new FormatException("object kind "+kind);
+        }
+    }
+
+    // The scene's nested lights with ObjectInfoAssist.LoadChild's light check held open (the count far below two),
+    // read the same way as Model; the scene's keys and light count are emptied again afterwards.
+    int NestedLightsInFile(byte[] data) {
+        hashIndex.Clear();studio.dicChangeAmount.Clear();lightCount.SetValue(studio.sceneInfo,int.MinValue/2);
+        int nested=0;
+        try {
+            using(var stream=new MemoryStream(data,false))
+            using(var reader=new BinaryReader(stream)) {
+                PngFile.SkipPng(reader);
+                var version=new Version(reader.ReadString());
+                int count=reader.ReadInt32();
+                for(int i=0;i<count;i++) {
+                    reader.ReadInt32();
+                    var info=Root(reader.ReadInt32());
+                    info.Load(reader,version,false);
+                    nested+=NestedLights(info);
+                }
+            }
+        } finally {hashIndex.Clear();studio.dicChangeAmount.Clear();lightCount.SetValue(studio.sceneInfo,0);}
+        return nested;
+    }
+
+    static int NestedLights(ObjectInfo info) {
+        var children=new List<ObjectInfo>();
+        var chara=info as OICharInfo;
+        if(chara!=null)foreach(var list in chara.child.Values)children.AddRange(list);
+        else if(info is OIRouteInfo)children.AddRange(((OIRouteInfo)info).child);
+        else if(info is OIItemInfo)children.AddRange(((OIItemInfo)info).child);
+        else if(info is OIFolderInfo)children.AddRange(((OIFolderInfo)info).child);
+        int n=0;
+        foreach(var child in children)n+=(child.kind==2?1:0)+NestedLights(child);
+        return n;
     }
 
     void Visit(PluginSceneModel scene,ObjectInfo info,int key,int parent) {
@@ -369,6 +435,7 @@ public sealed class PluginSceneSurvey {
         long total=0;foreach(var n in objectCounts)total+=n;
         return new Dictionary<string,object>{
             {"seconds",Math.Round(watch.Elapsed.TotalSeconds,1)},{"truncated",Truncated},{"perFileByteBound",bound},{"counts",counts},
+            {"unlimitedLights",unlimitedLights},
             {"objects",new Dictionary<string,object>{{"total",total},{"max",objectCounts.Count==0?0:objectCounts[objectCounts.Count-1]},
                 {"median",objectCounts.Count==0?0:objectCounts[objectCounts.Count/2]}}},
             {"scenesByEditKindAfter",after},{"scenesByEditKindBefore",before},{"scenesRefusedOnlyByUnknownIDs",unknownOnly},

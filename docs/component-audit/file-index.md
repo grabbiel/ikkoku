@@ -14,7 +14,7 @@ the ST-T07 eye look reference and solver-port files, the ST-T07s eye look
 Studio preview runtime files, the ST-T07u iris rendering files and the ST-T04
 studio item shader contract and record color files and the ST-T08 first-slice
 original motion capture/replay files. The 2026-10-23 ST-T08e skirt slice updates runtime, exporter, fixture, test and reference files and adds its paired
-Studio save/load scenarios; it does not represent a new code audit. The 2026-10-25 ST-T03i plug-in data slice adds its rule, test, rule-parity, survey and original-player probe files. The 2026-10-26 texture-loading slice (the parallel-test pool deadlock) adds the in-line texture loader, its identity, corpus and upload tests, and 19 synthetic decoder fixtures. The 2026-10-26 ST-T05a legacy-scene slice adds its reader, test, timing, original-player probe and scenario files. It lists every present Git-visible
+Studio save/load scenarios; it does not represent a new code audit. The 2026-10-25 ST-T03i plug-in data slice adds its rule, test, rule-parity, survey and original-player probe files. The 2026-10-26 texture-loading slice (the parallel-test pool deadlock) adds the in-line texture loader, its identity, corpus and upload tests, and 19 synthetic decoder fixtures. The 2026-10-26 ST-T05a legacy-scene slice adds its reader, test, timing, original-player probe and scenario files. The 2026-11-01 ST-T03k slice adds the opt-in installed-scene tally test and the phase-E original-player light-fix probe with its tests. It lists every present Git-visible
 tracked/untracked non-ignored repository file outside
 `docs/component-audit/`. It excludes private `.local/`, dependency/build caches
 and ignored intermediate assets. Binary assets are inventoried, not reviewed as
@@ -23,7 +23,7 @@ branch was tested or every asset matches the original game. Feature status,
 specific comments and pending tasks are in the linked reports. Shared behavior
 may be discussed in more than one report; one primary owner is listed here.
 
-**1068 files indexed; 1068 assigned; 0 unassigned.**
+**1072 files indexed; 1072 assigned; 0 unassigned.**
 
 Counts include the website and clothes-group additions listed below. Runtime and
 test totals include their specialized role descriptions; this is inventory
@@ -33,7 +33,7 @@ bookkeeping, not a new full source audit.
 | --- | ---: |
 | [App / gameplay / plugins](app-gameplay-and-plugins.md) | 110 |
 | [Character / Maker / mods](character-and-mods.md) | 130 |
-| [Studio / IK / animation](studio.md) | 249 |
+| [Studio / IK / animation](studio.md) | 253 |
 | [Renderer / foundation / assets](renderer-and-foundation.md) | 360 |
 | [Toolchain / verification / historical docs](toolchain-and-verification.md) | 209 |
 
@@ -41,12 +41,12 @@ bookkeeping, not a new full source audit.
 | --- | ---: |
 | App resource metadata / icon | 16 |
 | Build / repository configuration | 9 |
-| Conversion / recovery / verification tool | 246 |
+| Conversion / recovery / verification tool | 247 |
 | Documentation / historical evidence | 65 |
 | Generated asset / catalog / fixture | 205 |
-| Reference host / controlled fixture | 37 |
+| Reference host / controlled fixture | 38 |
 | Runtime / shared shader declaration | 231 |
-| Test / validation | 223 |
+| Test / validation | 225 |
 | Public synthetic body/face input fixture | 1 |
 
 ## App / gameplay / plugins
@@ -457,6 +457,7 @@ Feature assessment: [studio.md](studio.md).
 | [Packages/Engine/Tests/EngineTests/SourceTrigonometricIKTests.swift](../../Packages/Engine/Tests/EngineTests/SourceTrigonometricIKTests.swift) | Test / validation |
 | [Packages/Engine/Tests/EngineTests/StudioHierarchyTests.swift](../../Packages/Engine/Tests/EngineTests/StudioHierarchyTests.swift) | Test / validation |
 | [Packages/Engine/Tests/EngineTests/StudioStatusTextTests.swift](../../Packages/Engine/Tests/EngineTests/StudioStatusTextTests.swift) | Test / validation |
+| [Packages/Engine/Tests/EngineTests/UserPluginSceneTallyTests.swift](../../Packages/Engine/Tests/EngineTests/UserPluginSceneTallyTests.swift) | Test / validation |
 | [Tools/reverse/analysis/animation_playback_contract.py](../../Tools/reverse/analysis/animation_playback_contract.py) | Conversion / recovery / verification tool |
 | [Tools/reverse/analysis/chara_light_mapping.py](../../Tools/reverse/analysis/chara_light_mapping.py) | Conversion / recovery / verification tool |
 | [Tools/reverse/analysis/dynamics_manual_steps.py](../../Tools/reverse/analysis/dynamics_manual_steps.py) | Conversion / recovery / verification tool |
@@ -507,6 +508,7 @@ Feature assessment: [studio.md](studio.md).
 | [Tools/reverse/fixtures/OriginalCameraObjectProbe.cs](../../Tools/reverse/fixtures/OriginalCameraObjectProbe.cs) | Reference host / controlled fixture |
 | [Tools/reverse/fixtures/OriginalDynamicsProbe.cs](../../Tools/reverse/fixtures/OriginalDynamicsProbe.cs) | Reference host / controlled fixture |
 | [Tools/reverse/fixtures/OriginalLegacySceneProbe.cs](../../Tools/reverse/fixtures/OriginalLegacySceneProbe.cs) | Reference host / controlled fixture |
+| [Tools/reverse/fixtures/OriginalLightFixProbe.cs](../../Tools/reverse/fixtures/OriginalLightFixProbe.cs) | Reference host / controlled fixture |
 | [Tools/reverse/fixtures/OriginalLightProbe.cs](../../Tools/reverse/fixtures/OriginalLightProbe.cs) | Reference host / controlled fixture |
 | [Tools/reverse/fixtures/OriginalMapProbe.cs](../../Tools/reverse/fixtures/OriginalMapProbe.cs) | Reference host / controlled fixture |
 | [Tools/reverse/fixtures/OriginalPluginRewriteProbe.cs](../../Tools/reverse/fixtures/OriginalPluginRewriteProbe.cs) | Reference host / controlled fixture |
@@ -522,6 +524,7 @@ Feature assessment: [studio.md](studio.md).
 | [Tools/reverse/original_camera_object_probe.py](../../Tools/reverse/original_camera_object_probe.py) | Conversion / recovery / verification tool |
 | [Tools/reverse/original_dynamics_probe.py](../../Tools/reverse/original_dynamics_probe.py) | Conversion / recovery / verification tool |
 | [Tools/reverse/original_legacy_scene_probe.py](../../Tools/reverse/original_legacy_scene_probe.py) | Conversion / recovery / verification tool |
+| [Tools/reverse/original_light_fix_probe.py](../../Tools/reverse/original_light_fix_probe.py) | Conversion / recovery / verification tool |
 | [Tools/reverse/original_light_probe.py](../../Tools/reverse/original_light_probe.py) | Conversion / recovery / verification tool |
 | [Tools/reverse/original_map_probe.py](../../Tools/reverse/original_map_probe.py) | Conversion / recovery / verification tool |
 | [Tools/reverse/original_plugin_scene_probe.py](../../Tools/reverse/original_plugin_scene_probe.py) | Conversion / recovery / verification tool |
@@ -548,6 +551,7 @@ Feature assessment: [studio.md](studio.md).
 | [Tools/reverse/test_original_camera_object_probe.py](../../Tools/reverse/test_original_camera_object_probe.py) | Test / validation |
 | [Tools/reverse/test_original_dynamics_probe.py](../../Tools/reverse/test_original_dynamics_probe.py) | Test / validation |
 | [Tools/reverse/test_original_legacy_scene_probe.py](../../Tools/reverse/test_original_legacy_scene_probe.py) | Test / validation |
+| [Tools/reverse/test_original_light_fix_probe.py](../../Tools/reverse/test_original_light_fix_probe.py) | Test / validation |
 | [Tools/reverse/test_original_map_probe.py](../../Tools/reverse/test_original_map_probe.py) | Test / validation |
 | [Tools/reverse/test_original_plugin_scene_probe.py](../../Tools/reverse/test_original_plugin_scene_probe.py) | Test / validation |
 | [Tools/reverse/test_original_scene_reload_probe.py](../../Tools/reverse/test_original_scene_reload_probe.py) | Test / validation |
