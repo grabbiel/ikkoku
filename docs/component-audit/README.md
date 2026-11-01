@@ -123,12 +123,18 @@ acceptance boundary; their old “next” steps are historical, not a live queue
   not integrated; these lifetime checks establish no performance benefit.
   The [initial-load verifier](../reference/character/maker-assets.md#initial-load-verifier-controls-192-2026-11-01)
   passes 111 isolated controls; actual app-pair acceptance remains separate.
-  Another 22 collection-envelope controls pass; app execution remains held for
+  Another 22 collection-envelope controls pass; execution was then held for
   a timeout ownership gap found during source review.
   Eighteen further synthetic closure controls pass for conservative failure holds;
-  actual app cleanup and fidelity remain unverified.
+  those controls alone do not verify actual app cleanup or fidelity.
   The first collection stops before app launch on an input alias/absence conflict;
   that failed prerequisite and separate cleanup review are preserved.
+  Seventeen synthetic input-closure controls pass for the exact nine-alias
+  correction. A read-only preflight verifies all 3,698 files/aliases and 37
+  absences. The corrected four-app control cohort reports 124 passing rows and
+  releases naturally, but offline acceptance fails because the checker omits
+  reload step 5's successful reimport sample. The failed review is retained;
+  fidelity, candidate behavior and performance remain unaccepted.
   Per-component diagnostics now place about 52 ms of the tested repeat-cycle
   card-appearance work in six compositor wait/view intervals; batching across
   components remains a proposal. See the [attribution evidence](../reference/character/maker-assets.md#per-component-appearance-attribution-192).
@@ -157,8 +163,10 @@ acceptance boundary; their old “next” steps are historical, not a live queue
   explains why existing intervals cannot isolate decode, conversion or upload waits.
   The optional loader observer candidate compiles in Release with retained
   artifacts. Separate discovery finds all ten observer controls in a 1,139-ID inventory;
-  six CPU and four native controls pass. Pixel identity, wider lifetime checks
-  and overhead remain unverified on this candidate.
+  six CPU and four native controls pass. The strict default-nil corpus passes
+  all 138 positive entries and one expected rejection. Five wider identity tests
+  also pass with zero mismatches; their synthetic unsupported cases remain explicit.
+  Observed-versus-nil pixels, wider lifetime checks and overhead remain open.
   The [sampling investigation](../reference/renderer.md#translated-sampling-repeatability-investigation-188)
   distinguishes diagnostic controls from production behavior; reductions are
   evidence, not fixes or added material coverage. The latest controlled split
@@ -217,6 +225,9 @@ acceptance boundary; their old “next” steps are historical, not a live queue
   The corrected native attempt compiles and runs two callback-policy controls,
   then refuses a breakpoint opcode before target creation. Archive validation
   also fails; separate review proves release without accepting the native gate.
+  Thirteen synthetic ZIP consumer/interchange controls pass; actual corrected
+  producer execution and native capture remain unverified. Eighteen synthetic
+  disk-export witness controls pass, with no Windows query or live-memory proof.
   General plugin compatibility remains outside the supported subset.
 
 Use the linked issue/PR state for work in review, and the owning reference for

@@ -769,6 +769,30 @@ establishes release only. Evidence is under `native-gate-4/`; archive hash begin
 `bca5f88f8b8dd3bc`. Native capture and original lifecycle/pair outcomes remain
 unaccepted; no retry follows automatically.
 
+A proposed producer correction writes explicit canonical ZIP entry names while
+leaving the strict host consumer unchanged. Thirteen isolated Python controls
+pass with zero skips, failures or errors: exact root/nested/empty payloads and
+rejection of backslashes, aliases, noncanonical paths, manifest mismatches, bad
+CRC, symlinks and bounds violations. The aggregate-bound subcase uses mocked
+read counts; the remaining archive cases use small generated ZIP buffers.
+All four local and 36 external pins match; raw, ownership and wrapper exits are
+zero, with worker, parent and group release verified. These are consumer/interchange
+checks, not execution of the PowerShell/.NET producer or native-gate acceptance.
+Evidence is `zip-producer-correction-source-1/local-controls-1/output/`; raw result
+hash begins `6238ba408248f80e`, test report `46c5d87f83afddd4`.
+
+Eighteen separately isolated synthetic PE-witness/envelope controls also pass
+with zero skips, failures or errors. They cover bounded section/export mapping,
+forwarders, ordinals, opcode-field binding, typed identity/stderr evidence and
+complete non-`CC` observations without native-gate acceptance. All 35 pins and
+two loaded-module receipts match; raw, wait and wrapper exits are zero. The
+exact worker PID/group is absent after a successful wait, although the short run
+produced no sampled birth/parent row. These generated controls execute no
+PowerShell query and read no real DLL or live memory. Selected returned slices
+cannot prove a whole-file hash, full export-name uniqueness or the historical
+observer's identity. Evidence is `ntdll-opcode-query-source-1/local-controls-1/`;
+raw result hash begins `1435c772596e69e8`, report `3fa74e09048aca78`.
+
 ### Plug-in data rewrites
 
 Reviewed 2026-10-26 (ST-T03i, second change). `SourceScenePluginRewrites` (`Packages/Engine/Sources/Studio/SourceScenePluginRewrites.swift`) rewrites the KKPE, MaterialEditor and NodesConstraints entries after a delete or a copy, as CharaStudio's save writes them after the same interactive edit.
