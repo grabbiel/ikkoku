@@ -5035,7 +5035,10 @@ default-QoS pool, and waits. Once every Swift cooperative thread is blocked
 like that, the kernel grants that pool no thread, so MetalKit's work never
 runs. `ResourceStore` now loads textures in line on the calling thread and
 waits only for its own GPU command buffer. The results are identical to
-MetalKit's, texel for texel. Details, the evidence and the formats are in
+MetalKit's, texel for texel, for every input measured; baseline JPEGs of
+1024² and more were not until #313 drew them
+([renderer](renderer.md#jpeg-decode-route-290-2026-11-01)). Details, the
+evidence and the formats are in
 [renderer](renderer.md#texture-loading-without-worker-threads-2026-10-26).
 
 ### The pool rule
@@ -5509,9 +5512,172 @@ rule rejects comparative interpretation: 93 unrelated-process intervals exceed
 tails. No speed or FPS claim follows, and no timing cohort was rerun during this
 integration. Functional checks may overlap another owner's compilation. These
 limits do not invalidate the separately accepted functional/image checks;
-[JPEG/HEIC costs](https://github.com/grabbiel/ikkoku/issues/290) remain separate.
+[JPEG/HEIC costs](https://github.com/grabbiel/ikkoku/issues/290) remained separate; #313 settles them (below).
 
 Private receipts remain under
 `.local/codex-resume-2026-10-30/materials-runtime-acceptance/`, with the combined
 gates in `integration-main-1031/`. The rejected quiet result SHA-256 remains
 `3e2d4f4474a8702b354fa4433f706c7f0e6819061dfc9977cea671b93161b2f0`.
+
+## Texture-load observer and JPEG decode route (#313, 2026-11-01)
+
+[PR #313](https://github.com/grabbiel/ikkoku/pull/313) changes two things in
+the in-line texture loader:
+
+- It adds an internal, opt-in load-stage observer.
+- It draws opaque RGB JPEGs instead of copying ImageIO's decoded pixels from
+  the provider.
+
+Together these settle
+[#290](https://github.com/grabbiel/ikkoku/issues/290). The design and the
+identity evidence are in
+[renderer](renderer.md#load-stage-observer-2026-11-01) and
+[renderer](renderer.md#jpeg-decode-route-290-2026-11-01).
+
+### Window and validity
+
+All timings come from one quiet window on 2026-11-01, with every other lane
+idle (no builds, app or VM).
+
+- **Builds:** `899b777b` (main before #313: no observer, the provider's copy
+  for every image) against #313 at `43e1f31e`. Both are Release test builds
+  (`swift test -c release -Xswiftc -enable-testing`, Swift 6.4).
+- **Logging:** `vm.loadavg` and the top five processes by CPU before and
+  after every run.
+- **Rule:** a run is valid when no outside process is above 20% of a core.
+  The Claude desktop processes and WindowServer are exempt. The user's
+  browser (Firefox `plugin-container`) is allowed below 45%.
+- **Attempts:** each set ran three times, the first attempt and two
+  re-runs. Each invalid run below is labelled with what broke the rule.
+
+### Cost without an observer
+
+`stripUploadTiming` uploads a noise PNG with three warm-ups and then 16
+rounds that alternate the whole-image and 4 MiB-strip paths. Each run
+reports the median of its rounds. Base and head ran in ABBA order three
+times, giving six runs per side. The table gives the median of those run
+medians, with the range of the runs in brackets.
+
+| Upload | `899b777b` | #313 | Difference |
+| --- | --- | --- | --- |
+| 2048² PNG, 4 MiB strips (four) | 12.50 ms (12.42–12.60) | 12.49 ms (12.42–12.81) | −0.01 ms |
+| 2048² PNG, whole image | 13.05 ms (12.92–13.17) | 13.12 ms (12.87–13.26) | +0.07 ms (+0.5%) |
+| 1024² PNG, 4 MiB limit (one strip) | 4.09 ms (3.92–4.17) | 4.10 ms (3.95–4.28) | +0.02 ms |
+| 1024² PNG, no limit | 4.06 ms (3.95–4.17) | 4.08 ms (3.78–4.15) | +0.02 ms |
+
+Every difference is inside the run spread of either side.
+
+Only one of the 12 runs met the rule (base, first attempt, browser at
+38.9–39.1%). The other eleven were invalid because the browser was at
+45.0–50.8%:
+
+- first attempt: 45.0–45.4%;
+- second attempt: 48.1–50.8%, with WD Discovery at 25.0% in two runs and
+  `mds_stores` at 23.1% in one;
+- third attempt: 46.5–50.4%.
+
+The ABBA order puts that load on both builds. The Release code itself
+supports the result: no closure is outlined, every mark sits behind a
+`cbz` on the observer, and `__text` is +304 bytes for the observer (+1,012
+with the JPEG route)
+([renderer](renderer.md#load-stage-observer-2026-11-01)).
+
+### Load time by format
+
+`formatLoadStages` loads synthetic files with three warm-ups and then 16
+rounds that rotate four paths:
+
+- MetalKit from the data;
+- the in-line loader with no observer ("ours");
+- the in-line loader with an observer, for the stage split;
+- MetalKit from a `CGImage`.
+
+Each run reports medians. The table gives ours divided by MetalKit's data
+load, one value per run.
+
+| File | `899b777b`, valid run | `899b777b`, all six | #313, four valid runs | #313, all six |
+| --- | --- | --- | --- | --- |
+| JPEG 1024² (533 KB) | 1.46 (5.84 / 4.01 ms) | 1.43–1.71 | 1.03–1.07 (4.00–4.06 / 3.79–3.89 ms) | 1.03–1.07 |
+| JPEG 2048² (2,132 KB) | 1.27 (16.01 / 12.60 ms) | 1.26–1.34 | 0.97–0.99 (12.07–12.20 / 12.28–12.50 ms) | 0.97–0.99 |
+| HEIC with alpha 1024² | 0.98 | 0.98–1.15 | 0.98–1.20 | 0.98–1.20 |
+| HEIC with alpha 2048² | 1.02 | 0.92–1.07 | 1.02–1.04 | 0.97–1.04 |
+| PNG with alpha 1024² | 0.98 | 0.98–1.01 | 0.97–0.99 | 0.97–0.99 |
+| Opaque PNG 1024² | 1.01 | 0.97–1.01 | 0.96–0.99 | 0.96–0.99 |
+
+#313's stage split, valid runs:
+
+| File | Decode | Conversion | Completion wait |
+| --- | --- | --- | --- |
+| JPEG 1024² | 2.61–2.63 ms | 0.53–0.56 ms | 0.47–0.58 ms |
+| JPEG 2048² | 9.15–9.27 ms | 0.90–0.95 ms | 1.61–1.82 ms |
+
+Encode and submit takes 0.05 and 0.11–0.13 ms. The other four stages take
+0.02 ms or less each. For HEIC, ImageIO's decode
+is most of the load (8.9–13.3 ms at 1024²) on a route #313 does not change.
+Its spread moves MetalKit's time and ours together.
+
+Valid runs: base `format-a2-base-r2` (browser at 2.5–40.8%), and head
+`format-b1-head`, `-b1-head-r2`, `-b2-head-r2` and `-b1-head-r3` (2.0–36.7%).
+The other seven were invalid for one of these reasons:
+
+- the browser at 45.0–49.1%;
+- `mediaanalysisd` at 73–101%;
+- `launchd` at 20.9%;
+- `corespotlightd` at 149%.
+
+The JPEG ratios of the invalid runs fall inside the valid ones' spread.
+
+The standalone route probe (public APIs only, 16 rounds) times the two
+routes into a bitmap. For the 1024² JPEG:
+
+- the provider's copy takes 4.57–4.76 ms;
+- a draw into RGBX takes 2.76–2.80 ms;
+- MetalKit takes 3.85–3.92 ms.
+
+At 2048² the same three take 13.76–14.13, 9.14–9.18 and 12.39–12.59 ms.
+All three probe runs were invalid: `mediaanalysisd` at 108–113%, the browser
+at 45.5%, and `corespotlightd` at 130–149%. Their timings agree within 5% of
+each other, and their byte counts are exact and the same every time.
+
+The valid opaque-PNG probe (browser at 42.4%) found that a draw is no faster
+than the provider's copy at 1024² (16.6 against 16.1 ms) or 2048² (63.2
+against 62.1 ms), with identical bytes. So PNGs keep the copy.
+
+### Memory
+
+`jpegLoadFootprint` loads a 2048² JPEG on its own thread after a 64² warm-up
+and a reset of the footprint interval, one fresh process per run. It reports
+the peak above the start, the footprint while the image and texture are held,
+and the footprint after the image is released.
+
+| Build | Runs | Peak above start | Image and texture held | Texture only |
+| --- | --- | --- | --- | --- |
+| `899b777b` | 11 | 41.7–42.2 MiB | 41.7–42.2 MiB | 41.7–42.1 MiB |
+| #313 | 11 | 41.8–47.4 MiB (six at 43.1–47.4) | 41.8–42.0 MiB | 41.8–42.0 MiB |
+
+Three runs per side were in the window, and all six were invalid for CPU
+(`mediaanalysisd` at 76–136%, `mds_stores` at 39%, `launchd` at 24%). Eight
+more per side, alternating, ran just after it. A footprint does not depend on
+CPU load, and the two sets agree.
+
+The held footprint is the same on both builds. So the draw keeps no second
+decoded copy next to its buffer, which a cached ImageIO decode would add
+(16 MiB). The draw adds a peak of up to 5.5 MiB that is gone before the load
+returns, about a third of one decoded image.
+
+It falls inside the upload permit. So at most eight worker loads, plus one
+from the main thread, can hold it at once, the same bound as the decode it
+replaces. The footprint does not drop when the image is released, so these
+figures bound the memory rather than itemize it.
+
+### Result for #290
+
+Of #290's two claims:
+
+- **JPEG:** the extra cost came from the decode route, and it is gone. The
+  in-line loader is within 7% of MetalKit at 1024² and 1–3% faster at 2048²,
+  and it now matches MetalKit's pixels.
+- **HEIC:** the in-line loader is within the window's run spread of MetalKit.
+  Its time is ImageIO's decode, so there is nothing in the loader to change.
+
+No load in the app uses JPEG or HEIC today (#288).
