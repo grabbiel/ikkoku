@@ -32,7 +32,8 @@ import Renderer
 /// scene, and the decode recurses once per nesting level, up to the reader's
 /// 65. In Debug, a first half on a 65-level scene takes 525 KiB of stack
 /// through nested folders and 1,152 KiB through nested characters, more
-/// than a GCD worker's 512 KiB (`SourceSceneDeepStackTests`). The workers
+/// than a GCD worker's 512 KiB (Release: 153 and 211 KiB;
+/// `SourceSceneDeepStackTests`). The workers
 /// get `stackSize`, the main thread's 8 MiB, where the Studio's other scene
 /// decodes run.
 public final class SourceStudioCharacterBatch: @unchecked Sendable {
@@ -72,8 +73,8 @@ public final class SourceStudioCharacterBatch: @unchecked Sendable {
         let workers = min(max(1, width), requests.count)
         guard workers > 0 else { return }
         // The calling thread (the main thread in the Studio) starts one
-        // worker, which starts the others: a thread start costs about 15 µs,
-        // a GCD dispatch about 1 µs.
+        // worker, which starts the others: the init then takes about 25 µs
+        // for 22 workers, against 12 µs for 22 GCD dispatches (Release).
         Self.startWorker(1, of: workers, qos: qos) { [self] in
             for index in stride(from: 2, through: workers, by: 1) {
                 Self.startWorker(index, of: workers, qos: qos) { [self] in work() }

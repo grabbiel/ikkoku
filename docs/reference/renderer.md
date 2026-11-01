@@ -1789,15 +1789,18 @@ keeps nothing (measurement control).
 - Each worker has an 8 MiB stack (`SourceStudioCharacterBatch.stackSize`,
   #321), not a GCD worker's 512 KiB. A first half decodes the whole scene,
   and the decode recurses once per nesting level, up to the reader's limit
-  of 65 levels. In Debug, a first half on the deepest scene the reader
-  accepts takes 525 KiB through nested folders and 1,152 KiB through
-  nested characters (`SourceSceneDeepStackTests`, synthetic scenes). The
-  65-level installed scene needs 144 KiB in Release. Every other scene
+  of 65 levels. A first half on the deepest scene the reader accepts
+  takes 525 KiB of stack through nested folders and 1,152 KiB through
+  nested characters in Debug, and 153 KiB and 211 KiB in Release
+  (`SourceSceneDeepStackTests`, synthetic scenes). Every other scene
   decode and record walk in the Studio runs on the main thread, which
   also has 8 MiB.
 - The init starts one worker, which starts the others, so the calling
-  thread pays one thread start: 26 µs for a 22-wide batch against 18 µs
-  for the GCD dispatches before #321 (Debug, medians of 50).
+  thread pays one thread start. For a 22-wide batch it takes 25–26 µs in
+  Release (26 µs in Debug), against 12–14 µs (18 µs) for the GCD
+  dispatches before #321. Every worker has reported after 225–257 µs
+  (239 µs), against 145–156 µs (152 µs). These are medians of 50 rounds.
+  A first half that does real work takes milliseconds.
 - The owner runs the second halves one at a time, in request order, on a
   thread it chooses: `build(_:)` on the calling thread, or
   `run(_:on:main:built:finished:)` on a serial queue. `run` can also
