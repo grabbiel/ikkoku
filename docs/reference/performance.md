@@ -3973,7 +3973,8 @@ What the numbers show:
   `jsonVector`, which reads each colour and UV vector with
   `JSONSerialization`, at 87.4% of `decodeDocument`. Each item has 14
   vectors, so this scene has about 26,500. That cost predates this change;
-  a follow-up change reads these vectors directly.
+  [scene JSON vectors read directly](#scene-json-vectors-read-directly)
+  removes it.
 
 ### Second window (2026-11-01)
 
@@ -4017,7 +4018,8 @@ Each cell is the median of the runs' medians (each run takes 60 calls after
   The 1–5 ms of the first window does not reappear.
 - **Showoff is within 0.05 ms.** The ranges overlap.
 - **The legacy paths, in this window** (after-build only: the four full-probe
-  runs of the round against the follow-up JSON vector change, all invalid by
+  runs of the round against the follow-up
+  [JSON vector change](#scene-json-vectors-read-directly), all invalid by
   the rule above, so indicative):
   - the largest legacy scene decodes in 79.92 ms (78.93–80.66);
   - its unedited export takes 160.63 ms (159.01–161.67), and `upgraded()`
@@ -4056,6 +4058,105 @@ This uses the CPU factor of [scaling to the low end](#scaling-to-the-low-end-bas
 - The first window has two runs per build. The second has 3 valid before-runs
   and 4 valid after-runs, plus 13 runs that macOS daemons made invalid; they
   are reported, labelled.
+- Engine timing only. The app's import and export were not timed.
+- No M1 run.
+
+## Scene JSON vectors read directly
+
+Added 2026-10-26, after the [ST-T05a timing](#st-t05a-older-scene-versions)
+found it. A scene stores each item colour and UV vector as Unity
+`JsonUtility` text: 14 per item, plus a few per character, route and the
+settings. `KoikatsuBinaryReader.jsonVector` parsed every one with
+`JSONSerialization`, then cast the result to `[String: Any]` and each value to
+`NSNumber`. A `sample` of the Release decode of the largest legacy scene
+(1,894 items) put `jsonVector` at 87.4% of `decodeDocument`. Most of that was
+the parser and the bridging casts.
+
+The reader now reads the exact form `JsonUtility` writes directly
+(`unityJSONVector`; see [binary contracts](studio/binary-contracts.md)), to
+the Float `JSONSerialization` gives it. Every other form goes to
+`JSONSerialization` as before.
+
+### Correctness
+
+- **The fuzz.** `unityJSONVectorNumbersReadAsJSONSerialization` reads 27,995
+  number forms in each position and with both name sets, 111,980 readings in
+  all. The forms include random Floats printed 5 ways, long fractions,
+  integers up to 21 digits, exponents, negative zeros, NaN, booleans and
+  strings. 34,708 readings take the direct path. Every reading gives the same
+  Float bits as `JSONSerialization`, or the same error.
+- **Malformed and other layouts.** `unityJSONVectorOtherFormsReadAsJSONSerialization`
+  checks 435 more strings the same way: whitespace, BOM, other order, missing,
+  extra or duplicate names, escapes, wrong value types, trailing bytes, every
+  prefix of a plain vector, and every one-byte change of it to 12 characters.
+- **The corpus.** `unityJSONVectorReadsTheCorpusAsJSONSerialization` (opt-in)
+  finds every vector string in the user's 182 scenes by its framing:
+  678,678 vectors, 678,573 of them on the direct path, and 0 that differ.
+  `koikatsuSceneCorpusDigest` gives every one of the 175 distinct scenes the
+  same digest of every decoded field and the same export as before the
+  change.
+- **Lanes and the Engine suite.** On this change (Debug, `--strict`): the
+  Engine suite passed 1,075 tests, with only the opt-in probes skipped. After
+  the merge of #291's head with main `7cb4f995` (head `213eecfb`): the Engine
+  suite 1,134 tests with 0 failures (strict, the shared map), only the 11
+  opt-in probes skipped, and `studio-scenarios` 87/87 (Debug, `--strict`, 0
+  skipped). The fuzz and the other-layout check run in the default suite.
+  The corpus check, re-run on that head, again found 0 differences in
+  678,678 vectors.
+
+### Measurement
+
+The ST-T05a timing probe (`KoikatsuLegacyScenePerformanceTests`, full, not
+`CURRENT_ONLY`) on the scenes of the [ST-T05a timing](#st-t05a-older-scene-versions).
+
+- **Builds.** Before is the legacy-scene change (`fd1fb85a`), after is this
+  change merged with it (`213eecfb`), both Release (`swift build -c release
+  --build-tests -Xswiftc -enable-testing`).
+- **Window.** It ran in the [second ST-T05a window](#second-window-2026-11-01),
+  one round of before, after, after, before in each of its two attempts
+  (11:40:43–11:42:15 and 11:46:28–11:47:58), one process per run.
+- **Validity.** 7 of the 8 runs are invalid by the window rule. macOS daemons
+  ran above 20% CPU during each of them: `corespotlightd` (up to 349%),
+  `mediaanalysisd`, `spotlightknowledged`, `mds_stores`, `contactsd`,
+  `launchd`, `runningboardd` and WD Discovery. No agent build, test or app was
+  running. The one valid run is an after-run of the second attempt (1.0.4.2
+  form 20.16 ms, legacy decode 20.44 ms, unedited export 41.16 ms, showoff
+  1.66 ms). The numbers are therefore indicative, but the effect is far
+  larger than the noise. In ABBA order, background load slows both builds
+  alike, and each cell's spread is under 1 ms on the large scene against a
+  59 ms difference.
+- **Evidence.** `.local/stt05a-legacy-scenes/logs/finish/window-attempt1/`
+  and `window-rerun1/`, runs `r4a`–`r4d`.
+
+Each cell is the median of the 4 runs' medians (each run takes 60 calls
+after 10 warmups) and their range.
+
+| Scene, step | Before ms | After ms | After / before |
+| --- | --- | --- | --- |
+| showoff, `decodeDocument` | 2.37 (2.27–2.40) | 1.67 (1.63–1.70) | 0.70 |
+| largest legacy as 1.0.4.2, `decodeDocument` | 79.89 (79.73–80.78) | 20.25 (19.99–20.57) | 0.25 |
+| largest legacy, `decodeDocument` | 79.92 (78.93–80.66) | 20.40 (20.04–20.47) | 0.26 |
+| largest legacy, `editedData`, no edit | 160.63 (159.01–161.67) | 41.29 (40.95–42.02) | 0.26 |
+| largest legacy, `upgraded()` | 160.68 (158.22–163.85) | 41.36 (40.77–41.73) | 0.26 |
+| largest legacy, readback record compare | 0.40 (0.38–0.41) | 0.38 (0.37–0.40) | — |
+
+- **The item-heavy decode is about 3.9× faster.** The largest scene, legacy
+  or as 1.0.4.2, decodes in about 20 ms instead of 80 ms. Its unedited
+  export, which is two decodes and the upgrade's splice, falls from 161 to
+  41 ms.
+- **Showoff decodes 0.7 ms faster.** It has fewer vectors (7 characters and
+  their items).
+- **What is left (estimate).** The `sample` put 87.4% of the before-build's
+  decode in `jsonVector`, which leaves about 10 ms of other work in the 80 ms.
+  The direct reader then takes about the other 10 ms, or roughly 0.4 µs for
+  each of the scene's about 26,500 vectors.
+- **Scaling to a base M1 (estimate,** × 1.25, as in the ST-T05a section): the
+  largest scene decodes in about 25 ms and exports unedited in about 52 ms.
+
+### Limits
+
+- One round per attempt. 7 of the 8 runs are invalid by the window rule; all
+  are reported, as indicative.
 - Engine timing only. The app's import and export were not timed.
 - No M1 run.
 
