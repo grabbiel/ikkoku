@@ -89,7 +89,8 @@ struct MakerScenario: Decodable {
 
         private enum CodingKeys: String, CodingKey {
             case op, on, index, value, id, rgba, path, coordinate, face, body, color,
-                 colorApplied, diagnosticContains, selection, expectFailure, unchanged, resourcesAtMost, rigReuse, initialLoad
+                 colorApplied, diagnosticContains, selection, expectFailure, unchanged, resourcesAtMost, rigReuse, initialLoad,
+                 footprint
         }
 
         init(from decoder: Decoder) throws {
@@ -117,6 +118,7 @@ struct MakerScenario: Decodable {
             resourcesAtMost = try c.decodeIfPresent(String.self, forKey: .resourcesAtMost)
             rigReuse = try c.decodeIfPresent(RigReuseValue.self, forKey: .rigReuse)
             initialLoad = try c.decodeIfPresent(InitialLoadValue.self, forKey: .initialLoad)
+            footprint = try c.decodeIfPresent(Bool.self, forKey: .footprint)
         }
     }
 
