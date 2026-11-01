@@ -147,6 +147,10 @@ remain separate and are not substitutes for those source adapters.
   negative counts, duplicate object keys, nonfinite floats and truncated records.
   Character (kind 0) and route (kind 4) parsing now resides in the companion
   `KoikatsuSceneRecordReader.swift`; all six observed kinds are supported.
+- A JSON colour or Vector4 string that is not a JSON object, or lacks one of
+  its four finite numbers, is refused with the offset where the string starts (its
+  length prefix). Before ST-T05a the error named the byte after the string
+  (`vectorJSONErrorsPointAtTheStartOfTheString`).
 - Limits of 256 MiB per input, 1 MiB per string, 100,000 objects per scene or
   entries per collection, and hierarchy depth 64.
 
