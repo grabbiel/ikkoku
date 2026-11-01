@@ -4038,8 +4038,13 @@ the Float `JSONSerialization` gives it. Every other form goes to
   same digest of every decoded field and the same export as before the
   change.
 - **Lanes and the Engine suite.** On this change (Debug, `--strict`): the
-  Engine suite passed 1,075 tests, with only the opt-in probes skipped;
-  `studio-scenarios` (pending).
+  Engine suite passed 1,075 tests, with only the opt-in probes skipped. After
+  the merge of #291's head with main `7cb4f995` (head `213eecfb`): the Engine
+  suite 1,134 tests with 0 failures (strict, the shared map), only the 11
+  opt-in probes skipped, and `studio-scenarios` 87/87 (Debug, `--strict`, 0
+  skipped). The fuzz and the other-layout check run in the default suite.
+  The corpus check, re-run on that head, again found 0 differences in
+  678,678 vectors.
 
 ### Measurement
 
