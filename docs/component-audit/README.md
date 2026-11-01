@@ -123,6 +123,8 @@ acceptance boundary; their old “next” steps are historical, not a live queue
   not integrated; these lifetime checks establish no performance benefit.
   The [initial-load verifier](../reference/character/maker-assets.md#initial-load-verifier-controls-192-2026-11-01)
   passes 111 isolated controls; actual app-pair acceptance remains separate.
+  Another 22 collection-envelope controls pass; app execution remains held for
+  a timeout ownership gap found during source review.
   Per-component diagnostics now place about 52 ms of the tested repeat-cycle
   card-appearance work in six compositor wait/view intervals; batching across
   components remains a proposal. See the [attribution evidence](../reference/character/maker-assets.md#per-component-appearance-attribution-192).
@@ -200,6 +202,10 @@ acceptance boundary; their old “next” steps are historical, not a live queue
   or establish native capture suitability.
   The first public native attempt stops on a compiler output-path error before
   any observer or target runs; its failure and verified cleanup are retained.
+  Nine local stderr-envelope controls pass after source review caught a mismatch
+  with the lock wrapper output. A separate PowerShell query confirms that parentheses repair
+  output-argument construction in two literal cases; compiler acceptance and
+  native capture remain unverified.
   General plugin compatibility remains outside the supported subset.
 
 Use the linked issue/PR state for work in review, and the owning reference for

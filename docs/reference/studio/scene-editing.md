@@ -722,6 +722,32 @@ begins `b9f87f3c2d3f2a52` and compiler-output hash `0eb1b5f998997d80`. An argume
 construction correction requires separate review; no retry or original capture
 is implied by the successful cleanup.
 
+The separate argument-only plan was held before execution because its stderr
+parser expected one guest line while the shared lock wrapper emits two prefixes.
+A preserved sibling now requires the exact lock path, ordered waiting/acquired
+lines with valid clocks, and one type-checked guest identity stamp. Nine local
+synthetic methods pass with no failures or skips, including unexpected, missing,
+duplicate and reordered lines, wrong paths, invalid clocks and a Boolean PID.
+All 37 pins match; raw child, wait and wrapper exits are zero and the process
+group is released. These checks cover parsing only; PowerShell argument vectors
+and compiler acceptance remain unverified at this checkpoint. Evidence is
+`native-gate-4/argument-controls-2/local-controls-1/output/`; report hash begins
+`336c8f5472683f4f` and run receipt `03c2f968`.
+
+The separately granted argument-only query then passed on PowerShell
+`5.1.26100.9711`. Both synthetic literal path cases, including spaces, matched
+all eight expected vectors and joined strings: the old expression creates
+10 initial/13 full entries and joins the output switch as `/out:" <path> "`;
+parentheses produce 8/11 entries with `/out:"<path>"`. This confirms the expression
+and string-joining explanation for the earlier invalid filename, not actual
+compiler child arguments or compiler acceptance. Transport, wait and wrapper
+exits are zero; all 106 pins and four output artifacts match. The typed guest
+stamp matches the final envelope, synchronous completion is confirmed, and the
+host group and single HTTP owner are released. No compiler, observer or target
+ran. Evidence is `native-gate-4/argument-controls-2/output/`; result hash begins
+`ed47e26cd428b4d3` and guest receipt `5bb24acad7eed13b`. Native capture and original
+lifecycle/pair acceptance remain open.
+
 ### Plug-in data rewrites
 
 Reviewed 2026-10-26 (ST-T03i, second change). `SourceScenePluginRewrites` (`Packages/Engine/Sources/Studio/SourceScenePluginRewrites.swift`) rewrites the KKPE, MaterialEditor and NodesConstraints entries after a delete or a copy, as CharaStudio's save writes them after the same interactive edit.
