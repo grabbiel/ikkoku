@@ -214,6 +214,10 @@ public final class ResourceStore: @unchecked Sendable {
     /// them. The interactive draw shows an unchanged frame again only while
     /// this value is unchanged (R7 phase 2, item 4; `Renderer.DrawnFrame`).
     private var generationValue: UInt64 = 0
+    /// Bumped when an owner gives resources back, as it asks: every `retire`
+    /// and every immediate `unregister`/`release` call, before any completes.
+    /// See `reuseGeneration`.
+    private var releaseRequestsValue: UInt64 = 0
     /// Texture uploads only, never the renderer's frame queue: an upload
     /// neither interleaves with nor waits behind frame command buffers. One
     /// queue per device serves every store (`UploadQueues`).
@@ -253,6 +257,15 @@ public final class ResourceStore: @unchecked Sendable {
 
     /// See `generationValue`. Any thread.
     var generation: UInt64 { lock.lock(); defer { lock.unlock() }; return generationValue }
+
+    /// Changes whenever a frame built earlier may name something that was
+    /// registered, replaced, retired or released since: `generationValue`'s
+    /// changes plus every retirement and release as it is asked for. Both
+    /// counters only grow, so their sum changes with either. A Studio
+    /// character reuses its last frame only while this is unchanged
+    /// (`SourceStudioCharacterPreview.frame`), so a reused frame is never older
+    /// than a retirement it should follow (R6). Any thread.
+    public var reuseGeneration: UInt64 { lock.lock(); defer { lock.unlock() }; return generationValue &+ releaseRequestsValue }
 
     public struct Statistics: Encodable, Sendable {
         public let meshes: Int, textures: Int, deformBuffers: Int, hiddenBuffers: Int
@@ -377,7 +390,7 @@ public final class ResourceStore: @unchecked Sendable {
     /// Drops a mesh at once. A queued handle-only frame then skips it; owners whose
     /// frames may still be pending use `retire(meshes:)`.
     public func unregister(mesh h: MeshHandle) {
-        lock.lock(); meshes[h.id] = nil; retiringMeshes[h.id] = nil; generationValue &+= 1
+        lock.lock(); meshes[h.id] = nil; retiringMeshes[h.id] = nil; generationValue &+= 1; releaseRequestsValue &+= 1
         let live = liveInputs; lock.unlock()
         live?.evict(meshes: [h.id], deformKeys: [])
     }
@@ -452,6 +465,7 @@ public final class ResourceStore: @unchecked Sendable {
     /// Drops deformation buffers at once; see `retire` for owners with pending frames.
     public func releaseDeformBuffers(keys: [UInt64]) {
         lock.lock(); for k in keys { deformBuffers[k] = nil; retiringDeformKeys[k] = nil }
+        releaseRequestsValue &+= 1
         let live = liveInputs; lock.unlock()
         live?.evict(meshes: [], deformKeys: keys)
     }
@@ -478,7 +492,8 @@ public final class ResourceStore: @unchecked Sendable {
     /// Drops hidden masks at once, like `releaseDeformBuffers`. Encoded frames keep
     /// theirs; owners whose frames may still be pending use `retire(hiddenKeys:)`.
     public func releaseHiddenBuffers(keys: [UInt64]) {
-        lock.lock(); for k in keys { hiddenBuffers[k] = nil; retiringHiddenKeys[k] = nil }; generationValue &+= 1; lock.unlock()
+        lock.lock(); for k in keys { hiddenBuffers[k] = nil; retiringHiddenKeys[k] = nil }
+        generationValue &+= 1; releaseRequestsValue &+= 1; lock.unlock()
     }
 
     func hiddenBuffer(key: UInt64) -> (any MTLBuffer)? { lock.lock(); defer { lock.unlock() }; return hiddenBuffers[key] }
@@ -512,6 +527,7 @@ public final class ResourceStore: @unchecked Sendable {
     public func retire(meshes handles: [MeshHandle] = [], deformKeys: [UInt64] = [], hiddenKeys: [UInt64] = []) {
         let stamp = ResourceClock.tick()
         lock.lock(); defer { lock.unlock() }
+        releaseRequestsValue &+= 1
         for handle in handles where meshes[handle.id] != nil { retiringMeshes[handle.id] = stamp }
         // A deformation key may not have a buffer yet: a pending frame that names
         // it allocates one when prepared, and completion drops that one too.
@@ -527,6 +543,7 @@ public final class ResourceStore: @unchecked Sendable {
     public func retire(textures handles: [TextureHandle]) {
         let stamp = ResourceClock.tick()
         lock.lock(); defer { lock.unlock() }
+        releaseRequestsValue &+= 1
         let ids = Set(handles.map(\.id))
         for id in ids where textures[id] != nil { retiringTextures[id] = stamp }
         textureKeys = textureKeys.filter { !ids.contains($0.value.id) }
@@ -682,6 +699,6 @@ public final class ResourceStore: @unchecked Sendable {
         textures.removeValue(forKey: handle.id)
         retiringTextures[handle.id] = nil
         textureKeys = textureKeys.filter { $0.value.id != handle.id }
-        generationValue &+= 1
+        generationValue &+= 1; releaseRequestsValue &+= 1
     }
 }

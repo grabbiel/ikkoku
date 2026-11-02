@@ -30,6 +30,9 @@ public final class SourceRigPreview {
     /// Nil preserves the authored rig for cardless previews. This changes only
     /// cached visibility, never meshes, textures, poses or saved card bytes.
     public var doubleTooth: Bool? { didSet { updateCanineVisibility() } }
+    /// Bumped whenever the parts this preview draws are set again
+    /// (`doubleTooth`), so a cached frame built from them can tell.
+    public private(set) var visibilityGeneration: UInt64 = 0
     private var liveBounds: SourceRigBounds
     /// The last expression input with its weights (R7 phase 2, item 3, C5).
     /// `expressionWeights` is a pure function of the input for this preview's
@@ -91,6 +94,7 @@ public final class SourceRigPreview {
     }
 
     private func updateCanineVisibility() {
+        visibilityGeneration &+= 1
         for part in canineParts {
             activeParts[part.index] = doubleTooth.map { $0 && part.enabled }
                 ?? source.rig.activeNodes[source.parts[part.index].node]
