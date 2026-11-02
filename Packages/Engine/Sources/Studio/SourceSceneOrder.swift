@@ -414,8 +414,10 @@ public extension SourceSceneExportValidation {
     /// from an older CharaStudio, ST-T03i's plug-in data no installed plug-in
     /// reads, #322's count of stale Sideloader records dropped, then #278's
     /// reason when added objects kept the set-based keys. A replayed order
-    /// adds nothing: its keys are CharaStudio's.
-    static func exportStatus(fileName: String, source: KoikatsuSceneDocument, order: Order) -> String {
+    /// adds nothing: its keys are CharaStudio's. `staleSideloaderRecords` is
+    /// the export's own count (`SourceSceneExport`), so the status needs no
+    /// second pass over the plug-in data.
+    static func exportStatus(fileName: String, source: KoikatsuSceneDocument, order: Order, staleSideloaderRecords stale: Int) -> String {
         // ST-T03i: entries no installed plug-in reads travel verbatim; that
         // is CharaStudio's behavior only while no installed plug-in owns them.
         let orphans = source.orphanPluginIDs
@@ -427,7 +429,6 @@ public extension SourceSceneExportValidation {
             + (orphans.isEmpty ? "" : ". It keeps plug-in data no installed plug-in reads, unchanged: \(orphans.joined(separator: ", "))")
         // #322: judged against the scene as loaded, so every export of it
         // drops the same records.
-        let stale = source.staleSideloaderRecords
         if stale > 0 {
             status += ". It drops \(stale) Sideloader record\(stale == 1 ? "" : "s") naming objects the scene does not have, which would stop Sideloader's load"
         }

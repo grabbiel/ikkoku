@@ -99,12 +99,14 @@ enum SourceScenePluginData {
     /// only because the keys could differ then accept it, and copies are
     /// taken in operation order. Nil: copies are in key order, which is
     /// their operation order when no key was freed before one was taken.
+    /// The export also carries the stale Sideloader records this rewrite
+    /// dropped (#322), counted by its own `SideloaderPlan`, for the status.
     static func rewrite(_ data: Data, final: KoikatsuSceneDocument, source: KoikatsuSceneDocument,
-                        copies: [Int32: Int32], moved: Bool, ordered: [Int32: Int]? = nil) throws -> Data {
+                        copies: [Int32: Int32], moved: Bool, ordered: [Int32: Int]? = nil) throws -> SourceSceneExport {
         // No plug-in data: only the card fallback can refuse, and only for a
         // card that names KKAnimationController data. Every written card is
         // in `data` verbatim, so one search keeps such scenes at no cost.
-        if final.trailingData.isEmpty, data.range(of: cardMarker) == nil { return data }
+        if final.trailingData.isEmpty, data.range(of: cardMarker) == nil { return SourceSceneExport(data: data) }
         let edit = Edit(source: source.snapshot, final: final.snapshot, copies: copies, moved: moved, ordered: ordered)
         // #322: an export that leaves the object set as it was still drops
         // Sideloader's stale records; nothing else in the trailer changes.
@@ -112,24 +114,28 @@ enum SourceScenePluginData {
         guard !final.trailingData.isEmpty else {
             // No plug-in data, but NodesConstraints still reads the cards.
             if let reason = cardLinks(edit, .empty) { throw edit.refusal([reason]) }
-            return data
+            return SourceSceneExport(data: data)
         }
         let trailer: SourceSceneKKEx
         do { trailer = try SourceSceneKKEx.parse(final.trailingData) } catch {
             // Moves keep an unreadable trailer, as before.
-            guard edit.keysChange else { return data }
+            guard edit.keysChange else { return SourceSceneExport(data: data) }
             throw edit.refusal(["the scene's data after 【KStudio】 is not readable ExtendedSave data (\(error.localizedDescription))"])
         }
         var plan = Plan(trailer: trailer, edit: edit, scene: source.preservedData)
         try plan.decide()
         let cards = plan.cardPatches
-        guard plan.changes || !cards.isEmpty else { return data }
+        guard plan.changes || !cards.isEmpty else { return SourceSceneExport(data: data) }
         let end = data.startIndex + final.baseSceneEndOffset
         var result = data.subdata(in: data.startIndex..<end)
         // KKPE's copied characters: their cards' controller IDs, in place.
         try patchCards(&result, cards)
-        if plan.changes { result.append(contentsOf: try plan.emit()) } else { result.append(data.subdata(in: end..<data.endIndex)) }
-        return result
+        guard plan.changes else {
+            result.append(data.subdata(in: end..<data.endIndex))
+            return SourceSceneExport(data: result)
+        }
+        result.append(contentsOf: try plan.emit())
+        return SourceSceneExport(data: result, staleSideloaderRecords: plan.sideloaderPlan?.dropped ?? 0)
     }
 
     /// #322, an export that deletes, copies, adds and moves nothing: the
@@ -138,27 +144,13 @@ enum SourceScenePluginData {
     /// their bytes, order and positions, and nil entries go as in any
     /// rewritten trailer. An unreadable trailer or Sideloader entry is kept,
     /// as before.
-    private static func droppingStaleSideloaderRecords(_ data: Data, final: KoikatsuSceneDocument, edit: Edit) throws -> Data {
-        guard !final.trailingData.isEmpty, let trailer = try? SourceSceneKKEx.parse(final.trailingData) else { return data }
+    private static func droppingStaleSideloaderRecords(_ data: Data, final: KoikatsuSceneDocument, edit: Edit) throws -> SourceSceneExport {
+        guard !final.trailingData.isEmpty, let trailer = try? SourceSceneKKEx.parse(final.trailingData) else { return SourceSceneExport(data: data) }
         var plan = Plan(trailer: trailer, edit: edit)
-        guard plan.dropStaleSideloaderRecords() else { return data }
+        guard plan.dropStaleSideloaderRecords() else { return SourceSceneExport(data: data) }
         var result = data.subdata(in: data.startIndex..<(data.startIndex + final.baseSceneEndOffset))
         result.append(contentsOf: try plan.emit())
-        return result
-    }
-
-    /// The Sideloader records an export of `source` drops as stale (#322):
-    /// those naming no object of the scene, counted by the writer's own plan
-    /// (`SideloaderPlan.dropped`). Staleness is judged against the source
-    /// scene, so every export of it drops the same records. Zero when the
-    /// entry is missing, nil, of another version or unreadable, or has a
-    /// record of the wrong kind or a repeated one: then an export that
-    /// changes keys is refused and any other keeps the entry as it was.
-    static func staleSideloaderRecords(in source: KoikatsuSceneDocument) -> Int {
-        guard !source.trailingData.isEmpty, let trailer = try? SourceSceneKKEx.parse(source.trailingData),
-              let entry = trailer.entries.first(where: { $0.id == sideloader && !$0.isNil }), entry.version == 0 else { return 0 }
-        let edit = Edit(source: source.snapshot, final: source.snapshot, copies: [:], moved: false)
-        return (try? SideloaderPlan(trailer: trailer, entry: entry, edit: edit))?.dropped ?? 0
+        return SourceSceneExport(data: result, staleSideloaderRecords: plan.sideloaderPlan?.dropped ?? 0)
     }
 
     /// NodesConstraints.OnSceneLoad (NodesConstraints.cs:2061-2068): with
@@ -1157,11 +1149,6 @@ public extension KoikatsuSceneDocument {
         guard !trailingData.isEmpty, let trailer = try? SourceSceneKKEx.parse(trailingData) else { return [] }
         return trailer.entries.filter { !$0.isNil && SourceScenePluginData.orphanIDs.contains($0.id) }.map(\.id).sorted()
     }
-
-    /// Sideloader records naming objects this scene does not have, which
-    /// every original-scene export drops (#322,
-    /// `SourceScenePluginData.staleSideloaderRecords`).
-    var staleSideloaderRecords: Int { SourceScenePluginData.staleSideloaderRecords(in: self) }
 }
 
 // MARK: - MessagePack spans

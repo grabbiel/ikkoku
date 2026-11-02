@@ -350,7 +350,8 @@ func sourceSceneOrderReplaysALegacySceneOnItsUpgrade() throws {
         #expect(root == upgraded.snapshot.roots.first { $0.sourceKey == root.sourceKey })
     }
     // The status carries the legacy note, and a replayed order adds no reason.
-    let replayedStatus = SourceSceneExportValidation.exportStatus(fileName: "legacy-ordered.png", source: legacy, order: .replayed([.delete(153), .insert([0])]))
+    let replayedStatus = SourceSceneExportValidation.exportStatus(fileName: "legacy-ordered.png", source: legacy, order: .replayed([.delete(153), .insert([0])]),
+                                                                  staleSideloaderRecords: 0)
     #expect(replayedStatus == "Exported edited original scene to legacy-ordered.png, saved as 1.0.4.2 from CharaStudio 0.0.7, as CharaStudio does")
 
     // A second copy needs a key nothing freed: 159 here, which CharaStudio's
@@ -367,13 +368,14 @@ func sourceSceneOrderReplaysALegacySceneOnItsUpgrade() throws {
     // Without a delete the set-based keys stand (the replay is not needed).
     #expect(try session(legacy) { $0.duplicate(156) }.order == .unneeded)
     // The legacy note comes first, then the reason.
-    let fallbackStatus = SourceSceneExportValidation.exportStatus(fileName: "legacy-ordered.png", source: legacy, order: second)
+    let fallbackStatus = SourceSceneExportValidation.exportStatus(fileName: "legacy-ordered.png", source: legacy, order: second, staleSideloaderRecords: 0)
     let note = try #require(fallbackStatus.range(of: ", saved as 1.0.4.2 from CharaStudio 0.0.7, as CharaStudio does"))
     let reason = try #require(fallbackStatus.range(of: ". Added objects took keys after the scene's own, which can differ from CharaStudio's for these edits: "
                                                     + SourceSceneOrderFallback.legacyBones.reason))
     #expect(note.upperBound <= reason.lowerBound && fallbackStatus.hasSuffix(SourceSceneOrderFallback.legacyBones.reason))
     // A current scene's status carries neither.
-    #expect(SourceSceneExportValidation.exportStatus(fileName: "a.png", source: upgraded, order: .unneeded) == "Exported edited original scene to a.png")
+    #expect(SourceSceneExportValidation.exportStatus(fileName: "a.png", source: upgraded, order: .unneeded, staleSideloaderRecords: 0)
+            == "Exported edited original scene to a.png")
 }
 
 // MARK: - The log

@@ -3163,10 +3163,13 @@ final class StudioModel: ViewportInputHandler, LivePacedHandler {
             guard let image = host.renderer.capture(frame: thumbnailFrame, width: 640, height: 360) else { throw RigError.invalid("Could not render the edited Studio thumbnail.") }
             edits.thumbnailData = try CaptureOutput.pngData(image)
         }
-        try staged.stage.editedData(edits).write(to: url, options: .atomic)
-        // ST-T05a's legacy note, ST-T03i's orphaned plug-in data and #278's
+        let export = try staged.stage.exported(edits)
+        try export.data.write(to: url, options: .atomic)
+        // ST-T05a's legacy note, ST-T03i's orphaned plug-in data, #322's
+        // stale Sideloader records (the writer's own count) and #278's
         // fallback reason, in that order.
-        status = SourceSceneExportValidation.exportStatus(fileName: url.lastPathComponent, source: source, order: order)
+        status = SourceSceneExportValidation.exportStatus(fileName: url.lastPathComponent, source: source, order: order,
+                                                          staleSideloaderRecords: export.staleSideloaderRecords)
     }
 
     /// Deterministic integration input using original object/bone IDs. This
