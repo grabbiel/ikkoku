@@ -6770,3 +6770,31 @@ These numbers come from one machine, two cards and n = 4 per cell, with live
 animation off in the scenario. They show no FPS or live-animation result. Raw
 reports, snapshots, the scripts and the summaries stay under
 `.local/stt03k-maker-reimport/timing/run1/`.
+
+## Maker head-selection attribution (#192-D)
+
+#192-D step 1 adds two diagnostics to the normal-head selection report and
+changes nothing else. They are described in
+[maker-assets.md](character/maker-assets.md#texture-load-stages-and-main-actor-gap-phases-192-d):
+
+- **Texture-load stages.** The in-line loader's stages are split out under
+  `metalTextureLoad` in `baseAppearanceStages.textureLoads`.
+- **Gap phases.** Each `selectAsset` step reports its three longest
+  main-actor gaps, each with its split over the selection's phases.
+
+The owner numbers (63–66 ms) in
+[reader-local RGBA digest reuse](character/maker-assets.md#reader-local-verified-rgba-digest-reuse-192)
+(#241) predate `8a871c50` (one compositor command queue per device). The
+owner split here supersedes them.
+
+**Functional check** (Debug build, not timing). The strict
+`maker-scenarios` lane passes 10/10 on head `8deff4c2`. Every head selection
+has `phaseUptimes`, and the split of each reported gap adds up to the gap.
+The cold base appearance laps all eight loader stages once per created
+texture (17 textures). A warm base appearance creates none and reports no
+stage. The 11 lane exports and all 210 resource-statistics snapshots in the
+head, selection and async scenarios match a control build of `e0527080`.
+
+**Timing** is pending a coordinator quiet window. The run pairs Release
+`e0527080` (control) with Release `8deff4c2` (instrumented) in ABBA order per
+sex. If the instrumentation costs more than the noise, it does not merge.
