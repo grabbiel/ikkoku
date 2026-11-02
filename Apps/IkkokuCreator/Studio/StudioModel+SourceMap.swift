@@ -77,11 +77,7 @@ struct SourceMapVanishRuntime {
     var lastView: (camera: SIMD3<Double>, pivot: SIMD3<Double>, touched: [Bool])?
 
     static func model(_ environment: [String: String] = ProcessInfo.processInfo.environment) -> SourceStudioMapVanish.CapsuleModel? {
-        switch environment["IKKOKU_STUDIO_MAP_VANISH"] {
-        case "segment"?, "1"?: return .segment
-        case "midpoint"?: return .midpointSphere
-        default: return nil
-        }
+        SourceStudioMapVanish.CapsuleModel.fromEnvironment(environment)
     }
 }
 
@@ -168,9 +164,11 @@ extension StudioModel {
         guard let request = sourceMapRequest else { return }
         let start = DispatchTime.now().uptimeNanoseconds
         // LoadVanish: every row visible; the next refresh's step hides what the view touches.
-        sourceMapVanish = SourceMapVanishRuntime.model().flatMap { model in
-            asset.vanish.map { SourceMapVanishRuntime(state: SourceStudioMapVanishState(rows: $0.rows.count, sets: asset.vanishSets,
-                                                                                        delaySeconds: $0.delaySeconds), model: model) }
+        // An asset loaded with vanish off has its parts joined back and no vanish sets.
+        sourceMapVanish = SourceMapVanishRuntime.model().flatMap { model -> SourceMapVanishRuntime? in
+            guard asset.joinMode == .vanishSets, let vanish = asset.vanish else { return nil }
+            return SourceMapVanishRuntime(state: SourceStudioMapVanishState(rows: vanish.rows.count, sets: asset.vanishSets,
+                                                                            delaySeconds: vanish.delaySeconds), model: model)
         }
         do {
             sourceMapItems = try asset.items(transform: request.transform, sunLightType: request.sunLightType,

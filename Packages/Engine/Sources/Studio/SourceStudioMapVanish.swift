@@ -53,6 +53,16 @@ public struct SourceStudioMapVanish: Sendable {
         /// A sphere of `radius` halfway between them (height clamped to the
         /// diameter).
         case midpointSphere
+
+        /// The gate: `IKKOKU_STUDIO_MAP_VANISH` `segment` (or `1`) or
+        /// `midpoint`; nil, the default, leaves vanish off.
+        public static func fromEnvironment(_ environment: [String: String] = ProcessInfo.processInfo.environment) -> CapsuleModel? {
+            switch environment["IKKOKU_STUDIO_MAP_VANISH"] {
+            case "segment"?, "1"?: return .segment
+            case "midpoint"?: return .midpointSphere
+            default: return nil
+            }
+        }
     }
 
     public let radius: Double
@@ -334,5 +344,187 @@ public enum SourceStudioConvexDistance {
             if best == nil || simd_length_squared(candidate.0) < simd_length_squared(best!.0) { best = candidate }
         }
         return best ?? (.zero, [a, b, c, d])
+    }
+}
+
+/// PR B: a converted map's parts that a vanish set or a dynamic lightmap
+/// index split, joined back in the loaded glTF before any mesh is
+/// registered. The converter writes `ikkokuMap.join` on every such part: the
+/// unsplit mesh's name and the part's triangle runs, [part start, count,
+/// joined start], the joined start counted in the unsplit group's own order
+/// (its renderers in scene order). A joined mesh takes its parts' vertices in
+/// mesh order, each part's indices rebased by its first vertex, and its
+/// triangles in joined order, so it draws what the unsplit export's mesh
+/// draws, in the same order (under LEqual, equal-depth pixels keep the first
+/// triangle). Realtime GI is not drawn, so a joined mesh drops the dynamic
+/// lightmap index and the TEXCOORD_2 that carried its UV.
+public enum SourceStudioMapJoin {
+    public enum Mode: String, Sendable, Equatable {
+        /// Vanish off: every split group is one mesh again, the unsplit
+        /// export's draws.
+        case unsplit
+        /// Vanish on: one mesh per vanish set (and one for the renderers no
+        /// row names); only the dynamic lightmap split is joined.
+        case vanishSets
+
+        /// `vanishSets` while `IKKOKU_STUDIO_MAP_VANISH` turns vanish on.
+        public static func fromEnvironment(_ environment: [String: String] = ProcessInfo.processInfo.environment) -> Mode {
+            SourceStudioMapVanish.CapsuleModel.fromEnvironment(environment) == nil ? .unsplit : .vanishSets
+        }
+    }
+
+    private struct Member {
+        let node: Int, mesh: Int
+        let runs: [(start: Int, count: Int, at: Int)]
+        let vanishRows: [Int]
+        let dynamic: Bool
+    }
+
+    /// The keys a join may differ in across its parts.
+    private static let splitKeys: Set<String> = ["join", "vanishRows", "dynamicLightmapIndex", "renderers"]
+
+    /// Joins `gltf`'s split parts for `mode` in place; returns how many
+    /// meshes were joined away (their nodes lose the mesh, and its data is
+    /// dropped). Refuses runs that do not tile each part and each unsplit
+    /// group once, and parts that differ in anything but the split.
+    @discardableResult
+    public static func join(_ gltf: inout GLTFAsset, mode: Mode, label: String) throws -> Int {
+        func invalid(_ detail: String) -> RigError { .invalid("\(label): \(detail)") }
+        var groups: [String: [Member]] = [:], order: [String] = []
+        var seen = Set<Int>()
+        for (node, mesh) in gltf.meshNodes {
+            guard let info = gltf.meshes[mesh].extras?["ikkokuMap"], let join = info["join"] else { continue }
+            let meshName = gltf.meshes[mesh].name
+            guard seen.insert(mesh).inserted, gltf.meshes[mesh].primitives.count == 1,
+                  let name = join["name"]?.stringValue, !name.isEmpty, let list = join["runs"]?.arrayValue else {
+                throw invalid("mesh \(meshName) has a join that is not one primitive's unsplit name and runs.")
+            }
+            var runs: [(start: Int, count: Int, at: Int)] = []
+            for entry in list {
+                let numbers = entry.arrayValue?.compactMap { $0.doubleValue.flatMap { Int(exactly: $0) } } ?? []
+                guard numbers.count == 3, entry.arrayValue?.count == 3, numbers[0] >= 0, numbers[1] > 0, numbers[2] >= 0 else {
+                    throw invalid("mesh \(meshName) has a join run that is not [part start, count, joined start].")
+                }
+                runs.append((numbers[0], numbers[1], numbers[2]))
+            }
+            var next = 0
+            for run in runs.sorted(by: { $0.start < $1.start }) {
+                guard run.start == next else { throw invalid("mesh \(meshName)'s join runs do not cover its triangles once.") }
+                next += run.count
+            }
+            guard next * 3 == gltf.meshes[mesh].primitives[0].indices.count else {
+                throw invalid("mesh \(meshName)'s join runs do not cover its triangles once.")
+            }
+            let rows = info["vanishRows"]?.arrayValue?.compactMap { $0.doubleValue.flatMap { Int(exactly: $0) } } ?? []
+            if groups[name] == nil { order.append(name) }
+            groups[name, default: []].append(Member(node: node, mesh: mesh, runs: runs, vanishRows: rows,
+                                                    dynamic: info["dynamicLightmapIndex"] != nil))
+        }
+        var joinedAway = 0
+        for name in order {
+            let members = groups[name]!
+            let total = members.reduce(0) { $0 + gltf.meshes[$1.mesh].primitives[0].indices.count / 3 }
+            var at = 0
+            for run in members.flatMap(\.runs).sorted(by: { $0.at < $1.at }) {
+                guard run.at == at else { throw invalid("the parts joined as \(name) do not tile its triangles once.") }
+                at += run.count
+            }
+            guard at == total else { throw invalid("the parts joined as \(name) do not tile its triangles once.") }
+            try check(members, gltf: gltf) { invalid("the parts joined as \(name) \($0).") }
+            var subgroups: [[Member]] = []
+            switch mode {
+            case .unsplit:
+                subgroups = [members]
+            case .vanishSets:
+                var index: [[Int]: Int] = [:]
+                for member in members {
+                    if let k = index[member.vanishRows] { subgroups[k].append(member) }
+                    else { index[member.vanishRows] = subgroups.count; subgroups.append([member]) }
+                }
+            }
+            for parts in subgroups where parts.count > 1 || mode == .unsplit {
+                let joinedName: String
+                if mode == .unsplit {
+                    joinedName = name
+                } else {
+                    let first = gltf.meshes[parts[0].mesh]
+                    let index = first.extras?["ikkokuMap"]?["dynamicLightmapIndex"]?.doubleValue.flatMap { Int(exactly: $0) }
+                    joinedName = index.map { first.name.hasSuffix("_d\($0)") ? String(first.name.dropLast("_d\($0)".count)) : first.name } ?? first.name
+                }
+                joinedAway += joinParts(parts, into: joinedName, keepRows: mode == .vanishSets, gltf: &gltf)
+            }
+        }
+        return joinedAway
+    }
+
+    /// The parts must be one unsplit group's: one material, frame and
+    /// placement, the same streams (TEXCOORD_2 only as the dynamic lightmap
+    /// UV), no skin or morphs, and the same `ikkokuMap` but for the split.
+    private static func check(_ members: [Member], gltf: GLTFAsset, _ refuse: (String) -> RigError) throws {
+        let first = members[0]
+        let base = gltf.meshes[first.mesh].primitives[0], node = gltf.nodes[first.node]
+        func rest(_ mesh: Int) -> [String: JSONValue] {
+            (gltf.meshes[mesh].extras?["ikkokuMap"]?.objectValue ?? [:]).filter { !splitKeys.contains($0.key) }
+        }
+        func streams(_ p: MeshData) -> [Bool] {
+            [p.normals.isEmpty, p.tangents.isEmpty, p.uvs.isEmpty, p.uvs1.isEmpty, p.colors.isEmpty, p.regions.isEmpty]
+        }
+        let anyDynamic = members.contains(where: \.dynamic)
+        for member in members {
+            let p = gltf.meshes[member.mesh].primitives[0], n = gltf.nodes[member.node]
+            guard p.materialIndex == base.materialIndex else { throw refuse("have different materials") }
+            guard n.parent == node.parent, n.localMatrix == node.localMatrix, n.skin == nil else {
+                throw refuse("hang under different frames or placements")
+            }
+            guard !p.isSkinned, p.morphTargets.isEmpty else { throw refuse("carry a skin or morphs") }
+            guard streams(p) == streams(base), p.extras == base.extras else { throw refuse("carry different vertex streams") }
+            guard anyDynamic ? (p.uvs2.isEmpty || member.dynamic) : p.uvs2.isEmpty == base.uvs2.isEmpty else {
+                throw refuse("carry a TEXCOORD_2 that is not the dynamic lightmap UV")
+            }
+            guard rest(member.mesh) == rest(first.mesh) else { throw refuse("differ in more than the split") }
+        }
+    }
+
+    /// Joins `parts` into the first one's mesh and node; returns how many
+    /// meshes went away.
+    private static func joinParts(_ parts: [Member], into name: String, keepRows: Bool, gltf: inout GLTFAsset) -> Int {
+        let primitives = parts.map { gltf.meshes[$0.mesh].primitives[0] }
+        let dropUV2 = parts.contains(where: \.dynamic)
+        var joined = primitives[0]
+        joined.name = name
+        joined.positions = []; joined.normals = []; joined.tangents = []; joined.uvs = []; joined.uvs1 = []
+        joined.uvs2 = []; joined.colors = []; joined.regions = []; joined.indices = []
+        joined.bounds = .empty
+        var firstVertex: [UInt32] = []
+        for p in primitives {
+            firstVertex.append(UInt32(joined.positions.count))
+            joined.positions += p.positions; joined.normals += p.normals; joined.tangents += p.tangents
+            joined.uvs += p.uvs; joined.uvs1 += p.uvs1; joined.colors += p.colors; joined.regions += p.regions
+            if !dropUV2 { joined.uvs2 += p.uvs2 }
+            joined.bounds.expand(p.bounds)
+        }
+        joined.indices.reserveCapacity(primitives.reduce(0) { $0 + $1.indices.count })
+        let runs = parts.indices.flatMap { k in parts[k].runs.map { (part: k, run: $0) } }.sorted { $0.run.at < $1.run.at }
+        for (k, run) in runs {
+            let source = primitives[k].indices, base = firstVertex[k]
+            for i in (3 * run.start)..<(3 * (run.start + run.count)) { joined.indices.append(source[i] + base) }
+        }
+        var info = gltf.meshes[parts[0].mesh].extras?["ikkokuMap"]?.objectValue ?? [:]
+        info["join"] = nil
+        info["dynamicLightmapIndex"] = nil
+        if !keepRows { info["vanishRows"] = nil }
+        let renderers = parts.reduce(0.0) { $0 + (gltf.meshes[$1.mesh].extras?["ikkokuMap"]?["renderers"]?.doubleValue ?? 0) }
+        info["renderers"] = .number(renderers)
+        var extras = gltf.meshes[parts[0].mesh].extras?.objectValue ?? [:]
+        extras["ikkokuMap"] = .object(info)
+        gltf.meshes[parts[0].mesh].name = name
+        gltf.meshes[parts[0].mesh].extras = .object(extras)
+        gltf.meshes[parts[0].mesh].primitives = [joined]
+        gltf.nodes[parts[0].node].name = name
+        for part in parts.dropFirst() {
+            gltf.nodes[part.node].mesh = nil
+            gltf.meshes[part.mesh].primitives = []
+        }
+        return parts.count - 1
     }
 }

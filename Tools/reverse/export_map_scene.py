@@ -59,6 +59,12 @@ its name (Map layer, enabled, active per sun type: a box's eight corners or the 
 mesh, placed by an engine-basis matrix), and every part whose renderers a row hides names those rows in
 `ikkokuMap.vanishRows`; parts are split by that set, so a row hides exactly its renderers.
 
+Join (PR B): every part of a group that the vanish set or the dynamic lightmap index split carries
+`ikkokuMap.join`: the unsplit group's mesh name and its triangle runs, [part start, count, joined
+start] in triangles, where the joined start counts in the unsplit group's own order (renderers in
+scene order). The app joins the parts back by these runs while it draws neither (vanish off, realtime
+GI not drawn), and gets the unsplit export's triangle order and draws.
+
 Realtime GI (slice 4): Unity adds a renderer's Enlighten dynamic lightmap to the baked one. It is
 computed at runtime, so it is not exported; the provenance's `realtimeGI` counts the drawn
 renderers that carry one, and the catalog row's `notDrawn` names it. PR B writes what a draw of it
@@ -72,6 +78,7 @@ Proprietary output belongs in .local, never in the repository.
 from __future__ import annotations
 
 import argparse
+import collections
 import hashlib
 import json
 import math
@@ -1627,6 +1634,18 @@ VANISH_DELAY_SECONDS = 0.3
 VANISH_COLLIDERS = ("BoxCollider", "MeshCollider", "SphereCollider", "CapsuleCollider")
 
 
+def append_join_run(runs, part_start, count, joined_start):
+    """Records `count` triangles at `part_start` in a split part as `joined_start` in its unsplit
+    group's order (`ikkokuMap.join`'s [part start, count, joined start]); a run that continues the
+    last one in both orders extends it, and an empty one adds nothing."""
+    if not count:
+        return
+    if runs and runs[-1][0] + runs[-1][1] == part_start and runs[-1][2] + runs[-1][1] == joined_start:
+        runs[-1][1] += count
+    else:
+        runs.append([part_start, count, joined_start])
+
+
 def vanish_list_text(bundles, file):
     """GlobalMethod.LoadAllListText: the TextAsset named `file` (case ignored) of each bundle, in sorted
     bundle-name order, concatenated. Returns (text, [bundle names that held it])."""
@@ -1887,6 +1906,9 @@ def export(bundles, scene, map_no, output, max_texture=None, builtin_resources=N
     exporter = MapExporter(map_scene.environment, output, stem, max_texture, block_only_images)
     map_root_world_inverse = inverse_affine(map_scene.world[map_scene.map_root])
     groups, skipped, skies = {}, [], []
+    # Triangles appended so far per unsplit group key (the group key without the vanish set and the
+    # dynamic lightmap index): the joined order of `ikkokuMap.join`.
+    join_cursor = {}
     dynamic_gi = set()  # drawn renderers with a realtime-GI (dynamic) lightmap
     dynamic_sources = {}  # their submeshes by the UV stream TEXCOORD_2 is taken from
     lightmap_sources = {"renderer": 0, "LightmapPrefab": 0}
@@ -2053,6 +2075,11 @@ def export(bundles, scene, map_no, output, max_texture=None, builtin_resources=N
             converted = convert_triangles([[remap[i] for i in triangle] for triangle in triangles[submesh]], len(group["positions"]))
             if mirrored:  # a mirroring transform reverses the authored winding once more
                 converted = [converted[i + j] for i in range(0, len(converted), 3) for j in (0, 2, 1)]
+            # The run's place in the unsplit group's order (`ikkokuMap.join`).
+            count = len(converted) // 3
+            joined_start = join_cursor.get(group_key[:6], 0)
+            join_cursor[group_key[:6]] = joined_start + count
+            append_join_run(group.setdefault("runs", []), len(group["indices"]) // 3, count, joined_start)
             group["indices"].extend(converted)
             group["renderers"].append({"path": path, "submesh": submesh, "vertices": len(used), "triangles": len(triangles[submesh]),
                                        "lightmapIndex": group_lightmap, "lightmapScaleOffset": lm_offset if group_lightmap != NO_LIGHTMAP else None,
@@ -2071,6 +2098,7 @@ def export(bundles, scene, map_no, output, max_texture=None, builtin_resources=N
     def separate_key(value):  # a silhouette's renderer id, a particle's (renderer id, submesh)
         return value if isinstance(value, tuple) else (value or 0,)
     vanish_names = {}
+    split_from = collections.Counter(key[:6] for key in groups)
     for group_key in sorted(groups, key=lambda k: (k[0], k[1], k[2], k[3], k[4], separate_key(k[5]), k[6], k[7])):
         role, material_index, keys, lm_index, option, separate, vanish_set, dynamic_index = group_key
         group = groups[group_key]
@@ -2095,6 +2123,9 @@ def export(bundles, scene, map_no, output, max_texture=None, builtin_resources=N
         if separate is not None:
             separate_names[separate] = len(separate_names)
             suffix += f"_r{separate_names[separate]}"
+        if split_from[group_key[:6]] > 1:
+            extras["ikkokuMap"]["join"] = {"name": f"{role}_{material_index}_{'_'.join(map(str, keys))}_{lm_index}{suffix}",
+                                           "runs": group.get("runs", [])}
         if vanish_set:
             extras["ikkokuMap"]["vanishRows"] = list(vanish_set)
             suffix += f"_v{vanish_names.setdefault(vanish_set, len(vanish_names))}"
@@ -2191,6 +2222,10 @@ def export(bundles, scene, map_no, output, max_texture=None, builtin_resources=N
     if vanish_record is not None:
         provenance["vanish"] = vanish_record
         provenance["conversion"]["merge"] += "; split by the vanish rows a renderer belongs to (ikkokuMap.vanishRows)"
+    split_groups = sum(1 for parts in split_from.values() if parts > 1)
+    if split_groups:
+        provenance["conversion"]["merge"] += (f"; {split_groups} split group(s) carry ikkokuMap.join"
+                                              " (the unsplit mesh and each part's triangle runs)")
     realtime_gi = realtime_gi_of(map_scene, dynamic_gi)
     if realtime_gi:
         realtime_gi.update(uvSources=dynamic_sources,

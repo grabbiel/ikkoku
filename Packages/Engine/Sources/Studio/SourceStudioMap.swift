@@ -322,8 +322,14 @@ public final class SourceStudioMapAsset: @unchecked Sendable {
     /// The map's vanish rows and colliders (PR B), nil for a map without.
     public let vanish: SourceStudioMapVanish?
     /// The distinct row sets the parts' renderers belong to, in first-seen
-    /// order (`Part.vanishSet` indexes them).
+    /// order (`Part.vanishSet` indexes them); empty when the parts were
+    /// joined back (`joinMode` `unsplit`).
     public let vanishSets: [[Int]]
+    /// How the load joined the parts the vanish sets and the dynamic
+    /// lightmap indices split (`SourceStudioMapJoin`), and how many meshes
+    /// it joined away.
+    public let joinMode: SourceStudioMapJoin.Mode
+    public let joinedMeshes: Int
     /// Wall time of `load` on its worker.
     public let loadSeconds: Double
     private let resources: ResourceStore
@@ -332,7 +338,8 @@ public final class SourceStudioMapAsset: @unchecked Sendable {
 
     private init(url: URL, parts: [Part], textures: [TextureHandle], textureBytes: Int, lightmapBytes: Int, lightmapTextures: Int,
                  cubeBytes: Int, cubeTextures: Int, blockImages: Int, decodedImages: Int, imageSource: ImageSource,
-                 vanish: SourceStudioMapVanish?, vanishSets: [[Int]], loadSeconds: Double, resources: ResourceStore) {
+                 vanish: SourceStudioMapVanish?, vanishSets: [[Int]], joinMode: SourceStudioMapJoin.Mode, joinedMeshes: Int,
+                 loadSeconds: Double, resources: ResourceStore) {
         self.url = url; self.parts = parts; self.textures = textures; self.textureBytes = textureBytes
         self.lightmapBytes = lightmapBytes; self.lightmapTextures = lightmapTextures
         self.lightmappedParts = parts.filter { $0.draw == .lightmapped }.count
@@ -344,7 +351,7 @@ public final class SourceStudioMapAsset: @unchecked Sendable {
         self.cubeBytes = cubeBytes; self.cubeTextures = cubeTextures
         self.blockImages = blockImages; self.decodedImages = decodedImages; self.imageSource = imageSource
         self.triangles = parts.reduce(0) { $0 + $1.triangles }
-        self.vanish = vanish; self.vanishSets = vanishSets
+        self.vanish = vanish; self.vanishSets = vanishSets; self.joinMode = joinMode; self.joinedMeshes = joinedMeshes
         self.loadSeconds = loadSeconds; self.resources = resources
     }
 
@@ -354,12 +361,17 @@ public final class SourceStudioMapAsset: @unchecked Sendable {
     /// pool. A failure releases everything it registered. `imageSource` is
     /// read once here (default: the environment's measurement switch).
     /// `decoder` decodes the PNG and JPEG images; a block-only image never
-    /// reaches it (refused by name instead).
+    /// reaches it (refused by name instead). `joinMode` (default: the vanish
+    /// gate) joins split parts back before their meshes are registered.
     public static func load(url: URL, packageRoot: URL, resources: ResourceStore,
                             imageSource: ImageSource = .fromEnvironment(),
+                            joinMode: SourceStudioMapJoin.Mode = .fromEnvironment(),
                             decoder: ImageDecoder = SourceStudioMapAsset.storeDecoder) throws -> SourceStudioMapAsset {
         let start = DispatchTime.now().uptimeNanoseconds
-        let loaded = try LoadedAsset.loadStatic(url: url, packageRoot: packageRoot, resources: resources)
+        var joinedMeshes = 0
+        let loaded = try LoadedAsset.loadStatic(url: url, packageRoot: packageRoot, resources: resources) {
+            joinedMeshes = try SourceStudioMapJoin.join(&$0, mode: joinMode, label: url.lastPathComponent)
+        }
         // Registration order, so a failure gives back everything at once.
         var registered: [TextureHandle] = []
         var images: [String: TextureHandle] = [:]
@@ -590,7 +602,8 @@ public final class SourceStudioMapAsset: @unchecked Sendable {
                                         lightmapBytes: bytes(lightmapHandleList), lightmapTextures: lightmapHandleList.count,
                                         cubeBytes: bytes(cubes), cubeTextures: cubes.count, blockImages: blockImageCount,
                                         decodedImages: decodedImageCount, imageSource: imageSource,
-                                        vanish: vanish, vanishSets: vanishSets, loadSeconds: seconds, resources: resources)
+                                        vanish: vanish, vanishSets: vanishSets, joinMode: joinMode, joinedMeshes: joinedMeshes,
+                                        loadSeconds: seconds, resources: resources)
         } catch {
             for part in loaded.parts { resources.unregister(mesh: part.mesh) }
             for handle in registered { resources.unregister(texture: handle) }

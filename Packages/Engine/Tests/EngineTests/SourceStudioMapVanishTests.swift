@@ -164,3 +164,133 @@ private func vanishJSON(option: Bool = false) -> JSONValue {
     frames.frame(touched: [false], deltaTime: 0.035)
     #expect(frames.setEnabled == [true])
 }
+
+/// A converted map's split group in the converter's layout: under "Map", the
+/// unsplit group `g` as the part no row names (`g`), row 0's part (`g_v0`),
+/// row 0's part with dynamic lightmap 0 (`g_v0_d0`, with a TEXCOORD_2) and
+/// row 1's (`g_v1_d0`). Six triangles in the unsplit order:
+/// v0 0, rest 0, v1_d0 0, v0 1, v0_d0 0, rest 1. Every vertex is distinct.
+private struct JoinFixture {
+    struct Part { let name: String; let triangles: Int; let rows: [Int]?; let dynamic: Bool; let runs: [[Int]]; var material = 0 }
+    static let parts = [Part(name: "g", triangles: 2, rows: nil, dynamic: false, runs: [[0, 1, 1], [1, 1, 5]]),
+                        Part(name: "g_v0", triangles: 2, rows: [0], dynamic: false, runs: [[0, 1, 0], [1, 1, 3]]),
+                        Part(name: "g_v0_d0", triangles: 1, rows: [0], dynamic: true, runs: [[0, 1, 4]]),
+                        Part(name: "g_v1_d0", triangles: 1, rows: [1], dynamic: true, runs: [[0, 1, 2]])]
+    /// The corner positions of part `p`'s triangle `t`: x = part, y = triangle, z = corner.
+    static func corner(_ p: Int, _ t: Int, _ c: Int) -> Float3 { Float3(Float(p), Float(t), Float(c)) }
+
+    let root: URL
+    init(parts: [Part] = JoinFixture.parts) throws {
+        root = FileManager.default.temporaryDirectory.appendingPathComponent("ikkoku-join-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        var buffer = Data(), views: [[String: Any]] = [], accessors: [[String: Any]] = [], meshes: [[String: Any]] = []
+        func append<T>(_ values: [T]) -> Int {
+            while buffer.count % 4 != 0 { buffer.append(0) }
+            let offset = buffer.count
+            values.withUnsafeBytes { buffer.append(contentsOf: $0) }
+            views.append(["buffer": 0, "byteOffset": offset, "byteLength": buffer.count - offset])
+            return views.count - 1
+        }
+        for (p, part) in parts.enumerated() {
+            // Each triangle's corners are its own vertices, listed in reverse so the indices are not the identity.
+            let positions = (0..<part.triangles).flatMap { t in (0..<3).map { Self.corner(p, t, $0) } }.reversed().map { $0 }
+            let indices = (0..<part.triangles).flatMap { t in (0..<3).map { UInt32(positions.count - 1 - (3 * t + $0)) } }
+            var flat: [Float] = []
+            for v in positions { flat += [v.x, v.y, v.z] }
+            accessors.append(["bufferView": append(flat), "componentType": 5126, "count": positions.count, "type": "VEC3",
+                              "min": [Float(p), 0, 0], "max": [Float(p), Float(part.triangles - 1), 2]])
+            var attributes: [String: Int] = ["POSITION": accessors.count - 1]
+            accessors.append(["bufferView": append([Float](repeating: 0.5, count: 2 * positions.count)), "componentType": 5126,
+                              "count": positions.count, "type": "VEC2"])
+            attributes["TEXCOORD_0"] = accessors.count - 1
+            if part.dynamic {
+                accessors.append(["bufferView": append([Float](repeating: 0.25, count: 2 * positions.count)), "componentType": 5126,
+                                  "count": positions.count, "type": "VEC2"])
+                attributes["TEXCOORD_2"] = accessors.count - 1
+            }
+            accessors.append(["bufferView": append(indices), "componentType": 5125, "count": indices.count, "type": "SCALAR"])
+            var info: [String: Any] = ["role": "mapRoot", "visibleFor": [-1, 0, 1, 2], "lightmapIndex": -1, "renderers": 1,
+                                       "join": ["name": "g", "runs": part.runs]]
+            if let rows = part.rows { info["vanishRows"] = rows }
+            if part.dynamic { info["dynamicLightmapIndex"] = 0 }
+            meshes.append(["name": part.name, "extras": ["ikkokuMap": info],
+                           "primitives": [["attributes": attributes, "indices": accessors.count - 1, "material": part.material]]])
+        }
+        try buffer.write(to: root.appendingPathComponent("map.bin"))
+        var nodes: [[String: Any]] = [["name": "Map", "children": Array(1...parts.count), "extras": ["ikkokuMapRole": "mapRoot"]]]
+        nodes += parts.indices.map { ["name": parts[$0].name, "mesh": $0] as [String: Any] }
+        let gltf: [String: Any] = [
+            "asset": ["version": "2.0"], "buffers": [["byteLength": buffer.count, "uri": "map.bin"]],
+            "bufferViews": views, "accessors": accessors, "meshes": meshes,
+            "materials": [["name": "a"], ["name": "b"]], "nodes": nodes,
+            "scenes": [["nodes": [0]]], "scene": 0]
+        try JSONSerialization.data(withJSONObject: gltf, options: [.sortedKeys]).write(to: url)
+    }
+    var url: URL { root.appendingPathComponent("map.gltf") }
+    func load() throws -> GLTFAsset { try GLBLoader.load(url: url, packageRoot: root) }
+    func remove() { try? FileManager.default.removeItem(at: root) }
+
+    /// The drawn meshes in node order: name, extras and primitive.
+    static func drawn(_ gltf: GLTFAsset) -> [(name: String, info: JSONValue?, primitive: MeshData)] {
+        gltf.meshNodes.flatMap { node in
+            gltf.meshes[node.mesh].primitives.map { (name: gltf.meshes[node.mesh].name, info: gltf.meshes[node.mesh].extras?["ikkokuMap"], primitive: $0) }
+        }
+    }
+    /// A primitive's triangles as their corner positions.
+    static func triangles(_ p: MeshData) -> [[Float3]] {
+        stride(from: 0, to: p.indices.count, by: 3).map { i in (0..<3).map { p.positions[Int(p.indices[i + $0])] } }
+    }
+}
+
+@Test func splitMapPartsJoinBackInTheUnsplitTriangleOrder() throws {
+    let fixture = try JoinFixture()
+    defer { fixture.remove() }
+    let corner = JoinFixture.corner
+    func triangle(_ p: Int, _ t: Int) -> [Float3] { (0..<3).map { corner(p, t, $0) } }
+
+    // Vanish off: one mesh, vertices in part order, indices rebased by each part's first vertex.
+    var unsplit = try fixture.load()
+    let unsplitAway = try SourceStudioMapJoin.join(&unsplit, mode: .unsplit, label: "map.gltf")
+    #expect(unsplitAway == 3)
+    let joined = JoinFixture.drawn(unsplit)
+    #expect(joined.map(\.name) == ["g"])
+    let p = try #require(joined.first?.primitive)
+    #expect(p.positions.count == 18 && p.uvs.count == 18 && p.uvs2.isEmpty)
+    // Part k's vertices start at 6, 12 and 15; the first triangle is g_v0's first (stored reversed: 5, 4, 3, plus 6).
+    #expect(Array(p.indices.prefix(6)) == [11, 10, 9, 5, 4, 3])
+    #expect(JoinFixture.triangles(p) == [triangle(1, 0), triangle(0, 0), triangle(3, 0), triangle(1, 1), triangle(2, 0), triangle(0, 1)])
+    #expect(p.bounds == AABB(min: Float3(0, 0, 0), max: Float3(3, 1, 2)))
+    let info = try #require(joined.first?.info)
+    #expect(info["join"] == nil && info["vanishRows"] == nil && info["dynamicLightmapIndex"] == nil)
+    #expect(info["renderers"]?.doubleValue == 4 && info["role"]?.stringValue == "mapRoot")
+    #expect(unsplit.meshNodes.count == 1)
+
+    // Vanish on: row 0's parts join in their unsplit order (g_v0 0, g_v0 1, g_v0_d0 0); the others stay.
+    var sets = try fixture.load()
+    let setsAway = try SourceStudioMapJoin.join(&sets, mode: .vanishSets, label: "map.gltf")
+    #expect(setsAway == 1)
+    let drawn = JoinFixture.drawn(sets)
+    #expect(drawn.map(\.name) == ["g", "g_v0", "g_v1_d0"])
+    #expect(JoinFixture.triangles(drawn[1].primitive) == [triangle(1, 0), triangle(1, 1), triangle(2, 0)])
+    #expect(drawn[1].info?["vanishRows"] == .array([.number(0)]) && drawn[1].info?["dynamicLightmapIndex"] == nil)
+    #expect(drawn[1].primitive.uvs2.isEmpty && drawn[1].info?["renderers"]?.doubleValue == 2)
+    #expect(drawn[2].info?["dynamicLightmapIndex"]?.doubleValue == 0 && drawn[2].primitive.uvs2.count == 3)
+    #expect(JoinFixture.triangles(drawn[0].primitive) == [triangle(0, 0), triangle(0, 1)])
+}
+
+@Test func splitMapPartsThatDoNotTileOrDifferAreRefusedByName() throws {
+    var overlap = JoinFixture.parts
+    overlap[3] = JoinFixture.Part(name: "g_v1_d0", triangles: 1, rows: [1], dynamic: true, runs: [[0, 1, 4]])
+    var uncovered = JoinFixture.parts
+    uncovered[0] = JoinFixture.Part(name: "g", triangles: 2, rows: nil, dynamic: false, runs: [[0, 1, 1]])
+    var material = JoinFixture.parts
+    material[1].material = 1
+    for (parts, message) in [(overlap, "do not tile its triangles once"), (uncovered, "do not cover its triangles once"),
+                             (material, "have different materials")] {
+        let fixture = try JoinFixture(parts: parts)
+        defer { fixture.remove() }
+        var gltf = try fixture.load()
+        let failure: String? = { do { try SourceStudioMapJoin.join(&gltf, mode: .unsplit, label: "map.gltf"); return nil } catch { return "\(error)" } }()
+        #expect(failure?.contains(message) == true, "\(failure ?? "joined")")
+    }
+}

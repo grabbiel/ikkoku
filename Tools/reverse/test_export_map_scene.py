@@ -626,6 +626,22 @@ class VanishTests(unittest.TestCase):
         self.assertEqual(member, {2: (2,), 3: (2,), 4: (0, 2), 5: (0, 1, 2)})
         self.assertEqual(found[1], [{'name': 'D', 'path': 'map/A/C/D'}, {'name': 'missing', 'path': None}])
 
+    def test_join_runs_place_each_part_in_the_unsplit_order(self):
+        # Renderers in scene order: A (2 triangles, row 0), B (3, none), C (1, row 0), D (0), E (4, row 0).
+        cursor, parts = 0, {'v0': [[], 0], 'rest': [[], 0]}
+        for part, count in [('v0', 2), ('rest', 3), ('v0', 1), ('rest', 0), ('v0', 4)]:
+            runs, start = parts[part]
+            maps.append_join_run(runs, start, count, cursor)
+            parts[part][1] += count; cursor += count
+        self.assertEqual(parts['v0'][0], [[0, 2, 0], [2, 5, 5]])  # C and E are contiguous in both orders
+        self.assertEqual(parts['rest'][0], [[0, 3, 2]])
+        joined = [None] * cursor
+        for part, (runs, _) in parts.items():
+            for start, count, at in runs:
+                joined[at:at + count] = [(part, start + k) for k in range(count)]
+        self.assertEqual(joined, [('v0', 0), ('v0', 1), ('rest', 0), ('rest', 1), ('rest', 2),
+                                  ('v0', 2), ('v0', 3), ('v0', 4), ('v0', 5), ('v0', 6)])
+
     def test_box_corners_take_the_size_magnitude(self):
         corners = maps.box_corners([1, 2, 3], [2, 4, -6])
         self.assertEqual(len(corners), 8)
