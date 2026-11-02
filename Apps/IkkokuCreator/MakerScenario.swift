@@ -48,6 +48,8 @@ struct MakerScenario: Decodable {
         /// the resource store's counts before and after it (#332). Lane
         /// scenarios leave it unset and sample nothing.
         let footprint: Bool?
+        /// pause only (#332 measurement): how long to hold, 0 < seconds <= 30.
+        let seconds: Double?
         /// Any step: the decoded-rig hits and misses of the head selection it
         /// committed (`SourceSelectionTiming.headRigReuse`).
         let rigReuse: RigReuseValue?
@@ -93,7 +95,7 @@ struct MakerScenario: Decodable {
         private enum CodingKeys: String, CodingKey {
             case op, on, index, value, id, rgba, path, coordinate, face, body, color,
                  colorApplied, diagnosticContains, selection, expectFailure, unchanged, resourcesAtMost, rigReuse, initialLoad,
-                 footprint
+                 footprint, seconds
         }
 
         init(from decoder: Decoder) throws {
@@ -122,6 +124,7 @@ struct MakerScenario: Decodable {
             rigReuse = try c.decodeIfPresent(RigReuseValue.self, forKey: .rigReuse)
             initialLoad = try c.decodeIfPresent(InitialLoadValue.self, forKey: .initialLoad)
             footprint = try c.decodeIfPresent(Bool.self, forKey: .footprint)
+            seconds = try c.decodeIfPresent(Double.self, forKey: .seconds)
         }
     }
 
@@ -493,6 +496,25 @@ struct MakerScenario: Decodable {
                 guard let id = step.id else { record(step, false, "captureResources: missing id"); continue }
                 resourceSnapshots[id] = maker.host.renderer.resources.statistics()
                 record(step, true, "captured resource counts: \(id)")
+            case "pause":
+                // #332 measurement: hold so an outside tool can read this process
+                // (vmmap, footprint, heap). The marker under .local/ receives this
+                // process's own id; the reader uses only that id. The hold is an
+                // await, so the main run loop can sleep and drain its pool here.
+                guard let seconds = step.seconds, seconds > 0, seconds <= 30,
+                      let path = step.path, let marker = insideLocal(path) else {
+                    record(step, false, "pause: needs 0 < seconds <= 30 and a marker path under .local/")
+                    break scenarioLoop
+                }
+                do {
+                    try FileManager.default.createDirectory(at: marker.deletingLastPathComponent(), withIntermediateDirectories: true)
+                    try Data("\(ProcessInfo.processInfo.processIdentifier)\n".utf8).write(to: marker, options: .atomic)
+                } catch {
+                    record(step, false, "pause: marker not written: \(error)")
+                    break scenarioLoop
+                }
+                try? await Task.sleep(for: .seconds(seconds))
+                record(step, true, "paused \(seconds) s after marking \(path)")
             case "setFace", "setBody":
                 let face = step.op == "setFace"
                 guard let index = step.index, let value = step.value, value.isFinite else {
