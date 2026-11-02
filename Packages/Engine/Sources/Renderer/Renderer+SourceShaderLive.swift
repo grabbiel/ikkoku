@@ -92,7 +92,8 @@ extension Renderer {
                 if inputs[layout] != nil { continue }
                 let key = SourceShaderLiveEncoder.BufferKey(vertices: source, layout: layout)
                 if let existing = seen[key] { inputs[layout] = existing; continue }
-                guard let output = liveInput(encoder, key, mesh: record.item.mesh, vertexCount: mesh.vertexCount) else { failure = "vertex input buffer allocation failed"; break }
+                guard let output = liveInput(encoder, key, mesh: record.item.mesh, deformKey: mesh.needsDeform ? source : nil,
+                                             vertexCount: mesh.vertexCount) else { failure = "vertex input buffer allocation failed"; break }
                 seen[key] = output; inputs[layout] = output
                 jobs.append(LiveInputJob(layout: layout, output: output, mesh: mesh, deformed: record.vertexBuffer,
                                          skinBuffer: deform?.skinBuffer, skinOffset: deform?.skinOffset ?? 0, boneCount: deform?.boneCount ?? 0,
@@ -112,18 +113,26 @@ extension Renderer {
         }
     }
 
-    /// The live encoder's input buffer for one draw's mesh. A frame resolves its
-    /// meshes when preparation starts; the owner may release one on the main
-    /// thread before this runs, and its eviction then misses the entry this
-    /// call creates. A newly allocated entry is therefore checked against the
-    /// store afterwards and dropped when its mesh is gone: a release removes
-    /// the mesh before it evicts, so either the check sees it gone or the
-    /// eviction runs after the entry exists (#337). This frame still uses the
-    /// buffer. Only an allocation pays the lookup, never a reused buffer.
+    /// The live encoder's input buffer for one draw's mesh; `deformKey` is the
+    /// item's deformation key when the mesh is deformed. A frame resolves its
+    /// meshes and deformation buffers when preparation starts; the owner may
+    /// release either on the main thread before this runs, and its eviction
+    /// then misses the entry this call creates. A newly allocated entry is
+    /// therefore checked against the store afterwards. It is dropped when its
+    /// mesh is gone, or when the store no longer holds its deformation key
+    /// (looked up without creating one). A release removes the mesh or key
+    /// before it evicts, so either the check sees it gone or the eviction runs
+    /// after the entry exists (#337). This frame still uses the buffer. Only
+    /// an allocation pays the lookups, never a reused buffer. A stale frame
+    /// (one older than a completed retirement) deforms into transient buffers,
+    /// so its new entries are dropped too; the next current frame keeps them.
     func liveInput(_ encoder: SourceShaderLiveEncoder, _ key: SourceShaderLiveEncoder.BufferKey, mesh handle: MeshHandle,
-                   vertexCount: Int) -> (any MTLBuffer)? {
+                   deformKey: UInt64?, vertexCount: Int) -> (any MTLBuffer)? {
         guard let input = encoder.inputBuffer(key, mesh: handle.id, vertexCount: vertexCount) else { return nil }
-        if input.created, resources.mesh(handle) == nil { encoder.evict(meshes: [handle.id], deformKeys: []) }
+        guard input.created else { return input.buffer }
+        let meshGone = resources.mesh(handle) == nil
+        let releasedKeys = deformKey.map { resources.holdsDeformBuffer(key: $0) ? [] : [$0] } ?? []
+        if meshGone || !releasedKeys.isEmpty { encoder.evict(meshes: meshGone ? [handle.id] : [], deformKeys: releasedKeys) }
         return input.buffer
     }
 

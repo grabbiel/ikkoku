@@ -631,9 +631,28 @@ func liveSourceInputBuffersLeaveWithTheirMeshesAndDeformationKeys() throws {
     resources.unregister(mesh: released)
     let layout = try #require(SourceShaderLiveEncoder.layout(program))
     let raced = renderer.liveInput(encoder, .init(vertices: SourceShaderLiveEncoder.staticSource(mesh: released.id), layout: layout),
-                                   mesh: released, vertexCount: 3)
+                                   mesh: released, deformKey: nil, vertexCount: 3)
     #expect(raced != nil)
     #expect(encoder.bufferCount == baseline)
+
+    // The same race for a deformation key released while its mesh stays
+    // registered: the new entry is dropped because the store no longer holds
+    // the key. While the store holds it, the entry stays.
+    let keyed = try SourceRigPreview(source: liveSkinnedRig(), contract: nil, resources: resources)
+    let keyedFrame = try keyed.frame(camera: OrbitCamera())
+    let keyedItem = try #require(keyedFrame.items.first)
+    let keyedKey = try #require(keyedItem.deformKey)
+    #expect(try liveDraws(frame([kept, live(keyedItem)], skinSets: keyedFrame.skinSets)) == 2)
+    #expect(encoder.bufferCount == baseline + 1)
+    resources.releaseDeformBuffers(keys: [keyedKey])
+    #expect(encoder.bufferCount == baseline)
+    #expect(resources.mesh(keyedItem.mesh) != nil)
+    let keyRaced = renderer.liveInput(encoder, .init(vertices: keyedKey, layout: layout), mesh: keyedItem.mesh, deformKey: keyedKey, vertexCount: 3)
+    #expect(keyRaced != nil)
+    #expect(encoder.bufferCount == baseline)
+    #expect(try liveDraws(frame([kept, live(keyedItem)], skinSets: keyedFrame.skinSets)) == 2)
+    #expect(encoder.bufferCount == baseline + 1)
+    withExtendedLifetime(keyed) {}
     withExtendedLifetime(preview) {}
 }
 

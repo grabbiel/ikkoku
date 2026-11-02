@@ -104,7 +104,7 @@ final class SourceShaderLiveEncoder: @unchecked Sendable {
     /// A frame prepared after a release skips the released mesh at its lookup.
     /// One already being prepared on a render thread may still allocate an
     /// entry for it after this call; `Renderer.liveInput` drops such an entry
-    /// at once, because a release removes the mesh before it evicts.
+    /// at once, because a release removes the mesh or key before it evicts.
     func evict(meshes: [UInt32], deformKeys: [UInt64]) {
         guard !meshes.isEmpty || !deformKeys.isEmpty else { return }
         let meshes = Set(meshes), keys = Set(deformKeys)

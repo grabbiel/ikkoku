@@ -385,6 +385,11 @@ public final class ResourceStore: @unchecked Sendable {
         return b
     }
 
+    /// Whether `key` has a persistent deformation buffer, without creating one.
+    /// After a current frame's deform pass every key it drew holds one, until
+    /// released (#337, `Renderer.liveInput`).
+    func holdsDeformBuffer(key: UInt64) -> Bool { lock.lock(); defer { lock.unlock() }; return deformBuffers[key] != nil }
+
     /// Drops deformation buffers at once; see `retire` for owners with pending frames.
     public func releaseDeformBuffers(keys: [UInt64]) {
         lock.lock(); for k in keys { deformBuffers[k] = nil; retiringDeformKeys[k] = nil }
