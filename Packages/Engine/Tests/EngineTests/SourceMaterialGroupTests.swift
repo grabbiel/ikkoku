@@ -276,6 +276,54 @@ func sourceMaterialClothesFailedViewReleasesPrivateOutputAfterCompletion() throw
     #expect(fixture.resources.statistics().textures == baseline)
 }
 
+private final class GroupWeakCommandBuffer {
+    weak var value: (any MTLCommandBuffer)?
+}
+
+private final class GroupWeakBatch {
+    weak var value: SourceMaterialMetalBatch?
+}
+
+/// #332: a completed composition leaves nothing in the caller's autorelease
+/// pool. The command buffer retains every input and output it encoded, so a
+/// buffer the pool still holds keeps them alive until that pool drains. The
+/// Maker's synchronous reimports (and the scenario's back-to-back steps) run
+/// in one main-thread job, where the pool cannot drain between imports. No
+/// autoreleasepool surrounds this test's body on purpose.
+@Test(.enabled(if: MTLCreateSystemDefaultDevice() != nil))
+func sourceMaterialMetalCompletionReleasesItsCommandBufferAndOutputsOnReturn() throws {
+    let device = try #require(MTLCreateSystemDefaultDevice())
+    let weakBuffer = GroupWeakCommandBuffer(), weakOutput = GroupWeakTexture(), weakBatch = GroupWeakBatch()
+    let width = 64, height = 32
+    let main = SourceMaterialImage(width: width, height: height, repeating: false,
+                                   bytes: (0..<(width * height * 4)).map { UInt8(($0 * 37) % 256) })
+    let mask = SourceMaterialImage(width: width, height: height, repeating: false,
+                                   bytes: (0..<(width * height * 4)).map { UInt8(($0 * 11 + 5) % 256) })
+    do {
+        let compositor = try SourceMaterialCompositor(device: device)
+        let batch = try compositor.makeBatch(maximumLogicalInputBytes: 1 << 20, timings: nil)
+        weakBatch.value = batch
+        try batch.prepare(kind: .clothes, width: width, height: height, main: main, mask: mask,
+                          colors: [Float4(0.8, 0.2, 0.1, 1), Float4(0.1, 0.6, 0.3, 1), Float4(0.2, 0.3, 0.9, 1)],
+                          blend: 0.5, encodeSRGB: true, patterns: [], layers: [])
+        // Observation only: the production path still makes the buffer, the
+        // encoder and the views.
+        var hooks = SourceMaterialMetalCompletionHooks()
+        var bufferSeen = false, outputSeen = false
+        hooks.completionError = { buffer in weakBuffer.value = buffer; bufferSeen = true; return nil }
+        hooks.view = { texture, _ in
+            weakOutput.value = texture; outputSeen = true
+            return texture.makeTextureView(pixelFormat: .rgba8Unorm_srgb)
+        }
+        let views = try SourceMaterialMetalBatch.complete([batch], timings: nil, hooks: hooks)
+        #expect(views.count == 1 && views[0].count == 1)
+        #expect(bufferSeen && outputSeen)
+    }
+    #expect(weakBatch.value == nil, "the batch and its prepared inputs outlive the composition")
+    #expect(weakBuffer.value == nil, "the completed command buffer is still referenced (autorelease pool)")
+    #expect(weakOutput.value == nil, "the dropped output is still referenced")
+}
+
 /// R7 phase 2 item 6 follow-up: compositors share one command queue per
 /// device, and a composition through either gives the same bytes.
 @Test(.enabled(if: MTLCreateSystemDefaultDevice() != nil))
