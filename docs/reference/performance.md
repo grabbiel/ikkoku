@@ -3915,8 +3915,9 @@ map scene are the map's draws:
   - **Map 11 is 0.10 ms slower (0.613 → 0.716),** and the ranges do not
     overlap. That is not attributed. No Metal System Trace was recorded, and
     maps 22 and 27, which add more draws, are flat. So the per-draw cost is
-    not the explanation by itself. A composited recheck with a trace is in
-    [what remains](studio/maps.md#what-remains).
+    not the explanation by itself. PR B's composited recheck, with a trace,
+    found no difference in its own view
+    ([slice 4 PR B](#slice-4-pr-b-vanish-the-join-and-the-composited-recheck)).
 - **Memory.** The split changes Metal bytes by at most 114,688 bytes, down in
   map 21 and up in map 27, and leaves the textures alone. The worker's load is the
   same within the ranges.
@@ -3938,11 +3939,131 @@ method above (GPU × about 4.75, CPU × 1.25):
 
 - Two rounds per case, not three.
 - Nothing was presented, so there are no presentation, pacing or idle
-  metrics. A composited startup recheck is in
-  [what remains](studio/maps.md#what-remains).
+  metrics. PR B rechecked startup and idle on a composited display
+  ([slice 4 PR B](#slice-4-pr-b-vanish-the-join-and-the-composited-recheck)).
 - No Metal System Trace was recorded, so map 11's GPU difference is not
   attributed.
 - No `studio-idle` or orbit runs, and no M1 run.
+
+### Slice 4 PR B: vanish, the join and the composited recheck
+
+Added 2026-11-01 with ST-A11d PR B ([vanish](studio/maps.md#vanish-slice-4-pr-b)).
+Release, on the reference machine, on a composited display: the M32UC at
+1920×1080 (looks like) and 120 Hz, the main display, the same at the start and
+the end of the window. One binary, the PR B Release build, with two exports of
+map 11: slice 4 before the particle split, and slice 4 (the shared export).
+The scene is the map showoff scene, the characters over map 33, with only its
+map set to 11: the studio workloads need source characters, and the VM's map 11
+scene has none. Two rounds in ABBA order, under the quiet-window rule
+(`.local/sta11d-pr-b/tools/perf_window_b.py`, `perf_summary_b.py`).
+
+Startup, seconds since process start, presented, mean (range) of 2 rounds:
+
+| Scene | Export | Scene ready s | First draw s | App state ready s | Longest main-thread stall ms |
+| --- | --- | --- | --- | --- | --- |
+| showoff, no map † | slice 4 | 0.925 | 0.386 | 0.118 | 374 |
+| map 11 | slice 4 before the split | 0.907 (0.892–0.923) | 0.335 (0.330–0.341) | 0.107 (0.106–0.109) | 358 (355–362) |
+| map 11 | slice 4 | 0.930 (0.904–0.957) | 0.344 (0.316–0.373) | 0.114 (0.109–0.119) | 330 (285–374) |
+
+† One valid round: `syspolicyd` stayed above 20% through round 1's three
+attempts.
+
+`studio-idle` for 5 s, presented, mean (range) of 2 rounds. The draws are the
+map's. The draw phase is the frame's CPU draw on the main thread:
+
+| Run | Export | Map draws | Presented fps | Draw ms p50 | Draw ms p95 | GPU ms p50 | GPU ms p95 | Main thread busy ms/s | Peak footprint MB |
+| --- | --- | ---: | --- | --- | --- | --- | --- | --- | --- |
+| idle | slice 4 before the split | 161 | 30.02 | 3.00 (2.39–3.60) | 3.95 (3.85–4.05) | 1.187 (1.179–1.196) | 1.373 (1.360–1.386) | 40 (35–45) | 1102 (1095–1110) |
+| idle | slice 4 | 187 | 30.02 | 3.13 (2.64–3.63) | 4.04 (3.93–4.15) | 1.188 (1.185–1.190) | 1.365 (1.361–1.368) | 40 (35–46) | 1091 (1089–1094) |
+| under the trace | slice 4 before the split | 161 | 30.02 | 2.42 (2.27–2.56) | 4.05 (3.74–4.36) | 1.216 (1.209–1.223) | 1.623 (1.557–1.690) | 31 (27–36) | 1102 (1096–1108) |
+| under the trace | slice 4 | 187 | 30.00 | 3.01 (2.35–3.66) | 3.94 (3.25–4.63) | 1.208 (1.197–1.218) | 1.650 (1.644–1.656) | 31 (26–36) | 1095 (1092–1097) |
+
+The Metal System Trace (`xctrace`, attached to the app's PID) gives the app's
+GPU busy time, the union of its intervals over the trace's 5 s span, per
+frame. It is 3.50 and 3.23 ms before the split, and 3.60 and 3.19 ms after
+it (round 1, round 2; `.local/sta11d-pr-b/tools/mst_app_gpu.py`). The rounds
+differ more than the exports do.
+
+- **No measurable difference on map 11 between the two exports.** Startup,
+  draw and GPU per frame, and the app's GPU busy time all overlap.
+- **The frame rate is bound by the 30 Hz tick.** The display link runs at
+  120 Hz, but the Studio's tick submits 30 frames a second, so `studio-idle`
+  presents 30 fps by design.
+- **The particle split's +26 draws cost about +0.03 ms** of CPU encode
+  (slice 4's offscreen benchmark). That is below what this workload resolves.
+- **The bench's +0.10 ms is not reproduced or attributed.** The showoff view
+  is not the slice-4 bench's camera view. The traces carry no recording
+  signposts and no encoder labels, so the GPU time cannot be split by encoder.
+  Full-rate cells for map 11 before and after the split join the vanish
+  window below.
+
+**The join.** The vanish split's parts carry their unsplit mesh's name and
+triangle runs (`ikkokuMap.join`). With vanish off, the loader joins them back
+([vanish](studio/maps.md#vanish-slice-4-pr-b)). Offline, on the join
+re-export, the joined meshes are the shared export's, in the same triangle
+order (`.local/sta11d-pr-b/tools/merge_order_check.py`, `draw_delta.py`):
+
+| Map | Draws (sun 0/1/2), shared | Vanish off, joined | Vanish on |
+| --- | --- | --- | --- |
+| 4 `1-1` | 51/50/47 | 51/50/47 | 117/116/113 (+66) |
+| 11 `StaffAdultRoom` | 187/186/183 | 187/186/183 | 382/381/378 (+195) |
+| 30 `Toilet_nozoki` | 16/16/16 | 16/16/16 | 44/44/44 (+28) |
+
+With vanish on, each vanish set is its own draw. The added draws cost what
+slice 4 measured per draw, about 1.2–1.8 µs of CPU encode each: about
+0.08–0.12 ms on map 4 and 0.23–0.35 ms on map 11.
+
+**At full rate (`studio-orbit`).** A second window, the same binary and
+display (the same at the start and the end), with the join re-export of all
+maps. `studio-orbit` drags the camera once per input tick for 10 s, so the
+Studio refreshes and draws at the display's rate. The scene is again the map
+showoff scene with only its map set (to 4 or 11). Two rounds in ABBA order over
+the five cells, every cell valid; three were run again after an indexer went
+above 20% (`.local/sta11d-pr-b/tools/perf_vanish.py`). Round 1 / round 2:
+
+| Map | Export | Vanish | Map draws | Presented fps | Draw ms p50 | GPU ms p50 | Worker load ms |
+| --- | --- | --- | ---: | --- | --- | --- | --- |
+| 4 | join | on (`segment`) | 117 | 119.4 / 118.8 | 1.49 / 2.01 | 0.735 / 0.826 | 118.8 / 100.7 |
+| 4 | join | off | 51 | 119.8 / 118.8 | 1.26 / 1.84 | 0.749 / 0.856 | 100.3 / 100.8 |
+| 4 | shared | off | 51 | 119.5 / 119.7 | 1.37 / 1.74 | 0.745 / 0.841 | 95.1 / 81.0 |
+| 11 | before the split | off | 161 | 119.5 / 119.5 | 1.865 / 1.853 | 0.919 / 1.042 | 158.4 / 164.9 |
+| 11 | shared | off | 187 | 119.6 / 117.4 | 2.007 / 1.926 | 0.962 / 0.928 | 169.2 / 168.6 |
+
+- **The vanish step costs 4.15 and 6.11 ms of main-thread time per second**
+  (round 1, round 2) on map 4 with vanish on. That is the sum of every
+  `studioMapVanish` sample over the recording: 41.49 ms in 10.001 s and
+  61.14 ms in 10.002 s. It runs at every refresh, 126 times a second while the
+  camera moves. Per refresh it takes 26.0 and 40.3 µs at p50, 79.9 and
+  116.1 µs at p95, and at most 263 µs. In those 10 s it changed what was
+  hidden 55 and 56 times, with at most 10 of the map's 57 rows hidden at once.
+  With vanish off, the step returns before it measures anything: no samples.
+- **Vanish on or off does not change the GPU time** on map 4 (0.735–0.856 ms
+  in every cell, the rounds differing more than the cells), although vanish on
+  draws 117 times instead of 51.
+- **The join is load work, once per map load, on the worker.** Map 4's join
+  export loads in 100.3–118.8 ms against 81.0–95.1 ms for the shared export:
+  +5 to +24 ms per round, about +17 ms on average. Placing the map on the main
+  thread takes 0.08–0.10 ms either way.
+- **On map 11 the shared export draws 0.07–0.14 ms longer per frame** than
+  before the split (draw p50 +0.142 and +0.073 ms; the ranges do not overlap
+  in two rounds). That is the CPU encode of its +26 draws, close to slice 4's
+  bench (+0.10 ms in its own view). The GPU time overlaps, and both present
+  119–120 fps: the frame rate is bound by the display.
+
+**Scaling to a base M1 (estimates, scaled and not measured),** with the
+method above (GPU × about 4.75, CPU × 1.25): with vanish on, at most about
++0.15 ms of encode per frame on map 4 and +0.45 ms on map 11, and about
+5–8 ms/s of main-thread time for the vanish step while the camera moves. Map
+11's particle split is about +0.1–0.2 ms of encode per frame. Vanish stays off
+by default until the VM phase.
+
+**Limits.**
+
+- Two rounds per case, not three. One round for the showoff scene without a
+  map.
+- Two maps (4 and 11) composited, in one view each; `studio-orbit` for 10 s
+  per cell.
+- No M1 run.
 
 ## ST-T03i: scene plug-in data rewrites
 

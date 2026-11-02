@@ -52,15 +52,33 @@ own draw, with the renderer's bounds centre in `ikkokuMap.sortCenter`, the subme
 app can order them as Unity orders transparent renderers (queue, then distance to the bounds
 centre, back to front, then one renderer's submeshes in index order).
 
+Vanish (slice 4 PR B, `--vanish-folder`/`--vanish-file`): Studio hides the walls and furniture its
+camera's view capsule passes through (Studio.CameraControl.VanishProc; see "vanish" below). The glTF's
+top-level extras `ikkokuVanish` list the catalog row's vanish rows in order, each with the colliders of
+its name (Map layer, enabled, active per sun type: a box's eight corners or the hull points of a convex
+mesh, placed by an engine-basis matrix), and every part whose renderers a row hides names those rows in
+`ikkokuMap.vanishRows`; parts are split by that set, so a row hides exactly its renderers.
+
+Join (PR B): every part of a group that the vanish set or the dynamic lightmap index split carries
+`ikkokuMap.join`: the unsplit group's mesh name and its triangle runs, [part start, count, joined
+start] in triangles, where the joined start counts in the unsplit group's own order (renderers in
+scene order). The app joins the parts back by these runs while it draws neither (vanish off, realtime
+GI not drawn), and gets the unsplit export's triangle order and draws.
+
 Realtime GI (slice 4): Unity adds a renderer's Enlighten dynamic lightmap to the baked one. It is
 computed at runtime, so it is not exported; the provenance's `realtimeGI` counts the drawn
-renderers that carry one, and the catalog row's `notDrawn` names it.
+renderers that carry one, and the catalog row's `notDrawn` names it. PR B writes what a draw of it
+needs from the scene: a GI-lit renderer with a dynamic lightmap is merged only with renderers of the
+same dynamic lightmap index (`ikkokuMap.dynamicLightmapIndex`), and its TEXCOORD_2 is the dynamic
+lightmap UV (dynamic_lightmap_uv) with its `m_LightmapTilingOffsetDynamic` applied and V flipped
+like TEXCOORD_1.
 
 Proprietary output belongs in .local, never in the repository.
 """
 from __future__ import annotations
 
 import argparse
+import collections
 import hashlib
 import json
 import math
@@ -324,6 +342,20 @@ def normal_matrix(m):
 def lightmap_uv(uv, scale_offset):
     """Unity's lightmap UV (uv * ST.xy + ST.zw, bottom-up), then the UV0 origin flip."""
     return convert_uv([uv[0] * scale_offset[0] + scale_offset[2], uv[1] * scale_offset[1] + scale_offset[3]])
+
+
+# UnityCG's vertex input for the dynamic lightmap is TEXCOORD2 (`v.texcoord2`, o.lmap.zw =
+# texcoord2 * unity_DynamicLightmapST.xy + .zw). Enlighten's realtime UVs are the mesh's UV2 (uv3)
+# when it has one, else its lightmap UV (UV1), else UV0; no converted map's GI-lit renderer has a
+# UV2 or an Enlighten vertex stream (`m_EnlightenVertexStream`), so the fallback is what they use
+# (`tools/realtime_gi_survey.py`: maps 30, 32, 37, 41 UV1, map 40 UV0). Not checked against a
+# capture of the player's dynamic lightmaps yet.
+def dynamic_lightmap_uv(handler):
+    """(the UV stream the dynamic lightmap reads, its name)."""
+    for name, uv in (("uv2", handler.m_UV2), ("uv1", handler.m_UV1), ("uv0", handler.m_UV0)):
+        if uv:
+            return uv, name
+    return None, None
 
 
 def tiled_uv(uv, scale, offset):
@@ -1584,6 +1616,220 @@ def find_loop(map_scene, transform_id, name):
     return None
 
 
+# ---------------------------------------------------------------- vanish (slice 4 PR B)
+
+# Studio.CameraControl (recovered, CharaStudio 1.0.4.2): Studio.SetupMap calls
+# LoadVanish(vanish.bundlePath, vanish.fileName, Map.mapRoot). LoadVanish reads the list with
+# GlobalMethod.LoadAllListText (the TextAsset of that name from every bundle in the folder, bundle
+# names sorted, texts concatenated) and GetListString (rows on '\n' without a last empty line, cells on
+# '\t', '\r' removed); per row cell 0 is the collider name and cells 1.. up to the first empty one are
+# names found with FindLoop under mapRoot, whose MeshRenderers (inactive ones too) the row hides.
+# The camera's kinematic trigger capsule (radius 0.05, along the view from the camera to the pivot)
+# lists the colliders it touches on mapLayer, LayerMask.GetMask("Map", "MapNoShadow") = 2048 in the
+# player (slice-4 trace: layer 11 only). VanishProc, each LateUpdate, matches a row by that collider's
+# GameObject name: it hides the row's renderers at once and shows them 0.3 s after the overlap ends.
+MAP_LAYER = 11
+VANISH_RADIUS = 0.05
+VANISH_DELAY_SECONDS = 0.3
+VANISH_COLLIDERS = ("BoxCollider", "MeshCollider", "SphereCollider", "CapsuleCollider")
+
+
+def append_join_run(runs, part_start, count, joined_start):
+    """Records `count` triangles at `part_start` in a split part as `joined_start` in its unsplit
+    group's order (`ikkokuMap.join`'s [part start, count, joined start]); a run that continues the
+    last one in both orders extends it, and an empty one adds nothing."""
+    if not count:
+        return
+    if runs and runs[-1][0] + runs[-1][1] == part_start and runs[-1][2] + runs[-1][1] == joined_start:
+        runs[-1][1] += count
+    else:
+        runs.append([part_start, count, joined_start])
+
+
+def vanish_list_text(bundles, file):
+    """GlobalMethod.LoadAllListText: the TextAsset named `file` (case ignored) of each bundle, in sorted
+    bundle-name order, concatenated. Returns (text, [bundle names that held it])."""
+    import UnityPy
+    parts, found = [], []
+    for bundle in sorted(Path(b) for b in bundles):
+        for obj in UnityPy.load(str(bundle)).objects:
+            if obj.type.name != "TextAsset":
+                continue
+            data = obj.read()
+            if data.m_Name.casefold() != file.casefold():
+                continue
+            script = data.m_Script
+            parts.append(script if isinstance(script, str) else bytes(script).decode("utf-8"))
+            found.append(bundle.name)
+            break
+    return "".join(parts), found
+
+
+def vanish_rows(text):
+    """CameraControl.LoadVanish's reading of the list (GetListString): [(collider name, [node names])]."""
+    lines = text.split("\n")
+    if lines and lines[-1].strip() == "":
+        lines = lines[:-1]
+    rows = []
+    for line in lines:
+        cells = [cell.replace("\r", "").replace("\n", "") for cell in line.split("\t")]
+        names = []
+        for cell in cells[1:]:
+            if cell == "":
+                break
+            names.append(cell)
+        rows.append((cells[0], names))
+    return rows
+
+
+def vanish_membership(map_scene, rows):
+    """{transform id: (row indices)} of every node under a row's FindLoop nodes (the node included):
+    the hosts whose MeshRenderers each row hides; and per row the nodes found and not found."""
+    member, found = {}, []
+    for index, (_, names) in enumerate(rows):
+        nodes = []
+        for name in names:
+            node = find_loop(map_scene, map_scene.map_root, name)
+            nodes.append({"name": name, "path": map_scene.path(node) if node is not None else None})
+            stack = [node] if node is not None else []
+            while stack:
+                current = stack.pop()
+                member.setdefault(current, set()).add(index)
+                stack.extend(child.path_id for child in map_scene.transforms[current].m_Children)
+        found.append(nodes)
+    return {host: tuple(sorted(indices)) for host, indices in member.items()}, found
+
+
+_ICOSPHERES = {}
+
+
+def icosphere_directions(level):
+    """Unit directions of an icosphere subdivided `level` times (2: 162, 5: 10242, 6: 40962), cached."""
+    if level in _ICOSPHERES:
+        return _ICOSPHERES[level]
+    t = (1 + math.sqrt(5)) / 2
+    vertices = [normalized(v) for v in ([-1, t, 0], [1, t, 0], [-1, -t, 0], [1, -t, 0], [0, -1, t], [0, 1, t], [0, -1, -t],
+                                         [0, 1, -t], [t, 0, -1], [t, 0, 1], [-t, 0, -1], [-t, 0, 1])]
+    faces = [(0, 11, 5), (0, 5, 1), (0, 1, 7), (0, 7, 10), (0, 10, 11), (1, 5, 9), (5, 11, 4), (11, 10, 2), (10, 7, 6), (7, 1, 8),
+             (3, 9, 4), (3, 4, 2), (3, 2, 6), (3, 6, 8), (3, 8, 9), (4, 9, 5), (2, 4, 11), (6, 2, 10), (8, 6, 7), (9, 8, 1)]
+    for _ in range(level):
+        cache, refined = {}, []
+
+        def middle(a, b):
+            k = (min(a, b), max(a, b))
+            if k not in cache:
+                cache[k] = len(vertices)
+                vertices.append(normalized([(vertices[a][i] + vertices[b][i]) / 2 for i in range(3)]))
+            return cache[k]
+        for a, b, c in faces:
+            ab, bc, ca = middle(a, b), middle(b, c), middle(c, a)
+            refined += [(a, ab, ca), (b, bc, ab), (c, ca, bc), (ab, bc, ca)]
+        faces = refined
+    _ICOSPHERES[level] = vertices
+    return vertices
+
+
+# The hull points of a convex MeshCollider: every vertex that is the farthest one in some icosphere
+# direction. On the 12 meshes the 31 maps' vanish rows name (460-821 vertices), level 5 keeps 24-74
+# points and leaves the dropped vertices within 0.8 mm of their hull; level 6 is used. PhysX cooks the
+# hull with at most 255 vertices, so it keeps all of them.
+HULL_LEVEL = 6
+
+
+def box_corners(center, size):
+    """A BoxCollider's eight corners in its object space (PhysX takes the size's magnitude)."""
+    half = [abs(v) / 2 for v in size]
+    return [[center[0] + sx * half[0], center[1] + sy * half[1], center[2] + sz * half[2]]
+            for sx in (-1, 1) for sy in (-1, 1) for sz in (-1, 1)]
+
+
+def support_points(points, directions, chunk=4096):
+    """The indices (ascending) of the points that are the farthest one (first of equals) in some direction."""
+    import numpy as np
+    p = np.asarray(points, dtype=float)
+    d = np.asarray(directions, dtype=float)
+    chosen = set()
+    for start in range(0, len(d), chunk):
+        chosen.update(int(i) for i in (p @ d[start:start + chunk].T).argmax(axis=0))
+    return sorted(chosen)
+
+
+def vanish_extras(map_scene, rows, membership, active, map_root_world_inverse, handlers_for, root_scale=(1.0, 1.0, 1.0),
+                  option_roots=frozenset()):
+    """(glTF extras `ikkokuVanish`, provenance record). Every collider of a row's name on MAP_LAYER,
+    enabled, under its object's sun-type activity: a box as its eight corners, a convex MeshCollider as
+    its hull points (support_points, HULL_LEVEL); points in their object space (Z reflected), placed by
+    an engine-basis matrix in the role frame (a mapRoot collider's includes the Map node's authored scale,
+    so the app's map transform alone places it). Its shape is the hull of the points: the capsule
+    touches it where their distance is at most the radius. A collider under a map option root
+    (`option`) is active only while the scene's mapOption is on; its keys count the option active,
+    as a part's do. Concave mesh, sphere and capsule colliders
+    are not modelled (none of the 31 converted maps' rows names a sphere or capsule)."""
+    names = {name for name, _ in rows}
+    shapes, shape_of_mesh, colliders, not_modelled, skipped = [], {}, [], [], {"otherLayer": 0, "disabled": 0, "inactive": 0}
+    scale = [[root_scale[0], 0, 0, 0], [0, root_scale[1], 0, 0], [0, 0, root_scale[2], 0], [0, 0, 0, 1]]
+    by_name = {}
+    for kind in VANISH_COLLIDERS:
+        for pid, reader in sorted(map_scene.of_type(kind)):
+            collider = reader.read()
+            game_object = collider.m_GameObject.read()
+            if game_object.m_Name not in names:
+                continue
+            host = map_scene.transform_of_object[collider.m_GameObject.path_id]
+            path = map_scene.path(host)
+            if game_object.m_Layer != MAP_LAYER:
+                skipped["otherLayer"] += 1
+                continue
+            if not collider.m_Enabled:
+                skipped["disabled"] += 1
+                continue
+            keys = visibility_keys(host, map_scene.parents, active)
+            if not keys:
+                skipped["inactive"] += 1
+                continue
+            record = {"name": game_object.m_Name, "path": path, "type": kind, "trigger": bool(collider.m_IsTrigger)}
+            if kind == "BoxCollider":
+                center, size = collider.m_Center, collider.m_Size
+                shape = len(shapes)
+                shapes.append({"type": "box", "points": [reflect(p) for p in box_corners([center.x, center.y, center.z],
+                                                                                          [size.x, size.y, size.z])]})
+            elif kind == "MeshCollider" and getattr(collider, "m_Convex", False) and collider.m_Mesh.path_id:
+                identity = key(collider.m_Mesh)
+                if identity not in shape_of_mesh:
+                    vertices = handlers_for(collider.m_Mesh).m_Vertices
+                    hull = support_points(vertices, icosphere_directions(HULL_LEVEL))
+                    shape_of_mesh[identity] = len(shapes)
+                    shapes.append({"type": "convexMesh", "mesh": collider.m_Mesh.read().m_Name, "vertices": len(vertices),
+                                   "points": [reflect(vertices[i]) for i in hull]})
+                shape = shape_of_mesh[identity]
+            else:
+                not_modelled.append({**record, "reason": "concave MeshCollider" if kind == "MeshCollider" else f"{kind} not modelled"})
+                continue
+            role = "mapRoot" if map_scene.under_map_root(host) else "scene"
+            world = map_scene.world[host]
+            matrix = matmul(scale, matmul(map_root_world_inverse, world)) if role == "mapRoot" else world
+            by_name.setdefault(game_object.m_Name, []).append(len(colliders))
+            colliders.append({**record, "role": role, "visibleFor": list(keys),
+                              "option": bool(option_roots) and under_any(map_scene, host, option_roots), "shape": shape,
+                              "matrix": [round(v, 7) for v in engine_matrix(matrix)]})
+    for shape in shapes:
+        shape["points"] = [[round(v, 7) for v in point] for point in shape["points"]]
+    extras = {"kind": "ikkoku.studioMapVanish", "version": 1, "radius": VANISH_RADIUS, "delaySeconds": VANISH_DELAY_SECONDS,
+              "mapLayer": MAP_LAYER,
+              "rule": "Studio.CameraControl: each LateUpdate, in row order, a row whose collider name a collider the view capsule "
+                      "touches carries hides its parts at once; a row without one shows them again 0.3 s after its overlap ended",
+              "shape": "the convex hull of each shape's points; a collider is touched where its distance to the capsule's "
+                       "axis is at most the radius",
+              "rows": [{"collider": name, "colliders": by_name.get(name, [])} for name, _ in rows],
+              "colliders": colliders, "shapes": shapes}
+    hosts = {h for h in membership}
+    record = {"rows": len(rows), "rowsWithColliders": sum(1 for name, _ in rows if by_name.get(name)),
+              "colliders": len(colliders), "shapes": {"box": sum(1 for s in shapes if s["type"] == "box"),
+                                                       "convexMesh": sum(1 for s in shapes if s["type"] == "convexMesh")},
+              "skippedColliders": skipped, "notModelled": not_modelled, "memberNodes": len(hosts)}
+    return extras, record
+
+
 def map_option_roots(map_scene, map_no):
     """`Studio.Map.Reserve`'s option objects (`lstOption`) for `map_no`: [] for maps without."""
     if map_no not in MAP_OPTIONS:
@@ -1647,7 +1893,8 @@ def not_drawn_notes(provenance):
     return notes
 
 
-def export(bundles, scene, map_no, output, max_texture=None, builtin_resources=None, block_only_images=False):
+def export(bundles, scene, map_no, output, max_texture=None, builtin_resources=None, block_only_images=False, vanish=None):
+    """`vanish` (slice 4 PR B): {"text": the vanish list (vanish_list_text), "source": its catalog cell and bundles}."""
     import UnityPy
     from UnityPy.helpers.MeshHelper import MeshHandler
     map_scene = MapScene(bundles, scene, builtin_resources)
@@ -1659,7 +1906,11 @@ def export(bundles, scene, map_no, output, max_texture=None, builtin_resources=N
     exporter = MapExporter(map_scene.environment, output, stem, max_texture, block_only_images)
     map_root_world_inverse = inverse_affine(map_scene.world[map_scene.map_root])
     groups, skipped, skies = {}, [], []
+    # Triangles appended so far per unsplit group key (the group key without the vanish set and the
+    # dynamic lightmap index): the joined order of `ikkokuMap.join`.
+    join_cursor = {}
     dynamic_gi = set()  # drawn renderers with a realtime-GI (dynamic) lightmap
+    dynamic_sources = {}  # their submeshes by the UV stream TEXCOORD_2 is taken from
     lightmap_sources = {"renderer": 0, "LightmapPrefab": 0}
     handlers = {}
     # Map options (slice 4): `visibleOption` sets each option object active to the scene's
@@ -1669,6 +1920,9 @@ def export(bundles, scene, map_no, output, max_texture=None, builtin_resources=N
     if option_roots:
         active = {key_: {**states, **{node: True for node in option_roots}} for key_, states in active.items()}
     option_counts = {"renderers": 0, "triangles": 0}
+    # Vanish (slice 4 PR B): the rows each renderer's host belongs to; parts are split by that set.
+    vanish_list = vanish_rows(vanish["text"]) if vanish else []
+    membership, vanish_nodes = vanish_membership(map_scene, vanish_list) if vanish_list else ({}, [])
     for pid, reader in sorted(map_scene.of_type("MeshRenderer")):
         renderer = reader.read()
         host = map_scene.transform_of_object[renderer.m_GameObject.path_id]
@@ -1772,10 +2026,18 @@ def export(bundles, scene, map_no, output, max_texture=None, builtin_resources=N
             # centre and its submesh index.
             particle = name in PARTICLE_SHADERS
             separate = pid if draw == "silhouette" else (pid, submesh) if particle else None
-            group_key = (role, material_index, tuple(keys), group_lightmap, option, separate)
             # Only the GI-lit shaders (Standard's family, Legacy Diffuse) read the dynamic lightmap.
+            dynamic_index = -1
             if (name in STANDARD_SHADERS or name == "Legacy Shaders/Diffuse") and getattr(renderer, "m_LightmapIndexDynamic", 0xFFFF) < 0xFFFE:
                 dynamic_gi.add(pid)
+                dynamic_index = renderer.m_LightmapIndexDynamic
+                dynamic_uv, dynamic_source = dynamic_lightmap_uv(handler)
+                if dynamic_uv is None:
+                    raise ValueError(f"{path}: a dynamic lightmap without any UV stream to read it by")
+                st = renderer.m_LightmapTilingOffsetDynamic
+                dynamic_offset = [st.x, st.y, st.z, st.w]
+                dynamic_sources[dynamic_source] = dynamic_sources.get(dynamic_source, 0) + 1
+            group_key = (role, material_index, tuple(keys), group_lightmap, option, separate, membership.get(host, ()), dynamic_index)
             group = groups.setdefault(group_key, {"positions": [], "normals": [], "tangents": [], "uv0": [], "uv1": [], "uv2": [],
                                                   "colors": [], "indices": [], "renderers": [], "vertexColor": vertex_color})
             if particle:
@@ -1806,15 +2068,25 @@ def export(bundles, scene, map_no, output, max_texture=None, builtin_resources=N
                 elif group_lightmap != NO_LIGHTMAP:
                     source_uv = handler.m_UV1 if handler.m_UV1 else handler.m_UV0
                     group["uv1"].append(lightmap_uv(source_uv[old], lm_offset))
+                if dynamic_index >= 0:
+                    group["uv2"].append(lightmap_uv(dynamic_uv[old], dynamic_offset))
                 if vertex_color and handler.m_Colors:
                     group["colors"].append(list(handler.m_Colors[old]))
             converted = convert_triangles([[remap[i] for i in triangle] for triangle in triangles[submesh]], len(group["positions"]))
             if mirrored:  # a mirroring transform reverses the authored winding once more
                 converted = [converted[i + j] for i in range(0, len(converted), 3) for j in (0, 2, 1)]
+            # The run's place in the unsplit group's order (`ikkokuMap.join`).
+            count = len(converted) // 3
+            joined_start = join_cursor.get(group_key[:6], 0)
+            join_cursor[group_key[:6]] = joined_start + count
+            append_join_run(group.setdefault("runs", []), len(group["indices"]) // 3, count, joined_start)
             group["indices"].extend(converted)
             group["renderers"].append({"path": path, "submesh": submesh, "vertices": len(used), "triangles": len(triangles[submesh]),
                                        "lightmapIndex": group_lightmap, "lightmapScaleOffset": lm_offset if group_lightmap != NO_LIGHTMAP else None,
                                        "lightmapSource": lm_source, "mirrored": mirrored})
+            if dynamic_index >= 0:
+                group["renderers"][-1].update(dynamicLightmapIndex=dynamic_index, dynamicLightmapScaleOffset=dynamic_offset,
+                                              dynamicLightmapUV=dynamic_source)
     # glTF: node 0 "Map" (mapRoot's authored scale; the app replaces translation and rotation
     # with the record's map transform), node 1 "Scene" (identity, scene-space geometry).
     root_scale = map_scene.local_trs(map_scene.transforms[map_scene.map_root])[2]
@@ -1825,8 +2097,10 @@ def export(bundles, scene, map_no, output, max_texture=None, builtin_resources=N
     separate_names = {}
     def separate_key(value):  # a silhouette's renderer id, a particle's (renderer id, submesh)
         return value if isinstance(value, tuple) else (value or 0,)
-    for group_key in sorted(groups, key=lambda k: (k[0], k[1], k[2], k[3], k[4], separate_key(k[5]))):
-        role, material_index, keys, lm_index, option, separate = group_key
+    vanish_names = {}
+    split_from = collections.Counter(key[:6] for key in groups)
+    for group_key in sorted(groups, key=lambda k: (k[0], k[1], k[2], k[3], k[4], separate_key(k[5]), k[6], k[7])):
+        role, material_index, keys, lm_index, option, separate, vanish_set, dynamic_index = group_key
         group = groups[group_key]
         count = len(group["positions"])
         attributes = {"POSITION": exporter.accessor(group["positions"], "VEC3", bounds=True)}
@@ -1849,6 +2123,15 @@ def export(bundles, scene, map_no, output, max_texture=None, builtin_resources=N
         if separate is not None:
             separate_names[separate] = len(separate_names)
             suffix += f"_r{separate_names[separate]}"
+        if split_from[group_key[:6]] > 1:
+            extras["ikkokuMap"]["join"] = {"name": f"{role}_{material_index}_{'_'.join(map(str, keys))}_{lm_index}{suffix}",
+                                           "runs": group.get("runs", [])}
+        if vanish_set:
+            extras["ikkokuMap"]["vanishRows"] = list(vanish_set)
+            suffix += f"_v{vanish_names.setdefault(vanish_set, len(vanish_names))}"
+        if dynamic_index >= 0:
+            extras["ikkokuMap"]["dynamicLightmapIndex"] = dynamic_index
+            suffix += f"_d{dynamic_index}"
         mesh_index = len(exporter.gltf["meshes"])
         exporter.gltf["meshes"].append({"name": f"{role}_{material_index}_{'_'.join(map(str, keys))}_{lm_index}{suffix}",
                                         "primitives": [{"attributes": attributes, "mode": 4, "material": material_index,
@@ -1875,6 +2158,21 @@ def export(bundles, scene, map_no, output, max_texture=None, builtin_resources=N
     if lightmap_extras:
         extras["ikkokuLightmaps"] = lightmap_extras
         lightmapped_dropped_terms(exporter.gltf)
+    vanish_record = None
+    if vanish_list:
+        def handlers_for(pointer):
+            identity = key(pointer)
+            if identity not in handlers:
+                handler = MeshHandler(pointer.read())
+                handler.process()
+                handlers[identity] = (handler, handler.get_triangles())
+            return handlers[identity][0]
+        extras["ikkokuVanish"], vanish_record = vanish_extras(map_scene, vanish_list, membership, active, map_root_world_inverse,
+                                                              handlers_for, root_scale, option_roots)
+        vanishing = [g for g in exporter.source["groups"] if exporter.gltf["meshes"][g["mesh"]]["extras"]["ikkokuMap"].get("vanishRows")]
+        vanish_record.update(source=vanish["source"], nodes=vanish_nodes,
+                             nodesNotFound=sum(1 for nodes in vanish_nodes for n in nodes if n["path"] is None),
+                             parts=len(vanishing), renderersInParts=len({r["path"] for g in vanishing for r in g["renderers"]}))
     if exporter.block_images or exporter.cubes:
         extras["ikkokuBlockImages"] = {"kind": "ikkoku.unityBlockImages", "version": 1, "rows": "topDown",
                                        "images": exporter.block_images, "cubes": exporter.cubes}
@@ -1921,8 +2219,20 @@ def export(bundles, scene, map_no, output, max_texture=None, builtin_resources=N
     components = not_drawn_components(map_scene, active)
     if components:
         provenance["notDrawn"] = {"components": components}
+    if vanish_record is not None:
+        provenance["vanish"] = vanish_record
+        provenance["conversion"]["merge"] += "; split by the vanish rows a renderer belongs to (ikkokuMap.vanishRows)"
+    elif vanish is not None:
+        provenance["vanish"] = {"source": vanish["source"], "rows": 0}
+    split_groups = sum(1 for parts in split_from.values() if parts > 1)
+    if split_groups:
+        provenance["conversion"]["merge"] += (f"; {split_groups} split group(s) carry ikkokuMap.join"
+                                              " (the unsplit mesh and each part's triangle runs)")
     realtime_gi = realtime_gi_of(map_scene, dynamic_gi)
     if realtime_gi:
+        realtime_gi.update(uvSources=dynamic_sources,
+                           texcoord=("TEXCOORD_2 of the parts with ikkokuMap.dynamicLightmapIndex: the mesh's UV2, else UV1, else UV0, "
+                                     "times m_LightmapTilingOffsetDynamic.xy plus .zw, V flipped (sampled at (u, 1 - v))"))
         provenance["realtimeGI"] = realtime_gi
     if block_only_images:
         provenance["conversion"]["blockImages"] = ("BC1/BC3 images as their serialized blocks only, every mip, block and pixel "
@@ -2391,6 +2701,8 @@ def main():
                      help="the player's 'unity default resources' file (built-in meshes such as a sky Sphere)")
     exp.add_argument("--block-only-images", action="store_true",
                      help="write BC1/BC3 images as their blocks only, without PNG copies (slice 4; the app reads them)")
+    exp.add_argument("--vanish-folder", type=Path, help="the folder of the catalog row's vanish bundlePath (abdata/h/list), slice 4 PR B")
+    exp.add_argument("--vanish-file", help="the catalog row's vanish file (map_col_XX); with --vanish-folder")
     sur = commands.add_parser("survey", help="inventory every catalog row's bundle and summarize it (slice 4)")
     sur.add_argument("--catalog", type=Path, required=True)
     sur.add_argument("--bundle-root", type=Path, required=True, help="the folder holding abdata/<bundlePath>")
@@ -2414,8 +2726,21 @@ def main():
         print(json.dumps({k: result[k] for k in ("scene", "rendererCount", "drawnRendererCount", "triangles", "meshes",
                                                  "materialCount", "textureCount", "baseTextureGPUBytes", "shaders")}, indent=2))
     elif args.command == "export":
+        vanish = None
+        if args.vanish_folder or args.vanish_file:
+            if not (args.vanish_folder and args.vanish_file):
+                raise SystemExit("--vanish-folder and --vanish-file go together")
+            bundles = sorted(args.vanish_folder.glob("*.unity3d"))
+            if not bundles:
+                raise SystemExit(f"no bundle in {args.vanish_folder}")
+            text, held = vanish_list_text(bundles, args.vanish_file)
+            vanish = {"text": text, "source": {"file": args.vanish_file, "bundles": [file_record(b) for b in bundles if b.name in held]}}
+            if not held:
+                # LoadAllListText then returns no text, so the player loads no rows for this map.
+                vanish["source"]["absent"] = (f"none of the folder's {len(bundles)} bundles holds it; GlobalMethod.LoadAllListText "
+                                              "returns no text, so the player has no vanish rows")
         result = export(args.bundle, args.scene, args.map_no, private(args.output), args.max_texture, args.builtin_resources,
-                        args.block_only_images)
+                        args.block_only_images, vanish)
         print(json.dumps({k: result[k] for k in ("mapNo", "scene", "meshes", "materials", "textures", "vertices", "triangles",
                                                  "textureGPUBytesRGBA8Mips", "shaders", "droppedTerms")}, indent=2, ensure_ascii=False))
     elif args.command == "survey":

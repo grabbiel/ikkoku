@@ -108,7 +108,10 @@ private struct MapFixture {
     let root: URL
     var url: URL { root.appendingPathComponent("map.gltf") }
 
-    init(mapNode: Bool = true) throws {
+    /// `vanishRows` go on the mapRoot mesh; `vanish` adds a one-row list (PR B).
+    /// `dynamicLightmap` names dynamic lightmap 0 on the mapRoot mesh, with a
+    /// TEXCOORD_2 when `uv2`.
+    init(mapNode: Bool = true, vanishRows: [Int]? = nil, vanish: Bool = false, dynamicLightmap: Bool = false, uv2: Bool = false) throws {
         root = FileManager.default.temporaryDirectory.appendingPathComponent("ikkoku-map-\(UUID().uuidString)", isDirectory: true)
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
         var buffer = Data()
@@ -119,10 +122,16 @@ private struct MapFixture {
         try buffer.write(to: root.appendingPathComponent("map.bin"))
         try Self.rgbaPNG().write(to: root.appendingPathComponent("0_tex.png"))
         func mesh(_ role: String, _ keys: [Int]) -> [String: Any] {
-            ["name": role, "primitives": [["attributes": ["POSITION": 0, "TEXCOORD_0": 1], "material": 0]],
-             "extras": ["ikkokuMap": ["role": role, "visibleFor": keys, "lightmapIndex": 0, "renderers": 1]]]
+            var info: [String: Any] = ["role": role, "visibleFor": keys, "lightmapIndex": 0, "renderers": 1]
+            var attributes = ["POSITION": 0, "TEXCOORD_0": 1]
+            if role == "mapRoot" {
+                if let vanishRows { info["vanishRows"] = vanishRows }
+                if dynamicLightmap { info["dynamicLightmapIndex"] = 0 }
+                if uv2 { attributes["TEXCOORD_2"] = 1 }
+            }
+            return ["name": role, "primitives": [["attributes": attributes, "material": 0]], "extras": ["ikkokuMap": info]]
         }
-        let gltf: [String: Any] = [
+        var gltf: [String: Any] = [
             "asset": ["version": "2.0"],
             "buffers": [["byteLength": buffer.count, "uri": "map.bin"]],
             "bufferViews": [["buffer": 0, "byteLength": 36], ["buffer": 0, "byteOffset": 36, "byteLength": 24]],
@@ -136,6 +145,14 @@ private struct MapFixture {
                       ["name": "a", "mesh": 0, "translation": [0, 0, 1]], ["name": "b", "mesh": 1, "translation": [0, 3, 0]]],
             "scenes": [["nodes": [0, 1]]], "scene": 0,
         ]
+        if vanish {
+            gltf["extras"] = ["ikkokuVanish": [
+                "kind": "ikkoku.studioMapVanish", "version": 1, "radius": 0.05, "delaySeconds": 0.3, "mapLayer": 11,
+                "rows": [["collider": "wall", "colliders": [0]]],
+                "colliders": [["name": "wall", "role": "mapRoot", "visibleFor": [-1, 0, 1, 2], "option": false, "shape": 0,
+                               "matrix": [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1]]],
+                "shapes": [["type": "box", "points": [[-1, -1, -1], [1, 1, 1]]]]]]
+        }
         try JSONSerialization.data(withJSONObject: gltf, options: [.sortedKeys]).write(to: url)
     }
 
@@ -203,6 +220,52 @@ struct SourceStudioMapAssetTests {
         #expect(resources.statistics().retiring == 0)
         #expect(resources.statistics().meshes == before.meshes - 2 && resources.statistics().textures == before.textures - 1)
         #expect(resources.texture(asset.textures[0]) == nil)
+    }
+
+    @Test func vanishRowsSplitTheDrawsTheirStateDisables() async throws {
+        let device = try #require(MTLCreateSystemDefaultDevice())
+        let resources = ResourceStore(device: device)
+        let fixture = try MapFixture(vanishRows: [0], vanish: true)
+        defer { fixture.remove() }
+        let (url, packageRoot) = (fixture.url, fixture.root)
+        let asset = try await liveTickOffPool { try SourceStudioMapAsset.load(url: url, packageRoot: packageRoot, resources: resources) }
+        defer { asset.release() }
+        let vanish = try #require(asset.vanish)
+        #expect(vanish.rows.count == 1 && asset.vanishSets == [[0]])
+        #expect(asset.parts.map(\.vanishSet) == [0, nil])
+        let amount = KoikatsuChangeAmount(position: .zero, rotationDegrees: .zero, scale: .one)
+        let wallPart = try #require(asset.parts.first { $0.vanishSet == 0 })
+        #expect(try asset.items(transform: amount, sunLightType: 1, mapOption: false).count == 2)
+        #expect(try asset.items(transform: amount, sunLightType: 1, mapOption: false, vanishEnabled: [true]).count == 2)
+        let hidden = try asset.items(transform: amount, sunLightType: 1, mapOption: false, vanishEnabled: [false])
+        #expect(hidden.count == 1 && !hidden.contains { $0.mesh == wallPart.mesh })
+
+        // Rows the map does not list, or a list without vanish extras, are refused by name.
+        for bad in [try MapFixture(vanishRows: [1], vanish: true), try MapFixture(vanishRows: [0], vanish: false)] {
+            defer { bad.remove() }
+            let (badURL, badRoot) = (bad.url, bad.root)
+            let failure = try await liveTickOffPool { () -> String? in
+                do { _ = try SourceStudioMapAsset.load(url: badURL, packageRoot: badRoot, resources: resources); return nil }
+                catch { return "\(error)" }
+            }
+            #expect(failure?.contains("names vanish rows the map does not list") == true, "\(failure ?? "loaded")")
+        }
+    }
+
+    @Test func aDynamicLightmapIndexNeedsItsTexcoord2() async throws {
+        let device = try #require(MTLCreateSystemDefaultDevice())
+        let resources = ResourceStore(device: device)
+        let good = try MapFixture(dynamicLightmap: true, uv2: true), bad = try MapFixture(dynamicLightmap: true)
+        defer { good.remove(); bad.remove() }
+        let (goodURL, goodRoot, badURL, badRoot) = (good.url, good.root, bad.url, bad.root)
+        let asset = try await liveTickOffPool { try SourceStudioMapAsset.load(url: goodURL, packageRoot: goodRoot, resources: resources) }
+        defer { asset.release() }
+        #expect(asset.parts.map(\.dynamicLightmapIndex) == [0, nil])
+        let failure = try await liveTickOffPool { () -> String? in
+            do { _ = try SourceStudioMapAsset.load(url: badURL, packageRoot: badRoot, resources: resources); return nil }
+            catch { return "\(error)" }
+        }
+        #expect(failure?.contains("names a dynamic lightmap without its TEXCOORD_2") == true, "\(failure ?? "loaded")")
     }
 
     @Test func aFileThatIsNotAConvertedMapFailsByNameAndRegistersNothing() async throws {

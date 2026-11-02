@@ -369,6 +369,7 @@ Feature assessment: [studio.md](studio.md).
 | [Packages/Engine/Sources/Studio/SourceStudioMapLightmaps.swift](../../Packages/Engine/Sources/Studio/SourceStudioMapLightmaps.swift) | Runtime / shared shader declaration |
 | [Packages/Engine/Sources/Studio/SourceStudioMapSky.swift](../../Packages/Engine/Sources/Studio/SourceStudioMapSky.swift) | Runtime / shared shader declaration |
 | [Packages/Engine/Sources/Studio/SourceStudioMapUnlitDraws.swift](../../Packages/Engine/Sources/Studio/SourceStudioMapUnlitDraws.swift) | Runtime / shared shader declaration |
+| [Packages/Engine/Sources/Studio/SourceStudioMapVanish.swift](../../Packages/Engine/Sources/Studio/SourceStudioMapVanish.swift) | Runtime / shared shader declaration |
 | [Packages/Engine/Sources/Studio/SourceStudioNeckLook.swift](../../Packages/Engine/Sources/Studio/SourceStudioNeckLook.swift) | Runtime / shared shader declaration |
 | [Packages/Engine/Sources/Studio/SourceStudioNeckLookRuntime.swift](../../Packages/Engine/Sources/Studio/SourceStudioNeckLookRuntime.swift) | Runtime / shared shader declaration |
 | [Packages/Engine/Sources/Studio/SourceStudioNeckTargetAngle.swift](../../Packages/Engine/Sources/Studio/SourceStudioNeckTargetAngle.swift) | Runtime / shared shader declaration |
@@ -443,6 +444,7 @@ Feature assessment: [studio.md](studio.md).
 | [Packages/Engine/Tests/EngineTests/SourceStudioMapSkyTests.swift](../../Packages/Engine/Tests/EngineTests/SourceStudioMapSkyTests.swift) | Test / validation |
 | [Packages/Engine/Tests/EngineTests/SourceStudioMapUnlitDrawTests.swift](../../Packages/Engine/Tests/EngineTests/SourceStudioMapUnlitDrawTests.swift) | Test / validation |
 | [Packages/Engine/Tests/EngineTests/SourceStudioMapTests.swift](../../Packages/Engine/Tests/EngineTests/SourceStudioMapTests.swift) | Test / validation |
+| [Packages/Engine/Tests/EngineTests/SourceStudioMapVanishTests.swift](../../Packages/Engine/Tests/EngineTests/SourceStudioMapVanishTests.swift) | Test / validation |
 | [Packages/Engine/Tests/EngineTests/SourceStudioNeckLookRuntimeTests.swift](../../Packages/Engine/Tests/EngineTests/SourceStudioNeckLookRuntimeTests.swift) | Test / validation |
 | [Packages/Engine/Tests/EngineTests/SourceStudioNeckLookTests.swift](../../Packages/Engine/Tests/EngineTests/SourceStudioNeckLookTests.swift) | Test / validation |
 | [Packages/Engine/Tests/EngineTests/SourceStudioNeckTargetAngleTests.swift](../../Packages/Engine/Tests/EngineTests/SourceStudioNeckTargetAngleTests.swift) | Test / validation |

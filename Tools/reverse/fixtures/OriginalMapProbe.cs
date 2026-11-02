@@ -63,7 +63,8 @@
 //                                    alpha 0; RGB is the blended radiance over black).
 //
 // The maps mode (ST-A11 slice 4), when reload-maps-showoff.png is uploaded: one run authors, reads back,
-// captures and measures MapCases (phases B and C per case, like map 34) across twelve maps, then
+// captures and measures MapCases (phases B and C per case, like map 34) across fifteen maps (twelve until
+// slice 4 PR B added maps 30, 32 and 37 and a second map 40 view), then
 // "map41-showoff" (the uploaded character scene with map 41 added). An inside case puts the saved camera at
 // a map-local pivot near the map root's origin with the table's yaw, pitch and distance (chosen offline from
 // the converted geometry so the camera has room behind it). An outside case keeps the pivot and moves the
@@ -81,6 +82,40 @@
 // (a particle), Custom/Silhouette ("silhouette") and Unlit/Transparent ("unlit"); the oracle renders the
 // last two alone like the sky (oracle-<case>-silhouettes.rgba.f32, -unlit.rgba.f32) and skips the
 // irradiance pair when the map has no lightmaps or no keyword-free opaque Standard material (recorded).
+//
+// Slice 4 PR B changes the maps mode's passes; the other modes are unchanged:
+// - Culling mask. The map-only passes and the oracle draw with Camera.main's culling mask, not every layer,
+//   so a map renderer no Studio camera draws (a layer-0 helper) is left out on this side too. Each renderer
+//   record says whether Camera.main's mask holds its layer ("drawnByMain").
+// - Per-slot classes. Each material slot is classed on its own ("slots" in the renderer record), and a pass
+//   draws only its own slots: the solid passes a renderer's opaque submeshes, the sky, particle, silhouette
+//   and unlit passes their own submeshes. Every other slot gets HiddenMaterial, which writes no colour and
+//   no depth and whose RenderType no depth-normals subshader has, so the depth-normals pass replaces by
+//   "RenderType" (the white material is tagged Opaque, the subshader the "" replacement used). Each case
+//   first renders every slot hidden and records that nothing was drawn ("hiddenCheck"; the case fails
+//   in compare_original_map.py otherwise).
+// - Irradiance template. When a map has no keyword-free opaque Standard material (map 40), the template is
+//   a new material on the shader of the map's first opaque Standard material, by name, with no keywords;
+//   Albedo neutralises the inputs a keyword variant would read (metallic-gloss and detail mask black, no
+//   normal or emission), so whichever variant the player picks draws the same diffuse. Where both exist,
+//   the oracle also renders the irradiance with this fallback and records the largest difference
+//   ("fallbackTemplateCheck").
+// - Realtime GI. Where a map renderer has an Enlighten dynamic lightmap, the oracle adds the term alone
+//   (oracle-<case>-irradiance-dynamic.f32: the irradiance pass with every baked colour lightmap black, then
+//   the irradiance again with the lightmaps restored, which must equal the first), each renderer's
+//   realtimeLightmapIndex and realtimeLightmapScaleOffset, unity_DynamicLightmap_HDR, and the loaded textures
+//   that may be the dynamic lightmaps, read back (RealtimeLightmaps) and digested again RealtimeSettleFrames
+//   later ("realtimeLightmapsLater"); then, for the other two sun types in turn (Map.sunType, as authored),
+//   the same read-back after RealtimeSettleFrames and its digest that many frames later
+//   (oracle-<case>-realtime-sun<type>-<n>.rgba.f32, "realtimeLightmapsOtherSunTypes").
+// - Vanish. Each case's vanish record adds what the trigger needs ("physics": the camera object's layer and
+//   its collision-matrix row, Time.timeScale and the fixed step, its rigidbody, the LateUpdate gate, and the
+//   Map-layer colliders the view capsule overlaps by Physics.OverlapCapsule). After the case's images the
+//   probe waits TriggerSteps fixed steps and records the vanish state again ("vanishAfterFixedSteps"), then
+//   runs the trigger experiment ("triggerExperiment": test capsules like the view capsule on the camera's
+//   layer and on layer 0, and what their own trigger callbacks saw). Every such wait counts fixed steps for
+//   at most FixedStepTimeout real seconds, since none runs while Time.timeScale is 0; in that case the
+//   vanish state is recorded once more with the time scale at 1 for those steps ("vanishWithTimeScale1").
 using System;
 using System.Collections;
 using System.Collections.Generic;
@@ -98,6 +133,9 @@ public sealed class OriginalMapProbe:BaseUnityPlugin {
     const float DepthFar33=25f,DepthFar34=1000f,SkyFar=10000f;
     const string Map34Upload="reload-map34-showoff.png",MapsUpload="reload-maps-showoff.png";
     const float OutsideMinimum=1f;
+    const int TriggerSteps=5; // fixed steps the vanish re-record and the trigger experiment wait (PR B)
+    const float FixedStepTimeout=3f; // real seconds those waits allow: no fixed step runs while Time.timeScale is 0
+    const int RealtimeSettleFrames=120; // frames between the two reads of the dynamic lightmaps (PR B)
     static readonly Vector3 MapPos=new Vector3(0.3f,-0.05f,-0.5f),MapRot=new Vector3(4f,25f,-3f);
     // A mapRoot-local point near the middle of map 33's room (the converted geometry spans x -2.17..1.46,
     // y 0..3.44, Unity z -1.64..4.19): the saved camera's pivot, so the camera stays inside the room.
@@ -140,7 +178,14 @@ public sealed class OriginalMapProbe:BaseUnityPlugin {
         new MapCase("map15-outside",15,0,false,true,true,Pivot,0f,0f,0f),
         new MapCase("map25-outside",25,0,false,true,true,Pivot,0f,0f,0f),
         new MapCase("map01-outside",1,0,false,true,true,Pivot,0f,0f,0f),
-        new MapCase("map27-outside",27,0,false,true,true,Pivot,0f,0f,0f)};
+        new MapCase("map27-outside",27,0,false,true,true,Pivot,0f,0f,0f),
+        // PR B: the realtime-GI maps without a case (pivot and yaw by .local/sta11d-pr-b/tools/choose_cameras.py:
+        // the yaw with the most free room behind the pivot), and a map 40 view over its Unlit/Transparent road
+        // shadows (the densest 4 m cluster of them; 95 % of a 32x24 ray grid lands on them).
+        new MapCase("map30",30,0,false,false,true,Pivot,8f,165f,3f),
+        new MapCase("map32",32,0,false,false,true,Pivot,8f,60f,3f),
+        new MapCase("map37",37,0,false,false,true,Pivot,8f,180f,3f),
+        new MapCase("map40-unlit",40,0,false,false,true,new Vector3(13.06f,1.1f,-25.22f),35f,75f,5f)};
     // Shaders export_map_scene.py skips (MAP_SKIPPED_SHADERS): not drawn by the app.
     static readonly string[] SkippedShaders={"FX/MirrorReflection_Transparent","Xffect/heat_distortion","Shader Forge/electricLight",
         "Shader Forge/spotLaser","Shader Forge/spotLight_beam","Shader Forge/spotLight_glow","Shader Forge/volumeLight",
@@ -191,7 +236,7 @@ public sealed class OriginalMapProbe:BaseUnityPlugin {
         File.WriteAllText(Path.Combine(folder,"status.json"),J(K("error",errors.Count==0?null:String.Join(" | ",errors.ToArray()),"errors",errors,
             "unity",Application.unityVersion,"device",SystemInfo.graphicsDeviceName,"colorSpace",QualitySettings.activeColorSpace.ToString(),
             "voiceRepair",voiceRepair,"cases",new List<string>(cases.Keys),
-            "scope","Original CharaStudio 1.0.4.2 map "+(mapsMode?"(maps mode: "+MapCases.Length+" cases across twelve maps, and map41-showoff)":mapNo.ToString())+" fixtures authored with the player's own writer (Studio.AddMap, caMap through MapCtrl.Reflect, Studio.sceneInfo.Save) and read back through Studio.LoadSceneCoroutine; per case the player's Camera.main colour image, the map scene's renderers as a white silhouette and as Unity depth-normals (linear depth over "+depthFar+" m) from Camera.main's pose and field of view, and a trace of the map root, renderers, lights, lightmaps, RenderSettings, SunLightInfo and cameras; no installed cards, saves or media"+
+            "scope","Original CharaStudio 1.0.4.2 map "+(mapsMode?"(maps mode: "+MapCases.Length+" cases across fifteen maps, and map41-showoff)":mapNo.ToString())+" fixtures authored with the player's own writer (Studio.AddMap, caMap through MapCtrl.Reflect, Studio.sceneInfo.Save) and read back through Studio.LoadSceneCoroutine; per case the player's Camera.main colour image, the map scene's renderers as a white silhouette and as Unity depth-normals (linear depth over "+depthFar+" m) from Camera.main's pose and field of view, and a trace of the map root, renderers, lights, lightmaps, RenderSettings, SunLightInfo and cameras; no installed cards, saves or media"+
             (oracles.Length>0||withOracle?". Oracle"+(withOracle?" (in the same run, per case)":" mode: the uploaded records read back")+": a clean colour frame, Unity's decoded lightmap irradiance per pixel (white minus black albedo over 0.96, lights at 0 and as authored), the solid renderers' lightmap classes, and the sky and particle renderers alone as linear float radiance":""))));
         Application.Quit();
         for(int i=0;i<3600;i++){yield return null;if(i%30==29)Application.Quit();}
@@ -361,7 +406,87 @@ public sealed class OriginalMapProbe:BaseUnityPlugin {
             "isLimitPos",ctrl.isLimitPos,"limitPos",ctrl.limitPos,"hiddenRenderers",hidden,"overlapping",overlapping,"rows",rows,
             "viewCollider",view==null?null:K("enabled",view.enabled,"isTrigger",view.isTrigger,"center",V(view.center),"height",view.height,"radius",view.radius,
                 "direction",view.direction,"boundsMin",V(view.bounds.min),"boundsMax",V(view.bounds.max),"position",V(view.transform.position),
-                "rotation",Q(view.transform.rotation),"lossyScale",V(view.transform.lossyScale)));
+                "rotation",Q(view.transform.rotation),"lossyScale",V(view.transform.lossyScale)),
+            "physics",PhysicsRecord(ctrl,view));
+    }
+    // What the vanish trigger needs (PR B): the camera object's layer and its row of the layer collision matrix,
+    // the time scale and fixed step, the camera's rigidbody, the LateUpdate gate, and which Map-layer colliders
+    // the view capsule overlaps geometrically (Physics.OverlapCapsule with |height|, and a sphere of the
+    // capsule's radius at its centre for the reading where a negative height collapses the segment).
+    Dictionary<string,object> PhysicsRecord(Studio.CameraControl ctrl,CapsuleCollider view) {
+        var go=ctrl.gameObject;int layer=go.layer;var body=go.GetComponent<Rigidbody>();int mapMask=LayerMask.GetMask("Map","MapNoShadow");
+        var cameraRow=new List<object>();var mapRow=new List<object>();
+        for(int i=0;i<32;i++){cameraRow.Add(!Physics.GetIgnoreLayerCollision(layer,i));mapRow.Add(!Physics.GetIgnoreLayerCollision(11,i));}
+        object overlap=null;
+        if(view!=null) {
+            var t=view.transform;float radius=view.radius;float half=Mathf.Max(Mathf.Abs(view.height)*0.5f-radius,0f);
+            var centre=t.TransformPoint(view.center);var axis=t.TransformDirection(Vector3.forward); // direction 2: the local Z axis
+            overlap=K("centre",V(centre),"halfSegment",half,"radius",radius,
+                "capsule",Names(Physics.OverlapCapsule(centre-axis*half,centre+axis*half,radius,mapMask,QueryTriggerInteraction.Collide)),
+                "sphereAtCentre",Names(Physics.OverlapSphere(centre,radius,mapMask,QueryTriggerInteraction.Collide)));
+        }
+        var scene=Singleton<Manager.Scene>.Instance;
+        return K("cameraObject",TPath(go.transform),"cameraLayer",layer,"cameraLayerName",LayerMask.LayerToName(layer),"mapMask",mapMask,
+            "cameraCollidesWithMap",!Physics.GetIgnoreLayerCollision(layer,11),"cameraLayerRow",cameraRow,"mapLayerRow",mapRow,
+            "timeScale",Time.timeScale,"fixedDeltaTime",Time.fixedDeltaTime,"maximumDeltaTime",Time.maximumDeltaTime,
+            "frameCount",Time.frameCount,"time",Time.time,"fixedTime",Time.fixedTime,"queriesHitTriggers",Physics.queriesHitTriggers,
+            "rigidbody",body==null?null:K("isKinematic",body.isKinematic,"detectCollisions",body.detectCollisions,"useGravity",body.useGravity,
+                "isSleeping",body.IsSleeping(),"position",V(body.position),"interpolation",body.interpolation.ToString(),
+                "collisionDetectionMode",body.collisionDetectionMode.ToString()),
+            "controlEnabled",ctrl.enabled,"isInit",Field(ctrl,"isInit"),"isFlashVisible",ctrl.isFlashVisible,
+            "lateUpdateGate",K("addSceneName",scene.AddSceneName,"isNowLoadingFade",scene.IsNowLoadingFade),
+            "overlap",overlap);
+    }
+    static List<object> Names(Collider[] colliders) {
+        var list=new List<object>();
+        foreach(var c in colliders)if(c!=null)list.Add(K("path",TPath(c.transform),"layer",c.gameObject.layer,"type",c.GetType().Name,"isTrigger",c.isTrigger));
+        return list;
+    }
+    // Frames until `steps` fixed steps have run, at most FixedStepTimeout seconds of real time (WaitForFixedUpdate
+    // never returns while Time.timeScale is 0); records the steps seen, the real time and the time scale.
+    IEnumerator FixedSteps(int steps,Dictionary<string,object> into) {
+        var go=new GameObject("IkkokuFixedStepCounter");var counter=go.AddComponent<IkkokuTriggerTest>();
+        float start=Time.realtimeSinceStartup;
+        while(counter.fixedSteps<steps&&Time.realtimeSinceStartup-start<FixedStepTimeout)yield return null;
+        into["fixedSteps"]=counter.fixedSteps;into["timedOut"]=counter.fixedSteps<steps;
+        into["realSeconds"]=Time.realtimeSinceStartup-start;into["timeScale"]=Time.timeScale;
+        Destroy(go);
+    }
+    // The trigger experiment (PR B): kinematic trigger capsules like Studio's view capsule, at its pose, on the
+    // camera's layer and on layer 0, with the capsule's own (negative) height and with its absolute value, held
+    // for TriggerSteps fixed steps; what each one's OnTriggerEnter/OnTriggerStay saw. It runs after the case's
+    // images, and the test objects are destroyed before the next case.
+    IEnumerator TriggerExperiment(Dictionary<string,object> result) {
+        var ctrl=studio.cameraCtrl;var view=Field(ctrl,"viewCollider") as CapsuleCollider;
+        if(view==null){result["skipped"]="no view capsule";yield break;}
+        var layers=new List<int>{ctrl.gameObject.layer};if(ctrl.gameObject.layer!=0)layers.Add(0);
+        var tests=new List<IkkokuTriggerTest>();
+        foreach(var layer in layers)foreach(var negative in new[]{true,false}) {
+            var go=new GameObject("IkkokuTriggerTest-"+layer+(negative?"-raw":"-abs"));go.layer=layer;
+            go.transform.position=view.transform.position;go.transform.rotation=view.transform.rotation;
+            var capsule=go.AddComponent<CapsuleCollider>();capsule.isTrigger=true;capsule.direction=2;capsule.radius=view.radius;
+            capsule.height=negative?view.height:Mathf.Abs(view.height);capsule.center=view.center;
+            var body=go.AddComponent<Rigidbody>();body.useGravity=false;body.isKinematic=true;
+            var test=go.AddComponent<IkkokuTriggerTest>();test.layer=layer;test.rawHeight=negative;tests.Add(test);
+        }
+        // Frames until every test has seen TriggerSteps fixed steps, at most FixedStepTimeout seconds of real time
+        // (WaitForFixedUpdate never returns while Time.timeScale is 0).
+        float start=Time.realtimeSinceStartup;
+        while(Time.realtimeSinceStartup-start<FixedStepTimeout) {
+            int fewest=int.MaxValue;foreach(var test in tests)fewest=Math.Min(fewest,test.fixedSteps);
+            if(fewest>=TriggerSteps)break;
+            yield return null;
+        }
+        result["realSeconds"]=Time.realtimeSinceStartup-start;result["timeScale"]=Time.timeScale;
+        var records=new List<object>();
+        foreach(var test in tests) {
+            var capsule=test.GetComponent<CapsuleCollider>();
+            records.Add(K("layer",test.layer,"rawHeight",test.rawHeight,"height",capsule.height,"boundsMin",V(capsule.bounds.min),"boundsMax",V(capsule.bounds.max),
+                "fixedSteps",test.fixedSteps,"entered",test.entered,"stayed",test.stayed));
+            Destroy(test.gameObject);
+        }
+        result["tests"]=records;result["steps"]=TriggerSteps;
+        yield return null;
     }
     IEnumerator AuthorShowoff(string source,string label) {
         studio.InitScene(false);
@@ -411,6 +536,49 @@ public sealed class OriginalMapProbe:BaseUnityPlugin {
             "loadedCameraData",CameraData(studio.cameraCtrl.Export()),"capture",capture);
         if(mapsMode)record["vanish"]=vanish;
         if(withOracle)record["oracle"]=Oracle(label);
+        if(mapsMode&&withOracle) {
+            // Realtime GI: the candidate dynamic lightmaps again RealtimeSettleFrames later, by digest, to show
+            // whether Enlighten had settled when the oracle read them.
+            bool hasDynamic=false;foreach(var r in FindObjectsOfType<Renderer>())if(r.gameObject.scene==map.mapRoot.scene&&HasDynamicLightmap(r)){hasDynamic=true;break;}
+            if(hasDynamic) {
+                for(int i=0;i<RealtimeSettleFrames;i++)yield return null;
+                record["realtimeLightmapsLater"]=K("frames",RealtimeSettleFrames,"textures",RealtimeLightmaps(label,"",false));
+                // The other two sun types' dynamic lightmaps, read back the same way (no images): the sun type set
+                // as the authoring sets it, RealtimeSettleFrames to settle, a read, and a digest that many frames later.
+                var current=map.sunType;var others=new Dictionary<string,object>();
+                foreach(SunLightInfo.Info.Type type in Enum.GetValues(typeof(SunLightInfo.Info.Type))) {
+                    if(type==current)continue;
+                    map.sunType=type;
+                    for(int i=0;i<RealtimeSettleFrames;i++)yield return null;
+                    var read=RealtimeLightmaps(label,"-sun"+(int)type,true);
+                    for(int i=0;i<RealtimeSettleFrames;i++)yield return null;
+                    others[((int)type).ToString(CultureInfo.InvariantCulture)]=K("sunType",(int)type,"lights",Lights(),"textures",read,"later",RealtimeLightmaps(label,"",false));
+                }
+                map.sunType=current;
+                for(int i=0;i<RealtimeSettleFrames;i++)yield return null;
+                record["realtimeLightmapsOtherSunTypes"]=K("restoredSunType",(int)current,"bySunType",others);
+            }
+        }
+        if(mapsMode) {
+            // The vanish state again after explicit physics steps and a LateUpdate, then the trigger experiment.
+            var wait=new Dictionary<string,object>();var steps=FixedSteps(TriggerSteps,wait);
+            while(steps.MoveNext())yield return steps.Current;
+            yield return null;yield return new WaitForEndOfFrame();
+            var after=VanishRecord();after["wait"]=wait;record["vanishAfterFixedSteps"]=after;
+            var experiment=new Dictionary<string,object>();var run=TriggerExperiment(experiment);
+            while(run.MoveNext())yield return run.Current;
+            record["triggerExperiment"]=experiment;
+            // With Time.timeScale 0 no physics step runs, so no trigger can fire: then the same re-record with the
+            // time scale at 1 for those steps, and 0 again after it.
+            if(Time.timeScale==0f) {
+                Time.timeScale=1f;var scaledWait=new Dictionary<string,object>();var scaledSteps=FixedSteps(TriggerSteps,scaledWait);
+                while(scaledSteps.MoveNext())yield return scaledSteps.Current;
+                yield return null;yield return new WaitForEndOfFrame();
+                var scaled=VanishRecord();scaled["wait"]=scaledWait;
+                Time.timeScale=0f;
+                record["vanishWithTimeScale1"]=scaled;
+            }
+        }
         cases[label]=record;
     }
     Dictionary<string,object> Capture(string label) {
@@ -429,41 +597,62 @@ public sealed class OriginalMapProbe:BaseUnityPlugin {
         foreach(var b in main.GetComponents<Behaviour>())effects.Add(K("type",b.GetType().FullName,"enabled",b.enabled));
         var mapScene=map.mapRoot.scene;
         var mapRenderers=new List<Renderer>();var hidden=new List<Renderer>();var excluded=new List<Renderer>();
-        var mapRecords=new List<object>();
+        var mapRecords=new List<object>();var slots=new Dictionary<Renderer,string[]>();
         foreach(var r in FindObjectsOfType<Renderer>()) {
             if(r.gameObject.scene==mapScene) {
                 if(!(r.enabled&&r.gameObject.activeInHierarchy))continue;
-                var kind=RendererClass(r);mapRecords.Add(RendererRecord(r,kind));
-                if(kind=="solid")mapRenderers.Add(r);else{r.enabled=false;excluded.Add(r);}
+                var kind=RendererClass(r);var classes=SlotClasses(r);slots[r]=classes;mapRecords.Add(RendererRecord(r,kind,classes,main.cullingMask));
+                if(Array.IndexOf(classes,"solid")>=0)mapRenderers.Add(r);else{r.enabled=false;excluded.Add(r);}
             }
             else if(r.enabled){r.enabled=false;hidden.Add(r);}
         }
         var probeObject=new GameObject("IkkokuMapProbeCamera");var cam=probeObject.AddComponent<Camera>();cam.enabled=false;
         cam.transform.position=main.transform.position;cam.transform.rotation=main.transform.rotation;
         cam.fieldOfView=main.fieldOfView;cam.nearClipPlane=main.nearClipPlane;cam.farClipPlane=depthFar;cam.aspect=(float)Width/Height;
-        cam.clearFlags=CameraClearFlags.SolidColor;cam.backgroundColor=Color.black;cam.allowHDR=false;cam.allowMSAA=false;cam.cullingMask=~0;
+        cam.clearFlags=CameraClearFlags.SolidColor;cam.backgroundColor=Color.black;cam.allowHDR=false;cam.allowMSAA=false;cam.cullingMask=PassMask(main);
         cam.renderingPath=RenderingPath.Forward;cam.useOcclusionCulling=false;cam.targetTexture=target;
         var probeRecord=CameraRecord(cam);
         var saved=new Dictionary<Renderer,Material[]>();
-        string whiteShader;var white=WhiteMaterial(out whiteShader);
+        string whiteShader;var white=WhiteMaterial(out whiteShader);var none=mapsMode?HiddenMaterial():null;
+        // The depth-normals replacement: by RenderType in the maps mode (hidden slots match no subshader), every
+        // material through the first subshader otherwise (see the header).
+        string replacement=mapsMode?"RenderType":"";
+        object hiddenCheck=null,coverage=null;int mixed=0,hiddenSlots=0;
         try {
-            foreach(var r in mapRenderers){saved[r]=r.sharedMaterials;var m=new Material[r.sharedMaterials.Length];for(int i=0;i<m.Length;i++)m[i]=white;r.sharedMaterials=m;}
-            cam.Render();SaveTarget(target,"original-"+label+"-map-geometry.png");
             var depthShader=Shader.Find("Hidden/Internal-DepthNormalsTexture");
             if(depthShader==null)throw new Exception("Hidden/Internal-DepthNormalsTexture is not in this player");
             var depthTarget=new RenderTexture(Width,Height,24,RenderTextureFormat.ARGB32,RenderTextureReadWrite.Linear);depthTarget.Create();
-            cam.targetTexture=depthTarget;cam.backgroundColor=Color.white;cam.RenderWithShader(depthShader,"");
+            foreach(var r in mapRenderers)saved[r]=r.sharedMaterials;
+            if(mapsMode) {
+                // Every slot hidden: neither pass may draw anything.
+                foreach(var r in mapRenderers){var m=new Material[saved[r].Length];for(int i=0;i<m.Length;i++)m[i]=none;r.sharedMaterials=m;}
+                cam.targetTexture=target;cam.backgroundColor=Color.black;cam.Render();int colour=Drawn(target,Color.black);
+                cam.targetTexture=depthTarget;cam.backgroundColor=Color.white;cam.RenderWithShader(depthShader,replacement);int depth=Drawn(depthTarget,Color.white);
+                hiddenCheck=K("renderers",mapRenderers.Count,"colourPixels",colour,"depthNormalsPixels",depth,"passes",colour==0&&depth==0);
+            }
+            foreach(var r in mapRenderers) {
+                var classes=slots[r];var m=new Material[saved[r].Length];bool partial=false;
+                for(int i=0;i<m.Length;i++){bool solid=i<classes.Length&&classes[i]=="solid";m[i]=solid?white:none;if(!solid){partial=true;hiddenSlots++;}}
+                if(partial)mixed++;
+                r.sharedMaterials=m;
+            }
+            cam.targetTexture=target;cam.backgroundColor=Color.black;
+            cam.Render();SaveTarget(target,"original-"+label+"-map-geometry.png");
+            cam.targetTexture=depthTarget;cam.backgroundColor=Color.white;cam.RenderWithShader(depthShader,replacement);
             SaveTarget(depthTarget,"original-"+label+"-map-depth-normals.png");
+            // The two passes draw the same slots, so they cover the same pixels (recorded, not enforced).
+            if(mapsMode)coverage=K("geometryPixels",Drawn(target,Color.black),"depthNormalsPixels",Drawn(depthTarget,Color.white));
             cam.targetTexture=null;depthTarget.Release();Destroy(depthTarget);
         } finally {
             foreach(var pair in saved)pair.Key.sharedMaterials=pair.Value;
             foreach(var r in hidden)r.enabled=true;
             foreach(var r in excluded)r.enabled=true;
-            cam.targetTexture=null;Destroy(probeObject);target.Release();Destroy(target);Destroy(white);
+            cam.targetTexture=null;Destroy(probeObject);target.Release();Destroy(target);Destroy(white);if(none!=null)Destroy(none);
         }
         return K("main",mainRecord,"mainRenderMilliseconds",timer.Elapsed.TotalMilliseconds,"cameras",cameras,"mainBehaviours",effects,
             "probe",probeRecord,"whiteShader",whiteShader,"hiddenRenderers",hidden.Count,"mapRenderers",mapRecords,
             "solidRenderers",mapRenderers.Count,"excludedRenderers",ClassCounts(excluded),
+            "depthNormalsReplacementTag",replacement,"mixedRenderers",mixed,"hiddenSlots",hiddenSlots,"hiddenCheck",hiddenCheck,"coverage",coverage,
             "mapScene",K("name",mapScene.name,"path",mapScene.path,"isActive",SceneManager.GetActiveScene()==mapScene,"roots",Roots(mapScene)),
             "lights",Lights(),"lightmaps",Lightmaps(),"renderSettings",RenderSettingsRecord(),"sunLightInfo",SunRecord(),
             "quality",K("pixelLightCount",QualitySettings.pixelLightCount,"shadows",QualitySettings.shadows.ToString(),"antiAliasing",QualitySettings.antiAliasing,
@@ -494,12 +683,13 @@ public sealed class OriginalMapProbe:BaseUnityPlugin {
         var mapRenderers=new List<Renderer>();var hidden=new List<Renderer>();
         var skies=new List<Renderer>();var particles=new List<Renderer>();var others=new List<Renderer>();
         var silhouettes=new List<Renderer>();var unlits=new List<Renderer>();
-        var saved=new Dictionary<Renderer,Material[]>();
+        var saved=new Dictionary<Renderer,Material[]>();var slots=new Dictionary<Renderer,string[]>();
         var lights=FindObjectsOfType<Light>();var intensities=new float[lights.Length];for(int i=0;i<lights.Length;i++)intensities[i]=lights[i].intensity;
         bool runtimeFog=RenderSettings.fog;
         var fogRecord=K("fog",RenderSettings.fog,"fogMode",RenderSettings.fogMode.ToString(),"fogColor",C(RenderSettings.fogColor),
             "fogStartDistance",RenderSettings.fogStartDistance,"fogEndDistance",RenderSettings.fogEndDistance,"fogDensity",RenderSettings.fogDensity);
-        Material white=null,black=null;var classMaterials=new List<Material>();
+        Material white=null,black=null,fallback=null,fallbackWhite=null,fallbackBlack=null;var classMaterials=new List<Material>();Texture2D blackLightmap=null;
+        var none=mapsMode?HiddenMaterial():null;
         try {
             // The clean colour frame: Camera.main's settings, none of its image-effect components.
             cam.CopyFrom(main);cam.enabled=false;cam.aspect=(float)Width/Height;cam.targetTexture=ldr;
@@ -507,38 +697,65 @@ public sealed class OriginalMapProbe:BaseUnityPlugin {
             cam.Render();cam.targetTexture=null;SaveTarget(ldr,"oracle-"+label+"-clean-color.png");
             // The measurement passes: fog off, the map's renderers only, the solid ones unless a pass says otherwise.
             RenderSettings.fog=false;
+            // Per-slot classes (see the header): a renderer joins the solid set when a slot is solid and each group
+            // set (sky, particle, silhouette, unlit) when a slot is of that group; "others" have neither.
             foreach(var r in FindObjectsOfType<Renderer>()) {
                 if(r.gameObject.scene==mapScene) {
                     if(!(r.enabled&&r.gameObject.activeInHierarchy))continue;
-                    var kind=RendererClass(r);
-                    if(kind=="solid")mapRenderers.Add(r);
-                    else{r.enabled=false;(kind=="sky"?skies:kind=="particle"?particles:kind=="silhouette"?silhouettes:kind=="unlit"?unlits:others).Add(r);}
+                    var classes=SlotClasses(r);slots[r]=classes;saved[r]=r.sharedMaterials;bool grouped=false;
+                    foreach(var g in new[]{"sky","particle","silhouette","unlit"})
+                        if(Array.IndexOf(classes,g)>=0){(g=="sky"?skies:g=="particle"?particles:g=="silhouette"?silhouettes:unlits).Add(r);grouped=true;}
+                    if(Array.IndexOf(classes,"solid")>=0)mapRenderers.Add(r);
+                    else{r.enabled=false;if(!grouped)others.Add(r);}
                 }
                 else if(r.enabled){r.enabled=false;hidden.Add(r);}
             }
-            // The first (by name) keyword-free opaque Standard material the map draws with.
-            Material template=null;
-            foreach(var r in mapRenderers)foreach(var m in r.sharedMaterials)
-                if(m!=null&&m.shader!=null&&m.shader.name=="Standard"&&NoKeywords(m)&&m.renderQueue<=2500&&m.HasProperty("_Mode")&&m.GetFloat("_Mode")==0f
-                   &&(template==null||String.CompareOrdinal(m.name,template.name)<0))template=m;
+            // The first (by name) keyword-free opaque Standard material the map draws with, or (maps mode) a new
+            // material on the shader of the first opaque Standard material with any keywords (see the header).
+            var template=StandardMaterial(mapRenderers,slots,true);
+            var fallbackSource=mapsMode?StandardMaterial(mapRenderers,slots,false):null;
+            if(fallbackSource!=null)fallback=FallbackTemplate(fallbackSource.shader);
             int bakedMaps=LightmapSettings.lightmaps==null?0:LightmapSettings.lightmaps.Length;
-            string irradianceSkipped=bakedMaps==0?"the map has no baked lightmaps":template==null?"no keyword-free opaque Standard material on the map's renderers to copy":null;
+            var used=template??fallback;
+            string irradianceSkipped=bakedMaps==0?"the map has no baked lightmaps":used==null?"no opaque Standard material on the map's renderers":null;
             if(irradianceSkipped!=null&&!mapsMode)throw new Exception(irradianceSkipped);
-            if(irradianceSkipped==null){white=Albedo(template,Color.white);black=Albedo(template,Color.black);}
-            foreach(var r in mapRenderers)saved[r]=r.sharedMaterials;
+            if(irradianceSkipped==null){white=Albedo(used,Color.white);black=Albedo(used,Color.black);}
+            if(irradianceSkipped==null&&template!=null&&fallback!=null){fallbackWhite=Albedo(fallback,Color.white);fallbackBlack=Albedo(fallback,Color.black);}
             cam.CopyFrom(main);cam.enabled=false;cam.aspect=(float)Width/Height;
-            cam.clearFlags=CameraClearFlags.SolidColor;cam.backgroundColor=Color.black;cam.allowHDR=true;cam.allowMSAA=false;cam.cullingMask=~0;
+            cam.clearFlags=CameraClearFlags.SolidColor;cam.backgroundColor=Color.black;cam.allowHDR=true;cam.allowMSAA=false;cam.cullingMask=PassMask(main);
             cam.renderingPath=RenderingPath.Forward;cam.useOcclusionCulling=false;
             var probeRecord=CameraRecord(cam);
-            var unlitStats=new Dictionary<string,object>();var litStats=new Dictionary<string,object>();double repeatMax=0;
+            var unlitStats=new Dictionary<string,object>();var litStats=new Dictionary<string,object>();double repeatMax=0;object fallbackCheck=null,dynamicRecord=null;
+            int dynamicRenderers=0;
             if(irradianceSkipped==null) {
                 for(int i=0;i<lights.Length;i++)lights[i].intensity=0f;
-                var gi=Difference(cam,hdr,mapRenderers,white,black,unlitStats);
-                var repeat=Difference(cam,hdr,mapRenderers,white,black,new Dictionary<string,object>());
+                var gi=Difference(cam,hdr,mapRenderers,slots,none,white,black,unlitStats);
+                var repeat=Difference(cam,hdr,mapRenderers,slots,none,white,black,new Dictionary<string,object>());
                 for(int i=0;i<gi.Length;i++)repeatMax=Math.Max(repeatMax,Math.Abs((double)gi[i]-repeat[i]));
                 WriteFloats(gi,"oracle-"+label+"-irradiance.f32");
+                if(fallbackWhite!=null) {
+                    var alternative=Difference(cam,hdr,mapRenderers,slots,none,fallbackWhite,fallbackBlack,new Dictionary<string,object>());
+                    double most=0;for(int i=0;i<gi.Length;i++)most=Math.Max(most,Math.Abs((double)gi[i]-alternative[i]));
+                    fallbackCheck=K("source",fallbackSource.name,"sourceKeywords",fallbackSource.shaderKeywords,"maximumDifference",most);
+                }
+                // Realtime GI (see the header): the dynamic lightmaps' term alone, every baked colour lightmap
+                // swapped for black for two renders, then the irradiance again with the lightmaps restored.
+                foreach(var r in mapRenderers)if(HasDynamicLightmap(r))dynamicRenderers++;
+                if(mapsMode&&dynamicRenderers>0) {
+                    var baked=LightmapSettings.lightmaps;var swapped=new LightmapData[baked.Length];blackLightmap=BlackTexture();
+                    for(int i=0;i<baked.Length;i++){var d=new LightmapData();d.lightmapColor=blackLightmap;d.lightmapDir=baked[i].lightmapDir;swapped[i]=d;}
+                    float[] dynamicOnly;
+                    try{LightmapSettings.lightmaps=swapped;dynamicOnly=Difference(cam,hdr,mapRenderers,slots,none,white,black,new Dictionary<string,object>());}
+                    finally{LightmapSettings.lightmaps=baked;}
+                    var restored=Difference(cam,hdr,mapRenderers,slots,none,white,black,new Dictionary<string,object>());
+                    double most=0;for(int i=0;i<gi.Length;i++)most=Math.Max(most,Math.Abs((double)gi[i]-restored[i]));
+                    WriteFloats(dynamicOnly,"oracle-"+label+"-irradiance-dynamic.f32");
+                    dynamicRecord=K("written",true,"file","oracle-"+label+"-irradiance-dynamic.f32","layout","float32 little-endian RGB, rows top-down",
+                        "rule","the irradiance pass with every LightmapData colour map black (direction maps kept), lights at intensity 0",
+                        "renderers",dynamicRenderers,"restoredMaximumDifference",most,"restored",most==0);
+                }
                 for(int i=0;i<lights.Length;i++)lights[i].intensity=intensities[i];
-                var lit=Difference(cam,hdr,mapRenderers,white,black,litStats);
+                var lit=Difference(cam,hdr,mapRenderers,slots,none,white,black,litStats);
                 WriteFloats(lit,"oracle-"+label+"-irradiance-lit.f32");
             }
             // Which solid pixels the irradiance gate may compare: Standard on a baked lightmap.
@@ -547,8 +764,10 @@ public sealed class OriginalMapProbe:BaseUnityPlugin {
             var classCounts=new Dictionary<string,object>();int lightmappedRenderers=0,probeLitRenderers=0,otherSlots=0;
             foreach(var r in mapRenderers) {
                 bool baked=r.lightmapIndex>=0&&r.lightmapIndex<lightmapCount;
-                var m=new Material[r.sharedMaterials.Length];
-                for(int i=0;i<m.Length;i++){var source=saved[r][i];bool standard=source!=null&&source.shader!=null&&(source.shader.name=="Standard"
+                var m=new Material[r.sharedMaterials.Length];var classes=slots[r];
+                for(int i=0;i<m.Length;i++){
+                    if(!(i<classes.Length&&classes[i]=="solid")){m[i]=none;continue;}
+                    var source=saved[r][i];bool standard=source!=null&&source.shader!=null&&(source.shader.name=="Standard"
                     ||(mapsMode&&(source.shader.name=="Custom/StandardDouble"||source.shader.name=="Legacy Shaders/Diffuse")));
                     m[i]=standard?(baked?lightmapped:probeLit):other;if(!standard)otherSlots++;}
                 if(baked)lightmappedRenderers++;else probeLitRenderers++;
@@ -565,13 +784,19 @@ public sealed class OriginalMapProbe:BaseUnityPlugin {
             foreach(var pass in new[]{"sky","particles","silhouettes","unlit"}) {
                 var set=pass=="sky"?skies:pass=="particles"?particles:pass=="silhouettes"?silhouettes:unlits;
                 if(set.Count==0){groups[pass]=K("written",false);continue;}
-                foreach(var r in set)r.enabled=true;
+                // Each renderer draws only this group's slots (in the other modes every slot is the renderer's class).
+                string group=pass=="particles"?"particle":pass=="silhouettes"?"silhouette":pass;int otherGroupSlots=0;
+                foreach(var r in set) {
+                    var classes=slots[r];var m=new Material[saved[r].Length];
+                    for(int i=0;i<m.Length;i++){bool own=i<classes.Length&&classes[i]==group;m[i]=own?saved[r][i]:none;if(!own)otherGroupSlots++;}
+                    r.sharedMaterials=m;r.enabled=true;
+                }
                 var rgba=RenderAlone(cam,hdr);
-                foreach(var r in set)r.enabled=false;
+                foreach(var r in set){r.enabled=false;r.sharedMaterials=saved[r];}
                 var file="oracle-"+label+"-"+pass+".rgba.f32";WriteFloats(rgba,file);
                 var materials=new List<object>();foreach(var r in set)materials.Add(K("path",TPath(r.transform),"materials",GroupMaterials(r)));
                 groups[pass]=K("written",true,"file",file,"layout","float32 little-endian RGBA, rows top-down","renderers",materials,"farClipPlane",SkyFar,
-                    "background","(0,0,0,0)","coveredPixels",Covered(rgba,pass=="sky"));
+                    "background","(0,0,0,0)","coveredPixels",Covered(rgba,pass=="sky"),"otherSlotsHidden",otherGroupSlots);
             }
             foreach(var r in mapRenderers)r.enabled=true;
             var lightmapTextures=new List<object>();
@@ -579,7 +804,12 @@ public sealed class OriginalMapProbe:BaseUnityPlugin {
                 if(t!=null)lightmapTextures.Add(K("name",t.name,"filterMode",t.filterMode.ToString(),"anisoLevel",t.anisoLevel,"wrapMode",t.wrapMode.ToString(),
                     "mipMapBias",t.mipMapBias,"mipmapCount",t.mipmapCount,"format",t.format.ToString()));
             return K("clean",K("camera",cleanRecord,"image","oracle-"+label+"-clean-color.png"),
-                "probe",probeRecord,"template",template==null?null:K("name",template.name,"shader",template.shader.name,"keywords",template.shaderKeywords,"renderQueue",template.renderQueue),
+                "probe",probeRecord,"template",used==null?null:K("name",used.name,"shader",used.shader.name,"keywords",used.shaderKeywords,"renderQueue",used.renderQueue,
+                    "source",template!=null?"keyword-free map material":"new material on the shader of "+fallbackSource.name,
+                    "shaderIsShaderFindStandard",used.shader==Shader.Find("Standard")),
+                "fallbackTemplateCheck",fallbackCheck,
+                "irradianceDynamic",dynamicRecord,"realtimeLightmaps",mapsMode&&dynamicRenderers>0?RealtimeLightmaps(label,"",true):null,
+                "unity_DynamicLightmap_HDR",V4(Shader.GetGlobalVector("unity_DynamicLightmap_HDR")),
                 "overrides",white==null?null:K("albedo","_Color and _MainTex white or black","metallic",0,"glossiness",0,"keywords",white.shaderKeywords),
                 "irradianceSkipped",irradianceSkipped,
                 "mapRenderers",mapRenderers.Count,"hiddenRenderers",hidden.Count,
@@ -606,9 +836,107 @@ public sealed class OriginalMapProbe:BaseUnityPlugin {
             foreach(var r in mapRenderers)if(r!=null)r.enabled=true;
             foreach(var set in new[]{hidden,skies,particles,silhouettes,unlits,others})foreach(var r in set)if(r!=null)r.enabled=true;
             cam.targetTexture=null;Destroy(probeObject);ldr.Release();Destroy(ldr);hdr.Release();Destroy(hdr);
-            if(white!=null)Destroy(white);if(black!=null)Destroy(black);
+            foreach(var m in new[]{white,black,fallback,fallbackWhite,fallbackBlack,none})if(m!=null)Destroy(m);
+            if(blackLightmap!=null)Destroy(blackLightmap);
             foreach(var m in classMaterials)Destroy(m);
         }
+    }
+    static bool HasDynamicLightmap(Renderer r){return r.realtimeLightmapIndex>=0&&r.realtimeLightmapIndex<0xFFFE;}
+    static Texture2D BlackTexture() {
+        var t=new Texture2D(4,4,TextureFormat.RGBA32,false,true);var c=new Color32[16];for(int i=0;i<16;i++)c[i]=new Color32(0,0,0,0);
+        t.SetPixels32(c);t.Apply(false,false);return t;
+    }
+    // The textures that may be Enlighten's dynamic lightmaps (see the header): every loaded texture whose name
+    // holds "realtime", "dynamic" or "enlighten" is read back through Graphics.Blit into a linear float target
+    // (what a shader's sample returns) and, when `write`, saved as oracle-<case>-realtime<suffix>-<n>.rgba.f32;
+    // unnamed runtime textures are listed (at most 100) so a later run can name them.
+    Dictionary<string,object> RealtimeLightmaps(string label,string suffix,bool write) {
+        var named=new List<object>();var unnamed=new List<object>();int n=0;
+        foreach(var t in Resources.FindObjectsOfTypeAll<Texture>()) {
+            if(t==null)continue;var name=t.name??"";var lower=name.ToLowerInvariant();
+            var d=K("name",name,"type",t.GetType().Name,"instanceId",t.GetInstanceID(),"width",t.width,"height",t.height,"hideFlags",t.hideFlags.ToString(),
+                "filterMode",t.filterMode.ToString(),"wrapMode",t.wrapMode.ToString(),"format",t is Texture2D?((Texture2D)t).format.ToString():t is RenderTexture?((RenderTexture)t).format.ToString():null);
+            if((lower.Contains("realtime")||lower.Contains("dynamic")||lower.Contains("enlighten"))&&t.dimension==UnityEngine.Rendering.TextureDimension.Tex2D) {
+                var rgba=ReadTexture(t);d["sha256"]=Sha256Floats(rgba);
+                if(write){var file="oracle-"+label+"-realtime"+suffix+"-"+n+".rgba.f32";WriteFloats(rgba,file);d["file"]=file;d["layout"]="float32 little-endian RGBA, rows top-down";}
+                n++;named.Add(d);
+            } else if(name.Length==0&&t.hideFlags!=HideFlags.None&&unnamed.Count<100)unnamed.Add(d);
+        }
+        return K("named",named,"unnamed",unnamed);
+    }
+    static float[] ReadTexture(Texture t) {
+        var target=new RenderTexture(t.width,t.height,0,RenderTextureFormat.ARGBFloat,RenderTextureReadWrite.Linear);target.Create();
+        Graphics.Blit(t,target);
+        var previous=RenderTexture.active;RenderTexture.active=target;
+        var read=new Texture2D(t.width,t.height,TextureFormat.RGBAFloat,false,true);read.ReadPixels(new Rect(0,0,t.width,t.height),0,0);read.Apply(false,false);
+        RenderTexture.active=previous;var pixels=read.GetPixels();Destroy(read);target.Release();Destroy(target);
+        var rgba=new float[t.width*t.height*4];
+        for(int y=0;y<t.height;y++)for(int x=0;x<t.width;x++){var c=pixels[(t.height-1-y)*t.width+x];int o=(y*t.width+x)*4;rgba[o]=c.r;rgba[o+1]=c.g;rgba[o+2]=c.b;rgba[o+3]=c.a;}
+        return rgba;
+    }
+    static string Sha256Floats(float[] values) {
+        var bytes=new byte[values.Length*4];Buffer.BlockCopy(values,0,bytes,0,bytes.Length);
+        using(var hash=System.Security.Cryptography.SHA256.Create())return BitConverter.ToString(hash.ComputeHash(bytes)).Replace("-",String.Empty).ToLowerInvariant();
+    }
+    // The maps mode's passes draw with Camera.main's culling mask; the other modes with every layer (see the header).
+    int PassMask(Camera main){return mapsMode?main.cullingMask:~0;}
+    // Each material slot's class (see the header). Outside the maps mode every slot takes the renderer's class,
+    // so a pass draws a renderer whole, as before.
+    string[] SlotClasses(Renderer r) {
+        var materials=r.sharedMaterials;var classes=new string[materials.Length];
+        if(!mapsMode||!(r is MeshRenderer)){var kind=RendererClass(r);for(int i=0;i<classes.Length;i++)classes[i]=kind;return classes;}
+        for(int i=0;i<materials.Length;i++)classes[i]=MaterialClass(materials[i]);
+        return classes;
+    }
+    // One slot's class in the maps mode, by the rules RendererClass applies to the whole renderer.
+    static string MaterialClass(Material m) {
+        if(m==null||m.shader==null)return "nonOpaque";
+        var name=m.shader.name;
+        if(Array.IndexOf(SkippedShaders,name)>=0||(m.HasProperty("_MainTex")&&m.GetTexture("_MainTex") is RenderTexture))return "skipped";
+        if(name=="Skybox/Cubemap")return "sky";
+        if(name=="Particles/Alpha Blended"||name=="Particles/Anim Alpha Blended")return "particle";
+        if(name=="Custom/Silhouette")return "silhouette";
+        if(name=="Unlit/Transparent")return "unlit";
+        return m.GetTag("RenderType",true)=="Opaque"?"solid":"nonOpaque";
+    }
+    // A slot that must not draw (see the header): blend (Zero, One) and no depth write, so a camera pass leaves
+    // the target as it was, and a RenderType no depth-normals subshader has, so the replacement skips it.
+    static Material HiddenMaterial() {
+        var shader=Shader.Find("Hidden/Internal-Colored");
+        if(shader==null)throw new Exception("Hidden/Internal-Colored is not in this player");
+        var m=new Material(shader);m.name="IkkokuHiddenSlot";m.color=new Color(1f,0f,1f,1f);
+        m.SetInt("_SrcBlend",0);m.SetInt("_DstBlend",1);m.SetInt("_ZWrite",0);m.SetInt("_ZTest",8);m.SetInt("_Cull",0);
+        m.SetOverrideTag("RenderType","IkkokuHidden");
+        return m;
+    }
+    // How many pixels of `target` differ from the clear colour (8-bit read-back).
+    int Drawn(RenderTexture target,Color background) {
+        var previous=RenderTexture.active;RenderTexture.active=target;
+        var read=new Texture2D(target.width,target.height,TextureFormat.RGBA32,false,true);read.ReadPixels(new Rect(0,0,target.width,target.height),0,0);read.Apply(false,false);
+        RenderTexture.active=previous;
+        var clear=(Color32)background;int n=0;
+        foreach(var c in read.GetPixels32())if(c.r!=clear.r||c.g!=clear.g||c.b!=clear.b||c.a!=clear.a)n++;
+        Destroy(read);return n;
+    }
+    // The first (by name) opaque Standard material on the solid slots: keyword-free, or with any keywords.
+    static Material StandardMaterial(List<Renderer> renderers,Dictionary<Renderer,string[]> slots,bool keywordFree) {
+        Material found=null;
+        foreach(var r in renderers) {
+            var materials=r.sharedMaterials;var classes=slots[r];
+            for(int i=0;i<materials.Length;i++) {
+                var m=materials[i];
+                if(i<classes.Length&&classes[i]=="solid"&&m!=null&&m.shader!=null&&m.shader.name=="Standard"&&(!keywordFree||NoKeywords(m))
+                   &&m.renderQueue<=2500&&m.HasProperty("_Mode")&&m.GetFloat("_Mode")==0f&&(found==null||String.CompareOrdinal(m.name,found.name)<0))found=m;
+            }
+        }
+        return found;
+    }
+    // A new opaque material on the map's own Standard shader object, without keywords (see the header).
+    static Material FallbackTemplate(Shader shader) {
+        var m=new Material(shader);m.name="IkkokuStandardTemplate";m.shaderKeywords=new string[0];
+        if(m.HasProperty("_Mode"))m.SetFloat("_Mode",0f);
+        m.SetInt("_SrcBlend",1);m.SetInt("_DstBlend",0);m.SetInt("_ZWrite",1);
+        return m;
     }
     // A renderer's class for the map-only passes (see the header): "sky", "particle", "solid" (every material
     // RenderType=Opaque) or "nonOpaque"; in the maps mode also "unconverted" (not a MeshRenderer), "skipped"
@@ -683,15 +1011,22 @@ public sealed class OriginalMapProbe:BaseUnityPlugin {
     }
     static bool NoKeywords(Material m){foreach(var k in m.shaderKeywords)if(!String.IsNullOrEmpty(k))return false;return true;}
     // A copy of the map's keyword-free Standard material (so its compiled lightmapped variants exist in this
-    // player) with the albedo forced and no metallic or smoothness.
-    static Material Albedo(Material template,Color color) {
+    // player) with the albedo forced and no metallic or smoothness. In the maps mode it also neutralises what a
+    // keyword variant would read (see the header): metallic-gloss and detail masks black, the default normal
+    // map, no parallax, occlusion strength 0.
+    Material Albedo(Material template,Color color) {
         var m=new Material(template);m.shaderKeywords=new string[0];
         m.SetColor("_Color",color);m.SetTexture("_MainTex",Texture2D.whiteTexture);
         m.SetFloat("_Metallic",0f);m.SetFloat("_Glossiness",0f);m.SetColor("_EmissionColor",Color.black);
+        if(mapsMode) {
+            foreach(var p in new[]{"_MetallicGlossMap","_DetailMask"})if(m.HasProperty(p))m.SetTexture(p,Texture2D.blackTexture);
+            foreach(var p in new[]{"_BumpMap","_ParallaxMap","_EmissionMap","_DetailAlbedoMap","_DetailNormalMap"})if(m.HasProperty(p))m.SetTexture(p,null);
+            foreach(var p in new[]{"_Parallax","_OcclusionStrength","_GlossMapScale"})if(m.HasProperty(p))m.SetFloat(p,0f);
+        }
         return m;
     }
-    float[] Difference(Camera cam,RenderTexture target,List<Renderer> renderers,Material white,Material black,Dictionary<string,object> stats) {
-        var a=RenderWith(cam,target,renderers,white);var b=RenderWith(cam,target,renderers,black);
+    float[] Difference(Camera cam,RenderTexture target,List<Renderer> renderers,Dictionary<Renderer,string[]> slots,Material none,Material white,Material black,Dictionary<string,object> stats) {
+        var a=RenderWith(cam,target,renderers,slots,none,white);var b=RenderWith(cam,target,renderers,slots,none,black);
         var d=new float[a.Length];int nonFinite=0,negative=0,positive=0;double max=0,sum=0;
         for(int i=0;i<a.Length;i++) {
             float v=(a[i]-b[i])/OneMinusDielectricSpec;d[i]=v;
@@ -701,8 +1036,10 @@ public sealed class OriginalMapProbe:BaseUnityPlugin {
         stats["nonFinite"]=nonFinite;stats["negative"]=negative;stats["positive"]=positive;stats["maximum"]=max;stats["meanPositive"]=positive>0?sum/positive:0;
         return d;
     }
-    float[] RenderWith(Camera cam,RenderTexture target,List<Renderer> renderers,Material material) {
-        foreach(var r in renderers){var m=new Material[r.sharedMaterials.Length];for(int i=0;i<m.Length;i++)m[i]=material;r.sharedMaterials=m;}
+    // `material` on each renderer's solid slots, `none` on the rest (every slot is solid outside the maps mode).
+    float[] RenderWith(Camera cam,RenderTexture target,List<Renderer> renderers,Dictionary<Renderer,string[]> slots,Material none,Material material) {
+        foreach(var r in renderers){var classes=slots[r];var m=new Material[r.sharedMaterials.Length];
+            for(int i=0;i<m.Length;i++)m[i]=i<classes.Length&&classes[i]=="solid"?material:none;r.sharedMaterials=m;}
         cam.targetTexture=target;cam.Render();cam.targetTexture=null;
         var previous=RenderTexture.active;RenderTexture.active=target;
         var read=new Texture2D(Width,Height,TextureFormat.RGBAFloat,false,true);read.ReadPixels(new Rect(0,0,Width,Height),0,0);read.Apply(false,false);
@@ -720,7 +1057,7 @@ public sealed class OriginalMapProbe:BaseUnityPlugin {
         var shader=Shader.Find("Unlit/Color");name="Unlit/Color";
         if(shader==null){shader=Shader.Find("Hidden/Internal-Colored");name="Hidden/Internal-Colored";}
         if(shader==null)throw new Exception("neither Unlit/Color nor Hidden/Internal-Colored is in this player");
-        var white=new Material(shader);white.color=Color.white;
+        var white=new Material(shader);white.color=Color.white;white.SetOverrideTag("RenderType","Opaque"); // the depth-normals replacement's first subshader
         white.SetInt("_Cull",2);white.SetInt("_ZWrite",1);white.SetInt("_ZTest",4);white.SetInt("_SrcBlend",1);white.SetInt("_DstBlend",0); // back-face culled, opaque, like the map's Standard materials
         return white;
     }
@@ -734,12 +1071,14 @@ public sealed class OriginalMapProbe:BaseUnityPlugin {
             "caMap",K("pos",V(ca.pos),"rot",V(ca.rot),"scale",V(ca.scale)),"expectedRotation",Q(Quaternion.Euler(ca.rot)),"mapRoot",rootRecord,
             "activeScene",SceneManager.GetActiveScene().name);
     }
-    static Dictionary<string,object> RendererRecord(Renderer r,string kind) {
+    static Dictionary<string,object> RendererRecord(Renderer r,string kind,string[] slots,int mainMask) {
         var filter=r.GetComponent<MeshFilter>();var mesh=filter==null?null:filter.sharedMesh;
         var materials=new List<object>();
         foreach(var m in r.sharedMaterials)materials.Add(m==null?null:K("name",m.name,"shader",m.shader==null?null:m.shader.name,"renderQueue",m.renderQueue));
-        return K("path",TPath(r.transform),"class",kind,"type",r.GetType().Name,"layer",r.gameObject.layer,"localToWorld",M(r.localToWorldMatrix),
+        return K("path",TPath(r.transform),"class",kind,"slots",slots,"drawnByMain",((mainMask>>r.gameObject.layer)&1)!=0,
+            "type",r.GetType().Name,"layer",r.gameObject.layer,"localToWorld",M(r.localToWorldMatrix),
             "boundsMin",V(r.bounds.min),"boundsMax",V(r.bounds.max),"lightmapIndex",r.lightmapIndex,"lightmapScaleOffset",V4(r.lightmapScaleOffset),
+            "realtimeLightmapIndex",r.realtimeLightmapIndex,"realtimeLightmapScaleOffset",V4(r.realtimeLightmapScaleOffset),
             "isPartOfStaticBatch",r.isPartOfStaticBatch,"shadowCasting",r.shadowCastingMode.ToString(),"receiveShadows",r.receiveShadows,"materials",materials,
             "mesh",mesh==null?null:mesh.name,"vertexCount",mesh==null?0:mesh.vertexCount,"subMeshCount",mesh==null?0:mesh.subMeshCount,
             "meshBoundsCenter",mesh==null?null:V(mesh.bounds.center),"meshBoundsSize",mesh==null?null:V(mesh.bounds.size));
@@ -809,4 +1148,19 @@ public sealed class OriginalMapProbe:BaseUnityPlugin {
         var list=value as IEnumerable;if(list!=null){var a=new List<string>();foreach(var x in list)a.Add(J(x));return "["+String.Join(",",a.ToArray())+"]";}
         return Convert.ToString(value,CultureInfo.InvariantCulture);
     }
+}
+// The trigger experiment's recorder (OriginalMapProbe.TriggerExperiment): every collider its kinematic trigger
+// capsule entered or stayed in, by path and layer, and the fixed steps it saw.
+public sealed class IkkokuTriggerTest:MonoBehaviour {
+    public int layer,fixedSteps;public bool rawHeight;
+    public readonly List<string> entered=new List<string>(),stayed=new List<string>();
+    void FixedUpdate(){fixedSteps++;}
+    void OnTriggerEnter(Collider other){Note(entered,other);}
+    void OnTriggerStay(Collider other){Note(stayed,other);}
+    static void Note(List<string> list,Collider other) {
+        if(other==null)return;
+        var name=TransformPath(other.transform)+"@"+other.gameObject.layer;
+        if(!list.Contains(name))list.Add(name);
+    }
+    static string TransformPath(Transform t){return t.parent==null?t.name:TransformPath(t.parent)+"/"+t.name;}
 }

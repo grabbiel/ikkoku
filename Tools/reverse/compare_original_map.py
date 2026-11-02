@@ -22,9 +22,12 @@ Gates (all must pass; no registration, resizing, recolouring or camera fitting):
   of Unity's EncodeFloatRG over the shared far plane and normal p99 <= 2 channel
   bytes (compare_original_frame.depth_metrics).
 Colour is reported, never gated: the in-app label lists what the map's material
-leaves out. Two controls must FAIL: our depth image shifted one pixel, and (for a
-case with a nonzero map rotation) that rotation composed in the wrong Euler order
-(X, Y, Z).
+leaves out. Two controls must FAIL: our depth image shifted DEPTH_SHIFT_PIXELS
+pixels along both axes (slice 4 PR B; docs/reference/studio/maps.md, "The depth
+control"), and (for a case with a nonzero map rotation) that rotation composed in
+the wrong Euler order (X, Y, Z). The one-pixel horizontal shift, the control until
+PR B, is still reported; it cannot fail on views of smooth surfaces at the 1000 m far
+plane (map 21's and 22's outside views).
 
 With --oracle (an `original_map_probe.py oracle` folder, ST-A11 slice 2) each case
 also gets:
@@ -95,6 +98,11 @@ from PIL import Image
 from compare_original_frame import depth_metrics, geometry_metrics
 
 BASIS = np.diag([1.0, 1.0, -1.0, 1.0])  # Unity <-> engine: z negated (UnityCoordinates.basis)
+# The depth control (slice 4 PR B): our depth-normals image rolled this many pixels down and right. On
+# the slice-4 captures it fails all 21 cases, the weakest (map22-outside) at 6 quantization steps and 68
+# normal bytes against the gate's 2 and 2; the one-pixel horizontal shift passes map21-outside and
+# map22-outside, and a one-pixel diagonal shift fails map22-outside by 3 steps and 1 byte only.
+DEPTH_SHIFT_PIXELS = 2
 
 
 def matrix(values):
@@ -479,7 +487,8 @@ def compare_case(trace, case, original, ours, oracle=None, oracle_trace=None):
     result["placement"] = dict(mapRootError=placement_error, drawModelError=draw_error, draws=len(native["draws"]),
                                drawsArePickOccludersWithoutShadowOrOutline=flags_ok, tolerance=1e-5,
                                passes=placement_error <= 1e-5 and draw_error <= 1e-5 and flags_ok)
-    original_skies = [r for r in record.get("capture", {}).get("mapRenderers", []) if r.get("class") == "sky"]
+    # Slice 4 PR B traces say whether Camera.main's culling mask holds each renderer's layer; older traces drew every layer.
+    original_skies = [r for r in record.get("capture", {}).get("mapRenderers", []) if r.get("class") == "sky" and r.get("drawnByMain", True)]
     if skies or original_skies:
         sky_ok, sky_error = len(skies) == len(original_skies), math.inf
         if sky_ok:
@@ -508,7 +517,11 @@ def compare_case(trace, case, original, ours, oracle=None, oracle_trace=None):
     shifted = np.roll(nd, 1, axis=1)
     control = depth_metrics(od, shifted, a & b, float(far))
     result["depthNormals"]["onePixelShiftControl"] = dict(p99Metres=control["p99Metres"], normalP99ChannelBytes=control["normalP99ChannelBytes"],
-                                                          fails=not control["passes"])
+                                                          fails=not control["passes"], gated=False)
+    shifted = np.roll(np.roll(nd, DEPTH_SHIFT_PIXELS, axis=0), DEPTH_SHIFT_PIXELS, axis=1)
+    control = depth_metrics(od, shifted, a & b, float(far))
+    result["depthNormals"]["diagonalShiftControl"] = dict(pixels=DEPTH_SHIFT_PIXELS, p99Metres=control["p99Metres"],
+                                                          normalP99ChannelBytes=control["normalP99ChannelBytes"], fails=not control["passes"], gated=True)
     # Colour, reported only.
     oc = pixels(names["originalColor"]); nc = pixels(names["nativeColor"])
     census = native.get("census", {})
@@ -524,13 +537,18 @@ def compare_case(trace, case, original, ours, oracle=None, oracle_trace=None):
                    + (" or per-renderer sorting" if unsorted else "") + "), light-probe-lit parts as items")
     result["color"] = dict(gated=False, lightmappedDraws=census.get("lightmappedDraws"), reason=reason, **color_error(oc, nc))
     gated = ["record", "rule", "placement", "camera", "geometry", "depthNormals"]
+    # Slice 4 PR B: the probe first renders every map slot with its hidden material, which must draw nothing.
+    hidden = record.get("capture", {}).get("hiddenCheck")
+    if hidden is not None:
+        result["hiddenCheck"] = dict(hidden, passes=hidden.get("colourPixels") == 0 and hidden.get("depthNormalsPixels") == 0)
+        gated.append("hiddenCheck")
     if oracle is not None:
         result.update(oracle_case(oracle_trace, case, oracle, ours, native, a & b, od, nc, trace["width"], trace["height"], float(far)))
         gated += [k for k in ("irradiance", "sky", "particles", "silhouettes", "unlit") if result[k].get("gated")]
     result["images"] = {k: dict(file=str(v), sha256=digest(v)) for k, v in names.items()}
     result["passes"] = all(result[k]["passes"] for k in gated) \
         and (result["rule"]["wrongEulerOrderControl"]["fails"] or not result["rule"]["wrongEulerOrderControl"]["applicable"]) \
-        and result["depthNormals"]["onePixelShiftControl"]["fails"]
+        and result["depthNormals"]["diagonalShiftControl"]["fails"]
     return result
 
 

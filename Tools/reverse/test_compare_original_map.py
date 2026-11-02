@@ -117,8 +117,42 @@ class CaseTests(CaseFixture):
         self.assertEqual(case['geometry']['intersectionOverUnion'], 1.0)
         self.assertEqual(case['depthNormals']['p99Metres'], 0.0)
         self.assertTrue(case['depthNormals']['onePixelShiftControl']['fails'])
+        self.assertTrue(case['depthNormals']['diagonalShiftControl']['fails'])
+        self.assertEqual(case['depthNormals']['diagonalShiftControl']['pixels'], compare.DEPTH_SHIFT_PIXELS)
         self.assertTrue(case['rule']['wrongEulerOrderControl']['applicable'] and case['rule']['wrongEulerOrderControl']['fails'])
         self.assertFalse(case['color']['gated'])
+
+    def test_a_hidden_slot_that_draws_fails_the_case(self):
+        trace = json.loads((self.original / 'map-trace.json').read_text())
+        for colour, passes in ((0, True), (3, False)):
+            trace['cases']['c']['capture']['hiddenCheck'] = dict(renderers=1, colourPixels=colour, depthNormalsPixels=0, passes=colour == 0)
+            (self.original / 'map-trace.json').write_text(json.dumps(trace))
+            case = self.run_case()
+            self.assertEqual(case['hiddenCheck']['passes'], passes); self.assertEqual(case['passes'], passes)
+
+    def depth_rows(self, step):
+        """Both depth-normals images: depth rising `step` low-byte steps per row, constant along a row."""
+        depth = np.full((H, W, 4), 255.0); depth[..., 0] = 128; depth[..., 1] = 100; depth[..., 2] = 40
+        depth[..., 3] = np.arange(H)[:, None] * step
+        for folder, prefix in ((self.original, 'original-c-'), (self.ours, 'native-')):
+            save(folder / (prefix + 'map-depth-normals.png'), depth)
+
+    def test_the_diagonal_control_fails_where_the_horizontal_shift_cannot(self):
+        # A floor seen head-on: depth changes only from row to row, so a horizontal shift leaves it as it was.
+        self.depth_rows(3)
+        case = self.run_case()
+        self.assertFalse(case['depthNormals']['onePixelShiftControl']['fails'])
+        self.assertFalse(case['depthNormals']['onePixelShiftControl']['gated'])
+        self.assertTrue(case['depthNormals']['diagonalShiftControl']['fails'])
+        self.assertTrue(case['passes'], json.dumps(case['depthNormals'], indent=1))
+
+    def test_a_view_no_shift_can_tell_apart_fails_the_case(self):
+        # A wall facing the camera: the same depth and normal everywhere, so no shift changes anything.
+        self.depth_rows(0)
+        case = self.run_case()
+        self.assertTrue(case['depthNormals']['passes'])
+        self.assertFalse(case['depthNormals']['diagonalShiftControl']['fails'])
+        self.assertFalse(case['passes'])
 
     def test_a_map_root_in_the_wrong_euler_order_fails_placement(self):
         native = json.loads((self.ours / 'native-map.json').read_text())
@@ -412,6 +446,13 @@ class Slice3Tests(OracleTests):
             else: edited['draws'][-1]['model'][12] += change['sky']['shift']
             (self.ours / 'native-map.json').write_text(json.dumps(edited))
             self.assertFalse(self.run_case()['passes'], change)
+        # A PR B trace: a second sky on a layer Camera.main does not draw is not one of the original's skies.
+        hidden_sky = dict(path='Map/sky-helper', **{'class': 'sky'}, localToWorld=column_major(unity_sky), drawnByMain=False)
+        trace['cases']['c']['capture']['mapRenderers'] = [dict(trace['cases']['c']['capture']['mapRenderers'][0], drawnByMain=True), hidden_sky]
+        (self.original / 'map-trace.json').write_text(json.dumps(trace))
+        (self.ours / 'native-map.json').write_text(json.dumps(native))
+        case = self.run_case()
+        self.assertTrue(case['passes']); self.assertEqual(case['placement']['originalSkyRenderers'], 1)
 
 
 class Slice4Tests(Slice3Tests):
