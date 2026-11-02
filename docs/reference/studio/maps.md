@@ -1074,6 +1074,7 @@ All 42 maps were exported again with this converter, from the same bundles (chec
   - the mesh and triangle counts are unchanged in every map, and the catalog changes only in its 42 `provenanceSHA256` values.
 
   So the app reads the new export exactly as it reads the fixture.
+- **The engine's census agrees.** `everyConvertedMapLoadsItsBlockImagesByteForByte` (Engine at `35f43e98`) passes on both catalogs. Every listed block image uploads byte for byte, and its 42 census lines are identical apart from the load times: the parts of each kind, the block images, the texture bytes and the status line (`.local/sta11d-slice5/logs/swift-census-{old,new}.txt`).
 - **What it holds.**
   - 33 maps have a sun; 11 use the flat ambient and 31 the skybox.
   - 2,322 meshes carry 2,894 shadow runs.
