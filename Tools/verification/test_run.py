@@ -830,7 +830,7 @@ class StudioScenarioLaneTests(unittest.TestCase):
                       and not name.startswith(("maker-", "gameplay-")))
 
     def test_lane_validates_and_covers_every_scenario(self):
-        self.assertEqual(len(self.checks), 89)
+        self.assertEqual(len(self.checks), 90)
         referenced = set()
         for check in self.checks:
             scenario = check["env"]["IKKOKU_STUDIO_SCENARIO"]
@@ -930,6 +930,15 @@ class StudioScenarioLaneTests(unittest.TestCase):
                     self.assertIs(type(step["index"]), int)
                     self.assertIn(step["index"], range(100, 2001))
                     self.assertEqual(step["key"], step["accessoryLabels"]["key"])
+                if "liveSamplers" in step:
+                    self.assertIn(op, ("assert", "assertRejected"))
+                    samplers = step["liveSamplers"]
+                    self.assertIs(type(samplers["key"]), int)
+                    self.assertTrue(samplers["counts"], "an empty count pins nothing: %s" % path)
+                    for state, count in samplers["counts"].items():
+                        self.assertRegex(state, r"^aniso ([1-9]|1[0-6]), mips (linear|nearest|none)$")
+                        self.assertIs(type(count), int)
+                        self.assertGreater(count, 0)
                 if "accessoryLabels" in step:
                     labels = step["accessoryLabels"]
                     self.assertIs(type(labels["key"]), int)
@@ -1099,7 +1108,8 @@ class StudioScenarioLaneTests(unittest.TestCase):
                                             "diagnosticContains", "statusContains", "indicatorContains",
                                             "treeLabel", "view", "render",
                                             "exportIdenticalToSource", "outfit", "clothes", "ik", "expression", "accessoryLabels", "pluginMount",
-                                            "children", "absent", "activeCopyOf", "route", "routeLines", "sourceMap") if k in step]
+                                            "children", "absent", "activeCopyOf", "route", "routeLines", "sourceMap",
+                                            "liveSamplers") if k in step]
                     self.assertTrue(declared, "assert declares nothing: %s" % path)
                     if "sourceMap" in step:
                         # ST-A11: `none`, or census fields; pick points are two viewport fractions.

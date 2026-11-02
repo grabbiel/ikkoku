@@ -216,7 +216,7 @@ fragment float4 toon_fragment(
         float2 buv = (mat.flags & MaterialFlagSourceIrisHighlights)
             ? rotateIrisUV(uv, mat.irisRotation) * mat.irisST0.xy + mat.irisST0.zw : uv;
         float4 t = (mat.flags & MaterialFlagSourceIrisHighlights)
-            ? baseTex.sample(linearClamp, buv) : baseTex.sample(linearRepeat, uv);
+            ? baseTex.sample(forcedAnisoClamp, buv) : baseTex.sample(forcedAnisoRepeat, uv);
         base *= t;
     }
     if (mat.flags & MaterialFlagHasVertexColor && mat.kind != MaterialKindHair && mat.kind != MaterialKindCloth) {
@@ -224,7 +224,7 @@ fragment float4 toon_fragment(
     }
     // ColorMask tinting (clothes): R/G/B zones get tint1/2/3
     if (mat.flags & MaterialFlagHasColorMask) {
-        float3 m = colorMask.sample(linearRepeat, uv).rgb;
+        float3 m = colorMask.sample(forcedAnisoRepeat, uv).rgb;
         float3 tint = float3(1.0);
         tint = mix(tint, mat.tint1.rgb, m.r);
         tint = mix(tint, mat.tint2.rgb, m.g);
@@ -232,7 +232,7 @@ fragment float4 toon_fragment(
         base.rgb *= tint;
         if (mat.flags & MaterialFlagHasPattern) {
             float2 puv = uv * mat.uvTransform.xy + mat.uvTransform.zw;
-            float p = patternTex.sample(linearRepeat, puv).r;
+            float p = patternTex.sample(forcedAnisoRepeat, puv).r;
             base.rgb = mix(base.rgb, base.rgb * mat.patternColor.rgb, p * mat.patternColor.a * m.r);
         }
     }
@@ -243,17 +243,17 @@ fragment float4 toon_fragment(
         // and the Clamp-imported wrap. The source _rotation leaves these samples
         // untouched (asm L79/L84/L87); source gaze and expression sampling remain
         // separate.
-        float upperAlpha = (mat.flags & MaterialFlagHasOverlay0) ? overlay0.sample(linearClamp, in.uv1 * mat.irisST1.xy + mat.irisST1.zw).a : 0.0;
-        float lowerAlpha = (mat.flags & MaterialFlagHasOverlay1) ? overlay1.sample(linearClamp, in.uv2 * mat.irisST2.xy + mat.irisST2.zw).a : 0.0;
+        float upperAlpha = (mat.flags & MaterialFlagHasOverlay0) ? overlay0.sample(forcedAnisoClamp, in.uv1 * mat.irisST1.xy + mat.irisST1.zw).a : 0.0;
+        float lowerAlpha = (mat.flags & MaterialFlagHasOverlay1) ? overlay1.sample(forcedAnisoClamp, in.uv2 * mat.irisST2.xy + mat.irisST2.zw).a : 0.0;
         float4 highlight = max(upperAlpha * mat.overlayColor0, lowerAlpha * mat.overlayColor1);
         float factor = highlight.a * mat.eye.w;
         base.rgb = mix(base.rgb, highlight.rgb, factor);
         base.a = max(base.a, factor);
     } else {
-        if (mat.flags & MaterialFlagHasOverlay0) { float a = overlay0.sample(linearRepeat, uv).a * mat.overlayColor0.a; base.rgb = mix(base.rgb, base.rgb * mat.overlayColor0.rgb, a); }
-        if (mat.flags & MaterialFlagHasOverlay1) { float a = overlay1.sample(linearRepeat, uv).a * mat.overlayColor1.a; base.rgb = mix(base.rgb, base.rgb * mat.overlayColor1.rgb, a); }
+        if (mat.flags & MaterialFlagHasOverlay0) { float a = overlay0.sample(forcedAnisoRepeat, uv).a * mat.overlayColor0.a; base.rgb = mix(base.rgb, base.rgb * mat.overlayColor0.rgb, a); }
+        if (mat.flags & MaterialFlagHasOverlay1) { float a = overlay1.sample(forcedAnisoRepeat, uv).a * mat.overlayColor1.a; base.rgb = mix(base.rgb, base.rgb * mat.overlayColor1.rgb, a); }
     }
-    if (mat.flags & MaterialFlagHasOverlay2) { float a = overlay2.sample(linearRepeat, uv).a * mat.overlayColor2.a; base.rgb = mix(base.rgb, base.rgb * mat.overlayColor2.rgb, a); }
+    if (mat.flags & MaterialFlagHasOverlay2) { float a = overlay2.sample(forcedAnisoRepeat, uv).a * mat.overlayColor2.a; base.rgb = mix(base.rgb, base.rgb * mat.overlayColor2.rgb, a); }
 
     float alpha = base.a;
     if (mat.flags & MaterialFlagAlphaTest) { if (alpha < mat.params.w) discard_fragment(); }
@@ -265,7 +265,7 @@ fragment float4 toon_fragment(
     float3 n = normalize(in.worldNormal);
     if (!isFront && (mat.flags & MaterialFlagDoubleSided)) n = -n;
     if (mat.flags & MaterialFlagHasNormal) {
-        float3 tn = normalTex.sample(linearRepeat, uv).xyz * 2.0 - 1.0;
+        float3 tn = normalTex.sample(forcedAnisoRepeat, uv).xyz * 2.0 - 1.0;
         // Interpolation and skinning can make the tangent nonorthogonal to n.
         float3 t = in.worldTangent.xyz - n * dot(n, in.worldTangent.xyz);
         if (dot(t, t) < 1e-10) {
@@ -280,10 +280,10 @@ fragment float4 toon_fragment(
     s.view = normalize(frame.cameraPosition.xyz - in.worldPos);
     s.specMask = 1.0; s.shadeDetail = 1.0; s.lineMask = 0.0;
     if (mat.flags & MaterialFlagHasDetail) {
-        float3 d = detailTex.sample(linearRepeat, uv).rgb;
+        float3 d = detailTex.sample(forcedAnisoRepeat, uv).rgb;
         s.specMask = d.r; s.shadeDetail = mix(0.6, 1.0, d.g); s.lineMask = d.b;
     }
-    if (mat.flags & MaterialFlagHasLine) { s.lineMask = max(s.lineMask, lineTex.sample(linearRepeat, uv).r); }
+    if (mat.flags & MaterialFlagHasLine) { s.lineMask = max(s.lineMask, lineTex.sample(forcedAnisoRepeat, uv).r); }
 
     float3 color;
     if (mat.kind == MaterialKindUnlit) {
@@ -310,20 +310,20 @@ fragment float4 eye_fragment(
     if (in.hidden > 0.5) discard_fragment();
     float2 c = float2(0.5, 0.5) + mat.eye.yz;
     float2 iuv = (in.uv - c) / max(mat.eye.x, 0.05) + 0.5;
-    float4 iris = irisTex.sample(linearClamp, iuv);
+    float4 iris = irisTex.sample(forcedAnisoClamp, iuv);
     float inside = float(all(iuv >= 0.0) && all(iuv <= 1.0));
     float coverage = iris.a * inside * mat.baseColor.a;
     // Source-style eye textures (e.g. a transparent cornea shell) use alpha as coverage.
     if ((mat.flags & MaterialFlagAlphaTest) && coverage < mat.params.w) discard_fragment();
     iris.a *= inside;
-    float4 white = whiteTex.sample(linearClamp, in.uv);
+    float4 white = whiteTex.sample(forcedAnisoClamp, in.uv);
     if (white.a == 0.0) white = float4(1.0, 1.0, 1.0, 1.0);
     float3 irisColor = iris.rgb * mat.baseColor.rgb;   // texture stores near-white where colourised
     float3 col = mix(white.rgb * mat.tint1.rgb, irisColor, iris.a);
     // Highlights (screen-stable by using the same UV but slightly offset toward the light)
     float3 l = normalize(frame.mainLightDirection.xyz);
     float2 huv = iuv + float2(-l.x, l.y) * 0.04;
-    float4 hl = highlightTex.sample(linearClamp, huv);
+    float4 hl = highlightTex.sample(forcedAnisoClamp, huv);
     col = mix(col, float3(1.0), hl.a * mat.eye.w * inside);
     float3 n = normalize(in.worldNormal);
     float ndl = dot(n, l);
@@ -367,9 +367,8 @@ fragment float4 eye_fragment(
 // anisotropy 9 (the lightmaps' anisoLevel 3 and the particle textures' 1 are
 // raised to it). D3D11 samples an anisotropic texture with linear mips. The map
 // probe's irradiance and particle gates measure it: trilinear without anisotropy
-// fails both (docs/reference/studio/maps.md, "Sampler state").
-constexpr sampler lightmapSampler(mag_filter::linear, min_filter::linear, mip_filter::linear, max_anisotropy(9), address::clamp_to_edge);
-constexpr sampler mapForcedAnisoRepeat(mag_filter::linear, min_filter::linear, mip_filter::linear, max_anisotropy(9), address::repeat);
+// fails both (docs/reference/studio/maps.md, "Sampler state"). The samplers are
+// Common.h's forcedAnisoClamp (light and direction maps) and forcedAnisoRepeat.
 
 inline float3 decodeLightmapRGBM(float4 data, float range, float exponent) {
     return (range * pow(data.a, exponent)) * data.rgb;
@@ -398,33 +397,33 @@ fragment float4 map_fragment(
     if (mat.flags & MaterialFlagMapUnlit) {
         // Unlit/Transparent (Unlit-Alpha.shader v5.6.2f1; the bundle's DX11 fragment is one sample):
         // col = tex2D(_MainTex, uv), blended; baseColor stays white. No lighting, lightmap or fog.
-        float4 texel = (mat.flags & MaterialFlagHasBaseTexture) ? baseTex.sample(mapForcedAnisoRepeat, in.uv) : float4(1.0);
+        float4 texel = (mat.flags & MaterialFlagHasBaseTexture) ? baseTex.sample(forcedAnisoRepeat, in.uv) : float4(1.0);
         return texel * mat.baseColor;
     }
     if (mat.flags & MaterialFlagMapParticle) {
         // Particles/Alpha Blended (Particle Alpha Blend.shader v5.6.2f1): o.color = v.color * _TintColor,
         // col = 2 * i.color * tex2D(_MainTex); no lighting, lightmap or fog term is read. baseColor is
         // _TintColor as a Linear player uploads it; a mesh without colours reads white (fetchVertex).
-        float4 texel = (mat.flags & MaterialFlagHasBaseTexture) ? baseTex.sample(mapForcedAnisoRepeat, in.uv) : float4(1.0);
+        float4 texel = (mat.flags & MaterialFlagHasBaseTexture) ? baseTex.sample(forcedAnisoRepeat, in.uv) : float4(1.0);
         if (mat.flags & MaterialFlagMapParticleAnim) {
             // Particles/Anim Alpha Blended (Particle AnimAlphaBlend.shader v5.6.2f1, checked against the
             // bundle's DX11 program): lerp(tex(uv.xy), tex(uv.zw), blend), uv.zw in TEXCOORD_2 and the
             // blend in TEXCOORD_1.x as the converter writes them.
-            float4 second = (mat.flags & MaterialFlagHasBaseTexture) ? baseTex.sample(mapForcedAnisoRepeat, in.uv2) : float4(1.0);
+            float4 second = (mat.flags & MaterialFlagHasBaseTexture) ? baseTex.sample(forcedAnisoRepeat, in.uv2) : float4(1.0);
             texel = mix(texel, second, in.uv1.x);
         }
         return 2.0 * in.color * mat.baseColor * texel;
     }
     float4 albedo = mat.baseColor;
-    if (mat.flags & MaterialFlagHasBaseTexture) albedo *= baseTex.sample(mapForcedAnisoRepeat, in.uv);
+    if (mat.flags & MaterialFlagHasBaseTexture) albedo *= baseTex.sample(forcedAnisoRepeat, in.uv);
     if ((mat.flags & MaterialFlagAlphaTest) && albedo.a < mat.params.w) discard_fragment();
     float2 luv = float2(in.uv1.x, 1.0 - in.uv1.y);
-    float3 gi = decodeLightmapRGBM(lightmap.sample(lightmapSampler, luv), mat.lightmapRange, mat.lightmapExponent);
+    float3 gi = decodeLightmapRGBM(lightmap.sample(forcedAnisoClamp, luv), mat.lightmapRange, mat.lightmapExponent);
     if (mat.flags & MaterialFlagMapDirectionalLightmap) {
-        gi = decodeDirectionalLightmap(gi, lightmapDirection.sample(lightmapSampler, luv), normalize(in.worldNormal));
+        gi = decodeDirectionalLightmap(gi, lightmapDirection.sample(forcedAnisoClamp, luv), normalize(in.worldNormal));
     }
     float3 color = albedo.rgb * mat.oneMinusReflectivity * gi;
-    if (mat.emissive.a > 0.0) color += emissionTex.sample(mapForcedAnisoRepeat, in.uv).rgb * mat.emissive.rgb * mat.emissive.a;
+    if (mat.emissive.a > 0.0) color += emissionTex.sample(forcedAnisoRepeat, in.uv).rgb * mat.emissive.rgb * mat.emissive.a;
     return float4(color, (mat.flags & MaterialFlagAlphaBlend) ? albedo.a : 1.0);
 }
 

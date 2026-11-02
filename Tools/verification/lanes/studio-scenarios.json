@@ -3273,6 +3273,65 @@
         }
       ],
       "timeout": 600
+    },
+    {
+      "id": "studio-scenario-live-samplers",
+      "argv": [
+        ".local/build/Build/Products/Debug/Ikkoku.app/Contents/MacOS/Ikkoku"
+      ],
+      "fixtures": [
+        {
+          "env": "IKKOKU_SOURCE_SCENE",
+          "kind": "file",
+          "from": "IKKOKU_STUDIO_SCENARIO_SCENE"
+        },
+        {
+          "env": "IKKOKU_SOURCE_AVATAR",
+          "kind": "file"
+        },
+        {
+          "env": "IKKOKU_MAKER_LIBRARY",
+          "kind": "file"
+        },
+        {
+          "env": "IKKOKU_LIVE_SOURCE_PROGRAMS",
+          "kind": "directory"
+        },
+        {
+          "env": "IKKOKU_LIVE_SOURCE_TEXTURES",
+          "kind": "file"
+        },
+        {
+          "env": "IKKOKU_LIVE_SOURCE_STREAMS",
+          "kind": "file"
+        },
+        {
+          "env": "IKKOKU_SHADER_BINDING_SUPPLEMENT",
+          "kind": "file"
+        },
+        {
+          "env": "IKKOKU_HEAD_MATERIAL_CONTRACT",
+          "kind": "file"
+        }
+      ],
+      "env": {
+        "IKKOKU_LIVE_SOURCE_SHADERS": "1",
+        "IKKOKU_STUDIO_SCENARIO": "Tools/verification/scenarios/live-samplers.json",
+        "IKKOKU_STUDIO_SCENARIO_REPORT": ".local/verification/reports/studio-scenario-live-samplers.json"
+      },
+      "referenceTier": "app-smoke",
+      "tolerance": "#338, the live source-shader path's sampler state in the Studio (IKKOKU_LIVE_SOURCE_SHADERS=1 on the scenario scene): each listed character's live assembly must exist, and its resolved materials' bound textures, counted by effective sampler state (SourceShaderLiveAssembly.samplerSummary, max anisotropy x mip filter), must equal the scenario's counts exactly. Under the player's ForceEnable, Bilinear and Trilinear textures with aniso above 0 read 'aniso 9, mips linear'. This pins the anisotropic mode the Studio call site passes: with it reverted to none, the Bilinear textures read 'aniso 1, mips nearest' and the check fails. Only materials that resolve live are counted. Most of the scene's slots stay toon while CharaStudio's scene globals are unresolved, so the counts cover the slots that do resolve. The same counts must hold after the original-format export and reimport.",
+      "artifacts": [
+        {
+          "path": ".local/verification/reports/studio-scenario-live-samplers.json",
+          "kind": "scenario-report"
+        },
+        {
+          "path": ".local/verification/scenario-exports/live-samplers.png",
+          "kind": "exported-scene"
+        }
+      ],
+      "timeout": 600
     }
   ]
 }

@@ -183,6 +183,16 @@ public final class SourceShaderLiveAssembly: @unchecked Sendable {
         return report
     }
 
+    /// Every resolved material's bound textures counted by effective sampler
+    /// state (`SourceShaderLiveMaterial.samplerSummary`), summed per character.
+    public var samplerSummary: [String: Int] {
+        var counts: [String: Int] = [:]
+        for case .success(let material) in materials.values {
+            for (key, count) in material.samplerSummary { counts[key, default: 0] += count }
+        }
+        return counts
+    }
+
     /// Per-material resolution summary (status lines, stable order).
     public var resolution: [String] {
         bindings.renderers.indices.compactMap { index in

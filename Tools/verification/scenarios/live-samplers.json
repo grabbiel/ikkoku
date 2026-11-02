@@ -1,0 +1,20 @@
+{
+  "steps": [
+    {"op": "assert", "liveSamplers": {"key": 0, "counts": {"aniso 9, mips linear": 1}}},
+    {"op": "assert", "liveSamplers": {"key": 65, "counts": {"aniso 9, mips linear": 1}}},
+    {"op": "assert", "liveSamplers": {"key": 627, "counts": {"aniso 9, mips linear": 1}}},
+    {"op": "assert", "liveSamplers": {"key": 795, "counts": {"aniso 9, mips linear": 1}}},
+    {"op": "assert", "liveSamplers": {"key": 963, "counts": {"aniso 9, mips linear": 1}}},
+    {"op": "assert", "liveSamplers": {"key": 1131, "counts": {"aniso 9, mips linear": 1}}},
+    {"op": "assert", "liveSamplers": {"key": 1299, "counts": {"aniso 9, mips linear": 1}}},
+    {"op": "export", "path": ".local/verification/scenario-exports/live-samplers.png"},
+    {"op": "reimport", "path": ".local/verification/scenario-exports/live-samplers.png"},
+    {"op": "assert", "liveSamplers": {"key": 0, "counts": {"aniso 9, mips linear": 1}}},
+    {"op": "assert", "liveSamplers": {"key": 65, "counts": {"aniso 9, mips linear": 1}}},
+    {"op": "assert", "liveSamplers": {"key": 627, "counts": {"aniso 9, mips linear": 1}}},
+    {"op": "assert", "liveSamplers": {"key": 795, "counts": {"aniso 9, mips linear": 1}}},
+    {"op": "assert", "liveSamplers": {"key": 963, "counts": {"aniso 9, mips linear": 1}}},
+    {"op": "assert", "liveSamplers": {"key": 1131, "counts": {"aniso 9, mips linear": 1}}},
+    {"op": "assert", "liveSamplers": {"key": 1299, "counts": {"aniso 9, mips linear": 1}}}
+  ]
+}
