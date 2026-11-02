@@ -830,7 +830,7 @@ class StudioScenarioLaneTests(unittest.TestCase):
                       and not name.startswith(("maker-", "gameplay-")))
 
     def test_lane_validates_and_covers_every_scenario(self):
-        self.assertEqual(len(self.checks), 89)
+        self.assertEqual(len(self.checks), 93)
         referenced = set()
         for check in self.checks:
             scenario = check["env"]["IKKOKU_STUDIO_SCENARIO"]
@@ -863,15 +863,31 @@ class StudioScenarioLaneTests(unittest.TestCase):
                 self.assertTrue(all(type(key) is int for key in step["keys"]))
                 self.assertIs(type(step["count"]), int)
                 self.assertGreater(step["count"], 0)
-            for name in ("undoCount", "redoCount", "keyViews", "hiddenKeyViews", "activeWells"):
+            for name in ("undoCount", "redoCount", "keyViews", "hiddenKeyViews", "activeWells", "keptKeyViews"):
                 if name in step:
                     self.assertIs(type(step[name]), int)
-            for name in ("probeHit", "probeFocusable", "editing", "unchanged", "exists"):
+            for name in ("probeHit", "probeFocusable", "editing", "unchanged", "exists",
+                         "responderHidden", "fullKeyboardAccess"):
                 if name in step:
                     self.assertIs(type(step[name]), bool)
             for name in ("axContains", "axAbsent"):
                 if name in step:
                     self.assertTrue(all(isinstance(text, str) and text for text in step[name]))
+
+    def test_full_keyboard_access_checks_pass_the_launch_argument(self):
+        # C1 (item 7 follow-ups): Full Keyboard Access is turned on for the app
+        # process only, through the argument domain, never in System Settings.
+        # A scenario that asserts it is on needs the argument, and only those
+        # scenarios get it.
+        fka = ["-AppleKeyboardUIMode", "3"]
+        for check in self.checks:
+            with open(os.path.join(run.REPO_ROOT, check["env"]["IKKOKU_STUDIO_SCENARIO"]),
+                      encoding="utf-8") as handle:
+                scenario = json.load(handle)
+            steps = (scenario.get("inspectorUI") or {}).get("steps", [])
+            wants = any(step.get("fullKeyboardAccess") is True for step in steps)
+            self.assertIn(check["argv"][1:], ([], fka), check["id"])
+            self.assertEqual(check["argv"][1:] == fka, wants, check["id"])
 
     def test_scenario_reports_are_artifacts(self):
         for check in self.checks:

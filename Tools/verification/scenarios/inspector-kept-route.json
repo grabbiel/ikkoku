@@ -37,7 +37,8 @@
           "Add point",
           "Line colour",
           "Parent"
-        ]
+        ],
+        "responderHidden": false
       },
       {
         "op": "closeColorPanel"
@@ -93,7 +94,8 @@
           "Connection",
           "Line colour",
           "Parent"
-        ]
+        ],
+        "responderHidden": false
       },
       {
         "op": "type",
@@ -102,7 +104,8 @@
       {
         "op": "assert",
         "unchanged": true,
-        "editing": false
+        "editing": false,
+        "responderHidden": false
       },
       {
         "op": "select",
@@ -157,7 +160,8 @@
           "Ease",
           "Connection",
           "Line colour"
-        ]
+        ],
+        "responderHidden": false
       },
       {
         "op": "type",
@@ -166,7 +170,8 @@
       {
         "op": "assert",
         "unchanged": true,
-        "editing": false
+        "editing": false,
+        "responderHidden": false
       },
       {
         "op": "keyLoop",
@@ -197,7 +202,8 @@
         "activeWells": 0,
         "axAbsent": [
           "Line colour"
-        ]
+        ],
+        "responderHidden": false
       },
       {
         "op": "closeColorPanel"
@@ -233,7 +239,8 @@
         "op": "assert",
         "unchanged": true,
         "editing": false,
-        "activeWells": 0
+        "activeWells": 0,
+        "responderHidden": false
       },
       {
         "op": "select",

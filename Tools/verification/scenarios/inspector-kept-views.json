@@ -61,7 +61,8 @@
           "Locked",
           "Play playlist",
           "Cursor Arrow"
-        ]
+        ],
+        "responderHidden": false
       },
       {
         "op": "type",
@@ -72,7 +73,8 @@
         "key": 0,
         "name": "Source character 0 K",
         "unchanged": true,
-        "editing": false
+        "editing": false,
+        "responderHidden": false
       },
       {
         "op": "keyLoop",
@@ -128,7 +130,8 @@
         "positionX": 2.25,
         "unchanged": true,
         "editing": false,
-        "inspectorView": "none"
+        "inspectorView": "none",
+        "responderHidden": false
       },
       {
         "op": "select",
@@ -280,7 +283,8 @@
         "op": "assert",
         "unchanged": true,
         "editing": false,
-        "inspectorView": "ObjectInspector"
+        "inspectorView": "ObjectInspector",
+        "responderHidden": false
       },
       {
         "op": "select",

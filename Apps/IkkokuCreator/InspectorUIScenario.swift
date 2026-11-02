@@ -22,7 +22,8 @@ struct InspectorUIScenario: Decodable {
         /// `"press"` (`label`: presses the accessibility element with that label or
         /// title, a section's disclosure triangle), `"activateWell"` (activates the
         /// inspector's first visible colour well), `"routePoint"` (`index`: selects
-        /// that point of the selected route) and `"closeColorPanel"`.
+        /// that point of the selected route) and `"closeColorPanel"`. C1 adds the
+        /// `responderHidden` and `fullKeyboardAccess` assertions and `keptKeyViews`.
         let op: String
         let key: Int32?
         let keys: [Int32]?
@@ -63,6 +64,14 @@ struct InspectorUIScenario: Decodable {
         /// nothing; an accepted one is undone with no first responder).
         let probeHit: Bool?
         let probeFocusable: Bool?
+        // Added with C1 (item 7 follow-ups: kept views in hidden containers).
+        /// Whether the first responder (a field being edited counts as its field)
+        /// lies in a hidden kept view: see `hiddenSection(_:)`.
+        let responderHidden: Bool?
+        /// Whether Full Keyboard Access is on for this process (`-AppleKeyboardUIMode 3`).
+        let fullKeyboardAccess: Bool?
+        /// keyLoop only: how many key views in the loop may lie in a hidden kept view.
+        let keptKeyViews: Int?
     }
 
     let steps: [Step]
@@ -95,7 +104,8 @@ struct InspectorUIScenario: Decodable {
         }
         window.makeKeyAndOrderFront(nil)
         await settle()
-        record("window", true, "window \(Int(window.frame.width))x\(Int(window.frame.height)) pt")
+        record("window", true, "window \(Int(window.frame.width))x\(Int(window.frame.height)) pt, "
+            + "full keyboard access \(NSApp.isFullKeyboardAccessEnabled), kept hiding \(StudioKeptHiding.current.rawValue)")
 
         func object(_ key: Int32?) -> StudioObject? {
             guard let key else { return nil }
@@ -206,7 +216,9 @@ struct InspectorUIScenario: Decodable {
             case "keyLoop":
                 let loop = Self.keyLoop(window)
                 let ok = (step.hiddenKeyViews.map { loop.hidden <= $0 } ?? true) && (step.keyViews.map { loop.views.count == $0 } ?? true)
-                record(step.op, ok, "\(loop.views.count) key views, \(loop.hidden) outside the visible window, sha \(loop.sha): " + loop.views.joined(separator: " > "))
+                    && (step.keptKeyViews.map { loop.kept <= $0 } ?? true)
+                record(step.op, ok, "\(loop.views.count) key views\(loop.closed ? "" : " (the walk stopped before the loop closed)"), "
+                    + "\(loop.hidden) outside the visible window, \(loop.kept) in a hidden kept view, sha \(loop.sha): " + loop.views.joined(separator: " > "))
             case "assert":
                 var problems: [String] = []
                 let target = object(step.key)
@@ -250,6 +262,16 @@ struct InspectorUIScenario: Decodable {
                 let wells = Self.colorWells(in: window).filter(\.isActive).count
                 seen.append("active wells \(wells)")
                 if let n = step.activeWells, n != wells { problems.append("active wells \(wells), expected \(n)") }
+                let responderHidden = Self.responderView(window).flatMap { Self.hiddenSection($0) }
+                seen.append("responder \(Self.describe(window.firstResponder))" + (responderHidden.map { " (in a hidden kept view: \($0))" } ?? ""))
+                if let expected = step.responderHidden, expected != (responderHidden != nil) {
+                    problems.append("responder in a hidden kept view \(responderHidden != nil), expected \(expected)")
+                }
+                if let expected = step.fullKeyboardAccess {
+                    let enabled = NSApp.isFullKeyboardAccessEnabled
+                    seen.append("full keyboard access \(enabled)")
+                    if expected != enabled { problems.append("full keyboard access \(enabled), expected \(expected)") }
+                }
                 if step.probeHit != nil || step.probeFocusable != nil {
                     if let probe, let content = window.contentView {
                         let hit = content.hitTest(content.superview?.convert(probe.center, from: nil) ?? probe.center)
@@ -386,13 +408,16 @@ struct InspectorUIScenario: Decodable {
     }
 
     /// Walks the Tab key-view loop from the window's first key view and back to
-    /// it (at most 80 steps), naming each view; `hidden` counts the views that
-    /// lie outside the visible window. Ends with no first responder.
-    @MainActor static func keyLoop(_ window: NSWindow) -> (views: [String], hidden: Int, sha: String) {
+    /// it, naming each view; `hidden` counts the views that lie outside the
+    /// visible window and `kept` those in a hidden kept view. `closed` is false
+    /// when the walk stopped after `keyLoopLimit` views before reaching the
+    /// first again: with Full Keyboard Access every button is a key view.
+    /// Ends with no first responder.
+    @MainActor static func keyLoop(_ window: NSWindow) -> (views: [String], hidden: Int, kept: Int, closed: Bool, sha: String) {
         window.makeFirstResponder(nil)
-        var views: [String] = [], hidden = 0
+        var views: [String] = [], hidden = 0, kept = 0, closed = false
         var first: NSView?
-        for _ in 0..<80 {
+        for _ in 0..<keyLoopLimit {
             // From a field being edited, step from the field: its field editor is not in the loop.
             if let current = editedField(window) ?? (window.firstResponder as? NSView) {
                 window.selectKeyView(following: current)
@@ -401,15 +426,41 @@ struct InspectorUIScenario: Decodable {
             }
             let responder = window.firstResponder
             let view: NSView? = editedField(window) ?? (responder as? NSView)
-            guard let view else { break }
-            if view === first { break }
+            guard let view else { closed = true; break }
+            if view === first { closed = true; break }
             if first == nil { first = view }
             let frame = view.convert(view.bounds, to: nil)
             if view.visibleRect.isEmpty || view.isHiddenOrHasHiddenAncestor { hidden += 1 }
+            if hiddenSection(view) != nil { kept += 1 }
             views.append("\(describe(view))@\(Int(frame.minX)),\(Int(frame.minY))")
         }
         window.makeFirstResponder(nil)
-        return (views, hidden, sha(views))
+        return (views, hidden, kept, closed, sha(views))
+    }
+
+    /// The most views `keyLoop` visits; item 7's loops have 2 to 12 without
+    /// Full Keyboard Access.
+    static let keyLoopLimit = 400
+
+    /// The first responder as a view: a field being edited counts as its field.
+    @MainActor static func responderView(_ window: NSWindow) -> NSView? {
+        editedField(window) ?? (window.firstResponder as? NSView)
+    }
+
+    /// Why `view` counts as lying in a hidden kept inspector view, or nil. With
+    /// `IKKOKU_PERF_KEPT_HIDING=container` (C1) a hidden kept view is in a
+    /// hidden AppKit container, so the view is under a hidden view. Item 7's
+    /// `inspectorHidden` instead draws it at zero opacity and disables its
+    /// controls.
+    @MainActor static func hiddenSection(_ view: NSView) -> String? {
+        if view.isHiddenOrHasHiddenAncestor { return "under a hidden view" }
+        var current: NSView? = view
+        while let v = current {
+            if v.alphaValue == 0 || v.layer?.opacity == 0 { return "at zero opacity" }
+            current = v.superview
+        }
+        if let control = view as? NSControl, !control.isEnabled { return "disabled" }
+        return nil
     }
 
     static func sha(_ lines: [String]) -> String {
