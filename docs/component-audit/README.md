@@ -1314,6 +1314,20 @@ reruns, and branch cleanup) is handed off in
       resolved, 31 relocated, 0 unresolved.`, and showed all 6 characters with no
       `Unresolved` or fallback line. See the
       [build guide](../guides/build-and-test.md#use-a-converted-library-outside-the-checkout).)
+- [ ] R7 item 7 follow-ups (PR #319): in the app, with a source scene of
+      characters and folders open, do three things. Select a character and
+      FK-drag a bone: the drag stays smooth, and the workspace tree, the
+      toolbar and the timeline bar keep showing the right selection, names
+      and key count. Type in the inspector's Name field: the workspace row
+      follows while you type, and the Visible toggle flips the row's eye
+      button. Select a character, then a folder, then nothing: the toolbar's
+      FK/IK picker shows only for the character.
+      (automated in part: `scenarios/inspector-kept-views.json` checks that the
+      row follows a rename typed mid-session and a visibility toggle. In every
+      Studio scenario, the Debug check compares the published workspace,
+      toolbar and timeline state with a fresh computation after each run-loop
+      turn. Passed `--strict` 2026-11-01. The drag's feel and the picker are
+      not automated.)
 
 | Order | Tasks | Concrete result required |
 | --- | --- | --- |
