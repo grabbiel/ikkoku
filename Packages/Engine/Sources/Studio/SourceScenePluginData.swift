@@ -427,7 +427,7 @@ enum SourceScenePluginData {
                   trailer.entries[index].version == 0,
                   let plan = try? SideloaderPlan(trailer: trailer, entry: trailer.entries[index], edit: edit),
                   plan.dropped > 0 else { return false }
-            decisions = trailer.entries.map { $0.isNil ? .remove : .keep }
+            decisions = trailer.entries.map { $0.isNil ? Decision.remove : Decision.keep }
             decisions[index] = plan.decision
             sideloaderPlan = plan
             return true
