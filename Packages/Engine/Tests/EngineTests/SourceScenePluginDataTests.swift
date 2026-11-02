@@ -386,6 +386,13 @@ func installedScenesHaveNoStaleSideloaderRecords() throws {
     // With nothing else to change the trailer stays as it was: a nil entry
     // is inert for any ID, and the next CharaStudio save drops it.
     #expect(verdict(pluginScene([("example.nil", .null), settings]), .init(deletions: [1])) == "kept")
+    // #322's stale-only rewrite of an unedited export runs only when a record
+    // is stale. Without one, the export is the input byte for byte, its nil
+    // entry included; with one, the stale record and the nil entry both go.
+    let kept = pluginScene([(sideloaderID, sideloader([Record(4, 4, 3)])), ("example.nil", .null), settings])
+    #expect(try KoikatsuSceneReader.decodeDocument(kept.data).editedData(SourceSceneEdits()) == kept.data)
+    let stale = pluginScene([(sideloaderID, sideloader([Record(99, 99, 0), Record(4, 4, 3)])), ("example.nil", .null), settings])
+    #expect(try trailer(stale, SourceSceneEdits()) == pluginTrailer([(sideloaderID, sideloader([Record(4, 4, 3)])), settings]))
 }
 
 @Test func sourceScenePluginDataRefusesUnreadableTrailersAndUnknownEntriesByName() throws {
