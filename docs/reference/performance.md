@@ -6138,8 +6138,8 @@ none. The rows below are labelled by how they depend on that:
   SwiftUI appearance; the second is the end of the first rendered draw. Neither
   waits for a presented frame, but both depend on the 1199×946 drawable size.
 - **Measured without presentation (display 1920x1080@60, scale 1):** idle
-  main-thread busy time, `makerTick` p50 and peak footprint. A rerun with
-  presentation waits for the user's usual display.
+  main-thread busy time, `makerTick` p50 and peak footprint. The rerun with
+  presentation is [below](#rerun-with-presentation-2026-11-01).
 
 Median (min–max), n = 4 valid units per cell. Peak footprint covers all
 attempts: female base 7, female head 8, male base 5, male head 8.
@@ -6184,6 +6184,50 @@ These numbers come from one machine, two cards and a non-compositing display.
 They show no FPS, live-animation or broad hardware result. Raw reports,
 snapshots, the scripts and the summary stay under
 `.local/cxm1-maker-rig-seed/timing/run1/`.
+
+### Rerun with presentation (2026-11-01)
+
+**Setup.** The same preserved Release binaries (base `644195a7…`, head
+`f191e32d…`), `maker-idle` only, in a coordinator quiet window. ABBA per sex for
+two cycles, n = 4 units per cell; all 16 traces exited 0. Before each unit the
+run waited until corespotlightd had stayed below 20% for 10 s.
+
+**Display.** The main display was 1920×1080 points at 120 Hz with scale 2, at the
+start and the end. The window's drawable was 2398×1892, and each idle trace
+presented 299 frames at a median interval of 8.33 ms.
+
+**Validity.** In all 16 units, plugin-container (the user's Firefox) went
+above the first run's 45% noted limit, peaking at 54.9–62.6%. Three units had
+one snapshot at 3.2–17.8%. The ABBA order puts the load on both builds, so
+every unit is reported here. One unit
+(cycle 1, male head) also had corespotlightd at 113%. Without it the male head
+medians move by 0.5 ms/s of idle busy time or less, and by 0.1 ms or less of
+card import.
+
+Median (min–max), n = 4 per cell.
+
+| Metric | Female base | Female head | Male base | Male head |
+| --- | --- | --- | --- | --- |
+| Card import (ms) | 1,284.7 (1,259.5–1,308.9) | 749.2 (743.6–765.2) | 1,337.0 (1,331.6–1,345.7) | 788.0 (786.3–790.6) |
+| `firstDraw` (s) | 2.605 (2.564–3.525) | 2.090 (2.078–2.612) | 2.662 (2.608–2.680) | 2.084 (2.069–2.166) |
+| Idle main busy (ms/s) | 48.8 (47.4–62.2) | 45.6 (35.3–48.2) | 8.9 (6.4–10.2) | 9.1 (6.4–10.8) |
+| `makerTick` p50 (ms) | 1.41 (1.40–1.60) | 1.32 (1.15–1.35) | 0.005 (0.005–0.005) | 0.006 (0.006–0.006) |
+| Peak footprint (MiB) | 826.9 (824.4–829.0) | 813.4 (794.9–816.6) | 868.0 (864.1–870.8) | 855.5 (854.9–857.1) |
+
+**Reading.**
+
+- **Idle.** With presentation, idle main-thread time still does not regress.
+  The female head median is lower, but the ranges overlap; the male cells are
+  equal.
+- **Memory.** Peak footprint is 13.5 MiB (female) and 12.5 MiB (male) lower in
+  head. Both arms are about 120 MiB above the first run, whose drawable was
+  1199×946 at scale 1.
+- **Import.** The saving holds: 535 ms (41.7%) for the female card and 549 ms
+  (41.1%) for the male. Absolute import times are about 6% longer than in the
+  first run in both arms, with the browser at 54–63% instead of below 45%.
+
+Raw reports and snapshots stay under
+`.local/cxm1-maker-rig-seed/timing/idle-composited-1824/`.
 
 ## Maker reimport rig carry (#192-C, 2026-11-01)
 
