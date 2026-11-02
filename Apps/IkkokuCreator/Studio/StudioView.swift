@@ -33,7 +33,7 @@ struct StudioView: View {
                 }
             }
             Divider().opacity(interfaceVisible ? 1 : 0)
-            StudioInspectorPanel(model: model).frame(width: 350).studioInterfaceVisibility(interfaceVisible)
+            StudioInspectorPanel(model: model).frame(width: InspectorLayout.width).studioInterfaceVisibility(interfaceVisible)
         }
     }
 }
@@ -371,6 +371,21 @@ struct StudioTimelineControls: View, Equatable {
 
 // MARK: Inspector
 
+/// The inspector column's layout. With a legacy scroller the column's visible
+/// width is 333 pt; the Clothes tab's segmented rows use small controls so that
+/// each row's natural width fits within it (#333: the four-state rows at the
+/// regular size asked for 240 pt and widened the tab's content past the column).
+enum InspectorLayout {
+    /// The inspector column's width.
+    static let width: CGFloat = 350
+    /// The padding around the selected tab's content.
+    static let padding: CGFloat = 12
+    /// The label column of the source character's clothes-state and shoes-type rows.
+    static let sourceRowLabel: CGFloat = 90
+    /// The label column of a native character's clothing-state rows.
+    static let nativeRowLabel: CGFloat = 120
+}
+
 /// The inspector column. Its body reads nothing; each part observes its own state.
 struct StudioInspectorPanel: View {
     let model: StudioModel
@@ -382,7 +397,7 @@ struct StudioInspectorPanel: View {
             ScrollView {
                 StudioCompatibilityDetails(model: model)
                 StudioLiveShaderDetails(model: model)
-                StudioInspectorTab(model: model).padding(12)
+                StudioInspectorTab(model: model).padding(InspectorLayout.padding)
             }
             Divider()
             StudioStatusLine(model: model)
@@ -1115,10 +1130,10 @@ struct ClothesInspector: View {
                     ForEach(ClothSlot.allCases, id: \.self) { slot in
                         if card.outfit.items[slot]?.itemID != nil {
                             HStack {
-                                Text(slot.label).font(.callout).frame(width: 120, alignment: .leading)
+                                Text(slot.label).font(.callout).frame(width: InspectorLayout.nativeRowLabel, alignment: .leading)
                                 Picker("", selection: Binding(get: { model.doc.objects[i].card?.outfit.states[slot] ?? .on }, set: { v in model.update(o.id) { $0.card?.outfit.states[slot] = v } })) {
                                     ForEach(ClothState.allCases, id: \.self) { Text($0.rawValue.capitalized).tag($0) }
-                                }.pickerStyle(.segmented).labelsHidden()
+                                }.pickerStyle(.segmented).labelsHidden().controlSize(.small)
                             }
                         }
                     }
@@ -1198,7 +1213,7 @@ extension ClothesInspector {
         SectionBox(title: "Clothes state") {
             ForEach(SourceStudioWear.studioKinds, id: \.self) { kind in
                 HStack {
-                    Text(labels[kind]).font(.callout).frame(width: 90, alignment: .leading)
+                    Text(labels[kind]).font(.callout).frame(width: InspectorLayout.sourceRowLabel, alignment: .leading)
                     if let allowed = preview.wearRules.allowed[kind] {
                         Picker(labels[kind], selection: Binding(get: { Int(preview.clothesState[kind]) }, set: { value in
                             do {
@@ -1210,7 +1225,7 @@ extension ClothesInspector {
                                 Text(SourceStudioWear.stateNames[Int(state)].capitalized).tag(Int(state))
                             }
                         }
-                        .pickerStyle(.segmented).labelsHidden()
+                        .pickerStyle(.segmented).labelsHidden().controlSize(.small)
                     } else {
                         Text("No garment").font(.caption).foregroundStyle(.secondary)
                     }
@@ -1228,7 +1243,7 @@ extension ClothesInspector {
             // CharaStudio's State panel shoes buttons (OnClickShoesType ->
             // OCIChar.SetShoesType): which shoe slot the shoes row shows.
             HStack {
-                Text("Shoes type").font(.callout).frame(width: 90, alignment: .leading)
+                Text("Shoes type").font(.callout).frame(width: InspectorLayout.sourceRowLabel, alignment: .leading)
                 Picker("Shoes type", selection: Binding(get: { preview.shoesType }, set: { value in
                     do { try model.setSourceShoesType(o.id, type: value); model.status = value == 0 ? "Indoor shoes" : "Outdoor shoes" }
                     catch { model.status = "Shoes type: \(error)" }
@@ -1236,7 +1251,7 @@ extension ClothesInspector {
                     Text("Indoor").tag(0)
                     Text("Outdoor").tag(1)
                 }
-                .pickerStyle(.segmented).labelsHidden()
+                .pickerStyle(.segmented).labelsHidden().controlSize(.small)
             }
             .accessibilityIdentifier("studio.source.shoesType")
             Text("The shoes row addresses the \(preview.shoesType == 0 ? "indoor" : preview.shoesType == 1 ? "outdoor" : "neither") shoes (shoesType \(preview.shoesType), saved \(preview.savedWear.shoesType)). Export writes an edited state or shoes type into the embedded card; the loaded values write nothing.")
