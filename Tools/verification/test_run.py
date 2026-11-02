@@ -648,7 +648,7 @@ INSPECTOR_UI_OPS = {"select", "deselect", "focus", "type", "delete", "undo", "re
                     # Added with the model's Object tab state (R7 phase 2, item 7).
                     "outfit",
                     # Added for #333 (the Clothes tab laid out wider than the inspector).
-                    "tab"}
+                    "tab", "addCharacter"}
 
 # ST-T11 `editRoute` settings: point edits name the point, route edits do not.
 ROUTE_POINT_SETTINGS = ("delete", "move", "speed", "ease", "connection", "link")
@@ -663,7 +663,7 @@ MAKER_SCENARIO_OPS = {"customization", "selectCoordinate", "setFace", "setBody",
                       "mode", "queueSelectionThenStudio", "advanceMotion", "liveAnimation", "mouthOpen"}
 
 # App settings that name a file the app is asked to write (A-T05).
-APP_OUTPUT_VARIABLES = ("IKKOKU_AUTOCAPTURE", "IKKOKU_CAPTURE_UI", "IKKOKU_CAPTURE_UI_REPORT",
+APP_OUTPUT_VARIABLES = ("IKKOKU_AUTOCAPTURE", "IKKOKU_CAPTURE_UI", "IKKOKU_CAPTURE_UI_REPORT", "IKKOKU_CAPTURE_UI_FIT_LOG",
                         "IKKOKU_NATIVE_PLUGIN_REPORT", "IKKOKU_BENCHMARK_OUTPUT",
                         "IKKOKU_STUDIO_SCENARIO_REPORT", "IKKOKU_MAKER_SCENARIO_REPORT",
                         "IKKOKU_GAMEPLAY_SCENARIO_REPORT",
@@ -709,6 +709,21 @@ class AppOutputArtifactTests(unittest.TestCase):
         self.assertTrue(capture["env"]["IKKOKU_CAPTURE_UI"].endswith(".png"))
         self.assertIn(capture["env"]["IKKOKU_CAPTURE_UI"], artifacts)
         self.assertIn(capture["env"]["IKKOKU_CAPTURE_UI_REPORT"], artifacts)
+
+    def test_clothes_fit_capture_log_is_validated_after_the_capture(self):
+        # #333: the capture path's start (ui-sel-clothes) with legacy scrollers; the
+        # validator reads the fit log that capture writes, after it in the lane.
+        order = [check["id"] for lane, check in self.app_smoke_checks() if lane == "app-smoke.json"]
+        self.assertLess(order.index("studio-inspector-clothes-fit-capture"), order.index("studio-inspector-clothes-fit-validate"))
+        checks = {check["id"]: check for lane, check in self.app_smoke_checks()
+                  if lane == "app-smoke.json"}
+        capture, validate = checks["studio-inspector-clothes-fit-capture"], checks["studio-inspector-clothes-fit-validate"]
+        self.assertEqual(capture["argv"][1:], ["-AppleShowScrollBars", "Always"])
+        self.assertEqual(capture["env"]["IKKOKU_CAPTURE_UI_STUDIO_TAB"], "clothes")
+        self.assertEqual(capture["env"]["IKKOKU_CAPTURE_UI_SELECT"], "0,622,963")
+        self.assertEqual(validate["argv"][:3], ["python3", "Tools/verification/checks/inspector_fit_log.py",
+                                                capture["env"]["IKKOKU_CAPTURE_UI_FIT_LOG"]])
+        self.assertEqual(validate["argv"][3:], ["--selection", "963", "--tab", "Clothes"])
 
     def test_ui_capture_does_not_discover_a_maker_library(self):
         # The synthetic scene's minimal card exercises the source-pose inspector,
@@ -832,7 +847,7 @@ class StudioScenarioLaneTests(unittest.TestCase):
                       and not name.startswith(("maker-", "gameplay-")))
 
     def test_lane_validates_and_covers_every_scenario(self):
-        self.assertEqual(len(self.checks), 91)
+        self.assertEqual(len(self.checks), 93)
         referenced = set()
         for check in self.checks:
             scenario = check["env"]["IKKOKU_STUDIO_SCENARIO"]
@@ -857,6 +872,8 @@ class StudioScenarioLaneTests(unittest.TestCase):
                 self.assertTrue(step["label"])
             if op == "tab":
                 self.assertIn(step["label"], ("object", "pose", "face", "clothes", "scene"))
+            if op == "addCharacter":
+                self.assertIn(step["sex"], ("female", "male"))
             if op in ("routePoint", "outfit"):
                 self.assertIs(type(step["index"]), int)
                 self.assertGreaterEqual(step["index"], 0)

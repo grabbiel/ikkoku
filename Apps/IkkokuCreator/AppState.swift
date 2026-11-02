@@ -1113,7 +1113,10 @@ final class AppState {
     /// horizontal extent of the views in its document view, and every scroll view's frame with its
     /// ancestors' frames, to find when and how the Clothes tab is laid out wider than the inspector. Only after the capture, so that it cannot
     /// change what the capture shows, does it also walk the accessibility elements
-    /// (`InspectorUIScenario.inspectorFit`).
+    /// (`InspectorUIScenario.inspectorFit`, with each segmented row's natural width and margins).
+    /// The first line of a launch creates the file's folder and replaces the file, so the log holds
+    /// one launch and a check that reads it (`inspector_fit_log.py`) cannot pass on an earlier
+    /// launch's lines.
     private func logUICaptureFit(_ moment: String, elapsed: Double, accessibility: Bool = false) {
         guard let path = ProcessInfo.processInfo.environment["IKKOKU_CAPTURE_UI_FIT_LOG"],
               let window = NSApp?.windows.first(where: { $0.isVisible && $0.contentView != nil }) else { return }
@@ -1161,12 +1164,17 @@ final class AppState {
             line += " | fits \(fit.fits): \(fit.detail)"
         }
         guard let data = (line + "\n").data(using: .utf8) else { return }
-        if let handle = FileHandle(forWritingAtPath: path) {
-            handle.seekToEndOfFile(); handle.write(data); try? handle.close()
-        } else {
+        if !uiCaptureFitLogStarted {
+            uiCaptureFitLogStarted = true
+            try? FileManager.default.createDirectory(at: URL(fileURLWithPath: path).deletingLastPathComponent(),
+                                                     withIntermediateDirectories: true)
             FileManager.default.createFile(atPath: path, contents: data)
+        } else if let handle = FileHandle(forWritingAtPath: path) {
+            handle.seekToEndOfFile(); handle.write(data); try? handle.close()
         }
     }
+    /// Whether this launch has written its first `IKKOKU_CAPTURE_UI_FIT_LOG` line.
+    @ObservationIgnored private var uiCaptureFitLogStarted = false
 
     /// Draws the window content into a bitmap and writes it as a verified PNG.
     private func writeWindowSnapshot(_ view: NSView, to url: URL) throws -> (width: Int, height: Int) {

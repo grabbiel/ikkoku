@@ -23,7 +23,7 @@ branch was tested or every asset matches the original game. Feature status,
 specific comments and pending tasks are in the linked reports. Shared behavior
 may be discussed in more than one report; one primary owner is listed here.
 
-**1072 files indexed; 1072 assigned; 0 unassigned.**
+**1077 files indexed; 1077 assigned; 0 unassigned.**
 
 Counts include the website and clothes-group additions listed below. Runtime and
 test totals include their specialized role descriptions; this is inventory
@@ -33,20 +33,20 @@ bookkeeping, not a new full source audit.
 | --- | ---: |
 | [App / gameplay / plugins](app-gameplay-and-plugins.md) | 110 |
 | [Character / Maker / mods](character-and-mods.md) | 130 |
-| [Studio / IK / animation](studio.md) | 251 |
+| [Studio / IK / animation](studio.md) | 253 |
 | [Renderer / foundation / assets](renderer-and-foundation.md) | 360 |
-| [Toolchain / verification / historical docs](toolchain-and-verification.md) | 211 |
+| [Toolchain / verification / historical docs](toolchain-and-verification.md) | 214 |
 
 | File role | Files |
 | --- | ---: |
 | App resource metadata / icon | 16 |
 | Build / repository configuration | 9 |
-| Conversion / recovery / verification tool | 248 |
+| Conversion / recovery / verification tool | 250 |
 | Documentation / historical evidence | 65 |
 | Generated asset / catalog / fixture | 205 |
 | Reference host / controlled fixture | 37 |
-| Runtime / shared shader declaration | 232 |
-| Test / validation | 221 |
+| Runtime / shared shader declaration | 233 |
+| Test / validation | 223 |
 | Public synthetic body/face input fixture | 1 |
 
 ## App / gameplay / plugins
@@ -329,6 +329,7 @@ Feature assessment: [studio.md](studio.md).
 | [Packages/Engine/Sources/Scene/IK.swift](../../Packages/Engine/Sources/Scene/IK.swift) | Runtime / shared shader declaration |
 | [Packages/Engine/Sources/Scene/SourceTrigonometricIK.swift](../../Packages/Engine/Sources/Scene/SourceTrigonometricIK.swift) | Runtime / shared shader declaration |
 | [Packages/Engine/Sources/Studio/Gizmo.swift](../../Packages/Engine/Sources/Studio/Gizmo.swift) | Runtime / shared shader declaration |
+| [Packages/Engine/Sources/Studio/InspectorFitRule.swift](../../Packages/Engine/Sources/Studio/InspectorFitRule.swift) | Runtime / shared shader declaration |
 | [Packages/Engine/Sources/Studio/KoikatsuBinary.swift](../../Packages/Engine/Sources/Studio/KoikatsuBinary.swift) | Runtime / shared shader declaration |
 | [Packages/Engine/Sources/Studio/KoikatsuLayoutImporter.swift](../../Packages/Engine/Sources/Studio/KoikatsuLayoutImporter.swift) | Runtime / shared shader declaration |
 | [Packages/Engine/Sources/Studio/KoikatsuLegacyScenes.swift](../../Packages/Engine/Sources/Studio/KoikatsuLegacyScenes.swift) | Runtime / shared shader declaration |
@@ -393,6 +394,7 @@ Feature assessment: [studio.md](studio.md).
 | [Packages/Engine/Tests/EngineTests/Fixtures/neck-target-angle.json](../../Packages/Engine/Tests/EngineTests/Fixtures/neck-target-angle.json) | Reference host / controlled fixture |
 | [Packages/Engine/Tests/EngineTests/Fixtures/route-reference.json](../../Packages/Engine/Tests/EngineTests/Fixtures/route-reference.json) | Reference host / controlled fixture |
 | [Packages/Engine/Tests/EngineTests/Fixtures/route-stepping.json](../../Packages/Engine/Tests/EngineTests/Fixtures/route-stepping.json) | Reference host / controlled fixture |
+| [Packages/Engine/Tests/EngineTests/InspectorFitRuleTests.swift](../../Packages/Engine/Tests/EngineTests/InspectorFitRuleTests.swift) | Test / validation |
 | [Packages/Engine/Tests/EngineTests/KoikatsuBinaryTests.swift](../../Packages/Engine/Tests/EngineTests/KoikatsuBinaryTests.swift) | Test / validation |
 | [Packages/Engine/Tests/EngineTests/KoikatsuJSONVectorTests.swift](../../Packages/Engine/Tests/EngineTests/KoikatsuJSONVectorTests.swift) | Test / validation |
 | [Packages/Engine/Tests/EngineTests/KoikatsuLayoutTests.swift](../../Packages/Engine/Tests/EngineTests/KoikatsuLayoutTests.swift) | Test / validation |
@@ -969,7 +971,9 @@ Feature assessment: [toolchain-and-verification.md](toolchain-and-verification.m
 | [Tools/reverse/vm_source.py](../../Tools/reverse/vm_source.py) | Conversion / recovery / verification tool |
 | [Tools/verification/README.md](../../Tools/verification/README.md) | Documentation / historical evidence |
 | [Tools/verification/app-bundle-rules.json](../../Tools/verification/app-bundle-rules.json) | Build / repository configuration |
+| [Tools/verification/checks/inspector_fit_log.py](../../Tools/verification/checks/inspector_fit_log.py) | Conversion / recovery / verification tool |
 | [Tools/verification/checks/studio_inspector_report.py](../../Tools/verification/checks/studio_inspector_report.py) | Conversion / recovery / verification tool |
+| [Tools/verification/checks/test_inspector_fit_log.py](../../Tools/verification/checks/test_inspector_fit_log.py) | Test / validation |
 | [Tools/verification/checks/test_studio_inspector_report.py](../../Tools/verification/checks/test_studio_inspector_report.py) | Test / validation |
 | [Tools/verification/doctor-samples.json](../../Tools/verification/doctor-samples.json) | Reference host / controlled fixture |
 | [Tools/verification/doctor.py](../../Tools/verification/doctor.py) | Conversion / recovery / verification tool |
@@ -1014,6 +1018,7 @@ Feature assessment: [toolchain-and-verification.md](toolchain-and-verification.m
 | [Tools/verification/scenarios/hand-patterns.json](../../Tools/verification/scenarios/hand-patterns.json) | Conversion / recovery / verification tool |
 | [Tools/verification/scenarios/hand-patterns-kept.json](../../Tools/verification/scenarios/hand-patterns-kept.json) | Conversion / recovery / verification tool |
 | [Tools/verification/scenarios/inspector-clothes-fit.json](../../Tools/verification/scenarios/inspector-clothes-fit.json) | Conversion / recovery / verification tool |
+| [Tools/verification/scenarios/inspector-clothes-fit-native.json](../../Tools/verification/scenarios/inspector-clothes-fit-native.json) | Conversion / recovery / verification tool |
 | [Tools/verification/scenarios/inspector-edit-deselect.json](../../Tools/verification/scenarios/inspector-edit-deselect.json) | Conversion / recovery / verification tool |
 | [Tools/verification/scenarios/inspector-hidden-route.json](../../Tools/verification/scenarios/inspector-hidden-route.json) | Conversion / recovery / verification tool |
 | [Tools/verification/scenarios/inspector-hide-cycles.json](../../Tools/verification/scenarios/inspector-hide-cycles.json) | Conversion / recovery / verification tool |

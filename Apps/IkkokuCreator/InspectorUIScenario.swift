@@ -1,6 +1,7 @@
 import Foundation
 import AppKit
 import CryptoKit
+import Character
 import Studio
 
 /// R7 phase 2, item 7: Object-tab checks that need the real window, entered
@@ -23,7 +24,9 @@ struct InspectorUIScenario: Decodable {
         /// title, a section's disclosure triangle), `"activateWell"` (activates the
         /// inspector's first visible colour well), `"routePoint"` (`index`: selects
         /// that point of the selected route) and `"closeColorPanel"`. Added for
-        /// #333: `"tab"` (`label`: shows that inspector tab, such as `clothes`).
+        /// #333: `"tab"` (`label`: shows that inspector tab, such as `clothes`) and
+        /// `"addCharacter"` (`sex`: `female` or `male`; the toolbar's Add ▸ Character,
+        /// which adds a native character and selects it).
         let op: String
         let key: Int32?
         let keys: [Int32]?
@@ -36,6 +39,7 @@ struct InspectorUIScenario: Decodable {
         let replace: Bool?
         let label: String?
         let index: Int?
+        let sex: String?
         // assert only; an absent key is not checked.
         let name: String?
         let positionX: Float?
@@ -209,6 +213,18 @@ struct InspectorUIScenario: Decodable {
                 studio.inspectorTab = tab
                 await settle()
                 record(step.op, true, "inspector tab \(tab.rawValue)")
+            case "addCharacter":
+                guard let sex = ["female": Sex.female, "male": Sex.male][step.sex ?? ""] else {
+                    record(step.op, false, "addCharacter: sex must be \"female\" or \"male\""); continue
+                }
+                let before = Set(studio.doc.objects.map(\.id))
+                studio.addCharacter(sex: sex)
+                await settle()
+                guard let added = studio.doc.objects.first(where: { !before.contains($0.id) }), added.kind == .character,
+                      added.sourceCharacter == nil, studio.selection == added.id else {
+                    record(step.op, false, "addCharacter: no new selected native character: \(studio.status)"); continue
+                }
+                record(step.op, true, "added native \(step.sex!) character \"\(added.name)\"")
             case "closeColorPanel":
                 if NSColorPanel.sharedColorPanelExists { NSColorPanel.shared.orderOut(nil) }
                 await settle()
@@ -452,13 +468,13 @@ struct InspectorUIScenario: Decodable {
     /// Whether everything in the inspector's scroll view lies within its visible
     /// width (#333): its document view is no wider than its clip view, and no
     /// accessibility element inside it (SwiftUI's text is not an NSView, so
-    /// views alone would miss it) extends past the clip view on either side.
-    /// A disclosure triangle's element spans its section's header from 10 pt
-    /// before the leading edge (in every run of #333's first diagnostic), so a
-    /// triangle is judged by a static text that carries its title, when there
-    /// is one, and by its own frame otherwise. The detail names the scroller
-    /// style, whether the vertical scroller shows, how many triangles were
-    /// judged by their titles, and up to eight elements past the visible width.
+    /// views alone would miss it) extends past the clip view on either side,
+    /// judged by `InspectorFitRule` (a section's disclosure triangle passes only
+    /// at its header offset, 10 pt before the leading edge, with its title
+    /// visible). The detail names the scroller style, whether the vertical
+    /// scroller shows, how many triangles were accepted at the header offset, up
+    /// to eight elements past the visible width, and each segmented row's
+    /// natural width, laid-out width and margins (`segmentedRows`).
     @MainActor static func inspectorFit(_ window: NSWindow) -> (fits: Bool, detail: String) {
         guard let scroll = inspectorScrollView(window) else { return (false, "no inspector scroll view") }
         let clip = scroll.contentView
@@ -494,22 +510,46 @@ struct InspectorUIScenario: Decodable {
             children.forEach { visit($0, depth: depth + 1) }
         }
         visit(scroll, depth: 0)
-        func past(_ f: CGRect) -> Bool { f.minX < visible.minX - 1 || f.maxX > visible.maxX + 1 }
-        let titles = Set(leaves.filter { $0.role == "AXStaticText" }.map(\.name))
-        var offenders: [String] = [], byTitle = 0
-        for leaf in leaves where past(leaf.frame) {
-            if leaf.role == "AXDisclosureTriangle", !leaf.name.isEmpty, titles.contains(leaf.name) { byTitle += 1; continue }
-            offenders.append("\(leaf.role) '\(leaf.name.prefix(40))' x \(Int(leaf.frame.minX - visible.minX))...\(Int(leaf.frame.maxX - visible.minX))")
-        }
         let document = scroll.documentView?.frame.width ?? 0
+        let judgement = InspectorFitRule.judge(leaves.map { InspectorFitRule.Element(role: $0.role, name: $0.name, frame: $0.frame) },
+                                               visible: visible, document: document, clip: clip.bounds.width)
         let vertical = scroll.hasVerticalScroller && !(scroll.verticalScroller?.isHidden ?? true)
-        let fits = offenders.isEmpty && !leaves.isEmpty && document <= clip.bounds.width + 1
-        let detail = "inspector scroll view: clip \(Int(clip.bounds.width)) pt, document \(Int(document)) pt, "
-            + (scroll.scrollerStyle == .legacy ? "legacy" : "overlay") + " scrollers, vertical scroller "
-            + (vertical ? "shown" : "not shown") + ", \(leaves.count) elements, "
-            + "\(byTitle) disclosure triangles past it judged by their titles, \(offenders.count) past the visible width "
-            + "(\(Int(visible.width)) pt)" + (offenders.isEmpty ? "" : ": " + offenders.prefix(8).joined(separator: "; "))
-        return (fits, detail)
+        let offenders = judgement.offenders
+        let rows = segmentedRows(scroll, visible: visible, labels: leaves.filter { $0.role == "AXStaticText" }.map { ($0.name, $0.frame) })
+        let scrollers = scroll.scrollerStyle == .legacy ? "legacy" : "overlay"
+        var detail = "inspector scroll view: clip \(Int(clip.bounds.width)) pt, document \(Int(document)) pt, "
+        detail += "\(scrollers) scrollers, vertical scroller \(vertical ? "shown" : "not shown"), \(leaves.count) elements, "
+        detail += "\(judgement.triangles) titled disclosure triangles at the header offset, "
+        detail += "\(offenders.count) past the visible width (\(Int(visible.width)) pt)"
+        if !offenders.isEmpty { detail += ": " + offenders.prefix(8).joined(separator: "; ") }
+        detail += "; segmented rows (natural/width lead+trail): " + (rows.isEmpty ? "none" : rows.joined(separator: ", "))
+        return (judgement.fits, detail)
+    }
+
+    /// Each segmented control in the inspector's document view, top to bottom, as
+    /// "label natural/width lead+trail": the row's label (the static text level
+    /// with the control and nearest before it, else its segment titles), the
+    /// control's natural width (`intrinsicContentSize`, the width it asks for),
+    /// its laid-out width (smaller when the row compresses it), and its leading
+    /// and trailing margins to the visible width (negative past it), in points.
+    @MainActor static func segmentedRows(_ scroll: NSScrollView, visible: CGRect, labels: [(name: String, frame: CGRect)]) -> [String] {
+        guard let window = scroll.window, let document = scroll.documentView else { return [] }
+        var controls: [NSSegmentedControl] = []
+        func find(_ view: NSView) {
+            if let control = view as? NSSegmentedControl, !control.isHiddenOrHasHiddenAncestor { controls.append(control); return }
+            view.subviews.forEach(find)
+        }
+        find(document)
+        let framed = controls.map { ($0, window.convertToScreen($0.convert($0.bounds, to: nil))) }
+            .sorted { $0.1.maxY > $1.1.maxY }
+        return framed.map { control, f in
+            let level = labels.filter { $0.frame.maxX <= f.minX + 1 && abs($0.frame.midY - f.midY) < f.height / 2 }
+            let titles: [String] = (0..<control.segmentCount).compactMap { control.label(forSegment: $0) }
+            let label = level.max { $0.frame.maxX < $1.frame.maxX }?.name ?? titles.joined(separator: "|")
+            let natural = Int(control.intrinsicContentSize.width.rounded()), width = Int(f.width.rounded())
+            let lead = Int((f.minX - visible.minX).rounded()), trail = Int((visible.maxX - f.maxX).rounded())
+            return "\(label) \(natural)/\(width) \(lead)+\(trail)"
+        }
     }
 
     static func sha(_ lines: [String]) -> String {

@@ -3337,6 +3337,70 @@
         }
       ],
       "timeout": 600
+    },
+    {
+      "id": "studio-scenario-inspector-clothes-fit-native-legacy",
+      "argv": [
+        ".local/build/Build/Products/Debug/Ikkoku.app/Contents/MacOS/Ikkoku",
+        "-AppleShowScrollBars",
+        "Always"
+      ],
+      "fixtures": [
+        {
+          "env": "IKKOKU_SOURCE_SCENE",
+          "kind": "file",
+          "from": "IKKOKU_STUDIO_SCENARIO_SCENE"
+        },
+        {
+          "env": "IKKOKU_SOURCE_AVATAR",
+          "kind": "file"
+        }
+      ],
+      "env": {
+        "IKKOKU_STUDIO_SCENARIO": "Tools/verification/scenarios/inspector-clothes-fit-native.json",
+        "IKKOKU_STUDIO_SCENARIO_REPORT": ".local/verification/reports/studio-scenario-inspector-clothes-fit-native-legacy.json"
+      },
+      "referenceTier": "app-smoke",
+      "tolerance": "#333: the Clothes tab of a native character (the toolbar's Add > Character, female and then male defaults), whose clothing-state rows use the small three-state segmented control, with legacy scrollers for the app process only (-AppleShowScrollBars Always in the argument domain, not System Settings): the inspector's scroll view is no wider than its visible width, and no accessibility element in it extends past that width on either side. The report gives each row's natural width, laid-out width and margins.",
+      "artifacts": [
+        {
+          "path": ".local/verification/reports/studio-scenario-inspector-clothes-fit-native-legacy.json",
+          "kind": "scenario-report"
+        }
+      ],
+      "timeout": 600
+    },
+    {
+      "id": "studio-scenario-inspector-clothes-fit-native-overlay",
+      "argv": [
+        ".local/build/Build/Products/Debug/Ikkoku.app/Contents/MacOS/Ikkoku",
+        "-AppleShowScrollBars",
+        "WhenScrolling"
+      ],
+      "fixtures": [
+        {
+          "env": "IKKOKU_SOURCE_SCENE",
+          "kind": "file",
+          "from": "IKKOKU_STUDIO_SCENARIO_SCENE"
+        },
+        {
+          "env": "IKKOKU_SOURCE_AVATAR",
+          "kind": "file"
+        }
+      ],
+      "env": {
+        "IKKOKU_STUDIO_SCENARIO": "Tools/verification/scenarios/inspector-clothes-fit-native.json",
+        "IKKOKU_STUDIO_SCENARIO_REPORT": ".local/verification/reports/studio-scenario-inspector-clothes-fit-native-overlay.json"
+      },
+      "referenceTier": "app-smoke",
+      "tolerance": "#333: the Clothes tab of a native character (the toolbar's Add > Character, female and then male defaults), whose clothing-state rows use the small three-state segmented control, with overlay scrollers for the app process only (-AppleShowScrollBars WhenScrolling in the argument domain, not System Settings): the inspector's scroll view is no wider than its visible width, and no accessibility element in it extends past that width on either side. The report gives each row's natural width, laid-out width and margins.",
+      "artifacts": [
+        {
+          "path": ".local/verification/reports/studio-scenario-inspector-clothes-fit-native-overlay.json",
+          "kind": "scenario-report"
+        }
+      ],
+      "timeout": 600
     }
   ]
 }
