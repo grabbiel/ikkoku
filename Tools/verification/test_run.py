@@ -897,9 +897,15 @@ class PrivateSourceManifestTests(unittest.TestCase):
         fixtures = {fixture["env"] for fixture in check["fixtures"]}
         self.assertEqual(sorted(name for name in fixtures if PRIVATE_SOURCE_OUTPUTS.search(name)), [])
         self.assertEqual(sorted(fixtures & set(check["env"])), [])
+        # `swift test --package-path P` runs the tests with P as the working
+        # directory, so an output path resolves against it, not the repo root.
+        argv = check["argv"]
+        package = argv[argv.index("--package-path") + 1] if "--package-path" in argv else "."
         for name, value in check["env"].items():
-            self.assertTrue(value.startswith(".local/verification/private-source/"),
-                            "%s=%s is not a lane-owned output path" % (name, value))
+            resolved = os.path.normpath(os.path.join(package, value))
+            self.assertFalse(os.path.isabs(value), "%s=%s must be relative" % (name, value))
+            self.assertTrue(resolved.startswith(os.path.join(".local", "verification", "private-source") + os.sep),
+                            "%s=%s resolves to %s, not a lane-owned output path" % (name, value, resolved))
 
     def test_gate_reader_follows_constants_and_lists(self):
         text = '''

@@ -462,8 +462,8 @@
         }
       ],
       "env": {
-        "IKKOKU_PLUGIN_SCENE_INPUTS": ".local/verification/private-source/plugin-scene-inputs",
-        "IKKOKU_PLUGIN_SCENE_INPUTS_C": ".local/verification/private-source/plugin-scene-inputs-c"
+        "IKKOKU_PLUGIN_SCENE_INPUTS": "../../.local/verification/private-source/plugin-scene-inputs",
+        "IKKOKU_PLUGIN_SCENE_INPUTS_C": "../../.local/verification/private-source/plugin-scene-inputs-c"
       },
       "referenceTier": "recovered-code-oracle",
       "tolerance": "Gated tests run whatever fixture the environment file supplies; without the file the whole check is skipped (failed under --strict). Where a fixture drives an independent oracle, comparison is exact-decoded or documented tolerance, not resemblance.",
