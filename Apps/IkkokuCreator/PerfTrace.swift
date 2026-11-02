@@ -737,6 +737,7 @@ final class PerfTrace {
                 "selectKeys": configuration.selectKeys.map { $0.map { Int($0) } as Any } ?? NSNull(),
                 "inspectorTab": configuration.inspectorTab.map { $0 as Any } ?? NSNull(),
                 "keepMounted": StudioInspectorMounting.current.rawValue,
+                "keptHiding": StudioKeptHiding.current.rawValue,
             ] as [String: Any],
             "build": PerfTrace.buildDescription(),
             "machine": PerfTrace.machineDescription(device: device),

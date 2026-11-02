@@ -591,7 +591,7 @@ struct ObjectInspector: View {
                     .background(InspectorAnchor(kept: kept))
                     .environment(\.inspectorSectionExpansion, kept.sections)
                     .environment(\.inspectorKeptHidden, hidden)
-                    .inspectorHidden(hidden)
+                    .inspectorKeptHiding(hidden)
             }
             Self.nothingSelected.inspectorHidden(!hidden)
         }

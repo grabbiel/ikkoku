@@ -565,3 +565,32 @@ private struct CaptureRecipe {
     #expect(captureRequestMessage(maker).contains("IKKOKU_CAPTURE_UI_MODE=studio"))
     #expect(captureRequestProblems(["IKKOKU_CAPTURE_UI_SELECT": "0"]) == rejected)
 }
+
+// R7 item 7 follow-up C1: how hidden kept inspector views are hidden. The
+// trace, the Studio scenarios and the window read it; other modes reject it.
+@Test func captureRequestScopesTheKeptHidingControl() {
+    let variable = "IKKOKU_PERF_KEPT_HIDING"
+    let readers: [[String: String]] = [
+        ["IKKOKU_PERF_TRACE": "/p.json"],
+        ["IKKOKU_STUDIO_SCENARIO": "/scenarios/s.json", "IKKOKU_STUDIO_SCENARIO_REPORT": "/captures/s.json"],
+        ["IKKOKU_SOURCE_SCENE": "/scenes/scene.png", "IKKOKU_SOURCE_AVATAR": "/rigs/source-avatar.json",
+         "IKKOKU_CAPTURE_UI": "/ui.png", "IKKOKU_CAPTURE_UI_MODE": "studio"],
+        [:],
+    ]
+    for reader in readers {
+        for value in ["disabled", "container"] {
+            var environment = reader
+            environment[variable] = value
+            #expect(captureRequestProblems(environment).isEmpty, Comment(rawValue: "\(reader.keys.sorted()) \(value)"))
+        }
+        for value in ["Container", "hidden", "on", ""] {
+            var environment = reader
+            environment[variable] = value
+            let rejected: [[String]] = [[variable]]
+            #expect(captureRequestProblems(environment) == rejected, Comment(rawValue: "\(reader.keys.sorted()) \(value)"))
+        }
+    }
+    let outside: [[String]] = [[variable]]
+    #expect(captureRequestProblems(["IKKOKU_MAKER_SCENARIO": "/scenarios/m.json", "IKKOKU_MAKER_SCENARIO_REPORT": "/captures/m.json",
+                                    variable: "container"]) == outside)
+}
