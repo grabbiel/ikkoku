@@ -77,6 +77,16 @@ final class MakerModel: ViewportInputHandler, LivePacedHandler {
         var cardAppearanceStages: SourceAppearanceTimings.Sample? = nil
         var preparedAppearanceBytes: Int? = nil
         var preparedAppearanceBytesByCall: [Int]? = nil
+        /// #192-D: the boundaries above as absolute `systemUptime` seconds,
+        /// so a scenario can place a main-actor gap in its phase.
+        var phaseUptimes: PhaseUptimes? = nil
+
+        /// `started` → `snapshotFinished` is the snapshot, then the
+        /// preparation wait to `preparationFinished`, then the owner commit,
+        /// final refresh included, to `commitFinished`.
+        struct PhaseUptimes: Encodable {
+            let started: Double, snapshotFinished: Double, preparationFinished: Double, commitFinished: Double
+        }
 
         /// Consecutive owner intervals, including the final refresh. These are
         /// per-selection wall times, not CPU samples or animation-frame work.
@@ -1041,9 +1051,12 @@ final class MakerModel: ViewportInputHandler, LivePacedHandler {
         defer {
             updatingSource = false
             refresh()
+            let commitFinished = ProcessInfo.processInfo.systemUptime
             sourceSelectionTiming = SourceSelectionTiming(snapshotMilliseconds: (snapshotFinished - started) * 1000,
                 preparationMilliseconds: (preparationFinished - snapshotFinished) * 1000,
-                commitMilliseconds: (ProcessInfo.processInfo.systemUptime - preparationFinished) * 1000)
+                commitMilliseconds: (commitFinished - preparationFinished) * 1000,
+                phaseUptimes: .init(started: started, snapshotFinished: snapshotFinished,
+                    preparationFinished: preparationFinished, commitFinished: commitFinished))
         }
         importedSourceCard = candidate
         sourceColorEdits = colors
@@ -1173,7 +1186,9 @@ final class MakerModel: ViewportInputHandler, LivePacedHandler {
                 headShapeReuse: head.shapeReuseSample,
                 baseAppearanceStages: baseAppearanceTimings.sample,
                 cardAppearanceStages: appearanceTimings.sample, preparedAppearanceBytes: head.appearanceInputs.byteCount,
-                preparedAppearanceBytesByCall: head.appearanceInputs.perCallByteCounts)
+                preparedAppearanceBytesByCall: head.appearanceInputs.perCallByteCounts,
+                phaseUptimes: .init(started: started, snapshotFinished: snapshotFinished,
+                    preparationFinished: preparationFinished, commitFinished: commitFinished))
         }
         importedSourceCard = candidate
         sourceRigURL = url; sourceHeadID = head.headID

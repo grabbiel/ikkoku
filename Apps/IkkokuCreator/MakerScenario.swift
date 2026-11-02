@@ -140,9 +140,48 @@ struct MakerScenario: Decodable {
             let initialLoad: MakerModel.SourceInitialLoadTiming?
             let mainActorMaximumGapMilliseconds: Double?
             let mainActorHeartbeatCount: Int?
+            /// #192-D: the step's longest main-actor gaps, longest first, each
+            /// placed in the selection phase it overlaps most.
+            let mainActorGaps: [MainActorGap]?
             let resourcesBefore: ResourceStore.Statistics?
             let resources: ResourceStore.Statistics?
             let footprint: MakerScenarioFootprint.Sample?
+        }
+        /// One main-actor gap of a selection step (#192-D): the time between
+        /// two heartbeat samples. Offsets count from the selection's
+        /// `phaseUptimes.started`, negative before it. `overlapMilliseconds`
+        /// splits the gap over beforeSelection, snapshot, preparation, commit
+        /// and afterCommit, and `phase` names the largest. Both are nil when
+        /// the step published no phase uptimes (a failed or no-op selection).
+        struct MainActorGap: Encodable {
+            let milliseconds: Double
+            let startMilliseconds: Double?, endMilliseconds: Double?
+            let phase: String?
+            let overlapMilliseconds: [String: Double]?
+
+            init(_ gap: MakerSelectionHeartbeat.Gap, phases: MakerModel.SourceSelectionTiming.PhaseUptimes?) {
+                milliseconds = (gap.end - gap.start) * 1000
+                guard let phases else {
+                    startMilliseconds = nil; endMilliseconds = nil; phase = nil; overlapMilliseconds = nil
+                    return
+                }
+                startMilliseconds = (gap.start - phases.started) * 1000
+                endMilliseconds = (gap.end - phases.started) * 1000
+                let bounds: [(String, Double, Double)] = [
+                    ("beforeSelection", -.infinity, phases.started),
+                    ("snapshot", phases.started, phases.snapshotFinished),
+                    ("preparation", phases.snapshotFinished, phases.preparationFinished),
+                    ("commit", phases.preparationFinished, phases.commitFinished),
+                    ("afterCommit", phases.commitFinished, .infinity),
+                ]
+                var overlaps: [String: Double] = [:]
+                for (name, lower, upper) in bounds {
+                    let overlap = min(gap.end, upper) - max(gap.start, lower)
+                    if overlap > 0 { overlaps[name] = overlap * 1000 }
+                }
+                overlapMilliseconds = overlaps
+                phase = overlaps.max { $0.value < $1.value }?.key
+            }
         }
         let steps: [StepResult]
         let passed: Int
@@ -265,6 +304,16 @@ struct MakerScenario: Decodable {
                     }
                 } else { problems.append("initialLoad: no sample") }
             }
+            let phases = maker.sourceSelectionTiming?.phaseUptimes
+            let gaps = heartbeat.map { $0.longest.map { Report.MainActorGap($0, phases: phases) } }
+            // The longest kept gap is the reported maximum, and the phases
+            // partition it; anything else is an instrumentation fault.
+            if let heartbeat, let first = gaps?.first {
+                let split = first.overlapMilliseconds?.values.reduce(0, +) ?? first.milliseconds
+                if abs(first.milliseconds - heartbeat.maximumGapMilliseconds) > 1e-6 || abs(split - first.milliseconds) > 1e-6 {
+                    problems.append("mainActorGaps: longest gap \(first.milliseconds) ms, split \(split) ms, maximum \(heartbeat.maximumGapMilliseconds) ms")
+                }
+            }
             let passed = ok && problems.isEmpty
             let shown = problems.isEmpty ? detail : detail + "; " + problems.joined(separator: "; ")
             results.append(Report.StepResult(op: step.op, ok: passed, detail: shown,
@@ -273,6 +322,7 @@ struct MakerScenario: Decodable {
                 initialLoad: initialLoad,
                 mainActorMaximumGapMilliseconds: heartbeat?.maximumGapMilliseconds,
                 mainActorHeartbeatCount: heartbeat?.count,
+                mainActorGaps: gaps,
                 resourcesBefore: resourcesBefore,
                 resources: ["selectAsset", "captureResources", "beginSelection", "finishSelection"].contains(step.op) || step.resourcesAtMost != nil || resourcesBefore != nil ? maker.host.renderer.resources.statistics() : nil,
                 footprint: footprint))
@@ -737,13 +787,26 @@ nonisolated private final class MakerSelectionGate: @unchecked Sendable {
 
 /// Scenario-only responsiveness evidence. A presented frame can continue on the
 /// render thread even while input is blocked, so sample the actual main actor.
-private final class MakerSelectionHeartbeat {
+final class MakerSelectionHeartbeat {
+    /// The interval between two consecutive samples, as `systemUptime` seconds.
+    struct Gap { let start: Double, end: Double }
+    /// How many of the longest gaps are kept (#192-D).
+    static let kept = 3
     private var last = ProcessInfo.processInfo.systemUptime
     private(set) var maximumGapMilliseconds = 0.0
     private(set) var count = 0
+    /// The longest gaps so far, longest first; no extra clock read.
+    private(set) var longest: [Gap] = []
     func sample() {
         let now = ProcessInfo.processInfo.systemUptime
         maximumGapMilliseconds = max(maximumGapMilliseconds, (now - last) * 1000)
+        let length: Double = now - last
+        let shortestKept: Double = longest.last.map { $0.end - $0.start } ?? 0
+        if longest.count < Self.kept || length > shortestKept {
+            let index = longest.firstIndex { $0.end - $0.start < length } ?? longest.count
+            longest.insert(Gap(start: last, end: now), at: index)
+            if longest.count > Self.kept { longest.removeLast() }
+        }
         last = now; count += 1
     }
     func run() async {
