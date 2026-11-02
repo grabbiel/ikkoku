@@ -772,6 +772,33 @@ retired hidden mask (the region bitmask applies) and skips retired meshes.
 frame lock and render lock order is unchanged; `retire` and completion take
 only the store lock, so `deinit` can retire from any thread.
 
+Textures complete earlier. A texture an owner retires (`retire(textures:)`,
+the ST-A11 map path) is released when a frame created after the
+retirement is submitted (`completeTextureRetirements`, #368). A submitted
+frame holds its own references to the textures it names
+(`RenderFrame.retainTextures`), so the pending frame it replaces, and every
+copy of that frame, still draw them.
+
+- **Order and cost.** `submit` calls it after `retainTextures`, before taking
+  `frameLock`, under the store lock alone. With nothing retiring it costs one
+  lock and one check.
+- **Generation and stamp.** It bumps the resource generation when it releases
+  something, and leaves the newest-completed stamp alone. That stamp orders
+  deformation keys, and moving it would give every frame created before a
+  texture retirement transient deformation buffers.
+- **Why.** An occluded or minimized viewport prepares no frame, so a texture
+  retired while it is hidden waited for the window to show again. Run D of
+  #358, with an appearance texture cache that retires through the same path,
+  showed it: retiring entries grew from 24 to 115, and the footprint reached
+  954 MB at the fifth head, against 695 MB without the cache.
+- **Unsubmitted frames.** A frame that is never submitted resolves its
+  textures when it is prepared: `StudioModel.frame` for picks and captures,
+  the probes, thumbnails. Each is built and drawn on the main actor in one
+  call while its textures are owned. The asynchronous hover pick is
+  the exception, and its result is dropped once a newer frame was built. A
+  texture released before such a frame is prepared draws the fallback: white
+  base, black masks and overlays, the flat normal.
+
 The rule for owners is to retire before building their next frame. A frame
 created after the retirement counts as current, so its preparation would
 re-create the deformation keys it still names.
