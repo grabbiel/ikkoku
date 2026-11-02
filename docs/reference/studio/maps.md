@@ -1005,6 +1005,179 @@ Release captures, 17 per set: slice 3's 16 and map 41's scene. They come from `m
 - **Scenes.** No scene in `environment.json` names a map other than 33, 34 and 41. The others name none, and the legacy scene prints no map line.
 - **Lanes.** `main`'s scenario files expect the slice-3 counts: map 33's 8 draws, and map 34's 30 lightmapped draws and 1 particle draw. So `source-map`, `-source-map34` and the reload pair would fail on the slice-4 export (inferred from the files; `main`'s lane was not run on it). Install it only once this change has merged, and merge `main` into branches that run the Studio lane.
 
+## Lighting (slice 5)
+
+Slice 5 draws the realtime sun, the ambient and the sun's shadows on the maps' `Standard` draws: the 64% of their triangles that have no lightmap, and the sun on the lightmapped ones too. It comes in two changes. This one is the converter's side: it writes the lighting data, and the app reads none of it yet. The engine change draws it.
+
+### What the offline checks found
+
+These were measured against the slice-4 oracle, before any code (`.local/sta11d-map-coverage/vm-maps`, the 14 cases with the irradiance pair). They use interior pixels and world normals decoded from the 8-bit depth-normals images. The scripts are in `.local/sta11d-pr-b/slice5/`.
+
+- **No light probes.** None of the 42 map scenes has one: their `LightProbes` assets are empty. So a `Standard` renderer without a lightmap takes RenderSettings' ambient probe.
+- **Flat maps use the colour.** Maps 1–7, 18, 28, 34 and 41 are in flat ambient mode (the other 31 use the skybox). Their probe-lit irradiance is exactly the linearised sky colour, (0.0370, 0.0421, 0.0546) in maps 1 and 41. The serialized `m_AmbientProbe` is stale in these maps and misses by 0.27.
+- **Skybox maps use the serialized probe.** In the 12 skybox cases, SH9 of `m_AmbientProbe` at the world normal matches with a mean error of 0.0003–0.002 and a p99 of at most 0.0094; those errors come from the 8-bit normals.
+  - It holds under all three sun types.
+  - It also holds in maps 19 and 25 with the map rotated by caMap (4, 25, −3), so the probe is in world space.
+  - The flat colour misses by 0.12–0.29.
+- **The sun's colour.** The term is `GammaToLinearSpace(color × intensity)` (Unity 5.6 with `lightsUseLinearIntensity` off), times Standard's Disney diffuse, times n·l.
+  - On map 21's probe-lit pixels, the unshadowed ratio is 0.9993. Map 11 gives 0.98 and map 15 gives 0.976.
+  - `linear(color) × intensity` gives ratios of 1.35–1.59, and Lambert gives 1.069.
+- **Shadow strength.** A shadowed pixel keeps 1 − strength of the sun: 0.104 in map 11, whose strength is 0.897.
+- **Direction.** `SunLightInfo` sets the sun's local Euler angles, so the sun turns with the map: its world rotation is mapRoot × Euler(angle). This matches map 41 at caMap (4, 25, −3) to 1e-5.
+- **Only the direct term.** On pixels facing away from the sun, `irradianceLit − irradiance` is exactly 0 in every case, maps 21 and 41 included. The lit pass changed no indirect light.
+- **Open.** Where lit, map 21's lightmapped surfaces read 0.74 of the modelled sun, or 0.96 beyond 30 m. This is not explained and not claimed. The next VM phase renders the lit pass once more with the sun's shadows off, which separates the shadow from the rest.
+- **The suns in the scene files.**
+  - All 33 suns have soft shadows, with the resolution from the quality settings.
+  - Their strength is 1, except in maps 5 (0.85), 11 (0.897), 16 (0.116) and 40 (0.5).
+  - Bias is 0–0.1, normal bias 0–0.4, and near plane 0.1–0.47.
+  - The culling mask is 2048 (layer 11) in 25 maps. In maps 4–7, 28, 34 and 41 it is 2064, which adds layer 4 (Water). Map 33's sun lights every layer but 0, 10 and 12.
+  - Nine maps show no sun: 29–32 and 35–39.
+
+### Converter (slice 5)
+
+`export_map_scene.py export` adds the following, and changes nothing else:
+
+- **`ikkokuMapLighting`** in the glTF's scene extras:
+  - **`ambient`:**
+    - the mode: `skybox`, `trilight` or `flat`, with Unity's number;
+    - the three colours as serialized (gamma);
+    - the intensity;
+    - the 27 `m_AmbientProbe` coefficients: red 0–8, green 9–17, blue 18–26.
+  - **`sun`,** or null when there is none. The sun is the one enabled realtime directional light that some sun type shows. A baked or mixed one, or a second one, is refused by name. The record holds:
+    - its path, role and culling mask;
+    - the sun types that show it, and whether it is `SunLightInfo`'s target;
+    - its shadow settings: type, strength, bias, normal bias, near plane and resolution;
+    - per sun type (0, 1 and 2, and −1 for the authored state): the colour and intensity as authored, and the unit direction to the light. The direction is Z reflected, in its role's frame. For a sun under mapRoot, that is mapRoot's frame, so the app turns it with the map.
+  - **`shadowCasters`:** the `ShadowsOnly` renderers in the sun's mask. These are the stand-ins for walls and pillars that only cast shadows. They are merged per role, visibility and option into one position accessor and one index accessor, written after every mesh's and sky's data. A submesh without an opaque lit shader is left out and listed in provenance.
+- **`ikkokuMap.shadowRuns`** on each lit mesh (`Standard`, `Custom/StandardDouble`, `Legacy Shaders/Diffuse`) of a map with a sun. Each run is `[first index, index count, cast mode, receives, in the sun's mask]`, and the runs cover the mesh's indices in order. Each renderer's triangles are contiguous, so the runs need no new vertex data.
+- **More of each material's `ikkokuStandard`** (`Standard` and `Custom/StandardDouble`), the inputs the sun's term reads beyond slice 2's albedo and metallic:
+  - **`smoothness`,** by Standard's `MetallicGloss`:
+    - under `_SMOOTHNESS_TEXTURE_ALBEDO_CHANNEL_A`, the albedo's alpha times `_GlossMapScale`, with or without `_METALLICGLOSSMAP` (metallic then still comes from the map's red channel);
+    - else, under `_METALLICGLOSSMAP`, the metallic map's alpha times `_GlossMapScale`;
+    - else `_Glossiness`.
+  - **`smoothnessSource`** (`glossiness`, `metallicGlossMapAlphaMean` or `albedoAlphaMean`) and **`smoothnessFactor`** (`_GlossMapScale`, or null for `_Glossiness`).
+  - **`smoothnessApproximation`.** A texture's alpha stands in by its mean over the texture, never sRGB-decoded, and this says so, as `metallicSource` does for metallic. A missing texture is Unity's white default, alpha 1. It is null for `_Glossiness`.
+  - **`specularHighlights`** and **`glossyReflections`:** false under `_SPECULARHIGHLIGHTS_OFF` and `_GLOSSYREFLECTIONS_OFF`.
+  - **`premultiplyAlpha`:** `_ALPHAPREMULTIPLY_ON`, the Transparent mode, which multiplies diffColor by alpha.
+
+  `Legacy Shaders/Diffuse` materials get no smoothness field at all, not 0.
+- **`provenance.json`:** `lighting` (counts, with `standardInputs`: the smoothness sources, the approximations and the three flags), each light's other shadow fields, and the conversion note.
+
+Tests (`test_export_map_scene.py`, `LightingTests`):
+
+- the Euler rule against Unity's `Quaternion.Euler`;
+- the direction to the light against the player's trace, at rest and turned with the map;
+- the world rotation, parents first and without scale;
+- the ambient record and the modes it refuses;
+- which light is the sun;
+- a sun type's entry;
+- merging the runs;
+- smoothness in each of the three cases, with and without its texture, and alpha means that are not sRGB-decoded;
+- the three keyword flags, and no smoothness on `Legacy Shaders/Diffuse`;
+- the provenance counts.
+
+### What Standard's sun reads (slice 5)
+
+Standard's ForwardBase pass lights a pixel with the sun from the albedo, metallic, smoothness, the normal and the light. Before the re-export, every material the 42 maps draw lit was checked against what `ikkokuStandard` carries (`.local/sta11d-slice5/tools/standard_audit.py`). There are 2,200 material records, counted once per map:
+
+- 2,189 `Standard`;
+- 11 `Custom/StandardDouble`;
+- no `Standard (Specular setup)` and no `Legacy Shaders/Diffuse`.
+
+| Input | Materials | In the export | Why |
+|---|---:|---|---|
+| Smoothness from `_Glossiness` | 1,719 | `smoothness` | 1,381 of them are above 0. |
+| Smoothness from `_MetallicGlossMap` alpha × `_GlossMapScale` | 476 | `smoothness`, the alpha's mean | Each has its texture. Per-texel smoothness needs the map drawn. |
+| Smoothness from albedo alpha × `_GlossMapScale` | 5 | `smoothness`, the alpha's mean | Maps 4–7 and 34, all opaque. None also has `_METALLICGLOSSMAP`. |
+| `_SPECULARHIGHLIGHTS_OFF` | 64 | `specularHighlights` | |
+| `_GLOSSYREFLECTIONS_OFF` | 66 | `glossyReflections` | The reflection probe's term, not the sun's. Recorded because it is a flag. |
+| `_ALPHAPREMULTIPLY_ON` (Transparent mode) | 35 | `premultiplyAlpha` | It multiplies diffColor by alpha before the sun's term. |
+| `Custom/StandardDouble` | 11 (map 28) | as `Standard`: `smoothness` from `_Glossiness` | See below. |
+| `_NORMALMAP` with a `_BumpMap` texture | 1,015 | no | The sun reads the per-texel normal. That needs the normal texture and tangents in the export, and the engine to draw them. `_BumpScale` scales that texture's normal, so it is not added without it. The other 111 with the keyword have no texture, so Unity's flat default changes nothing. |
+| `_DETAIL_MULX2` | 201 | no | Per-texel: 11 have a detail albedo texture and 190 a detail normal map. |
+| `_PARALLAXMAP` | 107 | no | Each has a height texture. The parallax offset moves every per-texel lookup, so it needs those textures drawn. |
+| An `_OcclusionMap` texture | 2 | no | Occlusion scales only the indirect light, not the sun's term. |
+| `_SpecColor`, `_SpecGlossMap` (Specular setup) | 0 | — | No such material. |
+
+No material carries a keyword combination outside the three smoothness cases. `_SmoothnessTextureChannel` is set only where its keyword is, and the two highlight floats always match their keywords. One `Standard` material in map 35 also carries `_ALPHA_A_ON` and `_ALPHA_B_ON`, which Standard does not read.
+
+`Custom/StandardDouble` reads the same inputs as `Standard`, from its own shader in map 28's bundle:
+
+- its 27 properties are `Standard`'s, by name and type, and its editor is `StandardShaderGUI`;
+- its ForwardBase variants cover only `_ALPHABLEND_ON`, `_ALPHATEST_ON`, `_DETAIL_MULX2`, `_EMISSION`, `_GLOSSYREFLECTIONS_OFF` and `_SPECULARHIGHLIGHTS_OFF`;
+- every variant's fragment program binds `_Color`, `_Glossiness` and `_Metallic`, and none binds `_MetallicGlossMap` or `_SpecColor`.
+
+So its smoothness is `_Glossiness`, the third case. Its first subshader culls nothing, which is the engine's matter, not the export's. The programs' bodies were not disassembled.
+
+The oracle's irradiance template is `_Glossiness` 0 and `_Metallic` 0, so the oracle cannot gate smoothness. The engine change tests it against a reference computed from Standard's BRDF, with smoothness above 0. A VM case for it is queued, and no parity is claimed until it runs.
+
+### The slice-5 export
+
+All 42 maps were exported again with this converter, from the same bundles (checked by SHA-256) and with the shared fixture's settings: block-only images and the player's built-in resources. The export is in `.local/sta11d-slice5/exports/maps/`, with its catalog. The scripts and logs are in `.local/sta11d-slice5/`.
+
+- **It only adds.** `tools/verify_additive.py` checks each map against the shared fixture, and all 42 pass:
+  - the fixture's `.bin` is a byte prefix of the new one. 28 maps append 466,824 bytes in all, the shadow casters' data; the other 14 keep their `.bin` byte for byte;
+  - every other top-level glTF key is unchanged, and so is every mesh apart from its new `shadowRuns`;
+  - the existing accessors and buffer views are unchanged, and the 60 new accessors come after them;
+  - the scene extras are unchanged apart from the new `ikkokuMapLighting`;
+  - every material is unchanged apart from the new `ikkokuStandard` keys, and all 2,200 `Standard` and `Custom/StandardDouble` materials carry them;
+  - the mesh and triangle counts are unchanged in every map, and the catalog changes only in its 42 `provenanceSHA256` values.
+
+  So the app reads the new export exactly as it reads the fixture.
+- **The engine's census agrees.** `everyConvertedMapLoadsItsBlockImagesByteForByte` (Engine at `35f43e98`) passes on both catalogs. Every listed block image uploads byte for byte, and its 42 census lines are identical apart from the load times: the parts of each kind, the block images, the texture bytes and the status line (`.local/sta11d-slice5/logs/swift-census-{old,smooth}.txt`).
+- **What it holds.**
+  - 33 maps have a sun; 11 use the flat ambient and 31 the skybox.
+  - 2,322 meshes carry 2,894 shadow runs.
+  - 27 meshes in 7 maps mix the receive flag (maps 4, 5, 7, 20, 22, 27 and 41). No mesh mixes the sun's mask.
+  - 42 `ShadowsOnly` renderers (18,146 triangles) form 30 caster groups, and none is left out.
+  - Smoothness in the 2,200 materials comes from `_Glossiness` in 1,719, from the metallic map's alpha in 476 and from the albedo's alpha in 5. So 481 are approximations by a texture's mean, and none lacks its texture.
+  - 64 materials turn highlights off, 66 turn glossy reflections off, and 35 premultiply alpha.
+  - These are each map's `provenance.json` `lighting.standardInputs`, summed, and they match the [audit](#what-standards-sun-reads-slice-5).
+- **The sun's direction** in maps 41 and 11 (sun type 0) matches the player's trace: (0.977662, 0.210118, −0.005215) and (−0.851377, 0.27879, 0.444334).
+- **Space.** 113 files change: 42 glTF files, 42 provenance files, 28 `.bin` files and the catalog. The other 2,750 files are APFS clones of the fixture's (`cp -c`), and each changed `.bin` is a clone of the fixture's with its tail appended. So the export adds about 13.4 MB of new blocks: 11.9 MB of glTF JSON, 1.0 MB of provenance, 0.07 MB of catalog and 0.47 MB of tails.
+
+### Draw counts (slice 5)
+
+If the engine split each lit mesh where its receive flag changes, it would add these draws (`tools/draw_counts.py`, `draw-counts.json`). No other map adds any:
+
+| Map | Draws | Split | Growth |
+|---|---:|---:|---:|
+| 4 | 58 | 60 | +3.4% |
+| 5 | 58 | 59 | +1.7% |
+| 7 | 58 | 59 | +1.7% |
+| 20 | 102 | 109 | +6.9% |
+| 22 | 153 | 175 | +14.4% |
+| 27 | 118 | 168 | +42.4% |
+| 41 | 29 | 32 | +10.3% |
+
+Maps 22, 27 and 41 exceed the +10% budget.
+
+- **No split needed.** No vertex is shared between runs of different receive values, across the 30,848 vertices of the 27 mixed meshes (`tools/mixed_meshes.py`). So the receive flag can travel per vertex instead, and the main pass adds no draw.
+- **The shadow pass** draws each contiguous caster run and each caster group once: 0–171 draws per map. Map 28 has the most, because its casting runs alternate with non-casting ones within its 62 meshes.
+
+### Installing the slice-5 export
+
+The shared fixture (`.local/reverse/exports/maps/`) keeps the slice-4 export until this change merges. `environment.json` names only its `catalog.json` (`IKKOKU_STUDIO_MAP_CATALOG`), and the path does not change. The hashes are in `.local/sta11d-slice5/`:
+
+- `old-export.sha256` and `new-export.sha256` list every file;
+- `changed-files.txt` lists the 113 that differ;
+- `old-changed.sha256` has the fixture's hashes for those 113.
+
+The other 2,750 files are byte-identical in both trees. Both trees are on the same volume, so the two renames below are atomic.
+
+```sh
+cd /Users/rumpology/code/repo/ikkoku
+M=$PWD/.local/reverse/exports/maps        # the shared fixture
+H=$PWD/.local/sta11d-slice5
+N=$H/exports/maps                         # the slice-5 export
+(cd "$M" && shasum -a 256 -q -c "$H/old-export.sha256")
+(cd "$N" && shasum -a 256 -q -c "$H/new-export.sha256")
+mv "$M" "$H/slice4-maps" && mv "$N" "$M"
+(cd "$M" && shasum -a 256 -q -c "$H/new-export.sha256")
+```
+
+After the swap, the slice-4 folder's own blocks come to about 11.5 MB: its old glTF, provenance and catalog files. Everything else in it shares blocks with the new export, including its `.bin` files, which are the prefixes of the new ones. Its 113 changed files (84.5 MB as plain files, `old-changed.sha256`) are all that differs from the new export. The folder goes to the archive or the Trash and is not kept live.
+
 ## Performance
 
 Release, on the reference machine, in one quiet window. The full tables are in [performance: ST-A11](../performance.md#st-a11-original-studio-maps).
@@ -1053,14 +1226,14 @@ Slice 4 (all maps), Release, in one quiet window ([performance: slice 4](../perf
 
 ## What remains
 
-- **Light-probe-lit parts.** Map 34's 32 `Standard` renderers without a lightmap (17,701 triangles) are drawn as items. Unity lights them with light probes and the realtime sun. They cover 77,159, 72,567 and 92,296 of the 691,200 pixels in the day, evening and night views (11–13%), and none in the showoff view. Drawing them needs the scene's light probes (spherical harmonics per probe, and the tetrahedral interpolation) and the sun term below.
-- **The realtime sun and its shadows.** Map 33's only map light, `Map/SunLight`, is realtime, and map 34's sun is too. Across the 40 slice-4 maps, 879,090 of the 1,367,623 `Standard` and `Custom/StandardDouble` triangles that Studio draws (64.3%) have no lightmap: they are probe-lit, or the map has none (each map's `provenance.json` `lightmapCoverage`). In 20 of the 40 maps that share is 50% or more. All of them draw as items until the sun, the ambient and the light probes are drawn. Its term is `diffColor × light.color × diffuseTerm` with its soft shadows. Drawing it needs:
-  - the sun as a scene light in the map's draws;
-  - the `SunLightInfo` angle, colour and intensity per sun type;
+- **Probe-lit parts.** Map 34's 32 `Standard` renderers without a lightmap (17,701 triangles) are drawn as items. They cover 77,159, 72,567 and 92,296 of the 691,200 pixels in the day, evening and night views (11–13%), and none in the showoff view. No map has light probes ([slice 5](#lighting-slice-5)), so Unity lights them with RenderSettings' ambient and the realtime sun. The slice-5 export carries both; the engine change draws them.
+- **The realtime sun and its shadows.** Map 33's only map light, `Map/SunLight`, is realtime, and map 34's sun is too. Across the 40 slice-4 maps, 879,090 of the 1,367,623 `Standard` and `Custom/StandardDouble` triangles that Studio draws (64.3%) have no lightmap: they are probe-lit, or the map has none (each map's `provenance.json` `lightmapCoverage`). In 20 of the 40 maps that share is 50% or more. All of them draw as items until the sun and the ambient are drawn. Its term is `diffColor × light.color × diffuseTerm` with its soft shadows. The slice-5 export carries the sun per sun type, its shadow settings and each draw's shadow flags ([converter](#converter-slice-5)). The engine change still has to draw:
+  - the sun and the ambient in the map's draws;
   - a shadow map of the room.
 
   In map33 the phase-C oracle shows the sun adding up to 0.70 of irradiance on 15,692 pixels, where it comes through the windows (`irradianceLit`).
-- **The rest of `Standard`.** Not drawn: specular and the reflection probe, normal maps, per-texel `_MetallicGlossMap` and detail maps.
+- **The rest of `Standard`.** Not drawn: specular and the reflection probe, normal maps, per-texel `_MetallicGlossMap` and smoothness, detail maps, parallax and occlusion maps. The slice-5 export carries smoothness (texture alphas by their mean) and the highlight, reflection and premultiply flags; the [audit](#what-standards-sun-reads-slice-5) counts what it leaves out and why.
+- **Smoothness is not gated.** The oracle's irradiance template has `_Glossiness` 0. The engine change tests smoothness above 0 against Standard's BRDF computed offline, and a VM case is queued; until it runs, no parity is claimed for it.
 - **Particles.** Soft particles (the fade where the cards meet geometry) are not drawn. Particle renderers sort as Unity's do (see [particles, slice 4](#particles-slice-4)), but blended `Standard` materials are still merged across renderers (60 draws in 20 maps hold two or more), so their blend order within a draw is the mesh's triangle order.
 - **The sky's far plane.** The player's main camera clips at 1000 m, inside parts of map 34's sky spheres (about 450–1,200 m). Our infinite projection draws the whole sphere, so the full frame differs where the player shows black.
 - **Fog and camera effects.** RenderSettings fog was off at runtime in every phase-C and map 34 scene. The per-sun-type fog of `SunLightInfo` and CharaStudio's camera image effects are not drawn.

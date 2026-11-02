@@ -272,6 +272,43 @@ class StandardInputTests(unittest.TestCase):
         image.putdata([(128, 0, 0, 255), (128, 0, 0, 255)])
         self.assertAlmostEqual(maps.texture_channel_mean(SimpleNamespace(image=image, m_ColorSpace=1), 0),
                                maps.gamma_to_linear_exact(128 / 255))
+        image.putdata([(0, 0, 0, 128), (0, 0, 0, 128)])  # alpha is never sRGB decoded
+        self.assertAlmostEqual(maps.texture_channel_mean(SimpleNamespace(image=image, m_ColorSpace=1), 3), 128 / 255)
+
+    def test_smoothness_follows_metallic_gloss(self):
+        # UnityStandardInput.cginc MetallicGloss: the albedo alpha wins, then the map's alpha, then _Glossiness.
+        plain = maps.standard_inputs({}, {"_Glossiness": 0.3, "_GlossMapScale": 0.5}, [])
+        self.assertEqual([plain[k] for k in ("smoothness", "smoothnessSource", "smoothnessFactor", "smoothnessApproximation")],
+                         [0.3, "glossiness", None, None])
+        self.assertEqual(maps.standard_inputs({}, {}, [])["smoothness"], 0.5)  # the property's default
+        mapped = maps.standard_inputs({}, {"_Glossiness": 0.3, "_GlossMapScale": 0.5}, ["_METALLICGLOSSMAP"], metallic_map_mean=0.2,
+                                      gloss_map_alpha_mean=0.8)
+        self.assertEqual([mapped[k] for k in ("smoothness", "smoothnessSource", "smoothnessFactor", "metallic")],
+                         [0.4, "metallicGlossMapAlphaMean", 0.5, 0.2])
+        self.assertIn("mean over the texture", mapped["smoothnessApproximation"])
+        absent = maps.standard_inputs({}, {"_GlossMapScale": 0.5}, ["_METALLICGLOSSMAP"])
+        self.assertEqual(absent["smoothness"], 0.5); self.assertIn("white default", absent["smoothnessApproximation"])
+        albedo = maps.standard_inputs({}, {"_Glossiness": 0.3, "_GlossMapScale": 0.5},
+                                      ["_METALLICGLOSSMAP", "_SMOOTHNESS_TEXTURE_ALBEDO_CHANNEL_A"], metallic_map_mean=0.2,
+                                      gloss_map_alpha_mean=0.8, albedo_alpha_mean=0.6)
+        self.assertEqual([albedo[k] for k in ("smoothness", "smoothnessSource", "smoothnessFactor", "metallic")],
+                         [0.3, "albedoAlphaMean", 0.5, 0.2])  # metallic still from the map's R
+        self.assertEqual(maps.standard_inputs({}, {}, ["_SMOOTHNESS_TEXTURE_ALBEDO_CHANNEL_A"])["smoothness"], 1.0)
+
+    def test_forward_base_keyword_flags_are_recorded(self):
+        plain = maps.standard_inputs({}, {}, [])
+        self.assertEqual((plain["specularHighlights"], plain["glossyReflections"], plain["premultiplyAlpha"]), (True, True, False))
+        off = maps.standard_inputs({}, {}, ["_SPECULARHIGHLIGHTS_OFF", "_GLOSSYREFLECTIONS_OFF", "_ALPHAPREMULTIPLY_ON"])
+        self.assertEqual((off["specularHighlights"], off["glossyReflections"], off["premultiplyAlpha"]), (False, False, True))
+        self.assertNotIn("smoothness", maps.legacy_diffuse_inputs({}))  # Lambert: absent, not 0
+
+    def test_provenance_counts_the_smoothness_sources_and_flags(self):
+        materials = [{"extras": {"ikkokuStandard": maps.standard_inputs({}, {}, kw, gloss_map_alpha_mean=0.5)}}
+                     for kw in ([], ["_METALLICGLOSSMAP"], ["_METALLICGLOSSMAP", "_SPECULARHIGHLIGHTS_OFF"], ["_ALPHAPREMULTIPLY_ON"])]
+        materials += [{"extras": {"ikkokuStandard": maps.legacy_diffuse_inputs({})}}, {"extras": {}}]
+        self.assertEqual(maps.standard_input_counts(materials),
+                         {"materials": 4, "smoothnessSources": {"glossiness": 2, "metallicGlossMapAlphaMean": 2},
+                          "smoothnessApproximations": 2, "specularHighlightsOff": 1, "glossyReflectionsOff": 0, "premultiplyAlpha": 1})
 
 
 class LightmapFileTests(unittest.TestCase):
@@ -599,6 +636,81 @@ class PrivateOutputTests(unittest.TestCase):
                 for outside in (repo / 'docs' / 'catalog.json', Path(tmp) / 'main-local' / 'other', repo / '.local' / '..' / 'x'):
                     with self.assertRaisesRegex(ValueError, 'ignored .local'):
                         maps.private(outside)
+
+
+class LightingTests(unittest.TestCase):
+    """Slice 5: the ambient and sun records. The direction numbers are the player's own (the slice-4
+    maps trace: map 41's sun, type 0, with the map at rest and at caMap rotation (4, 25, -3))."""
+    MAP41_TYPE0 = [12.1292715, 269.6944, 192.9215]
+
+    @staticmethod
+    def quaternion_euler(angles):  # Quaternion.Euler(x, y, z) = qy * qx * qz, as Unity composes it
+        def axis(v, degrees):
+            s = math.sin(math.radians(degrees) / 2)
+            return [v[0] * s, v[1] * s, v[2] * s, math.cos(math.radians(degrees) / 2)]
+        def mul(a, b):
+            ax, ay, az, aw = a; bx, by, bz, bw = b
+            return [aw * bx + ax * bw + ay * bz - az * by, aw * by - ax * bz + ay * bw + az * bx,
+                    aw * bz + ax * by - ay * bx + az * bw, aw * bw - ax * bx - ay * by - az * bz]
+        return mul(mul(axis([0, 1, 0], angles[1]), axis([1, 0, 0], angles[0])), axis([0, 0, 1], angles[2]))
+
+    def test_euler_matrix_is_unity_quaternion_euler(self):
+        for angles in ([0, 0, 0], [30, 0, 0], [0, 45, 0], [0, 0, 60], [12.5, 270, 193], [-80, 400, 17]):
+            close(self, maps.euler_matrix(angles), maps.quaternion_matrix(self.quaternion_euler(angles)))
+
+    def test_direction_to_light_reproduces_the_player_trace(self):
+        # Transform.forward (-0.977662, -0.210118, -0.005215): towards the light is its opposite, Z reflected.
+        close(self, maps.direction_to_light(maps.euler_matrix(self.MAP41_TYPE0)), [0.977662, 0.210118, -0.005215], places=5)
+        # Under mapRoot at caMap (4, 25, -3) the light's local angles turn with the map:
+        # the trace's forward is (-0.901691, -0.157913, 0.402513).
+        turned = maps.mul3(maps.euler_matrix([4, 25, -3]), maps.euler_matrix(self.MAP41_TYPE0))
+        close(self, maps.direction_to_light(turned), [0.901691, 0.157913, 0.402513], places=5)
+
+    def test_world_rotation_composes_parents_first_and_leaves_scale_out(self):
+        q30x = [math.sin(math.radians(15)), 0, 0, math.cos(math.radians(15))]
+        q90y = [0, math.sin(math.radians(45)), 0, math.cos(math.radians(45))]
+        transforms = {'root': (q90y, [2, 5, 0.5]), 'child': (q30x, [3, 3, 3])}
+        scene = SimpleNamespace(parents={'root': None, 'child': 'root'}, transforms=transforms,
+                                local_trs=lambda t: ([0, 0, 0], t[0], t[1]))
+        expected = maps.mul3(maps.quaternion_matrix(q90y), maps.quaternion_matrix(q30x))
+        close(self, maps.world_rotation(scene, 'child'), expected)
+
+    def test_ambient_record_names_the_mode_and_refuses_what_unity_does_not_write(self):
+        record = maps.ambient_record(3, [0.212, 0.227, 0.259, 1], [0, 0, 0, 1], [0, 0, 0, 1], 1.0, [0.1] * 27)
+        self.assertEqual((record['mode'], record['unityMode'], len(record['probe'])), ('flat', 3, 27))
+        self.assertEqual(maps.ambient_record(0, None, None, None, 1.0, None)['mode'], 'skybox')
+        with self.assertRaisesRegex(ValueError, 'Ambient mode 2'):
+            maps.ambient_record(2, None, None, None, 1.0, None)
+        with self.assertRaisesRegex(ValueError, '27 finite'):
+            maps.ambient_record(0, None, None, None, 1.0, [0.1] * 26)
+        with self.assertRaisesRegex(ValueError, '27 finite'):
+            maps.ambient_record(0, None, None, None, 1.0, [float('nan')] * 27)
+
+    def test_the_sun_is_the_one_shown_realtime_directional_light(self):
+        def light(path, kind=1, enabled=True, keys=(0, 1, 2), mode=4):
+            return {'path': path, 'pathID': path, 'type': kind, 'enabled': enabled, 'visibleFor': list(keys), 'lightmapping': mode}
+        self.assertEqual(maps.select_sun([], None), (None, False))
+        hidden, off, point = light('h', keys=()), light('o', enabled=False), light('p', kind=2)
+        self.assertEqual(maps.select_sun([hidden, off, point], 'h'), (None, False))
+        sun = light('s')
+        self.assertEqual(maps.select_sun([hidden, sun, point], 's'), (sun, True))
+        self.assertEqual(maps.select_sun([sun], 'other'), (sun, False))
+        with self.assertRaisesRegex(ValueError, 'not realtime'):
+            maps.select_sun([light('b', mode=2)], None)
+        with self.assertRaisesRegex(ValueError, 'More than one'):
+            maps.select_sun([sun, light('t')], 's')
+
+    def test_a_sun_type_takes_its_first_entry_and_other_keys_none(self):
+        entries = [{'type': 1, 'n': 'a'}, {'type': 0, 'n': 'b'}, {'type': 1, 'n': 'c'}]
+        self.assertEqual(maps.sun_type_entry(entries, 1)['n'], 'a')
+        self.assertEqual(maps.sun_type_entry(entries, 0)['n'], 'b')
+        self.assertIsNone(maps.sun_type_entry(entries, 2))
+        self.assertIsNone(maps.sun_type_entry(entries, maps.OTHER_SUN_TYPE))
+
+    def test_shadow_runs_merge_only_contiguous_entries_with_equal_flags(self):
+        entries = [[0, 6, 1, True, True], [6, 3, 1, True, True], [9, 3, 0, True, True], [12, 6, 0, True, True], [18, 3, 0, False, True]]
+        self.assertEqual(maps.shadow_runs(entries), [[0, 9, 1, True, True], [9, 9, 0, True, True], [18, 3, 0, False, True]])
+        self.assertEqual(maps.shadow_runs([]), [])
 
 
 if __name__ == '__main__':
