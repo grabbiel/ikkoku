@@ -41,10 +41,27 @@ public struct SourceMakerLibrary: Sendable {
         public let sex: Int, headID: Int, exType: Int
         public let manifest: File
     }
-    private struct Document: Decodable { let schemaVersion: Int, entries: [Entry], assemblies: [Assembly]? }
+    private struct Document: Decodable {
+        let schemaVersion: Int, entries: [Entry], assemblies: [Assembly]?
+        /// #346: which IDs every installed list bundle has, per category
+        /// (`catalog-presence.json`, written by Tools/reverse/catalog_presence.py).
+        let catalogPresence: File?
+    }
     private struct Key: Hashable, Sendable { let category: Int, id: Int, guid: Data? }
     public let sourceURL: URL, directory: URL, entries: [Entry], assemblies: [Assembly]
     private let entryIndex: [Key: Int]
+    /// The installed catalogs' IDs per hair and clothes category, read and
+    /// SHA-verified once at load; nil when the library has no presence file.
+    public private(set) var catalogPresence: [Int: Set<Int>]? = nil
+    /// ChaControl's default ID per category when a saved ID is in no installed
+    /// list (recovered ChaControl.Koikatu.cs): hair `defId` {0, 1, 0, 0}
+    /// (ChangeHairAsync :7015-7026), clothes 0 (top :7278, bottom :7778, bra
+    /// :7893, shorts :8069, gloves :8164, pantyhose :8249, socks :8344, shoes
+    /// `defID` :8404-8415). Accessories pass -1 (:8621) and load nothing, which
+    /// is what an unresolved accessory already does here.
+    public static let catalogDefaultIDs: [Int: Int] = [101: 0, 102: 1, 103: 0, 104: 0, 105: 0, 106: 0, 107: 0, 108: 0,
+                                                       109: 0, 110: 0, 111: 0, 112: 0]
+    private struct PresenceDocument: Decodable { let schemaVersion: Int, kind: String, categories: [String: [Int]] }
 
     public static func load(url: URL) throws -> Self {
         let input = try FileHandle(forReadingFrom: url); defer { try? input.close() }
@@ -80,7 +97,8 @@ public struct SourceMakerLibrary: Sendable {
                 throw RigError.invalid("Maker wear appearance requires half-state meshes.")
             }
         }
-        let result = Self(sourceURL: url.resolvingSymlinksInPath(), directory: url.deletingLastPathComponent().resolvingSymlinksInPath(), entries: doc.entries, assemblies: doc.assemblies ?? [], entryIndex: index)
+        var result = Self(sourceURL: url.resolvingSymlinksInPath(), directory: url.deletingLastPathComponent().resolvingSymlinksInPath(), entries: doc.entries, assemblies: doc.assemblies ?? [], entryIndex: index)
+        if let presence = doc.catalogPresence { result.catalogPresence = try result.presence(presence) }
         for entry in result.entries {
             for ref in [entry.rig, entry.appearance, entry.cardBindings, entry.bodyMask, entry.materialEvidence,
                         entry.alternateMaterialEvidence, entry.wearAppearance, entry.wearCardBindings].compactMap({ $0 }) { _ = try result.contained(ref) }
@@ -104,6 +122,24 @@ public struct SourceMakerLibrary: Sendable {
         guard refs?.records.contains(where: { $0.property.map { Data($0.utf8) } == Data("ChaFileFace.headId".utf8) }) != true else {
             throw RigError.invalid("This card selects a mod head whose assembly conversion is unavailable. Its saved head and mod identities remain unchanged.")
         }
+    }
+    /// The presence sidecar: contained, SHA-verified (a mismatch is a load
+    /// error, as for every other sidecar) and decoded into one set per category.
+    private func presence(_ ref: File) throws -> [Int: Set<Int>] {
+        let url = try verified(ref, maximumBytes: 8 * 1024 * 1024)
+        let document = try JSONDecoder().decode(PresenceDocument.self, from: Data(contentsOf: url))
+        guard document.schemaVersion == 1, document.kind == "koikatsu-catalog-presence" else {
+            throw RigError.invalid("Unsupported Maker catalog presence file.")
+        }
+        var result: [Int: Set<Int>] = [:]
+        for (key, ids) in document.categories {
+            guard let category = Int(key), Self.catalogDefaultIDs[category] != nil, ids.count <= 1_000_000,
+                  ids.allSatisfy({ $0 >= 0 && Int32(exactly: $0) != nil }) else {
+                throw RigError.invalid("Invalid Maker catalog presence category \(key).")
+            }
+            result[category] = Set(ids)
+        }
+        return result
     }
     private func contained(_ ref: File) throws -> URL {
         let url = directory.appendingPathComponent(ref.file).resolvingSymlinksInPath()
@@ -140,6 +176,10 @@ public struct SourceMakerLibrary: Sendable {
     public struct Selection: Sendable {
         public let property: String, category: Int, savedID: Int, sourceID: Int
         public let modGUID: String?, entry: Entry?, status: String
+        /// `catalogFallback` only: the catalog ID the original draws instead
+        /// (its default, else 0), or nil when it draws nothing. `entry` is
+        /// that ID's library entry. The saved ID is never rewritten.
+        public var resolvedID: Int? = nil
     }
     public func selection(category: Int, savedID: Int, property: String, references: SourceCardModReferences?) -> Selection {
         let record = references?.records.first { $0.property.map { Data($0.utf8) } == Data(property.utf8) }
@@ -152,6 +192,27 @@ public struct SourceMakerLibrary: Sendable {
             id = record.sourceSlot; guid = value
         } else { id = savedID; guid = nil }
         let entry = entryIndex[Key(category: category, id: id, guid: guid.map { Data($0.utf8) })].map { entries[$0] }
+        // #346: a vanilla ID that no installed list has draws the original's
+        // fallback (LoadCharaFbxDataAsync, ChaControl.Koikatu.cs:8675-8700):
+        // the default ID unless it is the saved one, else 0, else nothing.
+        if entry == nil, guid == nil, let present = catalogPresence?[category], !present.contains(id),
+           let defaultID = Self.catalogDefaultIDs[category] {
+            // Explicit optional: Swift 6.3.3 (CI) does not promote the mixed ternary.
+            var resolved: Int? = nil
+            if id != defaultID && present.contains(defaultID) { resolved = defaultID } else if present.contains(0) { resolved = 0 }
+            let fallback: Entry?
+            if let resolved {
+                // Its entry, or nil when it is unconverted: the reference part stays.
+                fallback = entryIndex[Key(category: category, id: resolved, guid: nil)].map { entries[$0] }
+            } else {
+                // The original loads nothing: assembled as the empty row is, with no part.
+                fallback = Entry(category: category, id: id, name: "", modGUID: nil, empty: true, rig: nil, appearance: nil,
+                                 cardBindings: nil, bodyMask: nil, materialEvidence: nil, meshNames: nil, attachment: nil,
+                                 alternates: nil, alternateMaterialEvidence: nil, wearAppearance: nil, wearCardBindings: nil)
+            }
+            return Selection(property: property, category: category, savedID: savedID, sourceID: id, modGUID: nil,
+                             entry: fallback, status: "catalogFallback", resolvedID: resolved)
+        }
         return Selection(property: property, category: category, savedID: savedID, sourceID: id, modGUID: guid,
             entry: entry, status: entry == nil ? "conversionMissing" : entry?.empty == true ? "empty" : "converted")
     }
@@ -522,6 +583,10 @@ public struct SourceMakerLibrary: Sendable {
         func selected(_ category: Int, _ id: Int, _ property: String, _ prefix: String, accessorySlot: Int? = nil,
                       indoorShoes: Bool = false, clothingSlot: Int? = nil) throws -> (SourceRig, [String]?)? {
             let resolution = selection(category: category, savedID: id, property: property, references: references); selections.append(resolution)
+            if resolution.status == "catalogFallback" {
+                let drawn = resolution.resolvedID.map { "ID \($0)" } ?? "nothing"
+                diagnostics.append("\(property): catalogFallback, source ID \(resolution.sourceID) is in no installed catalog, so the original draws \(drawn). Card identity preserved.")
+            }
             guard let entry = resolution.entry else {
                 diagnostics.append("\(property): \(resolution.status), source ID \(resolution.sourceID). Card identity preserved; reference geometry retained where available."); return nil
             }

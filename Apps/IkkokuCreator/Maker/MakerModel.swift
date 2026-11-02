@@ -888,8 +888,11 @@ final class MakerModel: ViewportInputHandler, LivePacedHandler {
             let reason = resolverError ?? unavailableReason
             let choices = library.entries.filter { reason == nil && $0.category == destination.category && $0.modGUID == nil }
                 .map { SourceSelectionRow.Choice(id: $0.id, name: "\($0.name) · ID \($0.id)") }
-            let selectedID = reason == nil && selection.entry != nil && selection.modGUID == nil ? selection.sourceID : nil
-            let current = reason ?? ("ID \(selection.sourceID)" + (selection.modGUID.map { " · \($0)" } ?? "") + " · \(selection.status)")
+            // #346: an ID in no installed catalog is not a choice; the row names what the original draws.
+            let fallback = selection.status == "catalogFallback"
+            let selectedID = reason == nil && selection.entry != nil && selection.modGUID == nil && !fallback ? selection.sourceID : nil
+            let drawn = fallback ? " → " + (selection.resolvedID.map { "ID \($0)" } ?? "nothing") : ""
+            let current = reason ?? ("ID \(selection.sourceID)" + (selection.modGUID.map { " · \($0)" } ?? "") + " · \(selection.status)" + drawn)
             return SourceSelectionRow(id: destination.property, label: label, slot: slot,
                 selectedID: selectedID, current: current, unavailableReason: reason, choices: choices)
         }
