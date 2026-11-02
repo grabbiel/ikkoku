@@ -534,6 +534,12 @@ class Map34Tests(unittest.TestCase):
         self.assertIn('DepthFar33=25f', source); self.assertIn('DepthFar34=1000f', source)
 
 
+def map_cases_table(source):
+    """The probe's MapCases table (the maps mode's cases), without the lighting mode's own cases."""
+    start = source.index('static readonly MapCase[] MapCases={')
+    return source[start:source.index('};', start)]
+
+
 class MapsTests(unittest.TestCase):
     """Slice 4: twelve maps' phases B and C in one exec, selected by the reload-maps-showoff.png upload."""
 
@@ -584,7 +590,7 @@ class MapsTests(unittest.TestCase):
     def test_the_probe_source_has_the_maps_mode_cases(self):
         source = probe.MAP_PROBE.read_text()
         self.assertIn('MapsUpload="reload-maps-showoff.png"', source)
-        cases = re.findall(r'new MapCase\("([a-z0-9-]+)",(\d+),(\d),(true|false),(true|false),', source)
+        cases = re.findall(r'new MapCase\("([a-z0-9-]+)",(\d+),(\d),(true|false),(true|false),', map_cases_table(source))
         self.assertEqual(len(cases), 24)
         inside = [c for c in cases if c[4] == 'false']; outside = [c for c in cases if c[4] == 'true']
         # Slice 4 PR B adds the realtime-GI maps 30, 32 and 37 and a second map 40 view (its unlit road shadows).
@@ -596,6 +602,96 @@ class MapsTests(unittest.TestCase):
         self.assertEqual({c[2] for c in inside}, {'0', '1', '2'})  # every sun type
         self.assertIn('Guard("map41-showoff"', source)
         self.assertIn('depthFar=no==33?DepthFar33:DepthFar34', source)
+
+
+class LightingTests(unittest.TestCase):
+    """Maps slice 5: the lighting mode's own exec, selected by the reload-lighting.png marker."""
+
+    SUNLESS = {29, 30, 31, 32, 35, 36, 37, 38, 39}  # maps.md: nine maps show no sun
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory(); self.dir = Path(self.tmp.name)
+        FakeEndpoint.instances = []
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def run_lighting(self, scenes=None):
+        upload = archive({'status.json': b'{}', 'map-trace.json': b'{}', 'oracle-map20-irradiance-lit-unshadowed.f32': bytes(range(24))})
+        guest = dict(processID=81, source=sha(probe.MAP_PROBE.read_bytes()), scenes=scenes or {probe.LIGHTING_UPLOAD: sha(probe.LIGHTING_MARKER)},
+                     zipSHA256=sha(upload), zipBytes=len(upload), exited=True, removed=True, remainingGameProcesses=[],
+                     scanBefore={'abdata': {'files': 1}}, scanAfter={'abdata': {'files': 1}})
+        FakeEndpoint.next_upload = upload
+        completed = SimpleNamespace(returncode=0, stdout=json.dumps(guest), stderr='')
+        args = SimpleNamespace(vm='vm', output=self.dir / 'out', errno_baseline=0, host_address='10.211.55.2', wait_seconds=60)
+        with patch.object(probe, 'private', side_effect=lambda p: Path(p).resolve()), \
+             patch.object(probe, 'fresh_root', return_value=PLAYER_ROOT), \
+             patch.object(probe, 'guarded', return_value=0), \
+             patch.object(probe, 'errno_count', return_value=0), \
+             patch.object(probe, 'Endpoint', FakeEndpoint), \
+             patch.object(probe.subprocess, 'run', return_value=completed) as vm:
+            try:
+                return probe.lighting(args)
+            finally:
+                self.vm = vm
+
+    def test_the_marker_is_a_one_pixel_png_under_an_upload_name_the_transport_accepts(self):
+        marker = probe.LIGHTING_MARKER
+        self.assertTrue(marker.startswith(b'\x89PNG\r\n\x1a\n') and marker.endswith(b'IEND\xaeB`\x82'))
+        self.assertEqual(marker[16:24], b'\x00\x00\x00\x01\x00\x00\x00\x01')  # IHDR: 1 x 1
+        from original_scene_reload_probe import once_script
+        script = once_script(PLAYER_ROOT, 'http://10.211.55.2:1/' + 'c' * 32 + '/', 60, [probe.LIGHTING_UPLOAD], *probe.MAP_PROBE_NAMES)
+        self.assertIn("@('reload-lighting.png')", script)
+
+    def test_one_exec_uploads_only_the_marker_with_the_junction_scans(self):
+        result = self.run_lighting()
+        out = self.dir / 'out'
+        endpoint = FakeEndpoint.instances[0]
+        self.assertEqual(set(endpoint.files) - {'run.ps1'}, {'MapProbe.cs', 'reload-lighting.png'})
+        self.assertEqual(endpoint.files['reload-lighting.png'], probe.LIGHTING_MARKER)
+        script = endpoint.files['run.ps1'].decode()
+        self.assertIn('$r.scanBefore=Scan', script); self.assertIn('$r.scanAfter=Scan', script)
+        self.assertEqual(self.vm.call_count, 1)
+        run = json.loads((out / 'run.json').read_text())
+        self.assertEqual((run['mode'], run['marker'], run['markerSHA256']), ('lighting', 'reload-lighting.png', sha(probe.LIGHTING_MARKER)))
+        self.assertTrue(result['scansEqual'])
+        self.assertEqual(gzip.decompress((out / 'oracle-map20-irradiance-lit-unshadowed.f32.gz').read_bytes()), bytes(range(24)))
+        with self.assertRaisesRegex(RuntimeError, 'run lighting into a new output folder'):
+            self.run_lighting()
+
+    def test_a_changed_marker_on_the_guest_is_refused(self):
+        with self.assertRaisesRegex(ValueError, 'Guest scene hash differs: reload-lighting.png'):
+            self.run_lighting(scenes={probe.LIGHTING_UPLOAD: 'd' * 64})
+
+    def test_the_probe_source_has_the_lighting_cases(self):
+        source = probe.MAP_PROBE.read_text()
+        self.assertIn(f'LightingUpload="{probe.LIGHTING_UPLOAD}"', source)
+        table = {c[0]: int(c[1]) for c in re.findall(r'new MapCase\("([a-z0-9-]+)",(\d+),', map_cases_table(source))}
+        labels = re.findall(r'"([a-z0-9-]+)"', re.search(r'LightingLabels=\{([^}]*)\}', source).group(1))
+        self.assertEqual(len(labels), len(set(labels)))
+        self.assertTrue(set(labels) <= set(table), set(labels) - set(table))
+        # Every maps-mode case whose map shows a sun, and only those.
+        self.assertEqual(set(labels), {label for label, no in table.items() if no not in self.SUNLESS})
+        extra = re.findall(r'new MapCase\("([a-z0-9-]+)",(\d+),(\d),(true|false),(true|false),',
+                           source[source.index('LightingExtraCases={'):source.index('// LightingLabels\' cases in order')])
+        self.assertEqual([(c[0], int(c[1]), c[4]) for c in extra], [('map20', 20, 'false'), ('map28', 28, 'false')])
+        self.assertFalse('TBD' in source, 'a placeholder is left in the probe')
+        self.assertIn('else if(File.Exists(lighting))', source)
+        self.assertLess(source.index('else if(File.Exists(lighting))'), source.index('else if(File.Exists(maps))'))
+
+    def test_the_probe_source_restores_and_checks_the_shadow_types(self):
+        source = probe.MAP_PROBE.read_text()
+        body = source[source.index('Dictionary<string,object> Unshadowed('):source.index('static bool HasDynamicLightmap')]
+        self.assertIn('try{for(int i=0;i<lights.Length;i++)lights[i].shadows=LightShadows.None;', body)
+        self.assertIn('finally{for(int i=0;i<lights.Length;i++)if(lights[i]!=null)lights[i].shadows=authored[i];}', body)
+        self.assertIn('did not read back as saved', body)
+        self.assertLess(body.index('did not read back as saved'), body.index('var again=Difference('))
+        self.assertIn('"litRepeatMatches",most==0', body)
+        # The oracle's own finally puts the types back too, and only the lighting mode keeps the pair without lightmaps.
+        self.assertIn('if(lights[i].shadows!=shadowTypes[i])lights[i].shadows=shadowTypes[i];', source)
+        self.assertIn('bakedMaps==0&&!lightingMode?"the map has no baked lightmaps"', source)
+        self.assertIn('if(mapsMode&&dynamicRenderers>0&&bakedMaps>0)', source)
+        self.assertIn('if(lightingMode)record["irradianceLitUnshadowed"]=', source)
 
 
 if __name__ == '__main__':

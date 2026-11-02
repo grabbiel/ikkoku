@@ -59,9 +59,16 @@ PR B the trigger's physics inputs and a trigger experiment) and the map option; 
 -silhouettes.rgba.f32 and -unlit.rgba.f32 where a map has them and skips the irradiance pair, with the
 reason recorded, where a map has no lightmaps. Since PR B, maps with Enlighten dynamic lightmaps also
 get -irradiance-dynamic.f32 and the candidate dynamic lightmaps (-realtime[-sun<type>]-<n>.rgba.f32).
+
+`lighting` (maps slice 5) is a second exec with the same transport and junction scans, run after `maps`. It
+uploads only a fixed 1x1 PNG marker as reload-lighting.png, which selects the probe's lighting mode: the maps
+mode's cases whose map shows a sun, then maps 20 and 28 (scene-mapNN.png, inside cameras), with no showoff
+case. Their oracle keeps the irradiance pair where a map has no lightmaps, and adds
+-irradiance-lit-unshadowed.f32 (the lit pass with every light's shadows None). Each light's shadow type is
+restored and read back, and the lit pass is rendered again and compared, in the same case.
 """
 from __future__ import annotations
-import argparse, fnmatch, gzip, hashlib, http.server, io, json, re, subprocess, threading, uuid, zipfile
+import argparse, fnmatch, gzip, hashlib, http.server, io, json, re, struct, subprocess, threading, uuid, zipfile, zlib
 from pathlib import Path, PurePosixPath
 from original_wear_probe import Endpoint, bootstrap, errno_count, extract, fresh_root, guarded
 
@@ -374,6 +381,16 @@ SHOWOFF_UPLOAD = 'reload-showoff.png'
 
 MAP34_UPLOAD = 'reload-map34-showoff.png'
 MAPS_UPLOAD = 'reload-maps-showoff.png'
+LIGHTING_UPLOAD = 'reload-lighting.png'
+
+
+def png_chunk(kind, data):
+    return struct.pack('>I', len(data)) + kind + data + struct.pack('>I', zlib.crc32(kind + data))
+
+
+# The lighting mode's marker: a fixed 1x1 grey PNG. The probe only checks that the file exists.
+LIGHTING_MARKER = (b'\x89PNG\r\n\x1a\n' + png_chunk(b'IHDR', struct.pack('>IIBBBBB', 1, 1, 8, 0, 0, 0, 0))
+                   + png_chunk(b'IDAT', zlib.compress(b'\x00\x80', 9)) + png_chunk(b'IEND', b''))
 # The player root's junction targets, read only: file and directory counts, bytes and the newest write
 # time of each, taken in the same run.ps1 before the player is set up and after the root is removed.
 JUNCTION_SCAN = (r"""function Scan{$o=[ordered]@{};foreach($n in @('abdata','CharaStudio_Data')){$p="C:\Illusion\Koikatsu\$n";"""
@@ -471,8 +488,19 @@ def showoff_phase(args, mode, upload):
     the player root's junction targets are scanned before and after."""
     if (private(args.output) / 'run.json').exists(): raise RuntimeError(f'{args.output}/run.json exists: run {mode} into a new output folder')
     showoff = scene_record(args.showoff, '--showoff')
-    result = run_probe(args, {upload: showoff}, dict(mode=mode, showoff=str(args.showoff), showoffSHA256=digest(showoff)),
-                       floats=True, scans=True)
+    return scanned_phase(args, {upload: showoff}, dict(mode=mode, showoff=str(args.showoff), showoffSHA256=digest(showoff)))
+
+
+def lighting(args):
+    """Maps slice 5's phase in one `prlctl exec` (see the module docstring): the marker upload selects the mode."""
+    if (private(args.output) / 'run.json').exists(): raise RuntimeError(f'{args.output}/run.json exists: run lighting into a new output folder')
+    return scanned_phase(args, {LIGHTING_UPLOAD: LIGHTING_MARKER},
+                         dict(mode='lighting', marker=LIGHTING_UPLOAD, markerSHA256=digest(LIGHTING_MARKER)))
+
+
+def scanned_phase(args, uploads, record):
+    """run_probe with the float images gzipped and the junction scans, which the result compares."""
+    result = run_probe(args, uploads, record, floats=True, scans=True)
     guest = json.loads((private(args.output) / 'run.json').read_text()).get('guest') or {}
     result.update(scanBefore=guest.get('scanBefore'), scanAfter=guest.get('scanAfter'),
                   scansEqual=guest.get('scanBefore') is not None and guest.get('scanBefore') == guest.get('scanAfter'))
@@ -556,8 +584,13 @@ def main():
     s.add_argument('--errno-baseline', type=int, required=True, help='Parallels errno-24 count that must hold before the exec')
     s.add_argument('--host-address', default='10.211.55.2', help="the Mac's address on the VM's host-only network")
     s.add_argument('--wait-seconds', type=int, default=3600, help='bound on the player run')
+    li = commands.add_parser('lighting', help="author, capture and measure the lighting cases in the original player (maps slice 5's phase)")
+    li.add_argument('--vm', default='Windows 11'); li.add_argument('--output', type=Path, required=True)
+    li.add_argument('--errno-baseline', type=int, required=True, help='Parallels errno-24 count that must hold before the exec')
+    li.add_argument('--host-address', default='10.211.55.2', help="the Mac's address on the VM's host-only network")
+    li.add_argument('--wait-seconds', type=int, default=3600, help='bound on the player run')
     args = p.parse_args()
-    run = dict(fetch=fetch, capture=capture, oracle=oracle, map34=map34, maps=maps)[args.command]
+    run = dict(fetch=fetch, capture=capture, oracle=oracle, map34=map34, maps=maps, lighting=lighting)[args.command]
     print(json.dumps(run(args), indent=2))
 
 

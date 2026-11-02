@@ -124,6 +124,22 @@
 //   layer and on layer 0, and what their own trigger callbacks saw). Every such wait counts fixed steps for
 //   at most FixedStepTimeout real seconds, since none runs while Time.timeScale is 0; in that case the
 //   vanish state is recorded once more with the time scale at 1 for those steps ("vanishWithTimeScale1").
+//
+// The lighting mode (maps slice 5), when reload-lighting.png is uploaded (a marker whose content is not read): its
+// own exec after the maps mode's, with the maps mode's passes and records, over LightingCases: each MapCases case
+// whose map shows a sun, then new inside cases for maps 20 and 28, and no showoff case. Their cameras come from
+// .local/sta11d-pr-b/slice5/lighting_cameras.py on the slice-5 export: map 20's yaw has the largest smaller share
+// of lit and shadowed sun-facing rays; no view of map 28 from five pivots shows more than 1% shadowed, so its
+// yaw sees the most lit surface (a no-shadow control). Only the oracle changes, and only in this mode:
+// - A map without baked lightmaps keeps the irradiance pair. Without a lightmap Unity's indirect diffuse is the
+//   ambient (UnityGI_Base's SH) or the renderer's dynamic lightmap, which slice 5 gates. The dynamic-lightmap
+//   swap runs only where there are baked lightmaps to swap.
+// - After the lit pass, the lit pass again with every light's shadows None
+//   (oracle-<case>-irradiance-lit-unshadowed.f32, "irradianceLitUnshadowed"), so a pixel's sun visibility is
+//   (lit - irradiance) / (unshadowed - irradiance). Each light's shadow type is saved first and put back in a
+//   finally block (the oracle's own finally puts it back too). The probe then reads every type back and stops the
+//   run if one differs ("shadowsRestored"), and renders the lit pass once more, which must equal the first
+//   ("litRepeatMaximumDifference", "litRepeatMatches").
 using System;
 using System.Collections;
 using System.Collections.Generic;
@@ -139,7 +155,7 @@ using UnityEngine.SceneManagement;
 public sealed class OriginalMapProbe:BaseUnityPlugin {
     const int Width=960,Height=720,SettleFrames=30,LoadFrames=3600;
     const float DepthFar33=25f,DepthFar34=1000f,SkyFar=10000f;
-    const string Map34Upload="reload-map34-showoff.png",MapsUpload="reload-maps-showoff.png";
+    const string Map34Upload="reload-map34-showoff.png",MapsUpload="reload-maps-showoff.png",LightingUpload="reload-lighting.png";
     const float OutsideMinimum=1f;
     const int TriggerSteps=5; // fixed steps the vanish re-record and the trigger experiment wait (PR B)
     const float FixedStepTimeout=3f; // real seconds those waits allow: no fixed step runs while Time.timeScale is 0
@@ -194,11 +210,28 @@ public sealed class OriginalMapProbe:BaseUnityPlugin {
         new MapCase("map32",32,0,false,false,true,Pivot,8f,60f,3f),
         new MapCase("map37",37,0,false,false,true,Pivot,8f,180f,3f),
         new MapCase("map40-unlit",40,0,false,false,true,new Vector3(13.06f,1.1f,-25.22f),35f,75f,5f)};
+    // The lighting mode's cases (see the header): the MapCases labels whose map shows a sun (29, 30, 32, 37 and 38
+    // show none), then maps 20 and 28, which have no baked lightmaps and no maps-mode case.
+    static readonly string[] LightingLabels={"map41","map21","map11","map19","map22","map40","map15","map25","map01","map27",
+        "map21-outside","map11-outside","map19-outside","map22-outside","map15-outside","map25-outside","map01-outside","map27-outside","map40-unlit"};
+    static readonly MapCase[] LightingExtraCases={
+        new MapCase("map20",20,0,false,false,true,Pivot,8f,LightingYaw20,3f),
+        new MapCase("map28",28,0,false,false,true,Pivot,8f,LightingYaw28,3f)};
+    const float LightingYaw20=180f,LightingYaw28=180f;
+    // LightingLabels' cases in order, then LightingExtraCases; a label MapCases lacks is an error, not a skip.
+    static List<MapCase> LightingCases(List<string> errors) {
+        var found=new List<MapCase>();
+        foreach(var label in LightingLabels) {
+            MapCase match=null;foreach(var c in MapCases)if(c.label==label)match=c;
+            if(match==null)errors.Add("lighting mode: no MapCases case "+label);else found.Add(match);
+        }
+        found.AddRange(LightingExtraCases);return found;
+    }
     // Shaders export_map_scene.py skips (MAP_SKIPPED_SHADERS): not drawn by the app.
     static readonly string[] SkippedShaders={"FX/MirrorReflection_Transparent","Xffect/heat_distortion","Shader Forge/electricLight",
         "Shader Forge/spotLaser","Shader Forge/spotLight_beam","Shader Forge/spotLight_glow","Shader Forge/volumeLight",
         "UnlitMosaicTextureShader","Particles/VertexLit Blended"};
-    int mapNo=33;float depthFar=DepthFar33;bool withOracle,mapsMode;
+    int mapNo=33;float depthFar=DepthFar33;bool withOracle,mapsMode,lightingMode;
     string folder,voiceRepair;
     Studio.Studio studio;
     Map map;
@@ -216,7 +249,7 @@ public sealed class OriginalMapProbe:BaseUnityPlugin {
             try{voiceRepair=RepairVoice();}catch(Exception e){errors.Add("voice repair: "+e);}
         }
         var oracles=Directory.GetFiles(dir,"reload-oracle-*.png");Array.Sort(oracles,StringComparer.Ordinal);
-        var map34=Path.Combine(dir,Map34Upload);var maps=Path.Combine(dir,MapsUpload);
+        var map34=Path.Combine(dir,Map34Upload);var maps=Path.Combine(dir,MapsUpload);var lighting=Path.Combine(dir,LightingUpload);
         if(oracles.Length>0) {
             foreach(var scene in oracles) {
                 if(errors.Count!=0)break;
@@ -224,6 +257,9 @@ public sealed class OriginalMapProbe:BaseUnityPlugin {
                 UseMap(label.StartsWith("map34")?34:33);
                 yield return StartCoroutine(Guard(label,LoadAndOracle(scene,label)));
             }
+        } else if(File.Exists(lighting)) {
+            withOracle=true;mapsMode=true;lightingMode=true;
+            foreach(var c in LightingCases(errors))if(errors.Count==0){UseMap(c.no);yield return StartCoroutine(Guard(c.label,AuthorMapCase(c)));}
         } else if(File.Exists(maps)) {
             withOracle=true;mapsMode=true;
             foreach(var c in MapCases)if(errors.Count==0){UseMap(c.no);yield return StartCoroutine(Guard(c.label,AuthorMapCase(c)));}
@@ -239,12 +275,12 @@ public sealed class OriginalMapProbe:BaseUnityPlugin {
             if(errors.Count==0&&File.Exists(showoff))yield return StartCoroutine(Guard("map33-showoff",AuthorShowoff(showoff,"map33-showoff")));
         }
         try{File.WriteAllText(Path.Combine(folder,oracles.Length>0?"oracle-trace.json":"map-trace.json"),J(K("schemaVersion",1,"mapNo",mapsMode?null:(object)mapNo,
-            "width",Width,"height",Height,"depthFar",mapsMode?null:(object)depthFar,"mode",mapsMode?"maps":null,"cases",cases)));}
+            "width",Width,"height",Height,"depthFar",mapsMode?null:(object)depthFar,"mode",lightingMode?"lighting":mapsMode?"maps":null,"cases",cases)));}
         catch(Exception e){errors.Add("trace write: "+e);}
         File.WriteAllText(Path.Combine(folder,"status.json"),J(K("error",errors.Count==0?null:String.Join(" | ",errors.ToArray()),"errors",errors,
             "unity",Application.unityVersion,"device",SystemInfo.graphicsDeviceName,"colorSpace",QualitySettings.activeColorSpace.ToString(),
             "voiceRepair",voiceRepair,"cases",new List<string>(cases.Keys),
-            "scope","Original CharaStudio 1.0.4.2 map "+(mapsMode?"(maps mode: "+MapCases.Length+" cases across fifteen maps, and map41-showoff)":mapNo.ToString())+" fixtures authored with the player's own writer (Studio.AddMap, caMap through MapCtrl.Reflect, Studio.sceneInfo.Save) and read back through Studio.LoadSceneCoroutine; per case the player's Camera.main colour image, the map scene's renderers as a white silhouette and as Unity depth-normals (linear depth over "+depthFar+" m) from Camera.main's pose and field of view, and a trace of the map root, renderers, lights, lightmaps, RenderSettings, SunLightInfo and cameras; no installed cards, saves or media"+
+            "scope","Original CharaStudio 1.0.4.2 map "+(lightingMode?"(lighting mode: "+(LightingLabels.Length+LightingExtraCases.Length)+" cases across twelve maps with a sun; the oracle adds the lit pass without shadows, and keeps the irradiance pair in maps without lightmaps)":mapsMode?"(maps mode: "+MapCases.Length+" cases across fifteen maps, and map41-showoff)":mapNo.ToString())+" fixtures authored with the player's own writer (Studio.AddMap, caMap through MapCtrl.Reflect, Studio.sceneInfo.Save) and read back through Studio.LoadSceneCoroutine; per case the player's Camera.main colour image, the map scene's renderers as a white silhouette and as Unity depth-normals (linear depth over "+depthFar+" m) from Camera.main's pose and field of view, and a trace of the map root, renderers, lights, lightmaps, RenderSettings, SunLightInfo and cameras; no installed cards, saves or media"+
             (oracles.Length>0||withOracle?". Oracle"+(withOracle?" (in the same run, per case)":" mode: the uploaded records read back")+": a clean colour frame, Unity's decoded lightmap irradiance per pixel (white minus black albedo over 0.96, lights at 0 and as authored), the solid renderers' lightmap classes, and the sky and particle renderers alone as linear float radiance":""))));
         Application.Quit();
         for(int i=0;i<3600;i++){yield return null;if(i%30==29)Application.Quit();}
@@ -695,6 +731,7 @@ public sealed class OriginalMapProbe:BaseUnityPlugin {
         var silhouettes=new List<Renderer>();var unlits=new List<Renderer>();
         var saved=new Dictionary<Renderer,Material[]>();var slots=new Dictionary<Renderer,string[]>();
         var lights=FindObjectsOfType<Light>();var intensities=new float[lights.Length];for(int i=0;i<lights.Length;i++)intensities[i]=lights[i].intensity;
+        var shadowTypes=new LightShadows[lights.Length];for(int i=0;i<lights.Length;i++)shadowTypes[i]=lights[i].shadows;
         bool runtimeFog=RenderSettings.fog;
         var fogRecord=K("fog",RenderSettings.fog,"fogMode",RenderSettings.fogMode.ToString(),"fogColor",C(RenderSettings.fogColor),
             "fogStartDistance",RenderSettings.fogStartDistance,"fogEndDistance",RenderSettings.fogEndDistance,"fogDensity",RenderSettings.fogDensity);
@@ -727,7 +764,7 @@ public sealed class OriginalMapProbe:BaseUnityPlugin {
             if(fallbackSource!=null)fallback=FallbackTemplate(fallbackSource.shader);
             int bakedMaps=LightmapSettings.lightmaps==null?0:LightmapSettings.lightmaps.Length;
             var used=template??fallback;
-            string irradianceSkipped=bakedMaps==0?"the map has no baked lightmaps":used==null?"no opaque Standard material on the map's renderers":null;
+            string irradianceSkipped=bakedMaps==0&&!lightingMode?"the map has no baked lightmaps":used==null?"no opaque Standard material on the map's renderers":null;
             if(irradianceSkipped!=null&&!mapsMode)throw new Exception(irradianceSkipped);
             if(irradianceSkipped==null){white=Albedo(used,Color.white);black=Albedo(used,Color.black);}
             if(irradianceSkipped==null&&template!=null&&fallback!=null){fallbackWhite=Albedo(fallback,Color.white);fallbackBlack=Albedo(fallback,Color.black);}
@@ -735,7 +772,7 @@ public sealed class OriginalMapProbe:BaseUnityPlugin {
             cam.clearFlags=CameraClearFlags.SolidColor;cam.backgroundColor=Color.black;cam.allowHDR=true;cam.allowMSAA=false;cam.cullingMask=PassMask(main);
             cam.renderingPath=RenderingPath.Forward;cam.useOcclusionCulling=false;
             var probeRecord=CameraRecord(cam);
-            var unlitStats=new Dictionary<string,object>();var litStats=new Dictionary<string,object>();double repeatMax=0;object fallbackCheck=null,dynamicRecord=null;
+            var unlitStats=new Dictionary<string,object>();var litStats=new Dictionary<string,object>();double repeatMax=0;object fallbackCheck=null,dynamicRecord=null,unshadowedRecord=null;
             int dynamicRenderers=0;
             if(irradianceSkipped==null) {
                 for(int i=0;i<lights.Length;i++)lights[i].intensity=0f;
@@ -751,7 +788,7 @@ public sealed class OriginalMapProbe:BaseUnityPlugin {
                 // Realtime GI (see the header): the dynamic lightmaps' term alone, every baked colour lightmap
                 // swapped for black for two renders, then the irradiance again with the lightmaps restored.
                 foreach(var r in mapRenderers)if(HasDynamicLightmap(r))dynamicRenderers++;
-                if(mapsMode&&dynamicRenderers>0) {
+                if(mapsMode&&dynamicRenderers>0&&bakedMaps>0) {
                     var baked=LightmapSettings.lightmaps;var swapped=new LightmapData[baked.Length];blackLightmap=BlackTexture();
                     for(int i=0;i<baked.Length;i++){var d=new LightmapData();d.lightmapColor=blackLightmap;d.lightmapDir=baked[i].lightmapDir;swapped[i]=d;}
                     float[] dynamicOnly;
@@ -767,6 +804,7 @@ public sealed class OriginalMapProbe:BaseUnityPlugin {
                 for(int i=0;i<lights.Length;i++)lights[i].intensity=intensities[i];
                 var lit=Difference(cam,hdr,mapRenderers,slots,none,white,black,litStats);
                 WriteFloats(lit,"oracle-"+label+"-irradiance-lit.f32");
+                if(lightingMode)unshadowedRecord=Unshadowed(label,lit,lights,shadowTypes,cam,hdr,mapRenderers,slots,none,white,black);
             }
             // Which solid pixels the irradiance gate may compare: Standard on a baked lightmap.
             var lightmapped=ClassMaterial(Color.white,classMaterials);var probeLit=ClassMaterial(Color.red,classMaterials);var other=ClassMaterial(Color.green,classMaterials);
@@ -813,7 +851,7 @@ public sealed class OriginalMapProbe:BaseUnityPlugin {
             foreach(var d in LightmapSettings.lightmaps)foreach(var t in new[]{d.lightmapColor,d.lightmapDir})
                 if(t!=null)lightmapTextures.Add(K("name",t.name,"filterMode",t.filterMode.ToString(),"anisoLevel",t.anisoLevel,"wrapMode",t.wrapMode.ToString(),
                     "mipMapBias",t.mipMapBias,"mipmapCount",t.mipmapCount,"format",t.format.ToString()));
-            return K("clean",K("camera",cleanRecord,"image","oracle-"+label+"-clean-color.png"),
+            var record=K("clean",K("camera",cleanRecord,"image","oracle-"+label+"-clean-color.png"),
                 "probe",probeRecord,"template",used==null?null:K("name",used.name,"shader",used.shader.name,"keywords",used.shaderKeywords,"renderQueue",used.renderQueue,
                     "source",template!=null?"keyword-free map material":"new material on the shader of "+fallbackSource.name,
                     "shaderIsShaderFindStandard",used.shader==Shader.Find("Standard")),
@@ -839,9 +877,11 @@ public sealed class OriginalMapProbe:BaseUnityPlugin {
                 "colorSpace",QualitySettings.activeColorSpace.ToString(),"lightmapsMode",LightmapSettings.lightmapsMode.ToString(),
                 "lightmapTextures",lightmapTextures,"anisotropicFiltering",QualitySettings.anisotropicFiltering.ToString(),
                 "renderSettings",RenderSettingsRecord());
+            if(lightingMode)record["irradianceLitUnshadowed"]=irradianceSkipped!=null?K("written",false,"reason",irradianceSkipped):unshadowedRecord;
+            return record;
         } finally {
             foreach(var pair in saved)pair.Key.sharedMaterials=pair.Value;
-            for(int i=0;i<lights.Length;i++)if(lights[i]!=null)lights[i].intensity=intensities[i];
+            for(int i=0;i<lights.Length;i++)if(lights[i]!=null){lights[i].intensity=intensities[i];if(lights[i].shadows!=shadowTypes[i])lights[i].shadows=shadowTypes[i];}
             RenderSettings.fog=runtimeFog;
             foreach(var r in mapRenderers)if(r!=null)r.enabled=true;
             foreach(var set in new[]{hidden,skies,particles,silhouettes,unlits,others})foreach(var r in set)if(r!=null)r.enabled=true;
@@ -850,6 +890,29 @@ public sealed class OriginalMapProbe:BaseUnityPlugin {
             if(blackLightmap!=null)Destroy(blackLightmap);
             foreach(var m in classMaterials)Destroy(m);
         }
+    }
+    // The lighting mode's lit pass without shadows (see the header). Every light's shadow type goes back in the
+    // finally block; a type that does not read back as saved stops the run, and the lit pass rendered again must
+    // equal `lit`.
+    Dictionary<string,object> Unshadowed(string label,float[] lit,Light[] lights,LightShadows[] authored,Camera cam,RenderTexture hdr,
+        List<Renderer> mapRenderers,Dictionary<Renderer,string[]> slots,Material none,Material white,Material black) {
+        var stats=new Dictionary<string,object>();float[] unshadowed;
+        try{for(int i=0;i<lights.Length;i++)lights[i].shadows=LightShadows.None;unshadowed=Difference(cam,hdr,mapRenderers,slots,none,white,black,stats);}
+        finally{for(int i=0;i<lights.Length;i++)if(lights[i]!=null)lights[i].shadows=authored[i];}
+        var before=new List<object>();var after=new List<object>();var differing=new List<string>();
+        for(int i=0;i<lights.Length;i++) {
+            var path=TPath(lights[i].transform);
+            before.Add(K("path",path,"shadows",authored[i].ToString()));after.Add(K("path",path,"shadows",lights[i].shadows.ToString()));
+            if(lights[i].shadows!=authored[i])differing.Add(path+": "+lights[i].shadows+" instead of "+authored[i]);
+        }
+        if(differing.Count>0)throw new Exception("the lights' shadow types did not read back as saved: "+String.Join("; ",differing.ToArray()));
+        var again=Difference(cam,hdr,mapRenderers,slots,none,white,black,new Dictionary<string,object>());
+        double most=0;for(int i=0;i<lit.Length;i++)most=Math.Max(most,Math.Abs((double)lit[i]-again[i]));
+        var file="oracle-"+label+"-irradiance-lit-unshadowed.f32";WriteFloats(unshadowed,file);
+        return K("written",true,"file",file,"layout","float32 little-endian RGB, rows top-down","lights","as authored, every light's shadows None",
+            "stats",stats,"shadowsBefore",before,"shadowsRestored",after,"restored",true,
+            "litRepeatMaximumDifference",most,"litRepeatMatches",most==0,
+            "rule","sun visibility = (lit - irradiance) / (unshadowed - irradiance) where the denominator is positive");
     }
     static bool HasDynamicLightmap(Renderer r){return r.realtimeLightmapIndex>=0&&r.realtimeLightmapIndex<0xFFFE;}
     static Texture2D BlackTexture() {

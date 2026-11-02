@@ -1053,6 +1053,30 @@ Tests (`test_compare_original_map.py`): a floor whose depth changes only by row 
   - each capture records the quality level's shadow settings (`shadowQuality`): the level and its name, `shadows`, `shadowResolution`, `shadowProjection`, `shadowDistance`, `shadowCascades`, both split settings and `shadowNearPlaneOffset`.
 - **Four new cases.** Maps 30, 32 and 37 carry dynamic lightmaps and had no case. Their cameras use the pivot (0, 1.1, 0), pitch 8° and 3 m, with the yaw that leaves the most free room behind the pivot on the exported glTF: 165°, 60° and 180°. A second map 40 camera looks down at 35° from 5 m over its densest cluster of `Unlit/Transparent` road shadows, and 95% of a 32×24 ray grid lands on them. The maps mode now has 24 cases and the showoff case.
 
+### The lighting phase (maps slice 5)
+
+The same VM slot runs a second `prlctl exec` after the maps mode's: `original_map_probe.py lighting`. It has the same transport, private player root, errno check and junction scans before and after. It uploads only `reload-lighting.png`, a fixed 1×1 PNG that selects the probe's lighting mode; the probe never reads its content. The other modes are unchanged.
+
+- **Cases.**
+  - The 19 maps-mode cases whose map shows a sun: every case but maps 29, 30, 32, 37 and 38.
+  - New inside cases for maps 20 and 28, which have no baked lightmaps and no maps-mode case. Their cameras use the pivot (0, 1.1, 0), pitch 8°, 3 m and sun type 0, with yaw 180° in both. The yaws were chosen with `.local/sta11d-pr-b/slice5/lighting_cameras.py` on the slice-5 export. It casts a 16×12 ray grid, skips the sky, and uses the sun's casters as occluders.
+    - In map 20, 180° has the largest smaller share of lit and shadowed sun-facing rays: 19% lit and 12% shadowed.
+    - No view of map 28, from five pivots, has more than 1% shadowed. Its 180° view is 97% lit, so it checks the ambient and the sun term, and serves as a no-shadow control: there, unshadowed should equal lit.
+  - No showoff case.
+
+  Each case keeps the maps mode's images and records.
+- **The irradiance pair without lightmaps.** Maps 20, 22, 27 and 28 have no baked lightmaps, so the maps mode skipped their pair. The lighting mode keeps it. Without a lightmap, Unity's indirect diffuse is the ambient SH, which slice 5's ambient gate needs; where a renderer has a dynamic lightmap, it is that lightmap instead (map 22 enables realtime GI). The dynamic-lightmap swap runs only where there are baked lightmaps to swap. Map 40's template is the maps mode's (above).
+- **The lit pass without shadows.** After the lit pass, the oracle renders it again with every light's shadows set to None: `oracle-<case>-irradiance-lit-unshadowed.f32`. A pixel's sun visibility is then (lit − irradiance) / (unshadowed − irradiance). This separates the shadow from the BRDF, and should settle map 21's 0.74.
+  - Each light's shadow type is saved first and put back in a `finally` block. The oracle's own `finally` puts it back too.
+  - The probe then reads every light's type back. If one differs, the case fails and the run stops (`shadowsRestored` against `shadowsBefore`).
+  - It then renders the lit pass once more, which must equal the first exactly (`litRepeatMaximumDifference`, `litRepeatMatches`).
+- **Tests** (`test_original_map_probe.py`, `LightingTests`):
+  - the marker, and that the transport accepts its name;
+  - one exec that uploads only the marker, with the scans;
+  - a changed marker on the guest is refused;
+  - the case table: every maps-mode case whose map shows a sun and only those, then maps 20 and 28;
+  - the shadow restore and its check.
+
 ## Performance
 
 Release, on the reference machine, in one quiet window. The full tables are in [performance: ST-A11](../performance.md#st-a11-original-studio-maps).
