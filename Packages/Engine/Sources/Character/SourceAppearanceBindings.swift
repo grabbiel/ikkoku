@@ -105,6 +105,25 @@ public struct SourceAppearanceBindings: Codable, Sendable, Equatable {
         return try JSONDecoder().decode(Self.self, from: JSONSerialization.data(withJSONObject: rewrite(object)))
     }
 
+    /// #346: a catalogFallback row binds the resolved ID's entry while the
+    /// card keeps the saved ID. The original writes the drawn ID back before
+    /// it binds the card's colors (ChaControl.Koikatu.cs:7059 hair, :7292
+    /// clothes), so the entry's own slot-ID requirement (`requirement`
+    /// equal to `resolvedID`) is evaluated against the drawn ID: it now asks
+    /// the card for the saved ID it actually holds. Other requirements, and
+    /// a requirement naming another ID, are unchanged.
+    public func resolvingCatalogFallback(requirement: String, savedID: Int, resolvedID: Int) -> Self {
+        let resolved: [Entry] = entries.map { entry in
+            guard entry.requirements[requirement] == resolvedID else { return entry }
+            var requirements = entry.requirements
+            requirements[requirement] = savedID
+            return Entry(parts: entry.parts, pass: entry.pass, kind: entry.kind, colors: entry.colors, requirements: requirements,
+                         resolverProperties: entry.resolverProperties, main: entry.main, mask: entry.mask, blend: entry.blend,
+                         colorSpace: entry.colorSpace, patterns: entry.patterns, layers: entry.layers)
+        }
+        return Self(schemaVersion: schemaVersion, entries: resolved, limitations: limitations)
+    }
+
     public static func load(url: URL, timings: SourceMakerPreparationTimings? = nil) throws -> Self {
         let data = try SourceMakerPreparationTimings.read(timings, .bindingRead) {
             let file = try FileHandle(forReadingFrom: url); defer { try? file.close() }

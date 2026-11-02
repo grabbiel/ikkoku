@@ -1163,7 +1163,9 @@ extension ClothesInspector {
             let prefix = "outfit\(preview.coordinate)."
             let unconverted = preview.selections.filter { $0.property.hasPrefix(prefix) && $0.status != "converted" && $0.status != "empty" }
             ForEach(Array(unconverted.enumerated()), id: \.offset) { _, selection in
-                Text("\(selection.property.dropFirst(prefix.count)): \(selection.status), source ID \(selection.sourceID)")
+                // #346: a catalog fallback names what the original draws, as the Maker row does.
+                Text("\(selection.property.dropFirst(prefix.count)): \(selection.status), source ID \(selection.sourceID)"
+                     + (selection.drawnDescription.map { " → " + $0 } ?? ""))
                     .font(.caption).foregroundStyle(.secondary).textSelection(.enabled)
             }
             Text("Export writes the selected outfit into the embedded card; the saved outfit writes nothing.")

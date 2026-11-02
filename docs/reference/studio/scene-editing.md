@@ -1264,6 +1264,25 @@ them changes the export.
    820 B). Our export keeps the card's bytes. CharaStudio loads both forms
    identically: its load-then-save of the legacy record and of our upgrade are
    equal, and all four of its saves hold the same rewrite of each card.
+5. **Hair and clothes IDs in no installed catalog (#346).** This one is a
+   deliberate divergence. CharaStudio draws the category default for such an
+   ID (`LoadCharaFbxDataAsync`, ChaControl.Koikatu.cs:8675–8700), and so does
+   the native preview, when the Maker library records `catalogPresence`.
+   CharaStudio also writes the drawn ID back into the character it loaded:
+   - Hair goes into `chaFile.custom.hair` at :7059. A scene save writes that
+     file (`OICharInfo.Save`, Studio.OICharInfo.cs:146–150), so its next save
+     carries the default hair ID.
+   - Clothes go into `nowCoordinate` at :7292, :7811, :7908, :8090, :8178,
+     :8270, :8365 and :8462. No recovered save path copies `nowCoordinate`
+     back into the card's coordinate (`ChaFile.AssignCoordinate` runs only in
+     `OCIChar.LoadClothesFile`, before the reload). So a scene save probably
+     keeps the saved clothes ID; this is unverified, because Studio's save
+     entry point is not recovered.
+
+   Our export keeps every saved ID, because a later-installed list or mod can
+   still resolve it. The outfit tab names the drawn ID (`→ ID n`). The rule is
+   in `docs/reference/character/maker-assets.md`, under "Installed catalog
+   fallback".
 
 ## Shape and color reset contract
 
@@ -1355,7 +1374,9 @@ The Outfit picker numbers outfits from 1 by name (for example "4 Swimsuit");
 documents, scenarios and this page use the 0-based `coordinateType` index. The
 tab lists every `conversionMissing` selection of the chosen outfit with its
 source ID. The preview diagnostic states that the card identity is preserved.
-No other ID is substituted. `loadScene` now calls `refresh()` after source
+No other ID is substituted, except for an ID in no installed catalog. Such a
+row is `catalogFallback` and the tab names what the original draws instead
+(#346, known difference 5). `loadScene` now calls `refresh()` after source
 rehydration and plug-in restoration. Before that fix, the first frame after a
 native load was stale: undo after an outfit switch missed the loaded capture by
 138,276 pixels.

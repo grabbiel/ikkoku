@@ -888,8 +888,11 @@ final class MakerModel: ViewportInputHandler, LivePacedHandler {
             let reason = resolverError ?? unavailableReason
             let choices = library.entries.filter { reason == nil && $0.category == destination.category && $0.modGUID == nil }
                 .map { SourceSelectionRow.Choice(id: $0.id, name: "\($0.name) · ID \($0.id)") }
-            let selectedID = reason == nil && selection.entry != nil && selection.modGUID == nil ? selection.sourceID : nil
-            let current = reason ?? ("ID \(selection.sourceID)" + (selection.modGUID.map { " · \($0)" } ?? "") + " · \(selection.status)")
+            // #346: an ID in no installed catalog is not a choice; the row names what the original draws.
+            let fallback = selection.status == "catalogFallback"
+            let selectedID = reason == nil && selection.entry != nil && selection.modGUID == nil && !fallback ? selection.sourceID : nil
+            let drawn = selection.drawnDescription.map { " → " + $0 } ?? ""
+            let current = reason ?? ("ID \(selection.sourceID)" + (selection.modGUID.map { " · \($0)" } ?? "") + " · \(selection.status)" + drawn)
             return SourceSelectionRow(id: destination.property, label: label, slot: slot,
                 selectedID: selectedID, current: current, unavailableReason: reason, choices: choices)
         }
@@ -1180,7 +1183,7 @@ final class MakerModel: ViewportInputHandler, LivePacedHandler {
 
     func exportSourceCard(to url: URL) throws {
         cancelSourceSelection()
-        guard let importedSourceCard, let preview = sourceRigPreview, applySourceCustomization else {
+        guard let importedSourceCard, sourceRigPreview != nil, applySourceCustomization else {
             throw RigError.invalid("Import an original card and enable customization before exporting an edited copy.")
         }
         guard url.resolvingSymlinksInPath() != importedSourceCardURL?.resolvingSymlinksInPath() else {
@@ -1194,16 +1197,7 @@ final class MakerModel: ViewportInputHandler, LivePacedHandler {
         try applySourceAppearance()
         // Export a static current customization pose; animation does not become card data.
         func thumbnail(preset: CameraPreset, width: Int, height: Int) throws -> Data {
-            let oldSize = viewportSize
-            viewportSize = SIMD2<Float>(Float(width), Float(height))
-            defer { viewportSize = oldSize }
-            var frame = try (sourceRigPreview ?? preview).frame(camera: previewCamera(preset: preset), mainLight: mainLight,
-                effects: effects, bodyValues: sourceBodyValues, faceValues: sourceFaceValues,
-                expression: sourceExpressionInputs, boneModifiers: originalModifiers, coordinate: sourceBoneModifierCoordinate)
-            frame.effects.showGrid = false
-            guard let image = host.renderer.capture(frame: frame, width: width, height: height) else {
-                throw RigError.invalid("Could not render the edited card thumbnail.")
-            }
+            let image = try sourcePreviewImage(preset: preset, width: width, height: height, boneModifiers: originalModifiers)
             let png = NSMutableData()
             guard let destination = CGImageDestinationCreateWithData(png, UTType.png.identifier as CFString, 1, nil) else {
                 throw RigError.invalid("Could not encode the edited card thumbnail.")
@@ -1236,6 +1230,25 @@ final class MakerModel: ViewportInputHandler, LivePacedHandler {
 
     /// Frame the evaluated source geometry, including its current Maker values.
     /// Source +Z is forward; the native Z reflection puts the face toward -Z.
+    /// The current static customization pose rendered offscreen from a camera
+    /// preset, grid hidden: the export thumbnail's frame, also the Maker
+    /// scenario's `captureRender`. Animation does not enter it.
+    func sourcePreviewImage(preset: CameraPreset, width: Int, height: Int,
+                            boneModifiers: SourceBoneModifiers?) throws -> CGImage {
+        guard let preview = sourceRigPreview else { throw RigError.invalid("No source rig is open.") }
+        let oldSize = viewportSize
+        viewportSize = SIMD2<Float>(Float(width), Float(height))
+        defer { viewportSize = oldSize }
+        var frame = try preview.frame(camera: previewCamera(preset: preset), mainLight: mainLight,
+            effects: effects, bodyValues: sourceBodyValues, faceValues: sourceFaceValues,
+            expression: sourceExpressionInputs, boneModifiers: boneModifiers, coordinate: sourceBoneModifierCoordinate)
+        frame.effects.showGrid = false
+        guard let image = host.renderer.capture(frame: frame, width: width, height: height) else {
+            throw RigError.invalid("Could not render the source preview.")
+        }
+        return image
+    }
+
     func previewCamera(preset: CameraPreset) throws -> OrbitCamera {
         guard let preview = sourceRigPreview else { throw RigError.invalid("No source rig is open.") }
         let evaluation = try preview.evaluation(

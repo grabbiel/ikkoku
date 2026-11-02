@@ -1355,7 +1355,21 @@ under `.local/`. Ops: `customization` `{on}` (the export precondition),
 `coordinate` (a draft view state; after a reimport it is the importer's
 default outfit, not a round-tripped value),
 `face`/`body` `{index,value}`, `color` `{id,rgba}`, `colorApplied` (a color
-id in `sourceAppearanceAppliedFields`), `diagnosticContains`. The scenario
+id in `sourceAppearanceAppliedFields`), `diagnosticContains`.
+
+Two render steps were added for #346:
+
+- `captureRender` `{id, path?}` renders the export thumbnail's full-body frame
+  offscreen at 512×512, with the grid hidden. It keeps the frame's RGBA8
+  pixels under `id`, and with `path` it also writes the PNG under `.local/`.
+- `assert` with `render` `{from, changedPixelsAtLeast?, changedPixelsAtMost?,
+  maxChannelDeltaAtMost?}` compares the current preview with that capture.
+  A pixel changes when one channel moves by more than 2/255, the comparison
+  the Studio scenario uses (`ScenarioRender`).
+
+A `selection` assert with `resolvedID` requires a `catalogFallback` row that
+keeps the saved `sourceID`, draws that ID, and shows it in the picker row
+without selecting it. The scenario
 asserts only what `exportSourceCard` actually writes — face values, body
 values and the saved color edits — never the selected outfit, which is a
 view choice the export does not store. Color edits are saved per outfit

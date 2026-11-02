@@ -145,6 +145,151 @@ Studio has a separate selected-component binding path. Recovering more geometry
 therefore does not, by itself, enable its Maker animation or physics.
 
 
+## Installed catalog fallback (#346)
+
+The original reads each hair and clothes category as one ID dictionary merged
+from every installed `list/characustom` bundle (`LoadCharaFbxDataAsync`,
+recovered `ChaControl.Koikatu.cs` :8675–8700). A saved ID that is in the
+dictionary loads its row. For an ID that is in no installed list:
+
+1. If the category default is not the saved ID and is in the dictionary, the
+   default loads.
+2. Otherwise ID 0 loads if it is present.
+3. Otherwise nothing loads. A default of -1 loads nothing at once.
+
+A category with no installed row at all (`work.Count == 0`, :8679–8683) also
+loads nothing.
+
+The defaults are as follows:
+
+| Category | Default | Recovered source |
+| --- | --- | --- |
+| Hair back, front, side, option (101–104) | 0, 1, 0, 0 | `ChangeHairAsync` `defId`, :7015–7026 |
+| Top | 0 | :7278 |
+| Bottom | 0 | :7778 |
+| Bra | 0 | :7893 |
+| Shorts | 0 | :8069 |
+| Gloves | 0 | :8164 |
+| Pantyhose | 0 | :8249 |
+| Socks | 0 | :8344 |
+| Shoes | 0 | `defID`, :8404–8415, :8448 |
+
+The native library knows the installed IDs only from an optional
+`catalogPresence` record in `library.json`, which is `{file, sha256}` naming
+`catalog-presence.json` beside the index. `Tools/reverse/catalog_presence.py`
+writes it from the transferred list bundles. Absence is only true against the
+complete installed set, so the tool refuses to write unless the transferred
+bundles have exactly the names, sizes and SHA-256s of a fresh VM listing. The
+VM exec that fetches the bundles takes that listing, `Get-FileHash` included.
+Every category 101–112 is written, an empty one as `[]`. Sideloader zipmod
+rows are not included. `SourceMakerLibrary.load` reads and
+verifies the file once, through the same sidecar check as every other library
+file. It keeps one ID set per category. Any of these is a load error:
+
+- a changed hash or a path outside the library;
+- a schema other than 1 or another `kind`;
+- a category outside 101–112, or one of them missing;
+- an ID outside the nonnegative Int32 range.
+
+Selections never read the file again.
+
+When the presence is loaded, a vanilla selection (no resolver GUID) whose
+saved ID is absent from its category has the status `catalogFallback`.
+`resolvedID` names the ID the original draws, or is nil for nothing, and
+`entry` is that ID's library entry. The resolved ID enters the same rig,
+appearance and material path as a direct selection of it. An empty category
+resolves to nothing.
+
+The card's colors bind to the drawn row, as in the original, which writes the
+drawn ID back before it applies them. The converter's bindings for a row
+require the slot to hold that row's ID: 101:0 requires `hair.parts.0.id` = 0.
+For a fallback row, that slot-ID requirement is checked against the drawn ID
+instead of the saved one (`resolvingCatalogFallback`). The direct and
+prepared-input paths do this the same way. Other requirements are unchanged.
+Without this rule a fallback row drew the default geometry with its reference
+material and none of the card's colors.
+
+When the resolved ID is installed but not converted, the reference part is
+shown, as for `conversionMissing`, and the diagnostic and picker say so. The
+fallback row's catalog flags (`NotBra`, `Coordinate`, `StateType`) do not apply
+until that row is converted.
+
+The card is never rewritten: `savedID` and `sourceID` stay the saved ID, and
+an export writes it unchanged. `prepare` adds this diagnostic:
+
+> `<property>: catalogFallback, source ID <id> is in no installed catalog, so the original draws <drawn>. The saved ID is kept, unlike the original, which writes the drawn ID back.`
+
+`<drawn>` is one of three forms: `ID <n>`, `ID <n> (unconverted: reference
+part shown)` or `nothing`. The Maker picker row shows `ID <id> ·
+catalogFallback → <drawn>` with nothing selected. The Studio outfit tab lists
+the row with the same `→ <drawn>`, and the Studio benchmark metadata counts
+these rows as `fallbackAssets`. A library without `catalogPresence` behaves as
+before: an unconverted ID is `conversionMissing`.
+
+Studio coverage is Engine-only. The fixture test assembles the Studio wear
+path, but no Studio scene fixture saves an absent ID.
+
+### Deliberate divergence: the saved ID is kept
+
+The original writes the drawn ID back into the character it loaded:
+
+- hair into `chaFile.custom.hair` at :7059 (`fileHair`, ChaInfo.cs:43),
+  together with `fileHair.kind` from the back-hair row at :7062;
+- clothes into `nowCoordinate` at :7292, :7811, :7908, :8090, :8178, :8270,
+  :8365 and :8462.
+
+A CharaStudio scene save writes each character's file (`OICharInfo.Save`,
+Studio.OICharInfo.cs:146–150). That file is the one the character was built
+from (`AddObjectFemale` :55), so the save carries the drawn hair ID.
+
+Clothes are different. `nowCoordinate` reaches the file's coordinate only
+through `ChaFile.AssignCoordinate` (ChaFile.cs:284–292). Its only recovered
+Studio caller, `OCIChar.LoadClothesFile` (Studio.OCIChar.cs:1088–1092), runs
+it before the reload. `SceneInfo.Save` (:239) and `OICharInfo.Save` do not
+call it. In the recovered code a scene save therefore keeps the saved clothes
+ID. This is unverified, because Studio's save entry point, the Maker's save
+and `ChaFileControl.SaveCharaFile` are not recovered.
+
+The native export keeps every saved ID on purpose. A later-installed list or
+mod can still resolve it, while a written-back default would lose the card's
+choice for good.
+
+The following stay outside this rule:
+
+- The tops (105) and bras (107) whose row `Sex` excludes the character
+  (:8701–8722).
+- Male `exType` 1.
+- IDs carried by a mod GUID.
+- Accessories (default -1, :8621).
+- The head (default 0, :6835).
+- The jacket and sailor sub-parts (`defaultId[2,3]`, :7513–7529).
+
+The Maker selection editor still refuses inner shoes, so the lane card keeps
+its saved indoor-shoes ID. A fallback of category 112 is covered by the
+synthetic tests only. Follow-ups are in #351.
+
+Verification:
+
+- **Synthetic tests:** `sourceMakerCatalogFallbackDrawsEachCategoryDefaultForAnAbsentID`,
+  `sourceMakerCatalogFallbackFollowsTheOriginalOrderAndScope`,
+  `sourceMakerCatalogPresenceIsVerifiedOnceAtLoad` and
+  `sourceMakerCatalogFallbackBindsTheCardColorsAsTheDrawnDefault`. They cover
+  each category's default, the order (default, then 0, then nothing), mods,
+  the missing-presence case, every load error, and the card's colors on a
+  fallback row, applied directly and through prepared inputs. Mutation
+  controls are caught: removing the absence check fails 6 expectations,
+  reordering the defaults fails 4, skipping the presence hash check fails 3,
+  and checking the slot-ID requirement against the saved ID fails 5.
+- **Fixture test:** `sourceMakerCatalogFallbackCardAssemblesItsExplicitDefaults`
+  reads `IKKOKU_MAKER_FALLBACK_CARD`. That card is derived from
+  `IKKOKU_MAKER_SCENARIO_CARD` by the gated writer
+  `sourceMakerCatalogFallbackWritesTheLaneCards`, which changes only hair
+  and clothes IDs: 999,999 in four hair slots and in eight clothes slots of
+  all seven outfits. The test checks it against its twin that saves the
+  defaults explicitly: the same rig, geometry and applied card colors.
+- **Lane:** `maker-scenario-catalog-fallback` compares the two previews in the
+  app.
+
 ## Source selection editor (CMT-02 first slice)
 
 The source panel's **Head, hair and clothing** pickers use the loaded library's exact
