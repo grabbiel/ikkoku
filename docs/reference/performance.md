@@ -6891,3 +6891,117 @@ loader, so an upload group would gain little. In order:
 1. A Time Profiler sample, attached by pid during cold head-200 selections,
    names what holds the main actor during preparation.
 2. A worker pre-decode of the base-appearance pixels follows as its own PR.
+
+## Studio FK drag: reusing unchanged character frames (2026-11-02)
+
+During an FK drag the Studio refreshes once per drag event, about 120
+times a second. Each refresh asks every source character of the scene for
+a frame (`StudioModel.refreshFrame`). Only the dragged character changes,
+but before this change the other six of the scenario scene's seven rebuilt
+everything after their cached pose: the rig evaluation (world matrices,
+skin palettes, `isFiniteAffine` on every matrix), the items and their
+materials, the bounds, the palette copies, the retained textures and the
+iris transforms.
+
+### Step 0: where the drag's main thread goes
+
+A Time Profiler sample attached by pid to `studio-fk-drag`, on a Release
+of `main` `35f43e98`, for 10 s (2026-11-02 02:49, under the app lock; an
+attribution, not a timing). The figures are inclusive main-thread ms per
+second:
+
+| frame | ms/s |
+| --- | ---: |
+| `StudioModel.refresh` | 122.2 |
+| `StudioModel.refreshFrame` | 111.9 |
+| `SourceStudioCharacterPreview.frame` | 83.4 |
+| `RigDefinition.evaluate` (every caller) | 50.9 |
+| `SourceRigPreview.frame` | 47.7 |
+| `editedPose` | 34.6 |
+| `solvedPose` | 34.1 |
+| `isFiniteAffine` | 28.6 |
+| `makePose(binding:)` | 14.5 |
+| IK solve | 14.1 |
+| bounds | 10.8 |
+| renderer submit | 4.6 |
+| `bindPose` | 4.2 |
+| `retainTextures` | 4.2 |
+| iris transforms | 0.8 |
+
+`bindPose` is below the 10 ms/s at which a values-only FK path for the
+dragged character would have been tried, so that part was dropped.
+`isFiniteAffine` is a separate follow-up.
+
+### The change
+
+`SourceStudioCharacterPreview.frame` keeps its last finished frame (after
+world, object ID and iris) with a key. While the key matches, it returns
+that frame with the new camera, main light and effects. Those three are
+plain fields of the frame, and nothing else in a character frame reads
+them. The gaze follows the camera only through the live step, which writes
+the pose and the eye rates, and both are in the key. The key, compared bit
+for bit:
+
+- the pose, as a generation that every write to `evaluatedCache` bumps (a
+  solve, a clear or a checkpoint restore). `editedPose` returns a cached
+  pose without a write, so an unchanged generation after it means the same
+  pose;
+- the rig preview instance (a color edit replaces it) and its
+  `visibilityGeneration` (`doubleTooth`);
+- the expression inputs (a blink or a face edit);
+- wear (hidden parts and body alpha), world and object ID;
+- the eye-look rates and the iris tilt;
+- `ResourceStore.reuseGeneration`: the store's generation (registrations,
+  replacements, unregisters, hidden masks, completed retirements) plus
+  every retirement and release as it is asked for. A reused frame is
+  therefore never older than a retirement it should follow (R6).
+
+The cache lives on the preview, so deleting a character frees it, and a
+color edit drops it with the old rig preview. PerfTrace counts
+`studioCharacterFrameReused` and `studioCharacterFrameBuilt` at the
+Studio's two call sites. Their rates over the refresh rate give the frames
+reused per refresh.
+
+### Correctness
+
+- **The twin test** (`SourceStudioCharacterFrameReuseTests`) runs two sets
+  of the scenario scene's seven characters, each in a store of its own. One
+  set reuses frames; the other builds every frame afresh. Every frame must
+  match its twin bit for bit: items, materials, models, keys, morph
+  weights, texture handles, skin sets, bounds, gizmos, camera, light and
+  effects. The reusing set must report a reuse exactly when nothing
+  changed. The test covers:
+  - 90 live ticks (blink, neck and eye gaze on a circling camera, dynamics,
+    a held then moving FK edit, a seek), each followed by a refresh with
+    the view orbited;
+  - an FK drag, then the FK edit held while the view orbits;
+  - an IK edit, a face slider, the expression, wear, world, object ID, a
+    color edit, the double tooth and a resource retirement, each a fresh
+    frame and then a reuse;
+  - 24 orbit steps with the eyes on the camera (TARGET); the gaze moved on
+    17;
+  - the automatic blink alone for 8 s, with 22 changes, a fresh frame
+    exactly on each.
+  - All 1,550 frames matched (866 reused, 684 built).
+- **The lifetime test** drops the seven characters of each store. The store
+  ends where the store without reuse ends: meshes and deformation buffers
+  back to 0, and the same 19 cached textures. Every texture a cached frame
+  held whose owner released it was freed.
+- **The live-tick digest** over 180 ticks of the seven characters, serial
+  and parallel, is the same on base (`main` `fff1d332`) and head:
+  `2a441a23b9f5…`. The edit-during-a-tick digest is also the same,
+  `eeb9bb141283…`.
+
+### Memory
+
+The seven cached frames hold 476.5 KiB:
+- 124 items, 87.2 KiB;
+- 137 morph weights, 2.1 KiB;
+- 6,195 palette matrices, 387.2 KiB.
+
+### A/B
+
+To come: `studio-fk-drag` composited, base against head, in a quiet window
+the coordinator schedules. The prediction is a refresh about 40–50 ms/s
+lower, presented FPS unchanged, and about 6 of 7 frames reused per
+refresh.
