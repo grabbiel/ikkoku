@@ -97,6 +97,7 @@ extension StudioModel {
             case .success(let assembly):
                 row["textureProvider"] = assembly.textureProvider
                 row["resolution"] = assembly.resolution
+                row["samplers"] = assembly.samplerSummary
                 if let reason = liveSourceWearChanged[id] { row["toon"] = reason }
                 if let attach = liveSourceLastAttach[id] {
                     row["live"] = attach.live; row["fallbacks"] = attach.fallbacks; row["hidden"] = attach.hidden; row["unmatched"] = attach.unmatched

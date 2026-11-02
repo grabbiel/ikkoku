@@ -287,6 +287,16 @@ struct StudioScenario: Decodable {
         /// assert only: the named character's live wear readback (rendered
         /// preview and document); only the fields present are compared.
         let clothes: ClothesValue?
+        /// assert only: the named character's live source-shader assembly
+        /// (`IKKOKU_LIVE_SOURCE_SHADERS=1`), its resolved materials' bound
+        /// textures counted by effective sampler state.
+        let liveSamplers: LiveSamplersValue?
+
+        struct LiveSamplersValue: Decodable {
+            let key: Int32
+            /// `SourceShaderLiveAssembly.samplerSummary`, compared whole.
+            let counts: [String: Int]
+        }
         /// setExpression and assert share a partial face-state object.
         let expression: ExpressionValue?
 
@@ -533,7 +543,7 @@ struct StudioScenario: Decodable {
                  seconds, dx, dy, eyeLook, blink, handPattern, mode, axis, pixels,
                  render, exportIdenticalToSource, errorContains, outfit, accessoryLabels, pluginMount, state, clothes, expression,
                  sex, character, chain, delta, ik, edit, build, parent, children, absent, copy, added, activeCopyOf,
-                 aid, routeEdit, route, routeLines, sourceMap
+                 aid, routeEdit, route, routeLines, sourceMap, liveSamplers
         }
 
         init(from decoder: Decoder) throws {
@@ -603,6 +613,7 @@ struct StudioScenario: Decodable {
             pluginMount = try c.decodeIfPresent([PluginMountSummary.Section].self, forKey: .pluginMount)
             state = try c.decodeIfPresent(Int.self, forKey: .state)
             clothes = try c.decodeIfPresent(ClothesValue.self, forKey: .clothes)
+            liveSamplers = try c.decodeIfPresent(LiveSamplersValue.self, forKey: .liveSamplers)
             expression = try c.decodeIfPresent(ExpressionValue.self, forKey: .expression)
             // Native IK parameters: absent keys stay `nil` like every optional
             // above, and the op that needs one reports it missing.
@@ -1535,6 +1546,27 @@ struct StudioScenario: Decodable {
                 problems.append("no wear or import diagnostic contains \"\(needle)\"")
             }
             return problems.isEmpty ? nil : "assert clothes: character \(check.key) " + problems.joined(separator: "; ")
+        }
+
+        /// The live source-shader sampler states (#338): pins the anisotropic
+        /// mode the Studio resolves its live assemblies with.
+        func assertLiveSamplers(_ step: Step, details: inout [String]) -> String? {
+            guard let check = step.liveSamplers else { return nil }
+            guard studio.liveSourceShaders else { return "assert liveSamplers: live source shaders are off" }
+            guard let object = studio.doc.objects.first(where: { $0.sourceObjectKey == check.key }) else {
+                return "assert liveSamplers: no object with source key \(check.key)"
+            }
+            guard let entry = studio.liveSourceAssemblies[object.id] else {
+                return "assert liveSamplers: character \(check.key) has no live assembly"
+            }
+            switch entry.result {
+            case .failure(let reason): return "assert liveSamplers: character \(check.key) has no live assembly: \(reason.text)"
+            case .success(let assembly):
+                let summary = assembly.samplerSummary
+                func list(_ counts: [String: Int]) -> String { "{" + counts.sorted { $0.key < $1.key }.map { "\($0.key): \($0.value)" }.joined(separator: ", ") + "}" }
+                details.append("live samplers \(check.key): \(list(summary)) (\(assembly.textureProvider))")
+                return summary == check.counts ? nil : "assert liveSamplers: character \(check.key) samples \(list(summary)), expected \(list(check.counts))"
+            }
         }
 
         func assertExpression(_ step: Step, details: inout [String]) -> String? {
@@ -3121,6 +3153,7 @@ struct StudioScenario: Decodable {
                 if let problem = assertAccessoryLabels(step, details: &details) { problems.append(problem) }
                 if let problem = assertPluginMount(step, details: &details) { problems.append(problem) }
                 if let problem = assertClothes(step, details: &details) { problems.append(problem) }
+                if let problem = assertLiveSamplers(step, details: &details) { problems.append(problem) }
                 if let problem = assertExpression(step, details: &details) { problems.append(problem) }
                 if let problem = assertIK(step, details: &details) { problems.append(problem) }
                 if let needle = step.diagnosticContains {

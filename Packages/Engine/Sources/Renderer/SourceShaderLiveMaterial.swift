@@ -253,7 +253,9 @@ public final class SourceShaderTextureStore: SourceShaderLiveTextureProvider, @u
         return texture
     }
 
-    private func compositeSampler(_ configuration: TranslatedSourceProgram.SamplerConfiguration, resources: ResourceStore) -> (any MTLSamplerState)? {
+    /// One sampler state per normalized configuration and resource owner,
+    /// shared by composite inputs and every live material resolved from this store.
+    func samplerState(_ configuration: TranslatedSourceProgram.SamplerConfiguration, resources: ResourceStore) -> (any MTLSamplerState)? {
         lock.lock(); defer { lock.unlock() }
         let cache = uploads(resources)
         if let sampler = cache.samplers[configuration] { return sampler }
@@ -343,7 +345,7 @@ public final class SourceShaderTextureStore: SourceShaderLiveTextureProvider, @u
                 provenance.append("\(name)=Unity default \(kind)")
             }
             let configuration = TranslatedSourceProgram.SamplerConfiguration(filter: filter, wrap: wrap, aniso: aniso, anisotropicFiltering: request.anisotropicFiltering)
-            guard let sampler = compositeSampler(configuration, resources: resources) else { return fail("sampler state for \(name)") }
+            guard let sampler = samplerState(configuration, resources: resources) else { return fail("sampler state for \(name)") }
             textures[parameter.slot] = texture; samplers[parameter.samplerSlot] = sampler
             keyParts.append("t:\(name)@\(parameter.slot)/\(parameter.samplerSlot)=\(inputKey)|\(filter ?? "-")|\(wrap ?? "-")|\(aniso.map(String.init) ?? "-")|\(configuration.maxAnisotropy)|\(configuration.mipFilter.rawValue)")
         }
@@ -638,6 +640,15 @@ public final class SourceShaderLiveMaterial: @unchecked Sendable {
     /// filter, wrap and aniso under the anisotropic mode the material was resolved with.
     let samplers: [String: TranslatedSourceProgram.SamplerConfiguration]
 
+    /// The bound textures counted by effective sampler state, as
+    /// `"aniso <maxAnisotropy>, mips <linear|nearest|none>"` (the Studio's
+    /// live report and its scenario check read it).
+    public var samplerSummary: [String: Int] {
+        var counts: [String: Int] = [:]
+        for configuration in samplers.values { counts[configuration.summaryKey, default: 0] += 1 }
+        return counts
+    }
+
     /// Per-frame uniforms the live encoder computes.
     public static let frameUniforms: Set<String> = ["_WorldSpaceCameraPos", "_WorldSpaceLightPos0", "_LightColor0", "_ScreenParams",
                                                     "unity_WorldTransformParams", "_Time"]
@@ -740,7 +751,9 @@ public final class SourceShaderLiveMaterial: @unchecked Sendable {
                     sources[name] = "Unity default \(kind)"
                 }
                 let configuration = TranslatedSourceProgram.SamplerConfiguration(filter: filter, wrap: wrap, aniso: aniso, anisotropicFiltering: anisotropicFiltering)
-                guard let sampler = resources.device.makeSamplerState(descriptor: configuration.makeDescriptor()) else { throw SourceShaderLiveReason("sampler state for \(name)") }
+                // The store shares one sampler per configuration; the validation-only capture provider makes its own.
+                guard let sampler = (provider as? SourceShaderTextureStore)?.samplerState(configuration, resources: resources)
+                        ?? resources.device.makeSamplerState(descriptor: configuration.makeDescriptor()) else { throw SourceShaderLiveReason("sampler state for \(name)") }
                 textures[name] = (gpuTexture, sampler); samplers[name] = configuration
             }
         }

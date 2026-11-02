@@ -359,10 +359,13 @@ func studioLiveAssembliesSampleWithThePlayersForcedAnisotropy() throws {
     let bindings = BindingSet(scope: "synthetic", renderers: textures.enumerated().map { index, texture in
         liveRenderer("o_line\(index)", material: liveMaterial(shader: "Shader Forge/live_line", filter: texture.filter, aniso: texture.aniso))
     }, globalVectors: ["_LineColorG": .init([0.5, 0.5, 0.5, 0], source: "scene")])
+    func assembly(_ mode: String?) -> SourceShaderLiveAssembly {
+        SourceShaderLiveAssembly(bindings: bindings, programs: directory, resources: resources,
+                                 textures: StubTextureProvider(device: device, names: ["tex_main"]), streams: [:],
+                                 anisotropicFiltering: mode)
+    }
     func samplers(_ mode: String?) throws -> [TranslatedSourceProgram.SamplerConfiguration] {
-        let assembly = SourceShaderLiveAssembly(bindings: bindings, programs: directory, resources: resources,
-                                                textures: StubTextureProvider(device: device, names: ["tex_main"]), streams: [:],
-                                                anisotropicFiltering: mode)
+        let assembly = assembly(mode)
         return try textures.indices.map { try #require(try assembly.materials[$0]?.get().samplers["_MainTex"]) }
     }
     #expect(SourceShaderLiveConfiguration.playerAnisotropicFiltering == "ForceEnable")
@@ -375,6 +378,47 @@ func studioLiveAssembliesSampleWithThePlayersForcedAnisotropy() throws {
     let unforced = try samplers(nil)
     #expect(unforced.map(\.maxAnisotropy) == [1, 1, 1, 1])
     #expect(unforced.map(\.mipFilter.rawValue) == [MTLSamplerMipFilter.nearest, .linear, .nearest, .nearest].map(\.rawValue))
+    // The Studio's live report and the studio-scenario-live-samplers check read these counts.
+    #expect(assembly(SourceShaderLiveConfiguration.playerAnisotropicFiltering).samplerSummary
+        == ["aniso 9, mips linear": 2, "aniso 1, mips nearest": 2])
+    #expect(assembly(nil).samplerSummary == ["aniso 1, mips nearest": 3, "aniso 1, mips linear": 1])
+    let first = try #require(try assembly(nil).materials[0]?.get())
+    #expect(first.samplerSummary == ["aniso 1, mips nearest": 1])
+}
+
+/// Materials resolved from the native store share one sampler state per
+/// configuration, through the cache composite inputs use, instead of one per
+/// texture per material.
+@Test(.enabled(if: MTLCreateSystemDefaultDevice() != nil))
+func liveMaterialsFromTheStoreShareOneSamplerPerConfiguration() throws {
+    let device = try #require(MTLCreateSystemDefaultDevice())
+    let resources = ResourceStore(device: device)
+    let directory = try LiveProgramFixture.temporaryDirectory()
+    defer { try? FileManager.default.removeItem(at: directory) }
+    try LiveProgramFixture.write(LiveProgramFixture.lineSpec(outline: false), family: "live_line", to: directory)
+    let url = try nativeTextureStoreFixture()
+    defer { try? FileManager.default.removeItem(at: url.deletingLastPathComponent()) }
+    let store = try SourceShaderTextureStore(url: url)
+    var material = liveMaterial(shader: "Shader Forge/live_line")
+    material.textures["_MainTex"] = .init(identity: nativeTextureIdentity, identitySource: "prefab", scale: [1, 1], offset: [0, 0], transformSource: "prefab")
+    let bindings = BindingSet(scope: "synthetic", renderers: [liveRenderer("o_a", material: material), liveRenderer("o_b", material: material)],
+                              globalVectors: ["_LineColorG": .init([0.5, 0.5, 0.5, 0], source: "scene")])
+    func resolve(_ index: Int, _ mode: String?) throws -> SourceShaderLiveMaterial {
+        try SourceShaderLiveMaterial.resolve(renderer: bindings.renderers[index], bindings: bindings, programs: directory,
+                                             resources: resources, textures: store, anisotropicFiltering: mode)
+    }
+    let first = try resolve(0, "ForceEnable"), second = try resolve(1, "ForceEnable")
+    let a = try #require(first.textures["_MainTex"]?.sampler), b = try #require(second.textures["_MainTex"]?.sampler)
+    #expect(a === b)
+    #expect(first.samplerSummary == ["aniso 9, mips linear": 1])
+    #expect(store.compositeInputStatistics(for: resources).samplers == 1)
+    // Another configuration gets its own sampler, also cached.
+    let unforced = try resolve(0, nil), again = try resolve(1, nil)
+    let c = try #require(unforced.textures["_MainTex"]?.sampler), d = try #require(again.textures["_MainTex"]?.sampler)
+    #expect(c !== a)
+    #expect(c === d)
+    #expect(unforced.samplerSummary == ["aniso 1, mips nearest": 1])
+    #expect(store.compositeInputStatistics(for: resources).samplers == 2)
 }
 
 // MARK: - Vertex inputs

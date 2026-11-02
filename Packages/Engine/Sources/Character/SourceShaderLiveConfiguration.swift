@@ -35,6 +35,9 @@ public struct SourceShaderLiveConfiguration: Sendable, Equatable {
     /// every `OriginalMapProbe` case's quality block. No game assembly sets it or
     /// the global anisotropy limits. The Studio's live assemblies sample with it,
     /// as `SourceShaderLiveFixtureProbe` does with each frame's recorded value.
+    /// It is the probed install's value at its active quality level: Unity
+    /// keeps the mode per quality level, and neither probe records the level
+    /// or the level names (the next `OriginalCharacterProbe` run records them).
     public static let playerAnisotropicFiltering = "ForceEnable"
 
     public static func environment(_ env: [String: String], sourceAvatar: URL? = nil) -> SourceShaderLiveConfiguration {
