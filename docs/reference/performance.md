@@ -3787,6 +3787,61 @@ Offscreen benchmark at 1996×1824, median (range) of three runs of 60 frames:
   are not attributed.
 - No M1 run.
 
+### Forced anisotropy for characters and items (2026-11-01)
+
+Added with the toon, eye, outline and shadow-caster samplers that use the
+map's forced anisotropy 9
+([renderer](renderer.md#source-map-sky-particles-and-block-images-st-a11-slice-3-2026-10-26)).
+
+**Measurement.** Release builds, in one quiet window the orchestrator
+granted (2026-11-01, 21:58:20–22:02:31):
+
+- base is `334d12c`, the branch point; head is this change;
+- the offscreen benchmark (`IKKOKU_BENCHMARK_OUTPUT`, 1996×1824, 120
+  frames) ran 4 rounds, alternating the build order (base then head, then
+  head then base), one launch at a time under the app lock;
+- the display stayed at 1920×1080 at 120 Hz. Before each launch, a gate
+  waited for `corespotlightd` to stay under 20% for 10 s. All 24 runs
+  were valid; two were rerun after a daemon spike (`corespotlightd` 134%,
+  `launchd` 45%).
+
+There are three units. `showoff-nomap` is the showoff scene's 7 characters
+without the map. `map34-showoff` is the same scene on map 34. `face-yaw90` is
+the Maker frame (`IKKOKU_CAPTURE_PRESET=face`, `IKKOKU_CAPTURE_YAW=90`).
+GPU ms per frame, p50, median (range) of 4:
+
+| Unit | Base | Head | Head − base |
+| --- | --- | --- | --- |
+| showoff-nomap | 1.561 (1.555–1.596) | 1.579 (1.564–1.616) | +0.018 ms (+1.2%), within the run-to-run ranges |
+| map34-showoff | 1.637 (1.626–1.661) | 1.660 (1.647–1.680) | +0.023 ms (+1.4%), within the run-to-run ranges |
+| face-yaw90 | 0.5258 (0.5255–0.5269) | 0.5278 (0.5271–0.5290) | +0.002 ms (+0.4%), outside the ranges |
+
+- **The face's +0.002 ms is a real cost.** Each build's 4 runs spread over
+  about 1–2 µs, and the two ranges do not overlap. That is about 0.02% of
+  an 8.33 ms frame, accepted as the price of matching the player's forced
+  anisotropy.
+- **The showoff and map 34 differences are within the ranges.** They
+  cannot be told from run-to-run variation.
+- **Pixels.** Base and head renders are deterministic (base rounds 1 and 3
+  are byte-identical).
+  - The showoff and map 34 frames each change 27,717 of 3,640,704 pixels
+    (mean 2.46, max 35, over the changed pixels).
+  - 27,715 of those pixels are the same ones in both frames: the characters.
+    So map 34 adds no coverage beyond the characters. Its item-drawn parts
+    are `map_fragment` draws, which slice 3 already forced.
+  - The face frame changes 10,193 pixels (mean 4.23, max 101).
+- **Evidence:** `.local/sta11d-pr-b/aniso-bench/` (`summary.json`, the
+  per-run reports and renders) and `.local/sta11d-pr-b/notes/aniso-bench-run.log`.
+
+**Scaling to a base M1 (estimate),** with the method above (GPU × about
+4.75): the face's cost is about +0.01 ms per frame, and the showoff's
+difference, if real, under about +0.1 ms. As in slice 3, anisotropic
+filtering spends texture bandwidth, and the M1 has about a twelfth of this
+machine's. So this is the least certain estimate.
+
+**Limits.** One window, 4 rounds per unit, offscreen only: no presented,
+orbit or idle runs, no Metal System Trace and no M1 run.
+
 ### Slice 4: all maps
 
 Added 2026-11-01 with the fourth maps slice

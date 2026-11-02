@@ -427,9 +427,15 @@ are in [maps: slice 3](studio/maps.md#map-34-the-sky-and-block-images-slice-3).
     iris, white and highlight, the body mask, and the outline and shadow-caster
     alpha tests now use `forcedAnisoRepeat` or `forcedAnisoClamp`. Screen-space
     passes keep `linearClamp`. The glTF exports carry no sampler state, so the
-    few Point, aniso-0 or single-level textures the player leaves alone are
+    few Point or aniso-0 textures, which Unity's rule leaves unforced, are
     forced too. Before, they sampled trilinear, which matched the player no
-    better.
+    better. Single-level textures are forced like mipmapped ones, as
+    `TranslatedSourceProgram.SamplerConfiguration` forces every non-Point
+    texture with aniso above 0, mipmapped or not. In the live source-shader
+    gate, a mutation check that left them unforced moved 3,871 character
+    pixels, put every family further from the player's frame and failed
+    `toon_eyew_lod0` (p99 5 > 4). That is shown by the frame, not by a direct
+    player probe.
   - **Test.** `mapTexturesSampleWithThePlayersForcedAnisotropy` draws a
     16:1 texture footprint over a texture whose levels 0–1 are white and the
     rest black. Each map texture reads 1. `max_anisotropy` 1–4 reads 0 on
