@@ -373,7 +373,12 @@ the largest quaternion-component difference of its three bones and largest
 joint displacement — moved beyond the tolerance by default, or within `within`;
 the pose read is `CharacterInstance.currentPose()` of the rendered instance),
 `statusContains` (a substring of the app's status line, read after the step's
-`view` check so a rejected look-through has reported itself),
+`view` check so a rejected look-through has reported itself), `statusLacks`
+(a substring it must not contain), `characterBuilt` `{key,built}` (whether a
+source character has a preview; built and selected, its pose and animation
+state must be readable), `exportedAnimation` `{key,paths,agree?,increasing?}`
+(a character's saved animation state read back from exported scenes: the
+same in every file, or a normalizedTime rising file by file),
 `indicatorContains` (a substring of the view indicator under the status line,
 `StudioModel.activeSourceCameraView`; with no source camera active it is empty
 and contains nothing), `treeLabel` with `key` (the object's workspace tree
@@ -1396,6 +1401,36 @@ Bilinear `_MainTex` with aniso 1). See
 On `165db2c` all 7 characters read `"aniso 9, mips linear": 1` before and
 after the round trip (1/1 `--strict`, 15.4 s). With the call site reverted
 to no mode, all 14 asserts failed with `"aniso 1, mips nearest": 1`.
+
+### Lazy hidden characters (cxs1 gap list, item 7)
+
+Three checks cover the import that leaves hidden characters unbuilt (see
+[hidden characters at import](../../docs/reference/studio/scene-editing.md#hidden-characters-at-import-lazy-builds)).
+Two new `assert` keys serve them: `characterBuilt` (`key`, `built`) checks
+whether a source character has a preview, and, when it is built and
+selected, that its pose and animation state are readable. `statusLacks`
+names a substring the status line must not contain.
+
+- `hidden-character-build` (scenario scene): hides folder key 622, exports
+  and reimports. Character 0 inside it stays unbuilt, and the status and
+  diagnostics say so. Selecting it builds it without changing the render.
+  An outfit and an FK edit made while it is hidden apply, and showing the
+  folder draws it with both. An export and reimport keep the outfit.
+- `hidden-attachment-status` (accessory scene): hides character key 10,
+  which carries an attached folder, exports and reimports, then saves and
+  loads natively. While the character is unbuilt the status line never
+  reports "has no converted character". Selecting the attached folder
+  builds the character.
+- `hidden-animation-clock` (scenario scene and animation catalog): gives
+  character 0 a converted clip at speed 1.7, hides its folder, exports and
+  reimports. A third assert key, `exportedAnimation` (`key`, `paths`,
+  `agree` or `increasing`), reads exported scenes back from disk. After
+  2.5 s of the Studio clock the export saves a later normalizedTime. After a
+  native save and load, 1 s more of clock exports the same state as
+  reimporting that export and running 1 s, and the character stays unbuilt
+  throughout.
+
+RESULTS_PLACEHOLDER
 
 ## Maker scenario hook (T-T04)
 

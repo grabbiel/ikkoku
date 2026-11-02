@@ -2066,6 +2066,67 @@ Reset/Undo and exact-pixel checks: **7/7 save and 16/16 load steps pass**; the
 83-step edit scenario also passes again. This does not generalize support to hidden
 characters carrying only older shape/wear edits.
 
+## Hidden characters at import (lazy builds)
+
+An import builds the characters it draws and leaves a hidden one unbuilt
+(cxs1 gap list, item 7). A character is hidden when its own `visible` flag or
+any ancestor's is off; accessory children follow their character. Route
+characters stay eager, hidden or not. The scene corpus has 558 hidden
+characters in 29 scenes and no route characters.
+
+### Recovered rules
+
+- Hiding a character (`OCIChar.OnVisible`) sets `ChaControl.visibleAll` and
+  the guide and option-item visibility, nothing else. `visibleAll` is read
+  only as one flag of `YS_Assist.SetActiveControl`, which switches the
+  GameObjects of the body, head, tongue, hair, clothes, parts and accessory
+  renderers on or off.
+- The body Animator is on the root of the `p_cf_body_bone` prefab
+  (`p_cf_body_bone_low` for low detail) in `chara/oo_base.unity3d`, under the
+  character's top object. Hiding never touches either GameObject. Both
+  prefabs' Animators cull with AlwaysAnimate and update in Normal mode, and
+  no recovered code changes the culling mode. So a hidden character keeps
+  animating.
+- A save reads the live `normalizedTime` of the Animator's current state
+  (`OCIChar` save), so a hidden character saves the time it has reached.
+- A scene load selects nothing: `InitScene` clears the tree selection and
+  the load never selects a node.
+
+### App translation
+
+- The import plans every character and builds the drawn ones. A hidden one
+  gets its reference and no build. The status line adds "N hidden, built when
+  shown" and the diagnostics add "N hidden character(s) not built at import;
+  each builds when shown or selected."
+- A hidden character builds when it is shown, when it is selected, or when a
+  selected object hangs from it (an attached folder, for example). A hidden
+  selection builds without being drawn, so its inspectors and edits work.
+  While it builds, its Face, Clothes and Pose inspectors show "Building this
+  character…".
+- An object attached to an unbuilt hidden character reports no
+  "Attachment parent has no converted character" error: visibility is checked
+  before the attachment's world matrix.
+- The default selection after an import is the first drawn character, or
+  nothing when none is drawn, so the selection builds no hidden character.
+  This is a native convenience; CharaStudio selects nothing.
+- A character with no preview (unbuilt, not yet built after a native load,
+  or whose build failed) saves the animation time it has reached, like
+  CharaStudio's hidden characters. `SourceStudioAnimationClock` reads only
+  its card's body height and the catalog clip (no rig, no GPU) and calls
+  `SourceStudioAnimation.savedState`, the time advance a built character's
+  `savedAnimationState` calls. A native save, a clock rebase (an animation
+  edit) and an export all use it. The background export advances these
+  clocks on a worker thread, and every character's animation is saved at the
+  Studio clock of the moment the export was chosen.
+- This also fixes the native reload path. Before, a character hidden when a
+  native document was saved had its animation baked into the document, the
+  reload left it unbuilt, and the export failed with "Animation edits
+  require a loaded source character."
+
+### Evidence
+
+EVIDENCE_PLACEHOLDER
+
 ## CharaStudio reload acceptance
 
 Reviewed 2026-09-30. This closes the "reload in the original CharaStudio" half of the ST-T03 edit destinations: our app's own exported scene records are loaded into the real CharaStudio player, and the state the player shows is recorded and compared claim by claim.
