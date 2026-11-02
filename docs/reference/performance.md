@@ -5805,10 +5805,17 @@ refresh in head.
   whatever SwiftUI builds inside them. It is off by default behind
   `IKKOKU_PERF_KEPT_HIDING`, with a Debug check that no hidden container
   is in the key-view loop, holds the first responder or is reachable
-  through the accessibility tree, and scenario checks in both modes and
-  with Full Keyboard Access on. Fall back to marking the section's
-  controls `refusesFirstResponder` only if the container fails the
-  captures or costs more than it saves.
+  through the accessibility tree, and scenario checks in both modes.
+  Before a container hides, the window takes the first responder from it;
+  while it is hidden, it gives back a first responder that code puts in
+  it. The lane checks the Tab loop under Full Keyboard Access with a model
+  of it, not Full Keyboard Access itself:
+  `NSApp.isFullKeyboardAccessEnabled` ignores `-AppleKeyboardUIMode` in the
+  argument domain (macOS 27.0.1), so the real loop is checked only by hand
+  (`lanes/studio-manual-fka.json`), with Keyboard navigation turned on in
+  System Settings. Fall back to marking the section's controls
+  `refusesFirstResponder` only if the container fails the captures or
+  costs more than it saves.
 - **The Clothes tab drawn wider than the inspector.** After a select of
   character 0, folder 622 and character 963 on the Clothes tab
   (`ui-sel-clothes`), the tab's content is sometimes laid out wider than

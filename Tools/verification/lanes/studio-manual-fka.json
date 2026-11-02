@@ -1,0 +1,66 @@
+{
+  "schemaVersion": 2,
+  "checks": [
+    {
+      "id": "studio-scenario-inspector-kept-fka",
+      "argv": [
+        ".local/build/Build/Products/Debug/Ikkoku.app/Contents/MacOS/Ikkoku"
+      ],
+      "fixtures": [
+        {
+          "env": "IKKOKU_SOURCE_SCENE",
+          "kind": "file",
+          "from": "IKKOKU_STUDIO_SCENARIO_SCENE"
+        },
+        {
+          "env": "IKKOKU_SOURCE_AVATAR",
+          "kind": "file"
+        }
+      ],
+      "env": {
+        "IKKOKU_STUDIO_SCENARIO": "Tools/verification/scenarios/inspector-kept-fka.json",
+        "IKKOKU_STUDIO_SCENARIO_REPORT": ".local/verification/reports/studio-scenario-inspector-kept-fka.json"
+      },
+      "referenceTier": "app-smoke",
+      "tolerance": "Item 7's kept views (disabled while hidden). Manual: needs Keyboard navigation turned on in System Settings (Full Keyboard Access; NSApp.isFullKeyboardAccessEnabled ignores -AppleKeyboardUIMode in the argument domain on macOS 27.0.1, so no launch argument can turn it on for this process alone). The first step fails if Full Keyboard Access is off. With AppKit's real Tab loop, with character 0, nothing, character 963 and folder 622 selected, after a Name edit the selection clears, and after selection cycles, no view in the loop lies in a hidden kept view, the first responder never does, and the document and the undo stack are unchanged (what was typed has already been applied).",
+      "artifacts": [
+        {
+          "path": ".local/verification/reports/studio-scenario-inspector-kept-fka.json",
+          "kind": "scenario-report"
+        }
+      ],
+      "timeout": 600
+    },
+    {
+      "id": "studio-scenario-inspector-kept-fka-container",
+      "argv": [
+        ".local/build/Build/Products/Debug/Ikkoku.app/Contents/MacOS/Ikkoku"
+      ],
+      "fixtures": [
+        {
+          "env": "IKKOKU_SOURCE_SCENE",
+          "kind": "file",
+          "from": "IKKOKU_STUDIO_SCENARIO_SCENE"
+        },
+        {
+          "env": "IKKOKU_SOURCE_AVATAR",
+          "kind": "file"
+        }
+      ],
+      "env": {
+        "IKKOKU_STUDIO_SCENARIO": "Tools/verification/scenarios/inspector-kept-fka.json",
+        "IKKOKU_STUDIO_SCENARIO_REPORT": ".local/verification/reports/studio-scenario-inspector-kept-fka-container.json",
+        "IKKOKU_PERF_KEPT_HIDING": "container"
+      },
+      "referenceTier": "app-smoke",
+      "tolerance": "Item 7 follow-up C1, each kept inspector view in an AppKit container that is set hidden (IKKOKU_PERF_KEPT_HIDING=container). Manual: needs Keyboard navigation turned on in System Settings (Full Keyboard Access; NSApp.isFullKeyboardAccessEnabled ignores -AppleKeyboardUIMode in the argument domain on macOS 27.0.1, so no launch argument can turn it on for this process alone). The first step fails if Full Keyboard Access is off. With AppKit's real Tab loop, with character 0, nothing, character 963 and folder 622 selected, after a Name edit the selection clears, and after selection cycles, no view in the loop lies in a hidden kept view, the first responder never does, and the document and the undo stack are unchanged (what was typed has already been applied).",
+      "artifacts": [
+        {
+          "path": ".local/verification/reports/studio-scenario-inspector-kept-fka-container.json",
+          "kind": "scenario-report"
+        }
+      ],
+      "timeout": 600
+    }
+  ]
+}

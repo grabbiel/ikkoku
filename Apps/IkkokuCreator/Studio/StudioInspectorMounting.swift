@@ -111,8 +111,10 @@ final class InspectorAnchorView: NSView {
 
     func releaseControls() {
         guard let window else { return }
+        // A field in a kept container (C1's `container` mode) is left to its
+        // container, which ends the editing itself before it hides.
         if let editor = window.firstResponder as? NSTextView, editor.isFieldEditor,
-           let field = editor.delegate as? NSTextField, holds(field) {
+           let field = editor.delegate as? NSTextField, holds(field), InspectorKeptContainerView.enclosing(field) == nil {
             field.abortEditing()
             if window.firstResponder !== window { window.makeFirstResponder(nil) }
         }

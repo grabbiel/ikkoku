@@ -817,11 +817,22 @@ class StudioScenarioLaneTests(unittest.TestCase):
     """
 
     LANE = os.path.join(_HERE, "lanes", "studio-scenarios.json")
+    # C1: the checks that need Full Keyboard Access really on, which only
+    # System Settings can do; run by hand, outside the lane.
+    MANUAL_FKA = os.path.join(_HERE, "lanes", "studio-manual-fka.json")
     SCENARIO_DIR = os.path.join(_HERE, "scenarios")
 
     def setUp(self):
         with open(self.LANE, encoding="utf-8") as handle:
             self.checks = run.validate_manifest(json.load(handle))
+        with open(self.MANUAL_FKA, encoding="utf-8") as handle:
+            self.manual_fka = run.validate_manifest(json.load(handle))
+
+    def inspector_steps(self, check):
+        with open(os.path.join(run.REPO_ROOT, check["env"]["IKKOKU_STUDIO_SCENARIO"]),
+                  encoding="utf-8") as handle:
+            scenario = json.load(handle)
+        return (scenario.get("inspectorUI") or {}).get("steps", [])
 
     def scenario_files(self):
         # maker-*.json and gameplay-*.json belong to their own lanes, not this one.
@@ -832,15 +843,16 @@ class StudioScenarioLaneTests(unittest.TestCase):
     def test_lane_validates_and_covers_every_scenario(self):
         self.assertEqual(len(self.checks), 93)
         referenced = set()
-        for check in self.checks:
+        for check in self.checks + self.manual_fka:
             scenario = check["env"]["IKKOKU_STUDIO_SCENARIO"]
             referenced.add(os.path.join(run.REPO_ROOT, scenario))
             self.assertTrue(os.path.isfile(os.path.join(run.REPO_ROOT, scenario)),
                             "lane names a missing scenario: %s" % scenario)
         self.assertEqual(sorted(os.path.basename(p) for p in referenced),
                          self.scenario_files(),
-                         "a scenario file is not run by the lane, or the lane "
-                         "names a scenario that is not in Tools/verification/scenarios")
+                         "a scenario file is not run by the lane (or the manual "
+                         "Full Keyboard Access checks), or names a scenario that "
+                         "is not in Tools/verification/scenarios")
 
     def check_inspector_ui_steps(self, path, steps):
         self.assertTrue(steps)
@@ -867,30 +879,39 @@ class StudioScenarioLaneTests(unittest.TestCase):
                 if name in step:
                     self.assertIs(type(step[name]), int)
             for name in ("probeHit", "probeFocusable", "editing", "unchanged", "exists",
-                         "responderHidden", "fullKeyboardAccess"):
+                         "responderHidden", "fullKeyboardAccess", "fkaModel", "undoTopUnchanged"):
                 if name in step:
                     self.assertIs(type(step[name]), bool)
             for name in ("axContains", "axAbsent"):
                 if name in step:
                     self.assertTrue(all(isinstance(text, str) and text for text in step[name]))
 
-    def test_full_keyboard_access_checks_pass_the_launch_argument(self):
-        # C1 (item 7 follow-ups): Full Keyboard Access is turned on for the app
-        # process only, through the argument domain, never in System Settings.
-        # A scenario that asserts it is on needs the argument, and only those
-        # scenarios get it.
-        # The arguments after the binary are name/value pairs, so other
-        # per-process settings can sit beside it.
-        fka = ("-AppleKeyboardUIMode", "3")
+    def test_real_full_keyboard_access_checks_are_manual(self):
+        # C1 (item 7 follow-ups): NSApp.isFullKeyboardAccessEnabled ignores
+        # -AppleKeyboardUIMode in the argument domain (macOS 27.0.1), so only
+        # Keyboard navigation in System Settings turns Full Keyboard Access on,
+        # and a scenario that needs it on is run by hand from the manual
+        # manifest, never by the lane. Its first step is the guard that fails
+        # when it is off. No check passes the argument that does not take.
         for check in self.checks:
-            with open(os.path.join(run.REPO_ROOT, check["env"]["IKKOKU_STUDIO_SCENARIO"]),
-                      encoding="utf-8") as handle:
-                scenario = json.load(handle)
-            steps = (scenario.get("inspectorUI") or {}).get("steps", [])
-            wants = any(step.get("fullKeyboardAccess") is True for step in steps)
-            extra = check["argv"][1:]
-            self.assertEqual(len(extra) % 2, 0, check["id"])
-            self.assertEqual(fka in list(zip(extra[::2], extra[1::2])), wants, check["id"])
+            self.assertFalse(any(step.get("fullKeyboardAccess") is True for step in self.inspector_steps(check)),
+                             check["id"])
+        self.assertEqual(len(self.manual_fka), 2)
+        for check in self.manual_fka:
+            self.assertEqual(self.inspector_steps(check)[0], {"op": "assert", "fullKeyboardAccess": True}, check["id"])
+        for check in self.checks + self.manual_fka:
+            self.assertNotIn("-AppleKeyboardUIMode", check["argv"], check["id"])
+
+    def test_full_keyboard_access_model_follows_the_real_scenario(self):
+        # The lane's model checks run the real scenario's steps after its
+        # guard, with every key-view walk on the model instead of AppKit's loop.
+        real = self.inspector_steps(self.manual_fka[0])
+        model_checks = [c for c in self.checks if c["env"]["IKKOKU_STUDIO_SCENARIO"].endswith("inspector-kept-fka-model.json")]
+        self.assertEqual(len(model_checks), 2)
+        expected = [dict(step, fkaModel=True) if step["op"] == "keyLoop" else step for step in real[1:]]
+        self.assertEqual(self.inspector_steps(model_checks[0]), expected)
+        self.assertEqual(sorted(c["env"].get("IKKOKU_PERF_KEPT_HIDING", "disabled") for c in model_checks),
+                         ["container", "disabled"])
 
     def test_scenario_reports_are_artifacts(self):
         for check in self.checks:

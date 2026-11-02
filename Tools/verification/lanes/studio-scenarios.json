@@ -3337,11 +3337,9 @@
       "timeout": 600
     },
     {
-      "id": "studio-scenario-inspector-kept-fka",
+      "id": "studio-scenario-inspector-kept-fka-model",
       "argv": [
-        ".local/build/Build/Products/Debug/Ikkoku.app/Contents/MacOS/Ikkoku",
-        "-AppleKeyboardUIMode",
-        "3"
+        ".local/build/Build/Products/Debug/Ikkoku.app/Contents/MacOS/Ikkoku"
       ],
       "fixtures": [
         {
@@ -3355,25 +3353,23 @@
         }
       ],
       "env": {
-        "IKKOKU_STUDIO_SCENARIO": "Tools/verification/scenarios/inspector-kept-fka.json",
-        "IKKOKU_STUDIO_SCENARIO_REPORT": ".local/verification/reports/studio-scenario-inspector-kept-fka.json"
+        "IKKOKU_STUDIO_SCENARIO": "Tools/verification/scenarios/inspector-kept-fka-model.json",
+        "IKKOKU_STUDIO_SCENARIO_REPORT": ".local/verification/reports/studio-scenario-inspector-kept-fka-model.json"
       },
       "referenceTier": "app-smoke",
-      "tolerance": "Item 7's kept views (disabled while hidden), with Full Keyboard Access on for this process only (-AppleKeyboardUIMode 3 in the argument domain; the first step fails if it did not take): with character 0, nothing, character 963 and folder 622 selected, after a Name edit the selection clears, and after selection cycles, no view in the Tab key-view loop lies in a hidden kept view, the first responder never does, the edit is dropped without the end-of-editing commit, and the document and the undo stack are unchanged.",
+      "tolerance": "Item 7's kept views (disabled while hidden), with a model of the Tab loop with Full Keyboard Access on (keyViewModel: every enabled control, enabled editable or selectable text field, and other view that accepts the first responder, less those a hidden ancestor keeps out; a model, not AppKit's walk, since NSApp.isFullKeyboardAccessEnabled ignores -AppleKeyboardUIMode in the argument domain on macOS 27.0.1, so the real loop with Full Keyboard Access on is checked only by the manual lanes/studio-manual-fka.json, with Keyboard navigation turned on in System Settings): with character 0, nothing, character 963 and folder 622 selected, after a Name edit the selection clears, and after selection cycles, no such view lies in a hidden kept view, the first responder never does, and the document and the undo stack are unchanged (what was typed has already been applied).",
       "artifacts": [
         {
-          "path": ".local/verification/reports/studio-scenario-inspector-kept-fka.json",
+          "path": ".local/verification/reports/studio-scenario-inspector-kept-fka-model.json",
           "kind": "scenario-report"
         }
       ],
       "timeout": 600
     },
     {
-      "id": "studio-scenario-inspector-kept-fka-container",
+      "id": "studio-scenario-inspector-kept-fka-model-container",
       "argv": [
-        ".local/build/Build/Products/Debug/Ikkoku.app/Contents/MacOS/Ikkoku",
-        "-AppleKeyboardUIMode",
-        "3"
+        ".local/build/Build/Products/Debug/Ikkoku.app/Contents/MacOS/Ikkoku"
       ],
       "fixtures": [
         {
@@ -3387,15 +3383,15 @@
         }
       ],
       "env": {
-        "IKKOKU_STUDIO_SCENARIO": "Tools/verification/scenarios/inspector-kept-fka.json",
-        "IKKOKU_STUDIO_SCENARIO_REPORT": ".local/verification/reports/studio-scenario-inspector-kept-fka-container.json",
+        "IKKOKU_STUDIO_SCENARIO": "Tools/verification/scenarios/inspector-kept-fka-model.json",
+        "IKKOKU_STUDIO_SCENARIO_REPORT": ".local/verification/reports/studio-scenario-inspector-kept-fka-model-container.json",
         "IKKOKU_PERF_KEPT_HIDING": "container"
       },
       "referenceTier": "app-smoke",
-      "tolerance": "Item 7 follow-up C1, each kept inspector view in an AppKit container that is set hidden (IKKOKU_PERF_KEPT_HIDING=container): with Full Keyboard Access on for this process only (-AppleKeyboardUIMode 3 in the argument domain; the first step fails if it did not take): with character 0, nothing, character 963 and folder 622 selected, after a Name edit the selection clears, and after selection cycles, no view in the Tab key-view loop lies in a hidden kept view, the first responder never does, the edit is dropped without the end-of-editing commit, and the document and the undo stack are unchanged.",
+      "tolerance": "Item 7 follow-up C1, each kept inspector view in an AppKit container that is set hidden (IKKOKU_PERF_KEPT_HIDING=container), with a model of the Tab loop with Full Keyboard Access on (keyViewModel: every enabled control, enabled editable or selectable text field, and other view that accepts the first responder, less those a hidden ancestor keeps out; a model, not AppKit's walk, since NSApp.isFullKeyboardAccessEnabled ignores -AppleKeyboardUIMode in the argument domain on macOS 27.0.1, so the real loop with Full Keyboard Access on is checked only by the manual lanes/studio-manual-fka.json, with Keyboard navigation turned on in System Settings): with character 0, nothing, character 963 and folder 622 selected, after a Name edit the selection clears, and after selection cycles, no such view lies in a hidden kept view, the first responder never does, and the document and the undo stack are unchanged (what was typed has already been applied).",
       "artifacts": [
         {
-          "path": ".local/verification/reports/studio-scenario-inspector-kept-fka-container.json",
+          "path": ".local/verification/reports/studio-scenario-inspector-kept-fka-model-container.json",
           "kind": "scenario-report"
         }
       ],

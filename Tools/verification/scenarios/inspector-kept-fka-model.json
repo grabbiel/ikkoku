@@ -1,0 +1,138 @@
+{
+  "steps": [],
+  "inspectorUI": {
+    "steps": [
+      {
+        "op": "select",
+        "key": 0
+      },
+      {
+        "op": "assert",
+        "key": 0,
+        "field": "name",
+        "fieldText": "Source character 0",
+        "inspectorView": "ObjectInspector",
+        "editing": false
+      },
+      {
+        "op": "keyLoop",
+        "keptKeyViews": 0,
+        "fkaModel": true
+      },
+      {
+        "op": "deselect"
+      },
+      {
+        "op": "assert",
+        "inspectorView": "none",
+        "axContains": [
+          "Nothing selected"
+        ],
+        "responderHidden": false
+      },
+      {
+        "op": "keyLoop",
+        "keptKeyViews": 0,
+        "fkaModel": true
+      },
+      {
+        "op": "select",
+        "key": 963
+      },
+      {
+        "op": "keyLoop",
+        "keptKeyViews": 0,
+        "fkaModel": true
+      },
+      {
+        "op": "select",
+        "key": 622
+      },
+      {
+        "op": "keyLoop",
+        "keptKeyViews": 0,
+        "fkaModel": true
+      },
+      {
+        "op": "select",
+        "key": 0
+      },
+      {
+        "op": "focus",
+        "field": "name"
+      },
+      {
+        "op": "type",
+        "text": " F"
+      },
+      {
+        "op": "assert",
+        "key": 0,
+        "name": "Source character 0 F",
+        "editing": true
+      },
+      {
+        "op": "snapshot"
+      },
+      {
+        "op": "deselect"
+      },
+      {
+        "op": "assert",
+        "key": 0,
+        "name": "Source character 0 F",
+        "unchanged": true,
+        "editing": false,
+        "responderHidden": false
+      },
+      {
+        "op": "type",
+        "text": "Q"
+      },
+      {
+        "op": "assert",
+        "key": 0,
+        "name": "Source character 0 F",
+        "unchanged": true,
+        "editing": false,
+        "responderHidden": false
+      },
+      {
+        "op": "keyLoop",
+        "keptKeyViews": 0,
+        "fkaModel": true
+      },
+      {
+        "op": "cycle",
+        "keys": [
+          0,
+          -1,
+          963,
+          -1,
+          622,
+          -1,
+          0
+        ],
+        "count": 2
+      },
+      {
+        "op": "assert",
+        "editing": false,
+        "responderHidden": false
+      },
+      {
+        "op": "keyLoop",
+        "keptKeyViews": 0,
+        "fkaModel": true
+      },
+      {
+        "op": "deselect"
+      },
+      {
+        "op": "keyLoop",
+        "keptKeyViews": 0,
+        "fkaModel": true
+      }
+    ]
+  }
+}

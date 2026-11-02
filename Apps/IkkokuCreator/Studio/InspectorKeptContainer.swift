@@ -114,9 +114,12 @@ final class InspectorKeptContainerView: NSView {
     override func accessibilityChildren() -> [Any]? { isHidden ? [] : super.accessibilityChildren() }
 
     /// Takes the content's new root (nil keeps it) and hides or shows the view.
-    /// Before it hides, editing in it ends as removing it from the window
-    /// did: a field being edited loses its field editor without the
-    /// end-of-editing commit (`InspectorKeptViews.didHide` does the rest).
+    /// Before it hides, the window takes the first responder from anything in
+    /// it. A field being edited ends editing as when the window takes it: its
+    /// end-of-editing commit writes nothing, since the inspector writes only
+    /// to the object it shows and that is no longer the selection, and the
+    /// field shows its value formatted again, as item 7's disabled fields do.
+    /// (`InspectorKeptViews.didHide` does the rest.)
     func update(rootView: AnyView?, hidden: Bool) {
         if let rootView {
             controller.rootView = rootView
@@ -163,16 +166,51 @@ final class InspectorKeptContainerView: NSView {
         superview?.needsLayout = true
     }
 
+    /// The first responder as a view: a field being edited counts as its field.
+    private static func responderView(_ window: NSWindow) -> NSView? {
+        if let editor = window.firstResponder as? NSTextView, editor.isFieldEditor { return editor.delegate as? NSView }
+        return window.firstResponder as? NSView
+    }
+
+    /// The kept container `view` lies in, if any.
+    static func enclosing(_ view: NSView) -> InspectorKeptContainerView? {
+        sequence(first: view, next: \.superview).lazy.compactMap { $0 as? InspectorKeptContainerView }.first
+    }
+
     private func releaseFirstResponder() {
-        guard let window else { return }
-        let responder = window.firstResponder
-        if let editor = responder as? NSTextView, editor.isFieldEditor,
-           let field = editor.delegate as? NSTextField, field.isDescendant(of: self) {
-            field.abortEditing()
-            if window.firstResponder !== window { window.makeFirstResponder(nil) }
-        } else if let view = responder as? NSView, view.isDescendant(of: self) {
-            window.makeFirstResponder(nil)
+        guard let window, let view = Self.responderView(window), view.isDescendant(of: self) else { return }
+        window.makeFirstResponder(nil)
+    }
+
+    // A hidden container's views are out of the key-view loop and the reach of
+    // clicks, but `makeFirstResponder` still accepts an enabled one, as SwiftUI
+    // focus or other code could ask. The container watches its window's first
+    // responder and gives it back to the window, without the end-of-editing
+    // commit, as soon as it lands inside while hidden. The change is reported
+    // inside `makeFirstResponder`, so nothing runs with the focus inside.
+
+    /// How many times a hidden container gave the first responder back
+    /// (read by the inspector scenario).
+    static var guardResigns = 0
+    private var responderObservation: NSKeyValueObservation?
+    private var resigning = false
+
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        responderObservation = window?.observe(\.firstResponder, options: []) { [weak self] window, _ in
+            MainActor.assumeIsolated { self?.firstResponderChanged(in: window) }
         }
+    }
+
+    private func firstResponderChanged(in window: NSWindow) {
+        // `resigning`: the window taking the first responder back reports
+        // another change, while this one is still being handled.
+        guard isHidden, !resigning, let view = Self.responderView(window), view.isDescendant(of: self) else { return }
+        resigning = true
+        defer { resigning = false }
+        Self.guardResigns += 1
+        if let field = view as? NSTextField, field.currentEditor() != nil { field.abortEditing() }
+        if window.firstResponder !== window { window.makeFirstResponder(nil) }
     }
 }
 

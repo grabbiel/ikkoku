@@ -131,7 +131,10 @@
         "unchanged": true,
         "editing": false,
         "inspectorView": "none",
-        "responderHidden": false
+        "responderHidden": false,
+        "undoCount": 5,
+        "redoCount": 0,
+        "undoTopUnchanged": true
       },
       {
         "op": "select",
@@ -144,7 +147,10 @@
         "fieldText": "2.250",
         "positionX": 2.25,
         "unchanged": true,
-        "editing": false
+        "editing": false,
+        "undoCount": 5,
+        "redoCount": 0,
+        "undoTopUnchanged": true
       },
       {
         "op": "press",

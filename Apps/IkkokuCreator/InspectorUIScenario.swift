@@ -23,7 +23,8 @@ struct InspectorUIScenario: Decodable {
         /// title, a section's disclosure triangle), `"activateWell"` (activates the
         /// inspector's first visible colour well), `"routePoint"` (`index`: selects
         /// that point of the selected route) and `"closeColorPanel"`. C1 adds the
-        /// `responderHidden` and `fullKeyboardAccess` assertions and `keptKeyViews`.
+        /// `responderHidden`, `fullKeyboardAccess` and `undoTopUnchanged` assertions,
+        /// and `keptKeyViews` and `fkaModel` for keyLoop.
         let op: String
         let key: Int32?
         let keys: [Int32]?
@@ -72,6 +73,12 @@ struct InspectorUIScenario: Decodable {
         let fullKeyboardAccess: Bool?
         /// keyLoop only: how many key views in the loop may lie in a hidden kept view.
         let keptKeyViews: Int?
+        /// keyLoop only: walk `keyViewModel(_:)`, a model of the loop with Full
+        /// Keyboard Access on, instead of AppKit's loop.
+        let fkaModel: Bool?
+        /// The top undo entry (a whole document; entries have no names) is the
+        /// one the last `snapshot` saw.
+        let undoTopUnchanged: Bool?
     }
 
     let steps: [Step]
@@ -111,7 +118,7 @@ struct InspectorUIScenario: Decodable {
             guard let key else { return nil }
             return studio.doc.flattened().map(\.object).first { $0.sourceObjectKey == key }
         }
-        var snapshot: (doc: StudioDocument, undo: Int, redo: Int)?
+        var snapshot: (doc: StudioDocument, undo: Int, redo: Int, top: StudioDocument?)?
         var probe: (field: NSTextField, center: CGPoint)?
 
         for step in steps {
@@ -211,8 +218,14 @@ struct InspectorUIScenario: Decodable {
                 await settle()
                 record(step.op, true, "colour panel closed")
             case "snapshot":
-                snapshot = (studio.doc, studio.undoStack.count, studio.redoStack.count)
+                snapshot = (studio.doc, studio.undoStack.count, studio.redoStack.count, studio.undoStack.last)
                 record(step.op, true, "undo \(studio.undoStack.count), redo \(studio.redoStack.count)")
+            case "keyLoop" where step.fkaModel == true:
+                let model = Self.keyViewModel(window)
+                let ok = step.keptKeyViews.map { model.kept <= $0 } ?? true
+                record(step.op, ok, "Full Keyboard Access model (not AppKit's loop): \(model.views.count) key views, "
+                    + "\(model.kept) in a hidden kept view, \(model.leftOut) more under hidden views, sha \(model.sha): "
+                    + model.views.joined(separator: " > "))
             case "keyLoop":
                 let loop = Self.keyLoop(window)
                 let ok = (step.hiddenKeyViews.map { loop.hidden <= $0 } ?? true) && (step.keyViews.map { loop.views.count == $0 } ?? true)
@@ -247,6 +260,11 @@ struct InspectorUIScenario: Decodable {
                         }
                     } else { problems.append("no snapshot") }
                 }
+                if step.undoTopUnchanged == true {
+                    if let snapshot {
+                        if snapshot.top != studio.undoStack.last { problems.append("the top undo entry changed since the snapshot") }
+                    } else { problems.append("no snapshot") }
+                }
                 if let editing = step.editing, editing != (editedField != nil) { problems.append("editing \(editedField != nil), expected \(editing)") }
                 if let view = step.inspectorView, view != studio.displayedInspectorView { problems.append("inspector \(studio.displayedInspectorView ?? "nil"), expected \(view)") }
                 for text in step.axContains ?? [] where !ax.contains(where: { $0.contains(text) }) { problems.append("no accessibility element shows '\(text)'") }
@@ -279,8 +297,13 @@ struct InspectorUIScenario: Decodable {
                         seen.append("probe hit \(hit.map { Self.describe($0) } ?? "nil")")
                         if let expected = step.probeHit, expected != reaches { problems.append("probe hit \(reaches), expected \(expected)") }
                         if let expected = step.probeFocusable {
+                            let resigns = InspectorKeptContainerView.guardResigns
                             let focused = window.makeFirstResponder(probe.field) && Self.editedField(window) === probe.field
-                            seen.append("probe focusable \(focused)")
+                            // C1's container mode: a hidden container gives the first responder back inside
+                            // makeFirstResponder, so the state right after the call shows whether that held.
+                            seen.append("probe focusable \(focused), then responder \(Self.describe(window.firstResponder)), "
+                                + "field editor on the probed field \(probe.field.currentEditor() != nil), "
+                                + "kept containers gave it back \(InspectorKeptContainerView.guardResigns - resigns) times")
                             if focused { window.makeFirstResponder(nil) }
                             if expected != focused { problems.append("probe focusable \(focused), expected \(expected)") }
                         }
@@ -436,6 +459,40 @@ struct InspectorUIScenario: Decodable {
         }
         window.makeFirstResponder(nil)
         return (views, hidden, kept, closed, sha(views))
+    }
+
+    /// A model of the Tab loop with Full Keyboard Access on (C1), for this
+    /// process alone: `NSApp.isFullKeyboardAccessEnabled` ignores
+    /// `-AppleKeyboardUIMode` in the argument domain (macOS 27.0.1), so AppKit's
+    /// real loop with it on needs Keyboard navigation turned on in System
+    /// Settings. With it on, a control takes the keyboard when it is enabled
+    /// and does not refuse it, a text field when it is enabled and editable or selectable,
+    /// and any other view when it accepts the first responder; AppKit then
+    /// leaves out a view that is hidden or has a hidden ancestor. `views` names
+    /// the rest in window order, `kept` counts those that lie in a hidden kept
+    /// view (`hiddenSection(_:)`), and `leftOut` those only a hidden ancestor
+    /// keeps out. A model, not AppKit's walk: focus SwiftUI keeps without an
+    /// AppKit view is not in it.
+    @MainActor static func keyViewModel(_ window: NSWindow) -> (views: [String], kept: Int, leftOut: Int, sha: String) {
+        var views: [String] = [], kept = 0, leftOut = 0
+        func visit(_ view: NSView) {
+            let takesKeyboard: Bool
+            if let field = view as? NSTextField { takesKeyboard = field.isEnabled && field.acceptsFirstResponder }
+            else if let control = view as? NSControl { takesKeyboard = control.isEnabled && !control.refusesFirstResponder }
+            else { takesKeyboard = view.acceptsFirstResponder }
+            if takesKeyboard {
+                if view.isHiddenOrHasHiddenAncestor {
+                    leftOut += 1
+                } else {
+                    if hiddenSection(view) != nil { kept += 1 }
+                    let frame = view.convert(view.bounds, to: nil)
+                    views.append("\(describe(view))@\(Int(frame.minX)),\(Int(frame.minY))")
+                }
+            }
+            view.subviews.forEach(visit)
+        }
+        if let content = window.contentView { visit(content) }
+        return (views, kept, leftOut, sha(views))
     }
 
     /// The most views `keyLoop` visits; item 7's loops have 2 to 12 without
