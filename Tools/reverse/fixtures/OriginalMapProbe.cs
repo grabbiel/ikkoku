@@ -107,7 +107,15 @@
 //   that may be the dynamic lightmaps, read back (RealtimeLightmaps) and digested again RealtimeSettleFrames
 //   later ("realtimeLightmapsLater"); then, for the other two sun types in turn (Map.sunType, as authored),
 //   the same read-back after RealtimeSettleFrames and its digest that many frames later
-//   (oracle-<case>-realtime-sun<type>-<n>.rgba.f32, "realtimeLightmapsOtherSunTypes").
+//   (oracle-<case>-realtime-sun<type>-<n>.rgba.f32, "realtimeLightmapsOtherSunTypes"). Each sun type's entry
+//   also records RenderSettings there ("renderSettings"), and the record the restored type's
+//   ("restoredRenderSettings"), so the runtime ambient probe is read under every sun type (maps slice 5).
+// - Slice 5 read-backs (read only, nothing set): every RenderSettings record carries RenderSettings.ambientProbe
+//   as 27 floats in the serialized m_AmbientProbe order ("ambientProbe"); every light record carries its
+//   runtime shadowBias, shadowNormalBias, shadowNearPlane, shadowResolution and shadowCustomResolution; and
+//   each capture records the quality level's shadow settings ("shadowQuality": level and name, shadows,
+//   shadowResolution, shadowProjection, shadowDistance, shadowCascades and both split settings,
+//   shadowNearPlaneOffset).
 // - Vanish. Each case's vanish record adds what the trigger needs ("physics": the camera object's layer and
 //   its collision-matrix row, Time.timeScale and the fixed step, its rigidbody, the LateUpdate gate, and the
 //   Map-layer colliders the view capsule overlaps by Physics.OverlapCapsule). After the case's images the
@@ -552,11 +560,12 @@ public sealed class OriginalMapProbe:BaseUnityPlugin {
                     for(int i=0;i<RealtimeSettleFrames;i++)yield return null;
                     var read=RealtimeLightmaps(label,"-sun"+(int)type,true);
                     for(int i=0;i<RealtimeSettleFrames;i++)yield return null;
-                    others[((int)type).ToString(CultureInfo.InvariantCulture)]=K("sunType",(int)type,"lights",Lights(),"textures",read,"later",RealtimeLightmaps(label,"",false));
+                    others[((int)type).ToString(CultureInfo.InvariantCulture)]=K("sunType",(int)type,"lights",Lights(),"textures",read,"later",RealtimeLightmaps(label,"",false),
+                        "renderSettings",RenderSettingsRecord()); // slice 5: the ambient probe under this sun type, settled
                 }
                 map.sunType=current;
                 for(int i=0;i<RealtimeSettleFrames;i++)yield return null;
-                record["realtimeLightmapsOtherSunTypes"]=K("restoredSunType",(int)current,"bySunType",others);
+                record["realtimeLightmapsOtherSunTypes"]=K("restoredSunType",(int)current,"bySunType",others,"restoredRenderSettings",RenderSettingsRecord());
             }
         }
         if(mapsMode) {
@@ -657,6 +666,7 @@ public sealed class OriginalMapProbe:BaseUnityPlugin {
             "lights",Lights(),"lightmaps",Lightmaps(),"renderSettings",RenderSettingsRecord(),"sunLightInfo",SunRecord(),
             "quality",K("pixelLightCount",QualitySettings.pixelLightCount,"shadows",QualitySettings.shadows.ToString(),"antiAliasing",QualitySettings.antiAliasing,
                 "masterTextureLimit",QualitySettings.masterTextureLimit,"anisotropicFiltering",QualitySettings.anisotropicFiltering.ToString()),
+            "shadowQuality",ShadowQuality(),
             "images",new[]{"original-"+label+"-color.png","original-"+label+"-map-geometry.png","original-"+label+"-map-depth-normals.png"});
     }
     // Phase C: one uploaded record read back and measured (see the header).
@@ -1093,8 +1103,26 @@ public sealed class OriginalMapProbe:BaseUnityPlugin {
         var lights=new List<object>();
         foreach(var l in FindObjectsOfType<Light>())lights.Add(K("path",TPath(l.transform),"scene",l.gameObject.scene.name,"type",l.type.ToString(),"enabled",l.enabled,
             "active",l.gameObject.activeInHierarchy,"color",C(l.color),"intensity",l.intensity,"range",l.range,"spotAngle",l.spotAngle,"shadows",l.shadows.ToString(),
-            "shadowStrength",l.shadowStrength,"cullingMask",l.cullingMask,"eulerAngles",V(l.transform.eulerAngles),"forward",V(l.transform.forward),"position",V(l.transform.position)));
+            "shadowStrength",l.shadowStrength,"cullingMask",l.cullingMask,"eulerAngles",V(l.transform.eulerAngles),"forward",V(l.transform.forward),"position",V(l.transform.position),
+            // Slice 5: the runtime shadow state, to compare with the scene files' m_Shadows.
+            "shadowBias",l.shadowBias,"shadowNormalBias",l.shadowNormalBias,"shadowNearPlane",l.shadowNearPlane,
+            "shadowResolution",l.shadowResolution.ToString(),"shadowCustomResolution",l.shadowCustomResolution));
         return lights;
+    }
+    // Slice 5: the quality level's shadow settings (read only), which size and place the sun's shadow map.
+    static Dictionary<string,object> ShadowQuality() {
+        int level=QualitySettings.GetQualityLevel();var names=QualitySettings.names;
+        return K("level",level,"name",level>=0&&level<names.Length?names[level]:null,"shadows",QualitySettings.shadows.ToString(),
+            "shadowResolution",QualitySettings.shadowResolution.ToString(),"shadowProjection",QualitySettings.shadowProjection.ToString(),
+            "shadowDistance",QualitySettings.shadowDistance,"shadowCascades",QualitySettings.shadowCascades,
+            "shadowCascade2Split",QualitySettings.shadowCascade2Split,"shadowCascade4Split",V(QualitySettings.shadowCascade4Split),
+            "shadowNearPlaneOffset",QualitySettings.shadowNearPlaneOffset);
+    }
+    // Slice 5: RenderSettings.ambientProbe as 27 floats in the serialized m_AmbientProbe order (red 0-8, green 9-17, blue 18-26).
+    static List<object> AmbientProbe() {
+        var sh=RenderSettings.ambientProbe;var values=new List<object>();
+        for(int c=0;c<3;c++)for(int i=0;i<9;i++)values.Add(sh[c,i]);
+        return values;
     }
     static Dictionary<string,object> Lightmaps() {
         var maps=new List<object>();
@@ -1109,7 +1137,7 @@ public sealed class OriginalMapProbe:BaseUnityPlugin {
             "fogStartDistance",RenderSettings.fogStartDistance,"fogEndDistance",RenderSettings.fogEndDistance,
             "skybox",RenderSettings.skybox==null?null:K("name",RenderSettings.skybox.name,"shader",RenderSettings.skybox.shader==null?null:RenderSettings.skybox.shader.name),
             "sun",RenderSettings.sun==null?null:TPath(RenderSettings.sun.transform),"reflectionIntensity",RenderSettings.reflectionIntensity,
-            "defaultReflectionMode",RenderSettings.defaultReflectionMode.ToString());
+            "defaultReflectionMode",RenderSettings.defaultReflectionMode.ToString(),"ambientProbe",AmbientProbe());
     }
     object SunRecord() {
         var info=map.sunLightInfo;if(info==null)return null;

@@ -1046,6 +1046,11 @@ Tests (`test_compare_original_map.py`): a floor whose depth changes only by row 
   - the Map-layer colliders the view capsule overlaps by `Physics.OverlapCapsule`.
 
   After the images, the probe waits five physics steps and records the vanish state again. It then runs a trigger experiment: kinematic trigger capsules like the view capsule, on the camera's layer and on layer 0, with the raw and the absolute height. Every wait counts fixed steps for at most 3 real seconds, because none runs while `Time.timeScale` is 0. In that case the probe records the vanish state once more with the time scale at 1. The player's physics settings file is not on this machine or in the archive, so the collision matrix is read at run time.
+- **Slice 5 read-backs.** Read only: the probe sets nothing for them. They are what maps slice 5 (the realtime sun, ambient and shadows) still needs from the player:
+  - every RenderSettings record carries `RenderSettings.ambientProbe` as 27 floats, in the serialized `m_AmbientProbe` order (red 0–8, green 9–17, blue 18–26);
+  - for a map with dynamic lightmaps, each other sun type's entry records RenderSettings after it settles, and the record ends with the restored type's (`restoredRenderSettings`), so the runtime ambient probe is read under every sun type;
+  - every light record carries its runtime `shadowBias`, `shadowNormalBias`, `shadowNearPlane`, `shadowResolution` and `shadowCustomResolution`, to compare with the scene files' `m_Shadows`;
+  - each capture records the quality level's shadow settings (`shadowQuality`): the level and its name, `shadows`, `shadowResolution`, `shadowProjection`, `shadowDistance`, `shadowCascades`, both split settings and `shadowNearPlaneOffset`.
 - **Four new cases.** Maps 30, 32 and 37 carry dynamic lightmaps and had no case. Their cameras use the pivot (0, 1.1, 0), pitch 8° and 3 m, with the yaw that leaves the most free room behind the pivot on the exported glTF: 165°, 60° and 180°. A second map 40 camera looks down at 35° from 5 m over its densest cluster of `Unlit/Transparent` road shadows, and 95% of a 32×24 ray grid lands on them. The maps mode now has 24 cases and the showoff case.
 
 ## Performance
