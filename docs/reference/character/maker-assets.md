@@ -1273,9 +1273,22 @@ The male head 201 / body type 1 card shares eight rigs with the female session
 by bytes, so it carries eight. The decline is still forced with a smaller
 ledger, and the declined geometry still matches `prepare`.
 
+**Timing.** Release medians, base main `69a63513` plus the footprint harness
+against head, n = 4 valid units per sex and arm, composited window:
+
+- Same-card reimport: 669 → 139 ms (female) and 667 → 103 ms (male).
+- Head 200 after the reimports: 738 → 433 ms and 775 → 431 ms (0 / 10 → 9 / 1).
+- The following head 0: 336 → 105 ms and 336 → 106 ms (9 / 1 → 10 / 0).
+- The transient footprint peak is not lower. Each reimport holds 43–45 MiB more
+  in both arms (#332), and head ends the run 16–32 MiB lower.
+
+The [timing record](../performance.md#maker-reimport-rig-carry-192-c-2026-11-01)
+has the validity rules, the reruns and the sampler control.
+
 **Not covered.** Only the replaced session carries; there is no cross-session
 pool or LRU eviction. The 16-entry / 64 MiB / four-snapshot limits are
-unchanged. Timing is measured separately in a composited window.
+unchanged. The scenario runs with live animation off, so there is no FPS or
+live-animation result.
 
 ### Per-component appearance attribution (#192)
 
