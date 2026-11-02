@@ -205,9 +205,11 @@ func sourceMakerCatalogFallbackWritesTheLaneCards() throws {
 }
 
 /// The lane card against its explicit-default twin through the env Maker
-/// library and its installed catalog presence: every hair and clothes
-/// selection falls back to the default, and both cards decode the same rig
-/// files and assemble the same geometry, in the Maker and Studio assemblies.
+/// library and its installed catalog presence. Scope: every saved outfit
+/// resolves the same rig files (`rigFiles`, no decode); outfit 0 is also
+/// assembled in full for the Maker and a Studio wear assembly, where every
+/// edited hair and clothes selection falls back to the default and both
+/// cards build the same rig and geometry. Outfits 1-6 are not assembled.
 @Test(.enabled(if: SourceFixtureSupport.shouldRun(["IKKOKU_MAKER_FALLBACK_CARD", "IKKOKU_MAKER_LIBRARY", "IKKOKU_SOURCE_AVATAR"]),
                "Requires IKKOKU_MAKER_FALLBACK_CARD, IKKOKU_MAKER_LIBRARY and IKKOKU_SOURCE_AVATAR"))
 func sourceMakerCatalogFallbackCardAssemblesItsExplicitDefaults() throws {
