@@ -5559,6 +5559,51 @@ the text fields leaves buttons and pickers in the loop under Full Keyboard
 Access). So it is left for a follow-up; see
 [What remains](#what-remains-after-the-item-7-follow-ups).
 
+### C1, step 0: the composited ceiling (#342)
+
+Before the container was built further, the same ablation (hidden kept
+views stay enabled; never committed) was measured with presentation, on
+`main` `72e981ae`. One Release binary ran shipped and ablated by a launch
+variable, in ABBA order with 4 runs per cell, every run under the app
+lock. The display was 1920 × 1080 at 120 Hz at the start and the end of
+the window. Each value is the median over runs of each run's warm median
+main busy time in ms (the cold first sample is excluded), with the range
+of the run medians; the gain is the difference of the medians.
+
+| action | shipped | kept, not disabled | gain | run medians |
+| --- | ---: | ---: | ---: | --- |
+| deselect (from a character) | 61.1 (58.4–61.9) | 43.3 (34.5–51.2) | 17.8 | separate |
+| redo | 103.5 (98.3–105.9) | 93.3 (88.1–94.0) | 10.2 | separate |
+| undo | 92.9 (89.4–97.0) | 84.2 (74.3–88.0) | 8.7 | separate |
+| undo of the redo | 92.3 (87.1–93.3) | 83.3 (77.4–86.3) | 9.0 | separate |
+| select from nothing | 69.5 (51.5–72.6) | 63.0 (48.4–65.8) | 6.5 | overlap |
+| character to character | 29.7 (23.9–34.8) | 27.9 (17.8–33.6) | 1.8 | overlap |
+| duplicate | 45.4 (42.5–47.0) | 48.2 (44.7–50.2) | −2.8 | overlap |
+| deselect (from folder 622) | 46.6 (29.4–51.7) | 36.2 (20.2–39.7) | 10.4 | overlap |
+| select folder 622 | 48.2 (44.8–51.9) | 45.3 (40.2–52.9) | 2.9 | overlap |
+| select from nothing (with folder 622) | 72.2 (54.7–75.2) | 69.0 (67.3–70.3) | 3.2 | overlap |
+
+The first seven rows come from `studio-select` (characters 0 and 963) and
+`studio-redo`, 15 s each; the last three from `studio-select` with
+character 0 and folder 622, 15 s. On the four separating actions every
+ablated run is below every shipped run; the tightest pairs are undo (89.4
+against 88.0) and undo of the redo (87.1 against 86.3). Composited, a
+deselect gains 17.8 ms where the uncomposited ablation above gained about
+9. The other actions are within the run-to-run spread. This is the
+ceiling for C1: its container has to recover at least half of each
+separating gain.
+
+Validity: Firefox's `plugin-container` ran at 44–49% throughout (noted,
+not rerun). Six attempts were rerun for an intruder in the sample taken
+after the run: `syspolicyd` at 21% (under its 30% limit, so that rerun was
+not needed), `mediaanalysisd` at 80%, `corespotlightd` at 83%, 109% and
+115%, and `mds` at 28.5%. Each discarded attempt gives the same verdict as
+its replacement. The ablated unit 7 of the first comparison ran after its
+10 s quiet gate had waited the full 120 s. It is unverified: there are
+samples only before and after it, with no heavy daemon in either. The
+verdict holds without it (the tightest pair is then undo of the redo,
+87.1 against 85.0).
+
 ### Measurements (item 7 follow-ups)
 
 **Composited (window 2, the primary result).** 2026-11-01, 16:43–17:06,
@@ -5752,16 +5797,18 @@ refresh in head.
 
 ### What remains after the item 7 follow-ups
 
-- **Hiding without disabling (C1).** Prototype first a container `NSView`
-  per kept section that is set hidden while the section is: hidden views
-  leave the key-view loop and the accessibility tree whatever SwiftUI
-  builds inside them. Fall back to marking the section's controls
-  `refusesFirstResponder` only if the container fails the captures or
-  costs more than it saves. Either way, add a Debug check that after each
-  run-loop turn no key-eligible view and no accessibility element lies in
-  a hidden kept section, run the scenario with Full Keyboard Access on,
-  measure only with a composited window, and keep it off by default behind
-  a control until it is proven.
+- **Hiding without disabling (C1).** In progress in #342. Its
+  [step 0](#c1-step-0-the-composited-ceiling-342) measured a composited
+  ceiling of 17.8 ms per deselect and 8.7–10.2 ms per undo or redo. #342
+  puts each kept view in an AppKit container that is set hidden while it
+  is: hidden views leave the key-view loop and the accessibility tree
+  whatever SwiftUI builds inside them. It is off by default behind
+  `IKKOKU_PERF_KEPT_HIDING`, with a Debug check that no hidden container
+  is in the key-view loop, holds the first responder or is reachable
+  through the accessibility tree, and scenario checks in both modes and
+  with Full Keyboard Access on. Fall back to marking the section's
+  controls `refusesFirstResponder` only if the container fails the
+  captures or costs more than it saves.
 - **The Clothes tab drawn wider than the inspector.** After a select of
   character 0, folder 622 and character 963 on the Clothes tab
   (`ui-sel-clothes`), the tab's content is sometimes laid out wider than
