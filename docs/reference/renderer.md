@@ -404,9 +404,9 @@ are in [maps: slice 3](studio/maps.md#map-34-the-sky-and-block-images-slice-3).
   texture`. It is alpha blended in the transparent pass with both faces drawn,
   and reads no lightmap.
 - **Sampler state.** `map_fragment` samples the light map and direction map
-  (`lightmapSampler`) and the base, emission and particle textures
-  (`mapForcedAnisoRepeat`) with linear filtering, linear mips and
-  `max_anisotropy(9)`.
+  (`forcedAnisoClamp`) and the base, emission and particle textures
+  (`forcedAnisoRepeat`) with linear filtering, linear mips and
+  `max_anisotropy(9)`. Both samplers are in `Common.h`.
   - **Why 9.** The original player runs `QualitySettings.anisotropicFiltering`
     ForceEnable, which raises every texture to Unity's forced minimum of 9.
     The phase-map34 trace (`.local/sta11c-map34/phase-map34/map-trace.json`)
@@ -418,11 +418,29 @@ are in [maps: slice 3](studio/maps.md#map-34-the-sky-and-block-images-slice-3).
     differs by +0.005–0.007 ms of GPU per frame at 1996×1824. That is inside
     the offscreen benchmark's run-to-run range
     ([performance: slice 3](performance.md#slice-3-map-34-the-sky-and-block-images)).
-  - **Characters and items** keep `linearRepeat` (no anisotropy).
+  - **Characters and items** sample the same way since 2026-11-01. The
+    character and Studio item textures are mipmapped, Bilinear or Trilinear,
+    with `anisoLevel` 1 (the live store's 64; 1,034 of the 1,105 in
+    `studio/mat/00.unity3d`), so the player forces them to 9 too. The
+    `toon_fragment` base (repeat, and clamp for irises), colour mask, pattern,
+    overlays, iris highlights, normal, detail and line samples, `eye_fragment`'s
+    iris, white and highlight, the body mask, and the outline and shadow-caster
+    alpha tests now use `forcedAnisoRepeat` or `forcedAnisoClamp`. Screen-space
+    passes keep `linearClamp`. The glTF exports carry no sampler state, so the
+    few Point, aniso-0 or single-level textures the player leaves alone are
+    forced too. Before, they sampled trilinear, which matched the player no
+    better.
   - **Test.** `mapTexturesSampleWithThePlayersForcedAnisotropy` draws a
     16:1 texture footprint over a texture whose levels 0–1 are white and the
     rest black. Each map texture reads 1. `max_anisotropy` 1–4 reads 0 on
     Apple GPUs.
+  - **Test (characters and items).** `characterAndItemTexturesSampleWithThePlayersForcedAnisotropy`
+    draws the same footprint through every slot above. Each draw with the
+    level texture must equal the draw with an all-white texture there, and
+    the all-white and all-black draws must differ.
+    `lowAnisotropyReadsTheCoarseLevelsOfTheProbeTexture` is the control: with
+    the forced samplers at anisotropy 1 or 4, the base slot reads the coarse
+    levels.
 - **Block images.** `SourceStudioBlockImages` parses the glTF's
   `ikkokuBlockImages`. `SourceStudioBlockTexture.make` (slice 2's lightmap
   upload, generalised) uploads BC1 and BC3 images (`.bc1_rgba(_srgb)`,
