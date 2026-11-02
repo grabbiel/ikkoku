@@ -11,6 +11,7 @@ import ShaderTypes
 import GPU
 import Character
 import Studio
+@testable import Scene
 @testable import Renderer
 
 // R1/CMT-04 live source-shader path. Synthetic translated programs (written in
@@ -498,6 +499,161 @@ func liveSourceDrawsRunInTheProductionMainPassAndLeaveToonFramesUnchanged() thro
     // The live draw replaced the toon draw; a frame without live items renders as before.
     #expect(live != toonBefore)
     #expect(toonAfter == toonBefore)
+}
+
+/// A skinned one-triangle rig whose mesh carries native UV1 (the `live_uv`
+/// program reads TEXCOORD1), so its preview items draw live once deformed.
+private func liveSkinnedRig() throws -> SourceRig {
+    let rig = try RigDefinition(nodes: [
+        .init(name: "mesh", sourceID: "mesh", parent: nil),
+        .init(name: "joint", sourceID: "joint", parent: nil)], skins: [
+            .init(name: "skin", meshNode: 0, joints: [1], inverseBindMatrices: [matrix_identity_float4x4])])
+    let mesh = MeshData(name: "o_uv/0", positions: [.zero, Float3(1, 0, 0), Float3(0, 1, 0)],
+                        normals: [Float3](repeating: Float3(0, 0, 1), count: 3),
+                        uvs: [Float2](repeating: Float2(0.25, 0.25), count: 3), uvs1: [Float2](repeating: Float2(1, 1), count: 3),
+                        joints: [SIMD4<UInt16>](repeating: .zero, count: 3),
+                        weights: [Float4](repeating: Float4(1, 0, 0, 0), count: 3), indices: [0, 1, 2])
+    return SourceRig(sourcePrefab: "live", rig: rig, parts: [SourceRig.Part(mesh: mesh, node: 0, skin: 0, rendererEnabled: true)],
+                     morphChannelCount: 0)
+}
+
+/// #337: the live encoder's converted inputs leave with their vertex source,
+/// on the store's release events. A skinned preview's (deformed) inputs go with
+/// its deformation keys when it is dropped, a static mesh's with the mesh when
+/// it is unregistered or its retirement completes. Building and dropping these
+/// owners repeatedly returns the encoder to its baseline; a frame prepared
+/// after a release, which still names the released resources, re-creates none.
+@Test(.enabled(if: MTLCreateSystemDefaultDevice() != nil))
+func liveSourceInputBuffersLeaveWithTheirMeshesAndDeformationKeys() throws {
+    let renderer = try makeLiveTestRenderer()
+    let resources = renderer.resources
+    let directory = try LiveProgramFixture.temporaryDirectory()
+    defer { try? FileManager.default.removeItem(at: directory) }
+    let program = try resources.translatedPipelines.program(url: try LiveProgramFixture.write(LiveProgramFixture.uv, family: "live_uv", to: directory))
+    let material = SourceShaderLiveMaterial(label: "o_uv slot 0", family: "live_uv", queue: 2000, passes: [program],
+                                            vectors: ["_Color": [0, 0, 1, 1]], textures: [:], conventions: [], textureSources: [:])
+    func live(_ item: RenderItem) -> RenderItem {
+        var item = item
+        item.sourceShader = SourceShaderLiveDraw(material: material, streams: nil, sourceOrder: 0)
+        return item
+    }
+    func staticItem(_ mesh: MeshHandle) -> RenderItem {
+        live(RenderItem(mesh: mesh, material: MaterialState(uniforms: .make(kind: MaterialKindItem)), model: matrix_identity_float4x4, objectID: 2))
+    }
+    func frame(_ items: [RenderItem], skinSets: [UInt64: [float4x4]] = [:], submitted: Bool = false) -> RenderFrame {
+        var frame = RenderFrame(items: items)
+        frame.skinSets = skinSets
+        frame.submitted = submitted
+        return frame
+    }
+    func liveDraws(_ items: [RenderItem], submitted: Bool = false) throws -> Int {
+        try liveDraws(frame(items, submitted: submitted))
+    }
+    func liveDraws(_ frame: RenderFrame) throws -> Int {
+        _ = try #require(renderer.capture(frame: frame, width: 8, height: 8))
+        let frameError = renderer.lastFrameError
+        #expect(frameError == nil, "\(String(describing: frameError))")
+        return renderer.lastSourceShaderLive.draws
+    }
+    let cover = coverMesh("o_uv/0", uvs1: Array(repeating: Float2(1, 1), count: 3))
+
+    // A live mesh that stays registered throughout: no release evicts it.
+    let kept = staticItem(try resources.register(mesh: cover))
+    #expect(try liveDraws([kept]) == 1)
+    let encoder = try #require(renderer.liveEncoder)
+    let baseline = encoder.bufferCount
+    #expect(baseline == 1)
+
+    /// One build-draw-drop cycle per owner kind; `hold` keeps the owners
+    /// instead (the control), so their inputs must stay.
+    func cycle(hold: inout [SourceRigPreview], holdMeshes: inout [MeshHandle], holding: Bool) throws {
+        let before = encoder.bufferCount
+        // A skinned preview: dropping it unregisters its meshes and releases
+        // its deformation keys (`SourceRigPreview.deinit`).
+        var preview: SourceRigPreview? = try SourceRigPreview(source: liveSkinnedRig(), contract: nil, resources: resources)
+        let previewFrame = try #require(preview).frame(camera: OrbitCamera())
+        let previewItems = previewFrame.items.map(live)
+        #expect(previewItems.count == 1 && previewItems.allSatisfy { $0.deformKey != nil })
+        // A static mesh unregistered at once, and one retired (Studio maps and
+        // library assets), which completes when a later submitted frame is prepared.
+        let dropped = try resources.register(mesh: cover), retired = try resources.register(mesh: cover)
+        let all = frame([kept] + previewItems + [staticItem(dropped), staticItem(retired)], skinSets: previewFrame.skinSets)
+        #expect(try liveDraws(all) == 4)
+        #expect(encoder.bufferCount == before + 3)
+
+        if holding {
+            hold.append(try #require(preview)); holdMeshes += [dropped, retired]
+            return
+        }
+        preview = nil
+        resources.unregister(mesh: dropped)
+        resources.retire(meshes: [retired])
+        #expect(encoder.bufferCount == before + 1) // the retired mesh's frames may still be pending
+        #expect(try liveDraws([kept], submitted: true) == 1)
+        #expect(encoder.bufferCount == before)
+        // A frame built before the releases skips the released meshes.
+        #expect(try liveDraws(all) == 1)
+        #expect(encoder.bufferCount == before)
+    }
+
+    var held: [SourceRigPreview] = [], heldMeshes: [MeshHandle] = []
+    for _ in 0..<8 { try cycle(hold: &held, holdMeshes: &heldMeshes, holding: false) }
+    #expect(encoder.bufferCount == baseline)
+
+    // Control: owners that are kept keep their inputs, so the count grows.
+    for _ in 0..<3 { try cycle(hold: &held, holdMeshes: &heldMeshes, holding: true) }
+    #expect(encoder.bufferCount == baseline + 9)
+    held.removeAll()
+    for mesh in heldMeshes { resources.unregister(mesh: mesh) }
+    #expect(encoder.bufferCount == baseline)
+    #expect(try liveDraws([kept]) == 1)
+    #expect(encoder.bufferCount == baseline)
+
+    // A deformed entry leaves with its mesh or with its deformation key,
+    // whichever an owner releases first.
+    let preview = try SourceRigPreview(source: liveSkinnedRig(), contract: nil, resources: resources)
+    let previewFrame = try preview.frame(camera: OrbitCamera())
+    let previewItem = try #require(previewFrame.items.first)
+    let previewKey = try #require(previewItem.deformKey)
+    #expect(try liveDraws(frame([kept, live(previewItem)], skinSets: previewFrame.skinSets)) == 2)
+    #expect(encoder.bufferCount == baseline + 1)
+    resources.releaseDeformBuffers(keys: [previewKey]) // the mesh stays
+    #expect(encoder.bufferCount == baseline)
+    #expect(try liveDraws(frame([kept, live(previewItem)], skinSets: previewFrame.skinSets)) == 2)
+    #expect(encoder.bufferCount == baseline + 1)
+    resources.unregister(mesh: previewItem.mesh) // the key stays
+    #expect(encoder.bufferCount == baseline)
+
+    // A frame being prepared while its mesh is released (a render thread and
+    // the main thread): the release evicted before the entry existed, so the
+    // new entry is dropped at once; that frame still gets its buffer.
+    let released = try resources.register(mesh: cover)
+    resources.unregister(mesh: released)
+    let layout = try #require(SourceShaderLiveEncoder.layout(program))
+    let raced = renderer.liveInput(encoder, .init(vertices: SourceShaderLiveEncoder.staticSource(mesh: released.id), layout: layout),
+                                   mesh: released, deformKey: nil, vertexCount: 3)
+    #expect(raced != nil)
+    #expect(encoder.bufferCount == baseline)
+
+    // The same race for a deformation key released while its mesh stays
+    // registered: the new entry is dropped because the store no longer holds
+    // the key. While the store holds it, the entry stays.
+    let keyed = try SourceRigPreview(source: liveSkinnedRig(), contract: nil, resources: resources)
+    let keyedFrame = try keyed.frame(camera: OrbitCamera())
+    let keyedItem = try #require(keyedFrame.items.first)
+    let keyedKey = try #require(keyedItem.deformKey)
+    #expect(try liveDraws(frame([kept, live(keyedItem)], skinSets: keyedFrame.skinSets)) == 2)
+    #expect(encoder.bufferCount == baseline + 1)
+    resources.releaseDeformBuffers(keys: [keyedKey])
+    #expect(encoder.bufferCount == baseline)
+    #expect(resources.mesh(keyedItem.mesh) != nil)
+    let keyRaced = renderer.liveInput(encoder, .init(vertices: keyedKey, layout: layout), mesh: keyedItem.mesh, deformKey: keyedKey, vertexCount: 3)
+    #expect(keyRaced != nil)
+    #expect(encoder.bufferCount == baseline)
+    #expect(try liveDraws(frame([kept, live(keyedItem)], skinSets: keyedFrame.skinSets)) == 2)
+    #expect(encoder.bufferCount == baseline + 1)
+    withExtendedLifetime(keyed) {}
+    withExtendedLifetime(preview) {}
 }
 
 @Test(.enabled(if: MTLCreateSystemDefaultDevice() != nil))

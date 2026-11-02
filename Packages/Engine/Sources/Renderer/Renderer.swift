@@ -1069,7 +1069,13 @@ public final class Renderer: @unchecked Sendable {
         var sky: [DrawRecord] = []
         var casters: [DrawRecord] = []
         var deforms: [DeformRecord] = []
-        var deformSeen = Set<UInt64>()
+        // Each deformation key's buffer in this preparation, from the key's
+        // first item. Its other items (one per material pass) draw what that
+        // item's dispatch writes, so they reuse the buffer instead of asking
+        // the store again: a transient buffer (a stale frame, or an owner
+        // dropped mid-preparation, #344) is a new object per request, and a
+        // second request would give a later item an undispatched buffer.
+        var deformed: [UInt64: any MTLBuffer] = [:]
         var deformHeld = 0
         var liveCandidates: [DrawRecord] = []
 
@@ -1092,13 +1098,15 @@ public final class Renderer: @unchecked Sendable {
             }
             var vb: any MTLBuffer = mesh.baseVertices
             if let key = item.deformKey, mesh.needsDeform {
-                guard let buf = resources.deformBuffer(for: key, vertexCount: mesh.vertexCount, frameCreatedAt: frame.createdAt) else {
-                    deformationErrors.append("\(mesh.name): could not allocate deformation buffer \(key)")
-                    continue
-                }
-                vb = buf
-                if !deformSeen.contains(key) {
-                    deformSeen.insert(key)
+                if let first = deformed[key] {
+                    vb = first
+                } else {
+                    guard let buf = resources.deformBuffer(for: key, mesh: item.mesh, vertexCount: mesh.vertexCount, frameCreatedAt: frame.createdAt) else {
+                        deformationErrors.append("\(mesh.name): could not allocate deformation buffer \(key)")
+                        continue
+                    }
+                    vb = buf
+                    deformed[key] = buf
                     let entries = Renderer.activeMorphEntries(item.morphWeights, targetCount: mesh.morphNames.count)
                     let morphs = try frameRing.allocate(array: entries)
                     let skin = mesh.skin != nil ? palette : nil
@@ -1151,7 +1159,7 @@ public final class Renderer: @unchecked Sendable {
         }
         // Records of keys this frame does not use name buffers and meshes that
         // may have been released: drop them, which also releases those.
-        if tracking.track, deformContent.count > deformHeld { deformContent = deformContent.filter { deformSeen.contains($0.key) } }
+        if tracking.track, deformContent.count > deformHeld { deformContent = deformContent.filter { deformed[$0.key] != nil } }
         var liveReport = SourceShaderLiveFrameReport()
         var live = liveCandidates.isEmpty ? [] : prepareLive(liveCandidates, deforms: deforms, report: &liveReport, opaque: &opaque, transparent: &transparent)
         var liveMainPass: LiveMainPass?

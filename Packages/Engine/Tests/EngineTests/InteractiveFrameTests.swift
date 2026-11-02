@@ -454,7 +454,7 @@ extension InteractiveFrameTests {
         #expect(a.0.statistics.deformDispatches == 1)
         weak var released: (any MTLBuffer)?
         autoreleasepool {
-            released = f.renderer.resources.deformBuffer(for: 42, vertexCount: 3)
+            released = f.renderer.resources.deformBuffer(for: 42, mesh: f.mesh, vertexCount: 3)
             f.renderer.resources.releaseDeformBuffers(keys: [42])
         }
         #expect(released != nil, "the record holds the released buffer")

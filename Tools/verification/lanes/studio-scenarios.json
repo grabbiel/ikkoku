@@ -2504,7 +2504,7 @@
         "IKKOKU_STUDIO_SCENARIO_REPORT": ".local/verification/reports/studio-scenario-topology-reparent.json"
       },
       "referenceTier": "app-smoke",
-      "tolerance": "ST-T03/ST-S09 reparenting on koikatu_cs0002591: move item 623 into folder 962, character 65 into folder 626 and item 1129 to the root through the inspector's Parent path, and delete folder 1298 with its character and three items. Each moved record must be appended after its new siblings and keep its world position within 1e-4 m and rotation within 0.01 degrees in session; four undos restore the original tree and four redos repeat it; after export and reimport the tree must match and every moved object (plus an unmoved neighbour) must hold its world pose within 5e-4 m and 0.05 degrees. Negative controls prove the position check fails on a moved capture and on the wrong capture.",
+      "tolerance": "ST-T03/ST-S09 reparenting on source scene `029f0b1d`: move item 623 into folder 962, character 65 into folder 626 and item 1129 to the root through the inspector's Parent path, and delete folder 1298 with its character and three items. Each moved record must be appended after its new siblings and keep its world position within 1e-4 m and rotation within 0.01 degrees in session; four undos restore the original tree and four redos repeat it; after export and reimport the tree must match and every moved object (plus an unmoved neighbour) must hold its world pose within 5e-4 m and 0.05 degrees. Negative controls prove the position check fails on a moved capture and on the wrong capture.",
       "artifacts": [
         {
           "path": ".local/verification/reports/studio-scenario-topology-reparent.json",
@@ -2698,7 +2698,7 @@
         "IKKOKU_STUDIO_SCENARIO_REPORT": ".local/verification/reports/studio-scenario-topology-duplicate.json"
       },
       "referenceTier": "app-smoke",
-      "tolerance": "ST-T03/ST-S09/ST-D03 duplicate and add on koikatu_cs0002591 through the workspace Duplicate and Add buttons: duplicate folder 962 with its character and three items, root item 1540 and folder item 1127, then add a folder, a camera and a point light. Every copy is appended after its original's last sibling and holds its original's world pose within 1e-4 m and 0.01 degrees; six undos restore the original tree and six redos repeat it. After export and reimport the copies and new objects carry the keys an independent Python GetNewIndex walk allocates (113 with 114, 331, 332, 333; 334; 335 in folder 962; 336, 337, 338) and hold their world poses within 5e-4 m and 0.05 degrees. Negative controls prove the position and child-order checks fail on the wrong values.",
+      "tolerance": "ST-T03/ST-S09/ST-D03 duplicate and add on source scene `029f0b1d` through the workspace Duplicate and Add buttons: duplicate folder 962 with its character and three items, root item 1540 and folder item 1127, then add a folder, a camera and a point light. Every copy is appended after its original's last sibling and holds its original's world pose within 1e-4 m and 0.01 degrees; six undos restore the original tree and six redos repeat it. After export and reimport the copies and new objects carry the keys an independent Python GetNewIndex walk allocates (113 with 114, 331, 332, 333; 334; 335 in folder 962; 336, 337, 338) and hold their world poses within 5e-4 m and 0.05 degrees. Negative controls prove the position and child-order checks fail on the wrong values.",
       "artifacts": [
         {
           "path": ".local/verification/reports/studio-scenario-topology-duplicate.json",
@@ -2732,7 +2732,7 @@
         "IKKOKU_STUDIO_SCENARIO_REPORT": ".local/verification/reports/studio-scenario-light-limit.json"
       },
       "referenceTier": "app-smoke",
-      "tolerance": "#320 light limit on koikatu_cs0002591 (no lights): add a point, a spot and a directional light at the root. With the export setting off (CharaStudio 1.0.4.2's two-light limit, SceneInfo.isLightCheck) the export is refused with the light count 3 and no file is written; with it on (KK_Fix_UnlimitedMapLights) the export writes all three lights and the status names the three lights and what a CharaStudio without the fix drops. After reimport the lights carry keys 113, 114 and 115 (the first free keys) after the eight source roots. A negative control proves the child-order check fails without key 115.",
+      "tolerance": "#320 light limit on source scene `029f0b1d` (no lights): add a point, a spot and a directional light at the root. With the export setting off (CharaStudio 1.0.4.2's two-light limit, SceneInfo.isLightCheck) the export is refused with the light count 3 and no file is written; with it on (KK_Fix_UnlimitedMapLights) the export writes all three lights and the status names the three lights and what a CharaStudio without the fix drops. After reimport the lights carry keys 113, 114 and 115 (the first free keys) after the eight source roots. A negative control proves the child-order check fails without key 115.",
       "artifacts": [
         {
           "path": ".local/verification/reports/studio-scenario-light-limit.json",
@@ -3111,7 +3111,7 @@
         "IKKOKU_STUDIO_SCENARIO_REPORT": ".local/verification/reports/studio-scenario-source-map-none.json"
       },
       "referenceTier": "app-smoke",
-      "tolerance": "koikatu_cs0002591.png names no map (-1): with the map catalog supplied there is no map request, no draws and no status line before and after an original-format round trip, and the export is byte-identical to the source. ST-A11.",
+      "tolerance": "Source scene `029f0b1d` names no map (-1): with the map catalog supplied there is no map request, no draws and no status line before and after an original-format round trip, and the export is byte-identical to the source. ST-A11.",
       "artifacts": [
         {
           "path": ".local/verification/reports/studio-scenario-source-map-none.json",
@@ -3235,7 +3235,7 @@
         "IKKOKU_STUDIO_SCENARIO_REPORT": ".local/verification/reports/studio-scenario-inspector-kept-views.json"
       },
       "referenceTier": "app-smoke",
-      "tolerance": "R7 phase 2, item 7, in the window: the Object tab kept while nothing is selected. Its hidden fields take no click, no focus and no typing, and the accessibility tree and the Tab key-view loop show only the placeholder. A field shown again shows the document's value. A collapsed Transform section stays collapsed from one character to the next and is expanded again after nothing was selected, as when the tab was built anew. Selection cycles leave the document and the undo stack unchanged.",
+      "tolerance": "R7 phase 2, item 7, in the window: the Object tab kept while nothing is selected. Its hidden fields take no click, no focus and no typing, and the accessibility tree and the Tab key-view loop show only the placeholder. A field shown again shows the document's value. A collapsed Transform section stays collapsed from one character to the next and is expanded again after nothing was selected, as when the tab was built anew. Selection cycles leave the document and the undo stack unchanged. Item 7 follow-ups: the workspace row follows a mid-session rename and a visibility toggle (C4).",
       "artifacts": [
         {
           "path": ".local/verification/reports/studio-scenario-inspector-kept-views.json",
