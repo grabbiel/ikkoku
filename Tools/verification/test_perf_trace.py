@@ -440,7 +440,8 @@ class PerfTraceTests(unittest.TestCase):
                          "1 actions left an error, the first export: Could not export original scene: x")
         data["workload"] = "studio-idle"
         self.assertIsNone(perf_trace.action_problem(data))
-        for workload in ("studio-outfit", "studio-export", "studio-redo", "studio-load", "studio-select"):
+        for workload in ("studio-outfit", "studio-export", "studio-redo", "studio-load", "studio-select",
+                         "studio-export-import", "studio-show-hidden"):
             self.assertIn(workload, perf_trace.WORKLOADS)
             self.assertIn(workload, perf_trace.INPUTLESS_WORKLOADS)
             self.assertIn(workload, perf_trace.PRESENTATION_EXEMPT)

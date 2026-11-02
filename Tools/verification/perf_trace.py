@@ -50,12 +50,13 @@ import sys
 WORKLOADS = ["studio-idle", "studio-orbit", "studio-fk-drag", "studio-hover",
              "maker-slider", "maker-idle", "studio-native", "viewport-lifecycle", "startup",
              "studio-static", "studio-orbit-bursts", "studio-duplicate", "studio-undo-delete", "studio-timeline",
-             "studio-outfit", "studio-export", "studio-redo", "studio-load", "studio-select"]
+             "studio-outfit", "studio-export", "studio-redo", "studio-load", "studio-select",
+             "studio-export-import", "studio-show-hidden"]
 
 # The workloads that time Studio commands until their background work is done
 # (`details.actions`, R7 phase 2, item 6).
 ACTION_WORKLOADS = {"studio-duplicate", "studio-undo-delete", "studio-redo", "studio-outfit", "studio-export", "studio-load",
-                    "studio-select"}
+                    "studio-select", "studio-export-import", "studio-show-hidden"}
 
 # Fixture variables each workload family reads, by their environment.json
 # names. `IKKOKU_SOURCE_SCENE` comes from the scenario scene, the Maker card
