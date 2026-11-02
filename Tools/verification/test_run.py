@@ -879,15 +879,18 @@ class StudioScenarioLaneTests(unittest.TestCase):
         # process only, through the argument domain, never in System Settings.
         # A scenario that asserts it is on needs the argument, and only those
         # scenarios get it.
-        fka = ["-AppleKeyboardUIMode", "3"]
+        # The arguments after the binary are name/value pairs, so other
+        # per-process settings can sit beside it.
+        fka = ("-AppleKeyboardUIMode", "3")
         for check in self.checks:
             with open(os.path.join(run.REPO_ROOT, check["env"]["IKKOKU_STUDIO_SCENARIO"]),
                       encoding="utf-8") as handle:
                 scenario = json.load(handle)
             steps = (scenario.get("inspectorUI") or {}).get("steps", [])
             wants = any(step.get("fullKeyboardAccess") is True for step in steps)
-            self.assertIn(check["argv"][1:], ([], fka), check["id"])
-            self.assertEqual(check["argv"][1:] == fka, wants, check["id"])
+            extra = check["argv"][1:]
+            self.assertEqual(len(extra) % 2, 0, check["id"])
+            self.assertEqual(fka in list(zip(extra[::2], extra[1::2])), wants, check["id"])
 
     def test_scenario_reports_are_artifacts(self):
         for check in self.checks:
