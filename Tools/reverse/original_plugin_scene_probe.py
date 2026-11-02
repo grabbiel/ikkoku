@@ -85,6 +85,26 @@ both players exited with the same exit code (0, or the
 original player's 0xC0000005 shutdown fault, which the no-edit control shows is not caused by the edits), the
 root removed with no game process left, unchanged junction targets, runtime pins and errno-24 count, and matching
 guest source and input hashes.
+
+The light phase (--phase ol; #316, #320) is the ordered phase's exec with the same envelope, plug-ins, zipmod and
+runtime pins, from phase A's exact fixture.png and our exports with more than two lights (LIGHT_INPUTS, from
+--inputs). Before the players, run.ps1 counts, read only, the install's BepInEx\\plugins DLLs whose bytes hold each
+LIGHT_NAMES entry (UTF-8 and UTF-16LE), and which of them KK_Fix_UnlimitedMapLights itself holds; no DLL is named,
+copied or hashed apart from that one. Then two players run in one private root:
+
+1. vanilla (OL, at most --vanilla-seconds), which starts only once a sweep of the root (every regular file, by size
+   and SHA-256, whatever its name; junctions not followed) finds no copy of LIGHT_FIX: phase A's baseline, every LIGHT_CASES row (the real Delete, Duplicate
+   and Add Light, with SceneInfo.lightCount and both light getters in every snapshot) and the load and save of each
+   input. Its outputs are renamed vanilla-* in the upload;
+2. LIGHT_FIX is checked in the install's plug-ins (SHA-256 and size; nothing is copied on a mismatch or when the
+   root already holds its path), copied into the root's own plug-ins, and the copy checked again;
+3. with the fix (OU, at most --wait-seconds): the same steps.
+
+The run is accepted only with both statuses error-free, every output present, every save of the fixture and of a
+row equal to its resave, the vanilla baseline equal to the fix's apart from Sideloader's LocalSlot values, the fix
+copy matching, the sweep clean, the copy gone with the root, the byte scan complete, both players exited with the same exit code (0 or the shutdown fault), and
+the ordered phase's root, process, junction, runtime, errno and hash checks. The Engine light parity test
+(sourceSceneLightExportsMatchCharaStudio) compares the files.
 """
 from __future__ import annotations
 import argparse, json, os, re, signal, subprocess
@@ -128,6 +148,20 @@ ORDERED_FIXTURE_C = ('character-delete-duplicate', 'delete-duplicate-character')
 ORDERED_CONTROL_SECONDS = 180  # bound on the no-edit control player (OB)
 ORDERED_MAX_SECONDS = 600      # bound on the oracle player (OA)
 SHUTDOWN_FAULT = -1073741819   # 0xC0000005: the original player's access violation after Application.Quit
+# Phase OL (#316, #320). OriginalPluginRewriteProbe.LightCases labels, in order (a test holds them equal to the C#),
+# and the exports of ours both players load (sourceSceneLightProbeWritesItsInputs).
+LIGHT_CASES = ('delete-duplicate-light', 'delete-light-add-light-twice', 'delete-duplicate-light-twice', 'add-light-twice')
+LIGHT_INPUTS = ('ours-light-roots.png', 'ours-light-nested.png')
+# KK_Fix_UnlimitedMapLights 22.1 (GUID KK_Fix_UnlimitedMapLights), from the same installed-plug-in inventory. The
+# second player's root gets this file, copied from the install and checked; it is never kept outside that root.
+LIGHT_FIX = ('IllusionFixes\\KK_Fix_UnlimitedMapLights.dll', '23051ec9d3e6779b0dd612208dd381beb3c8855ecad5caada6075a7a0272e40e', 13312)
+# The counts-only byte scan of the install's plug-in DLLs: each name in UTF-8 (metadata and attribute strings)
+# and UTF-16LE (user strings). A Harmony patch names its target in an attribute string, not a member reference.
+# Where the second player's copy lives, relative to the private root: under its own plug-ins, never a junction.
+LIGHT_FIX_IN_ROOT = 'BepInEx\\plugins\\' + LIGHT_FIX[0]
+LIGHT_NAMES = ('isLightCheck', 'isLightLimitOver', 'get_isLightCheck', 'get_isLightLimitOver', 'IsLightCheck', 'lightCount')
+LIGHT_SCAN_SECONDS = 180       # bound on the byte scan
+LIGHT_SCAN_FILE_BYTES = 64 * 1024 * 1024  # DLLs larger than this are counted, not read
 
 
 def local_roots():
@@ -446,16 +480,18 @@ def rewrite_script(root, base, phase, wait_seconds, zipmod, inputs, collider=Non
     """Phase C, D or OA as run.ps1: the player with phase B's plug-ins (OA: phase A's) and zipmod, the rewrite
     probe and its inputs. OA runs the no-edit control player (OB, control_seconds) before the oracle player."""
     if not re.fullmatch(PLAYER_ROOT, root): raise ValueError('Unknown private player root')
-    if phase not in ('C', 'D', 'OA'): raise ValueError('Unknown phase')
+    if phase not in ('C', 'D', 'OA', 'OL'): raise ValueError('Unknown phase')
     for value in (wait_seconds, survey_seconds, survey_file_bytes, scan_seconds):
         if not isinstance(value, int) or value <= 0: raise ValueError('Bounds must be positive integers')
     zipmod_record(zipmod)
     if collider is not None and phase == 'C': raise ValueError('Phase C finds its own collider zipmod')
     if collider is not None: zipmod_record(collider)
     if not all(re.fullmatch(r'[A-Za-z0-9.-]+', name) for name in inputs): raise ValueError('Unexpected input name')
-    ordered = phase == 'OA'
+    # OL is the ordered exec with the vanilla player (bounded like OA) where OA has its control.
+    ordered, light = phase in ('OA', 'OL'), phase == 'OL'
+    first_max = ORDERED_MAX_SECONDS if light else ORDERED_CONTROL_SECONDS
     if ordered and (wait_seconds > ORDERED_MAX_SECONDS or collider is not None or type(control_seconds) is not int
-                    or not 1 <= control_seconds <= ORDERED_CONTROL_SECONDS):
+                    or not 1 <= control_seconds <= first_max):
         raise ValueError('The ordered phase allows at most %d oracle and %d control player seconds and no collider scan/copy'
                          % (ORDERED_MAX_SECONDS, ORDERED_CONTROL_SECONDS))
     if not ordered and control_seconds is not None: raise ValueError('Only the ordered phase runs a control player')
@@ -524,7 +560,8 @@ break}}
 $s=$null;$r.largestKKPE.seconds=[math]::Round($w.Elapsed.TotalSeconds,1)
 """)
     elif ordered:
-        middle = ''  # Exact retained input only: no authoring, config/corpus/installed-scene survey.
+        # Exact retained input only: no authoring, config/corpus/installed-scene survey; OL adds its plug-in byte scan.
+        middle = light_scan(scan_seconds) if light else ''
     else:
         middle = ((r"""$r.collider=Mod '""" + collider['name'] + "' '" + collider['sha256'] + "'\n") if collider else '') + (
             r"""[IO.File]::WriteAllText("$in\survey.txt","$original\UserData\studio\scene`n""" + str(survey_seconds) + '`n' + str(survey_file_bytes) + r"""`n")
@@ -608,8 +645,12 @@ OrderedStamp 'player-complete' '''
         bound = '$playerWatch.Elapsed.TotalSeconds -lt ' + str(wait_seconds) + '){'
         if launch.count(bound) != 1 or 'StopPlayerOwners' not in launch: raise AssertionError('Ordered launch block changed')
         control = launch.replace(bound, '$playerWatch.Elapsed.TotalSeconds -lt ' + str(control_seconds) + '){', 1)
-        control = control.replace("OrderedStamp 'player-", "OrderedStamp 'control-player-")
-        tail = tail[:start] + control + ORDERED_CONTROL_HANDOFF + tail[start:]
+        control = control.replace("OrderedStamp 'player-", "OrderedStamp '%s-player-" % ('vanilla' if light else 'control'))
+        if light:
+            control = (r"""OrderedStamp 'vanilla-fix-sweep';$r.vanillaFixSweep=LightFixCopies
+if($r.vanillaFixSweep.matches.Count -or $r.vanillaFixSweep.files -lt 1){throw 'The root holds a light fix copy, or nothing, before the vanilla player'}
+""") + control
+        tail = tail[:start] + control + (light_handoff() if light else ORDERED_CONTROL_HANDOFF) + tail[start:]
         tail = tail.replace("foreach($n in @('unity.log'", "OrderedStamp 'capture-logs'\nforeach($n in @('unity.log'", 1)
         tail = tail.replace('$z="$root\\reload.zip";', "OrderedStamp 'capture-archive'\n$z=\"$root\\reload.zip\";", 1)
         tail = tail.replace('Invoke-WebRequest -UseBasicParsing -Method Put', 'Invoke-WebRequest -UseBasicParsing -TimeoutSec 30 -Method Put')
@@ -649,6 +690,11 @@ OrderedStamp 'final-envelope';[Console]::Error.WriteLine('ORDERED_FINAL:'+($r|Co
 }
 [PSCustomObject]$r|ConvertTo-Json -Compress -Depth 6
 '''
+        if light:
+            # The copied fix leaves with the root: checked after the removal, whatever stopped the run.
+            old_removed = "try{OrderedStamp 'remaining-processes';$r.removed=-not(Test-Path -LiteralPath $root)"
+            if tail.count(old_removed) != 1: raise AssertionError('Ordered removal check changed')
+            tail = tail.replace(old_removed, old_removed + ";$r.lightFixGone=-not(Test-Path -LiteralPath (Join-Path $root '" + LIGHT_FIX_IN_ROOT + "'))", 1)
         head = head.replace('Invoke-WebRequest -UseBasicParsing -Uri', 'Invoke-WebRequest -UseBasicParsing -TimeoutSec 30 -Uri')
         # Bound the inherited target-metadata and exact-zipmod traversal too.
         head = head.replace('$f=0;$d=0;$t=$i.LastWriteTimeUtc', '$f=0;$d=0;$t=$i.LastWriteTimeUtc;$watch=[Diagnostics.Stopwatch]::StartNew()')
@@ -688,12 +734,86 @@ OrderedStamp 'control-complete'
 '''
 
 
+
+
+# Phase OL: every regular file under the private root (junctions not followed: they lead into the install, which the
+# runtime pins cover) whose size and SHA-256 are LIGHT_FIX's, by hash, whatever its name. Bounded.
+LIGHT_FIX_SWEEP = (r"""function LightFixCopies{$found=@();$files=0;$stack=New-Object 'System.Collections.Generic.Stack[string]';$stack.Push($root)
+$watch=[Diagnostics.Stopwatch]::StartNew();$seen=0
+while($stack.Count){foreach($path in [IO.Directory]::EnumerateFileSystemEntries($stack.Pop())){
+$seen++;if($seen -gt 8192 -or $watch.Elapsed.TotalSeconds -gt 60){throw 'Light fix sweep exceeded its bound'}
+$attributes=[IO.File]::GetAttributes($path);if($attributes -band [IO.FileAttributes]::ReparsePoint){continue}
+if($attributes -band [IO.FileAttributes]::Directory){$stack.Push($path);continue};$files++
+if((New-Object IO.FileInfo $path).Length -eq """ + str(LIGHT_FIX[2]) + r""" -and (Sha $path) -ceq '""" + LIGHT_FIX[1] + r"""'){$found+=$path.Substring($root.Length+1)}}}
+return [ordered]@{files=$files;matches=@($found)}}
+""")
+
+def light_scan(seconds):
+    """Phase OL's counts-only byte scan of the install's plug-in DLLs, read only and bounded: how many hold each
+    LIGHT_NAMES entry, and LIGHT_FIX's own hash, size and hits. No other DLL is named or hashed."""
+    if not isinstance(seconds, int) or not 1 <= seconds <= LIGHT_SCAN_SECONDS: raise ValueError('Light scan bound')
+    names = ','.join("'%s'" % name for name in LIGHT_NAMES)
+    return (LIGHT_FIX_SWEEP + r"""OrderedStamp 'light-scan'
+$w=[Diagnostics.Stopwatch]::StartNew();$latin=[Text.Encoding]::GetEncoding(28591);$wide=[Text.Encoding]::Unicode
+$fix=Join-Path "$original\BepInEx\plugins" '""" + LIGHT_FIX[0] + r"""';$names=@(""" + names + r""")
+$r.lightScan=[ordered]@{dlls=0;bytes=0;oversize=0;errors=0;truncated=$false;utf8=[ordered]@{};utf16=[ordered]@{};fix=$null}
+foreach($n in $names){$r.lightScan.utf8[$n]=0;$r.lightScan.utf16[$n]=0}
+try{foreach($path in [IO.Directory]::EnumerateFiles("$original\BepInEx\plugins",'*.dll',[IO.SearchOption]::AllDirectories)){
+if($w.Elapsed.TotalSeconds -gt """ + str(seconds) + r""" -or $r.lightScan.dlls -ge 4096){$r.lightScan.truncated=$true;break}
+try{if((New-Object IO.FileInfo $path).Length -gt """ + str(LIGHT_SCAN_FILE_BYTES) + r"""){$r.lightScan.oversize++;continue};$bytes=[IO.File]::ReadAllBytes($path)}catch{$r.lightScan.errors++;continue}
+$r.lightScan.dlls++;$r.lightScan.bytes+=$bytes.Length;$text=$latin.GetString($bytes);$own=$null
+if($path -ceq $fix){$own=[ordered]@{sha256=(Sha $path);bytes=$bytes.Length;utf8=[ordered]@{};utf16=[ordered]@{}}}
+foreach($n in $names){$a=$text.IndexOf($n,[StringComparison]::Ordinal) -ge 0;$u=$text.IndexOf($latin.GetString($wide.GetBytes($n)),[StringComparison]::Ordinal) -ge 0
+if($a){$r.lightScan.utf8[$n]=$r.lightScan.utf8[$n]+1};if($u){$r.lightScan.utf16[$n]=$r.lightScan.utf16[$n]+1};if($own){$own.utf8[$n]=$a;$own.utf16[$n]=$u}}
+if($own){$r.lightScan.fix=$own}}
+}catch{$r.lightScan.truncated=$true;$r.lightScan.enumerationError=$_.Exception.GetType().FullName}
+$text=$null;$bytes=$null;$r.lightScan.seconds=[math]::Round($w.Elapsed.TotalSeconds,1)
+""")
+
+
+def light_handoff():
+    """ORDERED_CONTROL_HANDOFF for phase OL: after the vanilla player, the same crash-report drain and capture, its
+    outputs renamed vanilla-*, then LIGHT_FIX copied from the install into the root's own plug-ins and checked, and
+    phase.txt set to OU for the second player."""
+    path, sha, size = LIGHT_FIX
+    copy = (r"""OrderedStamp 'light-fix-check'
+$src=Join-Path "$original\BepInEx\plugins" '""" + path + r"""';$dst=Join-Path $root '""" + LIGHT_FIX_IN_ROOT + r"""'
+if(-not(Test-Path -LiteralPath $src -PathType Leaf)){throw 'The install has no light fix at its inventory path; nothing copied'}
+$h=Sha $src;$n=(Get-Item -LiteralPath $src).Length
+if($h -ne '""" + sha + "' -or $n -ne " + str(size) + r"""){throw "The install's light fix differs from the inventory: $h $n; nothing copied"}
+if(Test-Path -LiteralPath $dst){throw 'The root already holds the light fix path; nothing copied'}
+OrderedStamp 'light-fix-copy'
+New-Item -ItemType Directory (Split-Path $dst) -Force|Out-Null;Copy-Item -LiteralPath $src -Destination $dst;$h=Sha $dst;$n=(Get-Item -LiteralPath $dst).Length
+if($h -ne '""" + sha + "' -or $n -ne " + str(size) + r"""){throw "Light fix copy differs from the inventory: $h $n"}
+$r.lightFix=[ordered]@{path='""" + path + r"""';sha256=$h;bytes=$n}
+""")
+    body = ORDERED_CONTROL_HANDOFF
+    for old, new in (
+            ("throw 'Control player did not exit within its bound'", "throw 'Vanilla player did not exit within its bound'"),
+            ("# The control's shutdown fault starts", "# The vanilla player's shutdown fault starts"),
+            ("# reflected CharaStudio child). OA starts", "# reflected CharaStudio child). OU starts"),
+            ("OrderedStamp 'control-crash-drain'", "OrderedStamp 'vanilla-crash-drain'"),
+            ("$r.controlCrashDrain=", "$r.vanillaCrashDrain="),
+            ("throw 'Control crash reporting did not drain within 120 seconds; OA not launched'",
+             "throw 'Vanilla crash reporting did not drain within 120 seconds; OU not launched'"),
+            ("$r.control=[ordered]@{phase='OB';", "$r.vanilla=[ordered]@{phase='OL';"),
+            ("OrderedStamp 'control-capture'", "OrderedStamp 'vanilla-capture'"),
+            ('"$out\\control-$(Split-Path $log -Leaf)"', '"$out\\vanilla-$(Split-Path $log -Leaf)"'),
+            ("$f.Name -notlike 'control-*'){Rename-Item -LiteralPath $f.FullName -NewName ('control-'+$f.Name)}",
+             "$f.Name -notlike 'vanilla-*'){Rename-Item -LiteralPath $f.FullName -NewName ('vanilla-'+$f.Name)}"),
+            ("[IO.File]::WriteAllText(\"$in\\phase.txt\",'OA');$r.phases=@('OB','OA')",
+             copy + "[IO.File]::WriteAllText(\"$in\\phase.txt\",'OU');$r.phases=@('OL','OU')"),
+            ("OrderedStamp 'control-complete'", "OrderedStamp 'vanilla-complete'")):
+        if body.count(old) != 1: raise AssertionError('Ordered handoff changed: ' + old)
+        body = body.replace(old, new)
+    return body
+
 def run_rewrite(vm, output, errno_baseline, phase, files, zipmod, collider, host_address, wait_seconds,
                 survey_seconds=900, survey_file_bytes=512 * 1024 * 1024, scan_seconds=180,
                 runtime_pins=None, control_seconds=None):
-    """One-exec phase C, D or OA into a new output folder: run.json, run.ps1, the probe's outputs, source/ and manifest.json."""
+    """One-exec phase C, D, OA or OL into a new output folder: run.json, run.ps1, the probe's outputs, source/ and manifest.json."""
     if not any(output.resolve().is_relative_to(root) for root in local_roots()): raise ValueError('Outputs must stay under .local')
-    ordered = phase == 'OA'
+    ordered, light = phase in ('OA', 'OL'), phase == 'OL'
     if ordered:
         if output.exists(): raise RuntimeError('Ordered output must be a new directory, including failed starts')
         runtime_check = ordered_runtime_check(runtime_pins)
@@ -712,11 +832,13 @@ def run_rewrite(vm, output, errno_baseline, phase, files, zipmod, collider, host
     dump(output / 'run.json', record)
     if ordered:
         record['runtimePins'] = runtime_pins; record['controlSeconds'] = control_seconds; record['waitSeconds'] = wait_seconds
+        if light: record['scanSeconds'] = scan_seconds; record['lightFix'] = dict(path=LIGHT_FIX[0], sha256=LIGHT_FIX[1], bytes=LIGHT_FIX[2])
         dump(output / 'run.json', record)
         (output / 'source-fixture.png').write_bytes(files['fixture.png'])
-        (output / 'source-fixture-c.png').write_bytes(files['fixture-c.png'])
+        if not light: (output / 'source-fixture-c.png').write_bytes(files['fixture-c.png'])
     served = dict(files); served.update(sources)
-    timeout = control_seconds + wait_seconds + 480 if ordered else wait_seconds + survey_seconds + 2 * scan_seconds + 1800
+    timeout = (control_seconds + wait_seconds + 480 + (scan_seconds if light else 0) if ordered
+               else wait_seconds + survey_seconds + 2 * scan_seconds + 1800)
     with Endpoint(host_address, served, upload='reload.zip') as endpoint:
         script = rewrite_script(root, endpoint.base, phase, wait_seconds, zipmod, list(files), collider, survey_seconds,
                                 survey_file_bytes, scan_seconds, control_seconds)
@@ -767,7 +889,8 @@ def run_rewrite(vm, output, errno_baseline, phase, files, zipmod, collider, host
         names = extract(upload, output)
     (output / 'source').mkdir(exist_ok=True)
     for name, data in sources.items(): (output / 'source' / name).write_bytes(data)
-    retained = ['run.json', 'run.ps1'] + (['source-fixture.png', 'source-fixture-c.png', 'exec.stdout', 'exec.stderr'] if ordered else [])
+    retained = ['run.json', 'run.ps1'] + (['source-fixture.png', 'exec.stdout', 'exec.stderr'] if ordered else [])
+    if ordered and not light: retained.append('source-fixture-c.png')
     if ordered and upload is not None: retained.append('transport-upload.zip')
     provenance = [dict(file=str(p.relative_to(output)), sha256=digest(p.read_bytes()), bytes=p.stat().st_size)
                   for p in sorted([output / n for n in set(names + retained)] + list((output / 'source').iterdir())) if p.is_file()]
@@ -779,7 +902,7 @@ def run_rewrite(vm, output, errno_baseline, phase, files, zipmod, collider, host
                 configs=guest.get('configs'), largestKKPE=guest.get('largestKKPE'),
                 errno=[record['errnoBefore'], record['errnoAfter']], files=len(provenance), statusError=(status or {}).get('error'))
     if ordered:
-        result.update(ordered_acceptance(output, names, guest, status, record, input_hashes, runtime_pins))
+        result.update((light_acceptance if light else ordered_acceptance)(output, names, guest, status, record, input_hashes, runtime_pins))
         dump(output / 'summary.json', result)
     return result
 
@@ -939,6 +1062,85 @@ def run_ordered(vm, output, errno_baseline, fixture, fixture_sha256, fixture_c, 
                        runtime_pins=runtime_pins, control_seconds=control_seconds)
 
 
+
+def light_acceptance(output, names, guest, status, record, input_hashes, runtime_pins):
+    """Phase OL's run check: both players' outputs and fixed points, the vanilla baseline against the fix's (apart
+    from Sideloader's per-session LocalSlot values), the fix copy, the complete byte scan, and the ordered phase's
+    envelope. The Engine test (sourceSceneLightExportsMatchCharaStudio) compares the files themselves."""
+    saves = ['fixture'] + ['edit-' + label for label in LIGHT_CASES]
+    pairs, required = {}, set()
+    for prefix in ('vanilla-', ''):
+        for save in saves: pairs[prefix + save] = (prefix + save + '.png', prefix + 'resave-' + save + '.png')
+        required.update({prefix + 'plugin-scene-trace.json', prefix + 'status.json'})
+        required.update(prefix + 'resave-' + name for name in LIGHT_INPUTS)
+    for pair in pairs.values(): required.update(pair)
+    present = set(names)
+    def read(name): return (output / name).read_bytes() if name in present and (output / name).is_file() else None
+    fixed, differences = {}, {}
+    for save, (saved, resaved) in pairs.items():
+        a, b = read(saved), read(resaved)
+        fixed[save] = a is not None and a == b
+        if a is not None and b is not None and a != b: differences[save] = differing(a, b)
+    vanilla, baseline = read('vanilla-fixture.png'), read('fixture.png')
+    slot_offsets = local_slot_values(baseline) if baseline is not None else []
+    baseline_diff = differing(vanilla, baseline) if vanilla is not None and baseline is not None else None
+    baselines_match = (baseline_diff is not None and set(baseline_diff) <= set(slot_offsets)
+                       and slot_offsets == local_slot_values(vanilla))
+    first = guest.get('vanilla') or {}
+    vanilla_status = json.loads(read('vanilla-status.json')) if read('vanilla-status.json') is not None else None
+    codes = [first.get('playerExitCode'), guest.get('playerExitCode')]
+    same_exit = (first.get('exited') is True and guest.get('exited') is True and codes[0] == codes[1]
+                 and codes[1] in (0, SHUTDOWN_FAULT))
+    scan = guest.get('lightScan') or {}
+    own = scan.get('fix') or {}
+    scan_complete = (scan.get('truncated') is False and scan.get('errors') == 0 and scan.get('oversize') == 0
+                     and type(scan.get('dlls')) is int and scan['dlls'] > 0 and not scan.get('enumerationError')
+                     and own.get('sha256') == LIGHT_FIX[1] and own.get('bytes') == LIGHT_FIX[2])
+    fix_copied = guest.get('lightFix') == dict(path=LIGHT_FIX[0], sha256=LIGHT_FIX[1], bytes=LIGHT_FIX[2])
+    sweep = guest.get('vanillaFixSweep') or {}
+    vanilla_clean = sweep.get('matches') == [] and type(sweep.get('files')) is int and sweep['files'] > 0
+    def clean(s, phase): return bool(s and s.get('phase') == phase and 'error' in s and s['error'] is None)
+    accepted = (clean(vanilla_status, 'OL') and clean(status, 'OU') and required <= present and all(fixed.values())
+        and baselines_match and same_exit and guest.get('phases') == ['OL', 'OU'] and fix_copied and scan_complete
+        and vanilla_clean and guest.get('lightFixGone') is True
+        and guest.get('removed') is True and guest.get('remainingGameProcesses') == []
+        and guest.get('junctionTargetsChanged') is False
+        and not any(guest.get(k) for k in ('error', 'cleanupError', 'runtimeError', 'partialUploadError'))
+        and guest.get('runtimeBefore') == runtime_pins == guest.get('runtimeAfter')
+        and guest.get('sources') == record['sources'] and guest.get('inputs') == input_hashes
+        and record.get('hostGroupReleased') is True and record['errnoBefore'] == record['errnoAfter'])
+    return dict(accepted=bool(accepted), playerExitCodes=codes, shutdownFault=same_exit and codes[1] == SHUTDOWN_FAULT,
+                fixedPoints=fixed, saveResaveDifferences=differences, baselinesMatch=baselines_match,
+                baselineDifferences=baseline_diff, localSlotOffsets=slot_offsets, missingOutputs=sorted(required - present),
+                vanillaStatusError=(vanilla_status or {}).get('error'), lightFixCopied=fix_copied,
+                vanillaFixSweep=sweep, vanillaRootClean=vanilla_clean, lightFixGone=guest.get('lightFixGone'),
+                lightScan=scan, lightScanComplete=scan_complete,
+                parityCheck='EngineTests sourceSceneLightExportsMatchCharaStudio')
+
+
+def run_light(vm, output, errno_baseline, fixture, fixture_sha256, inputs, retained_run, runtime_pins,
+              host_address='10.211.55.2', wait_seconds=300, vanilla_seconds=300, scan_seconds=LIGHT_SCAN_SECONDS):
+    """#316 and #320: phase A's exact fixture and our exports with more than two lights, with phase A's plug-ins; the
+    vanilla player (OL), then the same root with KK_Fix_UnlimitedMapLights (OU), in one exec."""
+    if not re.fullmatch('[0-9a-f]{64}', fixture_sha256 or ''): raise ValueError('The expected fixture SHA256 is required')
+    for bound in (wait_seconds, vanilla_seconds):
+        if type(bound) is not int or not 1 <= bound <= ORDERED_MAX_SECONDS:
+            raise ValueError('Light player bounds must be 1..%d seconds' % ORDERED_MAX_SECONDS)
+    if type(scan_seconds) is not int or not 1 <= scan_seconds <= LIGHT_SCAN_SECONDS:
+        raise ValueError('Light scan bound must be 1..%d seconds' % LIGHT_SCAN_SECONDS)
+    ordered_runtime_check(runtime_pins)  # Validate before reading or invoking any VM transport.
+    if output.exists(): raise RuntimeError('Ordered output must be a new directory, including failed starts')
+    data = fixture.read_bytes()
+    if digest(data) != fixture_sha256: raise ValueError('Retained fixture digest differs')
+    run = json.loads(retained_run.read_text()); zipmod = zipmod_record(run['guest']['zipmod'])
+    files = {'fixture.png': data, 'fixture.sha256': fixture_sha256.encode()}
+    for name in LIGHT_INPUTS:
+        if not (inputs / name).is_file(): raise ValueError(f'no {name} in {inputs}: run sourceSceneLightProbeWritesItsInputs')
+        files[name] = (inputs / name).read_bytes()
+    files['phase.txt'] = b'OL'
+    return run_rewrite(vm, output, errno_baseline, 'OL', files, zipmod, None, host_address, wait_seconds,
+                       scan_seconds=scan_seconds, runtime_pins=runtime_pins, control_seconds=vanilla_seconds)
+
 def run_c(vm, output, errno_baseline, phase_a, host_address='10.211.55.2', wait_seconds=1800, scan_seconds=180,
           survey_file_bytes=512 * 1024 * 1024):
     """Phase C: phase A's fixture in, CharaStudio's authored fixture and edits out."""
@@ -1077,20 +1279,22 @@ def run_b(vm, output, errno_baseline, inputs, corpus, phase_a, host_address='10.
 def main():
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument('--vm', default='Windows 11')
-    p.add_argument('--phase', choices=('a', 'b', 'c', 'd', 'oa'), default='a')
-    p.add_argument('--fixture', type=Path, help="phase oa: phase A's exact retained fixture.png")
-    p.add_argument('--fixture-sha256', help="phase oa: its expected SHA256")
+    p.add_argument('--phase', choices=('a', 'b', 'c', 'd', 'oa', 'ol'), default='a')
+    p.add_argument('--fixture', type=Path, help="phase oa or ol: phase A's exact retained fixture.png")
+    p.add_argument('--fixture-sha256', help="phase oa or ol: its expected SHA256")
     p.add_argument('--fixture-c', type=Path, help="phase oa: phase C's exact retained fixture.png (character W)")
     p.add_argument('--fixture-c-sha256', help="phase oa: its expected SHA256")
-    p.add_argument('--retained-run', type=Path, help="phase oa: phase A's run.json pinning the copied zipmod")
-    p.add_argument('--runtime-pins', type=Path, help='phase oa: independently acquired complete runtime-pins.json')
+    p.add_argument('--retained-run', type=Path, help="phase oa or ol: phase A's run.json pinning the copied zipmod")
+    p.add_argument('--runtime-pins', type=Path, help='phase oa or ol: independently acquired complete runtime-pins.json')
     p.add_argument('--control-seconds', type=int, default=ORDERED_CONTROL_SECONDS, help='phase oa: bound on the no-edit control player')
+    p.add_argument('--vanilla-seconds', type=int, default=300, help='phase ol: bound on the vanilla player')
     p.add_argument('--output', type=Path, help='new output folder (default .local/stt03i-plugin-data/phase-<a|b>, '
                                                '.local/stt03j-plugin-rewrites/phase-<c|d>)')
     p.add_argument('--phase-c', type=Path, default=ROOT / '.local/stt03j-plugin-rewrites/phase-c', help='phase D: the phase-C output folder')
-    p.add_argument('--scan-seconds', type=int, default=180, help='phase C: bound on the collider zipmod and largest-scene scans')
+    p.add_argument('--scan-seconds', type=int, default=180, help='phase C: bound on the collider zipmod and largest-scene scans; '
+                                                                'phase ol: on the plug-in byte scan')
     p.add_argument('--phase-a', type=Path, default=ROOT / '.local/stt03i-plugin-data/phase-a', help='phase B: the phase-A output folder')
-    p.add_argument('--inputs', type=Path, help='phase B or D: the folder our exports were written to')
+    p.add_argument('--inputs', type=Path, help='phase B, D or ol: the folder our exports were written to')
     p.add_argument('--corpus', type=Path, help="phase B or D: plugin_rule_parity.py's corpus.txt")
     p.add_argument('--errno-baseline', type=int, required=True, help='Parallels errno-24 count that must hold before the exec')
     p.add_argument('--host-address', default='10.211.55.2', help="the Mac's address on the VM's host-only network")
@@ -1107,6 +1311,14 @@ def main():
         result = run_ordered(a.vm, output, a.errno_baseline, a.fixture, a.fixture_sha256, a.fixture_c, a.fixture_c_sha256,
                              a.retained_run, json.loads(a.runtime_pins.read_text()), a.host_address,
                              300 if a.wait_seconds is None else a.wait_seconds, a.control_seconds)
+        print(json.dumps(result, indent=2))
+        if not result['accepted']: raise SystemExit(1)
+    elif a.phase == 'ol':
+        if not all((a.output, a.fixture, a.fixture_sha256, a.inputs, a.retained_run, a.runtime_pins)):
+            p.error('phase ol requires --output, --fixture, --fixture-sha256, --inputs, --retained-run and --runtime-pins')
+        result = run_light(a.vm, output, a.errno_baseline, a.fixture, a.fixture_sha256, a.inputs, a.retained_run,
+                           json.loads(a.runtime_pins.read_text()), a.host_address,
+                           300 if a.wait_seconds is None else a.wait_seconds, a.vanilla_seconds, a.scan_seconds)
         print(json.dumps(result, indent=2))
         if not result['accepted']: raise SystemExit(1)
     elif a.phase == 'c':
