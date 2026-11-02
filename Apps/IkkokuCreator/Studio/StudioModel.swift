@@ -335,8 +335,8 @@ final class StudioModel: ViewportInputHandler, LivePacedHandler {
     /// building (`selectSourceOutfit`). Changes only when a selection starts
     /// or ends.
     private(set) var pendingSourceOutfits: [UUID: Int] = [:]
-    /// The exports building their hidden characters' baselines
-    /// (`beginSourceSceneExport`), by number.
+    /// The exports building their hidden characters' baselines or advancing
+    /// their unbuilt characters' clocks (`beginSourceSceneExport`), by number.
     @ObservationIgnored private var sourceExportJobs: [Int: SourceExportJob] = [:]
     @ObservationIgnored private var nextSourceExport = 0
     struct SourceExportBaseline {
@@ -350,6 +350,12 @@ final class StudioModel: ViewportInputHandler, LivePacedHandler {
         /// What the export reads besides the baselines, as it was when the
         /// export was chosen (`SourceExportInputs`).
         let inputs: SourceExportInputs
+        /// The Studio clock when the export was chosen: every character's
+        /// animation is saved at it.
+        let elapsed: Float
+        /// The unbuilt characters' animation states at `elapsed`
+        /// (`sourceClockStates`), once the worker thread computed them.
+        var clockStates: [UUID: Result<SourceStudioAnimationState?, Error>]?
     }
     /// The model state an export writes from, apart from the previews: the
     /// document, the camera looked through and the routes' play flags.
@@ -436,6 +442,10 @@ final class StudioModel: ViewportInputHandler, LivePacedHandler {
     /// survives undo/redo through that gate (see `undo()`); New Scene's
     /// `refresh()` prunes it and only import reseeds.
     @ObservationIgnored var sourceRouteCharacterPreviews: [UUID: SourceStudioCharacterPreview] = [:]
+    /// The animation clock of source characters with no preview (lazy hidden
+    /// characters): their saves, exports and clock rebases advance the same
+    /// state a built character's would (`sourceClockRequests`).
+    @ObservationIgnored let sourceUnbuiltClock = SourceStudioAnimationClock()
     @ObservationIgnored private var lastSourceRouteDiagnostic: String?
     /// The imported scene record's `charaLight` as a scene-static native key
     /// light (PR #41's rot mapping). Runtime-only: original export requires
@@ -1220,7 +1230,8 @@ final class StudioModel: ViewportInputHandler, LivePacedHandler {
         return nil
     }
 
-    /// Bakes every character's evaluated time before resetting the shared clock.
+    /// Bakes every character's evaluated time before resetting the shared
+    /// clock, a character with no preview's through its data-only clock.
     func rebaseSourceAnimationClock() throws {
         var objects = doc.objects
         for i in doc.objects.indices {
@@ -1229,9 +1240,36 @@ final class StudioModel: ViewportInputHandler, LivePacedHandler {
                 objects[i].sourceAnimation = try preview.savedAnimationState(animationState: object.sourceAnimation, animationElapsed: sourceAnimationTime)
             }
         }
+        try bakeSourceClock(into: &objects, elapsed: sourceAnimationTime)
         doc.objects = objects
         sourceAnimationTime = 0
         for preview in sourceInstances.values { preview.resetAnimationPlayback() }
+    }
+
+    /// The source characters the Studio clock advances without a preview:
+    /// a hidden one the import left unbuilt, one a native load has not
+    /// built, one whose build failed. CharaStudio keeps a hidden character's
+    /// Animator running (`SourceStudioAnimationClock`), so each saves the
+    /// time it reached, through `sourceUnbuiltClock`.
+    private func sourceClockRequests(_ objects: [StudioObject]) -> [(id: UUID, request: SourceStudioAnimationClock.Request)] {
+        objects.compactMap { object in
+            guard object.kind == .character, let reference = object.sourceCharacter, sourceInstances[object.id] == nil,
+                  sourceRouteCharacterPreviews[object.id] == nil else { return nil }
+            return (object.id, SourceStudioAnimationClock.Request(reference: reference, edited: object.sourceAnimation, bodyValues: object.sourceBodyValues))
+        }
+    }
+
+    /// Writes each character with no preview's animation state at
+    /// `elapsed` into `objects`, as a save or a clock rebase writes a built
+    /// one's; a character whose saved clip cannot be read keeps its state.
+    private func bakeSourceClock(into objects: inout [StudioObject], elapsed: Float) throws {
+        let requests = sourceClockRequests(objects)
+        guard !requests.isEmpty else { return }
+        let states = sourceUnbuiltClock.savedStates(requests.map(\.request), elapsed: elapsed)
+        for (entry, result) in zip(requests, states) {
+            guard let state = try result.get(), let i = objects.firstIndex(where: { $0.id == entry.id }) else { continue }
+            objects[i].sourceAnimation = state
+        }
     }
 
     private func editSourceAnimation(_ id: UUID, change: (inout SourceStudioAnimationState) -> Void) throws {
@@ -2590,14 +2628,14 @@ final class StudioModel: ViewportInputHandler, LivePacedHandler {
         sourceAnimationCatalog = job.animationCatalog; sourceAnimationCatalogError = job.animationCatalogError
         // The replaced scene's characters stay borrowable for an undo.
         keepSourceDonations(sourceInstances.filter { previews[$0.key] !== $0.value }.values)
-        stopSourceVoices(); sourcePluginSession = nil; sourcePluginsRunning = false; sourceAnimationTime = 0; sourceInstances = previews; sourceRoutes = routes; sourceRoutePlayState = Dictionary(uniqueKeysWithValues: routes.map { ($0.key, (playing: $0.value.route.active, start: 0)) }); sourceRouteCharacterPreviews = routeCharacterPreviews; lastSourceRouteDiagnostic = nil; releaseInstances { _ in true }; sourceCameras = cameras; sourceItemAssets = itemAssets; activeSourceCamera = activeCameraAtLoad; sourceCameraLoadActive = activeCameraAtLoad; clearResourceDiagnostics(); doc = imported; sourceSceneLight = sceneLightOverride.map { (hash, $0) }; coverSourceRuntime(imported); self.sceneURL = nil
+        stopSourceVoices(); sourcePluginSession = nil; sourcePluginsRunning = false; sourceAnimationTime = 0; sourceUnbuiltClock.clear(); sourceInstances = previews; sourceRoutes = routes; sourceRoutePlayState = Dictionary(uniqueKeysWithValues: routes.map { ($0.key, (playing: $0.value.route.active, start: 0)) }); sourceRouteCharacterPreviews = routeCharacterPreviews; lastSourceRouteDiagnostic = nil; releaseInstances { _ in true }; sourceCameras = cameras; sourceItemAssets = itemAssets; activeSourceCamera = activeCameraAtLoad; sourceCameraLoadActive = activeCameraAtLoad; clearResourceDiagnostics(); doc = imported; sourceSceneLight = sceneLightOverride.map { (hash, $0) }; coverSourceRuntime(imported); self.sceneURL = nil
         rebuildSourceRouteClocks()
         committed = true
         installSourceMap(job.mapRequest, load: job.mapLoad)
         // The first drawn character, so a hidden one is not built just for
-        // the selection; with none drawn, the first character.
+        // the selection; with none drawn, nothing (CharaStudio selects
+        // nothing after any scene load).
         selection = imported.objects.first(where: { $0.sourceCharacter != nil && imported.isVisible($0.id) })?.id
-            ?? imported.objects.first(where: { $0.sourceCharacter != nil })?.id
         let deferredText = deferredCharacters > 0 ? " · \(deferredCharacters) hidden, built when shown" : ""
         status = "Source preview · \(previews.count) converted characters (\(routeCharacterPreviews.count) rendered on routes)\(deferredText) · \(imported.objects.count - previews.count - deferredCharacters) retained tree nodes. See source compatibility details."
     }
@@ -3005,7 +3043,7 @@ final class StudioModel: ViewportInputHandler, LivePacedHandler {
         // `rehydrateSourceRuntime()`, which rebuilds the route half from the
         // original scene file (play state reseeded from the saved flags)
         // when it finds the caches missing for a source document.
-        sourceAnimationTime = 0; sourceInstances.removeAll(); lastSourceRouteDiagnostic = nil; activeSourceCamera = nil; releaseInstances { _ in true }
+        sourceAnimationTime = 0; sourceUnbuiltClock.clear(); sourceInstances.removeAll(); lastSourceRouteDiagnostic = nil; activeSourceCamera = nil; releaseInstances { _ in true }
         var empty = StudioDocument(); empty.sourceNativePlugins = doc.sourceNativePlugins
         clearResourceDiagnostics()
         doc = empty; selection = nil; sceneURL = nil
@@ -3024,6 +3062,9 @@ final class StudioModel: ViewportInputHandler, LivePacedHandler {
                 savedDocument.objects[i].sourceAnimation = try preview.savedAnimationState(animationState: object.sourceAnimation, animationElapsed: sourceAnimationTime)
             }
         }
+        // A character with no preview (hidden, unbuilt) saves the time it
+        // reached too, so a reload resumes it where a built one resumes.
+        try bakeSourceClock(into: &savedDocument.objects, elapsed: sourceAnimationTime)
         // A-T02: record each referenced file's digest and its path inside the
         // libraries in effect, so a load can relocate a moved library. A file that
         // failed the load's check keeps the identity it was saved with.
@@ -3040,35 +3081,61 @@ final class StudioModel: ViewportInputHandler, LivePacedHandler {
 
     /// File ▸ Export Edited Original Scene (R7 phase 2 item 6, third part).
     /// A hidden character with face-state edits and no preview needs a
-    /// validation baseline (`exportSourceScene`). With `asyncSourceBuilds`
-    /// those baselines build first, in the background and in document order,
-    /// with a prefetching decode share and no donation, as the synchronous
-    /// export builds them. The export then runs on the main actor with them.
-    /// Meanwhile the scene stays editable and the status area shows
-    /// "Exporting <file>". The file is the scene as it was when the export was
-    /// chosen, as with the synchronous export: if the document, the camera
-    /// looked through or a route's play state changed before the baselines
-    /// landed, `completion` gets an error and nothing is written. A scene
-    /// import or load, or New Scene, cancels it with an error too. Without
-    /// baselines to build, without `asyncSourceBuilds` (captures, scenarios),
-    /// or while plugins run (their steps write the document), it exports at
-    /// once. `completion` gets the export's error, or nil once the file is
-    /// written.
+    /// validation baseline (`exportSourceScene`), and a character with no
+    /// preview saves its animation through its data-only clock
+    /// (`sourceClockRequests`). With `asyncSourceBuilds` the clocks advance
+    /// first on a worker thread, then the baselines build in the background
+    /// and in document order, with a prefetching decode share and no
+    /// donation, as the synchronous export builds them. The export then runs
+    /// on the main actor with them. Meanwhile the scene stays editable and
+    /// the status area shows "Exporting <file>". The file is the scene as it
+    /// was when the export was chosen, as with the synchronous export: every
+    /// character's animation is saved at the clock of that moment, and if the
+    /// document, the camera looked through or a route's play state changed
+    /// before the work landed, `completion` gets an error and nothing is
+    /// written. A scene import or load, or New Scene, cancels it with an
+    /// error too. Without baselines or clocks, without `asyncSourceBuilds`
+    /// (captures, scenarios), or while plugins run (their steps write the
+    /// document), it exports at once. `completion` gets the export's error,
+    /// or nil once the file is written.
     func beginSourceSceneExport(to url: URL, completion: @escaping @MainActor (Error?) -> Void) {
         let wanted = sourceExportBaselineRequests()
-        guard asyncSourceBuilds, !sourcePluginsRunning, !wanted.isEmpty else {
+        let clocks = sourceClockRequests(doc.objects)
+        guard asyncSourceBuilds, !sourcePluginsRunning, !wanted.isEmpty || !clocks.isEmpty else {
             do { try exportSourceScene(to: url); completion(nil) } catch { completion(error) }
             return
         }
         nextSourceExport += 1
         let key = nextSourceExport
-        let batch = SourceStudioCharacterBatch(requests: wanted.map { .init(reference: $0.reference, coordinate: $0.outfit) },
+        let elapsed = sourceAnimationTime
+        sourceExportJobs[key] = SourceExportJob(url: url, wanted: wanted, completion: completion, inputs: sourceExportInputs,
+                                                elapsed: elapsed, clockStates: clocks.isEmpty ? [:] : nil)
+        updateSourceBuildProgress()
+        guard !clocks.isEmpty else { startSourceExportBaselines(key); return }
+        let clock = sourceUnbuiltClock
+        let requests = clocks.map(\.request), ids = clocks.map(\.id)
+        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+            let states = clock.savedStates(requests, elapsed: elapsed)
+            DispatchQueue.main.async { [weak self] in
+                MainActor.assumeIsolated {
+                    guard let self, self.sourceExportJobs[key] != nil else { return }
+                    self.sourceExportJobs[key]?.clockStates = Dictionary(uniqueKeysWithValues: zip(ids, states))
+                    self.startSourceExportBaselines(key)
+                }
+            }
+        }
+    }
+
+    /// The baselines of export `key`, built in the background; without
+    /// any, the export runs now.
+    private func startSourceExportBaselines(_ key: Int) {
+        guard let job = sourceExportJobs[key] else { return }
+        guard !job.wanted.isEmpty else { finishSourceSceneExport(key, outcomes: []); return }
+        let batch = SourceStudioCharacterBatch(requests: job.wanted.map { .init(reference: $0.reference, coordinate: $0.outfit) },
                                                resources: host.renderer.resources, rigs: sourceRigShare())
-        sourceExportJobs[key] = SourceExportJob(url: url, wanted: wanted, completion: completion, inputs: sourceExportInputs)
         sourceSingleBuilds.start(.export(key), batch: batch) { [weak self] outcomes in
             self?.finishSourceSceneExport(key, outcomes: outcomes)
         }
-        updateSourceBuildProgress()
     }
 
     /// The characters an export builds a validation baseline for, in
@@ -3095,7 +3162,7 @@ final class StudioModel: ViewportInputHandler, LivePacedHandler {
             guard sourceExportInputs == job.inputs else {
                 throw RigError.invalid("the scene changed while the hidden characters of \(job.url.lastPathComponent) were built; export it again")
             }
-            try exportSourceScene(to: job.url, baselines: baselines)
+            try exportSourceScene(to: job.url, baselines: baselines, clockStates: job.clockStates, animationElapsed: job.elapsed)
             failure = nil
         } catch { failure = error }
         updateSourceBuildProgress()
@@ -3107,8 +3174,11 @@ final class StudioModel: ViewportInputHandler, LivePacedHandler {
     /// UUIDs never replace the original object, bone or plug-in identities.
     /// `baselines` are hidden characters' validation baselines built before
     /// the call (`beginSourceSceneExport`); one is used only while its object
-    /// still has the reference and outfit it was built for.
-    func exportSourceScene(to url: URL, baselines: [UUID: SourceExportBaseline] = [:]) throws {
+    /// still has the reference and outfit it was built for. `clockStates`
+    /// are the animation states of the characters with no preview at
+    /// `animationElapsed` (by default the clock now), computed here when nil.
+    func exportSourceScene(to url: URL, baselines: [UUID: SourceExportBaseline] = [:],
+                           clockStates: [UUID: Result<SourceStudioAnimationState?, Error>]? = nil, animationElapsed: Float? = nil) throws {
         guard let path = doc.sourceSceneFile, let expected = doc.sourceSceneSHA256 else { throw RigError.invalid("Import an original Studio scene first.") }
         guard url.resolvingSymlinksInPath().path != URL(fileURLWithPath: path).resolvingSymlinksInPath().path,
               !FileManager.default.fileExists(atPath: url.path) else { throw RigError.invalid("Choose a new filename for the edited original scene.") }
@@ -3118,6 +3188,15 @@ final class StudioModel: ViewportInputHandler, LivePacedHandler {
             throw RigError.invalid("The original scene changed; reimport before exporting edits.")
         }
         let source = try KoikatsuSceneReader.decodeDocument(bytes)
+        let elapsed = animationElapsed ?? sourceAnimationTime
+        // Lazy hidden characters: one with no preview saves the time its
+        // data-only clock reached, from the scene decoded here.
+        let clocks: [UUID: Result<SourceStudioAnimationState?, Error>]
+        if let clockStates { clocks = clockStates } else {
+            let requests = sourceClockRequests(doc.objects)
+            let states = requests.isEmpty ? [] : sourceUnbuiltClock.savedStates(requests.map(\.request), elapsed: elapsed, scene: (source, expected))
+            clocks = Dictionary(uniqueKeysWithValues: zip(requests.map(\.id), states))
+        }
         // ST-T03 / ST-S09 / ST-D03: copies and new folders, cameras and
         // lights are written first under the keys CharaStudio would allocate
         // (`SourceSceneExportValidation.stage`); every edit below addresses
@@ -3308,7 +3387,9 @@ final class StudioModel: ViewportInputHandler, LivePacedHandler {
                 try SourceStudioIKEditing.appendEdits(objectKey: key, record: character, overrides: object.sourceIKOverrides ?? [:], state: object.sourceKinematics, to: &edits)
             }
             if let character = original.character, let preview = exportPreview {
-                let animation = try preview.savedAnimationState(animationState: object.sourceAnimation, animationElapsed: sourceAnimationTime)
+                let animation = try preview.savedAnimationState(animationState: object.sourceAnimation, animationElapsed: elapsed)
+                if animation != SourceStudioAnimationState(record: character) { edits.animations[key] = animation }
+            } else if let character = original.character, let clock = clocks[object.id], let animation = try clock.get() {
                 if animation != SourceStudioAnimationState(record: character) { edits.animations[key] = animation }
             } else if object.sourceAnimation != nil { throw RigError.invalid("Animation edits require a loaded source character.") }
             if let voice = object.sourceVoice {
@@ -3451,7 +3532,7 @@ final class StudioModel: ViewportInputHandler, LivePacedHandler {
         stopSourceVoices()
         releaseInstances { _ in true }
         sourceInstances.removeAll()
-        sourceAnimationTime = 0
+        sourceAnimationTime = 0; sourceUnbuiltClock.clear()
         selection = nil
         applyResourceCheck(resources)
         preparedPlugins.restoredAttachments?.commit(document: d)

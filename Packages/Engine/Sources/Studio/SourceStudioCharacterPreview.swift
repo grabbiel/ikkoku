@@ -145,7 +145,7 @@ public final class SourceStudioCharacterPreview {
     /// The animation clip's height parameter follows the effective body height
     /// slot, the way rebuilding an original character recomputes the load-time
     /// height after a shape edit.
-    private var effectiveAnimationHeight: Float { sourceBodyValues?.first ?? animationHeight }
+    private var effectiveAnimationHeight: Float { SourceStudioAnimation.height(editedBody: sourceBodyValues, cardHeight: animationHeight) }
     private let characterRoot: Int
     private let poseCatalog: [SourceStudioPose.Bone]
     private var ikSolver: SourceStudioIK?
@@ -669,7 +669,7 @@ public final class SourceStudioCharacterPreview {
         poseCatalog = catalog.bones
         let roots = source.rig.nodes.indices.filter { source.rig.nodes[$0].parent == nil }
         guard roots.count == 1 else { throw RigError.invalid("Source scene preview requires a single assembled root.") }
-        characterRoot = roots[0]; animationHeight = identity.bodyValues.first ?? 0.5
+        characterRoot = roots[0]; animationHeight = SourceStudioAnimation.cardHeight(identity.bodyValues)
         animationDirectory = reference.animationCatalogFile.map { URL(fileURLWithPath: $0).deletingLastPathComponent() }
         animationCatalog = try assembly.animationCatalog.get()
         handPatternLibrary = try assembly.handPatterns.get()
@@ -1395,12 +1395,15 @@ public final class SourceStudioCharacterPreview {
          try SourceStudioGuide.rotation(node: characterRoot, rig: preview.source.rig, pose: pose))
     }
 
+    /// The state a save or an export writes after `animationElapsed`
+    /// seconds of the Studio clock (`SourceStudioAnimation.savedState`, which
+    /// a character with no preview runs too); the state unchanged when
+    /// nothing is edited and the saved clip does not resolve.
     public func savedAnimationState(animationState: SourceStudioAnimationState? = nil, animationElapsed: Float = 0) throws -> SourceStudioAnimationState {
-        var state = animationState ?? SourceStudioAnimationState(record: record)
-        if let animation = try resolvedAnimation(state, required: animationState != nil) {
-            state.normalizedTime = try animation.clock(state: state, elapsed: animationElapsed, height: effectiveAnimationHeight, playback: &animationPlayback).normalizedTime
-        }
-        return state
+        let saved = SourceStudioAnimationState(record: record)
+        let state = try SourceStudioAnimation.savedState(saved: saved, edited: animationState, elapsed: animationElapsed, height: effectiveAnimationHeight,
+            playback: &animationPlayback) { try resolvedAnimation($0, required: $1) }
+        return state ?? animationState ?? saved
     }
 
     public func resetAnimationPlayback() {
@@ -1643,17 +1646,7 @@ public final class SourceStudioCharacterPreview {
     }
 
     private func resolvedAnimation(_ state: SourceStudioAnimationState, required: Bool) throws -> SourceStudioAnimation? {
-        let key = "\(state.group)/\(state.category)/\(state.no)"
-        if let cached = animationCache[key] { return cached }
-        guard let animationCatalog, let animationDirectory else {
-            if required { throw RigError.invalid("Studio animation catalog is not configured.") }
-            return nil
-        }
-        do {
-            let value = try animationCatalog.resolve(state, directory: animationDirectory)
-            animationCache[key] = value
-            return value
-        } catch { if required { throw error }; return nil }
+        try SourceStudioAnimationCatalog.resolve(state, catalog: animationCatalog, directory: animationDirectory, required: required, cache: &animationCache)
     }
 
     public func attachmentMatrix(pointID: Int32, fkRotations: [Int: Float3] = [:], faceValues: [Float]? = nil, bodyValues: [Float]? = nil, ikTargets: [Int32: SourceStudioIKEdit] = [:], kinematics: SourceStudioKinematicState? = nil, animationState: SourceStudioAnimationState? = nil, animationElapsed: Float = 0) throws -> float4x4 {

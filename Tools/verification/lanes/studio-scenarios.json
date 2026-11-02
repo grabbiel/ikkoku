@@ -3420,6 +3420,56 @@
         }
       ],
       "timeout": 600
+    },
+    {
+      "id": "studio-scenario-hidden-animation-clock",
+      "argv": [
+        ".local/build/Build/Products/Debug/Ikkoku.app/Contents/MacOS/Ikkoku"
+      ],
+      "fixtures": [
+        {
+          "env": "IKKOKU_SOURCE_SCENE",
+          "kind": "file",
+          "from": "IKKOKU_STUDIO_SCENARIO_SCENE"
+        },
+        {
+          "env": "IKKOKU_SOURCE_AVATAR",
+          "kind": "file"
+        },
+        {
+          "env": "IKKOKU_MAKER_LIBRARY",
+          "kind": "file"
+        },
+        {
+          "env": "IKKOKU_STUDIO_ANIMATION_CATALOG",
+          "kind": "file"
+        }
+      ],
+      "env": {
+        "IKKOKU_STUDIO_SCENARIO": "Tools/verification/scenarios/hidden-animation-clock.json",
+        "IKKOKU_STUDIO_SCENARIO_REPORT": ".local/verification/reports/studio-scenario-hidden-animation-clock.json"
+      },
+      "referenceTier": "app-smoke",
+      "tolerance": "Gives character key 0 a converted clip at speed 1.7, hides its folder (key 622), exports and reimports: the character stays unbuilt. After 2.5 s of the Studio clock an export saves a later normalizedTime (its data-only clock ran). A native save and load, 1 s more of clock and an export save the same state as reimporting that export and running 1 s of clock, and the time keeps increasing; the character stays unbuilt throughout. Lazy hidden characters at import (cxs1 gap list, item 7).",
+      "artifacts": [
+        {
+          "path": ".local/verification/reports/studio-scenario-hidden-animation-clock.json",
+          "kind": "scenario-report"
+        },
+        {
+          "path": ".local/verification/scenario-exports/hidden-animation-clock-b.png",
+          "kind": "exported-scene"
+        },
+        {
+          "path": ".local/verification/scenario-exports/hidden-animation-clock-d.png",
+          "kind": "exported-scene"
+        },
+        {
+          "path": ".local/verification/scenario-exports/hidden-animation-clock-document.png",
+          "kind": "saved-document"
+        }
+      ],
+      "timeout": 600
     }
   ]
 }

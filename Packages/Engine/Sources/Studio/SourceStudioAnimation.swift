@@ -139,3 +139,186 @@ public struct SourceStudioAnimation: Sendable {
             floatParameters: parameters(height: height), to: rig, baseline: baseline, allowingUnbound: true)
     }
 }
+
+extension SourceStudioAnimationCatalog {
+    /// `state`'s clip, decoded once per catalog identity into `cache`. Without
+    /// a catalog, or when the clip does not resolve, nil; with `required` (an
+    /// edited state) the error is thrown instead.
+    public static func resolve(_ state: SourceStudioAnimationState, catalog: Self?, directory: URL?, required: Bool,
+                               cache: inout [String: SourceStudioAnimation]) throws -> SourceStudioAnimation? {
+        let key = "\(state.group)/\(state.category)/\(state.no)"
+        if let cached = cache[key] { return cached }
+        guard let catalog, let directory else {
+            if required { throw RigError.invalid("Studio animation catalog is not configured.") }
+            return nil
+        }
+        do {
+            let value = try catalog.resolve(state, directory: directory)
+            cache[key] = value
+            return value
+        } catch {
+            if required { throw error }
+            return nil
+        }
+    }
+}
+
+extension SourceStudioAnimation {
+    /// The clip's height parameter from the card: its saved body height slot,
+    /// or 0.5 when the card saves none.
+    public static func cardHeight(_ bodyValues: [Float]) -> Float { bodyValues.first ?? 0.5 }
+
+    /// The clip's height parameter: the edited body height slot, else the
+    /// card's (`cardHeight`). Rebuilding an original character after a shape
+    /// edit recomputes the load-time height the same way.
+    public static func height(editedBody: [Float]?, cardHeight: Float) -> Float { editedBody?.first ?? cardHeight }
+
+    /// The one time advance a save, an export or a clock rebase writes: for
+    /// a built character (`SourceStudioCharacterPreview.savedAnimationState`)
+    /// and for one with no preview (`SourceStudioAnimationClock`). The state
+    /// is `edited` (the document's animation edit), else `saved` (the scene
+    /// record's); the clip's speed, length and loop, with the state's speed,
+    /// forceLoop and normalizedTime (the clock's start), drive `clock` for
+    /// `elapsed` seconds of the Studio clock. Nil when nothing is edited and
+    /// the saved clip does not resolve: the saved state is kept as it is.
+    public static func savedState(saved: SourceStudioAnimationState, edited: SourceStudioAnimationState?, elapsed: Float, height: Float,
+                                  playback: inout Playback,
+                                  resolve: (SourceStudioAnimationState, _ required: Bool) throws -> SourceStudioAnimation?) throws -> SourceStudioAnimationState? {
+        var state = edited ?? saved
+        guard let animation = try resolve(state, edited != nil) else { return nil }
+        let clock = try animation.clock(state: state, elapsed: elapsed, height: height, playback: &playback)
+        state.normalizedTime = clock.normalizedTime
+        return state
+    }
+}
+
+/// The saved animation clock of a source character with no preview: a hidden
+/// character the import left unbuilt, or one a native load has not built.
+/// CharaStudio keeps such a character animating: its body Animator
+/// (`p_cf_body_bone` in `chara/oo_base.unity3d`) culls with AlwaysAnimate,
+/// and hiding a character switches off only its render objects, never the
+/// Animator's GameObject, so a save reads the advanced normalizedTime. This
+/// reads only the card's body height and the catalog clip (no rig, no GPU)
+/// and runs `SourceStudioAnimation.savedState`, the time advance a built
+/// character's `savedAnimationState` runs, so both write the same state.
+///
+/// Thread-safe: an export computes its states on a worker thread, a save or
+/// a clock rebase on the main thread. Scene seeds (saved state and card
+/// height) and decoded clips are cached until `clear()`.
+public final class SourceStudioAnimationClock: @unchecked Sendable {
+    public struct Request: Sendable {
+        public let reference: SourceStudioCharacterReference
+        /// The document's animation edit, if any.
+        public let edited: SourceStudioAnimationState?
+        /// The document's edited body shape rates, if any.
+        public let bodyValues: [Float]?
+        public init(reference: SourceStudioCharacterReference, edited: SourceStudioAnimationState?, bodyValues: [Float]?) {
+            self.reference = reference; self.edited = edited; self.bodyValues = bodyValues
+        }
+    }
+    private struct Seed { let saved: SourceStudioAnimationState, cardHeight: Result<Float, Error> }
+    private let lock = NSLock()
+    private var seeds: [String: Result<Seed, Error>] = [:]
+    private var catalogs: [String: Result<SourceStudioAnimationCatalog, Error>] = [:]
+    private var clips: [String: [String: SourceStudioAnimation]] = [:]
+
+    public init() {}
+
+    public func clear() {
+        lock.lock(); defer { lock.unlock() }
+        seeds.removeAll(); catalogs.removeAll(); clips.removeAll()
+    }
+
+    /// Each request's state after `elapsed` seconds of the Studio clock,
+    /// in order. `.success(nil)` keeps the saved state: nothing is edited
+    /// and the clip, the card or the record cannot be read, which is what a
+    /// character whose build failed keeps. An edited state that cannot be
+    /// advanced is a failure, as it is for a built character. Each distinct
+    /// scene file is read once, its SHA-256 checked; `scene` is used instead
+    /// for references to its hash.
+    public func savedStates(_ requests: [Request], elapsed: Float,
+                            scene: (document: KoikatsuSceneDocument, sha256: String)? = nil) -> [Result<SourceStudioAnimationState?, Error>] {
+        lock.lock(); defer { lock.unlock() }
+        loadSeeds(requests.map(\.reference), scene: scene)
+        return requests.map { (request: Request) -> Result<SourceStudioAnimationState?, Error> in
+            // Explicit types: Swift 6.3.3 (CI) does not infer this
+            // multi-statement closure's Result type from the return.
+            Result<SourceStudioAnimationState?, Error> {
+                let reference = request.reference
+                let required = request.edited != nil
+                let seed: Seed
+                do { seed = try seeds[Self.seedKey(reference)]!.get() } catch { if required { throw error }; return nil }
+                let cardHeight: Float
+                do { cardHeight = try seed.cardHeight.get() } catch { if required { throw error }; return nil }
+                let catalog: SourceStudioAnimationCatalog?
+                do { catalog = try reference.animationCatalogFile.map { try self.catalog($0) } } catch { if required { throw error }; return nil }
+                let file = reference.animationCatalogFile ?? ""
+                let directory = reference.animationCatalogFile.map { URL(fileURLWithPath: $0).deletingLastPathComponent() }
+                var playback = SourceStudioAnimation.Playback()
+                let height = SourceStudioAnimation.height(editedBody: request.bodyValues, cardHeight: cardHeight)
+                return try SourceStudioAnimation.savedState(saved: seed.saved, edited: request.edited, elapsed: elapsed, height: height,
+                                                            playback: &playback) { state, required in
+                    try SourceStudioAnimationCatalog.resolve(state, catalog: catalog, directory: directory, required: required,
+                                                             cache: &clips[file, default: [:]])
+                }
+            }
+        }
+    }
+
+    private static func seedKey(_ reference: SourceStudioCharacterReference) -> String { "\(reference.sceneSHA256)/\(reference.objectKey)" }
+
+    private func catalog(_ file: String) throws -> SourceStudioAnimationCatalog {
+        if let cached = catalogs[file] { return try cached.get() }
+        let loaded = Result { try SourceStudioAnimationCatalog.load(url: URL(fileURLWithPath: file)) }
+        catalogs[file] = loaded
+        return try loaded.get()
+    }
+
+    /// Fills `seeds` for every reference without one, reading each scene
+    /// file once.
+    private func loadSeeds(_ references: [SourceStudioCharacterReference], scene: (document: KoikatsuSceneDocument, sha256: String)?) {
+        var missing: [String: (sha256: String, keys: Set<Int32>)] = [:]
+        for reference in references where seeds[Self.seedKey(reference)] == nil {
+            missing[reference.sceneFile, default: (reference.sceneSHA256, [])].keys.insert(reference.objectKey)
+            if missing[reference.sceneFile]!.sha256 != reference.sceneSHA256 {
+                seeds[Self.seedKey(reference)] = .failure(RigError.invalid("Two references name one scene file with different hashes."))
+            }
+        }
+        for (file, wanted) in missing {
+            let document: Result<KoikatsuSceneDocument, Error>
+            if let scene, scene.sha256 == wanted.sha256 { document = .success(scene.document) } else {
+                document = Result { try Self.readScene(file, sha256: wanted.sha256) }
+            }
+            let records = document.map { Self.characterRecords($0, keys: wanted.keys) }
+            for key in wanted.keys where seeds["\(wanted.sha256)/\(key)"] == nil {
+                seeds["\(wanted.sha256)/\(key)"] = records.flatMap { records in
+                    guard let record = records[key] else { return .failure(RigError.invalid("Source character record is missing.")) }
+                    let height = Result { SourceStudioAnimation.cardHeight(try record.card().customization().bodyValues) }
+                    return .success(Seed(saved: SourceStudioAnimationState(record: record), cardHeight: height))
+                }
+            }
+        }
+    }
+
+    private static func readScene(_ file: String, sha256: String) throws -> KoikatsuSceneDocument {
+        let maximum = 256 * 1024 * 1024
+        let handle = try FileHandle(forReadingFrom: URL(fileURLWithPath: file)); defer { try? handle.close() }
+        let data = try handle.read(upToCount: maximum + 1) ?? Data()
+        guard data.count <= maximum, SHA256.hash(data: data).map({ String(format: "%02x", $0) }).joined() == sha256 else {
+            throw RigError.invalid("The referenced source scene changed; import it again to update this character.")
+        }
+        return try KoikatsuSceneReader.decodeDocument(data)
+    }
+
+    /// The character records with `keys`, found as a preview's assembly
+    /// finds its own: roots, children and accessory children.
+    private static func characterRecords(_ scene: KoikatsuSceneDocument, keys: Set<Int32>) -> [Int32: KoikatsuCharacterRecord] {
+        var stack = scene.snapshot.roots, found: [Int32: KoikatsuCharacterRecord] = [:]
+        while let object = stack.popLast(), found.count < keys.count {
+            if keys.contains(object.sourceKey), let character = object.character, found[object.sourceKey] == nil { found[object.sourceKey] = character }
+            stack += object.children
+            if let character = object.character { stack += character.accessoryChildren.values.flatMap { $0 } }
+        }
+        return found
+    }
+}

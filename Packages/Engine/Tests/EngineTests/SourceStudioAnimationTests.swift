@@ -181,3 +181,84 @@ func sourceStudioAnimationEvaluatesClothedPoseAttachmentsAndExportReloadWhenSupp
         try JSONEncoder().encode(finalState).write(to: path.appendingPathComponent("expected-state-t05.json"))
     }
 }
+
+/// Lazy hidden characters: a character with no preview advances its saved
+/// animation through `SourceStudioAnimationClock` (card height and catalog
+/// clip only) and must save exactly what the built character's
+/// `savedAnimationState` saves, for the saved clip, a speed and state speed
+/// other than 1, a non-looping clip with and without forceLoop, and an
+/// edited body height, at elapsed times off the 60 Hz step.
+@Test(.enabled(if: SourceFixtureSupport.shouldRun(["IKKOKU_STUDIO_EXPANSION", "IKKOKU_MAKER_LIBRARY", "IKKOKU_SOURCE_AVATAR", "IKKOKU_STUDIO_POSE_CONTRACT", "IKKOKU_STUDIO_ANIMATION_CATALOG"]) && MTLCreateSystemDefaultDevice() != nil,
+               "Requires IKKOKU_STUDIO_EXPANSION, IKKOKU_MAKER_LIBRARY, IKKOKU_SOURCE_AVATAR, IKKOKU_STUDIO_POSE_CONTRACT, IKKOKU_STUDIO_ANIMATION_CATALOG and a Metal device"))
+func sourceStudioAnimationClockWithoutPreviewMatchesBuiltCharacterWhenSupplied() throws {
+    let folder = try SourceFixtureSupport.require("IKKOKU_STUDIO_EXPANSION")
+    let maker = try SourceFixtureSupport.require("IKKOKU_MAKER_LIBRARY")
+    let female = try SourceFixtureSupport.require("IKKOKU_SOURCE_AVATAR")
+    let bones = try SourceFixtureSupport.require("IKKOKU_STUDIO_POSE_CONTRACT")
+    let animations = try SourceFixtureSupport.require("IKKOKU_STUDIO_ANIMATION_CATALOG")
+    let input = URL(fileURLWithPath: folder).appendingPathComponent("studio-female-head200-bone1.png")
+    // The fixture's own saved clip is not converted: save a converted
+    // looping one mid-clip, as the export-reload test does.
+    let original = try KoikatsuSceneReader.decodeDocument(Data(contentsOf: input))
+    var savedClip = SourceStudioAnimationState(record: try #require(original.snapshot.roots[0].character))
+    savedClip.group = 0; savedClip.category = 4; savedClip.no = 13; savedClip.normalizedTime = 0.25; savedClip.speed = 0.75
+    let bytes = try original.editedData(.init(animations: [10: savedClip]))
+    let fixture = input.deletingLastPathComponent().appendingPathComponent("animation-clock-" + UUID().uuidString + ".png")
+    defer { try? FileManager.default.removeItem(at: fixture) }
+    try bytes.write(to: fixture)
+    func reference(catalog: String?) -> SourceStudioCharacterReference {
+        .init(sceneFile: fixture.path, sceneSHA256: OriginalCardFixture.hash(bytes), rigFile: female, boneCatalogFile: bones, objectKey: 10,
+              makerLibraryFile: maker,
+              attachmentCatalogFile: URL(fileURLWithPath: bones).deletingLastPathComponent().appendingPathComponent("attachments.json").path,
+              animationCatalogFile: catalog)
+    }
+    let character = reference(catalog: animations)
+    let built = try SourceStudioCharacterPreview(reference: character, resources: ResourceStore(device: try #require(MTLCreateSystemDefaultDevice())))
+    let saved = SourceStudioAnimationState(record: built.record)
+    #expect(saved == savedClip && built.hasSavedAnimation)
+    func edited(_ group: Int32, _ category: Int32, _ no: Int32, speed: Float, forceLoop: Bool, time: Float) -> SourceStudioAnimationState {
+        var state = saved
+        state.group = group; state.category = category; state.no = no
+        state.speed = speed; state.forceLoop = forceLoop; state.normalizedTime = time
+        return state
+    }
+    var short = built.savedBodyValues; short[0] = 0.1
+    // 0/1/0 has state speed 0.5 and loops; 0/4/9 does not loop; 0/7/5 does
+    // not loop and blends motions of different lengths by height, so its
+    // length follows the body height.
+    let blended = edited(0, 7, 5, speed: 1, forceLoop: false, time: 0.1)
+    let cases: [(name: String, state: SourceStudioAnimationState?, body: [Float]?)] = [
+        ("saved clip", nil, nil),
+        ("speed 1.7, state speed 0.5", edited(0, 1, 0, speed: 1.7, forceLoop: false, time: 0.3), nil),
+        ("non-looping", edited(0, 4, 9, speed: 1, forceLoop: false, time: 0.2), nil),
+        ("non-looping, forceLoop", edited(0, 4, 9, speed: 1.3, forceLoop: true, time: 0.2), nil),
+        ("height-blended clip, edited body height", blended, short),
+    ]
+    let clock = SourceStudioAnimationClock()
+    for elapsed: Float in [7.3, 61.25] {
+        for (name, state, body) in cases {
+            try built.setShapeValues(face: nil, body: body)
+            let eager = try built.savedAnimationState(animationState: state, animationElapsed: elapsed)
+            let request = SourceStudioAnimationClock.Request(reference: character, edited: state, bodyValues: body)
+            let lazy = try #require(try clock.savedStates([request], elapsed: elapsed)[0].get(), "\(name) resolves")
+            #expect(lazy == eager, "\(name) at \(elapsed) s")
+            if (state ?? saved).speed > 0 { #expect(lazy.normalizedTime != (state ?? saved).normalizedTime, "\(name) advanced") }
+        }
+    }
+    try built.setShapeValues(face: nil, body: nil)
+    // The height case exercises the height: the card's body gives another time.
+    let cardBody = try built.savedAnimationState(animationState: blended, animationElapsed: 7.3)
+    try built.setShapeValues(face: nil, body: short)
+    #expect(try built.savedAnimationState(animationState: blended, animationElapsed: 7.3) != cardBody)
+    try built.setShapeValues(face: nil, body: nil)
+    // The decoded scene, passed in, gives the same state as reading the file.
+    let fresh = SourceStudioAnimationClock(), request = SourceStudioAnimationClock.Request(reference: character, edited: nil, bodyValues: nil)
+    let fromScene = try fresh.savedStates([request], elapsed: 7.3,
+                                          scene: (try KoikatsuSceneReader.decodeDocument(bytes), character.sceneSHA256))[0].get()
+    #expect(fromScene == (try built.savedAnimationState(animationElapsed: 7.3)))
+    // Without a catalog the saved state is kept; an edit cannot be advanced.
+    let bare = SourceStudioAnimationClock.Request(reference: reference(catalog: nil), edited: nil, bodyValues: nil)
+    #expect(try clock.savedStates([bare], elapsed: 7.3)[0].get() == nil)
+    let bareEdit = SourceStudioAnimationClock.Request(reference: reference(catalog: nil), edited: saved, bodyValues: nil)
+    #expect(throws: (any Error).self) { try clock.savedStates([bareEdit], elapsed: 7.3)[0].get() }
+}
