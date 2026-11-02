@@ -2,7 +2,7 @@
   "steps": [
     {"op": "liveAnimation", "on": false},
     {"op": "customization", "on": true},
-    {"op": "assert", "selection": {"kind": "head", "slot": 0, "sourceID": 0}, "initialLoad": {"geometry": "selectedAssets", "referenceLoad": "skipped", "cachePublication": "seeded"}},
+    {"op": "assert", "selection": {"kind": "head", "slot": 0, "sourceID": 0}, "initialLoad": {"geometry": "selectedAssets", "referenceLoad": "skipped", "cachePublication": "seeded", "shapeCachePublication": "seeded"}},
     {"op": "selectAsset", "selection": {"kind": "head", "slot": 0, "sourceID": 0}, "unchanged": true},
     {"op": "beginSelection", "selection": {"kind": "head", "slot": 0, "sourceID": 200}},
     {"op": "setBody", "index": 1, "value": 2.0},
@@ -14,11 +14,11 @@
     {"op": "setColorDraft", "id": "clothes.parts.0.colorInfo.0.baseColor", "rgba": [0.8, 0.2, 0.4, 1.0]},
     {"op": "mouthOpen", "value": 0.35},
     {"op": "advanceMotion", "value": 0.5},
-    {"op": "finishSelection", "rigReuse": {"hits": 9, "misses": 1}},
+    {"op": "finishSelection", "rigReuse": {"hits": 9, "misses": 1}, "shapeReuse": {"hits": 0, "misses": 1}},
     {"op": "assert", "selection": {"kind": "head", "slot": 0, "sourceID": 200}, "face": {"index": 20, "value": 0.625}, "body": {"index": 1, "value": 0.375}, "color": {"id": "clothes.parts.0.colorInfo.0.baseColor", "rgba": [0.8, 0.2, 0.4, 1.0]}},
     {"op": "selectAsset", "selection": {"kind": "head", "slot": 0, "sourceID": 201}},
     {"op": "assert", "selection": {"kind": "head", "slot": 0, "sourceID": 201}, "face": {"index": 20, "value": 0.625}, "body": {"index": 1, "value": 0.375}, "color": {"id": "clothes.parts.0.colorInfo.0.baseColor", "rgba": [0.8, 0.2, 0.4, 1.0]}},
-    {"op": "selectAsset", "selection": {"kind": "head", "slot": 0, "sourceID": 0}, "rigReuse": {"hits": 10, "misses": 0}},
+    {"op": "selectAsset", "selection": {"kind": "head", "slot": 0, "sourceID": 0}, "rigReuse": {"hits": 10, "misses": 0}, "shapeReuse": {"hits": 1, "misses": 0}},
     {"op": "assert", "selection": {"kind": "head", "slot": 0, "sourceID": 0}, "face": {"index": 20, "value": 0.625}, "body": {"index": 1, "value": 0.375}, "color": {"id": "clothes.parts.0.colorInfo.0.baseColor", "rgba": [0.8, 0.2, 0.4, 1.0]}},
     {"op": "captureResources", "id": "warm-head0"},
     {"op": "selectAsset", "selection": {"kind": "head", "slot": 0, "sourceID": 200}},
@@ -53,10 +53,10 @@
     {"op": "assert", "selection": {"kind": "hair", "slot": 0, "sourceID": 9}},
     {"op": "selectAsset", "selection": {"kind": "head", "slot": 0, "sourceID": 201}, "unchanged": true},
     {"op": "export", "path": ".local/verification/maker-scenario-exports/maker-head-female-selected.png"},
-    {"op": "reimport", "path": ".local/verification/maker-scenario-exports/maker-head-female-selected.png", "initialLoad": {"geometry": "selectedAssets", "referenceLoad": "skipped", "cachePublication": "seeded", "carried": 10, "misses": 0}},
+    {"op": "reimport", "path": ".local/verification/maker-scenario-exports/maker-head-female-selected.png", "initialLoad": {"geometry": "selectedAssets", "referenceLoad": "skipped", "cachePublication": "seeded", "shapeCachePublication": "seeded", "carried": 10, "misses": 0}},
     {"op": "assert", "selection": {"kind": "head", "slot": 0, "sourceID": 201}, "face": {"index": 20, "value": 0.625}, "body": {"index": 1, "value": 0.375}, "color": {"id": "clothes.parts.0.colorInfo.0.baseColor", "rgba": [0.8, 0.2, 0.4, 1.0]}},
-    {"op": "selectAsset", "selection": {"kind": "head", "slot": 0, "sourceID": 0}, "rigReuse": {"hits": 9, "misses": 1}},
-    {"op": "selectAsset", "selection": {"kind": "head", "slot": 0, "sourceID": 201}, "rigReuse": {"hits": 10, "misses": 0}},
+    {"op": "selectAsset", "selection": {"kind": "head", "slot": 0, "sourceID": 0}, "rigReuse": {"hits": 9, "misses": 1}, "shapeReuse": {"hits": 0, "misses": 1}},
+    {"op": "selectAsset", "selection": {"kind": "head", "slot": 0, "sourceID": 201}, "rigReuse": {"hits": 10, "misses": 0}, "shapeReuse": {"hits": 1, "misses": 0}},
     {"op": "assert", "selection": {"kind": "head", "slot": 0, "sourceID": 201}, "face": {"index": 20, "value": 0.625}, "body": {"index": 1, "value": 0.375}, "color": {"id": "clothes.parts.0.colorInfo.0.baseColor", "rgba": [0.8, 0.2, 0.4, 1.0]}}
   ]
 }
