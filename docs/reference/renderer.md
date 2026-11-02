@@ -404,9 +404,9 @@ are in [maps: slice 3](studio/maps.md#map-34-the-sky-and-block-images-slice-3).
   texture`. It is alpha blended in the transparent pass with both faces drawn,
   and reads no lightmap.
 - **Sampler state.** `map_fragment` samples the light map and direction map
-  (`lightmapSampler`) and the base, emission and particle textures
-  (`mapForcedAnisoRepeat`) with linear filtering, linear mips and
-  `max_anisotropy(9)`.
+  (`forcedAnisoClamp`) and the base, emission and particle textures
+  (`forcedAnisoRepeat`) with linear filtering, linear mips and
+  `max_anisotropy(9)`. Both samplers are in `Common.h`.
   - **Why 9.** The original player runs `QualitySettings.anisotropicFiltering`
     ForceEnable, which raises every texture to Unity's forced minimum of 9.
     The phase-map34 trace (`.local/sta11c-map34/phase-map34/map-trace.json`)
@@ -418,11 +418,53 @@ are in [maps: slice 3](studio/maps.md#map-34-the-sky-and-block-images-slice-3).
     differs by +0.005–0.007 ms of GPU per frame at 1996×1824. That is inside
     the offscreen benchmark's run-to-run range
     ([performance: slice 3](performance.md#slice-3-map-34-the-sky-and-block-images)).
-  - **Characters and items** keep `linearRepeat` (no anisotropy).
+  - **Characters and items** sample the same way since 2026-11-01. The
+    character and Studio item textures are mipmapped, Bilinear or Trilinear,
+    with `anisoLevel` 1 (the live store's 64; 1,034 of the 1,105 in
+    `studio/mat/00.unity3d`), so the player forces them to 9 too. The
+    `toon_fragment` base (repeat, and clamp for irises), colour mask, pattern,
+    overlays, iris highlights, normal, detail and line samples, `eye_fragment`'s
+    iris, white and highlight, the body mask, and the outline and shadow-caster
+    alpha tests now use `forcedAnisoRepeat` or `forcedAnisoClamp`. Screen-space
+    passes keep `linearClamp`. Single-level textures are forced like mipmapped ones, as
+    `TranslatedSourceProgram.SamplerConfiguration` forces every non-Point
+    texture with aniso above 0, mipmapped or not. In the live source-shader
+    gate, a mutation check that left them unforced moved 3,871 character
+    pixels, put every family further from the player's frame and failed
+    `toon_eyew_lod0` (p99 5 > 4). That is shown by the frame, not by a direct
+    player probe.
+  - **Limit: the native path forces every texture.** The native toon, eye,
+    outline, shadow-caster and map shaders read every texture through one
+    `constexpr` sampler per call site, and the glTF exports carry no sampler
+    state. So they force anisotropy 9 even on the textures the player leaves
+    unforced: Point-filtered ones, and those with `anisoLevel` 0. Before, those
+    sampled trilinear, which matched the player no better. Counts, from
+    `m_TextureSettings` (2026-11-02):
+    - The 35 transferred character bundles (`chara/*.unity3d`, 2,460
+      Texture2D) have no Point texture. Two ramps, `gt_ramp_05` and
+      `gt_ramp_06` (256×4, single-level), have aniso 0. The native shaders do
+      not sample them.
+    - The live store's 64 character textures: no Point, no aniso 0.
+    - In `studio/mat/00.unity3d` (1,105 Texture2D), 4 water textures are Point
+      with aniso 1 (`t_koi_stu_Water`, `t_koi_stu_WaterDropNormal`,
+      `t_koi_stu_waterCutOut`, `t_koi_stu_waterNormal`), and
+      `Ramp_SmoothFull` is aniso 0. None of them is in the converted item
+      catalog (chair, cube01, cylinder00).
+    - The live source-shader path follows Unity's rule per texture instead.
+      There, Point textures with their own aniso above 1 are an open question
+      ([#348](https://github.com/grabbiel/ikkoku/issues/348)); none of the
+      textures counted here is one.
   - **Test.** `mapTexturesSampleWithThePlayersForcedAnisotropy` draws a
     16:1 texture footprint over a texture whose levels 0–1 are white and the
     rest black. Each map texture reads 1. `max_anisotropy` 1–4 reads 0 on
     Apple GPUs.
+  - **Test (characters and items).** `characterAndItemTexturesSampleWithThePlayersForcedAnisotropy`
+    draws the same footprint through every slot above. Each draw with the
+    level texture must equal the draw with an all-white texture there, and
+    the all-white and all-black draws must differ.
+    `lowAnisotropyReadsTheCoarseLevelsOfTheProbeTexture` is the control: with
+    the forced samplers at anisotropy 1 or 4, the base slot reads the coarse
+    levels.
 - **Block images.** `SourceStudioBlockImages` parses the glTF's
   `ikkokuBlockImages`. `SourceStudioBlockTexture.make` (slice 2's lightmap
   upload, generalised) uploads BC1 and BC3 images (`.bc1_rgba(_srgb)`,
@@ -733,6 +775,46 @@ only the store lock, so `deinit` can retire from any thread.
 The rule for owners is to retire before building their next frame. A frame
 created after the retirement counts as current, so its preparation would
 re-create the deformation keys it still names.
+
+Unregistering first covers a frame prepared after the release, but not one
+already being prepared on a render thread (#344). The deform pass looks up
+an item's mesh and then asks for its buffer, without the store's lock in
+between. `SourceRigPreview.deinit`, or a Maker reimport, can unregister the
+mesh and release its key on the main thread in that gap, and the request
+used to cache a new buffer that nothing released again (one buffer per
+dropped owner). `deformBuffer(for:mesh:vertexCount:frameCreatedAt:)` now
+takes the item's mesh: it caches a new buffer only while that mesh is
+registered and not retiring, and returns a transient one otherwise, which
+the frame's own deform pass fills, as for a stale frame. A retiring mesh is
+included because its retirement may not cover the key. The check runs
+under the store lock that `unregister` and `retire` take, and only when a
+buffer is created. A buffer already cached is returned unchanged, so a
+released key whose mesh stays registered is re-created on its next use as
+before. `ResourceStore.beforeDeformBuffer` (DEBUG builds only) lets a test
+drop an owner inside that gap, on the capture thread. The hook runs inside
+`prepare`, under `renderLock`, so a teardown it runs must not take
+`renderLock`, and it must not request a deformation buffer itself.
+
+Items that share a deformation key in one preparation (one per material
+pass) draw the buffer that the key's first item requested and dispatched.
+Later items do not ask the store again: a transient buffer is a new object
+per request, so a second request would give a later pass a buffer that no
+dispatch writes.
+
+A cached buffer that is too small for a request whose mesh the store no
+longer owns stays cached until the owner's release. The request gets a
+transient buffer of the needed size. While a mesh is retiring, each
+preparation that names its key without a cached buffer allocates a new
+transient buffer, until the next submitted frame completes the retirement.
+That churn is accepted.
+
+So the rule for an owner that releases at once is to unregister its meshes
+before `releaseDeformBuffers`, as `SourceRigPreview.deinit` does: a request
+in the gap then finds the mesh gone. An owner whose meshes are shared, such
+as a library asset's, cannot unregister them, so the check would still find
+the mesh registered and cache a new buffer. Such an owner retires its keys
+with `retire(deformKeys:)` after its last frame was created. Completing the
+retirement drops any buffer a pending frame re-created.
 
 **Owners in the app.**
 
@@ -3586,6 +3668,44 @@ non-Shader-Forge shader, or a builtin the path does not compute
 a documented convention (`[1, 1, 0, 0]`, as in the probe). Each material using it
 lists it, so nothing is substituted silently.
 
+**Sampler state.** Each texture's sampler follows Unity's rule
+(`TranslatedSourceProgram.SamplerConfiguration`): its filter, wrap and aniso,
+under the player's `QualitySettings.anisotropicFiltering`. CharaStudio runs
+ForceEnable. `OriginalCharacterProbe`'s frame report and every
+`OriginalMapProbe` case record it, and no game assembly changes it or the
+global limits. So a non-Point texture with aniso above 0 samples with
+anisotropy 9 and linear mips, and composite inputs do too. The frozen-frame
+probe takes the mode from its frame. Since 2026-11-01 the Studio passes the
+recorded value, `SourceShaderLiveConfiguration.playerAnisotropicFiltering`.
+Before, it passed none, so its live characters sampled Bilinear textures
+(60 of the live store's 64) with nearest mips and no anisotropy. The test
+`studioLiveAssembliesSampleWithThePlayersForcedAnisotropy` pins both. Each
+resolved material records its effective sampler states
+(`SourceShaderLiveMaterial.samplers`). Materials resolved from the native store
+share one sampler state per configuration, through the store's per-resource
+cache that composite inputs use. The validation-only capture provider makes
+its own.
+
+- **Quality level.** Unity keeps `anisotropicFiltering` per quality level.
+  Neither probe records which level the install ran or the level names, so
+  the value is the probed install's at its active level. The next
+  `OriginalCharacterProbe` run records the `QualitySettings` level and names.
+- **Single-level textures.** The rule forces every non-Point texture with
+  aniso above 0, mipmapped or not. A mutation check of the controlled frame
+  gate left single-level textures unforced (capture provider, two runs per
+  rule, each rule deterministic). It moved 3,871 of 98,917 character pixels.
+  Every family ended further from the player's frame: `main_skin` mean
+  0.0544 → 0.1003 and p99 1 → 3, and `toon_eyew_lod0` p99 1 → 5, which fails
+  its gate. So the frame supports forcing them; no direct player probe has
+  checked it.
+- **The Studio report.** The Studio's live report
+  (`IKKOKU_LIVE_SOURCE_REPORT`, and the benchmark's `liveSourceShaders`) lists
+  each character's `samplers`. These are its resolved materials' bound
+  textures, counted by effective state, for example
+  `"aniso 9, mips linear": 3` (`SourceShaderLiveAssembly.samplerSummary`).
+  The `studio-scenario-live-samplers` check asserts those counts in the app.
+  With the Studio call site reverted to no mode, the check fails.
+
 **Per-frame inputs.** `SourceShaderLiveEncoder` converts each live item's vertices
 with a compute kernel, once per vertex source and register layout. The output is
 the program's `SourceInput` registers:
@@ -3813,7 +3933,7 @@ The validation capture then draws only the nose, so the character gate fails by
 construction. The asset-backed gaps are closed below; natively composed textures
 remain a separate step.
 
-**Measurement: Studio scene.** `koikatu_cs0002591.png`
+**Measurement: Studio scene.** Source scene `029f0b1d`
 (`IKKOKU_STUDIO_SCENARIO_SCENE`) was captured with `IKKOKU_LIVE_SOURCE_SHADERS=1`
 and the inputs above, without look settings. Six source characters loaded with
 no crash. 6 slots draw live (`cf_O_noseline` per character); the renderer
@@ -3869,7 +3989,7 @@ repeated after each merge of `main`:
 
 Each case was launched with only its own `IKKOKU_*` variables:
 
-- `koikatu_cs0002591.png`: `a0dc50f4…`. From `8d83f01` on it is `caed346e…`
+- Source scene `029f0b1d`: `a0dc50f4…`. From `8d83f01` on it is `caed346e…`
   on both sides, because #125 applies the scene's clothes state.
 - the rig and fixture card: `9d973e21…`;
 - `synthetic-current.png`: `6837cd63…`. Since #133, with a Maker library
@@ -4238,7 +4358,7 @@ launches:
 
 | Case | Capture SHA-256 | CPU encode p50 base / head | GPU p50 base / head |
 | --- | --- | ---: | ---: |
-| `koikatu_cs0002591.png` (`IKKOKU_SOURCE_SCENE`, `IKKOKU_BENCHMARK_OUTPUT`) | `cac034c1…` | 0.7284 / 0.7329 ms | 1.2344 / 1.2411 ms |
+| source scene `029f0b1d` (`IKKOKU_SOURCE_SCENE`, `IKKOKU_BENCHMARK_OUTPUT`) | `cac034c1…` | 0.7284 / 0.7329 ms | 1.2344 / 1.2411 ms |
 | fixture card, Maker app capture (`IKKOKU_BENCHMARK_OUTPUT`) | `26742344…` | 0.1799 / 0.1698 ms | 0.4636 / 0.4614 ms |
 | rig and fixture card (`IKKOKU_CAPTURE_RIG`, no benchmark output) | `9d973e21…` | — | — |
 
@@ -4502,7 +4622,7 @@ launches:
 
 | Case | Capture SHA-256 | CPU encode p50 base / head | GPU p50 base / head |
 | --- | --- | ---: | ---: |
-| `koikatu_cs0002591.png` (`IKKOKU_SOURCE_SCENE`, `IKKOKU_BENCHMARK_OUTPUT`) | `cac034c1…` | 0.7282 / 0.7536 ms | 1.2702 / 1.2719 ms |
+| source scene `029f0b1d` (`IKKOKU_SOURCE_SCENE`, `IKKOKU_BENCHMARK_OUTPUT`) | `cac034c1…` | 0.7282 / 0.7536 ms | 1.2702 / 1.2719 ms |
 | fixture card, Maker app capture (`IKKOKU_BENCHMARK_OUTPUT`) | `26742344…` | 0.1765 / 0.1763 ms | 0.4643 / 0.4567 ms |
 | rig and fixture card (`IKKOKU_CAPTURE_RIG`, no benchmark output) | `9d973e21…` | — | — |
 
@@ -6232,7 +6352,7 @@ a gate.
 **App acceptance.** Release apps: base main `0e6181a` (binary `a659f515…`) and
 the candidate built at `4b99cea` (`e29baf9c…`; later commits are docs only), both
 from the same tracked `Assets` tree. Each default-OFF capture is byte-identical
-between base and candidate: the Studio source scene (`koikatu_cs0002591`), the
+between base and candidate: the Studio source scene (`029f0b1d`), the
 native Studio capture and the Maker synthetic card, each with live opt-in OFF and
 ON (the ON runs add the live inputs, this store and contract). None of those
 reaches a face composite: the source-scene characters fall back first on the

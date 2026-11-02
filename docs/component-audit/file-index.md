@@ -23,7 +23,7 @@ branch was tested or every asset matches the original game. Feature status,
 specific comments and pending tasks are in the linked reports. Shared behavior
 may be discussed in more than one report; one primary owner is listed here.
 
-**1077 files indexed; 1077 assigned; 0 unassigned.**
+**1080 files indexed; 1080 assigned; 0 unassigned.**
 
 Counts include the website and clothes-group additions listed below. Runtime and
 test totals include their specialized role descriptions; this is inventory
@@ -34,19 +34,19 @@ bookkeeping, not a new full source audit.
 | [App / gameplay / plugins](app-gameplay-and-plugins.md) | 110 |
 | [Character / Maker / mods](character-and-mods.md) | 130 |
 | [Studio / IK / animation](studio.md) | 253 |
-| [Renderer / foundation / assets](renderer-and-foundation.md) | 360 |
-| [Toolchain / verification / historical docs](toolchain-and-verification.md) | 214 |
+| [Renderer / foundation / assets](renderer-and-foundation.md) | 362 |
+| [Toolchain / verification / historical docs](toolchain-and-verification.md) | 215 |
 
 | File role | Files |
 | --- | ---: |
 | App resource metadata / icon | 16 |
 | Build / repository configuration | 9 |
-| Conversion / recovery / verification tool | 250 |
+| Conversion / recovery / verification tool | 251 |
 | Documentation / historical evidence | 65 |
 | Generated asset / catalog / fixture | 205 |
 | Reference host / controlled fixture | 37 |
 | Runtime / shared shader declaration | 233 |
-| Test / validation | 223 |
+| Test / validation | 225 |
 | Public synthetic body/face input fixture | 1 |
 
 ## App / gameplay / plugins
@@ -825,6 +825,7 @@ Feature assessment: [renderer-and-foundation.md](renderer-and-foundation.md).
 | [Packages/Engine/Tests/CoreMathTests/CoreMathTests.swift](../../Packages/Engine/Tests/CoreMathTests/CoreMathTests.swift) | Test / validation |
 | [Packages/Engine/Tests/CoreMathTests/UnityCoordinatesTests.swift](../../Packages/Engine/Tests/CoreMathTests/UnityCoordinatesTests.swift) | Test / validation |
 | [Packages/Engine/Tests/EngineTests/CharacterLifetimeTests.swift](../../Packages/Engine/Tests/EngineTests/CharacterLifetimeTests.swift) | Test / validation |
+| [Packages/Engine/Tests/EngineTests/DeformBufferReleaseTests.swift](../../Packages/Engine/Tests/EngineTests/DeformBufferReleaseTests.swift) | Test / validation |
 | [Packages/Engine/Tests/EngineTests/DeformationSafetyTests.swift](../../Packages/Engine/Tests/EngineTests/DeformationSafetyTests.swift) | Test / validation |
 | [Packages/Engine/Tests/EngineTests/DisplayLinkRatePolicyTests.swift](../../Packages/Engine/Tests/EngineTests/DisplayLinkRatePolicyTests.swift) | Test / validation |
 | [Packages/Engine/Tests/EngineTests/Fixtures/texture-identity/opaque-10.avif](../../Packages/Engine/Tests/EngineTests/Fixtures/texture-identity/opaque-10.avif) | Generated asset / catalog / fixture (synthetic texture-identity decoder input) |
@@ -867,6 +868,7 @@ Feature assessment: [renderer-and-foundation.md](renderer-and-foundation.md).
 | [Packages/Engine/Tests/EngineTests/SourceShaderBindingTests.swift](../../Packages/Engine/Tests/EngineTests/SourceShaderBindingTests.swift) | Test / validation |
 | [Packages/Engine/Tests/EngineTests/SourceShaderCompositeTests.swift](../../Packages/Engine/Tests/EngineTests/SourceShaderCompositeTests.swift) | Test / validation |
 | [Packages/Engine/Tests/EngineTests/SourceShaderLiveTests.swift](../../Packages/Engine/Tests/EngineTests/SourceShaderLiveTests.swift) | Test / validation |
+| [Packages/Engine/Tests/EngineTests/ToonForcedAnisotropyTests.swift](../../Packages/Engine/Tests/EngineTests/ToonForcedAnisotropyTests.swift) | Test / validation |
 | [Packages/Engine/Tests/EngineTests/TranslatedSourceVertexStoreTests.swift](../../Packages/Engine/Tests/EngineTests/TranslatedSourceVertexStoreTests.swift) | Test / validation |
 | [Shaders/Common.h](../../Shaders/Common.h) | Runtime / shared shader declaration |
 | [Shaders/Deform.metal](../../Shaders/Deform.metal) | Runtime / shared shader declaration |
@@ -1026,6 +1028,7 @@ Feature assessment: [toolchain-and-verification.md](toolchain-and-verification.m
 | [Tools/verification/scenarios/inspector-kept-views.json](../../Tools/verification/scenarios/inspector-kept-views.json) | Conversion / recovery / verification tool |
 | [Tools/verification/scenarios/item-props.json](../../Tools/verification/scenarios/item-props.json) | Conversion / recovery / verification tool |
 | [Tools/verification/scenarios/legacy-scene.json](../../Tools/verification/scenarios/legacy-scene.json) | Conversion / recovery / verification tool |
+| [Tools/verification/scenarios/live-samplers.json](../../Tools/verification/scenarios/live-samplers.json) | Conversion / recovery / verification tool |
 | [Tools/verification/scenarios/live-step-edit.json](../../Tools/verification/scenarios/live-step-edit.json) | Conversion / recovery / verification tool |
 | [Tools/verification/scenarios/maker-color-roundtrip.json](../../Tools/verification/scenarios/maker-color-roundtrip.json) | Conversion / recovery / verification tool |
 | [Tools/verification/scenarios/maker-outfit-colors.json](../../Tools/verification/scenarios/maker-outfit-colors.json) | Conversion / recovery / verification tool |

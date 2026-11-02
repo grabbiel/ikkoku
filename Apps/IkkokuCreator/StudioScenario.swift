@@ -287,6 +287,16 @@ struct StudioScenario: Decodable {
         /// assert only: the named character's live wear readback (rendered
         /// preview and document); only the fields present are compared.
         let clothes: ClothesValue?
+        /// assert only: the named character's live source-shader assembly
+        /// (`IKKOKU_LIVE_SOURCE_SHADERS=1`), its resolved materials' bound
+        /// textures counted by effective sampler state.
+        let liveSamplers: LiveSamplersValue?
+
+        struct LiveSamplersValue: Decodable {
+            let key: Int32
+            /// `SourceShaderLiveAssembly.samplerSummary`, compared whole.
+            let counts: [String: Int]
+        }
         /// setExpression and assert share a partial face-state object.
         let expression: ExpressionValue?
 
@@ -533,7 +543,7 @@ struct StudioScenario: Decodable {
                  seconds, dx, dy, eyeLook, blink, handPattern, mode, axis, pixels,
                  render, exportIdenticalToSource, errorContains, outfit, accessoryLabels, pluginMount, state, clothes, expression,
                  sex, character, chain, delta, ik, edit, build, parent, children, absent, copy, added, activeCopyOf,
-                 aid, routeEdit, route, routeLines, sourceMap
+                 aid, routeEdit, route, routeLines, sourceMap, liveSamplers
         }
 
         init(from decoder: Decoder) throws {
@@ -603,6 +613,7 @@ struct StudioScenario: Decodable {
             pluginMount = try c.decodeIfPresent([PluginMountSummary.Section].self, forKey: .pluginMount)
             state = try c.decodeIfPresent(Int.self, forKey: .state)
             clothes = try c.decodeIfPresent(ClothesValue.self, forKey: .clothes)
+            liveSamplers = try c.decodeIfPresent(LiveSamplersValue.self, forKey: .liveSamplers)
             expression = try c.decodeIfPresent(ExpressionValue.self, forKey: .expression)
             // Native IK parameters: absent keys stay `nil` like every optional
             // above, and the op that needs one reports it missing.
@@ -679,6 +690,29 @@ struct StudioScenario: Decodable {
 
     /// Numeric compares (shape rates, color components) match within this bound.
     static let tolerance: Float = 1e-5
+
+    /// #354: one turn of the main dispatch queue between steps. `run` holds
+    /// the main thread from startup to exit, so without it nothing queued on
+    /// main runs during the scenario: every live step's completion handler
+    /// (`SourceStudioLiveTickJob.start`) keeps its job, frames, palettes and
+    /// textures alive until the run ends. The turn runs in a private common
+    /// mode: the run loop serves the main queue only in common modes, and the
+    /// studio's 30 Hz timer is scheduled in the default mode alone, so no
+    /// timer step moves the animation clock between steps. A zero timeout runs
+    /// only what is already queued (and what that queues), at most 64 times.
+    private static func mainQueueTurn() {
+        var turns = 0
+        while turns < 64, CFRunLoopRunInMode(stepTurnMode, 0, true) == .handledSource { turns += 1 }
+    }
+
+    /// The turn's mode, made a common mode of the main run loop once per
+    /// process on the first scenario step's turn: an app launch that runs no
+    /// Studio scenario never adds it.
+    private static let stepTurnMode: CFRunLoopMode = {
+        let mode = CFRunLoopMode("IkkokuScenarioStepTurn" as CFString)
+        CFRunLoopAddCommonMode(CFRunLoopGetMain(), mode)
+        return mode
+    }()
 
     /// Runs the steps against the imported scene. A failing step records its
     /// detail and the run continues; a failed `export`/`reimport` or
@@ -1537,6 +1571,27 @@ struct StudioScenario: Decodable {
             return problems.isEmpty ? nil : "assert clothes: character \(check.key) " + problems.joined(separator: "; ")
         }
 
+        /// The live source-shader sampler states (#338): pins the anisotropic
+        /// mode the Studio resolves its live assemblies with.
+        func assertLiveSamplers(_ step: Step, details: inout [String]) -> String? {
+            guard let check = step.liveSamplers else { return nil }
+            guard studio.liveSourceShaders else { return "assert liveSamplers: live source shaders are off" }
+            guard let object = studio.doc.objects.first(where: { $0.sourceObjectKey == check.key }) else {
+                return "assert liveSamplers: no object with source key \(check.key)"
+            }
+            guard let entry = studio.liveSourceAssemblies[object.id] else {
+                return "assert liveSamplers: character \(check.key) has no live assembly"
+            }
+            switch entry.result {
+            case .failure(let reason): return "assert liveSamplers: character \(check.key) has no live assembly: \(reason.text)"
+            case .success(let assembly):
+                let summary = assembly.samplerSummary
+                func list(_ counts: [String: Int]) -> String { "{" + counts.sorted { $0.key < $1.key }.map { "\($0.key): \($0.value)" }.joined(separator: ", ") + "}" }
+                details.append("live samplers \(check.key): \(list(summary)) (\(assembly.textureProvider))")
+                return summary == check.counts ? nil : "assert liveSamplers: character \(check.key) samples \(list(summary)), expected \(list(check.counts))"
+            }
+        }
+
         func assertExpression(_ step: Step, details: inout [String]) -> String? {
             guard let check = step.expression else { return nil }
             guard let id = object(step), let preview = studio.sourceShapePreview(for: id), let object = studio.doc.object(id) else {
@@ -1625,7 +1680,12 @@ struct StudioScenario: Decodable {
             return (id, boneID, axis, axisName, anchor, start)
         }
 
-        scenarioLoop: for step in scenario.steps {
+        // #354: each step drains its own autorelease pool and then gives the
+        // main queue one turn (`mainQueueTurn`), so neither a step's
+        // autoreleased buffers nor its jobs' main-queue completions outlive
+        // it. `continue` ends the step; `break scenarioLoop` stops the run.
+        var stopped = false
+        func runStep(_ step: Step) { scenarioLoop: repeat {
             // Steps run microseconds apart, inside the editor's 0.4 s
             // edit-coalescing window (startup's import opens it too), so an
             // edit could silently share the previous snapshot and `undo` would
@@ -1685,7 +1745,7 @@ struct StudioScenario: Decodable {
                 // it overwrites its own earlier artifact on a lane rerun.
                 guard let path = step.path, let url = insideLocal(path) else {
                     record(step, false, "saveDocument: path must stay under .local/: \(step.path ?? "<missing>")")
-                    break scenarioLoop
+                    stopped = true; break scenarioLoop
                 }
                 do {
                     try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
@@ -1693,19 +1753,19 @@ struct StudioScenario: Decodable {
                     record(step, true, "saved document to \(path)")
                 } catch {
                     record(step, false, "saveDocument failed, stopping: \(error)")
-                    break scenarioLoop
+                    stopped = true; break scenarioLoop
                 }
             case "loadDocument":
                 guard let path = step.path, let url = insideLocal(path) else {
                     record(step, false, "loadDocument: path must stay under .local/: \(step.path ?? "<missing>")")
-                    break scenarioLoop
+                    stopped = true; break scenarioLoop
                 }
                 do {
                     try studio.loadScene(from: url)
                     record(step, true, "loaded document from \(path): \(studio.doc.objects.count) objects")
                 } catch {
                     record(step, false, "loadDocument failed, stopping: \(error)")
-                    break scenarioLoop
+                    stopped = true; break scenarioLoop
                 }
             case "setFace", "setBody":
                 let face = step.op == "setFace"
@@ -2664,7 +2724,7 @@ struct StudioScenario: Decodable {
                     if studio.sourceBuildProgress != nil { problems.append("the progress line stayed after the builds") }
                 } catch {
                     record(step, false, "backgroundBuild (\(build)) failed, stopping: \(error)")
-                    break scenarioLoop
+                    stopped = true; break scenarioLoop
                 }
                 let claim = build == "importThenNewScene"
                     ? "New Scene cancelled the background import and nothing reached the document"
@@ -2794,11 +2854,11 @@ struct StudioScenario: Decodable {
             case "export":
                 guard let path = step.path, let url = insideLocal(path) else {
                     record(step, false, "export: path must stay under .local/: \(step.path ?? "<missing>")")
-                    break scenarioLoop
+                    stopped = true; break scenarioLoop
                 }
                 guard !isSourcePath(url) else {
                     record(step, false, "export: output must differ from both initial and current source paths")
-                    break scenarioLoop
+                    stopped = true; break scenarioLoop
                 }
                 do {
                     // The lane may name a report directory that does not exist
@@ -2816,12 +2876,12 @@ struct StudioScenario: Decodable {
                     record(step, true, "exported edited original scene to \(path)")
                 } catch {
                     record(step, false, "export failed, stopping: \(error)")
-                    break scenarioLoop
+                    stopped = true; break scenarioLoop
                 }
             case "reimport":
                 guard let path = step.path, let url = insideLocal(path) else {
                     record(step, false, "reimport: path must stay under .local/: \(step.path ?? "<missing>")")
-                    break scenarioLoop
+                    stopped = true; break scenarioLoop
                 }
                 do {
                     // The same inputs the `IKKOKU_SOURCE_SCENE` startup import
@@ -2834,7 +2894,7 @@ struct StudioScenario: Decodable {
                     record(step, true, "reimported \(path): \(studio.doc.objects.count) objects")
                 } catch {
                     record(step, false, "reimport failed, stopping: \(error)")
-                    break scenarioLoop
+                    stopped = true; break scenarioLoop
                 }
             case "focus":
                 // The F key: select the object and frame the view on it;
@@ -3121,6 +3181,7 @@ struct StudioScenario: Decodable {
                 if let problem = assertAccessoryLabels(step, details: &details) { problems.append(problem) }
                 if let problem = assertPluginMount(step, details: &details) { problems.append(problem) }
                 if let problem = assertClothes(step, details: &details) { problems.append(problem) }
+                if let problem = assertLiveSamplers(step, details: &details) { problems.append(problem) }
                 if let problem = assertExpression(step, details: &details) { problems.append(problem) }
                 if let problem = assertIK(step, details: &details) { problems.append(problem) }
                 if let needle = step.diagnosticContains {
@@ -3157,6 +3218,13 @@ struct StudioScenario: Decodable {
             default:
                 record(step, false, "unknown op \"\(step.op)\"")
             }
+        } while false }
+        for step in scenario.steps {
+            autoreleasepool {
+                runStep(step)
+                if !stopped { mainQueueTurn() }
+            }
+            if stopped { break }
         }
         let passed = results.filter(\.ok).count
         return Report(steps: results, passed: passed, failed: results.count - passed)

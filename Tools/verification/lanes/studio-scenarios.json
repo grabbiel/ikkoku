@@ -2504,7 +2504,7 @@
         "IKKOKU_STUDIO_SCENARIO_REPORT": ".local/verification/reports/studio-scenario-topology-reparent.json"
       },
       "referenceTier": "app-smoke",
-      "tolerance": "ST-T03/ST-S09 reparenting on koikatu_cs0002591: move item 623 into folder 962, character 65 into folder 626 and item 1129 to the root through the inspector's Parent path, and delete folder 1298 with its character and three items. Each moved record must be appended after its new siblings and keep its world position within 1e-4 m and rotation within 0.01 degrees in session; four undos restore the original tree and four redos repeat it; after export and reimport the tree must match and every moved object (plus an unmoved neighbour) must hold its world pose within 5e-4 m and 0.05 degrees. Negative controls prove the position check fails on a moved capture and on the wrong capture.",
+      "tolerance": "ST-T03/ST-S09 reparenting on source scene `029f0b1d`: move item 623 into folder 962, character 65 into folder 626 and item 1129 to the root through the inspector's Parent path, and delete folder 1298 with its character and three items. Each moved record must be appended after its new siblings and keep its world position within 1e-4 m and rotation within 0.01 degrees in session; four undos restore the original tree and four redos repeat it; after export and reimport the tree must match and every moved object (plus an unmoved neighbour) must hold its world pose within 5e-4 m and 0.05 degrees. Negative controls prove the position check fails on a moved capture and on the wrong capture.",
       "artifacts": [
         {
           "path": ".local/verification/reports/studio-scenario-topology-reparent.json",
@@ -2698,7 +2698,7 @@
         "IKKOKU_STUDIO_SCENARIO_REPORT": ".local/verification/reports/studio-scenario-topology-duplicate.json"
       },
       "referenceTier": "app-smoke",
-      "tolerance": "ST-T03/ST-S09/ST-D03 duplicate and add on koikatu_cs0002591 through the workspace Duplicate and Add buttons: duplicate folder 962 with its character and three items, root item 1540 and folder item 1127, then add a folder, a camera and a point light. Every copy is appended after its original's last sibling and holds its original's world pose within 1e-4 m and 0.01 degrees; six undos restore the original tree and six redos repeat it. After export and reimport the copies and new objects carry the keys an independent Python GetNewIndex walk allocates (113 with 114, 331, 332, 333; 334; 335 in folder 962; 336, 337, 338) and hold their world poses within 5e-4 m and 0.05 degrees. Negative controls prove the position and child-order checks fail on the wrong values.",
+      "tolerance": "ST-T03/ST-S09/ST-D03 duplicate and add on source scene `029f0b1d` through the workspace Duplicate and Add buttons: duplicate folder 962 with its character and three items, root item 1540 and folder item 1127, then add a folder, a camera and a point light. Every copy is appended after its original's last sibling and holds its original's world pose within 1e-4 m and 0.01 degrees; six undos restore the original tree and six redos repeat it. After export and reimport the copies and new objects carry the keys an independent Python GetNewIndex walk allocates (113 with 114, 331, 332, 333; 334; 335 in folder 962; 336, 337, 338) and hold their world poses within 5e-4 m and 0.05 degrees. Negative controls prove the position and child-order checks fail on the wrong values.",
       "artifacts": [
         {
           "path": ".local/verification/reports/studio-scenario-topology-duplicate.json",
@@ -2732,7 +2732,7 @@
         "IKKOKU_STUDIO_SCENARIO_REPORT": ".local/verification/reports/studio-scenario-light-limit.json"
       },
       "referenceTier": "app-smoke",
-      "tolerance": "#320 light limit on koikatu_cs0002591 (no lights): add a point, a spot and a directional light at the root. With the export setting off (CharaStudio 1.0.4.2's two-light limit, SceneInfo.isLightCheck) the export is refused with the light count 3 and no file is written; with it on (KK_Fix_UnlimitedMapLights) the export writes all three lights and the status names the three lights and what a CharaStudio without the fix drops. After reimport the lights carry keys 113, 114 and 115 (the first free keys) after the eight source roots. A negative control proves the child-order check fails without key 115.",
+      "tolerance": "#320 light limit on source scene `029f0b1d` (no lights): add a point, a spot and a directional light at the root. With the export setting off (CharaStudio 1.0.4.2's two-light limit, SceneInfo.isLightCheck) the export is refused with the light count 3 and no file is written; with it on (KK_Fix_UnlimitedMapLights) the export writes all three lights and the status names the three lights and what a CharaStudio without the fix drops. After reimport the lights carry keys 113, 114 and 115 (the first free keys) after the eight source roots. A negative control proves the child-order check fails without key 115.",
       "artifacts": [
         {
           "path": ".local/verification/reports/studio-scenario-light-limit.json",
@@ -2960,7 +2960,7 @@
         "IKKOKU_STUDIO_SCENARIO_REPORT": ".local/verification/reports/studio-scenario-source-map34.json"
       },
       "referenceTier": "app-smoke",
-      "tolerance": "ST-A11 slice 3 on scene-map34-day.png (Map 34 \u7a7a\u304d\u6559\u5ba4 alone, moved, day sun, saved by the original player): the converted map is drawn before the first step (53 draws: 29 lightmapped, the particles, the day sky; 54 images as BC blocks, none decoded) with the exact approximation label in the status line; two map-only points pick nothing; View > Show Source Map off draws 0 map parts and says so, on restores 53 with the sky; the original-format export is byte-identical to the source with the map hidden and shown; reimport, New Scene (no map, no line) and undo restore the map. Lighting, sky and colour are not checked here (see docs/reference/studio/maps.md, the map probe gates).",
+      "tolerance": "ST-A11 slice 3 on scene-map34-day.png (Map 34 空き教室 alone, moved, day sun, saved by the original player): the converted map is drawn before the first step (53 draws: 29 lightmapped, the particles, the day sky; 54 images as BC blocks, none decoded) with the exact approximation label in the status line; two map-only points pick nothing; View > Show Source Map off draws 0 map parts and says so, on restores 53 with the sky; the original-format export is byte-identical to the source with the map hidden and shown; reimport, New Scene (no map, no line) and undo restore the map. Lighting, sky and colour are not checked here (see docs/reference/studio/maps.md, the map probe gates).",
       "artifacts": [
         {
           "path": ".local/verification/reports/studio-scenario-source-map34.json",
@@ -3002,7 +3002,7 @@
         "IKKOKU_STUDIO_SCENARIO_REPORT": ".local/verification/reports/studio-scenario-source-map41.json"
       },
       "referenceTier": "app-smoke",
-      "tolerance": "ST-A11 slice 4 on scene-map41.png (Map 41 \u5099\u54c1\u5009\u5eab alone, moved, day sun, map option on, saved by the original player; the map the user's scenes name most): the converted map is drawn before the first step (29 draws: 27 lightmapped, no sky, particle, unlit, silhouette or option draws; 28 images as BC blocks with no PNG copies) with the exact approximation label in the status line; two map-only points pick nothing; View > Show Source Map off draws 0 map parts and says so, on restores 29; the original-format export is byte-identical to the source with the map hidden and shown; reimport, New Scene (no map, no line) and undo restore the map. Lighting and colour are not checked here (see docs/reference/studio/maps.md, the map probe gates).",
+      "tolerance": "ST-A11 slice 4 on scene-map41.png (Map 41 備品倉庫 alone, moved, day sun, map option on, saved by the original player; the map the user's scenes name most): the converted map is drawn before the first step (29 draws: 27 lightmapped, no sky, particle, unlit, silhouette or option draws; 28 images as BC blocks with no PNG copies) with the exact approximation label in the status line; two map-only points pick nothing; View > Show Source Map off draws 0 map parts and says so, on restores 29; the original-format export is byte-identical to the source with the map hidden and shown; reimport, New Scene (no map, no line) and undo restore the map. Lighting and colour are not checked here (see docs/reference/studio/maps.md, the map probe gates).",
       "artifacts": [
         {
           "path": ".local/verification/reports/studio-scenario-source-map41.json",
@@ -3111,7 +3111,7 @@
         "IKKOKU_STUDIO_SCENARIO_REPORT": ".local/verification/reports/studio-scenario-source-map-none.json"
       },
       "referenceTier": "app-smoke",
-      "tolerance": "koikatu_cs0002591.png names no map (-1): with the map catalog supplied there is no map request, no draws and no status line before and after an original-format round trip, and the export is byte-identical to the source. ST-A11.",
+      "tolerance": "Source scene `029f0b1d` names no map (-1): with the map catalog supplied there is no map request, no draws and no status line before and after an original-format round trip, and the export is byte-identical to the source. ST-A11.",
       "artifacts": [
         {
           "path": ".local/verification/reports/studio-scenario-source-map-none.json",
@@ -3270,6 +3270,65 @@
         {
           "path": ".local/verification/reports/studio-scenario-inspector-kept-route.json",
           "kind": "scenario-report"
+        }
+      ],
+      "timeout": 600
+    },
+    {
+      "id": "studio-scenario-live-samplers",
+      "argv": [
+        ".local/build/Build/Products/Debug/Ikkoku.app/Contents/MacOS/Ikkoku"
+      ],
+      "fixtures": [
+        {
+          "env": "IKKOKU_SOURCE_SCENE",
+          "kind": "file",
+          "from": "IKKOKU_STUDIO_SCENARIO_SCENE"
+        },
+        {
+          "env": "IKKOKU_SOURCE_AVATAR",
+          "kind": "file"
+        },
+        {
+          "env": "IKKOKU_MAKER_LIBRARY",
+          "kind": "file"
+        },
+        {
+          "env": "IKKOKU_LIVE_SOURCE_PROGRAMS",
+          "kind": "directory"
+        },
+        {
+          "env": "IKKOKU_LIVE_SOURCE_TEXTURES",
+          "kind": "file"
+        },
+        {
+          "env": "IKKOKU_LIVE_SOURCE_STREAMS",
+          "kind": "file"
+        },
+        {
+          "env": "IKKOKU_SHADER_BINDING_SUPPLEMENT",
+          "kind": "file"
+        },
+        {
+          "env": "IKKOKU_HEAD_MATERIAL_CONTRACT",
+          "kind": "file"
+        }
+      ],
+      "env": {
+        "IKKOKU_LIVE_SOURCE_SHADERS": "1",
+        "IKKOKU_STUDIO_SCENARIO": "Tools/verification/scenarios/live-samplers.json",
+        "IKKOKU_STUDIO_SCENARIO_REPORT": ".local/verification/reports/studio-scenario-live-samplers.json"
+      },
+      "referenceTier": "app-smoke",
+      "tolerance": "#338, the live source-shader path's sampler state in the Studio (IKKOKU_LIVE_SOURCE_SHADERS=1 on the scenario scene): each listed character's live assembly must exist, and its resolved materials' bound textures, counted by effective sampler state (SourceShaderLiveAssembly.samplerSummary, max anisotropy x mip filter), must equal the scenario's counts exactly. Under the player's ForceEnable, Bilinear and Trilinear textures with aniso above 0 read 'aniso 9, mips linear'. This pins the anisotropic mode the Studio call site passes: with it reverted to none, the Bilinear textures read 'aniso 1, mips nearest' and the check fails. Only materials that resolve live are counted. Most of the scene's slots stay toon while CharaStudio's scene globals are unresolved, so the counts cover the slots that do resolve. The same counts must hold after the original-format export and reimport.",
+      "artifacts": [
+        {
+          "path": ".local/verification/reports/studio-scenario-live-samplers.json",
+          "kind": "scenario-report"
+        },
+        {
+          "path": ".local/verification/scenario-exports/live-samplers.png",
+          "kind": "exported-scene"
         }
       ],
       "timeout": 600

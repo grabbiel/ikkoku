@@ -115,7 +115,7 @@ All VM work used one `prlctl exec` per phase. The Parallels errno-24 count was 0
 **Phase B** (`original_map_probe.py capture`, `Tools/reverse/fixtures/OriginalMapProbe.cs`) authored two scene records in the original player, then read each back through `Studio.LoadSceneCoroutine`.
 
 - **`scene-map33.png`** (SHA-256 `2043b3cb…6b9c`): an emptied scene with map 33, map transform pos (0.3, -0.05, -0.5) and rot (4, 25, -3), and a camera inside the room. The load took 0.231 s.
-- **`scene-map33-showoff.png`** (SHA-256 `c5a8135c…d694`): `koikatu_cs0002591.png` with map 33 added (transform reset to zero by `AddMap`) and the scene's own camera, fov 23. The load took 10.6 s, mostly characters.
+- **`scene-map33-showoff.png`** (SHA-256 `c5a8135c…d694`): source scene `029f0b1d` with map 33 added (transform reset to zero by `AddMap`) and the scene's own camera, fov 23. The load took 10.6 s, mostly characters.
 
 After each load, the player recorded the following in `map-trace.json`:
 
@@ -168,7 +168,7 @@ The Python tests are `test_export_map_scene.py`, `test_compare_original_map.py` 
   - reimport, New Scene and undo.
 - **`studio-scenario-reload-save-source-map`** saves that scene natively.
 - **`studio-scenario-reload-load-source-map`** loads the save in a fresh process: one rehydration, and the map draws again.
-- **`studio-scenario-source-map-none`** runs on `koikatu_cs0002591.png`, which names no map, with the catalog supplied: there is no request or line, and the export is byte-identical.
+- **`studio-scenario-source-map-none`** runs on source scene `029f0b1d`, which names no map, with the catalog supplied: there is no request or line, and the export is byte-identical.
 
 On the Debug build of `ceccafa`, the full Studio lane passed 77/77 under `--strict` and `maker-scenarios` 10/10. Both passed again on the merged head `c094f92` (main `6502803`). The private-source Engine suite there ran 999 tests: 978 passed, 20 were skipped, and 1 failed, the known `liveSourceShadersMeetTheControlledOriginalFrameGates`. Two negative controls ran on the same build, and both fail as they must (`.local/sta11a-maps/controls/`):
 
@@ -186,7 +186,7 @@ info=(); for f in .local/reverse/source/abdata/studio/info/*.unity3d; do info+=(
 $P Tools/reverse/export_map_scene.py catalog "${info[@]}" \
   --converted .local/reverse/exports/maps/33-bushitu --output .local/reverse/exports/maps/catalog.json
 $P Tools/reverse/original_map_probe.py capture --output .local/sta11a-maps/phase-b --errno-baseline 0 \
-  --showoff '<koikatu_cs0002591.png>'
+  --showoff '<source scene 029f0b1d>'
 # Per case, under the app lock: IKKOKU_SOURCE_SCENE=<authored scene> IKKOKU_STUDIO_MAP_CATALOG=<catalog>
 # IKKOKU_SOURCE_AVATAR=<rig> IKKOKU_SOURCE_MAP_PROBE=.local/sta11a-maps/ours/<case>
 # IKKOKU_AUTOCAPTURE=.local/sta11a-maps/ours/<case>/native-color.png IKKOKU_CAPTURE_W=960 IKKOKU_CAPTURE_H=720
@@ -474,9 +474,9 @@ Not drawn:
 
 ### Sampler state
 
-The player runs `QualitySettings.anisotropicFiltering` `ForceEnable`. The phase-map34 trace (`.local/sta11c-map34/phase-map34/map-trace.json`) records it in every case's `capture.quality` and `oracle.quality`, beside the lightmaps' `anisoLevel` 3 and the sky and particle textures' 1. Every mipmapped texture that is not point-filtered is then sampled with anisotropy clamped into Unity's forced limits, [9, 16]. No game assembly calls `Texture.SetGlobalAnisotropicFilteringLimits` or sets the quality value: only `UnityEngine.dll` names them. So the lightmaps' `anisoLevel` 3 and the particle and base textures' 1 are raised to 9. D3D11 samples an anisotropic texture with linear mips.
+The player runs `QualitySettings.anisotropicFiltering` `ForceEnable`. The phase-map34 trace (`.local/sta11c-map34/phase-map34/map-trace.json`) records it in every case's `capture.quality` and `oracle.quality`, beside the lightmaps' `anisoLevel` 3 and the sky and particle textures' 1. The code (`TranslatedSourceProgram.SamplerConfiguration`) then samples every texture that is not point-filtered and has `anisoLevel` above 0, mipmapped or not, with anisotropy clamped into Unity's forced limits, [9, 16]. For single-level textures this is shown by the frame, not by a direct player probe: a mutation check that left them unforced moved 3,871 character pixels on the controlled original frame, every family ended further from the player's frame, and `toon_eyew_lod0` failed its gate (p99 5 > 4). No game assembly calls `Texture.SetGlobalAnisotropicFilteringLimits` or sets the quality value: only `UnityEngine.dll` names them. So the lightmaps' `anisoLevel` 3 and the particle and base textures' 1 are raised to 9. D3D11 samples an anisotropic texture with linear mips.
 
-`map_fragment` now samples the light map, direction map, base, emission and particle textures with anisotropy 9 and linear mips (`lightmapSampler`, `mapForcedAnisoRepeat`). Character and item draws keep `linearRepeat`.
+`map_fragment` now samples the light map, direction map, base, emission and particle textures with anisotropy 9 and linear mips (`forcedAnisoClamp`, `forcedAnisoRepeat`). Since 2026-11-01, character and item draws do too ([renderer](../renderer.md#source-map-sky-particles-and-block-images-st-a11-slice-3-2026-10-26)).
 
 The probe gates found it. With trilinear sampling, map 34's irradiance failed on surfaces seen edge-on (baseboards, shelf boards), and the particles failed outright. A sampler sweep, with one rebuild and the four captures per state (`.local/sta11c-map34/exp/<state>/comparison.json`):
 
@@ -508,7 +508,7 @@ In the original player, the probe authored four scenes and reloaded each through
 | `map34-day` | 0 | pos (0.3, −0.05, −0.5), rot (4, 25, −3), as in `map33` | pivot (0.5, 1.3, 0.2) in the map's frame, pitch −4°, yaw −70°, 2.5 m, fov 45 |
 | `map34-evening` | 1 | zero | pivot (0.5, 1.3, −0.8), pitch −6°, yaw −105°, 2.5 m, fov 45 |
 | `map34-night` | 2 | zero | pivot (0.3, 1.4, 0.6), pitch −8°, yaw −80°, 2 m, fov 45 |
-| `map34-showoff` | 0 | zero (`AddMap`) | `koikatu_cs0002591.png`'s own camera, fov 23 |
+| `map34-showoff` | 0 | zero (`AddMap`) | source scene `029f0b1d`'s own camera, fov 23 |
 
 For each case it rendered:
 
@@ -827,7 +827,7 @@ The output is `.local/sta11d-map-coverage/vm-maps/` (163 MB, 192 files). The cas
 | --- | --- | --- | --- | --- |
 | 12 inside | 41, 21, 11, 19, 22, 29, 38, 40, 15, 25, 1, 27 | day, evening or night, each at least four times | MapPos/MapRot (as map33) for 41, 19, 40 and 25; zero otherwise | the map-local pivot (0, 1.1, 0), pitch 8°, 3 m, a yaw chosen offline from the converted geometry so the camera has room behind it |
 | 8 outside | 21, 11, 19, 22, 15, 25, 1, 27 | day (22: evening) | zero | through one of the map's vanish colliders (below) |
-| `map41-showoff` | 41 | day | zero (`AddMap`) | `koikatu_cs0002591.png`'s own camera |
+| `map41-showoff` | 41 | day | zero (`AddMap`) | source scene `029f0b1d`'s own camera |
 
 Every map but 33 now uses a far plane of 1000 m for the depth-normals images, on both sides (`UseMap`, `AppState.sourceMapProbeDepthFar`). Map 38's case keeps the map option on, so its 70 mob silhouettes draw. The player's `mobColor` was the default (0, 0, 1, 0.5). The oracle renders the silhouettes and the unlit draws alone, like the sky (`oracle-<case>-silhouettes.rgba.f32`, `-unlit.rgba.f32`). It skips the irradiance pair, recording why, for maps 22 and 27 (no baked lightmaps) and map 40, whose Standard materials all carry keywords, so there is no keyword-free template to copy. Map 40 draws with its three lightmaps on 8 renderers in the player too, so its irradiance is reported, not gated.
 
@@ -1065,7 +1065,7 @@ Slice 4 (all maps), Release, in one quiet window ([performance: slice 4](../perf
 - **The sky's far plane.** The player's main camera clips at 1000 m, inside parts of map 34's sky spheres (about 450–1,200 m). Our infinite projection draws the whole sphere, so the full frame differs where the player shows black.
 - **Fog and camera effects.** RenderSettings fog was off at runtime in every phase-C and map 34 scene. The per-sun-type fog of `SunLightInfo` and CharaStudio's camera image effects are not drawn.
 - **The PNG copies of maps 33 and 34.** The 40 slice-4 maps have no PNG copies of their block images. Maps 33 and 34 keep theirs, which `IKKOKU_SOURCE_MAP_DECODED_TEXTURES` decodes; map 34's take 17 MB of its export.
-- **Forced anisotropy for characters and items.** The original forces anisotropy on every texture, character and item textures included. Only map textures sample that way here. Matching it elsewhere is a separate fidelity item with its own gates.
+- **Forced anisotropy for characters and items.** Done on 2026-11-01: the toon, eye, outline, shadow-caster and body-mask samples use the map's forced samplers ([renderer](../renderer.md)). The Studio's live source-shader path passes the player's ForceEnable separately.
 - **Vanish.** `Studio.CameraControl` hides the walls the camera's view capsule crosses (`isConfigVanish`, on by default). In the slice-4 phase the player hid nothing from eight outside cameras, so the app does not either. The next change records what the trigger needs (the time scale, the camera's layer, the collision matrix, physics steps) and a case where the original does hide a wall.
 - **Map 40's irradiance.** Its Standard materials all carry keywords, so the oracle had no keyword-free template, and its lightmaps are not gated. The next VM phase builds the template from `Shader.Find("Standard")`.
 - **The oracle's culling mask.** The oracle's geometry, depth-normals, irradiance and class passes draw every layer (`cullingMask ~0`). So they draw layer-0 solids that no Studio camera draws: `mo_koi_mi_balckback` (a black backdrop, `Standard`, no lightmap) in maps 19, 25 and 29, and a pot in map 15's outside view. The slice-4 converter leaves them out, as Studio does, and map 19's and 25's outside views fail geometry by exactly that backdrop ([the gates](#the-gates)). The next VM phase renders those passes with `Camera.main`'s mask (536874000).
