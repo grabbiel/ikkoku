@@ -772,6 +772,32 @@ retired hidden mask (the region bitmask applies) and skips retired meshes.
 frame lock and render lock order is unchanged; `retire` and completion take
 only the store lock, so `deinit` can retire from any thread.
 
+Textures complete earlier. A texture an owner retires (`retire(textures:)`)
+or the texture cache evicts is released when a frame created after the
+retirement is submitted (`completeTextureRetirements`, #358). A submitted
+frame holds its own references to the textures it names
+(`RenderFrame.retainTextures`), so the pending frame it replaces, and every
+copy of that frame, still draw them.
+
+- **Order and cost.** `submit` calls it after `retainTextures`, before taking
+  `frameLock`, under the store lock alone. With nothing retiring it costs one
+  lock and one check.
+- **Generation and stamp.** It bumps the resource generation when it releases
+  something, and leaves the newest-completed stamp alone. That stamp orders
+  deformation keys, and moving it would give every frame created before an
+  eviction transient deformation buffers.
+- **Why.** In run D of #358, an occluded or minimized viewport prepared no
+  frame, so no eviction was ever released. Retiring entries grew from 24 to
+  115, and the footprint reached 954 MB at the fifth head, against 695 MB
+  without the cache.
+- **Unsubmitted frames.** A frame that is never submitted resolves its
+  textures when it is prepared: `StudioModel.frame` for picks and captures,
+  the probes, thumbnails. Each is built and drawn on the main actor in one
+  call while its textures are pinned or owned. The asynchronous hover pick is
+  the exception, and its result is dropped once a newer frame was built. A
+  texture released before such a frame is prepared draws the fallback: white
+  base, black masks and overlays, the flat normal.
+
 The rule for owners is to retire before building their next frame. A frame
 created after the retirement counts as current, so its preparation would
 re-create the deformation keys it still names.
@@ -920,8 +946,10 @@ hit as evictable entries with their `allocatedSize`.
   (42 MB) but not two.
 - **Eviction.** Past the budget, the least recently pinned or unpinned entry
   goes first. Its key is dropped and the texture is retired through
-  `retire(textures:)`, so a frame created before the eviction still draws it,
-  and the next submitted frame releases it.
+  `retire(textures:)`, so a frame created before the eviction still draws it.
+  The next submit of a frame created after the eviction releases it, even if
+  no viewport prepares a frame
+  ([R6](#character-and-import-lifetime-r6-second-slice)).
 - **Rescue.** A load whose lookup returned a handle just before its eviction
   takes the texture back when it pins it, which cancels the retirement. If the
   texture was already released, or its owner retired it, the pin fails and the
@@ -951,10 +979,13 @@ the next two. #332 records this one-time growth and does not investigate it.
 - the pending-frame rule;
 - the rescue;
 - that an owner's retire or unregister ends the cache's interest;
-- both publication paths through real appearance loads.
+- both publication paths through real appearance loads;
+- the release at the next submit without a prepared frame, a frame submitted
+  after the eviction still drawing the texture, the rescue before that submit,
+  and deformation buffers staying cached for frames created before a release.
 
 Run them with
-`swift test --package-path Packages/Engine --filter 'unpinnedTexturesPastTheBudget|aPinnedTextureStays|anEvictedTextureStays|aPinBetweenEviction|anOwnersRetireOrUnregister|liveAppearancesPinTheir'`.
+`swift test --package-path Packages/Engine --filter 'unpinnedTexturesPastTheBudget|aPinnedTextureStays|anEvictedTextureStays|aPinBetweenEviction|anOwnersRetireOrUnregister|liveAppearancesPinTheir|anEvictedTextureIsReleasedByTheNextSubmit|aFrameCreatedBeforeAnEviction|aPinBeforeTheNextSubmit|aTextureReleaseAtSubmit'`.
 
 ### Renderer threads (R7 phase 2, item 2)
 

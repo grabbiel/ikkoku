@@ -304,6 +304,11 @@ public final class Renderer: @unchecked Sendable {
         var snapshot = frame
         snapshot.retainTextures(from: resources)
         snapshot.submitted = true
+        // R6: the snapshot now holds the textures it names, and the frame it
+        // replaces has held its own since its submit, so textures retired before
+        // this frame was created go now, not when a viewport prepares it (an
+        // occluded or minimized one never does). Store lock only, before frameLock.
+        resources.completeTextureRetirements(createdBefore: snapshot.createdAt)
         // Native shaders do not read frame.time. Live programs may read _Time;
         // conservatively keep every visible live material at the display rate.
         let continuous = snapshot.items.contains { $0.visible && $0.sourceShader != nil }
