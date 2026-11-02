@@ -241,6 +241,7 @@ final class PerfWorkloadDriver {
         case "studio-select": try prepareStudioSelect()
         case "studio-export-import": try prepareStudioExportImport()
         case "studio-show-hidden": try prepareStudioShowHidden()
+        case "studio-clock-first": try prepareStudioClockFirst()
         default: throw RigError.invalid("unknown workload \(workload)")
         }
     }
@@ -649,6 +650,43 @@ final class PerfWorkloadDriver {
         actionSteps = steps
         trace.details["hiddenRoots"] = roots.map { ["sourceKey": Int($0.sourceObjectKey ?? -1), "characters": holds($0.id)] }
         trace.details["gesture"] = "Visible on, then off, for each of \(roots.count) hidden objects holding source characters, repeated; live animation on"
+    }
+
+    /// `studio-clock-first` (lazy hidden characters): the first clock rebase
+    /// and the first native save after the import, then repeated. "rebase"
+    /// sets the first drawn character with a converted saved clip to its own
+    /// animation speed (`setSourceAnimationSpeed`, which bakes every
+    /// character's clock and restarts it); "save" is File ▸ Save
+    /// (`saveScene(to:)`) to a scratch file, removed before the next one.
+    /// Live animation on, so each runs on an advanced clock.
+    private func prepareStudioClockFirst() throws {
+        let studio = try prepareStudioSource(selectKey: nil)
+        let doc = studio.doc
+        guard let target = doc.objects.first(where: { object in
+            object.kind == .character && doc.isVisible(object.id) && studio.sourceShapePreview(for: object.id)?.hasSavedAnimation == true
+        }) else { throw RigError.invalid("studio-clock-first needs a drawn character with a converted saved clip") }
+        let folder = try makeScratchFolder()
+        var count = 0
+        var previous: URL?
+        let id = target.id
+        actionSteps = [
+            ("rebase", true, { [weak self] in
+                guard let preview = studio.sourceShapePreview(for: id), let i = studio.doc.index(of: id) else {
+                    self?.app.errorMessage = "studio-clock-first: the target character has no preview"; return
+                }
+                let speed = (studio.doc.objects[i].sourceAnimation ?? SourceStudioAnimationState(record: preview.record)).speed
+                do { try studio.setSourceAnimationSpeed(id, speed) } catch { self?.app.errorMessage = "\(error)" }
+            }),
+            ("save", true, { [weak self] in
+                if let previous { try? FileManager.default.removeItem(at: previous) }
+                count += 1
+                let url = folder.appendingPathComponent("save-\(count).png")
+                previous = url
+                do { try studio.saveScene(to: url) } catch { self?.app.errorMessage = "\(error)" }
+            }),
+        ]
+        trace.details["clockTarget"] = Int(target.sourceObjectKey ?? -1)
+        trace.details["gesture"] = "Animation speed set to its own value (a clock rebase), then File ▸ Save, repeated; live animation on"
     }
 
     /// `studio-load`: File ▸ Open (`AppState.openScene(at:importing:)`) of the
