@@ -455,16 +455,18 @@ func legacyCorpusSceneUpgradesAndReadsBack() throws {
 /// saved with the scene. On this 0.0.7 character those are the 10 bones of
 /// its back hair. Our pose binds the catalog bones it finds in the rig it
 /// draws (SourceStudioPose.swift:143-149): body bones under the body, hair
-/// bones under `cf_J_FaceUp_ty`. This character's hair is not converted,
-/// so the drawn hair is the avatar's: the FK view lists 9 of its front-hair
-/// bones, which the record does not save, at a zero rotation, and none of
-/// the 10 CharaStudio adds. Each previews an edit without trapping, and an
-/// export that edits any bone the record does not save is refused.
+/// bones under `cf_J_FaceUp_ty`. The character's own hair is converted
+/// (back 28, front 48, option 7; side 0 is the empty row), so the FK view
+/// shows exactly the 10 bones CharaStudio adds, at a zero rotation, and
+/// binds every hair bone the record saves. Each previews an edit without
+/// trapping, and an export that edits any bone the record does not save is
+/// refused. The Maker path assembles the same hair: its rig files include
+/// the three converted hair rigs and no reference hair is kept.
 @Test(.enabled(if: SourceFixtureSupport.shouldRun(["IKKOKU_STUDIO_LEGACY_SCENE", "IKKOKU_LEGACY_SCENE_PROBE", "IKKOKU_SOURCE_AVATAR",
                                                    "IKKOKU_SOURCE_MALE_AVATAR", "IKKOKU_STUDIO_POSE_CONTRACT", "IKKOKU_MAKER_LIBRARY"])
                    && MTLCreateSystemDefaultDevice() != nil,
                "Requires IKKOKU_STUDIO_LEGACY_SCENE, IKKOKU_LEGACY_SCENE_PROBE, both source avatars, IKKOKU_STUDIO_POSE_CONTRACT, IKKOKU_MAKER_LIBRARY and a Metal device"))
-func legacyCharacterFKShowsUnsavedBonesAtZeroAndRefusesTheirExport() throws {
+func legacyCharacterFKShowsCharaStudiosAddedHairBonesAtZeroAndRefusesTheirExport() throws {
     let path = try SourceFixtureSupport.require("IKKOKU_STUDIO_LEGACY_SCENE")
     let probe = URL(fileURLWithPath: try SourceFixtureSupport.require("IKKOKU_LEGACY_SCENE_PROBE"))
     let female = try SourceFixtureSupport.require("IKKOKU_SOURCE_AVATAR"), male = try SourceFixtureSupport.require("IKKOKU_SOURCE_MALE_AVATAR")
@@ -507,8 +509,26 @@ func legacyCharacterFKShowsUnsavedBonesAtZeroAndRefusesTheirExport() throws {
         let unsaved = preview.controller.targets.filter { character.bones[Int32($0.bone.id)] == nil }
         let unsavedIDs = Set(unsaved.map { Int32($0.bone.id) })
         let hair = preview.selections.filter { $0.property.hasPrefix("ChaFileHair.") }.map { "\($0.property.dropFirst(12))=\($0.status)" }
-        print("[legacy-fk] character \(key): \(character.bones.count) saved FK bones; CharaStudio adds \(missing.sorted()); "
+        let bound = Set(preview.controller.targets.map { Int32($0.bone.id) })
+        let savedHair = Set(character.bones.keys.filter(isHair))
+        print("[legacy-fk] character \(key): \(character.bones.count) saved FK bones (\(savedHair.count) hair); CharaStudio adds \(missing.sorted()); "
             + "the FK view shows \(unsavedIDs.sorted()) unsaved, at zero; hair \(hair)")
+        // ST-T05a finding 2 closed: the character's own hair is drawn, so the
+        // view shows exactly the bones CharaStudio adds and binds every saved
+        // hair bone.
+        #expect(!hair.contains { $0.hasSuffix("=conversionMissing") }, "character \(key): hair \(hair)")
+        #expect(unsavedIDs == missing, "character \(key): the FK view shows \(unsavedIDs.sorted()), CharaStudio adds \(missing.sorted())")
+        #expect(savedHair.isSubset(of: bound), "character \(key): saved hair bones \(savedHair.subtracting(bound).sorted()) are not bound")
+        // The Maker path assembles the same hair from the same library.
+        let maker = try SourceMakerLibrary.load(url: URL(fileURLWithPath: library)), card = try character.card()
+        let base = URL(fileURLWithPath: character.sex == 0 ? male : female)
+        let prepared = try maker.prepare(card: card, coordinate: 0, baseURL: base)
+        #expect(prepared.selections.filter { $0.property.hasPrefix("ChaFileHair.") }.map(\.status)
+                == preview.selections.filter { $0.property.hasPrefix("ChaFileHair.") }.map(\.status))
+        #expect(!prepared.diagnostics.contains { $0.hasPrefix("ChaFileHair.") }, "\(prepared.diagnostics)")
+        let rigFolders = Set(maker.rigFiles(card: card, coordinate: 0, baseURL: base, wear: false).map { $0.deletingLastPathComponent().lastPathComponent })
+        let convertedHair = preview.selections.filter { $0.property.hasPrefix("ChaFileHair.") && $0.status == "converted" }.map { "\($0.category)-\($0.sourceID)" }
+        #expect(Set(convertedHair).isSubset(of: rigFolders), "character \(key): rig files \(rigFolders.sorted())")
         // Every bone either side adds is a hair bone: the body bones the
         // view shows are all saved.
         #expect(missing.allSatisfy(isHair) && unsavedIDs.allSatisfy(isHair), "character \(key): an unsaved body FK bone")
@@ -534,7 +554,7 @@ func legacyCharacterFKShowsUnsavedBonesAtZeroAndRefusesTheirExport() throws {
             }
         }
     }
-    #expect(added == 10 && shown > 0)
+    #expect(added == 10 && shown == 10)
 }
 
 /// The user's corpus (opt-in: IKKOKU_SCENE_CORPUS, read in place; see
