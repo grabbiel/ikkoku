@@ -387,16 +387,30 @@ public enum ResourceDigest {
         SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()
     }
 
-    /// Reads the file in 1 MiB chunks, so a large model is never held in memory whole.
+    /// Reads the file in 1 MiB chunks, so a large model is never held in memory
+    /// whole: each chunk is read in its own autorelease pool (`pooledRead`) and
+    /// is freed before the next one is read, even when the caller never turns
+    /// a run loop.
     public static func sha256(contentsOf url: URL) throws -> String {
         let input = try FileHandle(forReadingFrom: url); defer { try? input.close() }
         var hasher = SHA256()
-        while let chunk = try input.read(upToCount: 1 << 20), !chunk.isEmpty { hasher.update(data: chunk) }
+        while let chunk = try input.pooledRead(upToCount: 1 << 20), !chunk.isEmpty { hasher.update(data: chunk) }
         return hasher.finalize().map { String(format: "%02x", $0) }.joined()
     }
 
     public static func isSHA256(_ text: String) -> Bool {
         text.utf8.count == 64 && text.utf8.allSatisfy { (48...57).contains($0) || (97...102).contains($0) }
+    }
+}
+
+extension FileHandle {
+    /// `read(upToCount:)` in its own autorelease pool (#332). Foundation hands
+    /// the bytes over as an autoreleased `NSData`, so a caller that reads
+    /// again and again without a run-loop turn (a Maker card import on the
+    /// main actor, a scripted scenario) keeps every read until its pool
+    /// drains. Here the bytes are freed when the returned `Data` is.
+    package func pooledRead(upToCount count: Int) throws -> Data? {
+        try autoreleasepool { try read(upToCount: count) }
     }
 }
 
