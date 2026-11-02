@@ -749,7 +749,30 @@ under the store lock that `unregister` and `retire` take, and only when a
 buffer is created. A buffer already cached is returned unchanged, so a
 released key whose mesh stays registered is re-created on its next use as
 before. `ResourceStore.beforeDeformBuffer` (DEBUG builds only) lets a test
-drop an owner inside that gap, on the capture thread.
+drop an owner inside that gap, on the capture thread. The hook runs inside
+`prepare`, under `renderLock`, so a teardown it runs must not take
+`renderLock`, and it must not request a deformation buffer itself.
+
+Items that share a deformation key in one preparation (one per material
+pass) draw the buffer that the key's first item requested and dispatched.
+Later items do not ask the store again: a transient buffer is a new object
+per request, so a second request would give a later pass a buffer that no
+dispatch writes.
+
+A cached buffer that is too small for a request whose mesh the store no
+longer owns stays cached until the owner's release. The request gets a
+transient buffer of the needed size. While a mesh is retiring, each
+preparation that names its key without a cached buffer allocates a new
+transient buffer, until the next submitted frame completes the retirement.
+That churn is accepted.
+
+So the rule for an owner that releases at once is to unregister its meshes
+before `releaseDeformBuffers`, as `SourceRigPreview.deinit` does: a request
+in the gap then finds the mesh gone. An owner whose meshes are shared, such
+as a library asset's, cannot unregister them, so the check would still find
+the mesh registered and cache a new buffer. Such an owner retires its keys
+with `retire(deformKeys:)` after its last frame was created. Completing the
+retirement drops any buffer a pending frame re-created.
 
 **Owners in the app.**
 

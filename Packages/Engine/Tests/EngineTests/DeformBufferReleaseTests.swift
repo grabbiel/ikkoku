@@ -4,6 +4,7 @@ import Metal
 import simd
 import Assets
 import CoreMath
+import ShaderTypes
 @testable import Scene
 import Character
 @testable import Renderer
@@ -144,4 +145,154 @@ func droppingAPreviewDuringItsDeformPassLeavesNoBuffer() throws {
     #expect(after.deformBuffers == before.deformBuffers)
     #expect(after.meshes == before.meshes)
     #expect(encoder.bufferCount == 0)
+}
+
+// #349 review: every item of one deformation key in a preparation (one per
+// material pass) draws the buffer the key's single dispatch writes. A
+// transient buffer is a new object per request, so a later item asking the
+// store again would draw a buffer no dispatch fills.
+
+/// A one-morph triangle: its items deform.
+private func morphed(_ name: String) -> MeshData {
+    MeshData(name: name, positions: [.zero, Float3(1, 0, 0), Float3(0, 1, 0)],
+             normals: [Float3](repeating: Float3(0, 0, 1), count: 3), indices: [0, 1, 2],
+             morphTargets: [MeshData.MorphTarget(name: "m", positionDeltas: [Float3](repeating: Float3(0, 0, 0.1), count: 3), normalDeltas: [])])
+}
+
+/// Two passes of one deformed object, as a two-pass appearance draws it: the
+/// same mesh and deformation key.
+private func twoPasses(_ mesh: MeshHandle, key: UInt64) -> RenderFrame {
+    var frame = RenderFrame()
+    frame.items = (0..<2).map { _ in
+        RenderItem(mesh: mesh, material: MaterialState(uniforms: .make(kind: MaterialKindItem)), model: matrix_identity_float4x4,
+                   objectID: 1, deformKey: key, morphWeights: [(index: 0, weight: 0.5)])
+    }
+    return frame
+}
+
+/// Prepares `frame` as a capture does (under the render lock, in a
+/// frame-ring frame, abandoned afterwards) and returns what it would encode.
+private func prepared(_ renderer: Renderer, _ frame: RenderFrame) throws -> Renderer.FrameContext {
+    let targets = try RenderTargets(device: renderer.gpu.device, width: 16, height: 16)
+    var result: Result<Renderer.FrameContext, any Error> = .failure(CancellationError())
+    renderer.renderLockedLive {
+        renderer.frameRingBegin()
+        result = Result { try renderer.prepare(frame: frame, targets: targets) }
+        renderer.frameRing.abandonFrame()
+    }
+    return try result.get()
+}
+
+/// The frame dispatches `key` once, and each of its `draws` draws reads that
+/// dispatch's buffer.
+private func dispatchedOnce(_ context: Renderer.FrameContext, key: UInt64, draws: Int) throws -> any MTLBuffer {
+    let dispatches = context.deforms.filter { $0.key == key }
+    #expect(dispatches.count == 1)
+    let buffer = try #require(dispatches.first?.buffer)
+    let records = (context.opaque + context.transparent).filter { $0.item.deformKey == key }
+    #expect(records.count == draws)
+    #expect(records.allSatisfy { $0.vertexBuffer === buffer })
+    return buffer
+}
+
+/// The owner is dropped if the second pass asks the store for the key, which
+/// is when an undispatched transient buffer would reach it. The second pass
+/// draws the first pass's buffer instead, and never asks.
+@Test(.enabled(if: MTLCreateSystemDefaultDevice() != nil))
+func passesOfOneKeyDrawTheBufferTheirFirstPassDispatches() throws {
+    let renderer = try makeSourceShaderRenderer()
+    let resources = renderer.resources
+    let baseline = resources.statistics().deformBuffers
+    let key: UInt64 = 0x349A
+    let mesh = try resources.register(mesh: morphed("two-pass"))
+    final class Requests: @unchecked Sendable { var count = 0 }
+    let requests = Requests()
+    resources.beforeDeformBuffer = { requested in
+        guard requested == key else { return }
+        requests.count += 1
+        guard requests.count == 2 else { return }
+        resources.unregister(mesh: mesh)              // SourceRigPreview.deinit
+        resources.releaseDeformBuffers(keys: [key])
+    }
+    defer { resources.beforeDeformBuffer = nil }
+    let context = try prepared(renderer, twoPasses(mesh, key: key))
+    #expect(requests.count == 1)
+    let buffer = try dispatchedOnce(context, key: key, draws: 2)
+    #expect(buffer.label == "deform.\(key)")
+    #expect(resources.statistics().deformBuffers == baseline + 1)
+    resources.unregister(mesh: mesh)
+    resources.releaseDeformBuffers(keys: [key])
+    #expect(resources.statistics().deformBuffers == baseline)
+}
+
+/// A retiring mesh's key gets a transient buffer: both passes draw it.
+@Test(.enabled(if: MTLCreateSystemDefaultDevice() != nil))
+func passesOfARetiringMeshDrawOneTransientBuffer() throws {
+    let renderer = try makeSourceShaderRenderer()
+    let resources = renderer.resources
+    let baseline = resources.statistics().deformBuffers
+    let key: UInt64 = 0x349B
+    let mesh = try resources.register(mesh: morphed("retiring-two-pass"))
+    let frame = twoPasses(mesh, key: key)        // pending: created before the retirement
+    resources.retire(meshes: [mesh])
+    let buffer = try dispatchedOnce(try prepared(renderer, frame), key: key, draws: 2)
+    #expect(buffer.label == "deform.\(key).transient")
+    #expect(resources.statistics().deformBuffers == baseline)
+    resources.completeRetirements(createdBefore: RenderFrame().createdAt)
+    #expect(resources.mesh(mesh) == nil)
+    #expect(resources.statistics().deformBuffers == baseline)
+}
+
+/// A frame older than a completed retirement gets a transient buffer for a
+/// key without one: both passes draw it. A current frame caches the key's
+/// buffer again, and both passes draw that.
+@Test(.enabled(if: MTLCreateSystemDefaultDevice() != nil))
+func passesInAStaleFrameDrawOneTransientBuffer() throws {
+    let renderer = try makeSourceShaderRenderer()
+    let resources = renderer.resources
+    let baseline = resources.statistics().deformBuffers
+    let key: UInt64 = 0x349C
+    let mesh = try resources.register(mesh: morphed("stale-two-pass"))
+    let stale = twoPasses(mesh, key: key)
+    let other = try resources.register(mesh: triangle("retired"))
+    resources.retire(meshes: [other])
+    resources.completeRetirements(createdBefore: RenderFrame().createdAt)
+    let buffer = try dispatchedOnce(try prepared(renderer, stale), key: key, draws: 2)
+    #expect(buffer.label == "deform.\(key).transient")
+    #expect(resources.statistics().deformBuffers == baseline)
+    let cached = try dispatchedOnce(try prepared(renderer, twoPasses(mesh, key: key)), key: key, draws: 2)
+    #expect(cached.label == "deform.\(key)")
+    #expect(resources.statistics().deformBuffers == baseline + 1)
+    resources.unregister(mesh: mesh)
+    resources.releaseDeformBuffers(keys: [key])
+    #expect(resources.statistics().deformBuffers == baseline)
+}
+
+/// A cached buffer too small for a request whose mesh the store no longer
+/// owns stays cached: the request gets a transient buffer of the needed
+/// size. The owner's release then leaves neither.
+@Test(.enabled(if: MTLCreateSystemDefaultDevice() != nil))
+func aTooSmallCachedBufferOfAnUnownedMeshStaysUntilItsRelease() throws {
+    let resources = ResourceStore(device: try #require(MTLCreateSystemDefaultDevice()))
+    let baseline = resources.statistics().deformBuffers
+    let mesh = try resources.register(mesh: triangle("small"))
+    weak var weakOld: (any MTLBuffer)?
+    weak var weakTransient: (any MTLBuffer)?
+    try autoreleasepool {
+        let old = try #require(resources.deformBuffer(for: 10, mesh: mesh, vertexCount: 3, frameCreatedAt: RenderFrame().createdAt))
+        #expect(old.label == "deform.10")
+        resources.unregister(mesh: mesh)          // the owner drops its mesh; its key's release follows
+        let larger = try #require(resources.deformBuffer(for: 10, mesh: mesh, vertexCount: 64, frameCreatedAt: RenderFrame().createdAt))
+        #expect(larger !== old && larger.label == "deform.10.transient")
+        #expect(larger.length >= MemoryLayout<DeformedVertex>.stride * 64)
+        #expect(resources.deformBuffer(for: 10, mesh: mesh, vertexCount: 3) === old)
+        #expect(resources.statistics().deformBuffers == baseline + 1)
+        weakOld = old
+        weakTransient = larger
+    }
+    #expect(weakTransient == nil)
+    #expect(weakOld != nil)
+    resources.releaseDeformBuffers(keys: [10])
+    #expect(weakOld == nil)
+    #expect(resources.statistics().deformBuffers == baseline)
 }

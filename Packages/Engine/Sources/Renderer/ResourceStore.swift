@@ -368,8 +368,11 @@ public final class ResourceStore: @unchecked Sendable {
     /// Tests only (#344): runs at the top of `deformBuffer`, before this
     /// store's lock, so a test can drop an owner between the renderer's mesh
     /// lookup and the buffer request, as the main thread can while a render
-    /// thread prepares. Set before a capture and cleared after it. Not in
-    /// Release builds.
+    /// thread prepares. It runs inside `prepare`, under the renderer's
+    /// `renderLock`, on the capturing thread: a teardown it runs must not take
+    /// `renderLock` (it would deadlock), and it must not request a
+    /// deformation buffer itself (it would re-enter). Set before a capture and
+    /// cleared after it. Not in Release builds.
     var beforeDeformBuffer: ((UInt64) -> Void)?
     #endif
 
@@ -377,8 +380,9 @@ public final class ResourceStore: @unchecked Sendable {
     /// more vertices. Nil when Metal refuses the allocation; the renderer reports it
     /// as a deformation error instead of terminating. `frameCreatedAt` is the
     /// requesting frame's `RenderFrame.createdAt`; nil means a frame created now.
-    /// `mesh` is the requesting item's mesh; nil (tests) skips its check.
-    func deformBuffer(for key: UInt64, mesh: MeshHandle? = nil, vertexCount: Int, frameCreatedAt created: UInt64? = nil) -> (any MTLBuffer)? {
+    /// `mesh` is the requesting item's mesh: a new buffer is cached only while
+    /// it is registered and not retiring (#344, below).
+    func deformBuffer(for key: UInt64, mesh: MeshHandle, vertexCount: Int, frameCreatedAt created: UInt64? = nil) -> (any MTLBuffer)? {
         #if DEBUG
         beforeDeformBuffer?(key)
         #endif
@@ -401,8 +405,13 @@ public final class ResourceStore: @unchecked Sendable {
         // `completeRetirements` then has a key re-cached behind its back: a
         // retiring mesh's key may not be retiring itself. `unregister` and
         // `retire` take this lock, so the check cannot interleave with them.
-        // Only a new buffer pays the check.
-        let owned = mesh.map { meshes[$0.id] != nil && retiringMeshes[$0.id] == nil } ?? true
+        // Only a new buffer pays the check. A cached buffer too small for an
+        // unowned mesh stays cached, and the owner's release drops it; the
+        // request gets a transient one of the needed size. A retiring mesh's
+        // key without a cached buffer allocates a transient buffer on every
+        // preparation until the retirement completes, with the next submitted
+        // frame: that churn is accepted.
+        let owned = meshes[mesh.id] != nil && retiringMeshes[mesh.id] == nil
         if stale || !owned {
             b.label = "deform.\(key).transient"
             return b

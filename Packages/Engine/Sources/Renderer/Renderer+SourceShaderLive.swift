@@ -126,6 +126,12 @@ extension Renderer {
     /// an allocation pays the lookups, never a reused buffer. A stale frame
     /// (one older than a completed retirement) deforms into transient buffers,
     /// so its new entries are dropped too; the next current frame keeps them.
+    /// The same holds for an owner dropped during preparation, and for a
+    /// retiring mesh: a key without a cached buffer then gets a transient
+    /// one (#344), which the store does not hold, so the new entry is
+    /// dropped. If the key's buffer was already cached, a retiring mesh's
+    /// entry stays, and completing the retirement evicts it by mesh; an
+    /// unregistered mesh's entry is dropped by the mesh check.
     func liveInput(_ encoder: SourceShaderLiveEncoder, _ key: SourceShaderLiveEncoder.BufferKey, mesh handle: MeshHandle,
                    deformKey: UInt64?, vertexCount: Int) -> (any MTLBuffer)? {
         guard let input = encoder.inputBuffer(key, mesh: handle.id, vertexCount: vertexCount) else { return nil }
