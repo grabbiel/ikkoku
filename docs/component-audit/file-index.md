@@ -14,7 +14,7 @@ the ST-T07 eye look reference and solver-port files, the ST-T07s eye look
 Studio preview runtime files, the ST-T07u iris rendering files and the ST-T04
 studio item shader contract and record color files and the ST-T08 first-slice
 original motion capture/replay files. The 2026-10-23 ST-T08e skirt slice updates runtime, exporter, fixture, test and reference files and adds its paired
-Studio save/load scenarios; it does not represent a new code audit. The 2026-10-25 ST-T03i plug-in data slice adds its rule, test, rule-parity, survey and original-player probe files. The 2026-10-26 texture-loading slice (the parallel-test pool deadlock) adds the in-line texture loader, its identity, corpus and upload tests, and 19 synthetic decoder fixtures. The 2026-10-26 ST-T05a legacy-scene slice adds its reader, test, timing, original-player probe and scenario files. The 2026-11-01 #321 slice adds the deep-scene stack test. It lists every present Git-visible
+Studio save/load scenarios; it does not represent a new code audit. The 2026-10-25 ST-T03i plug-in data slice adds its rule, test, rule-parity, survey and original-player probe files. The 2026-10-26 texture-loading slice (the parallel-test pool deadlock) adds the in-line texture loader, its identity, corpus and upload tests, and 19 synthetic decoder fixtures. The 2026-10-26 ST-T05a legacy-scene slice adds its reader, test, timing, original-player probe and scenario files. The 2026-11-01 #321 slice adds the deep-scene stack test. The 2026-11-02 ST-T04 catalog slice adds the item catalog generator and its synthetic test. It lists every present Git-visible
 tracked/untracked non-ignored repository file outside
 `docs/component-audit/`. It excludes private `.local/`, dependency/build caches
 and ignored intermediate assets. Binary assets are inventoried, not reviewed as
@@ -23,7 +23,7 @@ branch was tested or every asset matches the original game. Feature status,
 specific comments and pending tasks are in the linked reports. Shared behavior
 may be discussed in more than one report; one primary owner is listed here.
 
-**1081 files indexed; 1081 assigned; 0 unassigned.**
+**1083 files indexed; 1083 assigned; 0 unassigned.**
 
 Counts include the website and clothes-group additions listed below. Runtime and
 test totals include their specialized role descriptions; this is inventory
@@ -35,18 +35,18 @@ bookkeeping, not a new full source audit.
 | [Character / Maker / mods](character-and-mods.md) | 130 |
 | [Studio / IK / animation](studio.md) | 253 |
 | [Renderer / foundation / assets](renderer-and-foundation.md) | 363 |
-| [Toolchain / verification / historical docs](toolchain-and-verification.md) | 215 |
+| [Toolchain / verification / historical docs](toolchain-and-verification.md) | 217 |
 
 | File role | Files |
 | --- | ---: |
 | App resource metadata / icon | 16 |
 | Build / repository configuration | 9 |
-| Conversion / recovery / verification tool | 251 |
+| Conversion / recovery / verification tool | 252 |
 | Documentation / historical evidence | 65 |
 | Generated asset / catalog / fixture | 205 |
 | Reference host / controlled fixture | 37 |
 | Runtime / shared shader declaration | 233 |
-| Test / validation | 226 |
+| Test / validation | 227 |
 | Public synthetic body/face input fixture | 1 |
 
 ## App / gameplay / plugins
@@ -968,6 +968,8 @@ Feature assessment: [toolchain-and-verification.md](toolchain-and-verification.m
 | [Tools/reverse/analysis/recovered_source.py](../../Tools/reverse/analysis/recovered_source.py) | Conversion / recovery / verification tool |
 | [Tools/reverse/analysis/test_recovered_source.py](../../Tools/reverse/analysis/test_recovered_source.py) | Test / validation |
 | [Tools/reverse/catalog.py](../../Tools/reverse/catalog.py) | Conversion / recovery / verification tool |
+| [Tools/reverse/item_catalog.py](../../Tools/reverse/item_catalog.py) | Conversion / recovery / verification tool |
+| [Tools/reverse/test_item_catalog.py](../../Tools/reverse/test_item_catalog.py) | Test / validation |
 | [Tools/reverse/inventory.ps1](../../Tools/reverse/inventory.ps1) | Conversion / recovery / verification tool |
 | [Tools/reverse/requirements.txt](../../Tools/reverse/requirements.txt) | Conversion / recovery / verification tool |
 | [Tools/reverse/test_recover_managed.py](../../Tools/reverse/test_recover_managed.py) | Test / validation |

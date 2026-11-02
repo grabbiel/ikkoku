@@ -2408,6 +2408,8 @@ final class StudioModel: ViewportInputHandler, LivePacedHandler {
         var cameras: [UUID: (sceneSHA256: String, objectKey: Int32, name: String)] = [:]
         var itemAssets: [UUID: (sceneSHA256: String, key: String, path: String, colors: [SIMD4<Float>], alpha: Float)] = [:]
         var unmappedItemKeys: [String: Int] = [:]
+        // ST-T04: why a key is unmapped, when the catalog lists what it could not convert.
+        var notConvertedReasons: [String: String] = [:], notInCatalogKeys: Set<String> = []
         while let (record, parent, routeChild, attachmentPoint) = stack.popLast() {
             var object = StudioObject(name: record.name ?? "Source object \(record.sourceKey)", kind: .folder)
             object.parent = parent; object.visible = record.visible; object.sourceObjectKey = record.sourceKey
@@ -2471,7 +2473,14 @@ final class StudioModel: ViewportInputHandler, LivePacedHandler {
                     // The export baseline is `sourcePreviewName`, set below.
                     object.name = itemNames[itemKey].map { "\($0) (unrendered source item \(record.sourceKey))" }
                         ?? "Unrendered source \(record.kind) \(record.sourceKey)"
-                    if error is KoikatsuLayoutError { unmappedItemKeys[itemKey, default: 0] += 1 }
+                    if let layoutError = error as? KoikatsuLayoutError {
+                        unmappedItemKeys[itemKey, default: 0] += 1
+                        switch layoutError {
+                        case .notConverted(_, let reason): notConvertedReasons[itemKey] = reason
+                        case .missingItem: notInCatalogKeys.insert(itemKey)
+                        default: break
+                        }
+                    }
                     diagnostics.append("Object \(record.sourceKey) (\(record.kind)) retained without rendering: \(error)")
                 }
             } else if record.kind != .folder {
@@ -2509,14 +2518,22 @@ final class StudioModel: ViewportInputHandler, LivePacedHandler {
             diagnostics.append("Camera \(key) (\"\(cameras[cameraID]!.name)\") active at load (saved active flag).")
         }
         if itemResolver != nil {
-            var unmapped: [String] = []
+            var unmapped: [String] = [], notConverted: [String] = [], notInCatalog: [String] = []
             for key in unmappedItemKeys.keys.sorted(by: { a, b in
                 a.split(separator: "/").map { Int($0) ?? 0 }.lexicographicallyPrecedes(b.split(separator: "/").map { Int($0) ?? 0 })
             }) {
                 unmapped.append("\(key) ×\(unmappedItemKeys[key]!)")
+                if let reason = notConvertedReasons[key] { notConverted.append("\(key) ×\(unmappedItemKeys[key]!) (\(reason))") }
+                if notInCatalogKeys.contains(key) { notInCatalog.append("\(key) ×\(unmappedItemKeys[key]!)") }
             }
             let unmappedText = unmapped.isEmpty ? "none" : unmapped.joined(separator: ", ")
             diagnostics.append("Items rendered from the converted catalog: \(itemAssets.count); unmapped keys: \(unmappedText).")
+            if itemResolver?.listsNotConverted == true, !unmapped.isEmpty {
+                // A generated catalog lists the rows it could not convert; any other
+                // unmapped key is a mod item or a row outside the generated groups.
+                diagnostics.append("Unmapped item keys by cause: not converted: \(notConverted.isEmpty ? "none" : notConverted.joined(separator: ", ")); "
+                    + "not in the catalog: \(notInCatalog.isEmpty ? "none" : notInCatalog.joined(separator: ", ")).")
+            }
             diagnostics.append("Saved record colors and alpha are applied for basic shapes whose exported material carries a recorded color slot; patterns, line, emission, light cancel, animation, FK and dynamics are not applied.")
         }
         imported.sourcePreviewDiagnostics = diagnostics

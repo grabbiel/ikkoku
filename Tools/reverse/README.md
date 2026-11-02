@@ -127,6 +127,34 @@ flipped V and encoded as normalized RGB for the native normal-map path. This add
 8-bit quantization; source lighting, parallax, metallic/gloss textures and original
 material customization remain unimplemented.
 
+## Generate the item catalog (ST-T04)
+
+`item_catalog.py` turns whole item groups into one `KoikatsuAssetCatalog`
+under the same rules: it reads the effective item table of every info bundle
+(`catalog.py`'s loader), converts each selected row's prefab with
+`export_prefab.py` in one process, byte-audits every export with
+`test_export_prefab.py`'s audit, and lists every row it could not convert with
+the exporter's own error (`notConverted`):
+
+```sh
+PY=.local/reverse/unitypy-venv/bin/python
+SET="studio/00.unity3d=studio/00.unity3d+studio/mat/00.unity3d"
+$PY Tools/reverse/item_catalog.py list --info-dir .local/reverse/source/abdata/studio/info \
+  --output .local/reverse/items/item-list.json
+$PY Tools/reverse/item_catalog.py export --dry-run --item-list .local/reverse/items/item-list.json \
+  --abdata .local/reverse/source/abdata --bundle-set "$SET" --group 0 --output .local/reverse/exports/items
+$PY Tools/reverse/item_catalog.py export --item-list .local/reverse/items/item-list.json \
+  --abdata .local/reverse/source/abdata --bundle-set "$SET" --group 0 --output .local/reverse/exports/items
+$PY Tools/reverse/item_catalog.py catalog --item-list .local/reverse/items/item-list.json \
+  --abdata .local/reverse/source/abdata --bundle-set "$SET" --group 0 --output .local/reverse/exports/items
+```
+
+`--bundle-set` names, for a row's bundle path, the bundles its prefab loads
+with; a row whose bundle has no set is listed as not available here.
+`coverage` compares the item list with an anonymous key-usage file. Output stays
+in `.local`. Two runs give a byte-identical `catalog.json` and export manifest.
+See [the generated catalog](../../docs/reference/studio/item-catalog.md#generated-catalog-st-t04-2026-11-02).
+
 ## Native verification and rendering
 
 ```sh
