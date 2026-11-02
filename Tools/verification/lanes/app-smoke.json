@@ -67,6 +67,38 @@
       "timeout": 120
     },
     {
+      "id": "studio-inspector-clothes-fit-capture",
+      "argv": [".local/build/Build/Products/Debug/Ikkoku.app/Contents/MacOS/Ikkoku", "-AppleShowScrollBars", "Always"],
+      "fixtures": [
+        {"env": "IKKOKU_SOURCE_SCENE", "kind": "file", "from": "IKKOKU_STUDIO_SCENARIO_SCENE"},
+        {"env": "IKKOKU_SOURCE_AVATAR", "kind": "file"}
+      ],
+      "env": {
+        "IKKOKU_CAPTURE_UI": ".local/verification/captures/studio-clothes-fit.png",
+        "IKKOKU_CAPTURE_UI_MODE": "studio",
+        "IKKOKU_CAPTURE_UI_STUDIO_TAB": "clothes",
+        "IKKOKU_CAPTURE_UI_SELECT": "0,622,963",
+        "IKKOKU_CAPTURE_UI_REPORT": ".local/verification/captures/studio-clothes-fit.json",
+        "IKKOKU_CAPTURE_UI_FIT_LOG": ".local/verification/captures/studio-clothes-fit.fit.txt"
+      },
+      "referenceTier": "app-smoke",
+      "tolerance": "#333 through the UI capture path, the start of #319's ui-sel-clothes capture, where the Clothes tab was laid out wider than the inspector in 6 of 10 launches before the fix (the inspector's scroll view ran past the window's trailing edge): the Debug app starts on the Clothes tab, selects character 0, folder 622 and character 963, and captures, with legacy scrollers for the app process only (-AppleShowScrollBars Always in the argument domain, not System Settings). The fit log (IKKOKU_CAPTURE_UI_FIT_LOG, one launch per file) is judged by studio-inspector-clothes-fit-validate; this check only needs the capture, its report and the log to be written.",
+      "artifacts": [
+        {"path": ".local/verification/captures/studio-clothes-fit.png", "kind": "ui-capture"},
+        {"path": ".local/verification/captures/studio-clothes-fit.json", "kind": "capture-report"},
+        {"path": ".local/verification/captures/studio-clothes-fit.fit.txt", "kind": "fit-log"}
+      ],
+      "timeout": 300
+    },
+    {
+      "id": "studio-inspector-clothes-fit-validate",
+      "argv": ["python3", "Tools/verification/checks/inspector_fit_log.py", ".local/verification/captures/studio-clothes-fit.fit.txt", "--selection", "963", "--tab", "Clothes"],
+      "env": {},
+      "referenceTier": "app-smoke",
+      "tolerance": "Validates the fit log of studio-inspector-clothes-fit-capture: exactly one captured line, showing character 963 on the Clothes tab, with the inspector's document view no wider than its clip view and the accessibility fit check after the capture passing (InspectorFitRule). A log without the inspector's scroll view, the state of #333's bad captures, fails.",
+      "timeout": 120
+    },
+    {
       "id": "build-release-app",
       "argv": ["xcodebuild", "-project", "Ikkoku.xcodeproj", "-scheme", "IkkokuCreator", "-configuration", "Release", "-derivedDataPath", ".local/build-release", "-destination", "platform=macOS,arch=arm64", "ARCHS=arm64", "build"],
       "env": {},
