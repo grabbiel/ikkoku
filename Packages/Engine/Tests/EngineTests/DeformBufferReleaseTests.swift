@@ -18,14 +18,16 @@ private func triangle(_ name: String) -> MeshData {
              normals: [Float3](repeating: Float3(0, 0, 1), count: 3), indices: [0, 1, 2])
 }
 
-/// A skinned one-triangle rig: its preview item deforms.
+/// A skinned one-triangle rig: its preview item deforms, and draws live with
+/// the `live_uv` fixture program (which reads both UV sets).
 private func skinnedRig() throws -> SourceRig {
     let rig = try RigDefinition(nodes: [
         .init(name: "mesh", sourceID: "mesh", parent: nil),
         .init(name: "joint", sourceID: "joint", parent: nil)], skins: [
             .init(name: "skin", meshNode: 0, joints: [1], inverseBindMatrices: [matrix_identity_float4x4])])
-    let mesh = MeshData(name: "skinned triangle", positions: [.zero, Float3(1, 0, 0), Float3(0, 1, 0)],
+    let mesh = MeshData(name: "o_uv/0", positions: [.zero, Float3(1, 0, 0), Float3(0, 1, 0)],
                         normals: [Float3](repeating: Float3(0, 0, 1), count: 3),
+                        uvs: [Float2](repeating: Float2(0.25, 0.25), count: 3), uvs1: [Float2](repeating: Float2(1, 1), count: 3),
                         joints: [SIMD4<UInt16>](repeating: .zero, count: 3),
                         weights: [Float4](repeating: Float4(1, 0, 0, 0), count: 3), indices: [0, 1, 2])
     return SourceRig(sourcePrefab: "test", rig: rig, parts: [SourceRig.Part(mesh: mesh, node: 0, skin: 0, rendererEnabled: true)],
@@ -83,25 +85,46 @@ func deformBufferRequestedForARetiringMeshIsTransient() throws {
 
 /// End to end through frame preparation: a preview dropped between its
 /// item's mesh lookup and its buffer request (the store's test hook, on the
-/// capture thread) leaves no deformation buffer or mesh behind, and the frame
-/// still deforms and renders. Without the drop the buffer is cached.
+/// capture thread) leaves no deformation buffer, mesh or live input behind,
+/// and the frame still deforms and draws. The item draws live, so the drop
+/// also runs the live encoder's release eviction (#337) mid-preparation.
+/// Without the drop the buffer is cached.
 @Test(.enabled(if: MTLCreateSystemDefaultDevice() != nil))
 func droppingAPreviewDuringItsDeformPassLeavesNoBuffer() throws {
     let renderer = try makeSourceShaderRenderer()
     let resources = renderer.resources
+    let directory = try LiveProgramFixture.temporaryDirectory()
+    defer { try? FileManager.default.removeItem(at: directory) }
+    let program = try resources.translatedPipelines.program(url: try LiveProgramFixture.write(LiveProgramFixture.uv, family: "live_uv", to: directory))
+    let material = SourceShaderLiveMaterial(label: "o_uv slot 0", family: "live_uv", queue: 2000, passes: [program],
+                                            vectors: ["_Color": [0, 0, 1, 1]], textures: [:], conventions: [], textureSources: [:])
+    func liveFrame(_ preview: SourceRigPreview) throws -> RenderFrame {
+        var frame = try preview.frame(camera: OrbitCamera())
+        frame.items = frame.items.map { item in
+            var item = item
+            item.sourceShader = SourceShaderLiveDraw(material: material, streams: nil, sourceOrder: 0)
+            return item
+        }
+        return frame
+    }
     let before = resources.statistics()
 
-    // Control: a preview that stays caches its key's buffer.
+    // Control: a preview that stays caches its key's buffer and live input;
+    // dropping it between frames releases both.
     var kept: SourceRigPreview? = try SourceRigPreview(source: skinnedRig(), contract: nil, resources: resources)
-    _ = try #require(renderer.capture(frame: try #require(kept).frame(camera: OrbitCamera()), width: 16, height: 16))
+    _ = try #require(renderer.capture(frame: try liveFrame(try #require(kept)), width: 16, height: 16))
+    #expect(renderer.lastSourceShaderLive.draws == 1)
+    let encoder = try #require(renderer.liveEncoder)
     #expect(resources.statistics().deformBuffers == before.deformBuffers + 1)
+    #expect(encoder.bufferCount == 1)
     kept = nil
     #expect(resources.statistics().deformBuffers == before.deformBuffers)
+    #expect(encoder.bufferCount == 0)
 
     final class Owner: @unchecked Sendable { var preview: SourceRigPreview?; var dropped = false }
     let owner = Owner()
     owner.preview = try SourceRigPreview(source: skinnedRig(), contract: nil, resources: resources)
-    let frame = try #require(owner.preview).frame(camera: OrbitCamera())
+    let frame = try liveFrame(try #require(owner.preview))
     let key = try #require(frame.items.first?.deformKey)
     resources.beforeDeformBuffer = { requested in
         guard requested == key, !owner.dropped else { return }
@@ -113,8 +136,11 @@ func droppingAPreviewDuringItsDeformPassLeavesNoBuffer() throws {
     #expect(owner.dropped)
     let frameError = renderer.lastFrameError
     #expect(frameError == nil, "\(String(describing: frameError))")
+    // The frame deforms and draws from the mesh it resolved.
     #expect(renderer.lastFrameStatistics.deformDispatches == 1)
+    #expect(renderer.lastSourceShaderLive.draws == 1)
     let after = resources.statistics()
     #expect(after.deformBuffers == before.deformBuffers)
     #expect(after.meshes == before.meshes)
+    #expect(encoder.bufferCount == 0)
 }

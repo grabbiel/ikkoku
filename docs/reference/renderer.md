@@ -734,6 +734,23 @@ The rule for owners is to retire before building their next frame. A frame
 created after the retirement counts as current, so its preparation would
 re-create the deformation keys it still names.
 
+Unregistering first covers a frame prepared after the release, but not one
+already being prepared on a render thread (#344). The deform pass looks up
+an item's mesh and then asks for its buffer, without the store's lock in
+between. `SourceRigPreview.deinit`, or a Maker reimport, can unregister the
+mesh and release its key on the main thread in that gap, and the request
+used to cache a new buffer that nothing released again (one buffer per
+dropped owner). `deformBuffer(for:mesh:vertexCount:frameCreatedAt:)` now
+takes the item's mesh: it caches a new buffer only while that mesh is
+registered and not retiring, and returns a transient one otherwise, which
+the frame's own deform pass fills, as for a stale frame. A retiring mesh is
+included because its retirement may not cover the key. The check runs
+under the store lock that `unregister` and `retire` take, and only when a
+buffer is created. A buffer already cached is returned unchanged, so a
+released key whose mesh stays registered is re-created on its next use as
+before. `ResourceStore.beforeDeformBuffer` (DEBUG builds only) lets a test
+drop an owner inside that gap, on the capture thread.
+
 **Owners in the app.**
 
 - Studio prunes native character instances at the top of `refresh()`, before
