@@ -690,11 +690,18 @@ struct StudioScenario: Decodable {
     /// timer step moves the animation clock between steps. A zero timeout runs
     /// only what is already queued (and what that queues), at most 64 times.
     private static func mainQueueTurn() {
+        var turns = 0
+        while turns < 64, CFRunLoopRunInMode(stepTurnMode, 0, true) == .handledSource { turns += 1 }
+    }
+
+    /// The turn's mode, made a common mode of the main run loop once per
+    /// process on the first scenario step's turn: an app launch that runs no
+    /// Studio scenario never adds it.
+    private static let stepTurnMode: CFRunLoopMode = {
         let mode = CFRunLoopMode("IkkokuScenarioStepTurn" as CFString)
         CFRunLoopAddCommonMode(CFRunLoopGetMain(), mode)
-        var turns = 0
-        while turns < 64, CFRunLoopRunInMode(mode, 0, true) == .handledSource { turns += 1 }
-    }
+        return mode
+    }()
 
     /// Runs the steps against the imported scene. A failing step records its
     /// detail and the run continues; a failed `export`/`reimport` or
