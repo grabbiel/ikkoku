@@ -112,6 +112,13 @@ public struct SourceSceneEdits: Sendable {
     /// call allocates; every other edit addresses inserted records by those
     /// keys and may delete or move them like source records.
     public var insertions: [SourceSceneInsertion]
+    /// #278: the order the user deleted source records and made the
+    /// insertions in (`SourceSceneExportValidation.order`). With it, each
+    /// insertion is written under the key and at the root position that order
+    /// gives it in CharaStudio (`SourceSceneStage.replay`); without it, keys
+    /// are allocated after every source key and inserted roots are appended.
+    /// Moves and added or deleted route points are not replayed.
+    public var order: [SourceSceneInsertion.Step]?
     /// #320: the light limit of the CharaStudio the export is for. The
     /// default, `.charaStudio`, refuses an export that adds or copies a light
     /// and leaves more than two; `.unlimitedMapLights` writes any number.

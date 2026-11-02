@@ -230,6 +230,25 @@ public enum SourceSceneTopology {
         }
     }
 
+    /// The records of `lists` in CharaStudio's load order: the root
+    /// dictionary in order, each record before its children (child lists and
+    /// accessory groups in `slots` byte order when given, else in ascending
+    /// accessory point order like `activeAtLoad`).
+    static func loadOrder(lists: [Tree.ListID: [Int32]], records: [Int32: KoikatsuObjectRecord],
+                          slots: [Int32: [SourceSceneEditSpans.Topology.Slot]]) -> [Int32] {
+        var order: [Int32] = []
+        func visit(_ key: Int32) {
+            order.append(key)
+            let points: [Int32?]
+            if let recordSlots = slots[key] { points = recordSlots.map(\.point) }
+            else if let character = records[key]?.character { points = character.accessoryChildren.keys.sorted() }
+            else { points = [nil] }
+            for point in points { for child in lists[Tree.ListID(owner: key, point: point)] ?? [] { visit(child) } }
+        }
+        for root in lists[Tree.ListID(owner: nil, point: nil)] ?? [] { visit(root) }
+        return order
+    }
+
     /// The validated final tree.
     struct Plan {
         let lists: [Tree.ListID: [Int32]]
@@ -237,22 +256,10 @@ public enum SourceSceneTopology {
         let rootKeys: [Int32: Int32]
         let records: [Int32: KoikatsuObjectRecord]
 
-        /// The surviving records in CharaStudio's load order: the root
-        /// dictionary in order, each record before its children (child lists
-        /// and accessory groups in `slots` byte order when given, else in
-        /// ascending accessory point order like `activeAtLoad`).
+        /// The surviving records in CharaStudio's load order
+        /// (`SourceSceneTopology.loadOrder`).
         func loadOrder(slots: [Int32: [SourceSceneEditSpans.Topology.Slot]] = [:]) -> [Int32] {
-            var order: [Int32] = []
-            func visit(_ key: Int32) {
-                order.append(key)
-                let points: [Int32?]
-                if let recordSlots = slots[key] { points = recordSlots.map(\.point) }
-                else if let character = records[key]?.character { points = character.accessoryChildren.keys.sorted() }
-                else { points = [nil] }
-                for point in points { for child in lists[Tree.ListID(owner: key, point: point)] ?? [] { visit(child) } }
-            }
-            for root in lists[Tree.ListID(owner: nil, point: nil)] ?? [] { visit(root) }
-            return order
+            SourceSceneTopology.loadOrder(lists: lists, records: records, slots: slots)
         }
 
         /// The decoded result must have exactly the planned tree: every

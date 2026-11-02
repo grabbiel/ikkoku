@@ -67,9 +67,27 @@ phase. See the probe source for what each phase does.
     the upload as largest-kkpe.png (for the export-time measurement), with its SHA-256 and size; no name is kept.
 - Phase D's inputs are phase C's scenes, our exports (ours-*.png) and card-link-fixint.png from --inputs, the rule
   corpus, and survey.txt. Phase C's collider zipmod, when it had one, is copied in again by name and hash.
+
+The ordered phase (--phase oa; #278) runs the same probe with phase A's plug-ins (PLUGINS) and zipmod only, from
+the exact retained inputs: phase A's fixture.png and phase C's fixture.png (sent as fixture-c.png), each with its
+expected SHA-256, and an independently acquired runtime-pins.json that is verified before and after. One exec runs
+two players in the same private root under one process-owner envelope:
+
+1. the control (OB, at most --control-seconds): phase A's fixture loaded, saved, reloaded and saved again, with no
+   edit. Its outputs are renamed control-* in the upload;
+2. the oracle (OA, at most --wait-seconds): both baselines, then every ORDERED_CASES row in order (the real
+   Delete, Duplicate and Add folder operations, with SceneInfo.hashIndex and root enumeration snapshots).
+
+The run is accepted only with both statuses error-free, every output present, every save of phase A's fixture
+equal to its resave (phase C's: recorded, compared by the Engine parity test apart from each character's live
+state), the control's save equal to OA's baseline save apart from Sideloader's per-session LocalSlot values,
+both players exited with the same exit code (0, or the
+original player's 0xC0000005 shutdown fault, which the no-edit control shows is not caused by the edits), the
+root removed with no game process left, unchanged junction targets, runtime pins and errno-24 count, and matching
+guest source and input hashes.
 """
 from __future__ import annotations
-import argparse, json, re, subprocess
+import argparse, json, os, re, signal, subprocess
 from pathlib import Path
 from original_character_probe import PLAYER_SETUP, PLAYER_ROOT
 from original_wear_probe import Endpoint, bootstrap, extract, errno_count, guarded, fresh_root, digest, dump
@@ -100,6 +118,16 @@ PLUGINS_B = (
     ('KK_Plugins\\KK_MaterialEditor.dll', 'dde57f4f65161aa5374a283619791c77e89ce4a014c28d4b00e70cf9905ab596', 718848),
 )
 SOURCES_B = ('PluginSceneRules.cs', 'PluginSceneRuleParity.cs', 'PluginSceneSurvey.cs')
+# OriginalPluginRewriteProbe.OrderedCases labels, in order (a test holds them equal to the C#).
+ORDERED_CASES = ('delete-duplicate', 'duplicate-delete', 'delete-delete-duplicate', 'child-delete-duplicate',
+                 'route-delete-duplicate-folder', 'delete-duplicate-duplicate', 'delete-add-folder',
+                 'character-delete-duplicate', 'delete-duplicate-character')
+# The rows on phase C's fixture (character W): their saves differ from their resaves in each character's live
+# state, which the Engine parity test masks (liveStateMasked, #287); every other row is a raw fixed point.
+ORDERED_FIXTURE_C = ('character-delete-duplicate', 'delete-duplicate-character')
+ORDERED_CONTROL_SECONDS = 180  # bound on the no-edit control player (OB)
+ORDERED_MAX_SECONDS = 600      # bound on the oracle player (OA)
+SHUTDOWN_FAULT = -1073741819   # 0xC0000005: the original player's access violation after Application.Quit
 
 
 def local_roots():
@@ -203,6 +231,138 @@ foreach($e in $i.EnumerateFileSystemInfos('*',[IO.SearchOption]::AllDirectories)
 function Targets{try{[ordered]@{abdata=(Tree "$original\abdata");CharaStudio_Data=(Tree "$original\CharaStudio_Data")}}catch{[ordered]@{error=$_.ToString()}}}
 """
 
+# Used only by OA. Paths describe recorded instances; they never select a
+# process for termination by themselves. The independent compiler is also
+# retained immediately so the outer finally can clean up after later errors.
+ORDERED_ENVELOPE = r'''function OrderedStamp($stage){
+$r.stage=$stage
+$state=[ordered]@{stage=$stage;root=$root;guestPID=$r.guestPID;guestStartUTC=$r.guestStartUTC;
+compiler=$r.compiler;processID=$r.processID;playerStartUTC=$r.playerStartUTC;playerIdentity=$r.playerIdentity;
+observedOwners=$r.observedOwners;unresolvedChildren=$r.unresolvedChildObservations;childObservationOverflow=$r.childObservationOverflow;
+error=$r.error;errorStage=$r.errorStage;cleanupErrors=$r.cleanupErrors}
+[Console]::Error.WriteLine('ORDERED_STATE:'+($state|ConvertTo-Json -Compress -Depth 6))}
+function OrderedCleanupFailure($failure){
+$r.cleanupErrors+=@([ordered]@{stage=$r.stage;message=$failure.ToString();position=$failure.InvocationInfo.PositionMessage})
+$r.cleanupError=($r.cleanupErrors|ForEach-Object{$_.stage+': '+$_.message}) -join '; '
+OrderedStamp 'cleanup-error'}
+$r.cleanupErrors=@();$r.guestPID=$PID;OrderedStamp 'bootstrap-pid'
+$r.guestStartUTC=(Get-Process -Id $PID).StartTime.ToUniversalTime().ToString('o');OrderedStamp 'bootstrap-identity'
+'''
+
+ORDERED_OWNERS = r'''$script:orderedOwners=@{};$script:orderedLaunched=@();$script:orderedUnresolved=@{};$script:orderedCompiler=$null;$script:orderedCompilerIdentity=$null
+function RowBirth($row){if($row.CreationDate -is [DateTime]){return $row.CreationDate.ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ss.ffffff')};return $null}
+function RememberUnresolved($row,$reason,$livePath=$null,$liveStart=$null){
+$cimBirth=RowBirth $row;$liveBirth=$null
+if($liveStart -is [DateTime]){$liveBirth=$liveStart.ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ss.ffffff')}
+$birth=if($cimBirth){$cimBirth}else{$liveBirth}
+$key=([string]$row.ProcessId)+':'+$birth
+if($script:orderedUnresolved.ContainsKey($key)){return}
+if($script:orderedUnresolved.Count -ge 32){if(-not $r.childObservationOverflow){$r.childObservationOverflow=$true;OrderedStamp 'child-observation-overflow'};return}
+$script:orderedUnresolved[$key]=[ordered]@{pid=[int]$row.ProcessId;parent=[int]$row.ParentProcessId;birth=$birth;
+name=$row.Name;cimPath=$row.ExecutablePath;livePath=$livePath;cimBirth=$cimBirth;liveBirth=$liveBirth;reason=$reason}
+$r.unresolvedChildObservations=@($script:orderedUnresolved.Values)
+OrderedStamp 'unresolved-child-recorded'}
+function ProcessIdentity($process){
+[ordered]@{pid=$process.Id;startTicks=$process.StartTime.ToUniversalTime().Ticks;path=$process.Path}}
+function MatchingProcess($identity){
+$process=Get-Process -Id $identity.pid -ErrorAction SilentlyContinue
+if(-not $process){return $null}
+if($process.StartTime.ToUniversalTime().Ticks -ne $identity.startTicks -or $process.Path -cne $identity.path){return $null}
+return $process}
+# A player just started may not have its main module readable yet (its path
+# reads null), longer while Windows Error Reporting handles an earlier crash.
+# The path is read again from a fresh object of the same PID and start time,
+# bounded; a process is never adopted without its exact private-root path.
+function RememberPlayer($process){
+$ticks=$process.StartTime.ToUniversalTime().Ticks;$identity=$null;$watch=[Diagnostics.Stopwatch]::StartNew();$reads=0
+while($true){$reads++
+$live=Get-Process -Id $process.Id -ErrorAction SilentlyContinue
+if($live -and $live.StartTime.ToUniversalTime().Ticks -eq $ticks -and $live.Path){$identity=[ordered]@{pid=$live.Id;startTicks=$ticks;path=$live.Path};break}
+if($process.HasExited -or $watch.Elapsed.TotalSeconds -ge 30){break}
+Start-Sleep -Milliseconds 250}
+$r.playerIdentityReads=$reads;$r.playerIdentityMilliseconds=[int]$watch.Elapsed.TotalMilliseconds
+if(-not $identity){throw 'Owned process executable path is unavailable'}
+if($identity.path -ine "$root\CharaStudio.exe"){throw 'Owned process executable is not the private player'}
+if($script:orderedOwners.Count -ge 32){throw 'Ordered process-owner bound exceeded'}
+$script:orderedOwners[[int]$identity.pid]=$identity
+$r.observedOwners=@($script:orderedOwners.Values)
+OrderedStamp 'player-owner-recorded'
+return $identity}
+function ObservePlayerChildren{
+$table=@(Get-CimInstance Win32_Process -OperationTimeoutSec 5);$changed=$true
+while($changed){$changed=$false
+foreach($row in $table){
+if($script:orderedOwners.ContainsKey([int]$row.ProcessId) -or -not $script:orderedOwners.ContainsKey([int]$row.ParentProcessId)){continue}
+$parent=$script:orderedOwners[[int]$row.ParentProcessId]
+try{$liveParent=MatchingProcess $parent}catch{RememberUnresolved $row 'Recorded parent identity unavailable';continue}
+if(-not $liveParent){RememberUnresolved $row 'Recorded parent no longer matches';continue}
+$child=Get-Process -Id $row.ProcessId -ErrorAction SilentlyContinue
+if(-not $child){RememberUnresolved $row 'Child process disappeared or is unavailable';continue}
+$childPath=$null;$childStart=$null
+try{$childPath=$child.Path;$childStart=$child.StartTime}catch{RememberUnresolved $row 'Live child identity read failed' $childPath $childStart;continue}
+$rowBirth=RowBirth $row
+if(-not $childPath -or -not $row.ExecutablePath -or -not ($childStart -is [DateTime]) -or -not $rowBirth){
+RememberUnresolved $row 'Missing child path or birth' $childPath $childStart;continue}
+if($childPath -ine $row.ExecutablePath -or $childStart.ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ss.ffffff') -cne $rowBirth){
+RememberUnresolved $row 'Child live/CIM identity differs' $childPath $childStart;continue}
+if($childStart.ToUniversalTime().Ticks -lt $parent.startTicks){RememberUnresolved $row 'Child predates recorded parent' $childPath $childStart;continue}
+# Remember the verified values, without another fallible property read after
+# validation. Missing fields are observations, never authority to stop a PID.
+if($script:orderedOwners.Count -ge 32){if(-not $r.childObservationOverflow){$r.childObservationOverflow=$true;OrderedStamp 'child-observation-overflow'};RememberUnresolved $row 'Owner bound exceeded' $childPath $childStart;continue}
+$identity=[ordered]@{pid=$child.Id;startTicks=$childStart.ToUniversalTime().Ticks;path=$childPath}
+$script:orderedOwners[[int]$identity.pid]=$identity;$r.observedOwners=@($script:orderedOwners.Values)
+OrderedStamp 'player-owner-recorded'
+$changed=$true}}
+}
+function StopPlayerOwners{
+$stopped=@();$errors=@()
+foreach($identity in @($script:orderedOwners.Values)){
+try{
+$process=MatchingProcess $identity
+if($process){$process|Stop-Process -Force;$stopped+=$identity.pid
+if(-not $process.WaitForExit(5000)){throw 'Recorded player owner did not exit within cleanup bound'}}
+}catch{$errors+=$_.ToString()}}
+foreach($launched in @($script:orderedLaunched)){
+try{if(-not $launched.HasExited){$launched.Kill();$stopped+=$launched.Id
+if(-not $launched.WaitForExit(5000)){throw 'Launched player did not exit within cleanup bound'}}}catch{$errors+=$_.ToString()}}
+$r.ownerCleanupErrors=$errors
+$r.ownersRemaining=@($script:orderedOwners.Values|Where-Object{MatchingProcess $_})
+$r.launchedRemaining=@($script:orderedLaunched|Where-Object{-not $_.HasExited}|ForEach-Object{$_.Id})
+if($r.ownersRemaining.Count -or $r.launchedRemaining.Count -or $errors.Count){throw 'Recorded player owner cleanup incomplete'}
+return ,$stopped}
+function StopOwnedCompiler{
+if(-not $script:orderedCompiler){return}
+if(-not $script:orderedCompilerIdentity){
+if($script:orderedCompiler.HasExited){return}
+$script:orderedCompilerIdentity=ProcessIdentity $script:orderedCompiler}
+$identity=$script:orderedCompilerIdentity;$process=MatchingProcess $identity
+if($process){$process|Stop-Process -Force
+if(-not $process.WaitForExit(5000)){throw 'Recorded compiler did not exit within cleanup bound'}}
+$r.compilerRemaining=[bool](MatchingProcess $identity)
+if($r.compilerRemaining){throw 'Recorded compiler remains'}}
+function RootRemovalReady{
+$launchedIDs=@($script:orderedLaunched|ForEach-Object{[int]$_.Id})
+$r.launchedRemaining=@($script:orderedLaunched|Where-Object{-not $_.HasExited}|ForEach-Object{$_.Id})
+if($r.launchedRemaining.Count){return $false}
+if(($r.processID -and -not $r.playerIdentity.path -and -not ($launchedIDs -contains [int]$r.processID)) -or ($script:orderedCompiler -and -not $script:orderedCompilerIdentity.path)){return $false}
+$r.ownersRemaining=@($script:orderedOwners.Values|Where-Object{MatchingProcess $_})
+$r.compilerRemaining=if($script:orderedCompilerIdentity){[bool](MatchingProcess $script:orderedCompilerIdentity)}else{$false}
+# This inventory only vetoes deletion. It never adopts or stops an unknown
+# process by path/parent PID. A detached or unrecorded child retains the root.
+$table=@(Get-CimInstance Win32_Process -OperationTimeoutSec 5)
+$r.unresolvedRecordedInstances=@(foreach($observation in $script:orderedUnresolved.Values){
+foreach($row in $table){if([int]$row.ProcessId -ne $observation.pid){continue}
+$birth=RowBirth $row
+# Only an absent PID or a known different birth proves the old instance gone.
+# Reparenting and missing current paths cannot erase an unresolved observation.
+if(-not $observation.birth -or -not $birth -or $birth -ceq $observation.birth){$observation}}})
+$r.unresolvedPlayerOwners=@($table|Where-Object{
+($_.ExecutablePath -and $_.ExecutablePath.StartsWith($root+'\',[StringComparison]::OrdinalIgnoreCase)) -or
+($_.Name -in @('CharaStudio.exe','Koikatu.exe')) -or $script:orderedOwners.ContainsKey([int]$_.ParentProcessId) -or ($launchedIDs -contains [int]$_.ParentProcessId)
+}|ForEach-Object{[ordered]@{pid=$_.ProcessId;parent=$_.ParentProcessId;path=$_.ExecutablePath;birth=(RowBirth $_)}})
+return -not($r.ownersRemaining.Count -or $r.compilerRemaining -or $r.unresolvedPlayerOwners.Count -or $r.unresolvedRecordedInstances.Count -or $r.childObservationOverflow)}
+'''
+
 
 def reload_script(root, base, wait_seconds, survey_seconds, survey_file_bytes, zipmod, inputs):
     """Phase B as run.ps1: the player with the full plug-in set, phase A's zipmod, the reload inputs and survey 2."""
@@ -282,17 +442,24 @@ def zipmod_record(record):
 
 
 def rewrite_script(root, base, phase, wait_seconds, zipmod, inputs, collider=None, survey_seconds=900,
-                   survey_file_bytes=512 * 1024 * 1024, scan_seconds=180):
-    """Phase C or D as run.ps1: the player with phase B's plug-ins and zipmod, the rewrite probe and its inputs."""
+                   survey_file_bytes=512 * 1024 * 1024, scan_seconds=180, control_seconds=None):
+    """Phase C, D or OA as run.ps1: the player with phase B's plug-ins (OA: phase A's) and zipmod, the rewrite
+    probe and its inputs. OA runs the no-edit control player (OB, control_seconds) before the oracle player."""
     if not re.fullmatch(PLAYER_ROOT, root): raise ValueError('Unknown private player root')
-    if phase not in ('C', 'D'): raise ValueError('Unknown phase')
+    if phase not in ('C', 'D', 'OA'): raise ValueError('Unknown phase')
     for value in (wait_seconds, survey_seconds, survey_file_bytes, scan_seconds):
         if not isinstance(value, int) or value <= 0: raise ValueError('Bounds must be positive integers')
     zipmod_record(zipmod)
     if collider is not None and phase == 'C': raise ValueError('Phase C finds its own collider zipmod')
     if collider is not None: zipmod_record(collider)
     if not all(re.fullmatch(r'[A-Za-z0-9.-]+', name) for name in inputs): raise ValueError('Unexpected input name')
-    plugins = ','.join("@('%s','%s',%d)" % entry for entry in PLUGINS + PLUGINS_B)
+    ordered = phase == 'OA'
+    if ordered and (wait_seconds > ORDERED_MAX_SECONDS or collider is not None or type(control_seconds) is not int
+                    or not 1 <= control_seconds <= ORDERED_CONTROL_SECONDS):
+        raise ValueError('The ordered phase allows at most %d oracle and %d control player seconds and no collider scan/copy'
+                         % (ORDERED_MAX_SECONDS, ORDERED_CONTROL_SECONDS))
+    if not ordered and control_seconds is not None: raise ValueError('Only the ordered phase runs a control player')
+    plugins = ','.join("@('%s','%s',%d)" % entry for entry in PLUGINS + (() if ordered else PLUGINS_B))
     names = ','.join("'%s'" % name for name in inputs)
     sources = ('OriginalPluginRewriteProbe.cs',) + SOURCES_B
     head = ("$ErrorActionPreference='Stop';$root='" + root + "';$base='" + base + "';$r=[ordered]@{root=$root;phase='" + phase + "'}\n"
@@ -356,6 +523,8 @@ if($r.largestKKPE.sha256 -ne (Sha $f.FullName)){throw 'The largest KKPE scene co
 break}}
 $s=$null;$r.largestKKPE.seconds=[math]::Round($w.Elapsed.TotalSeconds,1)
 """)
+    elif ordered:
+        middle = ''  # Exact retained input only: no authoring, config/corpus/installed-scene survey.
     else:
         middle = ((r"""$r.collider=Mod '""" + collider['name'] + "' '" + collider['sha256'] + "'\n") if collider else '') + (
             r"""[IO.File]::WriteAllText("$in\survey.txt","$original\UserData\studio\scene`n""" + str(survey_seconds) + '`n' + str(survey_file_bytes) + r"""`n")
@@ -384,13 +553,150 @@ $r.junctionTargetsChanged=(($r.junctionTargetsBefore|ConvertTo-Json -Compress) -
 }
 [PSCustomObject]$r|ConvertTo-Json -Compress -Depth 6
 """)
+    if ordered:
+        header_end = head.index('\n') + 1
+        head = head[:header_end] + ORDERED_ENVELOPE + head[header_end:]
+        old_owners = "function Own{@(Get-Process -ErrorAction SilentlyContinue|Where-Object{$_.Path -and $_.Path.StartsWith($root+'\\')})}"
+        if old_owners not in head: raise AssertionError('Ordered owner insertion point changed')
+        head = head.replace(old_owners, ORDERED_OWNERS, 1)
+        head = head.replace('[Net.ServicePointManager]::Expect100Continue=$false', r'''[Console]::Error.WriteLine('ORDERED_GUEST:'+(@{pid=$PID;startUTC=$r.guestStartUTC;root=$root}|ConvertTo-Json -Compress))
+[Net.ServicePointManager]::Expect100Continue=$false''', 1)
+        head = head.replace(PLAYER_SETUP, "OrderedStamp 'private-player-setup'\n" + PLAYER_SETUP, 1)
+        # The compiler is outside the private root. Retain its exact instance
+        # and bound that process separately, before any original player starts.
+        start = tail.index('$c=& '); end = tail.index('$r.playerArguments=')
+        compile_args = ','.join("('\"'+$root+'\\%s\"')" % name for name in sources)
+        tail = tail[:start] + (r'''$compiler='C:\Windows\Microsoft.NET\Framework64\v4.0.30319\csc.exe'
+$referenceArguments=@($refs|ForEach-Object{('/reference:"'+$_+'"')})
+$arguments=@('/nologo','/noconfig','/nostdlib+','/target:library',('/out:"'+$p+'\IkkokuPluginRewriteProbe.dll"'))+$referenceArguments+@(''' + compile_args + r''')
+OrderedStamp 'compiler-start'
+$c=Start-Process -FilePath $compiler -ArgumentList $arguments -RedirectStandardOutput "$out\compile.stdout" -RedirectStandardError "$out\compile.stderr" -PassThru
+$script:orderedCompiler=$c;$r.compiler=[ordered]@{pid=$c.Id;expectedPath=$compiler;maximumSeconds=60};OrderedStamp 'compiler-pid'
+[void]$c.Handle;OrderedStamp 'compiler-identity-read';$script:orderedCompilerIdentity=ProcessIdentity $c
+$stamp=$script:orderedCompilerIdentity.startTicks;$r.compiler=[ordered]@{pid=$c.Id;startTicks=$stamp;path=$compiler;maximumSeconds=60}
+OrderedStamp 'compiler-wait'
+if(-not $c.WaitForExit(60000)){
+StopOwnedCompiler;$r.compiler.stopped=$true
+throw 'Owned compiler exceeded 60 seconds'}
+OrderedStamp 'compiler-exit-read'
+if($null -eq $c.ExitCode){throw 'Owned compiler exit code is unavailable'}
+$r.compiler.exitCode=$c.ExitCode;$r.compiler.exited=$true
+OrderedStamp 'compiler-complete'
+if($c.ExitCode -ne 0){throw 'Compile failed; see retained compiler logs'}
+''') + tail[end:]
+        old_wait = '$r.processID=$x.Id;$r.exited=$x.WaitForExit(' + str(wait_seconds * 1000) + ')'
+        new_wait = r'''$script:orderedLaunched+=@($x);$r.processID=$x.Id;OrderedStamp 'player-pid'
+[void]$x.Handle;OrderedStamp 'player-birth-read';$r.playerStartUTC=$x.StartTime.ToUniversalTime().ToString('o')
+OrderedStamp 'player-identity-read';$r.playerIdentity=RememberPlayer $x
+OrderedStamp 'player-executable-hash'
+$r.playerExecutableSHA256=Sha "$root\CharaStudio.exe";$playerWatch=[Diagnostics.Stopwatch]::StartNew()
+OrderedStamp 'player-monitor'
+while(-not $x.HasExited -and $playerWatch.Elapsed.TotalSeconds -lt ''' + str(wait_seconds) + r'''){
+ObservePlayerChildren;[void]$x.WaitForExit(250)}
+OrderedStamp 'player-exit-read';$r.exited=$x.HasExited
+if($r.exited){if($null -eq $x.ExitCode){throw 'Owned player exit code is unavailable'};$r.playerExitCode=$x.ExitCode}
+OrderedStamp 'player-complete' '''
+        if old_wait not in tail: raise AssertionError('Ordered wait insertion point changed')
+        tail = tail.replace(old_wait, new_wait, 1)
+        tail = tail.replace('$x=Start-Process', "OrderedStamp 'player-start'\n$x=Start-Process", 1)
+        tail = tail.replace('$left=Own;$left|Stop-Process -Force;$r.stopped=@($left|ForEach-Object{$_.Id});', "OrderedStamp 'player-drain';$r.stopped=StopPlayerOwners;", 1)
+        # The no-edit control (OB) first, in its own player under the same owner envelope and private root;
+        # then the oracle (OA). A shutdown fault both share is the player's, not the edits'.
+        start = tail.index("OrderedStamp 'player-start'")
+        end = tail.index('Start-Sleep -Seconds 2\n', start) + len('Start-Sleep -Seconds 2\n')
+        launch = tail[start:end]
+        bound = '$playerWatch.Elapsed.TotalSeconds -lt ' + str(wait_seconds) + '){'
+        if launch.count(bound) != 1 or 'StopPlayerOwners' not in launch: raise AssertionError('Ordered launch block changed')
+        control = launch.replace(bound, '$playerWatch.Elapsed.TotalSeconds -lt ' + str(control_seconds) + '){', 1)
+        control = control.replace("OrderedStamp 'player-", "OrderedStamp 'control-player-")
+        tail = tail[:start] + control + ORDERED_CONTROL_HANDOFF + tail[start:]
+        tail = tail.replace("foreach($n in @('unity.log'", "OrderedStamp 'capture-logs'\nforeach($n in @('unity.log'", 1)
+        tail = tail.replace('$z="$root\\reload.zip";', "OrderedStamp 'capture-archive'\n$z=\"$root\\reload.zip\";", 1)
+        tail = tail.replace('Invoke-WebRequest -UseBasicParsing -Method Put', 'Invoke-WebRequest -UseBasicParsing -TimeoutSec 30 -Method Put')
+        tail = tail.replace("Invoke-WebRequest -UseBasicParsing -TimeoutSec 30 -Method Put", "if($r.zipBytes -gt 134217728){throw 'Ordered capture exceeds 128 MiB'}\nOrderedStamp 'capture-upload'\nInvoke-WebRequest -UseBasicParsing -TimeoutSec 30 -Method Put", 1)
+        # Retain compiler/partial probe output even when no successful player
+        # result reaches the normal upload. Each cleanup step retains its own
+        # error; it cannot replace the primary error or suppress the envelope.
+        tail = tail[:tail.index('}catch{$r.error=$_.ToString()}')] + r'''}catch{
+$r.errorStage=$r.stage;$r.error=$_.ToString();$r.errorPosition=$_.InvocationInfo.PositionMessage
+OrderedStamp 'primary-error'
+}finally{
+try{
+try{OrderedStamp 'cleanup-compiler';StopOwnedCompiler}catch{OrderedCleanupFailure $_}
+try{OrderedStamp 'cleanup-player';$r.stoppedAtCleanup=StopPlayerOwners}catch{OrderedCleanupFailure $_}
+if(-not $r.zipSHA256 -and $out -and (Test-Path -LiteralPath $out)){
+try{OrderedStamp 'partial-archive';$z="$root\partial.zip";[IO.Compression.ZipFile]::CreateFromDirectory($out,$z)
+$r.zipSHA256=Sha $z;$r.zipBytes=(Get-Item -LiteralPath $z).Length
+if($r.zipBytes -gt 134217728){throw 'Ordered partial capture exceeds 128 MiB'}
+OrderedStamp 'partial-upload'
+Invoke-WebRequest -UseBasicParsing -TimeoutSec 30 -Method Put -InFile $z -ContentType 'application/zip' -Uri ($base+'reload.zip')|Out-Null
+}catch{$r.partialUploadError=$_.ToString();OrderedCleanupFailure $_}}
+try{
+OrderedStamp 'root-removal-proof';$r.rootRemovalReady=RootRemovalReady
+if(-not $r.rootRemovalReady){throw 'Root retained: exact owner exit or detached-child drain is unproven'}
+OrderedStamp 'junction-removal';$kept=@()
+foreach($j in @("$root\abdata","$root\CharaStudio_Data")){if(Test-Path -LiteralPath $j){if((Get-Item -LiteralPath $j -Force).Attributes -band [IO.FileAttributes]::ReparsePoint){cmd /c rmdir "$j"|Out-Null}if(Test-Path -LiteralPath $j){$kept+=$j}}}
+if($kept.Count){throw ('junctions not removed: '+($kept -join ', '))}
+OrderedStamp 'root-removal';if(Test-Path -LiteralPath $root){Remove-Item -LiteralPath $root -Recurse -Force}
+}catch{OrderedCleanupFailure $_}
+try{OrderedStamp 'remaining-processes';$r.removed=-not(Test-Path -LiteralPath $root)
+$r.remainingGameProcesses=@(Get-Process CharaStudio,Koikatu -ErrorAction SilentlyContinue|ForEach-Object{$_.Id})}catch{OrderedCleanupFailure $_}
+OrderedStamp 'runtime-after'
+$r.junctionTargetsAfter=Targets
+$r.junctionTargetsChanged=(($r.junctionTargetsBefore|ConvertTo-Json -Compress) -ne ($r.junctionTargetsAfter|ConvertTo-Json -Compress))
+}catch{OrderedCleanupFailure $_}finally{
+OrderedStamp 'final-envelope';[Console]::Error.WriteLine('ORDERED_FINAL:'+($r|ConvertTo-Json -Compress -Depth 6))}
+}
+[PSCustomObject]$r|ConvertTo-Json -Compress -Depth 6
+'''
+        head = head.replace('Invoke-WebRequest -UseBasicParsing -Uri', 'Invoke-WebRequest -UseBasicParsing -TimeoutSec 30 -Uri')
+        # Bound the inherited target-metadata and exact-zipmod traversal too.
+        head = head.replace('$f=0;$d=0;$t=$i.LastWriteTimeUtc', '$f=0;$d=0;$t=$i.LastWriteTimeUtc;$watch=[Diagnostics.Stopwatch]::StartNew()')
+        head = head.replace("foreach($e in $i.EnumerateFileSystemInfos('*',[IO.SearchOption]::AllDirectories)){", "foreach($e in $i.EnumerateFileSystemInfos('*',[IO.SearchOption]::AllDirectories)){if($f+$d -gt 200000 -or $watch.Elapsed.TotalSeconds -gt 30){throw 'Target metadata traversal exceeded its bound'};")
+        old = '$m=@(Get-ChildItem -LiteralPath "$original\\mods" -Recurse -File -ErrorAction SilentlyContinue|Where-Object{$_.Name -ceq $name})'
+        new = r'''$m=@();$watch=[Diagnostics.Stopwatch]::StartNew();$visited=0
+foreach($path in [IO.Directory]::EnumerateFiles("$original\mods",'*',[IO.SearchOption]::AllDirectories)){
+$visited++;if($visited -gt 20000 -or $watch.Elapsed.TotalSeconds -gt 30){throw 'Exact zipmod traversal exceeded its bound'}
+if([IO.Path]::GetFileName($path) -ceq $name){$m+=Get-Item -LiteralPath $path}}'''
+        if old not in head: raise AssertionError('Ordered mod traversal insertion point changed')
+        head = head.replace(old, new, 1)
     return head + middle + tail
 
 
+# After the control player (OB) exits and its owners are drained: keep its record, move its logs and outputs to
+# control-* (flat names, as extract requires), and point the probe at OA for the second player.
+ORDERED_CONTROL_HANDOFF = r'''if(-not $r.exited){throw 'Control player did not exit within its bound'}
+# The control's shutdown fault starts Windows Error Reporting (WerFault and a
+# reflected CharaStudio child). OA starts only once that is gone: this waits
+# and records, it never stops a process, and a timeout ends the probe here.
+OrderedStamp 'control-crash-drain';$drain=[Diagnostics.Stopwatch]::StartNew();$since=$r.playerIdentity.startTicks
+$parents=@($script:orderedOwners.Keys|ForEach-Object{[int]$_})+@($script:orderedLaunched|ForEach-Object{[int]$_.Id})
+do{$table=@(Get-CimInstance Win32_Process -OperationTimeoutSec 5)
+$pending=@($table|Where-Object{($_.Name -ieq 'WerFault.exe' -and $_.CreationDate -is [DateTime] -and $_.CreationDate.ToUniversalTime().Ticks -ge $since) -or
+($_.Name -in @('CharaStudio.exe','Koikatu.exe')) -or ($parents -contains [int]$_.ParentProcessId)})
+if(-not $pending.Count){break};Start-Sleep -Milliseconds 500}while($drain.Elapsed.TotalSeconds -lt 120)
+$r.controlCrashDrain=[ordered]@{milliseconds=[int]$drain.Elapsed.TotalMilliseconds;pending=@($pending|ForEach-Object{[ordered]@{pid=$_.ProcessId;name=$_.Name;parent=$_.ParentProcessId;birth=(RowBirth $_)}})}
+if($pending.Count){throw 'Control crash reporting did not drain within 120 seconds; OA not launched'}
+$r.control=[ordered]@{phase='OB';processID=$r.processID;playerStartUTC=$r.playerStartUTC;playerIdentity=$r.playerIdentity;
+playerExecutableSHA256=$r.playerExecutableSHA256;exited=$r.exited;playerExitCode=$r.playerExitCode;stopped=$r.stopped}
+OrderedStamp 'control-capture'
+foreach($log in @('unity.log','BepInEx\LogOutput.log')){if(Test-Path -LiteralPath "$root\$log"){Move-Item -LiteralPath "$root\$log" -Destination "$out\control-$(Split-Path $log -Leaf)"}}
+foreach($f in @(Get-ChildItem -LiteralPath $out -File)){if($f.Name -notlike 'compile.*' -and $f.Name -notlike 'control-*'){Rename-Item -LiteralPath $f.FullName -NewName ('control-'+$f.Name)}}
+[IO.File]::WriteAllText("$in\phase.txt",'OA');$r.phases=@('OB','OA')
+$r.processID=$null;$r.playerStartUTC=$null;$r.playerIdentity=$null;$r.playerExecutableSHA256=$null;$r.exited=$null;$r.playerExitCode=$null;$r.stopped=$null
+OrderedStamp 'control-complete'
+'''
+
+
 def run_rewrite(vm, output, errno_baseline, phase, files, zipmod, collider, host_address, wait_seconds,
-                survey_seconds=900, survey_file_bytes=512 * 1024 * 1024, scan_seconds=180):
-    """One-exec phase C or D into a new output folder: run.json, run.ps1, the probe's outputs, source/ and manifest.json."""
+                survey_seconds=900, survey_file_bytes=512 * 1024 * 1024, scan_seconds=180,
+                runtime_pins=None, control_seconds=None):
+    """One-exec phase C, D or OA into a new output folder: run.json, run.ps1, the probe's outputs, source/ and manifest.json."""
     if not any(output.resolve().is_relative_to(root) for root in local_roots()): raise ValueError('Outputs must stay under .local')
+    ordered = phase == 'OA'
+    if ordered:
+        if output.exists(): raise RuntimeError('Ordered output must be a new directory, including failed starts')
+        runtime_check = ordered_runtime_check(runtime_pins)
     if (output / 'run.json').exists(): raise RuntimeError(f'{output}/run.json exists: run the probe into a new output folder')
     input_hashes = {name: digest(data) for name, data in files.items()}
     sources = {'OriginalPluginRewriteProbe.cs': REWRITE_PROBE.read_bytes()}
@@ -400,20 +706,50 @@ def run_rewrite(vm, output, errno_baseline, phase, files, zipmod, collider, host
     record = dict(vm=vm, root=root, phase=phase, sources={n: digest(b) for n, b in sources.items()}, inputs=input_hashes,
                   zipmod=dict(name=zipmod['name'], sha256=zipmod['sha256']),
                   collider=None if collider is None else dict(name=collider['name'], sha256=collider['sha256']),
-                  plugins=[dict(path=p, sha256=h, bytes=n) for p, h, n in PLUGINS + PLUGINS_B],
+                  plugins=[dict(path=p, sha256=h, bytes=n) for p, h, n in PLUGINS + (() if ordered else PLUGINS_B)],
                   errnoBaseline=errno_baseline, errnoBefore=guarded(errno_baseline),
                   transport='one prlctl exec; run.ps1 over a host-only HTTP endpoint')
     dump(output / 'run.json', record)
+    if ordered:
+        record['runtimePins'] = runtime_pins; record['controlSeconds'] = control_seconds; record['waitSeconds'] = wait_seconds
+        dump(output / 'run.json', record)
+        (output / 'source-fixture.png').write_bytes(files['fixture.png'])
+        (output / 'source-fixture-c.png').write_bytes(files['fixture-c.png'])
     served = dict(files); served.update(sources)
-    timeout = wait_seconds + survey_seconds + 2 * scan_seconds + 1800
+    timeout = control_seconds + wait_seconds + 480 if ordered else wait_seconds + survey_seconds + 2 * scan_seconds + 1800
     with Endpoint(host_address, served, upload='reload.zip') as endpoint:
         script = rewrite_script(root, endpoint.base, phase, wait_seconds, zipmod, list(files), collider, survey_seconds,
-                                survey_file_bytes, scan_seconds)
+                                survey_file_bytes, scan_seconds, control_seconds)
+        if ordered:
+            # The existing private-player setup stays intact. Reject changed runtime,
+            # producer or input bytes before the compiler/player starts. The original
+            # runtime is verified again after cleanup, not modified by the probe.
+            script = script.replace('$r.junctionTargetsBefore=Targets', runtime_check + '\n$r.runtimeBefore=VerifyRuntime\n$r.junctionTargetsBefore=Targets', 1)
+            script = script.replace('$r.junctionTargetsAfter=Targets', 'try{$r.runtimeAfter=VerifyRuntime}catch{$r.runtimeError=$_.ToString()}\n$r.junctionTargetsAfter=Targets', 1)
+            checks = []
+            for name, sha in sorted(input_hashes.items()):
+                checks.append("if($r.inputs['%s'] -cne '%s'){throw 'Input digest mismatch: %s'}" % (name, sha, name))
+            for name, data in sorted(sources.items()):
+                checks.append("if($r.sources['%s'] -cne '%s'){throw 'Producer digest mismatch: %s'}" % (name, digest(data), name))
+            script = script.replace('$refs=@(', '\n'.join(checks) + '\n$refs=@(', 1)
         served['run.ps1'] = script.encode()
         (output / 'run.ps1').write_text(script.replace(endpoint.base, '<endpoint>/'))
-        result = subprocess.run(['prlctl', 'exec', vm, '--current-user', 'powershell.exe', '-NoProfile', '-NonInteractive',
-                                 '-Command', bootstrap(endpoint.base)], text=True, capture_output=True, timeout=timeout)
+        command = ['prlctl', 'exec', vm, '--current-user', 'powershell.exe', '-NoProfile', '-NonInteractive',
+                   '-Command', bootstrap(endpoint.base)]
+        result = (ordered_transport(command, output, record, timeout) if ordered else
+                  subprocess.run(command, text=True, capture_output=True, timeout=timeout))
         upload = endpoint.upload
+    if ordered and upload is not None:
+        # A late guest/finally error must not discard bytes already delivered
+        # by the capture endpoint. Retention is not provenance acceptance or
+        # extraction: those still require the matching guest envelope below.
+        if len(upload) > 128 * 1024 * 1024:
+            record['unverifiedUploadBytes'] = len(upload)
+            dump(output / 'run.json', record)
+            raise ValueError('Ordered transport upload exceeds 128 MiB')
+        (output / 'transport-upload.zip').write_bytes(upload)
+        record['unverifiedUpload'] = dict(file='transport-upload.zip', bytes=len(upload), sha256=digest(upload))
+        dump(output / 'run.json', record)
     record['errnoAfter'] = errno_count()
     if result.returncode:
         record['execError'] = (result.stderr or result.stdout)[-4000:]; dump(output / 'run.json', record)
@@ -431,15 +767,176 @@ def run_rewrite(vm, output, errno_baseline, phase, files, zipmod, collider, host
         names = extract(upload, output)
     (output / 'source').mkdir(exist_ok=True)
     for name, data in sources.items(): (output / 'source' / name).write_bytes(data)
+    retained = ['run.json', 'run.ps1'] + (['source-fixture.png', 'source-fixture-c.png', 'exec.stdout', 'exec.stderr'] if ordered else [])
+    if ordered and upload is not None: retained.append('transport-upload.zip')
     provenance = [dict(file=str(p.relative_to(output)), sha256=digest(p.read_bytes()), bytes=p.stat().st_size)
-                  for p in sorted([output / n for n in set(names + ['run.json', 'run.ps1'])] + list((output / 'source').iterdir())) if p.is_file()]
+                  for p in sorted([output / n for n in set(names + retained)] + list((output / 'source').iterdir())) if p.is_file()]
     dump(output / 'manifest.json', dict(schemaVersion=1, inputs=input_hashes, files=provenance))
     status = json.loads((output / 'status.json').read_text()) if (output / 'status.json').is_file() else None
-    return dict(root=root, exited=guest.get('exited'), error=guest.get('error'), cleanupError=guest.get('cleanupError'),
+    result = dict(root=root, exited=guest.get('exited'), error=guest.get('error'), cleanupError=guest.get('cleanupError'),
                 removed=guest.get('removed'), remainingGameProcesses=guest.get('remainingGameProcesses'),
                 junctionTargetsChanged=guest.get('junctionTargetsChanged'), collider=guest.get('collider'),
                 configs=guest.get('configs'), largestKKPE=guest.get('largestKKPE'),
                 errno=[record['errnoBefore'], record['errnoAfter']], files=len(provenance), statusError=(status or {}).get('error'))
+    if ordered:
+        result.update(ordered_acceptance(output, names, guest, status, record, input_hashes, runtime_pins))
+        dump(output / 'summary.json', result)
+    return result
+
+
+LOCAL_SLOT = b'\xa9LocalSlot\xce'
+
+
+def local_slot_values(data):
+    """The offsets of each Sideloader LocalSlot uint32 value (msgpack key, 0xce, four bytes). The slot is the one
+    the saving session resolved (UniversalAutoResolver.cs:591-670); no load or import reads it."""
+    offsets, at = [], data.find(LOCAL_SLOT)
+    while at >= 0:
+        offsets += range(at + len(LOCAL_SLOT), at + len(LOCAL_SLOT) + 4); at = data.find(LOCAL_SLOT, at + 1)
+    return offsets
+
+
+def differing(a, b):
+    """Byte offsets where two same-length files differ, or None when their lengths differ."""
+    return None if len(a) != len(b) else [i for i in range(len(a)) if a[i] != b[i]]
+
+
+def ordered_acceptance(output, names, guest, status, record, input_hashes, runtime_pins):
+    """Main's #278 rule: the 0xC0000005 quit is accepted only when the no-edit control ends the same way."""
+    pairs = {'control-fixture': ('control-fixture.png', 'control-resave-fixture.png')}
+    for save in ['fixture', 'fixture-c'] + ['edit-' + label for label in ORDERED_CASES]:
+        pairs[save] = (save + '.png', 'resave-' + save + '.png')
+    required = {'plugin-scene-trace.json', 'status.json', 'control-plugin-scene-trace.json', 'control-status.json'}
+    for pair in pairs.values(): required.update(pair)
+    present = set(names)
+    def read(name): return (output / name).read_bytes() if name in present and (output / name).is_file() else None
+    fixed, differences = {}, {}
+    for save, (saved, resaved) in pairs.items():
+        a, b = read(saved), read(resaved)
+        fixed[save] = a is not None and a == b
+        if a is not None and b is not None and a != b: differences[save] = differing(a, b)
+    # Phase C's rows are compared apart from live state by the Engine parity test; the rest must be raw.
+    live = {'fixture-c'} | {'edit-' + label for label in ORDERED_FIXTURE_C}
+    raw = all(ok for save, ok in fixed.items() if save not in live)
+    control_fixture, baseline = read('control-fixture.png'), read('fixture.png')
+    slot_offsets = local_slot_values(baseline) if baseline is not None else []
+    control_diff = differing(control_fixture, baseline) if control_fixture is not None and baseline is not None else None
+    # Apart from Sideloader's per-session LocalSlot values, at the same offsets in both saves.
+    control_matches = (control_diff is not None and set(control_diff) <= set(slot_offsets)
+                       and slot_offsets == local_slot_values(control_fixture))
+    control = guest.get('control') or {}
+    control_status = json.loads((output / 'control-status.json').read_text()) if 'control-status.json' in present else None
+    codes = [control.get('playerExitCode'), guest.get('playerExitCode')]
+    same_exit = (control.get('exited') is True and guest.get('exited') is True and codes[0] == codes[1]
+                 and codes[1] in (0, SHUTDOWN_FAULT))
+    def clean(s, phase): return bool(s and s.get('phase') == phase and 'error' in s and s['error'] is None)
+    accepted = (clean(control_status, 'OB') and clean(status, 'OA') and required <= present and raw
+        and control_matches and same_exit and guest.get('phases') == ['OB', 'OA'] and guest.get('removed') is True
+        and guest.get('remainingGameProcesses') == [] and guest.get('junctionTargetsChanged') is False
+        and not any(guest.get(k) for k in ('error', 'cleanupError', 'runtimeError', 'partialUploadError'))
+        and guest.get('runtimeBefore') == runtime_pins == guest.get('runtimeAfter')
+        and guest.get('sources') == record['sources'] and guest.get('inputs') == input_hashes
+        and record.get('hostGroupReleased') is True and record['errnoBefore'] == record['errnoAfter'])
+    return dict(accepted=bool(accepted), playerExitCodes=codes, shutdownFault=same_exit and codes[1] == SHUTDOWN_FAULT,
+                fixedPoints=fixed, saveResaveDifferences=differences, liveStateRows=sorted(live),
+                liveStateCheck='EngineTests sourceSceneOrderedOracleParity (liveStateMasked)',
+                controlMatchesBaseline=control_matches, controlBaselineDifferences=control_diff,
+                controlLocalSlotOffsets=slot_offsets, missingOutputs=sorted(required - present),
+                controlStatusError=(control_status or {}).get('error'))
+
+
+def ordered_transport(command, output, record, seconds):
+    """One owned host group; guest timeout ambiguity is retained, never retried."""
+    with (output / 'exec.stdout').open('xb') as out, (output / 'exec.stderr').open('xb') as err:
+        child = subprocess.Popen(command, stdout=out, stderr=err, start_new_session=True)
+        record['hostPID'] = child.pid; record['hostPGID'] = child.pid
+        record['hostBirthAndCommand'] = subprocess.run(['ps', '-p', str(child.pid), '-o', 'lstart=,command='],
+            text=True, capture_output=True, timeout=5).stdout.strip()
+        dump(output / 'run.json', record)
+        try: code = child.wait(timeout=seconds)
+        except subprocess.TimeoutExpired:
+            record['hostTimedOut'] = True; record['guestCompletionUnresolved'] = True
+            os.killpg(child.pid, signal.SIGTERM)
+            try: child.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                os.killpg(child.pid, signal.SIGKILL); child.wait(timeout=5)
+            code = 124
+        try: os.killpg(child.pid, 0); record['hostGroupReleased'] = False
+        except ProcessLookupError: record['hostGroupReleased'] = True
+        record['hostExitCode'] = code; dump(output / 'run.json', record)
+    return subprocess.CompletedProcess(command, code, (output / 'exec.stdout').read_text(), (output / 'exec.stderr').read_text())
+
+
+def ordered_runtime_check(pins):
+    """A complete, independently acquired runtime manifest; never learn pins at launch."""
+    if not isinstance(pins, dict) or not 8 <= len(pins) <= 4096:
+        raise ValueError('Ordered probes require 8..4096 exact runtime file pins')
+    required = {'CharaStudio.exe', 'winhttp.dll', 'doorstop_config.ini', 'BepInEx/core/BepInEx.dll',
+                'CharaStudio_Data/Managed/Assembly-CSharp.dll', 'CharaStudio_Data/Managed/UnityEngine.dll',
+                'CharaStudio_Data/Managed/mscorlib.dll', '@compiler'}
+    if not required <= pins.keys(): raise ValueError('Runtime manifest lacks required player/compiler files')
+    if any(not isinstance(name, str) for name in pins) or len({name.lower() for name in pins}) != len(pins):
+        raise ValueError('Runtime paths must be distinct Windows path strings')
+    total = 0; rows = []
+    for name, entry in sorted(pins.items()):
+        if (not re.fullmatch(r'[A-Za-z0-9_. /-]+|@compiler', name) or
+            any(part in ('', '.', '..') or part != part.strip() or part.endswith('.') for part in name.split('/')) or
+            not (name in required or name.startswith(('CharaStudio_Data/', 'BepInEx/core/')))):
+            raise ValueError('Unexpected runtime relative path')
+        if (not isinstance(entry, dict) or set(entry) != {'sha256', 'bytes'} or
+            not isinstance(entry['sha256'], str) or not re.fullmatch('[0-9a-f]{64}', entry['sha256']) or
+            type(entry['bytes']) is not int or not 0 <= entry['bytes'] <= 512 * 1024 * 1024):
+            raise ValueError('Invalid runtime file pin')
+        total += entry['bytes']; rows.append("@('%s','%s',%d)" % (name, entry['sha256'], entry['bytes']))
+    if total > 1024 * 1024 * 1024: raise ValueError('Runtime pins exceed 1 GiB')
+    return r'''function VerifyRuntime {
+$expected=@(''' + ','.join(rows) + r''');$names=New-Object 'System.Collections.Generic.List[string]'
+foreach($n in @('CharaStudio.exe','winhttp.dll','doorstop_config.ini','@compiler')){$names.Add($n)}
+$watch=[Diagnostics.Stopwatch]::StartNew();$stack=New-Object 'System.Collections.Generic.Stack[string]';$visited=0
+foreach($dir in @('BepInEx\core','CharaStudio_Data')) {
+$item=Get-Item -Force -LiteralPath "$original\$dir";if($item.Attributes -band [IO.FileAttributes]::ReparsePoint){throw 'Runtime root is a reparse point'};$stack.Push($item.FullName)}
+while($stack.Count){foreach($path in [IO.Directory]::EnumerateFileSystemEntries($stack.Pop())){
+$visited++;if($visited -gt 20000 -or $watch.Elapsed.TotalSeconds -gt 90){throw 'Runtime traversal bound exceeded'}
+$attributes=[IO.File]::GetAttributes($path);if($attributes -band [IO.FileAttributes]::ReparsePoint){throw 'Runtime contains a reparse point'}
+if($attributes -band [IO.FileAttributes]::Directory){$stack.Push($path)}else{$names.Add($path.Substring($original.Length+1).Replace('\','/'))}
+if($names.Count -gt 4096){throw 'Runtime file bound exceeded'}}}
+if($names.Count -ne $expected.Count -or (Compare-Object -CaseSensitive @($names|Sort-Object -CaseSensitive) @($expected|ForEach-Object{$_[0]}|Sort-Object -CaseSensitive))){throw 'Runtime file inventory differs'}
+$result=[ordered]@{}
+foreach($entry in $expected){
+if($watch.Elapsed.TotalSeconds -gt 90){throw 'Runtime hash check exceeded 90 seconds'}
+$name=$entry[0];$path=if($name -ceq '@compiler'){'C:\Windows\Microsoft.NET\Framework64\v4.0.30319\csc.exe'}else{Join-Path $original $name.Replace('/','\')}
+$before=Get-Item -Force -LiteralPath $path;$size=$before.Length;$stamp=$before.LastWriteTimeUtc.Ticks
+$stream=[IO.File]::Open($path,[IO.FileMode]::Open,[IO.FileAccess]::Read,[IO.FileShare]::Read);$sha=[Security.Cryptography.SHA256]::Create()
+try{$buffer=New-Object byte[] 1048576;while(($n=$stream.Read($buffer,0,$buffer.Length)) -gt 0){
+if($watch.Elapsed.TotalSeconds -gt 90){throw 'Runtime hash check exceeded 90 seconds'}
+[void]$sha.TransformBlock($buffer,0,$n,$buffer,0)};[void]$sha.TransformFinalBlock($buffer,0,0)
+$hash=[BitConverter]::ToString($sha.Hash).Replace('-','').ToLowerInvariant()}finally{$sha.Dispose();$stream.Dispose()}
+$after=Get-Item -Force -LiteralPath $path
+if($size -ne $entry[2] -or $hash -cne $entry[1] -or $after.Length -ne $size -or $after.LastWriteTimeUtc.Ticks -ne $stamp){throw "Runtime identity differs: $name"}
+$result[$name]=[ordered]@{sha256=$hash;bytes=$size}}
+return $result}
+'''
+
+
+def run_ordered(vm, output, errno_baseline, fixture, fixture_sha256, fixture_c, fixture_c_sha256, retained_run,
+                runtime_pins, host_address='10.211.55.2', wait_seconds=300, control_seconds=ORDERED_CONTROL_SECONDS):
+    """#278: phase A's and C's exact inputs with phase A's plug-ins; the no-edit control (OB), then every
+    ORDERED_CASES row (OA), in one exec."""
+    for expected in (fixture_sha256, fixture_c_sha256):
+        if not re.fullmatch('[0-9a-f]{64}', expected or ''): raise ValueError('Expected fixture SHA256 values are required')
+    if type(wait_seconds) is not int or not 1 <= wait_seconds <= ORDERED_MAX_SECONDS:
+        raise ValueError('Ordered player bound must be 1..%d seconds' % ORDERED_MAX_SECONDS)
+    if type(control_seconds) is not int or not 1 <= control_seconds <= ORDERED_CONTROL_SECONDS:
+        raise ValueError('Control player bound must be 1..%d seconds' % ORDERED_CONTROL_SECONDS)
+    ordered_runtime_check(runtime_pins)  # Validate before reading or invoking any VM transport.
+    if output.exists(): raise RuntimeError('Ordered output must be a new directory, including failed starts')
+    data, data_c = fixture.read_bytes(), fixture_c.read_bytes()
+    if digest(data) != fixture_sha256 or digest(data_c) != fixture_c_sha256: raise ValueError('Retained fixture digest differs')
+    run = json.loads(retained_run.read_text()); zipmod = zipmod_record(run['guest']['zipmod'])
+    files = {'fixture.png': data, 'fixture.sha256': fixture_sha256.encode(), 'fixture-c.png': data_c,
+             'fixture-c.sha256': fixture_c_sha256.encode(), 'phase.txt': b'OB'}
+    return run_rewrite(vm, output, errno_baseline, 'OA', files, zipmod, None, host_address, wait_seconds,
+                       runtime_pins=runtime_pins, control_seconds=control_seconds)
 
 
 def run_c(vm, output, errno_baseline, phase_a, host_address='10.211.55.2', wait_seconds=1800, scan_seconds=180,
@@ -580,7 +1077,14 @@ def run_b(vm, output, errno_baseline, inputs, corpus, phase_a, host_address='10.
 def main():
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument('--vm', default='Windows 11')
-    p.add_argument('--phase', choices=('a', 'b', 'c', 'd'), default='a')
+    p.add_argument('--phase', choices=('a', 'b', 'c', 'd', 'oa'), default='a')
+    p.add_argument('--fixture', type=Path, help="phase oa: phase A's exact retained fixture.png")
+    p.add_argument('--fixture-sha256', help="phase oa: its expected SHA256")
+    p.add_argument('--fixture-c', type=Path, help="phase oa: phase C's exact retained fixture.png (character W)")
+    p.add_argument('--fixture-c-sha256', help="phase oa: its expected SHA256")
+    p.add_argument('--retained-run', type=Path, help="phase oa: phase A's run.json pinning the copied zipmod")
+    p.add_argument('--runtime-pins', type=Path, help='phase oa: independently acquired complete runtime-pins.json')
+    p.add_argument('--control-seconds', type=int, default=ORDERED_CONTROL_SECONDS, help='phase oa: bound on the no-edit control player')
     p.add_argument('--output', type=Path, help='new output folder (default .local/stt03i-plugin-data/phase-<a|b>, '
                                                '.local/stt03j-plugin-rewrites/phase-<c|d>)')
     p.add_argument('--phase-c', type=Path, default=ROOT / '.local/stt03j-plugin-rewrites/phase-c', help='phase D: the phase-C output folder')
@@ -596,7 +1100,16 @@ def main():
     p.add_argument('--zipmod-max-bytes', type=int, default=8 * 1024 * 1024, help='largest zipmod considered for the fixture')
     a = p.parse_args()
     output = a.output or ROOT / (f'.local/stt03i-plugin-data/phase-{a.phase}' if a.phase in 'ab' else f'.local/stt03j-plugin-rewrites/phase-{a.phase}')
-    if a.phase == 'c':
+    if a.phase == 'oa':
+        if not all((a.output, a.fixture, a.fixture_sha256, a.fixture_c, a.fixture_c_sha256, a.retained_run, a.runtime_pins)):
+            p.error('phase oa requires --output, --fixture, --fixture-sha256, --fixture-c, --fixture-c-sha256, '
+                    '--retained-run and --runtime-pins')
+        result = run_ordered(a.vm, output, a.errno_baseline, a.fixture, a.fixture_sha256, a.fixture_c, a.fixture_c_sha256,
+                             a.retained_run, json.loads(a.runtime_pins.read_text()), a.host_address,
+                             300 if a.wait_seconds is None else a.wait_seconds, a.control_seconds)
+        print(json.dumps(result, indent=2))
+        if not result['accepted']: raise SystemExit(1)
+    elif a.phase == 'c':
         print(json.dumps(run_c(a.vm, output, a.errno_baseline, a.phase_a, a.host_address, a.wait_seconds or 1800,
                                a.scan_seconds, a.survey_file_bytes), indent=2))
     elif a.phase == 'd':
