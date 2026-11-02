@@ -426,16 +426,34 @@ are in [maps: slice 3](studio/maps.md#map-34-the-sky-and-block-images-slice-3).
     overlays, iris highlights, normal, detail and line samples, `eye_fragment`'s
     iris, white and highlight, the body mask, and the outline and shadow-caster
     alpha tests now use `forcedAnisoRepeat` or `forcedAnisoClamp`. Screen-space
-    passes keep `linearClamp`. The glTF exports carry no sampler state, so the
-    few Point or aniso-0 textures, which Unity's rule leaves unforced, are
-    forced too. Before, they sampled trilinear, which matched the player no
-    better. Single-level textures are forced like mipmapped ones, as
+    passes keep `linearClamp`. Single-level textures are forced like mipmapped ones, as
     `TranslatedSourceProgram.SamplerConfiguration` forces every non-Point
     texture with aniso above 0, mipmapped or not. In the live source-shader
     gate, a mutation check that left them unforced moved 3,871 character
     pixels, put every family further from the player's frame and failed
     `toon_eyew_lod0` (p99 5 > 4). That is shown by the frame, not by a direct
     player probe.
+  - **Limit: the native path forces every texture.** The native toon, eye,
+    outline, shadow-caster and map shaders read every texture through one
+    `constexpr` sampler per call site, and the glTF exports carry no sampler
+    state. So they force anisotropy 9 even on the textures the player leaves
+    unforced: Point-filtered ones, and those with `anisoLevel` 0. Before, those
+    sampled trilinear, which matched the player no better. Counts, from
+    `m_TextureSettings` (2026-11-02):
+    - The 35 transferred character bundles (`chara/*.unity3d`, 2,460
+      Texture2D) have no Point texture. Two ramps, `gt_ramp_05` and
+      `gt_ramp_06` (256×4, single-level), have aniso 0. The native shaders do
+      not sample them.
+    - The live store's 64 character textures: no Point, no aniso 0.
+    - In `studio/mat/00.unity3d` (1,105 Texture2D), 4 water textures are Point
+      with aniso 1 (`t_koi_stu_Water`, `t_koi_stu_WaterDropNormal`,
+      `t_koi_stu_waterCutOut`, `t_koi_stu_waterNormal`), and
+      `Ramp_SmoothFull` is aniso 0. None of them is in the converted item
+      catalog (chair, cube01, cylinder00).
+    - The live source-shader path follows Unity's rule per texture instead.
+      There, Point textures with their own aniso above 1 are an open question
+      ([#348](https://github.com/grabbiel/ikkoku/issues/348)); none of the
+      textures counted here is one.
   - **Test.** `mapTexturesSampleWithThePlayersForcedAnisotropy` draws a
     16:1 texture footprint over a texture whose levels 0–1 are white and the
     rest black. Each map texture reads 1. `max_anisotropy` 1–4 reads 0 on

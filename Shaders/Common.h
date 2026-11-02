@@ -53,12 +53,19 @@ constexpr sampler linearRepeat(mag_filter::linear, min_filter::linear, mip_filte
 constexpr sampler linearClamp(mag_filter::linear, min_filter::linear, mip_filter::linear, address::clamp_to_edge);
 // The original player's sampler state for asset textures. CharaStudio runs
 // QualitySettings.anisotropicFiltering ForceEnable, and no game assembly calls
-// Texture.SetGlobalAnisotropicFilteringLimits. So every mipmapped, non-point
-// texture with anisoLevel above 0 (the character, item and map textures, and the
-// character composites) is sampled at Unity's forced minimum, anisotropy 9, and
-// D3D11 samples an anisotropic texture with linear mips. Map, toon, eye, outline,
-// shadow-caster and body-mask samples use these; screen-space passes keep
-// linearClamp (docs/reference/renderer.md, "Sampler state").
+// Texture.SetGlobalAnisotropicFilteringLimits. So every non-Point texture with
+// anisoLevel above 0, mipmapped or not (the character, item and map textures, and
+// the character composites), is sampled at Unity's forced minimum, anisotropy 9,
+// and D3D11 samples an anisotropic texture with linear mips. For single-level
+// textures that is shown by the controlled frame, not by a direct player probe.
+// Map, toon, eye, outline, shadow-caster and body-mask samples use these;
+// screen-space passes keep linearClamp.
+// Limit: these are constexpr samplers, one for every texture a call site reads,
+// so the native path also forces the textures the player leaves unforced (Point
+// filter, or anisoLevel 0). None of the transferred character textures is Point
+// and 2 ramps are aniso 0 (not sampled here); in studio/mat/00.unity3d 4 of 1,105
+// are Point and 1 is aniso 0, none of them in the converted item catalog
+// (docs/reference/renderer.md, "Sampler state").
 constexpr sampler forcedAnisoRepeat(mag_filter::linear, min_filter::linear, mip_filter::linear, max_anisotropy(9), address::repeat);
 constexpr sampler forcedAnisoClamp(mag_filter::linear, min_filter::linear, mip_filter::linear, max_anisotropy(9), address::clamp_to_edge);
 constexpr sampler shadowSampler(mag_filter::linear, min_filter::linear, compare_func::greater_equal, address::clamp_to_edge);
