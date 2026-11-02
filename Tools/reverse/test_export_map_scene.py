@@ -272,6 +272,43 @@ class StandardInputTests(unittest.TestCase):
         image.putdata([(128, 0, 0, 255), (128, 0, 0, 255)])
         self.assertAlmostEqual(maps.texture_channel_mean(SimpleNamespace(image=image, m_ColorSpace=1), 0),
                                maps.gamma_to_linear_exact(128 / 255))
+        image.putdata([(0, 0, 0, 128), (0, 0, 0, 128)])  # alpha is never sRGB decoded
+        self.assertAlmostEqual(maps.texture_channel_mean(SimpleNamespace(image=image, m_ColorSpace=1), 3), 128 / 255)
+
+    def test_smoothness_follows_metallic_gloss(self):
+        # UnityStandardInput.cginc MetallicGloss: the albedo alpha wins, then the map's alpha, then _Glossiness.
+        plain = maps.standard_inputs({}, {"_Glossiness": 0.3, "_GlossMapScale": 0.5}, [])
+        self.assertEqual([plain[k] for k in ("smoothness", "smoothnessSource", "smoothnessFactor", "smoothnessApproximation")],
+                         [0.3, "glossiness", None, None])
+        self.assertEqual(maps.standard_inputs({}, {}, [])["smoothness"], 0.5)  # the property's default
+        mapped = maps.standard_inputs({}, {"_Glossiness": 0.3, "_GlossMapScale": 0.5}, ["_METALLICGLOSSMAP"], metallic_map_mean=0.2,
+                                      gloss_map_alpha_mean=0.8)
+        self.assertEqual([mapped[k] for k in ("smoothness", "smoothnessSource", "smoothnessFactor", "metallic")],
+                         [0.4, "metallicGlossMapAlphaMean", 0.5, 0.2])
+        self.assertIn("mean over the texture", mapped["smoothnessApproximation"])
+        absent = maps.standard_inputs({}, {"_GlossMapScale": 0.5}, ["_METALLICGLOSSMAP"])
+        self.assertEqual(absent["smoothness"], 0.5); self.assertIn("white default", absent["smoothnessApproximation"])
+        albedo = maps.standard_inputs({}, {"_Glossiness": 0.3, "_GlossMapScale": 0.5},
+                                      ["_METALLICGLOSSMAP", "_SMOOTHNESS_TEXTURE_ALBEDO_CHANNEL_A"], metallic_map_mean=0.2,
+                                      gloss_map_alpha_mean=0.8, albedo_alpha_mean=0.6)
+        self.assertEqual([albedo[k] for k in ("smoothness", "smoothnessSource", "smoothnessFactor", "metallic")],
+                         [0.3, "albedoAlphaMean", 0.5, 0.2])  # metallic still from the map's R
+        self.assertEqual(maps.standard_inputs({}, {}, ["_SMOOTHNESS_TEXTURE_ALBEDO_CHANNEL_A"])["smoothness"], 1.0)
+
+    def test_forward_base_keyword_flags_are_recorded(self):
+        plain = maps.standard_inputs({}, {}, [])
+        self.assertEqual((plain["specularHighlights"], plain["glossyReflections"], plain["premultiplyAlpha"]), (True, True, False))
+        off = maps.standard_inputs({}, {}, ["_SPECULARHIGHLIGHTS_OFF", "_GLOSSYREFLECTIONS_OFF", "_ALPHAPREMULTIPLY_ON"])
+        self.assertEqual((off["specularHighlights"], off["glossyReflections"], off["premultiplyAlpha"]), (False, False, True))
+        self.assertNotIn("smoothness", maps.legacy_diffuse_inputs({}))  # Lambert: absent, not 0
+
+    def test_provenance_counts_the_smoothness_sources_and_flags(self):
+        materials = [{"extras": {"ikkokuStandard": maps.standard_inputs({}, {}, kw, gloss_map_alpha_mean=0.5)}}
+                     for kw in ([], ["_METALLICGLOSSMAP"], ["_METALLICGLOSSMAP", "_SPECULARHIGHLIGHTS_OFF"], ["_ALPHAPREMULTIPLY_ON"])]
+        materials += [{"extras": {"ikkokuStandard": maps.legacy_diffuse_inputs({})}}, {"extras": {}}]
+        self.assertEqual(maps.standard_input_counts(materials),
+                         {"materials": 4, "smoothnessSources": {"glossiness": 2, "metallicGlossMapAlphaMean": 2},
+                          "smoothnessApproximations": 2, "specularHighlightsOff": 1, "glossyReflectionsOff": 0, "premultiplyAlpha": 1})
 
 
 class LightmapFileTests(unittest.TestCase):

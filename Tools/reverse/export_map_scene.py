@@ -392,13 +392,23 @@ def one_minus_reflectivity(metallic):
     return ONE_MINUS_DIELECTRIC_SPEC - metallic * ONE_MINUS_DIELECTRIC_SPEC
 
 
-def standard_inputs(colors, floats, keywords, emission_image=None, emission_srgb=True, metallic_map_mean=None):
+def standard_inputs(colors, floats, keywords, emission_image=None, emission_srgb=True, metallic_map_mean=None,
+                    gloss_map_alpha_mean=None, albedo_alpha_mean=None):
     """What the app's baked-lightmap material needs from a Standard material: albedo and
     emission colours in Linear, and diffColor's factor. With `_METALLICGLOSSMAP` Standard reads
     metallic per texel from `_MetallicGlossMap.r` (UnityStandardInput.cginc L153-L164); the app
     draws no metallic map, so the texture's mean (as the sampler returns it, sRGB decoded when
     the texture is sRGB) stands in and says so. With the keyword but no texture Unity samples
-    the property's default, white: metallic 1."""
+    the property's default, white: metallic 1.
+
+    Smoothness (maps slice 5: the sun's Disney diffuse reads perceptualRoughness = 1 - smoothness)
+    follows the same function, MetallicGloss (UnityStandardInput.cginc): under
+    `_SMOOTHNESS_TEXTURE_ALBEDO_CHANNEL_A` the albedo alpha times `_GlossMapScale`, with or without
+    `_METALLICGLOSSMAP` (metallic still comes from the map's R); else under `_METALLICGLOSSMAP` the
+    map's alpha times `_GlossMapScale`; else `_Glossiness`. A texture's alpha stands in by its mean
+    (never sRGB decoded) and says so, like metallic; a missing texture is the white default, alpha 1.
+    The keyword flags ForwardBase also reads are recorded: `_SPECULARHIGHLIGHTS_OFF`,
+    `_GLOSSYREFLECTIONS_OFF` and `_ALPHAPREMULTIPLY_ON` (Transparent mode: diffColor times alpha)."""
     color = colors.get("_Color", [1, 1, 1, 1])
     words = set(keywords)
     if "_METALLICGLOSSMAP" in words:
@@ -407,9 +417,25 @@ def standard_inputs(colors, floats, keywords, emission_image=None, emission_srgb
                   else "_MetallicGlossMap.r mean over the texture (per-texel metallic is not drawn)")
     else:
         metallic, source = floats.get("_Metallic", 0.0), "_Metallic"
+    if "_SMOOTHNESS_TEXTURE_ALBEDO_CHANNEL_A" in words:
+        alpha, smoothness_source, texture_name = albedo_alpha_mean, "albedoAlphaMean", "_MainTex"
+    elif "_METALLICGLOSSMAP" in words:
+        alpha, smoothness_source, texture_name = gloss_map_alpha_mean, "metallicGlossMapAlphaMean", "_MetallicGlossMap"
+    else:
+        alpha, smoothness_source, texture_name = None, "glossiness", None
+    if texture_name is None:
+        smoothness, factor, approximation = floats.get("_Glossiness", 0.5), None, None
+    else:
+        factor = floats.get("_GlossMapScale", 1.0)
+        smoothness = (1.0 if alpha is None else alpha) * factor
+        approximation = (f"{texture_name} absent: the white default (alpha 1)" if alpha is None
+                         else f"{texture_name}.a mean over the texture (per-texel smoothness is not drawn)")
     result = {"albedoLinear": [gamma_to_linear_exact(c) for c in color[:3]] + [color[3]],
               "metallic": metallic, "oneMinusReflectivity": one_minus_reflectivity(metallic),
-              "metallicSource": source, "emission": None}
+              "metallicSource": source, "smoothness": smoothness, "smoothnessSource": smoothness_source,
+              "smoothnessFactor": factor, "smoothnessApproximation": approximation,
+              "specularHighlights": "_SPECULARHIGHLIGHTS_OFF" not in words, "glossyReflections": "_GLOSSYREFLECTIONS_OFF" not in words,
+              "premultiplyAlpha": "_ALPHAPREMULTIPLY_ON" in words, "emission": None}
     if "_EMISSION" in words:
         # Without a texture Unity samples the property's default, "white" (image None).
         emission = colors.get("_EmissionColor", [0, 0, 0, 1])
@@ -420,9 +446,10 @@ def standard_inputs(colors, floats, keywords, emission_image=None, emission_srgb
 
 def texture_channel_mean(texture, channel):
     """Mean of one channel of a texture's top mip as a sampler returns it: 0-1, decoded from
-    sRGB when the texture is sRGB (m_ColorSpace 1) in a Linear player."""
+    sRGB when the texture is sRGB (m_ColorSpace 1) in a Linear player. Alpha (channel 3) is
+    never decoded."""
     values = [value / 255.0 for value in texture.image.convert("RGBA").getchannel(channel).getdata()]
-    if texture.m_ColorSpace == 1:
+    if texture.m_ColorSpace == 1 and channel != 3:
         values = [gamma_to_linear_exact(value) for value in values]
     return sum(values) / len(values)
 
@@ -1647,10 +1674,14 @@ class MapExporter(Exporter):
             if "_EMISSION" in keywords_of(material) and emission_map and emission_map.m_Texture.path_id:
                 image = self.gltf["textures"][self.texture(emission_map.m_Texture)]["source"]
                 srgb = emission_map.m_Texture.read().m_ColorSpace == 1
-            metallic_map, mean = envs.get("_MetallicGlossMap"), None
+            metallic_map, mean, gloss_mean, albedo_alpha = envs.get("_MetallicGlossMap"), None, None, None
             if "_METALLICGLOSSMAP" in keywords_of(material) and metallic_map and metallic_map.m_Texture.path_id:
                 mean = texture_channel_mean(metallic_map.m_Texture.read(), 0)
-            result["extras"]["ikkokuStandard"] = standard_inputs(colors_of(material), floats, keywords_of(material), image, srgb, mean)
+                gloss_mean = texture_channel_mean(metallic_map.m_Texture.read(), 3)
+            if "_SMOOTHNESS_TEXTURE_ALBEDO_CHANNEL_A" in keywords_of(material) and main and main.m_Texture.path_id:
+                albedo_alpha = texture_channel_mean(main.m_Texture.read(), 3)
+            result["extras"]["ikkokuStandard"] = standard_inputs(colors_of(material), floats, keywords_of(material), image, srgb, mean,
+                                                                 gloss_mean, albedo_alpha)
         if rule.get("draw") == "legacyDiffuse":
             result["extras"]["ikkokuStandard"] = legacy_diffuse_inputs(colors_of(material))
         index = len(self.gltf["materials"])
@@ -2049,12 +2080,15 @@ def export(bundles, scene, map_no, output, max_texture=None, builtin_resources=N
         "meshesWithShadowRuns": len(run_meshes), "shadowRuns": sum(len(r) for r in run_meshes),
         "meshesMixingReceiveOrMask": sum(1 for r in run_meshes if len({(x[3], x[4]) for x in r}) > 1),
         "shadowOnlyCasters": {"renderers": sum(c["renderers"] for c in casters), "triangles": sum(c["triangles"] for c in casters),
-                              "groups": len(casters), "skipped": caster_skipped}}
+                              "groups": len(casters), "skipped": caster_skipped},
+        "standardInputs": standard_input_counts(exporter.gltf["materials"])}
     provenance["conversion"]["lighting"] = (
         "glTF extras ikkokuMapLighting: RenderSettings' ambient (mode, colours as serialized, intensity, the 27 "
         "m_AmbientProbe coefficients) and the sun (the one shown realtime directional light: shadow settings, cullingMask, "
         "and per sun type its colour, intensity and direction to the light in its role's frame, Z reflected); each lit "
-        "mesh's ikkokuMap.shadowRuns; ShadowsOnly renderers in the sun's mask as position/index accessors after every mesh's data")
+        "mesh's ikkokuMap.shadowRuns; ShadowsOnly renderers in the sun's mask as position/index accessors after every mesh's data; "
+        "ikkokuStandard adds smoothness (Standard's MetallicGloss: albedo alpha, the metallic map's alpha or _Glossiness; texture "
+        "alphas by their mean) and the _SPECULARHIGHLIGHTS_OFF, _GLOSSYREFLECTIONS_OFF and _ALPHAPREMULTIPLY_ON flags")
     if block_only_images:
         provenance["conversion"]["blockImages"] = ("BC1/BC3 images as their serialized blocks only, every mip, block and pixel "
                                                    "rows reversed to top-down (lossless; the top level decodes to the PNG's pixels, "
@@ -2073,6 +2107,20 @@ def export(bundles, scene, map_no, output, max_texture=None, builtin_resources=N
 
 def file_record(path):
     return {"path": str(path), "sha256": hashlib.sha256(path.read_bytes()).hexdigest(), "bytes": path.stat().st_size}
+
+
+def standard_input_counts(materials):
+    """Slice 5 provenance: how the Standard materials' smoothness was found, how many stand in by a
+    texture mean, and the ForwardBase keyword flags, in counts."""
+    inputs = [m["extras"]["ikkokuStandard"] for m in materials if "smoothness" in m.get("extras", {}).get("ikkokuStandard", {})]
+    sources = {}
+    for s in inputs:
+        sources[s["smoothnessSource"]] = sources.get(s["smoothnessSource"], 0) + 1
+    return {"materials": len(inputs), "smoothnessSources": dict(sorted(sources.items())),
+            "smoothnessApproximations": sum(1 for s in inputs if s["smoothnessApproximation"]),
+            "specularHighlightsOff": sum(1 for s in inputs if not s["specularHighlights"]),
+            "glossyReflectionsOff": sum(1 for s in inputs if not s["glossyReflections"]),
+            "premultiplyAlpha": sum(1 for s in inputs if s["premultiplyAlpha"])}
 
 
 def world_rotation(map_scene, transform_id):

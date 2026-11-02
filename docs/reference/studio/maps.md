@@ -1050,7 +1050,18 @@ These were measured against the slice-4 oracle, before any code (`.local/sta11d-
     - per sun type (0, 1 and 2, and −1 for the authored state): the colour and intensity as authored, and the unit direction to the light. The direction is Z reflected, in its role's frame. For a sun under mapRoot, that is mapRoot's frame, so the app turns it with the map.
   - **`shadowCasters`:** the `ShadowsOnly` renderers in the sun's mask. These are the stand-ins for walls and pillars that only cast shadows. They are merged per role, visibility and option into one position accessor and one index accessor, written after every mesh's and sky's data. A submesh without an opaque lit shader is left out and listed in provenance.
 - **`ikkokuMap.shadowRuns`** on each lit mesh (`Standard`, `Custom/StandardDouble`, `Legacy Shaders/Diffuse`) of a map with a sun. Each run is `[first index, index count, cast mode, receives, in the sun's mask]`, and the runs cover the mesh's indices in order. Each renderer's triangles are contiguous, so the runs need no new vertex data.
-- **`provenance.json`:** `lighting` (counts), each light's other shadow fields, and the conversion note.
+- **More of each material's `ikkokuStandard`** (`Standard` and `Custom/StandardDouble`), the inputs the sun's term reads beyond slice 2's albedo and metallic:
+  - **`smoothness`,** by Standard's `MetallicGloss`:
+    - under `_SMOOTHNESS_TEXTURE_ALBEDO_CHANNEL_A`, the albedo's alpha times `_GlossMapScale`, with or without `_METALLICGLOSSMAP` (metallic then still comes from the map's red channel);
+    - else, under `_METALLICGLOSSMAP`, the metallic map's alpha times `_GlossMapScale`;
+    - else `_Glossiness`.
+  - **`smoothnessSource`** (`glossiness`, `metallicGlossMapAlphaMean` or `albedoAlphaMean`) and **`smoothnessFactor`** (`_GlossMapScale`, or null for `_Glossiness`).
+  - **`smoothnessApproximation`.** A texture's alpha stands in by its mean over the texture, never sRGB-decoded, and this says so, as `metallicSource` does for metallic. A missing texture is Unity's white default, alpha 1. It is null for `_Glossiness`.
+  - **`specularHighlights`** and **`glossyReflections`:** false under `_SPECULARHIGHLIGHTS_OFF` and `_GLOSSYREFLECTIONS_OFF`.
+  - **`premultiplyAlpha`:** `_ALPHAPREMULTIPLY_ON`, the Transparent mode, which multiplies diffColor by alpha.
+
+  `Legacy Shaders/Diffuse` materials get no smoothness field at all, not 0.
+- **`provenance.json`:** `lighting` (counts, with `standardInputs`: the smoothness sources, the approximations and the three flags), each light's other shadow fields, and the conversion note.
 
 Tests (`test_export_map_scene.py`, `LightingTests`):
 
@@ -1060,7 +1071,45 @@ Tests (`test_export_map_scene.py`, `LightingTests`):
 - the ambient record and the modes it refuses;
 - which light is the sun;
 - a sun type's entry;
-- merging the runs.
+- merging the runs;
+- smoothness in each of the three cases, with and without its texture, and alpha means that are not sRGB-decoded;
+- the three keyword flags, and no smoothness on `Legacy Shaders/Diffuse`;
+- the provenance counts.
+
+### What Standard's sun reads (slice 5)
+
+Standard's ForwardBase pass lights a pixel with the sun from the albedo, metallic, smoothness, the normal and the light. Before the re-export, every material the 42 maps draw lit was checked against what `ikkokuStandard` carries (`.local/sta11d-slice5/tools/standard_audit.py`). There are 2,200 material records, counted once per map:
+
+- 2,189 `Standard`;
+- 11 `Custom/StandardDouble`;
+- no `Standard (Specular setup)` and no `Legacy Shaders/Diffuse`.
+
+| Input | Materials | In the export | Why |
+|---|---:|---|---|
+| Smoothness from `_Glossiness` | 1,719 | `smoothness` | 1,381 of them are above 0. |
+| Smoothness from `_MetallicGlossMap` alpha × `_GlossMapScale` | 476 | `smoothness`, the alpha's mean | Each has its texture. Per-texel smoothness needs the map drawn. |
+| Smoothness from albedo alpha × `_GlossMapScale` | 5 | `smoothness`, the alpha's mean | Maps 4–7 and 34, all opaque. None also has `_METALLICGLOSSMAP`. |
+| `_SPECULARHIGHLIGHTS_OFF` | 64 | `specularHighlights` | |
+| `_GLOSSYREFLECTIONS_OFF` | 66 | `glossyReflections` | The reflection probe's term, not the sun's. Recorded because it is a flag. |
+| `_ALPHAPREMULTIPLY_ON` (Transparent mode) | 35 | `premultiplyAlpha` | It multiplies diffColor by alpha before the sun's term. |
+| `Custom/StandardDouble` | 11 (map 28) | as `Standard`: `smoothness` from `_Glossiness` | See below. |
+| `_NORMALMAP` with a `_BumpMap` texture | 1,015 | no | The sun reads the per-texel normal. That needs the normal texture and tangents in the export, and the engine to draw them. `_BumpScale` scales that texture's normal, so it is not added without it. The other 111 with the keyword have no texture, so Unity's flat default changes nothing. |
+| `_DETAIL_MULX2` | 201 | no | Per-texel: 11 have a detail albedo texture and 190 a detail normal map. |
+| `_PARALLAXMAP` | 107 | no | Each has a height texture. The parallax offset moves every per-texel lookup, so it needs those textures drawn. |
+| An `_OcclusionMap` texture | 2 | no | Occlusion scales only the indirect light, not the sun's term. |
+| `_SpecColor`, `_SpecGlossMap` (Specular setup) | 0 | — | No such material. |
+
+No material carries a keyword combination outside the three smoothness cases. `_SmoothnessTextureChannel` is set only where its keyword is, and the two highlight floats always match their keywords. One `Standard` material in map 35 also carries `_ALPHA_A_ON` and `_ALPHA_B_ON`, which Standard does not read.
+
+`Custom/StandardDouble` reads the same inputs as `Standard`, from its own shader in map 28's bundle:
+
+- its 27 properties are `Standard`'s, by name and type, and its editor is `StandardShaderGUI`;
+- its ForwardBase variants cover only `_ALPHABLEND_ON`, `_ALPHATEST_ON`, `_DETAIL_MULX2`, `_EMISSION`, `_GLOSSYREFLECTIONS_OFF` and `_SPECULARHIGHLIGHTS_OFF`;
+- every variant's fragment program binds `_Color`, `_Glossiness` and `_Metallic`, and none binds `_MetallicGlossMap` or `_SpecColor`.
+
+So its smoothness is `_Glossiness`, the third case. Its first subshader culls nothing, which is the engine's matter, not the export's. The programs' bodies were not disassembled.
+
+The oracle's irradiance template is `_Glossiness` 0 and `_Metallic` 0, so the oracle cannot gate smoothness. The engine change tests it against a reference computed from Standard's BRDF, with smoothness above 0. A VM case for it is queued, and no parity is claimed until it runs.
 
 ### The slice-5 export
 
@@ -1071,17 +1120,21 @@ All 42 maps were exported again with this converter, from the same bundles (chec
   - every other top-level glTF key is unchanged, and so is every mesh apart from its new `shadowRuns`;
   - the existing accessors and buffer views are unchanged, and the 60 new accessors come after them;
   - the scene extras are unchanged apart from the new `ikkokuMapLighting`;
+  - every material is unchanged apart from the new `ikkokuStandard` keys, and all 2,200 `Standard` and `Custom/StandardDouble` materials carry them;
   - the mesh and triangle counts are unchanged in every map, and the catalog changes only in its 42 `provenanceSHA256` values.
 
   So the app reads the new export exactly as it reads the fixture.
-- **The engine's census agrees.** `everyConvertedMapLoadsItsBlockImagesByteForByte` (Engine at `35f43e98`) passes on both catalogs. Every listed block image uploads byte for byte, and its 42 census lines are identical apart from the load times: the parts of each kind, the block images, the texture bytes and the status line (`.local/sta11d-slice5/logs/swift-census-{old,new}.txt`).
+- **The engine's census agrees.** `everyConvertedMapLoadsItsBlockImagesByteForByte` (Engine at `35f43e98`) passes on both catalogs. Every listed block image uploads byte for byte, and its 42 census lines are identical apart from the load times: the parts of each kind, the block images, the texture bytes and the status line (`.local/sta11d-slice5/logs/swift-census-{old,smooth}.txt`).
 - **What it holds.**
   - 33 maps have a sun; 11 use the flat ambient and 31 the skybox.
   - 2,322 meshes carry 2,894 shadow runs.
   - 27 meshes in 7 maps mix the receive flag (maps 4, 5, 7, 20, 22, 27 and 41). No mesh mixes the sun's mask.
   - 42 `ShadowsOnly` renderers (18,146 triangles) form 30 caster groups, and none is left out.
+  - Smoothness in the 2,200 materials comes from `_Glossiness` in 1,719, from the metallic map's alpha in 476 and from the albedo's alpha in 5. So 481 are approximations by a texture's mean, and none lacks its texture.
+  - 64 materials turn highlights off, 66 turn glossy reflections off, and 35 premultiply alpha.
+  - These are each map's `provenance.json` `lighting.standardInputs`, summed, and they match the [audit](#what-standards-sun-reads-slice-5).
 - **The sun's direction** in maps 41 and 11 (sun type 0) matches the player's trace: (0.977662, 0.210118, −0.005215) and (−0.851377, 0.27879, 0.444334).
-- **Space.** 113 files change: 42 glTF files, 42 provenance files, 28 `.bin` files and the catalog. The other 2,750 files are APFS clones of the fixture's (`cp -c`), and each changed `.bin` is a clone of the fixture's with its tail appended. So the export adds about 12.7 MB of new blocks: 11.2 MB of glTF JSON, 1.0 MB of provenance and 0.47 MB of tails.
+- **Space.** 113 files change: 42 glTF files, 42 provenance files, 28 `.bin` files and the catalog. The other 2,750 files are APFS clones of the fixture's (`cp -c`), and each changed `.bin` is a clone of the fixture's with its tail appended. So the export adds about 13.4 MB of new blocks: 11.9 MB of glTF JSON, 1.0 MB of provenance, 0.07 MB of catalog and 0.47 MB of tails.
 
 ### Draw counts (slice 5)
 
@@ -1179,7 +1232,8 @@ Slice 4 (all maps), Release, in one quiet window ([performance: slice 4](../perf
   - a shadow map of the room.
 
   In map33 the phase-C oracle shows the sun adding up to 0.70 of irradiance on 15,692 pixels, where it comes through the windows (`irradianceLit`).
-- **The rest of `Standard`.** Not drawn: specular and the reflection probe, normal maps, per-texel `_MetallicGlossMap` and detail maps.
+- **The rest of `Standard`.** Not drawn: specular and the reflection probe, normal maps, per-texel `_MetallicGlossMap` and smoothness, detail maps, parallax and occlusion maps. The slice-5 export carries smoothness (texture alphas by their mean) and the highlight, reflection and premultiply flags; the [audit](#what-standards-sun-reads-slice-5) counts what it leaves out and why.
+- **Smoothness is not gated.** The oracle's irradiance template has `_Glossiness` 0. The engine change tests smoothness above 0 against Standard's BRDF computed offline, and a VM case is queued; until it runs, no parity is claimed for it.
 - **Particles.** Soft particles (the fade where the cards meet geometry) are not drawn. Particle renderers sort as Unity's do (see [particles, slice 4](#particles-slice-4)), but blended `Standard` materials are still merged across renderers (60 draws in 20 maps hold two or more), so their blend order within a draw is the mesh's triangle order.
 - **The sky's far plane.** The player's main camera clips at 1000 m, inside parts of map 34's sky spheres (about 450–1,200 m). Our infinite projection draws the whole sphere, so the full frame differs where the player shows black.
 - **Fog and camera effects.** RenderSettings fog was off at runtime in every phase-C and map 34 scene. The per-sun-type fog of `SunLightInfo` and CharaStudio's camera image effects are not drawn.
