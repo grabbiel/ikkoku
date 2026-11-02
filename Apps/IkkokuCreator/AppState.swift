@@ -65,6 +65,9 @@ final class AppState {
         // R7 phase 2, item 7: whether the inspector keeps hidden views
         // mounted, read once here (`IKKOKU_PERF_KEEP_MOUNTED`).
         _ = StudioInspectorMounting.current
+        // Item 7 follow-ups (C4): where the workspace, toolbar and timeline
+        // read the document (`IKKOKU_PERF_PANEL_STATE`), also read once here.
+        _ = StudioPanelStateMode.current
         // Item 7 follow-up C1: how hidden kept views are hidden
         // (`IKKOKU_PERF_KEPT_HIDING`), also read once here.
         _ = StudioKeptHiding.current

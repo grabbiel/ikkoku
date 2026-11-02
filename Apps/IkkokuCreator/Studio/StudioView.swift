@@ -8,12 +8,12 @@ import Studio
 
 /// The Studio window. Each panel is its own view that reads only the model
 /// state it shows, so an edit re-evaluates the panels that display it rather
-/// than the whole window (R7 phase 2, item 1). A panel that must read the
-/// document to find its values (the workspace tree, toolbar and timeline)
-/// computes them in a small outer view and hands them to an equatable content
-/// view, which SwiftUI skips while the values are unchanged; its controls'
-/// bindings read those values and write through the same model calls as
-/// before.
+/// than the whole window (R7 phase 2, item 1). The workspace tree, toolbar
+/// and timeline read what they show from the document through state the
+/// model publishes when it changes (item 7 follow-ups, C4), and hand it to an
+/// equatable content view, which SwiftUI skips while the values are
+/// unchanged; its controls' bindings read those values and write through the
+/// same model calls as before.
 struct StudioView: View {
     let model: StudioModel
 
@@ -98,28 +98,16 @@ extension WorkspaceEntry.CameraMarker {
     }
 }
 
-/// Reads the document for the tree rows and the object count.
+/// The tree rows and the object count, which the model publishes when they
+/// change (`workspaceState`, item 7 follow-ups, C4), so a document write that
+/// leaves them as they were does not re-evaluate the panel.
 struct StudioWorkspacePanel: View {
     let model: StudioModel
 
     var body: some View {
         let _ = PerfTrace.body(.studioWorkspace)
-        let selection = model.selection
-        let doc = model.doc
-        let activeCamera = model.activeSourceCameraView
-        let entries = doc.flattened().map { entry in
-            // A source camera placeholder reads "IKKOKU-MIRROR" over
-            // "camera 2", the title the status line and the view indicator use.
-            let label = model.workspaceLabel(of: entry.object, sceneSHA256: doc.sourceSceneSHA256)
-            var marker: WorkspaceEntry.CameraMarker?
-            if let activeCamera, activeCamera.id == entry.object.id {
-                marker = activeCamera.fallbackReason.map { .savedCameraShown(reason: $0) } ?? .viewing
-            }
-            return WorkspaceEntry(id: entry.object.id, name: entry.object.name, kind: entry.object.kind,
-                                  visible: entry.object.visible, depth: entry.depth, selected: selection == entry.object.id,
-                                  cameraPlaceholder: label.sourceCamera, keyDetail: label.keyDetail, cameraMarker: marker)
-        }
-        StudioWorkspaceContent(model: model, entries: entries, objectCount: doc.objects.count).equatable()
+        let state = model.shownWorkspaceState
+        StudioWorkspaceContent(model: model, entries: state.entries, objectCount: state.objectCount).equatable()
     }
 }
 
@@ -224,15 +212,16 @@ struct StudioToolbar: View {
 
     var body: some View {
         let _ = PerfTrace.body(.studioToolbar)
-        let slots = model.doc.cameraSlots
+        // The document's part is published (C4); the rest are the model's settings.
+        let shown = model.shownToolbarDocumentState
         let state = StudioToolbarState(
             gizmoMode: model.gizmoMode, localSpace: model.localSpace,
-            selectedIsCharacter: model.selectedObject?.kind == .character,
+            selectedIsCharacter: shown.selectedIsCharacter,
             poseMode: model.poseMode, fkGroup: model.fkGroup,
-            cameraSlotsFilled: slots.map { $0 != nil }, hasSourceRoutes: model.hasSourceRoutes,
+            cameraSlotsFilled: shown.cameraSlotsFilled, hasSourceRoutes: shown.hasSourceRoutes,
             canUndo: !model.undoStack.isEmpty, canRedo: !model.redoStack.isEmpty,
             showGizmos: model.showGizmos, liveAnimation: model.liveAnimation, showTimeline: model.showTimeline,
-            showGrid: model.doc.effects.showGrid)
+            showGrid: shown.showGrid)
         // Overlay content must fit the viewport without widening either side panel.
         ScrollView(.horizontal) {
             StudioToolbarControls(model: model, state: state).equatable()
@@ -327,11 +316,12 @@ struct StudioTimelineBar: View {
 
     var body: some View {
         let _ = PerfTrace.body(.studioTimeline)
-        let timeline = model.doc.timeline
+        // The document's part is published (C4); playback is the model's own.
+        let shown = model.shownTimelineDocumentState
         let state = StudioTimelineState(
-            playing: model.timelinePlaying, time: model.timelineTime, duration: timeline.duration, loop: timeline.loop,
-            keys: model.selectedKeyframes.map { .init(id: $0.id, time: $0.time) }, keyCount: timeline.keyframes.count,
-            hasSelection: model.selectedObject != nil, spaceHidesInterface: model.sourceHideStudioUI != nil)
+            playing: model.timelinePlaying, time: model.timelineTime, duration: shown.duration, loop: shown.loop,
+            keys: shown.keys, keyCount: shown.keyCount,
+            hasSelection: shown.hasSelection, spaceHidesInterface: model.sourceHideStudioUI != nil)
         StudioTimelineControls(model: model, state: state).equatable()
     }
 }

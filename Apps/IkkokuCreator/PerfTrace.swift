@@ -66,6 +66,9 @@ final class PerfTrace {
         /// Computing and comparing the Object tab's state and the inspector's
         /// diagnostics at each Studio refresh (R7 phase 2, item 7).
         case studioInspectorState
+        /// Computing and comparing what the workspace, toolbar and timeline
+        /// show at each Studio refresh (item 7 follow-ups, C4).
+        case studioPanelState
         /// The synthetic main-thread load (`IKKOKU_PERF_MAIN_LOAD_MS`); not model time.
         case mainLoad
         /// The main thread blocked on a Studio live step still running off it
@@ -737,6 +740,7 @@ final class PerfTrace {
                 "selectKeys": configuration.selectKeys.map { $0.map { Int($0) } as Any } ?? NSNull(),
                 "inspectorTab": configuration.inspectorTab.map { $0 as Any } ?? NSNull(),
                 "keepMounted": StudioInspectorMounting.current.rawValue,
+                "panelState": StudioPanelStateMode.current.rawValue,
                 "keptHiding": StudioKeptHiding.current.rawValue,
             ] as [String: Any],
             "build": PerfTrace.buildDescription(),
