@@ -739,3 +739,66 @@ private func shapeReuseFailure(_ action: () throws -> Void) -> [String: String] 
     let same = owner.input().snapshot === current
     #expect(thrown == expected && same && ledger.counts == counts)
 }
+
+/// A 44-body/52-face contract `previewSettings` accepts, as bytes (the
+/// same document as `OriginalCardFixture.contract()`).
+private func shapeReuseCardContractData() throws -> Data {
+    func domain(_ name: String, count: Int) -> [String: Any] {
+        ["id": name, "valueCount": count, "defaultValues": Array(repeating: 0.375, count: count),
+         "sourceNames": [], "destinationNames": [], "channels": [], "directTargets": [], "unportedDestinationNames": [],
+         "slots": (0..<count).map { ["index": $0, "label": "Synthetic", "bindings": []] as [String: Any] }]
+    }
+    return try JSONSerialization.data(withJSONObject: [
+        "schemaVersion": 1, "coordinateSystem": "UnityLeftHandedYUp", "rotationUnit": "degrees", "valueRange": [0, 1],
+        "domains": [domain("body", count: 44), domain("face", count: 52)]] as [String: Any], options: .sortedKeys)
+}
+
+/// Guard: two cards on one assembly read byte-identical contract bytes, so
+/// they share entries. The entry holds only what the bytes decode to; each
+/// card's values come from `previewSettings` after the decode.
+@MainActor @Test func sourceMakerShapeReuseCardsOnOneAssemblyShareTheContractNotTheirValues() throws {
+    typealias Fixture = OriginalCardFixture
+    let bytes = try shapeReuseCardContractData(), plainContract = try SourceShapeContract.decode(bytes)
+    let first = try SourceCharacterCard.decode(Fixture.card())
+    let face: [Fixture.Value] = (0..<52).map { Fixture.Value.float(Double(Float(51 - $0) / 51)) }
+    let body: [Fixture.Value] = (0..<44).map { Fixture.Value.float(Double(Float(43 - $0) / 43)) }
+    let second = try SourceCharacterCard.decode(Fixture.card(blocks: Fixture.blocks(custom: Fixture.custom(face: face, body: body))))
+    let expectedFace: [Float] = (0..<52).map { Float(51 - $0) / 51 }
+    let expectedBody: [Float] = (0..<44).map { Float(43 - $0) / 43 }
+    let owner = SourceMakerShapeReuse()
+    // The first card's import seeds the shared assembly's contract.
+    let firstReplacement = owner.prospectiveReplacement()
+    let firstSeed = try SourceMakerShapeReuse.seededDecode(bytes, for: firstReplacement)
+    #expect(owner.commitReplacement(firstReplacement, candidate: firstSeed.candidate))
+    let firstSettings = try first.previewSettings(contract: firstSeed.contract)
+    // A preparation for the second card in that session hits the first card's
+    // entry and still yields the second card's values.
+    try {
+        let worker = SourceShapeReuseWorker(owner.input()), timings = SourceMakerPreparationTimings()
+        let shared = try worker.decode(bytes, timings: timings)
+        let (_, sample) = worker.finish()
+        #expect(sample.hits == 1 && timings.sample.intervals["shapeDecode"] == nil)
+        let settings = try second.previewSettings(contract: shared)
+        #expect(settings.faceValues == expectedFace && settings.bodyValues == expectedBody)
+        #expect(settings.faceValues != firstSettings.faceValues && settings.bodyValues != firstSettings.bodyValues)
+    }()
+    // The second card's import replaces the session (no carry, so its own
+    // decode runs) and stages an entry with the same key. Its return hits.
+    let secondReplacement = owner.prospectiveReplacement()
+    let secondSeed = try SourceMakerShapeReuse.seededDecode(bytes, for: secondReplacement)
+    #expect(secondSeed.sample.misses == 1 && secondSeed.sample.hits == 0 && secondSeed.sample.admitted == 1)
+    #expect(owner.commitReplacement(secondReplacement, candidate: secondSeed.candidate))
+    let imported = try second.previewSettings(contract: secondSeed.contract)
+    #expect(imported.faceValues == expectedFace && imported.bodyValues == expectedBody)
+    let worker = SourceShapeReuseWorker(owner.input())
+    let returned = try worker.decode(bytes, timings: nil)
+    #expect(worker.finish().1.hits == 1)
+    let back = try second.previewSettings(contract: returned)
+    #expect(back.faceValues == expectedFace && back.bodyValues == expectedBody)
+    // Nothing card-specific is cached: every contract equals the plain decode.
+    let expected = try shapeReuseEncoded(plainContract)
+    for contract in [firstSeed.contract, secondSeed.contract, returned] {
+        let actual = try shapeReuseEncoded(contract)
+        #expect(actual == expected)
+    }
+}

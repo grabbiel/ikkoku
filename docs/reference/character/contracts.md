@@ -325,7 +325,7 @@ The import's initial-load sample reports `shapeCachePublication`,
 `shapeSeedStages` (the seed's SHA, decode and admission intervals) and
 `stagedShapeReuse`. The four head scenarios assert `shapeCachePublication`
 `seeded` at the startup import and the reimport, a miss on the first other
-head and a hit on the return (`shapeReuse`). Six synthetic tests in
+head and a hit on the return (`shapeReuse`). Seven synthetic tests in
 `SourceShapeReuseBoundaryTests.swift` cover:
 
 - the hit on the return, with no `shapeDecode`;
@@ -334,7 +334,10 @@ head and a hit on the return (`shapeReuse`). Six synthetic tests in
   pre-reimport selection being refused, and the replaced entry being released;
 - a changed contract missing;
 - stale, foreign and replayed replacements;
-- capacity and intrinsic bypasses and a malformed contract.
+- capacity and intrinsic bypasses and a malformed contract;
+- two cards on one assembly: they share the entry for their byte-identical
+  contract, and each card's `previewSettings` still yields its own values,
+  so nothing card-specific is cached.
 
 ### Shape evaluation boundary
 
