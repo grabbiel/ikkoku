@@ -58,8 +58,28 @@ The tool rejects missing or ambiguous rows, unsafe source paths, changed bundle
 hashes, incomplete geometry and unsupported accessory parenting. It never reads
 or decodes character-card thumbnails. Outputs must remain under ignored `.local/`.
 
+A row is looked up in every transferred `list/characustom` bundle, in the
+tables whose ChaListData `categoryNo` is the entry's category. This follows the
+original, which reads each category as one dictionary keyed by ID
+(`LoadCharaFbxDataAsync`, recovered ChaControl.Koikatu.cs:8677–8686). The
+original's list loader is not recovered, including its rule for an ID that two
+tables share, so such an ID is rejected.
+
+`--add CATEGORY:ID` (repeatable) appends new entries to an existing library
+instead of rebuilding it:
+
+- It refuses an identity the library already has, or an existing asset
+  directory, before converting anything.
+- It writes nothing unless every new entry converts.
+- It writes the retained entries, their order, the limitations and the head
+  assemblies back as read, and appends the new material inputs.
+
+Run `maker_asset_materials.py` afterwards to compose the new entries'
+appearance sidecars.
+
 Each drawable entry retains the exact source bundle, prefab, catalog table,
-catalog hash and bundle hash. Rig and material-evidence files have their own
+catalog hash and bundle hash. The catalog table and hash are those of the list
+bundle the row came from. Rig and material-evidence files have their own
 SHA-256 values. Per-entry appearance and card-binding sidecars are produced by
 the material conversion stage; they do not replace original card identities.
 The geometry stage preserves node names, source IDs, local transforms, inverse

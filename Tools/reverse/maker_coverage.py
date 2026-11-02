@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Count bounded native Maker coverage against the two recovered source catalogs.
+"""Count bounded native Maker coverage against the transferred source list catalogs.
 
 Reads catalog metadata and converted manifests only. Counts are not a claim of
 installed-game/mod completeness or original shader/rendering equivalence.
@@ -11,7 +11,7 @@ import json
 from pathlib import Path
 import msgpack
 import UnityPy
-from maker_asset_library import source_file
+from maker_asset_library import list_bundles
 
 ROOT = Path(__file__).resolve().parents[2]
 
@@ -43,10 +43,13 @@ def verified(directory, ref):
 def coverage(output):
     if not output.resolve().is_relative_to((ROOT/'.local').resolve()): raise ValueError('Evidence must stay under .local/')
     shared = ROOT/'.local/reverse/rigs'; directory = ROOT/'.local/reverse/maker-library'
-    paths = [source_file(shared, 'list/characustom/00.unity3d')]
+    # Every transferred list bundle (library entries may come from any of
+    # them), plus the head registry's list 50 unless it is one of those.
+    paths = list_bundles(shared)
     evidence = load(directory/'heads/evidence.json')
     head_catalog = next(row for row in evidence['sources'] if '/list/characustom/' in row['path'])
-    paths.append(Path(head_catalog['path'])); assert sha(paths[-1]) == head_catalog['sha256']
+    head_path = Path(head_catalog['path']); assert sha(head_path) == head_catalog['sha256']
+    if head_catalog['sha256'] not in {sha(path) for path in paths}: paths.append(head_path)
     catalogs = [table for path in paths for table in tables(path)]
     library = load(directory/'library.json'); entries = library['entries']
     original_entries = [e for e in entries if e.get('modGUID') is None]
@@ -114,7 +117,7 @@ def coverage(output):
         material_coverage[kind] = dict(catalogIDs=len(source_ids), catalogNullIDs=int(0 in source_ids),
             convertedTextureIDs=len(converted), unconvertedNonNullIDs=len(source_ids-converted-{0}), convertedIDs=sorted(converted))
     report = dict(schemaVersion=1,
-        scope='Only source list/characustom/00 and /50 catalogs transferred and hash-verified in this workspace; no all-installed catalog/mod denominator.',
+        scope='Only the source list/characustom catalogs transferred and hash-verified in this workspace (catalogEvidence); no all-installed catalog/mod denominator.',
         catalogEvidence=[dict(path=str(path),sha256=sha(path)) for path in paths], groups=groups,
         materialCatalogs=material_coverage,
         shaderRecipes=dict(geometryAssetsWithAppearanceAndRecipes=geometry_recipe_count, convertedDrawableGeometryAssets=len(drawable),

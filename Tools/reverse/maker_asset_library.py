@@ -5,9 +5,14 @@ The library does not rewrite card identities. Only exact installed catalog rows 
 accepted; original data and derived images stay under ignored .local/. No card
 thumbnail is decoded. The default selection consists of ordinary hair, shirts,
 long trousers, shoes and glasses, plus the half-state set: bloomers,
-pantyhose and indoor shoes. `meshNames` lists each garment's fully dressed
-(state 0) meshes; `alternates` lists the half-state meshes under the alternate
-ChaReference switch nodes, tagged with the clothes states that show them.
+pantyhose and indoor shoes, and the legacy fixture's hair. `meshNames` lists
+each garment's fully dressed (state 0) meshes; `alternates` lists the
+half-state meshes under the alternate ChaReference switch nodes, tagged with
+the clothes states that show them.
+
+A row is looked up across every transferred list/characustom bundle, in the
+tables whose ChaListData categoryNo is the entry's category. `--add` merges new
+entries into an existing library without rebuilding the retained ones.
 """
 from __future__ import annotations
 
@@ -23,11 +28,11 @@ from head_material_contract import material
 from rig_inventory import Inspector, identity, uv_channel
 
 ROOT = Path(__file__).resolve().parents[2]
-TABLES = {101: 'bo_hair_b_00', 102: 'bo_hair_f_00', 103: 'bo_hair_s_00',
-          104: 'bo_hair_o_00', 105: 'co_top_00', 106: 'co_bot_00',
-          107: 'co_bra_00', 108: 'co_shorts_00', 109: 'co_gloves_00',
-          110: 'co_panst_00', 111: 'co_socks_00', 112: 'co_shoes_00',
-          123: 'ao_face_00'}
+# Supported categories (ChaListDefine.CategoryNo): hair 101-104, clothes
+# 105-112 and the glasses accessory 123. The base list 00 holds bo_hair_b_00,
+# co_top_00 and so on; other list bundles add tables of the same categories.
+CATEGORIES = (101, 102, 103, 104, 105, 106, 107, 108, 109, 110, 111, 112, 123)
+LIST_DIRECTORY = 'list/characustom'
 DEFAULT_SELECTION = [(101, i) for i in (0, 2, 9)] + [(102, i) for i in (1, 2, 5)] + [
     (105, 38), (105, 3), (105, 39), (105, 13), (106, 3), (106, 25),
     (112, 1), (112, 3), (123, 0)]
@@ -37,6 +42,10 @@ DEFAULT_SELECTION = [(101, i) for i in (0, 2, 9)] + [(102, i) for i in (1, 2, 5)
 # Studio fixture's dressed character wears bra 1 and shorts 1, so converting
 # them would change its dressed render (scene-editing.md, third slice).
 HALF_STATE_SELECTION = [(106, 1), (110, 1), (112, 2)]
+# ST-T05a finding 2: the legacy 0.0.7 Studio fixture character's back 28
+# (bo_hair_b_06, list 06), front 48 (bo_hair_f_06, list 06) and option 7
+# (bo_hair_o_00). Its side hair 0 is the empty row, already in the library.
+LEGACY_HAIR_SELECTION = [(101, 28), (102, 48), (104, 7)]
 IDENTITY = [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1]
 
 
@@ -67,22 +76,58 @@ def source_file(shared: Path, relative: str):
     return path
 
 
-def catalog_table(environment, name):
-    matches = [r for k, r in environment.container.items() if k.endswith('/' + name + '.bytes')]
+class MissingCatalogRow(ValueError):
+    """No transferred list table of the category has the ID."""
+
+
+def list_tables(environment):
+    """Every ChaListData table of one list bundle, as (name, table), by container path.
+
+    Text assets that are not a ChaListData map are skipped, as maker_coverage does.
+    """
+    tables = []
+    for key, reader in sorted(environment.container.items()):
+        if not key.endswith('.bytes'):
+            continue
+        data = reader.read().m_Script
+        if isinstance(data, str):
+            data = data.encode('utf-8', 'surrogateescape')
+        try:
+            table = msgpack.unpackb(bytes(data), raw=False, strict_map_key=False)
+        except (ValueError, msgpack.ExtraData, msgpack.FormatError):
+            continue
+        if isinstance(table, dict) and {'categoryNo', 'lstKey', 'dictList'} <= table.keys():
+            tables.append((PurePosixPath(key).stem, table))
+    return tables
+
+
+def category_row(tables, category, item_id):
+    """The one row of an ID across every list table of a category: (bundle, table name, row).
+
+    `tables` holds (bundle, name, table) for every transferred list bundle. The
+    original reads a category as one dictionary keyed by ID
+    (`lstCtrl.GetCategoryInfo`, ChaControl.Koikatu.cs:8677-8686), merged from
+    every list bundle. ChaListControl's loader, and so its rule for an ID that
+    two tables share, is not recovered, so such an ID is rejected.
+    """
+    matches = [(bundle, name, dict(zip(table['lstKey'], r, strict=True)))
+               for bundle, name, table in tables if table['categoryNo'] == category
+               for r in table['dictList'].values() if int(r[0]) == item_id]
+    if not matches:
+        raise MissingCatalogRow(f'Missing original catalog ID: {category}:{item_id}')
     if len(matches) != 1:
-        raise ValueError('Missing or ambiguous catalog table: ' + name)
-    data = matches[0].read().m_Script
-    if isinstance(data, str):
-        data = data.encode('utf-8', 'surrogateescape')
-    return msgpack.unpackb(bytes(data), raw=False, strict_map_key=False)
+        names = ', '.join(sorted(name for _, name, _ in matches))
+        raise ValueError(f'Ambiguous original catalog ID {category}:{item_id} in tables {names}')
+    return matches[0]
 
 
-def select_row(table, item_id):
-    rows = [dict(zip(table['lstKey'], r, strict=True)) for r in table['dictList'].values()
-            if int(r[0]) == item_id]
-    if len(rows) != 1:
-        raise ValueError('Missing or ambiguous original catalog ID: ' + str(item_id))
-    return rows[0]
+def list_bundles(shared: Path):
+    """Every transferred list/characustom bundle, each verified against its VM provenance."""
+    directory = shared / 'source/abdata' / LIST_DIRECTORY
+    names = sorted(p.name for p in directory.glob('*.unity3d'))
+    if '00.unity3d' not in names:
+        raise ValueError('The base list/characustom/00 catalog is required')
+    return [source_file(shared, f'{LIST_DIRECTORY}/{name}') for name in names]
 
 
 def ancestors(nodes, index):
@@ -222,8 +267,10 @@ class Builder:
     def __init__(self, shared: Path, output: Path):
         local_output(output); output.mkdir(parents=True, exist_ok=True)
         self.shared, self.output = shared, output
-        self.catalog_path = source_file(shared, 'list/characustom/00.unity3d')
-        self.catalog = UnityPy.load(str(self.catalog_path))
+        self.tables = []; self.catalog_digests = {}
+        for path in list_bundles(shared):
+            self.catalog_digests[path] = digest(path)
+            self.tables += [(path, name, table) for name, table in list_tables(UnityPy.load(str(path)))]
         self.environments = {}
 
     def environment(self, relative):
@@ -252,10 +299,10 @@ class Builder:
         return self.texture(matches[0].read(), directory)
 
     def entry(self, category, item_id):
-        table_name = TABLES[category]
-        row = select_row(catalog_table(self.catalog, table_name), item_id)
+        # The catalog hash and table name are those of the list bundle the row is in.
+        catalog_path, table_name, row = category_row(self.tables, category, item_id)
         source = dict(bundle=row['MainAB'], asset=row['MainData'],
-                      catalogSHA256=digest(self.catalog_path), catalogTable=table_name)
+                      catalogSHA256=self.catalog_digests[catalog_path], catalogTable=table_name)
         entry = dict(category=category, id=item_id, name=row['Name'], source=source)
         if row['MainData'] == 'p_dummy':
             entry['empty'] = True
@@ -347,13 +394,13 @@ class Builder:
         requested = list(dict.fromkeys(selections))
         # An ID of zero is not intrinsically empty (hair-back and glasses prove
         # this). Include removal only when an exact catalog row says p_dummy.
-        for category in TABLES:
+        for category in CATEGORIES:
             try:
-                row = select_row(catalog_table(self.catalog, TABLES[category]), 0)
-                if row['MainData'] == 'p_dummy' and (category, 0) not in requested:
-                    requested.append((category, 0))
-            except ValueError:
-                pass
+                _, _, row = category_row(self.tables, category, 0)
+            except MissingCatalogRow:
+                continue  # An ambiguous zero row is still an error.
+            if row['MainData'] == 'p_dummy' and (category, 0) not in requested:
+                requested.append((category, 0))
         for category, item_id in requested:
             entry, material_input = self.entry(category, item_id)
             entries.append(entry)
@@ -375,17 +422,51 @@ class Builder:
         write_json(self.output / 'material-inputs.json', dict(schemaVersion=1, files=material_inputs))
         return index
 
+    def add(self, selections):
+        """Append new entries to the existing library.json and material-inputs.json.
+
+        Retained entries, their order, the limitations and the assemblies are
+        written back as read. An identity the library already has, or an
+        existing asset directory, is refused before anything is converted.
+        Nothing is written unless every new entry converts.
+        """
+        index_path = self.output / 'library.json'; inputs_path = self.output / 'material-inputs.json'
+        index = json.loads(index_path.read_text()); inputs = json.loads(inputs_path.read_text())
+        requested = list(dict.fromkeys(selections))
+        present = {(e['category'], e['id']) for e in index['entries']}
+        clashes = [f'{c}:{i}' for c, i in requested if (c, i) in present]
+        if clashes:
+            raise ValueError('The library already has ' + ', '.join(clashes))
+        stale = [f'{c}-{i}' for c, i in requested if (self.output / 'assets' / f'{c}-{i}').exists()]
+        if stale:
+            raise ValueError('Asset directory already exists: ' + ', '.join(stale))
+        for category, item_id in requested:
+            entry, material_input = self.entry(category, item_id)
+            index['entries'].append(entry)
+            if material_input:
+                inputs['files'].append(entry['materialEvidence']['file'])
+            print(f'Added catalog {category}:{item_id}', flush=True)
+        write_json(index_path, index)
+        write_json(inputs_path, inputs)
+        return index
+
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--shared', type=Path, default=ROOT / '.local/reverse/rigs')
     parser.add_argument('--output', type=Path, default=ROOT / '.local/reverse/maker-library')
-    parser.add_argument('--select', action='append', help='Exact vanilla CATEGORY:ID (repeatable); default: the clothed reference expansion plus the half-state set')
+    modes = parser.add_mutually_exclusive_group()
+    modes.add_argument('--select', action='append', help='Exact vanilla CATEGORY:ID (repeatable); default: the clothed reference expansion, the half-state set and the legacy hair')
+    modes.add_argument('--add', action='append', metavar='CATEGORY:ID',
+                       help='Merge exact vanilla CATEGORY:ID entries (repeatable) into the existing library; retained entries keep their bytes')
     args = parser.parse_args()
-    selections = [tuple(map(int, s.split(':'))) for s in args.select] if args.select else DEFAULT_SELECTION + HALF_STATE_SELECTION
-    if any(len(s) != 2 or s[0] not in TABLES or s[1] < 0 for s in selections):
+    chosen = args.add or args.select
+    selections = ([tuple(map(int, s.split(':'))) for s in chosen] if chosen
+                  else DEFAULT_SELECTION + HALF_STATE_SELECTION + LEGACY_HAIR_SELECTION)
+    if any(len(s) != 2 or s[0] not in CATEGORIES or s[1] < 0 for s in selections):
         parser.error('Each selection must be a supported CATEGORY:ID')
-    result = Builder(args.shared, args.output).build(selections)
+    builder = Builder(args.shared, args.output)
+    result = builder.add(selections) if args.add else builder.build(selections)
     print(json.dumps(dict(index=str(args.output / 'library.json'), entries=len(result['entries'])), indent=2))
 
 

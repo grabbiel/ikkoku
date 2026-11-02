@@ -10,14 +10,16 @@ import json
 import os
 from pathlib import Path
 import tempfile
+from types import SimpleNamespace
 import unittest
 
+import msgpack
 import numpy as np
 import UnityPy
 from UnityPy.helpers.MeshHelper import MeshHandler
 
-from maker_asset_library import (Builder, catalog_table, select_row, fully_dressed, alternate, source_file,
-                                  write_json, IDENTITY, SWITCH_RULES)
+from maker_asset_library import (Builder, MissingCatalogRow, category_row, list_tables, fully_dressed, alternate,
+                                  source_file, write_json, IDENTITY, SWITCH_RULES)
 
 
 def file_hash(path):
@@ -138,19 +140,113 @@ def audit_library(path):
                 passed=all(x['nodeMatrixMaxAbsoluteError'] < 1e-12 and x['staticWorldMaxAbsoluteError'] < 1e-12 for x in reports))
 
 
+def list_table(category, *rows):
+    """A synthetic ChaListData table: rows of (ID, MainData)."""
+    return dict(categoryNo=category, lstKey=['ID', 'MainData'],
+                dictList={str(i): [str(item), data] for i, (item, data) in enumerate(rows)})
+
+
 class MakerAssetLibraryTests(unittest.TestCase):
     def test_zero_is_not_intrinsically_empty(self):
-        table = dict(lstKey=['ID', 'MainData'], dictList={'a': ['0', 'p_long_hair']})
-        self.assertEqual(select_row(table, 0)['MainData'], 'p_long_hair')
+        tables = [('00', 'hair_b_00', list_table(101, (0, 'p_long_hair')))]
+        self.assertEqual(category_row(tables, 101, 0)[2]['MainData'], 'p_long_hair')
 
     def test_duplicate_identity_is_rejected(self):
-        table = dict(lstKey=['ID', 'MainData'], dictList={'a': ['7', 'a'], 'b': ['7', 'b']})
-        with self.assertRaisesRegex(ValueError, 'ambiguous'):
-            select_row(table, 7)
+        tables = [('00', 'hair_b_00', list_table(101, (7, 'a'), (7, 'b')))]
+        with self.assertRaisesRegex(ValueError, 'Ambiguous'):
+            category_row(tables, 101, 7)
 
     def test_missing_identity_is_rejected(self):
-        with self.assertRaisesRegex(ValueError, 'Missing'):
-            select_row(dict(lstKey=['ID'], dictList={'a': ['0']}), 3)
+        with self.assertRaises(MissingCatalogRow):
+            category_row([('00', 'hair_b_00', list_table(101, (0, 'p_dummy')))], 101, 3)
+
+    def test_row_is_found_in_a_second_list_table(self):
+        # The table's categoryNo selects it, not its name; another category's
+        # row with the same ID is not a match.
+        tables = [('00', 'hair_b_00', list_table(101, (0, 'p_b0'), (2, 'p_b2'))),
+                  ('06', 'hair_f_06', list_table(102, (28, 'p_f28'))),
+                  ('06', 'hair_b_06', list_table(101, (28, 'p_b28')))]
+        self.assertEqual(category_row(tables, 101, 28), ('06', 'hair_b_06', dict(ID='28', MainData='p_b28')))
+        self.assertEqual(category_row(tables, 102, 28)[:2], ('06', 'hair_f_06'))
+        self.assertEqual(category_row(tables, 101, 2)[:2], ('00', 'hair_b_00'))
+
+    def test_id_in_two_tables_of_a_category_is_rejected(self):
+        tables = [('00', 'hair_b_00', list_table(101, (5, 'a'))), ('06', 'hair_b_06', list_table(101, (5, 'b')))]
+        with self.assertRaisesRegex(ValueError, 'Ambiguous original catalog ID 101:5 in tables hair_b_00, hair_b_06') as caught:
+            category_row(tables, 101, 5)
+        # build() skips only a missing zero row; an ambiguous one stays an error.
+        self.assertNotIsInstance(caught.exception, MissingCatalogRow)
+
+    def test_id_missing_from_every_table_is_rejected(self):
+        tables = [('00', 'hair_b_00', list_table(101, (0, 'a'))), ('06', 'hair_b_06', list_table(101, (28, 'b'))),
+                  ('06', 'hair_o_06', list_table(104, (9, 'c')))]
+        with self.assertRaisesRegex(MissingCatalogRow, '101:9'):
+            category_row(tables, 101, 9)
+
+    def test_list_tables_reads_only_list_data(self):
+        def asset(data):
+            return SimpleNamespace(read=lambda: SimpleNamespace(m_Script=data))
+        table = list_table(101, (28, 'p_b28'))
+        container = {'abdata/list/characustom/06/hair_b_06.bytes': asset(msgpack.packb(table)),
+                     'abdata/list/characustom/06/notes.bytes': asset('hello'),  # not msgpack
+                     'abdata/list/characustom/06/array.bytes': asset(msgpack.packb([1, 2])),
+                     'abdata/list/characustom/06/other.bytes': asset(msgpack.packb(dict(lstKey=[], dictList={}))),
+                     'abdata/list/characustom/06/hair_b_06.prefab': asset(msgpack.packb(table))}
+        self.assertEqual(list_tables(SimpleNamespace(container=container)), [('hair_b_06', table)])
+
+    @staticmethod
+    def merge_fixture(root):
+        entries = [dict(category=101, id=0, name='a', rig=dict(file='assets/101-0/rig.json', sha256='0' * 64)),
+                   dict(category=103, id=0, name='b', empty=True)]
+        index = dict(schemaVersion=1, entries=entries, limitations=['x'], assemblies=[dict(sex=1, headID=0)])
+        write_json(root / 'library.json', index)
+        write_json(root / 'material-inputs.json', dict(schemaVersion=1, files=['assets/101-0/materials.json']))
+        builder = Builder.__new__(Builder); builder.output = root; builder.converted = []
+
+        def entry(category, item_id):
+            if (category, item_id) == (104, 99):
+                raise ValueError('conversion failed')
+            builder.converted.append((category, item_id))
+            evidence = f'assets/{category}-{item_id}/materials.json'
+            return dict(category=category, id=item_id, materialEvidence=dict(file=evidence, sha256='1' * 64)), dict(schemaVersion=1)
+        builder.entry = entry
+        return builder
+
+    def test_add_appends_entries_and_keeps_the_retained_bytes(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp); builder = self.merge_fixture(root)
+            before = (root / 'library.json').read_bytes(); old = json.loads(before)
+            builder.add([(101, 28), (102, 48), (101, 28)])
+            library = json.loads((root / 'library.json').read_text())
+            self.assertEqual(builder.converted, [(101, 28), (102, 48)])
+            self.assertEqual([(e['category'], e['id']) for e in library['entries']], [(101, 0), (103, 0), (101, 28), (102, 48)])
+            self.assertEqual(json.loads((root / 'material-inputs.json').read_text())['files'],
+                             ['assets/101-0/materials.json', 'assets/101-28/materials.json', 'assets/102-48/materials.json'])
+            # Without the new entries the index serializes to its old bytes.
+            library['entries'] = library['entries'][:2]
+            write_json(root / 'retained.json', library)
+            self.assertEqual((root / 'retained.json').read_bytes(), before)
+            self.assertEqual(library, old)
+
+    def test_add_refuses_an_existing_identity_or_asset_directory(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp); builder = self.merge_fixture(root)
+            files = {name: (root / name).read_bytes() for name in ('library.json', 'material-inputs.json')}
+            with self.assertRaisesRegex(ValueError, 'already has 103:0'):
+                builder.add([(101, 28), (103, 0)])
+            (root / 'assets/104-7').mkdir(parents=True)
+            with self.assertRaisesRegex(ValueError, 'Asset directory already exists: 104-7'):
+                builder.add([(104, 7)])
+            self.assertEqual(builder.converted, [])
+            self.assertEqual({name: (root / name).read_bytes() for name in files}, files)
+
+    def test_add_writes_nothing_when_an_entry_fails(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp); builder = self.merge_fixture(root)
+            files = {name: (root / name).read_bytes() for name in ('library.json', 'material-inputs.json')}
+            with self.assertRaisesRegex(ValueError, 'conversion failed'):
+                builder.add([(101, 28), (104, 99)])
+            self.assertEqual({name: (root / name).read_bytes() for name in files}, files)
 
     def test_source_path_escape_is_rejected(self):
         for path in ['../secret', '/tmp/file', 'C:/file', 'chara\\file']:
