@@ -5604,6 +5604,66 @@ samples only before and after it, with no heavy daemon in either. The
 verdict holds without it (the tightest pair is then undo of the redo,
 87.1 against 85.0).
 
+### C1, step 5: the container, composited (not accepted, #342)
+
+The rules were fixed before any step 5 data (2026-11-01):
+- Each separating action of step 0 must recover at least half its step 0
+  gain. The gain is the disabled median minus the container median.
+- Every other cost's container median must be at most the disabled
+  maximum (presented FPS at least the disabled minimum).
+- A non-separating action that fails that range rule needs n=8. It then
+  passes if two more ABBA rounds put the median difference at 3 ms or
+  less, recorded as a measured cost.
+- The FK-drag metrics are the coordinator's call.
+
+One Release binary of the branch ran with `IKKOKU_PERF_KEPT_HIDING`
+`disabled` and `container`, on 2026-11-02 between 03:13 and 03:44. Each
+cell had 2 ABBA rounds, so 4 runs per mode, every run under the app lock.
+Each run waited for a 10 s quiet gate (up to 15 minutes) and was sampled
+every 4–5 s while it ran. A run with an intruder was rerun, at most twice.
+The display was 1920 × 1080 at 120 Hz at every start and end. Values are
+each run's warm median main busy time in ms; the FK drag's are per-second
+rates.
+
+| cell / action | disabled | container | rule | result |
+| --- | --- | --- | --- | --- |
+| redo | 101.6, 94.1, 91.6, 96.2 | 86.5, 91.4, 84.2, 89.9 | gain 6.9 ≥ 5.1 | pass |
+| undo | 80.3, 78.4, 92.9, 86.2 | 80.7, 81.8, 77.8, 77.8 | gain 4.0 ≥ 4.4 | **fail** |
+| undo of the redo | 89.8, 86.9, 95.4, 85.0 | 71.4, 78.2, 73.7, 80.1 | gain 12.4 ≥ 4.5 | pass |
+| deselect (from a character) | 57.3, 52.0, 59.3, 59.8 | 25.0, 40.8, 42.1, 32.6 | gain 21.6 ≥ 8.9 | pass |
+| duplicate | 47.5, 46.0, 44.7, 43.8 | 57.0, 55.4, 56.4, 56.7 | 56.6 ≤ 47.5 | **+11.2** |
+| select source character | 29.0, 30.0, 29.9, 33.8 | 38.9, 36.7, 35.9, 35.2 | 36.3 ≤ 33.8 | **+6.3** |
+| select from nothing | 51.6, 70.6, 72.7, 70.9 | 41.8, 66.8, 61.5, 41.2 | 51.6 ≤ 72.7 | pass |
+| deselect (from folder 622) | 45.5, 47.1, 43.5, 48.4 | 18.0, 24.7, 34.8, 37.6 | 29.7 ≤ 48.4 | pass |
+| select folder 622 | 49.5, 48.3, 46.9, 50.6 | 55.9, 48.4, 51.4, 58.9 | 53.6 ≤ 50.6 | **+4.8** |
+| select from nothing (with folder 622) | 56.3, 71.1, 68.2, 69.7 | 70.5, 69.1, 71.2, 69.5 | 70.0 ≤ 71.1 | pass |
+| FK drag main busy (ms/s) | 214.4, 215.1, 211.9, 206.5 | 215.2, 213.7, 216.3, 224.6 | 215.7 ≤ 215.1 | over by 0.6 |
+| FK drag presented FPS | 119.4, 119.5, 119.5, 119.3 | 119.5, 119.2, 119.6, 119.3 | 119.4 ≥ 119.3 | pass |
+
+The first seven rows come from `studio-select` (characters 0 and 963) and
+`studio-redo`; the next three from `studio-select` with character 0 and
+folder 622; the last two from the FK drag. The FK drag's other time
+(3.3 against 3.3 ms/s), hitches and inspector bodies (0 in both) also pass.
+
+The verdict is that the container is not accepted. Undo's gain misses its
+bar, and the gain rule has no reruns. Duplicate (+10 to 11 ms in all five
+container runs, the interrupted attempt included), selecting a source
+character and selecting the folder exceed the 3 ms allowance by more than
+more runs could change, so no n=8 rounds were run. The FK drag's 0.6 ms/s
+is moot. The container stays an opt-in measurement mode, and the default
+stays `disabled`.
+
+Validity: 26 attempts were rerun for an intruder, mostly `corespotlightd`
+(103–149%), with `duetexpertd`, `speechmaintenanced`, NotificationCenter
+and a clock widget. Three kept runs are third attempts, with an intruder
+in 1 of their 7 in-run samples: container 16 (`duetexpertd` 92.9%), and
+disabled 14 and 15 (`corespotlightd` 49.2% and 111.3%). The verdict is the
+same without them (undo's gain is then 2.6). Firefox's `plugin-container`
+ran at 45–56% throughout (noted, not rerun). An earlier attempt that was
+interrupted after one run per mode is kept apart and not pooled. It shows
+the same signs: redo +6.5, undo +18.1, undo of the redo +15.8, deselect
++15.1, duplicate −10.3, select source character −6.3.
+
 ### Measurements (item 7 follow-ups)
 
 **Composited (window 2, the primary result).** 2026-11-01, 16:43–17:06,
@@ -5797,7 +5857,12 @@ refresh in head.
 
 ### What remains after the item 7 follow-ups
 
-- **Hiding without disabling (C1).** In progress in #342. Its
+- **Hiding without disabling (C1).** Measured in #342 and not accepted
+  ([step 5](#c1-step-5-the-container-composited-not-accepted-342)): undo's
+  gain missed its bar, and a duplicate, a select of a source character and
+  a select of the folder cost 4.8–11.2 ms more in container mode. Next, one
+  profile attributes the duplicate's extra 10 ms, and a fix would need a
+  new pre-registered round. Its
   [step 0](#c1-step-0-the-composited-ceiling-342) measured a composited
   ceiling of 17.8 ms per deselect and 8.7–10.2 ms per undo or redo. #342
   puts each kept view in an AppKit container that is set hidden while it
@@ -5813,9 +5878,9 @@ refresh in head.
   `NSApp.isFullKeyboardAccessEnabled` ignores `-AppleKeyboardUIMode` in the
   argument domain (macOS 27.0.1), so the real loop is checked only by hand
   (`lanes/studio-manual-fka.json`), with Keyboard navigation turned on in
-  System Settings. Fall back to marking the section's controls
-  `refusesFirstResponder` only if the container fails the captures or
-  costs more than it saves.
+  System Settings. The fallback named before, marking the section's
+  controls `refusesFirstResponder`, remains the alternative to the
+  container.
 - **The Clothes tab drawn wider than the inspector.** After a select of
   character 0, folder 622 and character 963 on the Clothes tab
   (`ui-sel-clothes`), the tab's content is sometimes laid out wider than
