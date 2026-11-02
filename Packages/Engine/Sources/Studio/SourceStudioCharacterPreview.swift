@@ -225,7 +225,23 @@ public final class SourceStudioCharacterPreview {
     /// from, the way the original LateUpdate runs NeckUpdateCalc after
     /// Animator/FK/IK and before its own rotation write.
     fileprivate typealias EvaluatedPose = (state: SourceStudioAnimationState, required: Bool, elapsed: Float, fk: [Int: Float3], ik: [Int32: SourceStudioIKEdit], kinematics: SourceStudioKinematicState?, pose: RigPose, preOverride: RigPose, guides: [SourceStudioIK.Guide])
-    private var evaluatedCache: EvaluatedPose?
+    private var evaluatedCache: EvaluatedPose? { didSet { poseGeneration &+= 1 } }
+    /// Bumped by every write to `evaluatedCache`: a solve, a clear or a
+    /// checkpoint restore. `editedPose` returns the cached pose without a
+    /// write, so an unchanged value after it means the same pose as before.
+    private var poseGeneration: UInt64 = 0
+    /// The last finished frame with what it was built from (R7 item 3, FK
+    /// drag). A refresh asks every character for a frame, and only the one
+    /// being edited changes, so the others give this one back with the new
+    /// camera, light and effects, the only fields that differ. Nothing else in
+    /// the frame reads them: the neck and eye gaze follow the camera through
+    /// the live step, which writes the pose and the eye rates in the key.
+    private var cachedFrame: (key: FrameKey, frame: RenderFrame)?
+    /// Whether `frame` keeps and reuses `cachedFrame`. Off only in the twin
+    /// test, which compares every frame with one built afresh.
+    var reusesFrames = true
+    /// Whether the last `frame` call gave back the cached frame.
+    public private(set) var lastFrameReused = false
     /// The animated, FK/IK-solved pose (`preOverride`) with the kinematic
     /// state and guides it was solved with, for the same key as
     /// `evaluatedCache` plus whether the animation was required. A Studio tick
@@ -843,13 +859,79 @@ public final class SourceStudioCharacterPreview {
     public func frame(camera: OrbitCamera, mainLight: MainLight, effects: SceneEffects,
                       world: float4x4, objectID: UInt32, fkRotations: [Int: Float3] = [:], faceValues: [Float]? = nil, bodyValues: [Float]? = nil, ikTargets: [Int32: SourceStudioIKEdit] = [:], kinematics: SourceStudioKinematicState? = nil, animationState: SourceStudioAnimationState? = nil,
                       animationElapsed: Float = 0) throws -> RenderFrame {
-        var frame = try preview.frame(camera: camera, mainLight: mainLight, effects: effects,
-            expression: effectiveExpressionInputs(), poseOverride: editedPose(fkRotations: fkRotations, faceValues: faceValues, bodyValues: bodyValues, ikTargets: ikTargets, kinematics: kinematics, animationState: animationState, animationElapsed: animationElapsed),
+        // Read first: a resource change while this frame is built leaves a
+        // key that no longer matches.
+        let resourceGeneration = resources.reuseGeneration
+        let expression = effectiveExpressionInputs()
+        let pose = try editedPose(fkRotations: fkRotations, faceValues: faceValues, bodyValues: bodyValues, ikTargets: ikTargets, kinematics: kinematics, animationState: animationState, animationElapsed: animationElapsed)
+        let key = FrameKey(resources: resourceGeneration, pose: poseGeneration, preview: ObjectIdentifier(preview),
+                           visibility: preview.visibilityGeneration, expression: expression, wear: wearEvaluation,
+                           world: world, objectID: objectID, eyeRates: eyeLookRates.map { ($0.horizontal, $0.vertical) },
+                           irisRotations: irisRotations)
+        if reusesFrames, let cached = cachedFrame, cached.key.matches(key) {
+            var frame = cached.frame
+            frame.camera = camera; frame.mainLight = mainLight; frame.effects = effects
+            lastFrameReused = true
+            return frame
+        }
+        lastFrameReused = false
+        var frame = try preview.frame(camera: camera, mainLight: mainLight, effects: effects, expression: expression, poseOverride: pose,
             hiddenParts: wearEvaluation.hiddenParts, sourceBodyAlpha: wearEvaluation.bodyAlpha)
         for i in frame.items.indices { frame.items[i].model = world * frame.items[i].model; frame.items[i].objectID = objectID }
         applyIrisTransforms(to: &frame)
         frame.sceneBounds = frame.sceneBounds.transformed(by: world)
+        cachedFrame = reusesFrames ? (key, frame) : nil
         return frame
+    }
+
+    /// `cachedFrame`'s key: everything `frame` reads besides camera, light and
+    /// effects, compared bit for bit (a signed zero or a NaN payload counts).
+    /// The pose is its generation; `preview` changes with a color edit; the
+    /// rig preview's visibility with `doubleTooth`; the expression with a blink
+    /// or a face edit; wear, world and object ID come from the document; the
+    /// eye rates with the eye gaze; the iris tilt with a face edit. The store's
+    /// `reuseGeneration` drops every cached frame on any resource change.
+    private struct FrameKey {
+        let resources: UInt64, pose: UInt64, preview: ObjectIdentifier, visibility: UInt64
+        let expression: SourceExpressionInputs?
+        let wear: SourceStudioWearLayout.Evaluation
+        let world: float4x4, objectID: UInt32
+        let eyeRates: (horizontal: [Double], vertical: Double)?
+        let irisRotations: [Double]
+
+        func matches(_ other: FrameKey) -> Bool {
+            guard resources == other.resources, pose == other.pose, preview == other.preview, visibility == other.visibility,
+                  objectID == other.objectID, wear.hiddenParts == other.wear.hiddenParts,
+                  Self.same(wear.bodyAlpha, other.wear.bodyAlpha), Self.same(expression, other.expression),
+                  Self.same(irisRotations, other.irisRotations) else { return false }
+            for column in 0..<4 where unsafeBitCast(world[column], to: SIMD4<UInt32>.self) != unsafeBitCast(other.world[column], to: SIMD4<UInt32>.self) {
+                return false
+            }
+            switch (eyeRates, other.eyeRates) {
+            case (nil, nil): return true
+            case let (a?, b?): return a.vertical.bitPattern == b.vertical.bitPattern && Self.same(a.horizontal, b.horizontal)
+            default: return false
+            }
+        }
+
+        private static func same(_ a: [Double], _ b: [Double]) -> Bool {
+            a.count == b.count && zip(a, b).allSatisfy { $0.bitPattern == $1.bitPattern }
+        }
+        private static func same(_ a: SIMD2<Float>, _ b: SIMD2<Float>) -> Bool {
+            unsafeBitCast(a, to: SIMD2<UInt32>.self) == unsafeBitCast(b, to: SIMD2<UInt32>.self)
+        }
+        private static func same(_ a: SourceExpressionInputs?, _ b: SourceExpressionInputs?) -> Bool {
+            switch (a, b) {
+            case (nil, nil): return true
+            case let (a?, b?):
+                return a.eyebrowPattern == b.eyebrowPattern && a.eyesPattern == b.eyesPattern && a.mouthPattern == b.mouthPattern
+                    && [a.eyebrowOpenRate, a.eyesOpenRate, a.mouthOpenRate, a.eyebrowOpenMax, a.eyesOpenMax, a.mouthOpenMax,
+                        a.blinkRate, a.mouthFixedRate].map(\.bitPattern)
+                    == [b.eyebrowOpenRate, b.eyesOpenRate, b.mouthOpenRate, b.eyebrowOpenMax, b.eyesOpenMax, b.mouthOpenMax,
+                        b.blinkRate, b.mouthFixedRate].map(\.bitPattern)
+            default: return false
+            }
+        }
     }
 
     /// The renderer-side half of EyeLookMaterialControll.Update: the frame's
@@ -1208,6 +1290,8 @@ public final class SourceStudioCharacterPreview {
         preview = try SourceRigPreview(source: appearancePrepared?.source ?? preview.source, contract: preview.contract,
             resources: resources, appearance: appearance, expressionContract: preview.expressionContract,
             bodyOptions: preview.bodyOptions, lateCorrectionOptions: preview.lateCorrectionOptions, doubleTooth: preview.doubleTooth)
+        // The old frame names the old preview's meshes and holds its textures.
+        cachedFrame = nil
         sourceColorEdits = edits
         appliedColorFields = fields.intersection(supported)
         colorEditDiagnostics = edits == nil ? nil : messages
