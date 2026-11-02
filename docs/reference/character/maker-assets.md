@@ -1132,7 +1132,8 @@ misses).
   the guard, that import would hash ten rigs, admit part of them, overflow and
   publish an empty session anyway. With it, the import does no hashing and
   publishes an empty session (`emptyLedgerFull`). The worker keeps its own
-  limits.
+  limits. [Reimport rig carry](#reimport-rig-carry-192-c-2026-11-01) later
+  replaced this decline: a reimport now carries the session it replaces.
 - **Report fields.** The initial-load sample now records `geometryOutcome`
   (`selectedAssets`, `referenceAfterSelectionFailure`, `referenceNoLibrary`,
   `referenceNoCard`), `referenceLoad` (`skipped` or `loaded`),
@@ -1185,7 +1186,8 @@ with no skips. The four head scenarios now assert the following:
 - The first selection after load reuses nine rigs (9 hits / 1 miss).
 - Returning to head 0 reuses all ten (10 / 0).
 - The reimport publishes `emptyLedgerFull`: step 53 in the selection scenarios,
-  step 5 in the reload scenarios.
+  step 5 in the reload scenarios. Since the reimport carry, it publishes
+  `seeded`.
 
 All 11 lane exports are byte-identical between base `899b777b` and head.
 
@@ -1211,11 +1213,89 @@ lists every row's dependence on presentation, the invalid attempts and the
 noted background processes.
 
 **Not covered.** Live animated viewport equivalence is not compared
-separately. Reuse across reimports would change #300's per-entry epoch rule and
-is a follow-up. The guard counts the card's rig files as an upper bound, so it
-also declines a seed that would only partly fit. No Maker lane scenario combines
+separately. Reuse across reimports was a follow-up at the time; the
+[reimport rig carry](#reimport-rig-carry-192-c-2026-11-01) adds it without
+changing #300's per-entry epoch rule. The guard counted the card's rig files as
+an upper bound, so it also declined a seed that would only partly fit. No Maker lane scenario combines
 a seeded startup with a later expected import failure; the Engine test covers
 that order.
+
+### Reimport rig carry (#192-C, 2026-11-01)
+
+A source-card reimport over a cached Maker session now reuses that session's
+decoded rigs. Before this change, the full-ledger guard declined the seed
+(`emptyLedgerFull`): the old entries were still live, and the per-entry epoch
+rule kept them out of the new session. The import published an empty session,
+and the next head selection decoded all ten rigs again.
+
+**What changed.**
+
+- **Carry.** `SourceMakerRigReuse.seedingInput(for:fileSizes:)` gives the
+  staged seed the entries of the session the reimport replaces. It does so
+  only when the token's expected epoch is still the owner's epoch and the
+  current snapshot belongs to that epoch. A token made before a reset or a
+  sibling commit carries nothing, and selection inputs never carry.
+- **Re-stamp with a shared permit.** When a card rig's key (all 256 SHA bits,
+  byte count and decoder version) matches a carried entry, the worker skips
+  the decode. It stages a copy of the entry stamped with the new epoch. The
+  copy shares the old entry's permit, so it takes no new ledger entry or
+  charge. The permit returns when the last holder, old or new, releases it.
+- **Per-entry epoch rule unchanged.** Every entry in a snapshot still carries
+  that snapshot's epoch. The old snapshot keeps its own entries, and lookups
+  by the old epoch still reject the new snapshot after replacement.
+- **Size guard.** The guard now counts only the files whose byte count matches
+  no carried entry. That is a lower bound: a file that matches a carried size
+  but differs in hash still decodes and needs a permit the guard did not
+  reserve. When the ledger is then full, the worker overflows as before. The
+  staged snapshot is cleared and published empty. The old session's permits,
+  epoch and hits stay the same, and the geometry still matches `prepare`
+  without a seed.
+- **Guards kept.** A failed reimport drops its staged entries and leaves the
+  current session unchanged. Delayed work from the old epoch cannot publish
+  after the replacement.
+- **Report field.** The staged seed's sample now records `carried`, the hits
+  that came from the replaced session (also counted in `hits`). A scenario
+  `reimport` step can assert `carried` and `misses`. A step can also ask for a
+  1 ms `phys_footprint` sample around the import (`footprint`), for timing
+  runs.
+
+**Tests.** Five new synthetic boundary tests:
+
+- A replacement carries both rigs of a two-entry ledger with no decode and no
+  new permit. A delayed commit from the old epoch is rejected.
+- A size match that misses on hash, with the ledger at its limit. The guard
+  allows the seed, the worker decodes one rig and clears only the staged
+  snapshot. Ledger counts, the old snapshot's hits and the epoch are unchanged.
+- Carry happens only from the session the token replaces: never from a
+  selection input, after a reset or after a sibling commit.
+- Re-stamped entries keep their shared permit until the last holder releases
+  it, in either release order.
+- A failed carried seed leaves the current session unchanged.
+
+`sourceMakerImportSeedingSurvivesFailedImportsAndDeclinesFullLedgers` now
+checks the fixture cohorts. A same-card reimport carries all ten rigs, with no
+`rigDecode` and ten SHA operations. A female head 201 / body type 0 card
+carries nine and decodes one, as does a female head 200 / body type 1 card.
+The male head 201 / body type 1 card shares eight rigs with the female session
+by bytes, so it carries eight. The decline is still forced with a smaller
+ledger, and the declined geometry still matches `prepare`.
+
+**Timing.** Release medians, base main `69a63513` plus the footprint harness
+against head, n = 4 valid units per sex and arm, composited window:
+
+- Same-card reimport: 669 → 139 ms (female) and 667 → 103 ms (male).
+- Head 200 after the reimports: 738 → 433 ms and 775 → 431 ms (0 / 10 → 9 / 1).
+- The following head 0: 336 → 105 ms and 336 → 106 ms (9 / 1 → 10 / 0).
+- The transient footprint peak is not lower. Each reimport holds 43–45 MiB more
+  in both arms (#332), and head ends the run 16–32 MiB lower.
+
+The [timing record](../performance.md#maker-reimport-rig-carry-192-c-2026-11-01)
+has the validity rules, the reruns and the sampler control.
+
+**Not covered.** Only the replaced session carries; there is no cross-session
+pool or LRU eviction. The 16-entry / 64 MiB / four-snapshot limits are
+unchanged. The scenario runs with live animation off, so there is no FPS or
+live-animation result.
 
 ### Per-component appearance attribution (#192)
 
