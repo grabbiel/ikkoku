@@ -284,12 +284,14 @@ private final class GroupWeakBatch {
     weak var value: SourceMaterialMetalBatch?
 }
 
-/// #332: a completed composition leaves nothing in the caller's autorelease
-/// pool. The command buffer retains every input and output it encoded, so a
-/// buffer the pool still holds keeps them alive until that pool drains. The
-/// Maker's synchronous reimports (and the scenario's back-to-back steps) run
-/// in one main-thread job, where the pool cannot drain between imports. No
-/// autoreleasepool surrounds this test's body on purpose.
+/// #332: no command buffer, batch or output escapes `complete()`. Nothing that
+/// still references them may survive the call: an encoder or view, the caller's
+/// autorelease pool, or a future change to how the buffer retains resources.
+/// The Maker's synchronous reimports (and the scenario's back-to-back steps)
+/// run in one main-thread job, where that pool cannot drain between imports,
+/// so no autoreleasepool surrounds this test's body. Metal itself drops a
+/// completed buffer's resource references: with the buffer deliberately left
+/// in the pool, only the buffer survives, not its output.
 @Test(.enabled(if: MTLCreateSystemDefaultDevice() != nil))
 func sourceMaterialMetalCompletionReleasesItsCommandBufferAndOutputsOnReturn() throws {
     let device = try #require(MTLCreateSystemDefaultDevice())
