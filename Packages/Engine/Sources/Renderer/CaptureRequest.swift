@@ -452,6 +452,10 @@ extension CaptureRequest {
         ScopedOption("IKKOKU_PERF_INSPECTOR_TAB", [.perfTrace]),
         ScopedOption("IKKOKU_PERF_KEEP_MOUNTED", [.perfTrace]),
         ScopedOption("IKKOKU_PERF_PANEL_STATE", [.perfTrace]),
+        // How hidden kept inspector views are hidden (item 7 follow-up C1):
+        // read by the trace, the Studio scenarios and the window, so lanes and
+        // window captures can run either way.
+        ScopedOption("IKKOKU_PERF_KEPT_HIDING", [.perfTrace, .studioScenario, .interactive]),
     ]
 
     /// Options read only by the window capture.
@@ -599,6 +603,9 @@ extension CaptureRequest {
         // what they show (item 7 follow-ups, C4): each body as before, or the
         // state the model publishes (the default).
         ValueRule("IKKOKU_PERF_PANEL_STATE", .oneOf(["document", "published"])),
+        // Disabled as in item 7 (the default), or each kept view in an AppKit
+        // container that is set hidden.
+        ValueRule("IKKOKU_PERF_KEPT_HIDING", .oneOf(["disabled", "container"])),
     ]
 
     /// `IKKOKU_PERF_WORKLOAD` values, in the order `docs/reference/performance.md` lists them.

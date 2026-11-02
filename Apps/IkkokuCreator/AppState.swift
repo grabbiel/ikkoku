@@ -68,6 +68,9 @@ final class AppState {
         // Item 7 follow-ups (C4): where the workspace, toolbar and timeline
         // read the document (`IKKOKU_PERF_PANEL_STATE`), also read once here.
         _ = StudioPanelStateMode.current
+        // Item 7 follow-up C1: how hidden kept views are hidden
+        // (`IKKOKU_PERF_KEPT_HIDING`), also read once here.
+        _ = StudioKeptHiding.current
         // R7: the performance trace records startup marks from here on.
         PerfTrace.startIfRequested(env)
         // A-T01: the gameplay host scenario is its own headless mode. It needs

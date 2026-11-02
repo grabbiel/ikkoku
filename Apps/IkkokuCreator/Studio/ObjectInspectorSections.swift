@@ -268,7 +268,7 @@ struct KeptSection<Section: View & Equatable>: View {
                 .environment(\.inspectorSectionExpansion, kept.sections)
                 .environment(\.inspectorSectionHidden, hidden)
                 .padding(.top, 10)
-                .inspectorHidden(hidden)
+                .inspectorKeptHiding(hidden)
                 .onChange(of: hidden) { _, nowHidden in if nowHidden { kept.didHide() } }
         }
     }
