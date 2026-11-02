@@ -74,8 +74,11 @@ instead of rebuilding it:
 - It writes the retained entries, their order, the limitations and the head
   assemblies back as read, and appends the new material inputs.
 
-Run `maker_asset_materials.py` afterwards to compose the new entries'
-appearance sidecars.
+Then run `maker_asset_materials.py <library> --only CATEGORY:ID` (repeatable)
+to compose the new entries' appearance sidecars only. The retained entries keep
+their fields and files: material tools changed since they were composed would
+otherwise rewrite them. An existing pattern copy in `material-inputs/` is kept
+and must match the pattern catalog.
 
 Each drawable entry retains the exact source bundle, prefab, catalog table,
 catalog hash and bundle hash. The catalog table and hash are those of the list

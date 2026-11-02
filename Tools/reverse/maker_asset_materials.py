@@ -95,7 +95,11 @@ def fold(bindings,extra):
   else:result.append(recipe)
  return result
 
-def build(root):
+def build(root,only=None):
+ """Compose every entry's sidecars, or only those of the (category, id) pairs in `only`.
+
+ With `only` (after maker_asset_library --add) the other entries keep their fields
+ and files: tools changed since they were composed would otherwise rewrite them."""
  index_path=root/'library.json';index=json.loads(index_path.read_text());updates={}
  # Original pattern catalog was independently extracted by maker_material_contract.
  catalog=json.loads((ROOT/'.local/reverse/rigs/expanded-materials/source-material-catalog.json').read_text())
@@ -104,10 +108,15 @@ def build(root):
   if row['kind']!='pattern':continue
   meta=dict(row['texture']);data=(ROOT/'.local/reverse/rigs/expanded-materials'/meta['file']).read_bytes()
   if sha(data)!=meta['sha256']:raise ValueError('Pattern evidence changed')
-  name=Path(meta['file']).name;(inputs/name).write_bytes(data);meta['file']='material-inputs/'+name;textures[str(row['id'])]=meta
+  name=Path(meta['file']).name;target=inputs/name
+  # Retained entries' recipes cite these copies: with `only`, an existing copy is kept and must match.
+  if only is not None and target.exists():
+   if target.read_bytes()!=data:raise ValueError('Pattern input differs from the library copy: '+name)
+  else:target.write_bytes(data)
+  meta['file']='material-inputs/'+name;textures[str(row['id'])]=meta
  tail=['Recovered albedo and catalog IDs only; source lighting and arbitrary plugin shaders remain incomplete.']
  for entry in index['entries']:
-  if 'materialEvidence' not in entry:continue
+  if 'materialEvidence' not in entry or (only is not None and (entry['category'],entry['id']) not in only):continue
   evidence=(root/entry['materialEvidence']['file']).read_bytes()
   if sha(evidence)!=entry['materialEvidence']['sha256']:raise ValueError('Material evidence changed')
   source=json.loads(evidence);category=entry['category'];identifier=entry['id'];written={}
@@ -136,6 +145,10 @@ def build(root):
  dump(index_path,current)
  print(json.dumps(dict(materialEntries=len(updates),library=str(index_path))))
 if __name__=='__main__':
- p=argparse.ArgumentParser(description=__doc__);p.add_argument('root',nargs='?',type=Path,default=ROOT/'.local/reverse/maker-library');args=p.parse_args()
+ p=argparse.ArgumentParser(description=__doc__);p.add_argument('root',nargs='?',type=Path,default=ROOT/'.local/reverse/maker-library')
+ p.add_argument('--only',action='append',metavar='CATEGORY:ID',help='Compose only these entries (repeatable); the others keep their sidecars')
+ args=p.parse_args()
  if not args.root.resolve().is_relative_to((ROOT/'.local').resolve()):raise ValueError('Source-derived outputs must stay in .local/')
- build(args.root)
+ only={tuple(map(int,s.split(':'))) for s in args.only} if args.only else None
+ if only is not None and any(len(s)!=2 for s in only):p.error('Each --only must be CATEGORY:ID')
+ build(args.root,only)
