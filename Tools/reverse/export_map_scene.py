@@ -1984,7 +1984,7 @@ def export(bundles, scene, map_no, output, max_texture=None, builtin_resources=N
     # Slice 5: written after every mesh and sky, so their accessors and bytes stay as they were.
     casters, caster_skipped = shadow_only_casters(map_scene, exporter, shadows_only, sun, handlers, map_root_world_inverse)
     lighting = map_lighting(map_scene, sun, sun_is_target, sun_info, casters)
-    mixed_lights =sum(1 for light in lights if light["enabled"] and light["visibleFor"] and LIGHT_MODES.get(light["lightmapping"]) == "mixed")
+    mixed_lights = sum(1 for light in lights if light["enabled"] and light["visibleFor"] and LIGHT_MODES.get(light["lightmapping"]) == "mixed")
     lightmaps, lightmap_mode, lightmap_export = export_lightmaps(map_scene, output, mixed_lights)
     lightmap_extras = lightmap_export.pop("extras", None)
     lightmap_export["drawn"] = lightmap_extras is not None
