@@ -5738,7 +5738,10 @@ refresh in head.
   workspace row follows a rename typed mid-session and a visibility toggle
   (C4). On the same build, under the app lock, the strict Studio lane
   passed 88/88 (0 skipped, 1,413.7 s), after 87/87 on `32ad7cd8` and the
-  strict Maker lane 10/10 (178.3 s).
+  strict Maker lane 10/10 (178.3 s). After the merge of `main` at
+  `d9bd8ec3`, on the Debug build of `2d69dbd1`: `inspector-kept-views`
+  passes `--strict` again (69 steps, 42 s), and the strict Studio lane
+  passes 89/89 (0 skipped, 1,418.2 s).
 - **Suites.** On `32ad7cd8`, the strict Engine suite with the shared map
   (127 `IKKOKU_*` keys): 1,150 tests in 18 suites and 21 more pass, with
   only the 13 opt-in timing and corpus probes skipped. Python:
@@ -5763,8 +5766,9 @@ refresh in head.
   character 0, folder 622 and character 963 on the Clothes tab
   (`ui-sel-clothes`), the tab's content is sometimes laid out wider than
   the inspector and clipped at its left edge: in 3 of 6 base runs and 5 of
-  6 head runs. This exists in `main` and is outside these follow-ups. Its
-  cause is not established.
+  6 head runs. This exists in `main` and is outside these follow-ups
+  ([#333](https://github.com/grabbiel/ikkoku/issues/333)). Its cause is not
+  established.
 - **Two differences left unattributed.** In the composited window the
   head's FK drag had 9.0 (6–11) hitches per 15 s run against base's
   6.5 (5–7); the same binary's C4 pair has 5.5 (5–6) in both modes. An
