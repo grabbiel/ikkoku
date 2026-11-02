@@ -12,10 +12,20 @@ import ShaderTypes
 /// caller owns this collector; ResourceStore never retains or shares it.
 /// Image creation may defer decoding into the texture load. Neither interval
 /// is a measurement of CPU decoding or GPU execution alone.
+///
+/// #192-D: `metalTextureLoad` is also split into the loader's own stages
+/// (`InlineTextureLoadObservations`: decode, conversion, encodeSubmit,
+/// completionWait and the rest), summed over every load this collector saw.
+/// Those stages are nested inside `metalTextureLoad`, never added to it. Every
+/// clock read goes through `clock`; a nil collector reads no clock.
 public final class ResourceTextureLoadTimings {
     enum Phase: String { case dataCacheLookup, imageCreation, imageCacheLookup, metalTextureLoad, registration }
     public struct Sample: Encodable {
         public let milliseconds: [String: Double], calls: [String: Int], failures: [String: Int]
+        /// `InlineTextureLoader.texture` stages inside `metalTextureLoad`,
+        /// by stage name. Wall time between the loader's marks, not CPU
+        /// decoding or GPU execution alone; nested, not additional.
+        public let loaderMilliseconds: [String: Double], loaderCalls: [String: Int]
         /// Supplied encoded Data, including shared-cache hits. This is not a
         /// count of file reads, decoded pixels or retained texture memory.
         public let dataRequests: Int, encodedBytesPresented: Int
@@ -26,9 +36,22 @@ public final class ResourceTextureLoadTimings {
     private var dataRequests = 0, encodedBytesPresented = 0
     private var dataCacheHits = 0, dataCacheMisses = 0, imageCacheHits = 0, imageCacheMisses = 0
     private var registeredTextures = 0
-    public init() {}
+    let clock: () -> Double
+    /// The loader's stages for every texture this collector's loads made.
+    let loaderObservations: InlineTextureLoadObservations
+    public convenience init() { self.init(clock: { ProcessInfo.processInfo.systemUptime }) }
+    /// Tests inject a clock that counts its reads.
+    init(clock: @escaping () -> Double) {
+        self.clock = clock
+        loaderObservations = InlineTextureLoadObservations(clock: clock)
+    }
     public var sample: Sample {
-        Sample(milliseconds: milliseconds, calls: calls, failures: failures,
+        // Only stages a load reached: an unused stage is absent, not zero.
+        let reached = InlineTextureLoadObservations.Stage.allCases.filter { loaderObservations[$0].calls > 0 }
+        let loaderMilliseconds = Dictionary(uniqueKeysWithValues: reached.map { ("\($0)", loaderObservations[$0].milliseconds) })
+        let loaderCalls = Dictionary(uniqueKeysWithValues: reached.map { ("\($0)", loaderObservations[$0].calls) })
+        return Sample(milliseconds: milliseconds, calls: calls, failures: failures,
+            loaderMilliseconds: loaderMilliseconds, loaderCalls: loaderCalls,
             dataRequests: dataRequests, encodedBytesPresented: encodedBytesPresented,
             dataCacheHits: dataCacheHits, dataCacheMisses: dataCacheMisses,
             imageCacheHits: imageCacheHits, imageCacheMisses: imageCacheMisses,
@@ -46,10 +69,10 @@ public final class ResourceTextureLoadTimings {
     fileprivate static func measure<T>(_ timings: ResourceTextureLoadTimings?, _ phase: Phase,
                                        _ body: () throws -> T) rethrows -> T {
         guard let timings else { return try body() }
-        let start = ProcessInfo.processInfo.systemUptime
+        let start = timings.clock()
         var succeeded = false
         defer {
-            timings.milliseconds[phase.rawValue, default: 0] += (ProcessInfo.processInfo.systemUptime - start) * 1000
+            timings.milliseconds[phase.rawValue, default: 0] += (timings.clock() - start) * 1000
             timings.calls[phase.rawValue, default: 0] += 1
             if !succeeded { timings.failures[phase.rawValue, default: 0] += 1 }
         }
@@ -582,11 +605,13 @@ public final class ResourceStore: @unchecked Sendable {
     /// Every texture made from an image goes through here, on the calling
     /// thread (`InlineTextureLoader`). An image ImageIO decoded from a GPU
     /// texture container is rejected by name, whichever entry point it took.
-    func makeTexture(_ image: InlineTextureLoader.Image, srgb: Bool, name: String) throws -> any MTLTexture {
+    /// `observations` (#192-D) times the loader's stages; nil adds nothing.
+    func makeTexture(_ image: InlineTextureLoader.Image, srgb: Bool, name: String,
+                     observations: InlineTextureLoadObservations? = nil) throws -> any MTLTexture {
         if case .imageIO(let type) = image.source, let container = InlineTextureLoader.container(ofType: type) {
             throw ResourceError.unsupportedTextureContainer(container, name)
         }
-        return try InlineTextureLoader.texture(image, srgb: srgb, device: device, queue: uploadQueue)
+        return try InlineTextureLoader.texture(image, srgb: srgb, device: device, queue: uploadQueue, observations: observations)
     }
 
     public func texture(data: Data, key: String, srgb: Bool = true, cacheNew: Bool = true,
@@ -621,7 +646,9 @@ public final class ResourceStore: @unchecked Sendable {
         let cached = ResourceTextureLoadTimings.measure(timings, .imageCacheLookup) { lookup(key: key) }
         timings?.recordLookup(image: true, hit: cached != nil)
         if let cached { return cached }
-        let t = try ResourceTextureLoadTimings.measure(timings, .metalTextureLoad) { try makeTexture(image, srgb: srgb, name: key) }
+        let t = try ResourceTextureLoadTimings.measure(timings, .metalTextureLoad) {
+            try makeTexture(image, srgb: srgb, name: key, observations: timings?.loaderObservations)
+        }
         t.label = key
         let handle = ResourceTextureLoadTimings.measure(timings, .registration) {
             register(texture: t, key: cacheNew ? key : nil)

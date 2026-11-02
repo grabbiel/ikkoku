@@ -458,6 +458,8 @@ extension CaptureRequest {
     static let windowOptions: [String] = [
         "IKKOKU_CAPTURE_UI_TAB", "IKKOKU_CAPTURE_UI_MODE", "IKKOKU_CAPTURE_UI_STUDIO_TAB",
         "IKKOKU_CAPTURE_UI_SELECT", "IKKOKU_CAPTURE_UI_REPORT", UICaptureReadiness.timeoutVariable,
+        // #333's diagnostic: the inspector's width at each readiness poll.
+        "IKKOKU_CAPTURE_UI_FIT_LOG",
     ]
 
     /// Inputs startup loads in any mode that builds the Maker and Studio, including
