@@ -348,9 +348,22 @@ def xyz2(value):
     return [value.x, value.y]
 
 
-def export(bundles, prefab, output, stem, catalog_lookup=None):
+def load_bundles(bundles):
+    """One UnityPy environment over explicit input and dependency bundles, and their hashes."""
     import UnityPy
     environment = UnityPy.load(*(str(p) for p in bundles))
+    sources = [{"path": str(p.resolve()), "sha256": hashlib.sha256(p.read_bytes()).hexdigest()} for p in bundles]
+    return environment, sources
+
+
+def export(bundles, prefab, output, stem, catalog_lookup=None):
+    environment, sources = load_bundles(bundles)
+    return export_loaded(environment, sources, prefab, output, stem, catalog_lookup)
+
+
+def export_loaded(environment, sources, prefab, output, stem, catalog_lookup=None):
+    """`export` on an environment already loaded (`load_bundles`), so a batch loads its bundles once."""
+    import UnityPy
     matches = [(name, value) for name, value in environment.container.items() if name == prefab or Path(name).stem == prefab]
     if len(matches) != 1:
         raise ValueError(f"Expected one explicit prefab match, found {len(matches)}")
@@ -379,7 +392,7 @@ def export(bundles, prefab, output, stem, catalog_lookup=None):
                   "conversion": {"basis": "Z reflection, LH Y-up to RH Y-up", "triangles": "i0,i2,i1",
                                  "uv": "u,1-v", "tangent": "x,y,-z,w (basis and UV handedness flips)",
                                  "images": "UnityPy flip=True PNG; A/G normal converted to RGB with scale baked and Y inverted"},
-                  "sources": [{"path": str(p.resolve()), "sha256": hashlib.sha256(p.read_bytes()).hexdigest()} for p in bundles],
+                  "sources": sources,
                   "meshes": len(exporter.gltf["meshes"]), "materials": len(exporter.gltf["materials"]),
                   "vertices": sum(m["vertexCount"] for m in exporter.source["meshes"]),
                   "triangles": sum(m["triangleCount"] for m in exporter.source["meshes"])}

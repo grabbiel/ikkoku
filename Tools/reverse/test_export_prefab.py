@@ -128,7 +128,8 @@ class ConversionTests(unittest.TestCase):
                 convert_triangles(triangles, 3)
 
 
-def verify_export(directory):
+def verify_export(directory, source_hashes=None):
+    """Byte audit of one export. `source_hashes` caches bundle hashes across a batch's audits."""
     provenance = json.loads((directory / "provenance.json").read_text())
     source = json.loads((directory / "source.unity.json").read_text())
     candidates = list(directory.glob("*.gltf"))
@@ -139,7 +140,13 @@ def verify_export(directory):
     if len(blob) != gltf["buffers"][0]["byteLength"]:
         raise ValueError("Buffer length mismatch")
     for record in provenance["sources"]:
-        if hashlib.sha256(Path(record["path"]).read_bytes()).hexdigest() != record["sha256"]:
+        if source_hashes is None or record["path"] not in source_hashes:
+            digest = hashlib.sha256(Path(record["path"]).read_bytes()).hexdigest()
+            if source_hashes is not None:
+                source_hashes[record["path"]] = digest
+        else:
+            digest = source_hashes[record["path"]]
+        if digest != record["sha256"]:
             raise ValueError("Original bundle hash changed")
 
     def read(index):
