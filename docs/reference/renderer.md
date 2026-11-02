@@ -3668,6 +3668,44 @@ non-Shader-Forge shader, or a builtin the path does not compute
 a documented convention (`[1, 1, 0, 0]`, as in the probe). Each material using it
 lists it, so nothing is substituted silently.
 
+**Sampler state.** Each texture's sampler follows Unity's rule
+(`TranslatedSourceProgram.SamplerConfiguration`): its filter, wrap and aniso,
+under the player's `QualitySettings.anisotropicFiltering`. CharaStudio runs
+ForceEnable. `OriginalCharacterProbe`'s frame report and every
+`OriginalMapProbe` case record it, and no game assembly changes it or the
+global limits. So a non-Point texture with aniso above 0 samples with
+anisotropy 9 and linear mips, and composite inputs do too. The frozen-frame
+probe takes the mode from its frame. Since 2026-11-01 the Studio passes the
+recorded value, `SourceShaderLiveConfiguration.playerAnisotropicFiltering`.
+Before, it passed none, so its live characters sampled Bilinear textures
+(60 of the live store's 64) with nearest mips and no anisotropy. The test
+`studioLiveAssembliesSampleWithThePlayersForcedAnisotropy` pins both. Each
+resolved material records its effective sampler states
+(`SourceShaderLiveMaterial.samplers`). Materials resolved from the native store
+share one sampler state per configuration, through the store's per-resource
+cache that composite inputs use. The validation-only capture provider makes
+its own.
+
+- **Quality level.** Unity keeps `anisotropicFiltering` per quality level.
+  Neither probe records which level the install ran or the level names, so
+  the value is the probed install's at its active level. The next
+  `OriginalCharacterProbe` run records the `QualitySettings` level and names.
+- **Single-level textures.** The rule forces every non-Point texture with
+  aniso above 0, mipmapped or not. A mutation check of the controlled frame
+  gate left single-level textures unforced (capture provider, two runs per
+  rule, each rule deterministic). It moved 3,871 of 98,917 character pixels.
+  Every family ended further from the player's frame: `main_skin` mean
+  0.0544 → 0.1003 and p99 1 → 3, and `toon_eyew_lod0` p99 1 → 5, which fails
+  its gate. So the frame supports forcing them; no direct player probe has
+  checked it.
+- **The Studio report.** The Studio's live report
+  (`IKKOKU_LIVE_SOURCE_REPORT`, and the benchmark's `liveSourceShaders`) lists
+  each character's `samplers`. These are its resolved materials' bound
+  textures, counted by effective state, for example
+  `"aniso 9, mips linear": 3` (`SourceShaderLiveAssembly.samplerSummary`).
+  The `studio-scenario-live-samplers` check asserts those counts in the app.
+  With the Studio call site reverted to no mode, the check fails.
+
 **Per-frame inputs.** `SourceShaderLiveEncoder` converts each live item's vertices
 with a compute kernel, once per vertex source and register layout. The output is
 the program's `SourceInput` registers:

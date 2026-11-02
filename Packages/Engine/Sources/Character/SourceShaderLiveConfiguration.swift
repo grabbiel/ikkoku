@@ -30,6 +30,16 @@ public struct SourceShaderLiveConfiguration: Sendable, Equatable {
         self.supplement = supplement; self.headContract = headContract; self.makerLibrary = makerLibrary
     }
 
+    /// CharaStudio's `QualitySettings.anisotropicFiltering`. Both original
+    /// probes record `ForceEnable`: `OriginalCharacterProbe`'s frame report and
+    /// every `OriginalMapProbe` case's quality block. No game assembly sets it or
+    /// the global anisotropy limits. The Studio's live assemblies sample with it,
+    /// as `SourceShaderLiveFixtureProbe` does with each frame's recorded value.
+    /// It is the probed install's value at its active quality level: Unity
+    /// keeps the mode per quality level, and neither probe records the level
+    /// or the level names (the next `OriginalCharacterProbe` run records them).
+    public static let playerAnisotropicFiltering = "ForceEnable"
+
     public static func environment(_ env: [String: String], sourceAvatar: URL? = nil) -> SourceShaderLiveConfiguration {
         func url(_ key: String) -> URL? { env[key].flatMap { $0.isEmpty ? nil : URL(fileURLWithPath: $0) } }
         return SourceShaderLiveConfiguration(enabledAtLaunch: env["IKKOKU_LIVE_SOURCE_SHADERS"] == "1",
