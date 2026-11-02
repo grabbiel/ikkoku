@@ -115,7 +115,7 @@ All VM work used one `prlctl exec` per phase. The Parallels errno-24 count was 0
 **Phase B** (`original_map_probe.py capture`, `Tools/reverse/fixtures/OriginalMapProbe.cs`) authored two scene records in the original player, then read each back through `Studio.LoadSceneCoroutine`.
 
 - **`scene-map33.png`** (SHA-256 `2043b3cb…6b9c`): an emptied scene with map 33, map transform pos (0.3, -0.05, -0.5) and rot (4, 25, -3), and a camera inside the room. The load took 0.231 s.
-- **`scene-map33-showoff.png`** (SHA-256 `c5a8135c…d694`): `koikatu_cs0002591.png` with map 33 added (transform reset to zero by `AddMap`) and the scene's own camera, fov 23. The load took 10.6 s, mostly characters.
+- **`scene-map33-showoff.png`** (SHA-256 `c5a8135c…d694`): source scene `029f0b1d` with map 33 added (transform reset to zero by `AddMap`) and the scene's own camera, fov 23. The load took 10.6 s, mostly characters.
 
 After each load, the player recorded the following in `map-trace.json`:
 
@@ -168,7 +168,7 @@ The Python tests are `test_export_map_scene.py`, `test_compare_original_map.py` 
   - reimport, New Scene and undo.
 - **`studio-scenario-reload-save-source-map`** saves that scene natively.
 - **`studio-scenario-reload-load-source-map`** loads the save in a fresh process: one rehydration, and the map draws again.
-- **`studio-scenario-source-map-none`** runs on `koikatu_cs0002591.png`, which names no map, with the catalog supplied: there is no request or line, and the export is byte-identical.
+- **`studio-scenario-source-map-none`** runs on source scene `029f0b1d`, which names no map, with the catalog supplied: there is no request or line, and the export is byte-identical.
 
 On the Debug build of `ceccafa`, the full Studio lane passed 77/77 under `--strict` and `maker-scenarios` 10/10. Both passed again on the merged head `c094f92` (main `6502803`). The private-source Engine suite there ran 999 tests: 978 passed, 20 were skipped, and 1 failed, the known `liveSourceShadersMeetTheControlledOriginalFrameGates`. Two negative controls ran on the same build, and both fail as they must (`.local/sta11a-maps/controls/`):
 
@@ -186,7 +186,7 @@ info=(); for f in .local/reverse/source/abdata/studio/info/*.unity3d; do info+=(
 $P Tools/reverse/export_map_scene.py catalog "${info[@]}" \
   --converted .local/reverse/exports/maps/33-bushitu --output .local/reverse/exports/maps/catalog.json
 $P Tools/reverse/original_map_probe.py capture --output .local/sta11a-maps/phase-b --errno-baseline 0 \
-  --showoff '<koikatu_cs0002591.png>'
+  --showoff '<source scene 029f0b1d>'
 # Per case, under the app lock: IKKOKU_SOURCE_SCENE=<authored scene> IKKOKU_STUDIO_MAP_CATALOG=<catalog>
 # IKKOKU_SOURCE_AVATAR=<rig> IKKOKU_SOURCE_MAP_PROBE=.local/sta11a-maps/ours/<case>
 # IKKOKU_AUTOCAPTURE=.local/sta11a-maps/ours/<case>/native-color.png IKKOKU_CAPTURE_W=960 IKKOKU_CAPTURE_H=720
@@ -508,7 +508,7 @@ In the original player, the probe authored four scenes and reloaded each through
 | `map34-day` | 0 | pos (0.3, −0.05, −0.5), rot (4, 25, −3), as in `map33` | pivot (0.5, 1.3, 0.2) in the map's frame, pitch −4°, yaw −70°, 2.5 m, fov 45 |
 | `map34-evening` | 1 | zero | pivot (0.5, 1.3, −0.8), pitch −6°, yaw −105°, 2.5 m, fov 45 |
 | `map34-night` | 2 | zero | pivot (0.3, 1.4, 0.6), pitch −8°, yaw −80°, 2 m, fov 45 |
-| `map34-showoff` | 0 | zero (`AddMap`) | `koikatu_cs0002591.png`'s own camera, fov 23 |
+| `map34-showoff` | 0 | zero (`AddMap`) | source scene `029f0b1d`'s own camera, fov 23 |
 
 For each case it rendered:
 
@@ -827,7 +827,7 @@ The output is `.local/sta11d-map-coverage/vm-maps/` (163 MB, 192 files). The cas
 | --- | --- | --- | --- | --- |
 | 12 inside | 41, 21, 11, 19, 22, 29, 38, 40, 15, 25, 1, 27 | day, evening or night, each at least four times | MapPos/MapRot (as map33) for 41, 19, 40 and 25; zero otherwise | the map-local pivot (0, 1.1, 0), pitch 8°, 3 m, a yaw chosen offline from the converted geometry so the camera has room behind it |
 | 8 outside | 21, 11, 19, 22, 15, 25, 1, 27 | day (22: evening) | zero | through one of the map's vanish colliders (below) |
-| `map41-showoff` | 41 | day | zero (`AddMap`) | `koikatu_cs0002591.png`'s own camera |
+| `map41-showoff` | 41 | day | zero (`AddMap`) | source scene `029f0b1d`'s own camera |
 
 Every map but 33 now uses a far plane of 1000 m for the depth-normals images, on both sides (`UseMap`, `AppState.sourceMapProbeDepthFar`). Map 38's case keeps the map option on, so its 70 mob silhouettes draw. The player's `mobColor` was the default (0, 0, 1, 0.5). The oracle renders the silhouettes and the unlit draws alone, like the sky (`oracle-<case>-silhouettes.rgba.f32`, `-unlit.rgba.f32`). It skips the irradiance pair, recording why, for maps 22 and 27 (no baked lightmaps) and map 40, whose Standard materials all carry keywords, so there is no keyword-free template to copy. Map 40 draws with its three lightmaps on 8 renderers in the player too, so its irradiance is reported, not gated.
 

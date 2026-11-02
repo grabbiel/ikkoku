@@ -462,7 +462,7 @@ these runs. All app launches ran one at a time under the machine-wide app
 lock.
 
 Scene: the private `IKKOKU_STUDIO_SCENARIO_SCENE` fixture
-(`koikatu_cs0002591.png`, SHA-256 `029f0b1d…a8bea04`, 32 document objects, 6
+(source scene `029f0b1d`, SHA-256 `029f0b1d…a8bea04`, 32 document objects, 6
 source characters). Maker workloads use `IKKOKU_MAKER_SCENARIO_CARD`.
 
 Builds, all arm64. The baseline builds are from `9e02a62`: the harness on top
@@ -652,7 +652,7 @@ No run was made on an M1. These are estimates from the reference numbers
 ### The live source-shader opt-in (#127)
 
 The [live path](renderer.md#live-source-shader-path-r1cmt-04-opt-in-2026-10-22)
-recorded one ON run of `koikatu_cs0002591` with a CPU encode time of 9.59 ms.
+recorded one ON run of source scene `029f0b1d` with a CPU encode time of 9.59 ms.
 That figure is the Debug encode time, and the live path adds almost nothing
 to it (**measured** on the merged-head builds, `.local/app-perf/live-on`).
 `IKKOKU_BENCHMARK_OUTPUT` renders the scene offscreen at 1200×1600, with 60
@@ -2611,7 +2611,7 @@ build. A launch straight into a source scene also creates the Maker only
 when it is first used. Captures, scenarios and reports are byte-identical;
 only time and threads change.
 
-On the reference machine, the showoff scene (`koikatu_cs0002591`) is ready
+On the reference machine, the showoff scene (source scene `029f0b1d`) is ready
 1.41 s after launch instead of 5.65 s, and the first frame shows at 0.43 s
 instead of 5.93 s. The main thread used to stall once for 5.6–6.0 s; it is
 now busy 620–672 ms in total until the scene is ready. Its longest busy
@@ -3391,7 +3391,7 @@ Conditions:
   16:20–16:26). Base, no map and map alternated in each round, every launch
   ran under the app lock, and the load average was 4.0–6.5.
 - **Display.** A 120 Hz display at 2×, with a 1996×1824 drawable.
-- **Scene.** `scene-map33-showoff.png`: `koikatu_cs0002591.png` with Map 33
+- **Scene.** `scene-map33-showoff.png`: source scene `029f0b1d` with Map 33
   added in the original player. It has 32 objects and 7 source characters.
 - **Runs.** `startup` ran three times per configuration. `studio-idle` and
   `studio-orbit-bursts` ran twice, each recording 10 s after a 3 s warmup.
@@ -3538,7 +3538,7 @@ Release captures from `74cee1c` and `ceccafa` (`.local/sta11a-maps/captures/{bas
 
 - **Byte-identical on base and branch,** with the live source-shader opt-in
   OFF and ON:
-  - the no-map scenario scene (`koikatu_cs0002591.png`) with the catalog
+  - the no-map scenario scene (source scene `029f0b1d`) with the catalog
     supplied;
   - the 2-character half-state fixture;
   - the native Studio capture;
@@ -3984,7 +3984,7 @@ and `IKKOKU_PLUGIN_SCENE_LARGEST`. Each case is the median of 60 calls after
   (the lazy hash). The runs went before, after, after, before, one process
   each, and each cell lists the two runs.
 - **Scenes:**
-  - showoff (`koikatu_cs0002591`): 595,127 B, 7 characters, no plug-in data;
+  - showoff (source scene `029f0b1d`): 595,127 B, 7 characters, no plug-in data;
   - the fixtures of the original-player phases A, B and C;
   - the largest KKPE scene of the install: 80,535,331 B, 173 objects, 42
     characters, 36,553 B of plug-in data. It is private, and its SHA-256
@@ -4097,7 +4097,7 @@ warmups.
   runs went before, after, after, before, one process each, and each cell
   lists the two runs.
 - **Scenes:**
-  - showoff (`koikatu_cs0002591`): 595,127 B, 7 characters, version 1.0.4.2;
+  - showoff (source scene `029f0b1d`): 595,127 B, 7 characters, version 1.0.4.2;
   - the largest legacy scene of the install: 1,676,359 B, version 1.0.3,
     2,255 objects (1,894 items, 360 folders, 1 light), no characters. It is
     private, and its SHA-256 begins `bcaca9ff`;

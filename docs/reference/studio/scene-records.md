@@ -1226,8 +1226,8 @@ SHA-verified VM transfer and decoded without viewing or rendering their PNGs:
 
 | Original file | Bytes | Root objects | Total objects | Characters | Object-section end | Base-scene end |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: |
-| `Asset-PlayGround-IronBar.png` | 17,876 | 1 | 14 | 0 | 16,782 | 17,862 |
-| `koikatu_cs0002591.png` | 595,127 | 8 | 32 | 7 | 593,997 | 595,127 |
+| source scene `6f31b4f6` | 17,876 | 1 | 14 | 0 | 16,782 | 17,862 |
+| source scene `029f0b1d` | 595,127 | 8 | 32 | 7 | 593,997 | 595,127 |
 
 Both native and independent Python parsing agree on those boundaries, object
 kind counts, input hashes and exact byte preservation. The first file has a

@@ -308,7 +308,7 @@ selection.
 **Source scene previews.** `StudioModel.importSourceScenePreview` refuses a scene
 with at least one character record when the Studio pose contract is not a regular
 file. Before this check, each character was retained without rendering. In the
-2026-10-23 manual run, a save of `koikatu_cs0002591.png` previewed from a copy
+2026-10-23 manual run, a save of source scene `029f0b1d` previewed from a copy
 without `studio-pose/` kept 32 folders and no character. The app prints each "retained without
 rendering" diagnostic as `[ikkoku] <scene>: …`. An automated run whose scene
 characters all failed to build exits 1 through `AppState.failCaptureInput`,
@@ -385,7 +385,7 @@ The build guide's
 [converted-library section](../guides/build-and-test.md#use-a-converted-library-outside-the-checkout)
 has the full table. An automated Release run (`f402483`, copied outside the
 checkout, `IKKOKU_SOURCE_TREE_FALLBACKS=0`, explicit variables) saved
-`koikatu_cs0002591.png` as a 32-object native scene against `.local/reverse/`.
+source scene `029f0b1d` as a 32-object native scene against `.local/reverse/`.
 Opened against an APFS clone holding the libraries, `studio-pose/`,
 `animation-assets/female-base/` and the source scene, it relocated all 31
 references. The capture was byte-identical to the original location's.

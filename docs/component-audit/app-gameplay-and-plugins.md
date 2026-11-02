@@ -162,7 +162,7 @@ Sources: [IkkokuApp.swift](../../Apps/IkkokuCreator/IkkokuApp.swift),
   control).
   **App runs (2026-10-23).** An automated Release run (`f402483`, copied outside
   the checkout, `IKKOKU_SOURCE_TREE_FALLBACKS=0`, explicit variables, because
-  automated runs ignore the selection) saved `koikatu_cs0002591.png` as a
+  automated runs ignore the selection) saved source scene `029f0b1d` as a
   32-object scene. Opened against an APFS clone of the libraries with
   `studio-pose/`, `animation-assets/` and the source scene, it relocated 31/31
   references. Its capture was byte-identical to the original location's (111
