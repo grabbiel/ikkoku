@@ -13,15 +13,28 @@ unresolved selection must remain visible as a diagnostic and must not change the
 card's saved identity.
 
 The current generated library is
-`.local/reverse/maker-library/library.json`. It contains 15 drawable entries:
+`.local/stc03c-half-state/maker-library/library.json`, the
+`IKKOKU_MAKER_LIBRARY` of the verification environment. Since 2026-11-01 the
+app's default path `.local/reverse/maker-library` is a relative symlink to it,
+so a plain launch and the tests read the same library.
+
+- **Consolidation.** The library formerly at the default path (SHA-256
+  `d898fea155e53abd30226d0633c832649a60570cffbcbbf1f47dc4c474cbb609`, 26
+  entries, 727 files, 578,840,024 bytes) was a subset of this one. All 723
+  of its files that this library also holds at the same size were
+  byte-identical; it lacked the half-state entries and the top alternates.
+- **Archive.** It is kept in the private archive drive with a SHA manifest.
+
+The library contains 18 drawable entries:
 
 | Category | Original IDs | Recovered selection |
 | --- | --- | --- |
 | 101, back hair | 0, 2, 9 | Three original hairstyles, including the normal male preset |
 | 102, front hair | 1, 2, 5 | Three original front styles |
-| 105, top | 3, 13, 38, 39 | Original T-shirt variants and normal male T-shirt |
-| 106, bottom | 3, 25 | Original long trousers and loose long trousers |
-| 112, shoes | 1, 3 | Loafers and trainers |
+| 105, top | 3, 13, 38, 39 | Original T-shirt variants and normal male T-shirt; 3, 38 and 39 carry their half-off alternates |
+| 106, bottom | 1, 3, 25 | Bloomers, original long trousers and loose long trousers |
+| 110, pantyhose | 1 | Pantyhose with its half-off alternate |
+| 112, shoes | 1, 2, 3 | Loafers, indoor shoes and trainers |
 | 123, face accessory | 0 | Square glasses, including their separate lens mesh |
 
 Eleven additional entries represent source `p_dummy` catalog rows. Zero is not
