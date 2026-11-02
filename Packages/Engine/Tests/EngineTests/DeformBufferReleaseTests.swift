@@ -112,7 +112,8 @@ func droppingAPreviewDuringItsDeformPassLeavesNoBuffer() throws {
     // Control: a preview that stays caches its key's buffer and live input;
     // dropping it between frames releases both.
     var kept: SourceRigPreview? = try SourceRigPreview(source: skinnedRig(), contract: nil, resources: resources)
-    _ = try #require(renderer.capture(frame: try liveFrame(try #require(kept)), width: 16, height: 16))
+    let keptFrame = try liveFrame(try #require(kept))
+    _ = try #require(renderer.capture(frame: keptFrame, width: 16, height: 16))
     #expect(renderer.lastSourceShaderLive.draws == 1)
     let encoder = try #require(renderer.liveEncoder)
     #expect(resources.statistics().deformBuffers == before.deformBuffers + 1)
