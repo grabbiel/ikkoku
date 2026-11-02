@@ -32,6 +32,14 @@ extension View {
     }
 }
 
+/// Lets the content's geometry callback reach its container, which is made
+/// after the content. It is not nested in the generic `InspectorKeptContainer`:
+/// Swift 6.3.3 (Xcode 26.6, CI's Release build) crashes optimizing the deinit
+/// of a class nested there.
+final class InspectorKeptContainerCoordinator {
+    weak var view: InspectorKeptContainerView?
+}
+
 /// A kept inspector view in its own hosting view. Shown, it has its
 /// content's size at the proposed width. Hidden, it has zero height and its
 /// content's width, at most the proposed width (as `inspectorHidden` reports),
@@ -40,11 +48,7 @@ struct InspectorKeptContainer<Content: View>: NSViewRepresentable {
     let hidden: Bool
     let content: Content
 
-    final class Coordinator {
-        weak var view: InspectorKeptContainerView?
-    }
-
-    func makeCoordinator() -> Coordinator { Coordinator() }
+    func makeCoordinator() -> InspectorKeptContainerCoordinator { InspectorKeptContainerCoordinator() }
 
     func makeNSView(context: Context) -> InspectorKeptContainerView {
         let view = InspectorKeptContainerView(rootView: root(context))
