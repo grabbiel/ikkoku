@@ -214,7 +214,12 @@ Citations are `file:line` under `.local/reverse/managed-recovery/902b9a23…/774
   Only these numbers change in the copied bytes. Gaps are filled first, and a key freed by a deletion earlier in the session can be reused.
 - **Placement.** `Duplicate` then loads each copy with `AddObjectAssist.LoadChild(info, parent, node)` when the original had a parent, else at the root (Studio.cs:472–484). The parent's `OnLoadAttach` appends the copy to its child list: a folder (OCIFolder.cs:61), an item (OCIItem.cs:234), a route (OCIRoute.cs:111), or the same accessory group of a character (OCIChar.cs:516). The copy is parented with `worldPositionStays: false` and keeps its saved local change amount, so it lands exactly on its original. A root copy is added to `dicObject` under its new key.
 - **Cameras.** A camera record's load calls `ChangeCamera(ocic, active)` (AddObjectCamera.cs:82). The looked-through camera saves `active = true` (`OCICamera.SetActive`, OCICamera.cs:32), so its copy takes the view.
-- **Lights.** The `OILightInfo` constructor calls `Studio.AddLight()` (OILightInfo.cs:27–39), and `isLightCheck` is `lightCount < 2` (SceneInfo.cs:109). `Import` and the nested child load read that check before they build a light and drop the light when two already exist (SceneInfo.cs:483, ObjectInfoAssist.cs:32). The Add Light menu refuses a third light the same way (Studio.cs:297).
+- **Lights.** The `OILightInfo` constructor calls `Studio.AddLight()` (OILightInfo.cs:27–39), `DeleteKey` calls `DeleteLight`, and `isLightCheck` is `lightCount < 2` (SceneInfo.cs:109). Three places read that check before they build a light, and refuse or drop the light once two are counted:
+  - the Add Light menu (Studio.cs:297–301);
+  - `SceneInfo.Import`, which Duplicate and Import Scene run, for a root light (SceneInfo.cs:483);
+  - `ObjectInfoAssist.LoadChild`, at load and at import alike, for a light under a folder, an item, a route or an accessory point (ObjectInfoAssist.cs:30–44).
+
+  `SceneInfo.Load` reads root lights unchecked (SceneInfo.cs:323–352). So CharaStudio 1.0.4.2 loads every root light in a file but drops each nested light it reads after the second light. `isLightLimitOver` (`lightCount > 2`, :111) has no call site in the five recovered Assembly-CSharp builds. The user's install removes the limit with KK_Fix_UnlimitedMapLights: see [the light limit](#the-light-limit-320).
 - **Add.** `AddObjectFolder.Add` (AddObjectFolder.cs:8–10), `AddObjectCamera.Add` and `AddObjectLight.Add` build the record with `GetNewIndex()` and add it at the root. The `ObjectInfo` constructor's defaults are a zero position and rotation, unit scale, `TreeState.Close` and visible (ObjectInfo.cs:20–30). With the default option `initialPosition = 0` (OptionSystem.cs:85), the position stays zero; option 1 moves it to the camera target.
   - A folder is named `フォルダー` (OIFolderInfo.cs:18).
   - A camera is named `カメラ` plus the session's camera count, and it is inactive (OICameraInfo.cs:17).
@@ -245,7 +250,7 @@ The writer works in two phases. `KoikatsuSceneDocument.inserting(_:)` writes the
 | Duplicating a route without points, or placing a copy of a route child outside its route's list | See [route points and settings](#route-points-and-settings-st-t11-st-t03). |
 | A duplicate or new record that the scene's plug-in data cannot follow | Plug-ins key that data by object, and some list objects by position. [Plug-in data](#plug-in-data-st-t03i) decides each KKEx entry for copies and new records alike, and refuses a copy when NodesConstraints would turn a written character's card links into constraints, with or without a trailer. Before ST-T03i, new records kept the trailer bytes in every scene, which could shift positional data. |
 | Adding characters or items | A new character needs a card and an item needs catalog identity this writer does not author. Duplicating a source one is supported. |
-| More than two lights after the export | `isLightCheck` drops a third light at load. |
+| More than two lights after an export that adds or copies a light, for CharaStudio 1.0.4.2 (the export setting off) | Duplicate, Import Scene and the nested child load drop a light once two are counted, and the Add Light menu refuses one. A vanilla load keeps root lights. See [the light limit](#the-light-limit-320). |
 | Adding under an item, onto accessory points, under a route, a camera or a light | The same rules as moves, except a copy beside its original. |
 | A new record with non-unit scale, a camera field of view other than 30, a light spot blend, or native card, asset, material or pose data | CharaStudio's records have no field for these, or the app has no writer for them. |
 | A new light number outside 0–2, a nonfinite value, a negative intensity, a range that is not positive, or a spot angle outside 0–180° | Invalid record. |
@@ -258,9 +263,31 @@ In an imported scene, Add Folder, Add Camera and Add Light add at the root, as C
 
 `SourceSceneExportValidation.stage(document, source:)` turns the document into insertions: each forest root in document order, then each added object's children depth first. Leaf edits, deletions and moves are then validated against the staged snapshot with the staged keys.
 
+### The light limit (#320)
+
+Reviewed 2026-11-01. The user's CharaStudio has KK_Fix_UnlimitedMapLights 22.1, so an export may need more lights than CharaStudio 1.0.4.2 keeps. `SourceSceneEdits.lightLimit` names the target install:
+
+- `.charaStudio`, the Engine default, refuses an export that adds or copies a light and leaves more than two lights. It counts the final root and nested lights, after deletions. An export that adds no light is not checked, so a source scene that already has three root lights still exports with a new folder.
+- `.unlimitedMapLights` writes any number of lights. The fix's two getter postfixes force one `SceneInfo` light getter to true and the other to false (IllusionFixes/UnlimitedMapLights.cs:40–52). That they make `isLightCheck` true and `isLightLimitOver` false is inferred from the forced values; ILSpy could not decode the attribute arguments. Its `AddLight` postfix only logs a warning when there are more than two lights (:30–38).
+
+The app's setting is File ▸ Original Scene Export Keeps Unlimited Lights. It is on by default, for the user's install, and off means CharaStudio 1.0.4.2's limit. Scenario and capture runs ignore the saved value, like the other saved selections; the `setUnlimitedLights` scenario op sets it. Whenever an export leaves more than two lights, the status names them: "N lights: a CharaStudio without KK_Fix_UnlimitedMapLights loads every root light but drops each nested light loaded after the second".
+
+Our reader keeps every nested light, which is what an install with the fix loads. The vanilla load-time drop of a nested light past the second is not modelled.
+
+- **Oracle.** The export follows the recovered rules and the fix's patches. No CharaStudio has loaded an export with more than two lights yet: that is a later original-player phase with the fix installed (Add Light and Duplicate), which will also count, read only, the installed plug-in DLLs that name either getter, and confirm the fix's targets from its own attribute bytes.
+- **Plug-in references.** `Tools/translation/plugin_inventory.py` over the plug-in DLLs on this host (3 in `reverse/mods`, 4 in `reverse/plugin-execution`) and the 6 recovered CharaStudio assemblies found no member reference to `get_isLightCheck` or `get_isLightLimitOver`. No plug-in DLL has either name in its bytes; only the Assembly-CSharp that defines the getters does. The 243 installed plug-in DLLs are only on the VM, so their count is pending the phase above.
+- **Performance.** No new work. Under `.unlimitedMapLights` the writer skips the light count; under `.charaStudio` it runs the same count as before. The status count is one comparison per object inside the export loop that already visits every object. No timing was taken.
+- **Evidence.** `sourceSceneInsertionLightLimitFollowsTheTargetInstall` compares every byte with the `TopologyScene` builder under `.unlimitedMapLights` and checks the refusal under the default:
+  - two new root lights (3 lights);
+  - two copies of a light under a folder (3);
+  - a copied folder that holds a light (3);
+  - lights under a route, a character's accessory point and an item, each copied beside its original (7).
+
+  Deleting a light before adding two, and a three-light source that takes only a new folder, export under both policies. With the policy check removed, the test fails on its first unlimited case. The `studio-scenario-light-limit` lane check (`light-limit.json`, koikatu_cs0002591, which has no lights) adds a point, a spot and a directional light. With the setting off the export is refused and writes no file. With it on the export writes the three lights, the status names them, and the reimport has keys 113, 114 and 115 after the eight source roots. A negative control proves the child-order assert fails without key 115.
+
 ### Evidence
 
-- **Engine.** `SourceSceneInsertionTests` (10 tests) build the expected scene with the independent `TopologyScene` spec builder from the topology tests, extended with copies, names, FK, IK, look-at and item bone keys, lights, tree states and visibility, and compare every byte:
+- **Engine.** `SourceSceneInsertionTests` (11 tests) build the expected scene with the independent `TopologyScene` spec builder from the topology tests, extended with copies, names, FK, IK, look-at and item bone keys, lights, tree states and visibility, and compare every byte:
   - a folder subtree, an item with its bones and a child, and a character with its FK, IK and look-at keys and an accessory child, each under the expected keys;
   - a camera copy written inactive, and the view handed to it only through an explicit `cameraActive` edit;
   - new folders, cameras and lights;
@@ -268,6 +295,7 @@ In an imported scene, Add Folder, Add Camera and Add Light add at the root, as C
   - edit-then-revert: deleting what was added restores the original bytes, and an empty insertion list is a no-op;
   - smallest-free-key allocation across sub-info keys, and a deleted key not reused;
   - the plug-in trailer rule;
+  - the light limit under both policies ([#320](#the-light-limit-320));
   - every refusal, each with its reason.
 
   `SourceSceneExportValidationTests` adds the app translation: a document with a copy subtree, a new folder and a moved copy stages keys `[0, 4, 6, 7, 8]` and exports roots `[10, 20, 0, 6, 8]`. The full Engine suite (`swift test --package-path Packages/Engine` with every fixture of the shared map, after merging main at 872d2ec) ran 942 tests. 12 were skipped: opt-in timing probes and fixtures that are not present. 1 failed, the pre-existing `liveSourceShadersMeetTheControlledOriginalFrameGates`, whose local store fixture has 52 entries where the test expects 62.

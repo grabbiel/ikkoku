@@ -151,16 +151,24 @@ struct StudioBytes {
     #expect(throws: KoikatsuReadError.self) { try KoikatsuSceneReader.decodeChangeAmount(bytes.data) }
 }
 
-@Test func KoikatsuRejectsDuplicateHierarchyKeysAndExcessDepth() {
+@Test func KoikatsuRejectsDuplicateHierarchyKeysAndExcessDepth() async throws {
     var duplicate = StudioBytes.prefix()
     duplicate.i32(1); duplicate.header(kind: 3, key: 1); duplicate.string("root"); duplicate.i32(1)
     duplicate.header(kind: 5, key: 1); duplicate.string("duplicate"); duplicate.bool(false)
     #expect(throws: KoikatsuReadError.self) { try KoikatsuSceneReader.decode(duplicate.data) }
+    // One level past the reader's 200-level cap (`maximumLevels`, #326; this
+    // file sees only the public API). The decode recurses once per level, so
+    // it runs on an 8 MiB thread, not the test pool's 512 KiB.
+    let levels: Int32 = 201
     var deep = StudioBytes.prefix(); deep.i32(0)
-    for key: Int32 in 0...65 {
-        deep.header(kind: 3, key: key); deep.string("folder"); deep.i32(key == 65 ? 0 : 1)
+    for key: Int32 in 0..<levels {
+        deep.header(kind: 3, key: key); deep.string("folder"); deep.i32(key == levels - 1 ? 0 : 1)
     }
-    #expect(throws: KoikatsuReadError.limitExceeded("hierarchy depth exceeds 64")) { try KoikatsuSceneReader.decode(deep.data) }
+    let data = deep.data
+    let refusal = try await liveTickOffPool { () -> KoikatsuReadError? in
+        do { _ = try KoikatsuSceneReader.decode(data); return nil } catch let error as KoikatsuReadError { return error }
+    }
+    #expect(refusal == .limitExceeded("objects nested more than 200 levels deep (Ikkoku reads at most 200)"))
 }
 
 @Test func KoikatsuHandlesDataWithNonzeroStartIndex() throws {

@@ -123,6 +123,20 @@ final class StudioModel: ViewportInputHandler, LivePacedHandler {
     @ObservationIgnored private var inspectorDiagnosticsStorage: [String] = []
     var inspectorDiagnostics: [String] { access(keyPath: \.inspectorDiagnostics); return inspectorDiagnosticsStorage }
 
+    /// What the workspace tree, the toolbar and the timeline bar show from
+    /// the document, published the same way (item 7 follow-ups, C4;
+    /// `StudioPanelState.swift`), so an FK drag frame, which writes the
+    /// document but changes none of it, re-evaluates none of them. Computed
+    /// with the Object tab's state, unless `IKKOKU_PERF_PANEL_STATE=document`.
+    @ObservationIgnored private var workspaceStateStorage = StudioWorkspaceState()
+    var workspaceState: StudioWorkspaceState { access(keyPath: \.workspaceState); return workspaceStateStorage }
+    @ObservationIgnored private var toolbarDocumentStateStorage = StudioToolbarDocumentState()
+    var toolbarDocumentState: StudioToolbarDocumentState { access(keyPath: \.toolbarDocumentState); return toolbarDocumentStateStorage }
+    @ObservationIgnored private var timelineDocumentStateStorage = StudioTimelineDocumentState()
+    var timelineDocumentState: StudioTimelineDocumentState { access(keyPath: \.timelineDocumentState); return timelineDocumentStateStorage }
+    /// The inputs `workspaceStateStorage` was last built from; nil before the first build.
+    @ObservationIgnored private var workspaceStateKey: StudioWorkspaceKey?
+
     /// The Object tab's state as the model is now: nil when nothing in the
     /// document is selected.
     func currentObjectInspectorState() -> ObjectInspectorState? {
@@ -138,6 +152,26 @@ final class StudioModel: ViewportInputHandler, LivePacedHandler {
             if state != objectInspectorStateStorage { withMutation(keyPath: \.objectInspectorState) { objectInspectorStateStorage = state } }
             let diagnostics = compatibilityDiagnostics
             if diagnostics != inspectorDiagnosticsStorage { withMutation(keyPath: \.inspectorDiagnostics) { inspectorDiagnosticsStorage = diagnostics } }
+        }
+        if StudioPanelStateMode.current.publishes { refreshPanelState() }
+    }
+
+    /// Publishes the workspace, toolbar and timeline states (C4), each only
+    /// when it differs. The workspace rows are rebuilt only when their inputs
+    /// changed (`workspaceKey`): building them copies every object, about
+    /// 0.1 ms a refresh in a 32-object scene.
+    private func refreshPanelState() {
+        PerfTrace.measure(.studioPanelState, "StudioPanelState") {
+            let key = workspaceKey()
+            if key != workspaceStateKey {
+                workspaceStateKey = key
+                let workspace = StudioWorkspaceState(model: self)
+                if workspace != workspaceStateStorage { withMutation(keyPath: \.workspaceState) { workspaceStateStorage = workspace } }
+            }
+            let toolbar = StudioToolbarDocumentState(model: self)
+            if toolbar != toolbarDocumentStateStorage { withMutation(keyPath: \.toolbarDocumentState) { toolbarDocumentStateStorage = toolbar } }
+            let timeline = StudioTimelineDocumentState(model: self)
+            if timeline != timelineDocumentStateStorage { withMutation(keyPath: \.timelineDocumentState) { timelineDocumentStateStorage = timeline } }
         }
     }
 
@@ -163,6 +197,18 @@ final class StudioModel: ViewportInputHandler, LivePacedHandler {
         let diagnostics = compatibilityDiagnostics
         assert(diagnostics == inspectorDiagnosticsStorage,
                "inspectorDiagnostics is stale: published \(inspectorDiagnosticsStorage), now \(diagnostics)")
+        guard StudioPanelStateMode.current.publishes else { return }
+        // C4: also checks that the workspace key covers every input of the
+        // rows, since the rows are rebuilt only when the key changes.
+        let workspace = StudioWorkspaceState(model: self)
+        assert(workspace == workspaceStateStorage,
+               "workspaceState is stale: published \(workspaceStateStorage), now \(workspace)")
+        let toolbar = StudioToolbarDocumentState(model: self)
+        assert(toolbar == toolbarDocumentStateStorage,
+               "toolbarDocumentState is stale: published \(toolbarDocumentStateStorage), now \(toolbar)")
+        let timeline = StudioTimelineDocumentState(model: self)
+        assert(timeline == timelineDocumentStateStorage,
+               "timelineDocumentState is stale: published \(timelineDocumentStateStorage), now \(timeline)")
     }
     #endif
 
@@ -427,6 +473,24 @@ final class StudioModel: ViewportInputHandler, LivePacedHandler {
     internal(set) var sourceMapLine: String?
     /// View ▸ Show Source Map: hides the drawn map without unloading it.
     var showSourceMap = true { didSet { if oldValue != showSourceMap { publishSourceMapLine(); refresh() } } }
+    /// #320, File ▸ Original Scene Export Keeps Unlimited Lights: whether the
+    /// CharaStudio an export is for has KK_Fix_UnlimitedMapLights (the user's
+    /// install) and keeps any number of lights. Off, an export follows
+    /// CharaStudio 1.0.4.2's two-light limit. On by default; an automated run
+    /// ignores the saved choice (`EngineHost.savedSelectionApplies`), so a
+    /// lane starts on and a scenario sets it with `setUnlimitedLights`.
+    var sourceExportUnlimitedLights = StudioModel.savedSourceExportUnlimitedLights
+    static let sourceExportUnlimitedLightsKey = "sourceSceneExportUnlimitedLights"
+    static var savedSourceExportUnlimitedLights: Bool {
+        guard EngineHost.savedSelectionApplies, UserDefaults.standard.object(forKey: sourceExportUnlimitedLightsKey) != nil else { return true }
+        return UserDefaults.standard.bool(forKey: sourceExportUnlimitedLightsKey)
+    }
+    /// The menu's setter: the choice is saved for later launches, except in
+    /// an automated run.
+    func setSourceExportUnlimitedLights(_ on: Bool) {
+        sourceExportUnlimitedLights = on
+        if EngineHost.savedSelectionApplies { UserDefaults.standard.set(on, forKey: Self.sourceExportUnlimitedLightsKey) }
+    }
     /// Imported camera objects (`KoikatsuObjectKind.camera`), keyed by the
     /// placeholder entry's id. Runtime-only like `sourceSceneLight`: the
     /// placeholder stays a `.folder` and `doc.camera` keeps the saved scene
@@ -530,6 +594,25 @@ final class StudioModel: ViewportInputHandler, LivePacedHandler {
         }
         return (SourceStudioCameraLabel.title(name: object.name, key: entry.objectKey),
                 SourceStudioCameraLabel.keyDetail(name: object.name, key: entry.objectKey), true)
+    }
+    /// The inputs of `StudioWorkspaceState` (see `StudioWorkspaceKey`), read
+    /// in place from the document without copying its objects.
+    func workspaceKey() -> StudioWorkspaceKey {
+        let objects = documentStorage.objects
+        var key = StudioWorkspaceKey()
+        key.items.reserveCapacity(objects.count)
+        for index in objects.indices {
+            let id = objects[index].id
+            let camera = sourceCameras[id]
+            key.items.append(.init(id: id, parent: objects[index].parent, name: objects[index].name, kind: objects[index].kind,
+                                   visible: objects[index].visible, sourceObjectKey: objects[index].sourceObjectKey,
+                                   sourceDuplicateOf: objects[index].sourceDuplicateOf,
+                                   cameraSceneSHA256: camera?.sceneSHA256, cameraObjectKey: camera?.objectKey))
+        }
+        key.selection = selection
+        key.sceneSHA256 = documentStorage.sourceSceneSHA256
+        key.activeCamera = activeSourceCameraView
+        return key
     }
     /// The camera after "source camera" in a status message:
     /// `"IKKOKU-MIRROR" (camera 2)`, from the object's current name.
@@ -2980,10 +3063,15 @@ final class StudioModel: ViewportInputHandler, LivePacedHandler {
         // placement is written by the transform edit below.
         let topology = try SourceSceneExportValidation.topologyEdits(doc, against: stage.snapshot, keys: staged.keys)
         var edits = SourceSceneEdits(deletions: topology.deletions, reparents: topology.reparents)
+        edits.lightLimit = sourceExportUnlimitedLights ? .unlimitedMapLights : .charaStudio
+        // #320: every exported record is one document object, so the
+        // exported scene's lights are counted here.
+        var lights = 0
         for object in doc.objects {
             guard let key = staged.keys[object.id], let original = records[key] else {
                 throw RigError.invalid("Original-scene export contains an unknown source object.")
             }
+            if original.kind == .light { lights += 1 }
             // A new folder, camera or light was written whole from the object.
             guard object.sourceRecordKey != nil else { continue }
             if object.visible != original.visible { edits.visibility[key] = object.visible }
@@ -3171,6 +3259,12 @@ final class StudioModel: ViewportInputHandler, LivePacedHandler {
         status = "Exported edited original scene to \(url.lastPathComponent)"
             + (source.isLegacy ? ", saved as 1.0.4.2 from CharaStudio \(source.snapshot.version), as CharaStudio does" : "")
             + (orphans.isEmpty ? "" : ". It keeps plug-in data no installed plug-in reads, unchanged: \(orphans.joined(separator: ", "))")
+        // #320: a CharaStudio without KK_Fix_UnlimitedMapLights loads every
+        // root light (SceneInfo.Load) but drops each nested light loaded once
+        // two are counted (ObjectInfoAssist.LoadChild).
+        if lights > 2 {
+            status += ". \(lights) lights: a CharaStudio without KK_Fix_UnlimitedMapLights loads every root light but drops each nested light loaded after the second"
+        }
     }
 
     /// Deterministic integration input using original object/bone IDs. This

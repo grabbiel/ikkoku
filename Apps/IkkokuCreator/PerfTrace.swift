@@ -66,6 +66,9 @@ final class PerfTrace {
         /// Computing and comparing the Object tab's state and the inspector's
         /// diagnostics at each Studio refresh (R7 phase 2, item 7).
         case studioInspectorState
+        /// Computing and comparing what the workspace, toolbar and timeline
+        /// show at each Studio refresh (item 7 follow-ups, C4).
+        case studioPanelState
         /// The source map's vanish step at a Studio refresh (ST-A11d PR B), only
         /// while `IKKOKU_STUDIO_MAP_VANISH` is on: with it off the step returns
         /// before this phase and records nothing.
@@ -741,6 +744,7 @@ final class PerfTrace {
                 "selectKeys": configuration.selectKeys.map { $0.map { Int($0) } as Any } ?? NSNull(),
                 "inspectorTab": configuration.inspectorTab.map { $0 as Any } ?? NSNull(),
                 "keepMounted": StudioInspectorMounting.current.rawValue,
+                "panelState": StudioPanelStateMode.current.rawValue,
             ] as [String: Any],
             "build": PerfTrace.buildDescription(),
             "machine": PerfTrace.machineDescription(device: device),
