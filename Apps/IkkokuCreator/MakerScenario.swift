@@ -42,6 +42,9 @@ struct MakerScenario: Decodable {
         let selection: SelectionValue?
         let expectFailure: Bool?, unchanged: Bool?
         let resourcesAtMost: String?
+        /// reimport only: sample the process footprint around the import
+        /// (#192-C timing). Lane scenarios leave it unset and sample nothing.
+        let footprint: Bool?
         /// Any step: the decoded-rig hits and misses of the head selection it
         /// committed (`SourceSelectionTiming.headRigReuse`).
         let rigReuse: RigReuseValue?
@@ -49,7 +52,12 @@ struct MakerScenario: Decodable {
         /// import's until a reimport or reload records its own (CXM1).
         let initialLoad: InitialLoadValue?
         struct RigReuseValue: Decodable { let hits: Int, misses: Int }
-        struct InitialLoadValue: Decodable { let geometry: String?, referenceLoad: String?, cachePublication: String? }
+        struct InitialLoadValue: Decodable {
+            let geometry: String?, referenceLoad: String?, cachePublication: String?
+            /// The staged seed's rigs carried from the replaced session and
+            /// decoded anew (#192-C, `stagedRigReuse`).
+            let carried: Int?, misses: Int?
+        }
         struct SelectionValue: Decodable {
             let kind: String, slot: Int, sourceID: Int
             let coordinate: Int?
@@ -81,7 +89,8 @@ struct MakerScenario: Decodable {
 
         private enum CodingKeys: String, CodingKey {
             case op, on, index, value, id, rgba, path, coordinate, face, body, color,
-                 colorApplied, diagnosticContains, selection, expectFailure, unchanged, resourcesAtMost, rigReuse, initialLoad
+                 colorApplied, diagnosticContains, selection, expectFailure, unchanged, resourcesAtMost, rigReuse, initialLoad,
+                 footprint
         }
 
         init(from decoder: Decoder) throws {
@@ -109,6 +118,7 @@ struct MakerScenario: Decodable {
             resourcesAtMost = try c.decodeIfPresent(String.self, forKey: .resourcesAtMost)
             rigReuse = try c.decodeIfPresent(RigReuseValue.self, forKey: .rigReuse)
             initialLoad = try c.decodeIfPresent(InitialLoadValue.self, forKey: .initialLoad)
+            footprint = try c.decodeIfPresent(Bool.self, forKey: .footprint)
         }
     }
 
@@ -126,6 +136,7 @@ struct MakerScenario: Decodable {
             let mainActorHeartbeatCount: Int?
             let resourcesBefore: ResourceStore.Statistics?
             let resources: ResourceStore.Statistics?
+            let footprint: MakerScenarioFootprint.Sample?
         }
         let steps: [StepResult]
         let passed: Int
@@ -215,7 +226,8 @@ struct MakerScenario: Decodable {
         var resourceSnapshots: [String: ResourceStore.Statistics] = [:]
         @discardableResult
         func record(_ step: Step, _ ok: Bool, _ detail: String,
-                    initialLoad: MakerModel.SourceInitialLoadTiming? = nil) -> Bool {
+                    initialLoad: MakerModel.SourceInitialLoadTiming? = nil,
+                    footprint: MakerScenarioFootprint.Sample? = nil) -> Bool {
             var problems: [String] = []
             if let expected = step.rigReuse {
                 if let sample = maker.sourceSelectionTiming?.headRigReuse {
@@ -232,6 +244,11 @@ struct MakerScenario: Decodable {
                     where wanted != nil && wanted != actual {
                         problems.append("initialLoad \(name) \(actual), expected \(wanted!)")
                     }
+                    for (name, actual, wanted) in [("carried", sample.stagedRigReuse?.carried, expected.carried),
+                                                   ("misses", sample.stagedRigReuse?.misses, expected.misses)]
+                    where wanted != nil && wanted != actual {
+                        problems.append("initialLoad \(name) \(actual.map(String.init) ?? "none"), expected \(wanted!)")
+                    }
                 } else { problems.append("initialLoad: no sample") }
             }
             let passed = ok && problems.isEmpty
@@ -243,7 +260,8 @@ struct MakerScenario: Decodable {
                 mainActorMaximumGapMilliseconds: heartbeat?.maximumGapMilliseconds,
                 mainActorHeartbeatCount: heartbeat?.count,
                 resourcesBefore: resourcesBefore,
-                resources: ["selectAsset", "captureResources", "beginSelection", "finishSelection"].contains(step.op) || step.resourcesAtMost != nil || resourcesBefore != nil ? maker.host.renderer.resources.statistics() : nil))
+                resources: ["selectAsset", "captureResources", "beginSelection", "finishSelection"].contains(step.op) || step.resourcesAtMost != nil || resourcesBefore != nil ? maker.host.renderer.resources.statistics() : nil,
+                footprint: footprint))
             return passed
         }
         func insideLocal(_ path: String) -> URL? {
@@ -547,15 +565,19 @@ struct MakerScenario: Decodable {
                 let beforeResources = expectsFailure ? maker.host.renderer.resources.statistics() : nil
                 let hadInitialSample = maker.sourceInitialLoadTiming != nil
                 resourcesBefore = beforeResources
+                let sampler = step.footprint == true ? MakerScenarioFootprint() : nil
+                defer { _ = sampler?.finish() }
                 do {
                     try maker.importSourceCardSettings(url: url, recordInitialLoad: true)
+                    let footprint = sampler?.finish()
                     if expectsFailure {
                         record(step, false, "expected-failure reimport unexpectedly succeeded; stopping",
                                initialLoad: maker.sourceInitialLoadTiming)
                         break scenarioLoop
                     }
                     heldCardPath = url.path
-                    record(step, true, "reimported \(path): \(maker.status)", initialLoad: maker.sourceInitialLoadTiming)
+                    record(step, true, "reimported \(path): \(maker.status)", initialLoad: maker.sourceInitialLoadTiming,
+                           footprint: footprint)
                 } catch {
                     guard expectsFailure, let before, let beforeFrame, let beforeClock, let beforeResources else {
                         record(step, false, "reimport failed, stopping: \(error)")
@@ -715,5 +737,57 @@ private final class MakerSelectionHeartbeat {
             do { try await Task.sleep(for: .milliseconds(1)) } catch { return }
             sample()
         }
+    }
+}
+
+/// The process footprint around one scenario reimport (#192-C timing):
+/// `phys_footprint` before, sampled every millisecond on a thread of its own
+/// while the import runs on the main thread, and after it returns, plus the
+/// kernel's lifetime peak before and after, which catches a spike shorter
+/// than the sampling interval when it sets a new process maximum.
+nonisolated final class MakerScenarioFootprint: @unchecked Sendable {
+    nonisolated struct Sample: Encodable, Sendable {
+        let beforeBytes: UInt64, peakBytes: UInt64, afterBytes: UInt64
+        let lifetimePeakBeforeBytes: Int64, lifetimePeakAfterBytes: Int64
+        let samples: Int
+    }
+    private let lock = NSLock()
+    private var running = true, peak: UInt64 = 0, count = 0, result: Sample?
+    private let before: (UInt64, Int64), done = DispatchSemaphore(value: 0)
+    init() {
+        before = Self.read()
+        peak = before.0
+        let thread = Thread { [self] in
+            while lock.withLock({ running }) {
+                let now = Self.read().0
+                lock.withLock { peak = max(peak, now); count += 1 }
+                usleep(1000)
+            }
+            done.signal()
+        }
+        thread.qualityOfService = .userInitiated
+        thread.start()
+    }
+    /// Stops the sampler (once) and returns the sample.
+    func finish() -> Sample {
+        if let result = lock.withLock({ result }) { return result }
+        lock.withLock { running = false }
+        done.wait()
+        let after = Self.read()
+        let sample = lock.withLock {
+            Sample(beforeBytes: before.0, peakBytes: max(peak, after.0), afterBytes: after.0,
+                   lifetimePeakBeforeBytes: before.1, lifetimePeakAfterBytes: after.1, samples: count)
+        }
+        lock.withLock { result = sample }
+        return sample
+    }
+    /// `phys_footprint` and `ledger_phys_footprint_peak` (TASK_VM_INFO).
+    private static func read() -> (UInt64, Int64) {
+        var info = task_vm_info_data_t()
+        var count = mach_msg_type_number_t(MemoryLayout<task_vm_info_data_t>.size / MemoryLayout<natural_t>.size)
+        let result = withUnsafeMutablePointer(to: &info) {
+            $0.withMemoryRebound(to: integer_t.self, capacity: Int(count)) { task_info(mach_task_self_, task_flavor_t(TASK_VM_INFO), $0, &count) }
+        }
+        return result == KERN_SUCCESS ? (info.phys_footprint, info.ledger_phys_footprint_peak) : (0, 0)
     }
 }

@@ -6533,8 +6533,10 @@ Selection rows show API time with rig hits/misses.
   lower.
 - **Saving.** The import saving is mostly the skipped reference-model decode
   (nine files, 32.16 MB). The seed's byte hashing adds about 13 ms back.
-  Reimports over a cached session decline the seed, so they skip both the
-  hashing and the reference decode.
+  Reimports over a cached session declined the seed, so they skipped both the
+  hashing and the reference decode. The
+  [reimport rig carry](character/maker-assets.md#reimport-rig-carry-192-c-2026-11-01)
+  now seeds them from the replaced session's rigs instead.
 
 These numbers come from one machine, two cards and a non-compositing display.
 They show no FPS, live-animation or broad hardware result. Raw reports,
@@ -6584,3 +6586,132 @@ Median (min–max), n = 4 per cell.
 
 Raw reports and snapshots stay under
 `.local/cxm1-maker-rig-seed/timing/idle-composited-1824/`.
+
+## Maker reimport rig carry (#192-C, 2026-11-01)
+
+[PR #331](https://github.com/grabbiel/ikkoku/pull/331) makes a card reimport
+over a cached Maker session carry that session's decoded rigs. Before, the
+reimport declined the seed and decoded all ten rigs again. The change is
+described in
+[maker-assets.md](character/maker-assets.md#reimport-rig-carry-192-c-2026-11-01).
+
+**Setup.** Release base is main `69a63513` plus the scenario footprint harness
+(binary `824ddc8a…`). Head `9bd9795c` is the same plus the carry (binary
+`aaa32cf6…`). Both arms therefore run the same 1 ms footprint sampler. The run
+took place in a coordinator composited window. Each sex used its head-0
+scenario card, in ABBA order per sex for two cycles. Each unit is two fresh
+processes:
+
+1. A `maker-idle` perf trace.
+2. A reimport scenario: export the card, then reimport it five times (the
+   fourth, R4, with the footprint sampler off). Then select head 200 and
+   head 0, export again and reimport that card (R6).
+
+Around each sampled reimport, the sampler reads `phys_footprint` every 1 ms.
+
+**Validity.** Each process has `vm.loadavg` and top-5 CPU snapshots before and
+after it. A unit is invalid when an outside process is over 20% in the
+snapshots just before or just after the scenario process. These are noted
+instead (ranges in the 16 valid units):
+
+- plugin-container (the user's Firefox): 50.9–62.5% in every unit. ABBA
+  balances it.
+- Claude Helper (the session host): 23.4–54.8% in eight units.
+- WindowServer: 22.9–49.7%, induced by the window's own presented frames.
+- Launch-induced BiomeAgent and syspolicyd, allowed up to 30%: 20.1–23.9%.
+  launchd and runningboardd stayed lower.
+
+Nine of the 16 first attempts were invalid:
+
+| Slot | Cause |
+| --- | --- |
+| cycle 1 female base (slot 4) | BiomeAgent 30.4% |
+| cycle 1 male head (slots 1 and 4) | corespotlightd 102–151% |
+| cycle 2 female base (slot 2) | spotlightknowledged.updater 54%, ecosystemanalyticsd 49%, WD Discovery Helper 44% |
+| cycle 2 female head (slot 4) | mediaanalysisd 90% |
+| cycle 2 male base (slot 1) | mediaanalysisd 99–103% |
+| cycle 2 male head (slots 2 and 3) | mediaanalysisd 88–123% |
+| cycle 2 male base (slot 4) | mediaanalysisd 57–83%, duetexpertd 66% |
+
+Each rerun kept its slot and started only after corespotlightd and
+mediaanalysisd had stayed under 20% for 10 s. The reruns ran about two hours
+after the first pass. Eight were valid on the first attempt. Cycle 2 male head
+slot 2 needed a second attempt: corespotlightd read 327–371% during the first.
+No slot is missing. Load average was 2.8–6.5 in the first pass and 2.5–4.8 in
+the reruns.
+
+**Display.** 1920×1080 at scale 2 and 120 Hz, with the window composited. The
+female idle traces presented 30 frames/s, the male ones 1.8–9.8 frames/s in
+both arms. The scenario rows are wall-clock intervals on the main thread or
+the preparation worker, so they do not depend on presentation.
+
+Median (min–max), n = 4 valid units per cell. Reimport rows are
+`importMilliseconds`.
+
+| Metric | Female base | Female head | Male base | Male head |
+| --- | --- | --- | --- | --- |
+| Same-card reimport R1 (ms) | 669.1 (641.6–692.3) | 138.5 (132.6–139.6) | 666.5 (640.0–683.7) | 103.4 (102.7–106.5) |
+| Reimports R1, R3, R5, R6 (ms) | 665.7 (634.9–692.3) | 138.5 (130.5–141.8) | 670.8 (640.0–691.0) | 104.0 (101.7–107.1) |
+| Reimport R2 (ms) | 680.4 (655.5–694.4) | 139.2 (131.9–147.3) | 682.1 (656.2–704.2) | 105.5 (104.0–107.2) |
+| Reimport R4, sampler off (ms) | 667.9 (642.8–686.4) | 137.6 (131.9–138.5) | 679.3 (645.4–701.3) | 102.7 (102.3–105.3) |
+| Head 200 after the reimports (ms) | 738.3 (723.3–743.2), 0/10 | 432.6 (422.7–443.0), 9/1 | 775.3 (769.0–782.5), 0/10 | 430.6 (427.7–431.5), 9/1 |
+| Then head 0 (ms) | 335.7 (330.4–339.4), 9/1 | 104.7 (104.0–106.7), 10/0 | 336.4 (331.2–336.9), 9/1 | 106.1 (105.3–107.1), 10/0 |
+| Startup import, scenario process (ms) | 722.1 (702.6–750.4) | 745.7 (697.2–750.9) | 802.4 (745.8–830.8) | 750.4 (731.0–756.8) |
+| Transient peak, peak − after (MiB) | 15.2 (1.6–19.9) | 14.0 (1.5–19.0) | 14.8 (0.9–20.6) | 14.9 (2.6–20.9) |
+| Peak − before (MiB) | 61.3 (39.9–79.2) | 61.4 (47.1–77.8) | 61.1 (42.4–82.4) | 63.9 (50.6–76.2) |
+| Held, after − before (MiB) | 43.4 (24.6–75.2) | 43.6 (33.2–69.1) | 44.8 (24.4–73.5) | 43.0 (35.0–70.0) |
+| Footprint after R6 (MiB) | 960.1 (952.4–1,002.1) | 944.1 (941.0–949.8) | 1,016.7 (998.0–1,030.1) | 984.7 (974.6–986.6) |
+| Idle trace: card import (ms) | 733.6 (718.4–743.7) | 740.1 (689.6–750.2) | 773.2 (746.3–804.1) | 744.2 (737.6–764.2) |
+| Idle trace: `firstDraw` (s) | 2.059 (2.023–2.102) | 2.038 (1.899–2.106) | 2.086 (2.011–2.130) | 2.008 (1.942–2.059) |
+| Idle trace: main busy (ms/s) | 44.7 (38.4–64.2) | 45.2 (41.5–71.2) | 7.3 (4.3–13.8) | 8.7 (6.5–11.3) |
+| Idle trace: peak footprint (MiB) | 815.7 (813.1–816.8) | 797.3 (796.0–799.9) | 857.5 (856.1–859.8) | 857.9 (853.3–858.3) |
+
+What each arm does:
+
+- **R1, R3, R5 and R6.** Base declines the seed (`emptyLedgerFull`) and still
+  decodes all ten rigs for the geometry. Head carries all ten (10 / 0).
+- **R2 and R4.** Base seeds 0 / 10, hashing and decoding every rig. Head again
+  carries ten.
+- **Selection rows** show rig hits / misses.
+- **Footprint rows** pool the five sampled reimports per unit.
+
+As a cross-check, the medians over all 16 first attempts (flagged units
+included) are: R1 682.2 → 138.5 ms (female) and 681.3 → 105.8 ms (male), and
+head 200 737.6 → 432.6 ms and 777.5 → 431.3 ms.
+
+**Reading.**
+
+- **Reimport.** A same-card reimport is 531 ms (79.3%) faster for the female
+  card and 563 ms (84.5%) for the male. Every head reimport carries all ten
+  rigs, decodes none and hashes ten.
+- **Selections after the reimports.** Head 200 drops by 306 ms (female) and
+  345 ms (male), because the session still holds nine of its ten rigs. The
+  following head 0 drops by 231 ms in both, reusing all ten.
+- **Sampler control.** In head, R4 with the sampler off reads 137.6 / 102.7 ms,
+  against 138.5 / 104.0 ms for the sampled R1, R3, R5 and R6. That is within the
+  spread. In base, R4 compares with R2, since both seed 0 / 10: 667.9 vs
+  680.4 ms (female) and 679.3 vs 682.1 ms (male). The 0.4–1.8% gap could come
+  from the sampler or from the step's position. Either way it is under 3% of
+  the difference between the arms.
+- **Footprint.** The transient peak (peak − after) is not lower in head. In
+  both arms each reimport holds 43–45 MiB more than before it
+  ([#332](https://github.com/grabbiel/ikkoku/issues/332)), and that dominates
+  the peak − before rise. After R6, head ends 16 MiB (female) and 32 MiB (male)
+  lower. The carried rigs total about 15 MiB of logical charge, small against
+  the import's other allocations.
+- **Startup and idle.** These paths are unchanged: an empty session seeds ten
+  rigs in both arms. The startup-import medians differ in opposite directions,
+  +24 ms (female) and −52 ms (male). In the first pass, the male gap was mostly
+  in `rigDecode` (about 50 ms), which #192-C does not touch. Idle main-thread time and the idle
+  peak footprint also move in mixed directions. None of these differences is
+  attributed to the change.
+- **Reruns.** The reruns ran on a quieter machine. Base reruns read 20–45 ms
+  faster than the first-pass base units, and head reruns about 2 ms faster.
+  The male head cell is all reruns; every other cell mixes both passes. So
+  the valid-only base medians sit 13–15 ms below the all-16 ones, and the head
+  medians move by at most 2.4 ms. This narrows the measured gain slightly.
+
+These numbers come from one machine, two cards and n = 4 per cell, with live
+animation off in the scenario. They show no FPS or live-animation result. Raw
+reports, snapshots, the scripts and the summaries stay under
+`.local/stt03k-maker-reimport/timing/run1/`.
