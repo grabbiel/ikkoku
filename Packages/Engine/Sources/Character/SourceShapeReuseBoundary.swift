@@ -213,6 +213,50 @@ final class SourceShapeReuseSnapshot: Sendable {
         snapshot = candidate.snapshot
         return true
     }
+
+    /// #192: an import's prospective session. The import reads its assembly's
+    /// shape contract anyway; decoding it through `seededDecode` stages that
+    /// contract as the new session's only entry, so a later return to the
+    /// imported head hits instead of decoding it again. Nothing carries over
+    /// from the replaced session. The key is the contract's SHA-256 and byte
+    /// count, so a changed contract file or another card's contract misses.
+    /// Creating one changes nothing until `commitReplacement`.
+    public struct Replacement: Sendable {
+        let admission: SourceShapeReuseAdmission
+        /// The session this replaces; a later reset or commit makes it stale.
+        let expected: SourceShapeReuseEpoch
+        let epoch: SourceShapeReuseEpoch
+    }
+    public func prospectiveReplacement() -> Replacement { .init(admission: admission, expected: epoch, epoch: .init()) }
+
+    /// Decodes `data`, the import's own bounded read of the contract, and
+    /// stages it for `replacement`. The SHA-256 of `data` is the only added
+    /// work. A full ledger (the replaced session still holds its permits)
+    /// stages an empty seed, as a capacity bypass, and the contract still
+    /// decodes. A throw stages nothing.
+    public nonisolated static func seededDecode(_ data: Data, for replacement: Replacement,
+                                                timings: SourceMakerPreparationTimings? = nil) throws
+        -> (contract: SourceShapeContract, candidate: Candidate, sample: Sample) {
+        let worker = SourceShapeReuseWorker(Input(admission: replacement.admission, epoch: replacement.epoch, snapshot: nil))
+        let contract = try worker.decode(data, timings: timings)
+        let (candidate, sample) = worker.finish()
+        return (contract, candidate, sample)
+    }
+
+    /// Publishes the import's seed (nil publishes an empty session) only
+    /// while the session `replacement` replaces is still current. A stale,
+    /// foreign or replayed replacement, or a candidate of another epoch,
+    /// changes nothing and returns false.
+    @discardableResult public func commitReplacement(_ replacement: Replacement, candidate: Candidate?) -> Bool {
+        guard replacement.admission === admission, replacement.expected == epoch else { return false }
+        if let candidate {
+            guard candidate.admission === admission, candidate.epoch == replacement.epoch else { return false }
+        }
+        epoch = replacement.epoch
+        // Outside the ledger lock, as in `commit`.
+        snapshot = candidate?.snapshot
+        return true
+    }
 }
 
 /// Synchronous worker-local adapter, never shared with the owner. Call only with
