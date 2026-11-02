@@ -135,7 +135,7 @@ emits the asset's parts like a native `.item` (same `order`, bounds and
 matrix, which follows the Studio scale rule (items keep their own saved scale).
 
 The import summary reports `Items rendered from the converted catalog: N;
-unmapped keys: …`. A headless run importing `koikatu_cs0002591.png` with the
+unmapped keys: …`. A headless run importing source scene `029f0b1d` with the
 private catalog renders its 19 cube (0/0/1) props at their saved transforms and
 saved record colors (every one of the 19 records `color[0]` as the same
 0.875 grey at alpha 1) with no unmapped keys, and original-scene export of that
@@ -170,7 +170,7 @@ so the frame builder never re-reads the scene file.
 
 A part whose material exports no color slot — a partial or multi-channel
 `_ColorMask` selection, where no single record color can be the tint — keeps
-its exported material untouched rather than guessing. In `koikatu_cs0002591.png`
+its exported material untouched rather than guessing. In source scene `029f0b1d`
 that path is provably harmless: both exported basic shapes mask pure red, so
 the exported factor is white and only the record color changes pixels. A
 headless A/B of the same scene with and without those extras (captures are

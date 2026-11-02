@@ -3853,7 +3853,7 @@ The validation capture then draws only the nose, so the character gate fails by
 construction. The asset-backed gaps are closed below; natively composed textures
 remain a separate step.
 
-**Measurement: Studio scene.** `koikatu_cs0002591.png`
+**Measurement: Studio scene.** Source scene `029f0b1d`
 (`IKKOKU_STUDIO_SCENARIO_SCENE`) was captured with `IKKOKU_LIVE_SOURCE_SHADERS=1`
 and the inputs above, without look settings. Six source characters loaded with
 no crash. 6 slots draw live (`cf_O_noseline` per character); the renderer
@@ -3909,7 +3909,7 @@ repeated after each merge of `main`:
 
 Each case was launched with only its own `IKKOKU_*` variables:
 
-- `koikatu_cs0002591.png`: `a0dc50f4…`. From `8d83f01` on it is `caed346e…`
+- Source scene `029f0b1d`: `a0dc50f4…`. From `8d83f01` on it is `caed346e…`
   on both sides, because #125 applies the scene's clothes state.
 - the rig and fixture card: `9d973e21…`;
 - `synthetic-current.png`: `6837cd63…`. Since #133, with a Maker library
@@ -4278,7 +4278,7 @@ launches:
 
 | Case | Capture SHA-256 | CPU encode p50 base / head | GPU p50 base / head |
 | --- | --- | ---: | ---: |
-| `koikatu_cs0002591.png` (`IKKOKU_SOURCE_SCENE`, `IKKOKU_BENCHMARK_OUTPUT`) | `cac034c1…` | 0.7284 / 0.7329 ms | 1.2344 / 1.2411 ms |
+| source scene `029f0b1d` (`IKKOKU_SOURCE_SCENE`, `IKKOKU_BENCHMARK_OUTPUT`) | `cac034c1…` | 0.7284 / 0.7329 ms | 1.2344 / 1.2411 ms |
 | fixture card, Maker app capture (`IKKOKU_BENCHMARK_OUTPUT`) | `26742344…` | 0.1799 / 0.1698 ms | 0.4636 / 0.4614 ms |
 | rig and fixture card (`IKKOKU_CAPTURE_RIG`, no benchmark output) | `9d973e21…` | — | — |
 
@@ -4542,7 +4542,7 @@ launches:
 
 | Case | Capture SHA-256 | CPU encode p50 base / head | GPU p50 base / head |
 | --- | --- | ---: | ---: |
-| `koikatu_cs0002591.png` (`IKKOKU_SOURCE_SCENE`, `IKKOKU_BENCHMARK_OUTPUT`) | `cac034c1…` | 0.7282 / 0.7536 ms | 1.2702 / 1.2719 ms |
+| source scene `029f0b1d` (`IKKOKU_SOURCE_SCENE`, `IKKOKU_BENCHMARK_OUTPUT`) | `cac034c1…` | 0.7282 / 0.7536 ms | 1.2702 / 1.2719 ms |
 | fixture card, Maker app capture (`IKKOKU_BENCHMARK_OUTPUT`) | `26742344…` | 0.1765 / 0.1763 ms | 0.4643 / 0.4567 ms |
 | rig and fixture card (`IKKOKU_CAPTURE_RIG`, no benchmark output) | `9d973e21…` | — | — |
 
@@ -6272,7 +6272,7 @@ a gate.
 **App acceptance.** Release apps: base main `0e6181a` (binary `a659f515…`) and
 the candidate built at `4b99cea` (`e29baf9c…`; later commits are docs only), both
 from the same tracked `Assets` tree. Each default-OFF capture is byte-identical
-between base and candidate: the Studio source scene (`koikatu_cs0002591`), the
+between base and candidate: the Studio source scene (`029f0b1d`), the
 native Studio capture and the Maker synthetic card, each with live opt-in OFF and
 ON (the ON runs add the live inputs, this store and contract). None of those
 reaches a face composite: the source-scene characters fall back first on the

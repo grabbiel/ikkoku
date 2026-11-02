@@ -149,7 +149,7 @@ The app's Delete and Set Parent commands (`deleteSelection`, `setParent`) are un
   The full Engine suite with the shared fixture map ran 917 tests, and 915 passed. One failure is `sourceDynamicsOriginalHairMatchesIndependentOracleWhenRequested`: it reads `.local/reverse` relative to the checkout and passes once the worktree links it. The other is `liveSourceShadersMeetTheControlledOriginalFrameGates`, whose 6 expectations fail identically on main `aee4287` (a store-manifest fixture mismatch, not part of this slice).
 - **Lanes.** Five `studio-scenarios` checks call the same `StudioModel` methods the UI uses. Each includes negative controls (`assertRejected`) or an export that is meant to fail (`exportRejected`):
   - `topology-delete.json` (scene-x): delete folder 1, undo and redo, export and reimport. Expects root `[0]`, keys 1 and 2 absent, and no active camera.
-  - `topology-reparent.json` (koikatu_cs0002591): item 623 moves from folder 622 to folder 962, character 65 from the root to folder 626, and item 1129 from folder 962 to the root; folder 1298 is deleted with its character and items. Asserts the child lists and that world pose holds within 1e-4 m and 0.01°, through 4 undos and 4 redos. After export and reimport it holds within 5e-4 m and 0.05°.
+  - `topology-reparent.json` (source scene `029f0b1d`): item 623 moves from folder 622 to folder 962, character 65 from the root to folder 626, and item 1129 from folder 962 to the root; folder 1298 is deleted with its character and items. Asserts the child lists and that world pose holds within 1e-4 m and 0.01°, through 4 undos and 4 redos. After export and reimport it holds within 5e-4 m and 0.05°.
   - `reload-save-topology.json` and `reload-load-topology.json` (scene-x): camera 2 moves to the root and folder 1 is deleted, then native save, a fresh process, load, export and reimport. Expects root `[0, 2]` with camera 2 still looked through.
   - `topology-refused.json` (mirrored-camera scene): moving item children and moving under items is refused with its reason and writes no file; deleting camera 3 then exports and reimports.
 
@@ -283,7 +283,7 @@ Our reader keeps every nested light, which is what an install with the fix loads
   - a copied folder that holds a light (3);
   - lights under a route, a character's accessory point and an item, each copied beside its original (7).
 
-  Deleting a light before adding two, and a three-light source that takes only a new folder, export under both policies. With the policy check removed, the test fails on its first unlimited case. The `studio-scenario-light-limit` lane check (`light-limit.json`, koikatu_cs0002591, which has no lights) adds a point, a spot and a directional light. With the setting off the export is refused and writes no file. With it on the export writes the three lights, the status names them, and the reimport has keys 113, 114 and 115 after the eight source roots. A negative control proves the child-order assert fails without key 115.
+  Deleting a light before adding two, and a three-light source that takes only a new folder, export under both policies. With the policy check removed, the test fails on its first unlimited case. The `studio-scenario-light-limit` lane check (`light-limit.json`, source scene `029f0b1d`, which has no lights) adds a point, a spot and a directional light. With the setting off the export is refused and writes no file. With it on the export writes the three lights, the status names them, and the reimport has keys 113, 114 and 115 after the eight source roots. A negative control proves the child-order assert fails without key 115.
 
 ### Evidence
 
@@ -300,7 +300,7 @@ Our reader keeps every nested light, which is what an install with the fix loads
 
   `SourceSceneExportValidationTests` adds the app translation: a document with a copy subtree, a new folder and a moved copy stages keys `[0, 4, 6, 7, 8]` and exports roots `[10, 20, 0, 6, 8]`. The full Engine suite (`swift test --package-path Packages/Engine` with every fixture of the shared map, after merging main at 872d2ec) ran 942 tests. 12 were skipped: opt-in timing probes and fixtures that are not present. 1 failed, the pre-existing `liveSourceShadersMeetTheControlledOriginalFrameGates`, whose local store fixture has 52 entries where the test expects 62.
 - **Lanes.** Four new `studio-scenarios` checks drive the same `StudioModel` methods the UI uses, with negative controls:
-  - `topology-duplicate.json` (koikatu_cs0002591): Duplicate folder 962 (a character and three items), item 1540 and item 1127, then Add Folder, Add Camera and Add Light (point). It asserts the tree labels, each copy's world position against its original within 1e-4 m and 0.01°, and six undos and redos. After export and reimport the roots are `[622, 65, 962, 626, 1130, 794, 1298, 1540, 113, 334, 336, 337, 338]`, copy 113 holds `[114, 331, 332, 333]` and folder 962 holds `[963, 1127, 1128, 1129, 335]`, the keys an independent Python allocation over the source file predicts. Every copy and new record is within 5e-4 m and 0.05° of its pre-export capture. Two `assertRejected` controls (a wrong position source and a wrong child order) must fail.
+  - `topology-duplicate.json` (source scene `029f0b1d`): Duplicate folder 962 (a character and three items), item 1540 and item 1127, then Add Folder, Add Camera and Add Light (point). It asserts the tree labels, each copy's world position against its original within 1e-4 m and 0.01°, and six undos and redos. After export and reimport the roots are `[622, 65, 962, 626, 1130, 794, 1298, 1540, 113, 334, 336, 337, 338]`, copy 113 holds `[114, 331, 332, 333]` and folder 962 holds `[963, 1127, 1128, 1129, 335]`, the keys an independent Python allocation over the source file predicts. Every copy and new record is within 5e-4 m and 0.05° of its pre-export capture. Two `assertRejected` controls (a wrong position source and a wrong child order) must fail.
   - `topology-insert-refused.json` (mirrored-camera scene): a new character, and a new folder moved under an item, are each refused with their reason and write no file. Duplicating camera 2 inside item 0 hands it the view, and the reimport has item 0 `[2, 4]` with camera 4 looked through.
   - `reload-save-duplicate.json` and `reload-load-duplicate.json` (scene-x): duplicate camera 2, undo and redo, add a folder and save natively. A fresh process loads it with three camera cache entries after one rehydration, switches to the copy, exports and reimports root `[0, 1, 4]`, folder 1 `[2, 3]`, camera 3 looked through at camera 2's world position.
 
@@ -315,7 +315,7 @@ Our reader keeps every nested light, which is what an install with the fix loads
   The parallels.log errno-24 count was 0 before and after the run. The private root was removed, and no game process was left.
 - **Performance.** Export costs did not change. Duplicating a character in the app stalls the main thread for about 0.6 s per character. An item copy costs about 1.6 ms.
 
-  The export was timed with `SourceSceneTopologyPerformanceTests`, in Release (`swift test -c release`) on koikatu_cs0002591, with one test per process and 60 calls each:
+  The export was timed with `SourceSceneTopologyPerformanceTests`, in Release (`swift test -c release`) on source scene `029f0b1d`, with one test per process and 60 calls each:
 
   | Call (median / p90 ms) | main d6b61a2 | this branch |
   | --- | --- | --- |
@@ -1065,7 +1065,7 @@ The refusal is the engine's message, which names each plug-in and its reason. Th
   - **Card links.** No installed scene's cards name KKAnimationController links, as in survey 2.
 
 - **Performance** (Release, `SourceScenePluginDataPerformanceTests`, 60 calls each, median; the tables, both builds and the method are in [performance](../performance.md#st-t03i-scene-plug-in-data-rewrites)). The numbers come from the second change's quiet window (2026-10-26, 07:19), with the rewrites and the lazy card hash.
-  - **Showoff scene.** `koikatu_cs0002591` has no plug-in data. A one-transform export takes 4.97 ms and a subtree deletion 4.80 ms. The plug-in step takes 0.049 and 0.044 ms of that: one search of the written bytes for KKAnimationController data, then a return.
+  - **Showoff scene.** Source scene `029f0b1d` has no plug-in data. A one-transform export takes 4.97 ms and a subtree deletion 4.80 ms. The plug-in step takes 0.049 and 0.044 ms of that: one search of the written bytes for KKAnimationController data, then a return.
   - **Fix found by the probe (first change).** Before that early exit, the step built its edit model for every export: 0.85 ms in Debug, now 0.05 ms.
   - **Phase-A fixture.** A delete with the Sideloader rewrite exports in 0.61 ms and a move in 0.67 ms. The plug-in step takes 0.040 and 0.047 ms.
   - **Phase-B fixture** (every plug-in's entries). A light delete exports in 0.66 ms and a move in 0.70 ms. The plug-in step takes 0.025 and 0.059 ms. An item delete, which rewrites KKPE and MaterialEditor, exports in 0.65 ms with a 0.072 ms plug-in step.
@@ -1361,7 +1361,7 @@ native load was stale: undo after an outfit switch missed the loaded capture by
 138,276 pixels.
 
 Evidence, 2026-10-17 (headless, no VM): the complete `studio-scenarios` lane
-passed 37/37 with `--strict` and 0 skipped. Source scene `koikatu_cs0002591.png`
+passed 37/37 with `--strict` and 0 skipped. Source scene `029f0b1d`
 has SHA-256 `029f0b1d248ba71158b08b8d237be14810819d411d62f529f77f3a612a8bea04`
 (595,127 bytes). Character key 65 has saved outfit 0 with `backCoordinateType`
 0; key 0 also saves outfit 0. Both cards carry all seven coordinates.
@@ -1405,7 +1405,7 @@ The clothes state and accessory visibility that this slice left unconsumed
 
 Reviewed 2026-10-22. The defect this slice fixes: the embedded card's
 `Status.clothesState` and `showAccessory` were never read, so source character
-key 0 of `koikatu_cs0002591.png` rendered clothed, although its card saves
+key 0 of source scene `029f0b1d` rendered clothed, although its card saves
 `clothesState` = `c4 09 03 03 03 03 03 03 03 03 03` (all nine kinds off,
 `shoesType` 1, every accessory flag true). The pre-fix lane build showed its
 reference top, reference bottom and converted outdoor shoes drawn.
