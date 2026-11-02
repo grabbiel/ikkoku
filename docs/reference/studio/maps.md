@@ -1138,6 +1138,8 @@ In the slice-4 phase the player hid nothing from eight outside cameras, and `ove
 - each collider on layer 11 that is enabled and active for some sun type, with its role, sun-type keys, map-option flag and an engine-basis matrix. A mapRoot collider's matrix includes the Map node's authored scale, so the app's rigid map transform alone places it;
 - each shape as points in object space: a box's 8 corners; a convex `MeshCollider`'s hull points. Concave mesh colliders, spheres and capsules are listed as not modelled; none of the 31 maps' rows names a sphere or capsule.
 
+A list that no bundle of the folder holds loads no rows, as `LoadAllListText` returns no text: map 29's row names `map_col_50`, which none of the 16 installed `h/list` bundles holds. Its export has no vanish, and its provenance records the absent list. A folder with no bundles is refused.
+
 Parts are split by the set of rows that hide their renderers (`ikkokuMap.vanishRows`, mesh suffix `_v<n>`), so a row hides exactly its renderers. The hull points are every vertex that is farthest in some direction of a level-6 icosphere. On the 12 convex meshes the rows name (460–821 vertices), level 5 already keeps 24–74 points and leaves the dropped vertices within 0.8 mm of the reduced hull (`tools/hull_reduce.py`). PhysX's 255-vertex cook limit is not reached. A first model, the k-DOP of 162 support planes, reached up to 5.8 cm past the hull, the size of the capsule's radius (`tools/kdop_excess.py`), and was dropped.
 
 The split adds draws on furniture maps (test exports, triangles and every per-key total unchanged):

@@ -2222,6 +2222,8 @@ def export(bundles, scene, map_no, output, max_texture=None, builtin_resources=N
     if vanish_record is not None:
         provenance["vanish"] = vanish_record
         provenance["conversion"]["merge"] += "; split by the vanish rows a renderer belongs to (ikkokuMap.vanishRows)"
+    elif vanish is not None:
+        provenance["vanish"] = {"source": vanish["source"], "rows": 0}
     split_groups = sum(1 for parts in split_from.values() if parts > 1)
     if split_groups:
         provenance["conversion"]["merge"] += (f"; {split_groups} split group(s) carry ikkokuMap.join"
@@ -2729,10 +2731,14 @@ def main():
             if not (args.vanish_folder and args.vanish_file):
                 raise SystemExit("--vanish-folder and --vanish-file go together")
             bundles = sorted(args.vanish_folder.glob("*.unity3d"))
+            if not bundles:
+                raise SystemExit(f"no bundle in {args.vanish_folder}")
             text, held = vanish_list_text(bundles, args.vanish_file)
-            if not held:
-                raise SystemExit(f"no bundle in {args.vanish_folder} holds {args.vanish_file}")
             vanish = {"text": text, "source": {"file": args.vanish_file, "bundles": [file_record(b) for b in bundles if b.name in held]}}
+            if not held:
+                # LoadAllListText then returns no text, so the player loads no rows for this map.
+                vanish["source"]["absent"] = (f"none of the folder's {len(bundles)} bundles holds it; GlobalMethod.LoadAllListText "
+                                              "returns no text, so the player has no vanish rows")
         result = export(args.bundle, args.scene, args.map_no, private(args.output), args.max_texture, args.builtin_resources,
                         args.block_only_images, vanish)
         print(json.dumps({k: result[k] for k in ("mapNo", "scene", "meshes", "materials", "textures", "vertices", "triangles",
