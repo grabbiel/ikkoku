@@ -262,6 +262,13 @@ private func sideloader(_ items: [Record], _ patterns: [Record] = [], map: Bool 
     }
     #expect(verdict(clean, SourceSceneEdits()) == "kept")
     #expect(try trailer(stale, SourceSceneEdits()) == clean.trailer)
+    // Judged against the scene as loaded: a stale record for key 13, the key
+    // an added light or a copy then takes, is dropped, not given to it.
+    let taken = pluginScene([(sideloaderID, sideloader(items + [Record(13, 13, 1)], patterns)), settings])
+    for edit in [addLight, copyItem] {
+        #expect(try trailer(taken, edit) == trailer(clean, edit))
+    }
+    #expect(try KoikatsuSceneReader.decodeDocument(taken.data).staleSideloaderRecords == 1)
     // An unedited export keeps every other record's bytes and position as
     // stored, even one CharaStudio would renumber: only stale records go.
     let unordered = [Record(4, 4, 9), Record(99, 99, 0), Record(1, 1, 0)]
@@ -313,7 +320,10 @@ private func sideloader(_ items: [Record], _ patterns: [Record] = [], map: Bool 
 /// `installedSideloaderScenesExportDigest`, compared across builds.
 @Test(.enabled(if: StaleRecordCorpus.enabled, "Opt-in: IKKOKU_USER_PLUGIN_SCENES names the installed scenes"))
 func installedScenesHaveNoStaleSideloaderRecords() throws {
-    final class Tally: @unchecked Sendable { var scenes = 0, items = 0, patterns = 0, stale = 0, unread = 0 }
+    final class Tally: @unchecked Sendable {
+        var scenes = 0, items = 0, patterns = 0, stale = 0, unread = 0
+        var countSeconds = 0.0, slowestSeconds = 0.0, largestTrailer = 0
+    }
     let tally = Tally()
     let files = StaleRecordCorpus.files()
     try StaleRecordCorpus.onLargeStack {
@@ -322,13 +332,22 @@ func installedScenesHaveNoStaleSideloaderRecords() throws {
                   let found = StaleRecordCorpus.sideloader(document) else { continue }
             let (trailer, entry) = found
             tally.scenes += 1
+            // The work every export now adds for this scene (the leaf-edit
+            // check and the status count each run it once).
+            let start = ContinuousClock.now
             tally.stale += document.staleSideloaderRecords
+            let elapsed = ContinuousClock.now - start
+            let seconds = Double(elapsed.components.seconds) + Double(elapsed.components.attoseconds) * 1e-18
+            tally.countSeconds += seconds; tally.slowestSeconds = max(tally.slowestSeconds, seconds)
+            tally.largestTrailer = max(tally.largestTrailer, document.trailingData.count)
             let edit = SourceScenePluginData.Edit(source: document.snapshot, final: document.snapshot, copies: [:], moved: false)
             guard entry.version == 0, let plan = try? SideloaderPlan(trailer: trailer, entry: entry, edit: edit) else { tally.unread += 1; continue }
             tally.items += plan.items.count; tally.patterns += plan.patterns.count
         }
     }
     print("[stale-corpus] \(tally.scenes) scenes with a Sideloader entry, \(tally.items) itemInfo, \(tally.patterns) patternInfo, \(tally.stale) stale, \(tally.unread) unreadable")
+    print(String(format: "[stale-corpus] stale count: %.3f ms total, %.3f ms slowest scene, largest trailer %d B",
+                 tally.countSeconds * 1000, tally.slowestSeconds * 1000, tally.largestTrailer))
     #expect(tally.scenes > 0, "no scene with a Sideloader entry under IKKOKU_USER_PLUGIN_SCENES")
     #expect(tally.stale == 0)
     #expect(tally.unread == 0)
