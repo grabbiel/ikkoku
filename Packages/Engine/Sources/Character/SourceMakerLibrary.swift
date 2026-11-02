@@ -139,6 +139,12 @@ public struct SourceMakerLibrary: Sendable {
             }
             result[category] = Set(ids)
         }
+        // Every category is recorded; an empty one is `[]` (the original's
+        // work.Count == 0, ChaControl.Koikatu.cs:8679-8683, loads nothing). A
+        // missing key would silently keep the reference part instead.
+        guard result.count == Self.catalogDefaultIDs.count else {
+            throw RigError.invalid("Maker catalog presence must record every hair and clothes category.")
+        }
         return result
     }
     private func contained(_ ref: File) throws -> URL {
@@ -178,8 +184,19 @@ public struct SourceMakerLibrary: Sendable {
         public let modGUID: String?, entry: Entry?, status: String
         /// `catalogFallback` only: the catalog ID the original draws instead
         /// (its default, else 0), or nil when it draws nothing. `entry` is
-        /// that ID's library entry. The saved ID is never rewritten.
+        /// that ID's library entry, nil while that row is unconverted. The
+        /// saved ID is kept, a deliberate divergence: the original writes the
+        /// drawn ID back into its loaded card (hair ChaControl.Koikatu.cs:7059,
+        /// clothes into nowCoordinate :7292 and the other Change*Async sites).
         public var resolvedID: Int? = nil
+        /// `catalogFallback` only: what the original draws, as diagnostics and
+        /// pickers show it: "ID n", "ID n (unconverted: reference part
+        /// shown)" or "nothing".
+        public var drawnDescription: String? {
+            guard status == "catalogFallback" else { return nil }
+            guard let resolvedID else { return "nothing" }
+            return entry == nil ? "ID \(resolvedID) (unconverted: reference part shown)" : "ID \(resolvedID)"
+        }
     }
     public func selection(category: Int, savedID: Int, property: String, references: SourceCardModReferences?) -> Selection {
         let record = references?.records.first { $0.property.map { Data($0.utf8) } == Data(property.utf8) }
@@ -583,12 +600,15 @@ public struct SourceMakerLibrary: Sendable {
         func selected(_ category: Int, _ id: Int, _ property: String, _ prefix: String, accessorySlot: Int? = nil,
                       indoorShoes: Bool = false, clothingSlot: Int? = nil) throws -> (SourceRig, [String]?)? {
             let resolution = selection(category: category, savedID: id, property: property, references: references); selections.append(resolution)
-            if resolution.status == "catalogFallback" {
-                let drawn = resolution.resolvedID.map { "ID \($0)" } ?? "nothing"
-                diagnostics.append("\(property): catalogFallback, source ID \(resolution.sourceID) is in no installed catalog, so the original draws \(drawn). Card identity preserved.")
+            if let drawn = resolution.drawnDescription {
+                diagnostics.append("\(property): catalogFallback, source ID \(resolution.sourceID) is in no installed catalog, so the original draws \(drawn). The saved ID is kept, unlike the original, which writes the drawn ID back.")
             }
             guard let entry = resolution.entry else {
-                diagnostics.append("\(property): \(resolution.status), source ID \(resolution.sourceID). Card identity preserved; reference geometry retained where available."); return nil
+                // An unconverted fallback row was diagnosed above.
+                if resolution.status != "catalogFallback" {
+                    diagnostics.append("\(property): \(resolution.status), source ID \(resolution.sourceID). Card identity preserved; reference geometry retained where available.")
+                }
+                return nil
             }
             guard entry.empty != true else { return nil }
             // The indoor shoes never replace the top's body cut-out.

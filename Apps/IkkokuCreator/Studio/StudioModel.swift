@@ -3335,6 +3335,7 @@ final class StudioModel: ViewportInputHandler, LivePacedHandler {
                  "selectedAssets": preview.selections.count,
                  "convertedAssets": preview.selections.filter { $0.status == "converted" }.count,
                  "emptyAssets": preview.selections.filter { $0.status == "empty" }.count,
+                 "fallbackAssets": preview.selections.filter { $0.status == "catalogFallback" }.count,
                  "missingAssets": preview.selections.filter { $0.entry == nil }.map(\.property), "diagnostics": preview.diagnostics]
          }, "diagnostics": doc.sourcePreviewDiagnostics ?? []]
     }

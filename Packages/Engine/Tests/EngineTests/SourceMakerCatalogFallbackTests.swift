@@ -16,9 +16,14 @@ private enum CatalogFallbackFixture {
     static func empty(_ category: Int, _ id: Int) -> [String: Any] {
         ["category": category, "id": id, "name": "p_dummy", "empty": true]
     }
-    /// The presence file's bytes for `categories`, as catalog_presence.py writes them.
-    static func presenceData(_ categories: [Int: [Int]], kind: String = "koikatsu-catalog-presence") throws -> Data {
-        let keyed = Dictionary(uniqueKeysWithValues: categories.map { (String($0.key), $0.value) })
+    /// The presence file's bytes for `categories`, as catalog_presence.py
+    /// writes them: every hair and clothes category, an unlisted one as `[]`
+    /// unless `complete` is false.
+    static func presenceData(_ categories: [Int: [Int]], kind: String = "koikatsu-catalog-presence",
+                             complete: Bool = true) throws -> Data {
+        var all = categories
+        if complete { for category in 101...112 where all[category] == nil { all[category] = [] } }
+        let keyed = Dictionary(uniqueKeysWithValues: all.map { (String($0.key), $0.value) })
         return try JSONSerialization.data(withJSONObject: ["schemaVersion": 1, "kind": kind, "categories": keyed], options: [.sortedKeys])
     }
     static func library(_ entries: [[String: Any]], presence: Data?, directory: URL, file: String = "catalog-presence.json",
@@ -80,7 +85,7 @@ private enum CatalogFallbackFixture {
     let directory = try AppearanceTestFixture.directory(); defer { try? FileManager.default.removeItem(at: directory) }
     // Front's default 1 is absent: 0 is next, and its row is unconverted, so
     // the reference part stays (no entry). Back has neither its default nor
-    // 0: the original loads nothing. Bottom 106 has no presence record.
+    // 0: the original loads nothing. Bottom 106 has no installed row at all.
     let presence: [Int: [Int]] = [101: [5], 102: [0, 5], 103: [0], 105: [0]]
     let library = try F.library([F.converted(101, 5), F.empty(105, 0)], presence: F.presenceData(presence), directory: directory)
     func select(_ category: Int, _ id: Int, _ references: SourceCardModReferences? = nil) -> SourceMakerLibrary.Selection {
@@ -88,14 +93,19 @@ private enum CatalogFallbackFixture {
     }
     let front = select(102, 99)
     #expect(front.status == "catalogFallback" && front.resolvedID == 0 && front.entry == nil)
+    #expect(front.drawnDescription == "ID 0 (unconverted: reference part shown)")
     // A saved ID equal to the default that is itself absent goes to 0.
     #expect(select(102, 1).status == "catalogFallback" && select(102, 1).resolvedID == 0)
     let back = select(101, 99)
     #expect(back.status == "catalogFallback" && back.resolvedID == nil)
-    #expect(back.entry?.empty == true && back.entry?.rig == nil && back.entry?.id == 99)
-    // Outside the presence record or the hair/clothes categories: unchanged.
-    #expect(select(106, 99).status == "conversionMissing")
-    #expect(select(121, 99).status == "conversionMissing")
+    #expect(back.entry?.empty == true && back.entry?.rig == nil && back.entry?.id == 99 && back.drawnDescription == "nothing")
+    // An empty category (no installed row, written as []) loads nothing, as
+    // work.Count == 0 does (:8679-8683).
+    let bottom = select(106, 99)
+    #expect(bottom.status == "catalogFallback" && bottom.resolvedID == nil && bottom.entry?.empty == true)
+    // Outside the hair/clothes categories: unchanged.
+    #expect(select(121, 99).status == "conversionMissing" && select(121, 99).drawnDescription == nil)
+    #expect(select(101, 5).drawnDescription == nil)
     // A resolver record naming a mod never falls back to a vanilla row; one
     // without a GUID still needs its compatibility data.
     let mod = try MakerLibraryReferences.make([("Example.Mod", "ChaFileHair.HairBack", 99, 1)])
@@ -116,6 +126,8 @@ private enum CatalogFallbackFixture {
     // A changed presence file is a load error, as for every other sidecar.
     #expect(throws: (any Error).self) { try F.library([], presence: valid, directory: directory, sha256: F.hash) }
     #expect(throws: (any Error).self) { try F.library([], presence: valid, directory: directory, file: "../catalog-presence.json") }
+    // A category without a record would silently keep the reference part.
+    #expect(throws: (any Error).self) { try F.library([], presence: F.presenceData([101: [0]], complete: false), directory: directory) }
     for invalid in [try F.presenceData([101: [0]], kind: "other"), try F.presenceData([121: [0]]), try F.presenceData([101: [-1]]),
                     try F.presenceData([101: [Int(Int32.max) + 1]]), Data("{\"schemaVersion\":2,\"kind\":\"koikatsu-catalog-presence\",\"categories\":{}}".utf8)] {
         #expect(throws: (any Error).self) { try F.library([], presence: invalid, directory: directory) }

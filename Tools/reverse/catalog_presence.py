@@ -6,7 +6,11 @@ list/characustom bundle (LoadCharaFbxDataAsync, recovered ChaControl.Koikatu.cs
 :8675-8700). An ID absent from all of them draws the category's default.
 "Absent" is only true against the complete installed set. This tool therefore
 refuses to write unless the transferred list bundles are exactly the bundles a
-fresh VM listing names, with the same sizes and verified provenance.
+fresh VM listing names, with the same names, sizes and SHA-256s (the listing's
+Get-FileHash values, taken in the same VM exec as the fetch).
+
+Every hair and clothes category is written, an empty one as `[]`: the original
+loads nothing for an empty category (work.Count == 0, :8679-8683).
 
 It writes `catalog-presence.json` into a Maker library and records it in that
 library's `library.json` as `catalogPresence`. Every other key and entry is
@@ -33,10 +37,11 @@ def digest(data: bytes) -> str:
     return hashlib.sha256(data).hexdigest()
 
 
-def installed_bundles(listing: dict) -> dict[str, int]:
-    """The listing's list/characustom bundles as {name: bytes}.
+def installed_bundles(listing: dict) -> dict[str, tuple[int, str]]:
+    """The listing's list/characustom bundles as {name: (bytes, sha256)}.
 
-    The listing is `{"bundles": [{"path": "abdata/list/characustom/00.unity3d", "bytes": N}, ...]}`.
+    The listing is `{"bundles": [{"path": "abdata/list/characustom/00.unity3d",
+    "bytes": N, "sha256": "<hex>"}, ...]}`; the hash may be upper case (Get-FileHash).
     """
     result = {}
     for row in listing['bundles']:
@@ -45,29 +50,35 @@ def installed_bundles(listing: dict) -> dict[str, int]:
             continue
         if path.name in result:
             raise ValueError('Duplicate installed list bundle: ' + path.name)
-        result[path.name] = int(row['bytes'])
+        sha256 = str(row.get('sha256', '')).lower()
+        if len(sha256) != 64 or any(c not in '0123456789abcdef' for c in sha256):
+            raise ValueError('The listing has no SHA-256 for ' + path.name)
+        result[path.name] = (int(row['bytes']), sha256)
     if not result:
         raise ValueError('The listing names no list/characustom bundle')
     return result
 
 
-def require_complete(installed: dict[str, int], transferred: dict[str, int]):
-    """Absence needs every installed list bundle: the same names and sizes, no more, no fewer."""
+def require_complete(installed: dict[str, tuple[int, str]], transferred: dict[str, tuple[int, str]]):
+    """Absence needs every installed list bundle: the same names, sizes and SHA-256s, no more, no fewer."""
     missing = sorted(set(installed) - set(transferred))
     extra = sorted(set(transferred) - set(installed))
-    resized = sorted(n for n in set(installed) & set(transferred) if installed[n] != transferred[n])
-    if missing or extra or resized:
+    shared = set(installed) & set(transferred)
+    resized = sorted(n for n in shared if installed[n][0] != transferred[n][0])
+    rehashed = sorted(n for n in shared if installed[n][0] == transferred[n][0] and installed[n][1] != transferred[n][1])
+    if missing or extra or resized or rehashed:
         raise ValueError(f'Transferred list bundles differ from the installed set: missing {missing}, '
-                         f'not installed {extra}, size differs {resized}')
+                         f'not installed {extra}, size differs {resized}, sha256 differs {rehashed}')
 
 
 def presence(tables) -> dict[str, list[int]]:
-    """Sorted IDs per supported category over every table, keyed by the category as text."""
-    ids: dict[int, set[int]] = {}
+    """Sorted IDs of every supported category over every table, keyed by the
+    category as text; a category no table has is `[]` (it loads nothing)."""
+    ids: dict[int, set[int]] = {category: set() for category in CATEGORIES}
     for table in tables:
         if table['category'] in CATEGORIES:
-            ids.setdefault(table['category'], set()).update(int(row['ID']) for row in table['rows'])
-    return {str(category): sorted(ids[category]) for category in sorted(ids)}
+            ids[table['category']].update(int(row['ID']) for row in table['rows'])
+    return {str(category): sorted(ids[category]) for category in CATEGORIES}
 
 
 def document(tables, sources, listing_sha256: str, installed: int) -> dict:
@@ -98,7 +109,7 @@ def main():
     listing_bytes = args.listing.read_bytes()
     installed = installed_bundles(json.loads(listing_bytes))
     directory = args.shared / 'source/abdata' / LIST_DIRECTORY
-    transferred = {p.name: p.stat().st_size for p in directory.glob('*.unity3d')}
+    transferred = {p.name: (p.stat().st_size, digest(p.read_bytes())) for p in directory.glob('*.unity3d')}
     require_complete(installed, transferred)
     paths = [source_file(args.shared, f'{LIST_DIRECTORY}/{name}') for name in sorted(installed)]
     sources = [dict(path=f'{LIST_DIRECTORY}/{p.name}', sha256=digest(p.read_bytes()), bytes=p.stat().st_size) for p in paths]

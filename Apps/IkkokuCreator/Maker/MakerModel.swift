@@ -891,7 +891,7 @@ final class MakerModel: ViewportInputHandler, LivePacedHandler {
             // #346: an ID in no installed catalog is not a choice; the row names what the original draws.
             let fallback = selection.status == "catalogFallback"
             let selectedID = reason == nil && selection.entry != nil && selection.modGUID == nil && !fallback ? selection.sourceID : nil
-            let drawn = fallback ? " → " + (selection.resolvedID.map { "ID \($0)" } ?? "nothing") : ""
+            let drawn = selection.drawnDescription.map { " → " + $0 } ?? ""
             let current = reason ?? ("ID \(selection.sourceID)" + (selection.modGUID.map { " · \($0)" } ?? "") + " · \(selection.status)" + drawn)
             return SourceSelectionRow(id: destination.property, label: label, slot: slot,
                 selectedID: selectedID, current: current, unavailableReason: reason, choices: choices)

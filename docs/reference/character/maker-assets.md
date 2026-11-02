@@ -157,6 +157,9 @@ dictionary loads its row. For an ID that is in no installed list:
 2. Otherwise ID 0 loads if it is present.
 3. Otherwise nothing loads. A default of -1 loads nothing at once.
 
+A category with no installed row at all (`work.Count == 0`, :8679–8683) also
+loads nothing.
+
 The defaults are as follows:
 
 | Category | Default | Recovered source |
@@ -176,14 +179,16 @@ The native library knows the installed IDs only from an optional
 `catalog-presence.json` beside the index. `Tools/reverse/catalog_presence.py`
 writes it from the transferred list bundles. Absence is only true against the
 complete installed set, so the tool refuses to write unless the transferred
-bundles have exactly the names and sizes that a fresh VM listing gives.
-Sideloader zipmod rows are not included. `SourceMakerLibrary.load` reads and
+bundles have exactly the names, sizes and SHA-256s of a fresh VM listing. The
+VM exec that fetches the bundles takes that listing, `Get-FileHash` included.
+Every category 101–112 is written, an empty one as `[]`. Sideloader zipmod
+rows are not included. `SourceMakerLibrary.load` reads and
 verifies the file once, through the same sidecar check as every other library
 file. It keeps one ID set per category. Any of these is a load error:
 
 - a changed hash or a path outside the library;
 - a schema other than 1 or another `kind`;
-- a category outside 101–112;
+- a category outside 101–112, or one of them missing;
 - an ID outside the nonnegative Int32 range.
 
 Selections never read the file again.
@@ -191,26 +196,54 @@ Selections never read the file again.
 When the presence is loaded, a vanilla selection (no resolver GUID) whose
 saved ID is absent from its category has the status `catalogFallback`.
 `resolvedID` names the ID the original draws, or is nil for nothing, and
-`entry` is that ID's library entry. An unconverted resolved row keeps the
-reference part, as `conversionMissing` does. The resolved ID enters the same
-rig, appearance and material path as a direct selection of it.
+`entry` is that ID's library entry. The resolved ID enters the same rig,
+appearance and material path as a direct selection of it. An empty category
+resolves to nothing.
+
+When the resolved ID is installed but not converted, the reference part is
+shown, as for `conversionMissing`, and the diagnostic and picker say so. The
+fallback row's catalog flags (`NotBra`, `Coordinate`, `StateType`) do not apply
+until that row is converted.
 
 The card is never rewritten: `savedID` and `sourceID` stay the saved ID, and
-an export writes it unchanged. `prepare` adds the diagnostic `<property>:
-catalogFallback, source ID <id> is in no installed catalog, so the original
-draws ID <n>` (or `nothing`). The Maker picker row shows `ID <id> ·
-catalogFallback → ID <n>` with nothing selected. A library without
-`catalogPresence` behaves as before: an unconverted ID is
-`conversionMissing`.
+an export writes it unchanged. `prepare` adds this diagnostic:
 
-Known difference: the original writes the resolved ID back into the
-character file:
+> `<property>: catalogFallback, source ID <id> is in no installed catalog, so the original draws <drawn>. The saved ID is kept, unlike the original, which writes the drawn ID back.`
 
-- hair at :7059, and `fileHair.kind` from the back-hair row at :7060–7063;
-- clothes at :7292, :7811, :7908, :8090, :8178, :8270, :8365 and :8462.
+`<drawn>` is one of three forms: `ID <n>`, `ID <n> (unconverted: reference
+part shown)` or `nothing`. The Maker picker row shows `ID <id> ·
+catalogFallback → <drawn>` with nothing selected. The Studio outfit tab lists
+the row with the same `→ <drawn>`, and the Studio benchmark metadata counts
+these rows as `fallbackAssets`. A library without `catalogPresence` behaves as
+before: an unconverted ID is `conversionMissing`.
 
-Its next save therefore stores the default, while the native export keeps the
-saved ID.
+Studio coverage is Engine-only. The fixture test assembles the Studio wear
+path, but no Studio scene fixture saves an absent ID.
+
+### Deliberate divergence: the saved ID is kept
+
+The original writes the drawn ID back into the character it loaded:
+
+- hair into `chaFile.custom.hair` at :7059 (`fileHair`, ChaInfo.cs:43),
+  together with `fileHair.kind` from the back-hair row at :7062;
+- clothes into `nowCoordinate` at :7292, :7811, :7908, :8090, :8178, :8270,
+  :8365 and :8462.
+
+A CharaStudio scene save writes each character's file (`OICharInfo.Save`,
+Studio.OICharInfo.cs:146–150). That file is the one the character was built
+from (`AddObjectFemale` :55), so the save carries the drawn hair ID.
+
+Clothes are different. `nowCoordinate` reaches the file's coordinate only
+through `ChaFile.AssignCoordinate` (ChaFile.cs:284–292). Its only recovered
+Studio caller, `OCIChar.LoadClothesFile` (Studio.OCIChar.cs:1088–1092), runs
+it before the reload. `SceneInfo.Save` (:239) and `OICharInfo.Save` do not
+call it. In the recovered code a scene save therefore keeps the saved clothes
+ID. This is unverified, because Studio's save entry point, the Maker's save
+and `ChaFileControl.SaveCharaFile` are not recovered.
+
+The native export keeps every saved ID on purpose. A later-installed list or
+mod can still resolve it, while a written-back default would lose the card's
+choice for good.
 
 The following stay outside this rule:
 
@@ -223,7 +256,8 @@ The following stay outside this rule:
 - The jacket and sailor sub-parts (`defaultId[2,3]`, :7513–7529).
 
 The Maker selection editor still refuses inner shoes, so the lane card keeps
-its saved indoor-shoes ID.
+its saved indoor-shoes ID. A fallback of category 112 is covered by the
+synthetic tests only. Follow-ups are in #351.
 
 Verification:
 
