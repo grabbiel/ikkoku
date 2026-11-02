@@ -1092,7 +1092,7 @@ public final class Renderer: @unchecked Sendable {
             }
             var vb: any MTLBuffer = mesh.baseVertices
             if let key = item.deformKey, mesh.needsDeform {
-                guard let buf = resources.deformBuffer(for: key, vertexCount: mesh.vertexCount, frameCreatedAt: frame.createdAt) else {
+                guard let buf = resources.deformBuffer(for: key, mesh: item.mesh, vertexCount: mesh.vertexCount, frameCreatedAt: frame.createdAt) else {
                     deformationErrors.append("\(mesh.name): could not allocate deformation buffer \(key)")
                     continue
                 }

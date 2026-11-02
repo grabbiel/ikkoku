@@ -352,11 +352,24 @@ public final class ResourceStore: @unchecked Sendable {
         lock.lock(); meshes[h.id] = nil; retiringMeshes[h.id] = nil; generationValue &+= 1; lock.unlock()
     }
 
+    #if DEBUG
+    /// Tests only (#344): runs at the top of `deformBuffer`, before this
+    /// store's lock, so a test can drop an owner between the renderer's mesh
+    /// lookup and the buffer request, as the main thread can while a render
+    /// thread prepares. Set before a capture and cleared after it. Not in
+    /// Release builds.
+    var beforeDeformBuffer: ((UInt64) -> Void)?
+    #endif
+
     /// The persistent deformation output for `key`, reallocated when a mesh needs
     /// more vertices. Nil when Metal refuses the allocation; the renderer reports it
     /// as a deformation error instead of terminating. `frameCreatedAt` is the
     /// requesting frame's `RenderFrame.createdAt`; nil means a frame created now.
-    func deformBuffer(for key: UInt64, vertexCount: Int, frameCreatedAt created: UInt64? = nil) -> (any MTLBuffer)? {
+    /// `mesh` is the requesting item's mesh; nil (tests) skips its check.
+    func deformBuffer(for key: UInt64, mesh: MeshHandle? = nil, vertexCount: Int, frameCreatedAt created: UInt64? = nil) -> (any MTLBuffer)? {
+        #if DEBUG
+        beforeDeformBuffer?(key)
+        #endif
         lock.lock(); defer { lock.unlock() }
         let needed = MemoryLayout<DeformedVertex>.stride * max(vertexCount, 1)
         if let b = deformBuffers[key], b.length >= needed { return b }
@@ -364,7 +377,21 @@ public final class ResourceStore: @unchecked Sendable {
         // A frame created before a completed retirement may still name a key that
         // retirement released. Its buffer stays transient (the frame's own deform
         // pass fills it), so preparing such a frame cannot re-create the key.
-        if let created, created < newestCompletedRetirement {
+        let stale = created.map { $0 < newestCompletedRetirement } ?? false
+        // #344: the renderer resolves an item's mesh, then asks for its buffer,
+        // without holding this lock in between. The owner can drop both there:
+        // `SourceRigPreview.deinit` unregisters its meshes and then releases its
+        // keys on the main thread while a render thread prepares. A buffer
+        // cached after that release would outlive its owner, as nothing
+        // releases the key again. So a new buffer is cached only while its mesh
+        // is registered and not retiring, and is transient otherwise. The frame
+        // being prepared still deforms into it. Neither a later release nor
+        // `completeRetirements` then has a key re-cached behind its back: a
+        // retiring mesh's key may not be retiring itself. `unregister` and
+        // `retire` take this lock, so the check cannot interleave with them.
+        // Only a new buffer pays the check.
+        let owned = mesh.map { meshes[$0.id] != nil && retiringMeshes[$0.id] == nil } ?? true
+        if stale || !owned {
             b.label = "deform.\(key).transient"
             return b
         }
