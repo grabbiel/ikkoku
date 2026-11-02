@@ -21,12 +21,16 @@ private enum CatalogFallbackFixture {
     /// The presence file's bytes for `categories`, as catalog_presence.py
     /// writes them: every hair and clothes category, an unlisted one as `[]`
     /// unless `complete` is false.
+    /// `sexLimited` is the optional #351 key (category → Sex value → IDs),
+    /// written only when given, as catalog_presence.py writes it.
     static func presenceData(_ categories: [Int: [Int]], kind: String = "koikatsu-catalog-presence",
-                             complete: Bool = true) throws -> Data {
+                             complete: Bool = true, sexLimited: [String: [String: [Int]]]? = nil) throws -> Data {
         var all = categories
         if complete { for category in 101...112 where all[category] == nil { all[category] = [] } }
         let keyed = Dictionary(uniqueKeysWithValues: all.map { (String($0.key), $0.value) })
-        return try JSONSerialization.data(withJSONObject: ["schemaVersion": 1, "kind": kind, "categories": keyed], options: [.sortedKeys])
+        var document: [String: Any] = ["schemaVersion": 1, "kind": kind, "categories": keyed]
+        if let sexLimited { document["sexLimited"] = sexLimited }
+        return try JSONSerialization.data(withJSONObject: document, options: [.sortedKeys])
     }
     static func library(_ entries: [[String: Any]], presence: Data?, directory: URL, file: String = "catalog-presence.json",
                         sha256: String? = nil) throws -> SourceMakerLibrary {
@@ -58,7 +62,7 @@ private enum CatalogFallbackFixture {
     let library = try F.library(F.entries, presence: F.presenceData(F.presence), directory: directory)
     #expect(library.catalogPresence?[101] == [0, 2, 28] && library.catalogPresence?.count == 12)
     func select(_ category: Int, _ id: Int) -> SourceMakerLibrary.Selection {
-        library.selection(category: category, savedID: id, property: "p\(category)", references: nil)
+        library.selection(category: category, savedID: id, property: "p\(category)", references: nil, sex: nil)
     }
     // Hair defaults {0, 1, 0, 0}: back 0 and front 1 are drawn, side and option 0 are empty.
     for (category, resolved, empty) in [(101, 0, false), (102, 1, false), (103, 0, true), (104, 0, true)] {
@@ -91,7 +95,7 @@ private enum CatalogFallbackFixture {
     let presence: [Int: [Int]] = [101: [5], 102: [0, 5], 103: [0], 105: [0]]
     let library = try F.library([F.converted(101, 5), F.empty(105, 0)], presence: F.presenceData(presence), directory: directory)
     func select(_ category: Int, _ id: Int, _ references: SourceCardModReferences? = nil) -> SourceMakerLibrary.Selection {
-        library.selection(category: category, savedID: id, property: "ChaFileHair.HairBack", references: references)
+        library.selection(category: category, savedID: id, property: "ChaFileHair.HairBack", references: references, sex: nil)
     }
     let front = select(102, 99)
     #expect(front.status == "catalogFallback" && front.resolvedID == 0 && front.entry == nil)
@@ -117,7 +121,7 @@ private enum CatalogFallbackFixture {
     // Without a presence file nothing is known to be absent: today's behaviour.
     let plain = try F.library([F.converted(101, 5)], presence: nil, directory: directory)
     #expect(plain.catalogPresence == nil)
-    #expect(plain.selection(category: 101, savedID: 99, property: "p", references: nil).status == "conversionMissing")
+    #expect(plain.selection(category: 101, savedID: 99, property: "p", references: nil, sex: nil).status == "conversionMissing")
 }
 
 @Test func sourceMakerCatalogPresenceIsVerifiedOnceAtLoad() throws {
@@ -137,7 +141,87 @@ private enum CatalogFallbackFixture {
     // Loaded once: editing the file after load changes nothing already loaded.
     let library = try F.library([F.converted(101, 0)], presence: try F.presenceData([101: [0, 1]]), directory: directory)
     try F.presenceData([101: [0, 1, 99]]).write(to: directory.appendingPathComponent("catalog-presence.json"))
-    #expect(library.selection(category: 101, savedID: 99, property: "p", references: nil).status == "catalogFallback")
+    #expect(library.selection(category: 101, savedID: 99, property: "p", references: nil, sex: nil).status == "catalogFallback")
+}
+
+/// #351: an installed top (105) or bra (107) row whose Sex column excludes
+/// the card's sex takes the #346 chain (LoadCharaFbxDataAsync,
+/// ChaControl.Koikatu.cs:8702-8726): Sex 3 is not drawn for a male (sex 0),
+/// Sex 2 not for a female (sex 1). Synthetic library and presence file.
+@Test func sourceMakerCatalogSexRuleDrawsTheDefaultForTheOtherSexsRow() throws {
+    typealias F = CatalogFallbackFixture
+    let directory = try AppearanceTestFixture.directory(); defer { try? FileManager.default.removeItem(at: directory) }
+    let presence = try F.presenceData([105: [0, 3, 7, 9], 107: [0, 4], 106: [0, 7]],
+                                      sexLimited: ["105": ["3": [7], "2": [9]], "107": ["2": [4]]])
+    let library = try F.library([F.empty(105, 0), F.converted(105, 7), F.converted(105, 9), F.empty(107, 0), F.converted(107, 4),
+                                 F.converted(106, 7)], presence: presence, directory: directory)
+    #expect(library.catalogSexLimited == [105: [3: [7], 2: [9]], 107: [2: [4]]])
+    func select(_ category: Int, _ id: Int, sex: Int?, _ references: SourceCardModReferences? = nil) -> SourceMakerLibrary.Selection {
+        library.selection(category: category, savedID: id, property: "p", references: references, sex: sex)
+    }
+    for (category, id, value, excludedSex) in [(105, 7, 3, 0), (105, 9, 2, 1), (107, 4, 2, 1)] {
+        let excluded = select(category, id, sex: excludedSex)
+        // The default 0 is the empty row: the original draws nothing there.
+        #expect(excluded.status == "catalogFallback" && excluded.resolvedID == 0 && excluded.entry?.empty == true, "\(category):\(id)")
+        #expect(excluded.fallbackReason == .sexLimited(value: value) && excluded.savedID == id && excluded.sourceID == id)
+        #expect(excluded.drawnDescription == "ID 0")
+        // The other sex draws the row as saved; an unknown sex excludes nothing.
+        for sex in [1 - excludedSex, nil] {
+            let kept = select(category, id, sex: sex)
+            #expect(kept.status == "converted" && kept.entry?.id == id && kept.fallbackReason == nil, "\(category):\(id) \(String(describing: sex))")
+        }
+    }
+    // A row with no limiting Sex, and every other category, is never excluded.
+    #expect(select(105, 3, sex: 0).status == "conversionMissing" && select(105, 3, sex: 1).status == "conversionMissing")
+    #expect(select(106, 7, sex: 0).status == "converted" && select(106, 7, sex: 1).status == "converted")
+    // A resolver record naming a mod is not a vanilla row: its Sex is not recorded.
+    let mod = try MakerLibraryReferences.make([("Example.Mod", "p", 7, 1)])
+    #expect(select(105, 7, sex: 0, mod).status == "conversionMissing" && select(105, 7, sex: 0, mod).fallbackReason == nil)
+    // The absence fallback names its own cause.
+    #expect(select(105, 99, sex: 0).fallbackReason == .notInstalled)
+    #expect(SourceMakerLibrary.fallbackCause(.sexLimited(value: 3)).contains("female-only row (Sex 3)"))
+    #expect(SourceMakerLibrary.fallbackCause(.sexLimited(value: 2)).contains("male-only row (Sex 2)"))
+    #expect(SourceMakerLibrary.fallbackCause(.notInstalled) == "is in no installed catalog")
+}
+
+/// #351 quirk: when the excluded ID is the category's default, the original
+/// never looks the default up again and keeps the excluded row (:8716, :8720),
+/// so it is drawn as saved. The default the chain lands on is not checked
+/// again either; with neither the default nor 0 installed, nothing is drawn.
+@Test func sourceMakerCatalogSexRuleKeepsAnExcludedDefaultAndChecksNothingTwice() throws {
+    typealias F = CatalogFallbackFixture
+    let directory = try AppearanceTestFixture.directory(); defer { try? FileManager.default.removeItem(at: directory) }
+    let presence = try F.presenceData([105: [0, 7], 107: [4]], sexLimited: ["105": ["3": [0, 7]], "107": ["2": [4]]])
+    let library = try F.library([F.converted(105, 0), F.converted(105, 7), F.converted(107, 4)], presence: presence, directory: directory)
+    func select(_ category: Int, _ id: Int, sex: Int) -> SourceMakerLibrary.Selection {
+        library.selection(category: category, savedID: id, property: "p", references: nil, sex: sex)
+    }
+    let kept = select(105, 0, sex: 0)
+    #expect(kept.status == "converted" && kept.entry?.id == 0 && kept.resolvedID == nil && kept.fallbackReason == nil)
+    // 7 is excluded too; it falls to the default 0, drawn although 0 is itself Sex 3.
+    let fallback = select(105, 7, sex: 0)
+    #expect(fallback.status == "catalogFallback" && fallback.resolvedID == 0 && fallback.entry?.id == 0 && fallback.entry?.empty != true)
+    #expect(fallback.drawnDescription == "ID 0" && fallback.fallbackReason == .sexLimited(value: 3))
+    let nothing = select(107, 4, sex: 1)
+    #expect(nothing.status == "catalogFallback" && nothing.resolvedID == nil && nothing.entry?.empty == true)
+    #expect(nothing.drawnDescription == "nothing" && nothing.fallbackReason == .sexLimited(value: 2))
+}
+
+/// The optional `sexLimited` key is validated at load: only tops and bras,
+/// only Sex 2 or 3, only installed IDs, nothing empty. A file without it
+/// limits nothing.
+@Test func sourceMakerCatalogSexLimitedRowsAreValidatedAtLoad() throws {
+    typealias F = CatalogFallbackFixture
+    let directory = try AppearanceTestFixture.directory(); defer { try? FileManager.default.removeItem(at: directory) }
+    let plain = try F.library([], presence: F.presenceData([105: [0, 7]]), directory: directory)
+    #expect(plain.catalogSexLimited.isEmpty)
+    _ = try F.library([], presence: F.presenceData([105: [0, 7]], sexLimited: ["105": ["3": [7]]]), directory: directory)
+    for invalid: [String: [String: [Int]]] in [["106": ["3": [7]]], ["105": ["1": [7]]], ["105": ["3": [8]]], ["105": ["3": []]],
+                                               ["105": [:]], ["x": ["3": [7]]], ["105": ["three": [7]]]] {
+        #expect(throws: (any Error).self, "\(invalid)") {
+            try F.library([], presence: F.presenceData([105: [0, 7], 106: [0, 7]], sexLimited: invalid), directory: directory)
+        }
+    }
 }
 
 /// A fallback row binds the card's colors to the drawn default, as the
@@ -156,7 +240,7 @@ func sourceMakerCatalogFallbackBindsTheCardColorsAsTheDrawnDefault() throws {
     let source = try A.card()
     let absent = try SourceCharacterCard.decode(source.selectingVanillaAsset(CatalogFallbackCards.absentID, at: .hair(0)))
     let explicit = try SourceCharacterCard.decode(source.selectingVanillaAsset(0, at: .hair(0)))
-    let row = library.selection(category: 101, savedID: CatalogFallbackCards.absentID, property: "ChaFileHair.HairBack", references: nil)
+    let row = library.selection(category: 101, savedID: CatalogFallbackCards.absentID, property: "ChaFileHair.HairBack", references: nil, sex: nil)
     let resolvedID = try #require(row.resolvedID)
     #expect(row.status == "catalogFallback" && resolvedID == 0)
     // 101:0's bindings as the converter writes them: a texture recipe and a

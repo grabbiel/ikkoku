@@ -905,7 +905,8 @@ public enum SourceShaderBindingDerivation {
             for slot in 0..<min(parts.count, 4) {
                 guard let id = card.number("hair.parts.\(slot).id").map(Int.init) else { result.diagnostics.append("hair part \(slot) has no id"); continue }
                 let property = "ChaFileHair." + ["HairBack", "HairFront", "HairSide", "HairOption"][slot]
-                let selection = library.selection(category: 101 + slot, savedID: id, property: property, references: references)
+                let selection = library.selection(category: 101 + slot, savedID: id, property: property, references: references,
+                                                  sex: characterIdentity?.sex)
                 guard let entry = selection.entry else {
                     result.diagnostics.append("\(property) \(101 + slot):\(id): \(selection.status); renderers unknown."); continue
                 }
@@ -950,7 +951,8 @@ public enum SourceShaderBindingDerivation {
             guard let id = card.number("clothes.parts.\(slot).id").map(Int.init) else { result.diagnostics.append("clothes part \(slot) has no id"); continue }
             let category = min(105 + slot, 112)
             let property = "outfit\(coordinate).ChaFileClothes.Clothes" + ["Top", "Bot", "Bra", "Shorts", "Gloves", "Pants", "Socks", "ShoesInner", "ShoesOuter"][slot]
-            let selection = library.selection(category: category, savedID: id, property: property, references: references)
+            let selection = library.selection(category: category, savedID: id, property: property, references: references,
+                                              sex: characterIdentity?.sex)
             guard let entry = selection.entry else {
                 result.diagnostics.append("\(property) \(category):\(id): \(selection.status); renderers unknown.")
                 if slot == 0 { topBodyMask = .failure(Reason("clothes top \(category):\(id) not converted")) }

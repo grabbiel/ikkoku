@@ -189,7 +189,9 @@ file. It keeps one ID set per category. Any of these is a load error:
 - a changed hash or a path outside the library;
 - a schema other than 1 or another `kind`;
 - a category outside 101–112, or one of them missing;
-- an ID outside the nonnegative Int32 range.
+- an ID outside the nonnegative Int32 range;
+- a `sexLimited` entry (below) outside 105 and 107, a Sex value other than 2
+  or 3, an ID its category does not list, or an empty list.
 
 Selections never read the file again.
 
@@ -229,6 +231,44 @@ before: an unconverted ID is `conversionMissing`.
 Studio coverage is Engine-only. The fixture test assembles the Studio wear
 path, but no Studio scene fixture saves an absent ID.
 
+### Tops and bras the card's sex excludes (#351)
+
+For a top (105) or bra (107) whose ID is installed, the original also reads
+the row's `Sex` column (`GetInfoInt`, -1 when it is not an integer) and
+compares it with the character's sex (:8702–8726):
+
+- a male (sex 0) does not draw a row with Sex 3;
+- a female (sex 1) does not draw a row with Sex 2.
+
+An excluded row takes the same chain as an absent ID: the default unless it
+is the saved ID, else 0, else nothing. One case differs. When the excluded
+ID is the default itself, the original never looks the default up again
+(:8716) and keeps the excluded row (:8720), so it is drawn as saved. The row
+the chain lands on is not checked again.
+
+`catalog_presence.py` records these rows under an optional `sexLimited` key:
+category → Sex value → IDs, for example `{"105": {"3": [7]}}`. It writes a
+category or value only when it has a row, and the key only when one exists.
+A presence file regenerated from tables without such rows is byte-identical
+to the earlier v1 file, and the schema stays 1. A presence file without the
+key limits nothing.
+
+`selection(category:savedID:property:references:sex:)` takes the card's sex.
+Every caller passes it, from `SourceCharacterCard.customization()`. With a
+nil sex the rule excludes nothing. An excluded row has the status
+`catalogFallback`, as for #346, and `fallbackReason` `.sexLimited(value:)`.
+An absent ID has `.notInstalled`. The `prepare` diagnostic names the cause:
+
+> `<property>: catalogFallback, source ID <id> is a female-only row (Sex 3), which the original does not draw for a male card, so the original draws <drawn>. …`
+
+Sex 2 reads `is a male-only row (Sex 2), which the original does not draw
+for a female card`. The picker and Studio rows show `→ <drawn>` as for an
+absent ID.
+
+The rule covers vanilla rows only. The presence file has no Sex column for
+zipmod rows, so a mod top or bra with a limiting Sex draws as saved here,
+unlike the original.
+
 ### Deliberate divergence: the saved ID is kept
 
 The original writes the drawn ID back into the character it loaded:
@@ -256,8 +296,6 @@ choice for good.
 
 The following stay outside this rule:
 
-- The tops (105) and bras (107) whose row `Sex` excludes the character
-  (:8701–8722).
 - Male `exType` 1.
 - IDs carried by a mod GUID.
 - Accessories (default -1, :8621).
@@ -280,6 +318,13 @@ Verification:
   controls are caught: removing the absence check fails 6 expectations,
   reordering the defaults fails 4, skipping the presence hash check fails 3,
   and checking the slot-ID requirement against the saved ID fails 5.
+- **Sex rule (#351):** `sourceMakerCatalogSexRuleDrawsTheDefaultForTheOtherSexsRow`,
+  `sourceMakerCatalogSexRuleKeepsAnExcludedDefaultAndChecksNothingTwice` and
+  `sourceMakerCatalogSexLimitedRowsAreValidatedAtLoad` cover both Sex values
+  and both sexes, an unknown sex, the other categories, a mod row, the
+  excluded default, the chain ending in nothing, and every load error.
+  `test_catalog_presence.py` checks that a presence file without
+  sex-limited rows keeps its v1 bytes.
 - **Fixture test:** `sourceMakerCatalogFallbackCardAssemblesItsExplicitDefaults`
   reads `IKKOKU_MAKER_FALLBACK_CARD`. That card is derived from
   `IKKOKU_MAKER_SCENARIO_CARD` by the gated writer

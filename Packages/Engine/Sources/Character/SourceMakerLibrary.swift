@@ -53,6 +53,14 @@ public struct SourceMakerLibrary: Sendable {
     /// The installed catalogs' IDs per hair and clothes category, read and
     /// SHA-verified once at load; nil when the library has no presence file.
     public private(set) var catalogPresence: [Int: Set<Int>]? = nil
+    /// #351: the installed top and bra rows whose Sex column limits them to
+    /// one sex, as category → Sex value (2 or 3) → IDs; empty when the
+    /// presence file records none (its optional `sexLimited` key).
+    public private(set) var catalogSexLimited: [Int: [Int: Set<Int>]] = [:]
+    /// The Sex value LoadCharaFbxDataAsync does not draw for a card's sex
+    /// (ChaControl.Koikatu.cs:8702-8726): 3 for a male (sex 0), 2 for a
+    /// female (sex 1). Only tops (105) and bras (107) are checked.
+    public static let catalogSexExcludedValue: [Int: Int] = [0: 3, 1: 2]
     /// ChaControl's default ID per category when a saved ID is in no installed
     /// list (recovered ChaControl.Koikatu.cs): hair `defId` {0, 1, 0, 0}
     /// (ChangeHairAsync :7015-7026), clothes 0 (top :7278, bottom :7778, bra
@@ -61,7 +69,12 @@ public struct SourceMakerLibrary: Sendable {
     /// is what an unresolved accessory already does here.
     public static let catalogDefaultIDs: [Int: Int] = [101: 0, 102: 1, 103: 0, 104: 0, 105: 0, 106: 0, 107: 0, 108: 0,
                                                        109: 0, 110: 0, 111: 0, 112: 0]
-    private struct PresenceDocument: Decodable { let schemaVersion: Int, kind: String, categories: [String: [Int]] }
+    private struct PresenceDocument: Decodable {
+        let schemaVersion: Int, kind: String, categories: [String: [Int]]
+        /// #351, optional: category → Sex value → IDs, written only when a
+        /// checked row is sex-limited, so older v1 files are unchanged.
+        let sexLimited: [String: [String: [Int]]]?
+    }
 
     public static func load(url: URL) throws -> Self {
         let input = try FileHandle(forReadingFrom: url); defer { try? input.close() }
@@ -98,7 +111,12 @@ public struct SourceMakerLibrary: Sendable {
             }
         }
         var result = Self(sourceURL: url.resolvingSymlinksInPath(), directory: url.deletingLastPathComponent().resolvingSymlinksInPath(), entries: doc.entries, assemblies: doc.assemblies ?? [], entryIndex: index)
-        if let presence = doc.catalogPresence { result.catalogPresence = try result.presence(presence) }
+        if let presence = doc.catalogPresence {
+            // Two assignments, not a tuple: Swift 6.3.3 (CI) does not convert a tuple element to an optional.
+            let loaded = try result.presence(presence)
+            result.catalogPresence = loaded.ids
+            result.catalogSexLimited = loaded.sexLimited
+        }
         for entry in result.entries {
             for ref in [entry.rig, entry.appearance, entry.cardBindings, entry.bodyMask, entry.materialEvidence,
                         entry.alternateMaterialEvidence, entry.wearAppearance, entry.wearCardBindings].compactMap({ $0 }) { _ = try result.contained(ref) }
@@ -125,7 +143,7 @@ public struct SourceMakerLibrary: Sendable {
     }
     /// The presence sidecar: contained, SHA-verified (a mismatch is a load
     /// error, as for every other sidecar) and decoded into one set per category.
-    private func presence(_ ref: File) throws -> [Int: Set<Int>] {
+    private func presence(_ ref: File) throws -> (ids: [Int: Set<Int>], sexLimited: [Int: [Int: Set<Int>]]) {
         let url = try verified(ref, maximumBytes: 8 * 1024 * 1024)
         let document = try JSONDecoder().decode(PresenceDocument.self, from: Data(contentsOf: url))
         guard document.schemaVersion == 1, document.kind == "koikatsu-catalog-presence" else {
@@ -145,7 +163,21 @@ public struct SourceMakerLibrary: Sendable {
         guard result.count == Self.catalogDefaultIDs.count else {
             throw RigError.invalid("Maker catalog presence must record every hair and clothes category.")
         }
-        return result
+        // A sex-limited row is an installed top or bra row with Sex 2 or 3;
+        // anything else is a writer error, not a rule to guess at.
+        var limited: [Int: [Int: Set<Int>]] = [:]
+        for (key, values) in document.sexLimited ?? [:] {
+            guard let category = Int(key), [105, 107].contains(category), let present = result[category], !values.isEmpty else {
+                throw RigError.invalid("Invalid Maker catalog sex-limited category \(key).")
+            }
+            for (valueKey, ids) in values {
+                guard let value = Int(valueKey), [2, 3].contains(value), !ids.isEmpty, ids.allSatisfy(present.contains) else {
+                    throw RigError.invalid("Invalid Maker catalog sex-limited rows \(key):\(valueKey).")
+                }
+                limited[category, default: [:]][value] = Set(ids)
+            }
+        }
+        return (result, limited)
     }
     private func contained(_ ref: File) throws -> URL {
         let url = directory.appendingPathComponent(ref.file).resolvingSymlinksInPath()
@@ -189,6 +221,15 @@ public struct SourceMakerLibrary: Sendable {
         /// drawn ID back into its loaded card (hair ChaControl.Koikatu.cs:7059,
         /// clothes into nowCoordinate :7292 and the other Change*Async sites).
         public var resolvedID: Int? = nil
+        /// `catalogFallback` only: why the saved row is not drawn.
+        public var fallbackReason: FallbackReason? = nil
+        public enum FallbackReason: Sendable, Equatable {
+            /// The saved ID is in no installed list (#346).
+            case notInstalled
+            /// The installed row's Sex column excludes the card's sex (#351):
+            /// `value` 2 is not drawn for a female, 3 not for a male.
+            case sexLimited(value: Int)
+        }
         /// `catalogFallback` only: what the original draws, as diagnostics and
         /// pickers show it: "ID n", "ID n (unconverted: reference part
         /// shown)" or "nothing".
@@ -198,7 +239,21 @@ public struct SourceMakerLibrary: Sendable {
             return entry == nil ? "ID \(resolvedID) (unconverted: reference part shown)" : "ID \(resolvedID)"
         }
     }
-    public func selection(category: Int, savedID: Int, property: String, references: SourceCardModReferences?) -> Selection {
+    /// Why a `catalogFallback` row's saved ID is not drawn, as the
+    /// diagnostics word it.
+    public static func fallbackCause(_ reason: Selection.FallbackReason?) -> String {
+        switch reason {
+        case .sexLimited(let value):
+            // In effect Sex 3 rows draw only for a female, 2 only for a male (:8706, :8710).
+            return value == 3 ? "is a female-only row (Sex 3), which the original does not draw for a male card"
+                : "is a male-only row (Sex 2), which the original does not draw for a female card"
+        case .notInstalled, nil: return "is in no installed catalog"
+        }
+    }
+    /// `sex` is the card's ChaControl.sex (0 male, 1 female), or nil when
+    /// unknown: the Sex rule (#351) then excludes nothing.
+    public func selection(category: Int, savedID: Int, property: String, references: SourceCardModReferences?,
+                          sex: Int?) -> Selection {
         let record = references?.records.first { $0.property.map { Data($0.utf8) } == Data(property.utf8) }
         let id: Int, guid: String?
         if let record {
@@ -212,8 +267,20 @@ public struct SourceMakerLibrary: Sendable {
         // #346: a vanilla ID that no installed list has draws the original's
         // fallback (LoadCharaFbxDataAsync, ChaControl.Koikatu.cs:8675-8700):
         // the default ID unless it is the saved one, else 0, else nothing.
-        if entry == nil, guid == nil, let present = catalogPresence?[category], !present.contains(id),
-           let defaultID = Self.catalogDefaultIDs[category] {
+        // #351: an installed top or bra row whose Sex excludes the card's sex
+        // takes the same chain (:8702-8726), except when the saved ID is the
+        // default: the original then keeps the excluded row (it never looks
+        // the default up again), so it is drawn as saved.
+        let present = guid == nil ? catalogPresence?[category] : nil
+        let defaultID = Self.catalogDefaultIDs[category]
+        var reason: Selection.FallbackReason? = nil
+        if let present, !present.contains(id) {
+            if entry == nil { reason = .notInstalled }
+        } else if present != nil, let sex, let value = Self.catalogSexExcludedValue[sex],
+                  catalogSexLimited[category]?[value]?.contains(id) == true, let defaultID, id != defaultID {
+            reason = .sexLimited(value: value)
+        }
+        if let reason, let present, let defaultID {
             // Explicit optional: Swift 6.3.3 (CI) does not promote the mixed ternary.
             var resolved: Int? = nil
             if id != defaultID && present.contains(defaultID) { resolved = defaultID } else if present.contains(0) { resolved = 0 }
@@ -228,7 +295,7 @@ public struct SourceMakerLibrary: Sendable {
                                  alternates: nil, alternateMaterialEvidence: nil, wearAppearance: nil, wearCardBindings: nil)
             }
             return Selection(property: property, category: category, savedID: savedID, sourceID: id, modGUID: nil,
-                             entry: fallback, status: "catalogFallback", resolvedID: resolved)
+                             entry: fallback, status: "catalogFallback", resolvedID: resolved, fallbackReason: reason)
         }
         return Selection(property: property, category: category, savedID: savedID, sourceID: id, modGUID: guid,
             entry: entry, status: entry == nil ? "conversionMissing" : entry?.empty == true ? "empty" : "converted")
@@ -260,6 +327,7 @@ public struct SourceMakerLibrary: Sendable {
     public func wearCatalog(card: SourceCharacterCard, coordinate: Int) throws -> WearCatalog {
         guard (0..<7).contains(coordinate) else { throw RigError.invalid("Invalid Maker outfit index.") }
         let references = try card.modReferences()
+        let sex = (try? card.customization())?.sex
         func row(_ resolution: Selection) throws -> CatalogRow {
             guard let entry = resolution.entry else { return .unknown(resolution.status) }
             if entry.empty == true { return .none }
@@ -277,7 +345,7 @@ public struct SourceMakerLibrary: Sendable {
                 throw RigError.invalid("Missing or invalid Maker selection id.")
             }
             let property = "outfit\(coordinate).ChaFileClothes.Clothes" + ["Top", "Bot", "Bra", "Shorts", "Gloves", "Pants", "Socks", "ShoesInner", "ShoesOuter"][slot]
-            let resolution = selection(category: min(105 + slot, 112), savedID: id, property: property, references: references)
+            let resolution = selection(category: min(105 + slot, 112), savedID: id, property: property, references: references, sex: sex)
             clothes.append(try row(resolution)); ids.append(id)
             modded.append(resolution.modGUID != nil || resolution.status == "compatibilityRequired")
         }
@@ -289,7 +357,7 @@ public struct SourceMakerLibrary: Sendable {
             guard let category = fields["type"]?.integerValue, (121...130).contains(category),
                   let id = fields["id"]?.integerValue, Int32(exactly: id) != nil else { continue }
             accessories[slot] = try row(selection(category: category, savedID: id,
-                property: "outfit\(coordinate).accessory\(slot).ChaFileAccessory.PartsInfo.id", references: references))
+                property: "outfit\(coordinate).accessory\(slot).ChaFileAccessory.PartsInfo.id", references: references, sex: sex))
         }
         return WearCatalog(clothes: clothes, clothesIDs: ids, clothesModded: modded, accessories: accessories)
     }
@@ -518,6 +586,7 @@ public struct SourceMakerLibrary: Sendable {
         func add(_ url: URL?) { if let url, !files.contains(url) { files.append(url) } }
         let references: SourceCardModReferences?
         do { references = try card.modReferences() } catch { return [] }
+        let sex = (try? card.customization())?.sex
         guard (0..<7).contains(coordinate), let bytes = try? Data(contentsOf: baseURL),
               let manifest = try? JSONDecoder().decode(SourceAvatarManifest.self, from: bytes) else { return [] }
         let folder = baseURL.deletingLastPathComponent().resolvingSymlinksInPath()
@@ -536,7 +605,7 @@ public struct SourceMakerLibrary: Sendable {
         /// (converted or explicitly empty) replaces the base part.
         func selected(_ category: Int, _ fields: [String: SourceMessagePackValue], _ property: String) -> Bool {
             guard let id = fields["id"]?.integerValue,
-                  let entry = selection(category: category, savedID: id, property: property, references: references).entry else { return false }
+                  let entry = selection(category: category, savedID: id, property: property, references: references, sex: sex).entry else { return false }
             if entry.empty != true, let rig = entry.rig { add(try? contained(rig)) }
             return true
         }
@@ -615,9 +684,10 @@ public struct SourceMakerLibrary: Sendable {
         /// which the entry's bindings name as a requirement.
         func selected(_ category: Int, _ id: Int, _ property: String, _ prefix: String, accessorySlot: Int? = nil,
                       indoorShoes: Bool = false, clothingSlot: Int? = nil, slotPath: String? = nil) throws -> (SourceRig, [String]?)? {
-            let resolution = selection(category: category, savedID: id, property: property, references: references); selections.append(resolution)
+            let resolution = selection(category: category, savedID: id, property: property, references: references, sex: identity.sex)
+            selections.append(resolution)
             if let drawn = resolution.drawnDescription {
-                diagnostics.append("\(property): catalogFallback, source ID \(resolution.sourceID) is in no installed catalog, so the original draws \(drawn). The saved ID is kept, unlike the original, which writes the drawn ID back.")
+                diagnostics.append("\(property): catalogFallback, source ID \(resolution.sourceID) \(Self.fallbackCause(resolution.fallbackReason)), so the original draws \(drawn). The saved ID is kept, unlike the original, which writes the drawn ID back.")
             }
             guard let entry = resolution.entry else {
                 // An unconverted fallback row was diagnosed above.

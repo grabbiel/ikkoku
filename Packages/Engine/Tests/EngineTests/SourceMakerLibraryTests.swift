@@ -45,21 +45,21 @@ private enum MakerLibraryFixture {
         MakerLibraryFixture.empty(101, 17, name: "original")], directory: directory)
     let property = "ChaFileHair.HairBack"
     let refs = try MakerLibraryFixture.references([("Example.Mod", property, 17, 900001), ("example.mod", property, 17, 900002)])
-    let selected = library.selection(category: 101, savedID: 99999, property: property, references: refs)
+    let selected = library.selection(category: 101, savedID: 99999, property: property, references: refs, sex: nil)
     #expect(selected.entry?.name == "first" && selected.savedID == 99999 && selected.sourceID == 17)
     #expect(selected.modGUID == "Example.Mod" && selected.status == "empty")
     #expect(refs.records.map(\.localSlot) == [900001, 900002])
-    #expect(library.selection(category: 102, savedID: 17, property: property, references: refs).entry == nil)
+    #expect(library.selection(category: 102, savedID: 17, property: property, references: refs, sex: nil).entry == nil)
     for (guid, name) in [("example.mod", "case-distinct"), ("caf\u{e9}", "composed"), ("cafe\u{301}", "decomposed")] {
         let ref = try MakerLibraryFixture.references([(guid, property, 17, 1)])
-        #expect(library.selection(category: 101, savedID: 900001, property: property, references: ref).entry?.name == name)
+        #expect(library.selection(category: 101, savedID: 900001, property: property, references: ref, sex: nil).entry?.name == name)
     }
     let ordinal = try MakerLibraryFixture.references([("Example.Mod", "caf\u{e9}", 17, 1)])
-    #expect(library.selection(category: 101, savedID: 17, property: "cafe\u{301}", references: ordinal).entry?.name == "original")
-    #expect(library.selection(category: 101, savedID: 17, property: property, references: nil).entry?.name == "original")
+    #expect(library.selection(category: 101, savedID: 17, property: "cafe\u{301}", references: ordinal, sex: nil).entry?.name == "original")
+    #expect(library.selection(category: 101, savedID: 17, property: property, references: nil, sex: nil).entry?.name == "original")
     for guid: String? in [nil, ""] {
         let ref = try MakerLibraryFixture.references([(guid, property, 17, 1)])
-        #expect(library.selection(category: 101, savedID: 17, property: property, references: ref).status == "compatibilityRequired")
+        #expect(library.selection(category: 101, savedID: 17, property: property, references: ref, sex: nil).status == "compatibilityRequired")
     }
 }
 

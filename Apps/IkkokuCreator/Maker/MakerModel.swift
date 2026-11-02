@@ -878,13 +878,14 @@ final class MakerModel: ViewportInputHandler, LivePacedHandler {
             try card.validateMakerSelectionMetadata()
             references = try card.modReferences(); resolverError = nil
         } catch { references = nil; resolverError = "Invalid resolver metadata: \(error)" }
+        let sex = (try? card.customization())?.sex
         return slots.compactMap { label, slot in
             guard let destination = try? slot.destination(),
                   let parts = try? card.recordFields(destination.record)["parts"]?.arrayValue,
                   parts.indices.contains(destination.slot),
                   let savedID = try? parts[destination.slot].stringKeyedMap()["id"]?.integerValue else { return nil }
             let selection = library.selection(category: destination.category, savedID: savedID,
-                property: destination.property, references: references)
+                property: destination.property, references: references, sex: sex)
             let reason = resolverError ?? unavailableReason
             let choices = library.entries.filter { reason == nil && $0.category == destination.category && $0.modGUID == nil }
                 .map { SourceSelectionRow.Choice(id: $0.id, name: "\($0.name) · ID \($0.id)") }

@@ -12,6 +12,11 @@ Get-FileHash values, taken in the same VM exec as the fetch).
 Every hair and clothes category is written, an empty one as `[]`: the original
 loads nothing for an empty category (work.Count == 0, :8679-8683).
 
+#351: a top (105) or bra (107) row whose Sex column excludes one sex (:8702-8726:
+Sex 3 is not drawn for a male, Sex 2 not for a female) is recorded under the
+optional `sexLimited` key, written only when such a row exists, so a file from
+tables without one keeps its v1 bytes.
+
 It writes `catalog-presence.json` into a Maker library and records it in that
 library's `library.json` as `catalogPresence`. Every other key and entry is
 written back as read. Catalog metadata only: no asset or card is decoded.
@@ -21,6 +26,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import re
 from pathlib import Path, PurePosixPath
 
 from maker_asset_library import source_file
@@ -31,6 +37,10 @@ LIST_DIRECTORY = 'list/characustom'
 # to a default ID (SourceMakerLibrary.catalogDefaultIDs).
 CATEGORIES = tuple(range(101, 113))
 KIND = 'koikatsu-catalog-presence'
+# LoadCharaFbxDataAsync checks the Sex column of these categories only (:8702),
+# and excludes these values: 3 for a male (:8706), 2 for a female (:8710).
+SEX_CHECKED = (105, 107)
+SEX_LIMITING = (2, 3)
 
 
 def digest(data: bytes) -> str:
@@ -81,10 +91,48 @@ def presence(tables) -> dict[str, list[int]]:
     return {str(category): sorted(ids[category]) for category in CATEGORIES}
 
 
+def info_int(value) -> int:
+    """ListInfoBase.GetInfoInt: int.TryParse of the text, else -1 (a missing key reads as text that fails)."""
+    text = value if isinstance(value, str) else ''
+    return int(text) if re.fullmatch(r'\s*[+-]?[0-9]+\s*', text, flags=re.ASCII) else -1
+
+
+def sex_limited(tables) -> dict[str, dict[str, list[int]]]:
+    """The sex-limited rows of the checked categories, {"105": {"3": [ids]}}; a category or value without a
+    row is left out. The original keeps one row per ID; an ID whose tables disagree on the limit is refused,
+    since ChaListControl's rule for an ID that two tables share is not recovered."""
+    limit: dict[int, dict[int, int]] = {category: {} for category in SEX_CHECKED}
+    for table in tables:
+        if table['category'] not in limit:
+            continue
+        for row in table['rows']:
+            item, value = int(row['ID']), info_int(row.get('Sex'))
+            value = value if value in SEX_LIMITING else -1
+            if limit[table['category']].setdefault(item, value) != value:
+                raise ValueError(f"Tables disagree on the Sex limit of {table['category']}:{item}")
+    result = {}
+    for category, rows in limit.items():
+        values = {str(v): sorted(i for i, w in rows.items() if w == v) for v in SEX_LIMITING}
+        values = {k: v for k, v in values.items() if v}
+        if values:
+            result[str(category)] = values
+    return result
+
+
 def document(tables, sources, listing_sha256: str, installed: int) -> dict:
-    return dict(schemaVersion=1, kind=KIND, installedListBundles=installed, listingSHA256=listing_sha256,
-                sources=sources, categories=presence(tables),
-                scope='Vanilla list/characustom catalogs of one installation; zipmod rows (Sideloader) are not included.')
+    result = dict(schemaVersion=1, kind=KIND, installedListBundles=installed, listingSHA256=listing_sha256,
+                  sources=sources, categories=presence(tables),
+                  scope='Vanilla list/characustom catalogs of one installation; zipmod rows (Sideloader) are not included.')
+    limited = sex_limited(tables)
+    if limited:
+        # Optional (#351): absent when no checked row is sex-limited, so such a file keeps its v1 bytes.
+        result['sexLimited'] = limited
+    return result
+
+
+def encode(value: dict) -> bytes:
+    """The presence file's bytes: sorted keys, no spaces, one newline."""
+    return (json.dumps(value, sort_keys=True, separators=(',', ':')) + '\n').encode()
 
 
 def attach(library_path: Path, presence_path: Path, data: bytes):
@@ -114,11 +162,13 @@ def main():
     paths = [source_file(args.shared, f'{LIST_DIRECTORY}/{name}') for name in sorted(installed)]
     sources = [dict(path=f'{LIST_DIRECTORY}/{p.name}', sha256=digest(p.read_bytes()), bytes=p.stat().st_size) for p in paths]
     all_tables = [table for path in paths for table in list_tables(path)]
-    data = (json.dumps(document(all_tables, sources, digest(listing_bytes), len(installed)), sort_keys=True,
-                       separators=(',', ':')) + '\n').encode()
+    data = encode(document(all_tables, sources, digest(listing_bytes), len(installed)))
     attach(args.library, args.library.parent / 'catalog-presence.json', data)
-    counts = {k: len(v) for k, v in json.loads(data)['categories'].items()}
-    print(json.dumps(dict(library=str(args.library), installedListBundles=len(installed), ids=counts, sha256=digest(data))))
+    written = json.loads(data)
+    counts = {k: len(v) for k, v in written['categories'].items()}
+    limited = {f'{c}:{v}': len(ids) for c, values in written.get('sexLimited', {}).items() for v, ids in values.items()}
+    print(json.dumps(dict(library=str(args.library), installedListBundles=len(installed), ids=counts, sexLimited=limited,
+                          sha256=digest(data))))
 
 
 if __name__ == '__main__':
