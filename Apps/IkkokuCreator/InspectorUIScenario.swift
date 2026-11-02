@@ -22,7 +22,8 @@ struct InspectorUIScenario: Decodable {
         /// `"press"` (`label`: presses the accessibility element with that label or
         /// title, a section's disclosure triangle), `"activateWell"` (activates the
         /// inspector's first visible colour well), `"routePoint"` (`index`: selects
-        /// that point of the selected route) and `"closeColorPanel"`.
+        /// that point of the selected route) and `"closeColorPanel"`. Added for
+        /// #333: `"tab"` (`label`: shows that inspector tab, such as `clothes`).
         let op: String
         let key: Int32?
         let keys: [Int32]?
@@ -63,6 +64,10 @@ struct InspectorUIScenario: Decodable {
         /// nothing; an accepted one is undone with no first responder).
         let probeHit: Bool?
         let probeFocusable: Bool?
+        // Added for #333 (the Clothes tab laid out wider than the inspector).
+        /// Whether everything in the inspector's scroll view lies within its
+        /// visible width: see `inspectorFit(_:)`.
+        let inspectorFits: Bool?
     }
 
     let steps: [Step]
@@ -196,6 +201,14 @@ struct InspectorUIScenario: Decodable {
                 repeat { await settle() } while studio.pendingSourceOutfits[id] != nil && Date() < deadline
                 let after = studio.sourceShapePreview(for: id)?.coordinate
                 record(step.op, after == index, "outfit \(before) to \(index): shows \(after.map { "\($0)" } ?? "none")")
+            case "tab":
+                guard let label = step.label?.lowercased(),
+                      let tab = StudioModel.InspectorTab.allCases.first(where: { $0.rawValue.lowercased() == label }) else {
+                    record(step.op, false, "no inspector tab '\(step.label ?? "")'"); continue
+                }
+                studio.inspectorTab = tab
+                await settle()
+                record(step.op, true, "inspector tab \(tab.rawValue)")
             case "closeColorPanel":
                 if NSColorPanel.sharedColorPanelExists { NSColorPanel.shared.orderOut(nil) }
                 await settle()
@@ -250,6 +263,11 @@ struct InspectorUIScenario: Decodable {
                 let wells = Self.colorWells(in: window).filter(\.isActive).count
                 seen.append("active wells \(wells)")
                 if let n = step.activeWells, n != wells { problems.append("active wells \(wells), expected \(n)") }
+                if let expected = step.inspectorFits {
+                    let fit = Self.inspectorFit(window)
+                    seen.append(fit.detail)
+                    if expected != fit.fits { problems.append("inspector fits \(fit.fits), expected \(expected)") }
+                }
                 if step.probeHit != nil || step.probeFocusable != nil {
                     if let probe, let content = window.contentView {
                         let hit = content.hitTest(content.superview?.convert(probe.center, from: nil) ?? probe.center)
@@ -410,6 +428,76 @@ struct InspectorUIScenario: Decodable {
         }
         window.makeFirstResponder(nil)
         return (views, hidden, sha(views))
+    }
+
+    /// The inspector column's scroll view: the tallest scroll view at the
+    /// window's trailing edge that is not inside another scroll view.
+    @MainActor static func inspectorScrollView(_ window: NSWindow) -> NSScrollView? {
+        guard let content = window.contentView else { return nil }
+        let edge = content.convert(content.bounds, to: nil).maxX
+        var found: [NSScrollView] = []
+        func visit(_ view: NSView) {
+            if let scroll = view as? NSScrollView {
+                if !scroll.isHiddenOrHasHiddenAncestor, abs(scroll.convert(scroll.bounds, to: nil).maxX - edge) <= 2 {
+                    found.append(scroll)
+                }
+                return
+            }
+            view.subviews.forEach(visit)
+        }
+        visit(content)
+        return found.max { $0.bounds.height < $1.bounds.height }
+    }
+
+    /// Whether everything in the inspector's scroll view lies within its visible
+    /// width (#333): its document view is no wider than its clip view, and no
+    /// accessibility element inside it (SwiftUI's text is not an NSView, so
+    /// views alone would miss it) extends past the clip view on either side.
+    /// The detail names the scroller style, whether the vertical scroller
+    /// shows, and up to eight elements past the visible width.
+    @MainActor static func inspectorFit(_ window: NSWindow) -> (fits: Bool, detail: String) {
+        guard let scroll = inspectorScrollView(window) else { return (false, "no inspector scroll view") }
+        let clip = scroll.contentView
+        let visible = window.convertToScreen(clip.convert(clip.bounds, to: nil))
+        var offenders: [String] = [], leaves = 0, visited = 0
+        func get(_ object: NSObject, _ name: String) -> Any? {
+            let selector = NSSelectorFromString(name)
+            guard object.responds(to: selector) else { return nil }
+            return object.perform(selector)?.takeUnretainedValue()
+        }
+        // The frame getter returns a struct, so it is called through its
+        // implementation, not `perform`, and not through key-value coding,
+        // which throws for an element that only forwards the selector.
+        typealias FrameGetter = @convention(c) (AnyObject, Selector) -> NSRect
+        let frameSelector = NSSelectorFromString("accessibilityFrame")
+        func frame(_ object: NSObject) -> CGRect? {
+            guard object.responds(to: frameSelector), let implementation = object.method(for: frameSelector) else { return nil }
+            return unsafeBitCast(implementation, to: FrameGetter.self)(object, frameSelector)
+        }
+        func visit(_ element: Any, depth: Int) {
+            guard depth < 80, visited < 20_000, let object = element as? NSObject else { return }
+            visited += 1
+            let children = get(object, "accessibilityChildren") as? [Any] ?? []
+            let role = get(object, "accessibilityRole") as? String ?? ""
+            if children.isEmpty, role != "AXScrollBar", let f = frame(object), f.width > 0, f.height > 0 {
+                leaves += 1
+                if f.minX < visible.minX - 1 || f.maxX > visible.maxX + 1 {
+                    let name = ["accessibilityLabel", "accessibilityTitle", "accessibilityValue"]
+                        .compactMap { get(object, $0) as? String }.first { !$0.isEmpty } ?? ""
+                    offenders.append("\(role) '\(name.prefix(40))' x \(Int(f.minX - visible.minX))...\(Int(f.maxX - visible.minX))")
+                }
+            }
+            children.forEach { visit($0, depth: depth + 1) }
+        }
+        visit(scroll, depth: 0)
+        let document = scroll.documentView?.frame.width ?? 0
+        let vertical = scroll.hasVerticalScroller && !(scroll.verticalScroller?.isHidden ?? true)
+        let fits = offenders.isEmpty && leaves > 0 && document <= clip.bounds.width + 1
+        let detail = "inspector scroll view: clip \(Int(clip.bounds.width)) pt, document \(Int(document)) pt, "
+            + (scroll.scrollerStyle == .legacy ? "legacy" : "overlay") + " scrollers, vertical scroller "
+            + (vertical ? "shown" : "not shown") + ", \(leaves) elements, \(offenders.count) past the visible width "
+            + "(\(Int(visible.width)) pt)" + (offenders.isEmpty ? "" : ": " + offenders.prefix(8).joined(separator: "; "))
+        return (fits, detail)
     }
 
     static func sha(_ lines: [String]) -> String {

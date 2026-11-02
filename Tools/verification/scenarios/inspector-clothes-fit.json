@@ -1,0 +1,131 @@
+{
+  "steps": [],
+  "inspectorUI": {
+    "steps": [
+      {
+        "op": "tab",
+        "label": "clothes"
+      },
+      {
+        "op": "select",
+        "key": 0
+      },
+      {
+        "op": "assert",
+        "key": 0,
+        "inspectorView": "ClothesInspector.sourceAccessoryLabels",
+        "inspectorFits": true
+      },
+      {
+        "op": "select",
+        "key": 622
+      },
+      {
+        "op": "select",
+        "key": 963
+      },
+      {
+        "op": "assert",
+        "key": 963,
+        "inspectorView": "ClothesInspector.sourceAccessoryLabels",
+        "inspectorFits": true
+      },
+      {
+        "op": "select",
+        "key": 0
+      },
+      {
+        "op": "assert",
+        "key": 0,
+        "inspectorView": "ClothesInspector.sourceAccessoryLabels",
+        "inspectorFits": true
+      },
+      {
+        "op": "select",
+        "key": 622
+      },
+      {
+        "op": "select",
+        "key": 963
+      },
+      {
+        "op": "assert",
+        "key": 963,
+        "inspectorView": "ClothesInspector.sourceAccessoryLabels",
+        "inspectorFits": true
+      },
+      {
+        "op": "select",
+        "key": 0
+      },
+      {
+        "op": "assert",
+        "key": 0,
+        "inspectorView": "ClothesInspector.sourceAccessoryLabels",
+        "inspectorFits": true
+      },
+      {
+        "op": "select",
+        "key": 622
+      },
+      {
+        "op": "select",
+        "key": 963
+      },
+      {
+        "op": "assert",
+        "key": 963,
+        "inspectorView": "ClothesInspector.sourceAccessoryLabels",
+        "inspectorFits": true
+      },
+      {
+        "op": "select",
+        "key": 0
+      },
+      {
+        "op": "assert",
+        "key": 0,
+        "inspectorView": "ClothesInspector.sourceAccessoryLabels",
+        "inspectorFits": true
+      },
+      {
+        "op": "select",
+        "key": 622
+      },
+      {
+        "op": "select",
+        "key": 963
+      },
+      {
+        "op": "assert",
+        "key": 963,
+        "inspectorView": "ClothesInspector.sourceAccessoryLabels",
+        "inspectorFits": true
+      },
+      {
+        "op": "select",
+        "key": 0
+      },
+      {
+        "op": "assert",
+        "key": 0,
+        "inspectorView": "ClothesInspector.sourceAccessoryLabels",
+        "inspectorFits": true
+      },
+      {
+        "op": "select",
+        "key": 622
+      },
+      {
+        "op": "select",
+        "key": 963
+      },
+      {
+        "op": "assert",
+        "key": 963,
+        "inspectorView": "ClothesInspector.sourceAccessoryLabels",
+        "inspectorFits": true
+      }
+    ]
+  }
+}

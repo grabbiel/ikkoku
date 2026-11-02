@@ -646,7 +646,9 @@ INSPECTOR_UI_OPS = {"select", "deselect", "focus", "type", "delete", "undo", "re
                     # Added with the kept inspector views (R7 phase 2, item 7).
                     "probe", "press", "activateWell", "routePoint", "closeColorPanel",
                     # Added with the model's Object tab state (R7 phase 2, item 7).
-                    "outfit"}
+                    "outfit",
+                    # Added for #333 (the Clothes tab laid out wider than the inspector).
+                    "tab"}
 
 # ST-T11 `editRoute` settings: point edits name the point, route edits do not.
 ROUTE_POINT_SETTINGS = ("delete", "move", "speed", "ease", "connection", "link")
@@ -830,7 +832,7 @@ class StudioScenarioLaneTests(unittest.TestCase):
                       and not name.startswith(("maker-", "gameplay-")))
 
     def test_lane_validates_and_covers_every_scenario(self):
-        self.assertEqual(len(self.checks), 89)
+        self.assertEqual(len(self.checks), 91)
         referenced = set()
         for check in self.checks:
             scenario = check["env"]["IKKOKU_STUDIO_SCENARIO"]
@@ -853,6 +855,8 @@ class StudioScenarioLaneTests(unittest.TestCase):
                 self.assertRegex(step["field"], r"^(name|vector[0-9]+)$")
             if op == "press":
                 self.assertTrue(step["label"])
+            if op == "tab":
+                self.assertIn(step["label"], ("object", "pose", "face", "clothes", "scene"))
             if op in ("routePoint", "outfit"):
                 self.assertIs(type(step["index"]), int)
                 self.assertGreaterEqual(step["index"], 0)
@@ -866,12 +870,23 @@ class StudioScenarioLaneTests(unittest.TestCase):
             for name in ("undoCount", "redoCount", "keyViews", "hiddenKeyViews", "activeWells"):
                 if name in step:
                     self.assertIs(type(step[name]), int)
-            for name in ("probeHit", "probeFocusable", "editing", "unchanged", "exists"):
+            for name in ("probeHit", "probeFocusable", "editing", "unchanged", "exists", "inspectorFits"):
                 if name in step:
                     self.assertIs(type(step[name]), bool)
             for name in ("axContains", "axAbsent"):
                 if name in step:
                     self.assertTrue(all(isinstance(text, str) and text for text in step[name]))
+
+    def test_launch_arguments_are_known_per_process_settings(self):
+        # #333: a check may pass per-process settings after the binary, through
+        # the argument domain, never through System Settings: only these
+        # names and values, as name/value pairs.
+        allowed = {"-AppleShowScrollBars": {"Always", "WhenScrolling"}}
+        for check in self.checks:
+            extra = check["argv"][1:]
+            self.assertEqual(len(extra) % 2, 0, check["id"])
+            for name, value in zip(extra[::2], extra[1::2]):
+                self.assertIn(value, allowed.get(name, set()), "%s: %s %s" % (check["id"], name, value))
 
     def test_scenario_reports_are_artifacts(self):
         for check in self.checks:
