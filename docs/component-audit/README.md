@@ -865,7 +865,7 @@ routes). Every slice records its own evidence in the linked reports. The merged
 kernel-, capture- and build-level: **the merged wave has not been exercised
 interactively in the running app yet.** Before these features count as verified
 through the app, run this checklist against an original Studio scene (for
-example `koikatu_cs0002591.png`) with the converted-asset environment variables
+example source scene `029f0b1d`) with the converted-asset environment variables
 set.
 
 **Merged 2026-09-28 – 2026-10-01 (PRs #40–#84):** source camera objects and the
@@ -1033,7 +1033,7 @@ reruns, and branch cleanup) is handed off in
       the hidden folder's camera child keeps its own saved `visible=true` flags, which
       matches our own-flag-only writer; recorded in
       [scene-editing](../reference/studio/scene-editing.md#charastudio-reload-acceptance);
-      on the synthetic scene-x, not `koikatu_cs0002591.png`; passed 2026-09-30)
+      on the synthetic scene-x, not source scene `029f0b1d`; passed 2026-09-30)
 - [x] ST-T03 rename: rename a source folder, camera or route, export the original scene,
       reload it: the new name shows; renaming a character (whose name lives in its card)
       stays rejected at the inspector export. (automated headlessly: the edits go
@@ -1149,7 +1149,7 @@ reruns, and branch cleanup) is handed off in
       orbit/pan/zoom refusal messages and the Look through UI itself stay unautomated;
       passed 2026-09-29)
 - [ ] ST-T04 source props: with `IKKOKU_STUDIO_ITEM_CATALOG` set, import
-      koikatu_cs0002591: the 19 basic cubes render at their saved transforms and show
+      source scene `029f0b1d`: the 19 basic cubes render at their saved transforms and show
       their saved colors (all 19 record the same `color[0]`, a 0.875 grey at alpha 1)
       (diagnostics report `Items rendered from the converted catalog: 19; unmapped keys:
       none.`); the placeholders stay exportable and export still succeeds (runtime only).
@@ -1305,7 +1305,7 @@ reruns, and branch cleanup) is handed off in
       tested the selection, not relocation. It first found the missing
       `studio-pose/` companion, fixed in `f402483`. Relocation, user,
       2026-10-23, main `c9df5df`: in the Debug app, Choose Converted Library… →
-      `.local/reverse/`, preview of `koikatu_cs0002591.png` from inside it, and
+      `.local/reverse/`, preview of source scene `029f0b1d` from inside it, and
       Save Scene…. Then Choose Converted Library… → the moved copy (the three
       libraries plus `studio-pose/`, `animation-assets/female-base/` and the scene
       at the same relative path), with no incomplete alert. The Release app, copied
@@ -1314,6 +1314,20 @@ reruns, and branch cleanup) is handed off in
       resolved, 31 relocated, 0 unresolved.`, and showed all 6 characters with no
       `Unresolved` or fallback line. See the
       [build guide](../guides/build-and-test.md#use-a-converted-library-outside-the-checkout).)
+- [ ] R7 item 7 follow-ups (PR #319): in the app, with a source scene of
+      characters and folders open, do three things. Select a character and
+      FK-drag a bone: the drag stays smooth, and the workspace tree, the
+      toolbar and the timeline bar keep showing the right selection, names
+      and key count. Type in the inspector's Name field: the workspace row
+      follows while you type, and the Visible toggle flips the row's eye
+      button. Select a character, then a folder, then nothing: the toolbar's
+      FK/IK picker shows only for the character.
+      (automated in part: `scenarios/inspector-kept-views.json` checks that the
+      row follows a rename typed mid-session and a visibility toggle. In every
+      Studio scenario, the Debug check compares the published workspace,
+      toolbar and timeline state with a fresh computation after each run-loop
+      turn. Passed `--strict` 2026-11-01. The drag's feel and the picker are
+      not automated.)
 
 | Order | Tasks | Concrete result required |
 | --- | --- | --- |

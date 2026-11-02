@@ -278,7 +278,7 @@ the listed folders:
 
 | Run | Library | Result |
 | --- | --- | --- |
-| save | `.local/reverse/` | `IKKOKU_SOURCE_SCENE=koikatu_cs0002591.png` with `IKKOKU_SAVE_SCENE`: 32 objects saved (6 characters, 26 folders), 111 render items |
+| save | `.local/reverse/` | `IKKOKU_SOURCE_SCENE=<source scene 029f0b1d>` with `IKKOKU_SAVE_SCENE`: 32 objects saved (6 characters, 26 folders), 111 render items |
 | load, original | `.local/reverse/` | 32 objects, no resource line, 111 items; the PNG is byte-identical to the save capture |
 | load, moved | clone + `studio-pose/` + `animation-assets/female-base/` + the scene at `studio-scenes/…` | `Resource check: 31 references: 0 resolved, 31 relocated, 0 unresolved.`; 111 items, PNG byte-identical to the original load |
 | load, moved without the scene | clone + `studio-pose/` + `animation-assets/female-base/` | 24 relocated, 7 unresolved (the scene file and each character's scene file), one `Unresolved` line each; 0 items |
