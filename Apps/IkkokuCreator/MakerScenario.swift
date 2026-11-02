@@ -48,12 +48,17 @@ struct MakerScenario: Decodable {
         /// Any step: the decoded-rig hits and misses of the head selection it
         /// committed (`SourceSelectionTiming.headRigReuse`).
         let rigReuse: RigReuseValue?
+        /// Any step: the shape-contract hits and misses of the head selection
+        /// it committed (`SourceSelectionTiming.headShapeReuse`, #192).
+        let shapeReuse: RigReuseValue?
         /// Any step: outcomes of the current initial-load sample, the startup
         /// import's until a reimport or reload records its own (CXM1).
         let initialLoad: InitialLoadValue?
         struct RigReuseValue: Decodable { let hits: Int, misses: Int }
         struct InitialLoadValue: Decodable {
             let geometry: String?, referenceLoad: String?, cachePublication: String?
+            /// The import's shape-contract seed publication (#192).
+            let shapeCachePublication: String?
             /// The staged seed's rigs carried from the replaced session and
             /// decoded anew (#192-C, `stagedRigReuse`).
             let carried: Int?, misses: Int?
@@ -236,11 +241,19 @@ struct MakerScenario: Decodable {
                     }
                 } else { problems.append("rigReuse: no head selection sample") }
             }
+            if let expected = step.shapeReuse {
+                if let sample = maker.sourceSelectionTiming?.headShapeReuse {
+                    if sample.hits != expected.hits || sample.misses != expected.misses {
+                        problems.append("shapeReuse \(sample.hits)/\(sample.misses), expected \(expected.hits)/\(expected.misses)")
+                    }
+                } else { problems.append("shapeReuse: no head selection sample") }
+            }
             if let expected = step.initialLoad {
                 if let sample = (initialLoad ?? maker.sourceInitialLoadTiming)?.preparation {
                     for (name, actual, wanted) in [("geometry", sample.geometryOutcome.rawValue, expected.geometry),
                                                    ("referenceLoad", sample.referenceLoad.rawValue, expected.referenceLoad),
-                                                   ("cachePublication", sample.cachePublication.rawValue, expected.cachePublication)]
+                                                   ("cachePublication", sample.cachePublication.rawValue, expected.cachePublication),
+                                                   ("shapeCachePublication", sample.shapeCachePublication.rawValue, expected.shapeCachePublication)]
                     where wanted != nil && wanted != actual {
                         problems.append("initialLoad \(name) \(actual), expected \(wanted!)")
                     }

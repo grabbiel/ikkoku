@@ -117,6 +117,16 @@ final class MakerModel: ViewportInputHandler, LivePacedHandler {
             /// Candidate/live-ledger values at worker finish, not post-commit
             /// resources, heap usage or an admission timer.
             let stagedRigReuse: SourceMakerRigReuse.Sample?
+            /// #192: the import's shape-contract seed (`SourceMakerShapeReuse.
+            /// seededDecode`). `seeded` publishes the import's contract as the
+            /// new session's only entry; `empty` is a non-card load or a seed
+            /// the ledger could not admit (see `stagedShapeReuse`). Never
+            /// `emptyLedgerFull`: the seed is always hashed and decoded.
+            let shapeCachePublication: CachePublication
+            /// The seed's own SHA, decode and admission intervals, so the
+            /// import's added hash is visible. Nil for a non-card load.
+            let shapeSeedStages: SourceMakerPreparationTimings.Sample?
+            let stagedShapeReuse: SourceMakerShapeReuse.Sample?
         }
     }
     @ObservationIgnored private(set) var sourceInitialLoadTiming: SourceInitialLoadTiming?
@@ -527,8 +537,23 @@ final class MakerModel: ViewportInputHandler, LivePacedHandler {
             selectionDiagnostics.append("Card asset selection retained the reference assembly: \(error)")
         }
         let contractURL = url.deletingLastPathComponent().appendingPathComponent("character-shape-contract.json")
-        let contract = FileManager.default.fileExists(atPath: contractURL.path)
-            ? try SourceShapeContract.decode(Data(contentsOf: contractURL)) : nil
+        // #192: a card import stages the contract it decodes anyway as the new
+        // shape session's only entry, so returning to the imported head after
+        // another selection skips its decode. Only card imports with a Maker
+        // library can select heads; other loads decode plainly and reset.
+        let shapeReplacement: SourceMakerShapeReuse.Replacement? =
+            imported != nil && makerLibrary != nil ? sourceShapeReuse.prospectiveReplacement() : nil
+        let shapeSeedTimings: SourceMakerPreparationTimings? =
+            recordInitialLoad && shapeReplacement != nil ? SourceMakerPreparationTimings() : nil
+        let contract: SourceShapeContract?
+        let shapeSeed: (candidate: SourceMakerShapeReuse.Candidate, sample: SourceMakerShapeReuse.Sample)?
+        if FileManager.default.fileExists(atPath: contractURL.path) {
+            let data = try Data(contentsOf: contractURL)
+            if let shapeReplacement {
+                let seeded = try SourceMakerShapeReuse.seededDecode(data, for: shapeReplacement, timings: shapeSeedTimings)
+                contract = seeded.contract; shapeSeed = (seeded.candidate, seeded.sample)
+            } else { contract = try SourceShapeContract.decode(data); shapeSeed = nil }
+        } else { contract = nil; shapeSeed = nil }
         let appearanceURL = url.deletingPathExtension().appendingPathExtension("appearance.json")
         var appearance = FileManager.default.fileExists(atPath: appearanceURL.path)
             ? try SourcePreviewAppearance.load(url: appearanceURL, resources: host.renderer.resources, modLibrary: sourceModLibrary) : nil
@@ -600,7 +625,17 @@ final class MakerModel: ViewportInputHandler, LivePacedHandler {
                 sourceRigReuse.reset(); cachePublication = .emptyStaleFallback
             }
         } else { sourceRigReuse.reset(); cachePublication = .empty }
-        sourceShapeReuse.reset()
+        let shapeCachePublication: SourceInitialLoadTiming.Preparation.CachePublication
+        if let shapeReplacement {
+            // A missing contract file publishes an empty session (nil seed).
+            if sourceShapeReuse.commitReplacement(shapeReplacement, candidate: shapeSeed?.candidate) {
+                shapeCachePublication = (shapeSeed?.sample.retainedEntries ?? 0) > 0 ? .seeded : .empty
+            } else {
+                // As for the rigs: no await since the replacement was taken,
+                // so staleness keeps today's empty reset and drops the seed.
+                sourceShapeReuse.reset(); shapeCachePublication = .emptyStaleFallback
+            }
+        } else { sourceShapeReuse.reset(); shapeCachePublication = .empty }
         sourceMakerLibrary = makerLibrary; sourcePreparedAssets = prepared
         sourceAssetSelections = prepared?.selections ?? []
         sourceSelectionRows = selectionRows(card: imported, library: makerLibrary, coordinate: 0,
@@ -646,7 +681,8 @@ final class MakerModel: ViewportInputHandler, LivePacedHandler {
             appearanceOutcome: appearanceOutcome, cachePublication: cachePublication,
             publishedEntries: cachePublication == .seeded ? (seedSample?.retainedEntries ?? 0) : 0,
             geometryMilliseconds: geometryMilliseconds, selectedPreparationStages: selectedTimings?.sample,
-            stagedRigReuse: seedSample)
+            stagedRigReuse: seedSample, shapeCachePublication: shapeCachePublication,
+            shapeSeedStages: shapeSeedTimings?.sample, stagedShapeReuse: shapeSeed?.sample)
     }
 
     func closeSourceRig() { cancelSourceSelection(); sourceInitialLoadTiming = nil; sourceRigReuse.reset(); sourceShapeReuse.reset(); sourceSelectionRows = []; sourceHeadChoices = []; sourceNormalBaseURL = nil; importedSourceCard = nil; importedSourceCardURL = nil; sourceRigPreview = nil; resetCamera(); refresh(); status = "Character Maker" }

@@ -282,6 +282,60 @@ This supports a bounded repeated-selection benefit, not an FPS, RSS or general
 source-fidelity claim. Owner-thread changes are mixed; [#192](https://github.com/grabbiel/ikkoku/issues/192)
 remains open.
 
+#### Import seed (#192, 2026-11-02)
+
+A card import already reads and decodes its assembly's
+`character-shape-contract.json`. Before this change it then reset the shape
+session, so the first return to the imported head after another head's
+selection decoded that contract again (`shapeDecode`, about 23 ms in the
+#192-C head-0 return). The import now decodes those same bytes through
+`SourceMakerShapeReuse.seededDecode`, which stages the contract as the new
+session's only entry:
+
+- **Key.** The key is the same one the head preparation uses: SHA-256 of the
+  bytes the import read, their length and decoder version 1. The return
+  preparation still does its own contained, bounded read and hashes it, so a
+  hit requires byte-identical contract files. A changed contract file, or
+  another head's or sex's assembly, misses.
+- **Replacement, not carry.** `prospectiveReplacement()` names the session
+  being replaced. `commitReplacement` publishes the seed only while that
+  session is still current, at the point where the import used to reset.
+  Nothing carries over from the replaced session, so a reimport of another
+  card drops the previous card's entries. A reset, an earlier replacement, a
+  replay, another owner's replacement or another epoch's candidate is
+  rejected and changes nothing; the import then resets as before
+  (`emptyStaleFallback`). A failed import publishes nothing and keeps the old
+  session. Selections prepared before the import cannot publish into the new
+  session.
+- **Bound.** The seed goes through the same admission ledger: six entries,
+  8 MiB of logical entry charge and four snapshots per Maker, counting the
+  replaced session's entries until it is released. If the ledger cannot admit
+  the seed (capacity), or the contract alone exceeds the byte bound
+  (intrinsic), the contract still decodes and the import publishes an empty
+  session, which is what the reset did. The seeded entry shares its decoded
+  arrays with the preview's contract.
+- **Cost.** The import adds one SHA-256 of the contract bytes and one
+  admission traversal (about 0.55 ms and 0.08 ms in the #297 measurements).
+  It claims no owner-thread time: the saving is the return's worker-side
+  `shapeDecode`.
+- **Scope.** Only card imports with a Maker library seed; other loads decode
+  plainly and reset, as before.
+
+The import's initial-load sample reports `shapeCachePublication`,
+`shapeSeedStages` (the seed's SHA, decode and admission intervals) and
+`stagedShapeReuse`. The four head scenarios assert `shapeCachePublication`
+`seeded` at the startup import and the reimport, a miss on the first other
+head and a hit on the return (`shapeReuse`). Six synthetic tests in
+`SourceShapeReuseBoundaryTests.swift` cover:
+
+- the hit on the return, with no `shapeDecode`;
+- the head preparation's own read hitting the seed;
+- a reimport of another card missing the previous card's contract, a stale
+  pre-reimport selection being refused, and the replaced entry being released;
+- a changed contract missing;
+- stale, foreign and replayed replacements;
+- capacity and intrinsic bypasses and a malformed contract.
+
 ### Shape evaluation boundary
 
 `SourceShapeChannels.swift` strictly loads the generated schema, reconstructs
