@@ -204,7 +204,10 @@ extension SourceStudioAnimation {
 ///
 /// Thread-safe: an export computes its states on a worker thread, a save or
 /// a clock rebase on the main thread. Scene seeds (saved state and card
-/// height) and decoded clips are cached until `clear()`.
+/// height) and decoded clips are cached until `clear()`. `beginWarmUp` loads
+/// them on a utility worker after an import, so a save or a rebase finds
+/// them loaded; one that comes first waits for that work instead of loading
+/// on its own thread, and nothing is loaded twice.
 public final class SourceStudioAnimationClock: @unchecked Sendable {
     public struct Request: Sendable {
         public let reference: SourceStudioCharacterReference
@@ -217,16 +220,76 @@ public final class SourceStudioAnimationClock: @unchecked Sendable {
         }
     }
     private struct Seed { let saved: SourceStudioAnimationState, cardHeight: Result<Float, Error> }
+    /// Guards the caches; a warm-up holds it while it loads.
     private let lock = NSLock()
     private var seeds: [String: Result<Seed, Error>] = [:]
     private var catalogs: [String: Result<SourceStudioAnimationCatalog, Error>] = [:]
     private var clips: [String: [String: SourceStudioAnimation]] = [:]
+    /// The generation the caches belong to (under `lock`).
+    private var cachedGeneration = 0
+    /// Guards `currentGeneration` and `warmUp`; never held while loading.
+    private let stateLock = NSLock()
+    private var currentGeneration = 0
+    private var warmUp: DispatchWorkItem?
 
     public init() {}
 
+    /// The document generation: `clear()` starts a new one.
+    public var generation: Int { withState { currentGeneration } }
+
+    private func withState<T>(_ body: () -> T) -> T {
+        stateLock.lock(); defer { stateLock.unlock() }
+        return body()
+    }
+
+    /// Starts a new generation for a replaced document: a warm-up of the
+    /// old one stops at its next character, and the caches empty on the
+    /// next use. Returns at once.
     public func clear() {
+        withState { currentGeneration += 1; warmUp = nil }
+    }
+
+    /// Loads, on a utility worker, the seeds and clips `requests` read, for
+    /// `generation`; `completion` runs on that worker once it ends (also
+    /// when a newer generation stopped it). Until then `savedStates` waits
+    /// for it, with the worker's priority raised to the waiter's.
+    public func beginWarmUp(_ requests: [Request], generation: Int, completion: @escaping @Sendable (_ loaded: Bool) -> Void) {
+        let item = DispatchWorkItem(qos: .utility) { [self] in
+            completion(warm(requests, generation: generation))
+        }
+        let current = withState { () -> Bool in
+            guard currentGeneration == generation else { return false }
+            warmUp = item
+            return true
+        }
+        guard current else { completion(false); return }
+        DispatchQueue.global(qos: .utility).async(execute: item)
+    }
+
+    private func warm(_ requests: [Request], generation: Int) -> Bool {
         lock.lock(); defer { lock.unlock() }
+        guard self.generation == generation else { return false }
+        syncGeneration()
+        loadSeeds(requests.map(\.reference), scene: nil)
+        for request in requests {
+            guard self.generation == generation else { return false }
+            let reference = request.reference
+            guard let seed = try? seeds[Self.seedKey(reference)]?.get(), let file = reference.animationCatalogFile,
+                  let catalog = try? catalog(file) else { continue }
+            let directory = URL(fileURLWithPath: file).deletingLastPathComponent()
+            _ = try? SourceStudioAnimationCatalog.resolve(request.edited ?? seed.saved, catalog: catalog, directory: directory,
+                                                          required: false, cache: &clips[file, default: [:]])
+        }
+        return true
+    }
+
+    /// Empties the caches when `clear()` started a new generation since
+    /// they were filled. Call under `lock`.
+    private func syncGeneration() {
+        let now = generation
+        guard cachedGeneration != now else { return }
         seeds.removeAll(); catalogs.removeAll(); clips.removeAll()
+        cachedGeneration = now
     }
 
     /// Each request's state after `elapsed` seconds of the Studio clock,
@@ -238,7 +301,11 @@ public final class SourceStudioAnimationClock: @unchecked Sendable {
     /// for references to its hash.
     public func savedStates(_ requests: [Request], elapsed: Float,
                             scene: (document: KoikatsuSceneDocument, sha256: String)? = nil) -> [Result<SourceStudioAnimationState?, Error>] {
+        // A warm-up in progress has the loads this call needs: wait for it
+        // (raising its priority) rather than load on this thread too.
+        withState { warmUp }?.wait()
         lock.lock(); defer { lock.unlock() }
+        syncGeneration()
         loadSeeds(requests.map(\.reference), scene: scene)
         return requests.map { (request: Request) -> Result<SourceStudioAnimationState?, Error> in
             // Explicit types: Swift 6.3.3 (CI) does not infer this

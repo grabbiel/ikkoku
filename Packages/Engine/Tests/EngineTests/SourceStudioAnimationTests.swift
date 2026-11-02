@@ -256,6 +256,19 @@ func sourceStudioAnimationClockWithoutPreviewMatchesBuiltCharacterWhenSupplied()
     let fromScene = try fresh.savedStates([request], elapsed: 7.3,
                                           scene: (try KoikatsuSceneReader.decodeDocument(bytes), character.sceneSHA256))[0].get()
     #expect(fromScene == (try built.savedAnimationState(animationElapsed: 7.3)))
+    // A warm-up loads on a worker what the call then reads, with the same
+    // result; one for a generation `clear()` replaced does not run.
+    final class Outcome: @unchecked Sendable { var loaded: [Bool] = [] }
+    let outcome = Outcome(), done = DispatchSemaphore(value: 0), warmed = SourceStudioAnimationClock()
+    warmed.beginWarmUp([request], generation: warmed.generation) { outcome.loaded.append($0); done.signal() }
+    done.wait()
+    #expect(try warmed.savedStates([request], elapsed: 7.3)[0].get() == (try built.savedAnimationState(animationElapsed: 7.3)))
+    let stale = warmed.generation
+    warmed.clear()
+    warmed.beginWarmUp([request], generation: stale) { outcome.loaded.append($0); done.signal() }
+    done.wait()
+    #expect(outcome.loaded == [true, false])
+    #expect(try warmed.savedStates([request], elapsed: 7.3)[0].get() == (try built.savedAnimationState(animationElapsed: 7.3)))
     // Without a catalog the saved state is kept; an edit cannot be advanced.
     let bare = SourceStudioAnimationClock.Request(reference: reference(catalog: nil), edited: nil, bodyValues: nil)
     #expect(try clock.savedStates([bare], elapsed: 7.3)[0].get() == nil)

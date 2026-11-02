@@ -1265,7 +1265,7 @@ final class StudioModel: ViewportInputHandler, LivePacedHandler {
     private func bakeSourceClock(into objects: inout [StudioObject], elapsed: Float) throws {
         let requests = sourceClockRequests(objects)
         guard !requests.isEmpty else { return }
-        let states = sourceUnbuiltClock.savedStates(requests.map(\.request), elapsed: elapsed)
+        let states = PerfTrace.step("sourceClockBake") { sourceUnbuiltClock.savedStates(requests.map(\.request), elapsed: elapsed) }
         for (entry, result) in zip(requests, states) {
             guard let state = try result.get(), let i = objects.firstIndex(where: { $0.id == entry.id }) else { continue }
             objects[i].sourceAnimation = state
@@ -2638,6 +2638,31 @@ final class StudioModel: ViewportInputHandler, LivePacedHandler {
         selection = imported.objects.first(where: { $0.sourceCharacter != nil && imported.isVisible($0.id) })?.id
         let deferredText = deferredCharacters > 0 ? " · \(deferredCharacters) hidden, built when shown" : ""
         status = "Source preview · \(previews.count) converted characters (\(routeCharacterPreviews.count) rendered on routes)\(deferredText) · \(imported.objects.count - previews.count - deferredCharacters) retained tree nodes. See source compatibility details."
+        scheduleSourceClockWarmUp()
+    }
+
+    /// Lazy hidden characters: once an import or a native load has put its
+    /// document in place, loads what the data-only clocks of its hidden
+    /// characters read (`SourceStudioAnimationClock.beginWarmUp`) on a
+    /// utility worker, so the first save or clock rebase does not load it on
+    /// the main thread; one that comes earlier waits for it. It starts on the
+    /// next main-queue turn, after the import's completion (the ready mark),
+    /// and a newer document stops it.
+    private func scheduleSourceClockWarmUp() {
+        let clock = sourceUnbuiltClock, generation = clock.generation
+        DispatchQueue.main.async { [weak self] in
+            MainActor.assumeIsolated {
+                guard let self, clock.generation == generation else { return }
+                let document = self.doc
+                let requests = self.sourceClockRequests(document.objects.filter { !document.isVisible($0.id) }).map(\.request)
+                guard !requests.isEmpty else { return }
+                PerfTrace.mark("sourceClockWarmUp.begin")
+                clock.beginWarmUp(requests, generation: generation) { loaded in
+                    guard loaded else { return }
+                    DispatchQueue.main.async { MainActor.assumeIsolated { PerfTrace.mark("sourceClockWarmUp.end") } }
+                }
+            }
+        }
     }
 
 
@@ -3546,6 +3571,7 @@ final class StudioModel: ViewportInputHandler, LivePacedHandler {
         sceneURL = url
         status = "Loaded scene \(url.lastPathComponent)"
             + (resources.diagnostics.isEmpty ? "" : " · \(resources.report.summary); see source compatibility details")
+        scheduleSourceClockWarmUp()
     }
 
     func importScene(from url: URL) throws {
