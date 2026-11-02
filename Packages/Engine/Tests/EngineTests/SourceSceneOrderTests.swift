@@ -504,8 +504,9 @@ func sourceSceneOrderReplaysALegacySceneOnItsUpgrade() throws {
 
     // A second copy needs a key nothing freed: 159 here, which CharaStudio's
     // load gave a back-hair bone, so its copy would take 169. The legacy
-    // export keeps the set-based keys and names why; its upgrade, a 1.0.4.2
-    // scene whose records hold every bone, replays.
+    // export keeps the set-based keys and names why. Its upgrade replays, and
+    // the copies take 153 and 159: our replay's keys. CharaStudio's reload of
+    // this upgrade adds 10 load-time bones at 159–168, so it differs (#318).
     let (second, secondStaged, secondDeletions) = try session(legacy) { $0.delete(153); $0.duplicate(156); $0.duplicate(157) }
     #expect(second == .fallback(.legacyBones))
     _ = try secondStaged.stage.editedData(SourceSceneEdits(deletions: secondDeletions))   // no refusal
