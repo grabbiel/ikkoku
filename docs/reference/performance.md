@@ -4013,22 +4013,56 @@ With vanish on, each vanish set is its own draw. The added draws cost what
 slice 4 measured per draw, about 1.2–1.8 µs of CPU encode each: about
 0.08–0.12 ms on map 4 and 0.23–0.35 ms on map 11.
 
-**Not yet measured.** The vanish step's cost per refresh on map 4, the
-join's share of the worker's load, and map 11 before and after the split at
-full rate wait for a short `studio-orbit` window
-(`.local/sta11d-pr-b/tools/perf_vanish.py`: map 4 with vanish on, off and the
-shared export; map 11 before the split and the shared export).
+**At full rate (`studio-orbit`).** A second window, the same binary and
+display (the same at the start and the end), with the join re-export of all
+maps. `studio-orbit` drags the camera once per input tick for 10 s, so the
+Studio refreshes and draws at the display's rate. The scene is again the map
+showoff scene with only its map set (to 4 or 11). Two rounds in ABBA order over
+the five cells, every cell valid; three were run again after an indexer went
+above 20% (`.local/sta11d-pr-b/tools/perf_vanish.py`). Round 1 / round 2:
+
+| Map | Export | Vanish | Map draws | Presented fps | Draw ms p50 | GPU ms p50 | Worker load ms |
+| --- | --- | --- | ---: | --- | --- | --- | --- |
+| 4 | join | on (`segment`) | 117 | 119.4 / 118.8 | 1.49 / 2.01 | 0.735 / 0.826 | 118.8 / 100.7 |
+| 4 | join | off | 51 | 119.8 / 118.8 | 1.26 / 1.84 | 0.749 / 0.856 | 100.3 / 100.8 |
+| 4 | shared | off | 51 | 119.5 / 119.7 | 1.37 / 1.74 | 0.745 / 0.841 | 95.1 / 81.0 |
+| 11 | before the split | off | 161 | 119.5 / 119.5 | 1.865 / 1.853 | 0.919 / 1.042 | 158.4 / 164.9 |
+| 11 | shared | off | 187 | 119.6 / 117.4 | 2.007 / 1.926 | 0.962 / 0.928 | 169.2 / 168.6 |
+
+- **The vanish step costs 4.15 and 6.11 ms of main-thread time per second**
+  (round 1, round 2) on map 4 with vanish on. That is the sum of every
+  `studioMapVanish` sample over the recording: 41.49 ms in 10.001 s and
+  61.14 ms in 10.002 s. It runs at every refresh, 126 times a second while the
+  camera moves. Per refresh it takes 26.0 and 40.3 µs at p50, 79.9 and
+  116.1 µs at p95, and at most 263 µs. In those 10 s it changed what was
+  hidden 55 and 56 times, with at most 10 of the map's 57 rows hidden at once.
+  With vanish off, the step returns before it measures anything: no samples.
+- **Vanish on or off does not change the GPU time** on map 4 (0.735–0.856 ms
+  in every cell, the rounds differing more than the cells), although vanish on
+  draws 117 times instead of 51.
+- **The join is load work, once per map load, on the worker.** Map 4's join
+  export loads in 100.3–118.8 ms against 81.0–95.1 ms for the shared export:
+  +5 to +24 ms per round, about +17 ms on average. Placing the map on the main
+  thread takes 0.08–0.10 ms either way.
+- **On map 11 the shared export draws 0.07–0.14 ms longer per frame** than
+  before the split (draw p50 +0.142 and +0.073 ms; the ranges do not overlap
+  in two rounds). That is the CPU encode of its +26 draws, close to slice 4's
+  bench (+0.10 ms in its own view). The GPU time overlaps, and both present
+  119–120 fps: the frame rate is bound by the display.
 
 **Scaling to a base M1 (estimates, scaled and not measured),** with the
 method above (GPU × about 4.75, CPU × 1.25): with vanish on, at most about
-+0.15 ms of encode per frame on map 4 and +0.45 ms on map 11. Vanish stays off by
-default until the VM phase.
++0.15 ms of encode per frame on map 4 and +0.45 ms on map 11, and about
+5–8 ms/s of main-thread time for the vanish step while the camera moves. Map
+11's particle split is about +0.1–0.2 ms of encode per frame. Vanish stays off
+by default until the VM phase.
 
 **Limits.**
 
 - Two rounds per case, not three. One round for the showoff scene without a
   map.
-- One map (11) composited, in one view.
+- Two maps (4 and 11) composited, in one view each; `studio-orbit` for 10 s
+  per cell.
 - No M1 run.
 
 ## ST-T03i: scene plug-in data rewrites

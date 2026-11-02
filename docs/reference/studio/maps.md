@@ -1099,7 +1099,7 @@ Slice 4 PR B, Release, on a composited display (1920×1080 at 120 Hz), in one qu
 - **No measurable difference on map 11.** Scene ready 0.91 against 0.93 s, the first draw 0.34 s either way, and `studio-idle` GPU 1.187 against 1.188 ms per frame; draw and GPU per frame overlap. The app's GPU busy time in a Metal System Trace overlaps too, and its rounds differ more than the exports.
 - **The frame rate is bound by the 30 Hz tick.** `studio-idle` presents 30 fps by design. The split's +26 draws, about +0.03 ms of encode, are below what this workload resolves.
 - **The join.** With vanish off, the joined split draws exactly the shared export's draws: 51/50/47 on map 4, 187/186/183 on map 11 and 16 on map 30. With vanish on, each vanish set is its own draw: +66 on map 4, +195 on map 11 and +28 on map 30, about 0.08–0.35 ms of encode at slice 4's cost per draw.
-- **Not yet measured:** the vanish step's cost per refresh on map 4, the join's share of the worker's load, and map 11 at full rate. They wait for a short `studio-orbit` window.
+- **At full rate** (`studio-orbit`, 10 s, 2 rounds): on map 4 with vanish on, the vanish step costs 4.15 and 6.11 ms of main-thread time per second (the sum of its samples), 26–40 µs per refresh at p50 and at most 263 µs, at 126 refreshes a second; with it off, nothing. The GPU time is the same with vanish on or off. The join is one-time load work on the worker: map 4's join export loads in 100–119 ms against 81–95 ms for the shared export, about +17 ms. On map 11 the shared export's +26 draws cost 0.07–0.14 ms of draw per frame; both present 119–120 fps, bound by the display.
 
 ### Particles at grazing angles (slice 4 PR B)
 
