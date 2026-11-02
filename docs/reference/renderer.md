@@ -3601,6 +3601,23 @@ the program's `SourceInput` registers:
   stream the item stays toon.
 - TEXCOORD3 and COLOR: the source stream.
 
+The converted buffers persist per vertex source and layout, like deform buffers.
+A deformed item's source is its deformation key; a static item's is its mesh.
+Since #337 they are evicted on the resource store's release events, never by a
+per-frame scan. Each buffer leaves with the mesh it was converted for, or with
+its deformation key, whichever is released first. The events are
+`unregister(mesh:)`, `releaseDeformBuffers` and completed retirements. That
+covers a dropped `SourceRigPreview` (Studio characters are previews), retired
+map meshes and library assets. A frame already being prepared on a render
+thread can allocate a buffer for a mesh or deformation key that the main thread
+has just released. A newly allocated buffer is therefore checked against the
+store. The cache drops it if its mesh is gone or the store no longer holds its
+deformation key; that frame still uses it. Before #337 nothing
+evicted them, so every Studio character dropped with live source shaders on
+kept its private input buffers until the renderer went away.
+`liveSourceInputBuffersLeaveWithTheirMeshesAndDeformationKeys` builds and drops
+each owner kind repeatedly and checks the encoder returns to its baseline.
+
 Matrices are `unity_ObjectToWorld = B·M·B` and `unity_MatrixVP = P·V·B`, with
 `B = diag(1, 1, −1)`. The clip position therefore equals the native one, and live
 draws depth-test against native draws. Builtins:

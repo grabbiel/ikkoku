@@ -179,6 +179,11 @@ public final class ResourceStore: @unchecked Sendable {
     private var nextMesh: UInt32 = 1
     private var nextTexture: UInt32 = 1
     private var deformBuffers: [UInt64: any MTLBuffer] = [:]
+    /// #337: the owning renderer's live source-shader encoder, whose converted
+    /// inputs belong to this store's meshes and deformation keys. Releasing
+    /// those evicts the inputs (`SourceShaderLiveEncoder.evict`), after the
+    /// release itself and outside this lock. Weak: the renderer owns it.
+    private weak var liveInputs: SourceShaderLiveEncoder?
     /// Bumped by every change to what a prepared frame can look up by handle
     /// or key: meshes, textures and hidden masks registered, replaced or
     /// dropped, and retirements completed. Deformation buffers are not
@@ -349,7 +354,14 @@ public final class ResourceStore: @unchecked Sendable {
     /// Drops a mesh at once. A queued handle-only frame then skips it; owners whose
     /// frames may still be pending use `retire(meshes:)`.
     public func unregister(mesh h: MeshHandle) {
-        lock.lock(); meshes[h.id] = nil; retiringMeshes[h.id] = nil; generationValue &+= 1; lock.unlock()
+        lock.lock(); meshes[h.id] = nil; retiringMeshes[h.id] = nil; generationValue &+= 1
+        let live = liveInputs; lock.unlock()
+        live?.evict(meshes: [h.id], deformKeys: [])
+    }
+
+    /// Called once, when the renderer creates its live encoder (#337).
+    func attachLiveInputs(_ encoder: SourceShaderLiveEncoder) {
+        lock.lock(); liveInputs = encoder; lock.unlock()
     }
 
     #if DEBUG
@@ -400,9 +412,16 @@ public final class ResourceStore: @unchecked Sendable {
         return b
     }
 
+    /// Whether `key` has a persistent deformation buffer, without creating one.
+    /// After a current frame's deform pass every key it drew holds one, until
+    /// released (#337, `Renderer.liveInput`).
+    func holdsDeformBuffer(key: UInt64) -> Bool { lock.lock(); defer { lock.unlock() }; return deformBuffers[key] != nil }
+
     /// Drops deformation buffers at once; see `retire` for owners with pending frames.
     public func releaseDeformBuffers(keys: [UInt64]) {
-        lock.lock(); for k in keys { deformBuffers[k] = nil; retiringDeformKeys[k] = nil }; lock.unlock()
+        lock.lock(); for k in keys { deformBuffers[k] = nil; retiringDeformKeys[k] = nil }
+        let live = liveInputs; lock.unlock()
+        live?.evict(meshes: [], deformKeys: keys)
     }
 
     private var hiddenBuffers: [UInt64: any MTLBuffer] = [:]
@@ -484,16 +503,23 @@ public final class ResourceStore: @unchecked Sendable {
     /// Called while the renderer prepares a submitted frame created at `stamp`:
     /// releases everything retired before that frame existed.
     func completeRetirements(createdBefore stamp: UInt64) {
+        var releasedMeshes: [UInt32] = [], releasedKeys: [UInt64] = []
+        var live: SourceShaderLiveEncoder?
+        // The live encoder's lock is taken after this store's lock is released.
+        defer { live?.evict(meshes: releasedMeshes, deformKeys: releasedKeys) }
         lock.lock(); defer { lock.unlock() }
         guard !retiringMeshes.isEmpty || !retiringDeformKeys.isEmpty || !retiringHiddenKeys.isEmpty
               || !retiringTextures.isEmpty else { return }
+        live = liveInputs
         var newest = newestCompletedRetirement
         var changed = false
         for (id, retired) in retiringMeshes where retired < stamp {
             meshes[id] = nil; retiringMeshes[id] = nil; newest = max(newest, retired); changed = true
+            releasedMeshes.append(id)
         }
         for (key, retired) in retiringDeformKeys where retired < stamp {
             deformBuffers[key] = nil; retiringDeformKeys[key] = nil; newest = max(newest, retired); changed = true
+            releasedKeys.append(key)
         }
         for (key, retired) in retiringHiddenKeys where retired < stamp {
             hiddenBuffers[key] = nil; retiringHiddenKeys[key] = nil; newest = max(newest, retired); changed = true
