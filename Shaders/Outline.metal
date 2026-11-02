@@ -52,7 +52,7 @@ fragment float4 outline_fragment(OutlineVertexOut in [[stage_in]],
     if (in.hidden > 0.5) discard_fragment();
     if (bodyMaskDiscards(bodyMask, in.uv, mat)) discard_fragment();
     if (mat.flags & MaterialFlagAlphaTest) {
-        float a = (mat.flags & MaterialFlagHasBaseTexture) ? baseTex.sample(linearRepeat, in.uv).a : 1.0;
+        float a = (mat.flags & MaterialFlagHasBaseTexture) ? baseTex.sample(forcedAnisoRepeat, in.uv).a : 1.0;
         if (a * mat.baseColor.a < mat.params.w) discard_fragment();
     }
     return float4(in.color, 1.0);
