@@ -303,6 +303,44 @@
         }
       ],
       "timeout": 600
+    },
+    {
+      "id": "maker-scenario-catalog-fallback",
+      "argv": [
+        ".local/build/Build/Products/Debug/Ikkoku.app/Contents/MacOS/Ikkoku"
+      ],
+      "fixtures": [
+        {
+          "env": "IKKOKU_SOURCE_CARD",
+          "kind": "file",
+          "from": "IKKOKU_MAKER_FALLBACK_CARD"
+        },
+        {
+          "env": "IKKOKU_SOURCE_AVATAR",
+          "kind": "file"
+        },
+        {
+          "env": "IKKOKU_MAKER_LIBRARY",
+          "kind": "file"
+        }
+      ],
+      "env": {
+        "IKKOKU_MAKER_SCENARIO": "Tools/verification/scenarios/maker-catalog-fallback.json",
+        "IKKOKU_MAKER_SCENARIO_REPORT": ".local/verification/reports/maker-scenario-catalog-fallback.json"
+      },
+      "referenceTier": "app-smoke",
+      "tolerance": "#346: a card saving hair and clothes IDs that no installed list catalog has (the library's catalogPresence) draws the original's defaults, back 0, front 1, side 0, option 0 and clothes 0, while the card keeps the saved IDs through export and reimport. The full-body preview at 512x512 equals, at zero changed pixels and zero channel delta, the preview after explicitly selecting those defaults; a hair change moves at least 1000 pixels against the same capture. Indoor shoes keep their saved ID (the Maker does not assemble them). Scripted API and offscreen-render checks of the native preview, not original-player rendering parity.",
+      "artifacts": [
+        {
+          "path": ".local/verification/reports/maker-scenario-catalog-fallback.json",
+          "kind": "scenario-report"
+        },
+        {
+          "path": ".local/verification/maker-scenario-exports/maker-catalog-fallback.png",
+          "kind": "exported-card"
+        }
+      ],
+      "timeout": 600
     }
   ]
 }

@@ -1,6 +1,7 @@
 import Foundation
 import Testing
 @testable import Character
+import Scene
 
 /// #346: a hair or clothes ID that no installed list has draws the original's
 /// fallback (LoadCharaFbxDataAsync, ChaControl.Koikatu.cs:8675-8700): the
@@ -137,5 +138,116 @@ private enum MakerLibraryReferences {
         let card = try SourceCharacterCard.decode(F.card(blocks: F.blocks() + [F.extended(F.map([
             ("com.bepis.sideloader.universalautoresolver", plugin)]))]))
         return try #require(try card.modReferences())
+    }
+}
+
+/// The #346 lane card pair. Only hair and clothes IDs change
+/// (`selectingVanillaAsset`): the absent card saves `absentID`, which no
+/// installed catalog has, in all four hair slots and in every saved outfit's
+/// clothes slots but the indoor shoes, which the selection editor leaves as
+/// saved (the Maker never assembles them). Its twin saves the original's
+/// defaults there explicitly: hair 0/1/0/0 and clothes 0.
+enum CatalogFallbackCards {
+    static let absentID = 999_999
+    static let hairDefaults = [0, 1, 0, 0]
+    static func selecting(_ card: SourceCharacterCard, hair: [Int], clothes: Int) throws -> SourceCharacterCard {
+        var current = card
+        for (slot, id) in hair.enumerated() {
+            current = try SourceCharacterCard.decode(current.selectingVanillaAsset(id, at: .hair(slot)))
+        }
+        for coordinate in 0..<(try current.coordinateCount()) {
+            for slot in 0..<9 where slot != 7 {
+                current = try SourceCharacterCard.decode(current.selectingVanillaAsset(clothes, at: .clothes(coordinate: coordinate, slot: slot)))
+            }
+        }
+        return current
+    }
+    static func absent(_ card: SourceCharacterCard) throws -> SourceCharacterCard {
+        try selecting(card, hair: Array(repeating: absentID, count: 4), clothes: absentID)
+    }
+    static func explicitDefaults(_ card: SourceCharacterCard) throws -> SourceCharacterCard {
+        try selecting(card, hair: hairDefaults, clothes: 0)
+    }
+    /// The same assembled rig and geometry, part by part.
+    static func sameAssembly(_ a: SourceRig, _ b: SourceRig) -> Bool {
+        guard a.rig.nodes.count == b.rig.nodes.count, a.rig.skins.count == b.rig.skins.count, a.parts.count == b.parts.count,
+              a.rig.order == b.rig.order, a.rig.activeNodes == b.rig.activeNodes else { return false }
+        for (left, right) in zip(a.rig.nodes, b.rig.nodes) {
+            guard left.name == right.name, left.sourceID == right.sourceID, left.parent == right.parent else { return false }
+            guard left.localMatrix == right.localMatrix, left.active == right.active else { return false }
+        }
+        for (left, right) in zip(a.rig.skins, b.rig.skins) {
+            guard left.name == right.name, left.meshNode == right.meshNode, left.rootJoint == right.rootJoint else { return false }
+            guard left.joints == right.joints, left.inverseBindMatrices == right.inverseBindMatrices else { return false }
+        }
+        for (left, right) in zip(a.parts, b.parts) {
+            guard left.node == right.node, left.skin == right.skin, left.rendererEnabled == right.rendererEnabled else { return false }
+            let x = left.mesh, y = right.mesh
+            guard x.name == y.name, x.positions == y.positions, x.normals == y.normals, x.uvs == y.uvs else { return false }
+            guard x.joints == y.joints, x.weights == y.weights, x.indices == y.indices, x.materialIndex == y.materialIndex else { return false }
+        }
+        return true
+    }
+}
+
+// Optional fixture writer, not a fixture test: the lane card pair under .local.
+@Test(.enabled(if: (ProcessInfo.processInfo.environment["IKKOKU_MAKER_FALLBACK_OUTPUT"] ?? "").isEmpty == false,
+               "Writes the #346 lane cards only when IKKOKU_MAKER_FALLBACK_OUTPUT is set"))
+func sourceMakerCatalogFallbackWritesTheLaneCards() throws {
+    let directory = URL(fileURLWithPath: try SourceFixtureSupport.require("IKKOKU_MAKER_FALLBACK_OUTPUT")).standardizedFileURL
+    // Derived from a private card: the pair stays in the ignored .local tree.
+    try #require(directory.pathComponents.contains(".local"))
+    let source = try SourceCharacterCard.load(url: URL(fileURLWithPath: try SourceFixtureSupport.require("IKKOKU_MAKER_SCENARIO_CARD")))
+    let absent = try CatalogFallbackCards.absent(source)
+    try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+    try absent.preservedData.write(to: directory.appendingPathComponent("absent-ids.png"))
+    try CatalogFallbackCards.explicitDefaults(absent).preservedData.write(to: directory.appendingPathComponent("explicit-defaults.png"))
+}
+
+/// The lane card against its explicit-default twin through the env Maker
+/// library and its installed catalog presence: every hair and clothes
+/// selection falls back to the default, and both cards decode the same rig
+/// files and assemble the same geometry, in the Maker and Studio assemblies.
+@Test(.enabled(if: SourceFixtureSupport.shouldRun(["IKKOKU_MAKER_FALLBACK_CARD", "IKKOKU_MAKER_LIBRARY", "IKKOKU_SOURCE_AVATAR"]),
+               "Requires IKKOKU_MAKER_FALLBACK_CARD, IKKOKU_MAKER_LIBRARY and IKKOKU_SOURCE_AVATAR"))
+func sourceMakerCatalogFallbackCardAssemblesItsExplicitDefaults() throws {
+    typealias C = CatalogFallbackCards
+    let library = try SourceMakerLibrary.load(url: URL(fileURLWithPath: try SourceFixtureSupport.require("IKKOKU_MAKER_LIBRARY")))
+    let presence = try #require(library.catalogPresence, "The Maker library records no installed catalog presence")
+    for category in 101...112 { #expect(presence[category]?.contains(C.absentID) == false, "\(category)") }
+    let card = try SourceCharacterCard.load(url: URL(fileURLWithPath: try SourceFixtureSupport.require("IKKOKU_MAKER_FALLBACK_CARD")))
+    // The fixture is the absent card: deriving it again changes nothing.
+    #expect(try C.absent(card).preservedData == card.preservedData)
+    let twin = try C.explicitDefaults(card)
+    let avatar = URL(fileURLWithPath: try SourceFixtureSupport.require("IKKOKU_SOURCE_AVATAR"))
+    let base = try library.assemblyURL(for: card.customization()) ?? avatar
+    for coordinate in 0..<(try card.coordinateCount()) {
+        for wear in coordinate == 0 ? [false, true] : [false] {
+            let fallback = try library.prepare(card: card, coordinate: coordinate, baseURL: base, wear: wear)
+            let explicit = try library.prepare(card: twin, coordinate: coordinate, baseURL: base, wear: wear)
+            // The indoor shoes keep their saved ID; `indoorShoes` compares them below.
+            func edited(_ selection: SourceMakerLibrary.Selection) -> Bool {
+                (101...112).contains(selection.category) && !selection.property.hasSuffix("ShoesInner")
+            }
+            let rows = fallback.selections.filter(edited), explicitRows = explicit.selections.filter(edited)
+            // Four hair slots and eight clothes slots.
+            #expect(rows.count == 12 && explicitRows.count == rows.count, "\(coordinate) \(wear)")
+            for (row, twinRow) in zip(rows, explicitRows) {
+                let resolved = row.category <= 104 ? C.hairDefaults[row.category - 101] : 0
+                #expect(row.status == "catalogFallback" && row.savedID == C.absentID && row.sourceID == C.absentID, "\(row.property)")
+                #expect(row.resolvedID == resolved && row.entry?.id == resolved && row.property == twinRow.property, "\(row.property)")
+                #expect(twinRow.status == "converted" || twinRow.status == "empty", "\(twinRow.property)")
+                #expect(twinRow.entry?.id == resolved && twinRow.resolvedID == nil, "\(twinRow.property)")
+            }
+            #expect(library.rigFiles(card: card, coordinate: coordinate, baseURL: base, wear: wear)
+                    == library.rigFiles(card: twin, coordinate: coordinate, baseURL: base, wear: wear))
+            #expect(fallback.clothingSlots == explicit.clothingSlots && fallback.referenceClothingSlots == explicit.referenceClothingSlots)
+            #expect(fallback.indoorShoes == explicit.indoorShoes)
+            #expect(C.sameAssembly(fallback.source, explicit.source), "\(coordinate) \(wear)")
+            // Each fallback is diagnosed; nothing else differs.
+            let fallbackLines = fallback.diagnostics.filter { $0.contains(": catalogFallback, source ID \(C.absentID) ") }
+            #expect(fallbackLines.count == rows.count)
+            #expect(fallback.diagnostics.filter { !fallbackLines.contains($0) } == explicit.diagnostics)
+        }
     }
 }

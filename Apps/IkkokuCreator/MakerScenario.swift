@@ -1,4 +1,5 @@
 import Foundation
+import CoreGraphics
 import Character
 import CoreMath
 import Renderer
@@ -16,7 +17,8 @@ import Studio
 struct MakerScenario: Decodable {
     struct Step: Decodable {
         /// `"customization"`, `"selectCoordinate"`, `"setFace"`, `"setBody"`,
-        /// `"setColor"`, `"resetShapes"`, `"export"`, `"reimport"`, `"assert"`.
+        /// `"setColor"`, `"resetShapes"`, `"export"`, `"reimport"`,
+        /// `"captureRender"`, `"assert"`.
         let op: String
         /// customization only: the new `applySourceCustomization` flag.
         let on: Bool?
@@ -40,6 +42,10 @@ struct MakerScenario: Decodable {
         /// assert only: a substring one import/appearance diagnostic must contain.
         let diagnosticContains: String?
         let selection: SelectionValue?
+        /// assert only: pixels the current preview moved against a
+        /// `captureRender` baseline (`id` names a capture, `path` optionally
+        /// writes its PNG under .local/).
+        let render: RenderValue?
         let expectFailure: Bool?, unchanged: Bool?
         let resourcesAtMost: String?
         /// reimport only: sample the process footprint around the import
@@ -58,9 +64,21 @@ struct MakerScenario: Decodable {
             /// decoded anew (#192-C, `stagedRigReuse`).
             let carried: Int?, misses: Int?
         }
+        struct RenderValue: Decodable {
+            /// The `captureRender` id whose pixels are the baseline.
+            let from: String
+            /// Changed-pixel bounds; a pixel changes when one of R, G, B or A
+            /// moves by more than 2/255 (ScenarioRender.difference).
+            let changedPixelsAtLeast: Int?, changedPixelsAtMost: Int?
+            /// The largest single-channel move allowed, 0...255.
+            let maxChannelDeltaAtMost: Int?
+        }
         struct SelectionValue: Decodable {
             let kind: String, slot: Int, sourceID: Int
             let coordinate: Int?
+            /// assert only: the saved `sourceID` is in no installed catalog, so
+            /// the row is `catalogFallback` and draws this catalog ID (#346).
+            let resolvedID: Int?
             func destination(currentCoordinate: Int) throws -> SourceMakerSelectionSlot {
                 switch kind {
                 case "hair": return .hair(slot)
@@ -69,6 +87,7 @@ struct MakerScenario: Decodable {
                 }
             }
             @MainActor func apply(to maker: MakerModel, beforePreparation: (@Sendable () -> Void)? = nil) async throws {
+                guard resolvedID == nil else { throw SourceCharacterCardError.invalid("resolvedID is an assert-only selection field.") }
                 try validate(currentCoordinate: maker.sourceBoneModifierCoordinate)
                 if kind == "head" {
                     try await maker.selectSourceHead(sourceID, beforePreparation: beforePreparation)
@@ -89,7 +108,7 @@ struct MakerScenario: Decodable {
 
         private enum CodingKeys: String, CodingKey {
             case op, on, index, value, id, rgba, path, coordinate, face, body, color,
-                 colorApplied, diagnosticContains, selection, expectFailure, unchanged, resourcesAtMost, rigReuse, initialLoad,
+                 colorApplied, diagnosticContains, selection, render, expectFailure, unchanged, resourcesAtMost, rigReuse, initialLoad,
                  footprint
         }
 
@@ -113,6 +132,7 @@ struct MakerScenario: Decodable {
             colorApplied = try c.decodeIfPresent(String.self, forKey: .colorApplied)
             diagnosticContains = try c.decodeIfPresent(String.self, forKey: .diagnosticContains)
             selection = try c.decodeIfPresent(SelectionValue.self, forKey: .selection)
+            render = try c.decodeIfPresent(RenderValue.self, forKey: .render)
             expectFailure = try c.decodeIfPresent(Bool.self, forKey: .expectFailure)
             unchanged = try c.decodeIfPresent(Bool.self, forKey: .unchanged)
             resourcesAtMost = try c.decodeIfPresent(String.self, forKey: .resourcesAtMost)
@@ -224,6 +244,46 @@ struct MakerScenario: Decodable {
         var stepStart = ProcessInfo.processInfo.systemUptime
         var resourcesBefore: ResourceStore.Statistics?
         var resourceSnapshots: [String: ResourceStore.Statistics] = [:]
+        var capturedRenders: [String: [UInt8]] = [:]
+        /// The export thumbnail's full-body frame at the shared capture size.
+        func capturePreview() throws -> CGImage {
+            try maker.sourcePreviewImage(preset: .full, width: ScenarioRender.side, height: ScenarioRender.side,
+                                         boneModifiers: maker.applySourceBoneModifiers ? maker.sourceBoneModifiers : nil)
+        }
+        /// Pixels the current preview moved against a `captureRender` baseline.
+        func renderProblem(_ check: Step.RenderValue, notes: inout [String]) -> String? {
+            let area = ScenarioRender.side * ScenarioRender.side
+            guard check.changedPixelsAtLeast != nil || check.changedPixelsAtMost != nil else {
+                return "assert render: name changedPixelsAtLeast or changedPixelsAtMost"
+            }
+            let minimum = check.changedPixelsAtLeast ?? 0, maximum = check.changedPixelsAtMost ?? area
+            guard (0...area).contains(minimum), (0...area).contains(maximum), minimum <= maximum else {
+                return "assert render: bounds must satisfy 0 <= minimum <= maximum <= \(area)"
+            }
+            if let bound = check.maxChannelDeltaAtMost, !(0...255).contains(bound) {
+                return "assert render: maxChannelDeltaAtMost must be in 0...255"
+            }
+            guard let base = capturedRenders[check.from] else {
+                return "assert render: no captureRender pixels recorded under \"\(check.from)\""
+            }
+            let image: CGImage
+            do { image = try capturePreview() } catch { return "assert render: \(error)" }
+            guard let now = ScenarioRender.bytes(image), now.count == base.count else {
+                return "assert render: the current preview's pixels could not be read at the capture's size"
+            }
+            let difference = ScenarioRender.difference(base, now), changed = difference.changed
+            notes.append("render \(ScenarioRender.side)x\(ScenarioRender.side): \(changed) pixels differ by >2/255 against \"\(check.from)\"; exactChangedPixels=\(difference.exactChanged), maxChannelDelta=\(difference.maximum)")
+            if changed < minimum {
+                return "assert render: \(changed) pixels changed against \"\(check.from)\", expected at least \(minimum)"
+            }
+            if changed > maximum {
+                return "assert render: \(changed) pixels changed against \"\(check.from)\", expected at most \(maximum)"
+            }
+            if let bound = check.maxChannelDeltaAtMost, difference.maximum > bound {
+                return "assert render: maxChannelDelta \(difference.maximum) exceeds \(bound) against \"\(check.from)\""
+            }
+            return nil
+        }
         @discardableResult
         func record(_ step: Step, _ ok: Bool, _ detail: String,
                     initialLoad: MakerModel.SourceInitialLoadTiming? = nil,
@@ -486,6 +546,23 @@ struct MakerScenario: Decodable {
             case "clearModLibrary":
                 do { try maker.setModLibrary(nil); record(step, true, "replaced mod library") }
                 catch { record(step, false, "clearModLibrary: \(error)") }
+            case "captureRender":
+                guard let label = step.id, !label.isEmpty else { record(step, false, "captureRender: id (the capture label) is required"); continue }
+                do {
+                    let image = try capturePreview()
+                    guard let bytes = ScenarioRender.bytes(image) else {
+                        record(step, false, "captureRender: the preview's pixels could not be read"); continue
+                    }
+                    if let path = step.path {
+                        guard let url = insideLocal(path), url.path != heldCardPath else {
+                            record(step, false, "captureRender: output must stay under .local/ and differ from the held card"); continue
+                        }
+                        try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+                        try CaptureOutput.writePNG(image, to: url)
+                    }
+                    capturedRenders[label] = bytes
+                    record(step, true, "captured the \(image.width)x\(image.height) preview under \"\(label)\"")
+                } catch { record(step, false, "captureRender: \(error)") }
             case "captureResources":
                 guard let id = step.id else { record(step, false, "captureResources: missing id"); continue }
                 resourceSnapshots[id] = maker.host.renderer.resources.statistics()
@@ -638,6 +715,17 @@ struct MakerScenario: Decodable {
                             let row = maker.sourceAssetSelections.first { $0.property == destination.property }
                             if row?.sourceID != expected.sourceID || row?.savedID != expected.sourceID || row?.modGUID != nil || row?.entry == nil {
                                 problems.append("assert selection: \(destination.property) did not resolve vanilla ID \(expected.sourceID)")
+                            } else if let resolved = expected.resolvedID {
+                                // The card keeps the saved ID; the preview draws the original's
+                                // fallback row, and the picker row names it without selecting it.
+                                let shown = maker.sourceSelectionRows.first { $0.id == destination.property }
+                                if row?.status != "catalogFallback" || row?.resolvedID != resolved || row?.entry?.id != resolved {
+                                    problems.append("assert selection: \(destination.property) is \(row?.status ?? "absent"), expected catalogFallback drawing ID \(resolved)")
+                                } else if shown?.selectedID != nil || shown?.current.hasSuffix("catalogFallback → ID \(resolved)") != true {
+                                    problems.append("assert selection: the \(destination.property) picker row shows \(shown?.current ?? "nothing")")
+                                }
+                            } else if row?.status == "catalogFallback" {
+                                problems.append("assert selection: \(destination.property) is catalogFallback; name resolvedID")
                             }
                         }
                     } catch { problems.append("assert selection: \(error)") }
@@ -680,8 +768,13 @@ struct MakerScenario: Decodable {
                         problems.append("assert diagnosticContains: no diagnostic contains \"\(needle)\"")
                     }
                 }
+                var notes: [String] = []
+                if problems.isEmpty, let check = step.render, let problem = renderProblem(check, notes: &notes) {
+                    problems.append(problem)
+                }
                 if problems.isEmpty {
-                    record(step, true, "assert passed (\(step.coordinate.map(String.init) ?? "coordinate n/a"))")
+                    let shown = notes.isEmpty ? "" : "; " + notes.joined(separator: "; ")
+                    record(step, true, "assert passed (\(step.coordinate.map(String.init) ?? "coordinate n/a"))" + shown)
                 } else {
                     record(step, false, problems.joined(separator: "; "))
                 }
