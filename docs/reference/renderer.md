@@ -3609,9 +3609,10 @@ its deformation key, whichever is released first. The events are
 `unregister(mesh:)`, `releaseDeformBuffers` and completed retirements. That
 covers a dropped `SourceRigPreview` (Studio characters are previews), retired
 map meshes and library assets. A frame already being prepared on a render
-thread can allocate a buffer for a mesh that the main thread has just released.
-A newly allocated buffer is therefore checked against the store, and the cache
-drops it if its mesh is gone; that frame still uses it. Before #337 nothing
+thread can allocate a buffer for a mesh or deformation key that the main thread
+has just released. A newly allocated buffer is therefore checked against the
+store. The cache drops it if its mesh is gone or the store no longer holds its
+deformation key; that frame still uses it. Before #337 nothing
 evicted them, so every Studio character dropped with live source shaders on
 kept its private input buffers until the renderer went away.
 `liveSourceInputBuffersLeaveWithTheirMeshesAndDeformationKeys` builds and drops
