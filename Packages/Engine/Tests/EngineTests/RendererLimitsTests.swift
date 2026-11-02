@@ -426,7 +426,7 @@ func rendererCaptureCrossesTheUniformRegionAndReportsItsLimits() throws {
     #expect(usedRegion)
 
     // Read the deformation buffer the capture wrote and compare with a CPU sum.
-    let deformed = try #require(renderer.resources.deformBuffer(for: morphKey, vertexCount: vertexCount))
+    let deformed = try #require(renderer.resources.deformBuffer(for: morphKey, mesh: handle, vertexCount: vertexCount))
     let readback = try #require(renderer.gpu.device.makeBuffer(length: deformed.length, options: .storageModeShared))
     let command = try #require(renderer.gpu.commandQueue.makeCommandBuffer())
     let blit = try #require(command.makeBlitCommandEncoder())
@@ -466,7 +466,7 @@ func resourceStoreAddRemoveCyclesKeepResourceCountsBounded() throws {
         let textureKey = "cycle-\(cycle)"
         let texture = try #require(resources.texture(r8: [UInt8](repeating: 128, count: 16), width: 4, height: 4, key: textureKey))
         let key = UInt64(cycle) << 16
-        _ = try #require(resources.deformBuffer(for: key, vertexCount: 3))
+        _ = try #require(resources.deformBuffer(for: key, mesh: handle, vertexCount: 3))
         #expect(resources.setHiddenBuffer(key: key, bytes: [0, 1, 0]))
         let live = resources.statistics()
         #expect(live.meshes == baseline.meshes + 1 && live.textures == baseline.textures + 1)

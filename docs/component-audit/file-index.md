@@ -23,7 +23,7 @@ branch was tested or every asset matches the original game. Feature status,
 specific comments and pending tasks are in the linked reports. Shared behavior
 may be discussed in more than one report; one primary owner is listed here.
 
-**1071 files indexed; 1071 assigned; 0 unassigned.**
+**1072 files indexed; 1072 assigned; 0 unassigned.**
 
 Counts include the website and clothes-group additions listed below. Runtime and
 test totals include their specialized role descriptions; this is inventory
@@ -34,7 +34,7 @@ bookkeeping, not a new full source audit.
 | [App / gameplay / plugins](app-gameplay-and-plugins.md) | 110 |
 | [Character / Maker / mods](character-and-mods.md) | 130 |
 | [Studio / IK / animation](studio.md) | 251 |
-| [Renderer / foundation / assets](renderer-and-foundation.md) | 360 |
+| [Renderer / foundation / assets](renderer-and-foundation.md) | 361 |
 | [Toolchain / verification / historical docs](toolchain-and-verification.md) | 210 |
 
 | File role | Files |
@@ -46,7 +46,7 @@ bookkeeping, not a new full source audit.
 | Generated asset / catalog / fixture | 205 |
 | Reference host / controlled fixture | 37 |
 | Runtime / shared shader declaration | 232 |
-| Test / validation | 221 |
+| Test / validation | 222 |
 | Public synthetic body/face input fixture | 1 |
 
 ## App / gameplay / plugins
@@ -823,6 +823,7 @@ Feature assessment: [renderer-and-foundation.md](renderer-and-foundation.md).
 | [Packages/Engine/Tests/CoreMathTests/CoreMathTests.swift](../../Packages/Engine/Tests/CoreMathTests/CoreMathTests.swift) | Test / validation |
 | [Packages/Engine/Tests/CoreMathTests/UnityCoordinatesTests.swift](../../Packages/Engine/Tests/CoreMathTests/UnityCoordinatesTests.swift) | Test / validation |
 | [Packages/Engine/Tests/EngineTests/CharacterLifetimeTests.swift](../../Packages/Engine/Tests/EngineTests/CharacterLifetimeTests.swift) | Test / validation |
+| [Packages/Engine/Tests/EngineTests/DeformBufferReleaseTests.swift](../../Packages/Engine/Tests/EngineTests/DeformBufferReleaseTests.swift) | Test / validation |
 | [Packages/Engine/Tests/EngineTests/DeformationSafetyTests.swift](../../Packages/Engine/Tests/EngineTests/DeformationSafetyTests.swift) | Test / validation |
 | [Packages/Engine/Tests/EngineTests/DisplayLinkRatePolicyTests.swift](../../Packages/Engine/Tests/EngineTests/DisplayLinkRatePolicyTests.swift) | Test / validation |
 | [Packages/Engine/Tests/EngineTests/Fixtures/texture-identity/opaque-10.avif](../../Packages/Engine/Tests/EngineTests/Fixtures/texture-identity/opaque-10.avif) | Generated asset / catalog / fixture (synthetic texture-identity decoder input) |
