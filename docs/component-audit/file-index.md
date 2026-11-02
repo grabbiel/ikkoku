@@ -14,7 +14,7 @@ the ST-T07 eye look reference and solver-port files, the ST-T07s eye look
 Studio preview runtime files, the ST-T07u iris rendering files and the ST-T04
 studio item shader contract and record color files and the ST-T08 first-slice
 original motion capture/replay files. The 2026-10-23 ST-T08e skirt slice updates runtime, exporter, fixture, test and reference files and adds its paired
-Studio save/load scenarios; it does not represent a new code audit. The 2026-10-25 ST-T03i plug-in data slice adds its rule, test, rule-parity, survey and original-player probe files. The 2026-10-26 texture-loading slice (the parallel-test pool deadlock) adds the in-line texture loader, its identity, corpus and upload tests, and 19 synthetic decoder fixtures. The 2026-10-26 ST-T05a legacy-scene slice adds its reader, test, timing, original-player probe and scenario files. The 2026-11-01 #321 slice adds the deep-scene stack test. It lists every present Git-visible
+Studio save/load scenarios; it does not represent a new code audit. The 2026-10-25 ST-T03i plug-in data slice adds its rule, test, rule-parity, survey and original-player probe files. The 2026-10-26 texture-loading slice (the parallel-test pool deadlock) adds the in-line texture loader, its identity, corpus and upload tests, and 19 synthetic decoder fixtures. The 2026-10-26 ST-T05a legacy-scene slice adds its reader, test, timing, original-player probe and scenario files. The 2026-11-01 #321 slice adds the deep-scene stack test. The 2026-11-02 #348 slice adds the original-player sampler probe, its driver and test. It lists every present Git-visible
 tracked/untracked non-ignored repository file outside
 `docs/component-audit/`. It excludes private `.local/`, dependency/build caches
 and ignored intermediate assets. Binary assets are inventoried, not reviewed as
@@ -896,10 +896,12 @@ Feature assessment: [renderer-and-foundation.md](renderer-and-foundation.md).
 | [Tools/reverse/export_prefab.py](../../Tools/reverse/export_prefab.py) | Conversion / recovery / verification tool |
 | [Tools/reverse/eye_shader_contract.py](../../Tools/reverse/eye_shader_contract.py) | Conversion / recovery / verification tool |
 | [Tools/reverse/fixtures/OriginalCharacterProbe.cs](../../Tools/reverse/fixtures/OriginalCharacterProbe.cs) | Reference host / controlled fixture |
+| [Tools/reverse/fixtures/OriginalSamplerProbe.cs](../../Tools/reverse/fixtures/OriginalSamplerProbe.cs) | Reference host / controlled fixture |
 | [Tools/reverse/fixtures/OriginalShaderProbe.cs](../../Tools/reverse/fixtures/OriginalShaderProbe.cs) | Reference host / controlled fixture |
 | [Tools/reverse/item_shader_contract.py](../../Tools/reverse/item_shader_contract.py) | Conversion / recovery / verification tool |
 | [Tools/reverse/original_character_probe.py](../../Tools/reverse/original_character_probe.py) | Conversion / recovery / verification tool |
 | [Tools/reverse/original_frame_normals.py](../../Tools/reverse/original_frame_normals.py) | Conversion / recovery / verification tool |
+| [Tools/reverse/original_sampler_probe.py](../../Tools/reverse/original_sampler_probe.py) | Conversion / recovery / verification tool |
 | [Tools/reverse/original_shader_probe.py](../../Tools/reverse/original_shader_probe.py) | Conversion / recovery / verification tool |
 | [Tools/reverse/original_texture_mips.py](../../Tools/reverse/original_texture_mips.py) | Conversion / recovery / verification tool |
 | [Tools/reverse/original_wear_probe.py](../../Tools/reverse/original_wear_probe.py) | Conversion / recovery / verification tool |
@@ -917,6 +919,7 @@ Feature assessment: [renderer-and-foundation.md](renderer-and-foundation.md).
 | [Tools/reverse/test_eye_shader_contract.py](../../Tools/reverse/test_eye_shader_contract.py) | Test / validation |
 | [Tools/reverse/test_original_character_probe.py](../../Tools/reverse/test_original_character_probe.py) | Test / validation |
 | [Tools/reverse/test_original_frame_normals.py](../../Tools/reverse/test_original_frame_normals.py) | Test / validation |
+| [Tools/reverse/test_original_sampler_probe.py](../../Tools/reverse/test_original_sampler_probe.py) | Test / validation |
 | [Tools/reverse/test_original_shader_probe.py](../../Tools/reverse/test_original_shader_probe.py) | Test / validation |
 | [Tools/reverse/test_original_wear_probe.py](../../Tools/reverse/test_original_wear_probe.py) | Test / validation |
 | [Tools/reverse/test_rig_inventory.py](../../Tools/reverse/test_rig_inventory.py) | Test / validation |

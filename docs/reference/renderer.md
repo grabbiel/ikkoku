@@ -6388,3 +6388,40 @@ captures), `timing/paired-unquiet.json` (the raw paired samples), `native-inputs
 `original-pair/original-{base,distinct,none}` (15 files each) and `vm-run-1/`
 (session record, settings and per-case manifests; base and distinct are kept as
 hash manifests only).
+
+## Player sampler probe (#348, 2026-11-02)
+
+`TranslatedSourceProgram.SamplerConfiguration` treats Point textures in two ways that no recorded evidence supports:
+
+- A Point texture whose own `anisoLevel` is above 1 gets nearest min/mag, linear mips and that anisotropy.
+- ForceEnable's minimum of 9 skips Point textures.
+
+D3D11 has no filter that combines point min/mag with anisotropy: `D3D11_FILTER_ANISOTROPIC` is linear at every stage. So the original player gets either point sampling or full anisotropic filtering for these textures, and the current rule matches neither. `Tools/reverse/original_sampler_probe.py` measures which one the player uses.
+
+- **Reach.** The local bundle copies (346 bundles, 4,347 textures) hold 4 Point textures, all at aniso 1, and none above 1. The live store's 64 textures are Bilinear or Trilinear. The probe's survey covers the whole install.
+- **Run.** `run` is one `prlctl exec` using the reload probe's transport:
+  - no upload;
+  - the errno-24 guard;
+  - junction scans before and after;
+  - `-logFile` in a private root, which is removed afterwards;
+  - no game process left running.
+
+  `fixtures/OriginalSamplerProbe.cs` draws synthetic 256×256 textures and reads no game pixels. The matrix is filter Point/Bilinear/Trilinear × anisoLevel 0/1/2/8/16 × mipmapped or single-level. Each texture is drawn into a grazing view and a magnified 128×128 view, first under the player's own `QualitySettings.anisotropicFiltering`, then under the other two modes, and the mode is then restored. Mip level l holds R = round(255 l / 8) and a one-texel checkerboard in G. A control frame shows that nothing else reaches the probe camera. One cell is drawn again after the restore and must be byte-identical.
+- **Survey.** The same exec records each Texture2D's filter, aniso, mip count, size and wrap in `abdata/chara`, `abdata/studio` and `abdata/map`. Each bundle the probe loads is unloaded with `Unload(true)`. A bundle the game already holds is read in place and left loaded.
+- **Analysis.** `analyse` decides each cell from its frames:
+  - linear min/mag when the magnified frame's G takes values strictly between 0 and 255;
+  - linear mips when the grazing frame's R falls between level values;
+  - anisotropy when its rows use finer levels than the same filter's aniso-0 cell.
+
+  With `--reference`, it also compares each cell with host Metal renders of the same views, one per candidate sampler. It reports the nearest candidate and whether `SamplerConfiguration`'s prediction matches. The VM's D3D11 runs through Parallels' translation to Metal on the same GPU, so the reference shows what the player requested; point and linear filtering stay distinct either way.
+
+  Candidates that render identically on the host tie, and a prediction that matches any of them counts as a match. On the M2 Ultra, `maxAnisotropy` 9 and 16 give byte-identical frames in both views, so the probe cannot separate ForceEnable's 9 from 16 there.
+
+  A dry run of `analyse` used host renders as a fake capture of a player that point-samples every Point texture. It flagged exactly the 12 Point cells with aniso above 1 under Enable and ForceEnable. Each was point by a margin of 6.7–8.6, and no other cell was flagged.
+- **The native path.** The ForceEnable Point cells also show whether the native path's forcing of every texture, Point included (the limit above), matches the player.
+- **Status.** Not yet run. The Point rule and its pinned cases in `liveSourceSamplerConfigurationPreservesTheDescriptorContract` change only after the run, in a separate change.
+
+```sh
+.local/reverse/unitypy-venv/bin/python Tools/reverse/original_sampler_probe.py run --output .local/<run> --errno-baseline <count>
+.local/reverse/unitypy-venv/bin/python Tools/reverse/original_sampler_probe.py analyse --capture .local/<run> --reference .local/<renders> --output .local/<run>/analysis.json
+```

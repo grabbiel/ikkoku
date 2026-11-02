@@ -83,12 +83,13 @@ def upload_items(scenes):
     return [(label,'reload-'+label+'.png') for label in LABELS+FK_LABELS+EXPRESSION_LABELS+TOPOLOGY_LABELS+ROUTE_LABELS if label in (scenes or {})]
 
 
-def once_script(root,base,wait_seconds,uploads,source_name='SceneReloadProbe.cs',dll_name='IkkokuSceneReloadProbe.dll'):
+def once_script(root,base,wait_seconds,uploads,source_name='SceneReloadProbe.cs',dll_name='IkkokuSceneReloadProbe.dll',allow_no_uploads=False):
     """The whole --once phase as run.ps1. `base` is the endpoint URL ending in the token and '/'.
     `source_name`/`dll_name` let another probe (original_map_probe.py capture) reuse this transport:
-    its source is served and compiled under its own names, and it writes to the same plugins/reload folder."""
+    its source is served and compiled under its own names, and it writes to the same plugins/reload folder.
+    `allow_no_uploads` is for a probe that needs no scene record (original_sampler_probe.py)."""
     if not re.fullmatch(PLAYER_ROOT,root):raise ValueError('Unknown private player root')
-    if not uploads or any(not re.fullmatch(r'reload-[a-z0-9-]+\.png',name) for name in uploads):raise ValueError('Unexpected scene upload names')
+    if (not uploads and not allow_no_uploads) or any(not re.fullmatch(r'reload-[a-z0-9-]+\.png',name) for name in uploads):raise ValueError('Unexpected scene upload names')
     if not re.fullmatch(r'[A-Za-z]+\.cs',source_name) or not re.fullmatch(r'Ikkoku[A-Za-z]+\.dll',dll_name):raise ValueError('Unexpected probe source or plug-in name')
     names=','.join("'"+name+"'" for name in uploads)
     return ("$ErrorActionPreference='Stop';$root='"+root+"';$base='"+base+"';$r=[ordered]@{root=$root}\n"
