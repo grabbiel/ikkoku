@@ -329,6 +329,13 @@ cache entry stays unchanged and the candidate keeps an appearance-owned lease.
 Successful uncontended loads retain the existing persistent cache behavior.
 Composed texture leases and preview mesh cleanup continue to own their respective
 resources. This boundary avoids treating resource-count changes as ownership.
+Two Engine tests pin that ownership for
+[#332](https://github.com/grabbiel/ikkoku/issues/332), where the Maker footprint
+grows on every reimport of the same card. A completed Metal composition leaves
+its command buffer, output and batch in no autorelease pool. Ten card
+replacements in a row free each previous preview's mesh buffers, deformation
+buffer and composed texture. Weak references to those Metal objects check this,
+with and without a per-step pool.
 
 The Maker lane includes paired selection/fresh-process reload checks for female
 and male head-0 inputs. It requires `IKKOKU_MAKER_HEAD_FEMALE_CARD`,

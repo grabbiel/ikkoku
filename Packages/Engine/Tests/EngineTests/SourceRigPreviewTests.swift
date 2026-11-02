@@ -8,12 +8,12 @@ import CoreMath
 import Character
 @testable import Renderer
 
-private func previewRigFixture(malformedSecondPart: Bool = false) throws -> SourceRig {
+private func previewRigFixture(malformedSecondPart: Bool = false, meshName: String = "preview triangle") throws -> SourceRig {
     let rig = try RigDefinition(nodes: [
         .init(name: "mesh", sourceID: "mesh", parent: nil),
         .init(name: "joint", sourceID: "joint", parent: nil)], skins: [
             .init(name: "skin", meshNode: 0, joints: [1], inverseBindMatrices: [matrix_identity_float4x4])])
-    let mesh = MeshData(name: "preview triangle", positions: [.zero, Float3(1, 0, 0), Float3(0, 1, 0)],
+    let mesh = MeshData(name: meshName, positions: [.zero, Float3(1, 0, 0), Float3(0, 1, 0)],
                         normals: [Float3](repeating: Float3(0, 0, 1), count: 3),
                         joints: [SIMD4<UInt16>](repeating: .zero, count: 3),
                         weights: [Float4](repeating: Float4(1, 0, 0, 0), count: 3), indices: [0, 1, 2])
@@ -43,6 +43,59 @@ func sourceRigPreviewReleasesMeshesAndDeformationBuffers() throws {
     let replacement = try #require(resources.deformBuffer(for: key, vertexCount: 3))
     #expect(oldDeform !== replacement)
     resources.releaseDeformBuffers(keys: [key])
+}
+
+private final class PreviewWeakGPUObject {
+    weak var value: AnyObject?
+    init(_ value: AnyObject) { self.value = value }
+}
+
+/// #332: a Maker card replacement gives the old preview's GPU objects back.
+/// Each step composes the card appearance through the Metal compositor, builds
+/// the new preview, makes its deformation buffer as a drawn frame would, and
+/// then replaces the old preview. After every replacement the previous
+/// preview's mesh buffers, deformation buffer and composed texture must be
+/// gone, and the store must hold one preview's worth. Weak references to the
+/// Metal objects, not `MTLDevice.currentAllocatedSize`: that counter is
+/// process-wide while tests run in parallel. Without the per-step pool, any
+/// reference left in the autorelease pool keeps an object alive and fails.
+@Test(.enabled(if: MTLCreateSystemDefaultDevice() != nil), arguments: [false, true])
+func sourceRigPreviewCardReplacementReleasesThePreviousGPUObjects(perStepPool: Bool) throws {
+    let resources = ResourceStore(device: try #require(MTLCreateSystemDefaultDevice()))
+    let directory = try AppearanceTestFixture.directory()
+    defer { try? FileManager.default.removeItem(at: directory) }
+    let base = try AppearanceTestFixture.preview(directory: directory, resources: resources)
+    let card = try SourceCardAppearance(card: AppearanceTestFixture.card())
+    let bindings = try AppearanceTestFixture.bindings([AppearanceTestFixture.recipe(directory: directory)], directory: directory)
+    let source = try previewRigFixture(meshName: "part")
+    var current: SourceRigPreview?
+    func replace() throws -> [PreviewWeakGPUObject] {
+        let applied = try base.applying(card, bindings: bindings, directory: directory, resources: resources)
+        let next = try SourceRigPreview(source: source, contract: nil, resources: resources, appearance: applied.appearance)
+        let item = try #require(try next.frame(camera: OrbitCamera()).items.first)
+        let mesh = try #require(resources.mesh(item.mesh))
+        let texture = try #require(resources.texture(item.material.base))
+        let key = try #require(item.deformKey)
+        let deform = try #require(resources.deformBuffer(for: key, vertexCount: mesh.vertexCount))
+        current = next
+        return [mesh.baseVertices, mesh.indices, deform, texture].map { PreviewWeakGPUObject($0) }
+    }
+    func step() throws -> [PreviewWeakGPUObject] { perStepPool ? try autoreleasepool { try replace() } : try replace() }
+    func counts(_ s: ResourceStore.Statistics) -> [Int] {
+        [s.meshes, s.textures, s.deformBuffers, s.hiddenBuffers, s.meshBufferBytes, s.deformBufferBytes, s.hiddenBufferBytes, s.retiring]
+    }
+    var previous = try step()
+    let baseline = counts(resources.statistics())
+    #expect(baseline[0] == 1 && baseline[1] == 1 && baseline[2] == 1 && baseline[7] == 0)
+    for replacement in 1...10 {
+        let next = try step()
+        #expect(previous.allSatisfy { $0.value == nil }, "replacement \(replacement) left the previous preview's GPU objects alive")
+        #expect(counts(resources.statistics()) == baseline)
+        previous = next
+    }
+    current = nil
+    #expect(current == nil && previous.allSatisfy { $0.value == nil })
+    #expect(counts(resources.statistics()) == [0, 0, 0, 0, 0, 0, 0, 0])
 }
 
 @Test(.enabled(if: MTLCreateSystemDefaultDevice() != nil))
