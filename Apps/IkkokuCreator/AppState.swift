@@ -1065,6 +1065,7 @@ final class AppState {
         let env = ProcessInfo.processInfo.environment
         guard var tracker = uiCaptureTracker, let out = env["IKKOKU_CAPTURE_UI"] else { return }
         if !uiCapturePendingSelections.isEmpty, let studio {
+            logUICaptureFit("select", elapsed: elapsed)
             studio.selection = uiCapturePendingSelections.removeFirst()
             if uiCapturePendingSelections.isEmpty { uiCaptureContentAppeared = true }
             return
@@ -1072,6 +1073,7 @@ final class AppState {
         let window = NSApp?.windows.first(where: { $0.isVisible && $0.contentView != nil })
         let view = window?.contentView
         view?.layoutSubtreeIfNeeded()
+        logUICaptureFit("poll", elapsed: elapsed)
         let bounds = view?.bounds ?? .zero
         let decision = tracker.observe(UICaptureReadiness.Observation(
             contentAppeared: uiCaptureContentAppeared, windowVisible: window != nil,
@@ -1094,6 +1096,7 @@ final class AppState {
                 }
                 let size = try writeWindowSnapshot(view, to: URL(fileURLWithPath: out))
                 print("[ikkoku] ui snapshot written to \(out) (\(size.width)x\(size.height) px, ready after \(String(format: "%.2f", elapsed)) s)")
+                logUICaptureFit("captured", elapsed: elapsed, accessibility: true)
             } catch {
                 print("[ikkoku] ui snapshot failed: \(error)")
                 failed = true
@@ -1101,6 +1104,67 @@ final class AppState {
             // Write the report even if the PNG failed; quit nonzero if either output is missing.
             writeUICaptureReport(to: env["IKKOKU_CAPTURE_UI_REPORT"])
             exit(failed ? 1 : 0)
+        }
+    }
+
+    /// `IKKOKU_CAPTURE_UI_FIT_LOG=<path>` (#333's diagnostic): before each selection, at each
+    /// readiness poll and after the capture, appends the elapsed time, the window size, the
+    /// selection, the inspector tab, the inspector scroll view's clip and document widths and the
+    /// horizontal extent of the views in its document view, and every scroll view's frame with its
+    /// ancestors' frames, to find when and how the Clothes tab is laid out wider than the inspector. Only after the capture, so that it cannot
+    /// change what the capture shows, does it also walk the accessibility elements
+    /// (`InspectorUIScenario.inspectorFit`).
+    private func logUICaptureFit(_ moment: String, elapsed: Double, accessibility: Bool = false) {
+        guard let path = ProcessInfo.processInfo.environment["IKKOKU_CAPTURE_UI_FIT_LOG"],
+              let window = NSApp?.windows.first(where: { $0.isVisible && $0.contentView != nil }) else { return }
+        var line = String(format: "%7.2f", elapsed) + " \(moment) window \(Int(window.frame.width))x\(Int(window.frame.height))"
+            + " selection \(studio?.selectedObject?.sourceObjectKey.map { String($0) } ?? "none")"
+            + " tab \(studio?.inspectorTab.rawValue ?? "-")"
+        if let scroll = InspectorUIScenario.inspectorScrollView(window) {
+            let clip = scroll.contentView
+            let left = clip.convert(clip.bounds, to: nil).minX
+            var extents: [String] = []
+            func visit(_ view: NSView, depth: Int) {
+                guard depth < 4, extents.count < 24 else { return }
+                let frame = view.convert(view.bounds, to: nil)
+                extents.append("\(type(of: view))@\(Int(frame.minX - left))+\(Int(frame.width))")
+                view.subviews.forEach { visit($0, depth: depth + 1) }
+            }
+            if let document = scroll.documentView { visit(document, depth: 0) }
+            line += " clip \(Int(clip.bounds.width)) document \(Int(scroll.documentView?.frame.width ?? 0))"
+                + " scrollers \(scroll.scrollerStyle == .legacy ? "legacy" : "overlay") views " + extents.joined(separator: " ")
+        } else {
+            line += " no inspector scroll view"
+        }
+        // Every scroll view at least 200 pt wide, with its frame and the frames of its ancestors up to the
+        // content view (the inspector column, its panel and the split's stacks), in window coordinates.
+        if let content = window.contentView {
+            var scrolls: [NSScrollView] = []
+            func find(_ view: NSView) {
+                if let scroll = view as? NSScrollView, scroll.frame.width >= 200 { scrolls.append(scroll) }
+                view.subviews.forEach(find)
+            }
+            find(content)
+            line += " | content \(Int(content.bounds.width)) | \(scrolls.count) scroll views"
+            for (index, scroll) in scrolls.enumerated() {
+                func extent(_ view: NSView) -> String {
+                    let frame = view.convert(view.bounds, to: nil)
+                    return "\(type(of: view))@\(Int(frame.minX))+\(Int(frame.width))" + (view.isHidden ? "(hidden)" : "")
+                }
+                let chain = sequence(first: scroll as NSView, next: \.superview).prefix { $0 !== content }.map(extent)
+                line += " | #\(index) document \(Int(scroll.documentView?.frame.width ?? 0))"
+                    + (scroll.isHiddenOrHasHiddenAncestor ? " hidden" : "") + ": " + chain.joined(separator: " < ")
+            }
+        }
+        if accessibility {
+            let fit = InspectorUIScenario.inspectorFit(window)
+            line += " | fits \(fit.fits): \(fit.detail)"
+        }
+        guard let data = (line + "\n").data(using: .utf8) else { return }
+        if let handle = FileHandle(forWritingAtPath: path) {
+            handle.seekToEndOfFile(); handle.write(data); try? handle.close()
+        } else {
+            FileManager.default.createFile(atPath: path, contents: data)
         }
     }
 

@@ -1279,8 +1279,12 @@ get wrong:
   are selected five times. After each character, the inspector's scroll
   view must be no wider than its visible width, and no accessibility
   element in it may extend past that width on either side
-  (`inspectorFits`). The report names the scroller style, whether the
-  vertical scroller shows, and the elements past the width. The two checks
+  (`inspectorFits`). The scroll bars and their parts are not counted. A
+  section's disclosure triangle reports a frame from 10 pt before the
+  leading edge, so it is judged by a static text with its title when there
+  is one. The report names the scroller style, whether the vertical
+  scroller shows, how many triangles were judged by their titles, and the
+  elements past the width. The two checks
   run with legacy and with overlay scrollers for the app process only
   (`-AppleShowScrollBars Always` or `WhenScrolling`, in the argument
   domain; System Settings are not changed).

@@ -453,13 +453,17 @@ struct InspectorUIScenario: Decodable {
     /// width (#333): its document view is no wider than its clip view, and no
     /// accessibility element inside it (SwiftUI's text is not an NSView, so
     /// views alone would miss it) extends past the clip view on either side.
-    /// The detail names the scroller style, whether the vertical scroller
-    /// shows, and up to eight elements past the visible width.
+    /// A disclosure triangle's element spans its section's header from 10 pt
+    /// before the leading edge (in every run of #333's first diagnostic), so a
+    /// triangle is judged by a static text that carries its title, when there
+    /// is one, and by its own frame otherwise. The detail names the scroller
+    /// style, whether the vertical scroller shows, how many triangles were
+    /// judged by their titles, and up to eight elements past the visible width.
     @MainActor static func inspectorFit(_ window: NSWindow) -> (fits: Bool, detail: String) {
         guard let scroll = inspectorScrollView(window) else { return (false, "no inspector scroll view") }
         let clip = scroll.contentView
         let visible = window.convertToScreen(clip.convert(clip.bounds, to: nil))
-        var offenders: [String] = [], leaves = 0, visited = 0
+        var leaves: [(role: String, name: String, frame: CGRect)] = [], visited = 0
         func get(_ object: NSObject, _ name: String) -> Any? {
             let selector = NSSelectorFromString(name)
             guard object.responds(to: selector) else { return nil }
@@ -477,25 +481,33 @@ struct InspectorUIScenario: Decodable {
         func visit(_ element: Any, depth: Int) {
             guard depth < 80, visited < 20_000, let object = element as? NSObject else { return }
             visited += 1
-            let children = get(object, "accessibilityChildren") as? [Any] ?? []
             let role = get(object, "accessibilityRole") as? String ?? ""
-            if children.isEmpty, role != "AXScrollBar", let f = frame(object), f.width > 0, f.height > 0 {
-                leaves += 1
-                if f.minX < visible.minX - 1 || f.maxX > visible.maxX + 1 {
-                    let name = ["accessibilityLabel", "accessibilityTitle", "accessibilityValue"]
-                        .compactMap { get(object, $0) as? String }.first { !$0.isEmpty } ?? ""
-                    offenders.append("\(role) '\(name.prefix(40))' x \(Int(f.minX - visible.minX))...\(Int(f.maxX - visible.minX))")
-                }
+            // A legacy scroller and its parts (knob, arrows) sit beside the clip
+            // view by design, so the whole scroll bar subtree is skipped.
+            if role == "AXScrollBar" { return }
+            let children = get(object, "accessibilityChildren") as? [Any] ?? []
+            if children.isEmpty, let f = frame(object), f.width > 0, f.height > 0 {
+                let name = ["accessibilityLabel", "accessibilityTitle", "accessibilityValue"]
+                    .compactMap { get(object, $0) as? String }.first { !$0.isEmpty } ?? ""
+                leaves.append((role, name, f))
             }
             children.forEach { visit($0, depth: depth + 1) }
         }
         visit(scroll, depth: 0)
+        func past(_ f: CGRect) -> Bool { f.minX < visible.minX - 1 || f.maxX > visible.maxX + 1 }
+        let titles = Set(leaves.filter { $0.role == "AXStaticText" }.map(\.name))
+        var offenders: [String] = [], byTitle = 0
+        for leaf in leaves where past(leaf.frame) {
+            if leaf.role == "AXDisclosureTriangle", !leaf.name.isEmpty, titles.contains(leaf.name) { byTitle += 1; continue }
+            offenders.append("\(leaf.role) '\(leaf.name.prefix(40))' x \(Int(leaf.frame.minX - visible.minX))...\(Int(leaf.frame.maxX - visible.minX))")
+        }
         let document = scroll.documentView?.frame.width ?? 0
         let vertical = scroll.hasVerticalScroller && !(scroll.verticalScroller?.isHidden ?? true)
-        let fits = offenders.isEmpty && leaves > 0 && document <= clip.bounds.width + 1
+        let fits = offenders.isEmpty && !leaves.isEmpty && document <= clip.bounds.width + 1
         let detail = "inspector scroll view: clip \(Int(clip.bounds.width)) pt, document \(Int(document)) pt, "
             + (scroll.scrollerStyle == .legacy ? "legacy" : "overlay") + " scrollers, vertical scroller "
-            + (vertical ? "shown" : "not shown") + ", \(leaves) elements, \(offenders.count) past the visible width "
+            + (vertical ? "shown" : "not shown") + ", \(leaves.count) elements, "
+            + "\(byTitle) disclosure triangles past it judged by their titles, \(offenders.count) past the visible width "
             + "(\(Int(visible.width)) pt)" + (offenders.isEmpty ? "" : ": " + offenders.prefix(8).joined(separator: "; "))
         return (fits, detail)
     }
