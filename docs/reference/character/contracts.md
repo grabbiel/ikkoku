@@ -321,6 +321,38 @@ session's only entry:
 - **Scope.** Only card imports with a Maker library seed; other loads decode
   plainly and reset, as before.
 
+**Acceptance timing** (Release, coordinator quiet window W2, 2026-11-02). The
+seed ran as the third arm of the #192-D overhead pass (#360), against Release
+`e0527080` (control):
+
+- **Units.** Each unit is one fresh process. It imports the sex's head-0 card
+  at startup, then selects heads 200, 0, 200, 0, 200 and 0.
+- **Order and validity.** The order is ABBA per sex, with n = 4 per arm and
+  sex. All 24 units are valid, 11 of them after one rerun.
+- **Display.** 1920×1080 @ 120 Hz.
+
+Medians in ms (min–max), control → seed:
+
+| First return to head 0 (step 2) | Female | Male |
+|---|---|---|
+| Selection API | 105.4 (102.6–106.7) → 82.9 (81.7–84.3) | 103.6 (102.9–105.0) → 81.6 (80.7–85.4) |
+| Preparation | 73.8 → 51.3 | 73.1 → 51.4 |
+| Commit | 30.3 → 30.6 | 29.7 → 29.8 |
+| Longest main-actor gap | 32.8 → 32.5 | 30.8 → 31.3 |
+
+- **The return.** It is about 22 ms (21%) faster, and the ranges are
+  disjoint. All 8 seed units hit the seed on the return (1 hit, 0 misses;
+  control 0 / 1) and decode no shape. The saving is the worker-side
+  `shapeDecode` inside preparation; commit and the main-actor gap are
+  unchanged.
+- **The other steps.** The cold step 1 and steps 3–6 are unchanged: their API
+  medians differ by −1.0 to +1.3 ms, except step 1 female (442.2 → 433.7 ms,
+  overlapping ranges).
+- **The startup import.**
+  - 737.4 → 732.6 ms (female) and 757.3 → 765.9 ms (male), with overlapping
+    ranges: within noise.
+  - The seed's own stages measure 0.9 ms (SHA-256) and 0.0–0.1 ms (admission).
+
 The import's initial-load sample reports `shapeCachePublication`,
 `shapeSeedStages` (the seed's SHA, decode and admission intervals) and
 `stagedShapeReuse`. The four head scenarios assert `shapeCachePublication`
