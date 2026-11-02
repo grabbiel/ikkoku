@@ -542,6 +542,27 @@ private struct CaptureRecipe {
     }
 }
 
+// R7 phase 2, item 7 follow-ups: the measurement controls are performance
+// trace options with fixed values, like `IKKOKU_PERF_KEEP_MOUNTED`.
+@Test func captureRequestScopesTheInspectorFollowUpControls() throws {
+    let controls: [(variable: String, values: [String], rejected: [String])] = [
+        ("IKKOKU_PERF_PANEL_STATE", ["document", "published"], ["Published", "on", ""]),
+    ]
+    for control in controls {
+        let outside: [[String]] = [[control.variable]]
+        #expect(captureRequestProblems([control.variable: control.values[0]]) == outside, Comment(rawValue: control.variable))
+        for value in control.values {
+            let environment: [String: String] = ["IKKOKU_PERF_TRACE": "/p.json", control.variable: value]
+            #expect(captureRequestProblems(environment).isEmpty, Comment(rawValue: "\(control.variable)=\(value)"))
+        }
+        for value in control.rejected {
+            let environment: [String: String] = ["IKKOKU_PERF_TRACE": "/p.json", control.variable: value]
+            let expected: [[String]] = [[control.variable]]
+            #expect(captureRequestProblems(environment) == expected, Comment(rawValue: "\(control.variable)=\(value)"))
+        }
+    }
+}
+
 // R7 phase 2, item 7: a Studio window capture can make selections first, one at a time.
 @Test func captureRequestAcceptsStudioWindowSelections() {
     let studio: [String: String] = ["IKKOKU_SOURCE_SCENE": "/scenes/scene.png", "IKKOKU_SOURCE_AVATAR": "/rigs/source-avatar.json",
