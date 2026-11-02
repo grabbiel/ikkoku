@@ -200,6 +200,15 @@ saved ID is absent from its category has the status `catalogFallback`.
 appearance and material path as a direct selection of it. An empty category
 resolves to nothing.
 
+The card's colors bind to the drawn row, as in the original, which writes the
+drawn ID back before it applies them. The converter's bindings for a row
+require the slot to hold that row's ID: 101:0 requires `hair.parts.0.id` = 0.
+For a fallback row, that slot-ID requirement is checked against the drawn ID
+instead of the saved one (`resolvingCatalogFallback`). The direct and
+prepared-input paths do this the same way. Other requirements are unchanged.
+Without this rule a fallback row drew the default geometry with its reference
+material and none of the card's colors.
+
 When the resolved ID is installed but not converted, the reference part is
 shown, as for `conversionMissing`, and the diagnostic and picker say so. The
 fallback row's catalog flags (`NotBra`, `Coordinate`, `StateType`) do not apply
@@ -262,19 +271,22 @@ synthetic tests only. Follow-ups are in #351.
 Verification:
 
 - **Synthetic tests:** `sourceMakerCatalogFallbackDrawsEachCategoryDefaultForAnAbsentID`,
-  `sourceMakerCatalogFallbackFollowsTheOriginalOrderAndScope` and
-  `sourceMakerCatalogPresenceIsVerifiedOnceAtLoad`. They cover each
-  category's default, the order (default, then 0, then nothing), mods, the
-  missing-presence case, and every load error. Mutation controls are caught:
-  removing the absence check fails 6 expectations, reordering the defaults
-  fails 4, and skipping the presence hash check fails 3.
+  `sourceMakerCatalogFallbackFollowsTheOriginalOrderAndScope`,
+  `sourceMakerCatalogPresenceIsVerifiedOnceAtLoad` and
+  `sourceMakerCatalogFallbackBindsTheCardColorsAsTheDrawnDefault`. They cover
+  each category's default, the order (default, then 0, then nothing), mods,
+  the missing-presence case, every load error, and the card's colors on a
+  fallback row, applied directly and through prepared inputs. Mutation
+  controls are caught: removing the absence check fails 6 expectations,
+  reordering the defaults fails 4, skipping the presence hash check fails 3,
+  and checking the slot-ID requirement against the saved ID fails 5.
 - **Fixture test:** `sourceMakerCatalogFallbackCardAssemblesItsExplicitDefaults`
   reads `IKKOKU_MAKER_FALLBACK_CARD`. That card is derived from
   `IKKOKU_MAKER_SCENARIO_CARD` by the gated writer
   `sourceMakerCatalogFallbackWritesTheLaneCards`, which changes only hair
   and clothes IDs: 999,999 in four hair slots and in eight clothes slots of
   all seven outfits. The test checks it against its twin that saves the
-  defaults explicitly.
+  defaults explicitly: the same rig, geometry and applied card colors.
 - **Lane:** `maker-scenario-catalog-fallback` compares the two previews in the
   app.
 

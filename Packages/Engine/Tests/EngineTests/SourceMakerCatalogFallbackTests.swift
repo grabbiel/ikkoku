@@ -1,5 +1,7 @@
 import Foundation
 import Testing
+import Metal
+import Renderer
 @testable import Character
 import Scene
 
@@ -138,6 +140,64 @@ private enum CatalogFallbackFixture {
     #expect(library.selection(category: 101, savedID: 99, property: "p", references: nil).status == "catalogFallback")
 }
 
+/// A fallback row binds the card's colors to the drawn default, as the
+/// original does after it writes the drawn ID back (ChaControl.Koikatu.cs:7059):
+/// the converter's bindings require their own slot ID ("hair.parts.0.id" ==
+/// 0), and that requirement is evaluated against the drawn ID, not the saved
+/// one. The absent ID and the explicit default apply the same bindings,
+/// directly and through prepared inputs. Synthetic card, bindings and pixels.
+@Test(.enabled(if: MTLCreateSystemDefaultDevice() != nil))
+func sourceMakerCatalogFallbackBindsTheCardColorsAsTheDrawnDefault() throws {
+    typealias F = CatalogFallbackFixture
+    typealias A = AppearanceTestFixture
+    let directory = try A.directory(); defer { try? FileManager.default.removeItem(at: directory) }
+    let resources = ResourceStore(device: try #require(MTLCreateSystemDefaultDevice()))
+    let library = try F.library([F.converted(101, 0)], presence: F.presenceData([101: [0, 2]]), directory: directory)
+    let source = try A.card()
+    let absent = try SourceCharacterCard.decode(source.selectingVanillaAsset(CatalogFallbackCards.absentID, at: .hair(0)))
+    let explicit = try SourceCharacterCard.decode(source.selectingVanillaAsset(0, at: .hair(0)))
+    let row = library.selection(category: 101, savedID: CatalogFallbackCards.absentID, property: "ChaFileHair.HairBack", references: nil)
+    let resolvedID = try #require(row.resolvedID)
+    #expect(row.status == "catalogFallback" && resolvedID == 0)
+    // 101:0's bindings as the converter writes them: a texture recipe and a
+    // tint that require the slot's own ID, and one naming another ID.
+    var recipe = try A.recipe(directory: directory)
+    recipe["requirements"] = ["hair.parts.0.id": 0, "body.skinId": 0]
+    let tint = A.entry(colors: ["hair.parts.0.baseColor"], requirements: ["hair.parts.0.id": 0])
+    let other = A.entry(colors: ["hair.parts.0.startColor"], requirements: ["hair.parts.0.id": 2])
+    let bindings = try A.bindings([recipe, tint, other], directory: directory)
+    let resolved = bindings.resolvingCatalogFallback(requirement: "hair.parts.0.id", savedID: row.savedID, resolvedID: resolvedID)
+    // Only the slot-ID requirement equal to the drawn ID changes.
+    #expect(resolved.entries.map(\.requirements) == [["hair.parts.0.id": CatalogFallbackCards.absentID, "body.skinId": 0],
+                                                     ["hair.parts.0.id": CatalogFallbackCards.absentID], ["hair.parts.0.id": 2]])
+    #expect(resolved.entries.map(\.parts) == bindings.entries.map(\.parts) && resolved.limitations == bindings.limitations)
+    let preview = try A.preview(directory: directory, resources: resources)
+    let absentAppearance = try SourceCardAppearance(card: absent), explicitAppearance = try SourceCardAppearance(card: explicit)
+    let expected = try preview.applying(explicitAppearance, bindings: bindings, directory: directory, resources: resources)
+    #expect(expected.appliedFields.contains("hair.parts.0.baseColor") && !expected.appliedFields.contains("hair.parts.0.startColor"))
+    // Evaluated against the saved ID, the fallback row keeps the reference material.
+    let saved = try preview.applying(absentAppearance, bindings: bindings, directory: directory, resources: resources)
+    #expect(saved.appliedFields.isEmpty && saved.diagnostics.contains { $0.contains("unmatched selections: hair.parts.0.id") })
+    // Composed textures are new handles each time: compare the uniforms and
+    // which texture slots are bound.
+    func state(_ application: SourcePreviewAppearance.CardApplication) -> [String: [String]] {
+        application.appearance.materials.mapValues { $0.map { "\($0.uniforms) \($0.base != nil) \($0.colorMask != nil)" } }
+    }
+    #expect(state(expected) != preview.materials.mapValues { $0.map { "\($0.uniforms) \($0.base != nil) \($0.colorMask != nil)" } })
+    let direct = try preview.applying(absentAppearance, bindings: resolved, directory: directory, resources: resources)
+    #expect(direct.appliedFields == expected.appliedFields && direct.diagnostics == expected.diagnostics)
+    #expect(state(direct) == state(expected))
+    // Prepared inputs read the recipe's textures only for a matching requirement.
+    let inputs = try SourceAppearanceInputs.prepare(card: absentAppearance, bindings: resolved, directory: directory)
+    let explicitInputs = try SourceAppearanceInputs.prepare(card: explicitAppearance, bindings: bindings, directory: directory)
+    #expect(inputs.byteCount == explicitInputs.byteCount && inputs.byteCount > 0)
+    let prepared = try preview.applying(absentAppearance, bindings: resolved, directory: directory, resources: resources, preparedInputs: inputs)
+    #expect(prepared.appliedFields == expected.appliedFields && state(prepared) == state(expected))
+    #expect(try SourceAppearanceInputs.prepare(card: absentAppearance, bindings: bindings, directory: directory).byteCount == 0)
+    // A slot path the bindings do not name leaves them unchanged.
+    #expect(bindings.resolvingCatalogFallback(requirement: "hair.parts.1.id", savedID: row.savedID, resolvedID: resolvedID) == bindings)
+}
+
 /// Resolver records (com.bepis.sideloader.universalautoresolver) for the synthetic cards.
 private enum MakerLibraryReferences {
     typealias F = OriginalCardFixture
@@ -221,9 +281,12 @@ func sourceMakerCatalogFallbackWritesTheLaneCards() throws {
 /// resolves the same rig files (`rigFiles`, no decode); outfit 0 is also
 /// assembled in full for the Maker and a Studio wear assembly, where every
 /// edited hair and clothes selection falls back to the default and both
-/// cards build the same rig and geometry. Outfits 1-6 are not assembled.
-@Test(.enabled(if: SourceFixtureSupport.shouldRun(["IKKOKU_MAKER_FALLBACK_CARD", "IKKOKU_MAKER_LIBRARY", "IKKOKU_SOURCE_AVATAR"]),
-               "Requires IKKOKU_MAKER_FALLBACK_CARD, IKKOKU_MAKER_LIBRARY and IKKOKU_SOURCE_AVATAR"))
+/// cards build the same rig and geometry, and the card's colors apply the
+/// same bindings, directly and through prepared inputs. Outfits 1-6 are not
+/// assembled.
+@Test(.enabled(if: SourceFixtureSupport.shouldRun(["IKKOKU_MAKER_FALLBACK_CARD", "IKKOKU_MAKER_LIBRARY", "IKKOKU_SOURCE_AVATAR"])
+               && MTLCreateSystemDefaultDevice() != nil,
+               "Requires IKKOKU_MAKER_FALLBACK_CARD, IKKOKU_MAKER_LIBRARY, IKKOKU_SOURCE_AVATAR and a Metal device"))
 func sourceMakerCatalogFallbackCardAssemblesItsExplicitDefaults() throws {
     typealias C = CatalogFallbackCards
     let library = try SourceMakerLibrary.load(url: URL(fileURLWithPath: try SourceFixtureSupport.require("IKKOKU_MAKER_LIBRARY")))
@@ -242,6 +305,7 @@ func sourceMakerCatalogFallbackCardAssemblesItsExplicitDefaults() throws {
                 == library.rigFiles(card: twin, coordinate: coordinate, baseURL: base, wear: false), "\(coordinate)")
     }
     let coordinate = 0
+    let resources = ResourceStore(device: try #require(MTLCreateSystemDefaultDevice()))
     for wear in [false, true] {
         let fallback = try library.prepare(card: card, coordinate: coordinate, baseURL: base, wear: wear)
         let explicit = try library.prepare(card: twin, coordinate: coordinate, baseURL: base, wear: wear)
@@ -268,5 +332,22 @@ func sourceMakerCatalogFallbackCardAssemblesItsExplicitDefaults() throws {
         let fallbackLines = fallback.diagnostics.filter { $0.contains(": catalogFallback, source ID \(C.absentID) ") }
         #expect(fallbackLines.count == rows.count)
         #expect(fallback.diagnostics.filter { !fallbackLines.contains($0) } == explicit.diagnostics)
+        // The card's colors bind to the drawn defaults (the slot-ID
+        // requirement is evaluated against the drawn ID), directly and through
+        // prepared inputs with the Maker's clothes batching.
+        let fallbackColors = try SourceCardAppearance(card: card, coordinate: coordinate)
+        let explicitColors = try SourceCardAppearance(card: twin, coordinate: coordinate)
+        for batched in [false, true] {
+            let fallbackInputs = batched ? try fallback.prepareAppearanceInputs(card: fallbackColors, baseURL: base) : nil
+            let explicitInputs = batched ? try explicit.prepareAppearanceInputs(card: explicitColors, baseURL: base) : nil
+            #expect(fallbackInputs?.perCallByteCounts == explicitInputs?.perCallByteCounts, "\(wear) \(batched)")
+            let applied = try #require(try fallback.appearance(base: nil, card: fallbackColors, resources: resources, modLibrary: nil,
+                inputs: fallbackInputs, batchClothes: batched))
+            let twinApplied = try #require(try explicit.appearance(base: nil, card: explicitColors, resources: resources, modLibrary: nil,
+                inputs: explicitInputs, batchClothes: batched))
+            #expect(!twinApplied.appliedFields.isEmpty && applied.appliedFields == twinApplied.appliedFields, "\(wear) \(batched)")
+            #expect(applied.diagnostics.filter { !fallbackLines.contains($0) } == twinApplied.diagnostics, "\(wear) \(batched)")
+            #expect(Set(applied.appearance.materials.keys) == Set(twinApplied.appearance.materials.keys), "\(wear) \(batched)")
+        }
     }
 }

@@ -299,6 +299,28 @@ public struct SourceMakerLibrary: Sendable {
         /// The indoor-shoe copy of a category 112 entry, whose recipes bind
         /// the outdoor slot (8) and are rebound to slot 7.
         var indoorShoes = false
+        /// #346: a catalogFallback row, drawn from the resolved ID's entry
+        /// while the card keeps the saved ID.
+        var catalogFallback: CatalogFallback? = nil
+        struct CatalogFallback: Sendable, Equatable {
+            /// The slot-ID card path the entry's requirements name, such as
+            /// "hair.parts.0.id" or "clothes.parts.7.id".
+            let requirement: String, savedID: Int, resolvedID: Int
+        }
+        /// The catalog bindings as this component binds them, the same for
+        /// prepared and direct application: slot-0 accessory keys moved to
+        /// its slot, shoe keys moved to the indoor slot, and a fallback row's
+        /// slot-ID requirement evaluated against the drawn ID.
+        func contextualizing(_ input: SourceAppearanceBindings) throws -> SourceAppearanceBindings {
+            var value = input
+            if let accessorySlot { value = try value.contextualized(accessorySlot: accessorySlot) }
+            if indoorShoes { value = try value.contextualizedIndoorShoes() }
+            if let catalogFallback {
+                value = value.resolvingCatalogFallback(requirement: catalogFallback.requirement,
+                    savedID: catalogFallback.savedID, resolvedID: catalogFallback.resolvedID)
+            }
+            return value
+        }
     }
     /// How a Studio wear assembly resolved the indoor shoes (clothes kind 7).
     public enum IndoorShoes: Sendable, Equatable {
@@ -371,12 +393,7 @@ public struct SourceMakerLibrary: Sendable {
             } else { base = nil }
             let values = try components.map { component -> AppearanceInputs.Binding? in
                 guard let url = component.bindings else { return nil }
-                return try prepare(url) { input in
-                    var value = input
-                    if let slot = component.accessorySlot { value = try value.contextualized(accessorySlot: slot) }
-                    if component.indoorShoes { value = try value.contextualizedIndoorShoes() }
-                    return value
-                }
+                return try prepare(url) { try component.contextualizing($0) }
             }
             return AppearanceInputs(baseURL: baseURL.standardizedFileURL, components: components, base: base,
                 componentBindings: values, byteCount: totalBytes)
@@ -419,10 +436,7 @@ public struct SourceMakerLibrary: Sendable {
                                     }
                                     return prepared.value
                                 }
-                                var value = try SourceAppearanceBindings.load(url: url)
-                                if let slot = component.accessorySlot { value = try value.contextualized(accessorySlot: slot) }
-                                if component.indoorShoes { value = try value.contextualizedIndoorShoes() }
-                                return value
+                                return try component.contextualizing(SourceAppearanceBindings.load(url: url))
                             }
                             if grouped {
                                 return try appearance.prepareMetalApplication(card, bindings: bindings, directory: url.deletingLastPathComponent(),
@@ -597,8 +611,10 @@ public struct SourceMakerLibrary: Sendable {
             guard let value = fields[name]?.integerValue, Int32(exactly: value) != nil else { throw RigError.invalid("Missing or invalid Maker selection \(name).") }
             return value
         }
+        /// `slotPath` is the card path of the slot's ID ("hair.parts.0.id"),
+        /// which the entry's bindings name as a requirement.
         func selected(_ category: Int, _ id: Int, _ property: String, _ prefix: String, accessorySlot: Int? = nil,
-                      indoorShoes: Bool = false, clothingSlot: Int? = nil) throws -> (SourceRig, [String]?)? {
+                      indoorShoes: Bool = false, clothingSlot: Int? = nil, slotPath: String? = nil) throws -> (SourceRig, [String]?)? {
             let resolution = selection(category: category, savedID: id, property: property, references: references); selections.append(resolution)
             if let drawn = resolution.drawnDescription {
                 diagnostics.append("\(property): catalogFallback, source ID \(resolution.sourceID) is in no installed catalog, so the original draws \(drawn). The saved ID is kept, unlike the original, which writes the drawn ID back.")
@@ -618,12 +634,19 @@ public struct SourceMakerLibrary: Sendable {
             // Half-state meshes join only with their wear appearance (or when
             // the whole garment is neutral), never as unmaterialed parts.
             let halfStates = wear && entry.alternates != nil && (entry.appearance == nil || entry.wearAppearance != nil)
+            // A fallback row binds the card's colors as the original does after
+            // writing the drawn ID back (ChaControl.Koikatu.cs:7059 hair, :7292
+            // clothes): its slot-ID requirement is checked against that ID.
+            var fallback: MaterialComponent.CatalogFallback? = nil
+            if let resolved = resolution.resolvedID, let slotPath {
+                fallback = MaterialComponent.CatalogFallback(requirement: slotPath, savedID: id, resolvedID: resolved)
+            }
             if let file = halfStates ? entry.wearAppearance ?? entry.appearance : entry.appearance {
                 let bindings = halfStates ? entry.wearCardBindings ?? entry.cardBindings : entry.cardBindings
                 materials.append(.init(appearance: try verified(file, maximumBytes: 1024 * 1024, timings: timings),
                     bindings: try bindings.map { try verified($0, maximumBytes: 1024 * 1024, timings: timings) },
                     meshNames: Set(rig.parts.map { $0.mesh.name }), prefix: prefix, accessorySlot: accessorySlot,
-                    clothingSlot: clothingSlot, indoorShoes: indoorShoes))
+                    clothingSlot: clothingSlot, indoorShoes: indoorShoes, catalogFallback: fallback))
             } else { diagnostics.append("\(property): converted geometry has a neutral material; shader conversion is missing.") }
             return (rig.namespacingMeshes(prefix), halfStates ? entry.meshNames.map { $0 + entry.alternates!.map(\.meshName) } : entry.meshNames)
         }
@@ -631,7 +654,7 @@ public struct SourceMakerLibrary: Sendable {
         guard let hairParts = hairFields["parts"]?.arrayValue, hairParts.count <= 4 else { throw RigError.invalid("Unsupported hair part array.") }
         for (slot, part) in hairParts.enumerated() {
             let id = try integer(part.stringKeyedMap(), "id"), property = "ChaFileHair." + ["HairBack", "HairFront", "HairSide", "HairOption"][slot]
-            let value = try selected(101 + slot, id, property, "hair-\(slot)/")
+            let value = try selected(101 + slot, id, property, "hair-\(slot)/", slotPath: "hair.parts.\(slot).id")
             if selections.last?.entry != nil { hairBySlot[slot] = value; referenceHair[slot] = nil }
         }
         let clothesFields = try card.recordFields(.clothes(coordinate: coordinate))
@@ -640,7 +663,8 @@ public struct SourceMakerLibrary: Sendable {
         for (slot, part) in parts.enumerated() where slot != 7 || wear {
             let id = try integer(part.stringKeyedMap(), "id")
             let property = "outfit\(coordinate).ChaFileClothes.Clothes" + ["Top", "Bot", "Bra", "Shorts", "Gloves", "Pants", "Socks", "ShoesInner", "ShoesOuter"][slot]
-            let value = try selected(min(105 + slot, 112), id, property, "clothes-\(slot)/", indoorShoes: slot == 7, clothingSlot: slot)
+            let value = try selected(min(105 + slot, 112), id, property, "clothes-\(slot)/", indoorShoes: slot == 7, clothingSlot: slot,
+                                     slotPath: "clothes.parts.\(slot).id")
             if selections.last?.entry != nil { clothesBySlot[slot] = value; referenceClothes[slot] = nil }
             if slot == 0, selections.last?.entry?.empty == true { clearBodyMask = true }
             if slot == 7, let entry = selections.last?.entry { indoorShoes = entry.empty == true ? .empty : .assembled }
