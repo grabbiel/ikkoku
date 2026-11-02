@@ -634,15 +634,19 @@ public final class SourceShaderLiveMaterial: @unchecked Sendable {
     public let conventions: [String]
     /// Texture provenance, property → source.
     public let textureSources: [String: String]
+    /// Each bound texture's effective sampler state, property → state: Unity's
+    /// filter, wrap and aniso under the anisotropic mode the material was resolved with.
+    let samplers: [String: TranslatedSourceProgram.SamplerConfiguration]
 
     /// Per-frame uniforms the live encoder computes.
     public static let frameUniforms: Set<String> = ["_WorldSpaceCameraPos", "_WorldSpaceLightPos0", "_LightColor0", "_ScreenParams",
                                                     "unity_WorldTransformParams", "_Time"]
 
     init(label: String, family: String, queue: Int, passes: [TranslatedSourceProgram], vectors: [String: [Float]],
-         textures: [String: (texture: any MTLTexture, sampler: any MTLSamplerState)], conventions: [String], textureSources: [String: String]) {
+         textures: [String: (texture: any MTLTexture, sampler: any MTLSamplerState)], conventions: [String], textureSources: [String: String],
+         samplers: [String: TranslatedSourceProgram.SamplerConfiguration] = [:]) {
         self.label = label; self.family = family; self.queue = queue; self.passes = passes; self.vectors = vectors
-        self.textures = textures; self.conventions = conventions; self.textureSources = textureSources
+        self.textures = textures; self.conventions = conventions; self.textureSources = textureSources; self.samplers = samplers
     }
 
     /// The shader family name of `Shader Forge/<family>`, or nil.
@@ -672,6 +676,7 @@ public final class SourceShaderLiveMaterial: @unchecked Sendable {
         let linear = TranslatedSourceProgram.linear
         var vectors: [String: [Float]] = [:], notes: [String] = []
         var textures: [String: (texture: any MTLTexture, sampler: any MTLSamplerState)] = [:], sources: [String: String] = [:]
+        var samplers: [String: TranslatedSourceProgram.SamplerConfiguration] = [:]
         for program in passes {
             for buffer in program.vertex.constantBuffers + program.fragment.constantBuffers {
                 for parameter in buffer.vectors where vectors[parameter.name] == nil && !frameUniforms.contains(parameter.name) {
@@ -734,13 +739,13 @@ public final class SourceShaderLiveMaterial: @unchecked Sendable {
                     catch { throw SourceShaderLiveReason("default texture \(kind): \(error)") }
                     sources[name] = "Unity default \(kind)"
                 }
-                let descriptor = TranslatedSourceProgram.samplerDescriptor(filter: filter, wrap: wrap, aniso: aniso, anisotropicFiltering: anisotropicFiltering)
-                guard let sampler = resources.device.makeSamplerState(descriptor: descriptor) else { throw SourceShaderLiveReason("sampler state for \(name)") }
-                textures[name] = (gpuTexture, sampler)
+                let configuration = TranslatedSourceProgram.SamplerConfiguration(filter: filter, wrap: wrap, aniso: aniso, anisotropicFiltering: anisotropicFiltering)
+                guard let sampler = resources.device.makeSamplerState(descriptor: configuration.makeDescriptor()) else { throw SourceShaderLiveReason("sampler state for \(name)") }
+                textures[name] = (gpuTexture, sampler); samplers[name] = configuration
             }
         }
         return SourceShaderLiveMaterial(label: label, family: family, queue: queue, passes: passes, vectors: vectors,
-                                        textures: textures, conventions: Array(Set(notes)).sorted(), textureSources: sources)
+                                        textures: textures, conventions: Array(Set(notes)).sorted(), textureSources: sources, samplers: samplers)
     }
 }
 

@@ -3586,6 +3586,21 @@ non-Shader-Forge shader, or a builtin the path does not compute
 a documented convention (`[1, 1, 0, 0]`, as in the probe). Each material using it
 lists it, so nothing is substituted silently.
 
+**Sampler state.** Each texture's sampler follows Unity's rule
+(`TranslatedSourceProgram.SamplerConfiguration`): its filter, wrap and aniso,
+under the player's `QualitySettings.anisotropicFiltering`. CharaStudio runs
+ForceEnable. `OriginalCharacterProbe`'s frame report and every
+`OriginalMapProbe` case record it, and no game assembly changes it or the
+global limits. So a non-Point texture with aniso above 0 samples with
+anisotropy 9 and linear mips, and composite inputs do too. The frozen-frame
+probe takes the mode from its frame. Since 2026-11-01 the Studio passes the
+recorded value, `SourceShaderLiveConfiguration.playerAnisotropicFiltering`.
+Before, it passed none, so its live characters sampled Bilinear textures
+(60 of the live store's 64) with nearest mips and no anisotropy. The test
+`studioLiveAssembliesSampleWithThePlayersForcedAnisotropy` pins both. Each
+resolved material records its effective sampler states
+(`SourceShaderLiveMaterial.samplers`).
+
 **Per-frame inputs.** `SourceShaderLiveEncoder` converts each live item's vertices
 with a compute kernel, once per vertex source and register layout. The output is
 the program's `SourceInput` registers:
