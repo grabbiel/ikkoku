@@ -394,9 +394,77 @@
           "env": "IKKOKU_LIPLINE_COMPOSITE_NONE_PROBE",
           "kind": "directory",
           "optional": true
+        },
+        {
+          "env": "IKKOKU_HIDE_STUDIO_UI_PACKAGE",
+          "kind": "file",
+          "optional": true
+        },
+        {
+          "env": "IKKOKU_PLUGIN_REWRITE_SCENE",
+          "kind": "file",
+          "optional": true
+        },
+        {
+          "env": "IKKOKU_PLUGIN_RULE_CORPUS",
+          "kind": "file",
+          "optional": true
+        },
+        {
+          "env": "IKKOKU_PLUGIN_SCENE_PROBE",
+          "kind": "directory",
+          "optional": true
+        },
+        {
+          "env": "IKKOKU_PLUGIN_SCENE_PROBE_B",
+          "kind": "directory",
+          "optional": true
+        },
+        {
+          "env": "IKKOKU_PLUGIN_SCENE_PROBE_C",
+          "kind": "directory",
+          "optional": true
+        },
+        {
+          "env": "IKKOKU_PLUGIN_SCENE_PROBE_D",
+          "kind": "directory",
+          "optional": true
+        },
+        {
+          "env": "IKKOKU_LEGACY_SCENE_PROBE",
+          "kind": "directory",
+          "optional": true
+        },
+        {
+          "env": "IKKOKU_LEGACY_SCENE_UPLOADS",
+          "kind": "directory",
+          "optional": true
+        },
+        {
+          "env": "IKKOKU_STUDIO_LEGACY_SCENE",
+          "kind": "file",
+          "optional": true
+        },
+        {
+          "env": "IKKOKU_SHAPE_REUSE_CONTRACTS",
+          "kind": "file",
+          "optional": true
+        },
+        {
+          "env": "IKKOKU_STUDIO_HAND_PATTERNS",
+          "kind": "file",
+          "optional": true
+        },
+        {
+          "env": "IKKOKU_STUDIO_MAP_CATALOG",
+          "kind": "file",
+          "optional": true
         }
       ],
-      "env": {},
+      "env": {
+        "IKKOKU_PLUGIN_SCENE_INPUTS": ".local/verification/private-source/plugin-scene-inputs",
+        "IKKOKU_PLUGIN_SCENE_INPUTS_C": ".local/verification/private-source/plugin-scene-inputs-c"
+      },
       "referenceTier": "recovered-code-oracle",
       "tolerance": "Gated tests run whatever fixture the environment file supplies; without the file the whole check is skipped (failed under --strict). Where a fixture drives an independent oracle, comparison is exact-decoded or documented tolerance, not resemblance.",
       "timeout": 900
