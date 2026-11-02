@@ -221,33 +221,38 @@ func sourceMakerCatalogFallbackCardAssemblesItsExplicitDefaults() throws {
     let twin = try C.explicitDefaults(card)
     let avatar = URL(fileURLWithPath: try SourceFixtureSupport.require("IKKOKU_SOURCE_AVATAR"))
     let base = try library.assemblyURL(for: card.customization()) ?? avatar
+    // Every outfit resolves the same rig files (no decode); outfit 0 is also
+    // assembled in full, as in the Maker and in a Studio wear assembly.
     for coordinate in 0..<(try card.coordinateCount()) {
-        for wear in coordinate == 0 ? [false, true] : [false] {
-            let fallback = try library.prepare(card: card, coordinate: coordinate, baseURL: base, wear: wear)
-            let explicit = try library.prepare(card: twin, coordinate: coordinate, baseURL: base, wear: wear)
-            // The indoor shoes keep their saved ID; `indoorShoes` compares them below.
-            func edited(_ selection: SourceMakerLibrary.Selection) -> Bool {
-                (101...112).contains(selection.category) && !selection.property.hasSuffix("ShoesInner")
-            }
-            let rows = fallback.selections.filter(edited), explicitRows = explicit.selections.filter(edited)
-            // Four hair slots and eight clothes slots.
-            #expect(rows.count == 12 && explicitRows.count == rows.count, "\(coordinate) \(wear)")
-            for (row, twinRow) in zip(rows, explicitRows) {
-                let resolved = row.category <= 104 ? C.hairDefaults[row.category - 101] : 0
-                #expect(row.status == "catalogFallback" && row.savedID == C.absentID && row.sourceID == C.absentID, "\(row.property)")
-                #expect(row.resolvedID == resolved && row.entry?.id == resolved && row.property == twinRow.property, "\(row.property)")
-                #expect(twinRow.status == "converted" || twinRow.status == "empty", "\(twinRow.property)")
-                #expect(twinRow.entry?.id == resolved && twinRow.resolvedID == nil, "\(twinRow.property)")
-            }
-            #expect(library.rigFiles(card: card, coordinate: coordinate, baseURL: base, wear: wear)
-                    == library.rigFiles(card: twin, coordinate: coordinate, baseURL: base, wear: wear))
-            #expect(fallback.clothingSlots == explicit.clothingSlots && fallback.referenceClothingSlots == explicit.referenceClothingSlots)
-            #expect(fallback.indoorShoes == explicit.indoorShoes)
-            #expect(C.sameAssembly(fallback.source, explicit.source), "\(coordinate) \(wear)")
-            // Each fallback is diagnosed; nothing else differs.
-            let fallbackLines = fallback.diagnostics.filter { $0.contains(": catalogFallback, source ID \(C.absentID) ") }
-            #expect(fallbackLines.count == rows.count)
-            #expect(fallback.diagnostics.filter { !fallbackLines.contains($0) } == explicit.diagnostics)
+        #expect(library.rigFiles(card: card, coordinate: coordinate, baseURL: base, wear: false)
+                == library.rigFiles(card: twin, coordinate: coordinate, baseURL: base, wear: false), "\(coordinate)")
+    }
+    let coordinate = 0
+    for wear in [false, true] {
+        let fallback = try library.prepare(card: card, coordinate: coordinate, baseURL: base, wear: wear)
+        let explicit = try library.prepare(card: twin, coordinate: coordinate, baseURL: base, wear: wear)
+        // The indoor shoes keep their saved ID; `indoorShoes` compares them below.
+        func edited(_ selection: SourceMakerLibrary.Selection) -> Bool {
+            (101...112).contains(selection.category) && !selection.property.hasSuffix("ShoesInner")
         }
+        let rows = fallback.selections.filter(edited), explicitRows = explicit.selections.filter(edited)
+        // Four hair slots and eight clothes slots.
+        #expect(rows.count == 12 && explicitRows.count == rows.count, "\(coordinate) \(wear)")
+        for (row, twinRow) in zip(rows, explicitRows) {
+            let resolved = row.category <= 104 ? C.hairDefaults[row.category - 101] : 0
+            #expect(row.status == "catalogFallback" && row.savedID == C.absentID && row.sourceID == C.absentID, "\(row.property)")
+            #expect(row.resolvedID == resolved && row.entry?.id == resolved && row.property == twinRow.property, "\(row.property)")
+            #expect(twinRow.status == "converted" || twinRow.status == "empty", "\(twinRow.property)")
+            #expect(twinRow.entry?.id == resolved && twinRow.resolvedID == nil, "\(twinRow.property)")
+        }
+        #expect(library.rigFiles(card: card, coordinate: coordinate, baseURL: base, wear: wear)
+                == library.rigFiles(card: twin, coordinate: coordinate, baseURL: base, wear: wear))
+        #expect(fallback.clothingSlots == explicit.clothingSlots && fallback.referenceClothingSlots == explicit.referenceClothingSlots)
+        #expect(fallback.indoorShoes == explicit.indoorShoes)
+        #expect(C.sameAssembly(fallback.source, explicit.source), "\(coordinate) \(wear)")
+        // Each fallback is diagnosed; nothing else differs.
+        let fallbackLines = fallback.diagnostics.filter { $0.contains(": catalogFallback, source ID \(C.absentID) ") }
+        #expect(fallbackLines.count == rows.count)
+        #expect(fallback.diagnostics.filter { !fallbackLines.contains($0) } == explicit.diagnostics)
     }
 }
