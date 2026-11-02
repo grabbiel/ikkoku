@@ -1,0 +1,25 @@
+{
+  "steps": [
+    {"op": "setVisible", "key": 622, "visible": false},
+    {"op": "export", "path": ".local/verification/scenario-exports/hidden-character-build.png"},
+    {"op": "reimport", "path": ".local/verification/scenario-exports/hidden-character-build.png"},
+    {"op": "assert", "key": 622, "visible": false, "characterBuilt": {"key": 0, "built": false},
+     "statusContains": "1 hidden, built when shown", "diagnosticContains": "1 hidden character not built at import"},
+    {"op": "assert", "characterBuilt": {"key": 65, "built": true}},
+    {"op": "captureRender", "name": "hidden"},
+    {"op": "select", "key": 0},
+    {"op": "assert", "characterBuilt": {"key": 0, "built": true},
+     "render": {"from": "hidden", "changedPixelsAtMost": 0, "maxChannelDeltaAtMost": 0}},
+    {"op": "setOutfit", "key": 0, "index": 3},
+    {"op": "setFK", "key": 0, "bone": 19, "rotation": [0, 35, 0]},
+    {"op": "assert", "outfit": {"key": 0, "coordinate": 3}, "fk": {"key": 0, "bone": 19, "rotation": [0, 35, 0]},
+     "render": {"from": "hidden", "changedPixelsAtMost": 0, "maxChannelDeltaAtMost": 0}},
+    {"op": "setVisible", "key": 622, "visible": true},
+    {"op": "assert", "key": 622, "visible": true, "characterBuilt": {"key": 0, "built": true},
+     "outfit": {"key": 0, "coordinate": 3}, "fk": {"key": 0, "bone": 19, "rotation": [0, 35, 0]},
+     "render": {"from": "hidden", "changedPixelsAtLeast": 2000}},
+    {"op": "export", "path": ".local/verification/scenario-exports/hidden-character-build-shown.png"},
+    {"op": "reimport", "path": ".local/verification/scenario-exports/hidden-character-build-shown.png"},
+    {"op": "assert", "key": 622, "visible": true, "outfit": {"key": 0, "coordinate": 3, "saved": 3}}
+  ]
+}

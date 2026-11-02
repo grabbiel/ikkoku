@@ -830,6 +830,11 @@ struct SourcePoseInspector: View {
                     Text("Rates follow the viewport camera; the iris shift itself comes in the next slice.").font(.caption).foregroundStyle(.secondary)
                 }
             }
+        } else if let o = model.selectedObject, model.sourceCharacterBuilding(o.id) {
+            // A character hidden at import or after a native reload builds
+            // when selected (`StudioModel.sourceSelectionBuild`).
+            Text("Building this character…").font(.caption).foregroundStyle(.secondary)
+                .accessibilityIdentifier("studio.source.building")
         } else {
             Text("The original character pose is not loaded.").font(.caption).foregroundStyle(.secondary)
         }
@@ -975,6 +980,10 @@ struct FaceInspector: View {
             .onAppear { model.displayedInspectorView = "FaceInspector.sourceShape" }
             .onDisappear { if model.displayedInspectorView == "FaceInspector.sourceShape" { model.displayedInspectorView = "none" } }
             .accessibilityIdentifier("studio.face.source.shape")
+        } else if let o = model.selectedObject, o.kind == .character, o.sourceCharacter != nil, model.sourceCharacterBuilding(o.id) {
+            Text("Building this character…")
+                .font(.callout).foregroundStyle(.secondary)
+                .accessibilityIdentifier("studio.source.building")
         } else if let o = model.selectedObject, o.kind == .character, o.sourceCharacter != nil {
             Text("Shape editing is not available for this character reference.")
                 .font(.callout).foregroundStyle(.secondary)
@@ -1068,6 +1077,9 @@ struct ClothesInspector: View {
                 if let preview = model.sourceShapePreview(for: o.id) {
                     sourceOutfit(o, preview: preview)
                     sourceClothesState(o, preview: preview)
+                } else if model.sourceCharacterBuilding(o.id) {
+                    Text("Building this character…").font(.callout).foregroundStyle(.secondary)
+                        .accessibilityIdentifier("studio.source.building")
                 }
                 SectionBox(title: "Accessories") {
                     let labels = model.sourceAccessoryLabels(for: o.id)

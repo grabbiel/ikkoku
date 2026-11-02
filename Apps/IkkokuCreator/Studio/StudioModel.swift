@@ -226,6 +226,9 @@ final class StudioModel: ViewportInputHandler, LivePacedHandler {
     var selection: UUID? {
         didSet {
             guard selection != oldValue else { return }
+            // A hidden character selected, or one a hidden selection hangs
+            // from, builds for the inspector (`sourceSelectionBuild`).
+            if let build = sourceSelectionBuild, sourceInstanceStorage[build] == nil { sourcePreviewsChecked = false }
             if selectedBone != nil { selectedBone = nil }
             if selectedSourceIK != nil { selectedSourceIK = nil }
             selectedRoutePoint = nil
@@ -2286,6 +2289,16 @@ final class StudioModel: ViewportInputHandler, LivePacedHandler {
         })
     }
 
+    /// The import's visibility rule: a record is drawn when its own flag
+    /// and every ancestor's are set, the rule `StudioDocument.isVisible`
+    /// applies to the imported document. A character's accessory children
+    /// take the character's result. `visibleAbove` is the parent's result
+    /// (true for a root). The import walks use it to leave hidden characters
+    /// unbuilt; it reads only the record, so the item side can share it.
+    static func sourceImportVisible(_ record: KoikatsuObjectRecord, visibleAbove: Bool) -> Bool {
+        visibleAbove && record.visible
+    }
+
     /// Reads, decodes and plans an import without touching the model, and
     /// starts its characters' first halves.
     private func prepareSourceSceneImport(sceneURL: URL, rigURL: URL, boneCatalogURL: URL) throws -> SourceSceneImportJob {
@@ -2352,39 +2365,57 @@ final class StudioModel: ViewportInputHandler, LivePacedHandler {
         }
         // The walk below in its own order, collecting what it builds: every
         // character with the reference it gets, and every item it loads.
-        var references: [SourceStudioCharacterReference] = [], itemRecords: [KoikatsuItemRecord] = []
+        // Only the characters drawn at import build (`builds`, the batch's
+        // order). A hidden character outside a route builds when it is shown
+        // or selected (`startMissingSourceBuilds`), as after a native reload;
+        // a route child builds here, hidden or not, because its placeholder
+        // entry carries no reference that a later build could start from.
+        var references: [SourceStudioCharacterReference] = [], builds: [Int?] = []
+        var buildReferences: [SourceStudioCharacterReference] = [], itemRecords: [KoikatsuItemRecord] = []
         var steps: [SourceStudioCharacterBatch.Step] = []
-        var plan = Array(source.snapshot.roots.reversed())
-        while let record = plan.popLast() {
+        // Each record with its parent's effective visibility and whether it
+        // sits under a route, as the commit's walk derives them.
+        var plan: [(record: KoikatsuObjectRecord, visibleAbove: Bool, routeChild: Bool)] =
+            source.snapshot.roots.reversed().map { ($0, true, false) }
+        while let (record, visibleAbove, routeChild) = plan.popLast() {
+            let visible = Self.sourceImportVisible(record, visibleAbove: visibleAbove)
             if let character = record.character {
                 let selectedRig = character.sex == 0
                     ? (try EngineHost.locateSourceAvatar(sex: .male) ?? rigURL) : rigURL
-                references.append(SourceStudioCharacterReference(sceneFile: sceneURL.path, sceneSHA256: hash,
+                let reference = SourceStudioCharacterReference(sceneFile: sceneURL.path, sceneSHA256: hash,
                     rigFile: selectedRig.path, boneCatalogFile: boneCatalogURL.path, objectKey: record.sourceKey,
                     makerLibraryFile: makerLibrary?.sourceURL.path, attachmentCatalogFile: attachmentPath, animationCatalogFile: animationPath,
                     dynamicsFile: ProcessInfo.processInfo.environment["IKKOKU_STUDIO_DYNAMICS"],
                     handPatternsFile: handPatternsPath,
-                    lookSettingsFile: ProcessInfo.processInfo.environment["IKKOKU_STUDIO_LOOK_SETTINGS"]))
-                steps.append(.character(references.count - 1))
+                    lookSettingsFile: ProcessInfo.processInfo.environment["IKKOKU_STUDIO_LOOK_SETTINGS"])
+                references.append(reference)
+                if visible || routeChild {
+                    buildReferences.append(reference)
+                    builds.append(buildReferences.count - 1)
+                    steps.append(.character(buildReferences.count - 1))
+                } else {
+                    builds.append(nil)
+                }
             } else if record.kind == .camera {
             } else if record.kind == .item, let item = record.item, itemResolver != nil {
                 itemRecords.append(item)
                 steps.append(.main(itemRecords.count - 1))
             }
-            plan += record.children.reversed()
+            let childRoute = routeChild || record.kind == .route
+            plan += record.children.reversed().map { ($0, visible, childRoute) }
             if let character = record.character {
                 for key in character.accessoryChildren.keys.sorted().reversed() {
-                    plan += (character.accessoryChildren[key] ?? []).reversed()
+                    plan += (character.accessoryChildren[key] ?? []).reversed().map { ($0, visible, routeChild) }
                 }
             }
         }
         // A re-import of a loaded character borrows its converted assembly.
-        let batch = sourceCharacterBatch(references.map { ($0, nil) })
+        let batch = sourceCharacterBatch(buildReferences.map { ($0, nil) })
         let job = SourceSceneImportJob(sceneURL: sceneURL, rigURL: rigURL, boneCatalogURL: boneCatalogURL, hash: hash,
             source: source, imported: imported, diagnostics: diagnostics, sceneLightOverride: sceneLightOverride,
             animationCatalog: animationCatalog, animationCatalogError: animationCatalogError,
-            itemResolver: itemResolver, itemNames: itemNames, references: references, itemRecords: itemRecords,
-            steps: steps, batch: batch)
+            itemResolver: itemResolver, itemNames: itemNames, references: references, builds: builds,
+            itemRecords: itemRecords, steps: steps, batch: batch)
         // ST-A11: the map loads on its own worker beside the characters.
         job.mapRequest = SourceMapRequest.make(settings: source.settings, sceneSHA256: hash)
         job.mapLoad = startSourceMapLoad(for: job.mapRequest)
@@ -2401,7 +2432,7 @@ final class StudioModel: ViewportInputHandler, LivePacedHandler {
         var imported = job.imported, diagnostics = job.diagnostics
         let sceneLightOverride = job.sceneLightOverride, itemResolver = job.itemResolver, itemNames = job.itemNames
         var previews: [UUID: SourceStudioCharacterPreview] = [:]
-        var characterIndex = 0, itemIndex = 0
+        var characterIndex = 0, itemIndex = 0, deferredCharacters = 0
         var bounds = AABB.empty, stack = source.snapshot.roots.reversed().map { ($0, Optional<UUID>.none, false, Optional<Int32>.none) }
         var routes: [UUID: SourceRouteRuntime] = [:]
         var routeCharacterPreviews: [UUID: SourceStudioCharacterPreview] = [:]
@@ -2422,28 +2453,44 @@ final class StudioModel: ViewportInputHandler, LivePacedHandler {
                 let index = characterIndex
                 characterIndex += 1
                 let reference = job.references[index]
-                do {
-                    let preview = try job.character(index)
-                    preview.automaticBlink = sourceAutomaticBlink
-                    if routeChild {
-                        // The world walk moves this character with `childRoot`,
-                        // but its document entry stays the unrendered placeholder:
-                        // no character reference, folder kind, and the same
-                        // fallback-name rule as `SourceSceneExportValidation`
-                        // keep FK/IK, animation and expression edits unoffered
-                        // and original export rejecting them.
-                        if record.kind != .folder { object.name = "Unrendered source \(record.kind) \(record.sourceKey)" }
-                        routeCharacterPreviews[object.id] = preview
-                        diagnostics.append("Character \(record.sourceKey) renders on its route; the placeholder entry keeps FK/IK, animation and expression edits unoffered and original export rejects them.")
-                        diagnostics += preview.diagnostics.map { "Route character \(record.sourceKey): \($0)" }
-                    } else {
-                        object.kind = .character; object.name = "Source character \(record.sourceKey)"
-                        object.sourceCharacter = reference; previews[object.id] = preview
-                        diagnostics += preview.diagnostics.map { "Character \(record.sourceKey): \($0)" }
+                // The preparation walked these same records in this order; a
+                // record that does not match its reference is a bug, never a
+                // character shown with another one's preview.
+                guard reference.objectKey == record.sourceKey else {
+                    throw RigError.invalid("Source scene import plan is out of step at object \(record.sourceKey).")
+                }
+                if let build = job.builds[index] {
+                    do {
+                        let preview = try job.character(build)
+                        preview.automaticBlink = sourceAutomaticBlink
+                        if routeChild {
+                            // The world walk moves this character with `childRoot`,
+                            // but its document entry stays the unrendered placeholder:
+                            // no character reference, folder kind, and the same
+                            // fallback-name rule as `SourceSceneExportValidation`
+                            // keep FK/IK, animation and expression edits unoffered
+                            // and original export rejecting them.
+                            if record.kind != .folder { object.name = "Unrendered source \(record.kind) \(record.sourceKey)" }
+                            routeCharacterPreviews[object.id] = preview
+                            diagnostics.append("Character \(record.sourceKey) renders on its route; the placeholder entry keeps FK/IK, animation and expression edits unoffered and original export rejects them.")
+                            diagnostics += preview.diagnostics.map { "Route character \(record.sourceKey): \($0)" }
+                        } else {
+                            object.kind = .character; object.name = "Source character \(record.sourceKey)"
+                            object.sourceCharacter = reference; previews[object.id] = preview
+                            diagnostics += preview.diagnostics.map { "Character \(record.sourceKey): \($0)" }
+                        }
+                    } catch {
+                        if routeChild, record.kind != .folder { object.name = "Unrendered source \(record.kind) \(record.sourceKey)" }
+                        diagnostics.append("Character \(record.sourceKey) retained without rendering: \(error)")
                     }
-                } catch {
-                    if routeChild, record.kind != .folder { object.name = "Unrendered source \(record.kind) \(record.sourceKey)" }
-                    diagnostics.append("Character \(record.sourceKey) retained without rendering: \(error)")
+                } else {
+                    // Hidden at import and not on a route: the character's
+                    // entry, reference included, with no preview yet. It
+                    // builds when shown or selected (`startMissingSourceBuilds`),
+                    // as after a native reload.
+                    object.kind = .character; object.name = "Source character \(record.sourceKey)"
+                    object.sourceCharacter = reference
+                    deferredCharacters += 1
                 }
             } else if record.kind == .camera {
                 // The placeholder stays a `.folder` (export keeps validating);
@@ -2519,6 +2566,9 @@ final class StudioModel: ViewportInputHandler, LivePacedHandler {
             diagnostics.append("Items rendered from the converted catalog: \(itemAssets.count); unmapped keys: \(unmappedText).")
             diagnostics.append("Saved record colors and alpha are applied for basic shapes whose exported material carries a recorded color slot; patterns, line, emission, light cancel, animation, FK and dynamics are not applied.")
         }
+        if deferredCharacters > 0 {
+            diagnostics.append("\(deferredCharacters) hidden character\(deferredCharacters == 1 ? "" : "s") not built at import; each builds when shown or selected.")
+        }
         imported.sourcePreviewDiagnostics = diagnostics
         try imported.validateHierarchy()
         // Published before the bounds walk so attachment matrices through a
@@ -2544,8 +2594,12 @@ final class StudioModel: ViewportInputHandler, LivePacedHandler {
         rebuildSourceRouteClocks()
         committed = true
         installSourceMap(job.mapRequest, load: job.mapLoad)
-        selection = imported.objects.first(where: { $0.sourceCharacter != nil })?.id
-        status = "Source preview · \(previews.count) converted characters (\(routeCharacterPreviews.count) rendered on routes) · \(imported.objects.count - previews.count) retained tree nodes. See source compatibility details."
+        // The first drawn character, so a hidden one is not built just for
+        // the selection; with none drawn, the first character.
+        selection = imported.objects.first(where: { $0.sourceCharacter != nil && imported.isVisible($0.id) })?.id
+            ?? imported.objects.first(where: { $0.sourceCharacter != nil })?.id
+        let deferredText = deferredCharacters > 0 ? " · \(deferredCharacters) hidden, built when shown" : ""
+        status = "Source preview · \(previews.count) converted characters (\(routeCharacterPreviews.count) rendered on routes)\(deferredText) · \(imported.objects.count - previews.count - deferredCharacters) retained tree nodes. See source compatibility details."
     }
 
 
@@ -2622,7 +2676,7 @@ final class StudioModel: ViewportInputHandler, LivePacedHandler {
         var progress: SourceBuildProgress?
         if let job = sourceImportJob {
             progress = .init(label: "Importing \(job.sceneURL.deletingPathExtension().lastPathComponent)",
-                             built: job.builtCount, total: job.references.count)
+                             built: job.builtCount, total: job.buildCount)
         } else if let export = sourceExportJobs.min(by: { $0.key < $1.key })?.value {
             progress = .init(label: "Exporting \(export.url.deletingPathExtension().lastPathComponent)", built: 0, total: export.wanted.count)
         } else if pendingSourceCharacterBuilds > 0 {
@@ -2698,9 +2752,10 @@ final class StudioModel: ViewportInputHandler, LivePacedHandler {
     }
 
     /// R7 phase 2 item 6: the document's drawn source characters without a
-    /// preview (after an undo or redo, a duplicate, a scene load, an outfit
-    /// the document restored) start their builds here together, in document
-    /// order: concurrent first halves that share rig decodes and borrow a
+    /// preview (after an undo or redo, a duplicate, a scene load or import
+    /// that left hidden characters unbuilt, an outfit the document restored),
+    /// and a hidden one the selection needs (`sourceSelectionBuild`), start
+    /// their builds here together, in document order: concurrent first halves that share rig decodes and borrow a
     /// loaded preview's converted assembly. With `asyncSourceBuilds` their
     /// second halves then run on `sourceBuildQueue` in that order and each
     /// installs itself (`installSourceBuild`); the frame leaves the
@@ -2723,8 +2778,10 @@ final class StudioModel: ViewportInputHandler, LivePacedHandler {
             }
         }
         guard sourceInstances.count < sourceCharacters else { return nil }
+        let selectionBuild = sourceSelectionBuild
         for o in doc.objects where o.kind == .character {
-            guard let reference = o.sourceCharacter, !resourceBlockedObjects.contains(o.id), doc.isVisible(o.id) else { continue }
+            guard let reference = o.sourceCharacter, !resourceBlockedObjects.contains(o.id),
+                  doc.isVisible(o.id) || o.id == selectionBuild else { continue }
             if let cached = sourceInstances[o.id], cached.reference == reference,
                cached.coordinate == (o.sourceOutfit ?? cached.savedCoordinate) { continue }
             if let pending = pendingSourceBuilds[o.id], pending.reference == reference, pending.outfit == o.sourceOutfit { continue }
@@ -2747,6 +2804,30 @@ final class StudioModel: ViewportInputHandler, LivePacedHandler {
             self?.installSourceBuild(delivery, id: ids[delivery.index], batch: batch)
         }, finished: {})
         return nil
+    }
+
+    /// The source character the selection needs built even while hidden:
+    /// the selected character, or the character a selected object hangs
+    /// from (an accessory child, at any depth). The inspector, the pose
+    /// guides and a hidden selection's own guide read its preview, and its
+    /// edits validate against it. A hidden character no selection needs
+    /// stays unbuilt until shown (lazy import, native reload); once built it
+    /// keeps its preview, like a character hidden after it was drawn.
+    private var sourceSelectionBuild: UUID? {
+        var current = selection, steps = 0
+        while let id = current, let object = doc.object(id), steps <= doc.objects.count {
+            if object.kind == .character, object.sourceCharacter != nil { return id }
+            current = object.parent; steps += 1
+        }
+        return nil
+    }
+
+    /// Whether the inspector's source character `id` is waiting for its
+    /// background build (`sourceBuildProgress` is read so a view showing this
+    /// updates when the build starts and ends).
+    func sourceCharacterBuilding(_ id: UUID) -> Bool {
+        _ = sourceBuildProgress
+        return pendingSourceBuilds[id] != nil
     }
 
     /// Whether `id` or one of its ancestors is a character, or a route
@@ -3638,8 +3719,58 @@ final class StudioModel: ViewportInputHandler, LivePacedHandler {
         var animatedDoc = doc
         if animated { for i in animatedDoc.objects.indices { animatedDoc.objects[i] = timelineState(animatedDoc.objects[i]) } }
         sourceRouteEditor.worlds.removeAll(keepingCapacity: true)
+        // The source character's preview for this frame: the cached one, or
+        // one built now (the frame's batch already ran its first half). Nil
+        // while its background build is in flight or after it failed.
+        func sourcePreview(_ o: StudioObject, reference: SourceStudioCharacterReference) throws -> SourceStudioCharacterPreview? {
+            if let cached = sourceInstances[o.id], cached.reference == reference,
+               cached.coordinate == (o.sourceOutfit ?? cached.savedCoordinate) { return cached }
+            // A background build in flight leaves the character out of the
+            // frame until it installs.
+            if asyncSourceBuilds, let pending = pendingSourceBuilds[o.id],
+               pending.reference == reference, pending.outfit == o.sourceOutfit { return nil }
+            if asyncSourceBuilds, let failed = failedSourceBuilds[o.id], failed.reference == reference, failed.outfit == o.sourceOutfit {
+                status = "Source character \(o.sourceObjectKey ?? 0): \(failed.error)"
+                return nil
+            }
+            // The document's outfit selection (scene reload, undo/redo)
+            // rebuilds the assembly for that outfit; the frame's batch
+            // already ran the first half.
+            let fresh = try missingSourceBuilds.flatMap { built in try built.index[o.id].map { try built.batch.build($0) } }
+                ?? SourceStudioCharacterPreview(reference: reference, resources: host.renderer.resources, coordinate: o.sourceOutfit)
+            fresh.automaticBlink = sourceAutomaticBlink
+            // Document color edits (scene reload, undo/redo) rebuild the new
+            // preview's appearance the way the import applied them; a
+            // rejected edit keeps the card's saved colors rendering.
+            if let edits = o.sourceColorEdits { try? fresh.setColorEdits(edits) }
+            sourceInstances[o.id] = fresh
+            PerfTrace.characterInstalled()
+            return fresh
+        }
+        let selectionBuild = sourceSelectionBuild
         for (index, o) in animatedDoc.objects.enumerated() {
             let objectID = UInt32(index + 1)
+            // A hidden object draws nothing, so its world matrix is not
+            // needed. Checking first keeps an object attached to a hidden,
+            // unbuilt character (a lazy import or a native reload) from
+            // reporting "Attachment parent has no converted character." A
+            // hidden character the selection needs still builds, undrawn.
+            guard doc.isVisible(o.id) else {
+                if o.id == selectionBuild, let reference = o.sourceCharacter, !resourceBlockedObjects.contains(o.id) {
+                    do {
+                        // The document's wear and face state, as a drawn
+                        // character's frame applies them below, so the
+                        // inspector and an export read the document's state.
+                        if let preview = try sourcePreview(o, reference: reference) {
+                            do { try preview.setWear(clothesState: o.sourceClothesState, showAccessory: o.sourceShowAccessory, shoesType: o.sourceShoesType) }
+                            catch { status = "Source character \(o.sourceObjectKey ?? 0) wear: \(error)" }
+                            do { try preview.setExpressionState(o.sourceExpression) }
+                            catch { status = "Source character \(o.sourceObjectKey ?? 0) face state: \(error)" }
+                        }
+                    } catch { status = "Source character \(o.sourceObjectKey ?? 0): \(error)" }
+                }
+                continue
+            }
             let world: float4x4
             do { world = try sourceWorldMatrix(of: o.id, document: animatedDoc, previews: sourceInstances) }
             catch {
@@ -3648,7 +3779,6 @@ final class StudioModel: ViewportInputHandler, LivePacedHandler {
                 if !awaitsSourceBuild(o.id) { status = "Source attachment: \(error)" }
                 continue
             }
-            guard doc.isVisible(o.id) else { continue }
             if sourceRoutes[o.id] != nil { sourceRouteEditor.worlds[o.id] = world } // ST-T11: the route line's frame
             switch o.kind {
             case .character:
@@ -3656,32 +3786,7 @@ final class StudioModel: ViewportInputHandler, LivePacedHandler {
                     // A-T02: an unresolved reference is never loaded from its saved path.
                     guard !resourceBlockedObjects.contains(o.id) else { continue }
                     do {
-                        let preview: SourceStudioCharacterPreview
-                        if let cached = sourceInstances[o.id], cached.reference == reference,
-                           cached.coordinate == (o.sourceOutfit ?? cached.savedCoordinate) { preview = cached }
-                        else {
-                            // A background build in flight leaves the
-                            // character out of the frame until it installs.
-                            if asyncSourceBuilds, let pending = pendingSourceBuilds[o.id],
-                               pending.reference == reference, pending.outfit == o.sourceOutfit { continue }
-                            if asyncSourceBuilds, let failed = failedSourceBuilds[o.id], failed.reference == reference, failed.outfit == o.sourceOutfit {
-                                status = "Source character \(o.sourceObjectKey ?? 0): \(failed.error)"
-                                continue
-                            }
-                            // The document's outfit selection (scene reload,
-                            // undo/redo) rebuilds the assembly for that outfit;
-                            // the frame's batch already ran the first half.
-                            let fresh = try missingSourceBuilds.flatMap { built in try built.index[o.id].map { try built.batch.build($0) } }
-                                ?? SourceStudioCharacterPreview(reference: reference, resources: host.renderer.resources, coordinate: o.sourceOutfit)
-                            fresh.automaticBlink = sourceAutomaticBlink
-                            // Document color edits (scene reload, undo/redo)
-                            // rebuild the new preview's appearance the way the
-                            // import applied them; a rejected edit keeps the
-                            // card's saved colors rendering.
-                            if let edits = o.sourceColorEdits { try? fresh.setColorEdits(edits) }
-                            sourceInstances[o.id] = fresh; preview = fresh
-                            PerfTrace.characterInstalled()
-                        }
+                        guard let preview = try sourcePreview(o, reference: reference) else { continue }
                         var rendered: RenderFrame
                         if let ready = prepared?.output(for: o.id, preview: preview, elapsed: sourceAnimationTime, request: {
                             SourceStudioLiveTick.FrameRequest(world: world, objectID: objectID, edits: Self.liveEdits(o),
@@ -3870,7 +3975,11 @@ final class StudioModel: ViewportInputHandler, LivePacedHandler {
                 let size = viewCamera.worldUnitsPerPixel(at: origin, viewport: viewportSize) * 110
                 gizmos += GizmoBuilder.build(mode: gizmoMode, origin: origin, orientation: orient, size: size, highlight: hoverAxis)
                 selectionGuide = (origin, orient)
-            } catch { status = "Source object guide: \(error)" }
+            } catch {
+                // A selection hanging from a character still building waits
+                // for it without a message, as the walk above does.
+                if !awaitsSourceBuild(sel.id) { status = "Source object guide: \(error)" }
+            }
         }
         // ST-T11: route lines, the selected route's point handles and guide.
         var routeGuides: SourceRouteGuides?

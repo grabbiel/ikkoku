@@ -77,6 +77,14 @@ struct StudioScenario: Decodable {
         /// must contain, read after any `view` check in the same step, so a
         /// look-through rejection the render camera reported is visible.
         let statusContains: String?
+        /// assert only: a substring the status line must not contain (a
+        /// hidden character's attachments report no false parent error).
+        let statusLacks: String?
+        /// assert only: whether source character `key` has a built preview,
+        /// the data its Face, Clothes and Pose inspectors read. A hidden
+        /// character builds when shown or selected; with `built` true and the
+        /// character selected, its pose and animation state must be readable.
+        let characterBuilt: CharacterBuiltValue?
         /// assert only: a substring the view indicator under the status line
         /// (`StudioModel.activeSourceCameraView`) must contain; with no source
         /// camera active the indicator is empty and contains nothing.
@@ -527,6 +535,11 @@ struct StudioScenario: Decodable {
             let pickSomethingAt: [[Float]]?
         }
 
+        struct CharacterBuiltValue: Decodable {
+            let key: Int32
+            let built: Bool
+        }
+
         struct SourceRuntimeValue: Decodable {
             let cameras: Int?
             let items: Int?
@@ -538,7 +551,8 @@ struct StudioScenario: Decodable {
 
         private enum CodingKeys: String, CodingKey {
             case op, key, visible, name, index, value, id, rgba, path, face, body, color,
-                 activeCamera, routePlaying, sourceRuntime, diagnosticContains, statusContains, indicatorContains, treeLabel, view,
+                 activeCamera, routePlaying, sourceRuntime, diagnosticContains, statusContains, statusLacks, characterBuilt,
+                 indicatorContains, treeLabel, view,
                  group, category, no, speed, on, bone, rotation, animation, fk, position,
                  seconds, dx, dy, eyeLook, blink, handPattern, mode, axis, pixels,
                  render, exportIdenticalToSource, errorContains, outfit, accessoryLabels, pluginMount, state, clothes, expression,
@@ -577,6 +591,8 @@ struct StudioScenario: Decodable {
             sourceRuntime = try c.decodeIfPresent(SourceRuntimeValue.self, forKey: .sourceRuntime)
             diagnosticContains = try c.decodeIfPresent(String.self, forKey: .diagnosticContains)
             statusContains = try c.decodeIfPresent(String.self, forKey: .statusContains)
+            statusLacks = try c.decodeIfPresent(String.self, forKey: .statusLacks)
+            characterBuilt = try c.decodeIfPresent(CharacterBuiltValue.self, forKey: .characterBuilt)
             indicatorContains = try c.decodeIfPresent(String.self, forKey: .indicatorContains)
             treeLabel = try c.decodeIfPresent(String.self, forKey: .treeLabel)
             view = try c.decodeIfPresent(ViewValue.self, forKey: .view)
@@ -3195,6 +3211,25 @@ struct StudioScenario: Decodable {
                 if let problem = assertView(step, details: &details) { problems.append(problem) }
                 if let needle = step.statusContains, !studio.status.contains(needle) {
                     problems.append("assert statusContains: status \"\(studio.status)\" does not contain \"\(needle)\"")
+                }
+                if let needle = step.statusLacks {
+                    if studio.status.contains(needle) {
+                        problems.append("assert statusLacks: status \"\(studio.status)\" contains \"\(needle)\"")
+                    } else { details.append("status lacks \"\(needle)\"") }
+                }
+                if let check = step.characterBuilt {
+                    let id = studio.doc.objects.first(where: { $0.sourceObjectKey == check.key })?.id
+                    let built = characterPreview(check.key) != nil
+                    if id == nil {
+                        problems.append("assert characterBuilt: no object with source key \(check.key)")
+                    } else if built != check.built {
+                        problems.append("assert characterBuilt: character \(check.key) is \(built ? "built" : "not built"), expected \(check.built ? "built" : "not built")")
+                    } else if built, studio.selection == id,
+                              studio.selectedSourceIKState == nil || studio.selectedSourceAnimationState == nil {
+                        problems.append("assert characterBuilt: selected character \(check.key) is built but its pose or animation state is unreadable")
+                    } else {
+                        details.append("character \(check.key) \(built ? "built" : "not built")\(studio.selection == id ? ", selected" : "")")
+                    }
                 }
                 if let needle = step.indicatorContains {
                     let indicator = studio.activeSourceCameraView?.indicator ?? ""

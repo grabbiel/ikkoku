@@ -3332,6 +3332,94 @@
         }
       ],
       "timeout": 600
+    },
+    {
+      "id": "studio-scenario-hidden-character-build",
+      "argv": [
+        ".local/build/Build/Products/Debug/Ikkoku.app/Contents/MacOS/Ikkoku"
+      ],
+      "fixtures": [
+        {
+          "env": "IKKOKU_SOURCE_SCENE",
+          "kind": "file",
+          "from": "IKKOKU_STUDIO_SCENARIO_SCENE"
+        },
+        {
+          "env": "IKKOKU_SOURCE_AVATAR",
+          "kind": "file"
+        },
+        {
+          "env": "IKKOKU_MAKER_LIBRARY",
+          "kind": "file"
+        },
+        {
+          "env": "IKKOKU_STUDIO_ANIMATION_CATALOG",
+          "kind": "file"
+        }
+      ],
+      "env": {
+        "IKKOKU_STUDIO_SCENARIO": "Tools/verification/scenarios/hidden-character-build.json",
+        "IKKOKU_STUDIO_SCENARIO_REPORT": ".local/verification/reports/studio-scenario-hidden-character-build.json"
+      },
+      "referenceTier": "app-smoke",
+      "tolerance": "Hides folder key 622, exports and reimports: the character inside it (key 0) is hidden and the import leaves it unbuilt (status and diagnostic say so). Selecting it builds it without drawing it (render unchanged). An outfit and an FK edit made while it is hidden apply; showing the folder draws it with both, and an export and reimport keep the outfit. Lazy hidden characters at import (cxs1 gap list, item 7).",
+      "artifacts": [
+        {
+          "path": ".local/verification/reports/studio-scenario-hidden-character-build.json",
+          "kind": "scenario-report"
+        },
+        {
+          "path": ".local/verification/scenario-exports/hidden-character-build.png",
+          "kind": "exported-scene"
+        },
+        {
+          "path": ".local/verification/scenario-exports/hidden-character-build-shown.png",
+          "kind": "exported-scene"
+        }
+      ],
+      "timeout": 600
+    },
+    {
+      "id": "studio-scenario-hidden-attachment-status",
+      "argv": [
+        ".local/build/Build/Products/Debug/Ikkoku.app/Contents/MacOS/Ikkoku"
+      ],
+      "fixtures": [
+        {
+          "env": "IKKOKU_SOURCE_SCENE",
+          "kind": "file",
+          "from": "IKKOKU_STUDIO_ACCESSORY_SCENE"
+        },
+        {
+          "env": "IKKOKU_SOURCE_AVATAR",
+          "kind": "file"
+        },
+        {
+          "env": "IKKOKU_MAKER_LIBRARY",
+          "kind": "file"
+        }
+      ],
+      "env": {
+        "IKKOKU_STUDIO_SCENARIO": "Tools/verification/scenarios/hidden-attachment-status.json",
+        "IKKOKU_STUDIO_SCENARIO_REPORT": ".local/verification/reports/studio-scenario-hidden-attachment-status.json"
+      },
+      "referenceTier": "app-smoke",
+      "tolerance": "Hides character key 10, which carries an attached folder (key 11), exports and reimports it; then saves and loads the document natively. While the character is unbuilt (after the import and after the native load), the status line must not report \"Attachment parent has no converted character\". Selecting the attached folder builds its character, and showing the character builds it.",
+      "artifacts": [
+        {
+          "path": ".local/verification/reports/studio-scenario-hidden-attachment-status.json",
+          "kind": "scenario-report"
+        },
+        {
+          "path": ".local/verification/scenario-exports/hidden-attachment-status.png",
+          "kind": "exported-scene"
+        },
+        {
+          "path": ".local/verification/scenario-exports/hidden-attachment-status-document.png",
+          "kind": "saved-document"
+        }
+      ],
+      "timeout": 600
     }
   ]
 }
