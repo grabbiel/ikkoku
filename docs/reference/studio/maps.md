@@ -1094,6 +1094,13 @@ Slice 4 (all maps), Release, in one quiet window ([performance: slice 4](../perf
 - **Map 33** in the showoff scene, with one shell fewer, is ready at 0.89 s against 0.90 s, with the same peak Metal.
 - **Base M1 (estimates, scaled, not measured):** at most +0.06 ms of encode per frame from the split, about 2.0–3.5 ms of GPU for a new map filling the window, and about +0.5 ms in map 11 if its difference is real.
 
+Slice 4 PR B, Release, on a composited display (1920×1080 at 120 Hz), in one quiet window ([performance: slice 4 PR B](../performance.md#slice-4-pr-b-vanish-the-join-and-the-composited-recheck)). Map 11 before and after the particle split, in the map showoff scene, 2 rounds:
+
+- **No measurable difference on map 11.** Scene ready 0.91 against 0.93 s, the first draw 0.34 s either way, and `studio-idle` GPU 1.187 against 1.188 ms per frame; draw and GPU per frame overlap. The app's GPU busy time in a Metal System Trace overlaps too, and its rounds differ more than the exports.
+- **The frame rate is bound by the 30 Hz tick.** `studio-idle` presents 30 fps by design. The split's +26 draws, about +0.03 ms of encode, are below what this workload resolves.
+- **The join.** With vanish off, the joined split draws exactly the shared export's draws: 51/50/47 on map 4, 187/186/183 on map 11 and 16 on map 30. With vanish on, each vanish set is its own draw: +66 on map 4, +195 on map 11 and +28 on map 30, about 0.08–0.35 ms of encode at slice 4's cost per draw.
+- **Not yet measured:** the vanish step's cost per refresh on map 4, the join's share of the worker's load, and map 11 at full rate. They wait for a short `studio-orbit` window.
+
 ### Particles at grazing angles (slice 4 PR B)
 
 The hypothesis was that map 21's outside view fails the particle p99 because Metal and D3D11 filter the edge-on card differently: the anisotropy level or the mip choice. It is refuted as a sampler setting. Nine variants of `map_fragment`'s particle sampler were compiled with the Release build's own `metal` command, linked with that build's other `.air` files into APFS clones of the app, and captured against the map21-outside oracle. The control's linked `metallib` is byte-identical to the build's, so the pipeline reproduces it (`.local/sta11d-pr-b/tools/grazing_variants.py`, `analysis/map21-outside-particle-sampler-variants.json`). Mean, p99 and pixels over 2⁻³, on the whole particle image and on the edge-on card:
@@ -1153,6 +1160,16 @@ The app (`StudioModel+SourceMap.swift`) steps the state in each refresh with the
 
 The join refuses runs that do not tile each part and each unsplit group exactly once, and parts that differ in anything but the split: material, frame, placement, vertex streams or the rest of `ikkokuMap`. `SourceStudioMapAsset.load` takes the mode from the gate (`SourceStudioMapJoin.Mode.fromEnvironment`). Off, it uses `unsplit`: every split group is one mesh again, and the asset has no vanish sets. On, it uses `vanishSets`: one mesh per vanish set, the dynamic lightmap split joined within each. The app starts vanish only on an asset loaded with `vanishSets`.
 
+On the join re-export, maps 4, 11 and 30 join back to the shared export exactly (`tools/merge_order_check.py`, offline):
+
+| Map | Joined groups in the shared order | Other meshes identical | Meshes, joined = shared | Draws (sun 0/1/2), vanish off = shared | Draws, vanish on |
+| --- | ---: | ---: | ---: | --- | --- |
+| 4 `1-1` | 14 of 14 | 44 of 44 | 58 | 51/50/47 | 117/116/113 (+66) |
+| 11 `StaffAdultRoom` | 113 of 113 | 81 of 81 | 194 | 187/186/183 | 382/381/378 (+195) |
+| 30 `Toilet_nozoki` | 6 of 6 | 10 of 10 | 16 | 16/16/16 | 44 (+28) |
+
+A group wholly inside one vanish set is never split, so it is the shared mesh and keeps only its `_v` name suffix. In these three maps no vanish set holds parts of two dynamic lightmap indices, so vanish on joins nothing.
+
 ### Realtime GI, converter side (slice 4 PR B)
 
 UnityCG reads the dynamic lightmap at TEXCOORD2 (`o.lmap.zw = v.texcoord2.xy * unity_DynamicLightmapST.xy + unity_DynamicLightmapST.zw`). The converter now writes what a draw of it needs. A GI-lit renderer (the Standard family, Legacy Diffuse) with a dynamic lightmap is merged only with renderers of the same dynamic lightmap index (`ikkokuMap.dynamicLightmapIndex`, suffix `_d<n>`). Its TEXCOORD_2 is the dynamic lightmap UV with `m_LightmapTilingOffsetDynamic` applied and V flipped, as for TEXCOORD_1. Enlighten's realtime UVs are the mesh's UV2 when it has one, else the lightmap UV, else UV0. No GI renderer of a converted map has a UV2 or an Enlighten vertex stream: maps 30, 32, 37 and 41 read UV1 and map 40 UV0 (`tools/realtime_gi_survey.py`). The provenance's `realtimeGI` record names the sources. The loader keeps the index (`Part.dynamicLightmapIndex`) and refuses one without its TEXCOORD_2. Nothing draws it yet; the dynamic lightmaps come from the VM phase's read-back. Until then the loader joins the parts this split back ([joining the split back](#vanish-slice-4-pr-b)), and a joined mesh drops the index and its TEXCOORD_2.
@@ -1185,6 +1202,7 @@ UnityCG reads the dynamic lightmap at TEXCOORD2 (`o.lmap.zw = v.texcoord2.xy * u
 - **The user's mob colour.** Silhouettes draw `mobColor`'s default (0, 0, 1, 0.5); the user's config is not read.
 - **RGBA32 lightmap memory.** Maps 1, 24, 38 and 39 upload their lightmaps uncompressed, as stored: 137 MB for map 1. Compressing them would change the decoded values and needs its own gate.
 - **Map 38's mob cost.** Its 70 silhouette draws are 519,000 of its 563,000 triangles, drawn twice (depth, then colour). See [performance](#performance) for what they cost.
-- **A composited perf recheck.** The slice-4 window ran with the display off, so its figures are measured without presentation. Recheck startup on a composited display, and record a Metal System Trace of map 11 before and after the particle split to attribute its +0.10 ms of GPU ([performance](#performance)).
+- **A composited perf recheck.** Done in PR B ([performance: slice 4 PR B](../performance.md#slice-4-pr-b-vanish-the-join-and-the-composited-recheck)). On a composited display, map 11 before and after the particle split shows no measurable difference in startup, `studio-idle` draw and GPU per frame, or the app's GPU time in a Metal System Trace. That view is the showoff scene's, not the slice-4 bench's camera, and the traces carry no encoder labels. So the bench's +0.10 ms in its own view is neither reproduced nor attributed.
+- **Vanish-on draws.** With vanish on, each vanish set is its own draw: map 11 draws 382 instead of 187. Drawing a group's joined mesh while none of its sets is hidden would bring that back to the shared count, at the cost of keeping both forms (or index ranges in one mesh). That waits for the VM phase to show that the player's vanish does something.
 - **Mods.** Rows that mods add are not evaluated.
 - **Character fidelity.** The showoff captures' character differences are the existing character-fidelity work, outside this slice.
