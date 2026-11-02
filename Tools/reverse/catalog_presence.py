@@ -17,6 +17,15 @@ Sex 3 is not drawn for a male, Sex 2 not for a female) is recorded under the
 optional `sexLimited` key, written only when such a row exists, so a file from
 tables without one keeps its v1 bytes.
 
+#351 item 3: Sideloader keeps a card's ID when the mod its resolver record names
+is missing but a vanilla row has that ID and the row's MainAB, with "chara/",
+".unity3d", "<CategoryNo name>_" and "/" removed, is not an integer
+(UniversalAutoResolver.ResolveStructure; otherwise the ID becomes 99999999).
+Those IDs are recorded under the optional `nonNumericMainAB` key. With
+--zipmods (the VM exec's zipmod listing), the installed mods' GUIDs are recorded
+under the optional `installedMods` key. That listing names mods: it and the
+library stay in .local.
+
 It writes `catalog-presence.json` into a Maker library and records it in that
 library's `library.json` as `catalogPresence`. Every other key and entry is
 written back as read. Catalog metadata only: no asset or card is decoded.
@@ -41,6 +50,10 @@ KIND = 'koikatsu-catalog-presence'
 # and excludes these values: 3 for a male (:8706), 2 for a female (:8710).
 SEX_CHECKED = (105, 107)
 SEX_LIMITING = (2, 3)
+# ChaListDefine.CategoryNo names, which ResolveStructure strips as "<name>_".
+CATEGORY_NAMES = {101: 'bo_hair_b', 102: 'bo_hair_f', 103: 'bo_hair_s', 104: 'bo_hair_o', 105: 'co_top', 106: 'co_bot',
+                  107: 'co_bra', 108: 'co_shorts', 109: 'co_gloves', 110: 'co_panst', 111: 'co_socks', 112: 'co_shoes'}
+INTEGER_TEXT = r'\s*[+-]?[0-9]+\s*'
 
 
 def digest(data: bytes) -> str:
@@ -94,7 +107,45 @@ def presence(tables) -> dict[str, list[int]]:
 def info_int(value) -> int:
     """ListInfoBase.GetInfoInt: int.TryParse of the text, else -1 (a missing key reads as text that fails)."""
     text = value if isinstance(value, str) else ''
-    return int(text) if re.fullmatch(r'\s*[+-]?[0-9]+\s*', text, flags=re.ASCII) else -1
+    return int(text) if re.fullmatch(INTEGER_TEXT, text, flags=re.ASCII) else -1
+
+
+def numbered_bundle(category: int, main_ab) -> bool:
+    """ResolveStructure's test: MainAB (null when the row has none) with "chara/", ".unity3d", the category's
+    "<name>_" and "/" removed, then int.TryParse."""
+    if not isinstance(main_ab, str):
+        return False
+    text = main_ab.replace('chara/', '').replace('.unity3d', '').replace(CATEGORY_NAMES[category] + '_', '').replace('/', '')
+    return re.fullmatch(INTEGER_TEXT, text, flags=re.ASCII) is not None and -2**31 <= int(text) < 2**31
+
+
+def non_numeric_main_ab(tables) -> dict[str, list[int]]:
+    """IDs per category whose row Sideloader keeps for a missing mod (branch "matching ID found"); a category
+    without one is left out."""
+    ids: dict[int, set[int]] = {}
+    for table in tables:
+        if table['category'] in CATEGORIES:
+            for row in table['rows']:
+                if not numbered_bundle(table['category'], row.get('MainAB')):
+                    ids.setdefault(table['category'], set()).add(int(row['ID']))
+    return {str(category): sorted(ids[category]) for category in sorted(ids)}
+
+
+def installed_mods(listing: dict, listing_sha256: str) -> dict:
+    """The installed zipmods' manifest GUIDs from the VM listing. Refused when the listing is incomplete: a
+    traversal error, or an additional mods directory it did not read. A zipmod without a readable GUID is
+    counted: Sideloader skips it too."""
+    if listing.get('error'):
+        raise ValueError('The zipmod listing is incomplete: ' + str(listing['error']))
+    for line in listing.get('sideloaderAdditionalModsDirectory') or []:
+        if line.split('=', 1)[1].strip():
+            raise ValueError('Sideloader reads an additional mods directory the listing did not cover')
+    rows = listing['zipmods']
+    if isinstance(rows, dict) and set(rows) == {'value', 'Count'}:  # Windows PowerShell 5.1's wrapped array
+        rows = rows['value']
+    guids = sorted({row['guid'] for row in rows if isinstance(row.get('guid'), str) and row['guid']})
+    return dict(listingSHA256=listing_sha256, zipmods=len(rows), guids=guids,
+                withoutGUID=sum(1 for row in rows if not (isinstance(row.get('guid'), str) and row['guid'])))
 
 
 def sex_limited(tables) -> dict[str, dict[str, list[int]]]:
@@ -119,7 +170,7 @@ def sex_limited(tables) -> dict[str, dict[str, list[int]]]:
     return result
 
 
-def document(tables, sources, listing_sha256: str, installed: int) -> dict:
+def document(tables, sources, listing_sha256: str, installed: int, mods: dict | None = None) -> dict:
     result = dict(schemaVersion=1, kind=KIND, installedListBundles=installed, listingSHA256=listing_sha256,
                   sources=sources, categories=presence(tables),
                   scope='Vanilla list/characustom catalogs of one installation; zipmod rows (Sideloader) are not included.')
@@ -127,6 +178,12 @@ def document(tables, sources, listing_sha256: str, installed: int) -> dict:
     if limited:
         # Optional (#351): absent when no checked row is sex-limited, so such a file keeps its v1 bytes.
         result['sexLimited'] = limited
+    kept = non_numeric_main_ab(tables)
+    if kept:
+        # Optional (#351 item 3), likewise absent when every row's bundle is numbered.
+        result['nonNumericMainAB'] = kept
+    if mods is not None:
+        result['installedMods'] = mods
     return result
 
 
@@ -151,6 +208,7 @@ def main():
     parser.add_argument('--shared', type=Path, default=ROOT / '.local/reverse/rigs')
     parser.add_argument('--library', type=Path, required=True, help='The Maker library.json to record the presence in')
     parser.add_argument('--listing', type=Path, required=True, help='Fresh VM listing of the installed list bundles (JSON)')
+    parser.add_argument('--zipmods', type=Path, help="The same exec's zipmod listing (private: names mods)")
     args = parser.parse_args()
     if not args.library.resolve().is_relative_to((ROOT / '.local').resolve()):
         raise ValueError('Derived game data must remain under ignored .local/')
@@ -162,13 +220,21 @@ def main():
     paths = [source_file(args.shared, f'{LIST_DIRECTORY}/{name}') for name in sorted(installed)]
     sources = [dict(path=f'{LIST_DIRECTORY}/{p.name}', sha256=digest(p.read_bytes()), bytes=p.stat().st_size) for p in paths]
     all_tables = [table for path in paths for table in list_tables(path)]
-    data = encode(document(all_tables, sources, digest(listing_bytes), len(installed)))
+    mods = None
+    if args.zipmods:
+        zipmod_bytes = args.zipmods.read_bytes()
+        mods = installed_mods(json.loads(zipmod_bytes), digest(zipmod_bytes))
+    data = encode(document(all_tables, sources, digest(listing_bytes), len(installed), mods))
     attach(args.library, args.library.parent / 'catalog-presence.json', data)
     written = json.loads(data)
     counts = {k: len(v) for k, v in written['categories'].items()}
     limited = {f'{c}:{v}': len(ids) for c, values in written.get('sexLimited', {}).items() for v, ids in values.items()}
+    kept = {k: len(v) for k, v in written.get('nonNumericMainAB', {}).items()}
+    # Counts only: the GUIDs stay in the .local library.
+    mods_written = written.get('installedMods') or {}
+    mod_counts = {k: len(v) if k == 'guids' else v for k, v in mods_written.items() if k != 'listingSHA256'}
     print(json.dumps(dict(library=str(args.library), installedListBundles=len(installed), ids=counts, sexLimited=limited,
-                          sha256=digest(data))))
+                          nonNumericMainAB=kept, installedMods=mod_counts, sha256=digest(data))))
 
 
 if __name__ == '__main__':

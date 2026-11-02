@@ -21,15 +21,18 @@ private enum CatalogFallbackFixture {
     /// The presence file's bytes for `categories`, as catalog_presence.py
     /// writes them: every hair and clothes category, an unlisted one as `[]`
     /// unless `complete` is false.
-    /// `sexLimited` is the optional #351 key (category → Sex value → IDs),
-    /// written only when given, as catalog_presence.py writes it.
+    /// `sexLimited`, `nonNumericMainAB` and `installedMods` are the optional
+    /// #351 keys, written only when given, as catalog_presence.py writes them.
     static func presenceData(_ categories: [Int: [Int]], kind: String = "koikatsu-catalog-presence",
-                             complete: Bool = true, sexLimited: [String: [String: [Int]]]? = nil) throws -> Data {
+                             complete: Bool = true, sexLimited: [String: [String: [Int]]]? = nil,
+                             nonNumericMainAB: [String: [Int]]? = nil, installedMods: [String]? = nil) throws -> Data {
         var all = categories
         if complete { for category in 101...112 where all[category] == nil { all[category] = [] } }
         let keyed = Dictionary(uniqueKeysWithValues: all.map { (String($0.key), $0.value) })
         var document: [String: Any] = ["schemaVersion": 1, "kind": kind, "categories": keyed]
         if let sexLimited { document["sexLimited"] = sexLimited }
+        if let nonNumericMainAB { document["nonNumericMainAB"] = nonNumericMainAB }
+        if let installedMods { document["installedMods"] = ["guids": installedMods, "zipmods": installedMods.count, "withoutGUID": 0] }
         return try JSONSerialization.data(withJSONObject: document, options: [.sortedKeys])
     }
     static func library(_ entries: [[String: Any]], presence: Data?, directory: URL, file: String = "catalog-presence.json",
@@ -220,6 +223,72 @@ private enum CatalogFallbackFixture {
                                                ["105": [:]], ["x": ["3": [7]]], ["105": ["three": [7]]]] {
         #expect(throws: (any Error).self, "\(invalid)") {
             try F.library([], presence: F.presenceData([105: [0, 7], 106: [0, 7]], sexLimited: invalid), directory: directory)
+        }
+    }
+}
+
+/// #351 item 3: a resolver record whose mod is not installed. Sideloader
+/// (UniversalAutoResolver.ResolveStructure) keeps the saved ID when a vanilla
+/// row has it and its MainAB is not numbered, so that vanilla row is drawn in
+/// the mod's slot; otherwise the ID becomes 99999999 and the category's
+/// default chain applies. Synthetic library, presence file and resolver records.
+@Test func sourceMakerCatalogMissingModFollowsSideloaderAndTheDefaultChain() throws {
+    typealias F = CatalogFallbackFixture
+    let directory = try AppearanceTestFixture.directory(); defer { try? FileManager.default.removeItem(at: directory) }
+    let presence = try F.presenceData([101: [0, 5, 28], 102: [5], 105: [0, 7]], sexLimited: ["105": ["3": [7]]],
+                                      nonNumericMainAB: ["101": [5], "105": [7]], installedMods: ["Installed.Mod"])
+    var converted = F.converted(101, 40); converted["modGUID"] = "Converted.Mod"
+    let library = try F.library([F.converted(101, 0), F.converted(101, 5), F.empty(105, 0), F.converted(105, 7), converted],
+                                presence: presence, directory: directory)
+    #expect(library.catalogKeptForMissingMod == [101: [5], 105: [7]] && library.installedModGUIDs == [Data("Installed.Mod".utf8)])
+    func select(_ category: Int, _ id: Int, guid: String, sex: Int? = nil) throws -> SourceMakerLibrary.Selection {
+        let references = try MakerLibraryReferences.make([(guid, "p", id, 1)])
+        return library.selection(category: category, savedID: id, property: "p", references: references, sex: sex)
+    }
+    // Branch (b): the vanilla row with the saved ID, in the mod's slot.
+    let kept = try select(101, 5, guid: "Missing.Mod")
+    #expect(kept.status == "catalogFallback" && kept.resolvedID == 5 && kept.entry?.id == 5 && kept.entry?.modGUID == nil)
+    #expect(kept.modGUID == "Missing.Mod" && kept.savedID == 5 && kept.fallbackReason == .missingMod(guid: "Missing.Mod", keptSlot: true))
+    #expect(kept.drawnDescription == "vanilla ID 5 in the mod's slot")
+    // Branches (a) and (c): a numbered vanilla row, or none, becomes 99999999 and draws the default.
+    for id in [28, 77] {
+        let reset = try select(101, id, guid: "Missing.Mod")
+        #expect(reset.status == "catalogFallback" && reset.resolvedID == 0 && reset.entry?.id == 0, "\(id)")
+        #expect(reset.fallbackReason == .missingMod(guid: "Missing.Mod", keptSlot: false) && reset.drawnDescription == "ID 0")
+    }
+    // The kept row is then loaded like any vanilla one: a male does not draw a Sex 3 top.
+    let excluded = try select(105, 7, guid: "Missing.Mod", sex: 0)
+    #expect(excluded.resolvedID == 0 && excluded.entry?.empty == true && excluded.drawnDescription == "ID 0")
+    #expect(excluded.fallbackReason == .missingMod(guid: "Missing.Mod", keptSlot: true))
+    #expect(try select(105, 7, guid: "Missing.Mod", sex: 1).resolvedID == 7)
+    // Front: neither its default 1 nor 0 is installed, so nothing is drawn.
+    let nothing = try select(102, 9, guid: "Missing.Mod")
+    #expect(nothing.resolvedID == nil && nothing.entry?.empty == true && nothing.drawnDescription == "nothing")
+    // An installed mod, or one the library converted, keeps today's statuses.
+    #expect(try select(101, 5, guid: "Installed.Mod").status == "conversionMissing")
+    #expect(try select(101, 40, guid: "Converted.Mod").status == "converted")
+    #expect(SourceMakerLibrary.fallbackCause(.missingMod(guid: "Missing.Mod", keptSlot: true))
+        == "names mod Missing.Mod, which is not installed; Sideloader keeps the ID because its vanilla row's MainAB is not numbered")
+    #expect(SourceMakerLibrary.fallbackCause(.missingMod(guid: "Missing.Mod", keptSlot: false)).hasSuffix("sets the ID to 99999999, which no catalog has"))
+    // Without an installed-mod list a mod is never called missing.
+    let unknown = try F.library([F.converted(101, 5)], presence: F.presenceData([101: [0, 5]], nonNumericMainAB: ["101": [5]]),
+                                directory: directory)
+    #expect(unknown.installedModGUIDs == nil)
+    let references = try MakerLibraryReferences.make([("Missing.Mod", "p", 5, 1)])
+    #expect(unknown.selection(category: 101, savedID: 5, property: "p", references: references, sex: nil).status == "conversionMissing")
+}
+
+/// The item 3 keys are validated at load: kept IDs must be installed rows of
+/// a hair or clothes category, and a listed GUID is never empty.
+@Test func sourceMakerCatalogMissingModKeysAreValidatedAtLoad() throws {
+    typealias F = CatalogFallbackFixture
+    let directory = try AppearanceTestFixture.directory(); defer { try? FileManager.default.removeItem(at: directory) }
+    _ = try F.library([], presence: F.presenceData([101: [0, 5]], nonNumericMainAB: ["101": [5]], installedMods: []), directory: directory)
+    let cases: [([String: [Int]]?, [String]?)] = [(["101": [6]], nil), (["121": [5]], nil), (["101": []], nil), (["x": [5]], nil),
+                                                  (nil, [""])]
+    for (kept, mods) in cases {
+        #expect(throws: (any Error).self, "\(String(describing: kept)) \(String(describing: mods))") {
+            try F.library([], presence: F.presenceData([101: [0, 5]], nonNumericMainAB: kept, installedMods: mods), directory: directory)
         }
     }
 }

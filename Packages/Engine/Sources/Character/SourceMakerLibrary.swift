@@ -61,6 +61,14 @@ public struct SourceMakerLibrary: Sendable {
     /// (ChaControl.Koikatu.cs:8702-8726): 3 for a male (sex 0), 2 for a
     /// female (sex 1). Only tops (105) and bras (107) are checked.
     public static let catalogSexExcludedValue: [Int: Int] = [0: 3, 1: 2]
+    /// #351 item 3: the installed rows whose MainAB is not numbered once
+    /// Sideloader strips it (UniversalAutoResolver.ResolveStructure), by
+    /// category. For a card whose mod is missing, Sideloader keeps such an ID
+    /// and the vanilla row with it is drawn; any other ID becomes 99999999.
+    public private(set) var catalogKeptForMissingMod: [Int: Set<Int>] = [:]
+    /// #351 item 3: the GUIDs of the installed zipmods, or nil when the
+    /// presence file does not list them (a mod is then never called missing).
+    public private(set) var installedModGUIDs: Set<Data>? = nil
     /// ChaControl's default ID per category when a saved ID is in no installed
     /// list (recovered ChaControl.Koikatu.cs): hair `defId` {0, 1, 0, 0}
     /// (ChangeHairAsync :7015-7026), clothes 0 (top :7278, bottom :7778, bra
@@ -74,6 +82,15 @@ public struct SourceMakerLibrary: Sendable {
         /// #351, optional: category → Sex value → IDs, written only when a
         /// checked row is sex-limited, so older v1 files are unchanged.
         let sexLimited: [String: [String: [Int]]]?
+        /// #351 item 3, optional: category → IDs Sideloader keeps for a
+        /// missing mod, and the installed zipmods' GUIDs.
+        let nonNumericMainAB: [String: [Int]]?
+        let installedMods: InstalledMods?
+        struct InstalledMods: Decodable { let guids: [String] }
+    }
+    private struct LoadedPresence {
+        var ids: [Int: Set<Int>] = [:], sexLimited: [Int: [Int: Set<Int>]] = [:]
+        var keptForMissingMod: [Int: Set<Int>] = [:], installedMods: Set<Data>? = nil
     }
 
     public static func load(url: URL) throws -> Self {
@@ -116,6 +133,8 @@ public struct SourceMakerLibrary: Sendable {
             let loaded = try result.presence(presence)
             result.catalogPresence = loaded.ids
             result.catalogSexLimited = loaded.sexLimited
+            result.catalogKeptForMissingMod = loaded.keptForMissingMod
+            result.installedModGUIDs = loaded.installedMods
         }
         for entry in result.entries {
             for ref in [entry.rig, entry.appearance, entry.cardBindings, entry.bodyMask, entry.materialEvidence,
@@ -143,7 +162,7 @@ public struct SourceMakerLibrary: Sendable {
     }
     /// The presence sidecar: contained, SHA-verified (a mismatch is a load
     /// error, as for every other sidecar) and decoded into one set per category.
-    private func presence(_ ref: File) throws -> (ids: [Int: Set<Int>], sexLimited: [Int: [Int: Set<Int>]]) {
+    private func presence(_ ref: File) throws -> LoadedPresence {
         let url = try verified(ref, maximumBytes: 8 * 1024 * 1024)
         let document = try JSONDecoder().decode(PresenceDocument.self, from: Data(contentsOf: url))
         guard document.schemaVersion == 1, document.kind == "koikatsu-catalog-presence" else {
@@ -177,7 +196,21 @@ public struct SourceMakerLibrary: Sendable {
                 limited[category, default: [:]][value] = Set(ids)
             }
         }
-        return (result, limited)
+        var loaded = LoadedPresence(ids: result, sexLimited: limited)
+        for (key, ids) in document.nonNumericMainAB ?? [:] {
+            guard let category = Int(key), let present = result[category], !ids.isEmpty, ids.allSatisfy(present.contains) else {
+                throw RigError.invalid("Invalid Maker catalog non-numeric bundle rows \(key).")
+            }
+            loaded.keptForMissingMod[category] = Set(ids)
+        }
+        if let mods = document.installedMods {
+            guard mods.guids.count <= 1_000_000, mods.guids.allSatisfy({ !$0.isEmpty }) else {
+                throw RigError.invalid("Invalid Maker catalog installed-mod list.")
+            }
+            // Ordinal UTF-8 bytes, as resolver GUIDs are compared (`Key`).
+            loaded.installedMods = Set(mods.guids.map { Data($0.utf8) })
+        }
+        return loaded
     }
     private func contained(_ ref: File) throws -> URL {
         let url = directory.appendingPathComponent(ref.file).resolvingSymlinksInPath()
@@ -229,14 +262,22 @@ public struct SourceMakerLibrary: Sendable {
             /// The installed row's Sex column excludes the card's sex (#351):
             /// `value` 2 is not drawn for a female, 3 not for a male.
             case sexLimited(value: Int)
+            /// The resolver record's mod `guid` is not installed (#351 item
+            /// 3). `keptSlot`: Sideloader kept the saved ID, so the vanilla
+            /// row with it is drawn in the mod's slot; otherwise the ID
+            /// became 99999999 and the category's default chain applies.
+            case missingMod(guid: String, keptSlot: Bool)
         }
         /// `catalogFallback` only: what the original draws, as diagnostics and
         /// pickers show it: "ID n", "ID n (unconverted: reference part
-        /// shown)" or "nothing".
+        /// shown)" or "nothing"; a missing mod's kept slot reads "vanilla
+        /// ID n in the mod's slot".
         public var drawnDescription: String? {
             guard status == "catalogFallback" else { return nil }
             guard let resolvedID else { return "nothing" }
-            return entry == nil ? "ID \(resolvedID) (unconverted: reference part shown)" : "ID \(resolvedID)"
+            var drawn = "ID \(resolvedID)"
+            if case .missingMod(_, true) = fallbackReason, resolvedID == savedID { drawn = "vanilla ID \(resolvedID) in the mod's slot" }
+            return entry == nil ? drawn + " (unconverted: reference part shown)" : drawn
         }
     }
     /// Why a `catalogFallback` row's saved ID is not drawn, as the
@@ -247,6 +288,10 @@ public struct SourceMakerLibrary: Sendable {
             // In effect Sex 3 rows draw only for a female, 2 only for a male (:8706, :8710).
             return value == 3 ? "is a female-only row (Sex 3), which the original does not draw for a male card"
                 : "is a male-only row (Sex 2), which the original does not draw for a female card"
+        case .missingMod(let guid, let keptSlot):
+            return "names mod \(guid), which is not installed; Sideloader " + (keptSlot
+                ? "keeps the ID because its vanilla row's MainAB is not numbered"
+                : "sets the ID to \(missingModID), which no catalog has")
         case .notInstalled, nil: return "is in no installed catalog"
         }
     }
@@ -264,41 +309,65 @@ public struct SourceMakerLibrary: Sendable {
             id = record.sourceSlot; guid = value
         } else { id = savedID; guid = nil }
         let entry = entryIndex[Key(category: category, id: id, guid: guid.map { Data($0.utf8) })].map { entries[$0] }
-        // #346: a vanilla ID that no installed list has draws the original's
-        // fallback (LoadCharaFbxDataAsync, ChaControl.Koikatu.cs:8675-8700):
-        // the default ID unless it is the saved one, else 0, else nothing.
-        // #351: an installed top or bra row whose Sex excludes the card's sex
-        // takes the same chain (:8702-8726), except when the saved ID is the
-        // default: the original then keeps the excluded row (it never looks
-        // the default up again), so it is drawn as saved.
-        let present = guid == nil ? catalogPresence?[category] : nil
-        let defaultID = Self.catalogDefaultIDs[category]
-        var reason: Selection.FallbackReason? = nil
-        if let present, !present.contains(id) {
-            if entry == nil { reason = .notInstalled }
-        } else if present != nil, let sex, let value = Self.catalogSexExcludedValue[sex],
-                  catalogSexLimited[category]?[value]?.contains(id) == true, let defaultID, id != defaultID {
-            reason = .sexLimited(value: value)
-        }
-        if let reason, let present, let defaultID {
-            // Explicit optional: Swift 6.3.3 (CI) does not promote the mixed ternary.
-            var resolved: Int? = nil
-            if id != defaultID && present.contains(defaultID) { resolved = defaultID } else if present.contains(0) { resolved = 0 }
-            let fallback: Entry?
-            if let resolved {
-                // Its entry, or nil when it is unconverted: the reference part stays.
-                fallback = entryIndex[Key(category: category, id: resolved, guid: nil)].map { entries[$0] }
-            } else {
-                // The original loads nothing: assembled as the empty row is, with no part.
-                fallback = Entry(category: category, id: id, name: "", modGUID: nil, empty: true, rig: nil, appearance: nil,
-                                 cardBindings: nil, bodyMask: nil, materialEvidence: nil, meshNames: nil, attachment: nil,
-                                 alternates: nil, alternateMaterialEvidence: nil, wearAppearance: nil, wearCardBindings: nil)
-            }
+        if guid == nil, let fallback = catalogFallback(category: category, id: id, converted: entry != nil, sex: sex) {
             return Selection(property: property, category: category, savedID: savedID, sourceID: id, modGUID: nil,
-                             entry: fallback, status: "catalogFallback", resolvedID: resolved, fallbackReason: reason)
+                             entry: fallbackEntry(category: category, savedID: savedID, resolved: fallback.resolved),
+                             status: "catalogFallback", resolvedID: fallback.resolved, fallbackReason: fallback.reason)
+        }
+        // #351 item 3: a resolver record whose mod is not installed (and was
+        // never converted). Sideloader (UniversalAutoResolver.ResolveStructure)
+        // keeps the saved ID when a vanilla row has it and that row's MainAB is
+        // not numbered ("matching ID found"); otherwise it sets 99999999, which
+        // no catalog has. ChaControl then loads that ID like any vanilla one.
+        if let guid, entry == nil, let installed = installedModGUIDs, !installed.contains(Data(guid.utf8)),
+           let present = catalogPresence?[category] {
+            let kept = present.contains(savedID) && catalogKeptForMissingMod[category]?.contains(savedID) == true
+            let loaded = kept ? savedID : Self.missingModID
+            // Explicit optional: Swift 6.3.3 (CI) does not promote the mixed ternary.
+            var resolved: Int? = loaded
+            if let fallback = catalogFallback(category: category, id: loaded, converted: false, sex: sex) { resolved = fallback.resolved }
+            return Selection(property: property, category: category, savedID: savedID, sourceID: id, modGUID: guid,
+                             entry: fallbackEntry(category: category, savedID: savedID, resolved: resolved),
+                             status: "catalogFallback", resolvedID: resolved, fallbackReason: .missingMod(guid: guid, keptSlot: kept))
         }
         return Selection(property: property, category: category, savedID: savedID, sourceID: id, modGUID: guid,
             entry: entry, status: entry == nil ? "conversionMissing" : entry?.empty == true ? "empty" : "converted")
+    }
+    /// The ID Sideloader gives a missing mod's selection it cannot keep.
+    public static let missingModID = 99_999_999
+    /// What LoadCharaFbxDataAsync draws instead of vanilla `id`, or nil when it
+    /// draws `id` itself (ChaControl.Koikatu.cs:8675-8726).
+    /// - #346: an ID that no installed list has (and the library never
+    ///   converted) takes the default unless it is that ID, else 0, else
+    ///   nothing (:8685-8700).
+    /// - #351: an installed top or bra row whose Sex excludes the card's sex
+    ///   takes the same chain (:8702-8724). When the ID is the default, the
+    ///   original never looks the default up again (:8716) and keeps the
+    ///   excluded row (:8720), so it is drawn as saved. The row the chain
+    ///   lands on is not checked again.
+    private func catalogFallback(category: Int, id: Int, converted: Bool,
+                                 sex: Int?) -> (reason: Selection.FallbackReason, resolved: Int?)? {
+        guard let present = catalogPresence?[category], let defaultID = Self.catalogDefaultIDs[category] else { return nil }
+        let reason: Selection.FallbackReason
+        if !present.contains(id) {
+            guard !converted else { return nil }
+            reason = .notInstalled
+        } else if let sex, let value = Self.catalogSexExcludedValue[sex],
+                  catalogSexLimited[category]?[value]?.contains(id) == true, id != defaultID {
+            reason = .sexLimited(value: value)
+        } else { return nil }
+        // Explicit optional: Swift 6.3.3 (CI) does not promote the mixed ternary.
+        var resolved: Int? = nil
+        if id != defaultID && present.contains(defaultID) { resolved = defaultID } else if present.contains(0) { resolved = 0 }
+        return (reason, resolved)
+    }
+    /// The drawn ID's entry, nil while it is unconverted (the reference part
+    /// stays), or for nothing an entry assembled as the empty row is, with no part.
+    private func fallbackEntry(category: Int, savedID: Int, resolved: Int?) -> Entry? {
+        if let resolved { return entryIndex[Key(category: category, id: resolved, guid: nil)].map { entries[$0] } }
+        return Entry(category: category, id: savedID, name: "", modGUID: nil, empty: true, rig: nil, appearance: nil,
+                     cardBindings: nil, bodyMask: nil, materialEvidence: nil, meshNames: nil, attachment: nil,
+                     alternates: nil, alternateMaterialEvidence: nil, wearAppearance: nil, wearCardBindings: nil)
     }
     /// What one saved clothing or accessory selection tells the source about
     /// its catalog row (the ListInfoBase ChaControl reads StateType,

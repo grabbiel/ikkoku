@@ -191,7 +191,9 @@ file. It keeps one ID set per category. Any of these is a load error:
 - a category outside 101–112, or one of them missing;
 - an ID outside the nonnegative Int32 range;
 - a `sexLimited` entry (below) outside 105 and 107, a Sex value other than 2
-  or 3, an ID its category does not list, or an empty list.
+  or 3, an ID its category does not list, or an empty list;
+- a `nonNumericMainAB` entry (below) outside 101–112, an ID its category does
+  not list, or an empty list; an empty GUID in `installedMods`.
 
 Selections never read the file again.
 
@@ -269,6 +271,48 @@ The rule covers vanilla rows only. The presence file has no Sex column for
 zipmod rows, so a mod top or bra with a limiting Sex draws as saved here,
 unlike the original.
 
+### A missing mod's selection (#351 item 3)
+
+A card saves a mod's selection as the mod's own slot number. A resolver
+record holds the mod's GUID. When that mod is not installed, Sideloader
+(`UniversalAutoResolver.ResolveStructure`) looks for a vanilla row with the
+saved ID. If one exists, it takes the row's MainAB and strips `chara/`,
+`.unity3d`, `<category name>_` (the `ChaListDefine.CategoryNo` name, such as
+`co_top_`) and `/`. The result decides the branch:
+
+- (a) The remainder parses as an integer: the ID becomes 99999999.
+- (b) The remainder is not an integer ("matching ID found"): the ID is kept,
+  and ChaControl draws that vanilla row in the mod's slot.
+- (c) No vanilla row has the ID: the ID becomes 99999999.
+
+99999999 is in no catalog, so ChaControl applies the default chain. The ID
+of a kept row still goes through the Sex rule above. A record without a GUID
+remains `compatibilityRequired`.
+
+`catalog_presence.py` records the kept IDs per category under the optional
+`nonNumericMainAB` key. With `--zipmods`, the VM exec's zipmod listing, it
+also writes `installedMods`: the manifest GUIDs, the zipmod count and the
+count without a readable GUID. It refuses a listing that stopped early, and
+one where Sideloader's `AdditionalModsDirectory` names a folder the listing
+did not read. The GUIDs name mods, so they stay in the `.local` library;
+committed text gives counts only.
+
+When `installedMods` is loaded, the selection of an unconverted record whose
+GUID is not in it has the status `catalogFallback`. `fallbackReason` is
+`.missingMod(guid:keptSlot:)`, `modGUID` stays the record's GUID, and
+`resolvedID` is the kept ID or the chain's result. A kept row reads
+`vanilla ID <n> in the mod's slot`. The `prepare` diagnostic names the GUID:
+
+> `<property>: catalogFallback, source ID <id> names mod <GUID>, which is not installed; Sideloader keeps the ID because its vanilla row's MainAB is not numbered, so the original draws vanilla ID <n> in the mod's slot. …`
+
+Branches (a) and (c) read `… Sideloader sets the ID to 99999999, which no
+catalog has, so the original draws <drawn>`. An installed GUID, a converted
+mod entry, or a library without `installedMods` keeps today's statuses. The
+listing has GUIDs, not each mod's slots. An installed mod that lacks the
+saved slot is therefore treated as resolved, and Sideloader's GUID migration
+is not modelled. Accessories stay outside: `KeepMissingAccessories` applies
+only to them, and only in the Maker.
+
 ### Deliberate divergence: the saved ID is kept
 
 The original writes the drawn ID back into the character it loaded:
@@ -297,7 +341,7 @@ choice for good.
 The following stay outside this rule:
 
 - Male `exType` 1.
-- IDs carried by a mod GUID.
+- IDs carried by an installed mod's GUID.
 - Accessories (default -1, :8621).
 - The head (default 0, :6835).
 - The jacket and sailor sub-parts (`defaultId[2,3]`, :7513–7529).
@@ -325,6 +369,13 @@ Verification:
   excluded default, the chain ending in nothing, and every load error.
   `test_catalog_presence.py` checks that a presence file without
   sex-limited rows keeps its v1 bytes.
+- **Missing mods (#351 item 3):** `sourceMakerCatalogMissingModFollowsSideloaderAndTheDefaultChain`
+  and `sourceMakerCatalogMissingModKeysAreValidatedAtLoad` cover the three
+  branches, a kept row the Sex rule excludes, the chain ending in nothing,
+  installed and converted mods, a library without the GUID list, and every
+  load error. `test_catalog_presence.py` covers the MainAB test, including
+  the category-name strip, a nested path, Int32 overflow and a row without
+  MainAB, and the zipmod listing's refusals.
 - **Fixture test:** `sourceMakerCatalogFallbackCardAssemblesItsExplicitDefaults`
   reads `IKKOKU_MAKER_FALLBACK_CARD`. That card is derived from
   `IKKOKU_MAKER_SCENARIO_CARD` by the gated writer

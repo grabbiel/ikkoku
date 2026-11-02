@@ -5,18 +5,27 @@ from pathlib import Path
 import tempfile
 import unittest
 
-from catalog_presence import KIND, attach, document, encode, info_int, installed_bundles, presence, require_complete, sex_limited
+from catalog_presence import (CATEGORY_NAMES, KIND, attach, document, encode, info_int, installed_bundles, installed_mods,
+                              non_numeric_main_ab, numbered_bundle, presence, require_complete, sex_limited)
 
 
 H1, H2 = 'a' * 64, 'b' * 64
 
 
-def table(category, *ids, sex=None):
-    """Rows without a Sex column, or with `sex[id]` as its text."""
-    rows = [dict(ID=str(i), MainData='p') for i in ids]
-    for row in rows:
-        if sex and int(row['ID']) in sex:
-            row['Sex'] = sex[int(row['ID'])]
+def table(category, *ids, sex=None, bundles=None):
+    """Rows with a numbered MainAB (or `bundles[id]`, None for no MainAB) and without a Sex column (or with
+    `sex[id]` as its text)."""
+    rows = []
+    for i in ids:
+        row = dict(ID=str(i), MainData='p', MainAB=f'chara/{CATEGORY_NAMES.get(category, "x")}_{i:02d}.unity3d')
+        if bundles and i in bundles:
+            if bundles[i] is None:
+                del row['MainAB']
+            else:
+                row['MainAB'] = bundles[i]
+        if sex and i in sex:
+            row['Sex'] = sex[i]
+        rows.append(row)
     return dict(name=f't{category}', category=category, rows=rows)
 
 
@@ -55,6 +64,41 @@ class CatalogPresenceTests(unittest.TestCase):
                             ('\u0663', -1)]:
             with self.subTest(text=text):
                 self.assertEqual(info_int(text), value)
+
+    def test_bundle_numbers_are_tested_as_resolve_structure_does(self):
+        for category, main_ab, numbered in [(101, 'chara/bo_hair_b_00.unity3d', True), (105, 'chara/co_top_13.unity3d', True),
+                                            (105, 'chara/co_top_ 7 .unity3d', True), (105, 'chara/mm_base.unity3d', False),
+                                            # Only the row's own category name is removed.
+                                            (106, 'chara/co_top_00.unity3d', False), (105, 'chara/co_top_.unity3d', False),
+                                            (105, 'chara/sub/co_top_05.unity3d', False), (105, 'chara/co_top_2147483648.unity3d', False),
+                                            (105, None, False), (112, 'chara/co_shoes_01.unity3d', True)]:
+            with self.subTest(category=category, main_ab=main_ab):
+                self.assertEqual(numbered_bundle(category, main_ab), numbered)
+
+    def test_rows_sideloader_keeps_for_a_missing_mod(self):
+        tables = [table(101, 0, 5, bundles={5: 'chara/mm_base.unity3d'}), table(105, 0, 1, bundles={1: None}),
+                  table(106, 0), table(121, 3, bundles={3: 'chara/x.unity3d'})]
+        self.assertEqual(non_numeric_main_ab(tables), {'101': [5], '105': [1]})
+        written = json.loads(encode(document(tables, [], '0' * 64, 1)))
+        self.assertEqual(written['nonNumericMainAB'], {'101': [5], '105': [1]})
+        self.assertNotIn('nonNumericMainAB', json.loads(encode(document([table(101, 0)], [], '0' * 64, 1))))
+
+    def test_installed_mods_are_read_from_a_complete_listing(self):
+        rows = [dict(path='mods/a.zipmod', guid='b.mod'), dict(path='mods/b.zipmod', guid='a.mod'),
+                dict(path='mods/c.zipmod', guid='a.mod'), dict(path='mods/d.zip', guid=None, error='no manifest.xml'),
+                dict(path='mods/e.zipmod', guid='')]
+        expected = dict(listingSHA256='f' * 64, zipmods=5, guids=['a.mod', 'b.mod'], withoutGUID=2)
+        self.assertEqual(installed_mods(dict(zipmods=rows), 'f' * 64), expected)
+        self.assertEqual(installed_mods(dict(zipmods=dict(value=rows, Count=5)), 'f' * 64), expected)
+        self.assertEqual(installed_mods(dict(zipmods=rows, sideloaderAdditionalModsDirectory=['AdditionalModsDirectory = ']),
+                                        'f' * 64), expected)
+        with self.assertRaisesRegex(ValueError, 'incomplete'):
+            installed_mods(dict(zipmods=rows, error='zipmod listing exceeded its bound'), 'f' * 64)
+        with self.assertRaisesRegex(ValueError, 'additional mods directory'):
+            installed_mods(dict(zipmods=rows, sideloaderAdditionalModsDirectory=['AdditionalModsDirectory = D:\\mods']), 'f' * 64)
+        written = json.loads(encode(document([table(101, 0)], [], '0' * 64, 1, expected)))
+        self.assertEqual(written['installedMods'], expected)
+        self.assertNotIn('installedMods', json.loads(encode(document([table(101, 0)], [], '0' * 64, 1))))
 
     def test_tables_that_disagree_on_a_limit_are_refused(self):
         self.assertEqual(sex_limited([table(105, 7, sex={7: '3'}), table(105, 7, sex={7: '3'})]), {'105': {'3': [7]}})
