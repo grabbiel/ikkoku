@@ -151,6 +151,12 @@ private func trailer(_ scene: TopologyScene, _ edits: SourceSceneEdits) throws -
     return try KoikatsuSceneReader.decodeDocument(original.editedData(edits)).trailingData
 }
 
+/// The stale Sideloader records an export drops, as its writer reports them
+/// for the status (#322, `SourceSceneExport`).
+private func dropped(_ scene: TopologyScene, _ edits: SourceSceneEdits = SourceSceneEdits()) throws -> Int {
+    try KoikatsuSceneReader.decodeDocument(scene.data).exported(edits).staleSideloaderRecords
+}
+
 // MARK: - Sideloader
 
 /// One Sideloader record: the object it was written for (its fields), and
@@ -218,8 +224,8 @@ private func sideloader(_ items: [Record], _ patterns: [Record] = [], map: Bool 
 
 @Test func sourceScenePluginDataRefusesSideloaderRecordsItCannotPlace() throws {
     let label = "Sideloader data ('\(sideloaderID)')"
+    // Stale records are dropped instead (#322, below).
     let cases: [([Record], String)] = [
-        ([Record(99, 99, 0)], "names object 99, which is not in this scene, so CharaStudio also loads this scene partly unresolved: its later mod items, map, filter, ramp and music"),
         ([Record(0, 0, 0)], "has a record for object 0, a folder rather than an item, light or character"),
         ([Record(4, 4, 3), Record(4, 4, 3)], "has two records for object 4"),
     ]
@@ -235,6 +241,137 @@ private func sideloader(_ items: [Record], _ patterns: [Record] = [], map: Bool 
     let unknownField = plugin(0, .map([("itemInfo", .arr([packed(.map([("SceneDicKey", .int(4)), ("SceneObjectOrder", .int(3)), ("Extra", .null)]))]))]))
     #expect(verdict(pluginScene([(sideloaderID, unknownField)]), copyItem).contains("\(label) has a record key 'Extra' this writer does not know"))
     #expect(verdict(pluginScene([(sideloaderID, plugin(1, .map([])))]), copyItem).contains("\(label) has version 1, which this writer has not recovered"))
+}
+
+/// #322: a record naming no object of the source scene is stale. Every
+/// export drops it, an unedited one or a leaf edit included, and otherwise
+/// writes what it writes for the scene without it. The status reports the
+/// count. Wrong-kind and repeated records still refuse an edit that changes
+/// keys, and other exports keep such an entry as it was, stale records too.
+@Test func sourceScenePluginDataDropsStaleSideloaderRecordsOnEveryExport() throws {
+    // Items 1 and 4, character 12 and item 3's patterns, plus stale records
+    // for objects 99 (an item record) and 98 (a pattern record).
+    let items = [Record(1, 1, 0), Record(4, 4, 3), Record(12, 12, 0)], patterns = [Record(3, 3, 2)]
+    let staleItems = [Record(1, 1, 0), Record(99, 99, 7), Record(4, 4, 3), Record(12, 12, 0)]
+    let stalePatterns = [Record(98, 98, 0), Record(3, 3, 2)]
+    let clean = pluginScene([(sideloaderID, sideloader(items, patterns)), settings])
+    let stale = pluginScene([(sideloaderID, sideloader(staleItems, stalePatterns)), settings])
+    let edits: [(String, SourceSceneEdits)] = [
+        ("unedited", SourceSceneEdits()), ("add folder", addFolder), ("add light", addLight), ("move", moveItem),
+        ("move to root", .init(reparents: [.init(object: 3, parent: nil)])), ("route point", try addPoint()),
+        ("delete", .init(deletions: [1])), ("delete light and character", .init(deletions: [5, 12])),
+        ("copy item", copyItem), ("copy folder", copyFolder),
+    ]
+    for (name, edit) in edits {
+        let expected = try trailer(clean, edit)
+        #expect(try trailer(stale, edit) == expected, "\(name)")
+        // The status's count is the one this export's writer used.
+        #expect(try dropped(stale, edit) == 2, "\(name)")
+        #expect(try dropped(clean, edit) == 0, "\(name)")
+    }
+    #expect(verdict(clean, SourceSceneEdits()) == "kept")
+    #expect(try trailer(stale, SourceSceneEdits()) == clean.trailer)
+    // Judged against the scene as loaded: a stale record for key 13, the key
+    // an added light or a copy then takes, is dropped, not given to it.
+    let taken = pluginScene([(sideloaderID, sideloader(items + [Record(13, 13, 1)], patterns)), settings])
+    for edit in [addLight, copyItem] {
+        #expect(try trailer(taken, edit) == trailer(clean, edit))
+        #expect(try dropped(taken, edit) == 1)
+    }
+    #expect(try dropped(taken) == 1)
+    // An unedited export keeps every other record's bytes and position as
+    // stored, even one CharaStudio would renumber: only stale records go.
+    let unordered = [Record(4, 4, 9), Record(99, 99, 0), Record(1, 1, 0)]
+    let unorderedScene = pluginScene([(sideloaderID, sideloader(unordered)), settings])
+    #expect(try trailer(unorderedScene, SourceSceneEdits()) == pluginScene([(sideloaderID, sideloader([Record(4, 4, 9), Record(1, 1, 0)])), settings]).trailer)
+    // Nothing but stale records: the scene identities stay; without them the
+    // entry goes, as when the edit deletes every record's object.
+    let onlyStale = pluginScene([(sideloaderID, sideloader([Record(99, 99, 0)]))])
+    #expect(try trailer(onlyStale, SourceSceneEdits()) == pluginScene([(sideloaderID, sideloader([]))]).trailer)
+    let bare = pluginScene([(sideloaderID, sideloader([Record(99, 99, 0)], map: false)), settings])
+    #expect(try trailer(bare, SourceSceneEdits()) == pluginTrailer([settings]))
+    #expect(try trailer(bare, .init(deletions: [1])) == pluginTrailer([settings]))
+
+    // The count, judged against the scene as loaded, and the status line.
+    let document = try KoikatsuSceneReader.decodeDocument(stale.data)
+    #expect(try dropped(stale) == 2)
+    #expect(try dropped(clean) == 0)
+    #expect(try dropped(onlyStale) == 1)
+    let status = SourceSceneExportValidation.exportStatus(fileName: "stale.png", source: document, order: .unneeded,
+                                                          staleSideloaderRecords: try dropped(stale))
+    #expect(status == "Exported edited original scene to stale.png. It drops 2 Sideloader records naming objects the scene does not have, which would stop Sideloader's load")
+    let one = SourceSceneExportValidation.exportStatus(fileName: "one.png", source: try KoikatsuSceneReader.decodeDocument(onlyStale.data), order: .unneeded,
+                                                       staleSideloaderRecords: try dropped(onlyStale))
+    #expect(one.hasSuffix(". It drops 1 Sideloader record naming objects the scene does not have, which would stop Sideloader's load"))
+    #expect(SourceSceneExportValidation.exportStatus(fileName: "clean.png", source: try KoikatsuSceneReader.decodeDocument(clean.data), order: .unneeded,
+                                                     staleSideloaderRecords: try dropped(clean))
+            == "Exported edited original scene to clean.png")
+
+    // Wrong kind or repeated, with a stale record too: still refused when keys
+    // change, and kept as it was (stale record included) otherwise; nothing
+    // is counted, since nothing is dropped.
+    let label = "Sideloader data ('\(sideloaderID)')"
+    for (records, reason) in [([Record(0, 0, 0), Record(99, 99, 0)], "has a record for object 0, a folder rather than an item, light or character"),
+                              ([Record(99, 99, 0), Record(4, 4, 3), Record(4, 4, 3)], "has two records for object 4")] {
+        let scene = pluginScene([(sideloaderID, sideloader(records))])
+        #expect(verdict(scene, .init(deletions: [1])) == "Original-scene export cannot delete objects in this scene: \(label) \(reason). Save in native format instead.")
+        #expect(verdict(scene, SourceSceneEdits()) == "kept")
+        #expect(verdict(scene, moveItem) == "kept")
+        #expect(try dropped(scene) == 0)
+        #expect(try dropped(scene, moveItem) == 0)
+    }
+    // Another version, or an entry this writer cannot read: kept, not counted.
+    let future = pluginScene([(sideloaderID, plugin(1, .map([("itemInfo", .arr([Record(99, 99, 0).item]))])))])
+    #expect(verdict(future, SourceSceneEdits()) == "kept")
+    #expect(try dropped(future) == 0)
+}
+
+/// #322 in the user's corpus (opt-in: IKKOKU_USER_PLUGIN_SCENES, see
+/// `StaleRecordCorpus`): no installed scene has a stale Sideloader record, so
+/// no export drops one and no status reports one: each scene's unedited
+/// export reports what its writer's plan drops. Prints the scenes with an
+/// entry and their record counts (ST-T03k: 51 scenes, 2,780 `itemInfo` and 41
+/// `patternInfo`). Byte identity of the exports is
+/// `installedSideloaderScenesExportDigest`, compared across builds.
+@Test(.enabled(if: StaleRecordCorpus.enabled, "Opt-in: IKKOKU_USER_PLUGIN_SCENES names the installed scenes"))
+func installedScenesHaveNoStaleSideloaderRecords() throws {
+    final class Tally: @unchecked Sendable {
+        var scenes = 0, items = 0, patterns = 0, stale = 0, unread = 0, mismatched = 0
+        var countSeconds = 0.0, slowestSeconds = 0.0, largestTrailer = 0
+    }
+    let tally = Tally()
+    let files = StaleRecordCorpus.files()
+    try StaleRecordCorpus.onLargeStack {
+        for url in files {
+            guard let document = try? KoikatsuSceneReader.decodeDocument(Data(contentsOf: url)) else { continue }
+            // The work every export now adds for this scene: its writer's
+            // trailer parse and Sideloader plan, once per export, on the
+            // exporting (main) thread. The status reads the count the writer
+            // returns and makes no pass of its own.
+            let start = ContinuousClock.now
+            let found = StaleRecordCorpus.sideloader(document)
+            let edit = SourceScenePluginData.Edit(source: document.snapshot, final: document.snapshot, copies: [:], moved: false)
+            let plan = found.flatMap { pair in pair.1.version == 0 ? try? SideloaderPlan(trailer: pair.0, entry: pair.1, edit: edit) : nil }
+            let elapsed = ContinuousClock.now - start
+            guard found != nil else { continue }
+            tally.scenes += 1
+            let seconds = Double(elapsed.components.seconds) + Double(elapsed.components.attoseconds) * 1e-18
+            tally.countSeconds += seconds; tally.slowestSeconds = max(tally.slowestSeconds, seconds)
+            tally.largestTrailer = max(tally.largestTrailer, document.trailingData.count)
+            guard let plan else { tally.unread += 1; continue }
+            tally.items += plan.items.count; tally.patterns += plan.patterns.count
+            let reported = try document.exported(SourceSceneEdits()).staleSideloaderRecords
+            if reported != plan.dropped { tally.mismatched += 1 }
+            tally.stale += reported
+        }
+    }
+    print("[stale-corpus] \(tally.scenes) scenes with a Sideloader entry, \(tally.items) itemInfo, \(tally.patterns) patternInfo, \(tally.stale) stale, \(tally.unread) unreadable")
+    print(String(format: "[stale-corpus] writer's Sideloader pass: %.3f ms total, %.3f ms slowest scene, largest trailer %d B",
+                 tally.countSeconds * 1000, tally.slowestSeconds * 1000, tally.largestTrailer))
+    #expect(tally.scenes > 0, "no scene with a Sideloader entry under IKKOKU_USER_PLUGIN_SCENES")
+    #expect(tally.stale == 0)
+    #expect(tally.unread == 0)
+    #expect(tally.mismatched == 0, "an export's reported count differs from its writer's plan")
 }
 
 // MARK: - Trailer framing
@@ -270,6 +407,13 @@ private func sideloader(_ items: [Record], _ patterns: [Record] = [], map: Bool 
     // With nothing else to change the trailer stays as it was: a nil entry
     // is inert for any ID, and the next CharaStudio save drops it.
     #expect(verdict(pluginScene([("example.nil", .null), settings]), .init(deletions: [1])) == "kept")
+    // #322's stale-only rewrite of an unedited export runs only when a record
+    // is stale. Without one, the export is the input byte for byte, its nil
+    // entry included; with one, the stale record and the nil entry both go.
+    let kept = pluginScene([(sideloaderID, sideloader([Record(4, 4, 3)])), ("example.nil", .null), settings])
+    #expect(try KoikatsuSceneReader.decodeDocument(kept.data).editedData(SourceSceneEdits()) == kept.data)
+    let stale = pluginScene([(sideloaderID, sideloader([Record(99, 99, 0), Record(4, 4, 3)])), ("example.nil", .null), settings])
+    #expect(try trailer(stale, SourceSceneEdits()) == pluginTrailer([(sideloaderID, sideloader([Record(4, 4, 3)])), settings]))
 }
 
 @Test func sourceScenePluginDataRefusesUnreadableTrailersAndUnknownEntriesByName() throws {

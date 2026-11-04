@@ -192,19 +192,39 @@ struct SourceSceneEditSpans {
     var topology = Topology()
 }
 
+/// An original-scene export: its bytes, and what only its writer knows that
+/// the export status reports.
+public struct SourceSceneExport: Sendable {
+    public let data: Data
+    /// The Sideloader records the export dropped as naming objects the scene
+    /// does not have (#322), counted by the writer's own `SideloaderPlan`.
+    /// Staleness is judged against the scene as loaded, so every export of
+    /// it drops the same ones. Zero when the entry is missing, nil, of another
+    /// version or unreadable, or has a record of the wrong kind or a repeated
+    /// one: an export that changes keys is then refused, any other keeps it.
+    public let staleSideloaderRecords: Int
+
+    init(data: Data, staleSideloaderRecords: Int = 0) {
+        self.data = data; self.staleSideloaderRecords = staleSideloaderRecords
+    }
+}
+
 public extension KoikatsuSceneDocument {
     /// Pure byte transformation. The caller chooses a separate output URL.
     /// Any unsupported/missing destination or invalid input rejects the whole
     /// edit before bytes are returned; source data is never mutated. A legacy
     /// scene is written as CharaStudio saves it, as 1.0.4.2 (`upgraded`),
     /// so even an empty edit changes its bytes.
-    func editedData(_ edits: SourceSceneEdits) throws -> Data {
-        if isLegacy { return try upgraded().editedData(edits) }
+    func editedData(_ edits: SourceSceneEdits) throws -> Data { try exported(edits).data }
+
+    /// `editedData`, with what its writer reports for the export status.
+    func exported(_ edits: SourceSceneEdits) throws -> SourceSceneExport {
+        if isLegacy { return try upgraded().exported(edits) }
         if !edits.insertions.isEmpty {
             var rest = edits; rest.insertions = []
-            return try inserting(edits.insertions).editedData(rest)
+            return try inserting(edits.insertions).exported(rest)
         }
-        return try editedData(edits, source: self, copies: [:])
+        return try exported(edits, source: self, copies: [:])
     }
 }
 
@@ -214,6 +234,10 @@ extension KoikatsuSceneDocument {
     /// the scene before insertions and `copies` maps each copy's key to its
     /// template's.
     func editedData(_ edits: SourceSceneEdits, source: KoikatsuSceneDocument, copies: [Int32: Int32]) throws -> Data {
+        try exported(edits, source: source, copies: copies).data
+    }
+
+    func exported(_ edits: SourceSceneEdits, source: KoikatsuSceneDocument, copies: [Int32: Int32]) throws -> SourceSceneExport {
         let (result, final) = try editedBody(edits)
         return try SourceScenePluginData.rewrite(result, final: final, source: source, copies: copies,
                                                  moved: !edits.reparents.isEmpty)

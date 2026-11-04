@@ -14,7 +14,9 @@ import Assets
 ///
 /// - Sideloader (`com.bepis.sideloader.universalautoresolver`) is rewritten:
 ///   one record per mod item, light or animation in the order CharaStudio
-///   saves them, with each object's key and its per-kind position.
+///   saves them, with each object's key and its per-kind position. Records
+///   naming no object of the source scene are stale and dropped by every
+///   export, an unedited one included (#322, `SideloaderPlan`).
 /// - Scene-global entries (no object reference) are kept.
 /// - KKPE, MaterialEditor and NodesConstraints are rewritten
 ///   (SourceScenePluginRewrites.swift): pose entries per item in key order
@@ -97,35 +99,58 @@ enum SourceScenePluginData {
     /// only because the keys could differ then accept it, and copies are
     /// taken in operation order. Nil: copies are in key order, which is
     /// their operation order when no key was freed before one was taken.
+    /// The export also carries the stale Sideloader records this rewrite
+    /// dropped (#322), counted by its own `SideloaderPlan`, for the status.
     static func rewrite(_ data: Data, final: KoikatsuSceneDocument, source: KoikatsuSceneDocument,
-                        copies: [Int32: Int32], moved: Bool, ordered: [Int32: Int]? = nil) throws -> Data {
+                        copies: [Int32: Int32], moved: Bool, ordered: [Int32: Int]? = nil) throws -> SourceSceneExport {
         // No plug-in data: only the card fallback can refuse, and only for a
         // card that names KKAnimationController data. Every written card is
         // in `data` verbatim, so one search keeps such scenes at no cost.
-        if final.trailingData.isEmpty, data.range(of: cardMarker) == nil { return data }
+        if final.trailingData.isEmpty, data.range(of: cardMarker) == nil { return SourceSceneExport(data: data) }
         let edit = Edit(source: source.snapshot, final: final.snapshot, copies: copies, moved: moved, ordered: ordered)
-        guard edit.structural else { return data }
+        // #322: an export that leaves the object set as it was still drops
+        // Sideloader's stale records; nothing else in the trailer changes.
+        guard edit.structural else { return try droppingStaleSideloaderRecords(data, final: final, edit: edit) }
         guard !final.trailingData.isEmpty else {
             // No plug-in data, but NodesConstraints still reads the cards.
             if let reason = cardLinks(edit, .empty) { throw edit.refusal([reason]) }
-            return data
+            return SourceSceneExport(data: data)
         }
         let trailer: SourceSceneKKEx
         do { trailer = try SourceSceneKKEx.parse(final.trailingData) } catch {
             // Moves keep an unreadable trailer, as before.
-            guard edit.keysChange else { return data }
+            guard edit.keysChange else { return SourceSceneExport(data: data) }
             throw edit.refusal(["the scene's data after 【KStudio】 is not readable ExtendedSave data (\(error.localizedDescription))"])
         }
         var plan = Plan(trailer: trailer, edit: edit, scene: source.preservedData)
         try plan.decide()
         let cards = plan.cardPatches
-        guard plan.changes || !cards.isEmpty else { return data }
+        guard plan.changes || !cards.isEmpty else { return SourceSceneExport(data: data) }
         let end = data.startIndex + final.baseSceneEndOffset
         var result = data.subdata(in: data.startIndex..<end)
         // KKPE's copied characters: their cards' controller IDs, in place.
         try patchCards(&result, cards)
-        if plan.changes { result.append(contentsOf: try plan.emit()) } else { result.append(data.subdata(in: end..<data.endIndex)) }
-        return result
+        guard plan.changes else {
+            result.append(data.subdata(in: end..<data.endIndex))
+            return SourceSceneExport(data: result)
+        }
+        result.append(contentsOf: try plan.emit())
+        return SourceSceneExport(data: result, staleSideloaderRecords: plan.sideloaderPlan?.dropped ?? 0)
+    }
+
+    /// #322, an export that deletes, copies, adds and moves nothing: the
+    /// trailer as it was, unless the Sideloader entry has stale records
+    /// (`SideloaderPlan`). Then that entry loses them, its other records keep
+    /// their bytes, order and positions, and nil entries go as in any
+    /// rewritten trailer. An unreadable trailer or Sideloader entry is kept,
+    /// as before.
+    private static func droppingStaleSideloaderRecords(_ data: Data, final: KoikatsuSceneDocument, edit: Edit) throws -> SourceSceneExport {
+        guard !final.trailingData.isEmpty, let trailer = try? SourceSceneKKEx.parse(final.trailingData) else { return SourceSceneExport(data: data) }
+        var plan = Plan(trailer: trailer, edit: edit)
+        guard plan.dropStaleSideloaderRecords() else { return SourceSceneExport(data: data) }
+        var result = data.subdata(in: data.startIndex..<(data.startIndex + final.baseSceneEndOffset))
+        result.append(contentsOf: try plan.emit())
+        return SourceSceneExport(data: result, staleSideloaderRecords: plan.sideloaderPlan?.dropped ?? 0)
     }
 
     /// NodesConstraints.OnSceneLoad (NodesConstraints.cs:2061-2068): with
@@ -384,6 +409,21 @@ enum SourceScenePluginData {
         }
 
         var cardPatches: [KKPEPlan.CardPatch] { kkpePlan?.cardPatches ?? [] }
+
+        /// #322, an edit that leaves the object set as it was: every entry
+        /// kept but nil ones, and the Sideloader entry without its stale
+        /// records. False when there is none to drop; the trailer then stays
+        /// as it was.
+        mutating func dropStaleSideloaderRecords() -> Bool {
+            guard let index = trailer.entries.firstIndex(where: { $0.id == sideloader && !$0.isNil }),
+                  trailer.entries[index].version == 0,
+                  let plan = try? SideloaderPlan(trailer: trailer, entry: trailer.entries[index], edit: edit),
+                  plan.dropped > 0 else { return false }
+            decisions = trailer.entries.map { $0.isNil ? Decision.remove : Decision.keep }
+            decisions[index] = plan.decision
+            sideloaderPlan = plan
+            return true
+        }
 
         /// Whether the scene's Timeline data may name `word`: its XML
         /// contains it, or it is there but not readable.
@@ -793,6 +833,18 @@ enum AnimationControllerForm {
 /// into its two integers (MessagePack-CSharp's shortest encoding), clones a
 /// template's records for each copy, drops a deleted object's records, and
 /// writes the records in the final walk's order.
+///
+/// #322: a record whose `SceneDicKey` names no object of the source scene
+/// (the scene as loaded, before the edit) is stale. This Sideloader's save
+/// never writes one, and its load throws at the first one
+/// (UniversalAutoResolver.cs:1334, :1342), which ExtendedSave catches per
+/// subscriber, so every later record, the compat loop and the map, filter,
+/// ramp and BGM stay unresolved. Every export drops stale records
+/// (`dropped`), an edit that leaves the object set as it was included
+/// (`SourceScenePluginData.droppingStaleSideloaderRecords`). A record for an
+/// object of the wrong kind, or a second record for one object, is not stale:
+/// Sideloader would resolve it wrongly, so it still refuses an edit that
+/// changes keys, and other exports keep the entry as it was.
 struct SideloaderPlan {
     struct Failure: Error { let reason: String }
     struct Record {
@@ -814,14 +866,19 @@ struct SideloaderPlan {
     let items: [Record], patterns: [Record]
     let plannedItems: [Planned], plannedPatterns: [Planned]
     let decision: SourceScenePluginData.Plan.Decision
+    /// Stale records (naming no source object) the plan leaves out (#322).
+    let dropped: Int
 
+    /// `edit.structural` false (nothing deleted, copied, added or moved):
+    /// the records keep their list order, keys and positions, and only stale
+    /// ones go.
     init(trailer: SourceSceneKKEx, entry: SourceSceneKKEx.Entry, edit: SourceScenePluginData.Edit) throws {
         let bytes = trailer.bytes
         sourceBytes = bytes
         let read: [SourceMessagePackSpans.Field]?
         do { read = try trailer.fields(entry) } catch { throw Failure(reason: "has a data value that is not a map") }
         guard let fields = read else {
-            items = []; patterns = []; plannedItems = []; plannedPatterns = []; decision = .keep; return
+            items = []; patterns = []; plannedItems = []; plannedPatterns = []; decision = .keep; dropped = 0; return
         }
         var lists: [String: (key: Range<Int>, records: [Record])] = [:], scene: [String: Range<Int>] = [:]
         for field in fields {
@@ -837,15 +894,17 @@ struct SideloaderPlan {
             }
         }
         items = lists["itemInfo"]?.records ?? []; patterns = lists["patternInfo"]?.records ?? []
-        // Every record names one source object of its kind, once.
+        // Every record that names a source object names one of its kind, once;
+        // a record naming none is stale and left out (#322).
+        var stale = 0
         func index(_ records: [Record], kinds: Set<KoikatsuObjectKind>) throws -> [Int32: Int] {
             var result: [Int32: Int] = [:]
             for (position, record) in records.enumerated() {
                 guard let key = Int32(exactly: record.key), let object = edit.sourceRecords[key] else {
-                    // Sideloader's load throws here (UniversalAutoResolver.cs:1342)
-                    // and resolves nothing after it (:474-481); its save never
+                    // Sideloader's load would throw here (UniversalAutoResolver.cs:1342)
+                    // and resolve nothing after it (:474-481); its save never
                     // writes such a record.
-                    throw Failure(reason: "names object \(record.key), which is not in this scene, so CharaStudio also loads this scene partly unresolved: its later mod items, map, filter, ramp and music")
+                    stale += 1; continue
                 }
                 guard kinds.contains(object.kind) else {
                     throw Failure(reason: "has a record for object \(key), a \(object.kind) rather than an item, light or character")
@@ -856,6 +915,7 @@ struct SideloaderPlan {
         }
         let itemIndex = try index(items, kinds: [.item, .light, .character])
         let patternIndex = try index(patterns, kinds: [.item])
+        dropped = stale
         // Positions per type in the final walk (`FindObjectInfoOrder`).
         var counters: [KoikatsuObjectKind: Int32] = [:], order: [Int32: Int32] = [:]
         for record in edit.finalRecords where record.kind == .item || record.kind == .light || record.kind == .character {
@@ -863,10 +923,18 @@ struct SideloaderPlan {
             counters[record.kind, default: 0] += 1
         }
         var plannedItems: [Planned] = [], plannedPatterns: [Planned] = []
-        for record in edit.finalRecords {
-            guard let origin = edit.origins[record.sourceKey], let position = order[record.sourceKey] else { continue }
-            if let index = itemIndex[origin] { plannedItems.append(.init(record: index, key: record.sourceKey, order: position)) }
-            if let index = patternIndex[origin] { plannedPatterns.append(.init(record: index, key: record.sourceKey, order: position)) }
+        if edit.structural {
+            for record in edit.finalRecords {
+                guard let origin = edit.origins[record.sourceKey], let position = order[record.sourceKey] else { continue }
+                if let index = itemIndex[origin] { plannedItems.append(.init(record: index, key: record.sourceKey, order: position)) }
+                if let index = patternIndex[origin] { plannedPatterns.append(.init(record: index, key: record.sourceKey, order: position)) }
+            }
+        } else {
+            // Nothing moved: each record as it was, stale ones left out.
+            func kept(_ index: [Int32: Int], _ records: [Record]) -> [Planned] {
+                index.values.sorted().map { Planned(record: $0, key: Int32(records[$0].key), order: Int32(records[$0].order)) }
+            }
+            plannedItems = kept(itemIndex, items); plannedPatterns = kept(patternIndex, patterns)
         }
         self.plannedItems = plannedItems; self.plannedPatterns = plannedPatterns
         func same(_ planned: [Planned], _ records: [Record]) -> Bool {

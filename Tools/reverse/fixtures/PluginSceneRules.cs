@@ -771,7 +771,8 @@ public static class PluginSceneRules {
     sealed class SideloaderFailure:Exception{public SideloaderFailure(string m):base(m){}}
 
     // UniversalAutoResolver's records must each name one object of their kind in the scene, once; the rewrite
-    // itself always succeeds after that.
+    // itself always succeeds after that. A record naming no object of the source scene is stale and dropped by
+    // every export (#322), so it refuses nothing.
     static void CheckSideloader(Trailer trailer,Entry entry,Edit edit) {
         List<Field> fields;
         try{fields=trailer.Fields(entry);}catch(Exception){throw new SideloaderFailure("has a data value that is not a map");}
@@ -783,7 +784,7 @@ public static class PluginSceneRules {
                 var seen=new HashSet<int>();
                 foreach(var key in records) {
                     int kind;
-                    if(key<int.MinValue||key>int.MaxValue||!edit.SourceKinds.TryGetValue((int)key,out kind))throw new SideloaderFailure("names object "+key+", which is not in this scene, so CharaStudio also loads this scene partly unresolved");
+                    if(key<int.MinValue||key>int.MaxValue||!edit.SourceKinds.TryGetValue((int)key,out kind))continue; // stale (#322)
                     if(pattern?kind!=Item:(kind!=Item&&kind!=Light&&kind!=Character))throw new SideloaderFailure("has a record for object "+key+" of the wrong kind");
                     if(!seen.Add((int)key))throw new SideloaderFailure("has two records for object "+key);
                 }

@@ -110,7 +110,10 @@ public struct SourceSceneStage: Sendable {
     /// (`SceneInfo.isLightCheck`), so a third would not reload. With
     /// `edits.order` (#278) each insertion then takes the key and root
     /// position that order of operations gives it in CharaStudio (`replay`).
-    public func editedData(_ edits: SourceSceneEdits) throws -> Data {
+    public func editedData(_ edits: SourceSceneEdits) throws -> Data { try exported(edits).data }
+
+    /// `editedData`, with what its writer reports for the export status.
+    public func exported(_ edits: SourceSceneEdits) throws -> SourceSceneExport {
         guard edits.insertions.isEmpty else {
             throw SourceSceneTopologyError.unsupported("The staged scene already carries its insertions.")
         }
@@ -122,7 +125,7 @@ public struct SourceSceneStage: Sendable {
                 throw SourceSceneTopologyError.unsupported("CharaStudio keeps at most two lights (SceneInfo.isLightCheck); the edited scene would have \(lights.count).")
             }
         }
-        guard let order = edits.order else { return try document.editedData(edits, source: source, copies: copies) }
+        guard let order = edits.order else { return try document.exported(edits, source: source, copies: copies) }
         guard edits.reparents.isEmpty else { throw SourceSceneTopologyError.unsupported("Ordered export: moves are not replayed.") }
         // Kept route points only: an added or deleted point takes or frees a key outside the replay.
         for (key, state) in edits.routes {

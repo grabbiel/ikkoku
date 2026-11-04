@@ -414,9 +414,12 @@ public extension SourceSceneExportValidation {
 
     /// The status after an original-scene export: ST-T05a's note for a scene
     /// from an older CharaStudio, ST-T03i's plug-in data no installed plug-in
-    /// reads, then #278's reason when added objects kept the set-based keys.
-    /// A replayed order adds nothing: its keys are CharaStudio's.
-    static func exportStatus(fileName: String, source: KoikatsuSceneDocument, order: Order) -> String {
+    /// reads, #322's count of stale Sideloader records dropped, then #278's
+    /// reason when added objects kept the set-based keys. A replayed order
+    /// adds nothing: its keys are CharaStudio's. `staleSideloaderRecords` is
+    /// the export's own count (`SourceSceneExport`), so the status needs no
+    /// second pass over the plug-in data.
+    static func exportStatus(fileName: String, source: KoikatsuSceneDocument, order: Order, staleSideloaderRecords stale: Int) -> String {
         // ST-T03i: entries no installed plug-in reads travel verbatim; that
         // is CharaStudio's behavior only while no installed plug-in owns them.
         let orphans = source.orphanPluginIDs
@@ -426,6 +429,11 @@ public extension SourceSceneExportValidation {
         var status = "Exported edited original scene to \(fileName)"
             + (source.isLegacy ? ", saved as 1.0.4.2 from CharaStudio \(source.snapshot.version), as CharaStudio does" : "")
             + (orphans.isEmpty ? "" : ". It keeps plug-in data no installed plug-in reads, unchanged: \(orphans.joined(separator: ", "))")
+        // #322: judged against the scene as loaded, so every export of it
+        // drops the same records.
+        if stale > 0 {
+            status += ". It drops \(stale) Sideloader record\(stale == 1 ? "" : "s") naming objects the scene does not have, which would stop Sideloader's load"
+        }
         if case .fallback(let reason) = order {
             status += ". Added objects took keys after the scene's own, which can differ from CharaStudio's for these edits: \(reason.reason)"
         }
