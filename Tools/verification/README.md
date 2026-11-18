@@ -1403,6 +1403,28 @@ On `165db2c` all 7 characters read `"aniso 9, mips linear": 1` before and
 after the round trip (1/1 `--strict`, 15.4 s). With the call site reverted
 to no mode, all 14 asserts failed with `"aniso 1, mips nearest": 1`.
 
+### Extended shape rates (Slider Unlocker)
+
+One check covers cards whose shape rates lie outside 0...1, as BepisPlugins'
+Slider Unlocker saves them (see
+[extended shape rates](../../docs/reference/character/contracts.md#extended-shape-rates-slider-unlocker)).
+
+- `extended-shape-rates` (scenario scene): sets body slot 0 of character key
+  65 to 1.5 and face slot 3 of key 0 to -0.25, then exports and reimports.
+  The card check and the build accept both cards, and the rates read back.
+  It then edits body slot 1 of the reimported card, and exports and
+  reimports again. Every rate reads back within 1e-5.
+
+The three Maker selection scenarios (`maker-head-female-selection`,
+`maker-head-male-selection` and `maker-async-selection`) used body rate 2.0
+to force an `invalidRate` commit failure. Extended rates make 2.0 valid.
+They now force the failure with body slot 4 = 3e38, a rate whose written
+components overflow, then restore the slot to the card's saved value. Each
+scenario also gains a tail at its end, so every earlier step and export is
+unchanged. In the tail, the slot that used 2.0 (body 1, or body 0 in the
+async scenario) is set to 2.0 and commits. It is then exported and
+reimported, and the rate is kept.
+
 ### Lazy hidden characters (cxs1 gap list, item 7)
 
 Three checks cover the import that leaves hidden characters unbuilt (see
