@@ -227,9 +227,9 @@ func finiteAffinePerformanceProbe() throws {
     }
     let count = Double(matrices.count)
     print("[finite-affine-perf] \(rig.nodes.count) nodes, \(rest.palettes.reduce(0) { $0 + $1.count }) palette matrices, \(matrices.count) checked matrices")
-    print(String(format: "[finite-affine-perf] check per matrix: element loop %.2f ns, RigDefinition.isFiniteAffine %.2f ns (median of %d rounds)",
+    print(String(format: "[finite-affine-perf] check per matrix: element loop %.2f ns, RigDefinition.isFiniteAffine %.2f ns (median of %ld rounds)",
                  median(loop) / count, median(current) / count, loop.count))
-    print(String(format: "[finite-affine-perf] evaluate: referenceEvaluate %.1f us, rig.evaluate %.1f us (median of %d rounds)",
+    print(String(format: "[finite-affine-perf] evaluate: referenceEvaluate %.1f us, rig.evaluate %.1f us (median of %ld rounds)",
                  median(old) / 1000, median(new) / 1000, old.count))
 }
 
