@@ -2410,6 +2410,7 @@ final class StudioModel: ViewportInputHandler, LivePacedHandler {
         // entry carries no reference that a later build could start from.
         var references: [SourceStudioCharacterReference] = [], builds: [Int?] = []
         var buildReferences: [SourceStudioCharacterReference] = [], itemRecords: [KoikatsuItemRecord] = []
+        var hiddenCards: [(index: Int, record: KoikatsuCharacterRecord)] = []
         var steps: [SourceStudioCharacterBatch.Step] = []
         // Each record with its parent's effective visibility and whether it
         // sits under a route, as the commit's walk derives them.
@@ -2433,6 +2434,7 @@ final class StudioModel: ViewportInputHandler, LivePacedHandler {
                     steps.append(.character(buildReferences.count - 1))
                 } else {
                     builds.append(nil)
+                    hiddenCards.append((references.count - 1, character))
                 }
             } else if record.kind == .camera {
             } else if record.kind == .item, let item = record.item, itemResolver != nil {
@@ -2453,7 +2455,7 @@ final class StudioModel: ViewportInputHandler, LivePacedHandler {
             source: source, imported: imported, diagnostics: diagnostics, sceneLightOverride: sceneLightOverride,
             animationCatalog: animationCatalog, animationCatalogError: animationCatalogError,
             itemResolver: itemResolver, itemNames: itemNames, references: references, builds: builds,
-            itemRecords: itemRecords, steps: steps, batch: batch)
+            hiddenCards: hiddenCards, itemRecords: itemRecords, steps: steps, batch: batch)
         // ST-A11: the map loads on its own worker beside the characters.
         job.mapRequest = SourceMapRequest.make(settings: source.settings, sceneSHA256: hash)
         job.mapLoad = startSourceMapLoad(for: job.mapRequest)
@@ -2471,6 +2473,10 @@ final class StudioModel: ViewportInputHandler, LivePacedHandler {
         let sceneLightOverride = job.sceneLightOverride, itemResolver = job.itemResolver, itemNames = job.itemNames
         var previews: [UUID: SourceStudioCharacterPreview] = [:]
         var characterIndex = 0, itemIndex = 0, deferredCharacters = 0
+        // Hidden characters whose card cannot convert are retained as a
+        // failed build is (`validateCard`, checked on a worker since the
+        // preparation).
+        let hiddenCardProblems = job.hiddenCardProblems()
         var bounds = AABB.empty, stack = source.snapshot.roots.reversed().map { ($0, Optional<UUID>.none, false, Optional<Int32>.none) }
         var routes: [UUID: SourceRouteRuntime] = [:]
         var routeCharacterPreviews: [UUID: SourceStudioCharacterPreview] = [:]
@@ -2521,6 +2527,10 @@ final class StudioModel: ViewportInputHandler, LivePacedHandler {
                         if routeChild, record.kind != .folder { object.name = "Unrendered source \(record.kind) \(record.sourceKey)" }
                         diagnostics.append("Character \(record.sourceKey) retained without rendering: \(error)")
                     }
+                } else if let problem = hiddenCardProblems[index] {
+                    // Hidden, and its card cannot convert: retained with the
+                    // diagnostic the eager import's failed build reports.
+                    diagnostics.append("Character \(record.sourceKey) retained without rendering: \(problem)")
                 } else {
                     // Hidden at import and not on a route: the character's
                     // entry, reference included, with no preview yet. It
@@ -3119,14 +3129,18 @@ final class StudioModel: ViewportInputHandler, LivePacedHandler {
     /// document, the camera looked through or a route's play state changed
     /// before the work landed, `completion` gets an error and nothing is
     /// written. A scene import or load, or New Scene, cancels it with an
-    /// error too. Without baselines or clocks, without `asyncSourceBuilds`
-    /// (captures, scenarios), or while plugins run (their steps write the
-    /// document), it exports at once. `completion` gets the export's error,
-    /// or nil once the file is written.
+    /// error too. Without baselines, and with no clock or every clock's
+    /// data already loaded (`SourceStudioAnimationClock.isLoaded`: the
+    /// import's warm-up has run, so its states cost about a millisecond),
+    /// without `asyncSourceBuilds` (captures, scenarios), or while plugins
+    /// run (their steps write the document), it exports at once, as before
+    /// lazy hidden characters: no worker hop, no progress line.
+    /// `completion` gets the export's error, or nil once the file is written.
     func beginSourceSceneExport(to url: URL, completion: @escaping @MainActor (Error?) -> Void) {
         let wanted = sourceExportBaselineRequests()
         let clocks = sourceClockRequests(doc.objects)
-        guard asyncSourceBuilds, !sourcePluginsRunning, !wanted.isEmpty || !clocks.isEmpty else {
+        let clocksLoaded = clocks.isEmpty || sourceUnbuiltClock.isLoaded(clocks.map(\.request))
+        guard asyncSourceBuilds, !sourcePluginsRunning, !wanted.isEmpty || !clocksLoaded else {
             do { try exportSourceScene(to: url); completion(nil) } catch { completion(error) }
             return
         }

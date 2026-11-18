@@ -44,6 +44,11 @@ final class SourceSceneImportJob {
     let builds: [Int?]
     /// How many characters the batch builds.
     let buildCount: Int
+    /// The card checks of the characters the batch does not build, started
+    /// here on a worker (`SourceStudioCharacterPreview.CardCheck`), with
+    /// their character indices.
+    private let hiddenCardCheck: SourceStudioCharacterPreview.CardCheck
+    private let hiddenCardIndices: [Int]
     /// Every item record the walk loads, in walk order.
     let itemRecords: [KoikatsuItemRecord]
     /// Characters and items interleaved in walk order.
@@ -62,7 +67,8 @@ final class SourceSceneImportJob {
          imported: StudioDocument, diagnostics: [String], sceneLightOverride: MainLight?,
          animationCatalog: SourceStudioAnimationCatalog?, animationCatalogError: String?,
          itemResolver: KoikatsuAssetResolver?, itemNames: [String: String],
-         references: [SourceStudioCharacterReference], builds: [Int?], itemRecords: [KoikatsuItemRecord],
+         references: [SourceStudioCharacterReference], builds: [Int?],
+         hiddenCards: [(index: Int, record: KoikatsuCharacterRecord)], itemRecords: [KoikatsuItemRecord],
          steps: [SourceStudioCharacterBatch.Step], batch: SourceStudioCharacterBatch) {
         self.sceneURL = sceneURL; self.rigURL = rigURL; self.boneCatalogURL = boneCatalogURL; self.hash = hash
         self.source = source; self.imported = imported; self.diagnostics = diagnostics
@@ -72,6 +78,8 @@ final class SourceSceneImportJob {
         self.references = references; self.builds = builds; self.itemRecords = itemRecords; self.steps = steps; self.batch = batch
         let buildCount = builds.reduce(0) { count, build in build == nil ? count : count + 1 }
         self.buildCount = buildCount
+        hiddenCardIndices = hiddenCards.map(\.index)
+        hiddenCardCheck = SourceStudioCharacterPreview.CardCheck(records: hiddenCards.map(\.record))
         characters = Array(repeating: nil, count: buildCount)
         items = Array(repeating: nil, count: itemRecords.count)
     }
@@ -82,6 +90,15 @@ final class SourceSceneImportJob {
     /// Records a character the build queue finished.
     func deliver(_ delivery: SourceStudioCharacterBatch.Delivery) {
         characters[delivery.index] = delivery.result
+    }
+
+    /// The unbuilt characters whose card cannot convert, by character
+    /// index: the error their build would report first
+    /// (`SourceStudioCharacterPreview.validateCard`). Waits for the check.
+    func hiddenCardProblems() -> [Int: String] {
+        var problems: [Int: String] = [:]
+        for (index, problem) in zip(hiddenCardIndices, hiddenCardCheck.problems()) { problems[index] = problem }
+        return problems
     }
 
     /// Built character `index` (the batch's order, `builds`): the build the

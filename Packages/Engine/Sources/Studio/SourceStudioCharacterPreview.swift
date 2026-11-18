@@ -1,6 +1,7 @@
 import Foundation
 import Assets
 import CryptoKit
+import os
 import simd
 import CoreMath
 import Scene
@@ -417,6 +418,83 @@ public final class SourceStudioCharacterPreview {
         public let sharedAssembly: Bool
     }
 
+    /// The embedded card's inputs a build reads first, with their checks, in
+    /// the build's order: the card and its customization decode, the scene
+    /// and card sex identities, the assembly identity, and the saved outfit
+    /// index. `assemble` and `validateCard` share them.
+    static func cardInputs(_ record: KoikatsuCharacterRecord) throws
+        -> (card: SourceCharacterCard, identity: SourceCharacterCard.Customization, status: [String: SourceMessagePackValue], savedCoordinate: Int) {
+        let card = try record.card(), identity = try card.customization()
+        guard identity.sex == Int(record.sex) else { throw RigError.invalid("Scene character/card sex identities differ.") }
+        try SourceMakerLibrary.validateAssemblyIdentity(card: card)
+        let status = try card.block(named: "Status").map { try SourceMessagePack.decode($0.data).stringKeyedMap() } ?? [:]
+        let savedCoordinate = status["coordinateType"]?.integerValue ?? 0
+        guard (0..<7).contains(savedCoordinate) else { throw RigError.invalid("Unsupported saved Studio outfit index.") }
+        return (card, identity, status, savedCoordinate)
+    }
+
+    /// Lazy hidden characters: the checks of a build that read only the
+    /// character's embedded card, in the build's order (`cardInputs`, then
+    /// the native preview's assembly kind and shape ranges, which
+    /// `previewSettings` checks after the converted files are read). A record
+    /// that fails cannot build, and the error is the one its build throws,
+    /// unless a converted-file step between them (the head assembly lookup,
+    /// rig and appearance reads) fails first. A record that passes may
+    /// still fail in those steps. No rig, no file read, no GPU.
+    public static func validateCard(of record: KoikatsuCharacterRecord) throws {
+        let identity = try cardInputs(record).identity
+        try SourceCharacterCard.validateNativeAssembly(identity)
+        try SourceCharacterCard.validateNativeShapeRanges(identity)
+    }
+
+    /// Lazy hidden characters: `validateCard` for the characters an import
+    /// leaves unbuilt, on a user-initiated worker started by the import's
+    /// preparation, so its commit retains the ones whose card cannot convert
+    /// as the eager import does, without decoding their cards on the main
+    /// thread. `problems()` waits for the worker once; the worker holds an
+    /// unfair lock while it checks, so any other caller waits on that lock
+    /// with its priority donated, or checks itself if the worker has not
+    /// started.
+    public final class CardCheck: @unchecked Sendable {
+        private let records: [KoikatsuCharacterRecord]
+        private let lock = OSAllocatedUnfairLock()
+        private var computed: [String?]?
+        private let pending = OSAllocatedUnfairLock<DispatchWorkItem?>(uncheckedState: nil)
+
+        public init(records: [KoikatsuCharacterRecord]) {
+            self.records = records
+            guard !records.isEmpty else { computed = []; return }
+            let item = DispatchWorkItem(qos: .userInitiated) { [self] in
+                lock.lock(); defer { lock.unlock() }
+                if computed == nil { computed = Self.check(records) }
+            }
+            pending.withLockUnchecked { $0 = item }
+            DispatchQueue.global(qos: .userInitiated).async(execute: item)
+        }
+
+        /// Per record, in order: the description of the error `validateCard`
+        /// throws for it, or nil when its card passes.
+        public func problems() -> [String?] {
+            pending.withLockUnchecked { item -> DispatchWorkItem? in
+                defer { item = nil }
+                return item
+            }?.wait()
+            lock.lock(); defer { lock.unlock() }
+            if computed == nil { computed = Self.check(records) }
+            return computed ?? []
+        }
+
+        private static func check(_ records: [KoikatsuCharacterRecord]) -> [String?] {
+            let results = OSAllocatedUnfairLock(initialState: [String?](repeating: nil, count: records.count))
+            DispatchQueue.concurrentPerform(iterations: records.count) { i in
+                let problem: String?
+                do { try SourceStudioCharacterPreview.validateCard(of: records[i]); problem = nil } catch { problem = "\(error)" }
+                results.withLock { $0[i] = problem }
+            }
+            return results.withLock { $0 }
+        }
+    }
+
     /// The first half of a build (see `Assembly`). `sharing` is a loaded
     /// preview's `donation`: when it shows the same reference (scene
     /// SHA-256, record key and converted files) and outfit on the same
@@ -439,12 +517,7 @@ public final class SourceStudioCharacterPreview {
             if let character = object.character { stack += character.accessoryChildren.values.flatMap { $0 } }
         }
         guard let record = match else { throw RigError.invalid("Source character record is missing.") }
-        let card = try record.card(), identity = try card.customization()
-        guard identity.sex == Int(record.sex) else { throw RigError.invalid("Scene character/card sex identities differ.") }
-        try SourceMakerLibrary.validateAssemblyIdentity(card: card)
-        let status = try card.block(named: "Status").map { try SourceMessagePack.decode($0.data).stringKeyedMap() } ?? [:]
-        let savedCoordinate = status["coordinateType"]?.integerValue ?? 0
-        guard (0..<7).contains(savedCoordinate) else { throw RigError.invalid("Unsupported saved Studio outfit index.") }
+        let (card, identity, status, savedCoordinate) = try cardInputs(record)
         let outfitCount = (try? card.coordinateCount()) ?? 0
         if let selectedCoordinate {
             guard (0..<7).contains(selectedCoordinate) else { throw RigError.invalid("Studio outfit index must be in 0...6.") }

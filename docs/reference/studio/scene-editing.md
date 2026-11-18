@@ -2098,6 +2098,20 @@ characters in 29 scenes and no route characters.
   gets its reference and no build. The status line adds "N hidden, built when
   shown" and the diagnostics add "N hidden character(s) not built at import;
   each builds when shown or selected."
+- A hidden character whose embedded card alone shows it cannot convert is
+  retained as the eager import retains a failed build: a placeholder entry
+  with no character reference, and the same diagnostic, "Character N retained
+  without rendering: <reason>". The check
+  (`SourceStudioCharacterPreview.validateCard`) runs the build's card-only
+  steps in the build's order: the card and customization decode, the scene
+  and card sex identities, the assembly identity, the saved outfit index,
+  the assembly kind (exType 0) and the shape rates (0...1). It reads no
+  converted file and runs on a worker from the import's preparation
+  (`CardCheck`); the commit collects it. A card that fails it cannot build,
+  and the reason is the build's own error unless a converted-file step the
+  build runs before the shape check fails first (the head assembly lookup,
+  the rig and appearance reads). A card that passes may still fail in those
+  steps; that failure is reported when the character is shown or selected.
 - A hidden character builds when it is shown, when it is selected, or when a
   selected object hangs from it (an attached folder, for example). A hidden
   selection builds without being drawn, so its inspectors and edits work.
@@ -2115,9 +2129,14 @@ characters in 29 scenes and no route characters.
   its card's body height and the catalog clip (no rig, no GPU) and calls
   `SourceStudioAnimation.savedState`, the time advance a built character's
   `savedAnimationState` calls. A native save, a clock rebase (an animation
-  edit) and an export all use it. The background export advances these
-  clocks on a worker thread, and every character's animation is saved at the
-  Studio clock of the moment the export was chosen.
+  edit) and an export all use it. Every character's animation is saved at
+  the Studio clock of the moment the export was chosen. When the import's
+  warm-up has loaded what the clocks read
+  (`SourceStudioAnimationClock.isLoaded`, which never waits), an export with
+  no baseline to build runs at once on the main thread, as before this
+  change; the clocks cost about a millisecond there. Before that (the
+  warm-up still running), the background export advances them on a worker
+  thread and shows its progress line.
 - This also fixes the native reload path. Before, a character hidden when a
   native document was saved had its animation baked into the document, the
   reload left it unbuilt, and the export failed with "Animation edits
