@@ -22,26 +22,37 @@ import Foundation
 ///   memo produces.
 ///
 /// Build it for one walk and drop it after. It is not thread-safe.
+///
+/// Its code is `@inlinable` so that a client module compiles it for its own
+/// types (#387 round 3). Unspecialized, every entry access went through the
+/// runtime's generic metadata and value witnesses: 6-9 ms of a 3,769-object
+/// frame rebuild, and a quarter of a 32-object one.
 public final class StudioWalkMemo<Key: Hashable, Value, Event> {
-    private struct Entry {
-        let result: Result<Value, any Error>
-        let events: [Event]
-        let keys: [Key]
+    @usableFromInline struct Entry {
+        @usableFromInline let result: Result<Value, any Error>
+        @usableFromInline let events: [Event]
+        @usableFromInline let keys: [Key]
+
+        @inlinable init(result: Result<Value, any Error>, events: [Event], keys: [Key]) {
+            self.result = result
+            self.events = events
+            self.keys = keys
+        }
     }
 
-    private var entries: [Entry?]
-    private var evaluating: [Bool]
-    private var dependents: [Key: [Int]] = [:]
+    @usableFromInline var entries: [Entry?]
+    @usableFromInline var evaluating: [Bool]
+    @usableFromInline var dependents: [Key: [Int]] = [:]
     // Events and keys of the evaluations in progress, appended in order; an
     // evaluation's own are the suffix from where it started.
-    private var eventLog: [Event] = []
-    private var keyLog: [Key] = []
-    private var depth = 0
-    private let sink: (Event) -> Void
+    @usableFromInline var eventLog: [Event] = []
+    @usableFromInline var keyLog: [Key] = []
+    @usableFromInline var depth = 0
+    @usableFromInline let sink: (Event) -> Void
 
     /// `count` is the number of indices; `sink` receives every emitted or
     /// replayed event.
-    public init(count: Int, sink: @escaping (Event) -> Void) {
+    @inlinable public init(count: Int, sink: @escaping (Event) -> Void) {
         entries = Array(repeating: nil, count: count)
         evaluating = Array(repeating: false, count: count)
         self.sink = sink
@@ -50,7 +61,7 @@ public final class StudioWalkMemo<Key: Hashable, Value, Event> {
     /// The value at `index`: the stored result, with its events replayed,
     /// or `evaluate()`'s, stored. A query for an index whose evaluation is in
     /// progress throws `cycle()` and stores nothing for it.
-    public func value(at index: Int, cycle: () -> any Error, _ evaluate: () throws -> Value) throws -> Value {
+    @inlinable public func value(at index: Int, cycle: () -> any Error, _ evaluate: () throws -> Value) throws -> Value {
         if let entry = entries[index] {
             for event in entry.events { emit(event) }
             if depth > 0 { keyLog.append(contentsOf: entry.keys) }
@@ -75,14 +86,14 @@ public final class StudioWalkMemo<Key: Hashable, Value, Event> {
 
     /// A side effect of the evaluation in progress: it reaches the sink now,
     /// and every later answer from that evaluation's result replays it.
-    public func emit(_ event: Event) {
+    @inlinable public func emit(_ event: Event) {
         sink(event)
         if depth > 0 { eventLog.append(event) }
     }
 
     /// The evaluation in progress read state that `invalidate(key)` reports
     /// as changed.
-    public func depend(on key: Key) {
+    @inlinable public func depend(on key: Key) {
         if depth > 0 { keyLog.append(key) }
     }
 
@@ -90,7 +101,7 @@ public final class StudioWalkMemo<Key: Hashable, Value, Event> {
     /// Call it between queries, not during an evaluation. A result that
     /// depended on several keys may be dropped again after a later change
     /// of another one; that only costs an evaluation.
-    public func invalidate(_ key: Key) {
+    @inlinable public func invalidate(_ key: Key) {
         assert(depth == 0, "a Studio walk memo invalidated during an evaluation")
         guard !dependents.isEmpty, let indices = dependents.removeValue(forKey: key) else { return }
         for index in indices { entries[index] = nil }
