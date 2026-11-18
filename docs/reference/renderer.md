@@ -575,6 +575,79 @@ pre-skin values because a unique transformed normal is unavailable. Position and
 usable tangent transforms still apply, allowing intentional zero-scale geometry;
 nonfinite transformed positions retain their pre-skin position.
 
+### DrawUniforms by instance (ST-T04 B0, 2026-11-18)
+
+`toon_vertex`, `outline_vertex`, `shadow_vertex` and `pick_vertex` take
+`constant DrawUniforms* draws` and `instance_id`, and read
+`constant DrawUniforms& draw = draws[iid]`. A record drawn on its own is still
+bound at its own frame-ring offset and drawn with one instance, so it reads
+element 0 there; no Swift code changed. The instanced static items of ST-T04
+(part B) draw through these same functions with a table of records.
+
+- **Why.** Metal compiles with fast math, and the same source compiles
+  differently for a uniform `constant DrawUniforms&` and for a dynamically
+  indexed element. Positions and varyings move by a few ULPs, which moves MSAA
+  edge coverage and toon band edges. Separate instanced copies of the vertex
+  functions therefore never matched their per-draw records byte for byte (14
+  pixels of the 3,506-item corpus scene, up to 25 levels). With every draw on
+  the indexed form, an instanced item renders exactly as its record does on
+  its own.
+- **What changes.** The per-draw output itself moves once, by the same kind of
+  ULP shifts, for everything these functions draw. `toon_vertex` is shared by
+  the toon (opaque and blend), eye (and eye blend) and map (map, map blend,
+  map depth-only) pipelines, and by their stencil main-pass copies, so
+  characters, eyes, maps and items all shift; outlines, shadow maps and pick
+  ids go through the other three. See the re-baseline below.
+- **What does not.** `sky_vertex`, the grid, gizmo and gizmo-pick vertex
+  functions, and every fragment function (`pick_fragment` still reads its
+  `draw` as a uniform; it returns an integer id). Runtime-compiled programs do
+  not read DrawUniforms: the native probe (`probe_vertex`), the live probe
+  (`live_probe_vertex`) and the translated source programs bind their own
+  matrices.
+- **Validators.** No test, tolerance or source-fidelity validator changed; the
+  strict Engine suite passes unchanged (1,211 + 21 tests, 14 opt-in skips),
+  including every committed frame and program hash.
+
+**Re-baseline (old main a281573b → B0, 2026-11-18).** No committed golden
+changes; the moved references are lane captures and offscreen captures, which
+are not committed. The PR lists every changed file with its old and new SHA-256.
+
+- Lane captures: app-smoke, Maker and Studio scenario lanes, 101 checks and
+  116 PNGs, the same checks in the same five chunks on both builds. Both pass
+  100 of 101. The one failure, `studio-scenario-inspector-hide-cycles`, is
+  identical on both builds: undo-depth timing, #390.
+  - 49 files are byte-identical.
+  - 6 scene exports differ only in the random object UUIDs of their embedded
+    scene document; their pixels are equal.
+  - 61 change pixels:
+
+  | Assets | Files | Pixels changed | Changed px (min / median / max) | Max channel delta |
+  |---|---:|---:|---|---:|
+  | UI and startup captures | 3 | 2 | 1 / 24 / 24 | 3 |
+  | Maker character cards | 11 | 11 | 0 / 2 / 6 (thumbnail 2–15) | 1 |
+  | Studio scenes with characters | 92 | 45 | 1 / 53 / 72 | 12 |
+  | Studio items | 4 | 2 | 40 / 56 / 56 | 9 |
+  | Studio maps | 6 | 1 | 47 | 5 |
+
+  A Maker card's data is byte for byte the same. Only its embedded 256×256
+  face thumbnail, itself a render, changes, together with that image's 4-byte
+  length.
+- Nondeterminism control: a second old-main run of 22 checks (26 PNGs) is
+  byte-identical to the first except one scene export, which differs only in
+  its object UUIDs.
+- Offscreen captures at 1996×1824, Release (G2). Each scene is captured twice
+  on old main, identically. The end capture of the 600-frame benchmark launch
+  equals the plain capture on both builds.
+
+  | Scene | Changed px | Max delta | old → new |
+  |---|---:|---:|---|
+  | Item corpus scene 4b87a4f49c81 (3,506 items) | 14 | 25 | `d32853ebbd60` → `2bffe2323dfa` |
+  | Showoff scene, 7 characters | 554 | 11 | `f40967047e46` → `4d596be33708` |
+  | map33 | 496 | 1 | `473da126d01a` → `faac8e5bb77a` |
+  | map33-showoff | 554 | 11 | `5e0202bbba56` → `15eccedfef56` |
+  | map34-day | 922 | 25 | `e8017e20387b` → `cf48b8b592ec` |
+  | map41 | 1,358 | 16 | `dd694e2c9d73` → `17b92f7e5108` |
+
 ### Renderer limits and resource lifetime (R6, first slice)
 
 **Uniform ring.** `FrameRing` keeps three 8 MiB regions in one shared buffer.
