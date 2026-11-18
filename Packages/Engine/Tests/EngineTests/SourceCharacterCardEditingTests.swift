@@ -95,6 +95,39 @@ private enum EditingFixture {
     #expect(try result.customization().bodyValues[43].bitPattern == Float(-0.0).bitPattern)
 }
 
+/// Cards made with Slider Unlocker: extended rates survive a Maker load →
+/// save and a Studio one-slot edit byte for byte. Resending the loaded arrays
+/// (as the Maker save does) writes no shape byte, and a Studio edit of one
+/// slot rewrites only that slot's float32 bits while the other extended rates
+/// are resent as saved. Saving never consults SourceShapeRateRange: only
+/// drawing clamps in the vanilla mode.
+@Test func sourceCardEditingExtendedShapeRatesRoundTripByteForByte() throws {
+    let base = try SourceCharacterCard.decode(EditingFixture.card())
+    var body = try base.customization().bodyValues, face = try base.customization().faceValues
+    body[0] = 1.5; body[4] = -0.75; body[43] = 5; face[3] = -0.25; face[33] = 2.5
+    let extendedData = try base.editedData(.init(faceValues: face, bodyValues: body))
+    let extended = try SourceCharacterCard.decode(extendedData)
+    let loaded = try extended.customization()
+    #expect(loaded.bodyValues.map(\.bitPattern) == body.map(\.bitPattern))
+    #expect(loaded.faceValues.map(\.bitPattern) == face.map(\.bitPattern))
+    // Maker: load, then save the loaded arrays with a color edit. Byte-equal
+    // to the color edit alone, so the shape tokens are untouched.
+    let color = EditingFixture.colors()[0]
+    let maker = try extended.editedData(.init(faceValues: loaded.faceValues, bodyValues: loaded.bodyValues, colors: [color]))
+    #expect(maker == (try extended.editedData(.init(colors: [color]))))
+    #expect(try extended.editedData(.init(faceValues: loaded.faceValues, bodyValues: loaded.bodyValues)) == extendedData)
+    // Studio: slot 0 edited (1.5 → 2.25, a float32 token rewritten in
+    // place), every other slot, extended ones included, resent as saved.
+    var edited = body; edited[0] = 2.25
+    let studio = try extended.editedData(.init(faceValues: face, bodyValues: edited))
+    #expect(studio.count == extendedData.count)
+    let changed = zip(studio, extendedData).enumerated().filter { $0.element.0 != $0.element.1 }.map(\.offset)
+    #expect(!changed.isEmpty && changed.last! - changed.first! < 4, "changed bytes \(changed)")
+    let reread = try SourceCharacterCard.decode(studio).customization()
+    #expect(reread.bodyValues.map(\.bitPattern) == edited.map(\.bitPattern))
+    #expect(reread.faceValues.map(\.bitPattern) == face.map(\.bitPattern))
+}
+
 @Test func sourceCardEditingPNGReplacementRejectsAppendedCardAndCorruptCRC() throws {
     let original = try SourceCharacterCard.decode(EditingFixture.card())
     let changed = try SourceCharacterCard.decode(original.editedData(.init(thumbnailData: Data(), faceThumbnailData: OriginalCardFixture.png)))

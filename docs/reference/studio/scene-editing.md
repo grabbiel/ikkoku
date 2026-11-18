@@ -2105,7 +2105,9 @@ characters in 29 scenes and no route characters.
   (`SourceStudioCharacterPreview.validateCard`) runs the build's card-only
   steps in the build's order: the card and customization decode, the scene
   and card sex identities, the assembly identity, the saved outfit index,
-  the assembly kind (exType 0) and the shape rates (0...1). It reads no
+  the assembly kind (exType 0) and that every shape rate is finite (rates
+  outside 0...1, from Slider Unlocker, build; see
+  [extended shape rates](../character/contracts.md#extended-shape-rates-slider-unlocker)). It reads no
   converted file and runs on a worker from the import's preparation
   (`CardCheck`); the commit collects it. A card that fails it cannot build,
   and the reason is the build's own error unless a converted-file step the
