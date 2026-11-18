@@ -23,7 +23,7 @@ branch was tested or every asset matches the original game. Feature status,
 specific comments and pending tasks are in the linked reports. Shared behavior
 may be discussed in more than one report; one primary owner is listed here.
 
-**1087 files indexed; 1087 assigned; 0 unassigned.**
+**1088 files indexed; 1088 assigned; 0 unassigned.**
 
 Counts include the website and clothes-group additions listed below. Runtime and
 test totals include their specialized role descriptions; this is inventory
@@ -33,7 +33,7 @@ bookkeeping, not a new full source audit.
 | --- | ---: |
 | [App / gameplay / plugins](app-gameplay-and-plugins.md) | 110 |
 | [Character / Maker / mods](character-and-mods.md) | 130 |
-| [Studio / IK / animation](studio.md) | 256 |
+| [Studio / IK / animation](studio.md) | 257 |
 | [Renderer / foundation / assets](renderer-and-foundation.md) | 364 |
 | [Toolchain / verification / historical docs](toolchain-and-verification.md) | 217 |
 
@@ -46,7 +46,7 @@ bookkeeping, not a new full source audit.
 | Generated asset / catalog / fixture | 205 |
 | Reference host / controlled fixture | 37 |
 | Runtime / shared shader declaration | 234 |
-| Test / validation | 230 |
+| Test / validation | 231 |
 | Public synthetic body/face input fixture | 1 |
 
 ## App / gameplay / plugins
@@ -444,6 +444,7 @@ Feature assessment: [studio.md](studio.md).
 | [Packages/Engine/Tests/EngineTests/SourceStudioLiveTickTests.swift](../../Packages/Engine/Tests/EngineTests/SourceStudioLiveTickTests.swift) | Test / validation |
 | [Packages/Engine/Tests/EngineTests/SourceStudioLookDataTests.swift](../../Packages/Engine/Tests/EngineTests/SourceStudioLookDataTests.swift) | Test / validation |
 | [Packages/Engine/Tests/EngineTests/SourceStudioMapLightmapTests.swift](../../Packages/Engine/Tests/EngineTests/SourceStudioMapLightmapTests.swift) | Test / validation |
+| [Packages/Engine/Tests/EngineTests/SourceStudioMapNormalTests.swift](../../Packages/Engine/Tests/EngineTests/SourceStudioMapNormalTests.swift) | Test / validation |
 | [Packages/Engine/Tests/EngineTests/SourceStudioMapSkyTests.swift](../../Packages/Engine/Tests/EngineTests/SourceStudioMapSkyTests.swift) | Test / validation |
 | [Packages/Engine/Tests/EngineTests/SourceStudioMapSunTests.swift](../../Packages/Engine/Tests/EngineTests/SourceStudioMapSunTests.swift) | Test / validation |
 | [Packages/Engine/Tests/EngineTests/SourceStudioMapUnlitDrawTests.swift](../../Packages/Engine/Tests/EngineTests/SourceStudioMapUnlitDrawTests.swift) | Test / validation |

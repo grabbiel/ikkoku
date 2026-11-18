@@ -1,5 +1,6 @@
 import Testing
 import Foundation
+import CryptoKit
 import Metal
 import simd
 import Assets
@@ -418,12 +419,18 @@ func mapSunShadowsFallBehindTheCastersByTheStrength() throws {
 /// (two triangles with no shared vertex, receive split, cast On then Two
 /// Sided) and mesh C (one triangle twice, receive split on shared vertices),
 /// "Scene" over mesh B (a Fade material in the Transparent mode, visible for
-/// sun type 0), the sun, and one ShadowsOnly group for sun type 0.
+/// sun type 0), the sun, and one ShadowsOnly group for sun type 0. With
+/// `normal` (slice 6), the opaque material carries a block-only BC3 normal
+/// map at `_BumpScale` 0.8 and A and C carry tangents, or one of them is
+/// broken as the variant says.
 private struct LitMapFixture {
+    enum Normal { case mapped, noTangent, noMark, badPacking }
     let root: URL
     var url: URL { root.appendingPathComponent("map.gltf") }
+    /// One constant BC3 block: alpha 200, colour (0, 63, 0) in 5:6:5.
+    static let bump: [UInt8] = [200, 200, 0, 0, 0, 0, 0, 0, 0xE0, 0x07, 0xE0, 0x07, 0, 0, 0, 0]
 
-    init(smoothness: Any = 0.5, casterTriangles: Int = 1) throws {
+    init(smoothness: Any = 0.5, casterTriangles: Int = 1, normal: Normal? = nil) throws {
         root = FileManager.default.temporaryDirectory.appendingPathComponent("ikkoku-litmap-\(UUID().uuidString)", isDirectory: true)
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
         var buffer = Data(), views: [[String: Any]] = [], accessors: [[String: Any]] = []
@@ -452,14 +459,37 @@ private struct LitMapFixture {
         indices([0, 1, 2])                                                                                       // 6: B
         floats([0, 0, -1, 1, 0, -1, 0, 1, -1], type: "VEC3", count: 3, bounds: true)                            // 7: caster positions
         indices([0, 1, 2])                                                                                       // 8: caster indices
+        let tangents = normal != nil && normal != .noTangent
+        if tangents { floats(Array([[Float]](repeating: [1, 0, 0, -1], count: 6).joined()), type: "VEC4", count: 6) }  // 9: A, C tangents
         try buffer.write(to: root.appendingPathComponent("map.bin"))
         func mesh(_ name: String, role: String, keys: [Int], positions: Int, uvs: Int, indices: Int, material: Int, runs: [[Any]]) -> [String: Any] {
-            ["name": name, "primitives": [["attributes": ["POSITION": positions, "TEXCOORD_0": uvs], "indices": indices, "material": material]],
-             "extras": ["ikkokuMap": ["role": role, "visibleFor": keys, "lightmapIndex": -1, "renderers": 1, "shadowRuns": runs]]]
+            var attributes = ["POSITION": positions, "TEXCOORD_0": uvs]
+            if tangents && positions == 0 { attributes["TANGENT"] = 9 }
+            return ["name": name, "primitives": [["attributes": attributes, "indices": indices, "material": material]],
+                    "extras": ["ikkokuMap": ["role": role, "visibleFor": keys, "lightmapIndex": -1, "renderers": 1, "shadowRuns": runs]]]
         }
         func standard(_ premultiply: Bool) -> [String: Any] {
-            ["unityShader": "Standard", "ikkokuStandard": ["albedoLinear": [0.5, 0.5, 0.5, 1], "oneMinusReflectivity": 0.9,
-                                                           "smoothness": smoothness, "specularHighlights": true, "premultiplyAlpha": premultiply]]
+            var inputs: [String: Any] = ["albedoLinear": [0.5, 0.5, 0.5, 1], "oneMinusReflectivity": 0.9,
+                                         "smoothness": smoothness, "specularHighlights": true, "premultiplyAlpha": premultiply]
+            if normal != nil && !premultiply {
+                inputs["normal"] = ["image": 0, "scale": 0.8, "packing": normal == .badPacking ? "rgb" : "unityDXT5nm", "srgb": false,
+                                    "textureFormat": "DXT5"]
+            }
+            return ["unityShader": "Standard", "ikkokuStandard": inputs]
+        }
+        var extras: [String: Any] = [:]
+        var images: [[String: Any]] = []
+        if normal != nil {
+            let bump = Data(Self.bump)
+            try bump.write(to: root.appendingPathComponent("0_bump.bc3"))
+            images = [["uri": "0_bump.bc3", "mimeType": "image/x-ikkoku-bc3"]]
+            let digest = SHA256.hash(data: bump).map { String(format: "%02x", $0) }.joined()
+            extras["ikkokuBlockImages"] = ["kind": "ikkoku.unityBlockImages", "version": 1, "rows": "topDown", "cubes": [] as [Any],
+                                           "images": [["image": 0, "name": "bump", "file": "0_bump.bc3", "format": "BC3", "width": 4,
+                                                       "height": 4, "mipCount": 1, "srgb": false, "bytes": bump.count, "sha256": digest]]]
+            if normal != .noMark {
+                extras["ikkokuMapNormals"] = ["kind": "ikkoku.unityNormalMaps", "version": 1, "packing": "unityDXT5nm", "materials": 1, "images": 1]
+            }
         }
         var sun = sunRecord(direction: [0.6, 0.8, 0])
         sun["shadows"] = ["type": "soft", "strength": 0.8, "bias": 0.05, "normalBias": 0.4, "nearPlane": 0.2]
@@ -478,9 +508,9 @@ private struct LitMapFixture {
                       ["name": "Scene", "children": [4], "extras": ["ikkokuMapRole": "scene"]],
                       ["name": "a", "mesh": 0, "translation": [0, 0, 1]], ["name": "c", "mesh": 1],
                       ["name": "b", "mesh": 2, "translation": [0, 3, 0]]],
-            "scenes": [["nodes": [0, 1]]], "scene": 0,
+            "scenes": [["nodes": [0, 1]]], "scene": 0, "images": images, "textures": images.indices.map { ["source": $0] },
             "extras": lightingExtras(sun: sun, casters: [["role": "mapRoot", "visibleFor": [0], "renderers": 1, "triangles": casterTriangles,
-                                                         "positions": 7, "indices": 8]]),
+                                                         "positions": 7, "indices": 8]]).merging(extras) { $1 },
         ]
         try JSONSerialization.data(withJSONObject: gltf, options: [.sortedKeys]).write(to: url)
     }
@@ -523,7 +553,7 @@ struct SourceStudioLitMapTests {
         var counts = SourceStudioMapAsset.SunCounts()
         counts.sunLit = 3; counts.receivingPerVertex = 1; counts.receiveFallbacks = 1; counts.transparentNotReceiving = 1
         counts.casterParts = 2; counts.casterRuns = 3
-        #expect(asset.sunCounts == counts && asset.premultipliedParts == 1)
+        #expect(asset.sunCounts == counts && asset.premultipliedParts == 1 && asset.normalMaps == nil)
         // The ShadowsOnly group: positions in mapRoot's frame below its authored scale.
         let shell = try #require(asset.shadowOnlyParts.first)
         #expect(asset.shadowOnlyParts.count == 1 && shell.role == .mapRoot && shell.visibleFor == [0] && shell.triangles == 1)
@@ -580,6 +610,61 @@ struct SourceStudioLitMapTests {
                 catch { return "\(error)" }
             }
             #expect(failure?.contains(reason) == true, "\(failure ?? "loaded")")
+            #expect(resources.statistics().meshes == before.meshes && resources.statistics().textures == before.textures)
+        }
+    }
+
+    /// Slice 6: the opaque material's normal map is one block-only BC3 image
+    /// for A and C. It loads, counts and releases with the map's other
+    /// textures; the Standard parts draw it at their `_BumpScale`, the
+    /// transparent part (no `_NORMALMAP`) does not.
+    @Test(.enabled(if: MTLCreateSystemDefaultDevice()?.supportsBCTextureCompression == true))
+    func aNormalMappedLitMapDrawsItsBumpOnItsStandardPartsAndReleasesIt() async throws {
+        let device = try #require(MTLCreateSystemDefaultDevice())
+        let resources = ResourceStore(device: device)
+        let fixture = try LitMapFixture(normal: .mapped)
+        defer { fixture.remove() }
+        let (url, packageRoot) = (fixture.url, fixture.root)
+        let before = resources.statistics()
+        let asset = try await liveTickOffPool {
+            try SourceStudioMapAsset.load(url: url, packageRoot: packageRoot, resources: resources, imageSource: .blocks)
+        }
+        let counts = try #require(asset.normalMaps)
+        #expect(counts.draws == 2 && counts.textures == 1 && counts.bytes > 0 && counts.bytes <= asset.textureBytes)
+        #expect(asset.blockImages == 1 && resources.statistics().textures == before.textures + 1)
+        let mapped = asset.parts.filter { $0.material.uniforms.flags & MaterialFlagMapNormal.rawValue != 0 }
+        #expect(mapped.count == 2 && mapped.allSatisfy { $0.role == .mapRoot && $0.draw == .probeLit && $0.material.uniforms.params.z == 0.8 })
+        #expect(Set(mapped.compactMap(\.material.normal)).count == 1 && mapped.allSatisfy { $0.material.normal != nil })
+        let b = try #require(asset.parts.first { $0.role == .scene })
+        #expect(b.material.normal == nil && b.material.uniforms.flags & MaterialFlagMapNormal.rawValue == 0)
+        let entry = try JSONDecoder().decode(SourceStudioMapCatalog.Entry.self, from: JSONSerialization.data(withJSONObject: [
+            "no": 41, "name": "備品倉庫", "bundlePath": "studio/map/warehouse.unity3d", "scene": "Warehouse", "file": "map.gltf"]))
+        #expect(SourceStudioMapStatus.loaded(entry, asset: asset) == "Map 41 備品倉庫 (Warehouse): the map's ambient, realtime sun with shadows; "
+            + "approximated: Transparent mode drawn as Fade, no reflections, no metallic or detail maps, no fog, no camera effects"
+            + " · 5 triangles, 3 draws")
+        // Release retires the three meshes, the shell and the normal map.
+        asset.release()
+        #expect(resources.statistics().retiring == 5)
+        resources.completeRetirements(createdBefore: ResourceClock.tick())
+        #expect(resources.statistics().meshes == before.meshes && resources.statistics().textures == before.textures)
+    }
+
+    @Test(.enabled(if: MTLCreateSystemDefaultDevice()?.supportsBCTextureCompression == true))
+    func aNormalMapWithoutTangentsMarkOrKnownPackingFailsByNameAndRegistersNothing() async throws {
+        let device = try #require(MTLCreateSystemDefaultDevice())
+        let resources = ResourceStore(device: device)
+        let before = resources.statistics()
+        for (variant, reason) in [(LitMapFixture.Normal.noTangent, "mesh A has a normal-mapped material but no TANGENT"),
+                                  (.noMark, "material opaque has a normal map but the map does not mark its normal maps"),
+                                  (.badPacking, "normal map has packing rgb, not unityDXT5nm")] {
+            let fixture = try LitMapFixture(normal: variant)
+            defer { fixture.remove() }
+            let (url, packageRoot) = (fixture.url, fixture.root)
+            let failure = try await liveTickOffPool { () -> String? in
+                do { _ = try SourceStudioMapAsset.load(url: url, packageRoot: packageRoot, resources: resources, imageSource: .blocks); return nil }
+                catch { return "\(error)" }
+            }
+            #expect(failure?.contains(reason) == true, "\(variant): \(failure ?? "loaded")")
             #expect(resources.statistics().meshes == before.meshes && resources.statistics().textures == before.textures)
         }
     }

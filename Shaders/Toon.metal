@@ -408,6 +408,23 @@ inline float3 decodeDirectionalLightmap(float3 color, float4 dirTex, float3 norm
 // Custom/StandardDouble reads no face register (no SV_IsFrontFace in its DX11 programs): back faces
 // are lit with the front normal, as here.
 
+// Maps slice 6: Standard's per-texel normal. Unity 5.6.2f1 on a desktop player (UNITY_NO_DXT5nm undefined):
+// UnpackScaleNormal (UnityStandardUtils.cginc) xy = (texel.ag * 2 - 1) * _BumpScale, z = sqrt(1 - saturate(dot(xy, xy)));
+// PerPixelWorldNormal (UnityStandardCore.cginc, UNITY_TANGENT_ORTHONORMALIZE off) normalize(t * x + b * y + n * z) with
+// the interpolated tangent and normal and b = cross(n, t) * tangent.w (CreateTangentToWorldPerVertex). Unity's vertex
+// stage makes t and n unit length (UnityObjectToWorldDir/Normal) and builds b per vertex; here b is built per pixel from
+// the normalized t and n, which is the same on a flat surface and keeps a scaled placement from tilting the normal.
+// The export reflects Z, which reverses the cross product, and flips V, and keeps w, so this b is Unity's bitangent
+// negated: y is negated here (the item export negates G for the same reason). A zero tangent keeps the geometric normal.
+inline float3 mapNormal(float4 texel, float scale, float3 n, float4 tangent) {
+    if (dot(tangent.xyz, tangent.xyz) < 1e-12) return n;
+    float3 t = normalize(tangent.xyz);
+    float2 xy = (texel.ag * 2.0 - 1.0) * scale;
+    float3 tn = float3(xy.x, -xy.y, sqrt(1.0 - saturate(dot(xy, xy))));
+    float3 b = cross(n, t) * tangent.w;
+    return normalize(t * tn.x + b * tn.y + n * tn.z);
+}
+
 inline float3 mapAmbient(constant MapLightingUniforms& light, float3 n) {
     float4 n1 = float4(n, 1.0);
     float3 x1 = float3(dot(light.sh[0], n1), dot(light.sh[1], n1), dot(light.sh[2], n1));
@@ -482,7 +499,8 @@ fragment float4 map_fragment(
     texture2d<float> lightmap [[texture(TextureIndexLightmap)]],
     texture2d<float> lightmapDirection [[texture(TextureIndexLightmapDirection)]],
     texture2d<float> emissionTex [[texture(TextureIndexEmission)]],
-    depth2d<float> mapShadow [[texture(TextureIndexMapShadow)]])
+    depth2d<float> mapShadow [[texture(TextureIndexMapShadow)]],
+    texture2d<float> normalTex [[texture(TextureIndexNormal)]])
 {
     if (mat.flags & MaterialFlagMapSilhouette) {
         // Custom/Silhouette's colour pass (the game's shader; its DX11 fragment is `mov o0, _Color`):
@@ -513,6 +531,8 @@ fragment float4 map_fragment(
     if (mat.flags & MaterialFlagHasBaseTexture) albedo *= baseTex.sample(forcedAnisoRepeat, in.uv);
     if ((mat.flags & MaterialFlagAlphaTest) && albedo.a < mat.params.w) discard_fragment();
     float3 n = normalize(in.worldNormal);
+    // Slice 6: the normal map moves every term below (Unity's normalWorld feeds the lightmap decode, ShadeSH9 and the sun).
+    if (mat.flags & MaterialFlagMapNormal) n = mapNormal(normalTex.sample(forcedAnisoRepeat, in.uv), mat.params.z, n, in.worldTangent);
     float3 gi;
     if (mat.flags & MaterialFlagMapProbeLit) {
         gi = mapAmbient(mapLight, n);

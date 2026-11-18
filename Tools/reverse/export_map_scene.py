@@ -392,6 +392,20 @@ def one_minus_reflectivity(metallic):
     return ONE_MINUS_DIELECTRIC_SPEC - metallic * ONE_MINUS_DIELECTRIC_SPEC
 
 
+NORMAL_PACKING = "unityDXT5nm"
+
+
+def normal_record(image, scale, srgb, texture_format, name):
+    """Slice 6: a Standard `_BumpMap` as the app decodes it. Unity 5.6.2f1's UnpackScaleNormal
+    (UnityStandardUtils.cginc) on a desktop player (UNITY_NO_DXT5nm undefined): xy = (texel.ag * 2 - 1)
+    * _BumpScale, z = sqrt(1 - saturate(dot(xy, xy))), whatever the texture's format. The texture is
+    sampled as its colour space says (srgb), like the base and emission images."""
+    if not isinstance(scale, (int, float)) or not math.isfinite(scale):
+        raise ValueError(f"{name}: _BumpScale {scale!r} is not a finite number")
+    return {"image": image, "scale": float(scale), "packing": NORMAL_PACKING, "srgb": bool(srgb),
+            "textureFormat": TEXTURE_FORMATS.get(texture_format, texture_format)}
+
+
 def standard_inputs(colors, floats, keywords, emission_image=None, emission_srgb=True, metallic_map_mean=None,
                     gloss_map_alpha_mean=None, albedo_alpha_mean=None):
     """What the app's baked-lightmap material needs from a Standard material: albedo and
@@ -1483,6 +1497,9 @@ class MapExporter(Exporter):
         self.gltf["generator"] = "Ikkoku CharaStudio map-scene exporter"
         self.source = {"materials": [], "textures": [], "groups": [], "cubes": []}
         self.block_images, self.cubes, self.cube_cache = [], [], {}
+        # Slice 6: (ikkokuStandard record, _BumpMap pointer, _BumpScale) of each _NORMALMAP material,
+        # written by finish_normals after every other texture.
+        self.pending_normals = []
 
     def block_image(self, texture, image_index, png_name, image, reduction):
         """Writes a BC1/BC3 texture's serialized blocks, every mip, rows reversed to top-down
@@ -1619,6 +1636,18 @@ class MapExporter(Exporter):
         self.source["textures"].append(record)
         return index
 
+    def finish_normals(self):
+        """Slice 6: writes each `_NORMALMAP` material's `_BumpMap` through `texture` (its BC3 blocks in
+        block-only mode) after every other texture, so the slice 1-5 images keep their indices and
+        files, and records `ikkokuStandard.normal`. Returns the normal images' indices."""
+        images = set()
+        for standard, pointer, scale in self.pending_normals:
+            texture = pointer.read()
+            image = self.gltf["textures"][self.texture(pointer)]["source"]
+            standard["normal"] = normal_record(image, scale, texture.m_ColorSpace == 1, int(texture.m_TextureFormat), texture.m_Name)
+            images.add(image)
+        return sorted(images)
+
     def map_material(self, pointer):
         identity = key(pointer)
         if identity in self.material_cache:
@@ -1682,6 +1711,11 @@ class MapExporter(Exporter):
                 albedo_alpha = texture_channel_mean(main.m_Texture.read(), 3)
             result["extras"]["ikkokuStandard"] = standard_inputs(colors_of(material), floats, keywords_of(material), image, srgb, mean,
                                                                  gloss_mean, albedo_alpha)
+            # Slice 6: Standard samples _BumpMap at i.tex.xy too (UnityStandardInput.cginc NormalInTangentSpace), so
+            # the baked TEXCOORD_0 serves it; without a texture Unity's "bump" default is the flat normal.
+            bump = envs.get("_BumpMap")
+            if "_NORMALMAP" in keywords_of(material) and bump and bump.m_Texture.path_id:
+                self.pending_normals.append((result["extras"]["ikkokuStandard"], bump.m_Texture, floats.get("_BumpScale", 1.0)))
         if rule.get("draw") == "legacyDiffuse":
             result["extras"]["ikkokuStandard"] = legacy_diffuse_inputs(colors_of(material))
         index = len(self.gltf["materials"])
@@ -2014,6 +2048,8 @@ def export(bundles, scene, map_no, output, max_texture=None, builtin_resources=N
         exporter.gltf["extensionsUsed"] = ["KHR_materials_unlit"]
     # Slice 5: written after every mesh and sky, so their accessors and bytes stay as they were.
     casters, caster_skipped = shadow_only_casters(map_scene, exporter, shadows_only, sun, handlers, map_root_world_inverse)
+    # Slice 6: the normal maps after every other texture, so the slice 1-5 images keep their indices and files.
+    normal_images = exporter.finish_normals()
     lighting = map_lighting(map_scene, sun, sun_is_target, sun_info, casters)
     mixed_lights = sum(1 for light in lights if light["enabled"] and light["visibleFor"] and LIGHT_MODES.get(light["lightmapping"]) == "mixed")
     lightmaps, lightmap_mode, lightmap_export = export_lightmaps(map_scene, output, mixed_lights)
@@ -2027,6 +2063,9 @@ def export(bundles, scene, map_no, output, max_texture=None, builtin_resources=N
         extras["ikkokuBlockImages"] = {"kind": "ikkoku.unityBlockImages", "version": 1, "rows": "topDown",
                                        "images": exporter.block_images, "cubes": exporter.cubes}
     extras["ikkokuMapLighting"] = lighting
+    # Slice 6: marks an export whose Standard materials carry their normal maps (ikkokuStandard.normal).
+    extras["ikkokuMapNormals"] = {"kind": "ikkoku.unityNormalMaps", "version": 1, "packing": NORMAL_PACKING,
+                                  "materials": len(exporter.pending_normals), "images": len(normal_images)}
     if extras:
         exporter.gltf["extras"] = extras
     exporter.gltf["buffers"] = [{"uri": stem + ".bin", "byteLength": len(exporter.blob)}]
@@ -2082,6 +2121,18 @@ def export(bundles, scene, map_no, output, max_texture=None, builtin_resources=N
         "shadowOnlyCasters": {"renderers": sum(c["renderers"] for c in casters), "triangles": sum(c["triangles"] for c in casters),
                               "groups": len(casters), "skipped": caster_skipped},
         "standardInputs": standard_input_counts(exporter.gltf["materials"])}
+    # Slice 6: the normal maps, in counts and block bytes.
+    blocks_by_image = {e["image"]: e for e in exporter.block_images}
+    provenance["normalMaps"] = {
+        "materials": len(exporter.pending_normals), "images": len(normal_images),
+        "blockImages": sum(1 for i in normal_images if i in blocks_by_image),
+        "blockBytes": sum(blocks_by_image[i]["bytes"] for i in normal_images if i in blocks_by_image),
+        "textureFormats": sorted({s["normal"]["textureFormat"] for s, _, _ in exporter.pending_normals}, key=str),
+        "srgb": sum(1 for s, _, _ in exporter.pending_normals if s["normal"]["srgb"])}
+    provenance["conversion"]["normalMaps"] = (
+        "glTF extras ikkokuMapNormals marks the export; each _NORMALMAP Standard material's _BumpMap is an image written after "
+        "every other texture (its BC3 blocks in block-only mode), recorded as ikkokuStandard.normal {image, scale (_BumpScale), "
+        "packing unityDXT5nm (xy = (a, g) * 2 - 1, scaled; z = sqrt(1 - |xy|^2)), srgb}; sampled at TEXCOORD_0 like _MainTex")
     provenance["conversion"]["lighting"] = (
         "glTF extras ikkokuMapLighting: RenderSettings' ambient (mode, colours as serialized, intensity, the 27 "
         "m_AmbientProbe coefficients) and the sun (the one shown realtime directional light: shadow settings, cullingMask, "
@@ -2120,7 +2171,8 @@ def standard_input_counts(materials):
             "smoothnessApproximations": sum(1 for s in inputs if s["smoothnessApproximation"]),
             "specularHighlightsOff": sum(1 for s in inputs if not s["specularHighlights"]),
             "glossyReflectionsOff": sum(1 for s in inputs if not s["glossyReflections"]),
-            "premultiplyAlpha": sum(1 for s in inputs if s["premultiplyAlpha"])}
+            "premultiplyAlpha": sum(1 for s in inputs if s["premultiplyAlpha"]),
+            "normalMaps": sum(1 for s in inputs if s.get("normal"))}
 
 
 def world_rotation(map_scene, transform_id):

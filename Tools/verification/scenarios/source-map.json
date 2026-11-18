@@ -1,7 +1,7 @@
 {
   "steps": [
     {"op": "assert", "sourceMap": {"map": 33, "draws": 7, "loading": false,
-      "lightmappedDraws": 7, "blockImages": 8, "probeLitDraws": 0, "sunLitDraws": 7, "receivingDraws": 7, "perVertexReceiveDraws": 0, "lineContains": "Map 33 空き部室 (bushitu): baked lightmaps, realtime sun with shadows; approximated: no reflections, no normal, metallic or detail maps, no fog, no camera effects · 1440 triangles, 7 draws",
+      "lightmappedDraws": 7, "blockImages": 12, "normalMappedDraws": 4, "normalTextures": 4, "sunCasters": 7, "probeLitDraws": 0, "sunLitDraws": 7, "receivingDraws": 7, "perVertexReceiveDraws": 0, "lineContains": "Map 33 空き部室 (bushitu): baked lightmaps, realtime sun with shadows; approximated: no reflections, no metallic or detail maps, no fog, no camera effects · 1440 triangles, 7 draws",
       "pickNothingAt": [[0.5, 0.03], [0.25, 0.97]], "pickSomethingAt": [[0.08, 0.25]]}},
     {"op": "setShowSourceMap", "on": false},
     {"op": "assert", "sourceMap": {"map": 33, "draws": 0, "lineContains": "hidden (View ▸ Show Source Map)"}},
@@ -12,7 +12,7 @@
     {"op": "export", "path": ".local/verification/scenario-exports/source-map.png"},
     {"op": "assert", "exportIdenticalToSource": ".local/verification/scenario-exports/source-map.png"},
     {"op": "reimport", "path": ".local/verification/scenario-exports/source-map.png"},
-    {"op": "assert", "sourceMap": {"map": 33, "draws": 7, "loading": false, "lightmappedDraws": 7, "lineContains": "Map 33 空き部室 (bushitu): baked lightmaps, realtime sun with shadows; approximated: no reflections, no normal, metallic or detail maps, no fog, no camera effects · 1440 triangles, 7 draws"}},
+    {"op": "assert", "sourceMap": {"map": 33, "draws": 7, "loading": false, "lightmappedDraws": 7, "lineContains": "Map 33 空き部室 (bushitu): baked lightmaps, realtime sun with shadows; approximated: no reflections, no metallic or detail maps, no fog, no camera effects · 1440 triangles, 7 draws"}},
     {"op": "newScene"},
     {"op": "assert", "sourceMap": {"none": true}},
     {"op": "undo"},

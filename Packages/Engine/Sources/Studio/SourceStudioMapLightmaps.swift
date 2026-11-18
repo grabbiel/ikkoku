@@ -323,6 +323,13 @@ public struct SourceStudioStandardInputs: Sendable, Equatable {
     /// `_ALPHAPREMULTIPLY_ON` (Transparent mode). Recorded, not drawn: the
     /// draw blends as Fade (see maps.md, "Engine (slice 5)").
     public var premultiplyAlpha: Bool = false
+    /// Maps slice 6: the `_BumpMap` image (`ikkokuStandard.normal`), drawn
+    /// with Unity's DXT5nm unpack scaled by `normalScale` (`_BumpScale`); nil
+    /// without `_NORMALMAP` or a texture (Unity's flat default).
+    public var normalImage: Int? = nil
+    public var normalScale: Float = 1
+    /// Whether that texture is sampled sRGB-decoded (Unity m_ColorSpace 1).
+    public var normalSRGB: Bool = false
 
     public static func parse(_ extras: JSONValue?) throws -> SourceStudioStandardInputs? {
         guard let value = extras?["ikkokuStandard"] else { return nil }
@@ -360,8 +367,25 @@ public struct SourceStudioStandardInputs: Sendable, Equatable {
             inputs.specularHighlights = highlights
             inputs.premultiplyAlpha = premultiply
         }
+        if let json = value["normal"], json != .null {
+            guard let index = json["image"]?.doubleValue.flatMap({ Int(exactly: $0) }), index >= 0,
+                  let scale = json["scale"]?.doubleValue, scale.isFinite, let isSRGB = json["srgb"]?.boolValue else {
+                throw RigError.invalid("A map material's normal map is incomplete.")
+            }
+            guard json["packing"]?.stringValue == normalPacking else {
+                throw RigError.invalid("A map material's normal map has packing \(json["packing"]?.stringValue ?? "none"), "
+                    + "not \(normalPacking).")
+            }
+            inputs.normalImage = index
+            inputs.normalScale = Float(scale)
+            inputs.normalSRGB = isSRGB
+        }
         return inputs
     }
+
+    /// Unity 5.6.2f1's `UnpackScaleNormal` on a desktop player: xy = (a, g)
+    /// * 2 - 1, scaled; z = sqrt(1 - saturate(dot(xy, xy))).
+    public static let normalPacking = "unityDXT5nm"
 }
 
 /// `MaterialKindMap`: the Standard subset `map_fragment` draws: the baked
@@ -373,7 +397,8 @@ public enum SourceStudioMapMaterial {
     /// no specular term). Smoothness goes to params.x.
     public static func make(_ material: MaterialData, standard: SourceStudioStandardInputs, base: TextureHandle?,
                             emission: TextureHandle?, lightmap: TextureHandle?, direction: TextureHandle?,
-                            range: Float, exponent: Float, lambert: Bool = false) -> MaterialState {
+                            range: Float, exponent: Float, lambert: Bool = false,
+                            normal: TextureHandle? = nil) -> MaterialState {
         var m = MaterialState(uniforms: .make(kind: MaterialKindMap))
         m.uniforms.flags = MaterialFlagNoOutline.rawValue
         m.uniforms.baseColor = standard.albedo
@@ -386,6 +411,12 @@ public enum SourceStudioMapMaterial {
         m.setFlag(MaterialFlagMapLambert, lambert)
         m.setFlag(MaterialFlagMapSpecularHighlights, !lambert && standard.specularHighlights)
         m.uniforms.params.x = standard.smoothness ?? 0
+        // Slice 6: the normal map (Legacy Diffuse has none), its _BumpScale in params.z.
+        if let normal, !lambert {
+            m.normal = normal
+            m.setFlag(MaterialFlagMapNormal, true)
+            m.uniforms.params.z = standard.normalScale
+        }
         m.uniforms.lightmapRange = range
         m.uniforms.lightmapExponent = exponent
         m.uniforms.oneMinusReflectivity = standard.oneMinusReflectivity
@@ -425,6 +456,10 @@ public enum SourceStudioMapMaterial {
         var m = material
         m.base = nil
         m.emission = nil
+        // Slice 6: the slice-4 oracle's template samples no _BumpMap (geometric normal).
+        m.normal = nil
+        m.setFlag(MaterialFlagMapNormal, false)
+        m.uniforms.params.z = 0
         m.setFlag(MaterialFlagMapSunLit, false)
         m.setFlag(MaterialFlagMapSpecularHighlights, false)
         m.setFlag(MaterialFlagHasBaseTexture, false)
@@ -440,5 +475,20 @@ public enum SourceStudioMapMaterial {
         case .gammaConstants: m.uniforms.lightmapRange = 5; m.uniforms.lightmapExponent = 1
         }
         return m
+    }
+}
+
+/// Maps slice 6: `ikkokuMapNormals`, the mark of an export whose Standard
+/// materials carry their normal maps (`ikkokuStandard.normal`).
+public enum SourceStudioMapNormals {
+    /// false for an export before slice 6; refuses a mark it does not know.
+    public static func exported(_ extras: JSONValue?, label: String) throws -> Bool {
+        guard let value = extras?["ikkokuMapNormals"], value != .null else { return false }
+        guard value["kind"]?.stringValue == "ikkoku.unityNormalMaps", value["version"]?.doubleValue == 1,
+              value["packing"]?.stringValue == SourceStudioStandardInputs.normalPacking else {
+            throw RigError.invalid("\(label): ikkokuMapNormals is not version 1 of ikkoku.unityNormalMaps "
+                + "with packing \(SourceStudioStandardInputs.normalPacking).")
+        }
+        return true
     }
 }

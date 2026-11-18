@@ -104,6 +104,9 @@ public final class GPUMesh: @unchecked Sendable {
     /// source mesh's channel).
     public var carriesUV1: Bool { (texcoords1 as AnyObject) !== (texcoords as AnyObject) }
     public var carriesUV2: Bool { (texcoords2 as AnyObject) !== (texcoords as AnyObject) }
+    /// Whether the mesh data carried one tangent per vertex (otherwise every
+    /// vertex holds (1, 0, 0, 1)). Maps slice 6: a normal-mapped map draw needs them.
+    public fileprivate(set) var carriesTangents = false
 
     init(name: String, vertexCount: Int, indexCount: Int, baseVertices: any MTLBuffer, texcoords: any MTLBuffer,
          texcoords1: any MTLBuffer, texcoords2: any MTLBuffer, colors: (any MTLBuffer)?,
@@ -367,6 +370,7 @@ public final class ResourceStore: @unchecked Sendable {
         let mesh = GPUMesh(name: data.name, vertexCount: n, indexCount: data.indices.count, baseVertices: vb, texcoords: ub,
                            texcoords1: ub1, texcoords2: ub2, colors: cb,
                            indices: ib, skin: sb, requiredBoneCount: influences.requiredBoneCount, morphDeltas: mb, morphNormals: mnb, morphNames: data.morphTargets.map(\.name), bounds: data.bounds, regions: data.regions)
+        mesh.carriesTangents = hasTangents
         lock.lock(); defer { lock.unlock() }
         let h = MeshHandle(id: nextMesh); nextMesh += 1
         meshes[h.id] = mesh

@@ -527,6 +527,9 @@ struct StudioScenario: Decodable {
             let receivingDraws: Int?
             let perVertexReceiveDraws: Int?
             let sunCasters: Int?
+            /// Draws that read a normal map, and the map's normal textures (slice 6).
+            let normalMappedDraws: Int?
+            let normalTextures: Int?
             let lineContains: String?
             let lineAbsent: String?
             let loading: Bool?
@@ -1172,7 +1175,9 @@ struct StudioScenario: Decodable {
                                              ("sun-lit draws", census.sunLitDraws, check.sunLitDraws),
                                              ("shadow-receiving draws", census.receivingDraws, check.receivingDraws),
                                              ("per-vertex receiving draws", census.perVertexReceiveDraws, check.perVertexReceiveDraws),
-                                             ("sun casters", census.sunCasters, check.sunCasters)] {
+                                             ("sun casters", census.sunCasters, check.sunCasters),
+                                             ("normal-mapped draws", census.normalMappedDraws, check.normalMappedDraws),
+                                             ("normal textures", census.normalTextures, check.normalTextures)] {
                 if let expected, actual != expected { problems.append("assert sourceMap: \(actual) \(name), expected \(expected)") }
             }
             if let expected = check.loading, census.loading != expected {
@@ -1195,7 +1200,7 @@ struct StudioScenario: Decodable {
                     if !nothing, id == 0 { problems.append("assert sourceMap: pick at \(point) found nothing, expected an object") }
                 }
             }
-            details.append("map \(census.map.map(String.init) ?? "none"), \(census.draws) draws (\(census.lightmappedDraws) lightmapped, \(census.particleDraws) particle, \(census.skyDraws) sky, \(census.unlitDraws) unlit, \(census.silhouetteDraws) silhouette, \(census.optionDraws) option; \(census.probeLitDraws) by ambient, \(census.sunLitDraws) sun-lit, \(census.receivingDraws) receiving (\(census.perVertexReceiveDraws) per vertex), \(census.sunCasters) sun casters, shadow strength \(census.sunShadowStrength)), \(census.triangles) triangles, \(census.textureBytes) texture bytes (\(census.lightmapBytes) lightmaps, \(census.cubeBytes) sky cubes, \(census.blockImages) BC images), line \(census.line ?? "none")")
+            details.append("map \(census.map.map(String.init) ?? "none"), \(census.draws) draws (\(census.lightmappedDraws) lightmapped, \(census.particleDraws) particle, \(census.skyDraws) sky, \(census.unlitDraws) unlit, \(census.silhouetteDraws) silhouette, \(census.optionDraws) option; \(census.probeLitDraws) by ambient, \(census.sunLitDraws) sun-lit, \(census.receivingDraws) receiving (\(census.perVertexReceiveDraws) per vertex), \(census.sunCasters) sun casters, shadow strength \(census.sunShadowStrength); \(census.normalMappedDraws) normal-mapped, \(census.normalTextures) normal textures, \(census.normalBytes) B), \(census.triangles) triangles, \(census.textureBytes) texture bytes (\(census.lightmapBytes) lightmaps, \(census.cubeBytes) sky cubes, \(census.blockImages) BC images), line \(census.line ?? "none")")
         }
 
         /// An object's world displacement from a `captureObject` position, read

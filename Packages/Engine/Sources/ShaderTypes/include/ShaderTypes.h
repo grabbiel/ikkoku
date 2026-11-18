@@ -123,6 +123,10 @@ typedef IK_ENUM(IKUInt, MaterialFlags) {
     MaterialFlagMapLambert      = 1u << 28, // Legacy Shaders/Diffuse: LightingLambert (n.l, no Disney term)
     MaterialFlagMapSpecularHighlights = 1u << 29, // Standard without _SPECULARHIGHLIGHTS_OFF: the sun's direct
                                                   // specular (GGX) term is drawn
+    // Maps slice 6:
+    MaterialFlagMapNormal       = 1u << 30, // Standard _BumpMap at TextureIndexNormal: Unity's DXT5nm unpack
+                                            // (x = a, y = g) scaled by params.z (_BumpScale), y negated for the
+                                            // export's V flip, through the vertex tangent frame
 };
 
 #define DrawFlagHasHiddenBuffer 0x80000000u
@@ -230,7 +234,7 @@ typedef struct {
     vector_float4 patternColor;   // rgb, a = pattern strength
     vector_float4 hairGloss;      // x = strength, y = width, z = shift (v along strand), w = secondary
     vector_float4 params;         // x = shade softness, y = specular strength, z = rim light mask, w = alpha cutoff
-                                  // (MaterialKindMap: x = Standard smoothness, slice 5)
+                                  // (MaterialKindMap: x = Standard smoothness, slice 5; z = _BumpScale, slice 6)
     vector_float4 eye;            // x = iris scale, y = iris offset u, z = iris offset v, w = highlight strength
     vector_float4 emissive;       // rgb, a = strength
     vector_float4 uvTransform;    // scale u, scale v, offset u, offset v (pattern)
