@@ -288,3 +288,66 @@ private func readinessTimeoutReason(_ decision: UICaptureReadiness.Decision?) ->
     let captured: [UICaptureReadiness.Decision] = [.wait, .wait, .capture]
     #expect(onTime == captured)
 }
+
+/// #364: content the app reports as pending (the Studio Pose tab's "Eye look"
+/// readout before the first live eye update) keeps a laid-out window unready;
+/// the stable count starts only once it arrived, and a timeout names it.
+@Test func uiCaptureReadinessWaitsForPendingContent() throws {
+    let policy = UICaptureReadiness(timeout: 1, pollInterval: 0.1, stableObservations: 3)
+    let text = "the selected source character's eye look has not had its first live update"
+    let pending = UICaptureReadiness.Observation(contentAppeared: true, windowVisible: true,
+                                                 width: 1180, height: 720, pendingContent: text)
+    let ready = UICaptureReadiness.Observation(contentAppeared: true, windowVisible: true, width: 1180, height: 720)
+    #expect(pending.unreadyReason == text)
+    // The default stays nil, so callers that report nothing pending are unchanged.
+    #expect(ready.pendingContent == nil)
+
+    let decisions = readinessDecisions(policy, [
+        (pending, 0.1), (pending, 0.2),
+        (ready, 0.3), (ready, 0.4),
+        // Pending again (a seek dropped the readout): the count restarts.
+        (pending, 0.5),
+        (ready, 0.6), (ready, 0.7), (ready, 0.8),
+    ])
+    let expected: [UICaptureReadiness.Decision] = [.wait, .wait, .wait, .wait, .wait, .wait, .wait, .capture]
+    #expect(decisions == expected)
+
+    // Content that never arrives fails at the deadline with its own text,
+    // not a capture of the window without it.
+    let never = readinessDecisions(policy, [(pending, 0.5), (pending, 1.0)])
+    let waits: [UICaptureReadiness.Decision] = [.wait]
+    #expect(Array(never.dropLast()) == waits)
+    let reason = try #require(readinessTimeoutReason(never.last))
+    #expect(reason.contains(text))
+    #expect(reason.contains(UICaptureReadiness.timeoutVariable))
+}
+
+/// #364: a change of the app's content state (the Studio live step starting
+/// or stopping to be driven as the viewport's window shows or hides) restarts
+/// the stable count like a size change, so no capture spans a flip.
+@Test func uiCaptureReadinessRestartsWhenTheContentStateFlips() {
+    let policy = UICaptureReadiness(timeout: 10, pollInterval: 0.1, stableObservations: 3)
+    func ready(_ state: String?) -> UICaptureReadiness.Observation {
+        UICaptureReadiness.Observation(contentAppeared: true, windowVisible: true, width: 1180, height: 720,
+                                       contentState: state)
+    }
+    let notDriven = ready("live steps not driven"), driven = ready("live steps driven")
+    // The state is not a reason to wait by itself.
+    #expect(driven.unreadyReason == nil)
+    let decisions = readinessDecisions(policy, [
+        (notDriven, 0.1), (notDriven, 0.2),
+        // The window started to show two polls in: the count restarts...
+        (driven, 0.3), (driven, 0.4),
+        // ...and again when it flips back, until three polls agree.
+        (notDriven, 0.5), (notDriven, 0.6), (notDriven, 0.7),
+    ])
+    let expected: [UICaptureReadiness.Decision] = [.wait, .wait, .wait, .wait, .wait, .wait, .capture]
+    #expect(decisions == expected)
+
+    // A state that stays put captures as before, and so does no state at all.
+    let steady = readinessDecisions(policy, [(driven, 0.1), (driven, 0.2), (driven, 0.3)])
+    let stateless = readinessDecisions(policy, [(ready(nil), 0.1), (ready(nil), 0.2), (ready(nil), 0.3)])
+    let captured: [UICaptureReadiness.Decision] = [.wait, .wait, .capture]
+    #expect(steady == captured)
+    #expect(stateless == captured)
+}
