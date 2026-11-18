@@ -104,7 +104,7 @@ the run.
 
 | `IKKOKU_PERF_WORKLOAD` | Fixtures | What it does |
 | --- | --- | --- |
-| `studio-idle` (default) | `IKKOKU_SOURCE_SCENE` | Studio, live animation on, nothing selected; blink, neck/eye look, hair dynamics and route clocks tick at 30 Hz. The scene needs one converted source character; a character riding a route counts (`details.sourceRouteCharacters`), so a route scene such as the route-children fixture measures a playing route |
+| `studio-idle` (default) | `IKKOKU_SOURCE_SCENE` | Studio, live animation on, nothing selected; blink, neck/eye look, hair dynamics and route clocks tick at 30 Hz. The scene needs one converted source character; a character riding a route counts (`details.sourceRouteCharacters`), so a route scene such as the route-children fixture measures a playing route. A scene whose only converted content is source items (`IKKOKU_STUDIO_ITEM_CATALOG`, `details.sourceItems`) also qualifies (ST-T04) |
 | `studio-orbit` | same | `studio-idle` plus a right-button orbit drag: one `mouseDragged` per input tick |
 | `studio-fk-drag` | same | selects source key 65 (or `IKKOKU_PERF_ACTION_KEY`), FK mode, bone 19 (the `fk-mouse-drag` scenario's grab), grabs the z ring found by `pickID` and drags it around a 40 px circle, one turn per 2 s; checks that the grab pushed exactly one undo snapshot |
 | `studio-hover` | same | character selected, mouse moves over the viewport (`mouseMoved`, gizmo hover pick) |
@@ -261,7 +261,10 @@ locked `PerfDrawLog`. Everything else is recorded on the main thread.
   installed or its other background work finished
   (`PerfTrace.characterInstalled`, `backgroundWorkFinished`), the main
   thread's busy time and longest busy period from the call until then, and
-  the status line and any error alert it left. `summarize` prints the
+  the status line and any error alert it left, and the process
+  `phys_footprint` and Metal allocation when it was ready (`footprintBytes`,
+  `metalAllocatedBytes`; ST-T04), so repeated loads show whether memory
+  accumulates per cycle. `summarize` prints the
   medians per action, with the 120 Hz refresh periods the median and the
   longest stall cover (a 100 ms stall drops 12 frames), and warns about an
   action that left an error;
