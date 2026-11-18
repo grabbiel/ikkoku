@@ -99,6 +99,50 @@ private func state(_ document: KoikatsuSceneDocument, _ key: Int32 = 8) throws -
     #expect(try original.editedData(.init(routes: [8: revert])) == scene().data)
 }
 
+/// #393: a Position or Rotation field commits only its own component, onto
+/// the point as it is now. Two fields committed before the panel re-renders
+/// keep both writes and export as one whole-vector move would. The former
+/// write, the vector captured at the render with one component replaced,
+/// lost the first field.
+@Test func sourceStudioRoutePointFieldCommitsKeepBothComponentsWithoutARender() throws {
+    let original = try decoded(scene())
+    let unedited = try state(original)
+    let shownPosition = unedited.points[2].position, shownRotation = unedited.points[0].rotationDegrees
+    var edit = unedited
+    try edit.movePoint(2, component: 0, to: 1.5)
+    try edit.movePoint(2, component: 1, to: 0.25)
+    try edit.rotateStart(component: 1, to: 45)
+    try edit.rotateStart(component: 2, to: -10)
+    #expect(edit.points[2].position == SIMD3(1.5, 0.25, shownPosition.z))
+    #expect(edit.points[0].rotationDegrees == SIMD3(shownRotation.x, 45, -10))
+    var whole = unedited
+    try whole.movePoint(2, to: SIMD3(1.5, 0.25, 2)); try whole.rotateStart(to: SIMD3(0, 45, -10))
+    #expect(edit == whole)
+    #expect(try original.editedData(.init(routes: [8: edit])) == original.editedData(.init(routes: [8: whole])))
+    // The former write: each field wrote the captured vector back whole.
+    var former = unedited
+    var written = shownPosition; written.x = 1.5; try former.movePoint(2, to: written)
+    written = shownPosition; written.y = 0.25; try former.movePoint(2, to: written)
+    #expect(former.points[2].position == SIMD3(shownPosition.x, 0.25, shownPosition.z))
+    // Committing a field's own value changes nothing, so the editor records
+    // no undo step and the export is the input.
+    var walked = unedited
+    for component in 0..<3 {
+        try walked.movePoint(2, component: component, to: shownPosition[component])
+        try walked.rotateStart(component: component, to: shownRotation[component])
+    }
+    #expect(walked == unedited)
+    #expect(try original.editedData(.init(routes: [8: walked])) == scene().data)
+    // The guide rules still apply, and a refused field leaves the point as it was.
+    #expect(reason { try edit.movePoint(0, component: 0, to: 1) }.contains("only rotates"))
+    #expect(reason { try edit.movePoint(2, component: 3, to: 1) }.contains("components 0, 1 and 2"))
+    #expect(reason { try edit.rotateStart(component: -1, to: 1) }.contains("components 0, 1 and 2"))
+    #expect(reason { try edit.movePoint(2, component: 2, to: .nan) }.contains("finite"))
+    #expect(reason { try edit.rotateStart(component: 0, to: .infinity) }.contains("finite"))
+    #expect(reason { try edit.movePoint(7, component: 0, to: 1) }.contains("no point 7"))
+    #expect(edit == whole)
+}
+
 @Test func sourceSceneRouteEditAddsAndDeletesPointsWithCharaStudioKeys() throws {
     let original = try decoded(scene())
     var edit = try state(original)
