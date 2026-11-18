@@ -473,7 +473,8 @@ func depthOnlyAndStencilMainPassesCarryTheSameGroups() throws {
     let renderer = try makeSourceShaderRenderer()
     let depthOnly = renderer.pipelines.depthOnlyMainPass.labels
     let stencil = try renderer.pipelines.stencilMainPass().labels
-    #expect(depthOnly.contains("Sky") && depthOnly.contains("MapDepthOnly") && depthOnly.count == 12)
+    #expect(depthOnly.contains("Sky") && depthOnly.contains("MapDepthOnly") && depthOnly.count == 14)
+    #expect(depthOnly.contains("ToonMapProbeLit") && depthOnly.contains("ToonMapProbeLitBlend"))
     #expect(stencil == depthOnly.map { $0 + "Stencil" })
 }
 

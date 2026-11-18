@@ -1310,6 +1310,13 @@ public final class Renderer: @unchecked Sendable {
                             gizmos: gizmos, width: W, height: H, live: live, liveMainPass: liveMainPass)
     }
 
+    /// ST-A11 slice 5: a map draw lit by the map's ambient (no lightmap) takes the ToonMapProbeLit pipelines
+    /// in both main-pass variants; silhouette, unlit and particle draws keep map_fragment's own branches.
+    static func drawsAmbientLitMap(_ u: MaterialUniforms) -> Bool {
+        let own = MaterialFlagMapSilhouette.rawValue | MaterialFlagMapUnlit.rawValue | MaterialFlagMapParticle.rawValue
+        return (u.flags & MaterialFlagMapProbeLit.rawValue) != 0 && (u.flags & own) == 0
+    }
+
     static func sortedOpaque(_ records: [DrawRecord]) -> [DrawRecord] {
         records.sorted { a, b in
             if a.item.order != b.item.order { return a.item.order < b.item.order }
@@ -1661,7 +1668,8 @@ public final class Renderer: @unchecked Sendable {
             }
             let nativeEye = m.uniforms.kind == UInt32(MaterialKindEye.rawValue) && (m.uniforms.flags & MaterialFlagSourceIrisHighlights.rawValue) == 0
             let isMap = m.uniforms.kind == UInt32(MaterialKindMap.rawValue)
-            enc.setRenderPipelineState(isMap ? main.map : nativeEye ? main.eye : main.toonOpaque)
+            let ambientLit = isMap && Self.drawsAmbientLitMap(m.uniforms)
+            enc.setRenderPipelineState(ambientLit ? main.toonMapProbeLit : isMap ? main.map : nativeEye ? main.eye : main.toonOpaque)
             enc.setDepthStencilState(pipelines.depthWrite)
             enc.setCullMode((m.uniforms.flags & MaterialFlagDoubleSided.rawValue) != 0 ? .none : .back)
             drawIndexed(enc, rec.mesh)
@@ -1702,7 +1710,8 @@ public final class Renderer: @unchecked Sendable {
                     enc.setDepthStencilState(pipelines.depthTest)
                     continue
                 }
-                enc.setRenderPipelineState(isMap ? main.mapBlend : nativeEye ? main.eyeBlend : main.toonBlend)
+                let ambientLit = isMap && Self.drawsAmbientLitMap(material)
+                enc.setRenderPipelineState(ambientLit ? main.toonMapProbeLitBlend : isMap ? main.mapBlend : nativeEye ? main.eyeBlend : main.toonBlend)
                 drawIndexed(enc, rec.mesh)
             }
             enc.popDebugGroup()
