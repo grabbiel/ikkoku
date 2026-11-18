@@ -270,9 +270,9 @@ public struct CaptureOutputBatch: Sendable {
 /// forced layout pass are nonzero, and no content the app reports as pending
 /// (`Observation.pendingContent`, for example a readout that only appears after
 /// the first live step, #364) is still missing. Capture starts once
-/// `stableObservations` consecutive ready polls report the same content size,
-/// meaning layout has converged; a change of size or an unready poll restarts
-/// the count. If that does not happen within `timeout` seconds of arming, the
+/// `stableObservations` consecutive ready polls report the same content size
+/// and content state (`Observation.contentState`), meaning layout has
+/// converged; a change of either, or an unready poll, restarts the count. If that does not happen within `timeout` seconds of arming, the
 /// capture fails with the last unready reason instead of snapshotting whatever
 /// is on screen.
 public struct UICaptureReadiness: Sendable, Equatable {
@@ -330,13 +330,20 @@ public struct UICaptureReadiness: Sendable, Equatable {
         /// of it appears later on its own (nil when nothing is pending). The
         /// poll is not ready while it is set, and a timeout names it.
         public var pendingContent: String?
+        /// What the shown content depends on, as the app describes it (nil
+        /// when nothing): a change restarts the stable count like a size
+        /// change, so a state that flips during the stability window (the
+        /// Studio live step starting to run, say) is never captured half-way.
+        public var contentState: String?
 
-        public init(contentAppeared: Bool, windowVisible: Bool, width: Double, height: Double, pendingContent: String? = nil) {
+        public init(contentAppeared: Bool, windowVisible: Bool, width: Double, height: Double,
+                    pendingContent: String? = nil, contentState: String? = nil) {
             self.contentAppeared = contentAppeared
             self.windowVisible = windowVisible
             self.width = width
             self.height = height
             self.pendingContent = pendingContent
+            self.contentState = contentState
         }
 
         /// Why this poll is not ready, or nil when it is.
@@ -361,10 +368,11 @@ public struct UICaptureReadiness: Sendable, Equatable {
     /// Consumes one observation per poll and decides whether to capture.
     public struct Tracker: Sendable {
         public let policy: UICaptureReadiness
-        /// Consecutive ready polls with the current content size.
+        /// Consecutive ready polls with the current content size and state.
         public private(set) var stableCount = 0
         private var stableWidth = 0.0
         private var stableHeight = 0.0
+        private var stableContentState: String?
 
         public init(policy: UICaptureReadiness) {
             self.policy = policy
@@ -373,12 +381,14 @@ public struct UICaptureReadiness: Sendable, Equatable {
         /// - Parameter elapsed: Seconds since the capture was armed.
         public mutating func observe(_ observation: Observation, elapsed: Double) -> Decision {
             if observation.unreadyReason == nil {
-                if stableCount > 0, observation.width == stableWidth, observation.height == stableHeight {
+                if stableCount > 0, observation.width == stableWidth, observation.height == stableHeight,
+                   observation.contentState == stableContentState {
                     stableCount += 1
                 } else {
                     stableCount = 1
                     stableWidth = observation.width
                     stableHeight = observation.height
+                    stableContentState = observation.contentState
                 }
             } else {
                 stableCount = 0

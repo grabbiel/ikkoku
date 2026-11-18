@@ -227,7 +227,9 @@ Sources: [IkkokuApp.swift](../../Apps/IkkokuCreator/IkkokuApp.swift),
   and expiry; CI runs them. Readiness also waits for content the app reports as
   pending: the Studio Pose tab's "Eye look" readout before the selected source
   character's first live eye update, which made `ui-pose` captures differ by
-  tick timing (#364). A readout that never arrives is a named timeout. Requested autocapture card/scene saves and exports
+  tick timing (#364). It waits only while the live step is driven (the
+  viewport's window shows), and a change of that restarts the stable count. A
+  readout that never arrives is a named timeout. Requested autocapture card/scene saves and exports
   now also exit nonzero when they fail or leave an empty file. The verification
   runner fails a 0-byte artifact, and `app-smoke` declares the UI PNG, UI report
   and Mute report as artifacts. Acceptance still needs the app run on the Mac:

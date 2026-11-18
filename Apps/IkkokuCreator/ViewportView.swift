@@ -39,6 +39,10 @@ protocol LivePacingOwner: AnyObject {
     /// The model has something to step again after answering `.idle`: the
     /// link, parked since, asks at its next callback.
     func resumeLiveSteps()
+    /// Whether the link asks for steps at all now: the viewport's window
+    /// shows it. An occluded or minimized window (or no window, or a display
+    /// that is off) gets no step until it shows again (R7 phase 2, item 4).
+    var livePacingWindowVisible: Bool { get }
 }
 
 /// The Metal viewport. Its display link runs on its own render thread
@@ -287,4 +291,7 @@ extension ViewportNSView: LivePacingOwner {
     func resumeLiveSteps() {
         if threadPaces { renderThread?.resumePacing() }
     }
+
+    /// The visibility the render thread's pacer is given (`setVisible`).
+    var livePacingWindowVisible: Bool { window.map(isVisible) ?? false }
 }

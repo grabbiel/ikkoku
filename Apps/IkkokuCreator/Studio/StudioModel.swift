@@ -878,6 +878,12 @@ final class StudioModel: ViewportInputHandler, LivePacedHandler {
     /// `uiCaptureEyeLookPending` reads the same decision.
     private var liveStepsStart: Bool { isActiveMode && !liveStepsStopped && drag == nil }
 
+    /// Whether something drives the live step now: the timer when no display
+    /// link paces it, else the pacing viewport's link, which asks for no step
+    /// while its window does not show the viewport (occluded, minimized, or
+    /// a display that is off). `uiCaptureEyeLookPending` reads it.
+    private var liveStepsDriven: Bool { livePacer?.livePacingWindowVisible ?? true }
+
     /// Whether `stepLive` takes its source branch, `beginLiveFrame`, whose
     /// serial and parallel steps update the neck and eye gaze: neither the
     /// timeline nor a plugin session takes the step, and the live source
@@ -1239,19 +1245,27 @@ final class StudioModel: ViewportInputHandler, LivePacedHandler {
         return nil
     }
 
+    /// `IKKOKU_CAPTURE_UI` readiness (#364): whether something drives the
+    /// live step now (`liveStepsDriven`). The poll passes it as the
+    /// observation's content state, so the window starting or stopping to
+    /// show the viewport restarts the stable count, and logs the captured one.
+    var uiCaptureLiveStepsDriven: Bool { liveStepsDriven }
+
     /// `IKKOKU_CAPTURE_UI` readiness (#364): what the Pose tab still waits for
     /// before its "Eye look" section is settled, or nil. A live eye pattern
     /// has no readout (so no section) until the live step's first
     /// `updateEyeLook` for the character has run: then the rates, or the
     /// reason its Init failed, are set. Pending only while the Pose tab shows
     /// a character the live step updates the eyes of: the step starts
-    /// (`liveStepsStart`), takes its source branch (`stepLiveTakesSourceBranch`)
+    /// (`liveStepsStart`), something drives it (`liveStepsDriven`: with the
+    /// display off no step runs, so the section stays absent and nothing is
+    /// pending), it takes its source branch (`stepLiveTakesSourceBranch`)
     /// and its eye loops pick this character (`liveGazeObject` plus
     /// `hasLiveEyeLook`), the same helpers those paths call. Otherwise the
     /// section is already as it will stay. The readout is per preview (keyed
     /// by the selection), so another character's update never ends the wait.
     var uiCaptureEyeLookPending: String? {
-        guard inspectorTab == .pose, liveStepsStart, stepLiveTakesSourceBranch,
+        guard inspectorTab == .pose, liveStepsStart, liveStepsDriven, stepLiveTakesSourceBranch,
               let id = selection, Self.liveGazeObject(id, in: doc) != nil,
               let preview = sourceInstances[id], preview.hasLiveEyeLook,
               selectedSourceEyeLookReadout == nil else { return nil }

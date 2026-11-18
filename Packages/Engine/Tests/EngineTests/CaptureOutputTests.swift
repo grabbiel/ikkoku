@@ -321,3 +321,33 @@ private func readinessTimeoutReason(_ decision: UICaptureReadiness.Decision?) ->
     #expect(reason.contains(text))
     #expect(reason.contains(UICaptureReadiness.timeoutVariable))
 }
+
+/// #364: a change of the app's content state (the Studio live step starting
+/// or stopping to be driven as the viewport's window shows or hides) restarts
+/// the stable count like a size change, so no capture spans a flip.
+@Test func uiCaptureReadinessRestartsWhenTheContentStateFlips() {
+    let policy = UICaptureReadiness(timeout: 10, pollInterval: 0.1, stableObservations: 3)
+    func ready(_ state: String?) -> UICaptureReadiness.Observation {
+        UICaptureReadiness.Observation(contentAppeared: true, windowVisible: true, width: 1180, height: 720,
+                                       contentState: state)
+    }
+    let notDriven = ready("live steps not driven"), driven = ready("live steps driven")
+    // The state is not a reason to wait by itself.
+    #expect(driven.unreadyReason == nil)
+    let decisions = readinessDecisions(policy, [
+        (notDriven, 0.1), (notDriven, 0.2),
+        // The window started to show two polls in: the count restarts...
+        (driven, 0.3), (driven, 0.4),
+        // ...and again when it flips back, until three polls agree.
+        (notDriven, 0.5), (notDriven, 0.6), (notDriven, 0.7),
+    ])
+    let expected: [UICaptureReadiness.Decision] = [.wait, .wait, .wait, .wait, .wait, .wait, .capture]
+    #expect(decisions == expected)
+
+    // A state that stays put captures as before, and so does no state at all.
+    let steady = readinessDecisions(policy, [(driven, 0.1), (driven, 0.2), (driven, 0.3)])
+    let stateless = readinessDecisions(policy, [(ready(nil), 0.1), (ready(nil), 0.2), (ready(nil), 0.3)])
+    let captured: [UICaptureReadiness.Decision] = [.wait, .wait, .capture]
+    #expect(steady == captured)
+    #expect(stateless == captured)
+}
