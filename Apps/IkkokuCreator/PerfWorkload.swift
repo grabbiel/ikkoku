@@ -54,7 +54,7 @@ final class PerfWorkloadDriver {
     private var actionIndex = 0
     private var pendingAction: (name: String, measured: Bool, start: CFTimeInterval, end: CFTimeInterval)?
     private var finishedActions: [(name: String, measured: Bool, start: CFTimeInterval, end: CFTimeInterval, ready: CFTimeInterval,
-                                   status: String, error: String?, footprint: UInt64, metal: Int)] = []
+                                   status: String, error: String?, footprint: UInt64, metal: Int, objects: Int)] = []
     /// The temporary folder `studio-export` and `studio-load` write scene
     /// files to, removed when the run stops.
     private var scratchFolder: URL?
@@ -697,9 +697,11 @@ final class PerfWorkloadDriver {
         let error = app.errorMessage
         app.errorMessage = nil
         // The process footprint and Metal allocation when the action is ready:
-        // flat across repeated loads means nothing accumulates per cycle.
+        // flat across repeated loads means nothing accumulates per cycle. The
+        // document's object count (read after the timed span) shows what an
+        // edit added or an undo restored.
         finishedActions.append((action.name, action.measured, action.start, action.end, ready, app.studio?.status ?? "", error,
-                                PerfTrace.footprint(), trace.device?.currentAllocatedSize ?? 0))
+                                PerfTrace.footprint(), trace.device?.currentAllocatedSize ?? 0, app.studio?.doc.objects.count ?? -1))
         pendingAction = nil
         DispatchQueue.main.asyncAfter(deadline: .now() + (action.measured ? 0.5 : 0.2)) { self.runNextAction() }
     }
@@ -724,7 +726,8 @@ final class PerfWorkloadDriver {
                     "busyMs": PerfTrace.round(lengths.reduce(0, +)),
                     "longestStallMs": PerfTrace.round(lengths.max() ?? 0),
                     "status": action.status, "error": action.error.map { $0 as Any } ?? NSNull(),
-                    "footprintBytes": action.footprint, "metalAllocatedBytes": action.metal]
+                    "footprintBytes": action.footprint, "metalAllocatedBytes": action.metal,
+                    "documentObjects": action.objects]
         }
     }
 

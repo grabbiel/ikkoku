@@ -264,7 +264,8 @@ locked `PerfDrawLog`. Everything else is recorded on the main thread.
   the status line and any error alert it left, and the process
   `phys_footprint` and Metal allocation when it was ready (`footprintBytes`,
   `metalAllocatedBytes`; ST-T04), so repeated loads show whether memory
-  accumulates per cycle. `summarize` prints the
+  accumulates per cycle, and the document's object count then
+  (`documentObjects`), so an edit's and its undo's effect can be checked. `summarize` prints the
   medians per action, with the 120 Hz refresh periods the median and the
   longest stall cover (a 100 ms stall drops 12 frames), and warns about an
   action that left an error;
