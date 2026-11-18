@@ -72,7 +72,7 @@ public struct BodyDefinition: Codable, Sendable, Equatable {
     public init() {}
 }
 
-public enum HairSlot: String, Codable, Sendable, CaseIterable { case back, front, side, extra }
+public enum HairSlot: String, Codable, Sendable, CaseIterable, StableEncodingKey { case back, front, side, extra }
 
 public struct HairPart: Codable, Sendable, Equatable {
     public var styleID: String?
@@ -90,7 +90,7 @@ public struct HairDefinition: Codable, Sendable, Equatable {
     public init() {}
 }
 
-public enum ClothSlot: String, Codable, Sendable, CaseIterable {
+public enum ClothSlot: String, Codable, Sendable, CaseIterable, StableEncodingKey {
     case top, bottom, bra, underwear, gloves, pantyhose, socks, shoesIn = "shoes_in", shoesOut = "shoes_out"
     public var label: String {
         switch self {
