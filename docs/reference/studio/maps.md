@@ -1276,7 +1276,29 @@ Slice 4 (all maps), Release, in one quiet window ([performance: slice 4](../perf
 - **Map 33** in the showoff scene, with one shell fewer, is ready at 0.89 s against 0.90 s, with the same peak Metal.
 - **Base M1 (estimates, scaled, not measured):** at most +0.06 ms of encode per frame from the split, about 2.0–3.5 ms of GPU for a new map filling the window, and about +0.5 ms in map 11 if its difference is real.
 
+Slice 5 (the sun and its shadows, P4), Release, in one quiet window on 2026-11-18 (01:25–01:38). It compares `main` (`02fec873`, A) against this change (`a4868c68`, B) and against B with the shadow map redrawn in every frame (C, `IKKOKU_BENCHMARK_MAP_SHADOW=every-frame`, the change frame's cost). The benchmark is offscreen (`IKKOKU_BENCHMARK_OUTPUT`) at 1996×1824 with the scene's own camera, 3 warm-up and 120 measured frames per run, and 4 rounds in alternating order. The display was on at 1920×1080 @ 60 Hz with the monitor off, and it was the same mode for every unit. Each figure is the median over the rounds of a run's p50 or p95, head minus base, in ms. The budgets were registered before the run, and **the GPU steady-state budget fails**:
+
+| Scene | B−A GPU p50 (≤ +0.10) | B−A GPU p95 (≤ +0.15) | B−A encode p50 / p95 (≤ +0.05 / +0.10) | B−A Metal MB (≤ +24; map 38 ≤ +1) | C−A GPU p95 (≤ +0.50) | C−A encode p95 (≤ +0.30) |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| map01 | **+0.194** | **+0.188** | −0.008 / −0.004 | +16.9 | +0.208 | +0.008 |
+| map11 | +0.095 | +0.106 | −0.015 / −0.017 | +17.3 | +0.141 | +0.014 |
+| map15 | **+0.115** | +0.139 | −0.017 / −0.036 | +16.7 | +0.219 | +0.002 |
+| map21 | **+0.123** | +0.146 | −0.017 / −0.013 | +16.8 | +0.168 | −0.011 |
+| map22 | **+0.133** | +0.145 | −0.005 / +0.012 | +16.8 | +0.191 | +0.006 |
+| map27 | **+0.117** | +0.124 | −0.006 / −0.034 | +16.8 | +0.154 | −0.022 |
+| map34-day | **+0.205** | **+0.234** | −0.002 / −0.010 | +16.7 | +0.260 | +0.002 |
+| map38 (no sun) | +0.012 | −0.008 | +0.000 / −0.000 | −0.2 | +0.010 | −0.001 |
+| map40 | **+0.185** | **+0.185** | −0.001 / −0.005 | +16.7 | +0.221 | +0.020 |
+
+- **No map:** GPU p50 +0.006 ms and encode p50 +0.009 ms (within ±0.03), Metal +0.0 MB. Pass.
+- **Fails:** 10 rows, all GPU in the steady state (7 p50, 3 p95). Encode, memory, the change frame and the scene without a map pass.
+- **Where it goes (inferred, not profiled):** redrawing the shadow map in every frame adds only +0.025 to +0.084 ms of GPU p50 over B, so most of the steady +0.12 to +0.21 ms is in `map_fragment` itself (the sun term and the 9 shadow compares per receiving pixel), not in the shadow-map pass. A diagnostic build attributes it before any fix; the fix is measured in a new registration with the same budgets.
+- **Validity:** 116 units, all valid in the end. 9 first attempts were rerun once for an intruder above the 20% rule (contactsd, Firefox's plugin-container, launchd above 30%, mds_stores, mdworker_shared).
+- Evidence: `.local/sta11d-slice5/perf/w4/` (`perf-window.log`, `summary.json`, `verdicts.txt`, `bench-png.sha256`).
+
 ## What remains
+
+- **The sun's GPU cost.** P4 ([performance](#performance)) puts the steady sun and shadow term at +0.12 to +0.21 ms of GPU p50 on 7 of the 9 measured maps, over the registered +0.10 ms. The attribution and a fix come before this slice is ready.
 
 - **The sun's VM case.** Slice 5 draws the sun and its shadows without a capture of the original's lit pass with the engine change. The next VM phase renders the lit pass with the sun's shadows off and on, and a case at smoothness above 0; until then no parity is claimed for smoothness, the shadow edge or the biases. Map 21's lightmapped surfaces reading 0.74 of the modelled sun ([what the offline checks found](#what-the-offline-checks-found)) is still open.
 - **Shadow assumptions.** Transparent parts receive no shadow, blended casters clip at 0.5 instead of D3D11's dither mask, the Transparent mode blends as Fade, receivers more than 40 m from the camera target are unshadowed, and a slope-scaled bias is added. Each is named in [the engine](#engine-slice-5) and none is measured against the original.

@@ -4002,6 +4002,28 @@ method above (GPU × about 4.75, CPU × 1.25):
   attributed.
 - No `studio-idle` or orbit runs, and no M1 run.
 
+### Slice 5: the sun and its shadows (P4)
+
+Added 2026-11-18 with the fifth maps slice
+([maps: performance](studio/maps.md#performance)). P4 is an offscreen A/B in
+one quiet window (2026-11-18, 01:25:19–01:38:18). It runs `main` (`02fec873`)
+against the change (`a4868c68`), and the change with
+`IKKOKU_BENCHMARK_MAP_SHADOW=every-frame`, on 9 map scenes and the showoff
+scene without a map. Each run is 1996×1824 with 3 warm-up and 120 measured
+frames, and there are 4 rounds in alternating order, 116 units, all valid.
+The display ran at 60 Hz with the monitor off.
+
+- **Fails the registered GPU budget:** the steady state adds +0.12 to
+  +0.21 ms of GPU p50 on maps 01, 15, 21, 22, 27, 34 and 40 (budget +0.10),
+  and +0.185 to +0.234 ms of p95 on maps 01, 34 and 40 (budget +0.15).
+  Map 11 is at +0.095 / +0.106 and map 38, without a sun, at +0.012.
+- **Passes:** CPU encode (−0.036 to +0.012 ms), Metal (+16.7 to +17.3 MB per
+  sun map against 24, map 38 −0.2 MB), the change frame (GPU p95 at most
+  +0.260 against 0.50, encode p95 at most +0.020 against 0.30) and the scene
+  without a map (GPU p50 +0.006, encode p50 +0.009, within ±0.03).
+- The full table and the attribution are in
+  [maps: performance](studio/maps.md#performance).
+
 ## ST-T03i: scene plug-in data rewrites
 
 Added 2026-10-26 with the second plug-in data change ([plug-in data](studio/scene-editing.md#plug-in-data-st-t03i)).
