@@ -264,6 +264,57 @@ public struct StudioDocument: Codable, Sendable, Equatable {
     }
 }
 
+extension StudioDocument {
+    /// One object list's answers to `object(_:)`, `index(of:)`, `isVisible(_:)`
+    /// and `isDescendant(_:of:)` by hash instead of a scan of `objects` per
+    /// call, so a walk over every object (the Studio frame rebuild, the
+    /// inspector's parent list) is O(N · depth) instead of O(N² · depth)
+    /// (#383). The answers are the document functions' own, including for a
+    /// repeated id (its first object, as `objects.first` finds it), a missing
+    /// parent and a cycle (the same visited-set walks).
+    ///
+    /// It holds a copy of the list it was built from and is never updated:
+    /// build it where the list is fixed for the walk and drop it after, so
+    /// there is nothing to invalidate when the document changes.
+    public struct Lookup: Sendable {
+        public let objects: [StudioObject]
+        private let indexByID: [UUID: Int]
+
+        public init(_ objects: [StudioObject]) {
+            self.objects = objects
+            var indexByID = [UUID: Int](minimumCapacity: objects.count)
+            // Backwards, so the first object of a repeated id is the one kept.
+            for index in objects.indices.reversed() { indexByID[objects[index].id] = index }
+            self.indexByID = indexByID
+        }
+
+        public func index(of id: UUID) -> Int? { indexByID[id] }
+        public func object(_ id: UUID) -> StudioObject? { indexByID[id].map { objects[$0] } }
+
+        /// `StudioDocument.isVisible(_:)`.
+        public func isVisible(_ id: UUID) -> Bool {
+            var cur: UUID? = id
+            var visited = Set<UUID>()
+            while let c = cur {
+                guard visited.insert(c).inserted, let i = indexByID[c], objects[i].visible else { return false }
+                cur = objects[i].parent
+            }
+            return true
+        }
+
+        /// `StudioDocument.isDescendant(_:of:)`.
+        public func isDescendant(_ id: UUID, of ancestor: UUID) -> Bool {
+            var cur = indexByID[id].flatMap { objects[$0].parent }
+            var visited = Set<UUID>()
+            while let c = cur, visited.insert(c).inserted {
+                if c == ancestor { return true }
+                cur = indexByID[c].flatMap { objects[$0].parent }
+            }
+            return false
+        }
+    }
+}
+
 public enum StudioHierarchyError: Error, CustomStringConvertible {
     case duplicate(UUID), missingParent(UUID), cycle(UUID)
     public var description: String {

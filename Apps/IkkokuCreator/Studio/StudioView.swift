@@ -645,7 +645,9 @@ struct ObjectInspectorState: Equatable {
     @MainActor init(model: StudioModel, object o: StudioObject) {
         let doc = model.doc
         id = o.id; name = o.name; visible = o.visible; locked = o.locked; parent = o.parent
-        parents = doc.objects.filter { $0.id != o.id && !doc.isDescendant($0.id, of: o.id) }.map { Parent(id: $0.id, name: $0.name) }
+        // #383: one hashed lookup instead of a scan of every object per parent step.
+        let lookup = StudioDocument.Lookup(doc.objects)
+        parents = doc.objects.filter { $0.id != o.id && !lookup.isDescendant($0.id, of: o.id) }.map { Parent(id: $0.id, name: $0.name) }
         transform = o.transform; kind = o.kind
         cardName = o.card?.profile.name ?? ""
         isSourceCharacter = o.sourceCharacter != nil
