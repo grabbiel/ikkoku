@@ -72,18 +72,19 @@ def item_record(values: list[str], evidence: dict) -> dict:
     }
 
 
-def lookup(bundles: list[Path], *, prefab: str | None, key: tuple[int, int, int] | None) -> dict:
+def item_table(bundles: list[Path]) -> dict:
+    """The effective item dictionary `Studio.Info` builds from the supplied info bundles.
+
+    Returns every observed row in load order (`observed`), the effective record per
+    (group, category, no) after later rows replaced earlier ones (`effective`), the
+    group and category labels, the bundle sources and the number of rows examined.
+    """
     effective: dict[tuple[int, int, int], dict] = {}
+    observed: list[dict] = []
     groups: dict[int, str] = {}
     categories: dict[tuple[int, int], str] = {}
-    matches = []
     sources = []
     row_count = 0
-
-    def selected(record: dict) -> bool:
-        if prefab is not None:
-            return record["prefab"] == prefab
-        return (record["group"], record["category"], record["no"]) == key
 
     # Studio.Info sorts bundle paths, then item tables by group/category/revision.
     for bundle in sorted(set(path.resolve() for path in bundles), key=lambda path: str(path).casefold()):
@@ -99,51 +100,67 @@ def lookup(bundles: list[Path], *, prefab: str | None, key: tuple[int, int, int]
             name = table.get("m_Name", "")
             if ITEM_NAME.fullmatch(name) or CATEGORY_NAME.fullmatch(name) or GROUP_NAME.fullmatch(name):
                 tables.append((name, obj.path_id, table))
+        row_count += apply_tables(tables, bundle, effective, observed, groups, categories)
+    return {"effective": effective, "observed": observed, "groups": groups, "categories": categories,
+            "sources": sources, "rowCount": row_count}
 
-        for name, _, table in sorted(tables):
-            group_match, category_match = GROUP_NAME.fullmatch(name), CATEGORY_NAME.fullmatch(name)
-            if not group_match and not category_match:
+
+def apply_tables(tables: list[tuple[str, int, dict]], bundle: Path, effective: dict, observed: list,
+                 groups: dict, categories: dict) -> int:
+    """Applies one info bundle's ExcelData tables (name, path ID, typetree) in the original order."""
+    row_count = 0
+    for name, _, table in sorted(tables, key=lambda entry: (entry[0], entry[1])):
+        group_match, category_match = GROUP_NAME.fullmatch(name), CATEGORY_NAME.fullmatch(name)
+        if not group_match and not category_match:
+            continue
+        for _, values in rows(table):
+            number = integer(values[0]) if values else None
+            if number is None or len(values) < 2:
                 continue
-            for _, values in rows(table):
-                number = integer(values[0]) if values else None
-                if number is None or len(values) < 2:
-                    continue
-                if group_match:
-                    groups[number] = values[1]
-                else:
-                    categories[(int(category_match[2]), number)] = values[1]
+            if group_match:
+                groups[number] = values[1]
+            else:
+                categories[(int(category_match[2]), number)] = values[1]
 
-        item_tables = [(tuple(map(int, match.groups())), name, path_id, table)
-                       for name, path_id, table in tables if (match := ITEM_NAME.fullmatch(name))]
-        item_tables.sort(key=lambda item: (item[0][1], item[0][2], item[0][0]))
-        for _, name, path_id, table in item_tables:
-            for row_index, values in rows(table):
-                # The original LoadItemLoadInfo stops at the first nonnumeric ID.
-                if not values or integer(values[0]) is None:
-                    break
-                row_count += 1
-                evidence = {"infoBundle": str(bundle), "assetName": name,
-                            "pathID": str(path_id), "rowIndex": row_index}
-                record = item_record(values, evidence)
-                item_key = (record["group"], record["category"], record["no"])
-                effective[item_key] = record
-                if selected(record):
-                    matches.append(record)
+    item_tables = [(tuple(map(int, match.groups())), name, path_id, table)
+                   for name, path_id, table in tables if (match := ITEM_NAME.fullmatch(name))]
+    item_tables.sort(key=lambda item: (item[0][1], item[0][2], item[0][0]))
+    for _, name, path_id, table in item_tables:
+        for row_index, values in rows(table):
+            # The original LoadItemLoadInfo stops at the first nonnumeric ID.
+            if not values or integer(values[0]) is None:
+                break
+            row_count += 1
+            evidence = {"infoBundle": str(bundle), "assetName": name,
+                        "pathID": str(path_id), "rowIndex": row_index}
+            record = item_record(values, evidence)
+            effective[(record["group"], record["category"], record["no"])] = record
+            observed.append(record)
+    return row_count
 
+
+def lookup(bundles: list[Path], *, prefab: str | None, key: tuple[int, int, int] | None) -> dict:
+    def selected(record: dict) -> bool:
+        if prefab is not None:
+            return record["prefab"] == prefab
+        return (record["group"], record["category"], record["no"]) == key
+
+    table = item_table(bundles)
     effective_matches = []
-    for record in effective.values():
+    for record in table["effective"].values():
         if selected(record):
             enriched = dict(record)
-            enriched["groupName"] = groups.get(record["group"])
-            enriched["categoryName"] = categories.get((record["group"], record["category"]))
+            enriched["groupName"] = table["groups"].get(record["group"])
+            enriched["categoryName"] = table["categories"].get((record["group"], record["category"]))
             effective_matches.append(enriched)
     effective_matches.sort(key=lambda record: (record["group"], record["category"], record["no"]))
     return {
         "schemaVersion": 1, "capturedAtUTC": datetime.now(timezone.utc).isoformat(),
         "query": {"prefab": prefab} if prefab is not None else {"group": key[0], "category": key[1], "no": key[2]},
         "coverage": "Only the explicitly supplied info bundles; runtime mod patches are not evaluated.",
-        "sources": sources, "itemRowsExamined": row_count,
-        "observedMatches": matches, "effectiveMatchesInSuppliedBundles": effective_matches,
+        "sources": table["sources"], "itemRowsExamined": table["rowCount"],
+        "observedMatches": [record for record in table["observed"] if selected(record)],
+        "effectiveMatchesInSuppliedBundles": effective_matches,
     }
 
 
