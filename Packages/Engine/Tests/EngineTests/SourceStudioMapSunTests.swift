@@ -286,6 +286,48 @@ func mapFragmentDrawsTheSunAsUnitysBRDF1AtSmoothnessAboveZero() throws {
           ambient + (try #require(reference["standard s0.6 hl1"])), "GPU ambient + sun")
 }
 
+/// P5: map_fragment skips the sun block where the normal faces away from the
+/// sun (n.l <= 0). Every term of BRDF1_Unity_PBS and LightingLambert is scaled
+/// by saturate(n.l) = 0 there, so the skip must leave the pixel bit-identical
+/// to the same draw without the sun: probe ambient, Standard (with and without
+/// highlights) and Lambert, with and without a shadowed receiver.
+@Test(.enabled(if: MTLCreateSystemDefaultDevice() != nil))
+func mapFragmentFacingAwayFromTheSunIsTheNoSunPixel() throws {
+    let l = simd_normalize(Float3(0.5, 0.6, 0.62)), eye = Float3(-0.4, 0.3, 2)
+    let sh = SourceStudioMapLightingMath.engineSH(testProbe())
+    // Straight away from the sun, and grazing (n.l = -0.05).
+    let side = simd_normalize(simd_cross(l, Float3(0, 0, 1)))
+    let normals = [-l, simd_normalize(simd_normalize(side + simd_cross(l, side) * 0.3) - 0.05 * l)]
+    for normal in normals { #expect(simd_dot(normal, l) < -0.04) }
+    func material(smoothness: Float?, highlights: Bool, lambert: Bool) -> MaterialState {
+        var standard = SourceStudioStandardInputs(albedo: Float4(0.5, 0.25, 1, 1), oneMinusReflectivity: lambert ? 1 : 0.8, emissionColor: nil,
+                                                  emissionImage: nil, emissionSRGB: true)
+        standard.smoothness = smoothness; standard.specularHighlights = highlights
+        var gltf = MaterialData(name: "map"); gltf.alphaMode = "OPAQUE"
+        var m = SourceStudioMapMaterial.make(gltf, standard: standard, base: nil, emission: nil, lightmap: nil, direction: nil,
+                                             range: 0, exponent: 0, lambert: lambert)
+        m.setFlag(MaterialFlagMapSunLit, true)
+        return m
+    }
+    for strength: Float in [0, 0.8] {
+        let lighting = Renderer.mapLightingUniforms(MapLighting(sh: sh, sun: MapLighting.Sun(directionToLight: l, color: Float3(1.3, 1.1, 0.9),
+                                                                                             shadowStrength: strength)))
+        for (smoothness, highlights, lambert) in [(Float(0.6), true, false), (Float(0), false, false), (nil, true, true)] {
+            var m = material(smoothness: smoothness, highlights: highlights, lambert: lambert)
+            m.setFlag(MaterialFlagReceiveShadow, true)
+            var noSun = m; noSun.setFlag(MaterialFlagMapSunLit, false)
+            for normal in normals {
+                let lit = try renderSun(m.uniforms, lighting: lighting, normal: normal, eye: eye)
+                let unlit = try renderSun(noSun.uniforms, lighting: lighting, normal: normal, eye: eye)
+                #expect(lit == unlit, "strength \(strength) smoothness \(String(describing: smoothness)) lambert \(lambert): \(lit) != \(unlit)")
+            }
+            // The same draws facing the sun do add it, so the equality above is not vacuous.
+            let facing = try renderSun(m.uniforms, lighting: lighting, normal: l, eye: eye)
+            #expect(simd_length(facing - (try renderSun(noSun.uniforms, lighting: lighting, normal: l, eye: eye))) > 0.01)
+        }
+    }
+}
+
 // MARK: - The map sun's shadow map
 
 /// A receiver filling the view at z = target - 1, lit by a sun along +z

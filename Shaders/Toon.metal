@@ -524,7 +524,9 @@ fragment float4 map_fragment(
         }
     }
     float3 color = albedo.rgb * mat.oneMinusReflectivity * gi;
-    if ((mat.flags & MaterialFlagMapSunLit) && mapLight.sunDirection.w > 0.0) {
+    // Facing away from the sun (n.l <= 0) every sun term is multiplied by saturate(n.l) = 0 (mapSunRadiance), so
+    // the block adds exactly 0: skipping it (and its shadow compares) leaves every pixel unchanged.
+    if ((mat.flags & MaterialFlagMapSunLit) && mapLight.sunDirection.w > 0.0 && dot(n, mapLight.sunDirection.xyz) > 0.0) {
         float atten = 1.0;
         if (in.receive > 0.5 && mapLight.shadowParams.x > 0.0) {
             atten = mix(1.0, mapShadowVisibility(in.worldPos, mapLight, mapShadow), mapLight.shadowParams.x);
