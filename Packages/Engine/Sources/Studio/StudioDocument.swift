@@ -20,6 +20,21 @@ public struct StudioTransform: Codable, Sendable, Equatable {
     public var quaternion: simd_quatf {
         rotationOverride.map { simd_quatf(vector: $0) } ?? simd_quatf(eulerXYZ: rotation.degreesToRadians)
     }
+
+    /// The inspector's three vector rows.
+    public enum Vector: Sendable { case position, rotation, scale }
+
+    /// One inspector field's commit (#390): writes only its own component, onto
+    /// the transform as it is now. A field must not write back the whole vector
+    /// it last read, since a second field committed before the view re-renders
+    /// would undo the first one's write.
+    public mutating func set(_ vector: Vector, _ component: Int, to value: Float) {
+        switch vector {
+        case .position: position[component] = value
+        case .rotation: rotation[component] = value
+        case .scale: scale[component] = value
+        }
+    }
 }
 
 /// One node of the studio workspace tree.

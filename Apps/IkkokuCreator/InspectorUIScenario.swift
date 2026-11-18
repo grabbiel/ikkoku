@@ -278,7 +278,9 @@ struct InspectorUIScenario: Decodable {
                 snapshot = (studio.doc, studio.undoStack.count, studio.redoStack.count)
                 record(step.op, true, "undo \(studio.undoStack.count), redo \(studio.redoStack.count)")
             case "keyLoop":
-                let loop = Self.keyLoop(window)
+                // Each Tab is its own gesture, as each step is, and the views
+                // re-render before the next one (#390).
+                let loop = await Self.keyLoop(window, beforeEachMove: { studio.endUndoCoalescing() }, afterEachMove: { await settle() })
                 let ok = (step.hiddenKeyViews.map { loop.hidden <= $0 } ?? true) && (step.keyViews.map { loop.views.count == $0 } ?? true)
                 record(step.op, ok, "\(loop.views.count) key views, \(loop.hidden) outside the visible window, sha \(loop.sha): " + loop.views.joined(separator: " > "))
             case "assert":
@@ -478,12 +480,20 @@ struct InspectorUIScenario: Decodable {
 
     /// Walks the Tab key-view loop from the window's first key view and back to
     /// it (at most 80 steps), naming each view; `hidden` counts the views that
-    /// lie outside the visible window. Ends with no first responder.
-    @MainActor static func keyLoop(_ window: NSWindow) -> (views: [String], hidden: Int, sha: String) {
+    /// lie outside the visible window. Ends with no first responder. Each move
+    /// (the start, every Tab and the end) runs between `beforeEachMove` and
+    /// `afterEachMove`; the runner uses them to make each Tab its own gesture
+    /// and let the views re-render before the next one (#390), as separate Tab
+    /// presses would. A view is named as it is right after the move.
+    @MainActor static func keyLoop(_ window: NSWindow, beforeEachMove: () -> Void = {},
+                                   afterEachMove: () async -> Void = {}) async -> (views: [String], hidden: Int, sha: String) {
+        beforeEachMove()
         window.makeFirstResponder(nil)
+        await afterEachMove()
         var views: [String] = [], hidden = 0
         var first: NSView?
         for _ in 0..<80 {
+            beforeEachMove()
             // From a field being edited, step from the field: its field editor is not in the loop.
             if let current = editedField(window) ?? (window.firstResponder as? NSView) {
                 window.selectKeyView(following: current)
@@ -492,14 +502,21 @@ struct InspectorUIScenario: Decodable {
             }
             let responder = window.firstResponder
             let view: NSView? = editedField(window) ?? (responder as? NSView)
-            guard let view else { break }
+            let named = view.map { view in
+                let frame = view.convert(view.bounds, to: nil)
+                return (name: "\(describe(view))@\(Int(frame.minX)),\(Int(frame.minY))",
+                        hidden: view.visibleRect.isEmpty || view.isHiddenOrHasHiddenAncestor)
+            }
+            await afterEachMove()
+            guard let view, let named else { break }
             if view === first { break }
             if first == nil { first = view }
-            let frame = view.convert(view.bounds, to: nil)
-            if view.visibleRect.isEmpty || view.isHiddenOrHasHiddenAncestor { hidden += 1 }
-            views.append("\(describe(view))@\(Int(frame.minX)),\(Int(frame.minY))")
+            if named.hidden { hidden += 1 }
+            views.append(named.name)
         }
+        beforeEachMove()
         window.makeFirstResponder(nil)
+        await afterEachMove()
         return (views, hidden, sha(views))
     }
 
