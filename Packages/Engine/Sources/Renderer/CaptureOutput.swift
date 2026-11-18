@@ -267,11 +267,14 @@ public struct CaptureOutputBatch: Sendable {
 /// The app polls the window on the main run loop every `pollInterval` seconds
 /// instead of sleeping a fixed delay. A poll is ready when the SwiftUI content
 /// has appeared (`onAppear`), a visible window holds it and its bounds after a
-/// forced layout pass are nonzero. Capture starts once `stableObservations`
-/// consecutive ready polls report the same content size, meaning layout has
-/// converged; a change of size or an unready poll restarts the count. If that
-/// does not happen within `timeout` seconds of arming, the capture fails with
-/// the last unready reason instead of snapshotting whatever is on screen.
+/// forced layout pass are nonzero, and no content the app reports as pending
+/// (`Observation.pendingContent`, for example a readout that only appears after
+/// the first live step, #364) is still missing. Capture starts once
+/// `stableObservations` consecutive ready polls report the same content size,
+/// meaning layout has converged; a change of size or an unready poll restarts
+/// the count. If that does not happen within `timeout` seconds of arming, the
+/// capture fails with the last unready reason instead of snapshotting whatever
+/// is on screen.
 public struct UICaptureReadiness: Sendable, Equatable {
     /// Overrides `timeout`, in seconds.
     public static let timeoutVariable = "IKKOKU_CAPTURE_UI_TIMEOUT"
@@ -323,12 +326,17 @@ public struct UICaptureReadiness: Sendable, Equatable {
         /// The content view's bounds after a forced layout pass, in points.
         public var width: Double
         public var height: Double
+        /// What the shown content still waits for, when the app knows a part
+        /// of it appears later on its own (nil when nothing is pending). The
+        /// poll is not ready while it is set, and a timeout names it.
+        public var pendingContent: String?
 
-        public init(contentAppeared: Bool, windowVisible: Bool, width: Double, height: Double) {
+        public init(contentAppeared: Bool, windowVisible: Bool, width: Double, height: Double, pendingContent: String? = nil) {
             self.contentAppeared = contentAppeared
             self.windowVisible = windowVisible
             self.width = width
             self.height = height
+            self.pendingContent = pendingContent
         }
 
         /// Why this poll is not ready, or nil when it is.
@@ -338,6 +346,7 @@ public struct UICaptureReadiness: Sendable, Equatable {
             guard width.isFinite, height.isFinite, width > 0, height > 0 else {
                 return "the content view has empty bounds (\(width)x\(height) pt)"
             }
+            if let pendingContent { return pendingContent }
             return nil
         }
     }

@@ -288,3 +288,36 @@ private func readinessTimeoutReason(_ decision: UICaptureReadiness.Decision?) ->
     let captured: [UICaptureReadiness.Decision] = [.wait, .wait, .capture]
     #expect(onTime == captured)
 }
+
+/// #364: content the app reports as pending (the Studio Pose tab's "Eye look"
+/// readout before the first live eye update) keeps a laid-out window unready;
+/// the stable count starts only once it arrived, and a timeout names it.
+@Test func uiCaptureReadinessWaitsForPendingContent() throws {
+    let policy = UICaptureReadiness(timeout: 1, pollInterval: 0.1, stableObservations: 3)
+    let text = "the selected source character's eye look has not had its first live update"
+    let pending = UICaptureReadiness.Observation(contentAppeared: true, windowVisible: true,
+                                                 width: 1180, height: 720, pendingContent: text)
+    let ready = UICaptureReadiness.Observation(contentAppeared: true, windowVisible: true, width: 1180, height: 720)
+    #expect(pending.unreadyReason == text)
+    // The default stays nil, so callers that report nothing pending are unchanged.
+    #expect(ready.pendingContent == nil)
+
+    let decisions = readinessDecisions(policy, [
+        (pending, 0.1), (pending, 0.2),
+        (ready, 0.3), (ready, 0.4),
+        // Pending again (a seek dropped the readout): the count restarts.
+        (pending, 0.5),
+        (ready, 0.6), (ready, 0.7), (ready, 0.8),
+    ])
+    let expected: [UICaptureReadiness.Decision] = [.wait, .wait, .wait, .wait, .wait, .wait, .wait, .capture]
+    #expect(decisions == expected)
+
+    // Content that never arrives fails at the deadline with its own text,
+    // not a capture of the window without it.
+    let never = readinessDecisions(policy, [(pending, 0.5), (pending, 1.0)])
+    let waits: [UICaptureReadiness.Decision] = [.wait]
+    #expect(Array(never.dropLast()) == waits)
+    let reason = try #require(readinessTimeoutReason(never.last))
+    #expect(reason.contains(text))
+    #expect(reason.contains(UICaptureReadiness.timeoutVariable))
+}

@@ -224,7 +224,10 @@ Sources: [IkkokuApp.swift](../../Apps/IkkokuCreator/IkkokuApp.swift),
   readiness/timeout policy. `CaptureOutputTests` cover a missing parent directory,
   a directory at the destination, missing, empty, garbage and truncated files,
   a pixel-size mismatch, PNG/JSON round trips, batch failures and timeout parsing
-  and expiry; CI runs them. Requested autocapture card/scene saves and exports
+  and expiry; CI runs them. Readiness also waits for content the app reports as
+  pending: the Studio Pose tab's "Eye look" readout before the selected source
+  character's first live eye update, which made `ui-pose` captures differ by
+  tick timing (#364). A readout that never arrives is a named timeout. Requested autocapture card/scene saves and exports
   now also exit nonzero when they fail or leave an empty file. The verification
   runner fails a 0-byte artifact, and `app-smoke` declares the UI PNG, UI report
   and Mute report as artifacts. Acceptance still needs the app run on the Mac:

@@ -1075,9 +1075,12 @@ final class AppState {
         view?.layoutSubtreeIfNeeded()
         logUICaptureFit("poll", elapsed: elapsed)
         let bounds = view?.bounds ?? .zero
+        // #364: in Studio the Pose tab's "Eye look" section appears only after
+        // the live step's first eye update for the selected character.
+        let pending = mode == .studio ? studio?.uiCaptureEyeLookPending : nil
         let decision = tracker.observe(UICaptureReadiness.Observation(
             contentAppeared: uiCaptureContentAppeared, windowVisible: window != nil,
-            width: Double(bounds.width), height: Double(bounds.height)), elapsed: elapsed)
+            width: Double(bounds.width), height: Double(bounds.height), pendingContent: pending), elapsed: elapsed)
         uiCaptureTracker = tracker
         switch decision {
         case .wait:

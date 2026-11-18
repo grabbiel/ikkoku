@@ -385,7 +385,10 @@ IKKOKU_CAPTURE_UI="$PWD/.local/studio-ui.png" IKKOKU_CAPTURE_UI_MODE=studio \
 UI capture opens the application window; it is distinct from offscreen rendering.
 It waits for readiness rather than a fixed delay. SwiftUI `onAppear` must have
 run, and a visible window's laid-out bounds must be nonzero and unchanged for
-five polls 0.1 s apart. Otherwise it exits 1 after `IKKOKU_CAPTURE_UI_TIMEOUT`
+five polls 0.1 s apart. In Studio, while the Pose tab shows a visible source
+character with a live eye pattern and the live step runs, the poll also waits
+for that character's first eye-look update, so the "Eye look" section is always
+in the capture (#364). Otherwise it exits 1 after `IKKOKU_CAPTURE_UI_TIMEOUT`
 seconds (default 30, at most 600), naming what was not ready.
 
 With `IKKOKU_CAPTURE_UI_MODE=studio`, `IKKOKU_CAPTURE_UI_SELECT` lists up to 16

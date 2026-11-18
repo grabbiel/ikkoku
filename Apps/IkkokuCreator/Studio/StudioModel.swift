@@ -821,7 +821,8 @@ final class StudioModel: ViewportInputHandler, LivePacedHandler {
                                           statistics: host.renderer.lastFrameStatistics, now: CFAbsoluteTimeGetCurrent()) {
             status = text
         }
-        guard drag == nil else { return }
+        // `isActiveMode` held above, and `stopBenchmarkTimer` ended this timer.
+        guard liveStepsStart else { return }
         if let livePacer {
             if hasLiveStepWork { livePacer.resumeLiveSteps() }
             return
@@ -858,7 +859,7 @@ final class StudioModel: ViewportInputHandler, LivePacedHandler {
     /// step is still running or not yet refreshed, `.idle` when there is
     /// nothing to step (the link then asks nothing until `tick` resumes it).
     func displayStep() -> LiveStepPacer.Result {
-        guard livePacer != nil, !liveStepsStopped, isActiveMode, drag == nil else { return .idle }
+        guard livePacer != nil, liveStepsStart else { return .idle }
         let result = PerfTrace.measure(.studioTick, "StudioTick") { stepLive() }
         if result == .ran { pacedSteps += 1 }
         return result
@@ -869,6 +870,29 @@ final class StudioModel: ViewportInputHandler, LivePacedHandler {
     /// `viewport-lifecycle` records it for its hand-over check.
     var hasLiveStepWork: Bool {
         !liveStepsStopped && (timelinePlaying || (sourcePluginsRunning && sourcePluginSession != nil) || liveSourceAnimates)
+    }
+
+    /// Whether a live step starts at all now: the display link's
+    /// `displayStep` and the timer's `tick` step only in the active mode,
+    /// outside a drag, until `stopBenchmarkTimer` (which also ends the timer).
+    /// `uiCaptureEyeLookPending` reads the same decision.
+    private var liveStepsStart: Bool { isActiveMode && !liveStepsStopped && drag == nil }
+
+    /// Whether `stepLive` takes its source branch, `beginLiveFrame`, whose
+    /// serial and parallel steps update the neck and eye gaze: neither the
+    /// timeline nor a plugin session takes the step, and the live source
+    /// animation steps. `uiCaptureEyeLookPending` reads the same decision.
+    private var stepLiveTakesSourceBranch: Bool {
+        !timelinePlaying && !(sourcePluginsRunning && sourcePluginSession != nil) && liveSourceAnimates
+    }
+
+    /// The object whose neck and eye gaze the live step updates for the
+    /// preview keyed `id`, or nil: a visible source character. The serial and
+    /// parallel steps and `uiCaptureEyeLookPending` share this test.
+    private static func liveGazeObject(_ id: UUID, in document: StudioDocument) -> StudioObject? {
+        guard let object = document.object(id), object.kind == .character,
+              object.sourceCharacter != nil, document.isVisible(id) else { return nil }
+        return object
     }
 
     /// Whether the live source animation steps. A playing route moves its
@@ -893,7 +917,8 @@ final class StudioModel: ViewportInputHandler, LivePacedHandler {
             catch { status = "Plugin execution: \(error)" }
             return .ran
         }
-        guard liveSourceAnimates else { return .idle }
+        // The branches above returned, so only `liveSourceAnimates` decides here.
+        guard stepLiveTakesSourceBranch else { return .idle }
         // A live step still running, or settled but not yet refreshed, when
         // the timer fires (or the display link asks) is not overlapped: this
         // step is skipped and the clock does not move, as when a main-thread
@@ -1083,8 +1108,7 @@ final class StudioModel: ViewportInputHandler, LivePacedHandler {
             let wantsNeck = preview.hasLiveNeckLook, wantsEye = preview.hasLiveEyeLook
             var neck: SourceStudioLiveTick.Gaze?, eye: SourceStudioLiveTick.Gaze?
             var neckError: (any Error)?, eyeError: (any Error)?
-            if wantsNeck || wantsEye, let object = document.object(id), object.kind == .character,
-               object.sourceCharacter != nil, document.isVisible(id) {
+            if wantsNeck || wantsEye, let object = Self.liveGazeObject(id, in: document) {
                 guard worldReadsNoRuntime(id, document: document) else { return nil }
                 do {
                     let world = try sourceWorldMatrix(of: id, document: document, previews: previews)
@@ -1155,8 +1179,7 @@ final class StudioModel: ViewportInputHandler, LivePacedHandler {
         // camera enters rig model space through the object world matrix; the
         // Z reflection commutes with its rigid part (UnityCoordinates.matrix).
         for (id, preview) in sourceInstances where preview.hasLiveNeckLook {
-            guard let object = doc.object(id), object.kind == .character,
-                  object.sourceCharacter != nil, doc.isVisible(id) else { continue }
+            guard let object = Self.liveGazeObject(id, in: doc) else { continue }
             do {
                 let world = try sourceWorldMatrix(of: id, document: doc, previews: sourceInstances)
                 let camera = UnityCoordinates.position(world.inverse.transformPoint(viewCamera.position))
@@ -1170,8 +1193,7 @@ final class StudioModel: ViewportInputHandler, LivePacedHandler {
         // this slice only reads its iris-shift rates back for the inspector,
         // so a failing frame never disturbs the neck or the pose.
         for (id, preview) in sourceInstances where preview.hasLiveEyeLook {
-            guard let object = doc.object(id), object.kind == .character,
-                  object.sourceCharacter != nil, doc.isVisible(id) else { continue }
+            guard let object = Self.liveGazeObject(id, in: doc) else { continue }
             do {
                 let world = try sourceWorldMatrix(of: id, document: doc, previews: sourceInstances)
                 let camera = UnityCoordinates.position(world.inverse.transformPoint(viewCamera.position))
@@ -1215,6 +1237,25 @@ final class StudioModel: ViewportInputHandler, LivePacedHandler {
         }
         if let reason = preview.eyeLookKeptReason { return "Eye look: animated (\(reason))" }
         return nil
+    }
+
+    /// `IKKOKU_CAPTURE_UI` readiness (#364): what the Pose tab still waits for
+    /// before its "Eye look" section is settled, or nil. A live eye pattern
+    /// has no readout (so no section) until the live step's first
+    /// `updateEyeLook` for the character has run: then the rates, or the
+    /// reason its Init failed, are set. Pending only while the Pose tab shows
+    /// a character the live step updates the eyes of: the step starts
+    /// (`liveStepsStart`), takes its source branch (`stepLiveTakesSourceBranch`)
+    /// and its eye loops pick this character (`liveGazeObject` plus
+    /// `hasLiveEyeLook`), the same helpers those paths call. Otherwise the
+    /// section is already as it will stay. The readout is per preview (keyed
+    /// by the selection), so another character's update never ends the wait.
+    var uiCaptureEyeLookPending: String? {
+        guard inspectorTab == .pose, liveStepsStart, stepLiveTakesSourceBranch,
+              let id = selection, Self.liveGazeObject(id, in: doc) != nil,
+              let preview = sourceInstances[id], preview.hasLiveEyeLook,
+              selectedSourceEyeLookReadout == nil else { return nil }
+        return "the selected source character's eye look has not had its first live update (the Pose tab's \"Eye look\" readout)"
     }
 
     /// Bakes every character's evaluated time before resetting the shared clock.
