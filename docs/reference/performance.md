@@ -4024,6 +4024,38 @@ The display ran at 60 Hz with the monitor off.
 - The full table and the attribution are in
   [maps: performance](studio/maps.md#performance).
 
+### Slice 5: the fix (P5)
+
+Added 2026-11-18. P5 measures the fix for P4's GPU cost in one quiet window
+(2026-11-18, 21:33:40–21:49:04 UTC).
+
+- **The fix** (`7e5fbf3d`) has three parts:
+  - it skips the sun block where n·l ≤ 0;
+  - it filters the shadow compares with a 3×3 tent in 4 bilinear taps;
+  - it draws the ambient-lit map surfaces with the toon pipelines.
+- **The runs:**
+  - `main` (`02fec873`, P4's base binary) against the fix, and the fix with
+    `IKKOKU_BENCHMARK_MAP_SHADOW=every-frame`;
+  - P4's 10 scenes, runs and bars;
+  - the plan was frozen before the window (SHA-256 `fe282e2f`).
+- **The base-spread rule:** a scene whose first-block base GPU p50 spread
+  exceeded 0.04 ms got one rerun block, and that block decides its verdict.
+  It triggered for maps 11 and 15.
+- **Passes, all 75 rows:**
+  - steady-state GPU p50 −0.047 to +0.036 ms (budget +0.10; P4 +0.095 to
+    +0.205 on the sun maps), and p95 −0.032 to +0.057 ms (budget +0.15);
+  - CPU encode −0.014 to +0.006 ms;
+  - Metal +16.7 to +17.3 MB per sun map, and map 38 −0.2 MB;
+  - the change frame: GPU p95 at most +0.212 ms against 0.50, and encode p95
+    at most +0.029 against 0.30;
+  - the scene without a map: GPU p50 +0.004 and encode p50 +0.014, within
+    ±0.03.
+- **Map 11's rerun block** had a base spread of 0.078, above 0.04 again. As
+  registered, it decides as is: there is no third block and no exclusion.
+- **Validity:** 140 units, all valid in the end. 9 first attempts were rerun
+  once, 8 for an intruder and 1 for an unread display mode.
+- The full table is in [maps: performance](studio/maps.md#performance).
+
 ## ST-T03i: scene plug-in data rewrites
 
 Added 2026-10-26 with the second plug-in data change ([plug-in data](studio/scene-editing.md#plug-in-data-st-t03i)).
