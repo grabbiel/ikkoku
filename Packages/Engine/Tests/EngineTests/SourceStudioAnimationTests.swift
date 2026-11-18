@@ -263,6 +263,9 @@ func sourceStudioAnimationClockWithoutPreviewMatchesBuiltCharacterWhenSupplied()
     warmed.beginWarmUp([request], generation: warmed.generation) { outcome.loaded.append($0); done.signal() }
     done.wait()
     #expect(try warmed.savedStates([request], elapsed: 7.3)[0].get() == (try built.savedAnimationState(animationElapsed: 7.3)))
+    // A second call after the same warm-up (a second export or save) must
+    // not wait on its work item again: libdispatch traps on that.
+    #expect(try warmed.savedStates([request], elapsed: 7.3)[0].get() == (try built.savedAnimationState(animationElapsed: 7.3)))
     let stale = warmed.generation
     warmed.clear()
     warmed.beginWarmUp([request], generation: stale) { outcome.loaded.append($0); done.signal() }

@@ -1,5 +1,6 @@
 import Foundation
 import CryptoKit
+import os
 import Character
 import Scene
 
@@ -220,8 +221,10 @@ public final class SourceStudioAnimationClock: @unchecked Sendable {
         }
     }
     private struct Seed { let saved: SourceStudioAnimationState, cardHeight: Result<Float, Error> }
-    /// Guards the caches; a warm-up holds it while it loads.
-    private let lock = NSLock()
+    /// Guards the caches; a warm-up holds it while it loads. An unfair lock,
+    /// so a waiter (the main thread's save or rebase) donates its priority to
+    /// the utility-QoS warm-up that holds it instead of being inverted.
+    private let lock = OSAllocatedUnfairLock()
     private var seeds: [String: Result<Seed, Error>] = [:]
     private var catalogs: [String: Result<SourceStudioAnimationCatalog, Error>] = [:]
     private var clips: [String: [String: SourceStudioAnimation]] = [:]
@@ -302,8 +305,16 @@ public final class SourceStudioAnimationClock: @unchecked Sendable {
     public func savedStates(_ requests: [Request], elapsed: Float,
                             scene: (document: KoikatsuSceneDocument, sha256: String)? = nil) -> [Result<SourceStudioAnimationState?, Error>] {
         // A warm-up in progress has the loads this call needs: wait for it
-        // (raising its priority) rather than load on this thread too.
-        withState { warmUp }?.wait()
+        // (raising its priority) rather than load on this thread too. A
+        // DispatchWorkItem may be waited for only once (libdispatch traps on
+        // a second wait), so the first call takes it; a later call, or one
+        // that comes while the first waits, blocks on `lock`, which the
+        // warm-up holds while it loads and which donates the waiter's
+        // priority to it.
+        withState { () -> DispatchWorkItem? in
+            defer { warmUp = nil }
+            return warmUp
+        }?.wait()
         lock.lock(); defer { lock.unlock() }
         syncGeneration()
         loadSeeds(requests.map(\.reference), scene: scene)
