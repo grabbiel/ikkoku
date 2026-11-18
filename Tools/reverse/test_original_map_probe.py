@@ -701,6 +701,14 @@ class SunTests(unittest.TestCase):
                       'ZoomDivisor=8f', '"sun-trace.json"', 'SaveScene("scene-sun-"+label+"-zoom.png")', '-mask.r.f32', '-mask-hard.r.f32'):
             self.assertIn(piece, source)
         self.assertEqual(probe.SUN_PREFIX, 'reload-sun-')
+        # Unity 5.6's Mono throws NotImplementedException for System.IO.DriveInfo (the first S1 run lost every
+        # case to it); free space comes from kernel32 and never costs a case when unreadable.
+        self.assertNotIn('new DriveInfo(', source); self.assertIn('GetDiskFreeSpaceEx(folder,out available', source)
+        self.assertIn('if(free>=0&&free<MinimumFreeBytes)', source)
+        # The trace extras, the edge pick and the deferred passes fail on their own, after the masks are written.
+        self.assertIn('"shadowSettings",Safe(()=>ShadowSettings())', source)
+        self.assertLess(source.index('-mask-hard.r.f32",images)'), source.index('if(full)try{'))
+        self.assertIn('record["deferred"]=K("error",e.ToString());', source)
 
 if __name__ == '__main__':
     unittest.main()
