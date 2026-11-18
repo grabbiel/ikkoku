@@ -41,6 +41,8 @@ public final class SourceStudioCharacterPreview {
     /// Import-time messages plus one-shot runtime notices (for example the FK
     /// neck conflict reported by editedPose); never grows per frame.
     public private(set) var diagnostics: [String]
+    /// Whether the one-shot collapsed-renderer notice (#404) was reported.
+    private var reportedCollapsedRenderers = false
     public let record: KoikatsuCharacterRecord
     public let selections: [SourceMakerLibrary.Selection]
     /// The outfit this preview assembled: the `coordinate` init argument when
@@ -916,6 +918,11 @@ public final class SourceStudioCharacterPreview {
         var frame = try preview.frame(camera: camera, mainLight: mainLight, effects: effects,
             expression: effectiveExpressionInputs(), poseOverride: editedPose(fkRotations: fkRotations, faceValues: faceValues, bodyValues: bodyValues, ikTargets: ikTargets, kinematics: kinematics, animationState: animationState, animationElapsed: animationElapsed),
             hiddenParts: wearEvaluation.hiddenParts, sourceBodyAlpha: wearEvaluation.bodyAlpha)
+        if !reportedCollapsedRenderers, !preview.collapsedSkins.isEmpty {
+            reportedCollapsedRenderers = true
+            let collapsed = preview.source.parts.filter { preview.collapsedSkins.contains($0.skin) }.count
+            diagnostics.append("\(collapsed) renderer(s) sit under a zero shape scale (#404) and draw flattened from their bones, as Unity's SkinnedMeshRenderer does.")
+        }
         for i in frame.items.indices { frame.items[i].model = world * frame.items[i].model; frame.items[i].objectID = objectID }
         applyIrisTransforms(to: &frame)
         frame.sceneBounds = frame.sceneBounds.transformed(by: world)
@@ -1638,12 +1645,7 @@ public final class SourceStudioCharacterPreview {
         let geometryPose = evaluatedCache?.preOverride ?? pose
         let world = try preview.source.rig.evaluate(geometryPose).worldMatrices
         func node(_ name: String) throws -> SourceStudioEyeLookGeometry.Node {
-            let matrix = UnityCoordinates.matrix(world[try preview.source.rig.uniqueNode(named: name)])
-            let q = matrix.rotationQuaternion
-            let scale = matrix.scaleFactors
-            return .init(position: SIMD3(Double(matrix.translation.x), Double(matrix.translation.y), Double(matrix.translation.z)),
-                         rotation: simd_quatd(ix: Double(q.imag.x), iy: Double(q.imag.y), iz: Double(q.imag.z), r: Double(q.real)),
-                         lossyScale: SIMD3(Double(scale.x), Double(scale.y), Double(scale.z)))
+            .init(unityWorld: UnityCoordinates.matrix(world[try preview.source.rig.uniqueNode(named: name)]))
         }
         func position(_ name: String) throws -> SIMD3<Double> { try node(name).position }
         let root = try node("cf_j_head")
