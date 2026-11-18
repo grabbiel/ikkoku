@@ -16,6 +16,8 @@ The fourth slice converts the other 40 maps, so all 42 installed `Map_XX` rows d
 
 The fifth slice draws the maps' realtime sun with its shadows, and lights the `Standard` parts without a lightmap by the map's ambient instead of as items. The sun's term is Standard's diffuse and direct specular at the material's smoothness. Map 33's line becomes `baked lightmaps, realtime sun with shadows; approximated: no reflections, no normal, metallic or detail maps, no fog, no camera effects`. Smoothness has no parity check against the original yet. See [lighting](#lighting-slice-5) and [the engine](#engine-slice-5).
 
+The sixth slice draws the `Standard` materials' normal maps (`_NORMALMAP`, `_BumpMap` at `_BumpScale`). As in Unity, the per-texel normal moves the lightmap's directional term, the map's ambient and the sun. The status line drops "normal" from its approximations: `…; approximated: no reflections, no metallic or detail maps, no fog, no camera effects`. No parity with the original is claimed for the normal maps yet. See [normal maps](#normal-maps-slice-6).
+
 ## Recovered rules
 
 These rules come from the recovered managed code (`Studio.Map`, `Studio.MapCtrl`, `Studio.Info`, `SunLightInfo`, `LightmapPrefab`, `Manager.Scene`). The original player confirmed them in phase B (see [evidence](#evidence)).
@@ -1230,6 +1232,38 @@ Tests (`SourceStudioMapSunTests.swift`):
 - a converted map with lighting: ambient-lit parts, each receive case, the casting runs, the `ShadowsOnly` mesh in mapRoot's frame, the placed casters and bounds, the status line, release, and the two refusals.
 
 
+## Normal maps (slice 6)
+
+### Converter (slice 6)
+
+- `export_map_scene.py` gives each `Standard` material with the `_NORMALMAP` keyword and a `_BumpMap` texture an `ikkokuStandard.normal` record: `{image, scale, packing, srgb, textureFormat}`. `scale` is `_BumpScale`, and `packing` is `unityDXT5nm`. A material without the keyword or the texture gets none: Unity's flat default bump changes nothing.
+- The normal images are written after every other texture. So every slice 1–5 image keeps its index and file name, and the bins are unchanged. In block-only mode a normal image is its BC3 blocks, with the rows reversed to top-down like the base maps. `_MainTex_ST` is already baked into UV0, which is the UV Unity samples `_BumpMap` at (`i.tex.xy`).
+- The scene extras' `ikkokuMapNormals` (`ikkoku.unityNormalMaps`, version 1) marks the export. The provenance gains `normalMaps`: materials, images, block bytes, texture formats and how many are sRGB.
+- Tangents were already exported for every `Standard` primitive as `(x, y, −z, w)`. The Z reflection and the V flip each reverse the handedness, so w is kept.
+- Not exported: detail normal maps (`_DetailNormalMap`, 190 materials).
+
+### Engine (slice 6)
+
+- **Loading.**
+  - `SourceStudioStandardInputs.parse` reads `normal` and refuses an incomplete record or another packing. `SourceStudioMapNormals.exported` reads the mark.
+  - A lit `Standard` part loads its normal map through the map's image path. A lit part is one that is lightmapped, or lit by the map's ambient. So the normal map is registered with the map's other textures, counted in `textureBytes` and Metal's bytes, and retired by `release()`.
+  - The map is refused by name if a material has a normal map but the export carries no mark, or if a normal-mapped mesh has no `TANGENT`.
+  - `Legacy Shaders/Diffuse` (Lambert) parts sample none.
+  - `SourceStudioMapAsset.normalMaps` counts the draws, the textures and their bytes.
+- **`map_fragment`** (`mapNormal` in `Shaders/Toon.metal`), from Unity 5.6.2f1's built-in shader source:
+  - `UnpackScaleNormal` (`UnityStandardUtils.cginc`, desktop DXT5nm) gives xy = (a, g) × 2 − 1, scaled by `_BumpScale`, and z = sqrt(1 − saturate(|xy|²)).
+  - `PerPixelWorldNormal` (`UnityStandardCore.cginc`, `UNITY_TANGENT_ORTHONORMALIZE` off) gives normalize(t·x + b·y + n·z), with b = cross(n, t)·w as in `CreateTangentToWorldPerVertex`.
+  - The export reflects Z, which reverses the cross product, and flips V while keeping w. So the engine's b is Unity's bitangent negated, and y is negated. The item exporter negates G for the same reason.
+  - Unity builds b per vertex from unit t and n. The engine builds it per pixel from the normalized interpolated t and n. The result is the same on a flat surface, and a scaled placement does not tilt the normal. A zero tangent keeps the geometric normal.
+  - The normal is used before the gi and the sun, so it moves the directional lightmap's `dot(normalWorld, dir)`, ShadeSH9 and the sun's term.
+- **The irradiance image** (the slice-4 gates) clears the normal. The oracle's template is keyword-free (`Albedo()` clears the keywords) and samples no `_BumpMap`, so the gates are unchanged.
+- **Census and lanes.** The scenario census adds `normalMappedDraws` (placed draws that sample a normal map) and `normalTextures` (the map's normal textures). The `[ikkoku] source map:` line adds the normal maps' bytes, textures and draws.
+- **Tests:**
+  - `SourceStudioMapNormalTests.swift` draws `map_fragment` on a 4×4 bump and compares it with Unity's formulas re-implemented in float64. It covers a tilted frame with w = −1 (Unity's usual layout) and w = +1 (mirrored), and a 2.5× placement. A negative control asserts that the y sign moves every texel. It also tests the record's parse, the material flags and scale, the Lambert and irradiance cases, and the mark.
+  - `SourceStudioMapSunTests.swift` loads a lit map with a block-only BC3 normal map. It checks the counts, the flags, the status line and the release, and three refusals.
+  - `test_export_map_scene.py` checks the record.
+- **Parity.** None is claimed. A VM case is queued: the world normal with `_NORMALMAP` on and off on maps 01, 15, 21, 22 and 41, a mirrored-UV surface, and the lit pass.
+
 ## Performance
 
 Release, on the reference machine, in one quiet window. The full tables are in [performance: ST-A11](../performance.md#st-a11-original-studio-maps).
@@ -1280,7 +1314,8 @@ Slice 4 (all maps), Release, in one quiet window ([performance: slice 4](../perf
 
 - **The sun's VM case.** Slice 5 draws the sun and its shadows without a capture of the original's lit pass with the engine change. The next VM phase renders the lit pass with the sun's shadows off and on, and a case at smoothness above 0; until then no parity is claimed for smoothness, the shadow edge or the biases. Map 21's lightmapped surfaces reading 0.74 of the modelled sun ([what the offline checks found](#what-the-offline-checks-found)) is still open.
 - **Shadow assumptions.** Transparent parts receive no shadow, blended casters clip at 0.5 instead of D3D11's dither mask, the Transparent mode blends as Fade, receivers more than 40 m from the camera target are unshadowed, and a slope-scaled bias is added. Each is named in [the engine](#engine-slice-5) and none is measured against the original.
-- **The rest of `Standard`.** Not drawn: the reflection probe's specular, normal maps, per-texel `_MetallicGlossMap` and smoothness, detail maps, parallax and occlusion maps. The [audit](#what-standards-sun-reads-slice-5) counts what the export leaves out and why. Normal maps (1,015 materials) need tangents in the export and a BC5 or DXT5nm decode.
+- **Normal-map parity.** Slice 6 draws the normal maps without a capture of the original's per-texel normal. The VM case in [the engine](#engine-slice-6) gives the evidence; until then no parity is claimed.
+- **The rest of `Standard`.** Not drawn: the reflection probe's specular, per-texel `_MetallicGlossMap` and smoothness, detail maps (detail albedo and the 190 detail normal maps), parallax and occlusion maps. The [audit](#what-standards-sun-reads-slice-5) counts what the export leaves out and why.
 - **The catalog's approximations.** The catalog rows still list `realtime sun and its shadows`, `specular and reflections` and the light-probe count among each map's approximations. The status line reads only their `shaders approximated` entry and names the rest itself, but a re-export should update them.
 - **Particles.** Soft particles (the fade where the cards meet geometry) are not drawn. Particle renderers sort as Unity's do (see [particles, slice 4](#particles-slice-4)), but blended `Standard` materials are still merged across renderers (60 draws in 20 maps hold two or more), so their blend order within a draw is the mesh's triangle order.
 - **The sky's far plane.** The player's main camera clips at 1000 m, inside parts of map 34's sky spheres (about 450–1,200 m). Our infinite projection draws the whole sphere, so the full frame differs where the player shows black.
