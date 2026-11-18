@@ -415,6 +415,8 @@ private struct CaptureRecipe {
     let frames: [[String]] = [["IKKOKU_BENCHMARK_FRAMES"]]
     #expect(problems("IKKOKU_BENCHMARK_FRAMES", "0", in: benchmark) == frames)
     #expect(problems("IKKOKU_BENCHMARK_FRAMES", "20", in: benchmark).isEmpty)
+    #expect(problems("IKKOKU_BENCHMARK_MAP_SHADOW", "always", in: benchmark) == [["IKKOKU_BENCHMARK_MAP_SHADOW"]])
+    #expect(problems("IKKOKU_BENCHMARK_MAP_SHADOW", "every-frame", in: benchmark).isEmpty)
 
     // Mode-specific values: rig capture frames only the face preset, and native
     // scene capture always hides the grid and gizmos.
