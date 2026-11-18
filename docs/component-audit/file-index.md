@@ -23,7 +23,7 @@ branch was tested or every asset matches the original game. Feature status,
 specific comments and pending tasks are in the linked reports. Shared behavior
 may be discussed in more than one report; one primary owner is listed here.
 
-**1103 files indexed; 1103 assigned; 0 unassigned.**
+**1106 files indexed; 1106 assigned; 0 unassigned.**
 
 Counts include the website and clothes-group additions listed below. Runtime and
 test totals include their specialized role descriptions; this is inventory
@@ -32,7 +32,7 @@ bookkeeping, not a new full source audit.
 | Primary report | Files |
 | --- | ---: |
 | [App / gameplay / plugins](app-gameplay-and-plugins.md) | 110 |
-| [Character / Maker / mods](character-and-mods.md) | 132 |
+| [Character / Maker / mods](character-and-mods.md) | 135 |
 | [Studio / IK / animation](studio.md) | 262 |
 | [Renderer / foundation / assets](renderer-and-foundation.md) | 368 |
 | [Toolchain / verification / historical docs](toolchain-and-verification.md) | 221 |
@@ -41,12 +41,12 @@ bookkeeping, not a new full source audit.
 | --- | ---: |
 | App resource metadata / icon | 16 |
 | Build / repository configuration | 9 |
-| Conversion / recovery / verification tool | 256 |
+| Conversion / recovery / verification tool | 257 |
 | Documentation / historical evidence | 65 |
 | Generated asset / catalog / fixture | 205 |
-| Reference host / controlled fixture | 37 |
+| Reference host / controlled fixture | 38 |
 | Runtime / shared shader declaration | 239 |
-| Test / validation | 236 |
+| Test / validation | 237 |
 | Public synthetic body/face input fixture | 1 |
 
 ## App / gameplay / plugins
@@ -267,6 +267,7 @@ Feature assessment: [character-and-mods.md](character-and-mods.md).
 | [Tools/mods/test_library.py](../../Tools/mods/test_library.py) | Test / validation |
 | [Tools/mods/test_zipmod.py](../../Tools/mods/test_zipmod.py) | Test / validation |
 | [Tools/mods/zipmod.py](../../Tools/mods/zipmod.py) | Conversion / recovery / verification tool |
+| [Tools/reverse/fixtures/OriginalABMXProbe.cs](../../Tools/reverse/fixtures/OriginalABMXProbe.cs) | Reference host / controlled fixture |
 | [Tools/reverse/analysis/abmx_contract.py](../../Tools/reverse/analysis/abmx_contract.py) | Conversion / recovery / verification tool |
 | [Tools/reverse/analysis/body_shape_contract.py](../../Tools/reverse/analysis/body_shape_contract.py) | Conversion / recovery / verification tool |
 | [Tools/reverse/analysis/card_contract.py](../../Tools/reverse/analysis/card_contract.py) | Conversion / recovery / verification tool |
@@ -287,7 +288,9 @@ Feature assessment: [character-and-mods.md](character-and-mods.md).
 | [Tools/reverse/maker_material_contract.py](../../Tools/reverse/maker_material_contract.py) | Conversion / recovery / verification tool |
 | [Tools/reverse/maker_selection_fixture.py](../../Tools/reverse/maker_selection_fixture.py) | Conversion / recovery / verification tool |
 | [Tools/reverse/male_avatar.py](../../Tools/reverse/male_avatar.py) | Conversion / recovery / verification tool |
+| [Tools/reverse/original_abmx_probe.py](../../Tools/reverse/original_abmx_probe.py) | Conversion / recovery / verification tool |
 | [Tools/reverse/test_abmx_contract.py](../../Tools/reverse/test_abmx_contract.py) | Test / validation |
+| [Tools/reverse/test_original_abmx_probe.py](../../Tools/reverse/test_original_abmx_probe.py) | Test / validation |
 | [Tools/reverse/test_card_appearance_bindings.py](../../Tools/reverse/test_card_appearance_bindings.py) | Test / validation |
 | [Tools/reverse/test_card_contract.py](../../Tools/reverse/test_card_contract.py) | Test / validation |
 | [Tools/reverse/test_card_roundtrip.py](../../Tools/reverse/test_card_roundtrip.py) | Test / validation |
