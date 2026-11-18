@@ -23,7 +23,7 @@ branch was tested or every asset matches the original game. Feature status,
 specific comments and pending tasks are in the linked reports. Shared behavior
 may be discussed in more than one report; one primary owner is listed here.
 
-**1100 files indexed; 1100 assigned; 0 unassigned.**
+**1103 files indexed; 1103 assigned; 0 unassigned.**
 
 Counts include the website and clothes-group additions listed below. Runtime and
 test totals include their specialized role descriptions; this is inventory
@@ -32,7 +32,7 @@ bookkeeping, not a new full source audit.
 | Primary report | Files |
 | --- | ---: |
 | [App / gameplay / plugins](app-gameplay-and-plugins.md) | 110 |
-| [Character / Maker / mods](character-and-mods.md) | 132 |
+| [Character / Maker / mods](character-and-mods.md) | 135 |
 | [Studio / IK / animation](studio.md) | 259 |
 | [Renderer / foundation / assets](renderer-and-foundation.md) | 368 |
 | [Toolchain / verification / historical docs](toolchain-and-verification.md) | 221 |
@@ -41,12 +41,12 @@ bookkeeping, not a new full source audit.
 | --- | ---: |
 | App resource metadata / icon | 16 |
 | Build / repository configuration | 9 |
-| Conversion / recovery / verification tool | 256 |
+| Conversion / recovery / verification tool | 257 |
 | Documentation / historical evidence | 65 |
 | Generated asset / catalog / fixture | 205 |
-| Reference host / controlled fixture | 37 |
+| Reference host / controlled fixture | 38 |
 | Runtime / shared shader declaration | 238 |
-| Test / validation | 234 |
+| Test / validation | 235 |
 | Public synthetic body/face input fixture | 1 |
 
 ## App / gameplay / plugins
