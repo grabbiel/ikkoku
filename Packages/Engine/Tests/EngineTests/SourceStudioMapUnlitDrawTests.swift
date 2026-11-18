@@ -66,6 +66,7 @@ private func renderMapFragment(material: MaterialUniforms, base: any MTLTexture,
     descriptor.fragmentFunction = library.makeFunction(name: "map_fragment")
     descriptor.colorAttachments[0].pixelFormat = .rgba32Float
     let pipeline = try device.makeRenderPipelineState(descriptor: descriptor)
+    let mapShadow = try mapShadowPlaceholder(device)
     let queue = try #require(device.makeCommandQueue())
     let targetDescriptor = MTLTextureDescriptor.texture2DDescriptor(pixelFormat: .rgba32Float, width: 1, height: 1, mipmapped: false)
     targetDescriptor.usage = [.renderTarget, .shaderRead]; targetDescriptor.storageMode = .shared
@@ -88,13 +89,14 @@ private func renderMapFragment(material: MaterialUniforms, base: any MTLTexture,
     encoder.setRenderPipelineState(pipeline)
     for (buffer, index) in [(mesh.baseVertices, BufferIndexVertices), (mesh.texcoords, BufferIndexTexcoords),
         (mesh.texcoords1, BufferIndexTexcoords1), (mesh.texcoords2, BufferIndexTexcoords2),
-        (mesh.colors ?? resources.dummyBuffer, BufferIndexVertexColors), (resources.dummyBuffer, BufferIndexVertexHidden)] {
+        (mesh.colors ?? resources.dummyBuffer, BufferIndexVertexColors), (resources.dummyBuffer, BufferIndexVertexHidden), (resources.dummyBuffer, BufferIndexVertexReceive)] {
         encoder.setVertexBuffer(buffer, offset: 0, index: Int(index.rawValue))
     }
     encoder.setVertexBytes(&frame, length: MemoryLayout<FrameUniforms>.stride, index: Int(BufferIndexFrameUniforms.rawValue))
     encoder.setVertexBytes(&draw, length: MemoryLayout<DrawUniforms>.stride, index: Int(BufferIndexDrawUniforms.rawValue))
     encoder.setVertexBytes(&uniforms, length: MemoryLayout<MaterialUniforms>.stride, index: Int(BufferIndexMaterial.rawValue))
     encoder.setFragmentBytes(&uniforms, length: MemoryLayout<MaterialUniforms>.stride, index: Int(BufferIndexMaterial.rawValue))
+    bindMapLighting(encoder, frame: frame, shadow: mapShadow)
     // A bright lightmap and emission that none of these branches may read.
     encoder.setFragmentTexture(base, index: Int(TextureIndexBase.rawValue))
     encoder.setFragmentTexture(resources.whiteTexture, index: Int(TextureIndexLightmap.rawValue))

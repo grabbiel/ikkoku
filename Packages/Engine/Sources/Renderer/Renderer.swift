@@ -797,6 +797,8 @@ public final class Renderer: @unchecked Sendable {
         let draw: FrameAllocation
         let material: FrameAllocation
         let distance: Float
+        /// Maps slice 5: a mixed map mesh's per-vertex receive bytes (nil: the dummy stays bound).
+        var receiveBuffer: (any MTLBuffer)? = nil
     }
 
     struct DeformRecord {
@@ -831,6 +833,10 @@ public final class Renderer: @unchecked Sendable {
         let lights: FrameAllocation
         let post: FrameAllocation
         let background: FrameAllocation?
+        /// Maps slice 5: `MapLightingUniforms` (zero, with no sun, without map lighting).
+        let mapLighting: FrameAllocation
+        /// Whether any draw uses `map_fragment`, which reads `mapLighting`.
+        let hasMapDraws: Bool
         let opaque: [DrawRecord]
         let transparent: [DrawRecord]
         /// ST-A11 map sky draws (`MaterialKindSky`): drawn after the background
@@ -1012,6 +1018,7 @@ public final class Renderer: @unchecked Sendable {
         fu.nearPlane = cam.near
         fu.exposure = fx.exposure
         let frameUniforms = try frameRing.allocate(fu)
+        let mapLighting = try frameRing.allocate(Renderer.mapLightingUniforms(frame.mapLighting))
 
         let packedLights = Renderer.packLights(frame.lights)
         statistics.enabledLights = packedLights.enabled
@@ -1078,6 +1085,7 @@ public final class Renderer: @unchecked Sendable {
         var deformed: [UInt64: any MTLBuffer] = [:]
         var deformHeld = 0
         var liveCandidates: [DrawRecord] = []
+        var hasMapDraws = false
 
         for item in frame.items where item.visible {
             guard let mesh = resources.mesh(item.mesh) else { continue }
@@ -1134,6 +1142,8 @@ public final class Renderer: @unchecked Sendable {
                 }
             }
             let hb = item.hiddenKey.flatMap { resources.hiddenBuffer(key: $0) }.flatMap { $0.length >= mesh.vertexCount ? $0 : nil }
+            // Maps slice 5: a per-vertex receive flag needs its bytes, one per vertex.
+            let receive = item.vertexReceive.map(\.buffer).flatMap { $0.length >= mesh.vertexCount ? $0 : nil }
             var du = DrawUniforms()
             du.model = item.model
             du.normalMatrix = Transform.normalMatrix(from: item.model)
@@ -1148,10 +1158,16 @@ public final class Renderer: @unchecked Sendable {
             if frame.texture(item.material.base, resources: resources) == nil { mu.flags &= ~MaterialFlagHasBaseTexture.rawValue }
             if frame.texture(item.material.bodyMask, resources: resources) == nil { mu.flags &= ~MaterialFlagHasBodyMask.rawValue }
             if mesh.colors != nil { mu.flags |= MaterialFlagHasVertexColor.rawValue } else { mu.flags &= ~MaterialFlagHasVertexColor.rawValue }
+            if mu.flags & MaterialFlagMapReceivePerVertex.rawValue != 0, receive == nil {
+                // Without its bytes the draw receives no shadow rather than a wrong one.
+                mu.flags &= ~(MaterialFlagMapReceivePerVertex.rawValue | MaterialFlagReceiveShadow.rawValue)
+            }
+            if mu.kind == UInt32(MaterialKindMap.rawValue) { hasMapDraws = true }
             let materialUniforms = try frameRing.allocate(mu)
             let c = item.model.transformPoint(item.sortCenter ?? mesh.bounds.center)
-            let rec = DrawRecord(item: item, mesh: mesh, vertexBuffer: vb, hiddenBuffer: hb, draw: drawUniforms,
+            var rec = DrawRecord(item: item, mesh: mesh, vertexBuffer: vb, hiddenBuffer: hb, draw: drawUniforms,
                                  material: materialUniforms, distance: length(c - cp))
+            if mu.flags & MaterialFlagMapReceivePerVertex.rawValue != 0 { rec.receiveBuffer = receive }
             if isSky { sky.append(rec); continue }
             if item.sourceShader != nil { liveCandidates.append(rec) }
             else if item.material.transparent { transparent.append(rec) } else { opaque.append(rec) }
@@ -1193,7 +1209,7 @@ public final class Renderer: @unchecked Sendable {
             gizmos.append(GizmoRecord(batch: g, vertices: vertices, draw: draw))
         }
         return FrameContext(frame: frame, frameUniforms: frameUniforms, lights: lights, post: post, background: background,
-                            opaque: opaque, transparent: transparent, sky: Self.sortedOpaque(sky), shadowCasters: casters, deforms: deforms,
+                            mapLighting: mapLighting, hasMapDraws: hasMapDraws, opaque: opaque, transparent: transparent, sky: Self.sortedOpaque(sky), shadowCasters: casters, deforms: deforms,
                             gizmos: gizmos, width: W, height: H, live: live, liveMainPass: liveMainPass)
     }
 
@@ -1302,6 +1318,32 @@ public final class Renderer: @unchecked Sendable {
         enc.setFrontFacing(.counterClockwise)
     }
 
+    /// Maps slice 5, once per main pass: toon_vertex's receive bytes (the shared
+    /// dummy; only a mixed map mesh binds its own, in `bindDraw`), and for a
+    /// frame with map draws `map_fragment`'s lighting and shadow map. Without a
+    /// map shadow map the character one stands in, unread (strength 0).
+    func bindMapCommon(_ enc: any MTLRenderCommandEncoder, _ ctx: FrameContext) {
+        enc.setVertexBuffer(resources.dummyBuffer, offset: 0, index: Int(BufferIndexVertexReceive.rawValue))
+        guard ctx.hasMapDraws else { return }
+        enc.setFragmentBuffer(ctx.mapLighting.buffer, offset: ctx.mapLighting.offset, index: Int(BufferIndexMapLighting.rawValue))
+        enc.setFragmentTexture(shadowMap, index: Int(TextureIndexMapShadow.rawValue))
+    }
+
+    /// `MapLightingUniforms` for a frame's map lighting; all zero (no sun) without it.
+    static func mapLightingUniforms(_ lighting: MapLighting?) -> MapLightingUniforms {
+        var u = MapLightingUniforms()
+        u.shadowViewProjection = matrix_identity_float4x4
+        guard let lighting else { return u }
+        let sh = lighting.sh
+        u.sh = (sh[0], sh[1], sh[2], sh[3], sh[4], sh[5], sh[6])
+        if let sun = lighting.sun {
+            let d = sun.directionToLight
+            u.sunDirection = Float4(d.x, d.y, d.z, 1)
+            u.sunColor = Float4(sun.color.x, sun.color.y, sun.color.z, 1)
+        }
+        return u
+    }
+
     private func bindDraw(_ enc: any MTLRenderCommandEncoder, _ rec: DrawRecord) {
         // Mirrored scene nodes reverse triangle orientation in every geometry pass.
         enc.setFrontFacing(simd_determinant(rec.item.model.upperLeft3x3) < 0 ? .clockwise : .counterClockwise)
@@ -1313,6 +1355,8 @@ public final class Renderer: @unchecked Sendable {
         enc.setVertexBuffer(rec.draw.buffer, offset: rec.draw.offset, index: Int(BufferIndexDrawUniforms.rawValue))
         enc.setVertexBuffer(rec.material.buffer, offset: rec.material.offset, index: Int(BufferIndexMaterial.rawValue))
         enc.setVertexBuffer(rec.hiddenBuffer ?? resources.dummyBuffer, offset: 0, index: Int(BufferIndexVertexHidden.rawValue))
+        // Read only under MaterialFlagMapReceivePerVertex, which only these draws keep.
+        if let receive = rec.receiveBuffer { enc.setVertexBuffer(receive, offset: 0, index: Int(BufferIndexVertexReceive.rawValue)) }
         enc.setFragmentBuffer(rec.draw.buffer, offset: rec.draw.offset, index: Int(BufferIndexDrawUniforms.rawValue))
         enc.setFragmentBuffer(rec.material.buffer, offset: rec.material.offset, index: Int(BufferIndexMaterial.rawValue))
     }
@@ -1412,6 +1456,7 @@ public final class Renderer: @unchecked Sendable {
         guard let enc = cb.makeRenderCommandEncoder(descriptor: pass) else { return }
         enc.label = "Main"
         bindCommon(enc, ctx)
+        bindMapCommon(enc, ctx)
 
         if !fx.transparentBackground, let background = ctx.background {
             enc.pushDebugGroup("Background")
@@ -1474,6 +1519,7 @@ public final class Renderer: @unchecked Sendable {
             // Translated programs bind buffers 0 and 8…, textures 0…; restore
             // the native frame bindings for the passes that follow.
             bindCommon(enc, ctx)
+            bindMapCommon(enc, ctx)
             enc.popDebugGroup()
         }
 

@@ -42,6 +42,9 @@ typedef IK_ENUM(EnumBackingType, BufferIndex) {
     BufferIndexVertexHidden   = 16,  // uchar[] per vertex (1 = hidden), when DrawFlagHasHiddenBuffer
     BufferIndexTexcoords1      = 17,  // optional source UV1, otherwise UV0
     BufferIndexTexcoords2      = 18,  // optional source UV2, otherwise UV0
+    BufferIndexMapLighting     = 19,  // MapLightingUniforms (map_fragment; bound once per pass)
+    BufferIndexVertexReceive   = 20,  // uchar[] per vertex (1 = receives the map sun's shadow), read only
+                                      // under MaterialFlagMapReceivePerVertex; a shared dummy otherwise
 };
 
 // MARK: - Texture bind points
@@ -66,6 +69,8 @@ typedef IK_ENUM(EnumBackingType, TextureIndex) {
     TextureIndexLightmapDirection = 17,  // MaterialKindMap: CombinedDirectional direction map
     TextureIndexEmission   = 18,  // MaterialKindMap: Standard _EmissionMap
     TextureIndexSkyCube    = 19,  // MaterialKindSky: Skybox/Cubemap _Tex (a cube texture; no other kind binds it)
+    TextureIndexMapShadow  = 20,  // MaterialKindMap: the map sun's shadow map (depth); read only when
+                                  // MapLightingUniforms.shadowParams.x > 0
 };
 
 // MARK: - Material kinds / flags
@@ -110,6 +115,12 @@ typedef IK_ENUM(IKUInt, MaterialFlags) {
     MaterialFlagMapUnlit        = 1u << 22, // MaterialKindMap: Unlit/Transparent (base texture * baseColor, no lighting)
     MaterialFlagMapParticleAnim = 1u << 23, // MaterialKindMap with MapParticle: Particles/Anim Alpha Blended (texture lerp to UV2 by UV1.x)
     MaterialFlagMapSilhouette   = 1u << 24, // MaterialKindMap: Custom/Silhouette (a depth prepass, then baseColor blended)
+    // Maps slice 5 (MaterialKindMap Standard draws of an export with ikkokuMapLighting):
+    MaterialFlagMapProbeLit     = 1u << 25, // no lightmap: gi.diffuse is the ambient (MapLightingUniforms.sh)
+    MaterialFlagMapSunLit       = 1u << 26, // in the map sun's culling mask: the sun term is drawn
+    MaterialFlagMapReceivePerVertex = 1u << 27, // the receive flag comes per vertex (BufferIndexVertexReceive)
+                                            // instead of MaterialFlagReceiveShadow (a mesh mixing receivers)
+    MaterialFlagMapLambert      = 1u << 28, // Legacy Shaders/Diffuse: LightingLambert (n.l, no Disney term)
 };
 
 #define DrawFlagHasHiddenBuffer 0x80000000u
@@ -180,6 +191,18 @@ typedef struct {
     float           depthBias;      // metres toward the camera (eyebrows over hair)
 } DrawUniforms;
 
+/// Maps slice 5: the loaded map's ambient and realtime sun for `map_fragment`,
+/// one per frame (zero, with no sun, when the frame has no lit map).
+typedef struct {
+    matrix_float4x4 shadowViewProjection; // clip space of the map shadow map
+    vector_float4   sh[7];                // Unity's unity_SHAr, SHAg, SHAb, SHBr, SHBg, SHBb, SHC in the
+                                          // engine basis (z reflected); a flat map holds its colour in SHA*.w
+    vector_float4   sunDirection;         // xyz = unit direction TO the sun (engine world), w = 1 with a sun
+    vector_float4   sunColor;             // rgb = GammaToLinearSpace(colour * intensity), Unity 5.6 Linear
+    vector_float4   shadowParams;         // x = shadow strength (0: no map shadow map), y = texel size,
+                                          // z = depth bias, w = PCF radius in texels
+} MapLightingUniforms;
+
 typedef struct {
     vector_float4 baseColor;      // rgba tint (multiplies texture)
     vector_float4 shadowColor;    // rgb multiplier on the dark side, a = shade threshold
@@ -195,6 +218,7 @@ typedef struct {
     vector_float4 patternColor;   // rgb, a = pattern strength
     vector_float4 hairGloss;      // x = strength, y = width, z = shift (v along strand), w = secondary
     vector_float4 params;         // x = shade softness, y = specular strength, z = rim light mask, w = alpha cutoff
+                                  // (MaterialKindMap: x = Standard smoothness, slice 5)
     vector_float4 eye;            // x = iris scale, y = iris offset u, z = iris offset v, w = highlight strength
     vector_float4 emissive;       // rgb, a = strength
     vector_float4 uvTransform;    // scale u, scale v, offset u, offset v (pattern)

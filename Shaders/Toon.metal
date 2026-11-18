@@ -11,6 +11,10 @@ struct ToonVertexOut {
     float4 color;
     float4 shadowCoord;
     float hidden;
+    // Maps slice 5: 1 when the draw receives the map sun's shadow. Per vertex for a
+    // mesh that mixes receivers (no vertex is shared across them, checked at load),
+    // so the provoking vertex speaks for its triangle.
+    float receive [[flat]];
 };
 
 vertex ToonVertexOut toon_vertex(
@@ -23,7 +27,8 @@ vertex ToonVertexOut toon_vertex(
     constant FrameUniforms& frame [[buffer(BufferIndexFrameUniforms)]],
     constant DrawUniforms& draw [[buffer(BufferIndexDrawUniforms)]],
     constant MaterialUniforms& mat [[buffer(BufferIndexMaterial)]],
-    device const uchar* hiddenBuf [[buffer(BufferIndexVertexHidden)]])
+    device const uchar* hiddenBuf [[buffer(BufferIndexVertexHidden)]],
+    device const uchar* receiveBuf [[buffer(BufferIndexVertexReceive)]])
 {
     VSInput v = fetchVertex(vid, verts, uvs, colors, (mat.flags & MaterialFlagHasVertexColor) != 0);
     ToonVertexOut o;
@@ -44,6 +49,9 @@ vertex ToonVertexOut toon_vertex(
     o.color = v.color;
     o.shadowCoord = frame.shadowViewProjection * wp;
     o.hidden = hiddenFlag(v.region, draw.flags, hiddenBuf, vid);
+    // A uniform switch: only a mixed map mesh binds its own bytes (the others a shared dummy).
+    o.receive = (mat.flags & MaterialFlagMapReceivePerVertex) ? (receiveBuf[vid] != 0 ? 1.0 : 0.0)
+              : ((mat.flags & MaterialFlagReceiveShadow) ? 1.0 : 0.0);
     return o;
 }
 
@@ -354,9 +362,10 @@ fragment float4 eye_fragment(
 //     diffColor = albedo * oneMinusReflectivity
 //   Emission, UnityStandardInput.cginc L176-L183: tex2D(_EmissionMap).rgb * _EmissionColor.rgb
 // Drawn here: diffColor * gi.diffuse + Emission, with the geometric normal.
-// Occlusion is 1 (no map material has an _OcclusionMap). Not drawn: the
-// realtime light (light.color * diffuseTerm, its shadows) and both specular
-// terms. The light map is sampled as sRGB (m_ColorSpace 1), the direction map
+// Occlusion is 1 (the two map materials with an _OcclusionMap are approximated).
+// Slice 5 adds the realtime sun (light.color * diffuseTerm, with its shadows)
+// and, without a lightmap, the ambient as gi.diffuse (see below). Not drawn:
+// both specular terms. The light map is sampled as sRGB (m_ColorSpace 1), the direction map
 // as linear. Both hold the bundle's raw rows, bottom-up like Unity's texture
 // memory, while TEXCOORD_1 has the glTF top-left origin: sample (u, 1 - v).
 // The direction is baked in Unity's left-handed world; the engine basis
@@ -381,13 +390,74 @@ inline float3 decodeDirectionalLightmap(float3 color, float4 dirTex, float3 norm
     return color * halfLambert / max(1e-4, dirTex.w);
 }
 
+// ---- Maps slice 5: the realtime sun and the ambient -------------------------
+// Unity 5.6.2f1 Standard, ForwardBase, Linear (docs/reference/studio/maps.md, "Lighting (slice 5)"):
+//   BRDF1_Unity_PBS (UnityStandardBRDF.cginc): diffColor * (gi.diffuse + light.color * diffuseTerm),
+//     diffuseTerm = DisneyDiffuse(nv, nl, lh, perceptualRoughness) * nl, perceptualRoughness =
+//     1 - smoothness, nv = abs(n.v), halfDir = Unity_SafeNormalize(l + v). The two specular terms
+//     are not drawn.
+//   light.color = _LightColor0 * atten; _LightColor0 = GammaToLinearSpace(colour * intensity) (the
+//     player's lightsUseLinearIntensity is off); atten = lerp(1 - strength, 1, visibility).
+//   gi.diffuse without a lightmap: ShadeSH9 of RenderSettings' ambient (no map has light probes),
+//     here evaluated per pixel (Unity sums L2 per vertex and L0/L1 per pixel), max 0.
+//   LightingLambert (Legacy Shaders/Diffuse): albedo * (gi.diffuse + light.color * max(0, n.l)).
+// Custom/StandardDouble reads no face register (no SV_IsFrontFace in its DX11 programs): back faces
+// are lit with the front normal, as here.
+
+inline float3 mapAmbient(constant MapLightingUniforms& light, float3 n) {
+    float4 n1 = float4(n, 1.0);
+    float3 x1 = float3(dot(light.sh[0], n1), dot(light.sh[1], n1), dot(light.sh[2], n1));
+    float4 vB = n.xyzz * n.yzzx;
+    float3 x2 = float3(dot(light.sh[3], vB), dot(light.sh[4], vB), dot(light.sh[5], vB));
+    float vC = n.x * n.x - n.y * n.y;
+    return max(float3(0.0), x1 + x2 + light.sh[6].rgb * vC);
+}
+
+inline float mapPow5(float x) { return x * x * x * x * x; }
+
+inline float mapDisneyDiffuse(float nv, float nl, float lh, float perceptualRoughness) {
+    float fd90 = 0.5 + 2.0 * lh * lh * perceptualRoughness;
+    float lightScatter = 1.0 + (fd90 - 1.0) * mapPow5(1.0 - nl);
+    float viewScatter = 1.0 + (fd90 - 1.0) * mapPow5(1.0 - nv);
+    return lightScatter * viewScatter;
+}
+
+/// BRDF1's diffuseTerm (or Lambert's n.l) for the unit normal n, view v and light l.
+inline float mapSunDiffuseTerm(float3 n, float3 v, float3 l, float smoothness, bool lambert) {
+    float nl = saturate(dot(n, l));
+    if (lambert) return nl;
+    float3 hv = l + v;
+    float3 h = hv * rsqrt(max(0.001, dot(hv, hv)));
+    float nv = abs(dot(n, v));
+    float lh = saturate(dot(l, h));
+    return mapDisneyDiffuse(nv, nl, lh, 1.0 - smoothness) * nl;
+}
+
+/// The map shadow map's visibility at worldPos: 3x3 PCF of reverse-Z compares (1 = lit).
+inline float mapShadowVisibility(float3 worldPos, constant MapLightingUniforms& light, depth2d<float> shadowMap) {
+    float4 sc = light.shadowViewProjection * float4(worldPos, 1.0);
+    float3 p = sc.xyz / sc.w;
+    float2 uv = float2(p.x * 0.5 + 0.5, 0.5 - p.y * 0.5);
+    if (any(uv < 0.0) || any(uv > 1.0)) return 1.0;
+    float ref = p.z + light.shadowParams.z;
+    float step = light.shadowParams.y * light.shadowParams.w;
+    float sum = 0.0;
+    for (int y = -1; y <= 1; ++y)
+        for (int x = -1; x <= 1; ++x)
+            sum += shadowMap.sample_compare(shadowSampler, uv + float2(x, y) * step, ref);
+    return sum / 9.0;
+}
+
 fragment float4 map_fragment(
     ToonVertexOut in [[stage_in]],
+    constant FrameUniforms& frame [[buffer(BufferIndexFrameUniforms)]],
     constant MaterialUniforms& mat [[buffer(BufferIndexMaterial)]],
+    constant MapLightingUniforms& mapLight [[buffer(BufferIndexMapLighting)]],
     texture2d<float> baseTex [[texture(TextureIndexBase)]],
     texture2d<float> lightmap [[texture(TextureIndexLightmap)]],
     texture2d<float> lightmapDirection [[texture(TextureIndexLightmapDirection)]],
-    texture2d<float> emissionTex [[texture(TextureIndexEmission)]])
+    texture2d<float> emissionTex [[texture(TextureIndexEmission)]],
+    depth2d<float> mapShadow [[texture(TextureIndexMapShadow)]])
 {
     if (mat.flags & MaterialFlagMapSilhouette) {
         // Custom/Silhouette's colour pass (the game's shader; its DX11 fragment is `mov o0, _Color`):
@@ -417,10 +487,25 @@ fragment float4 map_fragment(
     float4 albedo = mat.baseColor;
     if (mat.flags & MaterialFlagHasBaseTexture) albedo *= baseTex.sample(forcedAnisoRepeat, in.uv);
     if ((mat.flags & MaterialFlagAlphaTest) && albedo.a < mat.params.w) discard_fragment();
-    float2 luv = float2(in.uv1.x, 1.0 - in.uv1.y);
-    float3 gi = decodeLightmapRGBM(lightmap.sample(forcedAnisoClamp, luv), mat.lightmapRange, mat.lightmapExponent);
-    if (mat.flags & MaterialFlagMapDirectionalLightmap) {
-        gi = decodeDirectionalLightmap(gi, lightmapDirection.sample(forcedAnisoClamp, luv), normalize(in.worldNormal));
+    float3 n = normalize(in.worldNormal);
+    float3 gi;
+    if (mat.flags & MaterialFlagMapProbeLit) {
+        gi = mapAmbient(mapLight, n);
+    } else {
+        float2 luv = float2(in.uv1.x, 1.0 - in.uv1.y);
+        gi = decodeLightmapRGBM(lightmap.sample(forcedAnisoClamp, luv), mat.lightmapRange, mat.lightmapExponent);
+        if (mat.flags & MaterialFlagMapDirectionalLightmap) {
+            gi = decodeDirectionalLightmap(gi, lightmapDirection.sample(forcedAnisoClamp, luv), n);
+        }
+    }
+    if ((mat.flags & MaterialFlagMapSunLit) && mapLight.sunDirection.w > 0.0) {
+        float atten = 1.0;
+        if (in.receive > 0.5 && mapLight.shadowParams.x > 0.0) {
+            atten = mix(1.0, mapShadowVisibility(in.worldPos, mapLight, mapShadow), mapLight.shadowParams.x);
+        }
+        float3 v = normalize(frame.cameraPosition.xyz - in.worldPos);
+        float term = mapSunDiffuseTerm(n, v, mapLight.sunDirection.xyz, mat.params.x, (mat.flags & MaterialFlagMapLambert) != 0);
+        gi += mapLight.sunColor.rgb * (atten * term);
     }
     float3 color = albedo.rgb * mat.oneMinusReflectivity * gi;
     if (mat.emissive.a > 0.0) color += emissionTex.sample(forcedAnisoRepeat, in.uv).rgb * mat.emissive.rgb * mat.emissive.a;
