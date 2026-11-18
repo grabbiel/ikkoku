@@ -9,19 +9,26 @@ import ShaderTypes
 
 /// Each composed texture is shared independently. A derived appearance keeps only
 /// leases for handles still used by its material slots, so edits cannot retain an
-/// unbounded chain of fully replaced appearances.
+/// unbounded chain of fully replaced appearances. A private texture's lease
+/// releases it; a cached one's (#332) holds one pin, so the texture cache
+/// evicts nothing a live appearance draws.
 final class SourceAppearanceTextureLease: @unchecked Sendable {
     let resources: ResourceStore
     let handle: TextureHandle
     private let ownershipLock = NSLock()
     private var cached = false
     init(resources: ResourceStore, handle: TextureHandle) { self.resources = resources; self.handle = handle }
+    /// A cached texture already pinned for this lease (`ResourceStore.pinCachedTexture`).
+    init(resources: ResourceStore, pinned handle: TextureHandle) {
+        self.resources = resources; self.handle = handle; cached = true
+    }
+    /// The cache took the texture and pinned it for this lease (`publishPinnedTexture`).
     func transferToCache() {
         ownershipLock.lock(); cached = true; ownershipLock.unlock()
     }
     deinit {
-        ownershipLock.lock(); let shouldRelease = !cached; ownershipLock.unlock()
-        if shouldRelease { resources.unregister(texture: handle) }
+        ownershipLock.lock(); let cached = self.cached; ownershipLock.unlock()
+        if cached { resources.unpinTexture(handle) } else { resources.unregister(texture: handle) }
     }
 }
 

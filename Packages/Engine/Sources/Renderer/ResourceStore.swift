@@ -199,6 +199,14 @@ public final class ResourceStore: @unchecked Sendable {
     private var meshes: [UInt32: GPUMesh] = [:]
     private var textures: [UInt32: any MTLTexture] = [:]
     private var textureKeys: [String: TextureHandle] = [:]
+    /// #332: cached textures appearance loads published or hit, with their
+    /// pins (live appearances drawing them) and last use; `evictedTextures`
+    /// holds those the cache retired until a submit releases them.
+    private var evictableTextures: [UInt32: EvictableTexture] = [:]
+    private var evictedTextures: [UInt32: EvictableTexture] = [:]
+    private var unpinnedTextureBytes = 0
+    private var unpinnedTextureLimit = ResourceStore.defaultUnpinnedTextureBudget
+    private var textureUse: UInt64 = 0
     private var nextMesh: UInt32 = 1
     private var nextTexture: UInt32 = 1
     private var deformBuffers: [UInt64: any MTLBuffer] = [:]
@@ -257,9 +265,16 @@ public final class ResourceStore: @unchecked Sendable {
     public struct Statistics: Encodable, Sendable {
         public let meshes: Int, textures: Int, deformBuffers: Int, hiddenBuffers: Int
         public let meshBufferBytes: Int, deformBufferBytes: Int, hiddenBufferBytes: Int
-        /// Retired meshes and keys still waiting for a later submitted frame (`retire`).
-        /// They are included in the counts above until then.
+        /// Retired resources still waiting for their release (`retire`): textures
+        /// until a frame created after the retirement is submitted, meshes and
+        /// keys until such a frame is prepared. They are included in the counts
+        /// above until then.
         public let retiring: Int
+        /// `retiring` by kind.
+        public let retiringMeshes: Int, retiringDeformKeys: Int, retiringHiddenKeys: Int, retiringTextures: Int
+        /// Appearance textures no appearance pins, which the cache keeps while
+        /// their bytes fit `unpinnedTextureBudget` (#332), and those bytes.
+        public let unpinnedTextures: Int, unpinnedTextureBytes: Int
     }
 
     /// Counts store-owned resources; device allocation also includes render
@@ -277,7 +292,10 @@ public final class ResourceStore: @unchecked Sendable {
             hiddenBuffers: hiddenBuffers.count, meshBufferBytes: buffers.values.reduce(0) { $0 + $1.length },
             deformBufferBytes: deformBuffers.values.reduce(0) { $0 + $1.length },
             hiddenBufferBytes: hiddenBuffers.values.reduce(0) { $0 + $1.length },
-            retiring: retiringMeshes.count + retiringDeformKeys.count + retiringHiddenKeys.count + retiringTextures.count)
+            retiring: retiringMeshes.count + retiringDeformKeys.count + retiringHiddenKeys.count + retiringTextures.count,
+            retiringMeshes: retiringMeshes.count, retiringDeformKeys: retiringDeformKeys.count,
+            retiringHiddenKeys: retiringHiddenKeys.count, retiringTextures: retiringTextures.count,
+            unpinnedTextures: evictableTextures.values.filter { $0.pins == 0 }.count, unpinnedTextureBytes: unpinnedTextureBytes)
     }
 
     @discardableResult
@@ -485,22 +503,32 @@ public final class ResourceStore: @unchecked Sendable {
 
     // MARK: Deferred release (R6)
 
-    // A frame names meshes, deformation keys and hidden-mask keys, not buffers,
-    // until it is prepared, and it may be prepared after an owner gives them back:
-    // the renderer's pending frame, or a copy of it from `Renderer.currentFrame()`.
-    // Releasing at once would drop the mask and meshes that frame draws, and its
-    // preparation would re-create (and then keep forever) the owner's deformation
-    // buffers. `retire` therefore takes a `ResourceClock` stamp and leaves the
-    // resources in place. The release completes when the renderer prepares a
-    // submitted frame created after that stamp: the pending frame was replaced by
-    // one built without them. Encoded command buffers and prepared frames hold
-    // their own references, so completion never touches GPU work in flight.
+    // A frame names meshes, deformation keys, hidden-mask keys and textures by
+    // handle or key, not by buffer, and it may be prepared after an owner gives
+    // them back: the renderer's pending frame, or a copy of it from
+    // `Renderer.currentFrame()`. Releasing at once would drop the mask and meshes
+    // that frame draws, and its preparation would re-create (and then keep
+    // forever) the owner's deformation buffers. `retire` therefore takes a
+    // `ResourceClock` stamp and leaves the resources in place.
+    // - Meshes and keys are released when the renderer prepares a submitted
+    //   frame created after that stamp (`completeRetirements`): the pending frame
+    //   was replaced by one built without them.
+    // - Textures are released earlier, when a frame created after that stamp is
+    //   submitted (`completeTextureRetirements`). Every submitted frame holds its
+    //   own references to the textures it names (`RenderFrame.retainTextures`),
+    //   so the frame it replaces and every copy of that frame keep drawing them.
+    //   A viewport that prepares nothing (occluded or minimized) therefore still
+    //   releases them, which the cache's evictions (#332) depend on.
+    // Encoded command buffers and prepared frames hold their own references, so
+    // completion never touches GPU work in flight.
     private var retiringMeshes: [UInt32: UInt64] = [:]
     private var retiringDeformKeys: [UInt64: UInt64] = [:]
     private var retiringHiddenKeys: [UInt64: UInt64] = [:]
     private var retiringTextures: [UInt32: UInt64] = [:]
     /// Stamp of the newest completed retirement. A frame created before it gets
-    /// transient deformation buffers (see `deformBuffer`).
+    /// transient deformation buffers (see `deformBuffer`). It orders deformation
+    /// keys: a texture release at submit leaves it alone, or every frame created
+    /// before an eviction would get transient deformation buffers.
     private var newestCompletedRetirement: UInt64 = 0
 
     /// Gives an owner's resources back once no pending frame can name them (see
@@ -520,20 +548,42 @@ public final class ResourceStore: @unchecked Sendable {
     }
 
     /// `retire` for textures an owner registered itself (ST-A11 source map
-    /// textures). Their cache keys go at once, so a later load of the same
-    /// file creates its own textures; the handles keep resolving for a frame
-    /// created before this call until a later submitted frame is prepared.
+    /// textures); the cache's evictions (#332) take the same path. Their cache
+    /// keys go at once, so a later load of the same file creates its own
+    /// textures. The handles keep resolving until a frame created after this
+    /// call is submitted (`completeTextureRetirements`); a frame created before
+    /// it and submitted later took its own references at its submit.
     /// `unregister(texture:)` releases at once and cancels the retirement.
     public func retire(textures handles: [TextureHandle]) {
         let stamp = ResourceClock.tick()
         lock.lock(); defer { lock.unlock() }
         let ids = Set(handles.map(\.id))
+        forgetEvictableTextures(ids)
+        retireTextures(ids, stamp: stamp)
+    }
+
+    private func retireTextures(_ ids: Set<UInt32>, stamp: UInt64) {
         for id in ids where textures[id] != nil { retiringTextures[id] = stamp }
         textureKeys = textureKeys.filter { !ids.contains($0.value.id) }
     }
 
+    /// Called by `Renderer.submit` once the submitted snapshot holds its own
+    /// texture references: releases the textures retired before that frame was
+    /// created (see above). One lock and one check when nothing is retiring.
+    /// Unlike `completeRetirements`, it leaves `newestCompletedRetirement` alone.
+    func completeTextureRetirements(createdBefore stamp: UInt64) {
+        lock.lock(); defer { lock.unlock() }
+        guard !retiringTextures.isEmpty else { return }
+        var changed = false
+        for (id, retired) in retiringTextures where retired < stamp {
+            textures[id] = nil; retiringTextures[id] = nil; evictedTextures[id] = nil; changed = true
+        }
+        if changed { generationValue &+= 1 }
+    }
+
     /// Called while the renderer prepares a submitted frame created at `stamp`:
-    /// releases everything retired before that frame existed.
+    /// releases everything retired before that frame existed. Textures retired
+    /// before it normally went at its submit already.
     func completeRetirements(createdBefore stamp: UInt64) {
         var releasedMeshes: [UInt32] = [], releasedKeys: [UInt64] = []
         var live: SourceShaderLiveEncoder?
@@ -557,7 +607,7 @@ public final class ResourceStore: @unchecked Sendable {
             hiddenBuffers[key] = nil; retiringHiddenKeys[key] = nil; newest = max(newest, retired); changed = true
         }
         for (id, retired) in retiringTextures where retired < stamp {
-            textures[id] = nil; retiringTextures[id] = nil; newest = max(newest, retired); changed = true
+            textures[id] = nil; retiringTextures[id] = nil; evictedTextures[id] = nil; newest = max(newest, retired); changed = true
         }
         if changed { generationValue &+= 1 }
         newestCompletedRetirement = newest
@@ -651,6 +701,102 @@ public final class ResourceStore: @unchecked Sendable {
         return true
     }
 
+    // MARK: Appearance texture cache (#332)
+
+    /// `cacheTextureIfAbsent` for an appearance load's candidate: on success
+    /// the texture becomes evictable and is pinned once for its publisher,
+    /// which unpins it (`unpinTexture`) when its appearance goes.
+    package func publishPinnedTexture(_ handle: TextureHandle, key: String) -> Bool {
+        lock.lock(); defer { lock.unlock() }
+        guard let texture = textures[handle.id] else { return false }
+        if let existing = textureKeys[key] { guard existing == handle else { return false } }
+        textureKeys[key] = handle
+        pin(handle, texture: texture, key: key)
+        return true
+    }
+
+    /// Pins a cached texture an appearance load received, published or hit,
+    /// until `unpinTexture`. False when the handle no longer resolves or its
+    /// owner retired it after the lookup returned it; the load then runs
+    /// again. A texture this cache evicted in between is taken back: no submit
+    /// has released it yet.
+    package func pinCachedTexture(_ handle: TextureHandle, key: String) -> Bool {
+        lock.lock(); defer { lock.unlock() }
+        guard let texture = textures[handle.id] else { return false }
+        if let evicted = evictedTextures.removeValue(forKey: handle.id) {
+            retiringTextures[handle.id] = nil
+            if textureKeys[evicted.key] == nil { textureKeys[evicted.key] = handle }
+            evictableTextures[handle.id] = evicted
+            unpinnedTextureBytes += evicted.bytes
+        } else if evictableTextures[handle.id] == nil, retiringTextures[handle.id] != nil {
+            return false
+        }
+        pin(handle, texture: texture, key: key)
+        return true
+    }
+
+    /// Ends one pin. A texture no appearance pins stays cached for a later
+    /// load of its key; past `unpinnedTextureBudget` bytes of those, the
+    /// least recently pinned or unpinned go through `retire(textures:)`.
+    package func unpinTexture(_ handle: TextureHandle) {
+        let stamp = ResourceClock.tick()
+        lock.lock(); defer { lock.unlock() }
+        guard var entry = evictableTextures[handle.id], entry.pins > 0 else { return }
+        textureUse &+= 1
+        entry.pins -= 1; entry.lastUse = textureUse
+        evictableTextures[handle.id] = entry
+        if entry.pins == 0 { unpinnedTextureBytes += entry.bytes; evictUnpinnedTextures(stamp: stamp) }
+    }
+
+    /// 64 MiB: one head's base textures (about 42 MB in the #332 run) stay
+    /// for re-selection, two do not. Tests lower it.
+    package static let defaultUnpinnedTextureBudget = 64 << 20
+    package var unpinnedTextureBudget: Int {
+        get { lock.lock(); defer { lock.unlock() }; return unpinnedTextureLimit }
+        set {
+            let stamp = ResourceClock.tick()
+            lock.lock(); defer { lock.unlock() }
+            unpinnedTextureLimit = newValue
+            evictUnpinnedTextures(stamp: stamp)
+        }
+    }
+
+    private struct EvictableTexture {
+        let key: String, bytes: Int
+        var pins: Int, lastUse: UInt64
+    }
+
+    private func pin(_ handle: TextureHandle, texture: any MTLTexture, key: String) {
+        textureUse &+= 1
+        if var entry = evictableTextures[handle.id] {
+            if entry.pins == 0 { unpinnedTextureBytes -= entry.bytes }
+            entry.pins += 1; entry.lastUse = textureUse
+            evictableTextures[handle.id] = entry
+        } else {
+            evictableTextures[handle.id] = EvictableTexture(key: key, bytes: texture.allocatedSize, pins: 1, lastUse: textureUse)
+        }
+    }
+
+    private func evictUnpinnedTextures(stamp: UInt64) {
+        var ids: Set<UInt32> = []
+        while unpinnedTextureBytes > unpinnedTextureLimit,
+              let oldest = evictableTextures.filter({ $0.value.pins == 0 }).min(by: { $0.value.lastUse < $1.value.lastUse }) {
+            evictableTextures[oldest.key] = nil; unpinnedTextureBytes -= oldest.value.bytes
+            evictedTextures[oldest.key] = oldest.value
+            ids.insert(oldest.key)
+        }
+        if !ids.isEmpty { retireTextures(ids, stamp: stamp) }
+    }
+
+    /// An owner's `retire` or `unregister` ends the cache's interest; a later
+    /// pin of the handle fails and its unpins do nothing.
+    private func forgetEvictableTextures(_ ids: Set<UInt32>) {
+        for id in ids {
+            if let entry = evictableTextures.removeValue(forKey: id), entry.pins == 0 { unpinnedTextureBytes -= entry.bytes }
+            evictedTextures[id] = nil
+        }
+    }
+
     /// Creates (or replaces) an 8-bit single-channel texture from raw bytes (row-major, width*height).
     public func texture(r8 bytes: [UInt8], width: Int, height: Int, key: String) -> TextureHandle? {
         let d = MTLTextureDescriptor.texture2DDescriptor(pixelFormat: .r8Unorm, width: width, height: height, mipmapped: false)
@@ -679,6 +825,7 @@ public final class ResourceStore: @unchecked Sendable {
     /// and encoded command buffers retain the actual Metal texture separately.
     public func unregister(texture handle: TextureHandle) {
         lock.lock(); defer { lock.unlock() }
+        forgetEvictableTextures([handle.id])
         textures.removeValue(forKey: handle.id)
         retiringTextures[handle.id] = nil
         textureKeys = textureKeys.filter { $0.value.id != handle.id }

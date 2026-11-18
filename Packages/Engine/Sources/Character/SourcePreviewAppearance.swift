@@ -218,6 +218,9 @@ public final class SourceAppearanceLoadTransaction {
         }
     }
 
+    /// Whether this transaction created `handle` (a private candidate, not a cache hit).
+    fileprivate func isCandidate(_ handle: TextureHandle) -> Bool { created.values.contains { $0.handle == handle } }
+
     fileprivate func owner(for materials: [String: [MaterialState]]) -> SourceAppearanceTextureOwner {
         let used = Set(materials.values.flatMap { $0 }.flatMap(\.textureHandles))
         let leases = created.values.filter { used.contains($0.handle) }
@@ -229,7 +232,7 @@ public final class SourceAppearanceLoadTransaction {
     /// it never overwrites or releases the already-published shared texture.
     public func commit() {
         precondition(!committed, "Appearance transaction is already committed.")
-        for (key, lease) in created where resources.cacheTextureIfAbsent(lease.handle, key: key) {
+        for (key, lease) in created where resources.publishPinnedTexture(lease.handle, key: key) {
             lease.transferToCache()
         }
         created.removeAll()
@@ -325,9 +328,21 @@ public struct SourcePreviewAppearance: Sendable {
         }
         // Explicit source identities bind converted textures to known native shader
         // inputs. Material, shader and catalog conversion remain separate adapters.
+        // #332: every cached texture this appearance draws stays pinned while it
+        // lives. A failed pin means the cache dropped the texture after the
+        // lookup; the second load then makes its own.
+        var pinned: [TextureHandle: SourceAppearanceTextureLease] = [:]
         func loadTexture(_ data: Data, key: String, srgb: Bool) throws -> TextureHandle {
-            if let transaction { return try transaction.texture(data: data, key: key, srgb: srgb, timings: timings) }
-            return try resources.texture(data: data, key: key, srgb: srgb, timings: timings?.textureLoads)
+            for _ in 0..<2 {
+                let handle = try transaction.map { try $0.texture(data: data, key: key, srgb: srgb, timings: timings) }
+                    ?? resources.texture(data: data, key: key, srgb: srgb, timings: timings?.textureLoads)
+                if pinned[handle] != nil || transaction?.isCandidate(handle) == true { return handle }
+                if resources.pinCachedTexture(handle, key: "\(key)#\(srgb)") {
+                    pinned[handle] = SourceAppearanceTextureLease(resources: resources, pinned: handle)
+                    return handle
+                }
+            }
+            throw RigError.invalid("Texture '\(key)' left the cache twice while it loaded.")
         }
         func texture(_ path: String?, srgb: Bool = true) throws -> TextureHandle? {
             guard let path else { return nil }
@@ -407,7 +422,9 @@ public struct SourcePreviewAppearance: Sendable {
             material.transparent = entry.alphaMode == "BLEND"
             materials[entry.part, default: []].append(material)
         }
-        let appearance = Self(materials: materials, textureOwner: transaction?.owner(for: materials))
+        let used = Set(materials.values.flatMap { $0 }.flatMap(\.textureHandles))
+        let leases = (transaction?.owner(for: materials).leases ?? [:]).merging(pinned.filter { used.contains($0.key) }) { candidate, _ in candidate }
+        let appearance = Self(materials: materials, textureOwner: SourceAppearanceTextureOwner(leases: leases))
         succeeded = true
         return appearance
     }
