@@ -186,9 +186,7 @@ public struct SourceCharacterCard: Sendable {
     public func previewSettings(contract: SourceShapeContract, sex: Int = 1,
                                 headID: Int = 0, boneType: Int = 0) throws -> PreviewSettings {
         let source = try customization()
-        guard source.exType == 0 else {
-            throw SourceCharacterCardError.invalid("This card uses a special character assembly (exType \(source.exType)) that is not supported by the native preview.")
-        }
+        try Self.validateNativeAssembly(source)
         guard source.sex == sex, source.headID == headID, source.boneType == boneType else {
             throw SourceCharacterCardError.invalid("Card character sex, head or body-bone identity does not match the selected source assembly.")
         }
@@ -197,9 +195,7 @@ public struct SourceCharacterCard: Sendable {
             throw SourceCharacterCardError.invalid("The current source rig lacks the required 44-body/52-face shape contract.")
         }
         let body = source.bodyValues
-        guard source.faceValues.allSatisfy({ (0...1).contains($0) }), body.allSatisfy({ (0...1).contains($0) }) else {
-            throw SourceCharacterCardError.invalid("This card uses extended shape ranges not yet supported by the native shape evaluator.")
-        }
+        try Self.validateNativeShapeRanges(source)
         let extensions = try extensions()
         var diagnostics = ["Applied 52 face controls and 44 body controls. Card appearance compatibility is reported separately; unsupported asset selections and plug-in data remain preserved."]
             + extensions.diagnostics
@@ -209,6 +205,25 @@ public struct SourceCharacterCard: Sendable {
         let modifiers = try Self.boneModifiers(from: extensions)
         diagnostics += (modifiers?.diagnostics ?? []).map(\.message)
         return PreviewSettings(faceValues: source.faceValues, bodyValues: body, boneModifiers: modifiers, diagnostics: diagnostics)
+    }
+
+    /// The native preview builds only the normal character assembly
+    /// (exType 0). `previewSettings` checks it; a Studio import checks it
+    /// for the hidden characters it leaves unbuilt
+    /// (`SourceStudioCharacterPreview.validateCard`).
+    public static func validateNativeAssembly(_ source: Customization) throws {
+        guard source.exType == 0 else {
+            throw SourceCharacterCardError.invalid("This card uses a special character assembly (exType \(source.exType)) that is not supported by the native preview.")
+        }
+    }
+
+    /// The native shape evaluator takes face and body rates in 0...1 only.
+    /// `previewSettings` checks it; a Studio import checks it for the hidden
+    /// characters it leaves unbuilt (`SourceStudioCharacterPreview.validateCard`).
+    public static func validateNativeShapeRanges(_ source: Customization) throws {
+        guard source.faceValues.allSatisfy({ (0...1).contains($0) }), source.bodyValues.allSatisfy({ (0...1).contains($0) }) else {
+            throw SourceCharacterCardError.invalid("This card uses extended shape ranges not yet supported by the native shape evaluator.")
+        }
     }
 
     /// Decode only the current shape records. Materials, hair, outfits and modded

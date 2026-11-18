@@ -239,6 +239,9 @@ final class PerfWorkloadDriver {
         case "studio-export": try prepareStudioExport()
         case "studio-load": try prepareStudioLoad()
         case "studio-select": try prepareStudioSelect()
+        case "studio-export-import": try prepareStudioExportImport()
+        case "studio-show-hidden": try prepareStudioShowHidden()
+        case "studio-clock-first": try prepareStudioClockFirst()
         default: throw RigError.invalid("unknown workload \(workload)")
         }
     }
@@ -595,6 +598,101 @@ final class PerfWorkloadDriver {
         })]
         trace.details["actionSourceKey"] = Int(target.sourceObjectKey ?? -1)
         trace.details["gesture"] = "File ▸ Export Edited Original Scene with source key \(target.sourceObjectKey ?? -1) hidden, a cheek edit and no preview, repeated; live animation on"
+    }
+
+    /// `studio-export-import` (lazy hidden characters): File ▸ Export Edited
+    /// Original Scene (`AppState.exportSourceScene(to:)`) of the startup
+    /// scene as imported, unedited, repeated, with live animation on. A
+    /// hidden character the import left unbuilt has no edit, so the export
+    /// builds no baseline for it. Each export writes a new file and removes
+    /// the previous one.
+    private func prepareStudioExportImport() throws {
+        try prepareStudioSource(selectKey: nil)
+        let folder = try makeScratchFolder()
+        var count = 0
+        var previous: URL?
+        actionSteps = [("export", true, { [weak self] in
+            if let previous { try? FileManager.default.removeItem(at: previous) }
+            count += 1
+            let url = folder.appendingPathComponent("export-\(count).png")
+            previous = url
+            self?.app.exportSourceScene(to: url)
+        })]
+        trace.details["gesture"] = "File ▸ Export Edited Original Scene of the imported startup scene, unedited, repeated; live animation on"
+    }
+
+    /// `studio-show-hidden` (lazy hidden characters): Visible on (the
+    /// inspector's toggle, `update`) for each hidden object of the startup
+    /// scene that holds source characters (its own flag off, its ancestors
+    /// shown), in workspace order, each followed by Visible off again
+    /// (unmeasured), repeated, with live animation on. An action's first run
+    /// shows characters the import left unbuilt, so its ready time holds
+    /// their build; later runs find them built. Each action is named
+    /// "show <source key> (<n> characters)".
+    private func prepareStudioShowHidden() throws {
+        let studio = try prepareStudioSource(selectKey: nil)
+        let doc = studio.doc
+        let characters = doc.objects.filter { $0.kind == .character && $0.sourceCharacter != nil }
+        func holds(_ root: UUID) -> Int {
+            characters.filter { character in
+                var current: UUID? = character.id, steps = 0
+                while let id = current, steps <= doc.objects.count {
+                    if id == root { return true }
+                    current = doc.object(id)?.parent; steps += 1
+                }
+                return false
+            }.count
+        }
+        let roots = doc.flattened().map(\.object).filter { object in
+            !object.visible && (object.parent.map { doc.isVisible($0) } ?? true) && holds(object.id) > 0
+        }
+        guard !roots.isEmpty else { throw RigError.invalid("studio-show-hidden needs a hidden object holding source characters") }
+        var steps: [(name: String, measured: Bool, run: () -> Void)] = []
+        for root in roots {
+            let id = root.id
+            steps.append(("show \(root.sourceObjectKey ?? -1) (\(holds(id)) characters)", true, { studio.update(id) { $0.visible = true } }))
+            steps.append(("hide", false, { studio.update(id) { $0.visible = false } }))
+        }
+        actionSteps = steps
+        trace.details["hiddenRoots"] = roots.map { ["sourceKey": Int($0.sourceObjectKey ?? -1), "characters": holds($0.id)] }
+        trace.details["gesture"] = "Visible on, then off, for each of \(roots.count) hidden objects holding source characters, repeated; live animation on"
+    }
+
+    /// `studio-clock-first` (lazy hidden characters): the first clock rebase
+    /// and the first native save after the import, then repeated. "rebase"
+    /// sets the first drawn character with a converted saved clip to its own
+    /// animation speed (`setSourceAnimationSpeed`, which bakes every
+    /// character's clock and restarts it); "save" is File ▸ Save
+    /// (`saveScene(to:)`) to a scratch file, removed before the next one.
+    /// Live animation on, so each runs on an advanced clock.
+    private func prepareStudioClockFirst() throws {
+        let studio = try prepareStudioSource(selectKey: nil)
+        let doc = studio.doc
+        guard let target = doc.objects.first(where: { object in
+            object.kind == .character && doc.isVisible(object.id) && studio.sourceShapePreview(for: object.id)?.hasSavedAnimation == true
+        }) else { throw RigError.invalid("studio-clock-first needs a drawn character with a converted saved clip") }
+        let folder = try makeScratchFolder()
+        var count = 0
+        var previous: URL?
+        let id = target.id
+        actionSteps = [
+            ("rebase", true, { [weak self] in
+                guard let preview = studio.sourceShapePreview(for: id), let i = studio.doc.index(of: id) else {
+                    self?.app.errorMessage = "studio-clock-first: the target character has no preview"; return
+                }
+                let speed = (studio.doc.objects[i].sourceAnimation ?? SourceStudioAnimationState(record: preview.record)).speed
+                do { try studio.setSourceAnimationSpeed(id, speed) } catch { self?.app.errorMessage = "\(error)" }
+            }),
+            ("save", true, { [weak self] in
+                if let previous { try? FileManager.default.removeItem(at: previous) }
+                count += 1
+                let url = folder.appendingPathComponent("save-\(count).png")
+                previous = url
+                do { try studio.saveScene(to: url) } catch { self?.app.errorMessage = "\(error)" }
+            }),
+        ]
+        trace.details["clockTarget"] = Int(target.sourceObjectKey ?? -1)
+        trace.details["gesture"] = "Animation speed set to its own value (a clock rebase), then File ▸ Save, repeated; live animation on"
     }
 
     /// `studio-load`: File ▸ Open (`AppState.openScene(at:importing:)`) of the
