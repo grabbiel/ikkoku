@@ -835,10 +835,17 @@ final class AppState {
         if env["IKKOKU_CAPTURE_GIZMOS"] == "0" { frame.gizmos = [] }
         if let output = env["IKKOKU_BENCHMARK_OUTPUT"] {
             do {
+                // Maps slice 5: `IKKOKU_BENCHMARK_MAP_SHADOW=every-frame` redraws the map
+                // sun's shadow map in every measured frame (the change frame's cost).
+                let shadowEveryFrame = env["IKKOKU_BENCHMARK_MAP_SHADOW"] == "every-frame"
+                host.renderer.redrawsMapShadowEveryFrame = shadowEveryFrame
                 let report = try host.renderer.benchmark(frame: frame, width: w, height: h,
                     measuredFrames: Int(env["IKKOKU_BENCHMARK_FRAMES"] ?? "20") ?? 20)
+                host.renderer.redrawsMapShadowEveryFrame = false
                 let encoder = JSONEncoder(); encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
                 var document = try JSONSerialization.jsonObject(with: encoder.encode(report)) as! [String: Any]
+                document["mapShadowEveryFrame"] = shadowEveryFrame
+                document["mapShadowMap"] = host.renderer.hasMapShadowMap
                 document["sourceCardSHA256"] = maker.importedSourceCard?.sourceSHA256
                 document["assembly"] = maker.sourceRigURL?.path
                 document["coordinate"] = maker.sourceBoneModifierCoordinate

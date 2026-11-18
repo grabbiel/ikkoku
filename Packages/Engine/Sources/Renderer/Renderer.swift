@@ -38,6 +38,10 @@ public struct RenderFrameStatistics: Sendable, Equatable {
     /// Where the frame's uniforms were placed. Nonzero overflow means the frame
     /// needed more than its ring region, or found every region still in flight.
     public var uniforms = FrameRing.Statistics()
+    /// Maps slice 5: whether this frame redraws the map sun's shadow map, and
+    /// its indexed draws when it does (one per caster run).
+    public var mapShadowRedrawn = false
+    public var mapShadowDraws = 0
     public init() {}
 }
 
@@ -167,6 +171,12 @@ public struct RenderStatusReporter: Sendable {
 /// thread-safe Metal or store object (`pickQueue` is a serial dispatch queue).
 public final class Renderer: @unchecked Sendable {
     public static let shadowMapSize = 2048
+    /// Maps slice 5: the map sun's shadow map (`mapShadowMap`), its square
+    /// half-width around the camera target in metres, and how far the target
+    /// may move before it is fitted and drawn again.
+    public static let mapShadowMapSize = 2048
+    public static let mapShadowRadius: Float = 40
+    public static let mapShadowRefitDistance: Float = mapShadowRadius / 4
 
     public let gpu: GPUContext
     public let resources: ResourceStore
@@ -224,6 +234,12 @@ public final class Renderer: @unchecked Sendable {
     private var skipUnchanged = true
     var liveEncoder: SourceShaderLiveEncoder?
     var liveEncoderError: String?
+    /// Maps slice 5: the map sun's shadow map, made on the first frame that
+    /// draws one (16 MiB), what it holds, and the measurement control that
+    /// redraws it every frame. Protected by renderLock.
+    private var mapShadowMap: (any MTLTexture)?
+    private var mapShadowContent: MapShadowContent?
+    private var mapShadowEveryFrame = false
 
     /// Guards `submitObservers` only; never held while taking another lock.
     private let observerLock = NSLock()
@@ -267,6 +283,15 @@ public final class Renderer: @unchecked Sendable {
         get { renderLock.lock(); defer { renderLock.unlock() }; return skipUnchanged }
         set { renderLock.lock(); skipUnchanged = newValue; renderLock.unlock() }
     }
+    /// Maps slice 5 measurement control (default false): redraw the map sun's
+    /// shadow map on every frame instead of only when its casters, sun or
+    /// camera target change, so a benchmark measures the change frame.
+    public var redrawsMapShadowEveryFrame: Bool {
+        get { renderLock.lock(); defer { renderLock.unlock() }; return mapShadowEveryFrame }
+        set { renderLock.lock(); mapShadowEveryFrame = newValue; renderLock.unlock() }
+    }
+    /// Whether the map sun's shadow map has been made (it costs 16 MiB).
+    public var hasMapShadowMap: Bool { renderLock.lock(); defer { renderLock.unlock() }; return mapShadowMap != nil }
     /// Whether interactive draws and picks skip the deform dispatch of a
     /// deformation whose buffer already holds exactly the frame's vertices (R7
     /// phase 2, item 4; default true). False dispatches every deformation in
@@ -837,6 +862,8 @@ public final class Renderer: @unchecked Sendable {
         let mapLighting: FrameAllocation
         /// Whether any draw uses `map_fragment`, which reads `mapLighting`.
         let hasMapDraws: Bool
+        /// Maps slice 5: the map shadow map's casters when this frame redraws it.
+        var mapShadow: MapShadowPlan? = nil
         let opaque: [DrawRecord]
         let transparent: [DrawRecord]
         /// ST-A11 map sky draws (`MaterialKindSky`): drawn after the background
@@ -852,6 +879,50 @@ public final class Renderer: @unchecked Sendable {
         var live: [LiveRecord] = []
         /// The stencil-capable main pass, set exactly when `live` is non-empty.
         var liveMainPass: LiveMainPass? = nil
+    }
+
+    /// Maps slice 5: what the map shadow map holds (the revision of the casters
+    /// and sun it was drawn from, the camera target it was fitted around) and
+    /// the clip space it was drawn in.
+    struct MapShadowContent: Equatable {
+        let revision: UInt64
+        let center: Float3
+        let toLight: Float3
+        let viewProjection: float4x4
+        /// Metres per shadow-map texel, and the depth range's length.
+        let texelWorld: Float
+        let depthRange: Float
+    }
+
+    /// A redraw of the map shadow map: its content once drawn and the casters.
+    struct MapShadowPlan {
+        let content: MapShadowContent
+        let casters: [MapShadowCaster]
+        let normalOffset: Float
+    }
+
+    /// The map shadow map's clip space: an orthographic light view of
+    /// ±`radius` around `center`, looking along -`toLight`, whose depth range
+    /// holds the casters' bounds and the receivers within `radius`.
+    static func mapShadowFit(toLight: Float3, center: Float3, radius: Float, casterBounds: AABB) -> MapShadowContent {
+        let l = simd_normalize(toLight)
+        // A sun near the zenith needs another up vector than +y.
+        let up = abs(l.y) > 0.99 ? Float3(0, 0, 1) : Float3(0, 1, 0)
+        let view = Projection.lookAt(eye: center + l, center: center, up: up)
+        var bounds = casterBounds
+        bounds.expand(AABB(min: center - Float3(repeating: radius), max: center + Float3(repeating: radius)))
+        // The view looks down -z: a point's distance along -l from the eye is -z.
+        var nearest = Float.greatestFiniteMagnitude, farthest = -Float.greatestFiniteMagnitude
+        for i in 0..<8 {
+            let p = Float3(i & 1 == 0 ? bounds.min.x : bounds.max.x, i & 2 == 0 ? bounds.min.y : bounds.max.y,
+                           i & 4 == 0 ? bounds.min.z : bounds.max.z)
+            let z = -(view * Float4(p.x, p.y, p.z, 1)).z
+            nearest = min(nearest, z); farthest = max(farthest, z)
+        }
+        let near = nearest - 1, far = farthest + 1
+        let projection = Projection.orthographicReverseZ(left: -radius, right: radius, bottom: -radius, top: radius, near: near, far: far)
+        return MapShadowContent(revision: 0, center: center, toLight: l, viewProjection: projection * view,
+                                texelWorld: 2 * radius / Float(mapShadowMapSize), depthRange: far - near)
     }
 
     /// What a main pass with live source-shader draws needs beyond the
@@ -1018,7 +1089,6 @@ public final class Renderer: @unchecked Sendable {
         fu.nearPlane = cam.near
         fu.exposure = fx.exposure
         let frameUniforms = try frameRing.allocate(fu)
-        let mapLighting = try frameRing.allocate(Renderer.mapLightingUniforms(frame.mapLighting))
 
         let packedLights = Renderer.packLights(frame.lights)
         statistics.enabledLights = packedLights.enabled
@@ -1208,8 +1278,35 @@ public final class Renderer: @unchecked Sendable {
             let draw = try frameRing.allocate(du)
             gizmos.append(GizmoRecord(batch: g, vertices: vertices, draw: draw))
         }
+        var lightingUniforms = Renderer.mapLightingUniforms(frame.mapLighting)
+        var mapShadow: MapShadowPlan?
+        // Maps slice 5: only a frame that draws the map lights it or draws its shadow map.
+        if !forPick, hasMapDraws, let lighting = frame.mapLighting, let sun = lighting.sun, sun.shadowStrength > 0,
+           !lighting.casters.isEmpty, !lighting.casterBounds.isEmpty {
+            // Redrawn only when the casters, the sun or the camera target change (or for the measurement control).
+            let target = cam.target
+            var content: MapShadowContent
+            if let current = mapShadowContent, !mapShadowEveryFrame, current.revision == lighting.revision,
+               current.toLight == simd_normalize(sun.directionToLight),
+               simd_distance(current.center, target) <= Renderer.mapShadowRefitDistance {
+                content = current
+            } else {
+                let fit = Renderer.mapShadowFit(toLight: sun.directionToLight, center: target, radius: Renderer.mapShadowRadius,
+                                                casterBounds: lighting.casterBounds)
+                content = MapShadowContent(revision: lighting.revision, center: fit.center, toLight: fit.toLight,
+                                           viewProjection: fit.viewProjection, texelWorld: fit.texelWorld, depthRange: fit.depthRange)
+                mapShadow = MapShadowPlan(content: content, casters: lighting.casters, normalOffset: sun.shadowNormalBias * fit.texelWorld)
+                statistics.mapShadowRedrawn = true
+                statistics.mapShadowDraws = lighting.casters.reduce(0) { $0 + $1.runs.count }
+            }
+            lightingUniforms.shadowViewProjection = content.viewProjection
+            // The light's constant bias (Unity's units: world texels) at the receiver's compare.
+            lightingUniforms.shadowParams = Float4(sun.shadowStrength, 1 / Float(Renderer.mapShadowMapSize),
+                                                   sun.shadowBias * content.texelWorld / content.depthRange, 1)
+        }
+        let mapLighting = try frameRing.allocate(lightingUniforms)
         return FrameContext(frame: frame, frameUniforms: frameUniforms, lights: lights, post: post, background: background,
-                            mapLighting: mapLighting, hasMapDraws: hasMapDraws, opaque: opaque, transparent: transparent, sky: Self.sortedOpaque(sky), shadowCasters: casters, deforms: deforms,
+                            mapLighting: mapLighting, hasMapDraws: hasMapDraws, mapShadow: mapShadow, opaque: opaque, transparent: transparent, sky: Self.sortedOpaque(sky), shadowCasters: casters, deforms: deforms,
                             gizmos: gizmos, width: W, height: H, live: live, liveMainPass: liveMainPass)
     }
 
@@ -1241,6 +1338,7 @@ public final class Renderer: @unchecked Sendable {
         let writes = encodeDeform(ctx, cb)
         if !ctx.live.isEmpty { encodeLiveInputs(ctx, cb) }
         encodeShadow(ctx, cb)
+        encodeMapShadow(ctx, cb)
         encodeMain(ctx, targets: targets, cb)
         encodePost(ctx, targets: targets, target: target, cb)
         encodeOverlay(ctx, targets: targets, target: target, cb)
@@ -1326,7 +1424,64 @@ public final class Renderer: @unchecked Sendable {
         enc.setVertexBuffer(resources.dummyBuffer, offset: 0, index: Int(BufferIndexVertexReceive.rawValue))
         guard ctx.hasMapDraws else { return }
         enc.setFragmentBuffer(ctx.mapLighting.buffer, offset: ctx.mapLighting.offset, index: Int(BufferIndexMapLighting.rawValue))
-        enc.setFragmentTexture(shadowMap, index: Int(TextureIndexMapShadow.rawValue))
+        enc.setFragmentTexture(mapShadowMap ?? shadowMap, index: Int(TextureIndexMapShadow.rawValue))
+    }
+
+    /// Maps slice 5: draws the map sun's shadow map when the frame's plan asks
+    /// (a change frame), and records what it holds. The 2048² depth texture is
+    /// made on first use. Casters cull as Unity's cast mode says and move
+    /// along their normals by the light's normal bias; a slope-scaled bias
+    /// pushes them away from the light.
+    private func encodeMapShadow(_ ctx: FrameContext, _ cb: any MTLCommandBuffer) {
+        guard let plan = ctx.mapShadow else { return }
+        if mapShadowMap == nil {
+            let d = MTLTextureDescriptor.texture2DDescriptor(pixelFormat: Pipelines.depthFormat, width: Renderer.mapShadowMapSize,
+                                                             height: Renderer.mapShadowMapSize, mipmapped: false)
+            d.usage = [.renderTarget, .shaderRead]
+            d.storageMode = .private
+            guard let texture = gpu.device.makeTexture(descriptor: d) else { return }
+            texture.label = "MapShadowMap"
+            mapShadowMap = texture
+        }
+        guard let texture = mapShadowMap else { return }
+        let pass = MTLRenderPassDescriptor()
+        pass.depthAttachment.texture = texture
+        pass.depthAttachment.loadAction = .clear
+        pass.depthAttachment.storeAction = .store
+        pass.depthAttachment.clearDepth = 0
+        guard let enc = cb.makeRenderCommandEncoder(descriptor: pass) else { return }
+        enc.label = "MapShadow"
+        enc.setRenderPipelineState(pipelines.mapShadow)
+        enc.setDepthStencilState(pipelines.depthWrite)
+        // Reverse Z: a negative slope bias moves a caster away from the light, at most half a metre.
+        enc.setDepthBias(0, slopeScale: -2, clamp: -0.5 / max(plan.content.depthRange, 1))
+        let l = plan.content.toLight
+        for caster in plan.casters {
+            guard let mesh = resources.mesh(caster.mesh) else { continue }
+            var u = MapShadowDrawUniforms()
+            u.viewProjection = plan.content.viewProjection
+            u.model = caster.model
+            u.normalMatrix = Transform.normalMatrix(from: caster.model)
+            u.toLight = Float4(l.x, l.y, l.z, plan.normalOffset)
+            var base: (any MTLTexture)?
+            if let material = caster.alphaTest {
+                base = ctx.frame.texture(material.base, resources: resources)
+                u.alphaTest = Float4(1, material.uniforms.params.w, material.uniforms.baseColor.w, base == nil ? 0 : 1)
+            }
+            enc.setFrontFacing(simd_determinant(caster.model.upperLeft3x3) < 0 ? .clockwise : .counterClockwise)
+            enc.setCullMode(caster.twoSided ? .none : .back)
+            enc.setVertexBuffer(mesh.baseVertices, offset: 0, index: Int(BufferIndexVertices.rawValue))
+            enc.setVertexBuffer(mesh.texcoords, offset: 0, index: Int(BufferIndexTexcoords.rawValue))
+            enc.setVertexBytes(&u, length: MemoryLayout<MapShadowDrawUniforms>.stride, index: Int(BufferIndexDrawUniforms.rawValue))
+            enc.setFragmentBytes(&u, length: MemoryLayout<MapShadowDrawUniforms>.stride, index: Int(BufferIndexDrawUniforms.rawValue))
+            enc.setFragmentTexture(base ?? resources.whiteTexture, index: Int(TextureIndexBase.rawValue))
+            for run in caster.runs where run.count > 0 && run.first + run.count <= mesh.indexCount {
+                enc.drawIndexedPrimitives(type: .triangle, indexCount: run.count, indexType: .uint32, indexBuffer: mesh.indices,
+                                          indexBufferOffset: run.first * MemoryLayout<UInt32>.stride)
+            }
+        }
+        enc.endEncoding()
+        mapShadowContent = plan.content
     }
 
     /// `MapLightingUniforms` for a frame's map lighting; all zero (no sun) without it.

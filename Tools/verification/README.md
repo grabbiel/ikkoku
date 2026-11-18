@@ -1086,9 +1086,9 @@ declares it, so the runner gives no other check a map.
      until slice 4 dropped a shadow-only shell), all 8
      images uploaded as BC blocks (`blockImages`, since slice 3), not
      loading. The status line holds the exact label `Map 33 空き部室 (bushitu):
-     baked lightmaps; approximated: no realtime sun or its shadows, no specular
-     or reflections, no normal, metallic or detail maps, no fog, no camera
-     effects`. Two map-only points pick nothing, and a character in front of
+     baked lightmaps, realtime sun with shadows; approximated: no reflections,
+     no normal, metallic or detail maps, no fog, no camera effects` (since
+     slice 5; all 7 draws sun-lit and receiving, none ambient-lit). Two map-only points pick nothing, and a character in front of
      the wall picks.
   2. `setShowSourceMap` off draws 0 parts, and the line says `hidden (View ▸
      Show Source Map)`.
@@ -1111,6 +1111,10 @@ declares it, so the runner gives no other check a map.
   renderer alone, 53 → 54), 54 images as BC blocks, and the exact label,
   `Map 34 空き教室 (akikyoushitu): baked lightmaps on 29 of 56 draws (the rest
   as items), cubemap sky, particles (no soft-particle fade); approximated: …`.
+  Since slice 5 the label reads `baked lightmaps on 29 of 56 draws (27 by the
+  map's ambient), cubemap sky, particles (no soft-particle fade), realtime sun
+  with shadows; approximated: …`, and 22 draws are ambient-lit, 51 sun-lit
+  and 44 receiving (the two blended draws receive nothing).
   Two map points pick nothing. The View toggle hides and restores all 54
   draws, sky included. The exports are byte-identical, and reimport, New Scene
   and undo restore the map.
@@ -1122,7 +1126,10 @@ declares it, so the runner gives no other check a map.
   draws), 28 images as BC blocks with no PNG copies, and the exact label,
   `Map 41 備品倉庫 (Warehouse): baked lightmaps on 27 of 29 draws (the rest as
   items); approximated: … · 24308 triangles, 29 draws; not reproduced:
-  realtime GI (Enlighten dynamic lightmaps on 21 renderers)`. Two map points
+  realtime GI (Enlighten dynamic lightmaps on 21 renderers)`. Since slice 5:
+  `baked lightmaps on 27 of 29 draws (2 by the map's ambient), realtime sun
+  with shadows; approximated: Transparent mode drawn as Fade, …`, with 29
+  sun-lit draws, 26 receiving and 3 of them per vertex. Two map points
   pick nothing. The View toggle
   hides and restores all 29 draws. The exports are byte-identical, and
   reimport, New Scene and undo restore the map.
@@ -1148,7 +1155,12 @@ export](../../docs/reference/studio/maps.md#installing-the-slice-4-export)).
 the report's detail line prints them with the sky cube bytes. Since slice 4
 they also take `unlitDraws`, `silhouetteDraws` and `optionDraws` (the
 placed draws under a map option root, 0 while the scene's map option is
-off).
+off). Since slice 5 they take `probeLitDraws` (`Standard` draws lit by the
+map's ambient instead of a lightmap), `sunLitDraws`, `receivingDraws` and
+`perVertexReceiveDraws` (the sun's term and its shadow), and `sunCasters`
+(the map shadow map's casters); the detail line prints them with the sun's
+shadow strength. `source-map`, `source-map34`, `source-map41` and the reload
+pair expect the slice-5 export's counts and labels.
 
 **Measurement switch.** `IKKOKU_SOURCE_MAP_DECODED_TEXTURES=1` makes a map
 load decode its PNGs to RGBA8 (MetalKit mips) instead of uploading the

@@ -78,14 +78,19 @@ public enum GLBLoader {
     /// asset file and every external buffer/image must resolve, after symlinks, inside
     /// `packageRoot`; otherwise `GLTFError.escapesPackageRoot` is thrown before the
     /// offending bytes are read. External URIs resolve relative to `url`'s directory.
-    public static func load(url: URL, packageRoot: URL) throws -> GLTFAsset {
+    /// `accessors` names, from the root `extras`, accessors to decode into
+    /// `GLTFAsset.requestedAccessors` (data no mesh references, such as a map's
+    /// shadow-only casters); an index outside the file fails the load.
+    public static func load(url: URL, packageRoot: URL,
+                            accessors: (JSONValue?) -> Set<Int> = { _ in [] }) throws -> GLTFAsset {
         let file = try contained(url, root: packageRoot, reference: url.path)
         let data = try Data(contentsOf: file)
         return try load(data: data, external: .packaged(root: packageRoot, directory: url.deletingLastPathComponent()),
-                        sourceURL: url)
+                        sourceURL: url, accessors: accessors)
     }
 
-    public static func load(data: Data, external: GLTFExternalResources = .embeddedOnly, sourceURL: URL? = nil) throws -> GLTFAsset {
+    public static func load(data: Data, external: GLTFExternalResources = .embeddedOnly, sourceURL: URL? = nil,
+                            accessors: (JSONValue?) -> Set<Int> = { _ in [] }) throws -> GLTFAsset {
         var json: Data
         var bin: Data?
         if data.count >= 12, data.readUInt32(at: 0) == 0x46546C67 { // "glTF"
@@ -120,6 +125,20 @@ public enum GLBLoader {
         let ctx = try Context(root: root, bin: bin, external: external)
         var asset = try ctx.build()
         asset.url = sourceURL
+        for index in accessors(root.extras).sorted() {
+            guard let list = root.accessors, list.indices.contains(index) else {
+                throw GLTFError.unsupportedAccessor("requested accessor \(index) is not in the file")
+            }
+            // Float and normalised components read as floats, other integers as integers.
+            let accessor = list[index]
+            if accessor.componentType == 5126 || accessor.normalized == true {
+                let (values, components) = try ctx.readFloats(index)
+                asset.requestedAccessors[index] = .floats(values, components: components)
+            } else {
+                let (values, components) = try ctx.readUInts(index)
+                asset.requestedAccessors[index] = .integers(values, components: components)
+            }
+        }
         return asset
     }
 

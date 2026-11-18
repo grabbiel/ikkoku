@@ -778,7 +778,9 @@ func everyConvertedMapLoadsItsBlockImagesByteForByte() async throws {
         }
         #expect(asset.cubeTextures == (blocks?.cubes.count ?? 0) || asset.skyParts == 0, "map \(number)")
         if asset.skyParts == 0, asset.particleParts == 0, asset.lightmappedParts == asset.parts.count, asset.lightmappedParts > 0 {
-            #expect(SourceStudioMapStatus.loaded(entry, asset: asset).contains(": baked lightmaps; approximated: "), "map \(number)")
+            // Slice 5: a map with a realtime sun names it after the lightmaps.
+            let form = asset.lighting?.sun == nil ? ": baked lightmaps; approximated: " : ": baked lightmaps, realtime sun"
+            #expect(SourceStudioMapStatus.loaded(entry, asset: asset).contains(form), "map \(number)")
         }
         asset.release()
         guard blockOnly.isEmpty else {

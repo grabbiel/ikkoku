@@ -30,6 +30,8 @@ final class Pipelines: @unchecked Sendable {
     let sky: any MTLRenderPipelineState
     let outline: any MTLRenderPipelineState
     let shadow: any MTLRenderPipelineState
+    /// Maps slice 5: a caster of the map sun's shadow map (depth only).
+    let mapShadow: any MTLRenderPipelineState
     let background: any MTLRenderPipelineState
     let grid: any MTLRenderPipelineState
     let gizmoHDR: any MTLRenderPipelineState      // depth-tested, in the main pass
@@ -78,6 +80,7 @@ final class Pipelines: @unchecked Sendable {
         sky = try render("Sky", "sky_vertex", "sky_fragment", color: hdr, depth: dep, samples: ms)
         outline = try render("Outline", "outline_vertex", "outline_fragment", color: hdr, depth: dep, samples: ms)
         shadow = try render("Shadow", "shadow_vertex", "shadow_fragment", color: nil, depth: dep, samples: 1)
+        mapShadow = try render("MapShadow", "map_shadow_vertex", "map_shadow_fragment", color: nil, depth: dep, samples: 1)
         background = try render("Background", "fullscreen_vertex", "background_fragment", color: hdr, depth: dep, samples: ms)
         grid = try render("Grid", "grid_vertex", "grid_fragment", color: hdr, depth: dep, samples: ms, blend: .alpha)
         gizmoHDR = try render("GizmoHDR", "gizmo_vertex", "gizmo_fragment", color: hdr, depth: dep, samples: ms, blend: .alpha)

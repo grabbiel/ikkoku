@@ -391,11 +391,15 @@ inline float3 decodeDirectionalLightmap(float3 color, float4 dirTex, float3 norm
 }
 
 // ---- Maps slice 5: the realtime sun and the ambient -------------------------
-// Unity 5.6.2f1 Standard, ForwardBase, Linear (docs/reference/studio/maps.md, "Lighting (slice 5)"):
-//   BRDF1_Unity_PBS (UnityStandardBRDF.cginc): diffColor * (gi.diffuse + light.color * diffuseTerm),
-//     diffuseTerm = DisneyDiffuse(nv, nl, lh, perceptualRoughness) * nl, perceptualRoughness =
-//     1 - smoothness, nv = abs(n.v), halfDir = Unity_SafeNormalize(l + v). The two specular terms
-//     are not drawn.
+// Unity 5.6.2f1 Standard, ForwardBase, Linear (docs/reference/studio/maps.md, "Engine (slice 5)";
+// the CPU mirror is SourceStudioMapLightingMath):
+//   BRDF1_Unity_PBS (UnityStandardBRDF.cginc, UNITY_BRDF_GGX):
+//     diffColor * (gi.diffuse + light.color * diffuseTerm) + specularTerm * light.color * FresnelTerm(specColor, lh)
+//     diffuseTerm = DisneyDiffuse(nv, nl, lh, perceptualRoughness) * nl, perceptualRoughness = 1 - smoothness,
+//     specularTerm = max(0, SmithJointGGXVisibilityTerm(nl, nv, r) * GGXTerm(nh, r) * pi * nl), r = perceptualRoughness^2,
+//     0 under _SPECULARHIGHLIGHTS_OFF or with a black specColor; nv = abs(n.v), h = Unity_SafeNormalize(l + v).
+//     The indirect specular term (reflection probes) is not drawn.
+//   specColor = lerp(0.04, albedo, metallic), metallic = 1 - oneMinusReflectivity / 0.96.
 //   light.color = _LightColor0 * atten; _LightColor0 = GammaToLinearSpace(colour * intensity) (the
 //     player's lightsUseLinearIntensity is off); atten = lerp(1 - strength, 1, visibility).
 //   gi.diffuse without a lightmap: ShadeSH9 of RenderSettings' ambient (no map has light probes),
@@ -422,15 +426,34 @@ inline float mapDisneyDiffuse(float nv, float nl, float lh, float perceptualRoug
     return lightScatter * viewScatter;
 }
 
-/// BRDF1's diffuseTerm (or Lambert's n.l) for the unit normal n, view v and light l.
-inline float mapSunDiffuseTerm(float3 n, float3 v, float3 l, float smoothness, bool lambert) {
+/// The sun's radiance at one pixel for the unit normal n, view v and light l, before
+/// light.color: diffColor * diffuseTerm + specularTerm * FresnelTerm(specColor, lh).
+inline float3 mapSunRadiance(float3 n, float3 v, float3 l, float3 albedo, float oneMinusReflectivity,
+                             float smoothness, bool lambert, bool highlights) {
     float nl = saturate(dot(n, l));
-    if (lambert) return nl;
+    float3 diffColor = albedo * oneMinusReflectivity;
+    if (lambert) return diffColor * nl;
     float3 hv = l + v;
     float3 h = hv * rsqrt(max(0.001, dot(hv, hv)));
     float nv = abs(dot(n, v));
+    float nh = saturate(dot(n, h));
     float lh = saturate(dot(l, h));
-    return mapDisneyDiffuse(nv, nl, lh, 1.0 - smoothness) * nl;
+    float perceptualRoughness = 1.0 - smoothness;
+    float3 color = diffColor * (mapDisneyDiffuse(nv, nl, lh, perceptualRoughness) * nl);
+    float metallic = 1.0 - oneMinusReflectivity / 0.96;
+    float3 specColor = mix(float3(0.04), albedo, metallic);
+    if (highlights && any(specColor != 0.0)) {
+        float a = perceptualRoughness * perceptualRoughness;
+        float lambdaV = nl * (nv * (1.0 - a) + a);
+        float lambdaL = nv * (nl * (1.0 - a) + a);
+        float V = 0.5 / (lambdaV + lambdaL + 1e-5);
+        float a2 = a * a;
+        float d = (nh * a2 - nh) * nh + 1.0;
+        float D = M_1_PI_F * a2 / (d * d + 1e-7);
+        float specularTerm = max(0.0, V * D * M_PI_F * nl);
+        color += specularTerm * (specColor + (1.0 - specColor) * mapPow5(1.0 - lh));
+    }
+    return color;
 }
 
 /// The map shadow map's visibility at worldPos: 3x3 PCF of reverse-Z compares (1 = lit).
@@ -439,7 +462,9 @@ inline float mapShadowVisibility(float3 worldPos, constant MapLightingUniforms& 
     float3 p = sc.xyz / sc.w;
     float2 uv = float2(p.x * 0.5 + 0.5, 0.5 - p.y * 0.5);
     if (any(uv < 0.0) || any(uv > 1.0)) return 1.0;
-    float ref = p.z + light.shadowParams.z;
+    // Past the depth range nothing casts: clamped, a receiver behind every caster still compares
+    // against the cleared far depth (0) as lit.
+    float ref = clamp(p.z + light.shadowParams.z, 0.0, 1.0);
     float step = light.shadowParams.y * light.shadowParams.w;
     float sum = 0.0;
     for (int y = -1; y <= 1; ++y)
@@ -498,16 +523,16 @@ fragment float4 map_fragment(
             gi = decodeDirectionalLightmap(gi, lightmapDirection.sample(forcedAnisoClamp, luv), n);
         }
     }
+    float3 color = albedo.rgb * mat.oneMinusReflectivity * gi;
     if ((mat.flags & MaterialFlagMapSunLit) && mapLight.sunDirection.w > 0.0) {
         float atten = 1.0;
         if (in.receive > 0.5 && mapLight.shadowParams.x > 0.0) {
             atten = mix(1.0, mapShadowVisibility(in.worldPos, mapLight, mapShadow), mapLight.shadowParams.x);
         }
         float3 v = normalize(frame.cameraPosition.xyz - in.worldPos);
-        float term = mapSunDiffuseTerm(n, v, mapLight.sunDirection.xyz, mat.params.x, (mat.flags & MaterialFlagMapLambert) != 0);
-        gi += mapLight.sunColor.rgb * (atten * term);
+        color += mapLight.sunColor.rgb * atten * mapSunRadiance(n, v, mapLight.sunDirection.xyz, albedo.rgb, mat.oneMinusReflectivity,
+            mat.params.x, (mat.flags & MaterialFlagMapLambert) != 0, (mat.flags & MaterialFlagMapSpecularHighlights) != 0);
     }
-    float3 color = albedo.rgb * mat.oneMinusReflectivity * gi;
     if (mat.emissive.a > 0.0) color += emissionTex.sample(forcedAnisoRepeat, in.uv).rgb * mat.emissive.rgb * mat.emissive.a;
     return float4(color, (mat.flags & MaterialFlagAlphaBlend) ? albedo.a : 1.0);
 }

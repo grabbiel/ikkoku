@@ -113,9 +113,11 @@ public final class LoadedAsset: @unchecked Sendable {
     /// `AssetLibrary.importStaticAsset`'s: every external buffer and image
     /// inside `packageRoot`, no skins, at least one drawable mesh. Textures
     /// are not created here; `imageTexture` would cache them by file path.
-    public static func loadStatic(url: URL, packageRoot: URL, resources: ResourceStore) throws -> LoadedAsset {
+    /// `accessors`: see `GLBLoader.load(url:packageRoot:accessors:)`.
+    public static func loadStatic(url: URL, packageRoot: URL, resources: ResourceStore,
+                                  accessors: (JSONValue?) -> Set<Int> = { _ in [] }) throws -> LoadedAsset {
         let source = url.standardizedFileURL
-        let gltf = try GLBLoader.load(url: source, packageRoot: packageRoot)
+        let gltf = try GLBLoader.load(url: source, packageRoot: packageRoot, accessors: accessors)
         guard gltf.skins.isEmpty else {
             throw GLTFError.io("Static model import does not support skinned characters; a skeleton mapping is required.")
         }

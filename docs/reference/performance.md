@@ -441,7 +441,10 @@ Any task that may change the app's speed measures it this way:
 6. **Renderer cost without the window**: `IKKOKU_AUTOCAPTURE` with
    `IKKOKU_BENCHMARK_OUTPUT`, `IKKOKU_CAPTURE_W`/`_H` and
    `IKKOKU_BENCHMARK_FRAMES` renders the frame offscreen and records CPU
-   encode, GPU and completion times.
+   encode, GPU and completion times. `IKKOKU_BENCHMARK_MAP_SHADOW=every-frame`
+   redraws a map sun's shadow map in every measured frame, which measures
+   the frame where the casters, the sun or the camera target change
+   (`mapShadowEveryFrame` and `mapShadowMap` in the report).
 7. **Speed never changes output silently.** A change that should not alter
    pixels keeps byte-identical captures. A quality trade-off is opt-in and
    reported separately.

@@ -121,6 +121,8 @@ typedef IK_ENUM(IKUInt, MaterialFlags) {
     MaterialFlagMapReceivePerVertex = 1u << 27, // the receive flag comes per vertex (BufferIndexVertexReceive)
                                             // instead of MaterialFlagReceiveShadow (a mesh mixing receivers)
     MaterialFlagMapLambert      = 1u << 28, // Legacy Shaders/Diffuse: LightingLambert (n.l, no Disney term)
+    MaterialFlagMapSpecularHighlights = 1u << 29, // Standard without _SPECULARHIGHLIGHTS_OFF: the sun's direct
+                                                  // specular (GGX) term is drawn
 };
 
 #define DrawFlagHasHiddenBuffer 0x80000000u
@@ -199,9 +201,19 @@ typedef struct {
                                           // engine basis (z reflected); a flat map holds its colour in SHA*.w
     vector_float4   sunDirection;         // xyz = unit direction TO the sun (engine world), w = 1 with a sun
     vector_float4   sunColor;             // rgb = GammaToLinearSpace(colour * intensity), Unity 5.6 Linear
-    vector_float4   shadowParams;         // x = shadow strength (0: no map shadow map), y = texel size,
-                                          // z = depth bias, w = PCF radius in texels
+    vector_float4   shadowParams;         // x = shadow strength (0: no map shadow map), y = texel size (uv),
+                                          // z = receiver depth bias (NDC), w = PCF step in texels
 } MapLightingUniforms;
+
+/// Maps slice 5: one caster draw of the map shadow map (map_shadow_vertex / map_shadow_fragment).
+typedef struct {
+    matrix_float4x4 viewProjection;       // the map shadow map's clip space
+    matrix_float4x4 model;
+    matrix_float4x4 normalMatrix;         // upper 3x3 used
+    vector_float4   toLight;              // xyz = unit direction to the sun, w = normal offset (world metres,
+                                          // Unity's unity_LightShadowBias.z)
+    vector_float4   alphaTest;            // x = 1 to clip, y = cutoff, z = baseColor alpha, w = 1 with a base texture
+} MapShadowDrawUniforms;
 
 typedef struct {
     vector_float4 baseColor;      // rgba tint (multiplies texture)
