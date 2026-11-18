@@ -816,6 +816,17 @@ Each of these now avoids the copy or allocation, with the same result:
   the order the old stable record sort gave. `FramePreparationOrderTests`
   checks both sorts against the old record sorts, ties included, at sizes up
   to 3,506 records.
+
+  Since B2-v2 the records are not copied into a new array either:
+  `sortOpaque` and `sortTransparent` sort the array in place, and
+  `Renderer.permute` moves each record once along the permutation's cycles,
+  with no retain or release (mapping into a new array copied every record and
+  then released the old array's). A record already in its place is not
+  touched. The tests compare the sorts with the old mapped sort, every field
+  of every record included, at 0 to 3,506 records with ties. They also
+  compare `permute` with the permutation it was given (identity, reversed, one
+  cycle, a few swaps among fixed points, and shuffles, up to 3,506 records),
+  and check that no record is leaked.
 - **Texture retention.** `retainTextures` visits each item's handles in place
   (`MaterialState.forEachTextureHandle`, in `textureHandles` order). A handle
   it has already seen is skipped. A retained handle keeps its snapshot, a new

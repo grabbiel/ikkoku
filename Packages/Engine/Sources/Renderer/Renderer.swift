@@ -1362,8 +1362,9 @@ public final class Renderer: @unchecked Sendable {
             }
         }
         lastSourceShaderLive = liveReport
-        opaque = Self.sortedOpaque(opaque)
-        transparent = Self.sortedTransparent(transparent)
+        Self.sortOpaque(&opaque)
+        Self.sortTransparent(&transparent)
+        Self.sortOpaque(&sky)
         let opaqueRuns = try assignRuns(&opaque, casters: &casters, statistics: &statistics)
         let transparentRuns = try assignRuns(&transparent, casters: &casters, statistics: &statistics)
         var instancedShadowCasters: [Range<Int>] = []
@@ -1386,7 +1387,7 @@ public final class Renderer: @unchecked Sendable {
         }
         return FrameContext(frame: frame, frameUniforms: frameUniforms, lights: lights, post: post, background: background,
                             opaque: opaque, transparent: transparent, opaqueRuns: opaqueRuns, transparentRuns: transparentRuns,
-                            instancedShadowCasters: instancedShadowCasters, sky: Self.sortedOpaque(sky), shadowCasters: casters, deforms: deforms,
+                            instancedShadowCasters: instancedShadowCasters, sky: sky, shadowCasters: casters, deforms: deforms,
                             gizmos: gizmos, width: W, height: H, live: live, liveMainPass: liveMainPass)
     }
 
@@ -1566,8 +1567,10 @@ public final class Renderer: @unchecked Sendable {
     /// and moving whole records was the largest cost of preparing a
     /// 3,506-item frame (0.58 ms). Each key carries its record's index, which
     /// also decides between equal keys, so the order is the stable order the
-    /// record sort gave; each record is then copied once into its place.
-    static func sortedOpaque(_ records: [DrawRecord]) -> [DrawRecord] {
+    /// record sort gave. The records are then moved into that order in place
+    /// (`permute`, B2-v2): mapping them into a new array copied each one and
+    /// released the old array's.
+    static func sortOpaque(_ records: inout [DrawRecord]) {
         var keys: [(order: Int, kind: UInt32, mesh: UInt32, index: Int)] = []
         keys.reserveCapacity(records.count)
         records.withUnsafeBufferPointer { records in
@@ -1581,13 +1584,13 @@ public final class Renderer: @unchecked Sendable {
             if a.mesh != b.mesh { return a.mesh < b.mesh }
             return a.index < b.index
         }
-        return keys.map { records[$0.index] }
+        permute(&records) { keys[$0].index }
     }
 
     /// Unity's order for transparent draws: render queue, then camera distance
     /// to the sort centre (back to front); then our draw order and mesh id;
-    /// equal records keep their input order. Sorted by keys, as `sortedOpaque`.
-    static func sortedTransparent(_ records: [DrawRecord]) -> [DrawRecord] {
+    /// equal records keep their input order. Sorted by keys, as `sortOpaque`.
+    static func sortTransparent(_ records: inout [DrawRecord]) {
         var keys: [(queue: Int, distance: Float, order: Int, mesh: UInt32, index: Int)] = []
         keys.reserveCapacity(records.count)
         records.withUnsafeBufferPointer { records in
@@ -1603,7 +1606,58 @@ public final class Renderer: @unchecked Sendable {
             if a.mesh != b.mesh { return a.mesh < b.mesh }
             return a.index < b.index
         }
-        return keys.map { records[$0.index] }
+        permute(&records) { keys[$0].index }
+    }
+
+    /// `sortOpaque` on a copy (the tests compare it with the record sort it replaced).
+    static func sortedOpaque(_ records: [DrawRecord]) -> [DrawRecord] {
+        var sorted = records
+        sortOpaque(&sorted)
+        return sorted
+    }
+
+    /// `sortTransparent` on a copy.
+    static func sortedTransparent(_ records: [DrawRecord]) -> [DrawRecord] {
+        var sorted = records
+        sortTransparent(&sorted)
+        return sorted
+    }
+
+    /// Puts the record at index `source(k)` at index `k`, for every `k`, by
+    /// moving each record once along the permutation's cycles: no copy, no
+    /// retain or release, no second array. `source` must be a permutation of
+    /// the indices. A record already in its place (`source(k) == k`) is not
+    /// touched, and each cycle is followed from its first unplaced index, so
+    /// every record moves exactly once.
+    ///
+    /// Memory safety: `base` is `records`' buffer, valid only inside its
+    /// closure, and never escapes it. Inside a cycle exactly one slot is
+    /// uninitialized at a time (the hole): `held` takes the cycle's first
+    /// record, each step moves a record into the hole and leaves its old slot
+    /// as the new hole, and the last hole gets `held` back. Nothing in between
+    /// can throw or read `records`.
+    static func permute(_ records: inout [DrawRecord], source: (Int) -> Int) {
+        let count = records.count
+        guard count > 1 else { return }
+        var placed = [Bool](repeating: false, count: count)
+        records.withUnsafeMutableBufferPointer { buffer in
+            let base = buffer.baseAddress!
+            for start in 0..<count where !placed[start] {
+                placed[start] = true
+                var from = source(start)
+                guard from != start else { continue }
+                var hole = start
+                let held = (base + start).move()
+                while from != start {
+                    precondition(!placed[from], "permute: source is not a permutation")
+                    (base + hole).moveInitialize(from: base + from, count: 1)
+                    placed[from] = true
+                    hole = from
+                    from = source(hole)
+                }
+                (base + hole).initialize(to: held)
+            }
+        }
     }
 
     // MARK: - Encoding
