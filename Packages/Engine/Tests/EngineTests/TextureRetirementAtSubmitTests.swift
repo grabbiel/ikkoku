@@ -55,12 +55,16 @@ private func pixels(_ renderer: Renderer, _ frame: RenderFrame) throws -> Data {
 
 /// No prepared frame follows the submit: the retired texture goes at the next
 /// submit of a later frame, with no draw, capture or pick, and the resource
-/// generation moves. Meshes still wait for a prepared frame, and a submit
+/// generation moves. While a viewport draws, meshes still wait for a prepared
+/// frame (#368 completes them at submit only while none draws), and a submit
 /// with nothing retiring changes nothing.
 @Test(.enabled(if: MTLCreateSystemDefaultDevice() != nil))
 func aRetiredTextureIsReleasedByTheNextSubmitWithoutAPreparedFrame() throws {
     let renderer = try makeSourceShaderRenderer()
     let resources = renderer.resources
+    let viewport = NSObject()
+    renderer.setViewport(ObjectIdentifier(viewport), drawing: true)
+    defer { renderer.setViewport(ObjectIdentifier(viewport), drawing: false) }
     let handle = try solidTexture(resources, key: "submit-release-" + UUID().uuidString)
     let mesh = try resources.register(mesh: MeshData(name: "retired", positions: [Float3(0, 0, 0), Float3(1, 0, 0), Float3(0, 1, 0)],
                                                      normals: [Float3](repeating: Float3(0, 0, 1), count: 3), indices: [0, 1, 2]))

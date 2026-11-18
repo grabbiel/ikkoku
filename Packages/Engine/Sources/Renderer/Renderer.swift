@@ -153,6 +153,10 @@ public struct RenderStatusReporter: Sendable {
 ///   `renderLock`, so it always prepares the newest submitted frame, as when it
 ///   ran on the main thread (resource retirement, R6). Lock order: a frame
 ///   slot, then `renderLock`, then `frameLock` or `statusLock`.
+/// - While no viewport draws, `submit` queues a retirement completion on
+///   `retirementQueue` (#368). It takes `renderLock` only with `try`, then
+///   `frameLock` for the pending frame's stamp, then the store lock, in the
+///   order above, and never waits for `renderLock`.
 /// - What the last prepared frame reported (`lastFrameStatistics`,
 ///   `lastFrameError`, `lastDeformationErrors`, `lastSourceShaderLive`) and
 ///   `lastFrameGPUTime` are published under `statusLock`. They describe the
@@ -163,8 +167,9 @@ public struct RenderStatusReporter: Sendable {
 /// locks above (`pendingFrame`, its revision and continuous flag by `frameLock`;
 /// `targets`, `frameIndex`, interactive invalidation, the deformation buffers'
 /// content record and live encoder state by `renderLock`; the published values
-/// by `statusLock`; the submit observers by `observerLock`); everything else is immutable after `init` or a
-/// thread-safe Metal or store object (`pickQueue` is a serial dispatch queue).
+/// by `statusLock`; the submit observers, drawing viewports and the queued
+/// completion's flag by `observerLock`); everything else is immutable after `init` or a
+/// thread-safe Metal or store object (`pickQueue` and `retirementQueue` are serial dispatch queues).
 public final class Renderer: @unchecked Sendable {
     public static let shadowMapSize = 2048
 
@@ -225,10 +230,20 @@ public final class Renderer: @unchecked Sendable {
     var liveEncoder: SourceShaderLiveEncoder?
     var liveEncoderError: String?
 
-    /// Guards `submitObservers` only; never held while taking another lock.
+    /// Guards `submitObservers`, `drawingViewports` and `retirementScheduled`;
+    /// never held while taking another lock.
     private let observerLock = NSLock()
     private var submitObservers: [UInt64: @Sendable () -> Void] = [:]
     private var nextObserver: UInt64 = 0
+    /// #368: the viewports drawing this renderer's submits (`setViewport`).
+    private var drawingViewports = Set<ObjectIdentifier>()
+    /// #368: a completion is queued and has not started
+    /// (`completeScheduledRetirements`).
+    private var retirementScheduled = false
+    /// #368: how many completions submits have scheduled (tests).
+    private var retirementSchedules = 0
+    /// #368: completes retirements off the main thread while no viewport draws.
+    private let retirementQueue = DispatchQueue(label: "com.grabbiel.Ikkoku.retirements", qos: .utility)
 
     private let statusLock = NSLock()
     private var publishedStatistics = RenderFrameStatistics()
@@ -308,7 +323,8 @@ public final class Renderer: @unchecked Sendable {
         // replaces has held its own since its submit, so textures retired before
         // this frame was created go now, not when a viewport prepares it (an
         // occluded or minimized one never does). Store lock only, before frameLock.
-        resources.completeTextureRetirements(createdBefore: snapshot.createdAt)
+        // The same lock says whether meshes or keys are retiring (#368, below).
+        let retiring = resources.completeTextureRetirements(createdBefore: snapshot.createdAt)
         // Native shaders do not read frame.time. Live programs may read _Time;
         // conservatively keep every visible live material at the display rate.
         let continuous = snapshot.items.contains { $0.visible && $0.sourceShader != nil }
@@ -317,9 +333,73 @@ public final class Renderer: @unchecked Sendable {
         frameLock.unlock()
         observerLock.lock()
         let observers = submitObservers.isEmpty ? [] : Array(submitObservers.values)
+        // #368: meshes and keys still go when a prepare of a submitted frame
+        // completes them, which a drawing viewport does within a frame. With no
+        // viewport drawing (hidden, minimized, or none), nothing would prepare,
+        // so a utility queue completes them under the render lock instead, once
+        // for any number of submits before it starts. Nothing more runs on
+        // this thread.
+        var schedule = false
+        if retiring, drawingViewports.isEmpty, !retirementScheduled {
+            retirementScheduled = true; retirementSchedules += 1; schedule = true
+        }
         observerLock.unlock()
+        if schedule { retirementQueue.async { [weak self] in self?.completeScheduledRetirements() } }
         for observer in observers { observer() }
     }
+
+    /// #368: a viewport says whether it draws this renderer's submits: visible
+    /// with its display link running (`true`), or hidden, minimized or stopped
+    /// (`false`). While no viewport draws, `submit` completes retirements off
+    /// the main thread. Safe from any thread.
+    public func setViewport(_ viewport: ObjectIdentifier, drawing: Bool) {
+        observerLock.lock()
+        if drawing { drawingViewports.insert(viewport) } else { drawingViewports.remove(viewport) }
+        observerLock.unlock()
+    }
+
+    /// #368, on `retirementQueue`: completes what a prepare of the pending
+    /// frame would, the retirements made before it was created, if no frame
+    /// is being prepared (the render lock is free). Otherwise they stay, and
+    /// the next submit or the prepare of a submitted frame completes them, as
+    /// before. The pending frame is the submit that queued this or a later
+    /// one; if a later submit put back a copy of an older frame, that older
+    /// stamp applies, as at its prepare. Holding the render lock keeps every
+    /// guarantee of a completion at prepare: no prepare runs, the pending
+    /// frame was created after the retirements it completes, encoded command
+    /// buffers hold their own references, and frames created earlier get
+    /// transient deformation buffers. Internal so a test can run it with no
+    /// submitted frame pending, when it completes nothing.
+    func completeScheduledRetirements() {
+        observerLock.lock(); retirementScheduled = false; observerLock.unlock()
+        guard renderLock.try() else { return }
+        frameLock.lock()
+        let stamp: UInt64? = pendingFrame.submitted ? pendingFrame.createdAt : nil
+        frameLock.unlock()
+        if let stamp { dropDeformContent(resources.completeRetirements(createdBefore: stamp)) }
+        renderLock.unlock()
+    }
+
+    /// Drops the content records of released deformation keys, which hold
+    /// their buffers. A record only ever matches its own buffer (`===`), so a
+    /// key's later buffer never reuses it. Caller holds renderLock.
+    private func dropDeformContent(_ keys: [UInt64]) {
+        guard !keys.isEmpty, !deformContent.isEmpty else { return }
+        for key in keys { deformContent[key] = nil }
+    }
+
+    /// Waits for a scheduled completion (tests).
+    func waitForScheduledRetirements() { retirementQueue.sync {} }
+
+    /// Holds queued completions until released, so a test can submit again
+    /// before one starts (tests).
+    func holdScheduledRetirements(_ hold: Bool) { if hold { retirementQueue.suspend() } else { retirementQueue.resume() } }
+
+    /// How many completions submits have scheduled so far (tests).
+    var scheduledRetirementCount: Int { observerLock.lock(); defer { observerLock.unlock() }; return retirementSchedules }
+
+    /// Whether a content record holds `key`'s buffer (tests).
+    func holdsDeformContent(key: UInt64) -> Bool { renderLock.lock(); defer { renderLock.unlock() }; return deformContent[key] != nil }
 
     /// Calls `observer` after every `submit`, on the submitting thread and
     /// outside the renderer's locks, so a viewport can return its display link
@@ -937,7 +1017,7 @@ public final class Renderer: @unchecked Sendable {
                  deforms mode: DeformMode = .always) throws -> FrameContext {
         // A submitted frame created after a retirement replaced every pending frame
         // that could still name the retired resources (`ResourceStore.retire`).
-        if input.submitted { resources.completeRetirements(createdBefore: input.createdAt) }
+        if input.submitted { dropDeformContent(resources.completeRetirements(createdBefore: input.createdAt)) }
         var statistics = RenderFrameStatistics()
         var tracking: DeformTracking
         switch mode {

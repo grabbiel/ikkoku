@@ -500,7 +500,10 @@ public final class ResourceStore: @unchecked Sendable {
     // `ResourceClock` stamp and leaves the resources in place.
     // - Meshes and keys are released when the renderer prepares a submitted
     //   frame created after that stamp (`completeRetirements`): the pending frame
-    //   was replaced by one built without them.
+    //   was replaced by one built without them. When no viewport is drawing
+    //   (hidden, minimized, or none), a submit has the renderer complete them off
+    //   the main thread instead, once it holds its render lock (#368,
+    //   `Renderer.submit`): no prepare runs then, so the same holds.
     // - Textures are released earlier, when a frame created after that stamp is
     //   submitted (`completeTextureRetirements`). Every submitted frame holds its
     //   own references to the textures it names (`RenderFrame.retainTextures`),
@@ -553,27 +556,36 @@ public final class ResourceStore: @unchecked Sendable {
     /// texture references: releases the textures retired before that frame was
     /// created (see above). One lock and one check when nothing is retiring.
     /// Unlike `completeRetirements`, it leaves `newestCompletedRetirement` alone.
-    func completeTextureRetirements(createdBefore stamp: UInt64) {
+    /// Returns whether meshes or keys are retiring, from the same lock (#368).
+    @discardableResult
+    func completeTextureRetirements(createdBefore stamp: UInt64) -> Bool {
         lock.lock(); defer { lock.unlock() }
-        guard !retiringTextures.isEmpty else { return }
+        let others = !retiringMeshes.isEmpty || !retiringDeformKeys.isEmpty || !retiringHiddenKeys.isEmpty
+        guard !retiringTextures.isEmpty else { return others }
         var changed = false
         for (id, retired) in retiringTextures where retired < stamp {
             textures[id] = nil; retiringTextures[id] = nil; changed = true
         }
         if changed { generationValue &+= 1 }
+        return others
     }
 
-    /// Called while the renderer prepares a submitted frame created at `stamp`:
-    /// releases everything retired before that frame existed. Textures retired
-    /// before it normally went at its submit already.
-    func completeRetirements(createdBefore stamp: UInt64) {
+    /// Called while the renderer holds its render lock, so no frame is being
+    /// prepared, and the pending frame was submitted at `stamp` or later: as it
+    /// prepares a submitted frame created at `stamp`, or from a submit's
+    /// completion off the main thread (#368). Releases everything retired
+    /// before that frame existed; textures retired before it normally went at
+    /// its submit already. Returns the released deformation keys, whose content
+    /// records the renderer drops.
+    @discardableResult
+    func completeRetirements(createdBefore stamp: UInt64) -> [UInt64] {
         var releasedMeshes: [UInt32] = [], releasedKeys: [UInt64] = []
         var live: SourceShaderLiveEncoder?
         // The live encoder's lock is taken after this store's lock is released.
         defer { live?.evict(meshes: releasedMeshes, deformKeys: releasedKeys) }
         lock.lock(); defer { lock.unlock() }
         guard !retiringMeshes.isEmpty || !retiringDeformKeys.isEmpty || !retiringHiddenKeys.isEmpty
-              || !retiringTextures.isEmpty else { return }
+              || !retiringTextures.isEmpty else { return [] }
         live = liveInputs
         var newest = newestCompletedRetirement
         var changed = false
@@ -593,6 +605,7 @@ public final class ResourceStore: @unchecked Sendable {
         }
         if changed { generationValue &+= 1 }
         newestCompletedRetirement = newest
+        return releasedKeys
     }
 
     // MARK: Textures
