@@ -151,12 +151,13 @@ class ABMXProbeTests(unittest.TestCase):
             manifest.write_text(json.dumps({'entries': [dict(relativePath='KKABMX.dll', length=1, sha256='0' * 64)]}))
             with self.assertRaisesRegex(ValueError, 'differ from the inventory'): probe.dry_run(self.args(inventory=manifest, output=self.dir / 'out2'))
 
-    def test_the_probe_source_reads_abmx_by_its_own_reader_and_captures_three_frames(self):
+    def test_the_probe_source_reads_abmx_by_its_own_reader_and_frames_the_character(self):
         source = probe.PROBE.read_text()
         for piece in ('[BepInPlugin("org.ikkoku.validation.abmxprobe"', 'AbmxGuid="KKABMX.Core"', 'AbmxData="KKABMPlugin.ABMData"',
                       '"marco.kkapi"', '"com.bepis.bepinex.extendedsave"', 'abmx.Major!=5||abmx.Minor!=4', '"GetExtendedDataById"',
                       '"KKABMX.Core.BoneController"', '"ReadModifiers"', '"GetAllModifiers"', '"BoneLocation"', '"CoordinateModifiers"',
-                      '"ScaleModifier"', '"LengthModifier"', '"PositionModifier"', '"RotationModifier"', 'studio.cameraCtrl.Import(parsed.cameraSaveData)',
+                      '"ScaleModifier"', '"LengthModifier"', '"PositionModifier"', '"RotationModifier"', '"_sclBaseline"', '"_posBaseline"', '"_rotBaseline"',
+                      'Quaternion.LookRotation(-forward,up)', '"boneRootToCharacter"', '"whitePixels"',
                       '-color.png"', '-character.png"', '-skin.png"', 'Path.Combine(dir,"abmx-cases.tsv")', 'RenderSettings.fog=false'):
             self.assertIn(piece, source)
 

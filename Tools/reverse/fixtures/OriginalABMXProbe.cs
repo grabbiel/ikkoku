@@ -19,17 +19,20 @@
 //   load:   AddObjectFemale.Load / AddObjectMale.Load(info, null, null), SettleFrames frames, then at the end of a
 //           frame ("stage": "loaded"):
 //             - "live": the BoneController's GetAllModifiers() after the load, the same fields plus whether each
-//               modifier found its bone (BoneTransform) and that bone's path;
+//               modifier found its bone (BoneTransform), that bone's path, and the baseline ABMX applies the
+//               modifier to (its private _hasBaseline, _sclBaseline, _posBaseline and _rotBaseline);
 //             - every cf_/cm_ transform under the body and head bone roots (relative path and local transform);
-//             - the capture: the scene record's own camera (CameraControl.Import(parsed.cameraSaveData)), CameraFrames
-//               frames, then at the end of a frame three CaptureW x CaptureH renders: Camera.main as the player draws
-//               it (abmx-<label>-color.png), and two white-on-black silhouettes from a probe camera with its pose and
-//               projection, no image effects and fog off: every enabled renderer of the character
-//               (abmx-<label>-character.png), and the skin only, the body and head meshes without hair, clothes,
-//               parts, accessories or hit meshes (abmx-<label>-skin.png). Every other renderer is off for those two
-//               renders and restored after them. Both cameras (pose, field of view, clip planes, worldToCamera and
-//               projection), Studio's camera data, the character's renderers with their part, and the two sets'
-//               viewport rectangles are recorded.
+//             - the character's root: its localToWorld matrix and every transform from the bone root up to it;
+//             - the capture: a probe camera fitted to the character's renderer bounds (in front of the root, looking
+//               back along its forward, field of view FitFov, the bounds' sphere fitted with a margin), then at the
+//               end of a frame three CaptureW x CaptureH renders from it: the colour frame with Camera.main's
+//               settings but none of its image effects (abmx-<label>-color.png), and two white-on-black silhouettes
+//               with fog off: every enabled renderer of the character (abmx-<label>-character.png), and the skin only,
+//               the body and head meshes without hair, clothes, parts, accessories or hit meshes
+//               (abmx-<label>-skin.png). Every other renderer is off for those two renders and restored after them.
+//               The camera (pose, field of view, clip planes, worldToCamera and projection), the scene record's own
+//               camera data, the character's renderers with their part, the two sets' viewport rectangles and each
+//               silhouette's white pixel count are recorded.
 // Each case is written to abmx/abmx-<label>.json and the run's outcome to abmx/status.json. A failed case is recorded
 // and the run goes on. No installed card, scene or save is read or written; the uploaded records are only read.
 using System;
@@ -47,7 +50,8 @@ using Studio;
 using UnityEngine;
 [BepInPlugin("org.ikkoku.validation.abmxprobe", "Ikkoku ABMX probe", "1.0.0")]
 public sealed class OriginalABMXProbe:BaseUnityPlugin {
-    const int SettleFrames=30, CameraFrames=5, CaptureW=960, CaptureH=720;
+    const int SettleFrames=30, CaptureW=960, CaptureH=720;
+    const float FitFov=23f, FitMargin=1.05f;
     const string AbmxGuid="KKABMX.Core", AbmxVersion="5.4", AbmxData="KKABMPlugin.ABMData";
     static readonly string[] Required={"KKABMX.Core","marco.kkapi","com.bepis.bepinex.extendedsave"};
     const BindingFlags Any=BindingFlags.Public|BindingFlags.NonPublic|BindingFlags.Instance;
@@ -132,13 +136,14 @@ public sealed class OriginalABMXProbe:BaseUnityPlugin {
         if(controller==null)throw new Exception("the loaded character has no KKABMX.Core.BoneController");
         var live=Modifiers((IEnumerable)controllerType.GetMethod("GetAllModifiers",Type.EmptyTypes).Invoke(controller,null),true,cha.transform);
         var bones=K("body",Bones(cha.objBodyBone),"head",cha.objHeadBone==null||cha.objBodyBone==null||cha.objHeadBone.transform.IsChildOf(cha.objBodyBone.transform)?null:Bones(cha.objHeadBone));
-        string cameraImport;
-        try{studio.cameraCtrl.Import(parsed.cameraSaveData);cameraImport="imported";}catch(Exception e){cameraImport="failed: "+e.Message;}
-        for(int i=0;i<CameraFrames;i++)yield return null;
-        yield return new WaitForEndOfFrame();
+        var chain=new List<object>();
+        for(var x=cha.objBodyBone==null?null:cha.objBodyBone.transform;x!=null;x=x==cha.transform?null:x.parent)
+            chain.Add(K("name",x.name,"pos",V(x.localPosition),"quat",Q(x.localRotation),"scl",V(x.localScale)));
+        var characterRoot=K("name",cha.transform.name,"localToWorld",M(cha.transform.localToWorldMatrix),"position",V(cha.transform.position),
+            "rotation",Q(cha.transform.rotation),"lossyScale",V(cha.transform.lossyScale),"boneRootToCharacter",chain);
         var capture=Capture(cha,label);
         record["stage"]="loaded";record["frame"]=Time.frameCount;record["live"]=live;record["bones"]=bones;
-        record["cameraImport"]=cameraImport;record["capture"]=capture;
+        record["characterRoot"]=characterRoot;record["sceneCamera"]=CameraData(parsed.cameraSaveData);record["capture"]=capture;
         record["counts"]=K("deserialized",((List<object>)record["deserialized"]).Count,"live",live.Count);
         File.WriteAllText(Path.Combine(folder,name),J(record));written.Add(name);
     }
@@ -176,14 +181,17 @@ public sealed class OriginalABMXProbe:BaseUnityPlugin {
                 "position",V3(Member(d,"PositionModifier")),"rotation",V3(Member(d,"RotationModifier"))));
             var row=K("boneName",Member(m,"BoneName"),"boneLocation",location==null?null:(object)Convert.ToInt32(location),"boneLocationName",location==null?null:location.ToString(),
                 "coordinateModifiers",coordinates==null?null:entries);
-            if(live){var t=Member(m,"BoneTransform") as Transform;row["boneFound"]=t!=null;row["bonePath"]=t==null?null:PathOf(t,root);}
+            if(live) {
+                var t=Member(m,"BoneTransform") as Transform;row["boneFound"]=t!=null;row["bonePath"]=t==null?null:PathOf(t,root);
+                row["baseline"]=K("has",Member(m,"_hasBaseline"),"scale",V3(Member(m,"_sclBaseline")),"position",V3(Member(m,"_posBaseline")),"rotation",Q4(Member(m,"_rotBaseline")));
+            }
             rows.Add(row);
         }
         return rows;
     }
-    // The colour frame is Camera.main as the player draws it (its image effects included). The two silhouettes use a
-    // separate probe camera with Camera.main's pose and projection and no image effects, fog off, every renderer
-    // outside the set switched off and the set drawn white on black (OriginalMapProbe's measurement pass).
+    // One probe camera fitted to the character's renderer bounds draws the colour frame (Camera.main's settings, none of
+    // its image effects) and the two silhouettes (fog off, every renderer outside the set switched off and the set drawn
+    // white on black, as in OriginalMapProbe's measurement pass).
     object Capture(ChaControl cha,string label) {
         var main=Camera.main;
         if(main==null)throw new Exception("no Camera.main for the capture");
@@ -191,21 +199,23 @@ public sealed class OriginalABMXProbe:BaseUnityPlugin {
         foreach(var r in cha.gameObject.GetComponentsInChildren<Renderer>(false))if(r.enabled&&r.gameObject.activeInHierarchy)groups[r]=Group(cha,r.transform);
         var character=new List<Renderer>(groups.Keys);var skin=new List<Renderer>();
         foreach(var p in groups)if(p.Value=="skin")skin.Add(p.Key);
+        if(character.Count==0)throw new Exception("the character has no enabled renderer to frame");
         var listed=new List<object>();
         foreach(var p in groups)listed.Add(K("name",p.Key.name,"group",p.Value,"type",p.Key.GetType().Name,"path",PathOf(p.Key.transform,cha.transform)));
+        var bounds=character[0].bounds;foreach(var r in character)bounds.Encapsulate(r.bounds);
+        float radius=bounds.extents.magnitude,distance=FitMargin*radius/Mathf.Sin(0.5f*FitFov*Mathf.Deg2Rad);
+        Vector3 forward=cha.transform.forward,up=cha.transform.up;
         var target=new RenderTexture(CaptureW,CaptureH,24,RenderTextureFormat.ARGB32,RenderTextureReadWrite.Default);target.antiAliasing=1;target.Create();
-        var previous=main.targetTexture;
-        main.targetTexture=target;main.aspect=(float)CaptureW/CaptureH;
-        var mainRecord=CameraRecord(main);
-        main.Render();var color=Save(target,"abmx-"+label+"-color.png");
-        main.targetTexture=previous;main.ResetAspect();
         var effects=new List<object>();
         foreach(var b in main.GetComponents<Behaviour>())effects.Add(K("type",b.GetType().FullName,"enabled",b.enabled));
-        var probeObject=new GameObject("IkkokuABMXProbeCamera");var cam=probeObject.AddComponent<Camera>();cam.enabled=false;
-        cam.transform.position=main.transform.position;cam.transform.rotation=main.transform.rotation;
-        cam.fieldOfView=main.fieldOfView;cam.nearClipPlane=main.nearClipPlane;cam.farClipPlane=main.farClipPlane;cam.aspect=(float)CaptureW/CaptureH;
-        cam.clearFlags=CameraClearFlags.SolidColor;cam.backgroundColor=Color.black;cam.allowHDR=false;cam.allowMSAA=false;cam.cullingMask=~0;
-        cam.renderingPath=RenderingPath.Forward;cam.useOcclusionCulling=false;cam.targetTexture=target;
+        var mainRecord=CameraRecord(main);
+        var probeObject=new GameObject("IkkokuABMXProbeCamera");var cam=probeObject.AddComponent<Camera>();
+        cam.CopyFrom(main);cam.enabled=false;cam.targetTexture=target;
+        cam.transform.position=bounds.center+forward*distance;cam.transform.rotation=Quaternion.LookRotation(-forward,up);
+        cam.fieldOfView=FitFov;cam.nearClipPlane=Mathf.Max(0.01f,distance-2f*radius);cam.farClipPlane=distance+2f*radius;cam.aspect=(float)CaptureW/CaptureH;
+        cam.allowMSAA=false;cam.useOcclusionCulling=false;
+        cam.Render();var color=Save(target,"abmx-"+label+"-color.png");
+        cam.clearFlags=CameraClearFlags.SolidColor;cam.backgroundColor=Color.black;cam.allowHDR=false;cam.cullingMask=~0;cam.renderingPath=RenderingPath.Forward;
         var probeRecord=CameraRecord(cam);
         var hidden=new List<Renderer>();var saved=new Dictionary<Renderer,Material[]>();
         bool fog=RenderSettings.fog;string whiteShader;Material white=null;object characterMask,skinMask;
@@ -224,7 +234,7 @@ public sealed class OriginalABMXProbe:BaseUnityPlugin {
             if(white!=null)UnityEngine.Object.Destroy(white);
         }
         return K("width",CaptureW,"height",CaptureH,"color",color,"character",characterMask,"skin",skinMask,"whiteShader",whiteShader,
-            "main",mainRecord,"mainBehaviours",effects,"probe",probeRecord,"cameraData",CameraData(studio.cameraCtrl.Export()),
+            "main",mainRecord,"mainBehaviours",effects,"probe",probeRecord,"fit",K("center",V(bounds.center),"extents",V(bounds.extents),"radius",radius,"distance",distance,"fieldOfView",FitFov,"margin",FitMargin),
             "renderers",listed,"hiddenRenderers",hidden.Count,"characterViewport",ScreenRect(cam,character),"skinViewport",ScreenRect(cam,skin));
     }
     // The renderer's part of the character: the first of the ChaInfo part roots above it, else skin (body or head) or other.
@@ -257,9 +267,10 @@ public sealed class OriginalABMXProbe:BaseUnityPlugin {
     object Save(RenderTexture target,string file) {
         var previous=RenderTexture.active;RenderTexture.active=target;
         var readback=new Texture2D(target.width,target.height,TextureFormat.RGBA32,false,true);readback.ReadPixels(new Rect(0,0,target.width,target.height),0,0);readback.Apply(false,false);
+        int white=0;foreach(var c in readback.GetPixels32())if(c.r>128)white++;
         var png=readback.EncodeToPNG();UnityEngine.Object.Destroy(readback);RenderTexture.active=previous;
         File.WriteAllBytes(Path.Combine(folder,file),png);written.Add(file);
-        using(var sha=SHA256.Create())return K("file",file,"bytes",png.Length,"sha256",BitConverter.ToString(sha.ComputeHash(png)).Replace("-","").ToLowerInvariant());
+        using(var sha=SHA256.Create())return K("file",file,"bytes",png.Length,"sha256",BitConverter.ToString(sha.ComputeHash(png)).Replace("-","").ToLowerInvariant(),"whitePixels",white);
     }
     static object ScreenRect(Camera cam,List<Renderer> renderers) {
         float x0=float.MaxValue,y0=float.MaxValue,x1=float.MinValue,y1=float.MinValue;bool any=false;
@@ -332,6 +343,7 @@ public sealed class OriginalABMXProbe:BaseUnityPlugin {
     }
     static List<object> V(Vector3 v){return new List<object>{v.x,v.y,v.z};}
     static object V3(object v){return v is Vector3?V((Vector3)v):null;}
+    static object Q4(object q){return q is Quaternion?Q((Quaternion)q):null;}
     static List<object> Q(Quaternion q){return new List<object>{q.x,q.y,q.z,q.w};}
     static List<object> M(Matrix4x4 m){var l=new List<object>();for(int r=0;r<4;r++)for(int c=0;c<4;c++)l.Add(m[r,c]);return l;}
     static Dictionary<string,object> K(params object[] kv){var d=new Dictionary<string,object>();for(int i=0;i<kv.Length;i+=2)d[(string)kv[i]]=kv[i+1];return d;}
