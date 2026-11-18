@@ -2960,7 +2960,7 @@
         "IKKOKU_STUDIO_SCENARIO_REPORT": ".local/verification/reports/studio-scenario-source-map34.json"
       },
       "referenceTier": "app-smoke",
-      "tolerance": "ST-A11 slice 3 on scene-map34-day.png (Map 34 空き教室 alone, moved, day sun, saved by the original player): the converted map is drawn before the first step (53 draws: 29 lightmapped, the particles, the day sky; 54 images as BC blocks, none decoded) with the exact approximation label in the status line; two map-only points pick nothing; View > Show Source Map off draws 0 map parts and says so, on restores 53 with the sky; the original-format export is byte-identical to the source with the map hidden and shown; reimport, New Scene (no map, no line) and undo restore the map. Lighting, sky and colour are not checked here (see docs/reference/studio/maps.md, the map probe gates).",
+      "tolerance": "ST-A11 slice 3 on scene-map34-day.png (Map 34 空き教室 alone, moved, day sun, saved by the original player): the converted map is drawn before the first step (53 draws: 29 lightmapped, the particles, the day sky; 64 images as BC blocks (10 of them normal maps), none decoded) with the exact approximation label in the status line; two map-only points pick nothing; View > Show Source Map off draws 0 map parts and says so, on restores 53 with the sky; the original-format export is byte-identical to the source with the map hidden and shown; reimport, New Scene (no map, no line) and undo restore the map. Lighting, sky and colour are not checked here (see docs/reference/studio/maps.md, the map probe gates).",
       "artifacts": [
         {
           "path": ".local/verification/reports/studio-scenario-source-map34.json",
@@ -3002,7 +3002,7 @@
         "IKKOKU_STUDIO_SCENARIO_REPORT": ".local/verification/reports/studio-scenario-source-map41.json"
       },
       "referenceTier": "app-smoke",
-      "tolerance": "ST-A11 slice 4 on scene-map41.png (Map 41 備品倉庫 alone, moved, day sun, map option on, saved by the original player; the map the user's scenes name most): the converted map is drawn before the first step (29 draws: 27 lightmapped, no sky, particle, unlit, silhouette or option draws; 28 images as BC blocks with no PNG copies) with the exact approximation label in the status line; two map-only points pick nothing; View > Show Source Map off draws 0 map parts and says so, on restores 29; the original-format export is byte-identical to the source with the map hidden and shown; reimport, New Scene (no map, no line) and undo restore the map. Lighting and colour are not checked here (see docs/reference/studio/maps.md, the map probe gates).",
+      "tolerance": "ST-A11 slice 4 on scene-map41.png (Map 41 備品倉庫 alone, moved, day sun, map option on, saved by the original player; the map the user's scenes name most): the converted map is drawn before the first step (29 draws: 27 lightmapped, no sky, particle, unlit, silhouette or option draws; 30 images as BC blocks with no PNG copies (2 of them normal maps, drawn on 3 draws)) with the exact approximation label in the status line; two map-only points pick nothing; View > Show Source Map off draws 0 map parts and says so, on restores 29; the original-format export is byte-identical to the source with the map hidden and shown; reimport, New Scene (no map, no line) and undo restore the map. Lighting and colour are not checked here (see docs/reference/studio/maps.md, the map probe gates).",
       "artifacts": [
         {
           "path": ".local/verification/reports/studio-scenario-source-map41.json",

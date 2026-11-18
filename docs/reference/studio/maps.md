@@ -1242,6 +1242,34 @@ Tests (`SourceStudioMapSunTests.swift`):
 - Tangents were already exported for every `Standard` primitive as `(x, y, −z, w)`. The Z reflection and the V flip each reverse the handedness, so w is kept.
 - Not exported: detail normal maps (`_DetailNormalMap`, 190 materials).
 
+### The slice-6 export
+
+All 42 maps were re-exported from the worktree into a new folder (`.local/sta11d-slice6/tools/reexport_normals.py`, the same commands as each map's provenance). `verify_normals.py` checks that against the installed slice-5 fixture the export only adds:
+
+- the bins are byte-identical;
+- images, textures and `ikkokuBlockImages.images` are appended, and the old entries are unchanged;
+- each material differs only by `ikkokuStandard.normal`;
+- the scene extras differ only by `ikkokuMapNormals` and the appended block entries;
+- the only new files are the appended images' BC3 files, plus their PNG copies in maps 33 and 34, which keep PNG copies.
+
+| | Count |
+|---|---:|
+| Materials with a normal map | 1,015 |
+| Normal images | 904: 900 new, and 4 that are already another material's albedo (the toilets' glass texture, maps 8, 9, 10 and 12) |
+| New files | 914: 900 BC3 (973.0 MB) and 14 PNG copies (6.5 MB) |
+| Changed files | 126: each map's glTF and `provenance.json`, `source.unity.json` in the 41 maps with normal maps, and the catalog |
+| Texture formats | DXT5 for all; none is sRGB |
+
+The catalog's rows count the new images in `textures` and `textureGPUBytesRGBA8Mips`. Their `droppedTerms` still list "normal maps" (see [what remains](#what-remains)).
+
+Lane maps, every sun type, map option on or off:
+
+| Map | Normal-mapped draws | Normal textures | BC images |
+|---|---:|---:|---:|
+| 33 | 4 | 4 | 8 → 12 |
+| 34 | 10 | 10 | 54 → 64 |
+| 41 | 3 | 2 | 28 → 30 |
+
 ### Engine (slice 6)
 
 - **Loading.**
@@ -1316,7 +1344,7 @@ Slice 4 (all maps), Release, in one quiet window ([performance: slice 4](../perf
 - **Shadow assumptions.** Transparent parts receive no shadow, blended casters clip at 0.5 instead of D3D11's dither mask, the Transparent mode blends as Fade, receivers more than 40 m from the camera target are unshadowed, and a slope-scaled bias is added. Each is named in [the engine](#engine-slice-5) and none is measured against the original.
 - **Normal-map parity.** Slice 6 draws the normal maps without a capture of the original's per-texel normal. The VM case in [the engine](#engine-slice-6) gives the evidence; until then no parity is claimed.
 - **The rest of `Standard`.** Not drawn: the reflection probe's specular, per-texel `_MetallicGlossMap` and smoothness, detail maps (detail albedo and the 190 detail normal maps), parallax and occlusion maps. The [audit](#what-standards-sun-reads-slice-5) counts what the export leaves out and why.
-- **The catalog's approximations.** The catalog rows still list `realtime sun and its shadows`, `specular and reflections` and the light-probe count among each map's approximations. The status line reads only their `shaders approximated` entry and names the rest itself, but a re-export should update them.
+- **The catalog's approximations.** The catalog rows still list `realtime sun and its shadows`, `specular and reflections`, `normal maps` and the light-probe count among each map's approximations. The status line reads only their `shaders approximated` entry and names the rest itself, but a re-export should update them.
 - **Particles.** Soft particles (the fade where the cards meet geometry) are not drawn. Particle renderers sort as Unity's do (see [particles, slice 4](#particles-slice-4)), but blended `Standard` materials are still merged across renderers (60 draws in 20 maps hold two or more), so their blend order within a draw is the mesh's triangle order.
 - **The sky's far plane.** The player's main camera clips at 1000 m, inside parts of map 34's sky spheres (about 450–1,200 m). Our infinite projection draws the whole sphere, so the full frame differs where the player shows black.
 - **Fog and camera effects.** RenderSettings fog was off at runtime in every phase-C and map 34 scene. The per-sun-type fog of `SunLightInfo` and CharaStudio's camera image effects are not drawn.
