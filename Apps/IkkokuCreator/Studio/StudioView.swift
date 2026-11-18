@@ -615,13 +615,14 @@ struct ObjectInspector: View {
 
 /// Everything the Object tab shows for one object.
 struct ObjectInspectorState: Equatable {
-    struct Parent: Equatable, Identifiable { let id: UUID; let name: String }
     var id: UUID
     var name: String
     var visible: Bool
     var locked: Bool
     var parent: UUID?
-    var parents: [Parent]
+    /// What the Parent popup shows: "None", or the parent's name. Its
+    /// options are built when it opens (`StudioParentPopUp`).
+    var parentTitle: String
     var transform: StudioTransform
     var kind: StudioObjectKind
     var cardName: String
@@ -645,9 +646,7 @@ struct ObjectInspectorState: Equatable {
     @MainActor init(model: StudioModel, object o: StudioObject) {
         let doc = model.doc
         id = o.id; name = o.name; visible = o.visible; locked = o.locked; parent = o.parent
-        // #383: one hashed lookup instead of a scan of every object per parent step.
-        let lookup = StudioDocument.Lookup(doc.objects)
-        parents = doc.objects.filter { $0.id != o.id && !lookup.isDescendant($0.id, of: o.id) }.map { Parent(id: $0.id, name: $0.name) }
+        parentTitle = o.parent.map { doc.object($0)?.name ?? "" } ?? "None"
         transform = o.transform; kind = o.kind
         cardName = o.card?.profile.name ?? ""
         isSourceCharacter = o.sourceCharacter != nil
@@ -708,10 +707,10 @@ struct ObjectInspectorContent: View, Equatable {
                 Toggle("Visible", isOn: Binding(get: { o.visible }, set: { v in update { $0.visible = v } }))
                 Toggle("Locked", isOn: Binding(get: { o.locked }, set: { v in update { $0.locked = v } }))
             }
-            Picker(selection: Binding(get: { o.parent }, set: { parent in if model.selection == id { model.setParent(id, to: parent) } })) {
-                Text("None").tag(UUID?.none)
-                ForEach(o.parents) { p in Text(p.name).tag(UUID?.some(p.id)) }
-            } label: { Text("Parent").inspectorKeptLabel() }
+            HStack {
+                Text("Parent").inspectorKeptLabel()
+                StudioParentPopUp(model: model, id: id, parent: o.parent, title: o.parentTitle)
+            }
             if let sectionsKept {
                 VStack(alignment: .leading, spacing: 0) {
                     transformSection
