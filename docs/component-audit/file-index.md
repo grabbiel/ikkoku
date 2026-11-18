@@ -23,7 +23,7 @@ branch was tested or every asset matches the original game. Feature status,
 specific comments and pending tasks are in the linked reports. Shared behavior
 may be discussed in more than one report; one primary owner is listed here.
 
-**1086 files indexed; 1086 assigned; 0 unassigned.**
+**1087 files indexed; 1087 assigned; 0 unassigned.**
 
 Counts include the website and clothes-group additions listed below. Runtime and
 test totals include their specialized role descriptions; this is inventory
@@ -35,13 +35,13 @@ bookkeeping, not a new full source audit.
 | [Character / Maker / mods](character-and-mods.md) | 130 |
 | [Studio / IK / animation](studio.md) | 253 |
 | [Renderer / foundation / assets](renderer-and-foundation.md) | 363 |
-| [Toolchain / verification / historical docs](toolchain-and-verification.md) | 220 |
+| [Toolchain / verification / historical docs](toolchain-and-verification.md) | 221 |
 
 | File role | Files |
 | --- | ---: |
 | App resource metadata / icon | 16 |
 | Build / repository configuration | 9 |
-| Conversion / recovery / verification tool | 255 |
+| Conversion / recovery / verification tool | 256 |
 | Documentation / historical evidence | 65 |
 | Generated asset / catalog / fixture | 205 |
 | Reference host / controlled fixture | 37 |
@@ -1014,6 +1014,7 @@ Feature assessment: [toolchain-and-verification.md](toolchain-and-verification.m
 | [Tools/verification/scenarios/clothes-toggle.json](../../Tools/verification/scenarios/clothes-toggle.json) | Conversion / recovery / verification tool |
 | [Tools/verification/scenarios/color-edit.json](../../Tools/verification/scenarios/color-edit.json) | Conversion / recovery / verification tool |
 | [Tools/verification/scenarios/color-visual-reset.json](../../Tools/verification/scenarios/color-visual-reset.json) | Conversion / recovery / verification tool |
+| [Tools/verification/scenarios/extended-shape-rates.json](../../Tools/verification/scenarios/extended-shape-rates.json) | Conversion / recovery / verification tool |
 | [Tools/verification/scenarios/eye-look-orbit.json](../../Tools/verification/scenarios/eye-look-orbit.json) | Conversion / recovery / verification tool |
 | [Tools/verification/scenarios/face-shape.json](../../Tools/verification/scenarios/face-shape.json) | Conversion / recovery / verification tool |
 | [Tools/verification/scenarios/fk-edit.json](../../Tools/verification/scenarios/fk-edit.json) | Conversion / recovery / verification tool |
