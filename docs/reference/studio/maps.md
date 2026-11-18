@@ -78,7 +78,7 @@ With the first slice's export, the map's only shader, `Standard`, made the catal
   - The import job starts the load beside the characters. The commit hands both to the model. A cancelled or failed import cancels the load.
   - The result returns on the main queue. Synchronous paths (captures, scenarios) wait for the load instead, so their first frame already has the map.
   - A finished load nobody took is released.
-- **Textures.** Since slice 3, an image listed in `ikkokuBlockImages` uploads its BC blocks on the worker (see [block images](#block-images)), and the rest load through `ResourceStore` as before. Textures are registered privately (`cacheNew: false`). `release()` retires meshes and textures through `ResourceStore.retire(meshes:)` and the new `retire(textures:)`, so a frame already in flight keeps them until a later frame is prepared. Slice 2's lightmaps and emission maps are owned and released the same way. A load that fails part-way unregisters everything it registered.
+- **Textures.** Since slice 3, an image listed in `ikkokuBlockImages` uploads its BC blocks on the worker (see [block images](#block-images)), and the rest load through `ResourceStore` as before. Textures are registered privately (`cacheNew: false`). `release()` retires meshes and textures through `ResourceStore.retire(meshes:)` and the new `retire(textures:)`, so a frame already in flight keeps them: the meshes until a later submitted frame is prepared, the textures until a later frame is submitted. Slice 2's lightmaps and emission maps are owned and released the same way. A load that fails part-way unregisters everything it registered.
 - **Lightmapped parts (slice 2).** `SourceStudioLightmapSet.parse` reads the glTF's `ikkokuLightmaps` extras. An export without them gives nil, and every part keeps the item material. A part whose mesh has a lightmap index of 0 or more, and whose material has `ikkokuStandard` extras, is drawn with the map material (`MaterialKindMap`, see [the material](#the-map-material)). The load fails by name, and registers nothing, when such a part names a lightmap the map does not carry or has no TEXCOORD_1, or when a lightmap file's size or SHA-256 differs from the extras.
 - **Placement.** `SourceStudioMapPlacement.mapRootMatrix` computes `T(pos) · R(UnityCoordinates.eulerDegrees(rot))` in the engine basis, which is B · M_unity · B with B = diag(1, 1, -1, 1). A non-finite component is refused by name. `mapRoot` parts are drawn at `root × local`, and `scene` parts at their authored matrix.
 - **Timing.** Each placement sets the `sourceMapReady` startup mark (the perf report keeps the first) and prints `[ikkoku] source map: <draws> draws (<n> lightmapped, <n> particle, <n> sky), <triangles> triangles, <bytes> texture bytes (<bytes> in <n> lightmaps, <bytes> in <n> sky cubes; images: <n> as BC blocks, <n> decoded, source <blocks|decoded>); loaded in <ms> on a worker, placed in <ms> on the main thread`. The scenario census has the same fields. An import's load usually ends before the import commits, so the map is placed at the commit.
@@ -1110,6 +1110,27 @@ No material carries a keyword combination outside the three smoothness cases. `_
 So its smoothness is `_Glossiness`, the third case. Its first subshader culls nothing, which is the engine's matter, not the export's. The programs' bodies were not disassembled.
 
 The oracle's irradiance template is `_Glossiness` 0 and `_Metallic` 0, so the oracle cannot gate smoothness. The engine change tests it against a reference computed from Standard's BRDF, with smoothness above 0. A VM case for it is queued, and no parity is claimed until it runs.
+
+### The sun reference phase (tooling)
+
+`original_map_probe.py sun` (`OriginalMapProbe.cs`'s sun mode) is that VM case, and the reference for the sun's shadow filter. It reads already-authored map records back in the original player (`--scene <case>=<record>`, case `mapNN` or `mapNN-<suffix>`) and measures the sun at each record's saved camera. The measurements come from a probe camera with `Camera.main`'s settings and none of its image effects, into linear float targets at 960 × 720:
+
+- the lit frame;
+- the sun's screen-space shadow mask, soft as authored and with the sun's shadows set to Hard (the shadow-map texel grid). A command buffer on the sun copies it at `LightEvent.AfterScreenspaceMask`;
+- the frame without the sun's shadows, and without the sun;
+- the deferred GBuffer's normals and specular/smoothness, copied at `CameraEvent.AfterGBuffer`, and the normals and lit frame again with every map material's normal maps off.
+
+On the full frame the probe picks the strongest shadow edge on a continuous sunlit surface. It turns the Studio camera in place to look through that pixel with an eighth of the field of view, and saves that view as its own record (`scene-sun-<case>-zoom.png`), so the app can render the same pose. It repeats the lit passes and both masks there. `sun-trace.json` records the quality, light and tier shadow settings, the built-in shader modes, every map material's smoothness, metallic and normal-map inputs, the edge pick, and the zoom pose with its error.
+
+The phase is one `prlctl exec` under the same hygiene as the earlier phases: the 328-character bootstrap fetches `run.ps1` from the host-only endpoint, and the tool refuses any exec command of 3,500 characters or more. On top of the junction targets' scans, the run script:
+
+- waits up to 120 s for the player's processes, and any `WerFault` started during the run, to exit;
+- removes the root only when no process remains and no reparse point is left under it after the junctions;
+- reports `targetsChanged`.
+
+`--dry-run` makes every check and builds `run.ps1` without the VM. `test_original_map_probe.py` covers the subcommand, the dry run, the root guard, the exec limit and one-channel float images. The results land here once the phase has run.
+
+The first run lost every case before its first load. The probe's free-space check used `System.IO.DriveInfo`, which Unity 5.6's Mono does not implement (`NotImplementedException`). The local compile cannot catch that. The guest hygiene held: targets unchanged, root removed, no process left, errno 0/0. The probe now reads free space through `kernel32`'s `GetDiskFreeSpaceEx` and goes on without the check when it cannot. The trace extras, the edge pick and the deferred passes now fail on their own, after the lit passes and masks are written.
 
 ### The slice-5 export
 
