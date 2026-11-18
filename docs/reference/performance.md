@@ -6894,3 +6894,100 @@ loader, so an upload group would gain little. In order:
 1. A Time Profiler sample, attached by pid during cold head-200 selections,
    names what holds the main actor during preparation.
 2. A worker pre-decode of the base-appearance pixels follows as its own PR.
+
+## Lazy hidden characters at import
+
+An import builds only the characters it draws
+([scene editing](studio/scene-editing.md#hidden-characters-at-import-lazy-builds)).
+Hidden characters build when shown or selected. Their saved animation time
+comes from a data-only clock. These numbers compare the change with its
+merge base.
+
+### Window and validity (W3, 2026-11-17)
+
+- **Builds and order.** Release builds of both arms: head
+  `claude/stt03k-lazy-hidden` c825850c, base fb3aecd9 (the merge base plus
+  the three new workloads). Runs alternate ABBA.
+- **Scenes.** The 70-character user scene (45 of its characters cannot
+  convert, see below) and a median user scene with hidden characters.
+- **Display: 60 Hz, monitor off.** Every unit read 60.00 Hz, Online, before
+  and after. With the monitor off no frame is presented, so frame pacing and
+  presentation metrics were not measured. Startup runs used `--retries 0`;
+  their marks, main-thread and memory numbers do not need presentation.
+- **Validity.** A process outside our own work above 20% CPU in the
+  snapshot before or after a unit invalidates it. Three of 28 units were
+  invalid, and each was rerun valid:
+  - large startup base: corespotlightd 126%;
+  - median startup head: WD Discovery 21%;
+  - large export-import head: ecosystemd, trustd, plugin-container and
+    ecosystemanalyticsd.
+- **Noted, still valid.** plugin-container 40% (one unit); launchd 27–28.5%
+  (two units).
+
+All numbers are medians (min–max), 60 Hz, monitor off.
+
+### Startup (n = 4 per arm)
+
+| Scene | Metric | Base | Head |
+|---|---|---|---|
+| 70 characters | scene ready | 3.62 s (3.57–3.64) | 1.45 s (1.45–1.46) |
+| | main-thread busy until ready | 762 ms | 646 ms |
+| | longest stall | 396 ms | 390 ms |
+| | stalls over 100 ms | 2 | 2 |
+| | peak footprint | 1542 MiB | 1228 MiB |
+| | import call | 43.0 ms | 42.8 ms |
+| | clock warm-up (utility worker, after ready) | – | 170 ms |
+| median | scene ready | 1.58 s | 1.03 s |
+| | main-thread busy until ready | 617 ms | 576 ms |
+| | longest stall | 349 ms | 341 ms |
+| | peak footprint | 841 MiB | 855 MiB |
+| | maximum resident | about 1200 MiB | about 725 MiB |
+| | peak Metal allocation | 344 MiB | 231 MiB |
+| | clock warm-up | – | 58 ms |
+
+- **Median-scene footprint.** On the median scene the head builds less
+  (resident memory and Metal allocations both fall) while the footprint
+  stays level. Base's extra memory is mostly clean file-backed pages, which
+  the footprint does not count. One head unit read a 391 MiB footprint with
+  the same ready time, main-thread time, warm-up and Metal allocation as the
+  other head units, so it loaded everything. The difference (about
+  465 MiB) is most likely freed memory that run's allocator had already
+  returned; W3b's median units check it. The median above includes that
+  unit.
+
+### Actions on the 70-character scene
+
+| Workload (n units per arm) | Action | Base | Head |
+|---|---|---|---|
+| `studio-clock-first` (2) | first `sourceClockBake` | – | 1.0 ms |
+| | first rebase, main busy | 34.5 ms | 22.0 ms |
+| | later rebases | 26.8 ms | 19.8 ms |
+| | first save, main busy | 37.9 ms | 37.6 ms |
+| | later saves | 36.2 ms | 41.4 ms (24–48) |
+| `studio-show-hidden` (1) | first show of a hidden folder, ready | 11–17 ms (5 characters) | 1.11–1.16 s (14 characters) |
+| | first show, main busy | 14–21 ms | 186–203 ms |
+| | first show, longest stall | 14–21 ms | 19–25 ms |
+| | show again, main busy | 11–14 ms | 16–26 ms |
+| `studio-select` (1) | first select of an unbuilt hidden character, ready | 10–15 ms (built at import) | 434–439 ms |
+| | its main busy / longest stall | 61–97 ms / 61–97 ms | 103–153 ms / 57–110 ms |
+| | later selects, main busy | 60–116 ms | 69–112 ms |
+| `studio-export-import` (2) | export, ready | 41.6 ms | 63.0 ms |
+| | export, main busy | 54.7 ms | 68.8 ms |
+
+- **Clock.** The first bake of the data-only clocks costs 1.0 ms on the main
+  thread, within the 8 ms target. A save costs the same in both arms; its
+  time is the scene's serialization.
+- **First show and first select.** The cost of a hidden character moves from
+  the import to its first show or selection. The builds run on workers, so
+  the longest stall stays 19–25 ms on a first show. A first selection's
+  stall (57–110 ms) is the size of the selection's existing inspector gap
+  (60–115 ms). A follow-up could pre-build a hidden character on hover or at
+  idle.
+- **Export.** In W3 the head exported through the background path whenever
+  a character had no preview: a worker hop for the clock states, a main
+  hop, and the status line's progress row shown and hidden, which costs
+  layout. The trace shows about 13.6 ms of main-thread time between the
+  call and the export, before the live refresh could run. The export now
+  runs in line when the import's warm-up has loaded every clock
+  (`SourceStudioAnimationClock.isLoaded`), as base does; the clocks add about
+  1 ms. W3b times the final code.
