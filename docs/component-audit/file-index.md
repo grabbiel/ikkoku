@@ -23,7 +23,7 @@ branch was tested or every asset matches the original game. Feature status,
 specific comments and pending tasks are in the linked reports. Shared behavior
 may be discussed in more than one report; one primary owner is listed here.
 
-**1096 files indexed; 1096 assigned; 0 unassigned.**
+**1100 files indexed; 1100 assigned; 0 unassigned.**
 
 Counts include the website and clothes-group additions listed below. Runtime and
 test totals include their specialized role descriptions; this is inventory
@@ -33,20 +33,20 @@ bookkeeping, not a new full source audit.
 | --- | ---: |
 | [App / gameplay / plugins](app-gameplay-and-plugins.md) | 110 |
 | [Character / Maker / mods](character-and-mods.md) | 132 |
-| [Studio / IK / animation](studio.md) | 256 |
+| [Studio / IK / animation](studio.md) | 259 |
 | [Renderer / foundation / assets](renderer-and-foundation.md) | 368 |
-| [Toolchain / verification / historical docs](toolchain-and-verification.md) | 220 |
+| [Toolchain / verification / historical docs](toolchain-and-verification.md) | 221 |
 
 | File role | Files |
 | --- | ---: |
 | App resource metadata / icon | 16 |
 | Build / repository configuration | 9 |
-| Conversion / recovery / verification tool | 255 |
+| Conversion / recovery / verification tool | 256 |
 | Documentation / historical evidence | 65 |
 | Generated asset / catalog / fixture | 205 |
 | Reference host / controlled fixture | 37 |
-| Runtime / shared shader declaration | 236 |
-| Test / validation | 233 |
+| Runtime / shared shader declaration | 238 |
+| Test / validation | 234 |
 | Public synthetic body/face input fixture | 1 |
 
 ## App / gameplay / plugins
@@ -323,6 +323,7 @@ Feature assessment: [studio.md](studio.md).
 | [Apps/IkkokuCreator/Studio/SourceExpressionInspector.swift](../../Apps/IkkokuCreator/Studio/SourceExpressionInspector.swift) | Runtime / shared shader declaration |
 | [Apps/IkkokuCreator/Studio/SourceSceneImportJob.swift](../../Apps/IkkokuCreator/Studio/SourceSceneImportJob.swift) | Runtime / shared shader declaration |
 | [Apps/IkkokuCreator/Studio/StudioInspectorMounting.swift](../../Apps/IkkokuCreator/Studio/StudioInspectorMounting.swift) | Runtime / shared shader declaration |
+| [Apps/IkkokuCreator/Studio/StudioParentPopUp.swift](../../Apps/IkkokuCreator/Studio/StudioParentPopUp.swift) | Runtime / shared shader declaration |
 | [Apps/IkkokuCreator/Studio/StudioPanelState.swift](../../Apps/IkkokuCreator/Studio/StudioPanelState.swift) | Runtime / shared shader declaration |
 | [Apps/IkkokuCreator/Studio/ObjectInspectorSections.swift](../../Apps/IkkokuCreator/Studio/ObjectInspectorSections.swift) | Runtime / shared shader declaration |
 | [Apps/IkkokuCreator/Studio/StudioView.swift](../../Apps/IkkokuCreator/Studio/StudioView.swift) | Runtime / shared shader declaration |
@@ -389,6 +390,7 @@ Feature assessment: [studio.md](studio.md).
 | [Packages/Engine/Sources/Studio/SourceStudioWorldTransform.swift](../../Packages/Engine/Sources/Studio/SourceStudioWorldTransform.swift) | Runtime / shared shader declaration |
 | [Packages/Engine/Sources/Studio/StudioDocument.swift](../../Packages/Engine/Sources/Studio/StudioDocument.swift) | Runtime / shared shader declaration |
 | [Packages/Engine/Sources/Studio/StudioUndoSteps.swift](../../Packages/Engine/Sources/Studio/StudioUndoSteps.swift) | Runtime / shared shader declaration |
+| [Packages/Engine/Sources/Studio/StudioWalkMemo.swift](../../Packages/Engine/Sources/Studio/StudioWalkMemo.swift) | Runtime / shared shader declaration |
 | [Packages/Engine/Sources/Studio/StudioStatusText.swift](../../Packages/Engine/Sources/Studio/StudioStatusText.swift) | Runtime / shared shader declaration |
 | [Packages/Engine/Sources/Studio/Timeline.swift](../../Packages/Engine/Sources/Studio/Timeline.swift) | Runtime / shared shader declaration |
 | [Packages/Engine/Tests/EngineTests/Fixtures/camera-object-reference.json](../../Packages/Engine/Tests/EngineTests/Fixtures/camera-object-reference.json) | Reference host / controlled fixture |
@@ -465,6 +467,7 @@ Feature assessment: [studio.md](studio.md).
 | [Packages/Engine/Tests/EngineTests/SourceTrigonometricIKTests.swift](../../Packages/Engine/Tests/EngineTests/SourceTrigonometricIKTests.swift) | Test / validation |
 | [Packages/Engine/Tests/EngineTests/StudioHierarchyTests.swift](../../Packages/Engine/Tests/EngineTests/StudioHierarchyTests.swift) | Test / validation |
 | [Packages/Engine/Tests/EngineTests/StudioUndoStepsTests.swift](../../Packages/Engine/Tests/EngineTests/StudioUndoStepsTests.swift) | Test / validation |
+| [Packages/Engine/Tests/EngineTests/StudioWalkMemoTests.swift](../../Packages/Engine/Tests/EngineTests/StudioWalkMemoTests.swift) | Test / validation |
 | [Packages/Engine/Tests/EngineTests/StudioStatusTextTests.swift](../../Packages/Engine/Tests/EngineTests/StudioStatusTextTests.swift) | Test / validation |
 | [Tools/reverse/analysis/animation_playback_contract.py](../../Tools/reverse/analysis/animation_playback_contract.py) | Conversion / recovery / verification tool |
 | [Tools/reverse/analysis/chara_light_mapping.py](../../Tools/reverse/analysis/chara_light_mapping.py) | Conversion / recovery / verification tool |
@@ -1040,6 +1043,7 @@ Feature assessment: [toolchain-and-verification.md](toolchain-and-verification.m
 | [Tools/verification/scenarios/inspector-edit-deselect.json](../../Tools/verification/scenarios/inspector-edit-deselect.json) | Conversion / recovery / verification tool |
 | [Tools/verification/scenarios/inspector-hidden-route.json](../../Tools/verification/scenarios/inspector-hidden-route.json) | Conversion / recovery / verification tool |
 | [Tools/verification/scenarios/inspector-hide-cycles.json](../../Tools/verification/scenarios/inspector-hide-cycles.json) | Conversion / recovery / verification tool |
+| [Tools/verification/scenarios/inspector-parent-popup.json](../../Tools/verification/scenarios/inspector-parent-popup.json) | Conversion / recovery / verification tool |
 | [Tools/verification/scenarios/inspector-kept-route.json](../../Tools/verification/scenarios/inspector-kept-route.json) | Conversion / recovery / verification tool |
 | [Tools/verification/scenarios/inspector-kept-views.json](../../Tools/verification/scenarios/inspector-kept-views.json) | Conversion / recovery / verification tool |
 | [Tools/verification/scenarios/item-props.json](../../Tools/verification/scenarios/item-props.json) | Conversion / recovery / verification tool |

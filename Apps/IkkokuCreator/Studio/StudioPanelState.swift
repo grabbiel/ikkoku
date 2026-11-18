@@ -33,19 +33,37 @@ struct StudioWorkspaceState: Equatable {
         let selection = model.selection
         let doc = model.doc
         let activeCamera = model.activeSourceCameraView
-        entries = doc.flattened().map { entry in
+        // #387 round 3: by index, reading each object in place, instead of
+        // `flattened()`, which copied every object twice.
+        let objects = doc.objects
+        entries = doc.flattenedIndices().map { row in
+            let id = objects[row.index].id, name = objects[row.index].name
             // A source camera placeholder reads "IKKOKU-MIRROR" over
             // "camera 2", the title the status line and the view indicator use.
-            let label = model.workspaceLabel(of: entry.object, sceneSHA256: doc.sourceSceneSHA256)
+            let label = model.workspaceLabel(id: id, name: name, sourceObjectKey: objects[row.index].sourceObjectKey,
+                                             sourceDuplicateOf: objects[row.index].sourceDuplicateOf,
+                                             sceneSHA256: doc.sourceSceneSHA256)
             var marker: WorkspaceEntry.CameraMarker?
-            if let activeCamera, activeCamera.id == entry.object.id {
+            if let activeCamera, activeCamera.id == id {
                 marker = activeCamera.fallbackReason.map { .savedCameraShown(reason: $0) } ?? .viewing
             }
-            return WorkspaceEntry(id: entry.object.id, name: entry.object.name, kind: entry.object.kind,
-                                  visible: entry.object.visible, depth: entry.depth, selected: selection == entry.object.id,
+            return WorkspaceEntry(id: id, name: name, kind: objects[row.index].kind,
+                                  visible: objects[row.index].visible, depth: row.depth, selected: selection == id,
                                   cameraPlaceholder: label.sourceCamera, keyDetail: label.keyDetail, cameraMarker: marker)
         }
         objectCount = doc.objects.count
+    }
+
+    /// These rows with `selection` selected: what `init(model:)` builds when
+    /// only the selection changed (#387 round 3), since `selected` is the
+    /// one field that reads it (`selection == id`, per row, so a repeated
+    /// id's rows and a selection that is no row behave as there).
+    func selecting(_ selection: UUID?) -> StudioWorkspaceState {
+        var state = self
+        for index in state.entries.indices where state.entries[index].selected != (state.entries[index].id == selection) {
+            state.entries[index].selected.toggle()
+        }
+        return state
     }
 }
 
