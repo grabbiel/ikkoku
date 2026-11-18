@@ -1411,10 +1411,19 @@ public final class Renderer: @unchecked Sendable {
     /// winding (a mirrored model reverses front faces, set once per run).
     /// Records that merge share one instanced draw only when their
     /// MaterialUniforms are also equal byte for byte (`assignRuns`).
-    static func mergesWith(_ a: DrawRecord, _ b: DrawRecord) -> Bool {
-        guard a.item.mesh == b.item.mesh, a.item.outline == b.item.outline,
-              mirrored(a.item.model) == mirrored(b.item.model) else { return false }
-        return a.item.material.equalsApartFromBaseColor(b.item.material)
+    ///
+    /// The records are read where they lie, field by field (B2-v2): passing
+    /// them by value copied each one, about 750 bytes with its item's
+    /// references to retain and release, and on the instanced corpus frame
+    /// those copies were about 16% of the CPU encode time. `a` and `b` point
+    /// into `assignRuns`'s buffer and are only read here.
+    @inline(__always)
+    static func mergesWith(_ a: UnsafePointer<DrawRecord>, _ b: UnsafePointer<DrawRecord>) -> Bool {
+        guard a.pointee.item.mesh == b.pointee.item.mesh, a.pointee.item.outline == b.pointee.item.outline,
+              mirrored(a.pointee.item.model) == mirrored(b.pointee.item.model) else { return false }
+        let material = MemoryLayout<DrawRecord>.offset(of: \DrawRecord.item.material)!
+        return MaterialState.equalApartFromBaseColor((UnsafeRawPointer(a) + material).assumingMemoryBound(to: MaterialState.self),
+                                                     (UnsafeRawPointer(b) + material).assumingMemoryBound(to: MaterialState.self))
     }
 
     static func mirrored(_ model: float4x4) -> Bool { simd_determinant(model.upperLeft3x3) < 0 }
@@ -1434,72 +1443,97 @@ public final class Renderer: @unchecked Sendable {
     /// order, so the transparent pass blends exactly as it does one record at a time.
     func assignRuns(_ records: inout [DrawRecord], casters: inout [DrawRecord],
                     statistics: inout RenderFrameStatistics) throws -> [Range<Int>] {
-        var draws: [Range<Int>] = []
-        var members = 0
-        var i = records.startIndex
-        while i < records.endIndex {
-            guard records[i].pending >= 0 else { i += 1; continue }
-            var j = i + 1
-            while j < records.endIndex, records[j].pending >= 0, Self.mergesWith(records[i], records[j]),
-                  Self.sameBytes(pendingMaterials[records[i].pending], pendingMaterials[records[j].pending]) { j += 1 }
-            if j - i > 1 { draws.append(i..<j); members += j - i }
-            i = j
-        }
-        statistics.mainPassRecords += records.count
-        statistics.mainPassRuns += records.count - members + draws.count
-        statistics.instancedRecords += members
-        statistics.instancedRuns += draws.count
-        // The table's elements are written at the Swift stride, which the
-        // shaders' `constant DrawUniforms*` shares (144 bytes; the instanced
-        // versus per-draw tests compare).
-        let drawStride = MemoryLayout<DrawUniforms>.stride
-        let materialStride = (MemoryLayout<MaterialUniforms>.stride + FrameRing.alignment - 1) / FrameRing.alignment * FrameRing.alignment
-        let table = draws.isEmpty ? nil : try frameRing.allocate(byteCount: drawStride * members)
-        let materials = draws.isEmpty ? nil : try frameRing.allocate(byteCount: materialStride * draws.count)
-        var runs: [Range<Int>] = []
-        runs.reserveCapacity(records.count - members + draws.count)
-        var next = 0, instance = 0
-        i = records.startIndex
-        while i < records.endIndex {
-            if next < draws.count, draws[next].lowerBound == i, let table, let materials {
-                let run = runs.count
-                var end = i
-                repeat {
-                    let draw = draws[next]
-                    let element = materials.advanced(by: materialStride * next)
-                    element.buffer.contents().storeBytes(of: pendingMaterials[records[draw.lowerBound].pending], toByteOffset: element.offset,
-                                                         as: MaterialUniforms.self)
-                    for k in draw {
-                        table.buffer.contents().storeBytes(of: pendingDraws[records[k].pending], toByteOffset: table.offset + drawStride * instance,
-                                                           as: DrawUniforms.self)
-                        records[k].draw = table; records[k].material = element; records[k].instance = instance
-                        records[k].pending = -1; records[k].run = run
-                        instance += 1
-                    }
-                    end = draw.upperBound
-                    next += 1
-                } while next < draws.count && draws[next].lowerBound == end && Self.mergesWith(records[i], records[end])
-                runs.append(i..<end)
-                i = end
-                continue
-            }
-            if records[i].pending >= 0 {
-                // No equal neighbour: drawn on its own, exactly as before.
-                let index = records[i].pending
-                records[i].draw = try frameRing.allocate(pendingDraws[index])
-                records[i].material = try frameRing.allocate(pendingMaterials[index])
-                records[i].pending = -1
-                if records[i].item.castsShadow && !records[i].item.material.transparent { casters.append(records[i]) }
-            }
-            runs.append(i..<i + 1)
-            i += 1
-        }
-        return runs
+        try Self.assignRuns(&records, casters: &casters, draws: pendingDraws, materials: pendingMaterials, ring: frameRing,
+                            statistics: &statistics)
     }
 
-    /// Whether two MaterialUniforms are equal byte for byte.
-    static func sameBytes(_ a: MaterialUniforms, _ b: MaterialUniforms) -> Bool {
-        withUnsafeBytes(of: a) { x in withUnsafeBytes(of: b) { y in memcmp(x.baseAddress!, y.baseAddress!, x.count) == 0 } }
+    /// `assignRuns` on the given pending uniforms and ring (the tests run it
+    /// beside the by-value version it replaced). The records are read and
+    /// updated in their array's buffer, never copied, except a record drawn
+    /// on its own that casts a shadow, which `casters` gets by value as before.
+    ///
+    /// Memory safety: `p`, `d` and `m` are the buffers of `records`,
+    /// `pendingDraws` and `pendingMaterials`. They are valid only inside their
+    /// `with…` closures and never escape them, and while the closures run
+    /// nothing reaches those three arrays any other way (`casters` is another
+    /// array). `m` is read only at a record's `pending` index, which exists
+    /// exactly when `pendingMaterials` has that element.
+    static func assignRuns(_ records: inout [DrawRecord], casters: inout [DrawRecord], draws pendingDraws: [DrawUniforms],
+                           materials pendingMaterials: [MaterialUniforms], ring: FrameRing,
+                           statistics: inout RenderFrameStatistics) throws -> [Range<Int>] {
+        let count = records.count
+        return try records.withUnsafeMutableBufferPointer { p -> [Range<Int>] in
+            try pendingDraws.withUnsafeBufferPointer { d -> [Range<Int>] in
+                try pendingMaterials.withUnsafeBufferPointer { m -> [Range<Int>] in
+                    var draws: [Range<Int>] = []
+                    var members = 0
+                    if let r = p.baseAddress {
+                        var i = 0
+                        while i < count {
+                            guard r[i].pending >= 0 else { i += 1; continue }
+                            var j = i + 1
+                            while j < count, r[j].pending >= 0, mergesWith(r + i, r + j),
+                                  memcmp(m.baseAddress! + r[i].pending, m.baseAddress! + r[j].pending,
+                                         MemoryLayout<MaterialUniforms>.size) == 0 { j += 1 }
+                            if j - i > 1 { draws.append(i..<j); members += j - i }
+                            i = j
+                        }
+                    }
+                    statistics.mainPassRecords += count
+                    statistics.mainPassRuns += count - members + draws.count
+                    statistics.instancedRecords += members
+                    statistics.instancedRuns += draws.count
+                    guard let r = p.baseAddress else { return [] }
+                    // The table's elements are written at the Swift stride, which the
+                    // shaders' `constant DrawUniforms*` shares (144 bytes; the instanced
+                    // versus per-draw tests compare).
+                    let drawStride = MemoryLayout<DrawUniforms>.stride
+                    let materialStride = (MemoryLayout<MaterialUniforms>.stride + FrameRing.alignment - 1) / FrameRing.alignment * FrameRing.alignment
+                    let table = draws.isEmpty ? nil : try ring.allocate(byteCount: drawStride * members)
+                    let materials = draws.isEmpty ? nil : try ring.allocate(byteCount: materialStride * draws.count)
+                    var runs: [Range<Int>] = []
+                    runs.reserveCapacity(count - members + draws.count)
+                    var next = 0, instance = 0
+                    var i = 0
+                    while i < count {
+                        if next < draws.count, draws[next].lowerBound == i, let table, let materials {
+                            let run = runs.count
+                            let tableBytes = table.buffer.contents(), materialBytes = materials.buffer.contents()
+                            var end = i
+                            repeat {
+                                let draw = draws[next]
+                                let element = materials.advanced(by: materialStride * next)
+                                materialBytes.storeBytes(of: m[r[draw.lowerBound].pending], toByteOffset: element.offset,
+                                                         as: MaterialUniforms.self)
+                                for k in draw {
+                                    tableBytes.storeBytes(of: d[r[k].pending], toByteOffset: table.offset + drawStride * instance,
+                                                          as: DrawUniforms.self)
+                                    r[k].draw = table; r[k].material = element; r[k].instance = instance
+                                    r[k].pending = -1; r[k].run = run
+                                    instance += 1
+                                }
+                                end = draw.upperBound
+                                next += 1
+                            } while next < draws.count && draws[next].lowerBound == end && mergesWith(r + i, r + end)
+                            runs.append(i..<end)
+                            i = end
+                            continue
+                        }
+                        if r[i].pending >= 0 {
+                            // No equal neighbour: drawn on its own, exactly as before.
+                            let index = r[i].pending
+                            r[i].draw = try ring.allocate(d[index])
+                            r[i].material = try ring.allocate(m[index])
+                            r[i].pending = -1
+                            if r[i].item.castsShadow && !r[i].item.material.transparent { casters.append(r[i]) }
+                        }
+                        runs.append(i..<i + 1)
+                        i += 1
+                    }
+                    return runs
+                }
+            }
+        }
     }
 
     /// The instanced draws of an instanced run, in order: the stretches of its

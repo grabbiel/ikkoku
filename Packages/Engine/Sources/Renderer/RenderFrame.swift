@@ -48,19 +48,36 @@ public struct MaterialState: Sendable, Equatable {
     /// Neighbouring static item records that pass merge into one instanced run
     /// (`Renderer.mergesWith`, ST-T04).
     func equalsApartFromBaseColor(_ other: MaterialState) -> Bool {
-        let colour = MemoryLayout<MaterialUniforms>.offset(of: \.baseColor)!, after = colour + MemoryLayout<Float4>.size
-        return withUnsafeBytes(of: uniforms) { a in withUnsafeBytes(of: other.uniforms) { b in
-            memcmp(a.baseAddress!, b.baseAddress!, colour) == 0
-                && memcmp(a.baseAddress! + after, b.baseAddress! + after, a.count - after) == 0
-        } } && sameTexturesAndState(other)
+        withUnsafePointer(to: self) { a in withUnsafePointer(to: other) { b in Self.equalApartFromBaseColor(a, b) } }
     }
 
-    private func sameTexturesAndState(_ b: MaterialState) -> Bool {
-        base == b.base && colorMask == b.colorMask && detail == b.detail && line == b.line && normal == b.normal
-            && overlay0 == b.overlay0 && overlay1 == b.overlay1 && overlay2 == b.overlay2 && pattern == b.pattern
-            && hairGloss == b.hairGloss && bodyMask == b.bodyMask && lightmap == b.lightmap
-            && lightmapDirection == b.lightmapDirection && emission == b.emission && cubemap == b.cubemap
-            && transparent == b.transparent && depthBias == b.depthBias
+    /// `equalsApartFromBaseColor` on two materials read where they lie, such
+    /// as inside draw records in their array's buffer (`Renderer.mergesWith`):
+    /// the uniforms' bytes before and after the base colour, compared in
+    /// place, and the rest field by field. The pointers are only read, and
+    /// only for the duration of the call.
+    @inline(__always)
+    static func equalApartFromBaseColor(_ a: UnsafePointer<MaterialState>, _ b: UnsafePointer<MaterialState>) -> Bool {
+        let colour = MemoryLayout<MaterialUniforms>.offset(of: \.baseColor)!, after = colour + MemoryLayout<Float4>.size
+        let count = MemoryLayout<MaterialUniforms>.size, uniforms = MemoryLayout<MaterialState>.offset(of: \.uniforms)!
+        let x = UnsafeRawPointer(a) + uniforms, y = UnsafeRawPointer(b) + uniforms
+        return memcmp(x, y, colour) == 0 && memcmp(x + after, y + after, count - after) == 0 && sameTexturesAndState(a, b)
+    }
+
+    private func sameTexturesAndState(_ other: MaterialState) -> Bool {
+        withUnsafePointer(to: self) { a in withUnsafePointer(to: other) { b in Self.sameTexturesAndState(a, b) } }
+    }
+
+    @inline(__always)
+    private static func sameTexturesAndState(_ a: UnsafePointer<MaterialState>, _ b: UnsafePointer<MaterialState>) -> Bool {
+        a.pointee.base == b.pointee.base && a.pointee.colorMask == b.pointee.colorMask && a.pointee.detail == b.pointee.detail
+            && a.pointee.line == b.pointee.line && a.pointee.normal == b.pointee.normal
+            && a.pointee.overlay0 == b.pointee.overlay0 && a.pointee.overlay1 == b.pointee.overlay1
+            && a.pointee.overlay2 == b.pointee.overlay2 && a.pointee.pattern == b.pointee.pattern
+            && a.pointee.hairGloss == b.pointee.hairGloss && a.pointee.bodyMask == b.pointee.bodyMask
+            && a.pointee.lightmap == b.pointee.lightmap && a.pointee.lightmapDirection == b.pointee.lightmapDirection
+            && a.pointee.emission == b.pointee.emission && a.pointee.cubemap == b.pointee.cubemap
+            && a.pointee.transparent == b.pointee.transparent && a.pointee.depthBias == b.pointee.depthBias
     }
 
     /// All explicit texture references, without fallback textures.

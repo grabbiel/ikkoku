@@ -23,7 +23,7 @@ branch was tested or every asset matches the original game. Feature status,
 specific comments and pending tasks are in the linked reports. Shared behavior
 may be discussed in more than one report; one primary owner is listed here.
 
-**1099 files indexed; 1099 assigned; 0 unassigned.**
+**1100 files indexed; 1100 assigned; 0 unassigned.**
 
 Counts include the website and clothes-group additions listed below. Runtime and
 test totals include their specialized role descriptions; this is inventory
@@ -34,7 +34,7 @@ bookkeeping, not a new full source audit.
 | [App / gameplay / plugins](app-gameplay-and-plugins.md) | 110 |
 | [Character / Maker / mods](character-and-mods.md) | 132 |
 | [Studio / IK / animation](studio.md) | 257 |
-| [Renderer / foundation / assets](renderer-and-foundation.md) | 370 |
+| [Renderer / foundation / assets](renderer-and-foundation.md) | 371 |
 | [Toolchain / verification / historical docs](toolchain-and-verification.md) | 220 |
 
 | File role | Files |
@@ -46,7 +46,7 @@ bookkeeping, not a new full source audit.
 | Generated asset / catalog / fixture | 205 |
 | Reference host / controlled fixture | 37 |
 | Runtime / shared shader declaration | 238 |
-| Test / validation | 234 |
+| Test / validation | 235 |
 | Public synthetic body/face input fixture | 1 |
 
 ## App / gameplay / plugins
@@ -869,6 +869,7 @@ Feature assessment: [renderer-and-foundation.md](renderer-and-foundation.md).
 | [Packages/Engine/Tests/EngineTests/FramePreparationOrderTests.swift](../../Packages/Engine/Tests/EngineTests/FramePreparationOrderTests.swift) | Test / validation |
 | [Packages/Engine/Tests/EngineTests/EncoderStateTests.swift](../../Packages/Engine/Tests/EngineTests/EncoderStateTests.swift) | Test / validation |
 | [Packages/Engine/Tests/EngineTests/InstancedItemDrawTests.swift](../../Packages/Engine/Tests/EngineTests/InstancedItemDrawTests.swift) | Test / validation |
+| [Packages/Engine/Tests/EngineTests/InstancedRunAssignmentTests.swift](../../Packages/Engine/Tests/EngineTests/InstancedRunAssignmentTests.swift) | Test / validation |
 | [Packages/Engine/Tests/EngineTests/TextureRetirementAtSubmitTests.swift](../../Packages/Engine/Tests/EngineTests/TextureRetirementAtSubmitTests.swift) | Test / R6 texture release at the next submit without a prepared frame, older frames still drawing it, deformation-key order kept (#368) |
 | [Packages/Engine/Tests/EngineTests/ResourceStoreUploadTests.swift](../../Packages/Engine/Tests/EngineTests/ResourceStoreUploadTests.swift) | Test / upload queue registry, completion before handout, call order and many-store saturation |
 | [Packages/Engine/Tests/EngineTests/RendererLimitsTests.swift](../../Packages/Engine/Tests/EngineTests/RendererLimitsTests.swift) | Test / validation |

@@ -635,6 +635,25 @@ record does on its own.
   offset, vertex and fragment (`EncoderState.setBufferOffsets`), and the
   shadow and pick passes bind a run once, at its first caster or pickable
   record.
+- **Records read in place (B2-v2).** `assignRuns` and `mergesWith` read and
+  update the records in their array's buffer
+  (`withUnsafeMutableBufferPointer`) instead of copying them. Each record holds
+  its whole item, about 750 bytes with references to retain and release. A
+  Time Profiler of the instanced corpus frame (W1 orbit, #372's Release build)
+  put about 16% of the CPU encode time in those copies. The material check
+  compares the uniforms' bytes before and after the base colour in place
+  (`MaterialState.equalApartFromBaseColor`), and the draw check compares the
+  pending MaterialUniforms in their array, so the predicate and every run,
+  draw, table element and allocation are unchanged. The pointers never leave
+  their closures, and nothing else reaches those arrays while the closures
+  run. `InstancedRunAssignmentTests` keeps the by-value versions as the
+  reference:
+  - the predicate agrees on every pair of records that differ in one merge
+    condition or only in the base colour;
+  - on 200 seeded frames (up to 399 records) and on edge frames (no records,
+    one record, all mergeable, none mergeable), the runs, draw order, records,
+    casters, counts, ring allocations and the uniform bytes of every table
+    element and material element are equal.
 - **Statistics.** `RenderFrameStatistics` reports `mainPassRecords` and
   `mainPassRuns` (the draws: one per record drawn on its own and one per
   instanced draw, per pipeline), `instancedRecords` and `instancedRuns` (the
