@@ -178,3 +178,67 @@ otherwise bit-identical run to run) changes 103517 sampled pixels: 102917
 inside the cube footprint (pixels a cube-free capture also changes) and 600
 edge pixels within 6 px of it, none isolated, with the tinted/plain ratio
 sitting on 0.88 — the sRGB round trip of the saved 0.875 grey.
+
+## Generated catalog (ST-T04, 2026-11-02)
+
+`Tools/reverse/item_catalog.py` generates the catalog for whole item groups,
+instead of hand-written keys. Every step reads and writes explicit paths, and its
+output stays in `.local`. Usage is in the
+[reverse tools README](../../../Tools/reverse/README.md#generate-the-item-catalog-st-t04).
+
+- **Item table.** `list` reads the effective item table of the 23 info bundles on
+  this Mac with `catalog.py`'s loader, which keeps the original load order: later
+  bundles and table revisions replace earlier rows, and a nonnumeric ID ends a
+  table. It finds 1,453 rows after examining 1,617.
+- **Coverage of the user corpus.** The corpus has 175 distinct scenes (by
+  SHA-256), and only counts are recorded.
+  - All groups: 45,725 items over 745 keys; 42,924 items (498 keys) have a row.
+  - Group 0 (basic shapes): 34,134 items over 129 keys, in 120 scenes. 33,881
+    items (122 keys) have a row, and 112 scenes have a row for every group-0
+    item. No local info bundle lists the other 7 keys (253 items): mod items,
+    or rows from info bundles this Mac does not have.
+- **Export.** Group 0 has 172 rows: 100 in `studio/00.unity3d`, and the others in
+  three bundles only the VM installation has.
+  - One process loads `studio/00.unity3d` and `studio/mat/00.unity3d` once and
+    converts each prefab with `export_prefab.py`'s rules.
+  - `test_export_prefab.py`'s byte audit checks every export: 94 convert (14,548
+    triangles audited), and the audit refuses 6 ("Converted triangle faces away
+    from authored normals").
+  - The other 72 rows are listed as not available here. Rows whose prefab is
+    animated or has a child root are refused with the exporter's message.
+  - The converted rows cover 31,811 of the corpus's 34,134 group-0 items (93.2%).
+  - The survey (`export --dry-run`) runs the same conversion and audit in a
+    temporary directory, so it refuses exactly what the export refuses.
+- **Catalog.** `catalog` writes `KoikatsuAssetCatalog` version 1: `items` with
+  relative `file` paths, one folder per prefab. It adds `kind`, `groups`,
+  `sources` (the info and asset bundles' SHA-256), `coverage`, and
+  `notConverted`, which lists each refused row by key with its reason. Rows
+  outside the generated groups are absent.
+- **Disk.** 379 files and 1,585,672 bytes, of which 1,210,429 bytes are distinct
+  content. That includes a 266,016-byte zstd archive of the exporter's
+  `source.unity.json` dumps, written after each export's audit has read its own.
+  Identical images in different folders are APFS clones. The item list adds
+  902,034 bytes.
+- **Determinism.** Output is sorted and has no timestamps. Two runs give a
+  byte-identical `catalog.json` and export manifest, both in
+  `test_item_catalog.py` and on the real bundles.
+
+At runtime, `KoikatsuAssetCatalog.notConverted` is optional, so hand-written
+catalogs are unchanged. A key in that list fails with
+`KoikatsuLayoutError.notConverted(key, reason:)`, and any other unmapped key with
+`missingItem`, by exact key. When the catalog has the list and a scene leaves keys
+unmapped, the preview import adds one line after the unchanged summary:
+`Unmapped item keys by cause: not converted: … (reason); not in the catalog: ….`
+Each export folder is its glTF's package root. That is why shared images are
+cloned rather than referenced across folders: such a reference is refused as
+escaping the root (`KoikatsuLayoutTests`).
+
+Not claimed:
+- **Drawing cost.** The generated catalog is not the configured
+  `IKKOKU_STUDIO_ITEM_CATALOG` until instanced item draws pass their budget
+  (ST-T04 slice 1, second part). Drawn one by one, its items would cost one draw
+  each, plus a shadow draw.
+- **Item features.** Patterns, emission, light cancel, panels, item FK,
+  animation, dynamics and child roots.
+- **Other content.** Mod items, groups 1–15, and bundles only the VM has.
+- **Parity.** Pixel parity with the original's lighting.
