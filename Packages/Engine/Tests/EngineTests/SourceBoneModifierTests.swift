@@ -507,3 +507,40 @@ func sourceBoneModifierNativeWireMatchesLocalPythonConversion() throws {
         #expect(String(describing: error).contains("ABMX records require BoneName and CoordinateModifiers in source order (BoneLocation may follow)."))
     }
 }
+
+/// Provenance: synthetic constants serialized by ABMX 5.4 SaveModifiers in the original player, no card data.
+/// The original CharaStudio player (KKABMX 5.4, KKABMX.dll f3e2d987) added five constant modifiers in memory
+/// with ABMX's own AddModifier, then serialized them alone with its internal SaveModifiers(modifiers, false):
+/// PluginData version 2, this boneData (208 bytes, LZ4 extension 99). Its ReadModifiers read the same five
+/// rows back. The fifth row asked for location 0; ABMX resolved it to BodyTop (1) when it was added, so it is
+/// saved as 1 (Tools/reverse/original_abmx_probe.py, synthetic mode; docs/reference/mods/abmx.md, "Checked against the original").
+@Test func sourceBoneModifierDecodesTheOriginalSaveModifiersPayloadBitForBit() throws {
+    let base64 = "yQAAAMpj0gAAAWb7BZWTqWNmX3NfbmVja5GUk8o/gAAABQBmk8oAAAAABQDxBJPKQUAAAMrBoAAAykDgAAABk7BDAL9mb3JlYXJt" +
+        "MDFfTEoABug8I9cKyjyj1wrKvHXCj1oAJEHISgAXakoAH1JKAAEzkzMzOgBBPPXCj5kAAxAABakAMQGTrpQAVXRoaWdokgAzjMzN3AAE" +
+        "CgASk40AATgAAE0ADkgAEaxIAHFzcGluZTAyjgAzhmZmRgAECgAMNgADEACgQSAAAMoAAAAAAQ=="
+    let payload = try #require(Data(base64Encoded: base64))
+    #expect(payload.count == 208)
+    #expect(SHA256.hash(data: payload).map { String(format: "%02x", $0) }.joined()
+        == "4af827eb5910bd5fe62cd1d2a0fbfdb8feb33c31098c3f67815a3e0694876b41")
+    let decoded = try SourceBoneModifiers.decodeBoneData(payload, dataKind: "card", dataVersion: 2)
+    #expect(decoded.source.payloadSHA256 == "4af827eb5910bd5fe62cd1d2a0fbfdb8feb33c31098c3f67815a3e0694876b41")
+    #expect((decoded.diagnostics ?? []).isEmpty)
+    // The probe's code constants: name, saved location, scale, length, position, rotation (degrees).
+    let rows: [(String, Int, [Float], Float, [Float], [Float])] = [
+        ("cf_s_neck", 1, [1, 1, 1], 1, [0, 0, 0], [12, -20, 7]),
+        ("cf_s_forearm01_L", 1, [1, 1, 1], 1, [0.01, 0.02, -0.015], [0, 0, 25]),
+        ("cf_j_forearm01_R", 1, [1, 1, 1], 1.15, [0, 0.03, 0], [0, 0, 0]),
+        ("cf_s_thigh01_L", 1, [1.1, 1, 1.1], 1, [0.02, 0, 0.03], [0, 0, 0]),
+        ("cf_s_spine02", 1, [1.05, 1, 1.05], 1, [0, 0, 0], [0, 10, 0]),
+    ]
+    #expect(decoded.modifiers.map(\.boneName) == rows.map(\.0))
+    #expect(decoded.modifiers.map(\.boneLocation) == rows.map(\.1))
+    #expect(decoded.coordinateCounts == [1, 1, 1, 1, 1])
+    for (modifier, row) in zip(decoded.modifiers, rows) {
+        let values = try #require(modifier.coordinateModifiers.first)
+        #expect(values.scaleModifier.map(\.bitPattern) == row.2.map(\.bitPattern), "\(row.0) scale")
+        #expect(values.lengthModifier.bitPattern == row.3.bitPattern, "\(row.0) length")
+        #expect(values.positionModifier.map(\.bitPattern) == row.4.map(\.bitPattern), "\(row.0) position")
+        #expect(values.rotationModifier.map(\.bitPattern) == row.5.map(\.bitPattern), "\(row.0) rotation")
+    }
+}
