@@ -606,6 +606,19 @@ func mapSunShadowsFallBehindTheCastersByTheStrength() throws {
     #expect(zip(missing, unshadowed).allSatisfy { abs($0 - $1) < 2e-3 })
 }
 
+/// #399: the sun's compare bias and caster normal offset are Unity's biases,
+/// in world texels, × the tent's 2-texel reach.
+@Test func mapSunBiasesScaleUnitysBiasesByTheTentsReach() {
+    #expect(Renderer.mapShadowFilterReach == 2)
+    // The parse fixture's sun (bias 0.05, normal bias 0.4) on the ±40 m map shadow map.
+    let texel = 2 * Renderer.mapShadowRadius / Float(Renderer.mapShadowMapSize), range: Float = 80
+    let biases = Renderer.mapSunBiases(shadowBias: 0.05, normalBias: 0.4, texelWorld: texel, depthRange: range)
+    #expect(biases.compare == 2 * 0.05 * texel / range)
+    #expect(biases.normalOffset == 2 * 0.4 * texel)
+    let none = Renderer.mapSunBiases(shadowBias: 0, normalBias: 0, texelWorld: texel, depthRange: range)
+    #expect(none.compare == 0 && none.normalOffset == 0)
+}
+
 /// The fit holds the caster bounds and the receivers within the radius in its
 /// depth range, for a sun anywhere, the zenith included.
 @Test func mapShadowFitKeepsCastersAndReceiversInsideItsDepthRange() {
