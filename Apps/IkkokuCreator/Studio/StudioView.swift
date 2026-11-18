@@ -623,6 +623,8 @@ struct ObjectInspectorState: Equatable {
     var parent: UUID?
     var parents: [Parent]
     var transform: StudioTransform
+    /// An object of the imported scene: its Transform rows show the original's numbers (#391).
+    var isSourceObject: Bool
     var kind: StudioObjectKind
     var cardName: String
     var isSourceCharacter: Bool
@@ -647,6 +649,7 @@ struct ObjectInspectorState: Equatable {
         id = o.id; name = o.name; visible = o.visible; locked = o.locked; parent = o.parent
         parents = doc.objects.filter { $0.id != o.id && !doc.isDescendant($0.id, of: o.id) }.map { Parent(id: $0.id, name: $0.name) }
         transform = o.transform; kind = o.kind
+        isSourceObject = o.sourceObjectKey != nil
         cardName = o.card?.profile.name ?? ""
         isSourceCharacter = o.sourceCharacter != nil
         clothingVisible = o.clothingVisible; accessoriesVisible = o.accessoriesVisible
@@ -726,9 +729,13 @@ struct ObjectInspectorContent: View, Equatable {
         let o = state
         return SectionBox(title: "Transform") {
             // Each field writes its own component onto the current object (#390).
+            // A source object shows CharaStudio's numbers (#391): its Z-X-Y Euler
+            // angles, and three decimals in every row.
+            let source = o.isSourceObject
             VectorRow(label: "Position", value: o.transform.position, step: 0.05, format: "%.3f") { i, v in update { $0.transform.set(.position, i, to: v) } }
-            VectorRow(label: "Rotation", value: o.transform.rotation, step: 5, format: "%.0f") { i, v in update { $0.transform.set(.rotation, i, to: v) } }
-            VectorRow(label: "Scale", value: o.transform.scale, step: 0.1, format: "%.2f") { i, v in update { $0.transform.set(.scale, i, to: v) } }
+            VectorRow(label: "Rotation", value: source ? o.transform.sourceRotationDegrees : o.transform.rotation, step: 5,
+                      format: source ? "%.3f" : "%.0f") { i, v in update { $0.transform.set(source ? .sourceRotation : .rotation, i, to: v) } }
+            VectorRow(label: "Scale", value: o.transform.scale, step: 0.1, format: source ? "%.3f" : "%.2f") { i, v in update { $0.transform.set(.scale, i, to: v) } }
             Button("Reset transform") { update { $0.transform = StudioTransform() } }
         }
     }

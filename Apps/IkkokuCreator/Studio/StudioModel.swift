@@ -2481,11 +2481,8 @@ final class StudioModel: ViewportInputHandler, LivePacedHandler {
             object.parent = parent; object.visible = record.visible; object.sourceObjectKey = record.sourceKey
             object.sourceRecordKind = record.kind
             object.sourceAttachmentPoint = attachmentPoint
-            object.transform.position = UnityCoordinates.position(record.transform.position)
-            object.transform.scale = record.transform.scale
-            let rotation = UnityCoordinates.eulerDegrees(record.transform.rotationDegrees)
-            object.transform.rotation = rotation.eulerXYZ.radiansToDegrees
-            object.transform.rotationOverride = rotation.vector
+            // The exact quaternion and the original's own Euler angles (#391).
+            object.transform = StudioTransform(source: record.transform)
             if record.character != nil {
                 let index = characterIndex
                 characterIndex += 1
@@ -3197,16 +3194,8 @@ final class StudioModel: ViewportInputHandler, LivePacedHandler {
                route != SourceStudioRouteState(record: record) {
                 edits.routes[key] = route
             }
-            let originalRotation = UnityCoordinates.eulerDegrees(original.transform.rotationDegrees)
-            let rotationChanged = object.transform.quaternion.vector != originalRotation.vector
-                && object.transform.quaternion.vector != -originalRotation.vector
-            if object.transform.position != UnityCoordinates.position(original.transform.position)
-                || object.transform.scale != original.transform.scale
-                || rotationChanged {
-                edits.transforms.append(.init(.object(key), transform: .init(
-                    position: UnityCoordinates.position(object.transform.position),
-                    rotationDegrees: rotationChanged ? UnityCoordinates.sourceEulerDegrees(object.transform.quaternion) : original.transform.rotationDegrees,
-                    scale: object.transform.scale)))
+            if let transform = object.transform.sourceChangeAmount(original: original.transform) {
+                edits.transforms.append(.init(.object(key), transform: transform))
             }
             var exportPreview = sourceInstances[object.id]
             if object.sourceExpression != nil {

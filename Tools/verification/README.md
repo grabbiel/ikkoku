@@ -1227,8 +1227,8 @@ kept the Object tab mounted:
   the Name field or a field that already shows its exact value adds none.
   The steps after the import are " X", 0.139, 1.5, 1.23456, " Z" and the
   delete (7), and the three undos on character 0 revert 1.23456, 1.5 and
-  the 0.139 rounding. The rounding on focus is #391's question; if it
-  changes, these counts change with it.
+  the 0.139 rounding. CharaStudio's end-of-edit rounds the same way (#391),
+  and Position keeps 3 decimals, so #391 leaves these counts as they were.
 - `inspector-hidden-route` (`IKKOKU_STUDIO_HALF_STATE_SCENE`: route 20,
   character 10, folder 11). Three selection cycles leave the document and
   the undo depths unchanged. The route section ("Add point", "Delete point",
@@ -1320,24 +1320,28 @@ get wrong:
 
 The Tab walk of `keyLoop` focuses each field in turn, and focusing a
 Transform field commits the value it shows (as `inspector-edit-deselect`
-pins) into its own component of the object as it is now: Position rounded
-to 3 decimals, Rotation to whole degrees, Scale to 2 decimals. Setting a Rotation component also drops an imported object's exact
-rotation (#391). A commit that leaves the object unchanged takes no undo
-step (#390), and every move is its own gesture, so a walk adds one step per
-field whose commit changes the object, however long the walk takes. In
-`inspector-hide-cycles` the walks on source character 0 and on item 622
-each add 5:
+pins) into its own component of the object as it is now. An object of the
+imported scene shows CharaStudio's numbers (#391): Position, its Z-X-Y Euler
+rotation and Scale, each to 3 decimals. As in CharaStudio's end-of-edit, a
+Rotation commit takes the value modulo 360 (sign kept) and rebuilds the
+rotation from the three angles, so the other two keep their exact values and
+export unchanged. Native objects show Rotation in whole degrees and Scale to
+2 decimals. A commit that leaves the object unchanged takes no undo step
+(#390), and every move is its own gesture, so a walk adds one step per field
+whose commit changes the object, however long the walk takes. In
+`inspector-hide-cycles` the walks on source character 0 and on object 622
+each add 4:
 - Position X, Y and Z, which have more decimals than the field shows;
-- Rotation X, which drops the imported rotation;
-- Rotation Y, which is not a whole degree.
+- Rotation Y (359.58267 on character 0, 5.5238795 on object 622), likewise.
 
-Rotation Z is exactly 0 and the scales read back unchanged. The Name field
-writes the same name, and the timeline's duration field writes the document
-without an undo step. With the scene
-import's step, the counts are 6, 6 and 11. Before #390 every write pushed a
-step but the walk's writes coalesced, so the count depended on how long the
-walk took. The checks assert an unchanged document before a walk, not across
-one.
+Rotation X (-0) and Z (0) read back unchanged, and so do the scales (1.12 and
+1). The Name field writes the same name, and the timeline's duration field
+writes the document without an undo step. With the scene import's step, the
+counts are 5, 5 and 9. Before #391 they were 6, 6 and 11: the Rotation row
+showed the engine's X-Y-Z angles in whole degrees, and committing Rotation X
+also dropped the imported rotation. Before #390 every write pushed a step but
+the walk's writes coalesced, so the count depended on how long the walk took.
+The checks assert an unchanged document before a walk, not across one.
 
 The Object tab reads its state from the model (`StudioModel.objectInspectorState`),
 and the compatibility details read `StudioModel.inspectorDiagnostics`. Since
