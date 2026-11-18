@@ -267,6 +267,7 @@ Feature assessment: [character-and-mods.md](character-and-mods.md).
 | [Tools/mods/test_library.py](../../Tools/mods/test_library.py) | Test / validation |
 | [Tools/mods/test_zipmod.py](../../Tools/mods/test_zipmod.py) | Test / validation |
 | [Tools/mods/zipmod.py](../../Tools/mods/zipmod.py) | Conversion / recovery / verification tool |
+| [Tools/reverse/fixtures/OriginalABMXProbe.cs](../../Tools/reverse/fixtures/OriginalABMXProbe.cs) | Reference host / controlled fixture |
 | [Tools/reverse/analysis/abmx_contract.py](../../Tools/reverse/analysis/abmx_contract.py) | Conversion / recovery / verification tool |
 | [Tools/reverse/analysis/body_shape_contract.py](../../Tools/reverse/analysis/body_shape_contract.py) | Conversion / recovery / verification tool |
 | [Tools/reverse/analysis/card_contract.py](../../Tools/reverse/analysis/card_contract.py) | Conversion / recovery / verification tool |
@@ -287,7 +288,9 @@ Feature assessment: [character-and-mods.md](character-and-mods.md).
 | [Tools/reverse/maker_material_contract.py](../../Tools/reverse/maker_material_contract.py) | Conversion / recovery / verification tool |
 | [Tools/reverse/maker_selection_fixture.py](../../Tools/reverse/maker_selection_fixture.py) | Conversion / recovery / verification tool |
 | [Tools/reverse/male_avatar.py](../../Tools/reverse/male_avatar.py) | Conversion / recovery / verification tool |
+| [Tools/reverse/original_abmx_probe.py](../../Tools/reverse/original_abmx_probe.py) | Conversion / recovery / verification tool |
 | [Tools/reverse/test_abmx_contract.py](../../Tools/reverse/test_abmx_contract.py) | Test / validation |
+| [Tools/reverse/test_original_abmx_probe.py](../../Tools/reverse/test_original_abmx_probe.py) | Test / validation |
 | [Tools/reverse/test_card_appearance_bindings.py](../../Tools/reverse/test_card_appearance_bindings.py) | Test / validation |
 | [Tools/reverse/test_card_contract.py](../../Tools/reverse/test_card_contract.py) | Test / validation |
 | [Tools/reverse/test_card_roundtrip.py](../../Tools/reverse/test_card_roundtrip.py) | Test / validation |
