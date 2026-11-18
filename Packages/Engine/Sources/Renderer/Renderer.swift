@@ -157,6 +157,10 @@ public struct RenderStatusReporter: Sendable {
 ///   `renderLock`, so it always prepares the newest submitted frame, as when it
 ///   ran on the main thread (resource retirement, R6). Lock order: a frame
 ///   slot, then `renderLock`, then `frameLock` or `statusLock`.
+/// - While no viewport draws, `submit` queues a retirement completion on
+///   `retirementQueue` (#368). It takes `renderLock` only with `try`, then
+///   `frameLock` for the pending frame's stamp, then the store lock, in the
+///   order above, and never waits for `renderLock`.
 /// - What the last prepared frame reported (`lastFrameStatistics`,
 ///   `lastFrameError`, `lastDeformationErrors`, `lastSourceShaderLive`) and
 ///   `lastFrameGPUTime` are published under `statusLock`. They describe the
@@ -167,8 +171,9 @@ public struct RenderStatusReporter: Sendable {
 /// locks above (`pendingFrame`, its revision and continuous flag by `frameLock`;
 /// `targets`, `frameIndex`, interactive invalidation, the deformation buffers'
 /// content record and live encoder state by `renderLock`; the published values
-/// by `statusLock`; the submit observers by `observerLock`); everything else is immutable after `init` or a
-/// thread-safe Metal or store object (`pickQueue` is a serial dispatch queue).
+/// by `statusLock`; the submit observers, drawing viewports and the queued
+/// completion's flag by `observerLock`); everything else is immutable after `init` or a
+/// thread-safe Metal or store object (`pickQueue` and `retirementQueue` are serial dispatch queues).
 public final class Renderer: @unchecked Sendable {
     public static let shadowMapSize = 2048
     /// Maps slice 5: the map sun's shadow map (`mapShadowMap`), its square
@@ -248,6 +253,7 @@ public final class Renderer: @unchecked Sendable {
     static let deformBypassPause: CFTimeInterval = 0.1
     private var deformReuse = true
     private var skipUnchanged = true
+    private var skipRedundantState = true
     var liveEncoder: SourceShaderLiveEncoder?
     var liveEncoderError: String?
     /// Maps slice 5: the map sun's shadow map, made on the first frame that
@@ -257,10 +263,20 @@ public final class Renderer: @unchecked Sendable {
     private var mapShadowContent: MapShadowContent?
     private var mapShadowEveryFrame = false
 
-    /// Guards `submitObservers` only; never held while taking another lock.
+    /// Guards `submitObservers`, `drawingViewports` and `retirementScheduled`;
+    /// never held while taking another lock.
     private let observerLock = NSLock()
     private var submitObservers: [UInt64: @Sendable () -> Void] = [:]
     private var nextObserver: UInt64 = 0
+    /// #368: the viewports drawing this renderer's submits (`setViewport`).
+    private var drawingViewports = Set<ObjectIdentifier>()
+    /// #368: a completion is queued and has not started
+    /// (`completeScheduledRetirements`).
+    private var retirementScheduled = false
+    /// #368: how many completions submits have scheduled (tests).
+    private var retirementSchedules = 0
+    /// #368: completes retirements off the main thread while no viewport draws.
+    private let retirementQueue = DispatchQueue(label: "com.grabbiel.Ikkoku.retirements", qos: .utility)
 
     private let statusLock = NSLock()
     private var publishedStatistics = RenderFrameStatistics()
@@ -308,6 +324,14 @@ public final class Renderer: @unchecked Sendable {
     }
     /// Whether the map sun's shadow map has been made (it costs 16 MiB).
     public var hasMapShadowMap: Bool { renderLock.lock(); defer { renderLock.unlock() }; return mapShadowMap != nil }
+    /// Whether the geometry passes skip encoder calls that repeat the state
+    /// the encoder already holds (`EncoderState`; default true). False sets
+    /// every state for every draw, as before: the reference of the
+    /// state-skipping tests. Safe from any thread.
+    var skipsRedundantEncoderState: Bool {
+        get { renderLock.lock(); defer { renderLock.unlock() }; return skipRedundantState }
+        set { renderLock.lock(); skipRedundantState = newValue; renderLock.unlock() }
+    }
     /// Whether interactive draws and picks skip the deform dispatch of a
     /// deformation whose buffer already holds exactly the frame's vertices (R7
     /// phase 2, item 4; default true). False dispatches every deformation in
@@ -345,6 +369,12 @@ public final class Renderer: @unchecked Sendable {
         var snapshot = frame
         snapshot.retainTextures(from: resources)
         snapshot.submitted = true
+        // R6: the snapshot now holds the textures it names, and the frame it
+        // replaces has held its own since its submit, so textures retired before
+        // this frame was created go now, not when a viewport prepares it (an
+        // occluded or minimized one never does). Store lock only, before frameLock.
+        // The same lock says whether meshes or keys are retiring (#368, below).
+        let retiring = resources.completeTextureRetirements(createdBefore: snapshot.createdAt)
         // Native shaders do not read frame.time. Live programs may read _Time;
         // conservatively keep every visible live material at the display rate.
         let continuous = snapshot.items.contains { $0.visible && $0.sourceShader != nil }
@@ -353,9 +383,73 @@ public final class Renderer: @unchecked Sendable {
         frameLock.unlock()
         observerLock.lock()
         let observers = submitObservers.isEmpty ? [] : Array(submitObservers.values)
+        // #368: meshes and keys still go when a prepare of a submitted frame
+        // completes them, which a drawing viewport does within a frame. With no
+        // viewport drawing (hidden, minimized, or none), nothing would prepare,
+        // so a utility queue completes them under the render lock instead, once
+        // for any number of submits before it starts. Nothing more runs on
+        // this thread.
+        var schedule = false
+        if retiring, drawingViewports.isEmpty, !retirementScheduled {
+            retirementScheduled = true; retirementSchedules += 1; schedule = true
+        }
         observerLock.unlock()
+        if schedule { retirementQueue.async { [weak self] in self?.completeScheduledRetirements() } }
         for observer in observers { observer() }
     }
+
+    /// #368: a viewport says whether it draws this renderer's submits: visible
+    /// with its display link running (`true`), or hidden, minimized or stopped
+    /// (`false`). While no viewport draws, `submit` completes retirements off
+    /// the main thread. Safe from any thread.
+    public func setViewport(_ viewport: ObjectIdentifier, drawing: Bool) {
+        observerLock.lock()
+        if drawing { drawingViewports.insert(viewport) } else { drawingViewports.remove(viewport) }
+        observerLock.unlock()
+    }
+
+    /// #368, on `retirementQueue`: completes what a prepare of the pending
+    /// frame would, the retirements made before it was created, if no frame
+    /// is being prepared (the render lock is free). Otherwise they stay, and
+    /// the next submit or the prepare of a submitted frame completes them, as
+    /// before. The pending frame is the submit that queued this or a later
+    /// one; if a later submit put back a copy of an older frame, that older
+    /// stamp applies, as at its prepare. Holding the render lock keeps every
+    /// guarantee of a completion at prepare: no prepare runs, the pending
+    /// frame was created after the retirements it completes, encoded command
+    /// buffers hold their own references, and frames created earlier get
+    /// transient deformation buffers. Internal so a test can run it with no
+    /// submitted frame pending, when it completes nothing.
+    func completeScheduledRetirements() {
+        observerLock.lock(); retirementScheduled = false; observerLock.unlock()
+        guard renderLock.try() else { return }
+        frameLock.lock()
+        let stamp: UInt64? = pendingFrame.submitted ? pendingFrame.createdAt : nil
+        frameLock.unlock()
+        if let stamp { dropDeformContent(resources.completeRetirements(createdBefore: stamp)) }
+        renderLock.unlock()
+    }
+
+    /// Drops the content records of released deformation keys, which hold
+    /// their buffers. A record only ever matches its own buffer (`===`), so a
+    /// key's later buffer never reuses it. Caller holds renderLock.
+    private func dropDeformContent(_ keys: [UInt64]) {
+        guard !keys.isEmpty, !deformContent.isEmpty else { return }
+        for key in keys { deformContent[key] = nil }
+    }
+
+    /// Waits for a scheduled completion (tests).
+    func waitForScheduledRetirements() { retirementQueue.sync {} }
+
+    /// Holds queued completions until released, so a test can submit again
+    /// before one starts (tests).
+    func holdScheduledRetirements(_ hold: Bool) { if hold { retirementQueue.suspend() } else { retirementQueue.resume() } }
+
+    /// How many completions submits have scheduled so far (tests).
+    var scheduledRetirementCount: Int { observerLock.lock(); defer { observerLock.unlock() }; return retirementSchedules }
+
+    /// Whether a content record holds `key`'s buffer (tests).
+    func holdsDeformContent(key: UInt64) -> Bool { renderLock.lock(); defer { renderLock.unlock() }; return deformContent[key] != nil }
 
     /// Calls `observer` after every `submit`, on the submitting thread and
     /// outside the renderer's locks, so a viewport can return its display link
@@ -1025,7 +1119,7 @@ public final class Renderer: @unchecked Sendable {
                  deforms mode: DeformMode = .always) throws -> FrameContext {
         // A submitted frame created after a retirement replaced every pending frame
         // that could still name the retired resources (`ResourceStore.retire`).
-        if input.submitted { resources.completeRetirements(createdBefore: input.createdAt) }
+        if input.submitted { dropDeformContent(resources.completeRetirements(createdBefore: input.createdAt)) }
         var statistics = RenderFrameStatistics()
         var tracking: DeformTracking
         switch mode {
@@ -1131,10 +1225,14 @@ public final class Renderer: @unchecked Sendable {
         // steady scene allocates nothing per draw. Each referenced set is
         // validated element by element first, as before.
         var skinPalettes: [UInt64: (allocation: FrameAllocation, count: Int, matrices: [float4x4])] = [:]
-        let referencedSkinSets = Set(frame.items.compactMap { item -> UInt64? in
-            guard item.visible, resources.mesh(item.mesh)?.skin != nil else { return nil }
-            return item.skinSet
-        })
+        // Only an item with a skin set can reference one: the mesh lookup
+        // (the store's lock) is left for those.
+        var referencedSkinSets = Set<UInt64>()
+        frame.items.withUnsafeBufferPointer { items in
+            for index in items.indices where items[index].visible {
+                if let key = items[index].skinSet, resources.mesh(items[index].mesh)?.skin != nil { referencedSkinSets.insert(key) }
+            }
+        }
         var paletteKeys: [UInt64] = [], palettes: [[float4x4]] = []
         for (key, mats) in frame.skinSets where referencedSkinSets.contains(key) {
             guard !mats.isEmpty, mats.count <= Int(UInt32.max), Renderer.allFinite(mats) else {
@@ -1157,10 +1255,11 @@ public final class Renderer: @unchecked Sendable {
             }
         }
 
-        var opaque: [DrawRecord] = []
-        var transparent: [DrawRecord] = []
+        // Room for every item up front: a record holds its item, so regrowing
+        // these arrays moved every record again.
+        var opaque: [DrawRecord] = [], transparent: [DrawRecord] = [], casters: [DrawRecord] = []
+        opaque.reserveCapacity(frame.items.count); transparent.reserveCapacity(frame.items.count); casters.reserveCapacity(frame.items.count)
         var sky: [DrawRecord] = []
-        var casters: [DrawRecord] = []
         var deforms: [DeformRecord] = []
         // Each deformation key's buffer in this preparation, from the key's
         // first item. Its other items (one per material pass) draw what that
@@ -1336,23 +1435,51 @@ public final class Renderer: @unchecked Sendable {
         return (u.flags & MaterialFlagMapProbeLit.rawValue) != 0 && (u.flags & own) == 0
     }
 
+    /// The opaque order: draw order, then material kind, then mesh id; equal
+    /// records keep their input order.
+    ///
+    /// Both sorts sort small keys, not the records: a record holds its item,
+    /// and moving whole records was the largest cost of preparing a
+    /// 3,506-item frame (0.58 ms). Each key carries its record's index, which
+    /// also decides between equal keys, so the order is the stable order the
+    /// record sort gave; each record is then copied once into its place.
     static func sortedOpaque(_ records: [DrawRecord]) -> [DrawRecord] {
-        records.sorted { a, b in
-            if a.item.order != b.item.order { return a.item.order < b.item.order }
-            if a.item.material.uniforms.kind != b.item.material.uniforms.kind { return a.item.material.uniforms.kind < b.item.material.uniforms.kind }
-            return a.item.mesh.id < b.item.mesh.id
+        var keys: [(order: Int, kind: UInt32, mesh: UInt32, index: Int)] = []
+        keys.reserveCapacity(records.count)
+        records.withUnsafeBufferPointer { records in
+            for index in records.indices {
+                keys.append((records[index].item.order, records[index].item.material.uniforms.kind, records[index].item.mesh.id, index))
+            }
         }
+        keys.sort { a, b in
+            if a.order != b.order { return a.order < b.order }
+            if a.kind != b.kind { return a.kind < b.kind }
+            if a.mesh != b.mesh { return a.mesh < b.mesh }
+            return a.index < b.index
+        }
+        return keys.map { records[$0.index] }
     }
 
     /// Unity's order for transparent draws: render queue, then camera distance
-    /// to the sort centre (back to front); then our draw order and mesh id.
+    /// to the sort centre (back to front); then our draw order and mesh id;
+    /// equal records keep their input order. Sorted by keys, as `sortedOpaque`.
     static func sortedTransparent(_ records: [DrawRecord]) -> [DrawRecord] {
-        records.sorted {
-            if $0.item.renderQueue != $1.item.renderQueue { return $0.item.renderQueue < $1.item.renderQueue }
-            if $0.distance != $1.distance { return $0.distance > $1.distance }
-            if $0.item.order != $1.item.order { return $0.item.order < $1.item.order }
-            return $0.item.mesh.id < $1.item.mesh.id
+        var keys: [(queue: Int, distance: Float, order: Int, mesh: UInt32, index: Int)] = []
+        keys.reserveCapacity(records.count)
+        records.withUnsafeBufferPointer { records in
+            for index in records.indices {
+                keys.append((records[index].item.renderQueue, records[index].distance, records[index].item.order,
+                             records[index].item.mesh.id, index))
+            }
         }
+        keys.sort { a, b in
+            if a.queue != b.queue { return a.queue < b.queue }
+            if a.distance != b.distance { return a.distance > b.distance }
+            if a.order != b.order { return a.order < b.order }
+            if a.mesh != b.mesh { return a.mesh < b.mesh }
+            return a.index < b.index
+        }
+        return keys.map { records[$0.index] }
     }
 
     // MARK: - Encoding
@@ -1434,23 +1561,23 @@ public final class Renderer: @unchecked Sendable {
         cb.commit()
     }
 
-    func bindCommon(_ enc: any MTLRenderCommandEncoder, _ ctx: FrameContext) {
-        enc.setVertexBuffer(ctx.frameUniforms.buffer, offset: ctx.frameUniforms.offset, index: Int(BufferIndexFrameUniforms.rawValue))
-        enc.setFragmentBuffer(ctx.frameUniforms.buffer, offset: ctx.frameUniforms.offset, index: Int(BufferIndexFrameUniforms.rawValue))
-        enc.setFragmentBuffer(ctx.lights.buffer, offset: ctx.lights.offset, index: Int(BufferIndexLights.rawValue))
-        enc.setFragmentTexture(shadowMap, index: Int(TextureIndexShadowMap.rawValue))
-        enc.setFrontFacing(.counterClockwise)
+    func bindCommon(_ s: EncoderState, _ ctx: FrameContext) {
+        s.setVertexBuffer(ctx.frameUniforms.buffer, offset: ctx.frameUniforms.offset, index: Int(BufferIndexFrameUniforms.rawValue))
+        s.setFragmentBuffer(ctx.frameUniforms.buffer, offset: ctx.frameUniforms.offset, index: Int(BufferIndexFrameUniforms.rawValue))
+        s.setFragmentBuffer(ctx.lights.buffer, offset: ctx.lights.offset, index: Int(BufferIndexLights.rawValue))
+        s.setFragmentTexture(shadowMap, index: Int(TextureIndexShadowMap.rawValue))
+        s.setFrontFacing(.counterClockwise)
     }
 
     /// Maps slice 5, once per main pass: toon_vertex's receive bytes (the shared
     /// dummy; only a mixed map mesh binds its own, in `bindDraw`), and for a
     /// frame with map draws `map_fragment`'s lighting and shadow map. Without a
     /// map shadow map the character one stands in, unread (strength 0).
-    func bindMapCommon(_ enc: any MTLRenderCommandEncoder, _ ctx: FrameContext) {
-        enc.setVertexBuffer(resources.dummyBuffer, offset: 0, index: Int(BufferIndexVertexReceive.rawValue))
+    func bindMapCommon(_ s: EncoderState, _ ctx: FrameContext) {
+        s.setVertexBuffer(resources.dummyBuffer, offset: 0, index: Int(BufferIndexVertexReceive.rawValue))
         guard ctx.hasMapDraws else { return }
-        enc.setFragmentBuffer(ctx.mapLighting.buffer, offset: ctx.mapLighting.offset, index: Int(BufferIndexMapLighting.rawValue))
-        enc.setFragmentTexture(mapShadowMap ?? shadowMap, index: Int(TextureIndexMapShadow.rawValue))
+        s.setFragmentBuffer(ctx.mapLighting.buffer, offset: ctx.mapLighting.offset, index: Int(BufferIndexMapLighting.rawValue))
+        s.setFragmentTexture(mapShadowMap ?? shadowMap, index: Int(TextureIndexMapShadow.rawValue))
     }
 
     /// Maps slice 5: draws the map sun's shadow map when the frame's plan asks
@@ -1525,58 +1652,70 @@ public final class Renderer: @unchecked Sendable {
         return u
     }
 
-    private func bindDraw(_ enc: any MTLRenderCommandEncoder, _ rec: DrawRecord) {
+    private func bindDraw(_ s: EncoderState, _ rec: DrawRecord) {
         // Mirrored scene nodes reverse triangle orientation in every geometry pass.
-        enc.setFrontFacing(simd_determinant(rec.item.model.upperLeft3x3) < 0 ? .clockwise : .counterClockwise)
-        enc.setVertexBuffer(rec.vertexBuffer, offset: 0, index: Int(BufferIndexVertices.rawValue))
-        enc.setVertexBuffer(rec.mesh.texcoords, offset: 0, index: Int(BufferIndexTexcoords.rawValue))
-        enc.setVertexBuffer(rec.mesh.texcoords1, offset: 0, index: Int(BufferIndexTexcoords1.rawValue))
-        enc.setVertexBuffer(rec.mesh.texcoords2, offset: 0, index: Int(BufferIndexTexcoords2.rawValue))
-        enc.setVertexBuffer(rec.mesh.colors ?? resources.dummyBuffer, offset: 0, index: Int(BufferIndexVertexColors.rawValue))
-        enc.setVertexBuffer(rec.draw.buffer, offset: rec.draw.offset, index: Int(BufferIndexDrawUniforms.rawValue))
-        enc.setVertexBuffer(rec.material.buffer, offset: rec.material.offset, index: Int(BufferIndexMaterial.rawValue))
-        enc.setVertexBuffer(rec.hiddenBuffer ?? resources.dummyBuffer, offset: 0, index: Int(BufferIndexVertexHidden.rawValue))
+        s.setFrontFacing(simd_determinant(rec.item.model.upperLeft3x3) < 0 ? .clockwise : .counterClockwise)
+        s.setVertexBuffer(rec.vertexBuffer, offset: 0, index: Int(BufferIndexVertices.rawValue))
+        s.setVertexBuffer(rec.mesh.texcoords, offset: 0, index: Int(BufferIndexTexcoords.rawValue))
+        s.setVertexBuffer(rec.mesh.texcoords1, offset: 0, index: Int(BufferIndexTexcoords1.rawValue))
+        s.setVertexBuffer(rec.mesh.texcoords2, offset: 0, index: Int(BufferIndexTexcoords2.rawValue))
+        s.setVertexBuffer(rec.mesh.colors ?? resources.dummyBuffer, offset: 0, index: Int(BufferIndexVertexColors.rawValue))
+        s.setVertexBuffer(rec.draw.buffer, offset: rec.draw.offset, index: Int(BufferIndexDrawUniforms.rawValue))
+        s.setVertexBuffer(rec.material.buffer, offset: rec.material.offset, index: Int(BufferIndexMaterial.rawValue))
+        s.setVertexBuffer(rec.hiddenBuffer ?? resources.dummyBuffer, offset: 0, index: Int(BufferIndexVertexHidden.rawValue))
         // Read only under MaterialFlagMapReceivePerVertex, which only these draws keep.
-        if let receive = rec.receiveBuffer { enc.setVertexBuffer(receive, offset: 0, index: Int(BufferIndexVertexReceive.rawValue)) }
-        enc.setFragmentBuffer(rec.draw.buffer, offset: rec.draw.offset, index: Int(BufferIndexDrawUniforms.rawValue))
-        enc.setFragmentBuffer(rec.material.buffer, offset: rec.material.offset, index: Int(BufferIndexMaterial.rawValue))
+        if let receive = rec.receiveBuffer { s.setVertexBuffer(receive, offset: 0, index: Int(BufferIndexVertexReceive.rawValue)) }
+        s.setFragmentBuffer(rec.draw.buffer, offset: rec.draw.offset, index: Int(BufferIndexDrawUniforms.rawValue))
+        s.setFragmentBuffer(rec.material.buffer, offset: rec.material.offset, index: Int(BufferIndexMaterial.rawValue))
     }
 
-    private func bindTextures(_ enc: any MTLRenderCommandEncoder, _ m: MaterialState, frame: RenderFrame) {
+    /// The material's textures, by its kind. They depend only on its kind and
+    /// handles (the frame resolves each handle the same way all frame long),
+    /// so a material with the same set as the last one bound binds nothing.
+    private func bindTextures(_ s: EncoderState, _ m: MaterialState, frame: RenderFrame) {
+        let set = m.textureSet
+        if s.skips, s.boundTextureSet == set { return }
+        s.boundTextureSet = set
         let white = resources.whiteTexture, black = resources.blackTexture
         if m.uniforms.kind == UInt32(MaterialKindSky.rawValue) {
             // sky_fragment samples only the cube (ST-A11 map sky). prepare drops a
             // sky draw whose cube does not resolve, so index 19 always holds a cube here.
             if let cube = frame.texture(m.cubemap, resources: resources) {
-                enc.setFragmentTexture(cube, index: Int(TextureIndexSkyCube.rawValue))
+                s.setFragmentTexture(cube, index: Int(TextureIndexSkyCube.rawValue))
             }
             return
         }
-        enc.setFragmentTexture(frame.texture(m.base, resources: resources) ?? white, index: Int(TextureIndexBase.rawValue))
+        s.setFragmentTexture(frame.texture(m.base, resources: resources) ?? white, index: Int(TextureIndexBase.rawValue))
         if m.uniforms.kind == UInt32(MaterialKindMap.rawValue) {
             // map_fragment samples only these four (ST-A11 source maps).
-            enc.setFragmentTexture(frame.texture(m.lightmap, resources: resources) ?? black, index: Int(TextureIndexLightmap.rawValue))
-            enc.setFragmentTexture(frame.texture(m.lightmapDirection, resources: resources) ?? black,
+            s.setFragmentTexture(frame.texture(m.lightmap, resources: resources) ?? black, index: Int(TextureIndexLightmap.rawValue))
+            s.setFragmentTexture(frame.texture(m.lightmapDirection, resources: resources) ?? black,
                                    index: Int(TextureIndexLightmapDirection.rawValue))
             // Unity's _EmissionMap default is white; map_fragment reads it only when emissive.a > 0.
-            enc.setFragmentTexture(frame.texture(m.emission, resources: resources) ?? white, index: Int(TextureIndexEmission.rawValue))
+            s.setFragmentTexture(frame.texture(m.emission, resources: resources) ?? white, index: Int(TextureIndexEmission.rawValue))
             return
         }
-        enc.setFragmentTexture(frame.texture(m.colorMask, resources: resources) ?? black, index: Int(TextureIndexColorMask.rawValue))
+        s.setFragmentTexture(frame.texture(m.colorMask, resources: resources) ?? black, index: Int(TextureIndexColorMask.rawValue))
         let isEye = m.uniforms.kind == UInt32(MaterialKindEye.rawValue)
-        enc.setFragmentTexture(frame.texture(m.detail, resources: resources) ?? (isEye ? black : white), index: Int(TextureIndexDetail.rawValue))
-        enc.setFragmentTexture(frame.texture(m.line, resources: resources) ?? black, index: Int(TextureIndexLine.rawValue))
-        enc.setFragmentTexture(frame.texture(m.normal, resources: resources) ?? resources.flatNormalTexture, index: Int(TextureIndexNormal.rawValue))
-        enc.setFragmentTexture(frame.texture(m.overlay0, resources: resources) ?? black, index: Int(TextureIndexOverlay0.rawValue))
-        enc.setFragmentTexture(frame.texture(m.overlay1, resources: resources) ?? black, index: Int(TextureIndexOverlay1.rawValue))
-        enc.setFragmentTexture(frame.texture(m.overlay2, resources: resources) ?? black, index: Int(TextureIndexOverlay2.rawValue))
-        enc.setFragmentTexture(frame.texture(m.hairGloss, resources: resources) ?? white, index: Int(TextureIndexHairGloss.rawValue))
-        enc.setFragmentTexture(frame.texture(m.pattern, resources: resources) ?? white, index: Int(TextureIndexPattern.rawValue))
-        enc.setFragmentTexture(frame.texture(m.bodyMask, resources: resources) ?? black, index: Int(TextureIndexBodyMask.rawValue))
+        s.setFragmentTexture(frame.texture(m.detail, resources: resources) ?? (isEye ? black : white), index: Int(TextureIndexDetail.rawValue))
+        s.setFragmentTexture(frame.texture(m.line, resources: resources) ?? black, index: Int(TextureIndexLine.rawValue))
+        s.setFragmentTexture(frame.texture(m.normal, resources: resources) ?? resources.flatNormalTexture, index: Int(TextureIndexNormal.rawValue))
+        s.setFragmentTexture(frame.texture(m.overlay0, resources: resources) ?? black, index: Int(TextureIndexOverlay0.rawValue))
+        s.setFragmentTexture(frame.texture(m.overlay1, resources: resources) ?? black, index: Int(TextureIndexOverlay1.rawValue))
+        s.setFragmentTexture(frame.texture(m.overlay2, resources: resources) ?? black, index: Int(TextureIndexOverlay2.rawValue))
+        s.setFragmentTexture(frame.texture(m.hairGloss, resources: resources) ?? white, index: Int(TextureIndexHairGloss.rawValue))
+        s.setFragmentTexture(frame.texture(m.pattern, resources: resources) ?? white, index: Int(TextureIndexPattern.rawValue))
+        s.setFragmentTexture(frame.texture(m.bodyMask, resources: resources) ?? black, index: Int(TextureIndexBodyMask.rawValue))
     }
 
-    private func drawIndexed(_ enc: any MTLRenderCommandEncoder, _ mesh: GPUMesh) {
-        enc.drawIndexedPrimitives(type: .triangle, indexCount: mesh.indexCount, indexType: .uint32, indexBuffer: mesh.indices, indexBufferOffset: 0)
+    /// The base and body-mask textures, all the shadow and pick fragment functions read.
+    private func bindMaskTextures(_ s: EncoderState, _ m: MaterialState, frame: RenderFrame, base: Bool) {
+        if base { s.setFragmentTexture(frame.texture(m.base, resources: resources) ?? resources.whiteTexture, index: Int(TextureIndexBase.rawValue)) }
+        s.setFragmentTexture(frame.texture(m.bodyMask, resources: resources) ?? resources.blackTexture, index: Int(TextureIndexBodyMask.rawValue))
+    }
+
+    private func drawIndexed(_ s: EncoderState, _ mesh: GPUMesh) {
+        s.encoder.drawIndexedPrimitives(type: .triangle, indexCount: mesh.indexCount, indexType: .uint32, indexBuffer: mesh.indices, indexBufferOffset: 0)
     }
 
     private func encodeShadow(_ ctx: FrameContext, _ cb: any MTLCommandBuffer) {
@@ -1587,17 +1726,17 @@ public final class Renderer: @unchecked Sendable {
         pass.depthAttachment.clearDepth = 0
         guard let enc = cb.makeRenderCommandEncoder(descriptor: pass) else { return }
         enc.label = "Shadow"
+        let s = EncoderState(enc, skips: skipRedundantState)
         if ctx.frame.mainLight.castsShadow {
-            enc.setRenderPipelineState(pipelines.shadow)
-            enc.setDepthStencilState(pipelines.depthWrite)
-            enc.setCullMode(.none)
+            s.setPipeline(pipelines.shadow)
+            s.setDepthStencil(pipelines.depthWrite)
+            s.setCull(.none)
             enc.setDepthBias(1.0, slopeScale: 1.5, clamp: 0.01)
-            bindCommon(enc, ctx)
+            bindCommon(s, ctx)
             for rec in ctx.shadowCasters {
-                bindDraw(enc, rec)
-                enc.setFragmentTexture(ctx.frame.texture(rec.item.material.base, resources: resources) ?? resources.whiteTexture, index: Int(TextureIndexBase.rawValue))
-                enc.setFragmentTexture(ctx.frame.texture(rec.item.material.bodyMask, resources: resources) ?? resources.blackTexture, index: Int(TextureIndexBodyMask.rawValue))
-                drawIndexed(enc, rec.mesh)
+                bindDraw(s, rec)
+                bindMaskTextures(s, rec.item.material, frame: ctx.frame, base: true)
+                drawIndexed(s, rec.mesh)
             }
         }
         enc.endEncoding()
@@ -1636,39 +1775,40 @@ public final class Renderer: @unchecked Sendable {
         }
         guard let enc = cb.makeRenderCommandEncoder(descriptor: pass) else { return }
         enc.label = "Main"
-        bindCommon(enc, ctx)
-        bindMapCommon(enc, ctx)
+        let s = EncoderState(enc, skips: skipRedundantState)
+        bindCommon(s, ctx)
+        bindMapCommon(s, ctx)
 
         if !fx.transparentBackground, let background = ctx.background {
             enc.pushDebugGroup("Background")
-            enc.setRenderPipelineState(main.background)
-            enc.setDepthStencilState(pipelines.depthNone)
-            enc.setCullMode(.none)
-            enc.setFragmentBuffer(background.buffer, offset: background.offset, index: Int(BufferIndexFrameUniforms.rawValue))
-            enc.setFragmentBuffer(ctx.post.buffer, offset: ctx.post.offset, index: Int(BufferIndexPostParams.rawValue))
+            s.setPipeline(main.background)
+            s.setDepthStencil(pipelines.depthNone)
+            s.setCull(.none)
+            s.setFragmentBuffer(background.buffer, offset: background.offset, index: Int(BufferIndexFrameUniforms.rawValue))
+            s.setFragmentBuffer(ctx.post.buffer, offset: ctx.post.offset, index: Int(BufferIndexPostParams.rawValue))
             enc.drawPrimitives(type: .triangle, vertexStart: 0, vertexCount: 3)
-            enc.setFragmentBuffer(ctx.frameUniforms.buffer, offset: ctx.frameUniforms.offset, index: Int(BufferIndexFrameUniforms.rawValue))
+            s.setFragmentBuffer(ctx.frameUniforms.buffer, offset: ctx.frameUniforms.offset, index: Int(BufferIndexFrameUniforms.rawValue))
             enc.popDebugGroup()
         }
         if !ctx.sky.isEmpty {
             // Unity draws Background-queue geometry first, ZWrite Off; the sphere
             // lies far inside the infinite reverse-Z frustum, so nothing clips it.
             enc.pushDebugGroup("Sky")
-            enc.setRenderPipelineState(main.sky)
-            enc.setDepthStencilState(pipelines.depthNone)
-            enc.setCullMode(.none)
+            s.setPipeline(main.sky)
+            s.setDepthStencil(pipelines.depthNone)
+            s.setCull(.none)
             for rec in ctx.sky {
-                bindDraw(enc, rec)
-                bindTextures(enc, rec.item.material, frame: ctx.frame)
-                drawIndexed(enc, rec.mesh)
+                bindDraw(s, rec)
+                bindTextures(s, rec.item.material, frame: ctx.frame)
+                drawIndexed(s, rec.mesh)
             }
             enc.popDebugGroup()
         }
         if fx.showGrid {
             enc.pushDebugGroup("Grid")
-            enc.setRenderPipelineState(main.grid)
-            enc.setDepthStencilState(pipelines.depthTest)
-            enc.setCullMode(.none)
+            s.setPipeline(main.grid)
+            s.setDepthStencil(pipelines.depthTest)
+            s.setCull(.none)
             enc.drawPrimitives(type: .triangle, vertexStart: 0, vertexCount: 6)
             enc.popDebugGroup()
         }
@@ -1677,61 +1817,64 @@ public final class Renderer: @unchecked Sendable {
         let outlinesOn = fx.outlineWidth > 0.001
         for rec in ctx.opaque {
             let m = rec.item.material
-            bindDraw(enc, rec)
-            bindTextures(enc, m, frame: ctx.frame)
+            bindDraw(s, rec)
+            bindTextures(s, m, frame: ctx.frame)
             if outlinesOn && rec.item.outline && (m.uniforms.flags & MaterialFlagNoOutline.rawValue) == 0 {
-                enc.setRenderPipelineState(main.outline)
-                enc.setDepthStencilState(pipelines.depthWrite)
-                enc.setCullMode(.front)
-                drawIndexed(enc, rec.mesh)
+                s.setPipeline(main.outline)
+                s.setDepthStencil(pipelines.depthWrite)
+                s.setCull(.front)
+                drawIndexed(s, rec.mesh)
             }
             let nativeEye = m.uniforms.kind == UInt32(MaterialKindEye.rawValue) && (m.uniforms.flags & MaterialFlagSourceIrisHighlights.rawValue) == 0
             let isMap = m.uniforms.kind == UInt32(MaterialKindMap.rawValue)
             let ambientLit = isMap && Self.drawsAmbientLitMap(m.uniforms)
-            enc.setRenderPipelineState(ambientLit ? main.toonMapProbeLit : isMap ? main.map : nativeEye ? main.eye : main.toonOpaque)
-            enc.setDepthStencilState(pipelines.depthWrite)
-            enc.setCullMode((m.uniforms.flags & MaterialFlagDoubleSided.rawValue) != 0 ? .none : .back)
-            drawIndexed(enc, rec.mesh)
+            s.setPipeline(ambientLit ? main.toonMapProbeLit : isMap ? main.map : nativeEye ? main.eye : main.toonOpaque)
+            s.setDepthStencil(pipelines.depthWrite)
+            s.setCull((m.uniforms.flags & MaterialFlagDoubleSided.rawValue) != 0 ? .none : .back)
+            drawIndexed(s, rec.mesh)
         }
         enc.popDebugGroup()
 
         if !ctx.live.isEmpty, ctx.liveMainPass != nil {
             enc.pushDebugGroup("SourceShaderLive")
             encodeLiveDraws(enc, ctx, target: TranslatedSourceTarget(color: Pipelines.hdrFormat, depthStencil: Pipelines.depthStencilFormat, sampleCount: Pipelines.sampleCount))
-            // Translated programs bind buffers 0 and 8…, textures 0…; restore
-            // the native frame bindings for the passes that follow.
-            bindCommon(enc, ctx)
-            bindMapCommon(enc, ctx)
+            // Translated programs bind buffers 0 and 8…, textures 0… and their
+            // own pipeline, depth, cull and winding state directly: forget what
+            // the encoder held, and restore the native frame bindings for the
+            // passes that follow.
+            s.forget()
+            bindCommon(s, ctx)
+            bindMapCommon(s, ctx)
             enc.popDebugGroup()
         }
 
         if !ctx.transparent.isEmpty {
             enc.pushDebugGroup("Transparent")
-            enc.setDepthStencilState(pipelines.depthTest)
+            s.setDepthStencil(pipelines.depthTest)
             for rec in ctx.transparent {
                 let material = rec.item.material.uniforms
                 let nativeEye = material.kind == UInt32(MaterialKindEye.rawValue) && (material.flags & MaterialFlagSourceIrisHighlights.rawValue) == 0
                 let isMap = material.kind == UInt32(MaterialKindMap.rawValue)
-                bindDraw(enc, rec)
-                bindTextures(enc, rec.item.material, frame: ctx.frame)
-                enc.setCullMode((rec.item.material.uniforms.flags & MaterialFlagDoubleSided.rawValue) != 0 ? .none : .back)
+                bindDraw(s, rec)
+                bindTextures(s, rec.item.material, frame: ctx.frame)
+                s.setCull((rec.item.material.uniforms.flags & MaterialFlagDoubleSided.rawValue) != 0 ? .none : .back)
                 if isMap, (material.flags & MaterialFlagMapSilhouette.rawValue) != 0 {
                     // Custom/Silhouette, per renderer as Unity draws it: pass 1 writes
                     // depth only (ColorMask 0, ZWrite On, ZTest LEqual), pass 2 blends
                     // the colour where pass 1 left the nearest depth (ZWrite Off,
                     // ZTest LEqual), so a renderer's overlapping faces blend once.
-                    enc.setRenderPipelineState(main.mapDepthOnly)
-                    enc.setDepthStencilState(pipelines.depthWriteLEqual)
-                    drawIndexed(enc, rec.mesh)
-                    enc.setRenderPipelineState(main.mapBlend)
-                    enc.setDepthStencilState(pipelines.depthTestLEqual)
-                    drawIndexed(enc, rec.mesh)
-                    enc.setDepthStencilState(pipelines.depthTest)
+                    s.setPipeline(main.mapDepthOnly)
+                    s.setDepthStencil(pipelines.depthWriteLEqual)
+                    drawIndexed(s, rec.mesh)
+                    s.setPipeline(main.mapBlend)
+                    s.setDepthStencil(pipelines.depthTestLEqual)
+                    drawIndexed(s, rec.mesh)
+                    s.setDepthStencil(pipelines.depthTest)
                     continue
                 }
                 let ambientLit = isMap && Self.drawsAmbientLitMap(material)
-                enc.setRenderPipelineState(ambientLit ? main.toonMapProbeLitBlend : isMap ? main.mapBlend : nativeEye ? main.eyeBlend : main.toonBlend)
-                drawIndexed(enc, rec.mesh)
+                s.setPipeline(ambientLit ? main.toonMapProbeLitBlend : isMap ? main.mapBlend : nativeEye ? main.eyeBlend : main.toonBlend)
+                drawIndexed(s, rec.mesh)
             }
             enc.popDebugGroup()
         }
@@ -1739,21 +1882,21 @@ public final class Renderer: @unchecked Sendable {
         let depthGizmos = ctx.gizmos.filter { $0.batch.depthTest }
         if !depthGizmos.isEmpty {
             enc.pushDebugGroup("GizmosDepth")
-            enc.setRenderPipelineState(main.gizmoHDR)
-            enc.setDepthStencilState(pipelines.depthTest)
-            enc.setCullMode(.none)
-            encodeGizmos(enc, depthGizmos)
+            s.setPipeline(main.gizmoHDR)
+            s.setDepthStencil(pipelines.depthTest)
+            s.setCull(.none)
+            encodeGizmos(s, depthGizmos)
             enc.popDebugGroup()
         }
         enc.endEncoding()
     }
 
-    private func encodeGizmos(_ enc: any MTLRenderCommandEncoder, _ records: [GizmoRecord]) {
+    private func encodeGizmos(_ s: EncoderState, _ records: [GizmoRecord]) {
         for g in records {
-            enc.setVertexBuffer(g.vertices.buffer, offset: g.vertices.offset, index: Int(BufferIndexGizmoVertices.rawValue))
-            enc.setVertexBuffer(g.draw.buffer, offset: g.draw.offset, index: Int(BufferIndexDrawUniforms.rawValue))
-            enc.setFragmentBuffer(g.draw.buffer, offset: g.draw.offset, index: Int(BufferIndexDrawUniforms.rawValue))
-            enc.drawPrimitives(type: g.batch.primitive == .lines ? .line : .triangle, vertexStart: 0, vertexCount: g.batch.vertices.count)
+            s.setVertexBuffer(g.vertices.buffer, offset: g.vertices.offset, index: Int(BufferIndexGizmoVertices.rawValue))
+            s.setVertexBuffer(g.draw.buffer, offset: g.draw.offset, index: Int(BufferIndexDrawUniforms.rawValue))
+            s.setFragmentBuffer(g.draw.buffer, offset: g.draw.offset, index: Int(BufferIndexDrawUniforms.rawValue))
+            s.encoder.drawPrimitives(type: g.batch.primitive == .lines ? .line : .triangle, vertexStart: 0, vertexCount: g.batch.vertices.count)
         }
     }
 
@@ -1806,11 +1949,12 @@ public final class Renderer: @unchecked Sendable {
         pass.depthAttachment.clearDepth = 0
         guard let enc = cb.makeRenderCommandEncoder(descriptor: pass) else { return }
         enc.label = "Overlay"
-        enc.setRenderPipelineState(pipelines.gizmoLDR)
-        enc.setDepthStencilState(pipelines.depthWrite)
-        enc.setCullMode(.none)
-        enc.setVertexBuffer(ctx.frameUniforms.buffer, offset: ctx.frameUniforms.offset, index: Int(BufferIndexFrameUniforms.rawValue))
-        encodeGizmos(enc, overlays)
+        let s = EncoderState(enc, skips: skipRedundantState)
+        s.setPipeline(pipelines.gizmoLDR)
+        s.setDepthStencil(pipelines.depthWrite)
+        s.setCull(.none)
+        s.setVertexBuffer(ctx.frameUniforms.buffer, offset: ctx.frameUniforms.offset, index: Int(BufferIndexFrameUniforms.rawValue))
+        encodeGizmos(s, overlays)
         enc.endEncoding()
     }
 
@@ -1828,24 +1972,24 @@ public final class Renderer: @unchecked Sendable {
         pass.depthAttachment.clearDepth = 0
         guard let enc = cb.makeRenderCommandEncoder(descriptor: pass) else { return }
         enc.label = "Pick"
+        let s = EncoderState(enc, skips: skipRedundantState)
         if let scissor { enc.setScissorRect(scissor) }
-        enc.setFrontFacing(.counterClockwise)
-        enc.setVertexBuffer(ctx.frameUniforms.buffer, offset: ctx.frameUniforms.offset, index: Int(BufferIndexFrameUniforms.rawValue))
-        enc.setRenderPipelineState(pipelines.pick)
-        enc.setDepthStencilState(pipelines.depthWrite)
-        enc.setCullMode(.none)
+        s.setFrontFacing(.counterClockwise)
+        s.setVertexBuffer(ctx.frameUniforms.buffer, offset: ctx.frameUniforms.offset, index: Int(BufferIndexFrameUniforms.rawValue))
+        s.setPipeline(pipelines.pick)
+        s.setDepthStencil(pipelines.depthWrite)
+        s.setCull(.none)
         for rec in ctx.opaque + ctx.transparent + ctx.live.map(\.record) where rec.item.objectID != 0 || rec.item.pickOccluder {
-            bindDraw(enc, rec)
-            enc.setFragmentTexture(ctx.frame.texture(rec.item.material.bodyMask, resources: resources) ?? resources.blackTexture,
-                                   index: Int(TextureIndexBodyMask.rawValue))
-            drawIndexed(enc, rec.mesh)
+            bindDraw(s, rec)
+            bindMaskTextures(s, rec.item.material, frame: ctx.frame, base: false)
+            drawIndexed(s, rec.mesh)
         }
         // Pickable gizmos draw on top (depth cleared so handles always win).
         let pickable = ctx.gizmos.filter { $0.batch.objectID != 0 }
         if !pickable.isEmpty {
-            enc.setRenderPipelineState(pipelines.pickGizmo)
-            enc.setDepthStencilState(pipelines.depthNone)
-            encodeGizmos(enc, pickable)
+            s.setPipeline(pipelines.pickGizmo)
+            s.setDepthStencil(pipelines.depthNone)
+            encodeGizmos(s, pickable)
         }
         enc.endEncoding()
     }

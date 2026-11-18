@@ -430,6 +430,27 @@ class PerfTraceTests(unittest.TestCase):
                       "120 Hz frames dropped 1 (max 6)", text)
         self.assertEqual([perf_trace.frames_at_120(ms) for ms in (0, 8.3, 8.34, 100, 104)], [0, 0, 1, 12, 12])
 
+    def test_action_stats_add_the_own_busy_median_when_every_action_has_it(self):
+        def action(name, busy, own=None):
+            row = {"name": name, "measured": True, "startSeconds": 1, "callMs": 10, "readyMs": 20, "busyMs": busy,
+                   "longestStallMs": 5}
+            if own is not None:
+                row["busyOwnMs"] = own
+            return row
+        data = report()
+        data["details"] = {"actions": [action("duplicate", 1500, 1000), action("duplicate", 1600, 1100),
+                                       action("undo", 500, 500), action("undo", 520)]}
+        stats = perf_trace.action_stats(data)
+        # Additive: the existing fields are the same with or without it; an action group with a row that lacks it (a
+        # report from before the field) has none.
+        self.assertEqual(stats["duplicate"], {"count": 2, "callMs": 10, "readyMs": 20, "busyMs": 1550, "busyOwnMs": 1050,
+                                              "longestStallMs": 5, "maxStallMs": 5, "frames120": 0, "maxFrames120": 0})
+        self.assertNotIn("busyOwnMs", stats["undo"])
+        self.assertEqual(stats["undo"]["busyMs"], 510)
+        text = perf_trace.actions_line("dup", data)
+        self.assertIn("duplicate x2 call 10.0, ready 20.0, main busy 1550.0 (own 1050.0), longest stall 5.0", text)
+        self.assertIn("undo x2 call 10.0, ready 20.0, main busy 510.0, longest stall 5.0", text)
+
     def test_action_problem_flags_an_action_that_left_an_error(self):
         data = report()
         data["workload"] = "studio-export"
@@ -440,7 +461,8 @@ class PerfTraceTests(unittest.TestCase):
                          "1 actions left an error, the first export: Could not export original scene: x")
         data["workload"] = "studio-idle"
         self.assertIsNone(perf_trace.action_problem(data))
-        for workload in ("studio-outfit", "studio-export", "studio-redo", "studio-load", "studio-select"):
+        for workload in ("studio-outfit", "studio-export", "studio-redo", "studio-load", "studio-select",
+                         "studio-export-import", "studio-show-hidden", "studio-clock-first"):
             self.assertIn(workload, perf_trace.WORKLOADS)
             self.assertIn(workload, perf_trace.INPUTLESS_WORKLOADS)
             self.assertIn(workload, perf_trace.PRESENTATION_EXEMPT)

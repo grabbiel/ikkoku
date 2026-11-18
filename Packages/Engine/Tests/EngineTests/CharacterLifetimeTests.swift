@@ -386,6 +386,71 @@ struct CharacterLifetimeTests {
         #expect(threadExited)
         exited.signal()   // for the deferred wait
     }
+
+    /// #368, test 4's timing probe (opt-in: IKKOKU_RETIRE_SUBMIT_PERF=1; the
+    /// JSON also goes to IKKOKU_RETIRE_SUBMIT_PERF_REPORT when set). With no
+    /// viewport drawing, it times the submitting thread's `submit` of an empty
+    /// frame with nothing retiring, and right after a 70-character removal,
+    /// whose completion that submit schedules off the thread. It also times
+    /// that completion, the work a prepare used to do.
+    @Test(.enabled(if: ProcessInfo.processInfo.environment["IKKOKU_RETIRE_SUBMIT_PERF"] == "1"))
+    func submitTimeAfterASeventyCharacterRemovalProbe() throws {
+        let assets = try UntexturedCharacterAssets()
+        defer { assets.remove() }
+        let renderer = try makeSourceShaderRenderer()
+        let resources = renderer.resources
+        let library = AssetLibrary(resources: resources, root: assets.root)
+        let card = UntexturedCharacterAssets.card(garmentCount: 5)
+        let count = 70, rounds = 12, idleSubmits = 60
+        let clock = { DispatchTime.now().uptimeNanoseconds }
+        let ms = { (ns: UInt64) in Double(ns) / 1e6 }
+        var idle: [Double] = [], removal: [Double] = [], completion: [Double] = []
+        var retiring: ResourceStore.Statistics?
+        for round in 0..<rounds {
+            let characters = (0..<count).map {
+                CharacterInstance(instanceID: UInt64(1000 + round * count + $0), library: library, card: card)
+            }
+            var frame = RenderFrame()
+            for (index, character) in characters.enumerated() {
+                let built = character.build(objectID: UInt32(index + 1))
+                frame.items += built.items
+                frame.skinSets[character.instanceID] = built.skinSet
+            }
+            renderer.submit(frame)
+            render(renderer, renderer.currentFrame(), "round \(round): \(count) characters")
+            for _ in 0..<idleSubmits {
+                let t0 = clock()
+                renderer.submit(RenderFrame())
+                idle.append(ms(clock() - t0))
+            }
+            // The Studio's removal: each instance retires its keys and mask, then the model submits.
+            for character in characters { character.releaseGPUResources() }
+            retiring = resources.statistics()
+            let t0 = clock()
+            renderer.submit(RenderFrame())
+            let t1 = clock()
+            renderer.waitForScheduledRetirements()
+            let t2 = clock()
+            if round > 0 { removal.append(ms(t1 - t0)); completion.append(ms(t2 - t1)) }   // round 0 warms up
+            #expect(resources.statistics().retiring == 0, "round \(round): \(resources.statistics())")
+        }
+        func summary(_ values: [Double]) -> [String: Double] {
+            let sorted = values.sorted()
+            let at = { (q: Double) in sorted[min(sorted.count - 1, Int((Double(sorted.count - 1) * q).rounded()))] }
+            return ["n": Double(sorted.count), "median": at(0.5), "p95": at(0.95), "max": sorted.last ?? 0]
+        }
+        let report: [String: Any] = [
+            "characters": count, "rounds": rounds - 1,
+            "retiringDeformKeys": retiring?.retiringDeformKeys ?? -1, "retiringHiddenKeys": retiring?.retiringHiddenKeys ?? -1,
+            "deformBufferBytes": retiring?.deformBufferBytes ?? -1,
+            "submitMsNothingRetiring": summary(idle), "submitMsAfterRemoval": summary(removal),
+            "completionMsOffThread": summary(completion)]
+        let data = try JSONSerialization.data(withJSONObject: report, options: [.prettyPrinted, .sortedKeys])
+        print(String(decoding: data, as: UTF8.self))
+        if let path = ProcessInfo.processInfo.environment["IKKOKU_RETIRE_SUBMIT_PERF_REPORT"], !path.isEmpty {
+            try data.write(to: URL(fileURLWithPath: path))
+        }
+    }
 }
 
 @Test func renderStatusReporterShowsAProblemOnceAndRestoresTheStatusAfterRecovery() {

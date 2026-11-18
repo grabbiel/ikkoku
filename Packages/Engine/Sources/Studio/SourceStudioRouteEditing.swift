@@ -191,6 +191,27 @@ public struct SourceStudioRouteState: Codable, Sendable, Equatable {
         points[0].rotationDegrees = degrees
     }
 
+    /// One field of a point's Position row (#393): writes `component` onto
+    /// the point's position as it is now, so a second field committed before
+    /// the panel re-renders keeps the first field's write.
+    public mutating func movePoint(_ index: Int, component: Int, to value: Float) throws {
+        try check(index)
+        guard (0..<3).contains(component) else { throw refuse("A position has components 0, 1 and 2 only.") }
+        var position = points[index].position
+        position[component] = value
+        try movePoint(index, to: position)
+    }
+
+    /// One field of the start point's Rotation row (#393), onto its rotation
+    /// as it is now (see `movePoint(_:component:to:)`).
+    public mutating func rotateStart(component: Int, to value: Float) throws {
+        guard !points.isEmpty else { throw refuse("The route has no start point.") }
+        guard (0..<3).contains(component) else { throw refuse("A rotation has components 0, 1 and 2 only.") }
+        var degrees = points[0].rotationDegrees
+        degrees[component] = value
+        try rotateStart(to: degrees)
+    }
+
     /// The aid guide's move (Point-local). An aid's guide is active only
     /// for a curve connection.
     public mutating func moveAid(_ index: Int, to position: SIMD3<Float>) throws {

@@ -173,3 +173,27 @@ private struct PackageFixture {
     // A model the user chose explicitly is the separately named trusted import.
     #expect(try library.importTrustedStaticAsset(url: escaping).parts.count == 1)
 }
+
+/// #387: `LoadedAsset.imageTexture` keeps one handle per (image, colour
+/// space). The handle is registered under the same ResourceStore key as the
+/// string-keyed cache's, and a repeat request returns it without building
+/// that key.
+@Test func loadedAssetImageTexturesAreCachedPerImageAndColourSpace() throws {
+    let fixture = try PackageFixture()
+    defer { fixture.remove() }
+    let resources = ResourceStore(device: try #require(MTLCreateSystemDefaultDevice()))
+    let library = AssetLibrary(resources: resources, root: fixture.root)
+    // A 4x4 RGBA8 image the texture loader uploads.
+    let image = try #require(TextureIdentityCases.plain(bpc: 8, components: 4, alpha: .last, order: [], float: false, width: 4, height: 4))
+    try #require(TextureIdentityCases.encode(image, as: "public.png")).write(to: fixture.root.appendingPathComponent("textures/rgba.png"))
+    try fixture.write(bufferURI: "tri.bin", imageURI: "textures/rgba.png")
+    let asset = try #require(library.asset("asset.gltf"))
+    let srgb = try #require(asset.imageTexture(0, srgb: true))
+    let linear = try #require(asset.imageTexture(0, srgb: false))
+    #expect(srgb != linear)
+    #expect(asset.imageTexture(0) == srgb && asset.imageTexture(0, srgb: false) == linear)
+    // "<path>#img<index>#<srgb>", then the store's own "#<srgb>".
+    #expect(resources.lookup(key: "\(asset.url.path)#img0#true#true") == srgb)
+    #expect(resources.lookup(key: "\(asset.url.path)#img0#false#false") == linear)
+    #expect(asset.imageTexture(1) == nil)
+}

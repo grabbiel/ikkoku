@@ -215,18 +215,33 @@ struct VectorRow: View {
     @Binding var value: SIMD3<Float>
     var step: Float
     var format: String
+    /// Writes one component onto the model's current vector (#390). Without
+    /// it a field writes `value` with its component replaced.
+    var setComponent: ((Int, Float) -> Void)?
     var body: some View {
         HStack {
             Text(label).font(.callout).frame(width: 70, alignment: .leading)
             ForEach(0..<3, id: \.self) { i in
+                let component = Binding(get: { value[i] }, set: { x in if let setComponent { setComponent(i, x) } else { value[i] = x } })
                 HStack(spacing: 2) {
                     Text(["X", "Y", "Z"][i]).font(.caption2).foregroundStyle(.secondary)
-                    TextField("", value: Binding(get: { value[i] }, set: { value[i] = $0 }), format: .number.precision(.fractionLength(format == "%.0f" ? 0 : (format == "%.2f" ? 2 : 3))))
+                    TextField("", value: component, format: .number.precision(.fractionLength(format == "%.0f" ? 0 : (format == "%.2f" ? 2 : 3))))
                         .textFieldStyle(.roundedBorder).font(.caption).frame(width: 54)
-                    Stepper("", value: Binding(get: { value[i] }, set: { value[i] = $0 }), step: step).labelsHidden()
+                    Stepper("", value: component, step: step).labelsHidden()
                 }
             }
         }
+    }
+}
+
+extension VectorRow {
+    /// A row that shows `value` as last rendered and commits each field through
+    /// `set`, which writes that one component onto the current model (#390).
+    /// `value` may be the vector captured at the last render: writing it back
+    /// whole would let a second field, committed before the view re-renders,
+    /// undo the first field's write.
+    init(label: String, value: SIMD3<Float>, step: Float, format: String, set: @escaping (Int, Float) -> Void) {
+        self.init(label: label, value: .constant(value), step: step, format: format, setComponent: set)
     }
 }
 

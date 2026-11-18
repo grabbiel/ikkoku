@@ -575,6 +575,143 @@ pre-skin values because a unique transformed normal is unavailable. Position and
 usable tangent transforms still apply, allowing intentional zero-scale geometry;
 nonfinite transformed positions retain their pre-skin position.
 
+### DrawUniforms by instance (ST-T04 B0, 2026-11-18)
+
+`toon_vertex`, `outline_vertex`, `shadow_vertex` and `pick_vertex` take
+`constant DrawUniforms* draws` and `instance_id`, and read
+`constant DrawUniforms& draw = draws[iid]`. A record drawn on its own is still
+bound at its own frame-ring offset and drawn with one instance, so it reads
+element 0 there; no Swift code changed. The instanced static items of ST-T04
+(part B) draw through these same functions with a table of records.
+
+- **Why.** Metal compiles with fast math, and the same source compiles
+  differently for a uniform `constant DrawUniforms&` and for a dynamically
+  indexed element. Positions and varyings move by a few ULPs, which moves MSAA
+  edge coverage and toon band edges. Separate instanced copies of the vertex
+  functions therefore never matched their per-draw records byte for byte (14
+  pixels of the 3,506-item corpus scene, up to 25 levels). With every draw on
+  the indexed form, an instanced item renders exactly as its record does on
+  its own.
+- **What changes.** The per-draw output itself moves once, by the same kind of
+  ULP shifts, for everything these functions draw. `toon_vertex` is shared by
+  the toon (opaque and blend), eye (and eye blend) and map (map, map blend,
+  map depth-only) pipelines, and by their stencil main-pass copies, so
+  characters, eyes, maps and items all shift; outlines, shadow maps and pick
+  ids go through the other three. See the re-baseline below.
+- **What does not.** `sky_vertex`, the grid, gizmo and gizmo-pick vertex
+  functions, and every fragment function (`pick_fragment` still reads its
+  `draw` as a uniform; it returns an integer id). Runtime-compiled programs do
+  not read DrawUniforms: the native probe (`probe_vertex`), the live probe
+  (`live_probe_vertex`) and the translated source programs bind their own
+  matrices.
+- **Validators.** No test, tolerance or source-fidelity validator changed; the
+  strict Engine suite passes unchanged (1,211 + 21 tests, 14 opt-in skips),
+  including every committed frame and program hash.
+
+**Re-baseline (old main a281573b → B0, 2026-11-18).** No committed golden
+changes; the moved references are lane captures and offscreen captures, which
+are not committed. The PR lists every changed file with its old and new SHA-256.
+
+- Lane captures: app-smoke, Maker and Studio scenario lanes, 101 checks and
+  116 PNGs, the same checks in the same five chunks on both builds. Both pass
+  100 of 101. The one failure, `studio-scenario-inspector-hide-cycles`, is
+  identical on both builds: undo-depth timing, #390.
+  - 49 files are byte-identical.
+  - 6 scene exports differ only in the random object UUIDs of their embedded
+    scene document; their pixels are equal.
+  - 61 change pixels:
+
+  | Assets | Files | Pixels changed | Changed px (min / median / max) | Max channel delta |
+  |---|---:|---:|---|---:|
+  | UI and startup captures | 3 | 2 | 1 / 24 / 24 | 3 |
+  | Maker character cards | 11 | 11 | 0 / 2 / 6 (thumbnail 2–15) | 1 |
+  | Studio scenes with characters | 92 | 45 | 1 / 53 / 72 | 12 |
+  | Studio items | 4 | 2 | 40 / 56 / 56 | 9 |
+  | Studio maps | 6 | 1 | 47 | 5 |
+
+  A Maker card's data is byte for byte the same. Only its embedded 256×256
+  face thumbnail, itself a render, changes, together with that image's 4-byte
+  length.
+- Nondeterminism control: a second old-main run of 22 checks (26 PNGs) is
+  byte-identical to the first except one scene export, which differs only in
+  its object UUIDs.
+- Offscreen captures at 1996×1824, Release (G2). Each scene is captured twice
+  on old main, identically. The end capture of the 600-frame benchmark launch
+  equals the plain capture on both builds.
+
+  | Scene | Changed px | Max delta | old → new |
+  |---|---:|---:|---|
+  | Item corpus scene 4b87a4f49c81 (3,506 items) | 14 | 25 | `d32853ebbd60` → `2bffe2323dfa` |
+  | Showoff scene, 7 characters | 554 | 11 | `f40967047e46` → `4d596be33708` |
+  | map33 | 496 | 1 | `473da126d01a` → `faac8e5bb77a` |
+  | map33-showoff | 554 | 11 | `5e0202bbba56` → `15eccedfef56` |
+  | map34-day | 922 | 25 | `e8017e20387b` → `cf48b8b592ec` |
+  | map41 | 1,358 | 16 | `dd694e2c9d73` → `17b92f7e5108` |
+
+### Frame preparation without per-item copies (2026-11-18)
+
+`Renderer.prepare` turns a frame's items into draw records; each record holds a
+copy of its item. On the 3,506-item corpus scene a Time Profiler of the
+offscreen benchmark (attached by pid, PR #372's Release build, 1,000 frames)
+put 80% of the measured CPU encode time in that preparation, not in Metal
+encoding. The largest owners per frame were:
+
+- sorting the opaque records: 0.58 ms, because the sort moved whole records;
+- `RenderFrame.retainTextures`: 0.23 ms, because it built a handle array per
+  item and a set of all of them;
+- growing the record arrays: 0.13 ms;
+- the skin-set scan: 0.09 ms, because it ran a mesh lookup (the store's lock)
+  for every item.
+
+Each of these now avoids the copy or allocation, with the same result:
+
+- **Sorts.** `sortedOpaque` and `sortedTransparent` sort small keys (the
+  compared fields plus the record's input index) and then copy each record
+  once into its place. The comparison is unchanged. The index is the last
+  tie-break, so records that compare equal keep their input order, which is
+  the order the old stable record sort gave. `FramePreparationOrderTests`
+  checks both sorts against the old record sorts, ties included, at sizes up
+  to 3,506 records.
+- **Texture retention.** `retainTextures` visits each item's handles in place
+  (`MaterialState.forEachTextureHandle`, in `textureHandles` order). A handle
+  it has already seen is skipped. A retained handle keeps its snapshot, a new
+  one is looked up in the store, and one the store lacks is asked once and
+  then left out, as before.
+- **Skin sets.** The skin-set scan reads an item's skin set before its mesh,
+  so only items with a skin set take the store's lock.
+- **Record arrays.** The opaque, transparent and caster arrays reserve the
+  item count up front.
+- **Repeated encoder state.** Each record bound its whole state, about 30
+  encoder calls, even when the record before it had bound the same mesh,
+  pipeline, cull mode and textures. The shadow, main, overlay and pick passes
+  now set their state through an `EncoderState`. It records what the encoder
+  holds: pipeline, depth-stencil state, cull mode, winding, the vertex and
+  fragment buffers by index (object and offset) and the fragment textures.
+  - A set that repeats the recorded state is skipped.
+  - A buffer bound again at another offset only moves its offset
+    (`setVertexBufferOffset` / `setFragmentBufferOffset`), as each record's
+    draw and material uniforms do in the frame ring.
+  - `bindTextures` skips a material whose kind and texture handles
+    (`MaterialState.TextureSet`) equal the last bound set's. Within one frame
+    they resolve to the same textures.
+
+  Objects are compared by identity and held while recorded, so a released
+  object's address cannot pass for a bound one. The live source-shader draws
+  set state on the encoder directly, so the main pass forgets the record after
+  them. `Renderer.skipsRedundantEncoderState` (internal, default true) sets
+  every state for every draw when false: the reference of
+  `EncoderStateTests`. There, records that share a mesh draw one after
+  another, each differing from the one before in one state (the cull mode,
+  the winding of a mirrored model, a texture, the material element in the same
+  frame-ring buffer, the pipeline, and a transparent record's cull mode), and
+  a seeded frame of 48 mixed records with the grid and gizmos. Both render,
+  shade and pick byte for byte as with every state set; the controls show
+  that each change reaches the image, so a dropped one would differ.
+
+Draw order, pixels and the state each draw sees are unchanged. The lanes and the offscreen
+captures of the corpus, showoff and map scenes are byte-identical before and
+after (the PR lists them with its cost A/B).
+
 ### Renderer limits and resource lifetime (R6, first slice)
 
 **Uniform ring.** `FrameRing` keeps three 8 MiB regions in one shared buffer.
@@ -772,6 +909,71 @@ retired hidden mask (the region bitmask applies) and skips retired meshes.
 frame lock and render lock order is unchanged; `retire` and completion take
 only the store lock, so `deinit` can retire from any thread.
 
+Textures complete earlier. A texture an owner retires (`retire(textures:)`,
+the ST-A11 map path) is released when a frame created after the
+retirement is submitted (`completeTextureRetirements`, #368). A submitted
+frame holds its own references to the textures it names
+(`RenderFrame.retainTextures`), so the pending frame it replaces, and every
+copy of that frame, still draw them.
+
+- **Order and cost.** `submit` calls it after `retainTextures`, before taking
+  `frameLock`, under the store lock alone. With nothing retiring it costs one
+  lock and one check.
+- **Generation and stamp.** It bumps the resource generation when it releases
+  something, and leaves the newest-completed stamp alone. That stamp orders
+  deformation keys, and moving it would give every frame created before a
+  texture retirement transient deformation buffers.
+- **Why.** An occluded or minimized viewport prepares no frame, so a texture
+  retired while it is hidden waited for the window to show again. Run D of
+  #358, with an appearance texture cache that retires through the same path,
+  showed it: retiring entries grew from 24 to 115, and the footprint reached
+  954 MB at the fifth head, against 695 MB without the cache.
+- **Unsubmitted frames.** A frame that is never submitted resolves its
+  textures when it is prepared: `StudioModel.frame` for picks and captures,
+  the probes, thumbnails. Each is built and drawn on the main actor in one
+  call while its textures are owned. The asynchronous hover pick is
+  the exception, and its result is dropped once a newer frame was built. A
+  texture released before such a frame is prepared draws the fallback: white
+  base, black masks and overlays, the flat normal.
+
+Meshes and keys complete at submit while no viewport draws (#368). A hidden,
+minimized or stopped viewport prepares nothing, so a removal there kept its
+meshes, deformation buffers and masks until the viewport drew again.
+
+- **Who draws.** Each `ViewportRenderThread` tells the renderer whether it
+  draws (`Renderer.setViewport(_:drawing:)`): when it starts, stops and
+  changes visibility, under its own control lock. Visible with its link
+  running counts as drawing. A hidden viewport's link idles at 15 Hz without
+  the keep-alive, and in run D of #358 an occluded or minimized one prepared no frame
+  at all. If a hidden callback does prepare a submitted frame, that prepare
+  completes the retirements, and the queued completion finds nothing left.
+- **While one draws.** Completion stays at the prepare of a submitted frame,
+  which a drawing viewport reaches within a frame. Nothing changes.
+- **While none draws.** `submit` enqueues one completion on a utility serial
+  queue (`com.grabbiel.Ikkoku.retirements`). Submits made before it starts
+  share it. The completion takes `renderLock` with `try`. If a pick, capture
+  or draw holds it, the completion does nothing, and the next submit, or the
+  prepare of a submitted frame, completes the retirements.
+- **What it completes.** Under `renderLock`, it completes what a prepare of
+  the pending frame would: the retirements made before that frame was
+  created. The pending frame is the submit that enqueued the completion or a
+  later one. If a later submit put back a copy of an older frame, the older
+  stamp applies, as at its prepare. Holding `renderLock` keeps every
+  guarantee of a completion at prepare. No frame is being prepared, command
+  buffers hold their own references, and frames created earlier get
+  transient deformation buffers.
+- **Content records.** Either completion drops the content records
+  (item 4 of [threads](#renderer-threads-r7-phase-2-item-2)) of the keys it
+  released, in the same `renderLock` hold. A record holds its buffer, so a
+  released character's buffers go at once instead of at the next tracked
+  draw. A record only ever matches its own buffer (`===`), so a key's later
+  buffer never reuses it.
+- **Cost on the submitting thread.** `completeTextureRetirements` reports
+  whether meshes or keys are retiring under the store lock it already takes,
+  and the decision to enqueue is made under `observerLock`, which `submit`
+  already takes. With nothing retiring, `submit` takes no new lock. With a
+  retirement pending, it adds one `async`, whatever the retirement's size.
+
 The rule for owners is to retire before building their next frame. A frame
 created after the retirement counts as current, so its preparation would
 re-create the deformation keys it still names.
@@ -945,8 +1147,13 @@ handlers, the hover pick, SwiftUI layout.
   expose reusable images in draw order; neither operation waits for the GPU.
   Since item 4, picks and captures also commit before releasing it (see
   below); the wait for the GPU still happens after.
-- `observerLock` guards the submit observers (item 4). It is never held while
-  taking another lock, and `submit` calls the observers after releasing it.
+- `observerLock` guards the submit observers (item 4), and since #368 the set
+  of drawing viewports and the scheduled retirement completion. It is never
+  held while taking another lock, and `submit` calls the observers after
+  releasing it.
+- The retirement queue (#368) takes `renderLock` only with `try`, then
+  `frameLock` to read the pending frame's stamp, then the store lock, as a
+  prepare does. It never waits for `renderLock`.
 - `ResourceStore` and the frame ring's completion state keep their own locks,
   unchanged.
 
