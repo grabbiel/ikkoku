@@ -1082,9 +1082,16 @@ final class AppState {
         view?.layoutSubtreeIfNeeded()
         logUICaptureFit("poll", elapsed: elapsed)
         let bounds = view?.bounds ?? .zero
+        // #364: in Studio the Pose tab's "Eye look" section appears only after
+        // the live step's first eye update for the selected character, and
+        // only a driven live step (a viewport window that shows) makes one, so
+        // a flip of that restarts the stable count.
+        let pending = mode == .studio ? studio?.uiCaptureEyeLookPending : nil
+        let state = mode == .studio ? studio.map { $0.uiCaptureLiveStepsDriven ? "live steps driven" : "live steps not driven" } : nil
         let decision = tracker.observe(UICaptureReadiness.Observation(
             contentAppeared: uiCaptureContentAppeared, windowVisible: window != nil,
-            width: Double(bounds.width), height: Double(bounds.height)), elapsed: elapsed)
+            width: Double(bounds.width), height: Double(bounds.height),
+            pendingContent: pending, contentState: state), elapsed: elapsed)
         uiCaptureTracker = tracker
         switch decision {
         case .wait:
@@ -1103,6 +1110,7 @@ final class AppState {
                 }
                 let size = try writeWindowSnapshot(view, to: URL(fileURLWithPath: out))
                 print("[ikkoku] ui snapshot written to \(out) (\(size.width)x\(size.height) px, ready after \(String(format: "%.2f", elapsed)) s)")
+                if let state { print("[ikkoku] ui snapshot state: Studio \(state)") }
                 logUICaptureFit("captured", elapsed: elapsed, accessibility: true)
             } catch {
                 print("[ikkoku] ui snapshot failed: \(error)")

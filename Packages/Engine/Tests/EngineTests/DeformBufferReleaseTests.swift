@@ -84,6 +84,7 @@ func deformBufferRequestedForARetiringMeshIsTransient() throws {
     #expect(resources.statistics().deformBuffers == baseline)
 }
 
+#if DEBUG // `ResourceStore.beforeDeformBuffer` is a DEBUG-only test hook.
 /// End to end through frame preparation: a preview dropped between its
 /// item's mesh lookup and its buffer request (the store's test hook, on the
 /// capture thread) leaves no deformation buffer, mesh or live input behind,
@@ -146,6 +147,7 @@ func droppingAPreviewDuringItsDeformPassLeavesNoBuffer() throws {
     #expect(after.meshes == before.meshes)
     #expect(encoder.bufferCount == 0)
 }
+#endif
 
 // #349 review: every item of one deformation key in a preparation (one per
 // material pass) draws the buffer the key's single dispatch writes. A
@@ -195,6 +197,7 @@ private func dispatchedOnce(_ context: Renderer.FrameContext, key: UInt64, draws
     return buffer
 }
 
+#if DEBUG // `ResourceStore.beforeDeformBuffer` is a DEBUG-only test hook.
 /// The owner is dropped if the second pass asks the store for the key, which
 /// is when an undispatched transient buffer would reach it. The second pass
 /// draws the first pass's buffer instead, and never asks.
@@ -224,6 +227,7 @@ func passesOfOneKeyDrawTheBufferTheirFirstPassDispatches() throws {
     resources.releaseDeformBuffers(keys: [key])
     #expect(resources.statistics().deformBuffers == baseline)
 }
+#endif
 
 /// A retiring mesh's key gets a transient buffer: both passes draw it.
 @Test(.enabled(if: MTLCreateSystemDefaultDevice() != nil))
