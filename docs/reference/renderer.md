@@ -648,6 +648,70 @@ are not committed. The PR lists every changed file with its old and new SHA-256.
   | map34-day | 922 | 25 | `e8017e20387b` → `cf48b8b592ec` |
   | map41 | 1,358 | 16 | `dd694e2c9d73` → `17b92f7e5108` |
 
+### Frame preparation without per-item copies (2026-11-18)
+
+`Renderer.prepare` turns a frame's items into draw records; each record holds a
+copy of its item. On the 3,506-item corpus scene a Time Profiler of the
+offscreen benchmark (attached by pid, PR #372's Release build, 1,000 frames)
+put 80% of the measured CPU encode time in that preparation, not in Metal
+encoding. The largest owners per frame were:
+
+- sorting the opaque records: 0.58 ms, because the sort moved whole records;
+- `RenderFrame.retainTextures`: 0.23 ms, because it built a handle array per
+  item and a set of all of them;
+- growing the record arrays: 0.13 ms;
+- the skin-set scan: 0.09 ms, because it ran a mesh lookup (the store's lock)
+  for every item.
+
+Each of these now avoids the copy or allocation, with the same result:
+
+- **Sorts.** `sortedOpaque` and `sortedTransparent` sort small keys (the
+  compared fields plus the record's input index) and then copy each record
+  once into its place. The comparison is unchanged. The index is the last
+  tie-break, so records that compare equal keep their input order, which is
+  the order the old stable record sort gave. `FramePreparationOrderTests`
+  checks both sorts against the old record sorts, ties included, at sizes up
+  to 3,506 records.
+- **Texture retention.** `retainTextures` visits each item's handles in place
+  (`MaterialState.forEachTextureHandle`, in `textureHandles` order). A handle
+  it has already seen is skipped. A retained handle keeps its snapshot, a new
+  one is looked up in the store, and one the store lacks is asked once and
+  then left out, as before.
+- **Skin sets.** The skin-set scan reads an item's skin set before its mesh,
+  so only items with a skin set take the store's lock.
+- **Record arrays.** The opaque, transparent and caster arrays reserve the
+  item count up front.
+- **Repeated encoder state.** Each record bound its whole state, about 30
+  encoder calls, even when the record before it had bound the same mesh,
+  pipeline, cull mode and textures. The shadow, main, overlay and pick passes
+  now set their state through an `EncoderState`. It records what the encoder
+  holds: pipeline, depth-stencil state, cull mode, winding, the vertex and
+  fragment buffers by index (object and offset) and the fragment textures.
+  - A set that repeats the recorded state is skipped.
+  - A buffer bound again at another offset only moves its offset
+    (`setVertexBufferOffset` / `setFragmentBufferOffset`), as each record's
+    draw and material uniforms do in the frame ring.
+  - `bindTextures` skips a material whose kind and texture handles
+    (`MaterialState.TextureSet`) equal the last bound set's. Within one frame
+    they resolve to the same textures.
+
+  Objects are compared by identity and held while recorded, so a released
+  object's address cannot pass for a bound one. The live source-shader draws
+  set state on the encoder directly, so the main pass forgets the record after
+  them. `Renderer.skipsRedundantEncoderState` (internal, default true) sets
+  every state for every draw when false: the reference of
+  `EncoderStateTests`. There, records that share a mesh draw one after
+  another, each differing from the one before in one state (the cull mode,
+  the winding of a mirrored model, a texture, the material element in the same
+  frame-ring buffer, the pipeline, and a transparent record's cull mode), and
+  a seeded frame of 48 mixed records with the grid and gizmos. Both render,
+  shade and pick byte for byte as with every state set; the controls show
+  that each change reaches the image, so a dropped one would differ.
+
+Draw order, pixels and the state each draw sees are unchanged. The lanes and the offscreen
+captures of the corpus, showoff and map scenes are byte-identical before and
+after (the PR lists them with its cost A/B).
+
 ### Renderer limits and resource lifetime (R6, first slice)
 
 **Uniform ring.** `FrameRing` keeps three 8 MiB regions in one shared buffer.
