@@ -606,6 +606,172 @@ func mapSunShadowsFallBehindTheCastersByTheStrength() throws {
     #expect(zip(missing, unshadowed).allSatisfy { abs($0 - $1) < 2e-3 })
 }
 
+/// A box of half-size `half`: 6 faces of 4 vertices (no vertex shared across
+/// faces), outward normals, counter-clockwise seen from outside.
+private func mapStateBox(_ name: String, half: Float3) -> MeshData {
+    let faces: [(n: Float3, u: Float3, v: Float3)] = [
+        (Float3(1, 0, 0), Float3(0, 0, -1), Float3(0, 1, 0)), (Float3(-1, 0, 0), Float3(0, 0, 1), Float3(0, 1, 0)),
+        (Float3(0, 1, 0), Float3(1, 0, 0), Float3(0, 0, -1)), (Float3(0, -1, 0), Float3(1, 0, 0), Float3(0, 0, 1)),
+        (Float3(0, 0, 1), Float3(1, 0, 0), Float3(0, 1, 0)), (Float3(0, 0, -1), Float3(-1, 0, 0), Float3(0, 1, 0)),
+    ]
+    var positions: [Float3] = [], normals: [Float3] = [], uvs: [Float2] = [], indices: [UInt32] = []
+    for face in faces {
+        let first = UInt32(positions.count)
+        for (a, b, uv) in [(Float(-1), Float(-1), Float2(0, 1)), (1, -1, Float2(1, 1)), (1, 1, Float2(1, 0)), (-1, 1, Float2(0, 0))] {
+            positions.append((face.n + face.u * a + face.v * b) * half); normals.append(face.n); uvs.append(uv)
+        }
+        indices += [first, first + 1, first + 2, first, first + 2, first + 3]
+    }
+    return MeshData(name: name, positions: positions, normals: normals, uvs: uvs, indices: indices)
+}
+
+/// RGBA8 4×4 of one colour.
+private func mapStateTexture(_ renderer: Renderer, _ rgba: [UInt8]) throws -> TextureHandle {
+    let descriptor = MTLTextureDescriptor.texture2DDescriptor(pixelFormat: .rgba8Unorm, width: 4, height: 4, mipmapped: false)
+    descriptor.usage = .shaderRead
+    descriptor.storageMode = .shared
+    let texture = try #require(renderer.gpu.device.makeTexture(descriptor: descriptor))
+    texture.replace(region: MTLRegionMake2D(0, 0, 4, 4), mipmapLevel: 0, withBytes: [UInt8]((0..<16).flatMap { _ in rgba }), bytesPerRow: 16)
+    return renderer.resources.register(texture: texture)
+}
+
+/// Frame preparation's `EncoderState` (merged from main) on a slice-5 frame:
+/// the main pass alternates the Map, ToonMapProbeLit, toon and outline
+/// pipelines in its opaque records, and MapDepthOnly + MapBlend (silhouette),
+/// ToonMapProbeLitBlend, MapBlend and ToonBlend in its transparent ones, under
+/// the map sun with a map shadow map, between draws that do and do not bind
+/// their own receive bytes. Records 5 and 6 have the same texture set (kind
+/// and handles) and differ only in their pipeline. The frame renders, shades
+/// and picks byte for byte as it does with every state set for every draw
+/// (the reference `EncoderState` documents). The controls show that each
+/// switch, the lightmap texture and the map shadow map reach the image, so a
+/// dropped one would differ.
+@Test(.enabled(if: MTLCreateSystemDefaultDevice() != nil))
+func skippingRepeatedEncoderStateKeepsAlternatingMapAndAmbientLitDrawsByteForByte() throws {
+    let renderer = try makeSourceShaderRenderer()
+    let resources = renderer.resources
+    let cube = try resources.register(mesh: mapStateBox("map-state-cube", half: Float3(repeating: 0.2)))
+    let backdrop = try resources.register(mesh: mapStateBox("map-state-backdrop", half: Float3(2.4, 1.5, 0.05)))
+    let red = try mapStateTexture(renderer, [230, 40, 30, 255])
+    let lightA = try mapStateTexture(renderer, [200, 180, 120, 255]), lightB = try mapStateTexture(renderer, [60, 90, 220, 255])
+    defer {
+        [cube, backdrop].forEach { resources.unregister(mesh: $0) }
+        [red, lightA, lightB].forEach { resources.unregister(texture: $0) }
+    }
+    func map(lightmap: TextureHandle? = nil, base: TextureHandle? = nil, alpha: Float = 1, blend: Bool = false) -> MaterialState {
+        var standard = SourceStudioStandardInputs(albedo: Float4(0.8, 0.7, 0.6, alpha), oneMinusReflectivity: 0.9, emissionColor: nil,
+                                                  emissionImage: nil, emissionSRGB: true)
+        standard.smoothness = 0.4; standard.specularHighlights = true
+        var gltf = MaterialData(name: "map"); gltf.alphaMode = blend ? "BLEND" : "OPAQUE"
+        var m = SourceStudioMapMaterial.make(gltf, standard: standard, base: base, emission: nil, lightmap: lightmap, direction: nil,
+                                             range: 1, exponent: 1)
+        m.setFlag(MaterialFlagMapSunLit, true)
+        m.setFlag(MaterialFlagReceiveShadow, true)
+        return m
+    }
+    func toon(_ base: TextureHandle? = nil, alpha: Float = 1) -> MaterialState {
+        var m = MaterialState(uniforms: .make(kind: MaterialKindItem))
+        if let base { m.base = base; m.setFlag(MaterialFlagHasBaseTexture, true) }
+        if alpha < 1 { m.transparent = true; m.uniforms.baseColor.w = alpha }
+        return m
+    }
+    var lightmappedRed = map(base: red); lightmappedRed.setFlag(MaterialFlagMapProbeLit, false)
+    var perVertex = map(); perVertex.setFlag(MaterialFlagMapReceivePerVertex, true); perVertex.setFlag(MaterialFlagReceiveShadow, false)
+    let receive = try #require(resources.device.makeBuffer(bytes: [UInt8](repeating: 1, count: 12) + [UInt8](repeating: 0, count: 12),
+                                                           length: 24, options: .storageModeShared))
+    let silhouette = SourceStudioSilhouetteInputs(color: Float4(0.2, 0.6, 0.9, 0.5)).material()
+
+    struct Spec { var mesh: MeshHandle; var material: MaterialState; var at: Float3; var receive: VertexBytes? = nil; var outline = false }
+    // Opaque records draw in this order (`order` is their index); the transparent ones by their render queue.
+    let opaque: [Spec] = [
+        Spec(mesh: backdrop, material: map(), at: Float3(0, 1.2, -0.8)),                       // 1: ToonMapProbeLit, receives the cubes' shadows
+        Spec(mesh: cube, material: toon(red), at: Float3(-1.5, 0.5, 0), outline: true),       // 2: outline, then ToonOpaque
+        Spec(mesh: cube, material: map(), at: Float3(-0.9, 0.5, 0)),                          // 3: ToonMapProbeLit after toon
+        Spec(mesh: cube, material: map(lightmap: lightA), at: Float3(-0.3, 0.5, 0)),          // 4: Map after ToonMapProbeLit
+        Spec(mesh: cube, material: map(lightmap: lightB), at: Float3(0.3, 0.5, 0)),           // 5: Map, another lightmap
+        Spec(mesh: cube, material: map(base: red), at: Float3(0.9, 0.5, 0)),                  // 6: ToonMapProbeLit after Map
+        Spec(mesh: cube, material: lightmappedRed, at: Float3(1.5, 0.5, 0)),                  // 7: Map, the texture set of 6
+        Spec(mesh: cube, material: toon(), at: Float3(-0.9, 1.1, 0)),                         // 8: ToonOpaque after Map
+        Spec(mesh: cube, material: perVertex, at: Float3(-0.3, 1.1, 0),
+             receive: VertexBytes(buffer: receive)),                                           // 9: ToonMapProbeLit, its own receive bytes
+        Spec(mesh: cube, material: map(), at: Float3(0.3, 1.1, 0)),                           // 10: ToonMapProbeLit, the material's flag
+    ]
+    let transparent: [Spec] = [
+        Spec(mesh: cube, material: silhouette, at: Float3(-1.2, 1.8, 0.4)),                  // 11: MapDepthOnly, MapBlend
+        Spec(mesh: cube, material: map(alpha: 0.5, blend: true), at: Float3(-0.6, 1.8, 0.4)), // 12: ToonMapProbeLitBlend after the silhouette
+        Spec(mesh: cube, material: map(lightmap: lightA, alpha: 0.5, blend: true),
+             at: Float3(0, 1.8, 0.4)),                                                         // 13: MapBlend
+        Spec(mesh: cube, material: toon(alpha: 0.5), at: Float3(0.6, 1.8, 0.4)),              // 14: ToonBlend
+        Spec(mesh: cube, material: map(alpha: 0.5, blend: true), at: Float3(1.2, 1.8, 0.4)),  // 15: ToonMapProbeLitBlend after ToonBlend
+        Spec(mesh: cube, material: silhouette, at: Float3(0.3, 2.3, 0.4)),                   // 16: the silhouette after it
+    ]
+    let toLight = simd_normalize(Float3(0.35, 0.5, 1))
+    func frame(_ opaque: [Spec], _ transparent: [Spec], casters: Bool = true) throws -> RenderFrame {
+        var items: [RenderItem] = []
+        for (index, spec) in (opaque + transparent).enumerated() {
+            var item = RenderItem(mesh: spec.mesh, material: spec.material, model: Transform.trs(spec.at, simd_quatf(angle: 0, axis: Float3(0, 1, 0)), Float3(repeating: 1)),
+                                  objectID: UInt32(index + 1))
+            item.outline = spec.outline
+            item.vertexReceive = spec.receive
+            item.castsShadow = spec.material.uniforms.kind != UInt32(MaterialKindMap.rawValue)
+            if index < opaque.count { item.order = index } else { item.renderQueue = 3000 + index }
+            items.append(item)
+        }
+        var lighting = MapLighting(sh: [Float4(0, 0, 0, 0.35), Float4(0, 0, 0, 0.3), Float4(0, 0, 0, 0.25)] + Array(repeating: .zero, count: 4),
+                                   sun: MapLighting.Sun(directionToLight: toLight, color: Float3(1.2, 1.1, 0.95), shadowStrength: 0.8))
+        var bounds = AABB.empty
+        for spec in opaque[2...] where spec.mesh == cube && casters {
+            let model = Transform.trs(spec.at, simd_quatf(angle: 0, axis: Float3(0, 1, 0)), Float3(repeating: 1))
+            lighting.casters.append(MapShadowCaster(mesh: cube, model: model, runs: [(0, 36)], twoSided: false))
+            bounds.expand(AABB(min: spec.at - 0.2, max: spec.at + 0.2))
+        }
+        lighting.casterBounds = bounds
+        lighting.revision = casters ? 1 : 2
+        var camera = OrbitCamera()
+        camera.target = Float3(0, 1.2, 0); camera.distance = 6; camera.yaw = 0; camera.pitch = 0
+        var effects = SceneEffects(); effects.showGrid = false
+        var frame = RenderFrame(camera: camera, items: items, effects: effects, sceneBounds: AABB(min: Float3(-2.5, -0.5, -1), max: Float3(2.5, 2.8, 1)))
+        frame.mapLighting = lighting
+        return frame
+    }
+    struct Rendered: Equatable { let hdr: [UInt16]; let ldr: [UInt8]; let pick: [UInt32] }
+    func render(_ frame: RenderFrame, skips: Bool) throws -> Rendered {
+        renderer.skipsRedundantEncoderState = skips
+        defer { renderer.skipsRedundantEncoderState = true }
+        let hdr = try #require(renderer.captureSceneHDR(frame: frame, width: 320, height: 240), "\(String(describing: renderer.lastFrameError))")
+        let image = try #require(renderer.capture(frame: frame, width: 320, height: 240))
+        let data = try #require(image.dataProvider?.data as Data?)
+        let pick = try #require(renderer.pickTarget(frame: frame, size: (320, 240)))
+        return Rendered(hdr: hdr, ldr: [UInt8](data), pick: pick)
+    }
+    let reference = try frame(opaque, transparent)
+    let skipped = try render(reference, skips: true)
+    let full = try render(reference, skips: false)
+    #expect(skipped.hdr == full.hdr, "HDR scene differs at \(skipped.hdr.indices.filter { skipped.hdr[$0] != full.hdr[$0] }.prefix(8))")
+    #expect(skipped.ldr == full.ldr, "LDR image differs")
+    #expect(skipped.pick == full.pick, "Pick ids differ")
+    #expect(renderer.hasMapShadowMap)
+
+    // Controls: given the state of the record before it, a record renders differently.
+    let ids = Set(full.pick)
+    #expect(ids.isSuperset(of: Set(2...UInt32(opaque.count + transparent.count))), "\(ids.sorted())")
+    var variants: [(String, [Spec], [Spec], Bool)] = []
+    var o = opaque; o[2].material = toon(); variants.append(("ToonOpaque → ToonMapProbeLit", o, transparent, true))
+    o = opaque; o[3].material = map(); variants.append(("ToonMapProbeLit → Map", o, transparent, true))
+    o = opaque; o[4].material = map(lightmap: lightA); variants.append(("lightmap texture", o, transparent, true))
+    o = opaque; o[5].material = lightmappedRed; variants.append(("Map → ToonMapProbeLit", o, transparent, true))
+    o = opaque; o[6].material = map(base: red); variants.append(("ToonMapProbeLit → Map, same textures", o, transparent, true))
+    o = opaque; o[7].material = lightmappedRed; variants.append(("Map → ToonOpaque", o, transparent, true))
+    var t = transparent; t[1].material.setFlag(MaterialFlagMapProbeLit, false); variants.append(("MapBlend → ToonMapProbeLitBlend", opaque, t, true))
+    t = transparent; t[2].material = map(alpha: 0.5, blend: true); variants.append(("ToonMapProbeLitBlend → MapBlend", opaque, t, true))
+    t = transparent; t[4].material = toon(alpha: 0.5); variants.append(("ToonBlend → ToonMapProbeLitBlend", opaque, t, true))
+    variants.append(("map shadow map", opaque, transparent, false))
+    for (label, o, t, casters) in variants {
+        let other = try render(try frame(o, t, casters: casters), skips: false)
+        #expect(other.hdr != full.hdr, "\(label): the change does not reach the image")
+    }
+}
+
 /// The fit holds the caster bounds and the receivers within the radius in its
 /// depth range, for a sun anywhere, the zenith included.
 @Test func mapShadowFitKeepsCastersAndReceiversInsideItsDepthRange() {
