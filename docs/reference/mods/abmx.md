@@ -55,6 +55,27 @@ BoneModifierData = [ScaleModifier, LengthModifier, PositionModifier, RotationMod
 Vector3 = [x, y, z]  // serialized float32 elements
 ```
 
+These are the arrays the current plugin writes. Its int-keyed formatters read
+an array of any length: a missing trailing key takes its type's default, and
+keys beyond the last known one are skipped. Older saves therefore load in the
+shorter layouts, and the converter reads them the same way:
+
+| Saved array | Read as |
+| --- | --- |
+| `[BoneName, CoordinateModifiers]` | `BoneLocation` 0 (`Unknown`) |
+| `[ScaleModifier, LengthModifier]` | position and rotation `(0,0,0)` |
+| `[ScaleModifier, LengthModifier, PositionModifier]` | rotation `(0,0,0)` |
+| any longer array | extra fields skipped, one `skipped-unknown-fields` warning each |
+
+The two-field record with two-field entries is the only layout found in a local
+corpus of version-2 character cards. Records with fewer than two fields are
+rejected, as the original's constructor rejects them. Coordinate entries with
+fewer than two fields are also rejected: the original would read them with a
+zero `ScaleModifier` or `LengthModifier`, which is not implemented, and no known
+card uses that layout. The missing-key default is inferred from the recovered
+`Vector3` formatter, which follows the same pattern; the generated object
+formatter for these two types is not recovered.
+
 `CoordinateModifiers` contains one or more `BoneModifierData` arrays. One entry
 is coordinate-independent. Multiple entries are indexed by the current outfit;
 an index beyond the stored array supplies no modifier for that outfit. Defaults
@@ -70,7 +91,8 @@ dictionaries. That migration is not ported. The converter matches the current
 serialization constructor's repair of individual null coordinate entries to
 identity values, retaining one warning per repaired entry in `diagnostics`.
 A null whole coordinate array or an empty array is rejected, matching the
-constructor's explicit exceptions. Incomplete non-null records remain unsupported.
+constructor's explicit exceptions. Shorter and longer records and entries are
+read as described above.
 These behaviors are confirmed in the installed constructor; no inference from
 empty-array behavior in `GetModifier` is needed. The standalone Python converter
 consumes extracted `boneData`; it does not parse whole cards. The native `SourceCharacterCard` layer now performs card framing and
@@ -109,7 +131,7 @@ To convert an actual extracted `boneData` byte array:
 
 For a current outfit payload, use `--data-kind coordinate --data-version 3`.
 The converter validates sizes, finite numeric values, vector arity, duplicate
-record identities, and the current array layout. It records the payload SHA-256
+record identities, and the array layouts above. It records the payload SHA-256
 and preserves bone names, coordinate entries, and location numbers without
 renaming or mirroring. Accessory and dynamic records remain identifiable in
 the converted document with explicit scope diagnostics; the native static

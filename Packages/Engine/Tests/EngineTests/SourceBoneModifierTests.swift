@@ -333,10 +333,10 @@ private func decodeBoneModifierWire(_ value: SourceMessagePackValue) throws -> S
     let valid = boneModifierWireRecord(.array([values]))
     let malformed: [SourceMessagePackValue] = [
         .null, .map([]), .binary(Data()), .ext(98, Data()),
-        .array([.null]), .array([.array([])]), .array([.array([.string("bone"), .array([values])])]),
-        .array([.array([.string("bone"), .array([values]), .integer(1), .null])]),
+        .array([.null]), .array([.array([])]), .array([.array([.string("bone")])]),
         .array([boneModifierWireRecord(.null)]), .array([boneModifierWireRecord(.array([]))]),
         .array([boneModifierWireRecord(.array([.array([])]))]),
+        .array([boneModifierWireRecord(.array([.array([.array([.float(1), .float(1), .float(1)])])]))]),
         .array([boneModifierWireRecord(.array([.array([.array([]), .float(1), .array([])])]))]),
         .array([boneModifierWireRecord(.array([values]), name: "")]),
         .array([boneModifierWireRecord(.array([values]), name: "bo\0ne")]),
@@ -440,5 +440,70 @@ func sourceBoneModifierNativeWireMatchesLocalPythonConversion() throws {
         let baseline = model.rig.restPose
         #expect(try native.applying(to: model.rig, baseline: baseline).localMatrices ==
             converted.applying(to: model.rig, baseline: baseline).localMatrices)
+    }
+}
+
+/// #401: the original's int-keyed MessagePack formatters read an array of any
+/// length, give a missing key its default and skip unknown keys. Saves from
+/// before BoneLocation ([BoneName, CoordinateModifiers]) and before Position and
+/// Rotation ([Scale, Length]) therefore load with location 0 (Unknown) and zero
+/// Position and Rotation. That is the only ABMX layout in the user's scene corpus.
+@Test func sourceBoneModifierNativeWireReadsOlderAndLongerLayoutsLikeTheSourceFormatter() throws {
+    func older(_ name: String, scale: [Double], length: Double) -> SourceMessagePackValue {
+        .array([.string(name), .array([.array([.array(scale.map { .float($0) }), .float(length)])])])
+    }
+    let packed = boneModifierLZ4(boneModifierWire(.array([older("bone", scale: [1.25, 0.5, 1], length: 1.5)])))
+    let decoded = try SourceBoneModifiers.decodeBoneData(packed, dataKind: "card", dataVersion: 2)
+    let current = try decodeBoneModifierWire(.array([boneModifierWireRecord(
+        .array([boneModifierWireValues(scale: [1.25, 0.5, 1], length: 1.5)]), location: .integer(0))]))
+    #expect(decoded.modifiers.map(\.boneLocation) == [0])
+    #expect(decoded.modifiers[0].coordinateModifiers == current.modifiers[0].coordinateModifiers)
+    #expect(decoded.modifiers[0].coordinateModifiers[0].positionModifier == [0, 0, 0])
+    #expect(decoded.modifiers[0].coordinateModifiers[0].rotationModifier == [0, 0, 0])
+    #expect(decoded.diagnostics?.isEmpty == true)
+    let rig = try boneModifierRig()
+    #expect(try decoded.applying(to: rig, baseline: rig.restPose).localMatrices ==
+        current.applying(to: rig, baseline: rig.restPose).localMatrices)
+    #expect(try decoded.applying(to: rig, baseline: rig.restPose).localMatrices != rig.restPose.localMatrices)
+
+    // The corpus layout at its size: twelve two-field records of one two-field entry each.
+    let twelve = try SourceBoneModifiers.decodeBoneData(boneModifierLZ4(boneModifierWire(.array(
+        (0..<12).map { older("b\($0)", scale: [1, 1 + Double($0) / 16, 1], length: 1) }))), dataKind: "card", dataVersion: 2)
+    #expect(twelve.count == 12 && twelve.coordinateCounts == Array(repeating: 1, count: 12))
+    #expect(twelve.modifiers.allSatisfy { $0.boneLocation == 0 } && twelve.diagnostics?.isEmpty == true)
+
+    // Three fields: Rotation is zero.
+    let three = try decodeBoneModifierWire(.array([boneModifierWireRecord(.array([.array([
+        .array([.float(1), .float(1), .float(1)]), .float(1), .array([.float(0.5), .float(0), .float(0)])])]))]))
+    #expect(three.modifiers[0].coordinateModifiers[0].positionModifier == [0.5, 0, 0])
+    #expect(three.modifiers[0].coordinateModifiers[0].rotationModifier == [0, 0, 0])
+
+    // Unknown trailing keys are skipped, each with a diagnostic.
+    let longer = try decodeBoneModifierWire(.array([.array([.string("bone"),
+        .array([.array((try #require(boneModifierWireValues().arrayValue)) + [.string("extra")])]), .integer(1), .null])]))
+    let identity = try decodeBoneModifierWire(.array([boneModifierWireRecord(.array([boneModifierWireValues()]))]))
+    #expect(longer.modifiers[0].coordinateModifiers == identity.modifiers[0].coordinateModifiers)
+    #expect(longer.modifiers[0].boneLocation == 1)
+    #expect(longer.diagnostics?.map(\.code) == ["skipped-unknown-fields", "skipped-unknown-fields"])
+    #expect(longer.diagnostics?.map(\.message) == [
+        "ABMX record 'bone' has 4 fields; fields after BoneLocation are skipped, as the original's formatter skips unknown keys.",
+        "ABMX coordinate #1 for 'bone' has 5 fields; fields after Rotation are skipped, as the original's formatter skips unknown keys.",
+    ])
+
+    // Entries with fewer than two fields keep their own refusal: the original
+    // would read them with default(T) (a zero Scale or Length).
+    for (entry, count) in [(SourceMessagePackValue.array([]), 0), (.array([.array([.float(1), .float(1), .float(1)])]), 1)] {
+        do {
+            _ = try decodeBoneModifierWire(.array([boneModifierWireRecord(.array([entry]))]))
+            Issue.record("A \(count)-field coordinate entry was accepted.")
+        } catch {
+            #expect(String(describing: error).contains("ABMX coordinate entry #1 for 'bone' has \(count) field(s). The original would read it with default values (a zero Scale or Length), which is not implemented; no known card uses this layout."))
+        }
+    }
+    do {
+        _ = try decodeBoneModifierWire(.array([.array([.string("bone")])]))
+        Issue.record("A record without CoordinateModifiers was accepted.")
+    } catch {
+        #expect(String(describing: error).contains("ABMX records require BoneName and CoordinateModifiers in source order (BoneLocation may follow)."))
     }
 }

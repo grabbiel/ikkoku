@@ -103,15 +103,30 @@ public struct SourceBoneModifiers: Decodable, Sendable {
         var identities = Set<Data>()
         modifiers.reserveCapacity(records.count)
         for record in records {
-            guard let fields = record.arrayValue, fields.count == 3 else {
-                throw RigError.invalid("ABMX records require BoneName, CoordinateModifiers, and BoneLocation in source order.")
+            // BoneModifier is an int-keyed MessagePack object: Key 0 BoneName,
+            // 1 CoordinateModifiers, 2 BoneLocation. Its formatter reads an
+            // array of any length, gives a missing key default(T) and skips
+            // keys it does not know (#401). Saves from before BoneLocation have
+            // two fields, so the location is 0 (Unknown). The original's
+            // constructor fails without a name or coordinates, so fewer than
+            // two fields stays refused.
+            guard let fields = record.arrayValue, fields.count >= 2 else {
+                throw RigError.invalid("ABMX records require BoneName and CoordinateModifiers in source order (BoneLocation may follow).")
             }
             guard let name = fields[0].stringValue, !name.isEmpty,
                   name.unicodeScalars.count <= 1024, !name.contains("\0") else {
                 throw RigError.invalid("ABMX BoneName must contain 1 through 1024 source characters and no NUL.")
             }
-            guard let location = fields[2].integerValue, location >= 0 else {
-                throw RigError.invalid("ABMX BoneLocation must be a nonnegative integer representable by the native index type.")
+            let location: Int
+            if fields.count >= 3 {
+                guard let saved = fields[2].integerValue, saved >= 0 else {
+                    throw RigError.invalid("ABMX BoneLocation must be a nonnegative integer representable by the native index type.")
+                }
+                location = saved
+            } else { location = 0 }
+            if fields.count > 3 {
+                diagnostics.append(Diagnostic(code: "skipped-unknown-fields", severity: "warning",
+                    message: "ABMX record '\(name)' has \(fields.count) fields; fields after BoneLocation are skipped, as the original's formatter skips unknown keys."))
             }
             // Compare the original name bytes: Swift's canonical-equivalence
             // String equality would otherwise merge distinct source names.
@@ -130,11 +145,22 @@ public struct SourceBoneModifiers: Decodable, Sendable {
                         message: "ABMX repaired null coordinate #\(index + 1) for '\(name)' to identity; the converted document preserves this repair."))
                     continue
                 }
-                guard let fields = coordinate.arrayValue, fields.count == 4 else {
+                // BoneModifierData: Key 0 Scale, 1 Length, 2 Position, 3 Rotation.
+                // Saves from before Position and Rotation have two fields; a
+                // missing Position or Rotation is Vector3.zero, the identity.
+                guard let fields = coordinate.arrayValue else {
                     throw RigError.invalid("ABMX coordinate entries require Scale, Length, Position, and Rotation in source order.")
                 }
+                guard fields.count >= 2 else {
+                    throw RigError.invalid("ABMX coordinate entry #\(index + 1) for '\(name)' has \(fields.count) field(s). The original would read it with default values (a zero Scale or Length), which is not implemented; no known card uses this layout.")
+                }
+                if fields.count > 4 {
+                    diagnostics.append(Diagnostic(code: "skipped-unknown-fields", severity: "warning",
+                        message: "ABMX coordinate #\(index + 1) for '\(name)' has \(fields.count) fields; fields after Rotation are skipped, as the original's formatter skips unknown keys."))
+                }
                 values.append(try Values(scaleModifier: vector(fields[0]), lengthModifier: number(fields[1]),
-                                         positionModifier: vector(fields[2]), rotationModifier: vector(fields[3])))
+                                         positionModifier: fields.count > 2 ? vector(fields[2]) : [0, 0, 0],
+                                         rotationModifier: fields.count > 3 ? vector(fields[3]) : [0, 0, 0]))
             }
             modifiers.append(Modifier(boneName: name, boneLocation: location, coordinateModifiers: values))
             if location != 0 && location != 1 {

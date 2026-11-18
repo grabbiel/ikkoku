@@ -126,7 +126,9 @@ class ABMXContractTests(unittest.TestCase):
 
     def test_invalid_record_shapes_duplicate_identity_and_nonfinite_values(self):
         malformed = [
-            [["bone", [abmx.IDENTITY]]],  # Missing current BoneLocation key.
+            [["bone"]],  # No CoordinateModifiers: the source constructor fails.
+            [["bone", [[[1, 1, 1]]], 1]],  # A coordinate entry with one field.
+            [["bone", [[]], 1]],  # A coordinate entry with no fields.
             [["bone", [abmx.IDENTITY], -1]],
             [modifier(), modifier()],
             [["bone", [[[1, 1], 1, [0, 0, 0], [0, 0, 0]]], 1]],
@@ -140,6 +142,31 @@ class ABMXContractTests(unittest.TestCase):
                 abmx.convert(msgpack.packb(records, use_bin_type=True))
         with self.assertRaisesRegex(ValueError, "extension"):
             abmx.convert(msgpack.packb(msgpack.ExtType(42, b"other-codec")))
+
+    def test_older_and_longer_layouts_read_like_the_source_formatter(self):
+        # #401: saves from before BoneLocation ([BoneName, CoordinateModifiers]) and
+        # before Position/Rotation ([Scale, Length]) read with default values.
+        older = abmx.convert(wrapped(packed([["cf_s_older", [[[1.25, 0.5, 1], 1.5]]]])))
+        current = abmx.convert(packed([["cf_s_older", [[[1.25, 0.5, 1], 1.5, [0, 0, 0], [0, 0, 0]]], 0]]))
+        self.assertEqual(older["modifiers"], current["modifiers"])
+        self.assertEqual(older["modifiers"][0]["boneLocation"], 0)
+        self.assertEqual(older["diagnostics"], [])
+        three = abmx.convert(packed([["bone", [[[1, 1, 1], 1, [0.5, 0, 0]]], 1]]))
+        self.assertEqual(three["modifiers"][0]["coordinateModifiers"][0]["positionModifier"], [0.5, 0.0, 0.0])
+        self.assertEqual(three["modifiers"][0]["coordinateModifiers"][0]["rotationModifier"], [0.0, 0.0, 0.0])
+        # Unknown trailing keys are skipped, with a diagnostic for each.
+        longer = abmx.convert(packed([["bone", [[[1, 1, 1], 1, [0, 0, 0], [0, 0, 0], "extra"]], 1, None]]))
+        self.assertEqual(longer["modifiers"], abmx.convert(packed([modifier("bone")]))["modifiers"])
+        self.assertEqual([d["code"] for d in longer["diagnostics"]], ["skipped-unknown-fields", "skipped-unknown-fields"])
+        self.assertEqual(longer["diagnostics"][0]["message"],
+                         "ABMX record 'bone' has 4 fields; fields after BoneLocation are skipped, as the original's formatter skips unknown keys.")
+        self.assertEqual(longer["diagnostics"][1]["message"],
+                         "ABMX coordinate #1 for 'bone' has 5 fields; fields after Rotation are skipped, as the original's formatter skips unknown keys.")
+        for entry, count in [([], 0), ([[1, 1, 1]], 1)]:
+            with self.subTest(fields=count), self.assertRaisesRegex(ValueError, f"has {count} field\\(s\\). The original would read it with default values"):
+                abmx.convert(packed([["bone", [entry], 1]]))
+        with self.assertRaisesRegex(ValueError, "BoneName and CoordinateModifiers"):
+            abmx.convert(packed([["bone"]]))
 
 
 if __name__ == "__main__":
