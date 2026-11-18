@@ -165,6 +165,9 @@ enum InlineTextureLoader {
     struct Image {
         let cgImage: CGImage
         let source: Source
+        /// `image(data:)` made it: ImageIO's own image of an encoded file,
+        /// not a copy, crop or caller's image (`decodedPixels`).
+        var decodedHere = false
     }
 
     /// The source of an image a caller hands in. ImageIO sets `utType` on the
@@ -264,6 +267,12 @@ enum InlineTextureLoader {
     /// 1024² RGBA8 and smaller images stage in one strip.
     static let stagingLimit = 4 << 20
 
+    /// Decodes this size or larger go into their own mapped pages
+    /// (`decodedPixels`): 1 MiB, a 512² RGBA8 image. malloc serves blocks
+    /// this size from its large allocator, whose freed blocks stay resident;
+    /// smaller decodes keep malloc and skip a map and unmap per load.
+    static let ownedPagesThreshold = 1 << 20
+
     /// The texture MetalKit's `newTexture(cgImage:options:)` makes with
     /// `.generateMipmaps`, `.shaderRead` usage and `.private` storage.
     /// Returns only after the upload's last command buffer has completed, so
@@ -295,8 +304,8 @@ enum InlineTextureLoader {
             guard let data = decodedPixels(source) else { throw Failure.decode(describe(image)) }
             observations?.lap(.decode)
             try withExtendedLifetime(data) {
-                guard let pixels = CFDataGetBytePtr(data),
-                      CFDataGetLength(data) >= image.bytesPerRow * (height - 1) + width * (image.bitsPerPixel / 8) else {
+                let pixels = data.bytes
+                guard data.count >= image.bytesPerRow * (height - 1) + width * (image.bitsPerPixel / 8) else {
                     throw Failure.decode(describe(image))
                 }
                 let stripRows = max(1, min(height, stagingLimit / rowBytes))
@@ -403,7 +412,44 @@ enum InlineTextureLoader {
         guard let source = CGImageSourceCreateWithData(data as CFData, nil),
               let type = CGImageSourceGetType(source) as String?,
               let image = CGImageSourceCreateImageAtIndex(source, 0, nil) else { return nil }
-        return Image(cgImage: image, source: .imageIO(type: type))
+        return Image(cgImage: image, source: .imageIO(type: type), decodedHere: true)
+    }
+
+    /// Decoded pixels: the image's bytes with its own row stride, in memory
+    /// this loader owns (`Pixels.owned`) or in the provider's copy.
+    final class Pixels {
+        let bytes: UnsafePointer<UInt8>
+        let count: Int
+        /// The pages were mapped for this decode and are unmapped with it.
+        let owned: Bool
+        private let release: () -> Void
+
+        /// `count` zero-filled bytes in their own pages (`vm_allocate`), or nil.
+        init?(mapping count: Int) {
+            var address: vm_address_t = 0
+            guard count > 0, vm_allocate(mach_task_self_, &address, vm_size_t(count), VM_FLAGS_ANYWHERE) == KERN_SUCCESS,
+                  let base = UnsafePointer<UInt8>(bitPattern: UInt(address)) else { return nil }
+            bytes = base; self.count = count; owned = true
+            release = { vm_deallocate(mach_task_self_, address, vm_size_t(count)) }
+        }
+
+        /// `count` zero-filled bytes from malloc, as `NSMutableData` gave them.
+        init?(allocating count: Int) {
+            guard count > 0, let base = calloc(count, 1) else { return nil }
+            bytes = UnsafePointer(base.assumingMemoryBound(to: UInt8.self)); self.count = count; owned = false
+            release = { free(base) }
+        }
+
+        /// The provider's copy, kept alive by this object.
+        init?(copy data: CFData) {
+            guard let base = CFDataGetBytePtr(data) else { return nil }
+            bytes = base; count = CFDataGetLength(data); owned = false
+            release = { withExtendedLifetime(data) {} }
+        }
+
+        var mutableBytes: UnsafeMutableRawPointer { UnsafeMutableRawPointer(mutating: bytes) }
+
+        deinit { release() }
     }
 
     /// The decoded pixels of `source`, with the image's own row stride.
@@ -417,19 +463,48 @@ enum InlineTextureLoader {
     /// therefore drawn, 1:1 with no interpolation or blending. Every other
     /// image keeps the provider's copy: opaque PNGs, whose two routes agree,
     /// included.
-    static func decodedPixels(_ source: Image) -> CFData? {
+    ///
+    /// Decodes of `ownedPagesThreshold` bytes or more go into pages mapped
+    /// for this load and unmapped after it (#358, run D2). The provider's
+    /// copy is a malloc block, and malloc keeps freed large blocks resident
+    /// for reuse: a 2048² RGBA8 decode left 16–32 MB of empty dirty pages
+    /// counted in the footprint. The draw route draws into those pages. The
+    /// provider route reads the provider into them with
+    /// `vImageBuffer_InitWithCGImage` in the image's own format, which copies
+    /// the provider's bytes, only for ImageIO's own images (`decodedHere`)
+    /// outside the HEIF family and JPEG XL. A copy of such an image, or a
+    /// HEIF grey image with alpha, which MetalKit cannot load, can come out
+    /// differently, so those, smaller decodes, and any format vImage refuses
+    /// keep the provider's copy.
+    static func decodedPixels(_ source: Image) -> Pixels? {
         let image = source.cgImage
-        guard drawsDecodedPixels(source), let space = image.colorSpace,
-              let pixels = NSMutableData(length: image.bytesPerRow * image.height),
-              let context = CGContext(data: pixels.mutableBytes, width: image.width, height: image.height, bitsPerComponent: 8,
-                                      bytesPerRow: image.bytesPerRow, space: space,
-                                      bitmapInfo: CGImageAlphaInfo.noneSkipLast.rawValue) else {
-            return image.dataProvider?.data
+        let count = image.bytesPerRow * image.height
+        let owned = count >= ownedPagesThreshold
+        if drawsDecodedPixels(source) {
+            guard let space = image.colorSpace,
+                  let pixels = owned ? Pixels(mapping: count) : Pixels(allocating: count),
+                  let context = CGContext(data: pixels.mutableBytes, width: image.width, height: image.height, bitsPerComponent: 8,
+                                          bytesPerRow: image.bytesPerRow, space: space,
+                                          bitmapInfo: CGImageAlphaInfo.noneSkipLast.rawValue) else {
+                return image.dataProvider?.data.flatMap(Pixels.init(copy:))
+            }
+            context.interpolationQuality = .none
+            context.setBlendMode(.copy)
+            context.draw(image, in: CGRect(x: 0, y: 0, width: image.width, height: image.height))
+            return pixels
         }
-        context.interpolationQuality = .none
-        context.setBlendMode(.copy)
-        context.draw(image, in: CGRect(x: 0, y: 0, width: image.width, height: image.height))
-        return pixels as CFData
+        if owned, source.decodedHere, !source.source.premultipliesStraightAlpha,
+           let space = image.colorSpace, image.decode == nil, let pixels = Pixels(mapping: count) {
+            var format = vImage_CGImageFormat(bitsPerComponent: UInt32(image.bitsPerComponent), bitsPerPixel: UInt32(image.bitsPerPixel),
+                                              colorSpace: Unmanaged.passUnretained(space), bitmapInfo: image.bitmapInfo,
+                                              version: 0, decode: nil, renderingIntent: image.renderingIntent)
+            var buffer = vImage_Buffer(data: pixels.mutableBytes, height: vImagePixelCount(image.height),
+                                       width: vImagePixelCount(image.width), rowBytes: image.bytesPerRow)
+            if vImageBuffer_InitWithCGImage(&buffer, &format, nil, image, vImage_Flags(kvImageNoAllocate)) == kvImageNoError {
+                return pixels
+            }
+        }
+        return image.dataProvider?.data.flatMap(Pixels.init(copy:))
     }
 
     /// Whether `decodedPixels` draws `source`: a JPEG that ImageIO decoded

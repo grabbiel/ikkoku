@@ -791,6 +791,46 @@ extension TextureIdentityCases {
         #expect(!InlineTextureLoader.drawsDecodedPixels(png))
         #expect(!InlineTextureLoader.drawsDecodedPixels(.init(cgImage: opaque, source: .data)))
     }
+
+    /// #358 (run D2): a decode of 1 MiB or more of ImageIO's own image goes
+    /// into pages the loader maps for the load and unmaps after it, not into
+    /// a malloc block, whose freed large blocks malloc keeps resident. Off
+    /// the draw route the bytes are the provider's copy, byte for byte. A
+    /// caller's image and a smaller decode keep malloc.
+    @Test("Large decodes of ImageIO's own images live in pages the loader maps, with the provider's bytes off the draw route")
+    func decodedPixelsAreMappedPagesWithTheProvidersBytes() throws {
+        let opaque = try #require(TextureIdentityCases.jpegSource(.srgb, width: 1024, height: 1024))
+        let srgb = try #require(CGColorSpace(name: CGColorSpace.sRGB))
+        let context = try #require(CGContext(data: nil, width: 1024, height: 1024, bitsPerComponent: 8, bytesPerRow: 4096,
+                                             space: srgb, bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue))
+        context.draw(opaque, in: CGRect(x: 0, y: 0, width: 1024, height: 1024))
+        context.setFillColor(red: 0.2, green: 0.6, blue: 0.9, alpha: 0.4)
+        context.fill(CGRect(x: 100, y: 200, width: 700, height: 300))
+        let translucent = try #require(context.makeImage())
+        let jpegData = try #require(TextureIdentityCases.jpeg(.srgb, width: 1024, height: 1024))
+        let opaquePNG = try #require(TextureIdentityCases.encode(opaque, as: "public.png"))
+        let translucentPNG = try #require(TextureIdentityCases.encode(translucent, as: "public.png"))
+        let jpeg = try #require(InlineTextureLoader.image(data: jpegData))
+        let png = try #require(InlineTextureLoader.image(data: opaquePNG))
+        let alphaPNG = try #require(InlineTextureLoader.image(data: translucentPNG))
+        let smallSource = try #require(TextureIdentityCases.jpegSource(.srgb, width: 256, height: 256))
+        let smallData = try #require(TextureIdentityCases.encode(smallSource, as: "public.png"))
+        let small = try #require(InlineTextureLoader.image(data: smallData))
+        let cases: [(String, InlineTextureLoader.Image, Bool)] = [
+            ("jpeg", jpeg, true), ("opaque png", png, true), ("translucent png", alphaPNG, true),
+            ("caller's image", .init(cgImage: translucent, source: .data), false), ("256² png", small, false),
+        ]
+        #expect(InlineTextureLoader.ownedPagesThreshold == 1 << 20)
+        for (name, image, mapped) in cases {
+            let pixels = try #require(InlineTextureLoader.decodedPixels(image), "\(name)")
+            #expect(pixels.owned == mapped, "\(name)")
+            if mapped { #expect(malloc_size(pixels.bytes) == 0, "\(name): not a malloc block") }
+            #expect(pixels.count == image.cgImage.bytesPerRow * image.cgImage.height, "\(name)")
+            guard !InlineTextureLoader.drawsDecodedPixels(image) else { continue }
+            let copy = try #require(image.cgImage.dataProvider?.data, "\(name)")
+            #expect(CFDataGetLength(copy) == pixels.count && memcmp(CFDataGetBytePtr(copy), pixels.bytes, pixels.count) == 0, "\(name)")
+        }
+    }
 }
 
 private extension Optional {
