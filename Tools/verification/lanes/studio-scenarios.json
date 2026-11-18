@@ -3245,6 +3245,36 @@
       "timeout": 600
     },
     {
+      "id": "studio-scenario-inspector-parent-popup",
+      "argv": [
+        ".local/build/Build/Products/Debug/Ikkoku.app/Contents/MacOS/Ikkoku"
+      ],
+      "fixtures": [
+        {
+          "env": "IKKOKU_SOURCE_SCENE",
+          "kind": "file",
+          "from": "IKKOKU_STUDIO_SCENARIO_SCENE"
+        },
+        {
+          "env": "IKKOKU_SOURCE_AVATAR",
+          "kind": "file"
+        }
+      ],
+      "env": {
+        "IKKOKU_STUDIO_SCENARIO": "Tools/verification/scenarios/inspector-parent-popup.json",
+        "IKKOKU_STUDIO_SCENARIO_REPORT": ".local/verification/reports/studio-scenario-inspector-parent-popup.json"
+      },
+      "referenceTier": "app-smoke",
+      "tolerance": "#383 F3, in the window: the Object tab's Parent popup holds only the current parent while closed; opened, its options are the SwiftUI Picker's (None, then every object that is not the selection or one of its descendants, in document order) with the current parent selected; a choice reparents through StudioModel.setParent (item 623 under 962, then to the root), Undo restores the parent and the popup shows it.",
+      "artifacts": [
+        {
+          "path": ".local/verification/reports/studio-scenario-inspector-parent-popup.json",
+          "kind": "scenario-report"
+        }
+      ],
+      "timeout": 600
+    },
+    {
       "id": "studio-scenario-inspector-kept-route",
       "argv": [
         ".local/build/Build/Products/Debug/Ikkoku.app/Contents/MacOS/Ikkoku"
