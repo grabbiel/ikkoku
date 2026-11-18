@@ -185,3 +185,81 @@ func malformedStudioDocument(_ rng: inout LookupSeed, maxCount: Int = 24) -> (do
     }
     #expect(reached == ["visible", "hidden", "cycle"], "\(reached)")
 }
+
+/// `Lookup.Indices` as the document's linear functions define it: each
+/// object's `index(of:)` and its parent's (`noParent`, `missingParent`).
+private func expectedLookupIndices(_ document: StudioDocument) -> StudioDocument.Lookup.Indices {
+    let first = document.objects.map { document.index(of: $0.id)! }
+    let parent = document.objects.map { object in
+        object.parent.map { document.index(of: $0) ?? StudioDocument.Lookup.Indices.missingParent }
+            ?? StudioDocument.Lookup.Indices.noParent
+    }
+    return .init(first: first, parent: parent)
+}
+
+/// #387 round 3: the walk-by-index arrays answer exactly `index(of:)` for
+/// every object and its parent on the malformed hierarchies (repeated ids,
+/// missing parents, self-parents, cycles), and `visibleFlags` from them is
+/// the same as without them.
+@Test func studioLookupIndicesMatchIndexOfOnMalformedHierarchies() {
+    var reached: Set<String> = []
+    for seed in UInt64(1)...256 {
+        var rng = LookupSeed(state: seed)
+        let (document, _, _) = malformedStudioDocument(&rng, maxCount: seed % 4 == 0 ? 60 : 24)
+        let lookup = StudioDocument.Lookup(document.objects)
+        let indices = lookup.indices()
+        #expect(indices == expectedLookupIndices(document), "seed \(seed)")
+        #expect(lookup.visibleFlags(indices) == lookup.visibleFlags(), "seed \(seed)")
+        for (index, first) in indices.first.enumerated() where first != index { reached.insert("repeated id") }
+        for parent in indices.parent {
+            switch parent {
+            case StudioDocument.Lookup.Indices.noParent: reached.insert("root")
+            case StudioDocument.Lookup.Indices.missingParent: reached.insert("missing parent")
+            default: reached.insert("parent")
+            }
+        }
+    }
+    #expect(reached == ["repeated id", "root", "missing parent", "parent"], "\(reached)")
+}
+
+/// #387 round 3: the arrays answer for the list they were built from, so a
+/// lookup built after an in-place edit (reparent, delete, duplicate, move to
+/// the end) or after an undo (the earlier list back) gives that list's
+/// answers. The frame walk builds them every refresh, from that refresh's
+/// list; they are never carried over.
+@Test func studioLookupIndicesFollowEditsAndUndo() {
+    for seed in UInt64(1)...64 {
+        var rng = LookupSeed(state: seed)
+        var (document, _, _) = malformedStudioDocument(&rng, maxCount: 30)
+        let saved = document
+        let before = StudioDocument.Lookup(saved.objects).indices()
+        #expect(before == expectedLookupIndices(saved), "seed \(seed)")
+        var edits = 0
+        for step in 0..<6 {
+            let count = document.objects.count
+            switch (step + Int(seed)) % 4 {
+            case 0 where count > 1: // reparent in place
+                let k = Int.random(in: 0..<count, using: &rng)
+                document.objects[k].parent = document.objects[Int.random(in: 0..<count, using: &rng)].id
+            case 1 where count > 1: // delete
+                document.objects.remove(at: Int.random(in: 0..<count, using: &rng))
+            case 2: // duplicate under a new id, appended
+                var copy = document.objects[Int.random(in: 0..<count, using: &rng)]
+                copy.id = UUID()
+                document.objects.append(copy)
+            default: // move an object to the end, as setParent does
+                let moved = document.objects.remove(at: Int.random(in: 0..<count, using: &rng))
+                document.objects.append(moved)
+            }
+            edits += 1
+            let after = StudioDocument.Lookup(document.objects).indices()
+            #expect(after == expectedLookupIndices(document), "seed \(seed) edit \(step)")
+            #expect(StudioDocument.Lookup(document.objects).visibleFlags(after) == document.objects.map { document.isVisible($0.id) },
+                    "seed \(seed) edit \(step)")
+        }
+        #expect(edits == 6)
+        // Undo: the saved list again, and its answers again.
+        document = saved
+        #expect(StudioDocument.Lookup(document.objects).indices() == before, "seed \(seed)")
+    }
+}

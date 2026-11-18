@@ -392,6 +392,34 @@ extension StudioDocument {
         public func index(of id: UUID) -> Int? { indexByID[id] }
         public func object(_ id: UUID) -> StudioObject? { indexByID[id].map { objects[$0] } }
 
+        /// Every listed object's first index and its parent's, for a walk
+        /// by index that neither hashes ids nor copies objects (#387 round
+        /// 3). `first[i]` is `index(of: objects[i].id)`; `parent[i]` is
+        /// `index(of:)` of `objects[i]`'s parent id, `noParent` for a root
+        /// and `missingParent` for a parent id the list lacks. Like the
+        /// lookup, it answers for the list it was built from only.
+        public struct Indices: Sendable, Equatable {
+            public static let noParent = -1, missingParent = -2
+            public let first: [Int]
+            public let parent: [Int]
+            public init(first: [Int], parent: [Int]) {
+                self.first = first
+                self.parent = parent
+            }
+        }
+
+        /// `Indices` for this list, in one pass of 2N hash lookups.
+        public func indices() -> Indices {
+            var first: [Int] = [], parent: [Int] = []
+            first.reserveCapacity(objects.count)
+            parent.reserveCapacity(objects.count)
+            for index in objects.indices {
+                first.append(indexByID[objects[index].id] ?? index) // every listed id is there
+                parent.append(objects[index].parent.map { indexByID[$0] ?? Indices.missingParent } ?? Indices.noParent)
+            }
+            return Indices(first: first, parent: parent)
+        }
+
         /// `StudioDocument.isVisible(_:)`.
         public func isVisible(_ id: UUID) -> Bool {
             var cur: UUID? = id
@@ -408,16 +436,19 @@ extension StudioDocument {
         /// `isVisible(objects[i].id)`: every object of a repeated id gets
         /// its first object's answer, and objects in or below a cycle or
         /// under a missing parent get `false`, as there.
-        public func visibleFlags() -> [Bool] {
+        public func visibleFlags() -> [Bool] { visibleFlags(indices()) }
+
+        /// `visibleFlags()` from this list's `indices()`, already built for
+        /// the walk that also needs them.
+        public func visibleFlags(_ indices: Indices) -> [Bool] {
+            precondition(indices.first.count == objects.count, "Studio lookup indices built from another object list")
             // Per first index: 0 not reached, 1 on the current chain,
             // 2 visible, 3 hidden. Every object on one chain shares its end's
             // answer: each one walked on was visible itself.
             var state = [UInt8](repeating: 0, count: objects.count)
-            var first = [Int](repeating: 0, count: objects.count)
             var chain: [Int] = []
             for start in objects.indices {
-                guard let index = indexByID[objects[start].id] else { continue } // every listed id is there
-                first[start] = index
+                let index = indices.first[start]
                 guard state[index] == 0 else { continue }
                 chain.removeAll(keepingCapacity: true)
                 var current = index
@@ -428,13 +459,14 @@ extension StudioDocument {
                     state[current] = 1
                     chain.append(current)
                     guard objects[current].visible else { break }
-                    guard let parent = objects[current].parent else { answer = 2; break }
-                    guard let next = indexByID[parent] else { break } // a missing parent
+                    let next = indices.parent[current]
+                    if next == Indices.noParent { answer = 2; break }
+                    if next == Indices.missingParent { break }
                     current = next
                 }
                 for i in chain { state[i] = answer }
             }
-            return first.map { state[$0] == 2 }
+            return indices.first.map { state[$0] == 2 }
         }
 
         /// `StudioDocument.isDescendant(_:of:)`.

@@ -3918,11 +3918,12 @@ final class StudioModel: ViewportInputHandler, LivePacedHandler {
         // `doc.isVisible` did. #387: each object's world matrix is evaluated
         // once (`SourceWorldWalk`), and every object's visibility comes from
         // one pass; `visible[i]` answers for `animatedDoc.objects[i]`, whose
-        // id is `doc.objects[i]`'s.
+        // id is `doc.objects[i]`'s. Round 3: both walk by index (the walk's
+        // `indices`), built per frame like the lookup.
         let walk = SourceWorldWalk(lookup: StudioDocument.Lookup(animatedDoc.objects)) { [unowned self] report in
             self.reportSourceRouteDiagnostics(report.lines, routeKey: report.routeKey)
         }
-        let visible = (animated ? StudioDocument.Lookup(doc.objects) : walk.lookup).visibleFlags()
+        let visible = animated ? StudioDocument.Lookup(doc.objects).visibleFlags() : walk.lookup.visibleFlags(walk.indices)
         sourceRouteEditor.worlds.removeAll(keepingCapacity: true)
         // The source character's preview for this frame: the cached one, or
         // one built now (the frame's batch already ran its first half). Nil
@@ -3981,7 +3982,7 @@ final class StudioModel: ViewportInputHandler, LivePacedHandler {
                 continue
             }
             let world: float4x4
-            do { world = try sourceWorldMatrix(of: o.id, document: animatedDoc, previews: sourceInstances, walk: walk) }
+            do { world = try sourceWorldMatrix(at: walk.indices.first[index], document: animatedDoc, previews: sourceInstances, walk: walk) }
             catch {
                 // An object attached to a character still building in the
                 // background waits for it without a message.
@@ -4233,9 +4234,13 @@ final class StudioModel: ViewportInputHandler, LivePacedHandler {
     private final class SourceWorldWalk {
         struct RouteReport { let lines: [String]; let routeKey: Int32 }
         let lookup: StudioDocument.Lookup
+        /// Each walked object's first index and its parent's (round 3): the
+        /// walk reads objects by index, in place, without hashing their ids.
+        let indices: StudioDocument.Lookup.Indices
         let memo: StudioWalkMemo<UUID, float4x4, RouteReport>
         init(lookup: StudioDocument.Lookup, report: @escaping (RouteReport) -> Void) {
             self.lookup = lookup
+            indices = lookup.indices()
             memo = StudioWalkMemo(count: lookup.objects.count, sink: report)
         }
     }
@@ -4266,37 +4271,85 @@ final class StudioModel: ViewportInputHandler, LivePacedHandler {
     private func sourceWorldMatrix(of id: UUID, document: StudioDocument,
                                    previews: [UUID: SourceStudioCharacterPreview],
                                    visited: Set<UUID>, walk: SourceWorldWalk? = nil) throws -> float4x4 {
-        // In the frame walk each object is evaluated once (#387). The memo's
-        // in-progress mark is the cycle check the visited set makes below; it
-        // also stops a cycle through a route object, which restarts the
-        // visited set and used to recurse without end.
         if let walk {
             guard let index = walk.lookup.index(of: id) else { throw RigError.invalid("Missing Studio object.") }
-            return try walk.memo.value(at: index, cycle: { RigError.invalid("Invalid Studio parent hierarchy.") }) {
-                try composedSourceWorld(of: id, document: document, previews: previews, visited: visited, walk: walk)
-            }
+            return try sourceWorldMatrix(at: index, document: document, previews: previews, walk: walk)
         }
-        return try composedSourceWorld(of: id, document: document, previews: previews, visited: visited, walk: nil)
+        let (object, parentFrame) = try sourceParentFrame(of: id, document: document, previews: previews, visited: visited)
+        return try Self.composedSourceWorld(parentFrame: parentFrame, sourceRecordKey: object.sourceRecordKey,
+            sourceRecordKind: object.sourceRecordKind, kind: object.kind, transform: object.transform)
     }
 
-    /// `sourceWorldMatrix`'s composition of `id`'s own transform under its parent frame.
-    private func composedSourceWorld(of id: UUID, document: StudioDocument,
-                                     previews: [UUID: SourceStudioCharacterPreview],
-                                     visited: Set<UUID>, walk: SourceWorldWalk?) throws -> float4x4 {
-        let (object, parentFrame) = try sourceParentFrame(of: id, document: document, previews: previews, visited: visited,
-                                                          walk: walk)
+    /// `sourceWorldMatrix` in the frame walk, for the object at first index
+    /// `index` (`walk.indices.first`). Each object is evaluated once (#387).
+    /// The memo's in-progress mark is the cycle check the visited set makes
+    /// in `sourceParentFrame`; it also stops a cycle through a route object,
+    /// which restarts the visited set and used to recurse without end.
+    /// Round 3: the walk reads the objects in place by index, with the same
+    /// answers, errors and route reports as the id-based walk.
+    private func sourceWorldMatrix(at index: Int, document: StudioDocument,
+                                   previews: [UUID: SourceStudioCharacterPreview],
+                                   walk: SourceWorldWalk) throws -> float4x4 {
+        try walk.memo.value(at: index, cycle: { RigError.invalid("Invalid Studio parent hierarchy.") }) {
+            let objects = walk.lookup.objects
+            let parentFrame = try walkedSourceParentFrame(at: index, document: document, previews: previews, walk: walk)
+            return try Self.composedSourceWorld(parentFrame: parentFrame, sourceRecordKey: objects[index].sourceRecordKey,
+                sourceRecordKind: objects[index].sourceRecordKind, kind: objects[index].kind,
+                transform: objects[index].transform)
+        }
+    }
+
+    /// `sourceWorldMatrix`'s composition of an object's own transform under its parent frame.
+    private static func composedSourceWorld(parentFrame: float4x4, sourceRecordKey: Int32?,
+                                            sourceRecordKind: KoikatsuObjectKind?, kind: StudioObjectKind,
+                                            transform: StudioTransform) throws -> float4x4 {
         // Native objects (no source key) keep the native full-TRS composition
         // of `StudioDocument.worldMatrix(of:)`, which setParent and native
         // gizmo edits also use; only source records follow the Studio rule.
-        guard object.sourceRecordKey != nil else { return parentFrame * object.transform.matrix }
+        guard sourceRecordKey != nil else { return parentFrame * transform.matrix }
         // Documents saved before `sourceRecordKind` was recorded carry no
         // record kind; their import made every non-character placeholder a
         // `.folder`, so those fall back to the non-scalable rule (an item's
         // authored scale is then dropped) and characters stay scalable.
-        let scalable = object.sourceRecordKind.map(SourceStudioWorldTransform.isScalable) ?? (object.kind != .folder)
+        let scalable = sourceRecordKind.map(SourceStudioWorldTransform.isScalable) ?? (kind != .folder)
         return try SourceStudioWorldTransform.world(parentFrame: parentFrame,
-            localPosition: object.transform.position, localRotation: object.transform.quaternion,
-            localScale: object.transform.scale, scalable: scalable)
+            localPosition: transform.position, localRotation: transform.quaternion,
+            localScale: transform.scale, scalable: scalable)
+    }
+
+    /// `sourceParentFrame` in the frame walk, by first index: the same
+    /// frame, the same errors in the same order, and the route report as a
+    /// memo event. Only an attachment copies its parent (its pose fields).
+    private func walkedSourceParentFrame(at index: Int, document: StudioDocument,
+                                         previews: [UUID: SourceStudioCharacterPreview],
+                                         walk: SourceWorldWalk) throws -> float4x4 {
+        let objects = walk.lookup.objects
+        guard let parentID = objects[index].parent else { return matrix_identity_float4x4 }
+        let parentIndex = walk.indices.parent[index]
+        guard parentIndex >= 0 else { throw RigError.invalid("Invalid Studio parent hierarchy.") }
+        // `sourceRouteRuntime` answers nil without a route; most scenes have none.
+        if !sourceRoutes.isEmpty, let route = sourceRouteRuntime(id: parentID, document: document) {
+            // See `sourceParentFrame`: `childRoot` replaces the route object
+            // as the parent frame, and the walk stops there.
+            let (matrix, diagnostics) = try routeChildRootWorld(id: parentID, route: route,
+                document: document, previews: previews, walk: walk)
+            // A memo event, replayed with every later answer from this matrix
+            // (an empty report reports nothing).
+            if !diagnostics.isEmpty { walk.memo.emit(.init(lines: diagnostics, routeKey: route.objectKey)) }
+            return matrix
+        }
+        var parentFrame = try sourceWorldMatrix(at: parentIndex, document: document, previews: previews, walk: walk)
+        if let point = objects[index].sourceAttachmentPoint {
+            // The parent's preview, present or not, is read here.
+            walk.memo.depend(on: parentID)
+            if let preview = previews[parentID] {
+                let parent = objects[parentIndex]
+                parentFrame *= try preview.attachmentMatrix(pointID: point, fkRotations: parent.sourceFKRotations ?? [:], faceValues: parent.sourceFaceValues, bodyValues: parent.sourceBodyValues, ikTargets: parent.sourceIKOverrides ?? [:], kinematics: parent.sourceKinematics, animationState: parent.sourceAnimation, animationElapsed: sourceAnimationTime)
+            } else if let preview = sourceRouteCharacterPreview(of: parentID, document: document) {
+                parentFrame *= try preview.attachmentMatrix(pointID: point, animationElapsed: sourceAnimationTime)
+            } else { throw RigError.invalid("Attachment parent has no converted character.") }
+        }
+        return parentFrame
     }
 
     /// The object `id` and the frame `sourceWorldMatrix` composes its own
@@ -4304,14 +4357,14 @@ final class StudioModel: ViewportInputHandler, LivePacedHandler {
     /// the parent's world matrix times the attachment point's frame.
     private func sourceParentFrame(of id: UUID, document: StudioDocument,
                                    previews: [UUID: SourceStudioCharacterPreview],
-                                   visited: Set<UUID>, walk: SourceWorldWalk? = nil) throws -> (object: StudioObject, frame: float4x4) {
-        guard let object = Self.studioObject(id, in: document, lookup: walk?.lookup) else { throw RigError.invalid("Missing Studio object.") }
+                                   visited: Set<UUID>) throws -> (object: StudioObject, frame: float4x4) {
+        // The frame walk has its own copy of this by index (`walkedSourceParentFrame`).
+        guard let object = document.object(id) else { throw RigError.invalid("Missing Studio object.") }
         var visited = visited
-        // The frame walk's memo makes this check (see `sourceWorldMatrix`).
-        if walk == nil { guard visited.insert(id).inserted else { throw RigError.invalid("Invalid Studio parent hierarchy.") } }
+        guard visited.insert(id).inserted else { throw RigError.invalid("Invalid Studio parent hierarchy.") }
         var parentFrame = matrix_identity_float4x4
         if let parentID = object.parent {
-            guard let parent = Self.studioObject(parentID, in: document, lookup: walk?.lookup) else { throw RigError.invalid("Invalid Studio parent hierarchy.") }
+            guard let parent = document.object(parentID) else { throw RigError.invalid("Invalid Studio parent hierarchy.") }
             if let route = sourceRouteRuntime(id: parentID, document: document) {
                 // `childRoot` replaces the route object as the parent frame
                 // (`AddObjectRoute.cs` parents children under it, and the
@@ -4322,18 +4375,12 @@ final class StudioModel: ViewportInputHandler, LivePacedHandler {
                 // attachment parent, so the route frame never needs the
                 // attachment multiplication below.
                 let (matrix, diagnostics) = try routeChildRootWorld(id: parentID, route: route,
-                    document: document, previews: previews, walk: walk)
-                // In the frame walk the report is a memo event, replayed with
-                // every later answer from this matrix (an empty one reports nothing).
-                if let walk { if !diagnostics.isEmpty { walk.memo.emit(.init(lines: diagnostics, routeKey: route.objectKey)) } }
-                else { reportSourceRouteDiagnostics(diagnostics, routeKey: route.objectKey) }
+                    document: document, previews: previews)
+                reportSourceRouteDiagnostics(diagnostics, routeKey: route.objectKey)
                 parentFrame = matrix
             } else {
-                parentFrame = try sourceWorldMatrix(of: parentID, document: document, previews: previews, visited: visited,
-                                                    walk: walk)
+                parentFrame = try sourceWorldMatrix(of: parentID, document: document, previews: previews, visited: visited)
                 if let point = object.sourceAttachmentPoint {
-                    // The parent's preview, present or not, is read here.
-                    walk?.memo.depend(on: parentID)
                     if let preview = previews[parentID] {
                         parentFrame *= try preview.attachmentMatrix(pointID: point, fkRotations: parent.sourceFKRotations ?? [:], faceValues: parent.sourceFaceValues, bodyValues: parent.sourceBodyValues, ikTargets: parent.sourceIKOverrides ?? [:], kinematics: parent.sourceKinematics, animationState: parent.sourceAnimation, animationElapsed: sourceAnimationTime)
                     } else if let preview = sourceRouteCharacterPreview(of: parentID, document: document) {
@@ -4345,13 +4392,6 @@ final class StudioModel: ViewportInputHandler, LivePacedHandler {
             }
         }
         return (object, parentFrame)
-    }
-
-    /// `document.object(id)`, through the walk's lookup when it has one.
-    private static func studioObject(_ id: UUID, in document: StudioDocument, lookup: StudioDocument.Lookup?) -> StudioObject? {
-        guard let lookup else { return document.object(id) }
-        assert(lookup.objects.count == document.objects.count, "a Studio lookup built from another object list")
-        return lookup.object(id)
     }
 
     /// The import's authored route data, but only while the document still
