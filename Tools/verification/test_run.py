@@ -825,6 +825,100 @@ class CaptureRequestInventoryTests(unittest.TestCase):
         self.assertEqual(stale, [], "the app no longer reads: %s" % stale)
 
 
+PRIVATE_SOURCE_MANIFEST = os.path.join(_HERE, "lanes", "private-source.json")
+ENGINE_TESTS = os.path.join(run.REPO_ROOT, "Packages", "Engine", "Tests")
+# The argument of a SourceFixtureSupport gate: a list, a literal or a name.
+FIXTURE_GATE = re.compile(r'SourceFixtureSupport\.(?:shouldRun|require)\(\s*(\[[^\]]*\]|"IKKOKU_\w+"|\w+)')
+# A `let` holding a variable name or a list of them, as gates use by name.
+FIXTURE_CONSTANT = re.compile(r'\blet\s+(\w+)\s*(?::\s*[\w\[\]]+\s*)?=\s*(\[[^\]]*\]|"IKKOKU_\w+")')
+# Written by the tests, never read (Tools/verification/README.md, private-source.json row).
+PRIVATE_SOURCE_OUTPUTS = re.compile(r"_(OUTPUT|REPORT|RESULT)$|^IKKOKU_(SAVE_SCENE|EXPORT_SOURCE_SCENE)$")
+
+
+def _gated_fixtures(text):
+    """The IKKOKU_* names one Swift file's SourceFixtureSupport gates take.
+
+    A name reaches a gate as a literal, or through a `let` constant or list in
+    the file. A function parameter (`require(key)`) is left to its callers'
+    gates.
+    """
+    constants = dict(FIXTURE_CONSTANT.findall(text))
+    names = set()
+
+    def resolve(expression, depth=0):
+        if expression.startswith("["):
+            for item in expression[1:-1].split(","):
+                if item.strip():
+                    resolve(item.strip(), depth + 1)
+        elif expression.startswith('"'):
+            names.add(expression.strip('"'))
+        elif expression in constants and depth < 4:
+            resolve(constants[expression], depth + 1)
+
+    for match in FIXTURE_GATE.finditer(text):
+        resolve(match.group(1))
+    return names
+
+
+class PrivateSourceManifestTests(unittest.TestCase):
+    """private-source.json supplies every variable an Engine test gates on.
+
+    run.py passes a check only the IKKOKU_* variables it declares, so a
+    variable a `SourceFixtureSupport` gate names but the manifest leaves out
+    skips its tests in the lane and fails them under --strict (2026-11-02:
+    15 had drifted, and the strict lane failed 24 tests). Inputs are
+    fixtures, hashed and bounded from the environment file. An output the
+    tests write is never a fixture: the opt-in ones (`PRIVATE_SOURCE_OUTPUTS`)
+    stay unset, and a gated output directory is a lane-owned path in the
+    check's `env`.
+    """
+
+    def private_source_check(self):
+        with open(PRIVATE_SOURCE_MANIFEST, encoding="utf-8") as handle:
+            (check,) = json.load(handle)["checks"]
+        return check
+
+    def test_every_gated_engine_fixture_is_declared(self):
+        gated = set()
+        for root, _, files in os.walk(ENGINE_TESTS):
+            for name in files:
+                # The helper and its own tests name made-up variables.
+                if name.endswith(".swift") and not name.startswith("SourceFixtureSupport"):
+                    with open(os.path.join(root, name), encoding="utf-8") as handle:
+                        gated |= _gated_fixtures(handle.read())
+        self.assertGreater(len(gated), 50, "the gate reader found almost nothing")
+        check = self.private_source_check()
+        declared = {fixture["env"] for fixture in check["fixtures"]} | set(check["env"])
+        missing = sorted(name for name in gated - declared if not PRIVATE_SOURCE_OUTPUTS.search(name))
+        self.assertEqual(missing, [], "declare these in private-source.json: %s" % missing)
+
+    def test_outputs_are_lane_owned_and_never_fixtures(self):
+        check = self.private_source_check()
+        fixtures = {fixture["env"] for fixture in check["fixtures"]}
+        self.assertEqual(sorted(name for name in fixtures if PRIVATE_SOURCE_OUTPUTS.search(name)), [])
+        self.assertEqual(sorted(fixtures & set(check["env"])), [])
+        # `swift test --package-path P` runs the tests with P as the working
+        # directory, so an output path resolves against it, not the repo root.
+        argv = check["argv"]
+        package = argv[argv.index("--package-path") + 1] if "--package-path" in argv else "."
+        for name, value in check["env"].items():
+            resolved = os.path.normpath(os.path.join(package, value))
+            self.assertFalse(os.path.isabs(value), "%s=%s must be relative" % (name, value))
+            self.assertTrue(resolved.startswith(os.path.join(".local", "verification", "private-source") + os.sep),
+                            "%s=%s resolves to %s, not a lane-owned output path" % (name, value, resolved))
+
+    def test_gate_reader_follows_constants_and_lists(self):
+        text = '''
+        private let probe = "IKKOKU_P"
+        private let pair: [String] = [probe, "IKKOKU_Q"]
+        @Test(.enabled(if: SourceFixtureSupport.shouldRun(pair) && SourceFixtureSupport.shouldRun(["IKKOKU_R"])))
+        func a() throws { _ = try SourceFixtureSupport.require("IKKOKU_S") }
+        func helper(key: String) throws { _ = try SourceFixtureSupport.require(key) }
+        let unrelated = "IKKOKU_T"
+        '''
+        self.assertEqual(_gated_fixtures(text), {"IKKOKU_P", "IKKOKU_Q", "IKKOKU_R", "IKKOKU_S"})
+
+
 class StudioScenarioLaneTests(unittest.TestCase):
     """The shipped studio-scenarios lane and its scenario files are well-formed.
 
