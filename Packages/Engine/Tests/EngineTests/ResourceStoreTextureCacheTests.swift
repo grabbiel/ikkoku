@@ -218,13 +218,17 @@ private func pixels(_ renderer: Renderer, _ frame: RenderFrame) throws -> Data {
 
 /// Run D of #358: no viewport prepared a frame, so evicted textures were never
 /// released. The next submit of a later frame releases them now, with no
-/// draw, capture or pick, and bumps the resource generation. Meshes and keys
-/// still wait for a prepared frame, and a submit with nothing retiring
+/// draw, capture or pick, and bumps the resource generation. While a viewport
+/// draws, meshes and keys still wait for a prepared frame (#368 completes them
+/// at submit only while none draws), and a submit with nothing retiring
 /// changes nothing.
 @Test(.enabled(if: MTLCreateSystemDefaultDevice() != nil))
 func anEvictedTextureIsReleasedByTheNextSubmitWithoutAPreparedFrame() throws {
     let renderer = try makeSourceShaderRenderer()
     let resources = renderer.resources
+    let viewport = NSObject()
+    renderer.setViewport(ObjectIdentifier(viewport), drawing: true)
+    defer { renderer.setViewport(ObjectIdentifier(viewport), drawing: false) }
     resources.unpinnedTextureBudget = 0
     let key = "lru-submit-" + UUID().uuidString
     let handle = try cachedTexture(resources, key: key)
