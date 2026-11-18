@@ -718,7 +718,8 @@ final class StudioModel: ViewportInputHandler, LivePacedHandler {
     private let hoverMailbox = PickMailbox<LatestPickQueue<HoverPickContext>.Request>()
     /// When the pick in flight was started (`CACurrentMediaTime`), for the perf trace.
     @ObservationIgnored private var hoverPickStarted: CFTimeInterval = 0
-    @ObservationIgnored private var lastUndoPush = Date.distantPast
+    /// When an edit takes an undo snapshot (#390: real edits only, coalesced).
+    @ObservationIgnored private var undoSteps = StudioUndoSteps()
     @ObservationIgnored private var timer: Timer?
     @ObservationIgnored private var startTime = CFAbsoluteTimeGetCurrent()
     @ObservationIgnored private var animTime: Double = 0
@@ -2033,17 +2034,21 @@ final class StudioModel: ViewportInputHandler, LivePacedHandler {
     // MARK: Object management
 
     func pushUndo(force: Bool = false) {
-        if !force && Date().timeIntervalSince(lastUndoPush) < 0.4 { return }
+        guard undoSteps.startsStep(at: Date(), force: force) else { return }
+        appendUndoSnapshot()
+    }
+
+    /// The document as it is now, as the newest undo step.
+    private func appendUndoSnapshot() {
         undoStack.append(doc)
         if undoStack.count > 60 { undoStack.removeFirst() }
         redoStack.removeAll()
-        lastUndoPush = Date()
     }
 
     /// Closes the edit-coalescing window, so the next edit takes its own undo
     /// snapshot. The scenario runner calls it before every step: each step
     /// stands for a separate user gesture, however fast the steps run.
-    func endUndoCoalescing() { lastUndoPush = .distantPast }
+    func endUndoCoalescing() { undoSteps.endCoalescing() }
 
     /// Undo/redo keeps the SHA-gated source runtime caches (route runtimes,
     /// play state, clocks, route character previews, scene light, camera
@@ -2318,10 +2323,16 @@ final class StudioModel: ViewportInputHandler, LivePacedHandler {
         doc.objects[i].transform.scale = local.scaleFactors
     }
 
+    /// One object edit (the inspector's fields and toggles). A write that
+    /// leaves the object as it was takes no undo snapshot (#390): a field
+    /// committing the value it shows, or a binding writing the same value
+    /// again, so the undo history does not depend on timing. The write
+    /// itself still happens, so the views re-read the document as before.
     func update(_ id: UUID, _ change: (inout StudioObject) -> Void) {
         guard let i = doc.index(of: id) else { return }
-        pushUndo()
-        change(&doc.objects[i])
+        var object = doc.objects[i]
+        if undoSteps.edit(&object, at: Date(), change) { appendUndoSnapshot() }
+        doc.objects[i] = object
     }
     func updateSelected(_ change: (inout StudioObject) -> Void) { if let id = selection { update(id, change) } }
 

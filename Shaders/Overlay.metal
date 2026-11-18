@@ -58,8 +58,12 @@ vertex PickOut pick_vertex(uint vid [[vertex_id]],
                            device const DeformedVertex* verts [[buffer(BufferIndexVertices)]],
                            device const float2* uvs [[buffer(BufferIndexTexcoords)]],
                            constant FrameUniforms& frame [[buffer(BufferIndexFrameUniforms)]],
-                           constant DrawUniforms& draw [[buffer(BufferIndexDrawUniforms)]])
+                           uint iid [[instance_id]],
+                           constant DrawUniforms* draws [[buffer(BufferIndexDrawUniforms)]])
 {
+    // DrawUniforms by instance (ST-T04 B0): a per-draw record is bound as a one-element
+    // array at its own offset (instance_id 0); an instanced draw indexes its table.
+    constant DrawUniforms& draw = draws[iid];
     PickOut o;
     o.position = frame.viewProjection * draw.model * float4(verts[vid].position.xyz, 1.0);
     o.uv = uvs[vid];

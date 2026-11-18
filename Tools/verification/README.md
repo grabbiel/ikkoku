@@ -1187,8 +1187,11 @@ gesture, and SwiftUI commits it (0.3 s) before the next step. The ops are:
 - `snapshot` keeps the document and the undo depths;
 - `keyLoop` walks the Tab key-view loop and names each view. It checks
   `keyViews` (the loop's length) and `hiddenKeyViews` (views outside the
-  visible window). Tabbing out of a Transform field can commit its rounded
-  value, so a loop can push undo steps;
+  visible window). Each move (the start, every Tab and the end) is its own
+  gesture: the runner closes the coalescing window before it and settles
+  after it, so the views re-render before the next Tab, as with separate key
+  presses. Tabbing out of a Transform field can commit its rounded value, so
+  a loop can push undo steps (see below);
 - `assert`: `name` and `positionX` of `key`'s object, `exists`, `undoCount`,
   `redoCount`, `unchanged` (since the snapshot), `editing` (a field editor is
   the first responder), `inspectorView`, and `axContains` and `axAbsent`.
@@ -1224,7 +1227,13 @@ kept the Object tab mounted:
   the field leaves the window without the end-of-editing commit: 1.23456
   typed into a three-decimal field stays 1.23456 and adds no undo step. The
   window becomes the first responder, and later typing reaches nothing. The
-  undo and redo depths and values are pinned through three undos.
+  undo and redo depths and values are pinned through three undos. Since
+  #390, only a write that changes the object takes an undo step, so focusing
+  the Name field or a field that already shows its exact value adds none.
+  The steps after the import are " X", 0.139, 1.5, 1.23456, " Z" and the
+  delete (7), and the three undos on character 0 revert 1.23456, 1.5 and
+  the 0.139 rounding. The rounding on focus is #391's question; if it
+  changes, these counts change with it.
 - `inspector-hidden-route` (`IKKOKU_STUDIO_HALF_STATE_SCENE`: route 20,
   character 10, folder 11). Three selection cycles leave the document and
   the undo depths unchanged. The route section ("Add point", "Delete point",
@@ -1314,9 +1323,26 @@ get wrong:
   one captured line, on character 963 and the Clothes tab, with the
   document no wider than the clip and the accessibility fit check passing.
 
-The Tab walk of `keyLoop` commits rounded values as it passes the fields
-(two undo entries in these scenes, on base and on head alike), so the
-checks assert an unchanged document before a walk, not across one.
+The Tab walk of `keyLoop` focuses each field in turn, and focusing a
+Transform field commits the value it shows (as `inspector-edit-deselect`
+pins) into its own component of the object as it is now: Position rounded
+to 3 decimals, Rotation to whole degrees, Scale to 2 decimals. Setting a Rotation component also drops an imported object's exact
+rotation (#391). A commit that leaves the object unchanged takes no undo
+step (#390), and every move is its own gesture, so a walk adds one step per
+field whose commit changes the object, however long the walk takes. In
+`inspector-hide-cycles` the walks on source character 0 and on item 622
+each add 5:
+- Position X, Y and Z, which have more decimals than the field shows;
+- Rotation X, which drops the imported rotation;
+- Rotation Y, which is not a whole degree.
+
+Rotation Z is exactly 0 and the scales read back unchanged. The Name field
+writes the same name, and the timeline's duration field writes the document
+without an undo step. With the scene
+import's step, the counts are 6, 6 and 11. Before #390 every write pushed a
+step but the walk's writes coalesced, so the count depended on how long the
+walk took. The checks assert an unchanged document before a walk, not across
+one.
 
 The Object tab reads its state from the model (`StudioModel.objectInspectorState`),
 and the compatibility details read `StudioModel.inspectorDiagnostics`. Since
