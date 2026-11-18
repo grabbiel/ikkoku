@@ -10,6 +10,24 @@ public struct SourceStudioIKEdit: Codable, Sendable, Equatable {
     public init(position: Float3, rotationDegrees: Float3 = .zero) { self.position = position; self.rotationDegrees = rotationDegrees }
     public init(_ transform: KoikatsuChangeAmount) { position = transform.position; rotationDegrees = transform.rotationDegrees }
     public var transform: KoikatsuChangeAmount { .init(position: position, rotationDegrees: rotationDegrees, scale: .one) }
+
+    public enum Vector: Sendable { case position, rotation }
+
+    /// One field of the Original kinematics Position or Rotate row (#393):
+    /// this edit with one component of one vector replaced. The caller applies
+    /// it to the guide's value as it is when the field commits, so a field
+    /// never writes back a component, or the other vector, from the value the
+    /// row showed at its last render. A component outside 0...2 changes
+    /// nothing.
+    public func setting(_ vector: Vector, _ component: Int, to value: Float) -> SourceStudioIKEdit {
+        guard (0..<3).contains(component) else { return self }
+        var edit = self
+        switch vector {
+        case .position: edit.position[component] = value
+        case .rotation: edit.rotationDegrees[component] = value
+        }
+        return edit
+    }
 }
 
 public struct SourceStudioKinematicState: Codable, Sendable, Equatable {

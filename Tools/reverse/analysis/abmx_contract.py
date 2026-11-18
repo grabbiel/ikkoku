@@ -96,13 +96,22 @@ def convert(payload: bytes, data_kind: str = "card", data_version: int = 2) -> d
 
     modifiers, identities, diagnostics = [], set(), []
     for record in raw:
-        if not isinstance(record, list) or len(record) != 3:
-            raise ValueError("Expected source keys0 BoneName,1 CoordinateModifiers,2 BoneLocation; legacy/incomplete records unsupported")
-        name, coordinates, location = record
+        # Int-keyed MessagePack object (keys 0 BoneName, 1 CoordinateModifiers,
+        # 2 BoneLocation): the original's formatter reads an array of any length,
+        # gives a missing key its default and skips unknown keys (#401). Saves from
+        # before BoneLocation have two fields (location 0, Unknown). The source
+        # constructor fails without a name or coordinates.
+        if not isinstance(record, list) or len(record) < 2:
+            raise ValueError("ABMX records require BoneName and CoordinateModifiers in source order (BoneLocation may follow)")
+        name, coordinates = record[0], record[1]
+        location = record[2] if len(record) >= 3 else 0
         if not isinstance(name, str) or not name or len(name) > MAX_BONE_NAME or "\0" in name:
             raise ValueError("BoneName must be a nonempty source name")
         if type(location) is not int or location < 0:
             raise ValueError("BoneLocation must be a nonnegative integer")
+        if len(record) > 3:
+            diagnostics.append({"code": "skipped-unknown-fields", "severity": "warning", "boneName": name,
+                                "message": f"ABMX record '{name}' has {len(record)} fields; fields after BoneLocation are skipped, as the original's formatter skips unknown keys."})
         if (location, name) in identities:
             raise ValueError(f"Duplicate ABMX location/name: {location}/{name}")
         identities.add((location, name))
@@ -117,10 +126,19 @@ def convert(payload: bytes, data_kind: str = "card", data_version: int = 2) -> d
                 diagnostics.append({"code": "repaired-null-coordinate", "severity": "warning", "boneName": name,
                                     "coordinateIndex": coordinate_index,
                                     "message": f"ABMX repaired null coordinate #{coordinate_index + 1} for '{name}' to identity; the converted document preserves this repair."})
-            if not isinstance(data, list) or len(data) != 4:
-                raise ValueError("Expected source modifier keys0 Scale,1 Length,2 Position,3 Rotation; incomplete data unsupported")
+            # Keys 0 Scale, 1 Length, 2 Position, 3 Rotation. Saves from before
+            # Position and Rotation have two fields; a missing one is Vector3.zero.
+            if not isinstance(data, list):
+                raise ValueError("Expected source modifier keys0 Scale,1 Length,2 Position,3 Rotation")
+            if len(data) < 2:
+                raise ValueError(f"ABMX coordinate entry #{coordinate_index + 1} for '{name}' has {len(data)} field(s). The original would read it with default values (a zero Scale or Length), which is not implemented; no known card uses this layout.")
+            if len(data) > 4:
+                diagnostics.append({"code": "skipped-unknown-fields", "severity": "warning", "boneName": name,
+                                    "coordinateIndex": coordinate_index,
+                                    "message": f"ABMX coordinate #{coordinate_index + 1} for '{name}' has {len(data)} fields; fields after Rotation are skipped, as the original's formatter skips unknown keys."})
             values.append({"scaleModifier": vector(data[0]), "lengthModifier": number(data[1]),
-                           "positionModifier": vector(data[2]), "rotationModifier": vector(data[3])})
+                           "positionModifier": vector(data[2]) if len(data) > 2 else [0.0, 0.0, 0.0],
+                           "rotationModifier": vector(data[3]) if len(data) > 3 else [0.0, 0.0, 0.0]})
         modifiers.append({"boneName": name, "boneLocation": location, "coordinateModifiers": values})
         if location not in (0, 1):
             diagnostics.append({"code": "unsupported-bone-location", "severity": "warning", "boneName": name,
