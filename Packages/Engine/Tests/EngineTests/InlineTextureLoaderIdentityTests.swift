@@ -833,6 +833,71 @@ extension TextureIdentityCases {
     }
 }
 
+/// #358 (run D2), the decode cost probe (opt-in: IKKOKU_DECODE_PAGES_PERF=1;
+/// the JSON also goes to IKKOKU_DECODE_PAGES_PERF_REPORT when set). Times
+/// `decodedPixels` and the release of its pixels per batch, alternating the
+/// routes in each round: a batch of 24 large decodes (1024² and 2048² PNGs
+/// with and without alpha, and JPEGs) in owned pages (the default) and in the
+/// provider's copy (as before), and a batch of 200 decodes of 128² PNGs by
+/// default (the provider's copy, below the threshold) and forced into owned
+/// pages (what the threshold avoids).
+@Test(.enabled(if: ProcessInfo.processInfo.environment["IKKOKU_DECODE_PAGES_PERF"] == "1"))
+func decodeIntoOwnedPagesCostProbe() throws {
+    func png(_ size: Int, alpha: Bool, seed: Int) throws -> InlineTextureLoader.Image {
+        let space = try #require(CGColorSpace(name: CGColorSpace.sRGB))
+        let context = try #require(CGContext(data: nil, width: size, height: size, bitsPerComponent: 8, bytesPerRow: size * 4, space: space,
+                                             bitmapInfo: (alpha ? CGImageAlphaInfo.premultipliedLast : .noneSkipLast).rawValue))
+        for i in 0..<48 {
+            context.setFillColor(red: CGFloat((i + seed) % 7) / 7, green: CGFloat(i % 5) / 5, blue: 0.5, alpha: alpha ? 0.5 : 1)
+            context.fill(CGRect(x: (i * 37) % size, y: (i * 53) % size, width: size / 3, height: size / 5))
+        }
+        let image = try #require(context.makeImage())
+        let data = try #require(TextureIdentityCases.encode(image, as: "public.png"))
+        return try #require(InlineTextureLoader.image(data: data))
+    }
+    var large: [InlineTextureLoader.Image] = []
+    for i in 0..<8 {
+        large.append(try png(i % 2 == 0 ? 2048 : 1024, alpha: true, seed: i))
+        large.append(try png(i % 2 == 0 ? 1024 : 2048, alpha: false, seed: i))
+        let jpegData = try #require(TextureIdentityCases.jpeg(.srgb, width: 1024, height: 1024))
+        large.append(try #require(InlineTextureLoader.image(data: jpegData)))
+    }
+    var small: [InlineTextureLoader.Image] = []
+    for i in 0..<200 { small.append(try png(128, alpha: i % 2 == 0, seed: i)) }
+    func batch(_ images: [InlineTextureLoader.Image], threshold: Int) -> Double {
+        let start = DispatchTime.now().uptimeNanoseconds
+        var check = 0
+        for image in images {
+            autoreleasepool {
+                if let pixels = InlineTextureLoader.decodedPixels(image, threshold: threshold) { check &+= Int(pixels.bytes[pixels.count / 2]) }
+            }
+        }
+        withExtendedLifetime(check) {}
+        return Double(DispatchTime.now().uptimeNanoseconds - start) / 1e6
+    }
+    let rounds = 9
+    var times: [String: [Double]] = [:]
+    let arms: [(String, [InlineTextureLoader.Image], Int)] = [
+        ("large24OwnedPages", large, InlineTextureLoader.ownedPagesThreshold), ("large24ProviderCopy", large, .max),
+        ("small200Default", small, InlineTextureLoader.ownedPagesThreshold), ("small200ForcedOwnedPages", small, 0),
+    ]
+    for arm in arms { _ = batch(arm.1, threshold: arm.2) }   // warm-up
+    for round in 0..<rounds {
+        for pair in [(0, 1), (2, 3)] {
+            let order = round % 2 == 0 ? [pair.0, pair.1] : [pair.1, pair.0]
+            for index in order { times[arms[index].0, default: []].append(batch(arms[index].1, threshold: arms[index].2)) }
+        }
+    }
+    func median(_ values: [Double]) -> Double { let sorted = values.sorted(); return sorted[sorted.count / 2] }
+    var report: [String: Any] = ["rounds": rounds, "order": "ABBA per round, pairs (large owned, large copy) and (small default, small forced owned)"]
+    for (name, values) in times { report[name] = ["medianMs": median(values), "minMs": values.min() ?? 0, "maxMs": values.max() ?? 0] }
+    let data = try JSONSerialization.data(withJSONObject: report, options: [.prettyPrinted, .sortedKeys])
+    print(String(decoding: data, as: UTF8.self))
+    if let path = ProcessInfo.processInfo.environment["IKKOKU_DECODE_PAGES_PERF_REPORT"], !path.isEmpty {
+        try data.write(to: URL(fileURLWithPath: path))
+    }
+}
+
 private extension Optional {
     func orThrow(_ what: String) throws -> Wrapped {
         guard let self else { throw InlineTextureLoader.Failure.decode(what) }

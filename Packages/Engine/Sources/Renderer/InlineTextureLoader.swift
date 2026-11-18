@@ -476,10 +476,11 @@ enum InlineTextureLoader {
     /// HEIF grey image with alpha, which MetalKit cannot load, can come out
     /// differently, so those, smaller decodes, and any format vImage refuses
     /// keep the provider's copy.
-    static func decodedPixels(_ source: Image) -> Pixels? {
+    /// `threshold` replaces `ownedPagesThreshold` (the decode cost probe).
+    static func decodedPixels(_ source: Image, threshold: Int = ownedPagesThreshold) -> Pixels? {
         let image = source.cgImage
         let count = image.bytesPerRow * image.height
-        let owned = count >= ownedPagesThreshold
+        let owned = count >= threshold
         if drawsDecodedPixels(source) {
             guard let space = image.colorSpace,
                   let pixels = owned ? Pixels(mapping: count) : Pixels(allocating: count),
