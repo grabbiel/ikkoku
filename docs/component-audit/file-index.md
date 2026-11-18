@@ -23,7 +23,7 @@ branch was tested or every asset matches the original game. Feature status,
 specific comments and pending tasks are in the linked reports. Shared behavior
 may be discussed in more than one report; one primary owner is listed here.
 
-**1086 files indexed; 1086 assigned; 0 unassigned.**
+**1087 files indexed; 1087 assigned; 0 unassigned.**
 
 Counts include the website and clothes-group additions listed below. Runtime and
 test totals include their specialized role descriptions; this is inventory
@@ -34,7 +34,7 @@ bookkeeping, not a new full source audit.
 | [App / gameplay / plugins](app-gameplay-and-plugins.md) | 110 |
 | [Character / Maker / mods](character-and-mods.md) | 130 |
 | [Studio / IK / animation](studio.md) | 255 |
-| [Renderer / foundation / assets](renderer-and-foundation.md) | 364 |
+| [Renderer / foundation / assets](renderer-and-foundation.md) | 365 |
 | [Toolchain / verification / historical docs](toolchain-and-verification.md) | 217 |
 
 | File role | Files |
@@ -861,6 +861,7 @@ Feature assessment: [renderer-and-foundation.md](renderer-and-foundation.md).
 | [Packages/Engine/Tests/EngineTests/ResourceTextureLoadTimingTests.swift](../../Packages/Engine/Tests/EngineTests/ResourceTextureLoadTimingTests.swift) | Test / validation |
 | [Packages/Engine/Tests/EngineTests/InlineTextureLoaderCorpusTests.swift](../../Packages/Engine/Tests/EngineTests/InlineTextureLoaderCorpusTests.swift) | Test / strict identity with MetalKit for every texture the suite and the app load |
 | [Packages/Engine/Tests/EngineTests/InlineTextureLoaderIdentityTests.swift](../../Packages/Engine/Tests/EngineTests/InlineTextureLoaderIdentityTests.swift) | Test / identity with MetalKit for every image layout, encoded file and decoder fixture; texture-container rejection |
+| [Packages/Engine/Tests/EngineTests/TextureRetirementAtSubmitTests.swift](../../Packages/Engine/Tests/EngineTests/TextureRetirementAtSubmitTests.swift) | Test / R6 texture release at the next submit without a prepared frame, older frames still drawing it, deformation-key order kept (#368) |
 | [Packages/Engine/Tests/EngineTests/ResourceStoreUploadTests.swift](../../Packages/Engine/Tests/EngineTests/ResourceStoreUploadTests.swift) | Test / upload queue registry, completion before handout, call order and many-store saturation |
 | [Packages/Engine/Tests/EngineTests/RendererLimitsTests.swift](../../Packages/Engine/Tests/EngineTests/RendererLimitsTests.swift) | Test / validation |
 | [Packages/Engine/Tests/EngineTests/RigTests.swift](../../Packages/Engine/Tests/EngineTests/RigTests.swift) | Test / validation |
