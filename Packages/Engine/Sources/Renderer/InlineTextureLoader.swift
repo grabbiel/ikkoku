@@ -262,8 +262,11 @@ enum InlineTextureLoader {
     /// mips are generated with the last. One staging buffer the size of a
     /// 2048² RGBA8 image put the load's peak 54 MiB above its start (decoded
     /// pixels 16, staging 16, texture and mips 21.3) against MetalKit's 44.
-    /// malloc keeps a freed decode buffer of that size counted, so releasing
-    /// the pixels earlier does not lower it (`docs/reference/renderer.md`).
+    /// Releasing the pixels before the upload does not lower that peak: a
+    /// decode buffer is in use until its last strip is converted. Large
+    /// decodes are the loader's own pages, unmapped after the load
+    /// (`ownedPagesThreshold`); a provider's copy is a malloc block, which
+    /// malloc keeps counted once freed (`docs/reference/renderer.md`).
     /// 1024² RGBA8 and smaller images stage in one strip.
     static let stagingLimit = 4 << 20
 

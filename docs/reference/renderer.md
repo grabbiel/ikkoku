@@ -2745,6 +2745,58 @@ No load in the app uses JPEG today: the measured lanes load 3,749 PNG
 textures and 91 BC uploads, and no JPEG or HEIC (#288). The change matters
 for user content shipped as JPEG.
 
+### Decode pages the loader owns (#358, 2026-11-17)
+
+`InlineTextureLoader.decodedPixels` puts a decode of 1 MiB or more
+(`ownedPagesThreshold`, a 512² RGBA8 image) into pages it maps for the load
+(`vm_allocate`) and unmaps when the load returns. Smaller decodes keep malloc
+and skip a map and unmap per load.
+
+**Why.** The decoded pixels were a malloc block: the image provider's copy
+(`CGDataProvider.data`) or the JPEG route's draw buffer. malloc serves blocks
+that size from its large allocator and keeps freed ones dirty for reuse
+("Malloc Large (empty)" in `vmmap --summary`), so they stay in the process
+footprint after the load. In the #358 attribution, live malloc was the same
+with and without the texture cache (tiny, small and large within 0.1 MB under
+MallocStackLogging), and the cache's footprint excess at the fifth head was
+these freed blocks. `malloc_zone_pressure_relief(nil, 0)` returned none of
+them in a standalone probe.
+
+**Routes.**
+- **JPEG draw route** (above): draws into the owned pages.
+- **Images ImageIO decoded here** (`Image.decodedHere`, which `image(data:)`
+  sets; every file and data load): `vImageBuffer_InitWithCGImage` reads the
+  image into the owned pages in its own format (`kvImageNoAllocate`). Its
+  bytes equal the provider's copy.
+- **Everything else keeps the provider's copy.** The identity suites caught a
+  difference on the vImage route for the first two:
+  - an image a caller made or copied (`texture(cgImage:)`): a `copy()` of a
+    straight-alpha PNG came out up to 36 levels off (37×23);
+  - the types whose straight alpha the loader premultiplies
+    (`premultiplyingTypes`: the HEIF family and JPEG XL): for HEIC and AVIF
+    grey with alpha (64×64), MetalKit fails to load and vImage decoded;
+  - any image vImage refuses.
+
+`InlineTextureLoaderIdentityTests.decodedPixelsAreMappedPagesWithTheProvidersBytes`
+checks that a JPEG, an opaque PNG and a translucent PNG at 1024² are mapped
+pages (no malloc block) holding the provider's bytes, and that a caller's
+image and a 256² PNG keep malloc. The identity suites (2,016 layouts, 562
+files) pass unchanged.
+
+**Cost.** A standalone probe of 12 PNG and JPEG decodes (512² to 2048²)
+read bytes identical to the provider's copy, in 107.6 ms against 107.0 ms,
+and its footprint after the frees was 8 MB against 48 MB (40 MB of freed
+large blocks). `InlineTextureLoaderIdentityTests.decodeIntoOwnedPagesCostProbe`
+(opt-in, `IKKOKU_DECODE_PAGES_PERF=1`, report path in
+`IKKOKU_DECODE_PAGES_PERF_REPORT`) measures the same in a test build: 24
+large decodes owned against the provider's copy, and 200 decodes of 128²
+with and without the threshold.
+
+**What it does not remove.** In #358's D3 runs (60 Hz, monitor off), freed
+malloc pages from other large blocks remained: at the first two selections
+the cache build's empty malloc pages were still 8–13 MB above the runs
+without the cache, with live malloc equal.
+
 ## Checked math, legacy skeletons and cameras (R4)
 
 The unchecked CoreMath helpers (`normalize`, `simd_quatf.rotation(from:to:)`,
