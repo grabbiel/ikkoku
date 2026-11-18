@@ -72,9 +72,13 @@ corpus of version-2 character cards. Records with fewer than two fields are
 rejected, as the original's constructor rejects them. Coordinate entries with
 fewer than two fields are also rejected: the original would read them with a
 zero `ScaleModifier` or `LengthModifier`, which is not implemented, and no known
-card uses that layout. The missing-key default is inferred from the recovered
-`Vector3` formatter, which follows the same pattern; the generated object
-formatter for these two types is not recovered.
+card uses that layout. The generated object formatter for these two types is not
+in the recovered C#; the recovered `Vector3` formatter follows the same pattern.
+The installed plug-in confirms the defaults: reading a card saved in the
+two-field layout in CharaStudio, ABMX's own reader produced `BoneLocation` 0 and
+zero position and rotation, with scale and length as saved, and the converter
+matches that read exactly. After the load, ABMX resolves location 0 to BodyTop
+for bones it finds in the body.
 
 `CoordinateModifiers` contains one or more `BoneModifierData` arrays. One entry
 is coordinate-independent. Multiple entries are indexed by the current outfit;
