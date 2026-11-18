@@ -502,6 +502,27 @@ invalid rate, as NaN and ±infinity are. At ±3e38 that is 9 body slots and
     at 3e38.
 
 **Not verified yet.** Nothing has been compared with the original player for
-extended cards. Two items are queued for the VM: the DLL's FileVersion
-(read-only), and a bone-by-bone capture of two or three corpus cards with
-extended rates.
+extended cards. One VM phase is queued. It covers the DLL's FileVersion
+(read-only) and a bone-by-bone capture of three corpus characters with extended
+rates.
+
+`Tools/reverse/original_slider_probe.py run` makes the capture in one
+`prlctl exec`, with the `original_wear_probe.py` transport and a fresh private
+player root. It reads the installed `SliderUnlocker.dll`'s hash and version
+resource, then copies the DLL into the root after a hash check. It runs the
+player twice: with the copy (`unlocked`), then without it (`vanilla`).
+
+`fixtures/OriginalSliderProbe.cs` handles each case, which is an uploaded scene
+record plus an object key:
+
+1. It parses the scene with `SceneInfo.Load`.
+2. It builds that one character through `AddObjectFemale.Load` /
+   `AddObjectMale.Load`.
+3. At the end of a settled frame it records:
+   - the parsed and loaded rates;
+   - the Animator floats;
+   - both ShapeInfo objects' source channels and destination bones;
+   - every `cf_`/`cm_` bone's local transform;
+   - the two eye-highlight offsets.
+
+The comparison with `SourceShapeDomain` follows once the capture exists.
