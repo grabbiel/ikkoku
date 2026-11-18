@@ -1130,6 +1130,8 @@ The phase is one `prlctl exec` under the same hygiene as the earlier phases: the
 
 `--dry-run` makes every check and builds `run.ps1` without the VM. `test_original_map_probe.py` covers the subcommand, the dry run, the root guard, the exec limit and one-channel float images. The results land here once the phase has run.
 
+The first run lost every case before its first load. The probe's free-space check used `System.IO.DriveInfo`, which Unity 5.6's Mono does not implement (`NotImplementedException`). The local compile cannot catch that. The guest hygiene held: targets unchanged, root removed, no process left, errno 0/0. The probe now reads free space through `kernel32`'s `GetDiskFreeSpaceEx` and goes on without the check when it cannot. The trace extras, the edge pick and the deferred passes now fail on their own, after the lit passes and masks are written.
+
 ### The slice-5 export
 
 All 42 maps were exported again with this converter, from the same bundles (checked by SHA-256) and with the shared fixture's settings: block-only images and the player's built-in resources. The export is in `.local/sta11d-slice5/exports/maps/`, with its catalog. The scripts and logs are in `.local/sta11d-slice5/`.

@@ -665,8 +665,8 @@ public sealed class OriginalMapProbe:BaseUnityPlugin {
     }
     // The sun mode: one uploaded record read back and measured, then the zoomed view (see the header).
     IEnumerator LoadAndSun(string scene,string label) {
-        long free=new DriveInfo(Path.GetPathRoot(folder)).AvailableFreeSpace;
-        if(free<MinimumFreeBytes)throw new Exception(label+": "+free+" bytes free on the guest drive, below "+MinimumFreeBytes);
+        string freeError;long free=FreeBytes(folder,out freeError);
+        if(free>=0&&free<MinimumFreeBytes)throw new Exception(label+": "+free+" bytes free on the guest drive, below "+MinimumFreeBytes);
         studio.InitScene(false);
         for(int i=0;i<3;i++)yield return null;
         var done=new bool[1];int frames=0;float start=Time.realtimeSinceStartup;
@@ -677,9 +677,10 @@ public sealed class OriginalMapProbe:BaseUnityPlugin {
         for(int i=0;i<SettleFrames;i++)yield return null;
         yield return new WaitForEndOfFrame();
         var record=K("label",label,"mapNo",mapNo,"scene",Path.GetFileName(scene),"sceneSHA256",Sha256File(scene),"loadFrames",frames,"loadSeconds",seconds,
-            "freeBytes",free,"settled",MapRecord(),"objects",studio.dicObjectCtrl.Count,"loadedCameraData",CameraData(studio.cameraCtrl.Export()),
-            "vanishHidden",VanishRecord()["hiddenRenderers"],"shadowSettings",ShadowSettings(),"materials",SunMaterials(),
-            "renderSettings",RenderSettingsRecord(),"sunLightInfo",SunRecord());
+            "freeBytes",free>=0?(object)free:null,"freeBytesError",freeError,"settled",MapRecord(),"objects",studio.dicObjectCtrl.Count,
+            "loadedCameraData",CameraData(studio.cameraCtrl.Export()),"vanishHidden",Safe(()=>VanishRecord()["hiddenRenderers"]),
+            "shadowSettings",Safe(()=>ShadowSettings()),"materials",Safe(()=>SunMaterials()),
+            "renderSettings",Safe(()=>RenderSettingsRecord()),"sunLightInfo",Safe(()=>SunRecord()));
         cases[label]=record;
         int[] edge;
         record["full"]=SunPasses("sun-"+label,true,out edge);
@@ -706,7 +707,7 @@ public sealed class OriginalMapProbe:BaseUnityPlugin {
         var pose=K("scene",Path.GetFileName(zoomScene),"sceneSHA256",Sha256File(zoomScene),"edgePixel",edge,"direction",V(direction),
             "requestedPosition",V(position),"requestedCameraData",CameraData(view),"savedCameraData",CameraData(ctrl.Export()),
             "transBase",basis==null?null:TPath(basis),"position",V(main.transform.position),"positionError",(main.transform.position-position).magnitude,
-            "forwardErrorDegrees",Vector3.Angle(main.transform.forward,direction),"fieldOfView",main.fieldOfView,"vanishHidden",VanishRecord()["hiddenRenderers"]);
+            "forwardErrorDegrees",Vector3.Angle(main.transform.forward,direction),"fieldOfView",main.fieldOfView,"vanishHidden",Safe(()=>VanishRecord()["hiddenRenderers"]));
         int[] unused;
         var zoom=SunPasses("sun-"+label+"-zoom",false,out unused);
         zoom["written"]=true;zoom["pose"]=pose;
@@ -751,7 +752,7 @@ public sealed class OriginalMapProbe:BaseUnityPlugin {
             RenderAlone(cam,hdr);var hard=ReadFloats(maskTarget);sun.shadows=shadows;
             Save(Channel0(hard),stem+"-mask-hard.r.f32",images);
             sun.RemoveCommandBuffer(UR.LightEvent.AfterScreenspaceMask,maskCopy);maskAttached=false;
-            record["mask"]=K("soft",MaskStats(soft),"hard",MaskStats(hard),"sentinel",-1,
+            record["mask"]=K("soft",Safe(()=>MaskStats(soft)),"hard",Safe(()=>MaskStats(hard)),"sentinel",-1,
                 "copy","CommandBuffer.Blit(BuiltinRenderTextureType.CurrentActive) on the sun at LightEvent.AfterScreenspaceMask");
             float[] noshadow=null; // the full frame only: the zoom's visibility is its mask
             if(full){sun.shadows=LightShadows.None;noshadow=RGB(RenderAlone(cam,hdr));sun.shadows=shadows;Save(noshadow,stem+"-noshadow.f32",images);}
@@ -759,8 +760,10 @@ public sealed class OriginalMapProbe:BaseUnityPlugin {
             Save(nosun,stem+"-nosun.f32",images);
             if(full) {
                 var pick=new Dictionary<string,object>();
-                edge=EdgePick(Channel0(soft),noshadow,nosun,sun.shadowStrength,pick);
+                try{edge=EdgePick(Channel0(soft),noshadow,nosun,sun.shadowStrength,pick);}catch(Exception e){edge=null;pick["error"]=e.ToString();}
                 record["edge"]=pick;
+            }
+            if(full)try{
                 normalsTarget=Target(RenderTextureFormat.ARGBFloat,RenderTextureReadWrite.Linear,0);
                 specularTarget=Target(RenderTextureFormat.ARGBFloat,RenderTextureReadWrite.Linear,0);
                 gbufferCopy=new UR.CommandBuffer();gbufferCopy.name="IkkokuGBuffer";
@@ -780,6 +783,13 @@ public sealed class OriginalMapProbe:BaseUnityPlugin {
                 record["deferred"]=K("actualRenderingPath",deferredPath,"normals",GBufferStats(normals),"normalsFlat",GBufferStats(flatNormals),
                     "specular",GBufferStats(specular),"copy","CommandBuffer.Blit(GBuffer2 and GBuffer1) on the probe camera at CameraEvent.AfterGBuffer",
                     "flatMaterials",flat,"flatLitMaximumDifference",MaxDifference(lit,litFlat));
+            } catch(Exception e) {
+                // The lit passes and masks are already written: a deferred failure costs only its own images.
+                record["deferred"]=K("error",e.ToString());
+                if(gbufferAttached){cam.RemoveCommandBuffer(UR.CameraEvent.AfterGBuffer,gbufferCopy);gbufferAttached=false;}
+                cam.renderingPath=RenderingPath.Forward;
+                foreach(var pair in swapped)if(pair.Key!=null)pair.Key.sharedMaterials=pair.Value;
+                swapped.Clear();
             }
             record["images"]=images;
             return record;
@@ -840,6 +850,19 @@ public sealed class OriginalMapProbe:BaseUnityPlugin {
         return new[]{bx,by};
     }
     static bool Valid(float v){return v>=0f&&v<=1.0001f;}
+    // A trace extra's value, or its error: a record field never costs a case.
+    static object Safe(Func<object> read){try{return read();}catch(Exception e){return "error: "+e.Message;}}
+    [System.Runtime.InteropServices.DllImport("kernel32.dll",CharSet=System.Runtime.InteropServices.CharSet.Unicode,SetLastError=true)]
+    static extern bool GetDiskFreeSpaceEx(string directory,out ulong available,out ulong total,out ulong free);
+    // Free bytes for the caller on `folder`'s drive through kernel32 (Unity 5.6's Mono throws NotImplementedException
+    // for System.IO.DriveInfo); -1 with the reason when it cannot be read.
+    static long FreeBytes(string folder,out string error) {
+        error=null;
+        try{ulong available,total,free;if(GetDiskFreeSpaceEx(folder,out available,out total,out free))return (long)available;
+            error="GetDiskFreeSpaceEx failed, error "+System.Runtime.InteropServices.Marshal.GetLastWin32Error();}
+        catch(Exception e){error=e.GetType().Name+": "+e.Message;}
+        return -1;
+    }
     // Copies of every map material with a normal map: _NORMALMAP off, _BumpMap and _DetailNormalMap cleared (the shader's
     // flat default), swapped onto the map renderers; `swapped` keeps the originals for the caller to restore.
     List<object> FlatNormals(Dictionary<Renderer,Material[]> swapped,Dictionary<Material,Material> copies) {
