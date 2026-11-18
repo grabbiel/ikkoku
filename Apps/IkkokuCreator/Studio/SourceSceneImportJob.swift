@@ -20,6 +20,9 @@ import Studio
 ///   characters' second halves on the Studio's build queue, the items on the
 ///   main thread (`AssetLibrary` is main-thread only).
 ///
+/// A hidden character outside a route is planned but not built: it has a
+/// reference and no build (`builds`), and builds when shown or selected.
+///
 /// Either way, every mesh is registered in the same order as the synchronous
 /// import, the document, names and diagnostics come from the same code, and
 /// nothing reaches the model before the commit.
@@ -36,6 +39,16 @@ final class SourceSceneImportJob {
     let itemNames: [String: String]
     /// Every character record in walk order, with the reference it gets.
     let references: [SourceStudioCharacterReference]
+    /// Per character record in walk order: its index in the batch, or nil
+    /// for a hidden character the import leaves unbuilt.
+    let builds: [Int?]
+    /// How many characters the batch builds.
+    let buildCount: Int
+    /// The card checks of the characters the batch does not build, started
+    /// here on a worker (`SourceStudioCharacterPreview.CardCheck`), with
+    /// their character indices.
+    private let hiddenCardCheck: SourceStudioCharacterPreview.CardCheck
+    private let hiddenCardIndices: [Int]
     /// Every item record the walk loads, in walk order.
     let itemRecords: [KoikatsuItemRecord]
     /// Characters and items interleaved in walk order.
@@ -54,15 +67,20 @@ final class SourceSceneImportJob {
          imported: StudioDocument, diagnostics: [String], sceneLightOverride: MainLight?,
          animationCatalog: SourceStudioAnimationCatalog?, animationCatalogError: String?,
          itemResolver: KoikatsuAssetResolver?, itemNames: [String: String],
-         references: [SourceStudioCharacterReference], itemRecords: [KoikatsuItemRecord],
+         references: [SourceStudioCharacterReference], builds: [Int?],
+         hiddenCards: [(index: Int, record: KoikatsuCharacterRecord)], itemRecords: [KoikatsuItemRecord],
          steps: [SourceStudioCharacterBatch.Step], batch: SourceStudioCharacterBatch) {
         self.sceneURL = sceneURL; self.rigURL = rigURL; self.boneCatalogURL = boneCatalogURL; self.hash = hash
         self.source = source; self.imported = imported; self.diagnostics = diagnostics
         self.sceneLightOverride = sceneLightOverride
         self.animationCatalog = animationCatalog; self.animationCatalogError = animationCatalogError
         self.itemResolver = itemResolver; self.itemNames = itemNames
-        self.references = references; self.itemRecords = itemRecords; self.steps = steps; self.batch = batch
-        characters = Array(repeating: nil, count: references.count)
+        self.references = references; self.builds = builds; self.itemRecords = itemRecords; self.steps = steps; self.batch = batch
+        let buildCount = builds.reduce(0) { count, build in build == nil ? count : count + 1 }
+        self.buildCount = buildCount
+        hiddenCardIndices = hiddenCards.map(\.index)
+        hiddenCardCheck = SourceStudioCharacterPreview.CardCheck(records: hiddenCards.map(\.record))
+        characters = Array(repeating: nil, count: buildCount)
         items = Array(repeating: nil, count: itemRecords.count)
     }
 
@@ -74,8 +92,17 @@ final class SourceSceneImportJob {
         characters[delivery.index] = delivery.result
     }
 
-    /// Character `index`: the build the queue delivered, or its second half
-    /// now, on this thread.
+    /// The unbuilt characters whose card cannot convert, by character
+    /// index: the error their build would report first
+    /// (`SourceStudioCharacterPreview.validateCard`). Waits for the check.
+    func hiddenCardProblems() -> [Int: String] {
+        var problems: [Int: String] = [:]
+        for (index, problem) in zip(hiddenCardIndices, hiddenCardCheck.problems()) { problems[index] = problem }
+        return problems
+    }
+
+    /// Built character `index` (the batch's order, `builds`): the build the
+    /// queue delivered, or its second half now, on this thread.
     func character(_ index: Int) throws -> SourceStudioCharacterPreview {
         if let result = characters[index] { return try result.get() }
         let result = Result { try batch.build(index) }

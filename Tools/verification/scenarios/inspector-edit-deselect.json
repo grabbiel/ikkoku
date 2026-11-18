@@ -26,7 +26,7 @@
         "op": "assert",
         "key": 0,
         "name": "Source character 0 X",
-        "undoCount": 3,
+        "undoCount": 2,
         "editing": true
       },
       {
@@ -36,7 +36,7 @@
         "op": "assert",
         "key": 0,
         "name": "Source character 0 X",
-        "undoCount": 3,
+        "undoCount": 2,
         "editing": false,
         "inspectorView": "none",
         "axAbsent": [
@@ -55,7 +55,7 @@
         "op": "assert",
         "key": 0,
         "name": "Source character 0 X",
-        "undoCount": 3
+        "undoCount": 2
       },
       {
         "op": "select",
@@ -65,7 +65,7 @@
         "op": "assert",
         "key": 0,
         "name": "Source character 0 X",
-        "undoCount": 3,
+        "undoCount": 2,
         "inspectorView": "ObjectInspector"
       },
       {
@@ -81,7 +81,7 @@
         "op": "assert",
         "key": 0,
         "positionX": 1.5,
-        "undoCount": 5,
+        "undoCount": 4,
         "editing": true
       },
       {
@@ -91,7 +91,7 @@
         "op": "assert",
         "key": 0,
         "positionX": 1.5,
-        "undoCount": 5,
+        "undoCount": 4,
         "editing": false,
         "inspectorView": "none"
       },
@@ -103,7 +103,7 @@
         "op": "assert",
         "key": 0,
         "positionX": 1.5,
-        "undoCount": 5
+        "undoCount": 4
       },
       {
         "op": "select",
@@ -123,7 +123,7 @@
         "key": 0,
         "editing": true,
         "positionX": 1.23456,
-        "undoCount": 7
+        "undoCount": 5
       },
       {
         "op": "deselect"
@@ -134,7 +134,7 @@
         "editing": false,
         "inspectorView": "none",
         "positionX": 1.23456,
-        "undoCount": 7
+        "undoCount": 5
       },
       {
         "op": "select",
@@ -158,7 +158,7 @@
         "exists": false,
         "editing": false,
         "inspectorView": "none",
-        "undoCount": 10
+        "undoCount": 7
       },
       {
         "op": "type",
@@ -171,7 +171,7 @@
         "op": "assert",
         "key": 963,
         "name": "Source character 963 Z",
-        "undoCount": 9,
+        "undoCount": 6,
         "redoCount": 1
       },
       {
@@ -181,7 +181,7 @@
         "op": "assert",
         "key": 963,
         "name": "Source character 963",
-        "undoCount": 8,
+        "undoCount": 5,
         "redoCount": 2
       },
       {
@@ -195,8 +195,8 @@
         "op": "assert",
         "key": 0,
         "name": "Source character 0 X",
-        "positionX": 1.23456,
-        "undoCount": 7,
+        "positionX": 1.5,
+        "undoCount": 4,
         "redoCount": 3
       },
       {
@@ -206,8 +206,8 @@
         "op": "assert",
         "key": 0,
         "name": "Source character 0 X",
-        "positionX": 1.5,
-        "undoCount": 6,
+        "positionX": 0.139,
+        "undoCount": 3,
         "redoCount": 4
       },
       {
@@ -217,8 +217,8 @@
         "op": "assert",
         "key": 0,
         "name": "Source character 0 X",
-        "positionX": 1.5,
-        "undoCount": 5,
+        "positionX": 0.13868962,
+        "undoCount": 2,
         "redoCount": 5
       }
     ]

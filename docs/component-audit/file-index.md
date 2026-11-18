@@ -14,7 +14,7 @@ the ST-T07 eye look reference and solver-port files, the ST-T07s eye look
 Studio preview runtime files, the ST-T07u iris rendering files and the ST-T04
 studio item shader contract and record color files and the ST-T08 first-slice
 original motion capture/replay files. The 2026-10-23 ST-T08e skirt slice updates runtime, exporter, fixture, test and reference files and adds its paired
-Studio save/load scenarios; it does not represent a new code audit. The 2026-10-25 ST-T03i plug-in data slice adds its rule, test, rule-parity, survey and original-player probe files. The 2026-10-26 texture-loading slice (the parallel-test pool deadlock) adds the in-line texture loader, its identity, corpus and upload tests, and 19 synthetic decoder fixtures. The 2026-10-26 ST-T05a legacy-scene slice adds its reader, test, timing, original-player probe and scenario files. The 2026-11-01 #321 slice adds the deep-scene stack test. The 2026-11-02 ST-T04 catalog slice adds the item catalog generator and its synthetic test. It lists every present Git-visible
+Studio save/load scenarios; it does not represent a new code audit. The 2026-10-25 ST-T03i plug-in data slice adds its rule, test, rule-parity, survey and original-player probe files. The 2026-10-26 texture-loading slice (the parallel-test pool deadlock) adds the in-line texture loader, its identity, corpus and upload tests, and 19 synthetic decoder fixtures. The 2026-10-26 ST-T05a legacy-scene slice adds its reader, test, timing, original-player probe and scenario files. The 2026-11-01 #321 slice adds the deep-scene stack test. The 2026-11-02 ST-T04 catalog slice adds the item catalog generator and its synthetic test. The 2026-11-18 #394 slice adds the stable dictionary encoding and its test. The 2026-11-18 #391 slice adds the source Euler commit test. The 2026-11-18 frame-preparation slice adds the encoder state record, the draw-order test and the encoder state test. It lists every present Git-visible
 tracked/untracked non-ignored repository file outside
 `docs/component-audit/`. It excludes private `.local/`, dependency/build caches
 and ignored intermediate assets. Binary assets are inventoried, not reviewed as
@@ -23,7 +23,7 @@ branch was tested or every asset matches the original game. Feature status,
 specific comments and pending tasks are in the linked reports. Shared behavior
 may be discussed in more than one report; one primary owner is listed here.
 
-**1087 files indexed; 1087 assigned; 0 unassigned.**
+**1103 files indexed; 1103 assigned; 0 unassigned.**
 
 Counts include the website and clothes-group additions listed below. Runtime and
 test totals include their specialized role descriptions; this is inventory
@@ -32,21 +32,21 @@ bookkeeping, not a new full source audit.
 | Primary report | Files |
 | --- | ---: |
 | [App / gameplay / plugins](app-gameplay-and-plugins.md) | 110 |
-| [Character / Maker / mods](character-and-mods.md) | 130 |
-| [Studio / IK / animation](studio.md) | 256 |
-| [Renderer / foundation / assets](renderer-and-foundation.md) | 364 |
-| [Toolchain / verification / historical docs](toolchain-and-verification.md) | 217 |
+| [Character / Maker / mods](character-and-mods.md) | 132 |
+| [Studio / IK / animation](studio.md) | 262 |
+| [Renderer / foundation / assets](renderer-and-foundation.md) | 368 |
+| [Toolchain / verification / historical docs](toolchain-and-verification.md) | 221 |
 
 | File role | Files |
 | --- | ---: |
 | App resource metadata / icon | 16 |
 | Build / repository configuration | 9 |
-| Conversion / recovery / verification tool | 252 |
+| Conversion / recovery / verification tool | 256 |
 | Documentation / historical evidence | 65 |
 | Generated asset / catalog / fixture | 205 |
 | Reference host / controlled fixture | 37 |
-| Runtime / shared shader declaration | 234 |
-| Test / validation | 230 |
+| Runtime / shared shader declaration | 239 |
+| Test / validation | 236 |
 | Public synthetic body/face input fixture | 1 |
 
 ## App / gameplay / plugins
@@ -229,6 +229,7 @@ Feature assessment: [character-and-mods.md](character-and-mods.md).
 | [Packages/Engine/Sources/Character/SourceShapePoseBaseline.swift](../../Packages/Engine/Sources/Character/SourceShapePoseBaseline.swift) | Runtime / shared shader declaration |
 | [Packages/Engine/Sources/Character/SourceStudioHandPatterns.swift](../../Packages/Engine/Sources/Character/SourceStudioHandPatterns.swift) | Runtime / shared shader declaration |
 | [Packages/Engine/Sources/Character/SourceStudioHandPose.swift](../../Packages/Engine/Sources/Character/SourceStudioHandPose.swift) | Runtime / shared shader declaration |
+| [Packages/Engine/Sources/Character/StableDictionaryEncoding.swift](../../Packages/Engine/Sources/Character/StableDictionaryEncoding.swift) | Runtime / shared shader declaration |
 | [Packages/Engine/Tests/EngineTests/CharacterTests.swift](../../Packages/Engine/Tests/EngineTests/CharacterTests.swift) | Test / validation |
 | [Packages/Engine/Tests/EngineTests/SourceAnimationTests.swift](../../Packages/Engine/Tests/EngineTests/SourceAnimationTests.swift) | Test / validation |
 | [Packages/Engine/Tests/EngineTests/SourceAppearanceSafetyTests.swift](../../Packages/Engine/Tests/EngineTests/SourceAppearanceSafetyTests.swift) | Test / validation |
@@ -261,6 +262,7 @@ Feature assessment: [character-and-mods.md](character-and-mods.md).
 | [Packages/Engine/Tests/EngineTests/SourceShapeReuseBoundaryTests.swift](../../Packages/Engine/Tests/EngineTests/SourceShapeReuseBoundaryTests.swift) | Test / validation |
 | [Packages/Engine/Tests/EngineTests/SourceStudioHandPatternsTests.swift](../../Packages/Engine/Tests/EngineTests/SourceStudioHandPatternsTests.swift) | Test / validation |
 | [Packages/Engine/Tests/EngineTests/SourceStudioHandPoseTests.swift](../../Packages/Engine/Tests/EngineTests/SourceStudioHandPoseTests.swift) | Test / validation |
+| [Packages/Engine/Tests/EngineTests/StableDictionaryEncodingTests.swift](../../Packages/Engine/Tests/EngineTests/StableDictionaryEncodingTests.swift) | Test / validation |
 | [Tools/mods/library.py](../../Tools/mods/library.py) | Conversion / recovery / verification tool |
 | [Tools/mods/test_library.py](../../Tools/mods/test_library.py) | Test / validation |
 | [Tools/mods/test_zipmod.py](../../Tools/mods/test_zipmod.py) | Test / validation |
@@ -321,6 +323,7 @@ Feature assessment: [studio.md](studio.md).
 | [Apps/IkkokuCreator/Studio/SourceExpressionInspector.swift](../../Apps/IkkokuCreator/Studio/SourceExpressionInspector.swift) | Runtime / shared shader declaration |
 | [Apps/IkkokuCreator/Studio/SourceSceneImportJob.swift](../../Apps/IkkokuCreator/Studio/SourceSceneImportJob.swift) | Runtime / shared shader declaration |
 | [Apps/IkkokuCreator/Studio/StudioInspectorMounting.swift](../../Apps/IkkokuCreator/Studio/StudioInspectorMounting.swift) | Runtime / shared shader declaration |
+| [Apps/IkkokuCreator/Studio/StudioParentPopUp.swift](../../Apps/IkkokuCreator/Studio/StudioParentPopUp.swift) | Runtime / shared shader declaration |
 | [Apps/IkkokuCreator/Studio/StudioPanelState.swift](../../Apps/IkkokuCreator/Studio/StudioPanelState.swift) | Runtime / shared shader declaration |
 | [Apps/IkkokuCreator/Studio/ObjectInspectorSections.swift](../../Apps/IkkokuCreator/Studio/ObjectInspectorSections.swift) | Runtime / shared shader declaration |
 | [Apps/IkkokuCreator/Studio/StudioView.swift](../../Apps/IkkokuCreator/Studio/StudioView.swift) | Runtime / shared shader declaration |
@@ -387,6 +390,8 @@ Feature assessment: [studio.md](studio.md).
 | [Packages/Engine/Sources/Studio/SourceStudioWear.swift](../../Packages/Engine/Sources/Studio/SourceStudioWear.swift) | Runtime / shared shader declaration |
 | [Packages/Engine/Sources/Studio/SourceStudioWorldTransform.swift](../../Packages/Engine/Sources/Studio/SourceStudioWorldTransform.swift) | Runtime / shared shader declaration |
 | [Packages/Engine/Sources/Studio/StudioDocument.swift](../../Packages/Engine/Sources/Studio/StudioDocument.swift) | Runtime / shared shader declaration |
+| [Packages/Engine/Sources/Studio/StudioUndoSteps.swift](../../Packages/Engine/Sources/Studio/StudioUndoSteps.swift) | Runtime / shared shader declaration |
+| [Packages/Engine/Sources/Studio/StudioWalkMemo.swift](../../Packages/Engine/Sources/Studio/StudioWalkMemo.swift) | Runtime / shared shader declaration |
 | [Packages/Engine/Sources/Studio/StudioStatusText.swift](../../Packages/Engine/Sources/Studio/StudioStatusText.swift) | Runtime / shared shader declaration |
 | [Packages/Engine/Sources/Studio/Timeline.swift](../../Packages/Engine/Sources/Studio/Timeline.swift) | Runtime / shared shader declaration |
 | [Packages/Engine/Tests/EngineTests/Fixtures/camera-object-reference.json](../../Packages/Engine/Tests/EngineTests/Fixtures/camera-object-reference.json) | Reference host / controlled fixture |
@@ -407,6 +412,7 @@ Feature assessment: [studio.md](studio.md).
 | [Packages/Engine/Tests/EngineTests/MapLightingTestBindings.swift](../../Packages/Engine/Tests/EngineTests/MapLightingTestBindings.swift) | Test / validation |
 | [Packages/Engine/Tests/EngineTests/SourceDynamicBoneParityTests.swift](../../Packages/Engine/Tests/EngineTests/SourceDynamicBoneParityTests.swift) | Test / validation |
 | [Packages/Engine/Tests/EngineTests/SourceDynamicBoneTests.swift](../../Packages/Engine/Tests/EngineTests/SourceDynamicBoneTests.swift) | Test / validation |
+| [Packages/Engine/Tests/EngineTests/SourceEulerCommitTests.swift](../../Packages/Engine/Tests/EngineTests/SourceEulerCommitTests.swift) | Test / validation |
 | [Packages/Engine/Tests/EngineTests/SourceFullBodyBipedTests.swift](../../Packages/Engine/Tests/EngineTests/SourceFullBodyBipedTests.swift) | Test / validation |
 | [Packages/Engine/Tests/EngineTests/SourceOriginalAnimatorTests.swift](../../Packages/Engine/Tests/EngineTests/SourceOriginalAnimatorTests.swift) | Test / validation |
 | [Packages/Engine/Tests/EngineTests/SourceSceneDeepStackTests.swift](../../Packages/Engine/Tests/EngineTests/SourceSceneDeepStackTests.swift) | Test / validation |
@@ -463,6 +469,8 @@ Feature assessment: [studio.md](studio.md).
 | [Packages/Engine/Tests/EngineTests/SourceStudioWorldTransformTests.swift](../../Packages/Engine/Tests/EngineTests/SourceStudioWorldTransformTests.swift) | Test / validation |
 | [Packages/Engine/Tests/EngineTests/SourceTrigonometricIKTests.swift](../../Packages/Engine/Tests/EngineTests/SourceTrigonometricIKTests.swift) | Test / validation |
 | [Packages/Engine/Tests/EngineTests/StudioHierarchyTests.swift](../../Packages/Engine/Tests/EngineTests/StudioHierarchyTests.swift) | Test / validation |
+| [Packages/Engine/Tests/EngineTests/StudioUndoStepsTests.swift](../../Packages/Engine/Tests/EngineTests/StudioUndoStepsTests.swift) | Test / validation |
+| [Packages/Engine/Tests/EngineTests/StudioWalkMemoTests.swift](../../Packages/Engine/Tests/EngineTests/StudioWalkMemoTests.swift) | Test / validation |
 | [Packages/Engine/Tests/EngineTests/StudioStatusTextTests.swift](../../Packages/Engine/Tests/EngineTests/StudioStatusTextTests.swift) | Test / validation |
 | [Tools/reverse/analysis/animation_playback_contract.py](../../Tools/reverse/analysis/animation_playback_contract.py) | Conversion / recovery / verification tool |
 | [Tools/reverse/analysis/chara_light_mapping.py](../../Tools/reverse/analysis/chara_light_mapping.py) | Conversion / recovery / verification tool |
@@ -791,6 +799,7 @@ Feature assessment: [renderer-and-foundation.md](renderer-and-foundation.md).
 | [Packages/Engine/Sources/GPU/GPUContext.swift](../../Packages/Engine/Sources/GPU/GPUContext.swift) | Runtime / shared shader declaration |
 | [Packages/Engine/Sources/Renderer/DeformContent.swift](../../Packages/Engine/Sources/Renderer/DeformContent.swift) | Runtime / shared shader declaration |
 | [Packages/Engine/Sources/Renderer/DisplayLinkRatePolicy.swift](../../Packages/Engine/Sources/Renderer/DisplayLinkRatePolicy.swift) | Runtime / shared shader declaration |
+| [Packages/Engine/Sources/Renderer/EncoderState.swift](../../Packages/Engine/Sources/Renderer/EncoderState.swift) | Runtime / shared shader declaration |
 | [Packages/Engine/Sources/Renderer/InlineTextureLoadObservations.swift](../../Packages/Engine/Sources/Renderer/InlineTextureLoadObservations.swift) | Runtime / opt-in per-stage load times for the in-line texture loader (tests and measurements) |
 | [Packages/Engine/Sources/Renderer/InlineTextureLoader.swift](../../Packages/Engine/Sources/Renderer/InlineTextureLoader.swift) | Runtime / in-line texture decode, staging and upload with MetalKit-identical formats, mips and texels |
 | [Packages/Engine/Sources/Renderer/LatestPickQueue.swift](../../Packages/Engine/Sources/Renderer/LatestPickQueue.swift) | Runtime / shared shader declaration |
@@ -862,6 +871,9 @@ Feature assessment: [renderer-and-foundation.md](renderer-and-foundation.md).
 | [Packages/Engine/Tests/EngineTests/ResourceTextureLoadTimingTests.swift](../../Packages/Engine/Tests/EngineTests/ResourceTextureLoadTimingTests.swift) | Test / validation |
 | [Packages/Engine/Tests/EngineTests/InlineTextureLoaderCorpusTests.swift](../../Packages/Engine/Tests/EngineTests/InlineTextureLoaderCorpusTests.swift) | Test / strict identity with MetalKit for every texture the suite and the app load |
 | [Packages/Engine/Tests/EngineTests/InlineTextureLoaderIdentityTests.swift](../../Packages/Engine/Tests/EngineTests/InlineTextureLoaderIdentityTests.swift) | Test / identity with MetalKit for every image layout, encoded file and decoder fixture; texture-container rejection |
+| [Packages/Engine/Tests/EngineTests/FramePreparationOrderTests.swift](../../Packages/Engine/Tests/EngineTests/FramePreparationOrderTests.swift) | Test / validation |
+| [Packages/Engine/Tests/EngineTests/EncoderStateTests.swift](../../Packages/Engine/Tests/EngineTests/EncoderStateTests.swift) | Test / validation |
+| [Packages/Engine/Tests/EngineTests/TextureRetirementAtSubmitTests.swift](../../Packages/Engine/Tests/EngineTests/TextureRetirementAtSubmitTests.swift) | Test / R6 texture release at the next submit without a prepared frame, older frames still drawing it, deformation-key order kept (#368) |
 | [Packages/Engine/Tests/EngineTests/ResourceStoreUploadTests.swift](../../Packages/Engine/Tests/EngineTests/ResourceStoreUploadTests.swift) | Test / upload queue registry, completion before handout, call order and many-store saturation |
 | [Packages/Engine/Tests/EngineTests/RendererLimitsTests.swift](../../Packages/Engine/Tests/EngineTests/RendererLimitsTests.swift) | Test / validation |
 | [Packages/Engine/Tests/EngineTests/RigTests.swift](../../Packages/Engine/Tests/EngineTests/RigTests.swift) | Test / validation |
@@ -1026,11 +1038,15 @@ Feature assessment: [toolchain-and-verification.md](toolchain-and-verification.m
 | [Tools/verification/scenarios/gameplay-controlled-event.json](../../Tools/verification/scenarios/gameplay-controlled-event.json) | Conversion / recovery / verification tool |
 | [Tools/verification/scenarios/hand-patterns.json](../../Tools/verification/scenarios/hand-patterns.json) | Conversion / recovery / verification tool |
 | [Tools/verification/scenarios/hand-patterns-kept.json](../../Tools/verification/scenarios/hand-patterns-kept.json) | Conversion / recovery / verification tool |
+| [Tools/verification/scenarios/hidden-animation-clock.json](../../Tools/verification/scenarios/hidden-animation-clock.json) | Conversion / recovery / verification tool |
+| [Tools/verification/scenarios/hidden-attachment-status.json](../../Tools/verification/scenarios/hidden-attachment-status.json) | Conversion / recovery / verification tool |
+| [Tools/verification/scenarios/hidden-character-build.json](../../Tools/verification/scenarios/hidden-character-build.json) | Conversion / recovery / verification tool |
 | [Tools/verification/scenarios/inspector-clothes-fit.json](../../Tools/verification/scenarios/inspector-clothes-fit.json) | Conversion / recovery / verification tool |
 | [Tools/verification/scenarios/inspector-clothes-fit-native.json](../../Tools/verification/scenarios/inspector-clothes-fit-native.json) | Conversion / recovery / verification tool |
 | [Tools/verification/scenarios/inspector-edit-deselect.json](../../Tools/verification/scenarios/inspector-edit-deselect.json) | Conversion / recovery / verification tool |
 | [Tools/verification/scenarios/inspector-hidden-route.json](../../Tools/verification/scenarios/inspector-hidden-route.json) | Conversion / recovery / verification tool |
 | [Tools/verification/scenarios/inspector-hide-cycles.json](../../Tools/verification/scenarios/inspector-hide-cycles.json) | Conversion / recovery / verification tool |
+| [Tools/verification/scenarios/inspector-parent-popup.json](../../Tools/verification/scenarios/inspector-parent-popup.json) | Conversion / recovery / verification tool |
 | [Tools/verification/scenarios/inspector-kept-route.json](../../Tools/verification/scenarios/inspector-kept-route.json) | Conversion / recovery / verification tool |
 | [Tools/verification/scenarios/inspector-kept-views.json](../../Tools/verification/scenarios/inspector-kept-views.json) | Conversion / recovery / verification tool |
 | [Tools/verification/scenarios/item-props.json](../../Tools/verification/scenarios/item-props.json) | Conversion / recovery / verification tool |
