@@ -23,7 +23,7 @@ branch was tested or every asset matches the original game. Feature status,
 specific comments and pending tasks are in the linked reports. Shared behavior
 may be discussed in more than one report; one primary owner is listed here.
 
-**1101 files indexed; 1101 assigned; 0 unassigned.**
+**1102 files indexed; 1102 assigned; 0 unassigned.**
 
 Counts include the website and clothes-group additions listed below. Runtime and
 test totals include their specialized role descriptions; this is inventory
@@ -33,7 +33,7 @@ bookkeeping, not a new full source audit.
 | --- | ---: |
 | [App / gameplay / plugins](app-gameplay-and-plugins.md) | 110 |
 | [Character / Maker / mods](character-and-mods.md) | 132 |
-| [Studio / IK / animation](studio.md) | 260 |
+| [Studio / IK / animation](studio.md) | 261 |
 | [Renderer / foundation / assets](renderer-and-foundation.md) | 368 |
 | [Toolchain / verification / historical docs](toolchain-and-verification.md) | 221 |
 
@@ -46,7 +46,7 @@ bookkeeping, not a new full source audit.
 | Generated asset / catalog / fixture | 205 |
 | Reference host / controlled fixture | 37 |
 | Runtime / shared shader declaration | 238 |
-| Test / validation | 235 |
+| Test / validation | 236 |
 | Public synthetic body/face input fixture | 1 |
 
 ## App / gameplay / plugins
@@ -432,6 +432,7 @@ Feature assessment: [studio.md](studio.md).
 | [Packages/Engine/Tests/EngineTests/SourceStudioCharacterPreviewTests.swift](../../Packages/Engine/Tests/EngineTests/SourceStudioCharacterPreviewTests.swift) | Test / validation |
 | [Packages/Engine/Tests/EngineTests/SourceStudioCharacterBatchTests.swift](../../Packages/Engine/Tests/EngineTests/SourceStudioCharacterBatchTests.swift) | Test / validation |
 | [Packages/Engine/Tests/EngineTests/SourceStudioCharacterFrameReuseTests.swift](../../Packages/Engine/Tests/EngineTests/SourceStudioCharacterFrameReuseTests.swift) | Test / validation |
+| [Packages/Engine/Tests/EngineTests/GizmoHandleTests.swift](../../Packages/Engine/Tests/EngineTests/GizmoHandleTests.swift) | Test / validation |
 | [Packages/Engine/Tests/EngineTests/SourceStudioDonationCacheTests.swift](../../Packages/Engine/Tests/EngineTests/SourceStudioDonationCacheTests.swift) | Test / validation |
 | [Packages/Engine/Tests/EngineTests/SourceStudioBackgroundBuildsTests.swift](../../Packages/Engine/Tests/EngineTests/SourceStudioBackgroundBuildsTests.swift) | Test / validation |
 | [Packages/Engine/Tests/EngineTests/SourceStudioDynamicsTests.swift](../../Packages/Engine/Tests/EngineTests/SourceStudioDynamicsTests.swift) | Test / validation |

@@ -7294,9 +7294,35 @@ The seven cached frames hold 476.5 KiB:
 - 137 morph weights, 2.1 KiB;
 - 6,195 palette matrices, 387.2 KiB.
 
+### Follow-up changes (2026-11-18)
+
+The first A/B (2026-11-17, n = 4 per arm) reused 6 of 7 frames per input
+but left the refresh at 84.3% of base against the registered ≤ 70%. The
+attribution then found three costs on the dragged character's path:
+- **Change 1, the FK binding.** `bindPose`'s cache was keyed on the whole
+  FK map, so every drag input rebound the character.
+  `KoikatsuCharacterRecord.rebindPose` writes only the changed bones'
+  rotations into the cached binding. It falls back to a full bind when a
+  changed key is not a target, a no-guide target would lose its rotation,
+  or `setRotation` throws. A randomized test (160 seeds × 12 steps)
+  compares every rebind with a fresh bind: targets, flags, transitions,
+  effects, diagnostics and the `makePose` output, bit for bit.
+- **The gizmo handles.** `GizmoBuilder.handle` built the unit octahedron
+  afresh for every handle of every refresh, with about 13 allocations. Its
+  24 vertices now come from a table that the same
+  `octahedron(center: .zero, radius: 1)` call builds once; `handle` only
+  adds the color. A test compares 288 handles (negative, large and zero
+  centers; sizes that are not powers of two; several colors) with the
+  former construction bit for bit.
+- **The clip binding check.** `ResolvedClip.matches` compared every
+  binding's source ID and name with the rig's nodes on every sample. It now
+  skips that walk for the rig identity the resolution was last checked
+  against: rigs with one identity have the same nodes, skins and order
+  (`RigDefinition.Identity`). Any other rig still takes the full walk. A
+  test checks the shortcut against the walk and against a fresh resolution
+  over 60 rig pairs.
+
 ### A/B
 
-To come: `studio-fk-drag` composited, base against head, in a quiet window
-the coordinator schedules. The prediction is a refresh about 40–50 ms/s
-lower, presented FPS unchanged, and about 6 of 7 frames reused per
-refresh.
+To come with the new registration: `studio-fk-drag`, base against head,
+in a window the coordinator schedules.
