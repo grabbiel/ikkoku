@@ -393,6 +393,10 @@ public enum SourceStudioMapMaterial {
         if let color = standard.emissionColor {
             m.emission = emission
             m.uniforms.emissive = Float4(color.x, color.y, color.z, 1)
+            // Most Koikatsu map materials set _EmissionMap to _MainTex. The loader's image cache keys on (image, sRGB), so an
+            // equal handle is the same texture and view, read at the same uv: map_fragment reuses the base texel.
+            m.setFlag(MaterialFlagMapEmissionIsBase, emission != nil && emission == base)
+            m.setFlag(MaterialFlagMapEmissionWhite, emission == nil)
         } else {
             m.uniforms.emissive = .zero
         }
@@ -425,6 +429,8 @@ public enum SourceStudioMapMaterial {
         var m = material
         m.base = nil
         m.emission = nil
+        m.setFlag(MaterialFlagMapEmissionIsBase, false)
+        m.setFlag(MaterialFlagMapEmissionWhite, false)
         m.setFlag(MaterialFlagMapSunLit, false)
         m.setFlag(MaterialFlagMapSpecularHighlights, false)
         m.setFlag(MaterialFlagHasBaseTexture, false)

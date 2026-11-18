@@ -123,6 +123,10 @@ typedef IK_ENUM(IKUInt, MaterialFlags) {
     MaterialFlagMapLambert      = 1u << 28, // Legacy Shaders/Diffuse: LightingLambert (n.l, no Disney term)
     MaterialFlagMapSpecularHighlights = 1u << 29, // Standard without _SPECULARHIGHLIGHTS_OFF: the sun's direct
                                                   // specular (GGX) term is drawn
+    MaterialFlagMapEmissionIsBase = 1u << 30, // Standard emission on and its texture is the base texture's handle (the same
+                                              // image and sRGB view): map_fragment reuses the base texel, sampled at the same uv
+    MaterialFlagMapEmissionWhite  = 1u << 31, // Standard emission on with no emission image (the renderer binds 1x1 white):
+                                              // map_fragment uses 1.0 instead of sampling it
 };
 
 #define DrawFlagHasHiddenBuffer 0x80000000u

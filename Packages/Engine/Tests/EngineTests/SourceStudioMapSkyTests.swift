@@ -449,7 +449,8 @@ func mapTexturesSampleWithThePlayersForcedAnisotropy() throws {
     let standard = SourceStudioStandardInputs(albedo: Float4(1, 1, 1, 1), oneMinusReflectivity: 0.5, emissionColor: Float3(1, 1, 1),
                                               emissionImage: 2, emissionSRGB: true)
     let range = SourceStudioLightmapMath.linearRGBMRange
-    let map = SourceStudioMapMaterial.make(gltf, standard: standard, base: texture, emission: texture, lightmap: texture, direction: nil,
+    // A separate emission handle, so map_fragment samples the emission texture (the base handle would reuse the base texel).
+    let map = SourceStudioMapMaterial.make(gltf, standard: standard, base: texture, emission: TextureHandle(id: 2), lightmap: texture, direction: nil,
                                            range: range, exponent: SourceStudioLightmapMath.linearRGBMExponent)
     // The light map alone: RGBM (1, 1, 1, 1) decodes to the range.
     let irradiance = try #require(SourceStudioMapMaterial.irradiance(map))

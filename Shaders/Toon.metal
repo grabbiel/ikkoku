@@ -529,7 +529,8 @@ fragment float4 map_fragment(
         return 2.0 * in.color * mat.baseColor * texel;
     }
     float4 albedo = mat.baseColor;
-    if (mat.flags & MaterialFlagHasBaseTexture) albedo *= baseTex.sample(forcedAnisoRepeat, in.uv);
+    float4 baseTexel = float4(1.0);
+    if (mat.flags & MaterialFlagHasBaseTexture) { baseTexel = baseTex.sample(forcedAnisoRepeat, in.uv); albedo *= baseTexel; }
     if ((mat.flags & MaterialFlagAlphaTest) && albedo.a < mat.params.w) discard_fragment();
     float3 n = normalize(in.worldNormal);
     float3 gi;
@@ -554,7 +555,20 @@ fragment float4 map_fragment(
         color += mapLight.sunColor.rgb * atten * mapSunRadiance(n, v, mapLight.sunDirection.xyz, albedo.rgb, mat.oneMinusReflectivity,
             mat.params.x, (mat.flags & MaterialFlagMapLambert) != 0, (mat.flags & MaterialFlagMapSpecularHighlights) != 0);
     }
-    if (mat.emissive.a > 0.0) color += emissionTex.sample(forcedAnisoRepeat, in.uv).rgb * mat.emissive.rgb * mat.emissive.a;
+    // Standard's Emission(i.tex.xy) reads _EmissionMap at the albedo's uv (_MainTex_ST, baked into TEXCOORD_0). When the
+    // loader found the same texture handle for both (MapEmissionIsBase), the base texel already holds that sample; with no
+    // emission image (MapEmissionWhite) the bound 1x1 white reads 1.0. Either way the value is the sample's, one fewer read.
+    if (mat.emissive.a > 0.0) {
+        float3 e;
+        if (mat.flags & MaterialFlagMapEmissionIsBase) {
+            e = baseTexel.rgb;
+        } else if (mat.flags & MaterialFlagMapEmissionWhite) {
+            e = float3(1.0);
+        } else {
+            e = emissionTex.sample(forcedAnisoRepeat, in.uv).rgb;
+        }
+        color += e * mat.emissive.rgb * mat.emissive.a;
+    }
     return float4(color, (mat.flags & MaterialFlagAlphaBlend) ? albedo.a : 1.0);
 }
 

@@ -231,6 +231,18 @@ func mapFragmentDrawsTheDecodedDirectionalLightmapTimesDiffColorPlusEmission() t
     check(try render(glowing, normal: Float3(0, 0, -1), v: 0.75), Float3(0.25, 0.5, 2), "emission over a dark side")
     check(try render(glowing, normal: Float3(0, 0, 1), v: 0.75), expected(bottom, normal: Float3(0, 0, 1), emission: Float3(0.25, 0.5, 2)),
           "emission over a lit side")
+    // MapEmissionWhite: no emission image reads 1.0 without a sample. The emission slot holds black here
+    // (render binds black for a nil emission), so only the flag can give the colour.
+    let whiteEmission = SourceStudioMapMaterial.make(gltf, standard: emissive, base: nil, emission: nil, lightmap: handle, direction: handle,
+                                                     range: SourceStudioLightmapMath.linearRGBMRange, exponent: SourceStudioLightmapMath.linearRGBMExponent)
+    #expect(whiteEmission.uniforms.flags & MaterialFlagMapEmissionWhite.rawValue != 0)
+    check(try render(whiteEmission, normal: Float3(0, 0, -1), v: 0.75), Float3(0.25, 0.5, 2), "white emission, no sample")
+    // MapEmissionIsBase: the emission is the base texel (white here). With the emission slot black, only the reuse gives the colour.
+    var reused = SourceStudioMapMaterial.make(gltf, standard: emissive, base: handle, emission: handle, lightmap: handle, direction: handle,
+                                              range: SourceStudioLightmapMath.linearRGBMRange, exponent: SourceStudioLightmapMath.linearRGBMExponent)
+    #expect(reused.uniforms.flags & MaterialFlagMapEmissionIsBase.rawValue != 0)
+    reused.emission = nil
+    check(try render(reused, normal: Float3(0, 0, -1), v: 0.75), Float3(0.25, 0.5, 2), "emission from the base texel")
     // The probe's irradiance material writes gi alone; its controls differ.
     let irradiance = try #require(SourceStudioMapMaterial.irradiance(material))
     let gi = SourceStudioLightmapMath.directional(SourceStudioLightmapMath.decodeRGBM(bottom), direction: dir, engineNormal: Float3(0, 0, 1))
@@ -242,6 +254,38 @@ func mapFragmentDrawsTheDecodedDirectionalLightmapTimesDiffColorPlusEmission() t
     let undirected = try #require(SourceStudioMapMaterial.irradiance(material, variant: .nonDirectional))
     check(try render(undirected, normal: Float3(0, 0, -1), v: 0.75), SourceStudioLightmapMath.decodeRGBM(bottom), "non-directional control")
     #expect(SourceStudioMapMaterial.irradiance(MaterialState(uniforms: .make(kind: MaterialKindItem))) == nil)
+}
+
+/// The emission flags follow the texture handles, on lightmapped and probe-lit
+/// map materials alike: the base handle gives MapEmissionIsBase, no image gives
+/// MapEmissionWhite, another handle (or emission off) gives neither. The
+/// irradiance material drops both with the textures.
+@Test func mapEmissionFlagsFollowTheTextureHandles() throws {
+    var gltf = MaterialData(name: "map")
+    gltf.alphaMode = "OPAQUE"
+    let base = TextureHandle(id: 1), other = TextureHandle(id: 2), light = TextureHandle(id: 3)
+    let on = SourceStudioStandardInputs(albedo: Float4(1, 1, 1, 1), oneMinusReflectivity: 0.9, emissionColor: Float3(0.5, 0.5, 0.5),
+                                        emissionImage: 0, emissionSRGB: true)
+    let off = SourceStudioStandardInputs(albedo: Float4(1, 1, 1, 1), oneMinusReflectivity: 0.9, emissionColor: nil,
+                                         emissionImage: nil, emissionSRGB: true)
+    let isBase = MaterialFlagMapEmissionIsBase.rawValue, white = MaterialFlagMapEmissionWhite.rawValue
+    func material(_ standard: SourceStudioStandardInputs, base: TextureHandle?, emission: TextureHandle?, lightmap: TextureHandle?) -> MaterialState {
+        SourceStudioMapMaterial.make(gltf, standard: standard, base: base, emission: emission, lightmap: lightmap, direction: nil,
+                                     range: SourceStudioLightmapMath.linearRGBMRange, exponent: SourceStudioLightmapMath.linearRGBMExponent)
+    }
+    for lightmap in [light, nil] as [TextureHandle?] {
+        let label = lightmap == nil ? "probe-lit" : "lightmapped"
+        func flags(_ s: SourceStudioStandardInputs, _ b: TextureHandle?, _ e: TextureHandle?) -> UInt32 {
+            material(s, base: b, emission: e, lightmap: lightmap).uniforms.flags & (isBase | white)
+        }
+        #expect(flags(on, base, base) == isBase, "\(label): emission is the base handle")
+        #expect(flags(on, base, other) == 0, "\(label): another emission texture")
+        #expect(flags(on, base, nil) == white, "\(label): no emission image")
+        #expect(flags(on, nil, nil) == white, "\(label): no base and no emission image")
+        #expect(flags(off, base, base) == 0, "\(label): emission off")
+    }
+    let irradiance = try #require(SourceStudioMapMaterial.irradiance(material(on, base: base, emission: base, lightmap: light)))
+    #expect(irradiance.uniforms.flags & (isBase | white) == 0 && irradiance.uniforms.emissive == .zero)
 }
 
 // MARK: - The converted map's lightmap records
@@ -311,7 +355,7 @@ private struct LightmappedMapFixture {
     static let light = Data(bc3Block(red: 31, green: 63, blue: 31, alpha: 51))
     static let direction = Data(bc3Block(red: 16, green: 32, blue: 16, alpha: 255))
 
-    init(uv1: Bool = true, corruptLight: Bool = false) throws {
+    init(uv1: Bool = true, corruptLight: Bool = false, emission: Any = NSNull()) throws {
         root = FileManager.default.temporaryDirectory.appendingPathComponent("ikkoku-lightmapped-\(UUID().uuidString)", isDirectory: true)
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
         var buffer = Data()
@@ -330,7 +374,7 @@ private struct LightmappedMapFixture {
                     "extras": ["ikkokuMap": ["role": role, "visibleFor": keys, "lightmapIndex": lightmapIndex, "renderers": 1]]]
         }
         let standard: [String: Any] = ["albedoLinear": [0.5, 0.25, 1, 1], "metallic": 0.25, "oneMinusReflectivity": 0.72,
-                                       "metallicSource": "_Metallic", "emission": NSNull()]
+                                       "metallicSource": "_Metallic", "emission": emission]
         let gltf: [String: Any] = [
             "asset": ["version": "2.0"],
             "buffers": [["byteLength": buffer.count, "uri": "map.bin"]],
@@ -411,6 +455,32 @@ struct SourceStudioLightmappedMapTests {
         #expect(resources.statistics().retiring == 5)
         resources.completeRetirements(createdBefore: ResourceClock.tick())
         #expect(resources.statistics().meshes == before.meshes && resources.statistics().textures == before.textures)
+    }
+
+    /// The loader sets MapEmissionIsBase only when `_EmissionMap` resolves to the base texture's handle: the
+    /// same image with the same sRGB view (the image cache keys on both). The same image read as linear is
+    /// another texture, and no emission image is MapEmissionWhite.
+    @Test func theLoaderFlagsEmissionByTextureHandle() async throws {
+        let device = try #require(MTLCreateSystemDefaultDevice())
+        let resources = ResourceStore(device: device)
+        let isBase = MaterialFlagMapEmissionIsBase.rawValue, white = MaterialFlagMapEmissionWhite.rawValue
+        let cases: [(String, [String: Any], UInt32, Bool)] = [
+            ("_EmissionMap = _MainTex", ["colorLinear": [0.5, 0.5, 0.5], "image": 0, "srgb": true], isBase, true),
+            ("the same image as linear", ["colorLinear": [0.5, 0.5, 0.5], "image": 0, "srgb": false], 0, false),
+            ("no _EmissionMap", ["colorLinear": [0.5, 0.5, 0.5], "image": NSNull(), "srgb": true], white, false),
+        ]
+        for (label, emission, want, sameHandle) in cases {
+            let fixture = try LightmappedMapFixture(emission: emission)
+            defer { fixture.remove() }
+            let (url, root) = (fixture.url, fixture.root)
+            let asset = try await liveTickOffPool { try SourceStudioMapAsset.load(url: url, packageRoot: root, resources: resources) }
+            let items = try asset.items(transform: KoikatsuChangeAmount(position: .zero, rotationDegrees: .zero, scale: .one), sunLightType: 0, mapOption: true)
+            let map = try #require(items.first { $0.material.kind == MaterialKindMap })
+            #expect(map.material.uniforms.flags & (isBase | white) == want, "\(label)")
+            #expect((map.material.emission != nil && map.material.emission == map.material.base) == sameHandle, "\(label)")
+            #expect(map.material.uniforms.emissive.w == 1, "\(label)")
+            asset.release()
+        }
     }
 
     @Test func aChangedLightmapOrAMissingUV1FailsTheLoadAndRegistersNothing() async throws {
