@@ -546,6 +546,131 @@ probe gates and the numbers are in [maps: slice 4](studio/maps.md#all-maps-slice
   a slanted edge: partial coverage without the flag (before and after a flagged
   capture), and none with it.
 
+### Instanced static items (ST-T04 slice 1, part B)
+
+The generated item catalog ([item catalog](studio/item-catalog.md#generated-catalog-st-t04-2026-11-02))
+turns a large CharaStudio scene into thousands of basic-shape records. Most of
+them share a handful of meshes and one material each, so `Renderer.prepare`
+merges adjacent equal records into instanced draws. Each record keeps its own
+transform and pick id; the records of one instanced draw share their whole
+material, tint and alpha included, so every instance shades exactly as its
+record does on its own.
+
+- **Which records merge (B1).** `Renderer.instanceable` accepts only static
+  item records. The Studio frame builder marks them: `RenderItem.staticItem`
+  is set on the parts of `.item` objects and of source item placeholders, and
+  on nothing else. A marked record still does not merge if it has any of these:
+  - a deformation key, skin or morph weights;
+  - hidden regions or a hidden-buffer key;
+  - a live source shader;
+  - the sky material kind;
+  - any material kind but `MaterialKindItem`.
+
+  So characters, eyes and maps keep their per-draw path (they are never
+  marked, even where a character part uses the item material kind), and gizmos
+  are drawn apart. A frame with any live source-shader record draws everything per draw
+  (`Renderer.prepare`). The stencil main pass would work, since its pipelines
+  share the vertex functions; lifting this needs its own exactness check.
+- **Which neighbours merge.** After the existing sorts (opaque: order, material
+  kind, mesh id; transparent: render queue, distance back to front, order, mesh
+  id), `assignRuns` walks each pass. An instanced draw is a stretch of at least
+  two instanceable records that `mergesWith` its first record and whose
+  MaterialUniforms are equal byte for byte. `mergesWith` needs:
+  - the same mesh, hence the same vertex, texcoord, colour and index buffers;
+  - the same material apart from the base colour: pipeline, textures, alpha
+    mode, double-sidedness, depth bias and every other uniform byte;
+  - the same outline choice;
+  - the same winding (a mirrored model reverses front faces, set once per run).
+
+  The byte-equal MaterialUniforms then add the base colour, the record's tint
+  and alpha. A run is a stretch of adjacent instanced draws that merge (the
+  same bindings, different tints): it is bound once. A record with no equal
+  neighbour is drawn on its own, exactly as before, and casts its shadow with
+  the per-draw casters. Any other record between two equal ones ends the draw,
+  so the draw order of every record is unchanged. In the transparent pass that
+  keeps the blend order exactly as one record at a time: within an instanced
+  draw, Metal rasterizes instances in order.
+- **Uniforms.** Each pass's instanced DrawUniforms go into one frame-ring
+  table in record order, written at the Swift stride (144 bytes), which the
+  shaders' `constant DrawUniforms*` shares; an instance's `instance_id`
+  (which includes the draw's base instance) is its element. The pass's draws'
+  materials go into one allocation, one 256-byte aligned element per draw, so
+  the next draw of a run changes only the bound material offset
+  (`setVertexBufferOffset`, `setFragmentBufferOffset`). The records carry an
+  index into two scratch arrays the renderer keeps across frames, not the
+  496 bytes themselves, so sorting them costs what it did before.
+- **Shaders.** An instanced draw goes through the per-draw pipelines
+  themselves. Since B0 (#395) `toon_vertex`, `outline_vertex`,
+  `shadow_vertex` and `pick_vertex` read DrawUniforms as `draws[instance_id]`:
+  a record drawn on its own is bound as a one-element array at its own offset,
+  and an instanced draw's base instance and `instance_id` index the table. Both
+  forms run the same compiled function, so an instance shades exactly as its
+  record does on its own. Only picking has its own pair
+  (`Shaders/InstancedItems.metal`): `pick_vertex_instanced` is `pick_vertex`'s
+  text plus the instance index, and `pick_fragment_instanced` returns that
+  instance's id. Before B0, separate `*_instanced` vertex functions with the
+  per-draw text still differed from the per-draw draws at 14 pixels of the
+  3,506-item corpus scene (up to 25 levels), because Metal's fast math compiles
+  a uniform `constant DrawUniforms&` and an indexed element differently.
+- **Passes.**
+  - Shadow: the instanced draws' casters, as stretches, after the per-draw
+    casters. A depth-only pass keeps the nearest depth whatever the order.
+  - Main opaque: per run, its draws' outlines, then their surfaces.
+  - Transparent: one blended draw per instanced draw.
+  - Pick: each draw's pickable stretches, in record order, so ids at equal
+    depth resolve as before (the first drawn keeps the sample).
+- **The one ordering difference.** One record at a time interleaves outline
+  and surface (outline 1, surface 1, outline 2, …). A run draws every outline
+  first. With the strict `greater` depth test and opaque writes, the nearest
+  fragment wins either way. Only a sample where a later member's outline and an
+  earlier member's surface have exactly equal depth resolves differently. Shapes
+  of one run would have to intersect for that to happen.
+- **Switch.** `Renderer.instancesStaticItems` (default true) draws every
+  record on its own when false. It is the measurement control and the
+  reference of the tests.
+- **Repeated encoder state (B2-v2).** Instanced runs set their state through
+  the same `EncoderState` as records drawn on their own
+  ([Frame preparation without per-item copies](#frame-preparation-without-per-item-copies-2026-11-18),
+  "Repeated encoder state"). A run's next draw moves only the bound material
+  offset, vertex and fragment (`EncoderState.setBufferOffsets`), and the
+  shadow and pick passes bind a run once, at its first caster or pickable
+  record.
+- **Statistics.** `RenderFrameStatistics` reports `mainPassRecords` and
+  `mainPassRuns` (the draws: one per record drawn on its own and one per
+  instanced draw, per pipeline), `instancedRecords` and `instancedRuns` (the
+  instanced draws), and `shadowCasters` and `shadowDraws`.
+- **Studio material cache (B4).** `SourceStudioItemMaterials` builds the
+  untinted materials of an item asset's parts once. It is keyed by file, in part
+  order, and holds a weak reference to the asset it was built from, so a
+  re-imported asset rebuilds. The Studio clears it wherever an import replaces
+  the scene's item assets: the preview import's commit and
+  `installSourceRuntime`. `refresh()` then only applies each record's tint.
+
+Tests (`InstancedItemDrawTests.swift`):
+- B1: equal records merge; a tint is part of the material, so stretches of
+  one tint are instanced draws of one run and a record with no equal
+  neighbour is drawn on its own. Each kind of non-instanceable record (an
+  unmarked record among them), and each binding or state difference, between
+  two equal pairs breaks the draw; the pairs merge again when it is sorted
+  after them. A non-caster in a draw splits its shadow draw.
+- B3: a synthetic 500-shape scene renders byte for byte the same instanced and
+  per draw, in the HDR scene, the LDR image and the pick target, with shadows
+  on. It has opaque, mirrored, alpha-tested and two kinds of transparent
+  shapes, a tint per row (so a run has a draw per row), coincident
+  duplicates, and a column of transparent panes with an opaque record of the
+  same mesh between them in depth. Controls check that the shadow map reaches
+  the image, most shapes are pickable, and a duplicate never takes its
+  original's samples. A second B3 case draws one run of outlined cubes that
+  coincide, share face planes or intersect, in two tints (two draws), with
+  wide outlines and a per-draw twin of the first cube, byte for byte as per
+  draw; its controls check that ties follow the members' order and the
+  outlines reach the image.
+- B4: the cache returns exactly what `MaterialBuilder.itemMaterial` builds,
+  builds once per asset, and stays at one file over 12 imports of the same file.
+- B2-v2, repeated encoder state: the B3 grid scene, instanced, renders, shades
+  and picks byte for byte with and without the skipping (`EncoderStateTests`
+  covers records drawn on their own).
+
 ### Deformation safety
 
 The renderer writes complete skin palettes into the frame ring's palette

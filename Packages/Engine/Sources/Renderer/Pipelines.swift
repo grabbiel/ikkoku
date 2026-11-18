@@ -42,6 +42,11 @@ final class Pipelines: @unchecked Sendable {
     let blit: any MTLRenderPipelineState
     let pick: any MTLRenderPipelineState
     let pickGizmo: any MTLRenderPipelineState
+    /// ST-T04 instanced static items pick through `pick_vertex_instanced` /
+    /// `pick_fragment_instanced` (Shaders/InstancedItems.metal), whose id is
+    /// per instance. Every other instanced pass uses the per-draw pipelines,
+    /// whose vertex functions read DrawUniforms by instance (B0).
+    let pickInstanced: any MTLRenderPipelineState
 
     let depthWrite: any MTLDepthStencilState          // greater, write
     let depthTest: any MTLDepthStencilState           // greater, no write
@@ -90,6 +95,8 @@ final class Pipelines: @unchecked Sendable {
         blit = try render("Blit", "fullscreen_vertex", "blit_fragment", color: ldr, depth: nil, samples: 1)
         pick = try render("Pick", "pick_vertex", "pick_fragment", color: Pipelines.pickFormat, depth: dep, samples: 1)
         pickGizmo = try render("PickGizmo", "pick_gizmo_vertex", "pick_gizmo_fragment", color: Pipelines.pickFormat, depth: dep, samples: 1)
+        pickInstanced = try render("PickInstanced", "pick_vertex_instanced", "pick_fragment_instanced", color: Pipelines.pickFormat,
+                                   depth: dep, samples: 1)
 
         func depthState(_ label: String, _ compare: MTLCompareFunction, write: Bool) throws -> any MTLDepthStencilState {
             let d = MTLDepthStencilDescriptor()

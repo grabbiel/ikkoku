@@ -38,6 +38,20 @@ public struct RenderFrameStatistics: Sendable, Equatable {
     /// Where the frame's uniforms were placed. Nonzero overflow means the frame
     /// needed more than its ring region, or found every region still in flight.
     public var uniforms = FrameRing.Statistics()
+    /// The main pass's opaque and transparent records (live source-shader
+    /// draws excluded), and the draws they took: one per pipeline used (toon,
+    /// and outline when outlined) for each record drawn on its own and each
+    /// instanced draw. Equal when nothing merged (ST-T04 instanced static items).
+    public var mainPassRecords = 0
+    public var mainPassRuns = 0
+    /// Static item records drawn instanced (`Renderer.instancesStaticItems`),
+    /// and the instanced draws they took. A record with no equal neighbour is
+    /// drawn on its own, as before, and is not counted here.
+    public var instancedRecords = 0
+    public var instancedRuns = 0
+    /// Shadow-pass casters, and the draws they took.
+    public var shadowCasters = 0
+    public var shadowDraws = 0
     public init() {}
 }
 
@@ -227,7 +241,13 @@ public final class Renderer: @unchecked Sendable {
     static let deformBypassPause: CFTimeInterval = 0.1
     private var deformReuse = true
     private var skipUnchanged = true
+    private var instanceItems = true
     private var skipRedundantState = true
+    /// Static item records' uniforms between `buildContext` and `assignRuns`
+    /// (ST-T04), indexed by `DrawRecord.pending`. Kept, with their capacity,
+    /// across frames; used only under `renderLock`.
+    private var pendingDraws: [DrawUniforms] = []
+    private var pendingMaterials: [MaterialUniforms] = []
     var liveEncoder: SourceShaderLiveEncoder?
     var liveEncoderError: String?
 
@@ -299,6 +319,16 @@ public final class Renderer: @unchecked Sendable {
     public var reusesDeformedVertices: Bool {
         get { renderLock.lock(); defer { renderLock.unlock() }; return deformReuse }
         set { renderLock.lock(); deformReuse = newValue; renderLock.unlock() }
+    }
+    /// Whether static item records draw instanced (ST-T04; default true): each
+    /// adjacent stretch of the sorted opaque or transparent records that share
+    /// the mesh, the pipeline, the material identity, the textures and the cull
+    /// and depth state is one draw (`instanceable`, `mergesWith`). False draws
+    /// every record on its own, as before: a measurement control and the
+    /// reference of the instanced-versus-per-draw tests. Safe from any thread.
+    public var instancesStaticItems: Bool {
+        get { renderLock.lock(); defer { renderLock.unlock() }; return instanceItems }
+        set { renderLock.lock(); instanceItems = newValue; renderLock.unlock() }
     }
 
     /// Loads the bundled `IkkokuShaders.metallib`.
@@ -821,8 +851,12 @@ public final class Renderer: @unchecked Sendable {
     /// Measures the same pass graph as capture while reusing all render targets.
     /// Each command buffer completes before the next sample. This is a render
     /// latency baseline, not an interactive application throughput measurement.
+    /// `camera`, when given, is each sample's camera by sample index (warmup
+    /// samples first), set before the sample's timing starts: a scripted orbit
+    /// (ST-T04 B2). Without it every sample draws `frame` as it is.
     public func benchmark(frame: RenderFrame, width: Int, height: Int,
-                          warmupFrames: Int = 3, measuredFrames: Int = 20) throws -> RenderBenchmark {
+                          warmupFrames: Int = 3, measuredFrames: Int = 20,
+                          camera: ((Int) -> OrbitCamera)? = nil) throws -> RenderBenchmark {
         guard (1...8192).contains(width), (1...8192).contains(height),
               (0...100).contains(warmupFrames), (1...1000).contains(measuredFrames) else {
             throw RenderBenchmarkError.invalidConfiguration
@@ -833,8 +867,11 @@ public final class Renderer: @unchecked Sendable {
         guard let target = gpu.device.makeTexture(descriptor: descriptor) else { throw RendererError.textureCreationFailed }
         let targets = try RenderTargets(device: gpu.device, width: width, height: height)
         var cpu: [Double] = [], completion: [Double] = [], gpuTimes: [Double] = []
+        var counts: [String: [Double]] = [:]
         for sample in 0..<(warmupFrames + measuredFrames) {
             try autoreleasepool {
+                var sampleFrame = frame
+                if let camera { sampleFrame.camera = camera(sample) }
                 gpu.waitForFrameSlot(); defer { gpu.releaseFrameSlot() }
                 guard let cb = gpu.commandQueue.makeCommandBuffer() else { throw RenderBenchmarkError.commandBuffer }
                 cb.label = "Benchmark \(sample)"
@@ -843,8 +880,17 @@ public final class Renderer: @unchecked Sendable {
                 frameRing.beginFrame(frameIndex); frameIndex &+= 1
                 var failure: RenderFrameError?
                 var writes = DeformWrites.none
-                do { writes = try encode(frame: frame, target: target, targets: targets, commandBuffer: cb, deforms: .always) }
+                do { writes = try encode(frame: sampleFrame, target: target, targets: targets, commandBuffer: cb, deforms: .always) }
                 catch { failure = (error as? RenderFrameError) ?? .commandBufferUnavailable }
+                if sample >= warmupFrames, failure == nil {
+                    // This sample's own statistics: no other frame prepares while the lock is held.
+                    let s = lastFrameStatistics
+                    for (name, value) in [("mainPassRecords", s.mainPassRecords), ("mainPassRuns", s.mainPassRuns),
+                                          ("instancedRecords", s.instancedRecords), ("instancedRuns", s.instancedRuns),
+                                          ("shadowCasters", s.shadowCasters), ("shadowDraws", s.shadowDraws)] {
+                        counts[name, default: []].append(Double(value))
+                    }
+                }
                 let errors = lastDeformationErrors
                 // Commit under the lock so interactive draws cannot submit after
                 // reusing the same deformation buffers but before this frame.
@@ -878,7 +924,8 @@ public final class Renderer: @unchecked Sendable {
             completionMilliseconds: .init(completion), gpuMilliseconds: gpuTimes.count == measuredFrames ? .init(gpuTimes) : nil,
             residentBytesBefore: before, residentBytesAfter: RenderBenchmark.residentBytes(), metalAllocatedBytes: gpu.device.currentAllocatedSize,
             visibleItems: visible.count, missingMeshes: visible.count - meshes.count,
-            drawnTriangles: meshes.reduce(0) { $0 + $1.indexCount / 3 }, uniqueVertices: vertices, resources: resources.statistics())
+            drawnTriangles: meshes.reduce(0) { $0 + $1.indexCount / 3 }, uniqueVertices: vertices, resources: resources.statistics(),
+            drawCounts: counts.mapValues { RenderBenchmark.Distribution($0) })
     }
 
     // MARK: - Frame preparation
@@ -888,9 +935,23 @@ public final class Renderer: @unchecked Sendable {
         let mesh: GPUMesh
         let vertexBuffer: any MTLBuffer
         let hiddenBuffer: (any MTLBuffer)?
-        let draw: FrameAllocation
-        let material: FrameAllocation
+        /// The record's DrawUniforms and MaterialUniforms. A member of an
+        /// instanced draw (ST-T04) has its pass's table of DrawUniforms here,
+        /// with its own element at `instance`, and its draw's one material
+        /// element; every other record has its own allocations.
+        var draw: FrameAllocation
+        var material: FrameAllocation
+        var instance = 0
         let distance: Float
+        /// A static item record's index in `pendingDraws` and
+        /// `pendingMaterials` until `assignRuns` places its uniforms; -1 for
+        /// every other record. An index, not the 496 bytes of uniforms, so the
+        /// record stays as small to sort and copy as before.
+        var pending = -1
+        /// The index of its run in its pass's runs when it is drawn instanced;
+        /// -1 when it is drawn on its own.
+        var run = -1
+        var instanced: Bool { run >= 0 }
     }
 
     struct DeformRecord {
@@ -927,6 +988,14 @@ public final class Renderer: @unchecked Sendable {
         let background: FrameAllocation?
         let opaque: [DrawRecord]
         let transparent: [DrawRecord]
+        /// `opaque` and `transparent` in runs, in order (ST-T04): each range is
+        /// one record drawn on its own, or one instanced run, which is bound
+        /// once and draws one or more instanced draws (`forEachDraw`).
+        var opaqueRuns: [Range<Int>] = []
+        var transparentRuns: [Range<Int>] = []
+        /// The instanced shadow casters: stretches of the opaque instanced draws
+        /// whose records cast shadows. Every other caster is in `shadowCasters`.
+        var instancedShadowCasters: [Range<Int>] = []
         /// ST-A11 map sky draws (`MaterialKindSky`): drawn after the background
         /// with no depth test or write; never shadow casters, picked or live.
         var sky: [DrawRecord] = []
@@ -1177,6 +1246,12 @@ public final class Renderer: @unchecked Sendable {
         var deformed: [UInt64: any MTLBuffer] = [:]
         var deformHeld = 0
         var liveCandidates: [DrawRecord] = []
+        // ST-T04: static item records merge into instanced runs, except in a
+        // frame with live source-shader draws, whose stencil main pass has no
+        // instanced pipelines.
+        let instancing = instanceItems && !frame.items.contains { $0.visible && $0.sourceShader != nil }
+        pendingDraws.removeAll(keepingCapacity: true)
+        pendingMaterials.removeAll(keepingCapacity: true)
 
         for item in frame.items where item.visible {
             guard let mesh = resources.mesh(item.mesh) else { continue }
@@ -1240,15 +1315,25 @@ public final class Renderer: @unchecked Sendable {
             du.flags = hb != nil ? DrawFlagHasHiddenBuffer : item.hiddenRegions
             du.outlineScale = item.outlineScale
             du.depthBias = item.material.depthBias
-            let drawUniforms = try frameRing.allocate(du)
             var mu = item.material.uniforms
             if item.material.transparent { mu.flags |= MaterialFlagAlphaBlend.rawValue }
             else { mu.flags &= ~MaterialFlagAlphaBlend.rawValue }
             if frame.texture(item.material.base, resources: resources) == nil { mu.flags &= ~MaterialFlagHasBaseTexture.rawValue }
             if frame.texture(item.material.bodyMask, resources: resources) == nil { mu.flags &= ~MaterialFlagHasBodyMask.rawValue }
             if mesh.colors != nil { mu.flags |= MaterialFlagHasVertexColor.rawValue } else { mu.flags &= ~MaterialFlagHasVertexColor.rawValue }
-            let materialUniforms = try frameRing.allocate(mu)
             let c = item.model.transformPoint(item.sortCenter ?? mesh.bounds.center)
+            if instancing, Self.instanceable(item, mesh: mesh, isSky: isSky) {
+                // Its uniforms are placed once the passes are sorted (`assignRuns`):
+                // in an instanced draw, which also casts its shadow, or on its own.
+                let rec = DrawRecord(item: item, mesh: mesh, vertexBuffer: vb, hiddenBuffer: hb, draw: frameUniforms,
+                                     material: frameUniforms, distance: length(c - cp), pending: pendingDraws.count)
+                pendingDraws.append(du)
+                pendingMaterials.append(mu)
+                if item.material.transparent { transparent.append(rec) } else { opaque.append(rec) }
+                continue
+            }
+            let drawUniforms = try frameRing.allocate(du)
+            let materialUniforms = try frameRing.allocate(mu)
             let rec = DrawRecord(item: item, mesh: mesh, vertexBuffer: vb, hiddenBuffer: hb, draw: drawUniforms,
                                  material: materialUniforms, distance: length(c - cp))
             if isSky { sky.append(rec); continue }
@@ -1279,6 +1364,14 @@ public final class Renderer: @unchecked Sendable {
         lastSourceShaderLive = liveReport
         opaque = Self.sortedOpaque(opaque)
         transparent = Self.sortedTransparent(transparent)
+        let opaqueRuns = try assignRuns(&opaque, casters: &casters, statistics: &statistics)
+        let transparentRuns = try assignRuns(&transparent, casters: &casters, statistics: &statistics)
+        var instancedShadowCasters: [Range<Int>] = []
+        for run in opaqueRuns where opaque[run.lowerBound].instanced {
+            Self.forEachDraw(run, of: opaque) { instancedShadowCasters += Self.stretches($0, of: opaque) { $0.item.castsShadow } }
+        }
+        statistics.shadowCasters = casters.count + instancedShadowCasters.reduce(0) { $0 + $1.count }
+        statistics.shadowDraws = casters.count + instancedShadowCasters.count
         // Display frames draw every non-empty batch once (main pass when depth
         // tested, overlay otherwise); pick frames draw only pickable batches.
         var gizmos: [GizmoRecord] = []
@@ -1292,8 +1385,144 @@ public final class Renderer: @unchecked Sendable {
             gizmos.append(GizmoRecord(batch: g, vertices: vertices, draw: draw))
         }
         return FrameContext(frame: frame, frameUniforms: frameUniforms, lights: lights, post: post, background: background,
-                            opaque: opaque, transparent: transparent, sky: Self.sortedOpaque(sky), shadowCasters: casters, deforms: deforms,
+                            opaque: opaque, transparent: transparent, opaqueRuns: opaqueRuns, transparentRuns: transparentRuns,
+                            instancedShadowCasters: instancedShadowCasters, sky: Self.sortedOpaque(sky), shadowCasters: casters, deforms: deforms,
                             gizmos: gizmos, width: W, height: H, live: live, liveMainPass: liveMainPass)
+    }
+
+    // MARK: - Instanced static items (ST-T04)
+
+    /// B1: only static item records merge: records the Studio marks as props
+    /// (`RenderItem.staticItem`), with no deformation, skin or morphs, no
+    /// hidden regions or hidden buffer, no live source shader, not the sky, and
+    /// the item material kind only. Characters, eyes and maps are never marked
+    /// and keep their per-draw path. Gizmos are `GizmoRecord`s and never reach here.
+    static func instanceable(_ item: RenderItem, mesh: GPUMesh, isSky: Bool) -> Bool {
+        item.staticItem && item.deformKey == nil && item.skinSet == nil && item.morphWeights.isEmpty && mesh.skin == nil
+            && item.hiddenKey == nil && item.hiddenRegions == 0 && item.sourceShader == nil && !isSky
+            && item.material.uniforms.kind == UInt32(MaterialKindItem.rawValue)
+    }
+
+    /// Whether two instanceable records draw with the same bindings and state,
+    /// apart from their MaterialUniforms: the same mesh (so the same vertex,
+    /// texcoord, colour and index buffers), the same material apart from its
+    /// base colour (so the same pipeline, textures, alpha mode,
+    /// double-sidedness and depth bias), the same outline choice, and the same
+    /// winding (a mirrored model reverses front faces, set once per run).
+    /// Records that merge share one instanced draw only when their
+    /// MaterialUniforms are also equal byte for byte (`assignRuns`).
+    static func mergesWith(_ a: DrawRecord, _ b: DrawRecord) -> Bool {
+        guard a.item.mesh == b.item.mesh, a.item.outline == b.item.outline,
+              mirrored(a.item.model) == mirrored(b.item.model) else { return false }
+        return a.item.material.equalsApartFromBaseColor(b.item.material)
+    }
+
+    static func mirrored(_ model: float4x4) -> Bool { simd_determinant(model.upperLeft3x3) < 0 }
+
+    /// Groups sorted records into runs and draws (ST-T04). An instanced draw is
+    /// an adjacent stretch of at least two instanceable records that merge
+    /// (`mergesWith`) and whose MaterialUniforms are equal byte for byte, so the
+    /// draw binds one material, as one record does, and the per-draw fragment
+    /// functions shade every instance as they shade the record on its own. An
+    /// instanced run is an adjacent stretch of instanced draws that merge, bound
+    /// once. The draws' DrawUniforms go into the pass's table in record order
+    /// (an instance's `instance_id` is its element), their materials into one
+    /// allocation, one 256-byte aligned element per draw, so the next draw of a
+    /// run changes only the bound material offset. Every other record is a run
+    /// of its own with its own allocations; an instanceable one that casts a
+    /// shadow joins `casters`. Merging adjacent records only keeps the sorted
+    /// order, so the transparent pass blends exactly as it does one record at a time.
+    func assignRuns(_ records: inout [DrawRecord], casters: inout [DrawRecord],
+                    statistics: inout RenderFrameStatistics) throws -> [Range<Int>] {
+        var draws: [Range<Int>] = []
+        var members = 0
+        var i = records.startIndex
+        while i < records.endIndex {
+            guard records[i].pending >= 0 else { i += 1; continue }
+            var j = i + 1
+            while j < records.endIndex, records[j].pending >= 0, Self.mergesWith(records[i], records[j]),
+                  Self.sameBytes(pendingMaterials[records[i].pending], pendingMaterials[records[j].pending]) { j += 1 }
+            if j - i > 1 { draws.append(i..<j); members += j - i }
+            i = j
+        }
+        statistics.mainPassRecords += records.count
+        statistics.mainPassRuns += records.count - members + draws.count
+        statistics.instancedRecords += members
+        statistics.instancedRuns += draws.count
+        // The table's elements are written at the Swift stride, which the
+        // shaders' `constant DrawUniforms*` shares (144 bytes; the instanced
+        // versus per-draw tests compare).
+        let drawStride = MemoryLayout<DrawUniforms>.stride
+        let materialStride = (MemoryLayout<MaterialUniforms>.stride + FrameRing.alignment - 1) / FrameRing.alignment * FrameRing.alignment
+        let table = draws.isEmpty ? nil : try frameRing.allocate(byteCount: drawStride * members)
+        let materials = draws.isEmpty ? nil : try frameRing.allocate(byteCount: materialStride * draws.count)
+        var runs: [Range<Int>] = []
+        runs.reserveCapacity(records.count - members + draws.count)
+        var next = 0, instance = 0
+        i = records.startIndex
+        while i < records.endIndex {
+            if next < draws.count, draws[next].lowerBound == i, let table, let materials {
+                let run = runs.count
+                var end = i
+                repeat {
+                    let draw = draws[next]
+                    let element = materials.advanced(by: materialStride * next)
+                    element.buffer.contents().storeBytes(of: pendingMaterials[records[draw.lowerBound].pending], toByteOffset: element.offset,
+                                                         as: MaterialUniforms.self)
+                    for k in draw {
+                        table.buffer.contents().storeBytes(of: pendingDraws[records[k].pending], toByteOffset: table.offset + drawStride * instance,
+                                                           as: DrawUniforms.self)
+                        records[k].draw = table; records[k].material = element; records[k].instance = instance
+                        records[k].pending = -1; records[k].run = run
+                        instance += 1
+                    }
+                    end = draw.upperBound
+                    next += 1
+                } while next < draws.count && draws[next].lowerBound == end && Self.mergesWith(records[i], records[end])
+                runs.append(i..<end)
+                i = end
+                continue
+            }
+            if records[i].pending >= 0 {
+                // No equal neighbour: drawn on its own, exactly as before.
+                let index = records[i].pending
+                records[i].draw = try frameRing.allocate(pendingDraws[index])
+                records[i].material = try frameRing.allocate(pendingMaterials[index])
+                records[i].pending = -1
+                if records[i].item.castsShadow && !records[i].item.material.transparent { casters.append(records[i]) }
+            }
+            runs.append(i..<i + 1)
+            i += 1
+        }
+        return runs
+    }
+
+    /// Whether two MaterialUniforms are equal byte for byte.
+    static func sameBytes(_ a: MaterialUniforms, _ b: MaterialUniforms) -> Bool {
+        withUnsafeBytes(of: a) { x in withUnsafeBytes(of: b) { y in memcmp(x.baseAddress!, y.baseAddress!, x.count) == 0 } }
+    }
+
+    /// The instanced draws of an instanced run, in order: the stretches of its
+    /// members that share one material element (one offset in one allocation).
+    static func forEachDraw(_ run: Range<Int>, of records: [DrawRecord], _ body: (Range<Int>) -> Void) {
+        var start = run.lowerBound
+        for k in run.dropFirst() where records[k].material.offset != records[start].material.offset {
+            body(start..<k)
+            start = k
+        }
+        body(start..<run.upperBound)
+    }
+
+    /// The contiguous stretches of `run` whose records satisfy `include`, in order.
+    static func stretches(_ run: Range<Int>, of records: [DrawRecord], where include: (DrawRecord) -> Bool) -> [Range<Int>] {
+        var result: [Range<Int>] = []
+        var start: Int?
+        for k in run {
+            if include(records[k]) { if start == nil { start = k } }
+            else if let first = start { result.append(first..<k); start = nil }
+        }
+        if let first = start { result.append(first..<run.upperBound) }
+        return result
     }
 
     /// The opaque order: draw order, then material kind, then mesh id; equal
@@ -1465,7 +1694,7 @@ public final class Renderer: @unchecked Sendable {
             // map_fragment samples only these four (ST-A11 source maps).
             s.setFragmentTexture(frame.texture(m.lightmap, resources: resources) ?? black, index: Int(TextureIndexLightmap.rawValue))
             s.setFragmentTexture(frame.texture(m.lightmapDirection, resources: resources) ?? black,
-                                   index: Int(TextureIndexLightmapDirection.rawValue))
+                                 index: Int(TextureIndexLightmapDirection.rawValue))
             // Unity's _EmissionMap default is white; map_fragment reads it only when emissive.a > 0.
             s.setFragmentTexture(frame.texture(m.emission, resources: resources) ?? white, index: Int(TextureIndexEmission.rawValue))
             return
@@ -1493,6 +1722,24 @@ public final class Renderer: @unchecked Sendable {
         s.encoder.drawIndexedPrimitives(type: .triangle, indexCount: mesh.indexCount, indexType: .uint32, indexBuffer: mesh.indices, indexBufferOffset: 0)
     }
 
+    /// `records[stretch]`, all of one instanced draw, after `bindDraw` of a
+    /// record of its run: the instances are the table's elements from the
+    /// first record's on, in order. Another draw's material element moves the
+    /// bound material offset, vertex and fragment, on the allocation its run bound.
+    private func drawInstanced(_ s: EncoderState, _ stretch: Range<Int>, of records: [DrawRecord]) {
+        let first = records[stretch.lowerBound]
+        s.setBufferOffsets(first.material.offset, index: Int(BufferIndexMaterial.rawValue))
+        s.encoder.drawIndexedPrimitives(type: .triangle, indexCount: first.mesh.indexCount, indexType: .uint32, indexBuffer: first.mesh.indices,
+                                        indexBufferOffset: 0, instanceCount: stretch.count, baseVertex: 0, baseInstance: first.instance)
+    }
+
+    /// One run after `bindDraw` of its first record: the record's own draw, or
+    /// each of the run's instanced draws in order.
+    private func drawRun(_ s: EncoderState, _ run: Range<Int>, of records: [DrawRecord]) {
+        guard records[run.lowerBound].instanced else { drawIndexed(s, records[run.lowerBound].mesh); return }
+        Self.forEachDraw(run, of: records) { drawInstanced(s, $0, of: records) }
+    }
+
     private func encodeShadow(_ ctx: FrameContext, _ cb: any MTLCommandBuffer) {
         let pass = MTLRenderPassDescriptor()
         pass.depthAttachment.texture = shadowMap
@@ -1512,6 +1759,21 @@ public final class Renderer: @unchecked Sendable {
                 bindDraw(s, rec)
                 bindMaskTextures(s, rec.item.material, frame: ctx.frame, base: true)
                 drawIndexed(s, rec.mesh)
+            }
+            // Instanced static items (ST-T04), through the same pipeline: its
+            // vertex function reads DrawUniforms by instance (B0). A depth-only
+            // pass keeps the nearest depth whatever the order, so drawing these
+            // after the other casters stores what drawing each record in turn
+            // stores. A run is bound once; its next stretch changes only the material.
+            var boundRun = -1
+            for stretch in ctx.instancedShadowCasters {
+                let rec = ctx.opaque[stretch.lowerBound]
+                if rec.run != boundRun {
+                    bindDraw(s, rec)
+                    bindMaskTextures(s, rec.item.material, frame: ctx.frame, base: true)
+                    boundRun = rec.run
+                }
+                drawInstanced(s, stretch, of: ctx.opaque)
             }
         }
         enc.endEncoding()
@@ -1589,7 +1851,13 @@ public final class Renderer: @unchecked Sendable {
 
         enc.pushDebugGroup("Opaque")
         let outlinesOn = fx.outlineWidth > 0.001
-        for rec in ctx.opaque {
+        // An instanced run draws its members' outlines, then their surfaces;
+        // one record at a time interleaves them. With the strict depth test and
+        // opaque writes the nearest fragment wins either way; only a sample where
+        // a member's outline and an earlier member's surface have exactly equal
+        // depth keeps the other one (renderer.md, "Instanced static items").
+        for run in ctx.opaqueRuns {
+            let rec = ctx.opaque[run.lowerBound]
             let m = rec.item.material
             bindDraw(s, rec)
             bindTextures(s, m, frame: ctx.frame)
@@ -1597,14 +1865,16 @@ public final class Renderer: @unchecked Sendable {
                 s.setPipeline(main.outline)
                 s.setDepthStencil(pipelines.depthWrite)
                 s.setCull(.front)
-                drawIndexed(s, rec.mesh)
+                drawRun(s, run, of: ctx.opaque)
             }
             let nativeEye = m.uniforms.kind == UInt32(MaterialKindEye.rawValue) && (m.uniforms.flags & MaterialFlagSourceIrisHighlights.rawValue) == 0
             let isMap = m.uniforms.kind == UInt32(MaterialKindMap.rawValue)
+            // Instanced runs take the per-draw pipelines: their vertex functions
+            // read DrawUniforms by instance (B0), so a run renders like its records.
             s.setPipeline(isMap ? main.map : nativeEye ? main.eye : main.toonOpaque)
             s.setDepthStencil(pipelines.depthWrite)
             s.setCull((m.uniforms.flags & MaterialFlagDoubleSided.rawValue) != 0 ? .none : .back)
-            drawIndexed(s, rec.mesh)
+            drawRun(s, run, of: ctx.opaque)
         }
         enc.popDebugGroup()
 
@@ -1623,7 +1893,8 @@ public final class Renderer: @unchecked Sendable {
         if !ctx.transparent.isEmpty {
             enc.pushDebugGroup("Transparent")
             s.setDepthStencil(pipelines.depthTest)
-            for rec in ctx.transparent {
+            for run in ctx.transparentRuns {
+                let rec = ctx.transparent[run.lowerBound]
                 let material = rec.item.material.uniforms
                 let nativeEye = material.kind == UInt32(MaterialKindEye.rawValue) && (material.flags & MaterialFlagSourceIrisHighlights.rawValue) == 0
                 let isMap = material.kind == UInt32(MaterialKindMap.rawValue)
@@ -1645,7 +1916,7 @@ public final class Renderer: @unchecked Sendable {
                     continue
                 }
                 s.setPipeline(isMap ? main.mapBlend : nativeEye ? main.eyeBlend : main.toonBlend)
-                drawIndexed(s, rec.mesh)
+                drawRun(s, run, of: ctx.transparent)
             }
             enc.popDebugGroup()
         }
@@ -1750,7 +2021,39 @@ public final class Renderer: @unchecked Sendable {
         s.setPipeline(pipelines.pick)
         s.setDepthStencil(pipelines.depthWrite)
         s.setCull(.none)
-        for rec in ctx.opaque + ctx.transparent + ctx.live.map(\.record) where rec.item.objectID != 0 || rec.item.pickOccluder {
+        func pickable(_ rec: DrawRecord) -> Bool { rec.item.objectID != 0 || rec.item.pickOccluder }
+        // Opaque, transparent, then live records, in order. An instanced run
+        // draws its pickable stretches, so ids at equal depth resolve as they do
+        // one record at a time: the first drawn keeps the sample.
+        for (records, runs) in [(ctx.opaque, ctx.opaqueRuns), (ctx.transparent, ctx.transparentRuns)] {
+            for run in runs {
+                let first = records[run.lowerBound]
+                if !first.instanced {
+                    guard pickable(first) else { continue }
+                    s.setPipeline(pipelines.pick)
+                    bindDraw(s, first)
+                    bindMaskTextures(s, first.item.material, frame: ctx.frame, base: false)
+                    drawIndexed(s, first.mesh)
+                    continue
+                }
+                // The run is bound once, at its first pickable record.
+                var bound = false
+                Self.forEachDraw(run, of: records) { draw in
+                    for stretch in Self.stretches(draw, of: records, where: pickable) {
+                        s.setPipeline(pipelines.pickInstanced)
+                        if !bound {
+                            let rec = records[stretch.lowerBound]
+                            bindDraw(s, rec)
+                            bindMaskTextures(s, rec.item.material, frame: ctx.frame, base: false)
+                            bound = true
+                        }
+                        drawInstanced(s, stretch, of: records)
+                    }
+                }
+            }
+        }
+        s.setPipeline(pipelines.pick)
+        for rec in ctx.live.map(\.record) where pickable(rec) {
             bindDraw(s, rec)
             bindMaskTextures(s, rec.item.material, frame: ctx.frame, base: false)
             drawIndexed(s, rec.mesh)

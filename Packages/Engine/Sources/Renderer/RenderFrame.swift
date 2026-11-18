@@ -37,12 +37,30 @@ public struct MaterialState: Sendable, Equatable {
     public init(uniforms: MaterialUniforms) { self.uniforms = uniforms }
 
     public static func == (a: MaterialState, b: MaterialState) -> Bool {
-        withUnsafeBytes(of: a.uniforms) { ab in withUnsafeBytes(of: b.uniforms) { bb in ab.elementsEqual(bb) } }
-        && a.base == b.base && a.colorMask == b.colorMask && a.detail == b.detail && a.line == b.line && a.normal == b.normal
-        && a.overlay0 == b.overlay0 && a.overlay1 == b.overlay1 && a.overlay2 == b.overlay2 && a.pattern == b.pattern
-        && a.hairGloss == b.hairGloss && a.bodyMask == b.bodyMask && a.lightmap == b.lightmap
-        && a.lightmapDirection == b.lightmapDirection && a.emission == b.emission && a.cubemap == b.cubemap
-        && a.transparent == b.transparent && a.depthBias == b.depthBias
+        // Byte equality of the uniforms, as one memcmp: the render thread compares
+        // neighbouring item records' materials every frame (ST-T04 instanced runs).
+        withUnsafeBytes(of: a.uniforms) { ab in withUnsafeBytes(of: b.uniforms) { bb in memcmp(ab.baseAddress!, bb.baseAddress!, ab.count) == 0 } }
+        && a.sameTexturesAndState(b)
+    }
+
+    /// `==` apart from `uniforms.baseColor`, without copying either material:
+    /// the uniforms' bytes before and after the base colour, and the rest.
+    /// Neighbouring static item records that pass merge into one instanced run
+    /// (`Renderer.mergesWith`, ST-T04).
+    func equalsApartFromBaseColor(_ other: MaterialState) -> Bool {
+        let colour = MemoryLayout<MaterialUniforms>.offset(of: \.baseColor)!, after = colour + MemoryLayout<Float4>.size
+        return withUnsafeBytes(of: uniforms) { a in withUnsafeBytes(of: other.uniforms) { b in
+            memcmp(a.baseAddress!, b.baseAddress!, colour) == 0
+                && memcmp(a.baseAddress! + after, b.baseAddress! + after, a.count - after) == 0
+        } } && sameTexturesAndState(other)
+    }
+
+    private func sameTexturesAndState(_ b: MaterialState) -> Bool {
+        base == b.base && colorMask == b.colorMask && detail == b.detail && line == b.line && normal == b.normal
+            && overlay0 == b.overlay0 && overlay1 == b.overlay1 && overlay2 == b.overlay2 && pattern == b.pattern
+            && hairGloss == b.hairGloss && bodyMask == b.bodyMask && lightmap == b.lightmap
+            && lightmapDirection == b.lightmapDirection && emission == b.emission && cubemap == b.cubemap
+            && transparent == b.transparent && depthBias == b.depthBias
     }
 
     /// All explicit texture references, without fallback textures.
@@ -125,6 +143,12 @@ public struct RenderItem: Sendable {
     /// "Transparent" queue) unless set, so the order is unchanged without it;
     /// map particle materials carry their own (slice 4).
     public var renderQueue: Int = 3000
+    /// A static Studio prop (ST-T04): the Studio frame builder sets it on the
+    /// parts of `.item` objects and of source item placeholders, and only such
+    /// records may merge into an instanced run (`Renderer.instanceable` still
+    /// checks every condition). false (the default) keeps every other record,
+    /// characters and maps included, on its own draw.
+    public var staticItem: Bool = false
 
     public init(mesh: MeshHandle, material: MaterialState, model: float4x4, objectID: UInt32,
                 deformKey: UInt64? = nil, skinSet: UInt64? = nil, morphWeights: [(index: Int, weight: Float)] = []) {

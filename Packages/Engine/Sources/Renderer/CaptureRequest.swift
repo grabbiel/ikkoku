@@ -427,6 +427,7 @@ extension CaptureRequest {
         ScopedOption("IKKOKU_BENCHMARK_OUTPUT", [.appCapture]),
         ScopedOption("IKKOKU_BENCHMARK_FRAMES", [.appCapture]),
         ScopedOption("IKKOKU_BENCHMARK_SIMULATION_FRAMES", [.appCapture]),
+        ScopedOption("IKKOKU_BENCHMARK_ORBIT", [.appCapture]),
         ScopedOption("IKKOKU_PERF_WORKLOAD", [.perfTrace]),
         ScopedOption("IKKOKU_PERF_SECONDS", [.perfTrace]),
         ScopedOption("IKKOKU_PERF_WARMUP_SECONDS", [.perfTrace]),
@@ -505,6 +506,7 @@ extension CaptureRequest {
         Dependency("IKKOKU_BENCHMARK_FRAMES", requires: "IKKOKU_BENCHMARK_OUTPUT"),
         Dependency("IKKOKU_BENCHMARK_SIMULATION_FRAMES", requires: "IKKOKU_BENCHMARK_OUTPUT"),
         Dependency("IKKOKU_BENCHMARK_SIMULATION_FRAMES", requires: "IKKOKU_SOURCE_SCENE"),
+        Dependency("IKKOKU_BENCHMARK_ORBIT", requires: "IKKOKU_BENCHMARK_OUTPUT"),
         Dependency("IKKOKU_SOURCE_PLUGIN_DELTA", requires: "IKKOKU_SOURCE_PLUGIN_STEPS"),
         Dependency("IKKOKU_CAPTURE_UI_STUDIO_TAB", requires: "IKKOKU_CAPTURE_UI_MODE", value: "studio"),
         Dependency("IKKOKU_CAPTURE_UI_SELECT", requires: "IKKOKU_CAPTURE_UI_MODE", value: "studio"),
@@ -555,6 +557,7 @@ extension CaptureRequest {
         // The renderer and Studio benchmarks check their own frame ranges.
         ValueRule("IKKOKU_BENCHMARK_FRAMES", .integer(1...Int.max)),
         ValueRule("IKKOKU_BENCHMARK_SIMULATION_FRAMES", .integer(1...Int.max)),
+        ValueRule("IKKOKU_BENCHMARK_ORBIT", .finiteNumber),
         ValueRule("IKKOKU_CAPTURE_EXPR", .pairs(keys: ["eyes", "mouth", "brows", "head", "gaze"], integerValues: true)),
         ValueRule("IKKOKU_CAPTURE_SLIDERS", .pairs(keys: nil, integerValues: false)),
         ValueRule("IKKOKU_APPLICATION_FOCUS", .focusEvents),

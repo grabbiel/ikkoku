@@ -518,6 +518,10 @@ final class StudioModel: ViewportInputHandler, LivePacedHandler {
     /// re-reading the scene file.
     @ObservationIgnored private var sourceItemAssets: [UUID: (sceneSHA256: String, key: String, path: String,
         colors: [SIMD4<Float>], alpha: Float)] = [:]
+    /// ST-T04 (B4): the untinted materials of `sourceItemAssets`' files, built
+    /// once per asset instead of on every refresh. Cleared wherever an import
+    /// replaces `sourceItemAssets`, so it holds that import's files only.
+    @ObservationIgnored private var sourceItemMaterials = SourceStudioItemMaterials()
     /// A-T02: objects of opened scenes whose resource check (`resolvingResources`)
     /// left a reference missing, changed or outside its library, so their files
     /// are never read: `refresh()` skips them and rehydration and plugin
@@ -2721,7 +2725,7 @@ final class StudioModel: ViewportInputHandler, LivePacedHandler {
         sourceAnimationCatalog = job.animationCatalog; sourceAnimationCatalogError = job.animationCatalogError
         // The replaced scene's characters stay borrowable for an undo.
         keepSourceDonations(sourceInstances.filter { previews[$0.key] !== $0.value }.values)
-        stopSourceVoices(); sourcePluginSession = nil; sourcePluginsRunning = false; sourceAnimationTime = 0; sourceUnbuiltClock.clear(); sourceInstances = previews; sourceRoutes = routes; sourceRoutePlayState = Dictionary(uniqueKeysWithValues: routes.map { ($0.key, (playing: $0.value.route.active, start: 0)) }); sourceRouteCharacterPreviews = routeCharacterPreviews; lastSourceRouteDiagnostic = nil; releaseInstances { _ in true }; sourceCameras = cameras; sourceItemAssets = itemAssets; activeSourceCamera = activeCameraAtLoad; sourceCameraLoadActive = activeCameraAtLoad; clearResourceDiagnostics(); doc = imported; sourceSceneLight = sceneLightOverride.map { (hash, $0) }; coverSourceRuntime(imported); self.sceneURL = nil
+        stopSourceVoices(); sourcePluginSession = nil; sourcePluginsRunning = false; sourceAnimationTime = 0; sourceUnbuiltClock.clear(); sourceInstances = previews; sourceRoutes = routes; sourceRoutePlayState = Dictionary(uniqueKeysWithValues: routes.map { ($0.key, (playing: $0.value.route.active, start: 0)) }); sourceRouteCharacterPreviews = routeCharacterPreviews; lastSourceRouteDiagnostic = nil; releaseInstances { _ in true }; sourceCameras = cameras; sourceItemAssets = itemAssets; sourceItemMaterials.removeAll(); activeSourceCamera = activeCameraAtLoad; sourceCameraLoadActive = activeCameraAtLoad; clearResourceDiagnostics(); doc = imported; sourceSceneLight = sceneLightOverride.map { (hash, $0) }; coverSourceRuntime(imported); self.sceneURL = nil
         rebuildSourceRouteClocks()
         committed = true
         installSourceMap(job.mapRequest, load: job.mapLoad)
@@ -4067,6 +4071,7 @@ final class StudioModel: ViewportInputHandler, LivePacedHandler {
                     let model = world * part.worldMatrix
                     var ri = RenderItem(mesh: part.mesh, material: mat, model: model, objectID: objectID)
                     ri.order = 35
+                    ri.staticItem = true   // ST-T04: may draw instanced
                     items.append(ri)
                     bounds.expand(part.bounds.transformed(by: model))
                 }
@@ -4114,10 +4119,12 @@ final class StudioModel: ViewportInputHandler, LivePacedHandler {
                 // animation, FK and dynamics are not applied.
                 if let entry = sourceItemAssets[o.id], entry.sceneSHA256 == doc.sourceSceneSHA256,
                    let a = library.asset(entry.path) {
-                    for part in a.parts {
+                    // B4: the parts' untinted materials, built once per asset.
+                    let materials = sourceItemMaterials.materials(for: a, file: entry.path)
+                    for (part, material) in zip(a.parts, materials) {
                         let tint = SourceStudioItemColor.tint(colors: entry.colors, alpha: entry.alpha,
                             extras: part.material.extras)
-                        var mat = MaterialBuilder.itemMaterial(for: part, asset: a, tint: nil, emissive: 0)
+                        var mat = material
                         if let tint {
                             // The exported factor is the serialized `_Color`
                             // (and, for BLEND, `_alpha`); UpdateColor replaces
@@ -4132,6 +4139,7 @@ final class StudioModel: ViewportInputHandler, LivePacedHandler {
                         let model = world * part.worldMatrix
                         var ri = RenderItem(mesh: part.mesh, material: mat, model: model, objectID: objectID)
                         ri.order = 35
+                        ri.staticItem = true   // ST-T04: may draw instanced
                         items.append(ri)
                         bounds.expand(part.bounds.transformed(by: model))
                     }
@@ -4545,6 +4553,7 @@ final class StudioModel: ViewportInputHandler, LivePacedHandler {
         })
         sourceCameras = bundle.cameras
         sourceItemAssets = bundle.itemAssets
+        sourceItemMaterials.removeAll()
         sourceSceneLight = doc.sourceSceneSHA256.flatMap { hash in bundle.sceneLight.map { (hash, $0) } }
         activeSourceCamera = bundle.activeCameraAtLoad
         sourceCameraLoadActive = bundle.activeCameraAtLoad

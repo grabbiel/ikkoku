@@ -14,7 +14,7 @@ the ST-T07 eye look reference and solver-port files, the ST-T07s eye look
 Studio preview runtime files, the ST-T07u iris rendering files and the ST-T04
 studio item shader contract and record color files and the ST-T08 first-slice
 original motion capture/replay files. The 2026-10-23 ST-T08e skirt slice updates runtime, exporter, fixture, test and reference files and adds its paired
-Studio save/load scenarios; it does not represent a new code audit. The 2026-10-25 ST-T03i plug-in data slice adds its rule, test, rule-parity, survey and original-player probe files. The 2026-10-26 texture-loading slice (the parallel-test pool deadlock) adds the in-line texture loader, its identity, corpus and upload tests, and 19 synthetic decoder fixtures. The 2026-10-26 ST-T05a legacy-scene slice adds its reader, test, timing, original-player probe and scenario files. The 2026-11-01 #321 slice adds the deep-scene stack test. The 2026-11-02 ST-T04 catalog slice adds the item catalog generator and its synthetic test. The 2026-11-18 #394 slice adds the stable dictionary encoding and its test. The 2026-11-18 frame-preparation slice adds the encoder state record, the draw-order test and the encoder state test. It lists every present Git-visible
+Studio save/load scenarios; it does not represent a new code audit. The 2026-10-25 ST-T03i plug-in data slice adds its rule, test, rule-parity, survey and original-player probe files. The 2026-10-26 texture-loading slice (the parallel-test pool deadlock) adds the in-line texture loader, its identity, corpus and upload tests, and 19 synthetic decoder fixtures. The 2026-10-26 ST-T05a legacy-scene slice adds its reader, test, timing, original-player probe and scenario files. The 2026-11-01 #321 slice adds the deep-scene stack test. The 2026-11-02 ST-T04 catalog slice adds the item catalog generator and its synthetic test. The 2026-11-18 #394 slice adds the stable dictionary encoding and its test. The 2026-11-18 frame-preparation slice adds the encoder state record, the draw-order test and the encoder state test. The 2026-11-18 ST-T04 instancing slice adds the Studio item material cache, the instanced item shaders and the instanced item draw tests. It lists every present Git-visible
 tracked/untracked non-ignored repository file outside
 `docs/component-audit/`. It excludes private `.local/`, dependency/build caches
 and ignored intermediate assets. Binary assets are inventoried, not reviewed as
@@ -23,7 +23,7 @@ branch was tested or every asset matches the original game. Feature status,
 specific comments and pending tasks are in the linked reports. Shared behavior
 may be discussed in more than one report; one primary owner is listed here.
 
-**1095 files indexed; 1095 assigned; 0 unassigned.**
+**1098 files indexed; 1098 assigned; 0 unassigned.**
 
 Counts include the website and clothes-group additions listed below. Runtime and
 test totals include their specialized role descriptions; this is inventory
@@ -33,8 +33,8 @@ bookkeeping, not a new full source audit.
 | --- | ---: |
 | [App / gameplay / plugins](app-gameplay-and-plugins.md) | 110 |
 | [Character / Maker / mods](character-and-mods.md) | 132 |
-| [Studio / IK / animation](studio.md) | 255 |
-| [Renderer / foundation / assets](renderer-and-foundation.md) | 368 |
+| [Studio / IK / animation](studio.md) | 256 |
+| [Renderer / foundation / assets](renderer-and-foundation.md) | 370 |
 | [Toolchain / verification / historical docs](toolchain-and-verification.md) | 220 |
 
 | File role | Files |
@@ -45,8 +45,8 @@ bookkeeping, not a new full source audit.
 | Documentation / historical evidence | 65 |
 | Generated asset / catalog / fixture | 205 |
 | Reference host / controlled fixture | 37 |
-| Runtime / shared shader declaration | 236 |
-| Test / validation | 232 |
+| Runtime / shared shader declaration | 238 |
+| Test / validation | 233 |
 | Public synthetic body/face input fixture | 1 |
 
 ## App / gameplay / plugins
@@ -366,6 +366,7 @@ Feature assessment: [studio.md](studio.md).
 | [Packages/Engine/Sources/Studio/SourceStudioIrisOffset.swift](../../Packages/Engine/Sources/Studio/SourceStudioIrisOffset.swift) | Runtime / shared shader declaration |
 | [Packages/Engine/Sources/Studio/SourceStudioIrisRendering.swift](../../Packages/Engine/Sources/Studio/SourceStudioIrisRendering.swift) | Runtime / shared shader declaration |
 | [Packages/Engine/Sources/Studio/SourceStudioItemColor.swift](../../Packages/Engine/Sources/Studio/SourceStudioItemColor.swift) | Runtime / shared shader declaration |
+| [Packages/Engine/Sources/Studio/SourceStudioItemMaterials.swift](../../Packages/Engine/Sources/Studio/SourceStudioItemMaterials.swift) | Runtime / shared shader declaration |
 | [Packages/Engine/Sources/Studio/SourceStudioLiveTick.swift](../../Packages/Engine/Sources/Studio/SourceStudioLiveTick.swift) | Runtime / shared shader declaration |
 | [Packages/Engine/Sources/Studio/SourceStudioLookData.swift](../../Packages/Engine/Sources/Studio/SourceStudioLookData.swift) | Runtime / shared shader declaration |
 | [Packages/Engine/Sources/Studio/SourceStudioMap.swift](../../Packages/Engine/Sources/Studio/SourceStudioMap.swift) | Runtime / shared shader declaration |
@@ -866,6 +867,7 @@ Feature assessment: [renderer-and-foundation.md](renderer-and-foundation.md).
 | [Packages/Engine/Tests/EngineTests/InlineTextureLoaderIdentityTests.swift](../../Packages/Engine/Tests/EngineTests/InlineTextureLoaderIdentityTests.swift) | Test / identity with MetalKit for every image layout, encoded file and decoder fixture; texture-container rejection |
 | [Packages/Engine/Tests/EngineTests/FramePreparationOrderTests.swift](../../Packages/Engine/Tests/EngineTests/FramePreparationOrderTests.swift) | Test / validation |
 | [Packages/Engine/Tests/EngineTests/EncoderStateTests.swift](../../Packages/Engine/Tests/EngineTests/EncoderStateTests.swift) | Test / validation |
+| [Packages/Engine/Tests/EngineTests/InstancedItemDrawTests.swift](../../Packages/Engine/Tests/EngineTests/InstancedItemDrawTests.swift) | Test / validation |
 | [Packages/Engine/Tests/EngineTests/TextureRetirementAtSubmitTests.swift](../../Packages/Engine/Tests/EngineTests/TextureRetirementAtSubmitTests.swift) | Test / R6 texture release at the next submit without a prepared frame, older frames still drawing it, deformation-key order kept (#368) |
 | [Packages/Engine/Tests/EngineTests/ResourceStoreUploadTests.swift](../../Packages/Engine/Tests/EngineTests/ResourceStoreUploadTests.swift) | Test / upload queue registry, completion before handout, call order and many-store saturation |
 | [Packages/Engine/Tests/EngineTests/RendererLimitsTests.swift](../../Packages/Engine/Tests/EngineTests/RendererLimitsTests.swift) | Test / validation |
@@ -882,6 +884,7 @@ Feature assessment: [renderer-and-foundation.md](renderer-and-foundation.md).
 | [Packages/Engine/Tests/EngineTests/TranslatedSourceVertexStoreTests.swift](../../Packages/Engine/Tests/EngineTests/TranslatedSourceVertexStoreTests.swift) | Test / validation |
 | [Shaders/Common.h](../../Shaders/Common.h) | Runtime / shared shader declaration |
 | [Shaders/Deform.metal](../../Shaders/Deform.metal) | Runtime / shared shader declaration |
+| [Shaders/InstancedItems.metal](../../Shaders/InstancedItems.metal) | Runtime / shared shader declaration |
 | [Shaders/Outline.metal](../../Shaders/Outline.metal) | Runtime / shared shader declaration |
 | [Shaders/Overlay.metal](../../Shaders/Overlay.metal) | Runtime / shared shader declaration |
 | [Shaders/Post.metal](../../Shaders/Post.metal) | Runtime / shared shader declaration |
