@@ -227,6 +227,7 @@ public final class Renderer: @unchecked Sendable {
     static let deformBypassPause: CFTimeInterval = 0.1
     private var deformReuse = true
     private var skipUnchanged = true
+    private var skipRedundantState = true
     var liveEncoder: SourceShaderLiveEncoder?
     var liveEncoderError: String?
 
@@ -281,6 +282,14 @@ public final class Renderer: @unchecked Sendable {
     public var skipsUnchangedFrames: Bool {
         get { renderLock.lock(); defer { renderLock.unlock() }; return skipUnchanged }
         set { renderLock.lock(); skipUnchanged = newValue; renderLock.unlock() }
+    }
+    /// Whether the geometry passes skip encoder calls that repeat the state
+    /// the encoder already holds (`EncoderState`; default true). False sets
+    /// every state for every draw, as before: the reference of the
+    /// state-skipping tests. Safe from any thread.
+    var skipsRedundantEncoderState: Bool {
+        get { renderLock.lock(); defer { renderLock.unlock() }; return skipRedundantState }
+        set { renderLock.lock(); skipRedundantState = newValue; renderLock.unlock() }
     }
     /// Whether interactive draws and picks skip the deform dispatch of a
     /// deformation whose buffer already holds exactly the frame's vertices (R7
@@ -1412,64 +1421,76 @@ public final class Renderer: @unchecked Sendable {
         cb.commit()
     }
 
-    func bindCommon(_ enc: any MTLRenderCommandEncoder, _ ctx: FrameContext) {
-        enc.setVertexBuffer(ctx.frameUniforms.buffer, offset: ctx.frameUniforms.offset, index: Int(BufferIndexFrameUniforms.rawValue))
-        enc.setFragmentBuffer(ctx.frameUniforms.buffer, offset: ctx.frameUniforms.offset, index: Int(BufferIndexFrameUniforms.rawValue))
-        enc.setFragmentBuffer(ctx.lights.buffer, offset: ctx.lights.offset, index: Int(BufferIndexLights.rawValue))
-        enc.setFragmentTexture(shadowMap, index: Int(TextureIndexShadowMap.rawValue))
-        enc.setFrontFacing(.counterClockwise)
+    func bindCommon(_ s: EncoderState, _ ctx: FrameContext) {
+        s.setVertexBuffer(ctx.frameUniforms.buffer, offset: ctx.frameUniforms.offset, index: Int(BufferIndexFrameUniforms.rawValue))
+        s.setFragmentBuffer(ctx.frameUniforms.buffer, offset: ctx.frameUniforms.offset, index: Int(BufferIndexFrameUniforms.rawValue))
+        s.setFragmentBuffer(ctx.lights.buffer, offset: ctx.lights.offset, index: Int(BufferIndexLights.rawValue))
+        s.setFragmentTexture(shadowMap, index: Int(TextureIndexShadowMap.rawValue))
+        s.setFrontFacing(.counterClockwise)
     }
 
-    private func bindDraw(_ enc: any MTLRenderCommandEncoder, _ rec: DrawRecord) {
+    private func bindDraw(_ s: EncoderState, _ rec: DrawRecord) {
         // Mirrored scene nodes reverse triangle orientation in every geometry pass.
-        enc.setFrontFacing(simd_determinant(rec.item.model.upperLeft3x3) < 0 ? .clockwise : .counterClockwise)
-        enc.setVertexBuffer(rec.vertexBuffer, offset: 0, index: Int(BufferIndexVertices.rawValue))
-        enc.setVertexBuffer(rec.mesh.texcoords, offset: 0, index: Int(BufferIndexTexcoords.rawValue))
-        enc.setVertexBuffer(rec.mesh.texcoords1, offset: 0, index: Int(BufferIndexTexcoords1.rawValue))
-        enc.setVertexBuffer(rec.mesh.texcoords2, offset: 0, index: Int(BufferIndexTexcoords2.rawValue))
-        enc.setVertexBuffer(rec.mesh.colors ?? resources.dummyBuffer, offset: 0, index: Int(BufferIndexVertexColors.rawValue))
-        enc.setVertexBuffer(rec.draw.buffer, offset: rec.draw.offset, index: Int(BufferIndexDrawUniforms.rawValue))
-        enc.setVertexBuffer(rec.material.buffer, offset: rec.material.offset, index: Int(BufferIndexMaterial.rawValue))
-        enc.setVertexBuffer(rec.hiddenBuffer ?? resources.dummyBuffer, offset: 0, index: Int(BufferIndexVertexHidden.rawValue))
-        enc.setFragmentBuffer(rec.draw.buffer, offset: rec.draw.offset, index: Int(BufferIndexDrawUniforms.rawValue))
-        enc.setFragmentBuffer(rec.material.buffer, offset: rec.material.offset, index: Int(BufferIndexMaterial.rawValue))
+        s.setFrontFacing(simd_determinant(rec.item.model.upperLeft3x3) < 0 ? .clockwise : .counterClockwise)
+        s.setVertexBuffer(rec.vertexBuffer, offset: 0, index: Int(BufferIndexVertices.rawValue))
+        s.setVertexBuffer(rec.mesh.texcoords, offset: 0, index: Int(BufferIndexTexcoords.rawValue))
+        s.setVertexBuffer(rec.mesh.texcoords1, offset: 0, index: Int(BufferIndexTexcoords1.rawValue))
+        s.setVertexBuffer(rec.mesh.texcoords2, offset: 0, index: Int(BufferIndexTexcoords2.rawValue))
+        s.setVertexBuffer(rec.mesh.colors ?? resources.dummyBuffer, offset: 0, index: Int(BufferIndexVertexColors.rawValue))
+        s.setVertexBuffer(rec.draw.buffer, offset: rec.draw.offset, index: Int(BufferIndexDrawUniforms.rawValue))
+        s.setVertexBuffer(rec.material.buffer, offset: rec.material.offset, index: Int(BufferIndexMaterial.rawValue))
+        s.setVertexBuffer(rec.hiddenBuffer ?? resources.dummyBuffer, offset: 0, index: Int(BufferIndexVertexHidden.rawValue))
+        s.setFragmentBuffer(rec.draw.buffer, offset: rec.draw.offset, index: Int(BufferIndexDrawUniforms.rawValue))
+        s.setFragmentBuffer(rec.material.buffer, offset: rec.material.offset, index: Int(BufferIndexMaterial.rawValue))
     }
 
-    private func bindTextures(_ enc: any MTLRenderCommandEncoder, _ m: MaterialState, frame: RenderFrame) {
+    /// The material's textures, by its kind. They depend only on its kind and
+    /// handles (the frame resolves each handle the same way all frame long),
+    /// so a material with the same set as the last one bound binds nothing.
+    private func bindTextures(_ s: EncoderState, _ m: MaterialState, frame: RenderFrame) {
+        let set = m.textureSet
+        if s.skips, s.boundTextureSet == set { return }
+        s.boundTextureSet = set
         let white = resources.whiteTexture, black = resources.blackTexture
         if m.uniforms.kind == UInt32(MaterialKindSky.rawValue) {
             // sky_fragment samples only the cube (ST-A11 map sky). prepare drops a
             // sky draw whose cube does not resolve, so index 19 always holds a cube here.
             if let cube = frame.texture(m.cubemap, resources: resources) {
-                enc.setFragmentTexture(cube, index: Int(TextureIndexSkyCube.rawValue))
+                s.setFragmentTexture(cube, index: Int(TextureIndexSkyCube.rawValue))
             }
             return
         }
-        enc.setFragmentTexture(frame.texture(m.base, resources: resources) ?? white, index: Int(TextureIndexBase.rawValue))
+        s.setFragmentTexture(frame.texture(m.base, resources: resources) ?? white, index: Int(TextureIndexBase.rawValue))
         if m.uniforms.kind == UInt32(MaterialKindMap.rawValue) {
             // map_fragment samples only these four (ST-A11 source maps).
-            enc.setFragmentTexture(frame.texture(m.lightmap, resources: resources) ?? black, index: Int(TextureIndexLightmap.rawValue))
-            enc.setFragmentTexture(frame.texture(m.lightmapDirection, resources: resources) ?? black,
+            s.setFragmentTexture(frame.texture(m.lightmap, resources: resources) ?? black, index: Int(TextureIndexLightmap.rawValue))
+            s.setFragmentTexture(frame.texture(m.lightmapDirection, resources: resources) ?? black,
                                    index: Int(TextureIndexLightmapDirection.rawValue))
             // Unity's _EmissionMap default is white; map_fragment reads it only when emissive.a > 0.
-            enc.setFragmentTexture(frame.texture(m.emission, resources: resources) ?? white, index: Int(TextureIndexEmission.rawValue))
+            s.setFragmentTexture(frame.texture(m.emission, resources: resources) ?? white, index: Int(TextureIndexEmission.rawValue))
             return
         }
-        enc.setFragmentTexture(frame.texture(m.colorMask, resources: resources) ?? black, index: Int(TextureIndexColorMask.rawValue))
+        s.setFragmentTexture(frame.texture(m.colorMask, resources: resources) ?? black, index: Int(TextureIndexColorMask.rawValue))
         let isEye = m.uniforms.kind == UInt32(MaterialKindEye.rawValue)
-        enc.setFragmentTexture(frame.texture(m.detail, resources: resources) ?? (isEye ? black : white), index: Int(TextureIndexDetail.rawValue))
-        enc.setFragmentTexture(frame.texture(m.line, resources: resources) ?? black, index: Int(TextureIndexLine.rawValue))
-        enc.setFragmentTexture(frame.texture(m.normal, resources: resources) ?? resources.flatNormalTexture, index: Int(TextureIndexNormal.rawValue))
-        enc.setFragmentTexture(frame.texture(m.overlay0, resources: resources) ?? black, index: Int(TextureIndexOverlay0.rawValue))
-        enc.setFragmentTexture(frame.texture(m.overlay1, resources: resources) ?? black, index: Int(TextureIndexOverlay1.rawValue))
-        enc.setFragmentTexture(frame.texture(m.overlay2, resources: resources) ?? black, index: Int(TextureIndexOverlay2.rawValue))
-        enc.setFragmentTexture(frame.texture(m.hairGloss, resources: resources) ?? white, index: Int(TextureIndexHairGloss.rawValue))
-        enc.setFragmentTexture(frame.texture(m.pattern, resources: resources) ?? white, index: Int(TextureIndexPattern.rawValue))
-        enc.setFragmentTexture(frame.texture(m.bodyMask, resources: resources) ?? black, index: Int(TextureIndexBodyMask.rawValue))
+        s.setFragmentTexture(frame.texture(m.detail, resources: resources) ?? (isEye ? black : white), index: Int(TextureIndexDetail.rawValue))
+        s.setFragmentTexture(frame.texture(m.line, resources: resources) ?? black, index: Int(TextureIndexLine.rawValue))
+        s.setFragmentTexture(frame.texture(m.normal, resources: resources) ?? resources.flatNormalTexture, index: Int(TextureIndexNormal.rawValue))
+        s.setFragmentTexture(frame.texture(m.overlay0, resources: resources) ?? black, index: Int(TextureIndexOverlay0.rawValue))
+        s.setFragmentTexture(frame.texture(m.overlay1, resources: resources) ?? black, index: Int(TextureIndexOverlay1.rawValue))
+        s.setFragmentTexture(frame.texture(m.overlay2, resources: resources) ?? black, index: Int(TextureIndexOverlay2.rawValue))
+        s.setFragmentTexture(frame.texture(m.hairGloss, resources: resources) ?? white, index: Int(TextureIndexHairGloss.rawValue))
+        s.setFragmentTexture(frame.texture(m.pattern, resources: resources) ?? white, index: Int(TextureIndexPattern.rawValue))
+        s.setFragmentTexture(frame.texture(m.bodyMask, resources: resources) ?? black, index: Int(TextureIndexBodyMask.rawValue))
     }
 
-    private func drawIndexed(_ enc: any MTLRenderCommandEncoder, _ mesh: GPUMesh) {
-        enc.drawIndexedPrimitives(type: .triangle, indexCount: mesh.indexCount, indexType: .uint32, indexBuffer: mesh.indices, indexBufferOffset: 0)
+    /// The base and body-mask textures, all the shadow and pick fragment functions read.
+    private func bindMaskTextures(_ s: EncoderState, _ m: MaterialState, frame: RenderFrame, base: Bool) {
+        if base { s.setFragmentTexture(frame.texture(m.base, resources: resources) ?? resources.whiteTexture, index: Int(TextureIndexBase.rawValue)) }
+        s.setFragmentTexture(frame.texture(m.bodyMask, resources: resources) ?? resources.blackTexture, index: Int(TextureIndexBodyMask.rawValue))
+    }
+
+    private func drawIndexed(_ s: EncoderState, _ mesh: GPUMesh) {
+        s.encoder.drawIndexedPrimitives(type: .triangle, indexCount: mesh.indexCount, indexType: .uint32, indexBuffer: mesh.indices, indexBufferOffset: 0)
     }
 
     private func encodeShadow(_ ctx: FrameContext, _ cb: any MTLCommandBuffer) {
@@ -1480,17 +1501,17 @@ public final class Renderer: @unchecked Sendable {
         pass.depthAttachment.clearDepth = 0
         guard let enc = cb.makeRenderCommandEncoder(descriptor: pass) else { return }
         enc.label = "Shadow"
+        let s = EncoderState(enc, skips: skipRedundantState)
         if ctx.frame.mainLight.castsShadow {
-            enc.setRenderPipelineState(pipelines.shadow)
-            enc.setDepthStencilState(pipelines.depthWrite)
-            enc.setCullMode(.none)
+            s.setPipeline(pipelines.shadow)
+            s.setDepthStencil(pipelines.depthWrite)
+            s.setCull(.none)
             enc.setDepthBias(1.0, slopeScale: 1.5, clamp: 0.01)
-            bindCommon(enc, ctx)
+            bindCommon(s, ctx)
             for rec in ctx.shadowCasters {
-                bindDraw(enc, rec)
-                enc.setFragmentTexture(ctx.frame.texture(rec.item.material.base, resources: resources) ?? resources.whiteTexture, index: Int(TextureIndexBase.rawValue))
-                enc.setFragmentTexture(ctx.frame.texture(rec.item.material.bodyMask, resources: resources) ?? resources.blackTexture, index: Int(TextureIndexBodyMask.rawValue))
-                drawIndexed(enc, rec.mesh)
+                bindDraw(s, rec)
+                bindMaskTextures(s, rec.item.material, frame: ctx.frame, base: true)
+                drawIndexed(s, rec.mesh)
             }
         }
         enc.endEncoding()
@@ -1529,38 +1550,39 @@ public final class Renderer: @unchecked Sendable {
         }
         guard let enc = cb.makeRenderCommandEncoder(descriptor: pass) else { return }
         enc.label = "Main"
-        bindCommon(enc, ctx)
+        let s = EncoderState(enc, skips: skipRedundantState)
+        bindCommon(s, ctx)
 
         if !fx.transparentBackground, let background = ctx.background {
             enc.pushDebugGroup("Background")
-            enc.setRenderPipelineState(main.background)
-            enc.setDepthStencilState(pipelines.depthNone)
-            enc.setCullMode(.none)
-            enc.setFragmentBuffer(background.buffer, offset: background.offset, index: Int(BufferIndexFrameUniforms.rawValue))
-            enc.setFragmentBuffer(ctx.post.buffer, offset: ctx.post.offset, index: Int(BufferIndexPostParams.rawValue))
+            s.setPipeline(main.background)
+            s.setDepthStencil(pipelines.depthNone)
+            s.setCull(.none)
+            s.setFragmentBuffer(background.buffer, offset: background.offset, index: Int(BufferIndexFrameUniforms.rawValue))
+            s.setFragmentBuffer(ctx.post.buffer, offset: ctx.post.offset, index: Int(BufferIndexPostParams.rawValue))
             enc.drawPrimitives(type: .triangle, vertexStart: 0, vertexCount: 3)
-            enc.setFragmentBuffer(ctx.frameUniforms.buffer, offset: ctx.frameUniforms.offset, index: Int(BufferIndexFrameUniforms.rawValue))
+            s.setFragmentBuffer(ctx.frameUniforms.buffer, offset: ctx.frameUniforms.offset, index: Int(BufferIndexFrameUniforms.rawValue))
             enc.popDebugGroup()
         }
         if !ctx.sky.isEmpty {
             // Unity draws Background-queue geometry first, ZWrite Off; the sphere
             // lies far inside the infinite reverse-Z frustum, so nothing clips it.
             enc.pushDebugGroup("Sky")
-            enc.setRenderPipelineState(main.sky)
-            enc.setDepthStencilState(pipelines.depthNone)
-            enc.setCullMode(.none)
+            s.setPipeline(main.sky)
+            s.setDepthStencil(pipelines.depthNone)
+            s.setCull(.none)
             for rec in ctx.sky {
-                bindDraw(enc, rec)
-                bindTextures(enc, rec.item.material, frame: ctx.frame)
-                drawIndexed(enc, rec.mesh)
+                bindDraw(s, rec)
+                bindTextures(s, rec.item.material, frame: ctx.frame)
+                drawIndexed(s, rec.mesh)
             }
             enc.popDebugGroup()
         }
         if fx.showGrid {
             enc.pushDebugGroup("Grid")
-            enc.setRenderPipelineState(main.grid)
-            enc.setDepthStencilState(pipelines.depthTest)
-            enc.setCullMode(.none)
+            s.setPipeline(main.grid)
+            s.setDepthStencil(pipelines.depthTest)
+            s.setCull(.none)
             enc.drawPrimitives(type: .triangle, vertexStart: 0, vertexCount: 6)
             enc.popDebugGroup()
         }
@@ -1569,58 +1591,61 @@ public final class Renderer: @unchecked Sendable {
         let outlinesOn = fx.outlineWidth > 0.001
         for rec in ctx.opaque {
             let m = rec.item.material
-            bindDraw(enc, rec)
-            bindTextures(enc, m, frame: ctx.frame)
+            bindDraw(s, rec)
+            bindTextures(s, m, frame: ctx.frame)
             if outlinesOn && rec.item.outline && (m.uniforms.flags & MaterialFlagNoOutline.rawValue) == 0 {
-                enc.setRenderPipelineState(main.outline)
-                enc.setDepthStencilState(pipelines.depthWrite)
-                enc.setCullMode(.front)
-                drawIndexed(enc, rec.mesh)
+                s.setPipeline(main.outline)
+                s.setDepthStencil(pipelines.depthWrite)
+                s.setCull(.front)
+                drawIndexed(s, rec.mesh)
             }
             let nativeEye = m.uniforms.kind == UInt32(MaterialKindEye.rawValue) && (m.uniforms.flags & MaterialFlagSourceIrisHighlights.rawValue) == 0
             let isMap = m.uniforms.kind == UInt32(MaterialKindMap.rawValue)
-            enc.setRenderPipelineState(isMap ? main.map : nativeEye ? main.eye : main.toonOpaque)
-            enc.setDepthStencilState(pipelines.depthWrite)
-            enc.setCullMode((m.uniforms.flags & MaterialFlagDoubleSided.rawValue) != 0 ? .none : .back)
-            drawIndexed(enc, rec.mesh)
+            s.setPipeline(isMap ? main.map : nativeEye ? main.eye : main.toonOpaque)
+            s.setDepthStencil(pipelines.depthWrite)
+            s.setCull((m.uniforms.flags & MaterialFlagDoubleSided.rawValue) != 0 ? .none : .back)
+            drawIndexed(s, rec.mesh)
         }
         enc.popDebugGroup()
 
         if !ctx.live.isEmpty, ctx.liveMainPass != nil {
             enc.pushDebugGroup("SourceShaderLive")
             encodeLiveDraws(enc, ctx, target: TranslatedSourceTarget(color: Pipelines.hdrFormat, depthStencil: Pipelines.depthStencilFormat, sampleCount: Pipelines.sampleCount))
-            // Translated programs bind buffers 0 and 8…, textures 0…; restore
-            // the native frame bindings for the passes that follow.
-            bindCommon(enc, ctx)
+            // Translated programs bind buffers 0 and 8…, textures 0… and their
+            // own pipeline, depth, cull and winding state directly: forget what
+            // the encoder held, and restore the native frame bindings for the
+            // passes that follow.
+            s.forget()
+            bindCommon(s, ctx)
             enc.popDebugGroup()
         }
 
         if !ctx.transparent.isEmpty {
             enc.pushDebugGroup("Transparent")
-            enc.setDepthStencilState(pipelines.depthTest)
+            s.setDepthStencil(pipelines.depthTest)
             for rec in ctx.transparent {
                 let material = rec.item.material.uniforms
                 let nativeEye = material.kind == UInt32(MaterialKindEye.rawValue) && (material.flags & MaterialFlagSourceIrisHighlights.rawValue) == 0
                 let isMap = material.kind == UInt32(MaterialKindMap.rawValue)
-                bindDraw(enc, rec)
-                bindTextures(enc, rec.item.material, frame: ctx.frame)
-                enc.setCullMode((rec.item.material.uniforms.flags & MaterialFlagDoubleSided.rawValue) != 0 ? .none : .back)
+                bindDraw(s, rec)
+                bindTextures(s, rec.item.material, frame: ctx.frame)
+                s.setCull((rec.item.material.uniforms.flags & MaterialFlagDoubleSided.rawValue) != 0 ? .none : .back)
                 if isMap, (material.flags & MaterialFlagMapSilhouette.rawValue) != 0 {
                     // Custom/Silhouette, per renderer as Unity draws it: pass 1 writes
                     // depth only (ColorMask 0, ZWrite On, ZTest LEqual), pass 2 blends
                     // the colour where pass 1 left the nearest depth (ZWrite Off,
                     // ZTest LEqual), so a renderer's overlapping faces blend once.
-                    enc.setRenderPipelineState(main.mapDepthOnly)
-                    enc.setDepthStencilState(pipelines.depthWriteLEqual)
-                    drawIndexed(enc, rec.mesh)
-                    enc.setRenderPipelineState(main.mapBlend)
-                    enc.setDepthStencilState(pipelines.depthTestLEqual)
-                    drawIndexed(enc, rec.mesh)
-                    enc.setDepthStencilState(pipelines.depthTest)
+                    s.setPipeline(main.mapDepthOnly)
+                    s.setDepthStencil(pipelines.depthWriteLEqual)
+                    drawIndexed(s, rec.mesh)
+                    s.setPipeline(main.mapBlend)
+                    s.setDepthStencil(pipelines.depthTestLEqual)
+                    drawIndexed(s, rec.mesh)
+                    s.setDepthStencil(pipelines.depthTest)
                     continue
                 }
-                enc.setRenderPipelineState(isMap ? main.mapBlend : nativeEye ? main.eyeBlend : main.toonBlend)
-                drawIndexed(enc, rec.mesh)
+                s.setPipeline(isMap ? main.mapBlend : nativeEye ? main.eyeBlend : main.toonBlend)
+                drawIndexed(s, rec.mesh)
             }
             enc.popDebugGroup()
         }
@@ -1628,21 +1653,21 @@ public final class Renderer: @unchecked Sendable {
         let depthGizmos = ctx.gizmos.filter { $0.batch.depthTest }
         if !depthGizmos.isEmpty {
             enc.pushDebugGroup("GizmosDepth")
-            enc.setRenderPipelineState(main.gizmoHDR)
-            enc.setDepthStencilState(pipelines.depthTest)
-            enc.setCullMode(.none)
-            encodeGizmos(enc, depthGizmos)
+            s.setPipeline(main.gizmoHDR)
+            s.setDepthStencil(pipelines.depthTest)
+            s.setCull(.none)
+            encodeGizmos(s, depthGizmos)
             enc.popDebugGroup()
         }
         enc.endEncoding()
     }
 
-    private func encodeGizmos(_ enc: any MTLRenderCommandEncoder, _ records: [GizmoRecord]) {
+    private func encodeGizmos(_ s: EncoderState, _ records: [GizmoRecord]) {
         for g in records {
-            enc.setVertexBuffer(g.vertices.buffer, offset: g.vertices.offset, index: Int(BufferIndexGizmoVertices.rawValue))
-            enc.setVertexBuffer(g.draw.buffer, offset: g.draw.offset, index: Int(BufferIndexDrawUniforms.rawValue))
-            enc.setFragmentBuffer(g.draw.buffer, offset: g.draw.offset, index: Int(BufferIndexDrawUniforms.rawValue))
-            enc.drawPrimitives(type: g.batch.primitive == .lines ? .line : .triangle, vertexStart: 0, vertexCount: g.batch.vertices.count)
+            s.setVertexBuffer(g.vertices.buffer, offset: g.vertices.offset, index: Int(BufferIndexGizmoVertices.rawValue))
+            s.setVertexBuffer(g.draw.buffer, offset: g.draw.offset, index: Int(BufferIndexDrawUniforms.rawValue))
+            s.setFragmentBuffer(g.draw.buffer, offset: g.draw.offset, index: Int(BufferIndexDrawUniforms.rawValue))
+            s.encoder.drawPrimitives(type: g.batch.primitive == .lines ? .line : .triangle, vertexStart: 0, vertexCount: g.batch.vertices.count)
         }
     }
 
@@ -1695,11 +1720,12 @@ public final class Renderer: @unchecked Sendable {
         pass.depthAttachment.clearDepth = 0
         guard let enc = cb.makeRenderCommandEncoder(descriptor: pass) else { return }
         enc.label = "Overlay"
-        enc.setRenderPipelineState(pipelines.gizmoLDR)
-        enc.setDepthStencilState(pipelines.depthWrite)
-        enc.setCullMode(.none)
-        enc.setVertexBuffer(ctx.frameUniforms.buffer, offset: ctx.frameUniforms.offset, index: Int(BufferIndexFrameUniforms.rawValue))
-        encodeGizmos(enc, overlays)
+        let s = EncoderState(enc, skips: skipRedundantState)
+        s.setPipeline(pipelines.gizmoLDR)
+        s.setDepthStencil(pipelines.depthWrite)
+        s.setCull(.none)
+        s.setVertexBuffer(ctx.frameUniforms.buffer, offset: ctx.frameUniforms.offset, index: Int(BufferIndexFrameUniforms.rawValue))
+        encodeGizmos(s, overlays)
         enc.endEncoding()
     }
 
@@ -1717,24 +1743,24 @@ public final class Renderer: @unchecked Sendable {
         pass.depthAttachment.clearDepth = 0
         guard let enc = cb.makeRenderCommandEncoder(descriptor: pass) else { return }
         enc.label = "Pick"
+        let s = EncoderState(enc, skips: skipRedundantState)
         if let scissor { enc.setScissorRect(scissor) }
-        enc.setFrontFacing(.counterClockwise)
-        enc.setVertexBuffer(ctx.frameUniforms.buffer, offset: ctx.frameUniforms.offset, index: Int(BufferIndexFrameUniforms.rawValue))
-        enc.setRenderPipelineState(pipelines.pick)
-        enc.setDepthStencilState(pipelines.depthWrite)
-        enc.setCullMode(.none)
+        s.setFrontFacing(.counterClockwise)
+        s.setVertexBuffer(ctx.frameUniforms.buffer, offset: ctx.frameUniforms.offset, index: Int(BufferIndexFrameUniforms.rawValue))
+        s.setPipeline(pipelines.pick)
+        s.setDepthStencil(pipelines.depthWrite)
+        s.setCull(.none)
         for rec in ctx.opaque + ctx.transparent + ctx.live.map(\.record) where rec.item.objectID != 0 || rec.item.pickOccluder {
-            bindDraw(enc, rec)
-            enc.setFragmentTexture(ctx.frame.texture(rec.item.material.bodyMask, resources: resources) ?? resources.blackTexture,
-                                   index: Int(TextureIndexBodyMask.rawValue))
-            drawIndexed(enc, rec.mesh)
+            bindDraw(s, rec)
+            bindMaskTextures(s, rec.item.material, frame: ctx.frame, base: false)
+            drawIndexed(s, rec.mesh)
         }
         // Pickable gizmos draw on top (depth cleared so handles always win).
         let pickable = ctx.gizmos.filter { $0.batch.objectID != 0 }
         if !pickable.isEmpty {
-            enc.setRenderPipelineState(pipelines.pickGizmo)
-            enc.setDepthStencilState(pipelines.depthNone)
-            encodeGizmos(enc, pickable)
+            s.setPipeline(pipelines.pickGizmo)
+            s.setDepthStencil(pipelines.depthNone)
+            encodeGizmos(s, pickable)
         }
         enc.endEncoding()
     }

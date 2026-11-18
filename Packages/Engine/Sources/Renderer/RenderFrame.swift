@@ -64,6 +64,20 @@ public struct MaterialState: Sendable, Equatable {
         if let lightmapDirection { body(lightmapDirection) }; if let emission { body(emission) }; if let cubemap { body(cubemap) }
     }
 
+    /// What the main pass binds a material's textures from: its kind and its
+    /// handles (`Renderer.bindTextures`). Equal sets bind equal textures in one frame.
+    struct TextureSet: Equatable {
+        var kind: UInt32
+        var base, colorMask, detail, line, normal, overlay0, overlay1, overlay2, pattern, hairGloss, bodyMask: TextureHandle?
+        var lightmap, lightmapDirection, emission, cubemap: TextureHandle?
+    }
+
+    var textureSet: TextureSet {
+        TextureSet(kind: uniforms.kind, base: base, colorMask: colorMask, detail: detail, line: line, normal: normal,
+                   overlay0: overlay0, overlay1: overlay1, overlay2: overlay2, pattern: pattern, hairGloss: hairGloss,
+                   bodyMask: bodyMask, lightmap: lightmap, lightmapDirection: lightmapDirection, emission: emission, cubemap: cubemap)
+    }
+
     public var kind: MaterialKind { MaterialKind(rawValue: Int32(uniforms.kind)) }
 
     public mutating func setFlag(_ f: MaterialFlags, _ on: Bool) {

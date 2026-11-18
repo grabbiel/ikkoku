@@ -681,8 +681,34 @@ Each of these now avoids the copy or allocation, with the same result:
   so only items with a skin set take the store's lock.
 - **Record arrays.** The opaque, transparent and caster arrays reserve the
   item count up front.
+- **Repeated encoder state.** Each record bound its whole state, about 30
+  encoder calls, even when the record before it had bound the same mesh,
+  pipeline, cull mode and textures. The shadow, main, overlay and pick passes
+  now set their state through an `EncoderState`. It records what the encoder
+  holds: pipeline, depth-stencil state, cull mode, winding, the vertex and
+  fragment buffers by index (object and offset) and the fragment textures.
+  - A set that repeats the recorded state is skipped.
+  - A buffer bound again at another offset only moves its offset
+    (`setVertexBufferOffset` / `setFragmentBufferOffset`), as each record's
+    draw and material uniforms do in the frame ring.
+  - `bindTextures` skips a material whose kind and texture handles
+    (`MaterialState.TextureSet`) equal the last bound set's. Within one frame
+    they resolve to the same textures.
 
-Draw order, bindings and pixels are unchanged. The lanes and the offscreen
+  Objects are compared by identity and held while recorded, so a released
+  object's address cannot pass for a bound one. The live source-shader draws
+  set state on the encoder directly, so the main pass forgets the record after
+  them. `Renderer.skipsRedundantEncoderState` (internal, default true) sets
+  every state for every draw when false: the reference of
+  `EncoderStateTests`. There, records that share a mesh draw one after
+  another, each differing from the one before in one state (the cull mode,
+  the winding of a mirrored model, a texture, the material element in the same
+  frame-ring buffer, the pipeline, and a transparent record's cull mode), and
+  a seeded frame of 48 mixed records with the grid and gizmos. Both render,
+  shade and pick byte for byte as with every state set; the controls show
+  that each change reaches the image, so a dropped one would differ.
+
+Draw order, pixels and the state each draw sees are unchanged. The lanes and the offscreen
 captures of the corpus, showoff and map scenes are byte-identical before and
 after (the PR lists them with its cost A/B).
 
