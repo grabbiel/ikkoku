@@ -260,7 +260,9 @@ public final class SourceStudioCharacterPreview {
     /// solve, with what it was bound from: the rig, the effective kinematic
     /// state and the FK overrides. The record, catalog and roots are fixed
     /// for a preview. The overrides are compared bit for bit, since a signed
-    /// zero angle can reach the matrices (R7 phase 2, item 3, C3).
+    /// zero angle can reach the matrices (R7 phase 2, item 3, C3). When only
+    /// the overrides differ, the binding is updated for the changed bones
+    /// instead of bound again (#371).
     private var poseBinding: (rig: RigDefinition.Identity, kinematics: SourceStudioKinematicState, fk: [Int: Float3],
                               binding: KoikatsuCharacterRecord.PoseBinding)?
     /// Checkpoints rewind dynamics/animation, not edits or gaze. Revisions
@@ -1441,6 +1443,12 @@ public final class SourceStudioCharacterPreview {
         let rig = preview.source.rig, binding: KoikatsuCharacterRecord.PoseBinding
         if let cached = poseBinding, cached.rig === rig.identity, cached.kinematics == effective, Self.sameBits(cached.fk, fkRotations) {
             binding = cached.binding
+        } else if let cached = poseBinding, cached.rig === rig.identity, cached.kinematics == effective,
+                  let rebound = record.rebindPose(cached.binding, from: cached.fk, to: fkRotations) {
+            // An FK drag: the same rig and kinematics, only some overrides
+            // changed. The binding equals a fresh bind (#371, `rebindPose`).
+            binding = rebound
+            poseBinding = (rig.identity, effective, fkRotations, rebound)
         } else {
             binding = try record.bindPose(rig: rig, catalog: poseCatalog,
                 characterRoot: characterRoot, bodyRoot: rig.uniqueNode(named: "p_cf_body_bone"),
