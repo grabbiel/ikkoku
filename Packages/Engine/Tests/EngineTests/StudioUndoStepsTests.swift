@@ -1,6 +1,7 @@
 import Testing
 import Foundation
 import Studio
+import Character
 import CoreMath
 
 /// #390: the undo policy `StudioModel.update` and `pushUndo` use. `History`
@@ -153,4 +154,75 @@ private func bytes(_ document: StudioDocument) throws -> Data {
     var written = shown.position; written.x = 0.5; former.position = written
     written = shown.position; written.y = 0.25; former.position = written
     #expect(former.position == Float3(shown.position.x, 0.25, shown.position.z))
+}
+
+/// #393: the Pose tab's IK "Target" row commits one component onto the
+/// chain's target as it is now (`StudioObject.setIKTarget(_:component:to:)`),
+/// so two fields committed before the inspector re-renders keep both, each
+/// its own step. Committing the components the target already has is no
+/// edit and takes no step. The former write, the target captured at the
+/// render with one component replaced, lost the first field.
+@Test func studioIKTargetFieldCommitsKeepBothComponentsWithoutARender() throws {
+    var character = StudioObject(name: "Character", kind: .character)
+    character.ikTargets[.handL] = IKTarget(enabled: true, position: Float3(0.3, 1.1, 0.2))
+    var document = StudioDocument(); document.objects = [character]
+    let shown = try #require(character.ikTargets[.handL]).position
+    var history = History(document)
+    history.update(0, at: t0) { $0.setIKTarget(.handL, component: 0, to: 0.5) }
+    history.steps.endCoalescing()
+    history.update(0, at: t0 + 0.1) { $0.setIKTarget(.handL, component: 1, to: 0.25) }
+    #expect(history.document.objects[0].ikTargets[.handL]?.position == Float3(0.5, 0.25, shown.z))
+    #expect(history.undo.count == 2)
+    var former = character.ikTargets[.handL]!
+    var written = shown; written.x = 0.5; former.position = written
+    written = shown; written.y = 0.25; former.position = written
+    #expect(former.position == Float3(shown.x, 0.25, shown.z))
+    // An unedited walk over the three fields.
+    var walk = History(document)
+    for component in 0..<3 {
+        walk.steps.endCoalescing()
+        walk.update(0, at: t0 + Double(component)) { $0.setIKTarget(.handL, component: component, to: shown[component]) }
+    }
+    #expect(walk.document == document && walk.undo.isEmpty)
+    // A chain without a target, and a component outside 0...2, are left alone.
+    var other = History(document)
+    other.update(0, at: t0) { $0.setIKTarget(.footR, component: 0, to: 1) }
+    other.update(0, at: t0 + 1) { $0.setIKTarget(.handL, component: 3, to: 1) }
+    #expect(other.document == document && other.undo.isEmpty)
+}
+
+/// #393: the Original kinematics Position and Rotate rows. Each field
+/// writes one component onto the guide's value as it is when it commits
+/// (`SourceStudioIKEdit.setting`). Two fields of one row, committed before
+/// a re-render, keep both. A Position field does not write Rotate back from
+/// the value the rows showed, and the reverse. An unedited walk returns the
+/// value unchanged, which the model then does not write.
+@Test func sourceIKGuideFieldCommitsKeepBothComponentsAndTheOtherRow() {
+    let shown = SourceStudioIKEdit(position: Float3(0.1, 0.9, -0.2), rotationDegrees: Float3(10, 20, 30))
+    // Position X then Y, with no re-render: the model reads the stored value each time.
+    var stored = shown.setting(.position, 0, to: 0.5)
+    stored = stored.setting(.position, 1, to: 0.25)
+    #expect(stored == SourceStudioIKEdit(position: Float3(0.5, 0.25, -0.2), rotationDegrees: shown.rotationDegrees))
+    // Rotate X then Z, likewise.
+    stored = shown.setting(.rotation, 0, to: -5).setting(.rotation, 2, to: 90)
+    #expect(stored == SourceStudioIKEdit(position: shown.position, rotationDegrees: Float3(-5, 20, 90)))
+    // Rotate Y, then Position X: the rotation is kept.
+    stored = shown.setting(.rotation, 1, to: 45).setting(.position, 0, to: 0.5)
+    #expect(stored == SourceStudioIKEdit(position: Float3(0.5, 0.9, -0.2), rotationDegrees: Float3(10, 45, 30)))
+    // Position X, then Rotate Y: the position is kept.
+    stored = shown.setting(.position, 0, to: 0.5).setting(.rotation, 1, to: 45)
+    #expect(stored == SourceStudioIKEdit(position: Float3(0.5, 0.9, -0.2), rotationDegrees: Float3(10, 45, 30)))
+    // The former writes built each edit from the shown value: a Position
+    // commit after a Rotate commit wrote the shown rotation back.
+    var formerPosition = shown.position; formerPosition.x = 0.5
+    let former = SourceStudioIKEdit(position: formerPosition, rotationDegrees: shown.rotationDegrees)
+    #expect(former.rotationDegrees.y == 20)
+    // An unedited walk over both rows, and components outside 0...2.
+    var walked = shown
+    for component in 0..<3 {
+        walked = walked.setting(.position, component, to: shown.position[component])
+        walked = walked.setting(.rotation, component, to: shown.rotationDegrees[component])
+    }
+    #expect(walked == shown)
+    #expect(shown.setting(.position, 3, to: 1) == shown && shown.setting(.rotation, -1, to: 1) == shown)
 }

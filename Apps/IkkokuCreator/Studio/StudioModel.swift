@@ -4674,6 +4674,19 @@ final class StudioModel: ViewportInputHandler, LivePacedHandler {
         guard let object = selectedObject, let preview = sourceInstances[object.id], let target = selectedSourceIK else { return nil }
         return try? sourceIKValue(object, target: target, preview: preview)
     }
+    /// One field of the Original kinematics Position or Rotate row (#393):
+    /// that component, onto the guide's value read now
+    /// (`SourceStudioIKEdit.setting`), so neither a component nor the other
+    /// vector comes from the value the row showed at its last render. A field
+    /// that commits the value the guide already has writes nothing and takes
+    /// no undo step.
+    func setSourceIKComponent(_ target: Int32, _ vector: SourceStudioIKEdit.Vector, _ component: Int, to value: Float) {
+        guard let object = selectedObject, let preview = sourceInstances[object.id],
+              let current = try? sourceIKValue(object, target: target, preview: preview) else { return }
+        let edit = current.setting(vector, component, to: value)
+        guard edit != current else { return }
+        setSourceIKValue(target, edit: edit)
+    }
     /// Writes one source FK bone rotation (Unity Euler degrees) the way a guide
     /// drag does: the character switches to FK (IK off) and the FK part group
     /// that owns the bone turns on. The bone guide drag and the scenario
@@ -5122,10 +5135,12 @@ final class StudioModel: ViewportInputHandler, LivePacedHandler {
     }
 
     /// The Pose tab's IK "Target" row (R4): moves an enabled chain's target, in the
-    /// character's root space; a chain without a target is left alone. The
-    /// Studio scenario's `setIKTarget` calls this same setter.
-    func setIKTarget(_ id: UUID, _ chain: IKChain, position: Float3) {
-        update(id) { $0.ikTargets[chain]?.position = position }
+    /// character's root space; a chain without a target is left alone. Each
+    /// field writes its component onto the target as it is now (#393,
+    /// `StudioObject.setIKTarget(_:component:to:)`). The Studio scenario's
+    /// `setIKTarget` calls this same setter.
+    func setIKTarget(_ id: UUID, _ chain: IKChain, component: Int, to value: Float) {
+        update(id) { $0.setIKTarget(chain, component: component, to: value) }
     }
 
     func resetPose() { updateSelected { $0.poseDelta = PoseDelta(); $0.ikTargets = [:]; $0.animationPreset = nil } }
