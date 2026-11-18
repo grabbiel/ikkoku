@@ -19,7 +19,7 @@ import ShaderTypes
 struct StudioScenario: Decodable {
     struct Step: Decodable {
         /// `"select"`, `"setVisible"`, `"rename"`, `"toggleCamera"`, `"toggleRoute"`,
-        /// `"undo"`, `"redo"`, `"newScene"`, `"saveDocument"`, `"loadDocument"`,
+        /// `"undo"`, `"redo"`, `"newScene"`, `"saveDocument"`, `"loadDocument"`, `"loadDocumentRejected"`, `"importDocument"`,
         /// `"setFace"`, `"setBody"`, `"setColor"`, `"resetShape"`, `"resetColors"`, `"setOutfit"`,
         /// `"setClothesState"`, `"setAccessoryVisible"`, `"setShoesType"`, `"setExpression"`, `"resetExpression"`,
         /// `"setAnimation"`, `"setAnimationSpeed"`, `"setForceLoop"`, `"setFKEnabled"`,
@@ -42,6 +42,9 @@ struct StudioScenario: Decodable {
         /// assert only: the looked-through camera must be a copy of this
         /// source camera (`Studio.Duplicate` hands the view to the copy).
         let activeCopyOf: Int32?
+        /// assert only (#384): how many undo and redo steps the history holds,
+        /// and how many objects the document has.
+        let undoDepth: Int?, redoDepth: Int?, objectCount: Int?
         let visible: Bool?
         let name: String?
         let index: Int?
@@ -569,7 +572,7 @@ struct StudioScenario: Decodable {
                  seconds, dx, dy, eyeLook, blink, handPattern, mode, axis, pixels,
                  render, exportIdenticalToSource, errorContains, outfit, accessoryLabels, pluginMount, state, clothes, expression,
                  sex, character, chain, delta, ik, edit, build, parent, children, absent, copy, added, activeCopyOf,
-                 aid, routeEdit, route, routeLines, sourceMap, liveSamplers
+                 undoDepth, redoDepth, objectCount, aid, routeEdit, route, routeLines, sourceMap, liveSamplers
         }
 
         init(from decoder: Decoder) throws {
@@ -679,6 +682,9 @@ struct StudioScenario: Decodable {
             copy = try c.decodeIfPresent(Int.self, forKey: .copy)
             added = try c.decodeIfPresent(String.self, forKey: .added)
             activeCopyOf = try c.decodeIfPresent(Int32.self, forKey: .activeCopyOf)
+            undoDepth = try c.decodeIfPresent(Int.self, forKey: .undoDepth)
+            redoDepth = try c.decodeIfPresent(Int.self, forKey: .redoDepth)
+            objectCount = try c.decodeIfPresent(Int.self, forKey: .objectCount)
             aid = try c.decodeIfPresent(Bool.self, forKey: .aid)
             routeEdit = try c.decodeIfPresent(RouteEditValue.self, forKey: .routeEdit)
             route = try c.decodeIfPresent(RouteValue.self, forKey: .route)
@@ -1826,6 +1832,33 @@ struct StudioScenario: Decodable {
                     record(step, false, "loadDocument failed, stopping: \(error)")
                     stopped = true; break scenarioLoop
                 }
+            case "loadDocumentRejected":
+                // #384: an Open that fails after reading the file (a file that
+                // is not an Ikkoku scene) must leave the document and both
+                // history stacks exactly as they were.
+                guard let path = step.path, let url = insideLocal(path) else {
+                    record(step, false, "loadDocumentRejected: path must stay under .local/: \(step.path ?? "<missing>")"); continue
+                }
+                let (document, undo, redo) = (studio.doc, studio.undoStack, studio.redoStack)
+                do {
+                    try studio.loadScene(from: url)
+                    record(step, false, "loadDocumentRejected: \(path) loaded, expected a refusal")
+                } catch {
+                    let unchanged = studio.doc == document && studio.undoStack == undo && studio.redoStack == redo
+                    record(step, unchanged, unchanged
+                        ? "refused \(path) (\(error)); document and \(undo.count) undo / \(redo.count) redo steps unchanged"
+                        : "loadDocumentRejected: the refused Open changed the document or the history (undo \(undo.count) -> \(studio.undoStack.count), redo \(redo.count) -> \(studio.redoStack.count))")
+                }
+            case "importDocument":
+                // File ▸ Import Scene of an Ikkoku scene: merges its objects
+                // into the current scene, an ordinary undo step (#384).
+                guard let path = step.path, let url = insideLocal(path) else {
+                    record(step, false, "importDocument: path must stay under .local/: \(step.path ?? "<missing>")"); continue
+                }
+                do {
+                    try studio.importScene(from: url)
+                    record(step, true, "imported \(path): \(studio.doc.objects.count) objects")
+                } catch { record(step, false, "importDocument: \(error)") }
             case "setFace", "setBody":
                 let face = step.op == "setFace"
                 guard let id = object(step) else { record(step, false, "\(step.op): no object with source key \(step.key ?? -1)"); continue }
@@ -3137,6 +3170,15 @@ struct StudioScenario: Decodable {
                     } else {
                         details.append("looking through a copy of camera \(key)")
                     }
+                }
+                if let expected = step.undoDepth, studio.undoStack.count != expected {
+                    problems.append("assert undoDepth: \(studio.undoStack.count) undo steps, expected \(expected)")
+                }
+                if let expected = step.redoDepth, studio.redoStack.count != expected {
+                    problems.append("assert redoDepth: \(studio.redoStack.count) redo steps, expected \(expected)")
+                }
+                if let expected = step.objectCount, studio.doc.objects.count != expected {
+                    problems.append("assert objectCount: \(studio.doc.objects.count) objects, expected \(expected)")
                 }
                 if let expectedKey = step.activeCamera {
                     let active = studio.activeSourceCamera.flatMap { studio.doc.object($0)?.sourceObjectKey }
