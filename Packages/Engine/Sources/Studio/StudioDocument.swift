@@ -13,26 +13,112 @@ public struct StudioTransform: Codable, Sendable, Equatable {
     public var position = Float3.zero
     public var rotation = Float3.zero { didSet { rotationOverride = nil } } // Editable Euler XYZ degrees
     /// Exact imported quaternion; an explicit Euler edit replaces it.
-    public var rotationOverride: Float4?
+    public var rotationOverride: Float4? {
+        // Cheap tidy-up only: `currentSourceEuler` checks the bits itself.
+        didSet { if let sourceEuler, !sourceEuler.describes(rotationOverride) { self.sourceEuler = nil } }
+    }
     public var scale = Float3(repeating: 1)
+    /// The original's own Euler angles for `rotationOverride` (#391); read
+    /// through `currentSourceEuler`.
+    public var sourceEuler: SourceEuler?
     public init() {}
+
+    /// A source scene object's transform: its stored position and scale in
+    /// engine coordinates, its exact quaternion, and the Euler angles the
+    /// original stores and shows for it.
+    public init(source: KoikatsuChangeAmount) {
+        position = UnityCoordinates.position(source.position)
+        scale = source.scale
+        setSourceEuler(source.rotationDegrees)
+    }
+
+    /// CharaStudio's rotation numbers (#391): Z-X-Y Euler degrees in Unity
+    /// coordinates, recorded for one exact `rotationOverride`.
+    public struct SourceEuler: Codable, Sendable, Equatable {
+        public var degrees: Float3
+        /// The override these degrees describe, compared by its bits.
+        public var override: Float4
+        public init(degrees: Float3, override: Float4) { self.degrees = degrees; self.override = override }
+
+        func describes(_ rotation: Float4?) -> Bool {
+            guard let rotation else { return false }
+            return (0..<4).allSatisfy { override[$0].bitPattern == rotation[$0].bitPattern }
+        }
+    }
+
+    /// The original's Euler angles while they still describe this rotation:
+    /// only while `rotationOverride` holds exactly the bits they were recorded
+    /// for. Any other rotation write (the gizmo, reparenting, a plug-in clone,
+    /// IK, an engine-Euler edit) changes or clears the override, which retires
+    /// them whichever path made the write.
+    public var currentSourceEuler: Float3? {
+        guard let sourceEuler, sourceEuler.describes(rotationOverride) else { return nil }
+        return sourceEuler.degrees
+    }
+
+    /// A source object's Rotation row: the original's angles, or else the
+    /// current rotation decomposed the way the original stores rotations.
+    public var sourceRotationDegrees: Float3 {
+        currentSourceEuler ?? UnityCoordinates.sourceEulerDegrees(quaternion)
+    }
+
+    /// Rotates to the original's Euler `degrees` and records them, as the
+    /// original derives its transform from its three stored angles.
+    public mutating func setSourceEuler(_ degrees: Float3) {
+        let rotation = UnityCoordinates.eulerDegrees(degrees)
+        self.rotation = rotation.eulerXYZ.radiansToDegrees
+        rotationOverride = rotation.vector
+        sourceEuler = SourceEuler(degrees: degrees, override: rotation.vector)
+    }
+
+    /// The record an original-format export writes for this transform, or nil
+    /// when it still matches `original`. An unchanged rotation keeps the
+    /// original's bytes; a changed one writes the original's angles while
+    /// they are current (#391: an inspector commit changes only its own
+    /// component), and otherwise a fresh decomposition.
+    public func sourceChangeAmount(original: KoikatsuChangeAmount) -> KoikatsuChangeAmount? {
+        let rotationChanged: Bool
+        if let degrees = currentSourceEuler {
+            rotationChanged = degrees != original.rotationDegrees
+        } else {
+            let originalRotation = UnityCoordinates.eulerDegrees(original.rotationDegrees)
+            rotationChanged = quaternion.vector != originalRotation.vector && quaternion.vector != -originalRotation.vector
+        }
+        guard position != UnityCoordinates.position(original.position) || scale != original.scale || rotationChanged else { return nil }
+        return KoikatsuChangeAmount(
+            position: UnityCoordinates.position(position),
+            rotationDegrees: rotationChanged ? sourceRotationDegrees : original.rotationDegrees,
+            scale: scale)
+    }
     public var matrix: float4x4 { Transform.trs(position, quaternion, scale) }
     public var quaternion: simd_quatf {
         rotationOverride.map { simd_quatf(vector: $0) } ?? simd_quatf(eulerXYZ: rotation.degreesToRadians)
     }
 
-    /// The inspector's three vector rows.
-    public enum Vector: Sendable { case position, rotation, scale }
+    /// The inspector's vector rows. A source object's Rotation row edits the
+    /// original's Euler angles (`sourceRotation`, #391).
+    public enum Vector: Sendable { case position, rotation, scale, sourceRotation }
 
     /// One inspector field's commit (#390): writes only its own component, onto
     /// the transform as it is now. A field must not write back the whole vector
     /// it last read, since a second field committed before the view re-renders
     /// would undo the first one's write.
+    ///
+    /// `sourceRotation` commits as CharaStudio's end-of-edit does (#391): the
+    /// value modulo 360, sign kept, replaces its component only when it
+    /// differs, and the rotation is rebuilt from the three angles, so the
+    /// other two keep their exact values.
     public mutating func set(_ vector: Vector, _ component: Int, to value: Float) {
         switch vector {
         case .position: position[component] = value
         case .rotation: rotation[component] = value
         case .scale: scale[component] = value
+        case .sourceRotation:
+            var degrees = sourceRotationDegrees
+            let angle = value.truncatingRemainder(dividingBy: 360)
+            guard angle != degrees[component] else { return }
+            degrees[component] = angle
+            setSourceEuler(degrees)
         }
     }
 }

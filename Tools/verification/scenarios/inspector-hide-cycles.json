@@ -60,7 +60,7 @@
           "Locked",
           "Visible"
         ],
-        "undoCount": 6
+        "undoCount": 5
       },
       {
         "op": "keyLoop",
@@ -83,7 +83,7 @@
           "Original character",
           "Nothing selected"
         ],
-        "undoCount": 6
+        "undoCount": 5
       },
       {
         "op": "keyLoop",
@@ -99,7 +99,7 @@
         "axContains": [
           "Play playlist"
         ],
-        "undoCount": 11
+        "undoCount": 9
       }
     ]
   }
