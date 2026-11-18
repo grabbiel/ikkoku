@@ -257,9 +257,13 @@ public final class ResourceStore: @unchecked Sendable {
     public struct Statistics: Encodable, Sendable {
         public let meshes: Int, textures: Int, deformBuffers: Int, hiddenBuffers: Int
         public let meshBufferBytes: Int, deformBufferBytes: Int, hiddenBufferBytes: Int
-        /// Retired meshes and keys still waiting for a later submitted frame (`retire`).
-        /// They are included in the counts above until then.
+        /// Retired resources still waiting for their release (`retire`): textures
+        /// until a frame created after the retirement is submitted, meshes and
+        /// keys until such a frame is prepared. They are included in the counts
+        /// above until then.
         public let retiring: Int
+        /// `retiring` by kind.
+        public let retiringMeshes: Int, retiringDeformKeys: Int, retiringHiddenKeys: Int, retiringTextures: Int
     }
 
     /// Counts store-owned resources; device allocation also includes render
@@ -277,7 +281,9 @@ public final class ResourceStore: @unchecked Sendable {
             hiddenBuffers: hiddenBuffers.count, meshBufferBytes: buffers.values.reduce(0) { $0 + $1.length },
             deformBufferBytes: deformBuffers.values.reduce(0) { $0 + $1.length },
             hiddenBufferBytes: hiddenBuffers.values.reduce(0) { $0 + $1.length },
-            retiring: retiringMeshes.count + retiringDeformKeys.count + retiringHiddenKeys.count + retiringTextures.count)
+            retiring: retiringMeshes.count + retiringDeformKeys.count + retiringHiddenKeys.count + retiringTextures.count,
+            retiringMeshes: retiringMeshes.count, retiringDeformKeys: retiringDeformKeys.count,
+            retiringHiddenKeys: retiringHiddenKeys.count, retiringTextures: retiringTextures.count)
     }
 
     @discardableResult
@@ -485,22 +491,35 @@ public final class ResourceStore: @unchecked Sendable {
 
     // MARK: Deferred release (R6)
 
-    // A frame names meshes, deformation keys and hidden-mask keys, not buffers,
-    // until it is prepared, and it may be prepared after an owner gives them back:
-    // the renderer's pending frame, or a copy of it from `Renderer.currentFrame()`.
-    // Releasing at once would drop the mask and meshes that frame draws, and its
-    // preparation would re-create (and then keep forever) the owner's deformation
-    // buffers. `retire` therefore takes a `ResourceClock` stamp and leaves the
-    // resources in place. The release completes when the renderer prepares a
-    // submitted frame created after that stamp: the pending frame was replaced by
-    // one built without them. Encoded command buffers and prepared frames hold
-    // their own references, so completion never touches GPU work in flight.
+    // A frame names meshes, deformation keys, hidden-mask keys and textures by
+    // handle or key, not by buffer, and it may be prepared after an owner gives
+    // them back: the renderer's pending frame, or a copy of it from
+    // `Renderer.currentFrame()`. Releasing at once would drop the mask and meshes
+    // that frame draws, and its preparation would re-create (and then keep
+    // forever) the owner's deformation buffers. `retire` therefore takes a
+    // `ResourceClock` stamp and leaves the resources in place.
+    // - Meshes and keys are released when the renderer prepares a submitted
+    //   frame created after that stamp (`completeRetirements`): the pending frame
+    //   was replaced by one built without them. When no viewport is drawing
+    //   (hidden, minimized, or none), a submit has the renderer complete them off
+    //   the main thread instead, once it holds its render lock (#368,
+    //   `Renderer.submit`): no prepare runs then, so the same holds.
+    // - Textures are released earlier, when a frame created after that stamp is
+    //   submitted (`completeTextureRetirements`). Every submitted frame holds its
+    //   own references to the textures it names (`RenderFrame.retainTextures`),
+    //   so the frame it replaces and every copy of that frame keep drawing them.
+    //   A viewport that prepares nothing (occluded or minimized) therefore still
+    //   releases them (#368).
+    // Encoded command buffers and prepared frames hold their own references, so
+    // completion never touches GPU work in flight.
     private var retiringMeshes: [UInt32: UInt64] = [:]
     private var retiringDeformKeys: [UInt64: UInt64] = [:]
     private var retiringHiddenKeys: [UInt64: UInt64] = [:]
     private var retiringTextures: [UInt32: UInt64] = [:]
     /// Stamp of the newest completed retirement. A frame created before it gets
-    /// transient deformation buffers (see `deformBuffer`).
+    /// transient deformation buffers (see `deformBuffer`). It orders deformation
+    /// keys: a texture release at submit leaves it alone, or every frame created
+    /// before a texture retirement would get transient deformation buffers.
     private var newestCompletedRetirement: UInt64 = 0
 
     /// Gives an owner's resources back once no pending frame can name them (see
@@ -520,9 +539,10 @@ public final class ResourceStore: @unchecked Sendable {
     }
 
     /// `retire` for textures an owner registered itself (ST-A11 source map
-    /// textures). Their cache keys go at once, so a later load of the same
-    /// file creates its own textures; the handles keep resolving for a frame
-    /// created before this call until a later submitted frame is prepared.
+    /// textures). Their cache keys go at once, so a later load of the same file creates its own
+    /// textures. The handles keep resolving until a frame created after this
+    /// call is submitted (`completeTextureRetirements`); a frame created before
+    /// it and submitted later took its own references at its submit.
     /// `unregister(texture:)` releases at once and cancels the retirement.
     public func retire(textures handles: [TextureHandle]) {
         let stamp = ResourceClock.tick()
@@ -532,16 +552,40 @@ public final class ResourceStore: @unchecked Sendable {
         textureKeys = textureKeys.filter { !ids.contains($0.value.id) }
     }
 
-    /// Called while the renderer prepares a submitted frame created at `stamp`:
-    /// releases everything retired before that frame existed.
-    func completeRetirements(createdBefore stamp: UInt64) {
+    /// Called by `Renderer.submit` once the submitted snapshot holds its own
+    /// texture references: releases the textures retired before that frame was
+    /// created (see above). One lock and one check when nothing is retiring.
+    /// Unlike `completeRetirements`, it leaves `newestCompletedRetirement` alone.
+    /// Returns whether meshes or keys are retiring, from the same lock (#368).
+    @discardableResult
+    func completeTextureRetirements(createdBefore stamp: UInt64) -> Bool {
+        lock.lock(); defer { lock.unlock() }
+        let others = !retiringMeshes.isEmpty || !retiringDeformKeys.isEmpty || !retiringHiddenKeys.isEmpty
+        guard !retiringTextures.isEmpty else { return others }
+        var changed = false
+        for (id, retired) in retiringTextures where retired < stamp {
+            textures[id] = nil; retiringTextures[id] = nil; changed = true
+        }
+        if changed { generationValue &+= 1 }
+        return others
+    }
+
+    /// Called while the renderer holds its render lock, so no frame is being
+    /// prepared, and the pending frame was submitted at `stamp` or later: as it
+    /// prepares a submitted frame created at `stamp`, or from a submit's
+    /// completion off the main thread (#368). Releases everything retired
+    /// before that frame existed; textures retired before it normally went at
+    /// its submit already. Returns the released deformation keys, whose content
+    /// records the renderer drops.
+    @discardableResult
+    func completeRetirements(createdBefore stamp: UInt64) -> [UInt64] {
         var releasedMeshes: [UInt32] = [], releasedKeys: [UInt64] = []
         var live: SourceShaderLiveEncoder?
         // The live encoder's lock is taken after this store's lock is released.
         defer { live?.evict(meshes: releasedMeshes, deformKeys: releasedKeys) }
         lock.lock(); defer { lock.unlock() }
         guard !retiringMeshes.isEmpty || !retiringDeformKeys.isEmpty || !retiringHiddenKeys.isEmpty
-              || !retiringTextures.isEmpty else { return }
+              || !retiringTextures.isEmpty else { return [] }
         live = liveInputs
         var newest = newestCompletedRetirement
         var changed = false
@@ -561,6 +605,7 @@ public final class ResourceStore: @unchecked Sendable {
         }
         if changed { generationValue &+= 1 }
         newestCompletedRetirement = newest
+        return releasedKeys
     }
 
     // MARK: Textures

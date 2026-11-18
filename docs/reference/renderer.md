@@ -772,6 +772,71 @@ retired hidden mask (the region bitmask applies) and skips retired meshes.
 frame lock and render lock order is unchanged; `retire` and completion take
 only the store lock, so `deinit` can retire from any thread.
 
+Textures complete earlier. A texture an owner retires (`retire(textures:)`,
+the ST-A11 map path) is released when a frame created after the
+retirement is submitted (`completeTextureRetirements`, #368). A submitted
+frame holds its own references to the textures it names
+(`RenderFrame.retainTextures`), so the pending frame it replaces, and every
+copy of that frame, still draw them.
+
+- **Order and cost.** `submit` calls it after `retainTextures`, before taking
+  `frameLock`, under the store lock alone. With nothing retiring it costs one
+  lock and one check.
+- **Generation and stamp.** It bumps the resource generation when it releases
+  something, and leaves the newest-completed stamp alone. That stamp orders
+  deformation keys, and moving it would give every frame created before a
+  texture retirement transient deformation buffers.
+- **Why.** An occluded or minimized viewport prepares no frame, so a texture
+  retired while it is hidden waited for the window to show again. Run D of
+  #358, with an appearance texture cache that retires through the same path,
+  showed it: retiring entries grew from 24 to 115, and the footprint reached
+  954 MB at the fifth head, against 695 MB without the cache.
+- **Unsubmitted frames.** A frame that is never submitted resolves its
+  textures when it is prepared: `StudioModel.frame` for picks and captures,
+  the probes, thumbnails. Each is built and drawn on the main actor in one
+  call while its textures are owned. The asynchronous hover pick is
+  the exception, and its result is dropped once a newer frame was built. A
+  texture released before such a frame is prepared draws the fallback: white
+  base, black masks and overlays, the flat normal.
+
+Meshes and keys complete at submit while no viewport draws (#368). A hidden,
+minimized or stopped viewport prepares nothing, so a removal there kept its
+meshes, deformation buffers and masks until the viewport drew again.
+
+- **Who draws.** Each `ViewportRenderThread` tells the renderer whether it
+  draws (`Renderer.setViewport(_:drawing:)`): when it starts, stops and
+  changes visibility, under its own control lock. Visible with its link
+  running counts as drawing. A hidden viewport's link idles at 15 Hz without
+  the keep-alive, and in run D of #358 an occluded or minimized one prepared no frame
+  at all. If a hidden callback does prepare a submitted frame, that prepare
+  completes the retirements, and the queued completion finds nothing left.
+- **While one draws.** Completion stays at the prepare of a submitted frame,
+  which a drawing viewport reaches within a frame. Nothing changes.
+- **While none draws.** `submit` enqueues one completion on a utility serial
+  queue (`com.grabbiel.Ikkoku.retirements`). Submits made before it starts
+  share it. The completion takes `renderLock` with `try`. If a pick, capture
+  or draw holds it, the completion does nothing, and the next submit, or the
+  prepare of a submitted frame, completes the retirements.
+- **What it completes.** Under `renderLock`, it completes what a prepare of
+  the pending frame would: the retirements made before that frame was
+  created. The pending frame is the submit that enqueued the completion or a
+  later one. If a later submit put back a copy of an older frame, the older
+  stamp applies, as at its prepare. Holding `renderLock` keeps every
+  guarantee of a completion at prepare. No frame is being prepared, command
+  buffers hold their own references, and frames created earlier get
+  transient deformation buffers.
+- **Content records.** Either completion drops the content records
+  (item 4 of [threads](#renderer-threads-r7-phase-2-item-2)) of the keys it
+  released, in the same `renderLock` hold. A record holds its buffer, so a
+  released character's buffers go at once instead of at the next tracked
+  draw. A record only ever matches its own buffer (`===`), so a key's later
+  buffer never reuses it.
+- **Cost on the submitting thread.** `completeTextureRetirements` reports
+  whether meshes or keys are retiring under the store lock it already takes,
+  and the decision to enqueue is made under `observerLock`, which `submit`
+  already takes. With nothing retiring, `submit` takes no new lock. With a
+  retirement pending, it adds one `async`, whatever the retirement's size.
+
 The rule for owners is to retire before building their next frame. A frame
 created after the retirement counts as current, so its preparation would
 re-create the deformation keys it still names.
@@ -945,8 +1010,13 @@ handlers, the hover pick, SwiftUI layout.
   expose reusable images in draw order; neither operation waits for the GPU.
   Since item 4, picks and captures also commit before releasing it (see
   below); the wait for the GPU still happens after.
-- `observerLock` guards the submit observers (item 4). It is never held while
-  taking another lock, and `submit` calls the observers after releasing it.
+- `observerLock` guards the submit observers (item 4), and since #368 the set
+  of drawing viewports and the scheduled retirement completion. It is never
+  held while taking another lock, and `submit` calls the observers after
+  releasing it.
+- The retirement queue (#368) takes `renderLock` only with `try`, then
+  `frameLock` to read the pending frame's stamp, then the store lock, as a
+  prepare does. It never waits for `renderLock`.
 - `ResourceStore` and the frame ring's completion state keep their own locks,
   unchanged.
 
