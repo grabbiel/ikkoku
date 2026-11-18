@@ -658,7 +658,9 @@ public sealed class OriginalMapProbe:BaseUnityPlugin {
     }
     // The sun mode's map number: "map01" -> 1, "map34-day" -> 34; -1 unless the label is mapNN or mapNN-<suffix>.
     static int SunMapNo(string label) {
-        if(label==null||label.Length<5||!label.StartsWith("map",StringComparison.Ordinal))return -1;
+        // Character tests, not String.StartsWith: Mono's StartsWith reaches CompareInfo, whose collator has
+        // NotImplementedException paths (the BCL audit in #389).
+        if(label==null||label.Length<5||label[0]!='m'||label[1]!='a'||label[2]!='p')return -1;
         char a=label[3],b=label[4];
         if(a<'0'||a>'9'||b<'0'||b>'9'||(label.Length>5&&label[5]!='-'))return -1;
         return (a-'0')*10+(b-'0');
