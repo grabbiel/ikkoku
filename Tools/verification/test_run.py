@@ -638,7 +638,9 @@ SCENARIO_OPS = {"select", "setVisible", "rename", "toggleCamera", "toggleRoute",
                 "export", "reimport", "assert", "assertRejected", "loadNativePlugin", "unloadPlugins", "measureAccessoryLabels",
                 "delete", "setParent", "exportRejected", "duplicate", "addFolder", "addCamera", "addLight",
                 "focus", "selectRoutePoint", "dragRoutePoint", "captureRoute", "editRoute", "setShowSourceMap",
-                "setUnlimitedLights"}
+                "setUnlimitedLights",
+                # Added for #387 round 3 (the workspace rows a selection change patches).
+                "deselect", "assertWorkspaceRows"}
 
 # R7 phase 2, item 7: the window-run inspector checks (`"inspectorUI": {"steps": [...]}`).
 INSPECTOR_UI_OPS = {"select", "deselect", "focus", "type", "delete", "undo", "redo", "cycle",
@@ -648,7 +650,9 @@ INSPECTOR_UI_OPS = {"select", "deselect", "focus", "type", "delete", "undo", "re
                     # Added with the model's Object tab state (R7 phase 2, item 7).
                     "outfit",
                     # Added for #333 (the Clothes tab laid out wider than the inspector).
-                    "tab", "addCharacter"}
+                    "tab", "addCharacter",
+                    # Added for #383 (the Parent popup that replaced the Picker).
+                    "parentMenu"}
 
 # ST-T11 `editRoute` settings: point edits name the point, route edits do not.
 ROUTE_POINT_SETTINGS = ("delete", "move", "speed", "ease", "connection", "link")
@@ -941,7 +945,7 @@ class StudioScenarioLaneTests(unittest.TestCase):
                       and not name.startswith(("maker-", "gameplay-")))
 
     def test_lane_validates_and_covers_every_scenario(self):
-        self.assertEqual(len(self.checks), 98)
+        self.assertEqual(len(self.checks), 99)
         referenced = set()
         for check in self.checks:
             scenario = check["env"]["IKKOKU_STUDIO_SCENARIO"]
@@ -968,6 +972,8 @@ class StudioScenarioLaneTests(unittest.TestCase):
                 self.assertIn(step["label"], ("object", "pose", "face", "clothes", "scene"))
             if op == "addCharacter":
                 self.assertIn(step["sex"], ("female", "male"))
+            if op == "parentMenu" and "key" in step:
+                self.assertIs(type(step["key"]), int)
             if op in ("routePoint", "outfit"):
                 self.assertIs(type(step["index"]), int)
                 self.assertGreaterEqual(step["index"], 0)
