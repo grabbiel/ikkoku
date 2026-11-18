@@ -6770,3 +6770,124 @@ These numbers come from one machine, two cards and n = 4 per cell, with live
 animation off in the scenario. They show no FPS or live-animation result. Raw
 reports, snapshots, the scripts and the summaries stay under
 `.local/stt03k-maker-reimport/timing/run1/`.
+
+## Maker head-selection attribution (#192-D)
+
+#192-D step 1 adds two diagnostics to the normal-head selection report and
+changes nothing else. They are described in
+[maker-assets.md](character/maker-assets.md#texture-load-stages-and-main-actor-gap-phases-192-d):
+
+- **Texture-load stages.** The in-line loader's stages are split out under
+  `metalTextureLoad` in `baseAppearanceStages.textureLoads`.
+- **Gap phases.** Each `selectAsset` step reports its three longest
+  main-actor gaps, each with its split over the selection's phases.
+
+The owner numbers (63–66 ms) in
+[reader-local RGBA digest reuse](character/maker-assets.md#reader-local-verified-rgba-digest-reuse-192)
+(#241) predate `8a871c50` (one compositor command queue per device). The
+owner split here supersedes them.
+
+**Functional check** (Debug build, not timing). The strict
+`maker-scenarios` lane passes 10/10 on head `8deff4c2`. Every head selection
+has `phaseUptimes`, and the split of each reported gap adds up to the gap.
+The cold base appearance laps all eight loader stages once per created
+texture (17 textures). A warm base appearance creates none and reports no
+stage. The 11 lane exports and all 210 resource-statistics snapshots in the
+head, selection and async scenarios match a control build of `e0527080`.
+
+### Overhead timing (2026-11-02)
+
+The run was in a coordinator quiet window (W2). It paired Release `e0527080`
+(control) with a Release build of this step (instrumented; the code is
+unchanged since `8deff4c2`). #361's shape seed ran as a third arm in the same
+run; its results are documented with the seed.
+
+- **Units.** Each unit is one fresh process. It imports the sex's head-0 card
+  at startup, then selects heads 200, 0, 200, 0, 200 and 0. Step 1 (head 200)
+  is cold; the later steps are warm.
+- **Order.** Per sex and cycle the order is control, instrumented, seed,
+  seed, instrumented, control, mirrored on the second cycle. Two cycles give
+  n = 4 per arm and sex.
+- **Display.** 1920×1080 @ 120 Hz (UI size on a 3840×2160 panel), the same
+  at the start and the end.
+- **Validity.** A unit is invalid when a process outside the run is above
+  20% CPU in its before or after snapshot. The quiet-window rule counts
+  WindowServer, kernel_task and the Claude app's processes, including the
+  bundled `claude` binary that runs the agents, as background. 13 of 24 units
+  were valid on the first pass. The other 11 were rerun once and all were
+  valid, so 24/24 are valid.
+
+Medians in ms, control / instrumented; every pair's min–max ranges overlap:
+
+| Step, sex | Selection API | Preparation | Commit | Longest main-actor gap |
+|---|---|---|---|---|
+| 1 (cold), female | 442.2 / 433.8 | 369.2 / 360.6 | 69.0 / 69.7 | 140.9 / 136.8 |
+| 1 (cold), male | 434.9 / 438.1 | 362.9 / 365.4 | 70.8 / 71.1 | 128.2 / 125.6 |
+| 2 (warm), female | 105.4 / 104.6 | 73.8 / 73.8 | 30.3 / 29.8 | 32.8 / 31.3 |
+| 2 (warm), male | 103.6 / 105.1 | 73.1 / 75.0 | 29.7 / 29.0 | 30.8 / 30.5 |
+
+- On steps 3–6 the API medians differ by −0.9 to +1.3 ms per sex.
+- The startup import is 737.4 / 739.7 ms (female) and 757.3 / 776.8 ms
+  (male), with overlapping ranges (male control 754.9–805.2, instrumented
+  757.4–789.6).
+- On step 1 the sign of the difference flips between the sexes.
+
+**Verdict:** the instrumentation costs nothing above the noise.
+
+### Owner split (instrumented arm, step 1)
+
+Medians, female / male, n = 4 each.
+
+- **Selection API** 433.8 / 438.1 ms = snapshot 0.3 + preparation
+  360.6 / 365.4 + commit 69.7 / 71.1.
+- **Preparation** runs on the worker. Its intervals are nested or overlap,
+  so they are not additive:
+  - library preparation 311.7 / 314.3, of which rig decode 283.9 / 286.0;
+  - shape decode 23.0 / 23.5;
+  - appearance input preparation 22.3 / 22.7;
+  - rig reuse SHA 14.9 / 15.7 and RGBA SHA 12.3 / 12.4;
+  - rig read 4.9 / 5.0, RGBA read 4.5, verified-file SHA 4.4 / 4.5.
+- **Commit** runs on the owner:
+  - base appearance 39.7 / 42.9;
+  - card appearance 15.6 / 14.8. Of that, compose-encode wait is
+    11.6 / 11.2, body-mask load 1.5 / 1.4, component load 1.1 and pipeline
+    creation 0.65;
+  - preview 11.9 / 11.2;
+  - draft 1.0, pose frame 0.8, commit refresh 0.8.
+- **Base appearance texture loads.** 17 textures are created.
+  `metalTextureLoad` is 36.2 / 39.9 and image creation 0.97 / 0.94. The
+  loader stages inside `metalTextureLoad`:
+
+  | Stage | ms |
+  |---|---|
+  | decode | 23.0 / 26.9 |
+  | completionWait | 7.4 / 7.4 |
+  | conversion | 4.2 / 4.1 |
+  | encodeSubmit | 0.6 / 0.6 |
+  | destinationAllocation | 0.3 / 0.3 |
+  | stagingAllocation | 0.25 / 0.25 |
+  | cleanup | 0.15 / 0.15 |
+  | permitWait | 0 / 0 |
+
+- **Warm steps (2–6).** Base appearance is about 1 ms and creates no texture.
+  Card appearance stays at about 15 ms and preview at about 11 ms.
+
+**Open finding: the main-actor gap during preparation.**
+
+- In all 8 instrumented units, the longest main-actor gap of step 1 falls in
+  preparation: 108.9–144.2 ms.
+- The second longest falls in commit (67.0–75.5 ms) and the third in
+  preparation again (16.7–20.5 ms).
+- The control and seed arms have gaps of the same size (109.1–145.9 ms)
+  without the phase split.
+- No instrumented stage owns this gap. Preparation's stages run on the
+  worker, so something else holds the main actor for longer than the whole
+  commit.
+- In the Debug lane the longest gap falls in commit instead.
+
+**Next.** Decode (23–27 ms), not completionWait (7.4 ms), dominates the
+loader, so an upload group would gain little. In order:
+
+1. A Time Profiler sample, attached by pid during cold head-200 selections,
+   names what holds the main actor during preparation.
+2. A worker pre-decode of the base-appearance pixels follows as its own PR.
