@@ -1528,12 +1528,14 @@ public final class Renderer: @unchecked Sendable {
         }
         enc.setFragmentTexture(frame.texture(m.base, resources: resources) ?? white, index: Int(TextureIndexBase.rawValue))
         if m.uniforms.kind == UInt32(MaterialKindMap.rawValue) {
-            // map_fragment samples only these four (ST-A11 source maps).
+            // map_fragment samples only these five (ST-A11 source maps).
             enc.setFragmentTexture(frame.texture(m.lightmap, resources: resources) ?? black, index: Int(TextureIndexLightmap.rawValue))
             enc.setFragmentTexture(frame.texture(m.lightmapDirection, resources: resources) ?? black,
                                    index: Int(TextureIndexLightmapDirection.rawValue))
             // Unity's _EmissionMap default is white; map_fragment reads it only when emissive.a > 0.
             enc.setFragmentTexture(frame.texture(m.emission, resources: resources) ?? white, index: Int(TextureIndexEmission.rawValue))
+            // Slice 6: the _BumpMap, read only under MaterialFlagMapNormal.
+            enc.setFragmentTexture(frame.texture(m.normal, resources: resources) ?? black, index: Int(TextureIndexNormal.rawValue))
             return
         }
         enc.setFragmentTexture(frame.texture(m.colorMask, resources: resources) ?? black, index: Int(TextureIndexColorMask.rawValue))

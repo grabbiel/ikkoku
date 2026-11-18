@@ -160,14 +160,15 @@ extension StudioModel {
             // keeps the first mark.
             PerfTrace.mark("sourceMapReady")
             let draws = items.map { SourceStudioMapAsset.Draw($0.material) }
-            print(String(format: "[ikkoku] source map: %d draws (%d lightmapped, %d by the map's ambient, %d sun-lit, %d particle, %d sky, %d unlit, %d silhouette; %d option parts, option %@; %d sun casters), %d triangles, %d texture bytes (%d in %d lightmaps, %d in %d sky cubes; images: %d as BC blocks, %d decoded, source %@); loaded in %.1f ms on a worker, placed in %.2f ms on the main thread",
+            print(String(format: "[ikkoku] source map: %d draws (%d lightmapped, %d by the map's ambient, %d sun-lit, %d particle, %d sky, %d unlit, %d silhouette; %d option parts, option %@; %d sun casters), %d triangles, %d texture bytes (%d in %d lightmaps, %d in %d sky cubes, %d in %d normal maps on %d draws; images: %d as BC blocks, %d decoded, source %@); loaded in %.1f ms on a worker, placed in %.2f ms on the main thread",
                          items.count, draws.filter { $0 == .lightmapped }.count, draws.filter { $0 == .probeLit }.count,
                          items.filter { $0.material.uniforms.flags & MaterialFlagMapSunLit.rawValue != 0 }.count,
                          draws.filter { $0 == .particle }.count,
                          draws.filter { $0 == .sky }.count, draws.filter { $0 == .unlit }.count, draws.filter { $0 == .silhouette }.count,
                          asset.optionParts, request.mapOption ? "on" : "off", sourceMapLighting?.casters.count ?? 0,
                          asset.triangles, asset.textureBytes, asset.lightmapBytes, asset.lightmapTextures,
-                         asset.cubeBytes, asset.cubeTextures, asset.blockImages, asset.decodedImages, asset.imageSource.rawValue,
+                         asset.cubeBytes, asset.cubeTextures,
+                         asset.normalMaps?.bytes ?? 0, asset.normalMaps?.textures ?? 0, asset.normalMaps?.draws ?? 0, asset.blockImages, asset.decodedImages, asset.imageSource.rawValue,
                          asset.loadSeconds * 1000, sourceMapInstallSeconds * 1000))
         }
         publishSourceMapLine()
@@ -237,6 +238,9 @@ extension StudioModel {
         /// ShadowsOnly groups); the sun's shadow strength (0 without one).
         let probeLitDraws: Int, sunLitDraws: Int, receivingDraws: Int, perVertexReceiveDraws: Int
         let sunCasters: Int, sunShadowStrength: Float
+        /// Slice 6: draws that read a normal map, and the map's normal textures
+        /// and their share of `textureBytes` (0 for an export before slice 6).
+        let normalMappedDraws: Int, normalTextures: Int, normalBytes: Int
     }
     func sourceMapCensus() -> SourceMapCensus {
         let request = sourceMapRequest.flatMap { $0.sceneSHA256 == doc.sourceSceneSHA256 ? $0 : nil }
@@ -257,6 +261,8 @@ extension StudioModel {
                 && $0.material.uniforms.flags & MaterialFlagMapSunLit.rawValue != 0 }.count,
             perVertexReceiveDraws: items.filter { $0.material.uniforms.flags & MaterialFlagMapReceivePerVertex.rawValue != 0 }.count,
             sunCasters: items.isEmpty ? 0 : sourceMapLighting?.casters.count ?? 0,
-            sunShadowStrength: items.isEmpty ? 0 : sourceMapLighting?.sun?.shadowStrength ?? 0)
+            sunShadowStrength: items.isEmpty ? 0 : sourceMapLighting?.sun?.shadowStrength ?? 0,
+            normalMappedDraws: items.filter { $0.material.uniforms.flags & MaterialFlagMapNormal.rawValue != 0 }.count,
+            normalTextures: asset?.normalMaps?.textures ?? 0, normalBytes: asset?.normalMaps?.bytes ?? 0)
     }
 }

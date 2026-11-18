@@ -1160,8 +1160,11 @@ off). Since slice 5 they take `probeLitDraws` (`Standard` draws lit by the
 map's ambient instead of a lightmap), `sunLitDraws`, `receivingDraws` and
 `perVertexReceiveDraws` (the sun's term and its shadow), and `sunCasters`
 (the map shadow map's casters); the detail line prints them with the sun's
-shadow strength. `source-map`, `source-map34`, `source-map41` and the reload
-pair expect the slice-5 export's counts and labels.
+shadow strength. Since slice 6 they take `normalMappedDraws` (draws that
+sample their `_BumpMap`) and `normalTextures` (the map's normal-map
+textures); the detail line prints them with the normal maps' bytes.
+`source-map`, `source-map34`, `source-map41` and the reload pair expect the
+slice-6 export's counts and labels.
 
 **Measurement switch.** `IKKOKU_SOURCE_MAP_DECODED_TEXTURES=1` makes a map
 load decode its PNGs to RGBA8 (MetalKit mips) instead of uploading the

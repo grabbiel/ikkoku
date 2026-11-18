@@ -444,6 +444,7 @@ Feature assessment: [studio.md](studio.md).
 | [Packages/Engine/Tests/EngineTests/SourceStudioLiveTickTests.swift](../../Packages/Engine/Tests/EngineTests/SourceStudioLiveTickTests.swift) | Test / validation |
 | [Packages/Engine/Tests/EngineTests/SourceStudioLookDataTests.swift](../../Packages/Engine/Tests/EngineTests/SourceStudioLookDataTests.swift) | Test / validation |
 | [Packages/Engine/Tests/EngineTests/SourceStudioMapLightmapTests.swift](../../Packages/Engine/Tests/EngineTests/SourceStudioMapLightmapTests.swift) | Test / validation |
+| [Packages/Engine/Tests/EngineTests/SourceStudioMapNormalTests.swift](../../Packages/Engine/Tests/EngineTests/SourceStudioMapNormalTests.swift) | Test / validation |
 | [Packages/Engine/Tests/EngineTests/SourceStudioMapSkyTests.swift](../../Packages/Engine/Tests/EngineTests/SourceStudioMapSkyTests.swift) | Test / validation |
 | [Packages/Engine/Tests/EngineTests/SourceStudioMapSunTests.swift](../../Packages/Engine/Tests/EngineTests/SourceStudioMapSunTests.swift) | Test / validation |
 | [Packages/Engine/Tests/EngineTests/SourceStudioMapUnlitDrawTests.swift](../../Packages/Engine/Tests/EngineTests/SourceStudioMapUnlitDrawTests.swift) | Test / validation |

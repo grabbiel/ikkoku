@@ -120,6 +120,9 @@ public enum SourceStudioMapStatus {
     public static let shadowsLabel = " with shadows"
     public static let noSunLabel = "no realtime sun"
     public static let premultipliedLabel = "Transparent mode drawn as Fade"
+    /// Slice 6: what `litLabel`'s maps clause becomes once the export carries
+    /// its normal maps (detail normal maps and per-texel metallic are not drawn).
+    public static let normalsDrawnLabel = "no metallic or detail maps"
 
     static func title(_ entry: SourceStudioMapCatalog.Entry) -> String { "Map \(entry.no) \(entry.name) (\(entry.scene))" }
 
@@ -197,8 +200,11 @@ public enum SourceStudioMapStatus {
             missing.append(noSunLabel)
         }
         if asset.premultipliedParts > 0 { missing.append(premultipliedLabel) }
-        let approximated = missing.isEmpty ? litLabel
-            : litLabel.replacingOccurrences(of: "approximated: ", with: "approximated: \(missing.joined(separator: ", ")), ")
+        // Slice 6: an export with its normal maps draws them.
+        let base = asset.normalMaps == nil ? litLabel : litLabel.replacingOccurrences(of: "no normal, metallic or detail maps",
+                                                                                      with: normalsDrawnLabel)
+        let approximated = missing.isEmpty ? base
+            : base.replacingOccurrences(of: "approximated: ", with: "approximated: \(missing.joined(separator: ", ")), ")
         return "\(lit); \(approximated)"
     }
 
@@ -407,6 +413,14 @@ public final class SourceStudioMapAsset: @unchecked Sendable {
     /// Standard parts in the Transparent mode (`_ALPHAPREMULTIPLY_ON`), drawn
     /// as Fade: the premultiplied diffuse is not drawn (slice 5).
     public private(set) var premultipliedParts = 0
+    /// Slice 6: the normal maps drawn (nil for an export before slice 6, which
+    /// carries none): the draws that read one, and the textures and their
+    /// share of `textureBytes`. They load and release with the map's other images.
+    public private(set) var normalMaps: NormalMapCounts? = nil
+    public struct NormalMapCounts: Sendable, Equatable {
+        public var draws = 0, textures = 0, bytes = 0
+        public init() {}
+    }
     private let resources: ResourceStore
     private let lock = NSLock()
     private var released = false
@@ -449,6 +463,7 @@ public final class SourceStudioMapAsset: @unchecked Sendable {
         var cubeHandles: [Int: TextureHandle] = [:]
         var blockImageCount = 0, decodedImageCount = 0
         var shadowOnly: [ShadowOnlyPart] = []
+        var normalHandles: [TextureHandle] = [], normalDraws = 0
         do {
             let gltf = loaded.asset
             // ST-A11 slice 2: nil for an export without lightmaps (every part
@@ -458,6 +473,8 @@ public final class SourceStudioMapAsset: @unchecked Sendable {
             let blocks = try SourceStudioBlockImages.parse(gltf.extras, label: url.lastPathComponent)
             // Slice 5: nil for an export without map lighting.
             let lighting = try SourceStudioMapLightingData.parse(gltf.extras, label: url.lastPathComponent)
+            // Slice 6: an export that carries its Standard normal maps.
+            let normalsExported = try SourceStudioMapNormals.exported(gltf.extras, label: url.lastPathComponent)
             var sunCounts = SunCounts()
             var premultiplied = 0
             let directory = url.deletingLastPathComponent()
@@ -528,6 +545,21 @@ public final class SourceStudioMapAsset: @unchecked Sendable {
                 }
                 lightmapHandles[entry.index] = (light, direction)
                 return (light, direction)
+            }
+            /// Slice 6: a lit Standard part's `_BumpMap`, sampled as its colour space
+            /// says. The mesh must carry its tangents (the export writes them).
+            func normalMap(_ standard: SourceStudioStandardInputs, mesh: GPUMesh?, part: LoadedAsset.Part, lambert: Bool) throws -> TextureHandle? {
+                guard let index = standard.normalImage, !lambert else { return nil }
+                guard normalsExported else {
+                    throw RigError.invalid("\(url.lastPathComponent): material \(part.materialName) has a normal map but the map does not mark its normal maps.")
+                }
+                guard mesh?.carriesTangents == true else {
+                    throw RigError.invalid("\(url.lastPathComponent): mesh \(part.meshName) has a normal-mapped material but no TANGENT.")
+                }
+                let handle = try image(index, srgb: standard.normalSRGB, material: part.materialName)
+                if !normalHandles.contains(handle) { normalHandles.append(handle) }
+                normalDraws += 1
+                return handle
             }
             guard let mapNode = gltf.nodes.firstIndex(where: { $0.name == "Map" && $0.parent == nil }),
                   gltf.nodes[mapNode].extras?["ikkokuMapRole"]?.stringValue == Role.mapRoot.rawValue else {
@@ -637,15 +669,19 @@ public final class SourceStudioMapAsset: @unchecked Sendable {
                     }
                     let handles = try lightmap(entry)
                     let emission = try standard.emissionImage.map { try image($0, srgb: standard.emissionSRGB, material: part.materialName) }
+                    let normal = try normalMap(standard, mesh: mesh, part: part, lambert: lambert)
                     material = SourceStudioMapMaterial.make(part.material, standard: standard, base: base, emission: emission,
                                                             lightmap: handles.light, direction: handles.direction,
-                                                            range: lightmaps.range, exponent: lightmaps.exponent, lambert: lambert)
+                                                            range: lightmaps.range, exponent: lightmaps.exponent, lambert: lambert,
+                                                            normal: normal)
                     draw = .lightmapped
                 } else if lighting != nil, let standard {
                     // Slice 5: without a lightmap Standard reads the map's ambient, not the character light.
                     let emission = try standard.emissionImage.map { try image($0, srgb: standard.emissionSRGB, material: part.materialName) }
+                    let normal = try normalMap(standard, mesh: mesh, part: part, lambert: lambert)
                     material = SourceStudioMapMaterial.make(part.material, standard: standard, base: base, emission: emission,
-                                                            lightmap: nil, direction: nil, range: 0, exponent: 0, lambert: lambert)
+                                                            lightmap: nil, direction: nil, range: 0, exponent: 0, lambert: lambert,
+                                                            normal: normal)
                     draw = .probeLit
                 }
                 if draw != .item, standard?.premultiplyAlpha == true { premultiplied += 1 }
@@ -685,6 +721,11 @@ public final class SourceStudioMapAsset: @unchecked Sendable {
             asset.shadowOnlyParts = shadowOnly
             asset.sunCounts = sunCounts
             asset.premultipliedParts = premultiplied
+            if normalsExported {
+                var counts = NormalMapCounts()
+                counts.draws = normalDraws; counts.textures = normalHandles.count; counts.bytes = bytes(normalHandles)
+                asset.normalMaps = counts
+            }
             return asset
         } catch {
             for part in loaded.parts { resources.unregister(mesh: part.mesh) }

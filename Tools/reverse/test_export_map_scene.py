@@ -308,7 +308,20 @@ class StandardInputTests(unittest.TestCase):
         materials += [{"extras": {"ikkokuStandard": maps.legacy_diffuse_inputs({})}}, {"extras": {}}]
         self.assertEqual(maps.standard_input_counts(materials),
                          {"materials": 4, "smoothnessSources": {"glossiness": 2, "metallicGlossMapAlphaMean": 2},
-                          "smoothnessApproximations": 2, "specularHighlightsOff": 1, "glossyReflectionsOff": 0, "premultiplyAlpha": 1})
+                          "smoothnessApproximations": 2, "specularHighlightsOff": 1, "glossyReflectionsOff": 0, "premultiplyAlpha": 1,
+                          "normalMaps": 0})
+        materials[0]["extras"]["ikkokuStandard"]["normal"] = maps.normal_record(3, 0.5, False, 12, "n")
+        self.assertEqual(maps.standard_input_counts(materials)["normalMaps"], 1)
+
+    def test_normal_record_is_unitys_dxt5nm_unpack_with_its_scale_and_colour_space(self):
+        record = maps.normal_record(7, 0.30000001192092896, False, 12, "mt_bump")
+        self.assertEqual(record, {"image": 7, "scale": 0.30000001192092896, "packing": "unityDXT5nm", "srgb": False,
+                                  "textureFormat": "DXT5"})
+        self.assertEqual(maps.normal_record(1, 1, True, 4, "n")["textureFormat"], "RGBA32")
+        self.assertTrue(maps.normal_record(1, 1, True, 4, "n")["srgb"])
+        for bad in (float("nan"), float("inf"), None, "1"):
+            with self.assertRaisesRegex(ValueError, "_BumpScale"):
+                maps.normal_record(1, bad, False, 12, "n")
 
 
 class LightmapFileTests(unittest.TestCase):

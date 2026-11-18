@@ -1243,6 +1243,7 @@ class StudioScenarioLaneTests(unittest.TestCase):
                         self.assertTrue(set(source_map) <= {"none", "map", "draws", "lightmappedDraws", "particleDraws", "skyDraws", "blockImages",
                                                             "unlitDraws", "silhouetteDraws", "optionDraws",
                                                             "probeLitDraws", "sunLitDraws", "receivingDraws", "perVertexReceiveDraws", "sunCasters",
+                                                            "normalMappedDraws", "normalTextures",
                                                             "loading", "lineContains", "lineAbsent", "pickNothingAt", "pickSomethingAt"},
                                         "unknown sourceMap field: %s" % path)
                         self.assertTrue(source_map, "a sourceMap assert must name what it checks: %s" % path)
@@ -1250,7 +1251,8 @@ class StudioScenarioLaneTests(unittest.TestCase):
                             self.assertEqual(set(source_map), {"none"}, "no map has no census to compare: %s" % path)
                         for name in ("map", "draws", "lightmappedDraws", "particleDraws", "skyDraws", "blockImages",
                                      "unlitDraws", "silhouetteDraws", "optionDraws",
-                                     "probeLitDraws", "sunLitDraws", "receivingDraws", "perVertexReceiveDraws", "sunCasters"):
+                                     "probeLitDraws", "sunLitDraws", "receivingDraws", "perVertexReceiveDraws", "sunCasters",
+                                     "normalMappedDraws", "normalTextures"):
                             if name in source_map:
                                 self.assertIs(type(source_map[name]), int)
                         for name in ("pickNothingAt", "pickSomethingAt"):
