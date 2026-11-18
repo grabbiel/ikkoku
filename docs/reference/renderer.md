@@ -836,6 +836,14 @@ Each of these now avoids the copy or allocation, with the same result:
   so only items with a skin set take the store's lock.
 - **Record arrays.** The opaque, transparent and caster arrays reserve the
   item count up front.
+- **Item loop (B2-v2).** `for item in frame.items` copied every item, the
+  hidden ones included, and the record then copied the visible ones again.
+  The loop now reads the items by index in their buffer and copies a visible
+  item once, into its record (`consume`). It reads what it needs after that
+  (transparent, live, shadow caster) first. The live source-shader check
+  before it reads the buffer too, where `contains` copied every item. The
+  records are the same, so the tests above and the byte-exact captures cover
+  it.
 - **Repeated encoder state.** Each record bound its whole state, about 30
   encoder calls, even when the record before it had bound the same mesh,
   pipeline, cull mode and textures. The shadow, main, overlay and pick passes

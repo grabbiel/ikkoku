@@ -1249,97 +1249,110 @@ public final class Renderer: @unchecked Sendable {
         // ST-T04: static item records merge into instanced runs, except in a
         // frame with live source-shader draws, whose stencil main pass has no
         // instanced pipelines.
-        let instancing = instanceItems && !frame.items.contains { $0.visible && $0.sourceShader != nil }
+        // Read in the items' buffer: `contains` on the array copied every item.
+        let instancing = instanceItems && !frame.items.withUnsafeBufferPointer { items in
+            items.indices.contains { items[$0].visible && items[$0].sourceShader != nil }
+        }
         pendingDraws.removeAll(keepingCapacity: true)
         pendingMaterials.removeAll(keepingCapacity: true)
 
-        for item in frame.items where item.visible {
-            guard let mesh = resources.mesh(item.mesh) else { continue }
-            let isSky = item.material.uniforms.kind == UInt32(MaterialKindSky.rawValue)
-            // A sky draw needs its cube: without it there is nothing to sample.
-            if isSky, frame.texture(item.material.cubemap, resources: resources)?.textureType != .typeCube { continue }
-            let palette = item.skinSet.flatMap { skinPalettes[$0] }
-            if mesh.skin != nil, let key = item.skinSet {
-                do {
-                    guard item.deformKey != nil, let palette else {
-                        throw ResourceError.invalidSkin("\(mesh.name): missing deformation key or skin set \(key)")
-                    }
-                    try mesh.validateSkinPalette(boneCount: palette.count)
-                } catch {
-                    deformationErrors.append(String(describing: error))
-                    continue
-                }
-            }
-            var vb: any MTLBuffer = mesh.baseVertices
-            if let key = item.deformKey, mesh.needsDeform {
-                if let first = deformed[key] {
-                    vb = first
-                } else {
-                    guard let buf = resources.deformBuffer(for: key, mesh: item.mesh, vertexCount: mesh.vertexCount, frameCreatedAt: frame.createdAt) else {
-                        deformationErrors.append("\(mesh.name): could not allocate deformation buffer \(key)")
+        // By index in the items' buffer (B2-v2): `for item in frame.items` copied
+        // every item, the hidden ones included, before the record copied it
+        // again. Now a visible item is copied once, into its record
+        // (`consume`). `items` is valid only inside this closure and never
+        // escapes it; the loop only reads it.
+        try frame.items.withUnsafeBufferPointer { items in
+            for index in items.indices where items[index].visible {
+                let item = items[index]
+                guard let mesh = resources.mesh(item.mesh) else { continue }
+                let isSky = item.material.uniforms.kind == UInt32(MaterialKindSky.rawValue)
+                // A sky draw needs its cube: without it there is nothing to sample.
+                if isSky, frame.texture(item.material.cubemap, resources: resources)?.textureType != .typeCube { continue }
+                let palette = item.skinSet.flatMap { skinPalettes[$0] }
+                if mesh.skin != nil, let key = item.skinSet {
+                    do {
+                        guard item.deformKey != nil, let palette else {
+                            throw ResourceError.invalidSkin("\(mesh.name): missing deformation key or skin set \(key)")
+                        }
+                        try mesh.validateSkinPalette(boneCount: palette.count)
+                    } catch {
+                        deformationErrors.append(String(describing: error))
                         continue
                     }
-                    vb = buf
-                    deformed[key] = buf
-                    let entries = Renderer.activeMorphEntries(item.morphWeights, targetCount: mesh.morphNames.count)
-                    let morphs = try frameRing.allocate(array: entries)
-                    let skin = mesh.skin != nil ? palette : nil
-                    var content: DeformContent?
-                    var dispatch = true
-                    if tracking.track {
-                        let inputs = DeformContent(mesh: mesh, palette: skin?.matrices, morphs: entries)
-                        // The buffer already holds these vertices when the last
-                        // committed dispatch into it had the same inputs.
-                        if let held = deformContent[key] {
-                            deformHeld += 1; tracking.compared += 1
-                            if tracking.reuse, held.buffer === buf, held.content.matches(inputs) { dispatch = false }
-                        }
-                        content = inputs
-                    } else {
-                        statistics.deformUntracked += 1
-                    }
-                    deforms.append(DeformRecord(key: key, mesh: mesh, buffer: buf, skinBuffer: skin?.allocation.buffer,
-                                                skinOffset: skin?.allocation.offset ?? 0,
-                                                boneCount: skin?.count ?? 0, morphs: morphs, morphCount: entries.count,
-                                                content: content, dispatch: dispatch))
-                    if dispatch { statistics.deformDispatches += 1 } else { statistics.deformReuses += 1 }
-                    statistics.activeMorphEntries += entries.count
-                    statistics.largestActiveMorphSet = max(statistics.largestActiveMorphSet, entries.count)
                 }
+                var vb: any MTLBuffer = mesh.baseVertices
+                if let key = item.deformKey, mesh.needsDeform {
+                    if let first = deformed[key] {
+                        vb = first
+                    } else {
+                        guard let buf = resources.deformBuffer(for: key, mesh: item.mesh, vertexCount: mesh.vertexCount, frameCreatedAt: frame.createdAt) else {
+                            deformationErrors.append("\(mesh.name): could not allocate deformation buffer \(key)")
+                            continue
+                        }
+                        vb = buf
+                        deformed[key] = buf
+                        let entries = Renderer.activeMorphEntries(item.morphWeights, targetCount: mesh.morphNames.count)
+                        let morphs = try frameRing.allocate(array: entries)
+                        let skin = mesh.skin != nil ? palette : nil
+                        var content: DeformContent?
+                        var dispatch = true
+                        if tracking.track {
+                            let inputs = DeformContent(mesh: mesh, palette: skin?.matrices, morphs: entries)
+                            // The buffer already holds these vertices when the last
+                            // committed dispatch into it had the same inputs.
+                            if let held = deformContent[key] {
+                                deformHeld += 1; tracking.compared += 1
+                                if tracking.reuse, held.buffer === buf, held.content.matches(inputs) { dispatch = false }
+                            }
+                            content = inputs
+                        } else {
+                            statistics.deformUntracked += 1
+                        }
+                        deforms.append(DeformRecord(key: key, mesh: mesh, buffer: buf, skinBuffer: skin?.allocation.buffer,
+                                                    skinOffset: skin?.allocation.offset ?? 0,
+                                                    boneCount: skin?.count ?? 0, morphs: morphs, morphCount: entries.count,
+                                                    content: content, dispatch: dispatch))
+                        if dispatch { statistics.deformDispatches += 1 } else { statistics.deformReuses += 1 }
+                        statistics.activeMorphEntries += entries.count
+                        statistics.largestActiveMorphSet = max(statistics.largestActiveMorphSet, entries.count)
+                    }
+                }
+                let hb = item.hiddenKey.flatMap { resources.hiddenBuffer(key: $0) }.flatMap { $0.length >= mesh.vertexCount ? $0 : nil }
+                var du = DrawUniforms()
+                du.model = item.model
+                du.normalMatrix = Transform.normalMatrix(from: item.model)
+                du.objectID = item.objectID
+                du.flags = hb != nil ? DrawFlagHasHiddenBuffer : item.hiddenRegions
+                du.outlineScale = item.outlineScale
+                du.depthBias = item.material.depthBias
+                var mu = item.material.uniforms
+                if item.material.transparent { mu.flags |= MaterialFlagAlphaBlend.rawValue }
+                else { mu.flags &= ~MaterialFlagAlphaBlend.rawValue }
+                if frame.texture(item.material.base, resources: resources) == nil { mu.flags &= ~MaterialFlagHasBaseTexture.rawValue }
+                if frame.texture(item.material.bodyMask, resources: resources) == nil { mu.flags &= ~MaterialFlagHasBodyMask.rawValue }
+                if mesh.colors != nil { mu.flags |= MaterialFlagHasVertexColor.rawValue } else { mu.flags &= ~MaterialFlagHasVertexColor.rawValue }
+                let c = item.model.transformPoint(item.sortCenter ?? mesh.bounds.center)
+                let isTransparent = item.material.transparent
+                if instancing, Self.instanceable(item, mesh: mesh, isSky: isSky) {
+                    // Its uniforms are placed once the passes are sorted (`assignRuns`):
+                    // in an instanced draw, which also casts its shadow, or on its own.
+                    let rec = DrawRecord(item: consume item, mesh: mesh, vertexBuffer: vb, hiddenBuffer: hb, draw: frameUniforms,
+                                         material: frameUniforms, distance: length(c - cp), pending: pendingDraws.count)
+                    pendingDraws.append(du)
+                    pendingMaterials.append(mu)
+                    if isTransparent { transparent.append(rec) } else { opaque.append(rec) }
+                    continue
+                }
+                let drawUniforms = try frameRing.allocate(du)
+                let materialUniforms = try frameRing.allocate(mu)
+                let live = item.sourceShader != nil, castsShadow = item.castsShadow
+                let rec = DrawRecord(item: consume item, mesh: mesh, vertexBuffer: vb, hiddenBuffer: hb, draw: drawUniforms,
+                                     material: materialUniforms, distance: length(c - cp))
+                if isSky { sky.append(rec); continue }
+                if live { liveCandidates.append(rec) }
+                else if isTransparent { transparent.append(rec) } else { opaque.append(rec) }
+                if castsShadow && !isTransparent { casters.append(rec) }
             }
-            let hb = item.hiddenKey.flatMap { resources.hiddenBuffer(key: $0) }.flatMap { $0.length >= mesh.vertexCount ? $0 : nil }
-            var du = DrawUniforms()
-            du.model = item.model
-            du.normalMatrix = Transform.normalMatrix(from: item.model)
-            du.objectID = item.objectID
-            du.flags = hb != nil ? DrawFlagHasHiddenBuffer : item.hiddenRegions
-            du.outlineScale = item.outlineScale
-            du.depthBias = item.material.depthBias
-            var mu = item.material.uniforms
-            if item.material.transparent { mu.flags |= MaterialFlagAlphaBlend.rawValue }
-            else { mu.flags &= ~MaterialFlagAlphaBlend.rawValue }
-            if frame.texture(item.material.base, resources: resources) == nil { mu.flags &= ~MaterialFlagHasBaseTexture.rawValue }
-            if frame.texture(item.material.bodyMask, resources: resources) == nil { mu.flags &= ~MaterialFlagHasBodyMask.rawValue }
-            if mesh.colors != nil { mu.flags |= MaterialFlagHasVertexColor.rawValue } else { mu.flags &= ~MaterialFlagHasVertexColor.rawValue }
-            let c = item.model.transformPoint(item.sortCenter ?? mesh.bounds.center)
-            if instancing, Self.instanceable(item, mesh: mesh, isSky: isSky) {
-                // Its uniforms are placed once the passes are sorted (`assignRuns`):
-                // in an instanced draw, which also casts its shadow, or on its own.
-                let rec = DrawRecord(item: item, mesh: mesh, vertexBuffer: vb, hiddenBuffer: hb, draw: frameUniforms,
-                                     material: frameUniforms, distance: length(c - cp), pending: pendingDraws.count)
-                pendingDraws.append(du)
-                pendingMaterials.append(mu)
-                if item.material.transparent { transparent.append(rec) } else { opaque.append(rec) }
-                continue
-            }
-            let drawUniforms = try frameRing.allocate(du)
-            let materialUniforms = try frameRing.allocate(mu)
-            let rec = DrawRecord(item: item, mesh: mesh, vertexBuffer: vb, hiddenBuffer: hb, draw: drawUniforms,
-                                 material: materialUniforms, distance: length(c - cp))
-            if isSky { sky.append(rec); continue }
-            if item.sourceShader != nil { liveCandidates.append(rec) }
-            else if item.material.transparent { transparent.append(rec) } else { opaque.append(rec) }
-            if item.castsShadow && !item.material.transparent { casters.append(rec) }
         }
         // Records of keys this frame does not use name buffers and meshes that
         // may have been released: drop them, which also releases those.
