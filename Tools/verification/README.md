@@ -1455,6 +1455,13 @@ unchanged. In the tail, the slot that used 2.0 (body 1, or body 0 in the
 async scenario) is set to 2.0 and commits. It is then exported and
 reimported, and the rate is kept.
 
+`maker-selection-roundtrip` used the same rate to make two candidate
+previews fail (`selectAsset` with `expectFailure`). Its run on the merged
+head (2026-11-18) failed for that reason, because 2.0 now commits. It now
+uses body slot 4 = 3e38 for the two refused previews and restores the slot
+to the card's saved 0.5 before its export. It gets no tail, because the
+other three scenarios already cover a committed 2.0.
+
 ### Lazy hidden characters (cxs1 gap list, item 7)
 
 Three checks cover the import that leaves hidden characters unbuilt (see

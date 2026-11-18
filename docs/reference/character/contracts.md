@@ -499,7 +499,9 @@ invalid rate, as NaN and ±infinity are. At ±3e38 that is 9 body slots and
     export and reimport twice);
   - the three Maker selection scenarios: an extended body rate 2.0 commits and
     survives export and reimport, and the forced commit failure is body slot 4
-    at 3e38.
+    at 3e38;
+  - `maker-selection-roundtrip`: its two refused candidate previews also use
+    body slot 4 at 3e38.
 
 **Original-player comparison (2026-11-18).** One VM phase captured three
 corpus characters with extended rates (two male, one female), each twice: with
