@@ -6952,8 +6952,8 @@ All numbers are medians (min–max), 60 Hz, monitor off.
   the same ready time, main-thread time, warm-up and Metal allocation as the
   other head units, so it loaded everything. The difference (about
   465 MiB) is most likely freed memory that run's allocator had already
-  returned; W3b's median units check it. The median above includes that
-  unit.
+  returned. W3b found the same split again (see below). The median above
+  includes that unit.
 
 ### Actions on the 70-character scene
 
@@ -6989,5 +6989,59 @@ All numbers are medians (min–max), 60 Hz, monitor off.
   layout. The trace shows about 13.6 ms of main-thread time between the
   call and the export, before the live refresh could run. The export now
   runs in line when the import's warm-up has loaded every clock
-  (`SourceStudioAnimationClock.isLoaded`), as base does; the clocks add about
-  1 ms. W3b times the final code.
+  (`SourceStudioAnimationClock.isLoaded`), as base does. W3b (below) times
+  the final code.
+
+### Final code (W3b, 2026-11-17)
+
+- **Builds.**
+  - Head: the final code, Release (34804c13). It adds the hidden card check
+    and the in-line export.
+  - Base: unchanged (fb3aecd9).
+- **Method.** Same as W3: ABBA, 60 Hz with the monitor off, the same
+  validity rule.
+- **Validity.** 15 units ran, 13 planned plus 2 reruns.
+  - One was invalid: show-hidden head, codex at 39% after the unit. Its
+    rerun was valid.
+  - The window's first launch (70-character startup, base) read the scene
+    from a spun-down external disk. Its import call took 18.6 s, and the
+    scene was ready after 22.2 s.
+    - The unit passed the validity rule. It was left out after its result
+      was seen, which is a post-hoc exclusion. It is accepted only because
+      leaving it out favours base.
+    - It was rerun. The table shows the base row both ways.
+
+| Workload (n per arm) | Metric | Base | Head |
+|---|---|---|---|
+| startup, 70 characters (base 2 without the cold unit, 3 with it; head 2) | scene ready | 3.60 s (3.59–3.61); with it 3.61 s (3.59–22.15) | 1.56 s (1.44–1.68) |
+| | main-thread busy until ready | 738 ms; with it 758 ms (718–19249) | 633 ms |
+| | longest stall | 386 ms; with it 391 ms (382–18908) | 380 ms |
+| | peak footprint | 1524 MiB; with it 1517 MiB | 1248 MiB |
+| | clock warm-up | – | 121 ms |
+| startup, median (2) | scene ready | 1.59 s | 1.02 s |
+| | main-thread busy until ready | 615 ms | 554 ms |
+| | longest stall | 364 ms | 294 ms |
+| | peak footprint | 842 MiB (841–843) | 676 MiB (495–857) |
+| `studio-export-import` (2) | export, ready | 42.4 ms | 58.1 ms |
+| | export, main busy | 55.1 ms | 63.0 ms |
+| `studio-show-hidden` (head only, 1) | first show of a hidden folder, ready | – | 745–766 ms (5 characters) |
+| | first show, main busy / longest stall | – | 113–120 ms / 19–27 ms |
+
+- **Export.**
+  - The head now exports in line: the call takes as long as the export. In
+    W3 the call returned in 0.9 ms and the export finished 63 ms later.
+  - The gap to base narrows from 21 to 16 ms (ready) and from 14 to 8 ms
+    (main-thread busy).
+  - So the clocks cost more in an export than the 1 ms of their first bake.
+    Where the remaining time goes is not measured yet.
+- **First show.** The card check keeps the hidden characters that cannot
+  convert as placeholders, so a first show now builds 5 characters instead
+  of 14. It is ready in about 0.75 s, with about 115 ms of main-thread time.
+  This changes again once extended shape rates (#379) make those characters
+  convertible; #379's own measurement covers it.
+- **Median-scene footprint.** It is bimodal on the head.
+  - Of the six head units (W3 and W3b), four read 855–861 MiB, about
+    15 MiB above base's 837–847 MiB.
+  - The other two read 391 and 495 MiB, with the same ready and main-thread
+    times.
+  - Resident memory and Metal allocations fall on the head (W3 table).
