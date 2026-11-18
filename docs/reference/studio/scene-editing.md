@@ -60,6 +60,8 @@ remains separate.
 
 The app exports supported existing transforms, per-object visibility, folder/camera/route renames, camera active flags (only after the user switches the looked-through camera, then for every camera record), route play-state `active` flags, FK/IK and activation flags, animation, voice and cameras to a **new file** after checking the source SHA. It renders an explicit edited thumbnail. The app populates `edits.cards` with source face/body shape values and edited card colors that differ from the embedded card's saved values (ST-T06); shape and color edits on one character merge into a single `Edits`, and a value edited back to the saved rate or rgba writes nothing and the file stays byte-identical. Only colors that actually bound a material on the assembled character are exported; an edited color whose ID binds nothing still renders as saved. Its inspector diagnostic says it remains in the native document but is skipped by original-scene export. A selected outfit other than the card's saved one is merged into the same `Edits` as `coordinateType` (ST-C03); choosing the saved outfit again writes nothing. Clothes states, accessory flags and the shoes type that differ from the card's saved `Status` are merged the same way; a state edited back to the saved bytes writes nothing. Thumbnail and other card destinations remain unpopulated, and a native `object.card` override is rejected. Deleted objects and objects moved between the root and folders are exported as [topology edits](#topology-edits-deletion-and-reparenting-st-t03-st-s09), and copies of source records and new folders, cameras and lights as [inserted records](#duplicates-and-added-records-st-t03-st-s09-st-d03). Route point and setting edits, and route copies, are exported as [route edits](#route-points-and-settings-st-t11-st-t03).
 
+**Object transforms and the Transform rows (#391).** An imported object keeps its exact quaternion (`rotationOverride`) and the Z-X-Y Euler angles the scene stores for it (`StudioTransform.sourceEuler`), recorded together with the bits of that quaternion. Its Transform rows show CharaStudio's numbers: Position, those angles and Scale, each to 3 decimals. CharaStudio's own end-of-edit (`Studio.GuideInput.OnEndEditPos/Rot/Scale`) re-parses a field's 3-decimal text and writes it only when it differs from the stored component, rotation modulo 360 with the sign kept. The rows commit the same way (`StudioTransform.set`), and a rotation commit rebuilds the quaternion from the three angles. Export (`StudioTransform.sourceChangeAmount`) writes the stored angles while the quaternion is still the one they were recorded for, so committing one field's unedited text changes only that component, to the float of its text. Any other rotation write (gizmo, reparenting, plug-in clone, an engine-Euler edit) changes or clears the quaternion, which retires the angles whatever path made it; such an object exports a fresh Z-X-Y decomposition of its quaternion, as before. Documents saved before #391 have no stored angles and behave that way too. Native objects keep whole-degree X-Y-Z rows.
+
 The export validator rejects new characters and items, the topology and insertion cases those sections list as refused, type changes, and name edits for any record kind other than folder, camera or route (a renamed character keeps its name in its card), plus native assets/materials/cards/hand/appearance overrides, light/effect/timeline changes, live typed plugin state, and the plug-in data cases [plug-in data](#plug-in-data-st-t03i) refuses. A retained source file is not serialization for those edits.
 
 Implement the missing field writers, new characters and items and the refused topology cases under `ST-T03`, a real source-card edit workflow under `ST-T06`, and GUID-specific plugin serialization under `ST-T13`. Each writer must preserve unknown siblings, verify a no-op byte match, reverse supported changes exactly where possible, and validate an edited file in the original loader before widening its compatibility claim.
@@ -2065,6 +2067,86 @@ and all eleven fields, then reload the native file again for the existing
 Reset/Undo and exact-pixel checks: **7/7 save and 16/16 load steps pass**; the
 83-step edit scenario also passes again. This does not generalize support to hidden
 characters carrying only older shape/wear edits.
+
+## Hidden characters at import (lazy builds)
+
+An import builds the characters it draws and leaves a hidden one unbuilt
+(cxs1 gap list, item 7). A character is hidden when its own `visible` flag or
+any ancestor's is off; accessory children follow their character. Route
+characters stay eager, hidden or not. The scene corpus has 558 hidden
+characters in 29 scenes and no route characters.
+
+### Recovered rules
+
+- Hiding a character (`OCIChar.OnVisible`) sets `ChaControl.visibleAll` and
+  the guide and option-item visibility, nothing else. `visibleAll` is read
+  only as one flag of `YS_Assist.SetActiveControl`, which switches the
+  GameObjects of the body, head, tongue, hair, clothes, parts and accessory
+  renderers on or off.
+- The body Animator is on the root of the `p_cf_body_bone` prefab
+  (`p_cf_body_bone_low` for low detail) in `chara/oo_base.unity3d`, under the
+  character's top object. Hiding never touches either GameObject. Both
+  prefabs' Animators cull with AlwaysAnimate and update in Normal mode, and
+  no recovered code changes the culling mode. So a hidden character keeps
+  animating.
+- A save reads the live `normalizedTime` of the Animator's current state
+  (`OCIChar` save), so a hidden character saves the time it has reached.
+- A scene load selects nothing: `InitScene` clears the tree selection and
+  the load never selects a node.
+
+### App translation
+
+- The import plans every character and builds the drawn ones. A hidden one
+  gets its reference and no build. The status line adds "N hidden, built when
+  shown" and the diagnostics add "N hidden character(s) not built at import;
+  each builds when shown or selected."
+- A hidden character whose embedded card alone shows it cannot convert is
+  retained as the eager import retains a failed build: a placeholder entry
+  with no character reference, and the same diagnostic, "Character N retained
+  without rendering: <reason>". The check
+  (`SourceStudioCharacterPreview.validateCard`) runs the build's card-only
+  steps in the build's order: the card and customization decode, the scene
+  and card sex identities, the assembly identity, the saved outfit index,
+  the assembly kind (exType 0) and the shape rates (0...1). It reads no
+  converted file and runs on a worker from the import's preparation
+  (`CardCheck`); the commit collects it. A card that fails it cannot build,
+  and the reason is the build's own error unless a converted-file step the
+  build runs before the shape check fails first (the head assembly lookup,
+  the rig and appearance reads). A card that passes may still fail in those
+  steps; that failure is reported when the character is shown or selected.
+- A hidden character builds when it is shown, when it is selected, or when a
+  selected object hangs from it (an attached folder, for example). A hidden
+  selection builds without being drawn, so its inspectors and edits work.
+  While it builds, its Face, Clothes and Pose inspectors show "Building this
+  character…".
+- An object attached to an unbuilt hidden character reports no
+  "Attachment parent has no converted character" error: visibility is checked
+  before the attachment's world matrix.
+- The default selection after an import is the first drawn character, or
+  nothing when none is drawn, so the selection builds no hidden character.
+  This is a native convenience; CharaStudio selects nothing.
+- A character with no preview (unbuilt, not yet built after a native load,
+  or whose build failed) saves the animation time it has reached, like
+  CharaStudio's hidden characters. `SourceStudioAnimationClock` reads only
+  its card's body height and the catalog clip (no rig, no GPU) and calls
+  `SourceStudioAnimation.savedState`, the time advance a built character's
+  `savedAnimationState` calls. A native save, a clock rebase (an animation
+  edit) and an export all use it. Every character's animation is saved at
+  the Studio clock of the moment the export was chosen. When the import's
+  warm-up has loaded what the clocks read
+  (`SourceStudioAnimationClock.isLoaded`, which never waits), an export with
+  no baseline to build runs at once on the main thread, as before this
+  change; the clocks cost about a millisecond there. Before that (the
+  warm-up still running), the background export advances them on a worker
+  thread and shows its progress line.
+- This also fixes the native reload path. Before, a character hidden when a
+  native document was saved had its animation baked into the document, the
+  reload left it unbuilt, and the export failed with "Animation edits
+  require a loaded source character."
+
+### Evidence
+
+EVIDENCE_PLACEHOLDER
 
 ## CharaStudio reload acceptance
 
