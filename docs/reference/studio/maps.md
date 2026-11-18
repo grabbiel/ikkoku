@@ -1111,6 +1111,25 @@ So its smoothness is `_Glossiness`, the third case. Its first subshader culls no
 
 The oracle's irradiance template is `_Glossiness` 0 and `_Metallic` 0, so the oracle cannot gate smoothness. The engine change tests it against a reference computed from Standard's BRDF, with smoothness above 0. A VM case for it is queued, and no parity is claimed until it runs.
 
+### The sun reference phase (tooling)
+
+`original_map_probe.py sun` (`OriginalMapProbe.cs`'s sun mode) is that VM case, and the reference for the sun's shadow filter. It reads already-authored map records back in the original player (`--scene <case>=<record>`, case `mapNN` or `mapNN-<suffix>`) and measures the sun at each record's saved camera. The measurements come from a probe camera with `Camera.main`'s settings and none of its image effects, into linear float targets at 960 × 720:
+
+- the lit frame;
+- the sun's screen-space shadow mask, soft as authored and with the sun's shadows set to Hard (the shadow-map texel grid). A command buffer on the sun copies it at `LightEvent.AfterScreenspaceMask`;
+- the frame without the sun's shadows, and without the sun;
+- the deferred GBuffer's normals and specular/smoothness, copied at `CameraEvent.AfterGBuffer`, and the normals and lit frame again with every map material's normal maps off.
+
+On the full frame the probe picks the strongest shadow edge on a continuous sunlit surface. It turns the Studio camera in place to look through that pixel with an eighth of the field of view, and saves that view as its own record (`scene-sun-<case>-zoom.png`), so the app can render the same pose. It repeats the lit passes and both masks there. `sun-trace.json` records the quality, light and tier shadow settings, the built-in shader modes, every map material's smoothness, metallic and normal-map inputs, the edge pick, and the zoom pose with its error.
+
+The phase is one `prlctl exec` under the same hygiene as the earlier phases: the 328-character bootstrap fetches `run.ps1` from the host-only endpoint, and the tool refuses any exec command of 3,500 characters or more. On top of the junction targets' scans, the run script:
+
+- waits up to 120 s for the player's processes, and any `WerFault` started during the run, to exit;
+- removes the root only when no process remains and no reparse point is left under it after the junctions;
+- reports `targetsChanged`.
+
+`--dry-run` makes every check and builds `run.ps1` without the VM. `test_original_map_probe.py` covers the subcommand, the dry run, the root guard, the exec limit and one-channel float images. The results land here once the phase has run.
+
 ### The slice-5 export
 
 All 42 maps were exported again with this converter, from the same bundles (checked by SHA-256) and with the shared fixture's settings: block-only images and the player's built-in resources. The export is in `.local/sta11d-slice5/exports/maps/`, with its catalog. The scripts and logs are in `.local/sta11d-slice5/`.

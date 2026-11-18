@@ -81,6 +81,30 @@
 // (a particle), Custom/Silhouette ("silhouette") and Unlit/Transparent ("unlit"); the oracle renders the
 // last two alone like the sky (oracle-<case>-silhouettes.rgba.f32, -unlit.rgba.f32) and skips the
 // irradiance pair when the map has no lightmaps or no keyword-free opaque Standard material (recorded).
+//
+// The sun mode (ST-A11 slices 5 and 6, original_map_probe.py sun), when reload-sun-<case>.png records are uploaded
+// (<case> = mapNN or mapNN-<suffix>, the map number read from it): nothing is authored but one zoomed record per case.
+// Each record is read back the same way, settled, and measured from a probe camera with Camera.main's settings and
+// none of its image effects, every renderer outside the map scene hidden, into linear ARGBFloat targets at
+// Width x Height, rows top-down (the files are prefixed sun-<case>):
+//   -clean-color.png        the probe camera's LDR frame with the other renderers still drawn;
+//   -lit.f32                float32 RGB, HDR, MSAA off, forward: the map as lit, the sun's shadows as authored;
+//   -mask.r.f32             float32, one channel: the sun's screen-space shadow mask (Unity's collected shadow
+//                           attenuation, shadow strength applied), copied from BuiltinRenderTextureType.CurrentActive
+//                           by a command buffer on the sun at LightEvent.AfterScreenspaceMask during the -lit render;
+//   -mask-hard.r.f32        the same mask with the sun's shadows set to Hard (shows the shadow-map texel grid);
+//   -noshadow.f32           -lit with the sun's shadows off; -nosun.f32 -lit with the sun at intensity 0;
+//   -gbuffer-normals.f32    the deferred path's GBuffer2 (world normal * 0.5 + 0.5, RGB) and
+//   -gbuffer-specular.rgba.f32 its GBuffer1 (specular colour, smoothness in A), copied at CameraEvent.AfterGBuffer;
+//   -gbuffer-normals-flat.f32 and -lit-flat.f32 the same normals and -lit with every map material's normal maps off
+//                           (copies with _NORMALMAP disabled and _BumpMap/_DetailNormalMap cleared).
+// The sun is RenderSettings.sun when it is an enabled directional light in the map scene, else the brightest such
+// light. On the full frame the probe picks the strongest shadow edge on a continuous sunlit surface (EdgePick), turns
+// the Studio camera in place to look through that pixel with a field of view divided by ZoomDivisor, saves that
+// view as scene-sun-<case>-zoom.png with the player's writer (so our app can render the same pose), and repeats
+// the passes but -noshadow and the deferred ones as sun-<case>-zoom-*. sun-trace.json records per case the quality and
+// light shadow settings, the graphics tier and built-in shader modes, every map material's smoothness, metallic
+// and normal-map inputs, the edge pick and the zoom pose with its error.
 using System;
 using System.Collections;
 using System.Collections.Generic;
@@ -92,12 +116,18 @@ using Manager;
 using Studio;
 using UnityEngine;
 using UnityEngine.SceneManagement;
+using UR=UnityEngine.Rendering;
 [BepInPlugin("org.ikkoku.validation.mapprobe", "Ikkoku map probe", "1.0.0")]
 public sealed class OriginalMapProbe:BaseUnityPlugin {
     const int Width=960,Height=720,SettleFrames=30,LoadFrames=3600;
     const float DepthFar33=25f,DepthFar34=1000f,SkyFar=10000f;
     const string Map34Upload="reload-map34-showoff.png",MapsUpload="reload-maps-showoff.png";
     const float OutsideMinimum=1f;
+    // The sun mode (see the header): upload prefix, zoom, edge-pick bounds and the guest's free-space floor.
+    const string SunPrefix="reload-sun-";
+    const float ZoomDivisor=8f,SunFloor=0.02f,SunContinuity=0.15f;
+    const int EdgeMargin=32,EdgeStep=2,EdgeReach=8;
+    const long MinimumFreeBytes=3L*1024*1024*1024;
     static readonly Vector3 MapPos=new Vector3(0.3f,-0.05f,-0.5f),MapRot=new Vector3(4f,25f,-3f);
     // A mapRoot-local point near the middle of map 33's room (the converted geometry spans x -2.17..1.46,
     // y 0..3.44, Unity z -1.64..4.19): the saved camera's pivot, so the camera stays inside the room.
@@ -145,7 +175,7 @@ public sealed class OriginalMapProbe:BaseUnityPlugin {
     static readonly string[] SkippedShaders={"FX/MirrorReflection_Transparent","Xffect/heat_distortion","Shader Forge/electricLight",
         "Shader Forge/spotLaser","Shader Forge/spotLight_beam","Shader Forge/spotLight_glow","Shader Forge/volumeLight",
         "UnlitMosaicTextureShader","Particles/VertexLit Blended"};
-    int mapNo=33;float depthFar=DepthFar33;bool withOracle,mapsMode;
+    int mapNo=33;float depthFar=DepthFar33;bool withOracle,mapsMode,sunMode;
     string folder,voiceRepair;
     Studio.Studio studio;
     Map map;
@@ -164,7 +194,19 @@ public sealed class OriginalMapProbe:BaseUnityPlugin {
         }
         var oracles=Directory.GetFiles(dir,"reload-oracle-*.png");Array.Sort(oracles,StringComparer.Ordinal);
         var map34=Path.Combine(dir,Map34Upload);var maps=Path.Combine(dir,MapsUpload);
-        if(oracles.Length>0) {
+        var suns=Directory.GetFiles(dir,SunPrefix+"*.png");Array.Sort(suns,StringComparer.Ordinal);
+        if(suns.Length>0) {
+            // One case's failure is recorded and the next case still runs; a failed start-up runs none.
+            sunMode=true;bool started=errors.Count==0;
+            foreach(var scene in suns) {
+                if(!started)break;
+                var label=Path.GetFileNameWithoutExtension(scene).Substring(SunPrefix.Length);
+                int no=SunMapNo(label);
+                if(no<0){errors.Add(label+": not a mapNN or mapNN-<suffix> case");continue;}
+                UseMap(no);
+                yield return StartCoroutine(Guard(label,LoadAndSun(scene,label)));
+            }
+        } else if(oracles.Length>0) {
             foreach(var scene in oracles) {
                 if(errors.Count!=0)break;
                 var label=Path.GetFileNameWithoutExtension(scene).Substring("reload-oracle-".Length);
@@ -185,17 +227,21 @@ public sealed class OriginalMapProbe:BaseUnityPlugin {
             var showoff=Path.Combine(dir,"reload-showoff.png");
             if(errors.Count==0&&File.Exists(showoff))yield return StartCoroutine(Guard("map33-showoff",AuthorShowoff(showoff,"map33-showoff")));
         }
-        try{File.WriteAllText(Path.Combine(folder,oracles.Length>0?"oracle-trace.json":"map-trace.json"),J(K("schemaVersion",1,"mapNo",mapsMode?null:(object)mapNo,
-            "width",Width,"height",Height,"depthFar",mapsMode?null:(object)depthFar,"mode",mapsMode?"maps":null,"cases",cases)));}
+        try{File.WriteAllText(Path.Combine(folder,sunMode?"sun-trace.json":oracles.Length>0?"oracle-trace.json":"map-trace.json"),J(K("schemaVersion",1,"mapNo",mapsMode||sunMode?null:(object)mapNo,
+            "width",Width,"height",Height,"depthFar",mapsMode||sunMode?null:(object)depthFar,"mode",mapsMode?"maps":sunMode?"sun":null,"cases",cases)));}
         catch(Exception e){errors.Add("trace write: "+e);}
         File.WriteAllText(Path.Combine(folder,"status.json"),J(K("error",errors.Count==0?null:String.Join(" | ",errors.ToArray()),"errors",errors,
             "unity",Application.unityVersion,"device",SystemInfo.graphicsDeviceName,"colorSpace",QualitySettings.activeColorSpace.ToString(),
             "voiceRepair",voiceRepair,"cases",new List<string>(cases.Keys),
-            "scope","Original CharaStudio 1.0.4.2 map "+(mapsMode?"(maps mode: "+MapCases.Length+" cases across twelve maps, and map41-showoff)":mapNo.ToString())+" fixtures authored with the player's own writer (Studio.AddMap, caMap through MapCtrl.Reflect, Studio.sceneInfo.Save) and read back through Studio.LoadSceneCoroutine; per case the player's Camera.main colour image, the map scene's renderers as a white silhouette and as Unity depth-normals (linear depth over "+depthFar+" m) from Camera.main's pose and field of view, and a trace of the map root, renderers, lights, lightmaps, RenderSettings, SunLightInfo and cameras; no installed cards, saves or media"+
+            "scope",sunMode?SunScope:"Original CharaStudio 1.0.4.2 map "+(mapsMode?"(maps mode: "+MapCases.Length+" cases across twelve maps, and map41-showoff)":mapNo.ToString())+" fixtures authored with the player's own writer (Studio.AddMap, caMap through MapCtrl.Reflect, Studio.sceneInfo.Save) and read back through Studio.LoadSceneCoroutine; per case the player's Camera.main colour image, the map scene's renderers as a white silhouette and as Unity depth-normals (linear depth over "+depthFar+" m) from Camera.main's pose and field of view, and a trace of the map root, renderers, lights, lightmaps, RenderSettings, SunLightInfo and cameras; no installed cards, saves or media"+
             (oracles.Length>0||withOracle?". Oracle"+(withOracle?" (in the same run, per case)":" mode: the uploaded records read back")+": a clean colour frame, Unity's decoded lightmap irradiance per pixel (white minus black albedo over 0.96, lights at 0 and as authored), the solid renderers' lightmap classes, and the sky and particle renderers alone as linear float radiance":""))));
         Application.Quit();
         for(int i=0;i<3600;i++){yield return null;if(i%30==29)Application.Quit();}
     }
+    const string SunScope="Original CharaStudio 1.0.4.2 sun mode: uploaded map records read back through Studio.LoadSceneCoroutine and measured "+
+        "from a probe camera with Camera.main's settings and no image effects: the lit frame, the sun's screen-space shadow mask (soft and hard), "+
+        "the frame without the sun's shadows and without the sun, the deferred GBuffer normals and specular/smoothness with and without the map's "+
+        "normal maps, and the same lit passes at a zoomed view the player saves as its own record; no installed cards, saves or media";
     // Runs one case, recording an exception instead of ending the probe (the reload probe's pattern).
     IEnumerator Guard(string label,IEnumerator run) {
         while(true) {
@@ -609,6 +655,321 @@ public sealed class OriginalMapProbe:BaseUnityPlugin {
             if(white!=null)Destroy(white);if(black!=null)Destroy(black);
             foreach(var m in classMaterials)Destroy(m);
         }
+    }
+    // The sun mode's map number: "map01" -> 1, "map34-day" -> 34; -1 unless the label is mapNN or mapNN-<suffix>.
+    static int SunMapNo(string label) {
+        if(label==null||label.Length<5||!label.StartsWith("map",StringComparison.Ordinal))return -1;
+        char a=label[3],b=label[4];
+        if(a<'0'||a>'9'||b<'0'||b>'9'||(label.Length>5&&label[5]!='-'))return -1;
+        return (a-'0')*10+(b-'0');
+    }
+    // The sun mode: one uploaded record read back and measured, then the zoomed view (see the header).
+    IEnumerator LoadAndSun(string scene,string label) {
+        long free=new DriveInfo(Path.GetPathRoot(folder)).AvailableFreeSpace;
+        if(free<MinimumFreeBytes)throw new Exception(label+": "+free+" bytes free on the guest drive, below "+MinimumFreeBytes);
+        studio.InitScene(false);
+        for(int i=0;i<3;i++)yield return null;
+        var done=new bool[1];int frames=0;float start=Time.realtimeSinceStartup;
+        StartCoroutine(Track(this,studio.LoadSceneCoroutine(scene),done));
+        for(;frames<LoadFrames&&!(done[0]&&Loaded());frames++)yield return null;
+        if(!(done[0]&&Loaded()))throw new Exception(label+": the record did not load map "+mapNo+" within "+LoadFrames+" frames (done "+done[0]+", no "+map.no+")");
+        float seconds=Time.realtimeSinceStartup-start;
+        for(int i=0;i<SettleFrames;i++)yield return null;
+        yield return new WaitForEndOfFrame();
+        var record=K("label",label,"mapNo",mapNo,"scene",Path.GetFileName(scene),"sceneSHA256",Sha256File(scene),"loadFrames",frames,"loadSeconds",seconds,
+            "freeBytes",free,"settled",MapRecord(),"objects",studio.dicObjectCtrl.Count,"loadedCameraData",CameraData(studio.cameraCtrl.Export()),
+            "vanishHidden",VanishRecord()["hiddenRenderers"],"shadowSettings",ShadowSettings(),"materials",SunMaterials(),
+            "renderSettings",RenderSettingsRecord(),"sunLightInfo",SunRecord());
+        cases[label]=record;
+        int[] edge;
+        record["full"]=SunPasses("sun-"+label,true,out edge);
+        if(edge==null){record["zoom"]=K("written",false,"reason","no shadow edge on a continuous sunlit surface (full.edge)");yield break;}
+        // Turn the Studio camera in place towards the edge pixel (CameraUpdate: rotation = transBase.rotation *
+        // Euler(rotate), position = rotation * distance + transBase.TransformPoint(pos)) and narrow its field of view.
+        var main=Camera.main;var ctrl=studio.cameraCtrl;var before=new Studio.CameraControl.CameraData(ctrl.Export());
+        float tanHalf=Mathf.Tan(main.fieldOfView*0.5f*Mathf.Deg2Rad),aspect=(float)Width/Height;
+        float nx=(edge[0]+0.5f)/Width*2f-1f,ny=1f-(edge[1]+0.5f)/Height*2f;
+        var position=main.transform.position;
+        var direction=(main.transform.rotation*new Vector3(nx*tanHalf*aspect,ny*tanHalf,1f)).normalized;
+        var rotation=Quaternion.LookRotation(direction,Vector3.up);
+        var basis=ctrl.transBase;
+        var view=new Studio.CameraControl.CameraData(before);
+        view.rotate=(basis==null?rotation:Quaternion.Inverse(basis.rotation)*rotation).eulerAngles;
+        var turned=basis==null?Quaternion.Euler(view.rotate):basis.rotation*Quaternion.Euler(view.rotate);
+        var pivot=position-turned*view.distance;
+        view.pos=basis==null?pivot:basis.InverseTransformPoint(pivot);
+        view.parse=before.parse/ZoomDivisor;
+        ctrl.Import(view);
+        for(int i=0;i<2;i++)yield return new WaitForEndOfFrame();
+        main=Camera.main;
+        var zoomScene=SaveScene("scene-sun-"+label+"-zoom.png");
+        var pose=K("scene",Path.GetFileName(zoomScene),"sceneSHA256",Sha256File(zoomScene),"edgePixel",edge,"direction",V(direction),
+            "requestedPosition",V(position),"requestedCameraData",CameraData(view),"savedCameraData",CameraData(ctrl.Export()),
+            "transBase",basis==null?null:TPath(basis),"position",V(main.transform.position),"positionError",(main.transform.position-position).magnitude,
+            "forwardErrorDegrees",Vector3.Angle(main.transform.forward,direction),"fieldOfView",main.fieldOfView,"vanishHidden",VanishRecord()["hiddenRenderers"]);
+        int[] unused;
+        var zoom=SunPasses("sun-"+label+"-zoom",false,out unused);
+        zoom["written"]=true;zoom["pose"]=pose;
+        record["zoom"]=zoom;
+    }
+    // The sun mode's passes at Camera.main's current view (see the header); `full` adds the plain-frame check (the
+    // mask copy must not change the lit frame), -noshadow, the edge pick and the deferred passes. Everything changed is restored.
+    Dictionary<string,object> SunPasses(string stem,bool full,out int[] edge) {
+        edge=null;
+        var main=Camera.main;if(main==null)throw new Exception("no Camera.main to measure");
+        string sunPick;var sun=SunLight(out sunPick);
+        if(sun==null)throw new Exception("no enabled directional light in the map scene");
+        var probeObject=new GameObject("IkkokuSunProbeCamera");var cam=probeObject.AddComponent<Camera>();cam.enabled=false;
+        var ldr=Target(RenderTextureFormat.ARGB32,RenderTextureReadWrite.Default,24);
+        var hdr=Target(RenderTextureFormat.ARGBFloat,RenderTextureReadWrite.Linear,24);
+        var maskTarget=Target(RenderTextureFormat.ARGBFloat,RenderTextureReadWrite.Linear,0);
+        RenderTexture normalsTarget=null,specularTarget=null;
+        var maskCopy=new UR.CommandBuffer();maskCopy.name="IkkokuSunMask";
+        maskCopy.Blit(UR.BuiltinRenderTextureType.CurrentActive,maskTarget);
+        UR.CommandBuffer gbufferCopy=null;bool maskAttached=false,gbufferAttached=false;
+        var shadows=sun.shadows;float intensity=sun.intensity;
+        var hidden=new List<Renderer>();var swapped=new Dictionary<Renderer,Material[]>();var copies=new Dictionary<Material,Material>();
+        var images=new List<object>();
+        var record=K("sun",TPath(sun.transform),"sunPick",sunPick,"shadows",shadows.ToString(),"shadowStrength",sun.shadowStrength,"intensity",intensity,
+            "layout","float32 little-endian, linear, rows top-down: RGB (.f32), RGBA (.rgba.f32) or one channel (.r.f32)","width",Width,"height",Height);
+        try {
+            cam.CopyFrom(main);cam.enabled=false;cam.aspect=(float)Width/Height;cam.targetTexture=ldr;
+            record["clean"]=CameraRecord(cam);
+            cam.Render();cam.targetTexture=null;SaveTarget(ldr,stem+"-clean-color.png");images.Add(stem+"-clean-color.png");
+            var mapScene=map.mapRoot.scene;var hiddenPaths=new List<object>();
+            foreach(var r in FindObjectsOfType<Renderer>())if(r.gameObject.scene!=mapScene&&r.enabled){r.enabled=false;hidden.Add(r);hiddenPaths.Add(TPath(r.transform));}
+            record["hiddenRenderers"]=hiddenPaths;
+            cam.allowHDR=true;cam.allowMSAA=false;cam.renderingPath=RenderingPath.Forward;
+            record["probe"]=CameraRecord(cam);
+            float[] plain=full?RGB(RenderAlone(cam,hdr)):null;
+            sun.AddCommandBuffer(UR.LightEvent.AfterScreenspaceMask,maskCopy);maskAttached=true;
+            Fill(maskTarget,-1f);
+            var lit=RGB(RenderAlone(cam,hdr));var soft=ReadFloats(maskTarget);
+            Save(lit,stem+"-lit.f32",images);Save(Channel0(soft),stem+"-mask.r.f32",images);
+            if(plain!=null)record["plainMaximumDifference"]=MaxDifference(plain,lit);
+            sun.shadows=LightShadows.Hard;Fill(maskTarget,-1f);
+            RenderAlone(cam,hdr);var hard=ReadFloats(maskTarget);sun.shadows=shadows;
+            Save(Channel0(hard),stem+"-mask-hard.r.f32",images);
+            sun.RemoveCommandBuffer(UR.LightEvent.AfterScreenspaceMask,maskCopy);maskAttached=false;
+            record["mask"]=K("soft",MaskStats(soft),"hard",MaskStats(hard),"sentinel",-1,
+                "copy","CommandBuffer.Blit(BuiltinRenderTextureType.CurrentActive) on the sun at LightEvent.AfterScreenspaceMask");
+            float[] noshadow=null; // the full frame only: the zoom's visibility is its mask
+            if(full){sun.shadows=LightShadows.None;noshadow=RGB(RenderAlone(cam,hdr));sun.shadows=shadows;Save(noshadow,stem+"-noshadow.f32",images);}
+            sun.intensity=0f;var nosun=RGB(RenderAlone(cam,hdr));sun.intensity=intensity;
+            Save(nosun,stem+"-nosun.f32",images);
+            if(full) {
+                var pick=new Dictionary<string,object>();
+                edge=EdgePick(Channel0(soft),noshadow,nosun,sun.shadowStrength,pick);
+                record["edge"]=pick;
+                normalsTarget=Target(RenderTextureFormat.ARGBFloat,RenderTextureReadWrite.Linear,0);
+                specularTarget=Target(RenderTextureFormat.ARGBFloat,RenderTextureReadWrite.Linear,0);
+                gbufferCopy=new UR.CommandBuffer();gbufferCopy.name="IkkokuGBuffer";
+                gbufferCopy.Blit(UR.BuiltinRenderTextureType.GBuffer2,normalsTarget);gbufferCopy.Blit(UR.BuiltinRenderTextureType.GBuffer1,specularTarget);
+                cam.renderingPath=RenderingPath.DeferredShading;cam.AddCommandBuffer(UR.CameraEvent.AfterGBuffer,gbufferCopy);gbufferAttached=true;
+                var deferredPath=cam.actualRenderingPath.ToString();
+                Fill(normalsTarget,-1f);Fill(specularTarget,-1f);RenderAlone(cam,hdr);
+                var normals=ReadFloats(normalsTarget);var specular=ReadFloats(specularTarget);
+                Save(RGB(normals),stem+"-gbuffer-normals.f32",images);Save(specular,stem+"-gbuffer-specular.rgba.f32",images);
+                var flat=FlatNormals(swapped,copies);
+                Fill(normalsTarget,-1f);RenderAlone(cam,hdr);var flatNormals=ReadFloats(normalsTarget);
+                Save(RGB(flatNormals),stem+"-gbuffer-normals-flat.f32",images);
+                cam.RemoveCommandBuffer(UR.CameraEvent.AfterGBuffer,gbufferCopy);gbufferAttached=false;cam.renderingPath=RenderingPath.Forward;
+                var litFlat=RGB(RenderAlone(cam,hdr));Save(litFlat,stem+"-lit-flat.f32",images);
+                foreach(var pair in swapped)pair.Key.sharedMaterials=pair.Value;
+                swapped.Clear();
+                record["deferred"]=K("actualRenderingPath",deferredPath,"normals",GBufferStats(normals),"normalsFlat",GBufferStats(flatNormals),
+                    "specular",GBufferStats(specular),"copy","CommandBuffer.Blit(GBuffer2 and GBuffer1) on the probe camera at CameraEvent.AfterGBuffer",
+                    "flatMaterials",flat,"flatLitMaximumDifference",MaxDifference(lit,litFlat));
+            }
+            record["images"]=images;
+            return record;
+        } finally {
+            if(maskAttached)sun.RemoveCommandBuffer(UR.LightEvent.AfterScreenspaceMask,maskCopy);
+            if(gbufferAttached)cam.RemoveCommandBuffer(UR.CameraEvent.AfterGBuffer,gbufferCopy);
+            sun.shadows=shadows;sun.intensity=intensity;
+            foreach(var pair in swapped)if(pair.Key!=null)pair.Key.sharedMaterials=pair.Value;
+            foreach(var r in hidden)if(r!=null)r.enabled=true;
+            foreach(var m in copies.Values)Destroy(m);
+            cam.targetTexture=null;Destroy(probeObject);
+            foreach(var t in new[]{ldr,hdr,maskTarget,normalsTarget,specularTarget})if(t!=null){t.Release();Destroy(t);}
+            maskCopy.Release();if(gbufferCopy!=null)gbufferCopy.Release();
+        }
+    }
+    // The sun: RenderSettings.sun when it is an enabled directional light in the map scene, else the brightest such light.
+    Light SunLight(out string pick) {
+        var scene=map.mapRoot.scene;Light brightest=null;int count=0;
+        foreach(var l in FindObjectsOfType<Light>()) {
+            if(l.type!=LightType.Directional||!l.enabled||!l.gameObject.activeInHierarchy||l.gameObject.scene!=scene)continue;
+            count++;if(brightest==null||l.intensity>brightest.intensity)brightest=l;
+        }
+        var sun=RenderSettings.sun;
+        if(sun!=null&&sun.type==LightType.Directional&&sun.enabled&&sun.gameObject.activeInHierarchy&&sun.gameObject.scene==scene){
+            pick="RenderSettings.sun ("+count+" enabled directional lights in the map scene)";return sun;}
+        pick="the brightest of "+count+" enabled directional lights in the map scene";return brightest;
+    }
+    // The strongest shadow edge on a continuous sunlit surface, over the soft mask at least EdgeMargin pixels inside the
+    // frame: central differences EdgeStep pixels apart where the unshadowed sun term (luminance of noshadow - nosun) is
+    // at least SunFloor and within SunContinuity of itself at the four neighbours (one surface, not a geometry edge), and
+    // the mask spans at least 0.8 x the shadow strength between EdgeReach pixels either side along its gradient (a whole
+    // penumbra). The largest gradient wins, ties to the pixel nearest the centre. Returns {column, row from the top}.
+    static int[] EdgePick(float[] mask,float[] noshadow,float[] nosun,float strength,Dictionary<string,object> record) {
+        int w=Width,h=Height,s=EdgeStep,margin=Math.Max(EdgeMargin,EdgeReach+EdgeStep);
+        var sunTerm=new float[w*h];
+        for(int i=0;i<sunTerm.Length;i++){int o=i*3;sunTerm[i]=0.2126f*(noshadow[o]-nosun[o])+0.7152f*(noshadow[o+1]-nosun[o+1])+0.0722f*(noshadow[o+2]-nosun[o+2]);}
+        int bx=-1,by=-1,candidates=0;float best=0f,bestLow=0f,bestHigh=0f;double bestCentre=double.MaxValue;
+        for(int y=margin;y<h-margin;y++)for(int x=margin;x<w-margin;x++) {
+            int i=y*w+x;float s0=sunTerm[i];
+            if(s0<SunFloor)continue;
+            if(!Valid(mask[i])||!Valid(mask[i-s])||!Valid(mask[i+s])||!Valid(mask[i-s*w])||!Valid(mask[i+s*w]))continue;
+            float limit=SunContinuity*s0;
+            if(Math.Abs(sunTerm[i-s]-s0)>limit||Math.Abs(sunTerm[i+s]-s0)>limit||Math.Abs(sunTerm[i-s*w]-s0)>limit||Math.Abs(sunTerm[i+s*w]-s0)>limit)continue;
+            float gx=(mask[i+s]-mask[i-s])/(2f*s),gy=(mask[i+s*w]-mask[i-s*w])/(2f*s);float g=(float)Math.Sqrt(gx*gx+gy*gy);
+            if(!(g>0f))continue;
+            int dx=(int)Math.Round(EdgeReach*gx/g),dy=(int)Math.Round(EdgeReach*gy/g);
+            float low=mask[(y-dy)*w+x-dx],high=mask[(y+dy)*w+x+dx];
+            if(!Valid(low)||!Valid(high)||high-low<0.8f*strength)continue;
+            candidates++;
+            double centre=(x-w*0.5)*(x-w*0.5)+(y-h*0.5)*(y-h*0.5);
+            if(g>best+1e-6f||(Math.Abs(g-best)<=1e-6f&&centre<bestCentre)){best=g;bx=x;by=y;bestCentre=centre;bestLow=low;bestHigh=high;}
+        }
+        record["rule"]="max |grad mask| (central differences "+EdgeStep+" px apart) where luminance(noshadow - nosun) >= "+SunFloor+" and varies <= "+SunContinuity+
+            " at the 4 neighbours, mask range >= 0.8 x strength over +-"+EdgeReach+" px along the gradient, margin "+margin+" px; ties to the centre";
+        record["candidates"]=candidates;record["picked"]=bx>=0;
+        if(bx<0)return null;
+        record["pixel"]=new[]{bx,by};record["gradientPerPixel"]=best;record["low"]=bestLow;record["high"]=bestHigh;record["sunTerm"]=sunTerm[by*w+bx];
+        return new[]{bx,by};
+    }
+    static bool Valid(float v){return v>=0f&&v<=1.0001f;}
+    // Copies of every map material with a normal map: _NORMALMAP off, _BumpMap and _DetailNormalMap cleared (the shader's
+    // flat default), swapped onto the map renderers; `swapped` keeps the originals for the caller to restore.
+    List<object> FlatNormals(Dictionary<Renderer,Material[]> swapped,Dictionary<Material,Material> copies) {
+        var listed=new List<object>();var scene=map.mapRoot.scene;
+        foreach(var r in FindObjectsOfType<Renderer>()) {
+            if(r.gameObject.scene!=scene||!r.enabled||!r.gameObject.activeInHierarchy)continue;
+            var materials=r.sharedMaterials;Material[] replaced=null;
+            for(int i=0;i<materials.Length;i++) {
+                var m=materials[i];if(!HasNormalMap(m))continue;
+                Material copy;
+                if(!copies.TryGetValue(m,out copy)) {
+                    copy=new Material(m);copy.DisableKeyword("_NORMALMAP");
+                    foreach(var p in new[]{"_BumpMap","_DetailNormalMap"})if(copy.HasProperty(p))copy.SetTexture(p,null);
+                    copies[m]=copy;
+                    listed.Add(K("name",m.name,"shader",m.shader==null?null:m.shader.name,"keyword",m.IsKeywordEnabled("_NORMALMAP"),"bumpMap",TextureName(m,"_BumpMap"),
+                        "bumpScale",m.HasProperty("_BumpScale")?(object)m.GetFloat("_BumpScale"):null,"detailNormalMap",TextureName(m,"_DetailNormalMap")));
+                }
+                if(replaced==null)replaced=(Material[])materials.Clone();
+                replaced[i]=copy;
+            }
+            if(replaced!=null){swapped[r]=materials;r.sharedMaterials=replaced;}
+        }
+        return listed;
+    }
+    static bool HasNormalMap(Material m){return m!=null&&(m.IsKeywordEnabled("_NORMALMAP")||TextureName(m,"_BumpMap")!=null||TextureName(m,"_DetailNormalMap")!=null);}
+    static string TextureName(Material m,string property){if(m==null||!m.HasProperty(property))return null;var t=m.GetTexture(property);return t==null?null:t.name;}
+    // Every map material once, with the inputs the sun's terms read and how many renderers draw, receive and cast with it.
+    List<object> SunMaterials() {
+        var rows=new Dictionary<int,Dictionary<string,object>>();var order=new List<int>();var scene=map.mapRoot.scene;
+        foreach(var r in FindObjectsOfType<Renderer>()) {
+            if(r.gameObject.scene!=scene||!r.enabled||!r.gameObject.activeInHierarchy)continue;
+            foreach(var m in r.sharedMaterials) {
+                if(m==null)continue;
+                int id=m.GetInstanceID();Dictionary<string,object> row;
+                if(!rows.TryGetValue(id,out row)) {
+                    row=K("name",m.name,"shader",m.shader==null?null:m.shader.name,"keywords",m.shaderKeywords,"renderQueue",m.renderQueue,
+                        "renderType",m.GetTag("RenderType",true),"renderers",0,"receivers",0,"casters",0);
+                    foreach(var p in new[]{"_Glossiness","_GlossMapScale","_SmoothnessTextureChannel","_Metallic","_BumpScale","_SpecularHighlights",
+                        "_GlossyReflections","_Mode","_Cutoff","_OcclusionStrength","_Shininess"})if(m.HasProperty(p))row[p]=m.GetFloat(p);
+                    foreach(var p in new[]{"_Color","_SpecColor","_EmissionColor"})if(m.HasProperty(p))row[p]=C(m.GetColor(p));
+                    foreach(var p in new[]{"_MainTex","_BumpMap","_MetallicGlossMap","_SpecGlossMap","_OcclusionMap","_DetailNormalMap","_ParallaxMap"})
+                        if(m.HasProperty(p))row[p]=TextureName(m,p);
+                    rows[id]=row;order.Add(id);
+                }
+                row["renderers"]=(int)row["renderers"]+1;
+                if(r.receiveShadows)row["receivers"]=(int)row["receivers"]+1;
+                if(r.shadowCastingMode!=UR.ShadowCastingMode.Off)row["casters"]=(int)row["casters"]+1;
+            }
+        }
+        var list=new List<object>();foreach(var id in order)list.Add(rows[id]);
+        return list;
+    }
+    // The quality and light shadow settings, the graphics tier and the built-in shader modes the sun's shadows go through.
+    static Dictionary<string,object> ShadowSettings() {
+        var lights=new List<object>();
+        foreach(var l in FindObjectsOfType<Light>())if(l.type==LightType.Directional)lights.Add(K("path",TPath(l.transform),"scene",l.gameObject.scene.name,
+            "enabled",l.enabled,"active",l.gameObject.activeInHierarchy,"isRenderSettingsSun",RenderSettings.sun==l,"shadows",l.shadows.ToString(),
+            "shadowStrength",l.shadowStrength,"shadowBias",l.shadowBias,"shadowNormalBias",l.shadowNormalBias,"shadowNearPlane",l.shadowNearPlane,
+            "shadowResolution",l.shadowResolution.ToString(),"shadowCustomResolution",l.shadowCustomResolution,"cullingMask",l.cullingMask,
+            "renderMode",l.renderMode.ToString(),"intensity",l.intensity,"bounceIntensity",l.bounceIntensity,"color",C(l.color),"forward",V(l.transform.forward),
+            "commandBuffers",l.commandBufferCount,"baking",Baking(l)));
+        int level=QualitySettings.GetQualityLevel();var names=QualitySettings.names;
+        return K("qualityLevel",level,"qualityName",level>=0&&level<names.Length?names[level]:null,
+            "shadows",QualitySettings.shadows.ToString(),"shadowResolution",QualitySettings.shadowResolution.ToString(),
+            "shadowProjection",QualitySettings.shadowProjection.ToString(),"shadowCascades",QualitySettings.shadowCascades,
+            "shadowDistance",QualitySettings.shadowDistance,"shadowNearPlaneOffset",QualitySettings.shadowNearPlaneOffset,
+            "shadowCascade2Split",QualitySettings.shadowCascade2Split,"shadowCascade4Split",V(QualitySettings.shadowCascade4Split),
+            "shadowmaskMode",StaticProperty(typeof(QualitySettings),"shadowmaskMode"),"activeTier",Graphics.activeTier.ToString(),
+            "screenSpaceShadows",ShaderMode(UR.BuiltinShaderType.ScreenSpaceShadows),"deferredShading",ShaderMode(UR.BuiltinShaderType.DeferredShading),
+            "supportsShadows",SystemInfo.supportsShadows,"supportsRawShadowDepthSampling",SystemInfo.supportsRawShadowDepthSampling,
+            "graphicsShaderLevel",SystemInfo.graphicsShaderLevel,"screen",new[]{Screen.width,Screen.height},"lights",lights);
+    }
+    static object ShaderMode(UR.BuiltinShaderType type) {
+        var custom=UR.GraphicsSettings.GetCustomShader(type);
+        return K("mode",UR.GraphicsSettings.GetShaderMode(type).ToString(),"custom",custom==null?null:custom.name);
+    }
+    static object StaticProperty(Type type,string name) {
+        try{var p=type.GetProperty(name,System.Reflection.BindingFlags.Public|System.Reflection.BindingFlags.Static);
+            return p==null?null:Convert.ToString(p.GetValue(null,null),CultureInfo.InvariantCulture);}
+        catch(Exception e){return "unreadable: "+e.Message;}
+    }
+    // Whatever baking state this player's Light exposes (read by reflection: the members differ between Unity versions).
+    static Dictionary<string,object> Baking(Light l) {
+        var d=new Dictionary<string,object>();
+        foreach(var n in new[]{"isBaked","alreadyLightmapped","bakedIndex"}){try{var v=Field(l,n);if(v!=null)d[n]=Convert.ToString(v,CultureInfo.InvariantCulture);}catch(Exception e){d[n]="unreadable: "+e.Message;}}
+        return d;
+    }
+    static RenderTexture Target(RenderTextureFormat format,RenderTextureReadWrite space,int depth) {
+        var t=new RenderTexture(Width,Height,depth,format,space);t.antiAliasing=1;t.Create();return t;
+    }
+    static void Fill(RenderTexture target,float value) {
+        var previous=RenderTexture.active;RenderTexture.active=target;GL.Clear(false,true,new Color(value,value,value,value));RenderTexture.active=previous;
+    }
+    static float[] ReadFloats(RenderTexture target) {
+        var previous=RenderTexture.active;RenderTexture.active=target;
+        var read=new Texture2D(Width,Height,TextureFormat.RGBAFloat,false,true);read.ReadPixels(new Rect(0,0,Width,Height),0,0);read.Apply(false,false);
+        RenderTexture.active=previous;
+        var pixels=read.GetPixels();Destroy(read);
+        var rgba=new float[Width*Height*4];
+        for(int y=0;y<Height;y++)for(int x=0;x<Width;x++){var c=pixels[(Height-1-y)*Width+x];int o=(y*Width+x)*4;rgba[o]=c.r;rgba[o+1]=c.g;rgba[o+2]=c.b;rgba[o+3]=c.a;}
+        return rgba;
+    }
+    static float[] RGB(float[] rgba){var o=new float[rgba.Length/4*3];for(int i=0,j=0;i<rgba.Length;i+=4,j+=3){o[j]=rgba[i];o[j+1]=rgba[i+1];o[j+2]=rgba[i+2];}return o;}
+    static float[] Channel0(float[] rgba){var o=new float[rgba.Length/4];for(int i=0;i<o.Length;i++)o[i]=rgba[i*4];return o;}
+    void Save(float[] values,string file,List<object> images){WriteFloats(values,file);images.Add(file);}
+    // The largest absolute difference between two images (NaN pixels ignored).
+    static double MaxDifference(float[] a,float[] b){double m=0;for(int i=0;i<a.Length;i++){double d=Math.Abs((double)a[i]-b[i]);if(d>m)m=d;}return m;}
+    // A copied mask's pixels against the -1 sentinel: written, shadowed (R < 0.999) and penumbra (0.001 < R < 0.999)
+    // counts, R's range and distinct values (bounded), and how far G, B and A stray from R.
+    static Dictionary<string,object> MaskStats(float[] rgba) {
+        int written=0,shadowed=0,penumbra=0;float min=float.MaxValue,max=float.MinValue,g=0f,b=0f,aMin=float.MaxValue,aMax=float.MinValue;
+        var distinct=new HashSet<float>();
+        for(int i=0;i<rgba.Length;i+=4) {
+            float r=rgba[i];if(r==-1f&&rgba[i+1]==-1f&&rgba[i+2]==-1f&&rgba[i+3]==-1f)continue;
+            written++;if(r<0.999f)shadowed++;if(r>0.001f&&r<0.999f)penumbra++;
+            min=Mathf.Min(min,r);max=Mathf.Max(max,r);g=Mathf.Max(g,Mathf.Abs(rgba[i+1]-r));b=Mathf.Max(b,Mathf.Abs(rgba[i+2]-r));
+            aMin=Mathf.Min(aMin,rgba[i+3]);aMax=Mathf.Max(aMax,rgba[i+3]);if(distinct.Count<65536)distinct.Add(r);
+        }
+        return K("writtenPixels",written,"shadowedPixels",shadowed,"penumbraPixels",penumbra,"minimum",written>0?(object)min:null,"maximum",written>0?(object)max:null,
+            "distinctValues",distinct.Count,"greenMaximumDifference",g,"blueMaximumDifference",b,"alphaMinimum",written>0?(object)aMin:null,"alphaMaximum",written>0?(object)aMax:null);
+    }
+    // A copied GBuffer's pixels against the -1 sentinel: written, covered (RGB not all 0, Unity's clear) and each channel's range.
+    static Dictionary<string,object> GBufferStats(float[] rgba) {
+        int written=0,covered=0;var min=new[]{float.MaxValue,float.MaxValue,float.MaxValue,float.MaxValue};var max=new[]{float.MinValue,float.MinValue,float.MinValue,float.MinValue};
+        for(int i=0;i<rgba.Length;i+=4) {
+            if(rgba[i]==-1f&&rgba[i+1]==-1f&&rgba[i+2]==-1f&&rgba[i+3]==-1f)continue;
+            written++;if(rgba[i]!=0f||rgba[i+1]!=0f||rgba[i+2]!=0f)covered++;
+            for(int c=0;c<4;c++){min[c]=Mathf.Min(min[c],rgba[i+c]);max[c]=Mathf.Max(max[c],rgba[i+c]);}
+        }
+        return K("writtenPixels",written,"coveredPixels",covered,"minimum",written>0?min:null,"maximum",written>0?max:null);
     }
     // A renderer's class for the map-only passes (see the header): "sky", "particle", "solid" (every material
     // RenderType=Opaque) or "nonOpaque"; in the maps mode also "unconverted" (not a MeshRenderer), "skipped"
