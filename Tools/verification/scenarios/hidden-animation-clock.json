@@ -1,0 +1,32 @@
+{
+  "steps": [
+    {"op": "setAnimation", "key": 0, "group": 0, "category": 1, "no": 0},
+    {"op": "setAnimationSpeed", "key": 0, "speed": 1.7},
+    {"op": "setVisible", "key": 622, "visible": false},
+    {"op": "export", "path": ".local/verification/scenario-exports/hidden-animation-clock-a.png"},
+    {"op": "reimport", "path": ".local/verification/scenario-exports/hidden-animation-clock-a.png"},
+    {"op": "assert", "characterBuilt": {"key": 0, "built": false}},
+    {"op": "advance", "seconds": 2.5},
+    {"op": "export", "path": ".local/verification/scenario-exports/hidden-animation-clock-b.png"},
+    {"op": "assert", "characterBuilt": {"key": 0, "built": false},
+     "exportedAnimation": {"key": 0, "increasing": true, "paths": [
+       ".local/verification/scenario-exports/hidden-animation-clock-a.png",
+       ".local/verification/scenario-exports/hidden-animation-clock-b.png"]}},
+    {"op": "saveDocument", "path": ".local/verification/scenario-exports/hidden-animation-clock-document.png"},
+    {"op": "loadDocument", "path": ".local/verification/scenario-exports/hidden-animation-clock-document.png"},
+    {"op": "assert", "characterBuilt": {"key": 0, "built": false}},
+    {"op": "advance", "seconds": 1.0},
+    {"op": "export", "path": ".local/verification/scenario-exports/hidden-animation-clock-d.png"},
+    {"op": "reimport", "path": ".local/verification/scenario-exports/hidden-animation-clock-b.png"},
+    {"op": "assert", "characterBuilt": {"key": 0, "built": false}},
+    {"op": "advance", "seconds": 1.0},
+    {"op": "export", "path": ".local/verification/scenario-exports/hidden-animation-clock-e.png"},
+    {"op": "assert", "exportedAnimation": {"key": 0, "increasing": true, "paths": [
+       ".local/verification/scenario-exports/hidden-animation-clock-a.png",
+       ".local/verification/scenario-exports/hidden-animation-clock-b.png",
+       ".local/verification/scenario-exports/hidden-animation-clock-d.png"]}},
+    {"op": "assert", "exportedAnimation": {"key": 0, "agree": true, "paths": [
+       ".local/verification/scenario-exports/hidden-animation-clock-d.png",
+       ".local/verification/scenario-exports/hidden-animation-clock-e.png"]}}
+  ]
+}

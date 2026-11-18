@@ -941,7 +941,7 @@ class StudioScenarioLaneTests(unittest.TestCase):
                       and not name.startswith(("maker-", "gameplay-")))
 
     def test_lane_validates_and_covers_every_scenario(self):
-        self.assertEqual(len(self.checks), 94)
+        self.assertEqual(len(self.checks), 97)
         referenced = set()
         for check in self.checks:
             scenario = check["env"]["IKKOKU_STUDIO_SCENARIO"]
@@ -1231,12 +1231,17 @@ class StudioScenarioLaneTests(unittest.TestCase):
                                             "activeCamera", "routePlaying",
                                             "sourceRuntime", "animation", "fk", "position",
                                             "eyeLook", "blink", "handPattern",
-                                            "diagnosticContains", "statusContains", "indicatorContains",
-                                            "treeLabel", "view", "render",
+                                            "diagnosticContains", "statusContains", "statusLacks", "indicatorContains",
+                                            "characterBuilt", "exportedAnimation", "treeLabel", "view", "render",
                                             "exportIdenticalToSource", "outfit", "clothes", "ik", "expression", "accessoryLabels", "pluginMount",
                                             "children", "absent", "activeCopyOf", "route", "routeLines", "sourceMap",
                                             "liveSamplers") if k in step]
                     self.assertTrue(declared, "assert declares nothing: %s" % path)
+                    if "characterBuilt" in step:
+                        # #373 lazy hidden characters: one source key and whether its character is built.
+                        self.assertEqual(set(step["characterBuilt"]), {"key", "built"})
+                        self.assertIs(type(step["characterBuilt"]["key"]), int)
+                        self.assertIs(type(step["characterBuilt"]["built"]), bool)
                     if "sourceMap" in step:
                         # ST-A11: `none`, or census fields; pick points are two viewport fractions.
                         source_map = step["sourceMap"]
@@ -1406,6 +1411,22 @@ class StudioScenarioLaneTests(unittest.TestCase):
                 exported, imported = ops.index("export"), ops.index("reimport")
                 self.assertLess(exported, imported)
                 self.assertEqual(steps[exported]["path"], steps[imported]["path"])
+            elif check["id"] in ("studio-scenario-hidden-attachment-status", "studio-scenario-hidden-animation-clock"):
+                # #373 lazy hidden characters: a hidden character must stay
+                # unbuilt (and its data-only clock keep running) across the
+                # original-format export/reimport AND a same-process native
+                # save and load, so these checks run both round trips. They
+                # have no fresh-process partner (each reloads its own save).
+                self.assertEqual((ops.count("saveDocument"), ops.count("loadDocument")), (1, 1))
+                saved, loaded = ops.index("saveDocument"), ops.index("loadDocument")
+                self.assertLess(saved, loaded)
+                self.assertEqual(steps[saved]["path"], steps[loaded]["path"])
+                self.assertIn("reimport", ops)
+                self.assertLess(ops.index("export"), ops.index("reimport"))
+                for index, op in enumerate(ops):
+                    if op == "reimport":
+                        self.assertIn(steps[index]["path"], [steps[j]["path"] for j in range(index) if ops[j] == "export"],
+                                      "a reimport reads an earlier export: %s" % path)
             elif check["id"] == "studio-scenario-route-children-edit":
                 # ST-T11 route children: the save side reloads its native
                 # document in the same process, then exports and reimports the
