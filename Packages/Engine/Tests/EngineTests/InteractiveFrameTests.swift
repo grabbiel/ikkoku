@@ -632,6 +632,7 @@ extension InteractiveFrameTests {
         #expect(!f.renderer.holdsDeformContent(key: 42), "the record held the released buffer")
     }
 
+    #if DEBUG // `ResourceStore.beforeDeformBuffer` is a DEBUG-only test hook.
     /// Test 2. A completion that finds the render lock held (here by a
     /// capture, inside its prepare) leaves the retirements in place, and the
     /// prepare of the next submitted frame completes them.
@@ -660,6 +661,7 @@ extension InteractiveFrameTests {
         #expect(try f.draw().0.outcome == .rendered)
         #expect(r.statistics().retiring == 0 && r.mesh(retired) == nil)
     }
+    #endif
 
     /// Test 3. A copy of a frame created before the retirement, prepared after
     /// a completion at submit, gets a transient deformation buffer every time
