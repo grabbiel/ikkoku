@@ -711,19 +711,26 @@ final class PerfWorkloadDriver {
     /// were installed, and the main thread's busy time and longest busy
     /// period (a stall) from the call until then. A busy period that began
     /// before the call counts from the call; one that is still running when
-    /// the action is ready counts whole.
+    /// the action is ready counts whole. `busyOwnMs` is the same busy time
+    /// clipped at the next action's call: a busy period lasts until the run
+    /// loop sleeps, and when an action's SwiftUI update outlasts the gap to
+    /// the next action, `busyMs` of both counts the shared period.
     private func finishActions() {
         // The period still running (the stop timer may fire in the same
         // run-loop pass as a long action) counts until now.
         let busy = trace.busyIntervals + (trace.openBusyStart.map { [($0, CACurrentMediaTime())] } ?? [])
-        trace.details["actions"] = finishedActions.map { action -> [String: Any] in
+        trace.details["actions"] = finishedActions.indices.map { index -> [String: Any] in
+            let action = finishedActions[index]
+            let next = index + 1 < finishedActions.count ? finishedActions[index + 1].start : .infinity
             let overlapping = busy.filter { $0.end > action.start && $0.start <= action.ready }
             let lengths = overlapping.map { ($0.end - max($0.start, action.start)) * 1000 }
+            let own = overlapping.map { max(0, min($0.end, next) - max($0.start, action.start)) * 1000 }
             return ["name": action.name, "measured": action.measured,
                     "startSeconds": PerfTrace.round(action.start - recordingStart),
                     "callMs": PerfTrace.round((action.end - action.start) * 1000),
                     "readyMs": PerfTrace.round((action.ready - action.start) * 1000),
                     "busyMs": PerfTrace.round(lengths.reduce(0, +)),
+                    "busyOwnMs": PerfTrace.round(own.reduce(0, +)),
                     "longestStallMs": PerfTrace.round(lengths.max() ?? 0),
                     "status": action.status, "error": action.error.map { $0 as Any } ?? NSNull(),
                     "footprintBytes": action.footprint, "metalAllocatedBytes": action.metal,

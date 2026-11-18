@@ -260,13 +260,19 @@ locked `PerfDrawLog`. Everything else is recorded on the main thread.
   action (`details.actions`): its call time, the time until its builds were
   installed or its other background work finished
   (`PerfTrace.characterInstalled`, `backgroundWorkFinished`), the main
-  thread's busy time and longest busy period from the call until then, and
+  thread's busy time and longest busy period from the call until then
+  (`busyMs`, `longestStallMs`; a busy period lasts until the run loop sleeps,
+  so when an action's SwiftUI update outlasts the gap to the next action, both
+  actions count the shared period), the same busy time clipped at the next
+  action's call (`busyOwnMs`, added for #383: back-to-back actions then add up
+  to the main thread's time instead of counting it twice), and
   the status line and any error alert it left, and the process
   `phys_footprint` and Metal allocation when it was ready (`footprintBytes`,
   `metalAllocatedBytes`; ST-T04), so repeated loads show whether memory
   accumulates per cycle, and the document's object count then
   (`documentObjects`), so an edit's and its undo's effect can be checked. `summarize` prints the
-  medians per action, with the 120 Hz refresh periods the median and the
+  medians per action (the own busy time in parentheses after the busy time, when
+  the report has it), with the 120 Hz refresh periods the median and the
   longest stall cover (a 100 ms stall drops 12 frames), and warns about an
   action that left an error;
 - the build: Debug/Release, the app's and the Engine package's own assert
