@@ -330,6 +330,81 @@ func mapFragmentFacingAwayFromTheSunIsTheNoSunPixel() throws {
 
 // MARK: - The map sun's shadow map
 
+/// mapShadowVisibility across a straight shadow edge equals a 3-texel-wide
+/// triangle filter over the per-texel compares: with the edge at texel
+/// coordinate 8 and d the receiver's distance from it in texels,
+/// V(d) = (1.5 + d)^2 / 4.5 for -1.5 <= d <= 0 and 1 - (1.5 - d)^2 / 4.5 for
+/// 0 <= d <= 1.5 (0 and 1 beyond). The 4 bilinear compares carry the
+/// hardware's filtering precision, hence the tolerance.
+@Test(.enabled(if: MTLCreateSystemDefaultDevice() != nil))
+func mapShadowVisibilityIsATriangleFilterOfTheCompares() throws {
+    let device = try #require(MTLCreateSystemDefaultDevice())
+    let root = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
+        .deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
+    func read(_ file: String) throws -> String { try String(contentsOf: root.appendingPathComponent(file), encoding: .utf8) }
+    let header = try read("Packages/Engine/Sources/ShaderTypes/include/ShaderTypes.h")
+    let common = try read("Shaders/Common.h").replacingOccurrences(of: "#include \"ShaderTypes.h\"", with: "")
+    let toon = try read("Shaders/Toon.metal").replacingOccurrences(of: "#include \"Common.h\"", with: "")
+    let probe = """
+    kernel void shadow_visibility_probe(depth2d<float> shadow [[texture(0)]], constant MapLightingUniforms& light [[buffer(0)]],
+                                        device const float4* positions [[buffer(1)]], device float* out [[buffer(2)]],
+                                        uint i [[thread_position_in_grid]]) {
+        out[i] = mapShadowVisibility(positions[i].xyz, light, shadow);
+    }
+    """
+    let library = try device.makeLibrary(source: "#include <metal_stdlib>\nusing namespace metal;\n" + header + common + toon + probe, options: nil)
+    let pipeline = try device.makeComputePipelineState(function: try #require(library.makeFunction(name: "shadow_visibility_probe")))
+
+    // A 16x16 reverse-Z shadow map: columns 0-7 hold a caster at depth 1, columns 8-15 the cleared far depth 0.
+    let size = 16
+    var depths = [Float](repeating: 0, count: size * size)
+    for y in 0..<size { for x in 0..<8 { depths[y * size + x] = 1 } }
+    let staging = try #require(device.makeBuffer(bytes: depths, length: depths.count * 4, options: .storageModeShared))
+    let descriptor = MTLTextureDescriptor.texture2DDescriptor(pixelFormat: .depth32Float, width: size, height: size, mipmapped: false)
+    descriptor.usage = .shaderRead; descriptor.storageMode = .private
+    let shadow = try #require(device.makeTexture(descriptor: descriptor))
+
+    var lighting = MapLightingUniforms()
+    lighting.shadowViewProjection = matrix_identity_float4x4
+    lighting.shadowParams = Float4(1, 1 / Float(size), 0, 1)
+    // Receivers at depth 0.5 (behind the caster, in front of the far depth), d from -2.5 to 2.5 texels
+    // in quarter texels, on a row away from texel boundaries.
+    let ds = stride(from: Float(-2.5), through: 2.5, by: 0.25).map { $0 }
+    let positions = ds.map { d -> Float4 in
+        let u = (8 + d) / Float(size)
+        return Float4(2 * u - 1, 1 - 2 * (5.3 / Float(size)), 0.5, 1)
+    }
+    let positionBuffer = try #require(device.makeBuffer(bytes: positions, length: positions.count * 16, options: .storageModeShared))
+    let out = try #require(device.makeBuffer(length: positions.count * 4, options: .storageModeShared))
+    let queue = try #require(device.makeCommandQueue())
+    let command = try #require(queue.makeCommandBuffer())
+    let blit = try #require(command.makeBlitCommandEncoder())
+    blit.copy(from: staging, sourceOffset: 0, sourceBytesPerRow: size * 4, sourceBytesPerImage: size * size * 4,
+              sourceSize: MTLSize(width: size, height: size, depth: 1), to: shadow, destinationSlice: 0, destinationLevel: 0,
+              destinationOrigin: MTLOrigin())
+    blit.endEncoding()
+    let compute = try #require(command.makeComputeCommandEncoder())
+    compute.setComputePipelineState(pipeline)
+    compute.setTexture(shadow, index: 0)
+    compute.setBytes(&lighting, length: MemoryLayout<MapLightingUniforms>.stride, index: 0)
+    compute.setBuffer(positionBuffer, offset: 0, index: 1)
+    compute.setBuffer(out, offset: 0, index: 2)
+    compute.dispatchThreads(MTLSize(width: positions.count, height: 1, depth: 1), threadsPerThreadgroup: MTLSize(width: positions.count, height: 1, depth: 1))
+    compute.endEncoding()
+    command.commit(); command.waitUntilCompleted()
+    try #require(command.status == .completed, "probe failed: \(String(describing: command.error))")
+    let values = (0..<positions.count).map { out.contents().load(fromByteOffset: $0 * 4, as: Float.self) }
+
+    func expected(_ d: Float) -> Float {
+        if d <= -1.5 { return 0 }
+        if d >= 1.5 { return 1 }
+        return d <= 0 ? (1.5 + d) * (1.5 + d) / 4.5 : 1 - (1.5 - d) * (1.5 - d) / 4.5
+    }
+    for (d, v) in zip(ds, values) { #expect(abs(v - expected(d)) < 0.02, "d \(d): \(v) vs \(expected(d))") }
+    #expect(zip(values, values.dropFirst()).allSatisfy { $1 >= $0 - 1e-3 }, "not monotonic: \(values)")
+    #expect(abs(values[ds.firstIndex(of: 0)!] - 0.5) < 0.01)
+}
+
 /// A receiver filling the view at z = target - 1, lit by a sun along +z
 /// (toward the camera). Casters are invisible quads at z = target over the
 /// left half (x < target.x): they darken that half by the strength, and cull

@@ -202,7 +202,7 @@ typedef struct {
     vector_float4   sunDirection;         // xyz = unit direction TO the sun (engine world), w = 1 with a sun
     vector_float4   sunColor;             // rgb = GammaToLinearSpace(colour * intensity), Unity 5.6 Linear
     vector_float4   shadowParams;         // x = shadow strength (0: no map shadow map), y = texel size (uv),
-                                          // z = receiver depth bias (NDC), w = PCF step in texels
+                                          // z = receiver depth bias (NDC), w = 1 (unread)
 } MapLightingUniforms;
 
 /// Maps slice 5: one caster draw of the map shadow map (map_shadow_vertex / map_shadow_fragment).

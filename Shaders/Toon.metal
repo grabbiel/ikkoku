@@ -456,7 +456,19 @@ inline float3 mapSunRadiance(float3 n, float3 v, float3 l, float3 albedo, float 
     return color;
 }
 
-/// The map shadow map's visibility at worldPos: 3x3 PCF of reverse-Z compares (1 = lit).
+/// Per-texel weights of a 3-texel-wide triangle filter at `offset` (-0.5...0.5 from the nearest
+/// texel corner): UnityShadowLibrary.cginc's _UnityInternalGetWeightPerTexel_3TexelsWideTriangleFilter.
+inline float4 mapTentWeights3(float offset) {
+    float a = (offset + 0.5) * (offset + 0.5) * 0.5;
+    float lo = min(offset, 0.0), hi = max(offset, 0.0);
+    return float4(a - offset, (1.0 - offset) - lo * lo, (1.0 + offset) - hi * hi, a) * 0.44444;
+}
+
+/// The map shadow map's visibility at worldPos (1 = lit): a 3x3-texel tent of reverse-Z compares
+/// taken as 4 bilinear compares, the arithmetic of UnityShadowLibrary.cginc's
+/// UnitySampleShadowmap_PCF3x3Tent. It is not a claim about Unity's kernel: 2017.2's screen-space
+/// collector filters with PCF7x7 on desktop and 5.6.2f1's is unverified (#392). The tent replaced
+/// 9 point-offset compares because its edge profile measured closer to Unity's (docs/reference/studio/maps.md).
 inline float mapShadowVisibility(float3 worldPos, constant MapLightingUniforms& light, depth2d<float> shadowMap) {
     float4 sc = light.shadowViewProjection * float4(worldPos, 1.0);
     float3 p = sc.xyz / sc.w;
@@ -465,12 +477,19 @@ inline float mapShadowVisibility(float3 worldPos, constant MapLightingUniforms& 
     // Past the depth range nothing casts: clamped, a receiver behind every caster still compares
     // against the cleared far depth (0) as lit.
     float ref = clamp(p.z + light.shadowParams.z, 0.0, 1.0);
-    float step = light.shadowParams.y * light.shadowParams.w;
-    float sum = 0.0;
-    for (int y = -1; y <= 1; ++y)
-        for (int x = -1; x <= 1; ++x)
-            sum += shadowMap.sample_compare(shadowSampler, uv + float2(x, y) * step, ref);
-    return sum / 9.0;
+    float texel = light.shadowParams.y;
+    float2 tc = uv / texel;
+    float2 center = floor(tc + 0.5);
+    float2 offset = tc - center;
+    float4 wu = mapTentWeights3(offset.x), wv = mapTentWeights3(offset.y);
+    float2 fu = wu.xz + wu.yw, fv = wv.xz + wv.yw;
+    float2 ou = (wu.yw / fu + float2(-1.5, 0.5)) * texel;
+    float2 ov = (wv.yw / fv + float2(-1.5, 0.5)) * texel;
+    float2 o = center * texel;
+    return fu.x * fv.x * shadowMap.sample_compare(shadowSampler, o + float2(ou.x, ov.x), ref)
+         + fu.y * fv.x * shadowMap.sample_compare(shadowSampler, o + float2(ou.y, ov.x), ref)
+         + fu.x * fv.y * shadowMap.sample_compare(shadowSampler, o + float2(ou.x, ov.y), ref)
+         + fu.y * fv.y * shadowMap.sample_compare(shadowSampler, o + float2(ou.y, ov.y), ref);
 }
 
 fragment float4 map_fragment(
