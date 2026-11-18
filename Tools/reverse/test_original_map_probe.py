@@ -595,5 +595,120 @@ class MapsTests(unittest.TestCase):
         self.assertIn('depthFar=no==33?DepthFar33:DepthFar34', source)
 
 
+
+class SunTests(unittest.TestCase):
+    """Slices 5 and 6: authored records uploaded as reload-sun-<case>.png, one exec with the junction scans and the
+    root guard, one-channel masks gzipped on arrival; --dry-run stops before the VM."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory(); self.dir = Path(self.tmp.name)
+        self.scenes = {}
+        for label in ('map01', 'map34-day'):
+            path = self.dir / f'scene-{label}.png'; path.write_bytes(b'\x89PNG\r\n\x1a\n' + label.encode()); self.scenes[label] = path
+        FakeEndpoint.instances = []
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def args(self, scenes=None, dry_run=False):
+        return SimpleNamespace(vm='vm', output=self.dir / 'out', scene=scenes or [f'{l}={p}' for l, p in self.scenes.items()],
+                               errno_baseline=0, host_address='10.211.55.2', wait_seconds=60, dry_run=dry_run)
+
+    def run_sun(self, scenes=None, dry_run=False, guest_change=None):
+        mask = bytes(range(8))  # two float32 mask pixels
+        upload = archive({'status.json': b'{}', 'sun-trace.json': b'{}', 'sun-map01-mask.r.f32': mask, 'scene-sun-map01-zoom.png': b'png'})
+        guest = dict(processID=81, source=sha(probe.MAP_PROBE.read_bytes()),
+                     scenes={f'reload-sun-{l}.png': sha(p.read_bytes()) for l, p in self.scenes.items()},
+                     zipSHA256=sha(upload), zipBytes=len(upload), exited=True, removed=True, remainingGameProcesses=[], pending=[],
+                     drainMilliseconds=0, reparsePoints=[], scanBefore={'abdata': {'files': 1}}, scanAfter={'abdata': {'files': 1}}, targetsChanged=False)
+        guest.update(guest_change or {})
+        FakeEndpoint.next_upload = upload
+        completed = SimpleNamespace(returncode=0, stdout=json.dumps(guest), stderr='')
+        stderr = io.StringIO()
+        with patch.object(probe, 'private', side_effect=lambda p: Path(p).resolve()), \
+             patch.object(probe, 'fresh_root', return_value=PLAYER_ROOT), \
+             patch.object(probe, 'guarded', return_value=0), \
+             patch.object(probe, 'errno_count', return_value=0), \
+             patch.object(probe, 'Endpoint', FakeEndpoint), \
+             patch.object(probe.sys, 'stderr', stderr), \
+             patch.object(probe.subprocess, 'run', return_value=completed) as vm:
+            try:
+                return probe.sun(self.args(scenes, dry_run))
+            finally:
+                self.vm, self.stderr = vm, stderr.getvalue()
+
+    def test_one_exec_uploads_the_records_with_the_scans_and_the_root_guard(self):
+        result = self.run_sun()
+        out = self.dir / 'out'
+        endpoint = FakeEndpoint.instances[0]
+        self.assertEqual(sorted(n for n in endpoint.files if n.startswith('reload-')), ['reload-sun-map01.png', 'reload-sun-map34-day.png'])
+        script = endpoint.files['run.ps1'].decode()
+        self.assertIn("@('reload-sun-map01.png','reload-sun-map34-day.png')", script)
+        for piece in ('$r.scanBefore=Scan', '$r.scanAfter=Scan', '$t0=[DateTime]::Now', 'function Pending', 'WerFault',
+                      "elseif($q.Count){$r.cleanupError='processes remain after 120 s: root kept'}", 'reparse points remain under the root',
+                      '$r.targetsChanged='):
+            self.assertEqual(script.count(piece), 1, piece)
+        self.assertLess(script.index('function Pending'), script.index('cmd /c rmdir'))
+        self.assertLess(script.index('$r.scanAfter=Scan'), script.index('$r.targetsChanged='))
+        self.assertNotIn("elseif(Test-Path -LiteralPath $root){Remove-Item", script)
+        self.assertEqual(self.vm.call_count, 1)
+        command = self.vm.call_args.args[0]
+        self.assertEqual(command[:4], ['prlctl', 'exec', 'vm', '--current-user']); self.assertIn(endpoint.base + 'run.ps1', command[-1])
+        run = json.loads((out / 'run.json').read_text())
+        self.assertEqual(run['mode'], 'sun'); self.assertLess(run['execCommandChars'], probe.EXEC_LIMIT)
+        self.assertEqual(run['scenes'], {l: sha(p.read_bytes()) for l, p in self.scenes.items()})
+        self.assertEqual(gzip.decompress((out / 'sun-map01-mask.r.f32.gz').read_bytes()), bytes(range(8)))
+        self.assertTrue((out / 'scene-sun-map01-zoom.png').is_file())
+        self.assertEqual((result['targetsChanged'], result['scansEqual'], result['pending'], result['reparsePoints']), (False, True, [], []))
+        self.assertIn('endpoint-start http://10.211.55.2:1/ ', self.stderr); self.assertIn('endpoint-stop ', self.stderr)
+        self.assertLess(self.stderr.index('endpoint-start'), self.stderr.index('endpoint-stop'))
+        with self.assertRaisesRegex(RuntimeError, 'run sun into a new output folder'):
+            self.run_sun()
+
+    def test_the_dry_run_makes_the_checks_without_the_vm(self):
+        result = self.run_sun(dry_run=True)
+        self.vm.assert_not_called(); self.assertEqual(FakeEndpoint.instances, [])
+        self.assertFalse((self.dir / 'out').exists())
+        self.assertTrue(result['dryRun']); self.assertLess(result['execCommandChars'], probe.EXEC_LIMIT)
+        self.assertEqual(sorted(result['uploads']), ['reload-sun-map01.png', 'reload-sun-map34-day.png'])
+
+    def test_bad_cases_are_refused_before_any_vm_call(self):
+        scene = self.scenes['map01']
+        for label in ('map1', 'mapxx', 'map011', 'oracle-map01', 'map01_day'):
+            with self.subTest(label), self.assertRaises(ValueError):
+                self.run_sun(scenes=[f'{label}={scene}'])
+            self.vm.assert_not_called()
+
+    def test_the_guard_needs_the_known_layout_and_the_scans(self):
+        with self.assertRaisesRegex(ValueError, 'Unexpected run.ps1 layout'):
+            probe.with_root_guard('$r=[ordered]@{root=$root}\n')
+        with self.assertRaisesRegex(ValueError, 'needs the junction scans'):
+            probe.probe_script(PLAYER_ROOT, 'http://10.211.55.2:1/' + 'c' * 32 + '/', 60, {'reload-sun-map01.png': b''}, scans=False, guard=True)
+
+    def test_a_long_exec_command_is_refused(self):
+        self.assertLess(len(' '.join(probe.exec_command('Windows 11', 'http://10.211.55.2:65535/' + 'c' * 32 + '/'))), probe.EXEC_LIMIT)
+        with self.assertRaisesRegex(ValueError, 'limit 3500'):
+            probe.exec_command('vm', 'http://10.211.55.2:1/' + 'c' * 3500 + '/')
+
+    def test_a_one_channel_image_must_be_whole_pixels(self):
+        (self.dir / 'a.r.f32').write_bytes(bytes(6))
+        with self.assertRaisesRegex(ValueError, 'not float32 one-channel'):
+            probe.gzip_floats(self.dir, ['a.r.f32'])
+
+    def test_the_probe_source_has_the_sun_mode(self):
+        source = probe.MAP_PROBE.read_text()
+        for piece in ('SunPrefix="reload-sun-"', 'UR.LightEvent.AfterScreenspaceMask', 'UR.CameraEvent.AfterGBuffer', 'UR.BuiltinRenderTextureType.GBuffer2',
+                      'ZoomDivisor=8f', '"sun-trace.json"', 'SaveScene("scene-sun-"+label+"-zoom.png")', '-mask.r.f32', '-mask-hard.r.f32'):
+            self.assertIn(piece, source)
+        self.assertEqual(probe.SUN_PREFIX, 'reload-sun-')
+        # Unity 5.6's Mono throws NotImplementedException for System.IO.DriveInfo (the first S1 run lost every
+        # case to it); free space comes from kernel32 and never costs a case when unreadable.
+        self.assertNotIn('new DriveInfo(', source); self.assertIn('GetDiskFreeSpaceEx(folder,out available', source)
+        self.assertIn('if(free>=0&&free<MinimumFreeBytes)', source)
+        # The trace extras, the edge pick and the deferred passes fail on their own, after the masks are written.
+        self.assertIn('"shadowSettings",Safe(()=>ShadowSettings())', source)
+        self.assertLess(source.index('-mask-hard.r.f32",images)'), source.index('if(full)try{'))
+        self.assertIn('record["deferred"]=K("error",e.ToString());', source)
+
 if __name__ == '__main__':
     unittest.main()
