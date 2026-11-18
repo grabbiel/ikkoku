@@ -99,6 +99,29 @@ private func studioIKFixture(scale: Float3 = .one) throws -> (RigDefinition, Sou
     }
 }
 
+/// `RigDefinition.isFiniteAffine` became four-lane (2026-11-17). The IK pass
+/// still rejects a non-finite or projective baseline local matrix, with
+/// `rig.evaluate`'s message, whether IK is on (a limb solve) or off.
+@Test func sourceStudioIKRejectsNonfiniteBaselineMatrices() throws {
+    let (rig, bindings) = try studioIKFixture()
+    let solver = try SourceStudioIK(rig: rig, bindings: bindings)
+    // Typed: CI's Swift 6.3.3 mis-infers untyped numeric literals in tuple arrays.
+    let bad: [(Int, Int, Float)] = [(0, 0, .nan), (3, 1, .infinity), (2, 2, -.infinity), (0, 3, 0.25), (3, 3, 1.5)]
+    for enabled in [false, true] {
+        for (column, row, value) in bad {
+            var baseline = rig.restPose
+            baseline.localMatrices[5][column][row] = value
+            do {
+                _ = try solver.apply(rig: rig, baseline: baseline, savedTargets: [:], enabled: enabled,
+                                     activeGroups: [true, true, true, true, true], characterRoot: 0)
+                Issue.record("enabled \(enabled) [\(column)][\(row)] = \(value) was accepted")
+            } catch {
+                #expect("\(error)" == "Pose node 5 has an invalid matrix.", "enabled \(enabled) [\(column)][\(row)]")
+            }
+        }
+    }
+}
+
 @Test(.enabled(if: SourceFixtureSupport.shouldRun(["IKKOKU_SOURCE_AVATAR", "IKKOKU_STUDIO_IK_BINDINGS"]),
                "Requires IKKOKU_SOURCE_AVATAR, IKKOKU_STUDIO_IK_BINDINGS"))
 func sourceStudioIKOriginalBindingsBindAndReportActualCoverage() throws {

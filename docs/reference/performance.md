@@ -6894,3 +6894,65 @@ loader, so an upload group would gain little. In order:
 1. A Time Profiler sample, attached by pid during cold head-200 selections,
    names what holds the main actor during preparation.
 2. A worker pre-decode of the base-appearance pixels follows as its own PR.
+
+## Rig finite-affine check (#374, 2026-11-17)
+
+`RigDefinition.isFiniteAffine` now checks four lanes at a time: one
+comparison per column against `(inf, inf, inf, 1e-5)`, with the last column
+offset by `(0, 0, 0, 1)`. The old version called `isFinite` on each of the 16
+elements and then made four bottom-row checks. It returns the same Bool for
+every input: `abs(x) < .infinity` is false exactly for NaN and ±infinity.
+`RigFiniteAffineTests` keeps the old loop as its reference.
+
+Why: in step 0 of #371, a Time Profiler run attached to `studio-fk-drag`
+measured `isFiniteAffine` at 28.6 ms/s of the main thread, out of 50.9 ms/s
+for `RigDefinition.evaluate`. On the live-tick workers it was 37 ms/s (see
+[phase 2, item 3](#phase-2-item-3-live-tick-off-the-main-thread), "What remains").
+
+Both measurements below were taken in quiet window W4, at 60 Hz with the
+monitor off. The display mode stayed the same before and after each set.
+
+**Probe.** The probe is opt-in (`IKKOKU_FINITE_AFFINE_PERF=1`) and uses a
+Release test build. It runs on the source avatar rig, whose evaluation checks
+2,333 matrices (774 nodes, 785 palette matrices). It took the median of 400
+alternating rounds, in two separate processes. Both processes gave the same
+results:
+
+| Measure | Old element loop | Four-lane check |
+|---|---:|---:|
+| Check per matrix | 2.98 ns | 1.36 ns |
+| `evaluate` (verbatim copy vs `rig.evaluate`) | 13.2 µs | 9.5 / 9.4 µs |
+
+The four-lane check is 2.2 times faster per matrix, and `evaluate` takes 28%
+less time. In each round, both evaluations agree bit for bit.
+
+**App A/B.** The workload was `studio-fk-drag` for 10 s, with input at
+120 Hz. The run order was ABCCBA, repeated twice, so each arm had 4 runs. Each
+run took the app lock and waited 10 s for a clean `cputop` first. One run
+showed an intruder process and was repeated. The arms were:
+
+- A: `main` `02fec873`
+- B: #371 (the character frame cache)
+- C: this change
+
+The pass criteria were registered before the window:
+
+- C's median `studioRefresh` mean is at most 95% of A's.
+- C's main-thread busy time is no higher than A's.
+
+| Arm | `studioRefresh` mean, median (range) | Main busy, median |
+|---|---:|---:|
+| A, base | 2.261 ms (2.067–2.549) | 290.9 ms/s |
+| C, #374 | 2.145 ms (2.098–2.189), 94.8% of A | 277.8 ms/s |
+
+C passes, but narrowly: its range overlaps A's. With the monitor off, presented
+FPS, hitches and dropped drawables have no meaning, so they were not used.
+
+The same #371 binary took 0.555 ms per refresh in a 5 s smoke run at 21:30,
+when builds kept the machine loaded. In the quiet window it took about 1.9 ms.
+Every CPU phase was about 3.5 times slower there (draw 0.49 → 1.95 ms), while
+GPU time stayed the same (0.74 → 0.75 ms). That pattern points to the app
+being scheduled on slow cores or at a low clock while its window is not
+visible, not to a change in the code's own cost. So these absolute times, and
+possibly the ratios, are specific to this environment. Comparing against a run
+with the monitor on is a follow-up.
