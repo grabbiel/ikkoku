@@ -104,7 +104,7 @@ the run.
 
 | `IKKOKU_PERF_WORKLOAD` | Fixtures | What it does |
 | --- | --- | --- |
-| `studio-idle` (default) | `IKKOKU_SOURCE_SCENE` | Studio, live animation on, nothing selected; blink, neck/eye look, hair dynamics and route clocks tick at 30 Hz. The scene needs one converted source character; a character riding a route counts (`details.sourceRouteCharacters`), so a route scene such as the route-children fixture measures a playing route |
+| `studio-idle` (default) | `IKKOKU_SOURCE_SCENE` | Studio, live animation on, nothing selected; blink, neck/eye look, hair dynamics and route clocks tick at 30 Hz. The scene needs one converted source character; a character riding a route counts (`details.sourceRouteCharacters`), so a route scene such as the route-children fixture measures a playing route. A scene whose only converted content is source items (`IKKOKU_STUDIO_ITEM_CATALOG`, `details.sourceItems`) also qualifies (ST-T04) |
 | `studio-orbit` | same | `studio-idle` plus a right-button orbit drag: one `mouseDragged` per input tick |
 | `studio-fk-drag` | same | selects source key 65 (or `IKKOKU_PERF_ACTION_KEY`), FK mode, bone 19 (the `fk-mouse-drag` scenario's grab), grabs the z ring found by `pickID` and drags it around a 40 px circle, one turn per 2 s; checks that the grab pushed exactly one undo snapshot |
 | `studio-hover` | same | character selected, mouse moves over the viewport (`mouseMoved`, gizmo hover pick) |
@@ -263,9 +263,19 @@ locked `PerfDrawLog`. Everything else is recorded on the main thread.
   action (`details.actions`): its call time, the time until its builds were
   installed or its other background work finished
   (`PerfTrace.characterInstalled`, `backgroundWorkFinished`), the main
-  thread's busy time and longest busy period from the call until then, and
-  the status line and any error alert it left. `summarize` prints the
-  medians per action, with the 120 Hz refresh periods the median and the
+  thread's busy time and longest busy period from the call until then
+  (`busyMs`, `longestStallMs`; a busy period lasts until the run loop sleeps,
+  so when an action's SwiftUI update outlasts the gap to the next action, both
+  actions count the shared period), the same busy time clipped at the next
+  action's call (`busyOwnMs`, added for #383: back-to-back actions then add up
+  to the main thread's time instead of counting it twice), and
+  the status line and any error alert it left, and the process
+  `phys_footprint` and Metal allocation when it was ready (`footprintBytes`,
+  `metalAllocatedBytes`; ST-T04), so repeated loads show whether memory
+  accumulates per cycle, and the document's object count then
+  (`documentObjects`), so an edit's and its undo's effect can be checked. `summarize` prints the
+  medians per action (the own busy time in parentheses after the busy time, when
+  the report has it), with the 120 Hz refresh periods the median and the
   longest stall cover (a 100 ms stall drops 12 frames), and warns about an
   action that left an error;
 - the build: Debug/Release, the app's and the Engine package's own assert
@@ -7032,8 +7042,8 @@ All numbers are medians (min–max), 60 Hz, monitor off.
     W3 the call returned in 0.9 ms and the export finished 63 ms later.
   - The gap to base narrows from 21 to 16 ms (ready) and from 14 to 8 ms
     (main-thread busy).
-  - So the clocks cost more in an export than the 1 ms of their first bake.
-    Where the remaining time goes is not measured yet.
+  - The Q1 profile below finds the clocks' own cost at 0.17–0.29 ms per
+    export. The rest of the gap is attributed to the run environment.
 - **First show.** The card check keeps the hidden characters that cannot
   convert as placeholders, so a first show now builds 5 characters instead
   of 14. It is ready in about 0.75 s, with about 115 ms of main-thread time.
@@ -7045,6 +7055,75 @@ All numbers are medians (min–max), 60 Hz, monitor off.
   - The other two read 391 and 495 MiB, with the same ready and main-thread
     times.
   - Resident memory and Metal allocations fall on the head (W3 table).
+
+### Export profile (Q1, 2026-11-18)
+
+W3b measured the head's export 16 ms slower to ready than base's (58.1
+against 42.4 ms). A Time Profiler run looked for where that time goes.
+
+- **Builds.**
+  - Head: 7939fd97 (this branch with main a281573b merged), Release.
+  - Base: main a281573b plus the three perf-workload commits, Release. Both
+    arms include #374.
+- **Method.** One `studio-export-import` unit per arm on the 70-character
+  scene. Each unit is one launch under the app lock, with
+  `perf_trace.py --xctrace "Time Profiler"` attached by process id.
+  - An entry gate ran before queuing for the lock and again inside it. It
+    required no build or test from any agent, no other process above 20%
+    CPU, and indexing daemons at or below 4%.
+  - The display read 60 Hz with the monitor off before and after every unit.
+- **Validity.** Two units were invalid, each with a Spotlight process above
+  20% in a snapshot, and each was rerun once. The valid pair below is the
+  evidence.
+- **Samples.** The main-thread samples inside
+  `StudioModel.exportSourceScene` were cut into the 18 exports and paired in
+  order with the report's export calls. This Mac's E cores are CPUs 0–3 and
+  12–15; its P cores are 4–11 and 16–23.
+
+| | Base | Head |
+|---|---|---|
+| main-thread samples on P cores | 100% | 98% |
+| export samples on P cores | 100% | 99% |
+| exports with at least 80% of their samples on P cores | 18 of 18 | 18 of 18 |
+| export call, median (min–max) | 43.4 ms (38.6–50.0) | 43.5 ms (36.7–60.7) |
+| export call, exports after the first (W3b's measure) | 43.4 ms | 49.2 ms |
+| export main-thread busy, median | 54.8 ms | 47.8 ms |
+| `KoikatsuSceneReader.decodeDocument`, per export | 21.8 ms | 22.2 ms |
+| SHA-256 of the scene file | 7.9 ms | 8.8 ms |
+| `SourceSceneExportValidation.validate` | 2.3 ms | 2.7 ms |
+| `SourceStudioAnimationClock.savedStates` | – | 0.17 ms |
+| main-thread samples in the 10 s window | 4.0 s | 1.8 s |
+| `studioRefresh` p50 | 11.1 ms | 2.1 ms |
+
+- **Placement.** Both arms run the export on P cores, so P/E placement does
+  not explain the gap.
+- **Code.** The export calls the same functions in both arms. The only
+  addition is the data-only clocks of the 20 unbuilt characters: 0.17 ms per
+  export (0.29 ms in the invalid head unit).
+- **The head's slow phase.**
+  - The head's exports 1–9 took about 37 ms. Exports 10–18 took 49–61 ms.
+    All ran on P cores.
+  - In the slow phase the compute-bound callees took longer: decode 18.7 →
+    25.8 ms (+38%), SHA-256 6.2 → 11.4 ms (+84%), validation +29%. The file
+    read stayed at 1.0 ms and the write at 1.3–1.6 ms.
+  - So a P core ran slower (lower clock or contention); it was not more
+    work. The Time Profiler cannot tell the two apart.
+  - The slow phase ran from 02:06:22.0 to 02:06:26.5. Another agent's trace
+    analysis ran outside the lock from about 02:05:26 and finished at
+    02:06:21. That overlaps the fast phase (02:06:17.0–02:06:21.6), not the
+    slow one. What ran during the slow phase is unknown. The snapshot at
+    02:06:29 shows no process above 20%.
+  - The head process is lighter. Its main thread was busy 1.8 s of the 10 s,
+    against base's 4.0 s, and its refresh takes 2.1 ms against 11.1 ms,
+    because base builds every hidden character. A lighter process plausibly
+    runs at a lower clock in this monitor-off environment (see the #374 note
+    on CPU phases about 3.5 times slower).
+- **Result.** W3b's +16 ms stands as measured. In this window the medians
+  are equal (43.5 against 43.4 ms). Over the exports after the first, the
+  head reads 49.2 against 43.4 ms, because its slow phase began at export
+  10. The export's own added cost is the clock, 0.17–0.29 ms. Per export,
+  the head's main thread is busy 7 ms less than base's. The rest of W3b's
+  gap is attributed to the run environment, not to this change's code.
 
 ## Rig finite-affine check (#374, 2026-11-17)
 

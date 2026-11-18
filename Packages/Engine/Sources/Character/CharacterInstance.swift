@@ -716,7 +716,7 @@ public struct IKTarget: Codable, Sendable, Equatable {
     public init(enabled: Bool = false, position: Float3 = .zero, pole: Float3? = nil) { self.enabled = enabled; self.position = position; self.pole = pole }
 }
 
-public enum IKChain: String, CaseIterable, Codable, Sendable {
+public enum IKChain: String, CaseIterable, Codable, Sendable, StableEncodingKey {
     case handL = "hand_L", handR = "hand_R", footL = "foot_L", footR = "foot_R"
     public var bones: (upper: String, lower: String, end: String) {
         switch self {
