@@ -47,8 +47,21 @@ public struct MaterialState: Sendable, Equatable {
 
     /// All explicit texture references, without fallback textures.
     public var textureHandles: [TextureHandle] {
-        [base, colorMask, detail, line, normal, overlay0, overlay1, overlay2, pattern, hairGloss, bodyMask,
-         lightmap, lightmapDirection, emission, cubemap].compactMap { $0 }
+        var handles: [TextureHandle] = []
+        forEachTextureHandle { handles.append($0) }
+        return handles
+    }
+
+    /// Calls `body` with each explicit texture reference, in `textureHandles`
+    /// order, without building an array (`RenderFrame.retainTextures` visits
+    /// every item's handles each frame).
+    @inline(__always)
+    func forEachTextureHandle(_ body: (TextureHandle) -> Void) {
+        if let base { body(base) }; if let colorMask { body(colorMask) }; if let detail { body(detail) }
+        if let line { body(line) }; if let normal { body(normal) }; if let overlay0 { body(overlay0) }
+        if let overlay1 { body(overlay1) }; if let overlay2 { body(overlay2) }; if let pattern { body(pattern) }
+        if let hairGloss { body(hairGloss) }; if let bodyMask { body(bodyMask) }; if let lightmap { body(lightmap) }
+        if let lightmapDirection { body(lightmapDirection) }; if let emission { body(emission) }; if let cubemap { body(cubemap) }
     }
 
     public var kind: MaterialKind { MaterialKind(rawValue: Int32(uniforms.kind)) }
@@ -222,11 +235,23 @@ public struct RenderFrame: Sendable {
     /// Repeating this after editing items prunes removed references and keeps existing
     /// snapshots; new handles are resolved from the resource store.
     public mutating func retainTextures(from resources: ResourceStore) {
-        let handles = Set(items.flatMap { $0.material.textureHandles })
+        // One pass over the items' handles in place, without an array per item
+        // or a set of them (a 3,506-item frame spent 0.23 ms here). Each handle
+        // is resolved once, as before: a retained one keeps its snapshot, a new
+        // one is looked up in the store, and one the store lacks is skipped.
+        let previous = retainedTextures
         var snapshot: [TextureHandle: RetainedTexture] = [:]
-        for handle in handles {
-            if let retained = retainedTextures[handle] { snapshot[handle] = retained }
-            else if let texture = resources.texture(handle) { snapshot[handle] = RetainedTexture(texture: texture) }
+        snapshot.reserveCapacity(previous.count)
+        var unresolved: Set<TextureHandle> = []
+        items.withUnsafeBufferPointer { items in
+            for index in items.indices {
+                items[index].material.forEachTextureHandle { handle in
+                    guard snapshot[handle] == nil, unresolved.isEmpty || !unresolved.contains(handle) else { return }
+                    if let retained = previous[handle] { snapshot[handle] = retained }
+                    else if let texture = resources.texture(handle) { snapshot[handle] = RetainedTexture(texture: texture) }
+                    else { unresolved.insert(handle) }
+                }
+            }
         }
         retainedTextures = snapshot
     }

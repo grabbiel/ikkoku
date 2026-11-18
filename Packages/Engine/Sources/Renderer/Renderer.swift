@@ -1123,10 +1123,14 @@ public final class Renderer: @unchecked Sendable {
         // steady scene allocates nothing per draw. Each referenced set is
         // validated element by element first, as before.
         var skinPalettes: [UInt64: (allocation: FrameAllocation, count: Int, matrices: [float4x4])] = [:]
-        let referencedSkinSets = Set(frame.items.compactMap { item -> UInt64? in
-            guard item.visible, resources.mesh(item.mesh)?.skin != nil else { return nil }
-            return item.skinSet
-        })
+        // Only an item with a skin set can reference one: the mesh lookup
+        // (the store's lock) is left for those.
+        var referencedSkinSets = Set<UInt64>()
+        frame.items.withUnsafeBufferPointer { items in
+            for index in items.indices where items[index].visible {
+                if let key = items[index].skinSet, resources.mesh(items[index].mesh)?.skin != nil { referencedSkinSets.insert(key) }
+            }
+        }
         var paletteKeys: [UInt64] = [], palettes: [[float4x4]] = []
         for (key, mats) in frame.skinSets where referencedSkinSets.contains(key) {
             guard !mats.isEmpty, mats.count <= Int(UInt32.max), Renderer.allFinite(mats) else {
@@ -1149,10 +1153,11 @@ public final class Renderer: @unchecked Sendable {
             }
         }
 
-        var opaque: [DrawRecord] = []
-        var transparent: [DrawRecord] = []
+        // Room for every item up front: a record holds its item, so regrowing
+        // these arrays moved every record again.
+        var opaque: [DrawRecord] = [], transparent: [DrawRecord] = [], casters: [DrawRecord] = []
+        opaque.reserveCapacity(frame.items.count); transparent.reserveCapacity(frame.items.count); casters.reserveCapacity(frame.items.count)
         var sky: [DrawRecord] = []
-        var casters: [DrawRecord] = []
         var deforms: [DeformRecord] = []
         // Each deformation key's buffer in this preparation, from the key's
         // first item. Its other items (one per material pass) draw what that
@@ -1282,23 +1287,51 @@ public final class Renderer: @unchecked Sendable {
                             gizmos: gizmos, width: W, height: H, live: live, liveMainPass: liveMainPass)
     }
 
+    /// The opaque order: draw order, then material kind, then mesh id; equal
+    /// records keep their input order.
+    ///
+    /// Both sorts sort small keys, not the records: a record holds its item,
+    /// and moving whole records was the largest cost of preparing a
+    /// 3,506-item frame (0.58 ms). Each key carries its record's index, which
+    /// also decides between equal keys, so the order is the stable order the
+    /// record sort gave; each record is then copied once into its place.
     static func sortedOpaque(_ records: [DrawRecord]) -> [DrawRecord] {
-        records.sorted { a, b in
-            if a.item.order != b.item.order { return a.item.order < b.item.order }
-            if a.item.material.uniforms.kind != b.item.material.uniforms.kind { return a.item.material.uniforms.kind < b.item.material.uniforms.kind }
-            return a.item.mesh.id < b.item.mesh.id
+        var keys: [(order: Int, kind: UInt32, mesh: UInt32, index: Int)] = []
+        keys.reserveCapacity(records.count)
+        records.withUnsafeBufferPointer { records in
+            for index in records.indices {
+                keys.append((records[index].item.order, records[index].item.material.uniforms.kind, records[index].item.mesh.id, index))
+            }
         }
+        keys.sort { a, b in
+            if a.order != b.order { return a.order < b.order }
+            if a.kind != b.kind { return a.kind < b.kind }
+            if a.mesh != b.mesh { return a.mesh < b.mesh }
+            return a.index < b.index
+        }
+        return keys.map { records[$0.index] }
     }
 
     /// Unity's order for transparent draws: render queue, then camera distance
-    /// to the sort centre (back to front); then our draw order and mesh id.
+    /// to the sort centre (back to front); then our draw order and mesh id;
+    /// equal records keep their input order. Sorted by keys, as `sortedOpaque`.
     static func sortedTransparent(_ records: [DrawRecord]) -> [DrawRecord] {
-        records.sorted {
-            if $0.item.renderQueue != $1.item.renderQueue { return $0.item.renderQueue < $1.item.renderQueue }
-            if $0.distance != $1.distance { return $0.distance > $1.distance }
-            if $0.item.order != $1.item.order { return $0.item.order < $1.item.order }
-            return $0.item.mesh.id < $1.item.mesh.id
+        var keys: [(queue: Int, distance: Float, order: Int, mesh: UInt32, index: Int)] = []
+        keys.reserveCapacity(records.count)
+        records.withUnsafeBufferPointer { records in
+            for index in records.indices {
+                keys.append((records[index].item.renderQueue, records[index].distance, records[index].item.order,
+                             records[index].item.mesh.id, index))
+            }
         }
+        keys.sort { a, b in
+            if a.queue != b.queue { return a.queue < b.queue }
+            if a.distance != b.distance { return a.distance > b.distance }
+            if a.order != b.order { return a.order < b.order }
+            if a.mesh != b.mesh { return a.mesh < b.mesh }
+            return a.index < b.index
+        }
+        return keys.map { records[$0.index] }
     }
 
     // MARK: - Encoding
