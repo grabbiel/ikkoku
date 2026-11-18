@@ -2197,11 +2197,9 @@ struct StudioScenario: Decodable {
                     guard let target = studio.doc.object(id)?.ikTargets[chain], target.enabled else {
                         record(step, false, "setIKTarget: \(chain.label) IK is off; run setIKEnabled first"); continue
                     }
-                    var position = target.position
-                    if let delta = step.delta { position[axis] = position[axis].advanced(by: delta) }
-                    else { position[axis] = step.value! }
+                    let value = step.delta.map { target.position[axis].advanced(by: $0) } ?? step.value!
                     studio.selection = id
-                    studio.setIKTarget(id, chain, position: position)
+                    studio.setIKTarget(id, chain, component: axis, to: value)
                     let now = studio.doc.object(id)?.ikTargets[chain]?.position ?? .zero
                     record(step, true, "\(chain.label) target \(describe(target.position)) → \(describe(now)); status \"\(studio.status)\"")
                 } catch { record(step, false, "setIKTarget: \(error)") }

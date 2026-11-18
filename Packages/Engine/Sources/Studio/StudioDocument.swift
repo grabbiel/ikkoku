@@ -246,6 +246,15 @@ public struct StudioObject: Codable, Sendable, Equatable, Identifiable {
         o.transform.rotation = l.rotation
         return o
     }
+
+    /// One field of the Pose tab's IK "Target" row (#393): writes `component`
+    /// onto the chain's target as it is now, so a second field committed
+    /// before the inspector re-renders keeps the first field's write. A chain
+    /// without a target, or a component outside 0...2, is left alone.
+    public mutating func setIKTarget(_ chain: IKChain, component: Int, to value: Float) {
+        guard (0..<3).contains(component) else { return }
+        ikTargets[chain]?.position[component] = value
+    }
 }
 
 /// A studio scene: object tree, camera slots, character light and effects. Saved as a PNG "scene card".

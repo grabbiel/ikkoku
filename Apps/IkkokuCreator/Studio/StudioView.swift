@@ -802,7 +802,8 @@ struct PoseInspector: View {
                                     if t.enabled { Button("Select") { model.selectedIK = chain; model.poseMode = .ik }.controlSize(.small) }
                                 }
                                 if t.enabled {
-                                    VectorRow(label: "Target", value: Binding(get: { t.position }, set: { v in model.setIKTarget(o.id, chain, position: v) }), step: 0.02, format: "%.3f")
+                                    // One component onto the live target (#393), not `t` from this render.
+                                    VectorRow(label: "Target", value: t.position, step: 0.02, format: "%.3f") { component, v in model.setIKTarget(o.id, chain, component: component, to: v) }
                                 }
                             }
                         }
@@ -836,9 +837,11 @@ struct SourcePoseInspector: View {
                 }.disabled(!model.sourceIKAvailable)
                     .accessibilityIdentifier("studio.source.ik.guide")
                 if let target = model.selectedSourceIK, let value = model.selectedSourceIKValue {
-                    VectorRow(label: "Position", value: Binding(get: { value.position }, set: { model.setSourceIKValue(target, edit: .init(position: $0, rotationDegrees: value.rotationDegrees)) }), step: 0.02, format: "%.3f")
+                    // Each field writes one component onto the guide's live value (#393),
+                    // never `value` from this render, and never the other row's vector.
+                    VectorRow(label: "Position", value: value.position, step: 0.02, format: "%.3f") { component, v in model.setSourceIKComponent(target, .position, component, to: v) }
                     if SourceStudioIKEditing.allowsRotation(target) {
-                        VectorRow(label: "Rotate", value: Binding(get: { value.rotationDegrees }, set: { model.setSourceIKValue(target, edit: .init(position: value.position, rotationDegrees: $0)) }), step: 5, format: "%.0f")
+                        VectorRow(label: "Rotate", value: value.rotationDegrees, step: 5, format: "%.0f") { component, v in model.setSourceIKComponent(target, .rotation, component, to: v) }
                     }
                 }
                 Text("Select an FK bone or IK guide in the viewport, then drag its gizmo.").font(.caption).foregroundStyle(.secondary)
