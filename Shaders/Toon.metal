@@ -21,10 +21,14 @@ vertex ToonVertexOut toon_vertex(
     device const float2* uvs2 [[buffer(BufferIndexTexcoords2)]],
     device const uchar4* colors [[buffer(BufferIndexVertexColors)]],
     constant FrameUniforms& frame [[buffer(BufferIndexFrameUniforms)]],
-    constant DrawUniforms& draw [[buffer(BufferIndexDrawUniforms)]],
+    uint iid [[instance_id]],
+    constant DrawUniforms* draws [[buffer(BufferIndexDrawUniforms)]],
     constant MaterialUniforms& mat [[buffer(BufferIndexMaterial)]],
     device const uchar* hiddenBuf [[buffer(BufferIndexVertexHidden)]])
 {
+    // DrawUniforms by instance (ST-T04 B0): a per-draw record is bound as a one-element
+    // array at its own offset (instance_id 0); an instanced draw indexes its table.
+    constant DrawUniforms& draw = draws[iid];
     VSInput v = fetchVertex(vid, verts, uvs, colors, (mat.flags & MaterialFlagHasVertexColor) != 0);
     ToonVertexOut o;
     float4 wp = draw.model * float4(v.position, 1.0);
