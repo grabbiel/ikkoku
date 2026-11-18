@@ -79,9 +79,18 @@ class ABMXProbeTests(unittest.TestCase):
     def test_cases_name_the_scene_by_its_hash_and_key_only(self):
         uploads, cases_tsv, records = probe.cases_from(self.cases)
         self.assertEqual(list(uploads), [f'abmx-{self.label}.png'])
-        self.assertEqual(cases_tsv.decode(), f'{self.label}\t3012\t0\n')
-        self.assertEqual(records, [dict(label=self.label, sceneSHA256=self.sha, key=3012, sex=0)])
+        self.assertEqual(cases_tsv.decode(), f'{self.label}\t3012\t0\tcard\n')
+        self.assertEqual(records, [dict(label=self.label, sceneSHA256=self.sha, key=3012, sex=0, mode='card')])
         self.assertNotIn(b'scene.png', cases_tsv)
+
+    def test_a_sixth_field_selects_the_synthetic_mode(self):
+        other = self.dir / 'other.png'; other.write_bytes(b'\x89PNG\r\n\x1a\n' + b'another synthetic scene')
+        label = sha(other.read_bytes())[:12] + '-2081'
+        self.write_cases([self.label, str(self.scene), self.sha, '3012', '0', 'synthetic'], [label, str(other), sha(other.read_bytes()), '2081', '0', 'card'])
+        uploads, cases_tsv, records = probe.cases_from(self.cases)
+        self.assertEqual(cases_tsv.decode(), f'{self.label}\t3012\t0\tsynthetic\n{label}\t2081\t0\tcard\n')
+        self.assertEqual([r['mode'] for r in records], ['synthetic', 'card'])
+        self.assertEqual(sorted(uploads), sorted([f'abmx-{self.label}.png', f'abmx-{label}.png']))
 
     def test_bad_cases_are_refused(self):
         other = self.dir / 'other.txt'; other.write_bytes(b'not a png')
@@ -90,6 +99,8 @@ class ABMXProbeTests(unittest.TestCase):
                     [self.label, str(self.scene), 'f' * 64, '3012', '0'],
                     [self.label, str(self.scene), self.sha, '3013', '0'],
                     [self.label, str(self.scene), self.sha, '3012', '2'],
+                    [self.label, str(self.scene), self.sha, '3012', '0', 'live'],
+                    [self.label, str(self.scene), self.sha, '3012', '0', 'card', 'extra'],
                     [sha(b'not a png')[:12] + '-3012', str(other), sha(b'not a png'), '3012', '0']):
             with self.subTest(row):
                 self.write_cases(row)
@@ -160,6 +171,18 @@ class ABMXProbeTests(unittest.TestCase):
                       'Quaternion.LookRotation(-forward,up)', '"boneRootToCharacter"', '"whitePixels"',
                       '-color.png"', '-character.png"', '-skin.png"', 'Path.Combine(dir,"abmx-cases.tsv")', 'RenderSettings.fog=false'):
             self.assertIn(piece, source)
+
+    def test_the_synthetic_mode_uses_abmx_own_api_and_never_reloads_the_card(self):
+        source = probe.PROBE.read_text()
+        for piece in ('f[3]!="card"&&f[3]!="synthetic"', '"KKABMX.Core.BoneModifier"', '"KKABMX.Core.BoneModifierData"', '"KKABMX.Core.BoneLocation"',
+                      'GetConstructor(new[]{typeof(Vector3),typeof(float),typeof(Vector3),typeof(Vector3)})', '"GetModifier"', '"AddModifier"',
+                      '"SaveModifiers"', 'new object[]{added,false}', 'the card already has a modifier on synthetic bone', 'Capture(cha,label+"-post")',
+                      'var first=Sample(added,cha.transform);', 'var second=Sample(added,cha.transform);', 'Convert.ToBase64String(raw)'):
+            self.assertIn(piece, source)
+        self.assertNotIn('"NeedsFullRefresh"', source); self.assertNotIn('NeedsFullRefresh=', source)
+        rows = source[source.index('static readonly Row[] SyntheticRows={'):source.index('};', source.index('static readonly Row[] SyntheticRows={'))]
+        self.assertEqual(rows.count('new Row('), 5)
+        for bone in ('cf_s_neck', 'cf_s_forearm01_L', 'cf_j_forearm01_R', 'cf_s_thigh01_L', 'cf_s_spine02'): self.assertIn(f'new Row("{bone}",', rows)
 
 
 if __name__ == '__main__':

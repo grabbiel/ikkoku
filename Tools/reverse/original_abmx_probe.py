@@ -20,8 +20,10 @@ endpoint; original_map_probe.exec_command, refused at EXEC_LIMIT characters). ru
    removed (link only, after checking they are reparse points), and the root is removed only when no process remains
    and no reparse point is under it.
 
-The cases come from --cases, a host TSV: <label> TAB <scene record> TAB <scene SHA-256> TAB <object key> TAB <sex>.
-The label is the scene's SHA-256 prefix (12 hex) and the object key, e.g. 0123456789ab-1000, so no scene name
+The cases come from --cases, a host TSV: <label> TAB <scene record> TAB <scene SHA-256> TAB <object key> TAB <sex>
+[TAB <mode>]. The mode is card (the default) or synthetic: a synthetic case also adds the probe's constant modifiers
+in memory with ABMX's own API, records the character again after them and serializes them with ABMX's own writer
+(see the probe's header). The label is the scene's SHA-256 prefix (12 hex) and the object key, e.g. 0123456789ab-1000, so no scene name
 reaches the VM or the evidence. Each scene record must hash as listed. Nothing in C:\\Illusion\\Koikatsu is written;
 abdata and CharaStudio_Data are scanned before and after (original_map_probe.with_junction_scans) and targetsChanged
 says whether the scans differ. The Parallels errno-24 count must equal --errno-baseline before the exec; it is
@@ -60,8 +62,10 @@ def cases_from(path):
     for number, line in enumerate(Path(path).read_text().splitlines(), 1):
         if not line.strip(): continue
         fields = line.split('\t')
-        if len(fields) != 5: raise ValueError(f'case line {number}: expected 5 tab-separated fields')
-        label, scene, sha, key, sex = fields
+        if len(fields) not in (5, 6): raise ValueError(f'case line {number}: expected 5 or 6 tab-separated fields')
+        label, scene, sha, key, sex = fields[:5]
+        mode = fields[5] if len(fields) == 6 else 'card'
+        if mode not in ('card', 'synthetic'): raise ValueError(f'case line {number}: mode must be card or synthetic')
         if not LABEL.fullmatch(label): raise ValueError(f'case line {number}: label must be <12 hex>-<key>')
         if not re.fullmatch(r'[0-9a-f]{64}', sha) or not sha.startswith(label[:12]): raise ValueError(f'case line {number}: SHA-256 must start with the label')
         if not key.isdigit() or label.split('-')[1] != key: raise ValueError(f'case line {number}: the label must end with the object key')
@@ -72,8 +76,8 @@ def cases_from(path):
         if len(data) > MAX_SCENE_BYTES or not data.startswith(b'\x89PNG\r\n\x1a\n'): raise ValueError(f'case line {number}: not a PNG scene record within the size bound')
         if digest(data) != sha: raise ValueError(f'case line {number}: scene record SHA-256 differs')
         uploads[name] = data
-        rows.append('\t'.join((label, key, sex)))
-        records.append(dict(label=label, sceneSHA256=sha, key=int(key), sex=int(sex)))
+        rows.append('\t'.join((label, key, sex, mode)))
+        records.append(dict(label=label, sceneSHA256=sha, key=int(key), sex=int(sex), mode=mode))
     if not records: raise ValueError('no cases')
     return uploads, ('\n'.join(rows) + '\n').encode(), records
 
@@ -235,7 +239,7 @@ def main():
     for name, text in (('run', 'the one-exec VM phase'), ('dry-run', 'every host-side check and run.ps1, without the VM')):
         c = commands.add_parser(name, help=text)
         c.add_argument('--vm', default='Windows 11')
-        c.add_argument('--cases', type=Path, required=True, help='host TSV: label, scene record, scene SHA-256, object key, sex')
+        c.add_argument('--cases', type=Path, required=True, help='host TSV: label, scene record, scene SHA-256, object key, sex[, mode card|synthetic]')
         c.add_argument('--output', type=Path, required=True, help='a new folder under .local')
         c.add_argument('--host-address', default='10.211.55.2', help="the Mac's address on the VM's host-only network")
         c.add_argument('--wait-seconds', type=int, default=600, help='bound on the player run')

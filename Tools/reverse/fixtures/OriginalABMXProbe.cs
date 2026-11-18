@@ -3,8 +3,8 @@
 // what it draws. Driver: Tools/reverse/original_abmx_probe.py run (one prlctl exec, private player root, BepInEx core
 // plus hash-checked COPIES of the installed ExtensibleSaveFormat, KKAPI, KKAPI.NativeHelper and KKABMX).
 //
-// abmx-cases.tsv beside this plug-in lists the cases, one per line: <label> TAB <object key> TAB <sex 0|1>, and
-// abmx-<label>.png beside it is the uploaded scene record that holds the character. The run stops with an error
+// abmx-cases.tsv beside this plug-in lists the cases, one per line: <label> TAB <object key> TAB <sex 0|1> TAB
+// <mode card|synthetic>, and abmx-<label>.png beside it is the uploaded scene record that holds the character. The run stops with an error
 // unless KKABMX.Core 5.4, marco.kkapi and com.bepis.bepinex.extendedsave are loaded. ABMX, KKAPI and ExtendedSave
 // are reached by reflection only, so this file compiles against BepInEx core and the game's Managed assemblies.
 //
@@ -33,6 +33,15 @@
 //               The camera (pose, field of view, clip planes, worldToCamera and projection), the scene record's own
 //               camera data, the character's renderers with their part, the two sets' viewport rectangles and each
 //               silhouette's white pixel count are recorded.
+// synthetic mode, after the above ("stage": "synthetic"): the SyntheticRows below, code constants that use Position,
+//           Rotation, Length and location 0 as no saved card in the corpus does, are added in memory with ABMX's own
+//           BoneController.AddModifier(new BoneModifier(name, location, {new BoneModifierData(scale, length, position,
+//           rotation)})) after GetModifier shows the card has none on those bones (else the case fails). NeedsFullRefresh
+//           is never set: its OnReload re-reads the card and would drop them. After SettleFrames frames, every synthetic
+//           bone's local transform is sampled at the end of two consecutive frames, then the live modifiers, the bones
+//           and a second capture (abmx-<label>-post-*.png) are recorded, and the synthetic modifiers alone are serialized
+//           by ABMX's own writer, BoneController.SaveModifiers(list, false): the PluginData version and the boneData bytes
+//           (base64, length, SHA-256), and ReadModifiers on that PluginData. No card data is in that payload.
 // Each case is written to abmx/abmx-<label>.json and the run's outcome to abmx/status.json. A failed case is recorded
 // and the run goes on. No installed card, scene or save is read or written; the uploaded records are only read.
 using System;
@@ -78,7 +87,7 @@ public sealed class OriginalABMXProbe:BaseUnityPlugin {
                 foreach(var line in File.ReadAllLines(Path.Combine(dir,"abmx-cases.tsv"))) {
                     if(line.Length==0)continue;
                     var f=line.Split('\t');
-                    if(f.Length!=3||!File.Exists(Path.Combine(dir,"abmx-"+f[0]+".png")))throw new Exception("bad case row or missing scene record: "+line);
+                    if(f.Length!=4||(f[3]!="card"&&f[3]!="synthetic")||!File.Exists(Path.Combine(dir,"abmx-"+f[0]+".png")))throw new Exception("bad case row or missing scene record: "+line);
                     rows.Add(f);
                 }
                 if(rows.Count==0)throw new Exception("no case");
@@ -95,7 +104,7 @@ public sealed class OriginalABMXProbe:BaseUnityPlugin {
         foreach(var row in rows) {
             if(errors.Count!=0)break;
             IEnumerator run=null;string failed=null;
-            try{run=Case(row[0],Int32.Parse(row[1],CultureInfo.InvariantCulture),Int32.Parse(row[2],CultureInfo.InvariantCulture));}catch(Exception e){failed=row[0]+": "+e;}
+            try{run=Case(row[0],Int32.Parse(row[1],CultureInfo.InvariantCulture),Int32.Parse(row[2],CultureInfo.InvariantCulture),row[3]=="synthetic");}catch(Exception e){failed=row[0]+": "+e;}
             while(failed==null){bool more=false;object current=null;try{more=run.MoveNext();if(more)current=run.Current;}catch(Exception e){failed=row[0]+": "+e;}if(failed!=null||!more)break;yield return current;}
             if(failed!=null)caseErrors.Add(failed);
         }
@@ -103,12 +112,12 @@ public sealed class OriginalABMXProbe:BaseUnityPlugin {
         try{if(studio!=null)studio.InitScene(false);}catch(Exception e){errors.Add("final InitScene: "+e.Message);}
         File.WriteAllText(Path.Combine(folder,"status.json"),J(K("error",errors.Count==0?null:String.Join(" | ",errors.ToArray()),"errors",errors,
             "plugins",plugins,"unity",Application.unityVersion,"device",SystemInfo.graphicsDeviceName,"voiceRepair",voiceRepair,
-            "settleFrames",SettleFrames,"capture",new List<object>{CaptureW,CaptureH},"written",written,"caseErrors",caseErrors.Count,
-            "scope","Uploaded scene records read by the original CharaStudio player with KKABMX 5.4: per case ABMX's deserialized modifiers, then the character built by the scene-load path, its live modifiers, bone transforms and one capture from the scene's camera.")));
+            "settleFrames",SettleFrames,"syntheticRows",SyntheticRows.Length,"capture",new List<object>{CaptureW,CaptureH},"written",written,"caseErrors",caseErrors.Count,
+            "scope","Uploaded scene records read by the original CharaStudio player with KKABMX 5.4: per case ABMX's deserialized modifiers, then the character built by the scene-load path, its live modifiers, baselines, bone transforms and a capture from a probe camera fitted to it; synthetic cases add constant modifiers in memory with ABMX's own API, record the same after them and serialize them with ABMX's own writer.")));
         Application.Quit();
         for(int i=0;i<3600;i++){yield return null;if(i%30==29)Application.Quit();}
     }
-    IEnumerator Case(string label,int key,int sex) {
+    IEnumerator Case(string label,int key,int sex,bool synthetic) {
         studio.InitScene(false);
         for(int i=0;i<3;i++)yield return null;
         if(studio.dicObjectCtrl.Count!=0)throw new Exception("expected an empty scene after InitScene(false), found "+studio.dicObjectCtrl.Count+" objects");
@@ -146,7 +155,73 @@ public sealed class OriginalABMXProbe:BaseUnityPlugin {
         record["characterRoot"]=characterRoot;record["sceneCamera"]=CameraData(parsed.cameraSaveData);record["capture"]=capture;
         record["counts"]=K("deserialized",((List<object>)record["deserialized"]).Count,"live",live.Count);
         File.WriteAllText(Path.Combine(folder,name),J(record));written.Add(name);
+        if(!synthetic)yield break;
+        var steps=Synthetic(cha,controllerType,controller,label,record);
+        while(steps.MoveNext())yield return steps.Current;
+        record["stage"]="synthetic";File.WriteAllText(Path.Combine(folder,name),J(record));
     }
+    sealed class Row {
+        public readonly string Name;public readonly int Location;public readonly Vector3 Scale,Position,Rotation;public readonly float Length;
+        public Row(string name,int location,Vector3 scale,float length,Vector3 position,Vector3 rotation){Name=name;Location=location;Scale=scale;Length=length;Position=position;Rotation=rotation;}
+    }
+    // Code constants, no card data. Location 1 is BodyTop, 0 Unknown. Rotation only on cf_s_ bones (not animated); the
+    // animated joint cf_j_forearm01_R gets Length and Position only, so its animated rotation is left alone.
+    static readonly Row[] SyntheticRows={
+        new Row("cf_s_neck",1,new Vector3(1f,1f,1f),1f,new Vector3(0f,0f,0f),new Vector3(12f,-20f,7f)),
+        new Row("cf_s_forearm01_L",1,new Vector3(1f,1f,1f),1f,new Vector3(0.01f,0.02f,-0.015f),new Vector3(0f,0f,25f)),
+        new Row("cf_j_forearm01_R",1,new Vector3(1f,1f,1f),1.15f,new Vector3(0f,0.03f,0f),new Vector3(0f,0f,0f)),
+        new Row("cf_s_thigh01_L",1,new Vector3(1.1f,1f,1.1f),1f,new Vector3(0.02f,0f,0.03f),new Vector3(0f,0f,0f)),
+        new Row("cf_s_spine02",0,new Vector3(1.05f,1f,1.05f),1f,new Vector3(0f,0f,0f),new Vector3(0f,10f,0f)),
+    };
+    IEnumerator Synthetic(ChaControl cha,Type controllerType,object controller,string label,Dictionary<string,object> record) {
+        Type modifierType=T("KKABMX.Core.BoneModifier"),dataType=T("KKABMX.Core.BoneModifierData"),locationType=T("KKABMX.Core.BoneLocation");
+        if(modifierType==null||dataType==null||locationType==null)throw new Exception("KKABMX.Core.BoneModifier, BoneModifierData or BoneLocation not found");
+        var dataCtor=dataType.GetConstructor(new[]{typeof(Vector3),typeof(float),typeof(Vector3),typeof(Vector3)});
+        var modifierCtor=modifierType.GetConstructor(new[]{typeof(string),locationType,dataType.MakeArrayType()});
+        var getModifier=controllerType.GetMethod("GetModifier",new[]{typeof(string),locationType});
+        var addModifier=controllerType.GetMethod("AddModifier",new[]{modifierType});
+        var save=controllerType.GetMethod("SaveModifiers",AnyStatic,null,new[]{typeof(IEnumerable<>).MakeGenericType(modifierType),typeof(bool)},null);
+        if(dataCtor==null||modifierCtor==null||getModifier==null||addModifier==null||save==null)throw new Exception("an ABMX member the synthetic case needs is missing");
+        foreach(var row in SyntheticRows)foreach(var at in new[]{1,row.Location})
+            if(getModifier.Invoke(controller,new object[]{row.Name,Enum.ToObject(locationType,at)})!=null)throw new Exception("the card already has a modifier on synthetic bone "+row.Name+" at location "+at);
+        var added=(IList)Activator.CreateInstance(typeof(List<>).MakeGenericType(modifierType));var rows=new List<object>();
+        foreach(var row in SyntheticRows) {
+            var data=Array.CreateInstance(dataType,1);data.SetValue(dataCtor.Invoke(new object[]{row.Scale,row.Length,row.Position,row.Rotation}),0);
+            var m=modifierCtor.Invoke(new object[]{row.Name,Enum.ToObject(locationType,row.Location),data});added.Add(m);
+            string error=null;
+            try{addModifier.Invoke(controller,new[]{m});}catch(TargetInvocationException e){error=e.InnerException==null?e.Message:e.InnerException.ToString();}
+            var t=Member(m,"BoneTransform") as Transform;var location=Member(m,"BoneLocation");
+            rows.Add(K("boneName",row.Name,"requestedLocation",row.Location,"boneLocation",location==null?null:(object)Convert.ToInt32(location),"boneLocationName",location==null?null:location.ToString(),
+                "scale",V(row.Scale),"length",row.Length,"position",V(row.Position),"rotation",V(row.Rotation),"addError",error,
+                "boneFound",t!=null,"bonePath",t==null?null:PathOf(t,cha.transform),"localAtAdd",t==null?null:Local(t),"baselineAtAdd",Baseline(m)));
+        }
+        for(int i=0;i<SettleFrames;i++)yield return null;
+        yield return new WaitForEndOfFrame();
+        var first=Sample(added,cha.transform);
+        yield return null;
+        yield return new WaitForEndOfFrame();
+        var second=Sample(added,cha.transform);
+        var live=Modifiers((IEnumerable)controllerType.GetMethod("GetAllModifiers",Type.EmptyTypes).Invoke(controller,null),true,cha.transform);
+        var bones=K("body",Bones(cha.objBodyBone),"head",cha.objHeadBone==null||cha.objBodyBone==null||cha.objHeadBone.transform.IsChildOf(cha.objBodyBone.transform)?null:Bones(cha.objHeadBone));
+        var capture=Capture(cha,label+"-post");
+        var entry=save.Invoke(null,new object[]{added,false});
+        object payload=null;List<object> deserialized=null;
+        if(entry!=null) {
+            var data=Member(entry,"data") as IDictionary;var raw=data!=null&&data.Contains("boneData")?data["boneData"] as byte[]:null;
+            payload=K("entry",EntryRecord(entry),"base64",raw==null?null:Convert.ToBase64String(raw));
+            deserialized=Modifiers(ReadModifiers(entry),false,null);
+        }
+        int found=0;foreach(Dictionary<string,object> r in rows)if((bool)r["boneFound"])found++;
+        record["synthetic"]=K("rows",rows,"frames",new List<object>{first,second},"live",live,"bones",bones,"capture",capture,"payload",payload,"deserialized",deserialized,
+            "counts",K("rows",rows.Count,"found",found,"live",live.Count,"payloadRecords",deserialized==null?0:deserialized.Count));
+    }
+    static List<object> Sample(IList modifiers,Transform root) {
+        var rows=new List<object>();
+        foreach(var m in modifiers){var t=Member(m,"BoneTransform") as Transform;rows.Add(K("boneName",Member(m,"BoneName"),"frame",Time.frameCount,"local",t==null?null:Local(t),"baseline",Baseline(m)));}
+        return rows;
+    }
+    static Dictionary<string,object> Local(Transform t){return K("pos",V(t.localPosition),"quat",Q(t.localRotation),"euler",V(t.localEulerAngles),"scl",V(t.localScale));}
+    static Dictionary<string,object> Baseline(object m){return K("has",Member(m,"_hasBaseline"),"scale",V3(Member(m,"_sclBaseline")),"position",V3(Member(m,"_posBaseline")),"rotation",Q4(Member(m,"_rotBaseline")));}
     // ExtendedSave.GetExtendedDataById(ChaFile, "KKABMPlugin.ABMData"): an ExtensibleSaveFormat.PluginData or null.
     static object Extended(ChaFile file) {
         var type=T("ExtensibleSaveFormat.ExtendedSave");
@@ -183,7 +258,7 @@ public sealed class OriginalABMXProbe:BaseUnityPlugin {
                 "coordinateModifiers",coordinates==null?null:entries);
             if(live) {
                 var t=Member(m,"BoneTransform") as Transform;row["boneFound"]=t!=null;row["bonePath"]=t==null?null:PathOf(t,root);
-                row["baseline"]=K("has",Member(m,"_hasBaseline"),"scale",V3(Member(m,"_sclBaseline")),"position",V3(Member(m,"_posBaseline")),"rotation",Q4(Member(m,"_rotBaseline")));
+                row["baseline"]=Baseline(m);
             }
             rows.Add(row);
         }
