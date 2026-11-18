@@ -65,8 +65,8 @@ import CoreMath
     #expect(try JSONDecoder().decode(StudioObject.self, from: oldData).assetFile == nil)
 }
 
-/// Deterministic structure per seed for the lookup equivalence test.
-private struct LookupSeed: RandomNumberGenerator {
+/// Deterministic structure per seed for the lookup and walk equivalence tests.
+struct LookupSeed: RandomNumberGenerator {
     var state: UInt64
     mutating func next() -> UInt64 {
         state &+= 0x9E37_79B9_7F4A_7C15
@@ -77,6 +77,33 @@ private struct LookupSeed: RandomNumberGenerator {
     }
 }
 
+/// A random hierarchy of up to `maxCount` folders: about one in six objects
+/// repeats an earlier object's id, one in seven is hidden, and a parent is
+/// none, one of three ids not in the document, or any id of `pool`, which
+/// may be the object itself, a later object or an id no object took (so
+/// self-parents, cycles and missing parents all occur). `missing` are the
+/// three absent ids.
+func malformedStudioDocument(_ rng: inout LookupSeed, maxCount: Int = 24) -> (document: StudioDocument, pool: [UUID], missing: [UUID]) {
+    let count = Int.random(in: 1...maxCount, using: &rng)
+    let pool = (0..<count).map { _ in UUID() }
+    let missing = (0..<3).map { _ in UUID() }
+    var document = StudioDocument()
+    for index in 0..<count {
+        let id = index > 0 && Int.random(in: 0..<6, using: &rng) == 0
+            ? document.objects[Int.random(in: 0..<index, using: &rng)].id : pool[index]
+        var object = StudioObject(name: "Object \(index)", kind: .folder)
+        object.id = id
+        object.visible = Int.random(in: 0..<7, using: &rng) != 0
+        switch Int.random(in: 0..<8, using: &rng) {
+        case 0, 1: object.parent = nil
+        case 2: object.parent = missing[Int.random(in: 0..<missing.count, using: &rng)]
+        default: object.parent = pool[Int.random(in: 0..<count, using: &rng)] // may be later, itself or unused
+        }
+        document.objects.append(object)
+    }
+    return (document, pool, missing)
+}
+
 /// #383: `StudioDocument.Lookup` answers exactly what the document's linear
 /// functions answer, over hierarchies with repeated ids, missing parents,
 /// self-parents, cycles and ids that are not in the document; the
@@ -85,24 +112,7 @@ private struct LookupSeed: RandomNumberGenerator {
     var malformed: [String: Int] = [:]
     for seed in UInt64(1)...64 {
         var rng = LookupSeed(state: seed)
-        let count = Int.random(in: 1...24, using: &rng)
-        let pool = (0..<count).map { _ in UUID() }
-        let missing = (0..<3).map { _ in UUID() }
-        var document = StudioDocument()
-        for index in 0..<count {
-            // About one in six objects repeats an earlier object's id.
-            let id = index > 0 && Int.random(in: 0..<6, using: &rng) == 0
-                ? document.objects[Int.random(in: 0..<index, using: &rng)].id : pool[index]
-            var object = StudioObject(name: "Object \(index)", kind: .folder)
-            object.id = id
-            object.visible = Int.random(in: 0..<7, using: &rng) != 0
-            switch Int.random(in: 0..<8, using: &rng) {
-            case 0, 1: object.parent = nil
-            case 2: object.parent = missing[Int.random(in: 0..<missing.count, using: &rng)]
-            default: object.parent = pool[Int.random(in: 0..<count, using: &rng)] // may be later, itself or unused
-            }
-            document.objects.append(object)
-        }
+        let (document, pool, missing) = malformedStudioDocument(&rng)
         do { try document.validateHierarchy() } catch let error as StudioHierarchyError {
             switch error {
             case .duplicate: malformed["duplicate", default: 0] += 1
@@ -145,4 +155,33 @@ private struct LookupSeed: RandomNumberGenerator {
     #expect(lookup.isVisible(first.id))
     #expect(!lookup.isDescendant(first.id, of: parent.id))
     #expect(lookup.object(UUID()) == nil && lookup.index(of: UUID()) == nil && !lookup.isVisible(UUID()))
+}
+
+/// #387: `Lookup.visibleFlags()` gives every object `isVisible`'s answer for
+/// its id, in one pass, on the same malformed hierarchies: repeated ids,
+/// hidden ancestors, missing parents, self-parents and cycles.
+@Test func studioLookupVisibleFlagsMatchIsVisibleOnMalformedHierarchies() {
+    var reached: Set<String> = []
+    for seed in UInt64(1)...256 {
+        var rng = LookupSeed(state: seed)
+        let (document, _, _) = malformedStudioDocument(&rng, maxCount: seed % 4 == 0 ? 60 : 24)
+        let lookup = StudioDocument.Lookup(document.objects)
+        let flags = lookup.visibleFlags()
+        #expect(flags.count == document.objects.count, "seed \(seed)")
+        for (index, object) in document.objects.enumerated() {
+            #expect(flags[index] == document.isVisible(object.id), "seed \(seed) object \(index)")
+            reached.insert(flags[index] ? "visible" : "hidden")
+        }
+        // Some object's parent chain comes back to an id it already passed.
+        let cycle = document.objects.contains { object in
+            var seen: Set<UUID> = [], current: UUID? = object.id
+            while let id = current, let index = lookup.index(of: id) {
+                guard seen.insert(id).inserted else { return true }
+                current = document.objects[index].parent
+            }
+            return false
+        }
+        if cycle { reached.insert("cycle") }
+    }
+    #expect(reached == ["visible", "hidden", "cycle"], "\(reached)")
 }

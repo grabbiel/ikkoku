@@ -317,6 +317,40 @@ extension StudioDocument {
             return true
         }
 
+        /// `isVisible(_:)` for every object of the list in one O(N) pass,
+        /// for a walk that tests them all (#387). Entry `i` is
+        /// `isVisible(objects[i].id)`: every object of a repeated id gets
+        /// its first object's answer, and objects in or below a cycle or
+        /// under a missing parent get `false`, as there.
+        public func visibleFlags() -> [Bool] {
+            // Per first index: 0 not reached, 1 on the current chain,
+            // 2 visible, 3 hidden. Every object on one chain shares its end's
+            // answer: each one walked on was visible itself.
+            var state = [UInt8](repeating: 0, count: objects.count)
+            var first = [Int](repeating: 0, count: objects.count)
+            var chain: [Int] = []
+            for start in objects.indices {
+                guard let index = indexByID[objects[start].id] else { continue } // every listed id is there
+                first[start] = index
+                guard state[index] == 0 else { continue }
+                chain.removeAll(keepingCapacity: true)
+                var current = index
+                var answer: UInt8 = 3
+                while true {
+                    if state[current] >= 2 { answer = state[current]; break }
+                    if state[current] == 1 { break } // a cycle
+                    state[current] = 1
+                    chain.append(current)
+                    guard objects[current].visible else { break }
+                    guard let parent = objects[current].parent else { answer = 2; break }
+                    guard let next = indexByID[parent] else { break } // a missing parent
+                    current = next
+                }
+                for i in chain { state[i] = answer }
+            }
+            return first.map { state[$0] == 2 }
+        }
+
         /// `StudioDocument.isDescendant(_:of:)`.
         public func isDescendant(_ id: UUID, of ancestor: UUID) -> Bool {
             var cur = indexByID[id].flatMap { objects[$0].parent }

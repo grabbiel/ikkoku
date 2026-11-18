@@ -3926,9 +3926,14 @@ final class StudioModel: ViewportInputHandler, LivePacedHandler {
         // per parent step and per visibility test. Both are built from the
         // lists the walk reads (the document is not written during it) and
         // dropped on return. Visibility reads the document's own objects, as
-        // `doc.isVisible` did.
-        let walkLookup = StudioDocument.Lookup(animatedDoc.objects)
-        let visibility = animated ? StudioDocument.Lookup(doc.objects) : walkLookup
+        // `doc.isVisible` did. #387: each object's world matrix is evaluated
+        // once (`SourceWorldWalk`), and every object's visibility comes from
+        // one pass; `visible[i]` answers for `animatedDoc.objects[i]`, whose
+        // id is `doc.objects[i]`'s.
+        let walk = SourceWorldWalk(lookup: StudioDocument.Lookup(animatedDoc.objects)) { [unowned self] report in
+            self.reportSourceRouteDiagnostics(report.lines, routeKey: report.routeKey)
+        }
+        let visible = (animated ? StudioDocument.Lookup(doc.objects) : walk.lookup).visibleFlags()
         sourceRouteEditor.worlds.removeAll(keepingCapacity: true)
         // The source character's preview for this frame: the cached one, or
         // one built now (the frame's batch already ran its first half). Nil
@@ -3960,13 +3965,17 @@ final class StudioModel: ViewportInputHandler, LivePacedHandler {
         }
         let selectionBuild = sourceSelectionBuild
         for (index, o) in animatedDoc.objects.enumerated() {
+            // This iteration may install or step `o`'s preview (see
+            // `SourceWorldWalk`): later queries re-evaluate the matrices that
+            // read it.
+            defer { walk.memo.invalidate(o.id) }
             let objectID = UInt32(index + 1)
             // A hidden object draws nothing, so its world matrix is not
             // needed. Checking first keeps an object attached to a hidden,
             // unbuilt character (a lazy import or a native reload) from
             // reporting "Attachment parent has no converted character." A
             // hidden character the selection needs still builds, undrawn.
-            guard visibility.isVisible(o.id) else {
+            guard visible[index] else {
                 if o.id == selectionBuild, let reference = o.sourceCharacter, !resourceBlockedObjects.contains(o.id) {
                     do {
                         // The document's wear and face state, as a drawn
@@ -3983,7 +3992,7 @@ final class StudioModel: ViewportInputHandler, LivePacedHandler {
                 continue
             }
             let world: float4x4
-            do { world = try sourceWorldMatrix(of: o.id, document: animatedDoc, previews: sourceInstances, lookup: walkLookup) }
+            do { world = try sourceWorldMatrix(of: o.id, document: animatedDoc, previews: sourceInstances, walk: walk) }
             catch {
                 // An object attached to a character still building in the
                 // background waits for it without a message.
@@ -4217,12 +4226,38 @@ final class StudioModel: ViewportInputHandler, LivePacedHandler {
         }
     }
 
-    /// `lookup`, when given, must be built from `document.objects`; it only
-    /// replaces the walk's `document.object` scans.
+    /// The frame walk's state (#387): the hashed lookup over the walked
+    /// objects (#383) and the memo of each one's world matrix
+    /// (`StudioWalkMemo`), dropped when the frame is built.
+    ///
+    /// The memo's keys are attachment parents' ids. An attachment frame reads
+    /// the parent's preview (`previews[id]` or its route character preview):
+    /// whether it is there, and its pose state. The item loop installs or
+    /// steps a preview only in its own object's iteration (`sourcePreview`,
+    /// `setWear`, `setExpressionState`, `frame`, the live step's output, live
+    /// shaders, the selected character's gizmos), so each iteration ends by
+    /// invalidating its object's id. Route playback reads nothing the loop
+    /// writes; its diagnostics are the memo's events, so a memoized matrix
+    /// reports them again, in the order a walk without the memo reports them.
+    /// The animated document, the routes and the animation time do not
+    /// change during the walk.
+    private final class SourceWorldWalk {
+        struct RouteReport { let lines: [String]; let routeKey: Int32 }
+        let lookup: StudioDocument.Lookup
+        let memo: StudioWalkMemo<UUID, float4x4, RouteReport>
+        init(lookup: StudioDocument.Lookup, report: @escaping (RouteReport) -> Void) {
+            self.lookup = lookup
+            memo = StudioWalkMemo(count: lookup.objects.count, sink: report)
+        }
+    }
+
+    /// `walk`, when given, must be built from `document.objects`: its lookup
+    /// replaces the `document.object` scans and its memo the repeated
+    /// evaluations (#387).
     private func sourceWorldMatrix(of id: UUID, document: StudioDocument,
                                    previews: [UUID: SourceStudioCharacterPreview],
-                                   lookup: StudioDocument.Lookup? = nil) throws -> float4x4 {
-        try sourceWorldMatrix(of: id, document: document, previews: previews, visited: [], lookup: lookup)
+                                   walk: SourceWorldWalk? = nil) throws -> float4x4 {
+        try sourceWorldMatrix(of: id, document: document, previews: previews, visited: [], walk: walk)
     }
 
     /// Read-only: the world matrix `refresh()` places one current-document
@@ -4241,9 +4276,26 @@ final class StudioModel: ViewportInputHandler, LivePacedHandler {
     /// exactly as `StudioDocument.worldMatrix(of:)` places it.
     private func sourceWorldMatrix(of id: UUID, document: StudioDocument,
                                    previews: [UUID: SourceStudioCharacterPreview],
-                                   visited: Set<UUID>, lookup: StudioDocument.Lookup? = nil) throws -> float4x4 {
+                                   visited: Set<UUID>, walk: SourceWorldWalk? = nil) throws -> float4x4 {
+        // In the frame walk each object is evaluated once (#387). The memo's
+        // in-progress mark is the cycle check the visited set makes below; it
+        // also stops a cycle through a route object, which restarts the
+        // visited set and used to recurse without end.
+        if let walk {
+            guard let index = walk.lookup.index(of: id) else { throw RigError.invalid("Missing Studio object.") }
+            return try walk.memo.value(at: index, cycle: { RigError.invalid("Invalid Studio parent hierarchy.") }) {
+                try composedSourceWorld(of: id, document: document, previews: previews, visited: visited, walk: walk)
+            }
+        }
+        return try composedSourceWorld(of: id, document: document, previews: previews, visited: visited, walk: nil)
+    }
+
+    /// `sourceWorldMatrix`'s composition of `id`'s own transform under its parent frame.
+    private func composedSourceWorld(of id: UUID, document: StudioDocument,
+                                     previews: [UUID: SourceStudioCharacterPreview],
+                                     visited: Set<UUID>, walk: SourceWorldWalk?) throws -> float4x4 {
         let (object, parentFrame) = try sourceParentFrame(of: id, document: document, previews: previews, visited: visited,
-                                                          lookup: lookup)
+                                                          walk: walk)
         // Native objects (no source key) keep the native full-TRS composition
         // of `StudioDocument.worldMatrix(of:)`, which setParent and native
         // gizmo edits also use; only source records follow the Studio rule.
@@ -4263,13 +4315,14 @@ final class StudioModel: ViewportInputHandler, LivePacedHandler {
     /// the parent's world matrix times the attachment point's frame.
     private func sourceParentFrame(of id: UUID, document: StudioDocument,
                                    previews: [UUID: SourceStudioCharacterPreview],
-                                   visited: Set<UUID>, lookup: StudioDocument.Lookup? = nil) throws -> (object: StudioObject, frame: float4x4) {
-        guard let object = Self.studioObject(id, in: document, lookup: lookup) else { throw RigError.invalid("Missing Studio object.") }
+                                   visited: Set<UUID>, walk: SourceWorldWalk? = nil) throws -> (object: StudioObject, frame: float4x4) {
+        guard let object = Self.studioObject(id, in: document, lookup: walk?.lookup) else { throw RigError.invalid("Missing Studio object.") }
         var visited = visited
-        guard visited.insert(id).inserted else { throw RigError.invalid("Invalid Studio parent hierarchy.") }
+        // The frame walk's memo makes this check (see `sourceWorldMatrix`).
+        if walk == nil { guard visited.insert(id).inserted else { throw RigError.invalid("Invalid Studio parent hierarchy.") } }
         var parentFrame = matrix_identity_float4x4
         if let parentID = object.parent {
-            guard let parent = Self.studioObject(parentID, in: document, lookup: lookup) else { throw RigError.invalid("Invalid Studio parent hierarchy.") }
+            guard let parent = Self.studioObject(parentID, in: document, lookup: walk?.lookup) else { throw RigError.invalid("Invalid Studio parent hierarchy.") }
             if let route = sourceRouteRuntime(id: parentID, document: document) {
                 // `childRoot` replaces the route object as the parent frame
                 // (`AddObjectRoute.cs` parents children under it, and the
@@ -4280,13 +4333,18 @@ final class StudioModel: ViewportInputHandler, LivePacedHandler {
                 // attachment parent, so the route frame never needs the
                 // attachment multiplication below.
                 let (matrix, diagnostics) = try routeChildRootWorld(id: parentID, route: route,
-                    document: document, previews: previews, lookup: lookup)
-                reportSourceRouteDiagnostics(diagnostics, routeKey: route.objectKey)
+                    document: document, previews: previews, walk: walk)
+                // In the frame walk the report is a memo event, replayed with
+                // every later answer from this matrix (an empty one reports nothing).
+                if let walk { if !diagnostics.isEmpty { walk.memo.emit(.init(lines: diagnostics, routeKey: route.objectKey)) } }
+                else { reportSourceRouteDiagnostics(diagnostics, routeKey: route.objectKey) }
                 parentFrame = matrix
             } else {
                 parentFrame = try sourceWorldMatrix(of: parentID, document: document, previews: previews, visited: visited,
-                                                    lookup: lookup)
+                                                    walk: walk)
                 if let point = object.sourceAttachmentPoint {
+                    // The parent's preview, present or not, is read here.
+                    walk?.memo.depend(on: parentID)
                     if let preview = previews[parentID] {
                         parentFrame *= try preview.attachmentMatrix(pointID: point, fkRotations: parent.sourceFKRotations ?? [:], faceValues: parent.sourceFaceValues, bodyValues: parent.sourceBodyValues, ikTargets: parent.sourceIKOverrides ?? [:], kinematics: parent.sourceKinematics, animationState: parent.sourceAnimation, animationElapsed: sourceAnimationTime)
                     } else if let preview = sourceRouteCharacterPreview(of: parentID, document: document) {
@@ -4355,9 +4413,9 @@ final class StudioModel: ViewportInputHandler, LivePacedHandler {
     private func routeChildRootWorld(id: UUID, route: SourceRouteRuntime,
                                      document: StudioDocument,
                                      previews: [UUID: SourceStudioCharacterPreview],
-                                     lookup: StudioDocument.Lookup? = nil) throws
+                                     walk: SourceWorldWalk? = nil) throws
         -> (matrix: float4x4, diagnostics: [String]) {
-        let routeWorld = try sourceWorldMatrix(of: id, document: document, previews: previews, lookup: lookup)
+        let routeWorld = try sourceWorldMatrix(of: id, document: document, previews: previews, walk: walk)
         let state = sourceRoutePlayState[id] ?? (playing: route.route.active, start: 0)
         let clock: SourceStudioRouteClock
         if let existing = sourceRouteClocks[id] {
