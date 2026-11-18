@@ -13,8 +13,13 @@
 //   parse:  new SceneInfo().Load(path), the player's own reader (OICharInfo.Load reads the card with
 //           ChaFileControl.LoadCharaFile, whose CheckDataRange clamps the rates unless Slider Unlocker skips it).
 //           The character with that object key is found in the parsed tree (folders, items, routes and
-//           characters' children). Its rates are recorded as parsed. Its children (items on accessory points)
-//           are dropped from the parsed record, so only the character is built.
+//           characters' children). Its rates are recorded as parsed and written at once, so a failed load still
+//           leaves them. Its children (items on accessory points) are dropped from the parsed record, so only the
+//           character is built. The parse registers every record's change amount in the live scene
+//           (ObjectInfo.Load -> Studio.AddChangeAmount, ObjectInfo.cs:41-51), and the load's guide objects read
+//           them back (GuideObject.dicKey -> Studio.GetChangeAmount), so the scene is NOT emptied between the
+//           parse and the load, as in Studio.LoadScene. (Phase 1 emptied it there, and AddObjectAssist.InitLookAt
+//           threw a NullReferenceException on the look-at target's missing change amount.)
 //   load:   AddObjectFemale.Load / AddObjectMale.Load(info, null, null), the scene-load path for one character
 //           (ChaControl.Load, the animation, IK/FK, Studio's Animator "height" parameter), SettleFrames frames,
 //           then at the end of a frame:
@@ -25,7 +30,8 @@
 //               position, Euler angles, quaternion and scale after ShapeInfo.Update);
 //             - every cf_/cm_ transform under the body and head bone roots (relative path and local transform);
 //             - both EyeLookMaterialControll highlight offsets (hlUpOffsetY, hlDownOffsetY).
-// Each case is written to slider/<mode>-<label>.json and the run's outcome to slider/<mode>-status.json. No installed
+// Each case is written to slider/<mode>-<label>.json ("stage": "parsed", then "loaded") and the run's outcome to
+// slider/<mode>-status.json. A failed case is recorded and the run goes on to the next one. No installed
 // card, scene or save is read or written; the uploaded records are only read.
 using System;
 using System.Collections;
@@ -47,6 +53,7 @@ public sealed class OriginalSliderProbe:BaseUnityPlugin {
     string folder,mode,voiceRepair;
     Studio.Studio studio;
     readonly List<string> errors=new List<string>();
+    readonly List<string> caseErrors=new List<string>();
     readonly List<string> written=new List<string>();
     IEnumerator Start() {
         var dir=Path.GetDirectoryName(Assembly.GetExecutingAssembly().Location);
@@ -81,14 +88,16 @@ public sealed class OriginalSliderProbe:BaseUnityPlugin {
         }
         foreach(var row in rows) {
             if(errors.Count!=0)break;
-            IEnumerator run=null;
-            try{run=Case(row[0],Int32.Parse(row[1],CultureInfo.InvariantCulture),Int32.Parse(row[2],CultureInfo.InvariantCulture));}catch(Exception e){errors.Add(row[0]+": "+e);}
-            while(errors.Count==0){bool more=false;object current=null;try{more=run.MoveNext();if(more)current=run.Current;}catch(Exception e){errors.Add(row[0]+": "+e);}if(errors.Count!=0||!more)break;yield return current;}
+            IEnumerator run=null;string failed=null;
+            try{run=Case(row[0],Int32.Parse(row[1],CultureInfo.InvariantCulture),Int32.Parse(row[2],CultureInfo.InvariantCulture));}catch(Exception e){failed=row[0]+": "+e;}
+            while(failed==null){bool more=false;object current=null;try{more=run.MoveNext();if(more)current=run.Current;}catch(Exception e){failed=row[0]+": "+e;}if(failed!=null||!more)break;yield return current;}
+            if(failed!=null)caseErrors.Add(failed);
         }
+        errors.AddRange(caseErrors);
         try{if(studio!=null)studio.InitScene(false);}catch(Exception e){errors.Add("final InitScene: "+e.Message);}
         File.WriteAllText(Path.Combine(folder,mode+"-status.json"),J(K("error",errors.Count==0?null:String.Join(" | ",errors.ToArray()),"errors",errors,
             "mode",mode,"sliderUnlocker",slider,"unity",Application.unityVersion,"device",SystemInfo.graphicsDeviceName,"voiceRepair",voiceRepair,
-            "settleFrames",SettleFrames,"written",written,
+            "settleFrames",SettleFrames,"written",written,"caseErrors",caseErrors.Count,
             "scope","Uploaded scene records read by the original CharaStudio 1.0.4.2 player: per case the parsed character's shape rates, then the character built by the scene-load path and its rates, Animator parameters, shape channels, bone transforms and eye-highlight offsets at the end of a settled frame.")));
         Application.Quit();
         for(int i=0;i<3600;i++){yield return null;if(i%30==29)Application.Quit();}
@@ -107,9 +116,10 @@ public sealed class OriginalSliderProbe:BaseUnityPlugin {
         if(info.sex!=sex)throw new Exception("object key "+key+" has sex "+info.sex+", expected "+sex);
         var parsedRates=Rates(info.charFile);
         int dropped=0;foreach(var list in info.child.Values){dropped+=list.Count;list.Clear();}
-        // The parse registered its keys in the live scene index (ObjectInfo.Load); the next InitScene clears them.
-        studio.InitScene(false);
-        for(int i=0;i<3;i++)yield return null;
+        var name=mode+"-"+label+".json";
+        File.WriteAllText(Path.Combine(folder,name),J(K("schemaVersion",1,"stage","parsed","mode",mode,"label",label,"key",key,"sex",sex,
+            "dataVersion",version==null?null:version.ToString(),"parseMs",parseMs,"droppedChildren",dropped,"parsed",parsedRates)));
+        // No InitScene here: the load's guide objects need the change amounts the parse registered (see the header).
         timer=System.Diagnostics.Stopwatch.StartNew();
         OCIChar oci=sex==1?(OCIChar)AddObjectFemale.Load(info,null,null):AddObjectMale.Load(info,null,null);
         long loadMs=timer.ElapsedMilliseconds;
@@ -117,7 +127,7 @@ public sealed class OriginalSliderProbe:BaseUnityPlugin {
         yield return new WaitForEndOfFrame();
         var cha=oci.charInfo;
         if(cha==null)throw new Exception("the loaded character has no ChaControl");
-        var record=K("schemaVersion",1,"mode",mode,"label",label,"key",key,"sex",sex,"frame",Time.frameCount,
+        var record=K("schemaVersion",1,"stage","loaded","mode",mode,"label",label,"key",key,"sex",sex,"frame",Time.frameCount,
             "dataVersion",version==null?null:version.ToString(),"parseMs",parseMs,"loadMs",loadMs,"droppedChildren",dropped,
             "parsed",parsedRates,"loaded",Rates(cha.chaFile),
             "anime",K("group",info.animeInfo.group,"category",info.animeInfo.category,"no",info.animeInfo.no,"savedNormalizedTime",info.animeNormalizedTime,
@@ -126,7 +136,6 @@ public sealed class OriginalSliderProbe:BaseUnityPlugin {
             "shapes",K("body",ShapeRecord(cha.sibBody),"face",ShapeRecord(Member(cha,"sibFace") as ShapeInfoBase)),
             "bones",K("body",Bones(cha.objBodyBone),"head",cha.objHeadBone==null||cha.objBodyBone==null||cha.objHeadBone.transform.IsChildOf(cha.objBodyBone.transform)?null:Bones(cha.objHeadBone)),
             "eyeHighlights",Highlights(cha));
-        var name=mode+"-"+label+".json";
         File.WriteAllText(Path.Combine(folder,name),J(record));written.Add(name);
     }
     static OICharInfo Find(IEnumerable<ObjectInfo> list,int key) {
