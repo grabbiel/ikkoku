@@ -725,9 +725,10 @@ struct ObjectInspectorContent: View, Equatable {
     private var transformSection: some View {
         let o = state
         return SectionBox(title: "Transform") {
-            VectorRow(label: "Position", value: Binding(get: { o.transform.position }, set: { v in update { $0.transform.position = v } }), step: 0.05, format: "%.3f")
-            VectorRow(label: "Rotation", value: Binding(get: { o.transform.rotation }, set: { v in update { $0.transform.rotation = v } }), step: 5, format: "%.0f")
-            VectorRow(label: "Scale", value: Binding(get: { o.transform.scale }, set: { v in update { $0.transform.scale = v } }), step: 0.1, format: "%.2f")
+            // Each field writes its own component onto the current object (#390).
+            VectorRow(label: "Position", value: o.transform.position, step: 0.05, format: "%.3f") { i, v in update { $0.transform.set(.position, i, to: v) } }
+            VectorRow(label: "Rotation", value: o.transform.rotation, step: 5, format: "%.0f") { i, v in update { $0.transform.set(.rotation, i, to: v) } }
+            VectorRow(label: "Scale", value: o.transform.scale, step: 0.1, format: "%.2f") { i, v in update { $0.transform.set(.scale, i, to: v) } }
             Button("Reset transform") { update { $0.transform = StudioTransform() } }
         }
     }
