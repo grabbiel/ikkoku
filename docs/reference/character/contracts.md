@@ -501,10 +501,39 @@ invalid rate, as NaN and ±infinity are. At ±3e38 that is 9 body slots and
     survives export and reimport, and the forced commit failure is body slot 4
     at 3e38.
 
-**Not verified yet.** Nothing has been compared with the original player for
-extended cards. One VM phase is queued. It covers the DLL's FileVersion
-(read-only) and a bone-by-bone capture of three corpus characters with extended
-rates.
+**Original-player comparison (2026-11-18).** One VM phase captured three
+corpus characters with extended rates (two male, one female), each twice: with
+Slider Unlocker (`unlocked`) and without it (`vanilla`). The installed DLL is
+FileVersion 21.1.2.1 (`BepisPlugins.KK_SliderUnlocker`), read-only. The engine
+matches every capture under the rule registered in #379 before any engine
+result.
+
+- **(a) Rates.** The 44 body and 52 face rates the engine draws
+  (`SourceShapeRateRange.drawn` of the saved rate) equal the original's parsed
+  rates exactly. The unlocked parse keeps extended rates and the vanilla parse
+  clamps them, as the two modes draw.
+- **(b) Animator `height`.** The engine's input equals the original's float:
+  −0.7 unlocked and 0 vanilla on the female, 0.6 on both males.
+- **(c) Source channels.** All 111 body and 59 face channels, by name:
+  position within 5e-10, rotation within 1.2e-7°, scale exact.
+- **(d) Destination bones.** All 86 body and 59 face destinations: position
+  within 7.5e-9, scale within 7.2e-7, rotation within 3.3e-5°. The tolerances
+  were 1e-4 and 1e-3°.
+
+The (d) base is the captured local pose. The shape setters only assign
+(`SetLocalPositionX/Y/Z`, `SetLocalRotation`, `SetLocalScale`, read from the
+source channels, the correction table and constants), so a destination's
+other components come from the frame. A control run of the vanilla engine
+against the unlocked captures fails in 150–454 items per capture, including
+the female's height and destination bones.
+
+`SourceSliderOracleTests` runs the comparison with `IKKOKU_SLIDER_ORACLE` and
+`IKKOKU_SLIDER_ORACLE_CASES` (the captures and the probe's case table), one
+process per `IKKOKU_SHAPE_RATE_RANGE` mode.
+
+**Not verified.** `LerpUnclamped` of the eye-highlight Y: none of the three
+cards has `hlUpY`/`hlDownY` outside 0...1. The posed `cf_j_` bones (animation
+time, FK/IK, dynamics) are captured but not compared.
 
 `Tools/reverse/original_slider_probe.py run` makes the capture in one
 `prlctl exec`, with the `original_wear_probe.py` transport and a fresh private
@@ -515,14 +544,13 @@ player twice: with the copy (`unlocked`), then without it (`vanilla`).
 `fixtures/OriginalSliderProbe.cs` handles each case, which is an uploaded scene
 record plus an object key:
 
-1. It parses the scene with `SceneInfo.Load`.
+1. It parses the scene with `SceneInfo.Load` and writes the parsed rates.
 2. It builds that one character through `AddObjectFemale.Load` /
-   `AddObjectMale.Load`.
+   `AddObjectMale.Load`, directly after the parse, as `Studio.LoadScene` does
+   (the parse registers the guide objects' change amounts).
 3. At the end of a settled frame it records:
    - the parsed and loaded rates;
    - the Animator floats;
    - both ShapeInfo objects' source channels and destination bones;
    - every `cf_`/`cm_` bone's local transform;
    - the two eye-highlight offsets.
-
-The comparison with `SourceShapeDomain` follows once the capture exists.
