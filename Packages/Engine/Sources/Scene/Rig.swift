@@ -137,9 +137,19 @@ public struct RigDefinition: Sendable {
         return RigEvaluation(worldMatrices: world, palettes: palettes)
     }
 
+    /// Every element is finite and the bottom row is (0, 0, 0, 1) within 1e-5.
+    /// Four lanes at a time: in each column, `abs(x) < .infinity` is false
+    /// exactly for NaN and ±infinity, and the w lane's `abs(w) < 1e-5`
+    /// (`abs(w - 1)` in the last column, where `x - 0` is `x`) is false for
+    /// those too. So this returns what the former element loop (`isFinite`
+    /// on all 16 elements, then the four w checks) returned for every input;
+    /// `RigFiniteAffineTests` keeps that loop as its reference. It runs for
+    /// every node twice and every palette entry of each `evaluate`.
     public static func isFiniteAffine(_ matrix: float4x4) -> Bool {
-        for column in 0..<4 { for row in 0..<4 where !matrix[column][row].isFinite { return false } }
-        return abs(matrix[0].w) < 1e-5 && abs(matrix[1].w) < 1e-5 && abs(matrix[2].w) < 1e-5 && abs(matrix[3].w - 1) < 1e-5
+        let limit = SIMD4<Float>(.infinity, .infinity, .infinity, 1e-5)
+        let x = abs(matrix.columns.0) .< limit, y = abs(matrix.columns.1) .< limit
+        let z = abs(matrix.columns.2) .< limit, w = abs(matrix.columns.3 - SIMD4<Float>(0, 0, 0, 1)) .< limit
+        return all(x .& y .& z .& w)
     }
 }
 

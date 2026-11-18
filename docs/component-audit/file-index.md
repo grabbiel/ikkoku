@@ -46,7 +46,7 @@ bookkeeping, not a new full source audit.
 | Generated asset / catalog / fixture | 205 |
 | Reference host / controlled fixture | 37 |
 | Runtime / shared shader declaration | 233 |
-| Test / validation | 227 |
+| Test / validation | 228 |
 | Public synthetic body/face input fixture | 1 |
 
 ## App / gameplay / plugins
@@ -863,6 +863,7 @@ Feature assessment: [renderer-and-foundation.md](renderer-and-foundation.md).
 | [Packages/Engine/Tests/EngineTests/ResourceStoreUploadTests.swift](../../Packages/Engine/Tests/EngineTests/ResourceStoreUploadTests.swift) | Test / upload queue registry, completion before handout, call order and many-store saturation |
 | [Packages/Engine/Tests/EngineTests/RendererLimitsTests.swift](../../Packages/Engine/Tests/EngineTests/RendererLimitsTests.swift) | Test / validation |
 | [Packages/Engine/Tests/EngineTests/RigTests.swift](../../Packages/Engine/Tests/EngineTests/RigTests.swift) | Test / validation |
+| [Packages/Engine/Tests/EngineTests/RigFiniteAffineTests.swift](../../Packages/Engine/Tests/EngineTests/RigFiniteAffineTests.swift) | Test / validation |
 | [Packages/Engine/Tests/EngineTests/SourceAvatarTests.swift](../../Packages/Engine/Tests/EngineTests/SourceAvatarTests.swift) | Test / validation |
 | [Packages/Engine/Tests/EngineTests/SourceMaleAvatarTests.swift](../../Packages/Engine/Tests/EngineTests/SourceMaleAvatarTests.swift) | Test / validation |
 | [Packages/Engine/Tests/EngineTests/SourceMorphGPUTests.swift](../../Packages/Engine/Tests/EngineTests/SourceMorphGPUTests.swift) | Test / validation |
