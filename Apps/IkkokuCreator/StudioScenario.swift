@@ -536,6 +536,13 @@ struct StudioScenario: Decodable {
             let unlitDraws: Int?
             let silhouetteDraws: Int?
             let optionDraws: Int?
+            /// Draws by the map's ambient, with the realtime sun, receiving its
+            /// shadow, receiving per vertex, and the shadow map's casters (slice 5).
+            let probeLitDraws: Int?
+            let sunLitDraws: Int?
+            let receivingDraws: Int?
+            let perVertexReceiveDraws: Int?
+            let sunCasters: Int?
             let lineContains: String?
             let lineAbsent: String?
             let loading: Bool?
@@ -1225,7 +1232,12 @@ struct StudioScenario: Decodable {
                                              ("block images", census.blockImages, check.blockImages),
                                              ("unlit draws", census.unlitDraws, check.unlitDraws),
                                              ("silhouette draws", census.silhouetteDraws, check.silhouetteDraws),
-                                             ("option draws", census.optionDraws, check.optionDraws)] {
+                                             ("option draws", census.optionDraws, check.optionDraws),
+                                             ("ambient-lit draws", census.probeLitDraws, check.probeLitDraws),
+                                             ("sun-lit draws", census.sunLitDraws, check.sunLitDraws),
+                                             ("shadow-receiving draws", census.receivingDraws, check.receivingDraws),
+                                             ("per-vertex receiving draws", census.perVertexReceiveDraws, check.perVertexReceiveDraws),
+                                             ("sun casters", census.sunCasters, check.sunCasters)] {
                 if let expected, actual != expected { problems.append("assert sourceMap: \(actual) \(name), expected \(expected)") }
             }
             if let expected = check.loading, census.loading != expected {
@@ -1248,7 +1260,7 @@ struct StudioScenario: Decodable {
                     if !nothing, id == 0 { problems.append("assert sourceMap: pick at \(point) found nothing, expected an object") }
                 }
             }
-            details.append("map \(census.map.map(String.init) ?? "none"), \(census.draws) draws (\(census.lightmappedDraws) lightmapped, \(census.particleDraws) particle, \(census.skyDraws) sky, \(census.unlitDraws) unlit, \(census.silhouetteDraws) silhouette, \(census.optionDraws) option), \(census.triangles) triangles, \(census.textureBytes) texture bytes (\(census.lightmapBytes) lightmaps, \(census.cubeBytes) sky cubes, \(census.blockImages) BC images), line \(census.line ?? "none")")
+            details.append("map \(census.map.map(String.init) ?? "none"), \(census.draws) draws (\(census.lightmappedDraws) lightmapped, \(census.particleDraws) particle, \(census.skyDraws) sky, \(census.unlitDraws) unlit, \(census.silhouetteDraws) silhouette, \(census.optionDraws) option; \(census.probeLitDraws) by ambient, \(census.sunLitDraws) sun-lit, \(census.receivingDraws) receiving (\(census.perVertexReceiveDraws) per vertex), \(census.sunCasters) sun casters, shadow strength \(census.sunShadowStrength)), \(census.triangles) triangles, \(census.textureBytes) texture bytes (\(census.lightmapBytes) lightmaps, \(census.cubeBytes) sky cubes, \(census.blockImages) BC images), line \(census.line ?? "none")")
         }
 
         /// An object's world displacement from a `captureObject` position, read

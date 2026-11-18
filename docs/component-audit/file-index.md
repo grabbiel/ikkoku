@@ -23,7 +23,7 @@ branch was tested or every asset matches the original game. Feature status,
 specific comments and pending tasks are in the linked reports. Shared behavior
 may be discussed in more than one report; one primary owner is listed here.
 
-**1106 files indexed; 1106 assigned; 0 unassigned.**
+**1109 files indexed; 1109 assigned; 0 unassigned.**
 
 Counts include the website and clothes-group additions listed below. Runtime and
 test totals include their specialized role descriptions; this is inventory
@@ -33,7 +33,7 @@ bookkeeping, not a new full source audit.
 | --- | ---: |
 | [App / gameplay / plugins](app-gameplay-and-plugins.md) | 110 |
 | [Character / Maker / mods](character-and-mods.md) | 135 |
-| [Studio / IK / animation](studio.md) | 261 |
+| [Studio / IK / animation](studio.md) | 264 |
 | [Renderer / foundation / assets](renderer-and-foundation.md) | 368 |
 | [Toolchain / verification / historical docs](toolchain-and-verification.md) | 222 |
 
@@ -45,8 +45,8 @@ bookkeeping, not a new full source audit.
 | Documentation / historical evidence | 65 |
 | Generated asset / catalog / fixture | 205 |
 | Reference host / controlled fixture | 38 |
-| Runtime / shared shader declaration | 239 |
-| Test / validation | 236 |
+| Runtime / shared shader declaration | 240 |
+| Test / validation | 238 |
 | Public synthetic body/face input fixture | 1 |
 
 ## App / gameplay / plugins
@@ -374,6 +374,7 @@ Feature assessment: [studio.md](studio.md).
 | [Packages/Engine/Sources/Studio/SourceStudioLookData.swift](../../Packages/Engine/Sources/Studio/SourceStudioLookData.swift) | Runtime / shared shader declaration |
 | [Packages/Engine/Sources/Studio/SourceStudioMap.swift](../../Packages/Engine/Sources/Studio/SourceStudioMap.swift) | Runtime / shared shader declaration |
 | [Packages/Engine/Sources/Studio/SourceStudioMapLightmaps.swift](../../Packages/Engine/Sources/Studio/SourceStudioMapLightmaps.swift) | Runtime / shared shader declaration |
+| [Packages/Engine/Sources/Studio/SourceStudioMapLighting.swift](../../Packages/Engine/Sources/Studio/SourceStudioMapLighting.swift) | Runtime / shared shader declaration |
 | [Packages/Engine/Sources/Studio/SourceStudioMapSky.swift](../../Packages/Engine/Sources/Studio/SourceStudioMapSky.swift) | Runtime / shared shader declaration |
 | [Packages/Engine/Sources/Studio/SourceStudioMapUnlitDraws.swift](../../Packages/Engine/Sources/Studio/SourceStudioMapUnlitDraws.swift) | Runtime / shared shader declaration |
 | [Packages/Engine/Sources/Studio/SourceStudioNeckLook.swift](../../Packages/Engine/Sources/Studio/SourceStudioNeckLook.swift) | Runtime / shared shader declaration |
@@ -412,6 +413,7 @@ Feature assessment: [studio.md](studio.md).
 | [Packages/Engine/Tests/EngineTests/KoikatsuLegacySceneTests.swift](../../Packages/Engine/Tests/EngineTests/KoikatsuLegacySceneTests.swift) | Test / validation |
 | [Packages/Engine/Tests/EngineTests/KoikatsuSceneCorpusDigestTests.swift](../../Packages/Engine/Tests/EngineTests/KoikatsuSceneCorpusDigestTests.swift) | Test / validation |
 | [Packages/Engine/Tests/EngineTests/KoikatsuSceneDocumentTests.swift](../../Packages/Engine/Tests/EngineTests/KoikatsuSceneDocumentTests.swift) | Test / validation |
+| [Packages/Engine/Tests/EngineTests/MapLightingTestBindings.swift](../../Packages/Engine/Tests/EngineTests/MapLightingTestBindings.swift) | Test / validation |
 | [Packages/Engine/Tests/EngineTests/SourceDynamicBoneParityTests.swift](../../Packages/Engine/Tests/EngineTests/SourceDynamicBoneParityTests.swift) | Test / validation |
 | [Packages/Engine/Tests/EngineTests/SourceDynamicBoneTests.swift](../../Packages/Engine/Tests/EngineTests/SourceDynamicBoneTests.swift) | Test / validation |
 | [Packages/Engine/Tests/EngineTests/SourceEulerCommitTests.swift](../../Packages/Engine/Tests/EngineTests/SourceEulerCommitTests.swift) | Test / validation |
@@ -453,6 +455,7 @@ Feature assessment: [studio.md](studio.md).
 | [Packages/Engine/Tests/EngineTests/SourceStudioLookDataTests.swift](../../Packages/Engine/Tests/EngineTests/SourceStudioLookDataTests.swift) | Test / validation |
 | [Packages/Engine/Tests/EngineTests/SourceStudioMapLightmapTests.swift](../../Packages/Engine/Tests/EngineTests/SourceStudioMapLightmapTests.swift) | Test / validation |
 | [Packages/Engine/Tests/EngineTests/SourceStudioMapSkyTests.swift](../../Packages/Engine/Tests/EngineTests/SourceStudioMapSkyTests.swift) | Test / validation |
+| [Packages/Engine/Tests/EngineTests/SourceStudioMapSunTests.swift](../../Packages/Engine/Tests/EngineTests/SourceStudioMapSunTests.swift) | Test / validation |
 | [Packages/Engine/Tests/EngineTests/SourceStudioMapUnlitDrawTests.swift](../../Packages/Engine/Tests/EngineTests/SourceStudioMapUnlitDrawTests.swift) | Test / validation |
 | [Packages/Engine/Tests/EngineTests/SourceStudioMapTests.swift](../../Packages/Engine/Tests/EngineTests/SourceStudioMapTests.swift) | Test / validation |
 | [Packages/Engine/Tests/EngineTests/SourceStudioNeckLookRuntimeTests.swift](../../Packages/Engine/Tests/EngineTests/SourceStudioNeckLookRuntimeTests.swift) | Test / validation |

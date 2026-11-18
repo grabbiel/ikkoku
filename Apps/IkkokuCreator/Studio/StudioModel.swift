@@ -484,6 +484,9 @@ final class StudioModel: ViewportInputHandler, LivePacedHandler {
     @ObservationIgnored var sourceMapAsset: SourceStudioMapAsset?
     @ObservationIgnored var sourceMapLoad: SourceStudioMapLoad?
     @ObservationIgnored var sourceMapItems: [RenderItem]?
+    /// Maps slice 5: the request's ambient, sun and sun casters (nil for an
+    /// export without map lighting), placed with `sourceMapItems`.
+    @ObservationIgnored var sourceMapLighting: MapLighting?
     @ObservationIgnored var sourceMapFailure: Error?
     @ObservationIgnored var sourceMapInstallSeconds: Double = 0
     /// What `sourceMapLine` was last built from, so `refresh()` rebuilds it
@@ -4228,6 +4231,8 @@ final class StudioModel: ViewportInputHandler, LivePacedHandler {
         if bounds.isEmpty { bounds = AABB(min: Float3(-1, 0, -1), max: Float3(1, 2, 1)) }
         var f = RenderFrame(camera: viewCamera, mainLight: effectiveMainLight, lights: lights, items: items, gizmos: gizmos, effects: doc.effects, sceneBounds: bounds)
         f.skinSets = skinSets
+        // Maps slice 5: the map's ambient and sun, only while its draws are.
+        if !mapItems.isEmpty { f.mapLighting = sourceMapLighting }
         frame = f
         host.renderer.submit(f)
         if liveSourceShaders { publishLiveSourceShaderStatus(liveLines) }
