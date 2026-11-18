@@ -263,3 +263,30 @@ private func expectedLookupIndices(_ document: StudioDocument) -> StudioDocument
         #expect(StudioDocument.Lookup(document.objects).indices() == before, "seed \(seed)")
     }
 }
+
+/// #387 round 3 (F7): `flattenedIndices()` is `flattened()` by index, on the
+/// malformed hierarchies (repeated ids, missing parents, self-parents,
+/// cycles) and on well-formed nested ones.
+@Test func studioFlattenedIndicesMatchFlattened() {
+    var nested = 0
+    for seed in UInt64(1)...256 {
+        var rng = LookupSeed(state: seed)
+        var (document, _, _) = malformedStudioDocument(&rng, maxCount: seed % 4 == 0 ? 60 : 24)
+        if seed % 2 == 0 {
+            // Well formed: every parent is an earlier object or none.
+            for index in document.objects.indices {
+                document.objects[index].id = UUID()
+                document.objects[index].parent = index > 0 && Int.random(in: 0..<4, using: &rng) != 0
+                    ? document.objects[Int.random(in: 0..<index, using: &rng)].id : nil
+            }
+        }
+        let rows = document.flattened()
+        let indexed = document.flattenedIndices()
+        #expect(indexed.count == rows.count, "seed \(seed)")
+        for (row, entry) in zip(rows, indexed) {
+            #expect(document.objects[entry.index] == row.object && entry.depth == row.depth, "seed \(seed)")
+            if entry.depth > 1 { nested += 1 }
+        }
+    }
+    #expect(nested > 0)
+}

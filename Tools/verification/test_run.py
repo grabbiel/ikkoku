@@ -638,7 +638,9 @@ SCENARIO_OPS = {"select", "setVisible", "rename", "toggleCamera", "toggleRoute",
                 "export", "reimport", "assert", "assertRejected", "loadNativePlugin", "unloadPlugins", "measureAccessoryLabels",
                 "delete", "setParent", "exportRejected", "duplicate", "addFolder", "addCamera", "addLight",
                 "focus", "selectRoutePoint", "dragRoutePoint", "captureRoute", "editRoute", "setShowSourceMap",
-                "setUnlimitedLights"}
+                "setUnlimitedLights",
+                # Added for #387 round 3 (the workspace rows a selection change patches).
+                "deselect", "assertWorkspaceRows"}
 
 # R7 phase 2, item 7: the window-run inspector checks (`"inspectorUI": {"steps": [...]}`).
 INSPECTOR_UI_OPS = {"select", "deselect", "focus", "type", "delete", "undo", "redo", "cycle",

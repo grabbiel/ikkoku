@@ -363,6 +363,25 @@ public struct StudioDocument: Codable, Sendable, Equatable {
         }
         return out
     }
+
+    /// `flattened()` as indices into `objects` (#387 round 3): the same
+    /// rows in the same order, with the same rule for a repeated id (its
+    /// first row in that order) and for objects in a cycle or under a
+    /// missing parent (left out), without copying any object.
+    public func flattenedIndices() -> [(index: Int, depth: Int)] {
+        var children: [UUID?: [Int]] = [:]
+        for index in objects.indices { children[objects[index].parent, default: []].append(index) }
+        var out: [(index: Int, depth: Int)] = []
+        out.reserveCapacity(objects.count)
+        var stack = (children[nil] ?? []).reversed().map { ($0, 0) }
+        var visited = Set<UUID>(minimumCapacity: objects.count)
+        while let (index, depth) = stack.popLast() {
+            guard visited.insert(objects[index].id).inserted else { continue }
+            out.append((index, depth))
+            stack.append(contentsOf: (children[objects[index].id] ?? []).reversed().map { ($0, depth + 1) })
+        }
+        return out
+    }
 }
 
 extension StudioDocument {

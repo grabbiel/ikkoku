@@ -22,7 +22,7 @@
         "IKKOKU_STUDIO_SCENARIO_REPORT": ".local/verification/reports/studio-scenario-visibility-folder.json"
       },
       "referenceTier": "app-smoke",
-      "tolerance": "Hides source object key 622 (folder), exports the original scene and reimports it: the folder reads back hidden and the character inside it stays visible. The CharaStudio side of ST-T03 visibility (reloading the exported scene in the original player) is not covered here.",
+      "tolerance": "Hides source object key 622 (folder), exports the original scene and reimports it: the folder reads back hidden and the character inside it stays visible. The CharaStudio side of ST-T03 visibility (reloading the exported scene in the original player) is not covered here. On the way (#387 round 3), the published workspace rows equal a full rebuild after each selection change: the character inside the hidden folder, the hidden folder, the same again and none before the export; after the reimport, shown again, renamed, and none.",
       "artifacts": [
         {
           "path": ".local/verification/reports/studio-scenario-visibility-folder.json",

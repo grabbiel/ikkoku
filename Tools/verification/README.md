@@ -266,7 +266,9 @@ and names the JSON report to write (`{"steps":[{"op","ok","detail"}],
 (`sourceObjectKey`), never by runtime UUIDs; numeric compares use a 1e-5
 tolerance. A failing `assert`/edit step is recorded and the run
 continues; a failing `export`/`reimport` stops it. Both write only under
-`.local/`. Ops: `select`, `setVisible`, `rename`, `toggleCamera`,
+`.local/`. Ops: `select`, `deselect` (clears the selection), `assertWorkspaceRows`
+(the workspace tree's published rows must equal a full rebuild, which a
+selection change only patches; #387 round 3), `setVisible`, `rename`, `toggleCamera`,
 `toggleRoute`, `undo`, `redo`, `newScene`, `setFace`, `setBody`
 `{key,index,value}`, `setColor` `{key,id,rgba[4]}`, `resetShape`
 `{key,face:true|false}` (shared with the inspector; clears only the selected

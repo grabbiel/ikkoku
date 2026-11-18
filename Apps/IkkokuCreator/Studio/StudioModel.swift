@@ -158,14 +158,21 @@ final class StudioModel: ViewportInputHandler, LivePacedHandler {
 
     /// Publishes the workspace, toolbar and timeline states (C4), each only
     /// when it differs. The workspace rows are rebuilt only when their inputs
-    /// changed (`workspaceKey`): building them copies every object, about
-    /// 0.1 ms a refresh in a 32-object scene.
+    /// changed (`workspaceKey`), and a change of the selection alone only
+    /// rewrites the rows' `selected` flags (#387 round 3): a rebuild was
+    /// 8-9 ms in a 3,769-object scene.
     private func refreshPanelState() {
         PerfTrace.measure(.studioPanelState, "StudioPanelState") {
             let key = workspaceKey()
-            if key != workspaceStateKey {
+            // `key != workspaceStateKey`, split into the rows' inputs and the
+            // selection; every field of `StudioWorkspaceKey` but `selection`
+            // goes in `rowsSame`.
+            let old = workspaceStateKey
+            let rowsSame = old.map { $0.items == key.items && $0.sceneSHA256 == key.sceneSHA256 && $0.activeCamera == key.activeCamera } ?? false
+            assert((rowsSame && old?.selection == key.selection) == (old == key), "StudioWorkspaceKey has a field refreshPanelState does not compare")
+            if !rowsSame || old?.selection != key.selection {
                 workspaceStateKey = key
-                let workspace = StudioWorkspaceState(model: self)
+                let workspace = rowsSame ? workspaceStateStorage.selecting(key.selection) : StudioWorkspaceState(model: self)
                 if workspace != workspaceStateStorage { withMutation(keyPath: \.workspaceState) { workspaceStateStorage = workspace } }
             }
             let toolbar = StudioToolbarDocumentState(model: self)
@@ -597,13 +604,20 @@ final class StudioModel: ViewportInputHandler, LivePacedHandler {
     /// camera reads the same everywhere; any other object its name. The row
     /// draws `keyDetail` ("camera 2") under the name.
     func workspaceLabel(of object: StudioObject, sceneSHA256: String?) -> (title: String, keyDetail: String?, sourceCamera: Bool) {
-        guard let entry = sourceCameras[object.id], entry.sceneSHA256 == sceneSHA256 else { return (object.name, nil, false) }
+        workspaceLabel(id: object.id, name: object.name, sourceObjectKey: object.sourceObjectKey,
+                       sourceDuplicateOf: object.sourceDuplicateOf, sceneSHA256: sceneSHA256)
+    }
+    /// `workspaceLabel(of:sceneSHA256:)` from the fields it reads, for the
+    /// rows built in place (#387 round 3).
+    func workspaceLabel(id: UUID, name: String, sourceObjectKey: Int32?, sourceDuplicateOf: Int32?,
+                        sceneSHA256: String?) -> (title: String, keyDetail: String?, sourceCamera: Bool) {
+        guard let entry = sourceCameras[id], entry.sceneSHA256 == sceneSHA256 else { return (name, nil, false) }
         // A copy has no record key until export; it names the camera it copies.
-        if object.sourceObjectKey == nil, object.sourceDuplicateOf != nil {
-            return ("\(object.name) (copy of camera \(entry.objectKey))", "copy of camera \(entry.objectKey)", true)
+        if sourceObjectKey == nil, sourceDuplicateOf != nil {
+            return ("\(name) (copy of camera \(entry.objectKey))", "copy of camera \(entry.objectKey)", true)
         }
-        return (SourceStudioCameraLabel.title(name: object.name, key: entry.objectKey),
-                SourceStudioCameraLabel.keyDetail(name: object.name, key: entry.objectKey), true)
+        return (SourceStudioCameraLabel.title(name: name, key: entry.objectKey),
+                SourceStudioCameraLabel.keyDetail(name: name, key: entry.objectKey), true)
     }
     /// The inputs of `StudioWorkspaceState` (see `StudioWorkspaceKey`), read
     /// in place from the document without copying its objects.

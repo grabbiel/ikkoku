@@ -63,7 +63,8 @@ struct WorkspaceEntry: Equatable, Identifiable {
     let kind: StudioObjectKind
     let visible: Bool
     let depth: Int
-    let selected: Bool
+    /// The one field a selection change rewrites in place (`StudioWorkspaceState.selecting`).
+    var selected: Bool
     let cameraPlaceholder: Bool
     /// A named source camera's key, "camera 2", drawn under its name.
     var keyDetail: String? = nil
