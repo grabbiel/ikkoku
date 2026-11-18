@@ -29,7 +29,7 @@ struct StudioScenario: Decodable {
         /// `"captureIKPose"`, `"editDuringAdvance"`, `"backgroundBuild"`, `"delete"`, `"setParent"`, `"duplicate"`,
         /// `"addFolder"`, `"addCamera"`, `"addLight"`, `"export"`, `"exportRejected"`, `"reimport"`,
         /// `"focus"`, `"selectRoutePoint"`, `"dragRoutePoint"`, `"editRoute"`, `"captureRoute"`, `"setShowSourceMap"`, `"setUnlimitedLights"`,
-        /// `"assert"`, `"assertRejected"`.
+        /// `"deselect"`, `"assertWorkspaceRows"`, `"assert"`, `"assertRejected"`.
         let op: String
         let key: Int32?
         /// ST-T03: with `key`, address the n-th copy (document order) of that
@@ -1755,6 +1755,23 @@ struct StudioScenario: Decodable {
                 guard let id = object(step) else { record(step, false, "select: no object with source key \(step.key ?? -1)"); continue }
                 studio.selection = id
                 record(step, true, "selected source key \(step.key!)")
+            case "deselect":
+                studio.selection = nil
+                record(step, true, "selection cleared")
+            case "assertWorkspaceRows":
+                // #387 round 3: the published workspace rows, a selection
+                // change's patched ones included, equal a full rebuild.
+                guard StudioPanelStateMode.current.publishes else { record(step, true, "workspace rows read from the document (IKKOKU_PERF_PANEL_STATE=document)"); continue }
+                let published = studio.workspaceState, fresh = StudioWorkspaceState(model: studio)
+                let selected = published.entries.filter(\.selected).map { row in
+                    studio.doc.object(row.id)?.sourceObjectKey.map { "key \($0)" } ?? row.name
+                }
+                if published == fresh {
+                    record(step, true, "workspace rows equal a rebuild: \(published.entries.count) rows, selected \(selected.isEmpty ? "none" : selected.joined(separator: ", "))")
+                } else {
+                    let differing = zip(published.entries, fresh.entries).filter { $0 != $1 }.count
+                    record(step, false, "assertWorkspaceRows: published rows differ from a rebuild (\(published.entries.count) vs \(fresh.entries.count) rows, \(differing) differ)")
+                }
             case "setVisible":
                 guard let id = object(step) else { record(step, false, "setVisible: no object with source key \(step.key ?? -1)"); continue }
                 guard let visible = step.visible else { record(step, false, "setVisible: missing visible"); continue }

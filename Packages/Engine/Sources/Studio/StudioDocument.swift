@@ -372,6 +372,142 @@ public struct StudioDocument: Codable, Sendable, Equatable {
         }
         return out
     }
+
+    /// `flattened()` as indices into `objects` (#387 round 3): the same
+    /// rows in the same order, with the same rule for a repeated id (its
+    /// first row in that order) and for objects in a cycle or under a
+    /// missing parent (left out), without copying any object.
+    public func flattenedIndices() -> [(index: Int, depth: Int)] {
+        var children: [UUID?: [Int]] = [:]
+        for index in objects.indices { children[objects[index].parent, default: []].append(index) }
+        var out: [(index: Int, depth: Int)] = []
+        out.reserveCapacity(objects.count)
+        var stack = (children[nil] ?? []).reversed().map { ($0, 0) }
+        var visited = Set<UUID>(minimumCapacity: objects.count)
+        while let (index, depth) = stack.popLast() {
+            guard visited.insert(objects[index].id).inserted else { continue }
+            out.append((index, depth))
+            stack.append(contentsOf: (children[objects[index].id] ?? []).reversed().map { ($0, depth + 1) })
+        }
+        return out
+    }
+}
+
+extension StudioDocument {
+    /// One object list's answers to `object(_:)`, `index(of:)`, `isVisible(_:)`
+    /// and `isDescendant(_:of:)` by hash instead of a scan of `objects` per
+    /// call, so a walk over every object (the Studio frame rebuild, the
+    /// inspector's parent list) is O(N · depth) instead of O(N² · depth)
+    /// (#383). The answers are the document functions' own, including for a
+    /// repeated id (its first object, as `objects.first` finds it), a missing
+    /// parent and a cycle (the same visited-set walks).
+    ///
+    /// It holds a copy of the list it was built from and is never updated:
+    /// build it where the list is fixed for the walk and drop it after, so
+    /// there is nothing to invalidate when the document changes.
+    public struct Lookup: Sendable {
+        public let objects: [StudioObject]
+        private let indexByID: [UUID: Int]
+
+        public init(_ objects: [StudioObject]) {
+            self.objects = objects
+            var indexByID = [UUID: Int](minimumCapacity: objects.count)
+            // Backwards, so the first object of a repeated id is the one kept.
+            for index in objects.indices.reversed() { indexByID[objects[index].id] = index }
+            self.indexByID = indexByID
+        }
+
+        public func index(of id: UUID) -> Int? { indexByID[id] }
+        public func object(_ id: UUID) -> StudioObject? { indexByID[id].map { objects[$0] } }
+
+        /// Every listed object's first index and its parent's, for a walk
+        /// by index that neither hashes ids nor copies objects (#387 round
+        /// 3). `first[i]` is `index(of: objects[i].id)`; `parent[i]` is
+        /// `index(of:)` of `objects[i]`'s parent id, `noParent` for a root
+        /// and `missingParent` for a parent id the list lacks. Like the
+        /// lookup, it answers for the list it was built from only.
+        public struct Indices: Sendable, Equatable {
+            public static let noParent = -1, missingParent = -2
+            public let first: [Int]
+            public let parent: [Int]
+            public init(first: [Int], parent: [Int]) {
+                self.first = first
+                self.parent = parent
+            }
+        }
+
+        /// `Indices` for this list, in one pass of 2N hash lookups.
+        public func indices() -> Indices {
+            var first: [Int] = [], parent: [Int] = []
+            first.reserveCapacity(objects.count)
+            parent.reserveCapacity(objects.count)
+            for index in objects.indices {
+                first.append(indexByID[objects[index].id] ?? index) // every listed id is there
+                parent.append(objects[index].parent.map { indexByID[$0] ?? Indices.missingParent } ?? Indices.noParent)
+            }
+            return Indices(first: first, parent: parent)
+        }
+
+        /// `StudioDocument.isVisible(_:)`.
+        public func isVisible(_ id: UUID) -> Bool {
+            var cur: UUID? = id
+            var visited = Set<UUID>()
+            while let c = cur {
+                guard visited.insert(c).inserted, let i = indexByID[c], objects[i].visible else { return false }
+                cur = objects[i].parent
+            }
+            return true
+        }
+
+        /// `isVisible(_:)` for every object of the list in one O(N) pass,
+        /// for a walk that tests them all (#387). Entry `i` is
+        /// `isVisible(objects[i].id)`: every object of a repeated id gets
+        /// its first object's answer, and objects in or below a cycle or
+        /// under a missing parent get `false`, as there.
+        public func visibleFlags() -> [Bool] { visibleFlags(indices()) }
+
+        /// `visibleFlags()` from this list's `indices()`, already built for
+        /// the walk that also needs them.
+        public func visibleFlags(_ indices: Indices) -> [Bool] {
+            precondition(indices.first.count == objects.count, "Studio lookup indices built from another object list")
+            // Per first index: 0 not reached, 1 on the current chain,
+            // 2 visible, 3 hidden. Every object on one chain shares its end's
+            // answer: each one walked on was visible itself.
+            var state = [UInt8](repeating: 0, count: objects.count)
+            var chain: [Int] = []
+            for start in objects.indices {
+                let index = indices.first[start]
+                guard state[index] == 0 else { continue }
+                chain.removeAll(keepingCapacity: true)
+                var current = index
+                var answer: UInt8 = 3
+                while true {
+                    if state[current] >= 2 { answer = state[current]; break }
+                    if state[current] == 1 { break } // a cycle
+                    state[current] = 1
+                    chain.append(current)
+                    guard objects[current].visible else { break }
+                    let next = indices.parent[current]
+                    if next == Indices.noParent { answer = 2; break }
+                    if next == Indices.missingParent { break }
+                    current = next
+                }
+                for i in chain { state[i] = answer }
+            }
+            return indices.first.map { state[$0] == 2 }
+        }
+
+        /// `StudioDocument.isDescendant(_:of:)`.
+        public func isDescendant(_ id: UUID, of ancestor: UUID) -> Bool {
+            var cur = indexByID[id].flatMap { objects[$0].parent }
+            var visited = Set<UUID>()
+            while let c = cur, visited.insert(c).inserted {
+                if c == ancestor { return true }
+                cur = indexByID[c].flatMap { objects[$0].parent }
+            }
+            return false
+        }
+    }
 }
 
 public enum StudioHierarchyError: Error, CustomStringConvertible {

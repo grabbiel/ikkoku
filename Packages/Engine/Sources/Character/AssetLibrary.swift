@@ -30,7 +30,10 @@ public final class LoadedAsset: @unchecked Sendable {
     public let skeleton: Skeleton?
     public let parts: [Part]
     private let resources: ResourceStore
-    private var imageHandles: [String: TextureHandle] = [:]
+    /// Keyed by `imageSlot` (#387): one to one with the ResourceStore key
+    /// `imageTexture` builds, since `url` never changes. Never invalidated,
+    /// like the string-keyed cache it replaces.
+    private var imageHandles: [Int: TextureHandle] = [:]
     private let lock = NSLock()
 
     init(url: URL, asset: GLTFAsset, resources: ResourceStore, targetSkeleton: Skeleton? = nil, namePrefix: String? = nil) throws {
@@ -134,16 +137,22 @@ public final class LoadedAsset: @unchecked Sendable {
     }
 
     /// Texture for an embedded glTF image, cached per (image, colour space).
+    /// A cached image builds no key string: the Studio frame rebuild asks
+    /// for every item part's texture on every refresh (#387).
     public func imageTexture(_ index: Int, srgb: Bool = true) -> TextureHandle? {
         guard index < asset.images.count else { return nil }
-        let key = "\(url.path)#img\(index)#\(srgb)"
+        let slot = Self.imageSlot(index, srgb: srgb)
         lock.lock(); defer { lock.unlock() }
-        if let h = imageHandles[key] { return h }
+        if let h = imageHandles[slot] { return h }
         let img = asset.images[index]
+        let key = "\(url.path)#img\(index)#\(srgb)"
         guard !img.data.isEmpty, let h = try? resources.texture(data: img.data, key: key, srgb: srgb) else { return nil }
-        imageHandles[key] = h
+        imageHandles[slot] = h
         return h
     }
+
+    /// The (image, colour space) pair as one integer: `index * 2`, plus 1 for sRGB.
+    static func imageSlot(_ index: Int, srgb: Bool) -> Int { index &* 2 &+ (srgb ? 1 : 0) }
 }
 
 /// Loads catalog + assets on demand and caches them. Safe to call from the main thread only.
