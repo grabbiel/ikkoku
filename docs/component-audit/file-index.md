@@ -23,7 +23,7 @@ branch was tested or every asset matches the original game. Feature status,
 specific comments and pending tasks are in the linked reports. Shared behavior
 may be discussed in more than one report; one primary owner is listed here.
 
-**1127 files indexed; 1127 assigned; 0 unassigned.**
+**1128 files indexed; 1128 assigned; 0 unassigned.**
 
 Counts include the website and clothes-group additions listed below. Runtime and
 test totals include their specialized role descriptions; this is inventory
@@ -35,13 +35,13 @@ bookkeeping, not a new full source audit.
 | [Character / Maker / mods](character-and-mods.md) | 145 |
 | [Studio / IK / animation](studio.md) | 267 |
 | [Renderer / foundation / assets](renderer-and-foundation.md) | 372 |
-| [Toolchain / verification / historical docs](toolchain-and-verification.md) | 223 |
+| [Toolchain / verification / historical docs](toolchain-and-verification.md) | 224 |
 
 | File role | Files |
 | --- | ---: |
 | App resource metadata / icon | 16 |
 | Build / repository configuration | 9 |
-| Conversion / recovery / verification tool | 261 |
+| Conversion / recovery / verification tool | 262 |
 | Documentation / historical evidence | 65 |
 | Generated asset / catalog / fixture | 205 |
 | Reference host / controlled fixture | 39 |
@@ -1043,6 +1043,7 @@ Feature assessment: [toolchain-and-verification.md](toolchain-and-verification.m
 | [Tools/verification/scenarios/camera-deactivate.json](../../Tools/verification/scenarios/camera-deactivate.json) | Conversion / recovery / verification tool |
 | [Tools/verification/scenarios/camera-load-winner.json](../../Tools/verification/scenarios/camera-load-winner.json) | Conversion / recovery / verification tool |
 | [Tools/verification/scenarios/camera-rename.json](../../Tools/verification/scenarios/camera-rename.json) | Conversion / recovery / verification tool |
+| [Tools/verification/scenarios/camera-slot-keys.json](../../Tools/verification/scenarios/camera-slot-keys.json) | Conversion / recovery / verification tool |
 | [Tools/verification/scenarios/charastudio-camera-switch.json](../../Tools/verification/scenarios/charastudio-camera-switch.json) | Conversion / recovery / verification tool |
 | [Tools/verification/scenarios/charastudio-fk-edit.json](../../Tools/verification/scenarios/charastudio-fk-edit.json) | Conversion / recovery / verification tool |
 | [Tools/verification/scenarios/charastudio-hide-rename.json](../../Tools/verification/scenarios/charastudio-hide-rename.json) | Conversion / recovery / verification tool |
