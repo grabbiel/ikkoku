@@ -23,7 +23,7 @@ branch was tested or every asset matches the original game. Feature status,
 specific comments and pending tasks are in the linked reports. Shared behavior
 may be discussed in more than one report; one primary owner is listed here.
 
-**1122 files indexed; 1122 assigned; 0 unassigned.**
+**1125 files indexed; 1125 assigned; 0 unassigned.**
 
 Counts include the website and clothes-group additions listed below. Runtime and
 test totals include their specialized role descriptions; this is inventory
@@ -32,8 +32,8 @@ bookkeeping, not a new full source audit.
 | Primary report | Files |
 | --- | ---: |
 | [App / gameplay / plugins](app-gameplay-and-plugins.md) | 110 |
-| [Character / Maker / mods](character-and-mods.md) | 142 |
-| [Studio / IK / animation](studio.md) | 265 |
+| [Character / Maker / mods](character-and-mods.md) | 143 |
+| [Studio / IK / animation](studio.md) | 267 |
 | [Renderer / foundation / assets](renderer-and-foundation.md) | 372 |
 | [Toolchain / verification / historical docs](toolchain-and-verification.md) | 223 |
 
@@ -45,8 +45,8 @@ bookkeeping, not a new full source audit.
 | Documentation / historical evidence | 65 |
 | Generated asset / catalog / fixture | 205 |
 | Reference host / controlled fixture | 39 |
-| Runtime / shared shader declaration | 244 |
-| Test / validation | 243 |
+| Runtime / shared shader declaration | 245 |
+| Test / validation | 245 |
 | Public synthetic body/face input fixture | 1 |
 
 ## App / gameplay / plugins
@@ -184,6 +184,7 @@ Feature assessment: [character-and-mods.md](character-and-mods.md).
 | [Packages/Engine/Sources/Assets/SourceModCatalog.swift](../../Packages/Engine/Sources/Assets/SourceModCatalog.swift) | Runtime / shared shader declaration |
 | [Packages/Engine/Sources/Assets/SourceModPackage.swift](../../Packages/Engine/Sources/Assets/SourceModPackage.swift) | Runtime / shared shader declaration |
 | [Packages/Engine/Sources/Assets/SourceModProfile.swift](../../Packages/Engine/Sources/Assets/SourceModProfile.swift) | Runtime / shared shader declaration |
+| [Packages/Engine/Sources/Assets/SourceMonoUTF8.swift](../../Packages/Engine/Sources/Assets/SourceMonoUTF8.swift) | Runtime / shared shader declaration |
 | [Packages/Engine/Sources/Assets/SourceMonoWhiteChars.swift](../../Packages/Engine/Sources/Assets/SourceMonoWhiteChars.swift) | Runtime / shared shader declaration |
 | [Packages/Engine/Sources/Character/AssetLibrary.swift](../../Packages/Engine/Sources/Character/AssetLibrary.swift) | Runtime / shared shader declaration |
 | [Packages/Engine/Sources/Character/BodyCoverage.swift](../../Packages/Engine/Sources/Character/BodyCoverage.swift) | Runtime / shared shader declaration |
@@ -445,6 +446,8 @@ Feature assessment: [studio.md](studio.md).
 | [Packages/Engine/Tests/EngineTests/SourceStudioCameraObjectsTests.swift](../../Packages/Engine/Tests/EngineTests/SourceStudioCameraObjectsTests.swift) | Test / validation |
 | [Packages/Engine/Tests/EngineTests/SourceStudioCharacterPreviewTests.swift](../../Packages/Engine/Tests/EngineTests/SourceStudioCharacterPreviewTests.swift) | Test / validation |
 | [Packages/Engine/Tests/EngineTests/SourceStudioCharacterBatchTests.swift](../../Packages/Engine/Tests/EngineTests/SourceStudioCharacterBatchTests.swift) | Test / validation |
+| [Packages/Engine/Tests/EngineTests/SourceStudioCharacterFrameReuseTests.swift](../../Packages/Engine/Tests/EngineTests/SourceStudioCharacterFrameReuseTests.swift) | Test / validation |
+| [Packages/Engine/Tests/EngineTests/GizmoHandleTests.swift](../../Packages/Engine/Tests/EngineTests/GizmoHandleTests.swift) | Test / validation |
 | [Packages/Engine/Tests/EngineTests/SourceStudioDonationCacheTests.swift](../../Packages/Engine/Tests/EngineTests/SourceStudioDonationCacheTests.swift) | Test / validation |
 | [Packages/Engine/Tests/EngineTests/SourceStudioBackgroundBuildsTests.swift](../../Packages/Engine/Tests/EngineTests/SourceStudioBackgroundBuildsTests.swift) | Test / validation |
 | [Packages/Engine/Tests/EngineTests/SourceStudioDynamicsTests.swift](../../Packages/Engine/Tests/EngineTests/SourceStudioDynamicsTests.swift) | Test / validation |

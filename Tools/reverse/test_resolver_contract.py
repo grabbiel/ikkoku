@@ -59,11 +59,20 @@ class ResolverContractTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "Trailing"):
             resolver.record(raw, strict=True)
 
-    def test_exact_dotnet_whitespace_trim(self):
+    def test_mono_white_chars_trim(self):
+        # String.Trim() in the game's Mono: String.WhiteChars, which removes
+        # U+200B and U+FEFF but not U+180E or U+001C-U+001F, at the ends only.
         self.assertEqual(resolver.record(resolver.pack({"ModID": "\u0085\u00a0id\u3000"}))["ModID"], "id")
-        for char in ("\u200b", "\ufeff", "\x1c"):
-            value = char + "id" + char
+        self.assertEqual(resolver.record(resolver.pack({"ModID": "\u200b\ufeffid\u200b\ufeff"}))["ModID"], "id")
+        # #418: a leading EF BB BF decodes to U+FEFF, and Trim() removes it.
+        self.assertTrue(resolver.pack({"ModID": "\ufeffid"}).endswith(b"\xef\xbb\xbfid"))
+        self.assertEqual(resolver.record(resolver.pack({"ModID": "\ufeffid"}))["ModID"], "id")
+        for value in ("\u180eid\u180e", "\x1cid\x1f", "i\u200bd"):
             self.assertEqual(resolver.record(resolver.pack({"ModID": value}))["ModID"], value)
+        self.assertEqual(len(set(resolver.catalog.MONO_WHITE_CHARS)), 27)
+        rule = {"MigrationType": "MigrateAll", "GUIDOld": "old", "GUIDNew": "\ufeffnew\u200b"}
+        migrated = resolver.migrate_record({"ModID": "\u200bold", "Slot": 1, "CategoryNo": 122}, [rule], {"new"})
+        self.assertEqual(migrated["ModID"], "new")
 
     def test_bad_record_types_overflows_null_records_and_truncations(self):
         for value in (None, [], 1, {"Slot": None}, {"Slot": True}, {"Slot": 2**31}, {"LocalSlot": -2**31 - 1},

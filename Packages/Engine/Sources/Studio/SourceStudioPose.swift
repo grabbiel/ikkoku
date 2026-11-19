@@ -280,25 +280,36 @@ public struct SourceStudioPose: Sendable {
     /// evaluations instead of six). Throws exactly when, and with the
     /// message, the three calls would; returns the same pose.
     public func applyingActivations(ik: Transition, fk: Transition, rig: RigDefinition, pose: RigPose) throws -> RigPose {
-        try validate(rig: rig, pose: pose)
+        try evaluatedActivations(ik: ik, fk: fk, rig: rig, pose: pose).pose
+    }
+
+    /// `applyingActivations`, with `rig.evaluate` of the pose it returns
+    /// (#371). Every path evaluates the returned pose last (the input when
+    /// nothing changes it), so this keeps that evaluation instead of
+    /// dropping it; the throws, their order and the pose are the same.
+    public func evaluatedActivations(ik: Transition, fk: Transition, rig: RigDefinition,
+                                     pose: RigPose) throws -> (pose: RigPose, evaluation: RigEvaluation) {
+        var evaluation = try validate(rig: rig, pose: pose)
         var result = pose
         for transition in [ik, fk] where !transition.identityResetNodes.isEmpty {
             for node in transition.identityResetNodes {
                 guard rig.nodes.indices.contains(node) else { throw RigError.invalid("Studio transition targets a different rig.") }
                 result.localMatrices[node] = try replacingRotation(.identity, node: node, rig: rig, matrix: result.localMatrices[node])
             }
-            _ = try rig.evaluate(result)
+            evaluation = try rig.evaluate(result)
         }
-        guard enableFK else { return result }
+        guard enableFK else { return (result, evaluation) }
         for target in targets where target.enabled {
             result.localMatrices[target.node] = try replacingRotation(UnityCoordinates.eulerDegrees(target.rotation),
                 node: target.node, rig: rig, matrix: result.localMatrices[target.node])
         }
-        _ = try rig.evaluate(result)
-        return result
+        evaluation = try rig.evaluate(result)
+        return (result, evaluation)
     }
 
-    private func validate(rig: RigDefinition, pose: RigPose) throws {
+    /// Checks the hierarchy and evaluates `pose`, returning the evaluation.
+    @discardableResult
+    private func validate(rig: RigDefinition, pose: RigPose) throws -> RigEvaluation {
         // The rig this controller was bound to has the same hierarchy by
         // construction; any other rig compares IDs and parents element-wise.
         guard rig.identity === rigIdentity || rig.nodes.count == sourceIDs.count && rig.nodes.indices.allSatisfy({
@@ -306,7 +317,7 @@ public struct SourceStudioPose: Sendable {
         }) else {
             throw RigError.invalid("Studio FK is bound to a different hierarchy.")
         }
-        _ = try rig.evaluate(pose)
+        return try rig.evaluate(pose)
     }
 
     private func replacingRotation(_ rotation: simd_quatf, node: Int, rig: RigDefinition, matrix: float4x4) throws -> float4x4 {

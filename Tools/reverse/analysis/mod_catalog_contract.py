@@ -24,8 +24,20 @@ ACCESSORY_PROPERTY = "ChaFileAccessory.PartsInfo.id"
 WHITESPACE = "\t\n\v\f\r \u0085\u00a0\u1680\u2000\u2001\u2002\u2003\u2004\u2005\u2006\u2007\u2008\u2009\u200a\u2028\u2029\u202f\u205f\u3000"
 
 
+# Sideloader trims every GUID with String.Trim(): in the game's Mono that is
+# String.WhiteChars (Unity-Technologies/mono unity-5.6, String.cs, with its
+# NET_2_0 and NET_2_1 blocks; SourceMonoWhiteChars.swift), 27 entries including
+# U+200B and U+FEFF. The CSV fields above still use WHITESPACE (#421).
+MONO_WHITE_CHARS = "".join(map(chr, [0x09, 0x0A, 0x0B, 0x0C, 0x0D, 0x85, 0x1680, 0x2028, 0x2029, 0x20, 0xA0,
+                                     0x3000, 0xFEFF, 0x202F, 0x205F, *range(0x2000, 0x200C)]))
+
+
 def trim(value: str) -> str:
     return value.strip(WHITESPACE)
+
+
+def trim_guid(value: str) -> str:
+    return value.strip(MONO_WHITE_CHARS)
 
 
 def int32(value: str) -> int:
@@ -122,7 +134,7 @@ def generate_resolution(catalog: dict, guid: str, start_counter: int, properties
         generated = list(original)
         generated[0] = str(counter)
         for property_name in (["Ramp"] if source["categoryNo"] == 432 else properties):
-            records.append({"GUID": trim(guid), "Slot": slot, "LocalSlot": counter,
+            records.append({"GUID": trim_guid(guid), "Slot": slot, "LocalSlot": counter,
                             "Property": property_name, "CategoryNo": source["categoryNo"], "rowOrdinal": ordinal})
         rows.append({"ordinal": ordinal, "sourceSlot": slot, "runtimeLocalSlot": counter,
                      "values": generated, "fields": list_info(source["categoryNo"], source["distributionNo"], source["columns"], generated, keys)})
@@ -138,7 +150,7 @@ def lookup(records: list[dict], *, slot: int | None = None, local_slot: int | No
             continue
         if category is not None and record["CategoryNo"] != category:
             continue
-        if guid is not None and record["GUID"] != trim(guid):
+        if guid is not None and record["GUID"] != trim_guid(guid):
             continue
         if property_name is not None and record["Property"] != property_name:
             continue

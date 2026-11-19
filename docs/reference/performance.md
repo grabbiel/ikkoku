@@ -7283,3 +7283,205 @@ being scheduled on slow cores or at a low clock while its window is not
 visible, not to a change in the code's own cost. So these absolute times, and
 possibly the ratios, are specific to this environment. Comparing against a run
 with the monitor on is a follow-up.
+
+## Studio FK drag: reusing unchanged character frames (2026-11-02)
+
+During an FK drag the Studio refreshes once per drag event, about 120
+times a second. Each refresh asks every source character of the scene for
+a frame (`StudioModel.refreshFrame`). Only the dragged character changes,
+but before this change the other six of the scenario scene's seven rebuilt
+everything after their cached pose: the rig evaluation (world matrices,
+skin palettes, `isFiniteAffine` on every matrix), the items and their
+materials, the bounds, the palette copies, the retained textures and the
+iris transforms.
+
+### Step 0: where the drag's main thread goes
+
+A Time Profiler sample attached by pid to `studio-fk-drag`, on a Release
+of `main` `35f43e98`, for 10 s (2026-11-02 02:49, under the app lock; an
+attribution, not a timing). The figures are inclusive main-thread ms per
+second:
+
+| frame | ms/s |
+| --- | ---: |
+| `StudioModel.refresh` | 122.2 |
+| `StudioModel.refreshFrame` | 111.9 |
+| `SourceStudioCharacterPreview.frame` | 83.4 |
+| `RigDefinition.evaluate` (every caller) | 50.9 |
+| `SourceRigPreview.frame` | 47.7 |
+| `editedPose` | 34.6 |
+| `solvedPose` | 34.1 |
+| `isFiniteAffine` | 28.6 |
+| `makePose(binding:)` | 14.5 |
+| IK solve | 14.1 |
+| bounds | 10.8 |
+| renderer submit | 4.6 |
+| `bindPose` | 4.2 |
+| `retainTextures` | 4.2 |
+| iris transforms | 0.8 |
+
+`bindPose` is below the 10 ms/s at which a values-only FK path for the
+dragged character would have been tried, so that part was dropped.
+`isFiniteAffine` is a separate follow-up.
+
+### The change
+
+`SourceStudioCharacterPreview.frame` keeps its last finished frame (after
+world, object ID and iris) with a key. While the key matches, it returns
+that frame with the new camera, main light and effects. Those three are
+plain fields of the frame, and nothing else in a character frame reads
+them. The gaze follows the camera only through the live step, which writes
+the pose and the eye rates, and both are in the key. The key, compared bit
+for bit:
+
+- the pose, as a generation that every write to `evaluatedCache` bumps (a
+  solve, a clear or a checkpoint restore). `editedPose` returns a cached
+  pose without a write, so an unchanged generation after it means the same
+  pose;
+- the rig preview instance (a color edit replaces it) and its
+  `visibilityGeneration` (`doubleTooth`);
+- the expression inputs (a blink or a face edit);
+- wear (hidden parts and body alpha), world and object ID;
+- the eye-look rates and the iris tilt;
+- `ResourceStore.reuseGeneration`: the store's generation (registrations,
+  replacements, unregisters, hidden masks, completed retirements) plus
+  every retirement and release as it is asked for. A reused frame is
+  therefore never older than a retirement it should follow (R6).
+
+The cache lives on the preview, so deleting a character frees it, and a
+color edit drops it with the old rig preview. PerfTrace counts
+`studioCharacterFrameReused` and `studioCharacterFrameBuilt` at the
+Studio's two call sites. Their rates over the refresh rate give the frames
+reused per refresh.
+
+### Correctness
+
+- **The twin test** (`SourceStudioCharacterFrameReuseTests`) runs two sets
+  of the scenario scene's seven characters, each in a store of its own. One
+  set reuses frames; the other builds every frame afresh. Every frame must
+  match its twin bit for bit: items, materials, models, keys, morph
+  weights, texture handles, skin sets, bounds, gizmos, camera, light and
+  effects. The reusing set must report a reuse exactly when nothing
+  changed. The test covers:
+  - 90 live ticks (blink, neck and eye gaze on a circling camera, dynamics,
+    a held then moving FK edit, a seek), each followed by a refresh with
+    the view orbited;
+  - an FK drag, then the FK edit held while the view orbits;
+  - an IK edit, a face slider, the expression, wear, world, object ID, a
+    color edit, the double tooth and a resource retirement, each a fresh
+    frame and then a reuse;
+  - 24 orbit steps with the eyes on the camera (TARGET); the gaze moved on
+    17;
+  - the automatic blink alone for 8 s, with 22 changes, a fresh frame
+    exactly on each.
+  - All 1,550 frames matched (866 reused, 684 built).
+- **The lifetime test** drops the seven characters of each store. The store
+  ends where the store without reuse ends: meshes and deformation buffers
+  back to 0, and the same 19 cached textures. Every texture a cached frame
+  held whose owner released it was freed.
+- **The live-tick digest** over 180 ticks of the seven characters, serial
+  and parallel, is the same on base (`main` `fff1d332`) and head:
+  `2a441a23b9f5…`. The edit-during-a-tick digest is also the same,
+  `eeb9bb141283…`.
+
+### Memory
+
+The seven cached frames hold 476.5 KiB:
+- 124 items, 87.2 KiB;
+- 137 morph weights, 2.1 KiB;
+- 6,195 palette matrices, 387.2 KiB.
+
+### Follow-up changes (2026-11-18)
+
+The first A/B (2026-11-17, n = 4 per arm) reused 6 of 7 frames per input
+but left the refresh at 84.3% of base against the registered ≤ 70%. The
+attribution then found three costs on the dragged character's path:
+- **Change 1, the FK binding.** `bindPose`'s cache was keyed on the whole
+  FK map, so every drag input rebound the character.
+  `KoikatsuCharacterRecord.rebindPose` writes only the changed bones'
+  rotations into the cached binding. It falls back to a full bind when a
+  changed key is not a target, a no-guide target would lose its rotation,
+  or `setRotation` throws. A randomized test (160 seeds × 12 steps)
+  compares every rebind with a fresh bind: targets, flags, transitions,
+  effects, diagnostics and the `makePose` output, bit for bit.
+- **The gizmo handles.** `GizmoBuilder.handle` built the unit octahedron
+  afresh for every handle of every refresh, with about 13 allocations. Its
+  24 vertices now come from a table that the same
+  `octahedron(center: .zero, radius: 1)` call builds once; `handle` only
+  adds the color. A test compares 288 handles (negative, large and zero
+  centers; sizes that are not powers of two; several colors) with the
+  former construction bit for bit.
+- **The clip binding check.** `ResolvedClip.matches` compared every
+  binding's source ID and name with the rig's nodes on every sample. It now
+  skips that walk for the rig identity the resolution was last checked
+  against: rigs with one identity have the same nodes, skins and order
+  (`RigDefinition.Identity`). Any other rig still takes the full walk. A
+  test checks the shortcut against the walk and against a fresh resolution
+  over 60 rig pairs.
+
+A dev A/B of those three (W13, n = 4 per arm, not registered) put the
+refresh at 63.6% of base: a 9.1% margin against the ≤ 70% bar, short of
+the 15% a registration needs. A head profile (e039ee56, 15 s) then showed
+the gizmos down from 30.8% to 14.6% of the refresh and the clip check
+gone. It also found three more costs, changed here in this order, one
+commit each with its own test:
+- **The IK node check.** `SourceStudioIK.apply` mapped the rig's node
+  list twice and compared source IDs and parents on every call (~3.2 ms/s
+  of the refresh). The solver now keeps the identity of the rig it was
+  built for and skips the comparison for that rig. Any other rig gets the
+  full comparison as before: equal source IDs and parents pass and solve
+  bit for bit, and a changed node list fails with the same message.
+- **The rotate gizmo's rings.** `build(.rotate)` rebuilt three rings of
+  576 vertices from sine and cosine on every call. Their positions depend
+  only on the axis: radius, thickness and segment count are constants,
+  the color only fills a field, and origin, orientation and size go into
+  the batch's model. A table built by the same `ring` call holds them. A
+  test compares 384 rotate gizmos with the former construction bit for bit.
+- **Repeated rig evaluations** (21.5 ms/s, of which IK 4.5, the frame 2.2
+  and the bone handles 1.6):
+  - The IK solver evaluated its full-body initialization pose on every call.
+    `init` now evaluates it once (with `try?`, full-body only), and `apply`
+    uses that for the rig the solver was built for. A failed evaluation is
+    not kept: `apply` evaluates and throws where it did before. `init` runs
+    at import and on a body or face shape edit, never during an FK drag.
+  - `applyingActivations` evaluates the pose it returns last, on every path.
+    `evaluatedActivations` keeps that evaluation, `makePose`'s result
+    carries it, and the IK solve takes it in place of evaluating the same
+    pose again.
+  - The character preview keeps its last pose evaluation. It is used again
+    only for the same rig and a pose that shares the kept pose's matrix
+    storage, which therefore holds the same values. The frame build and the
+    Studio's bone handles share it. No checkpoint, undo state or document
+    field holds it.
+  - Tests compare every path with `rig.evaluate`, bit for bit.
+
+### A/B
+
+Registered A/B, 2026-11-19 (W16). The plan was frozen before measuring and
+verified by the coordinator.
+- **Arms:** base `main` `0d7eb327` against head `3b170522` (`0d7eb327` plus
+  this change), both Release.
+- **Run:** `studio-fk-drag` for 10 s, ABBA × 2, so 8 units and n = 4 per
+  arm. Each launch held the app lock on its own, at 60 Hz with the monitor
+  off.
+- **Gates:** the entry and after gates use the strict 20% intruder rule,
+  and the pre-launch snapshot invalidates too.
+- **Reruns:** an invalid unit is rerun at most twice.
+- **Statistic:** the median of the per-run refresh means.
+
+All 8 units were valid. One head unit's first attempt was invalid
+(`corespotlightd` at 362% in its after gate) and was rerun under the plan.
+
+| | base | head |
+|---|---:|---:|
+| refresh, median of run means (ms) | 2.257 (2.200–2.375) | 1.258 (1.198–1.293) |
+| main busy, median (ms/s) | 287.3 | 178.7 |
+| frames built / reused per refresh | — | 1 / 6 in every run |
+
+- **(a)** The refresh is 55.7% of base, against ≤ 70%: pass.
+- **(b)** Main busy is 62.2% of base, against ≤ base: pass.
+- **(c)** Every head run builds 1 frame and reuses 6, inside the bands:
+  pass.
+
+The ranges do not overlap. A dev A/B of the same binaries, run 15 minutes
+earlier, gave 55.5%.

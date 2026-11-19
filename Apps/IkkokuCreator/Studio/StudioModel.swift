@@ -4055,6 +4055,7 @@ final class StudioModel: ViewportInputHandler, LivePacedHandler {
                             catch { status = "Source character \(o.sourceObjectKey ?? 0) face state: \(error)" }
                             rendered = try preview.frame(camera: viewCamera, mainLight: effectiveMainLight, effects: doc.effects,
                                 world: world, objectID: objectID, fkRotations: o.sourceFKRotations ?? [:], faceValues: o.sourceFaceValues, bodyValues: o.sourceBodyValues, ikTargets: o.sourceIKOverrides ?? [:], kinematics: o.sourceKinematics, animationState: o.sourceAnimation, animationElapsed: sourceAnimationTime)
+                            PerfTrace.event(preview.lastFrameReused ? .studioCharacterFrameReused : .studioCharacterFrameBuilt)
                         }
                         if liveSourceShaders { applyLiveSourceShaders(&rendered, id: o.id, preview: preview, lines: &liveLines) }
                         if effectiveShowGizmos, selection == o.id {
@@ -4183,6 +4184,7 @@ final class StudioModel: ViewportInputHandler, LivePacedHandler {
                     do {
                         var rendered = try preview.frame(camera: viewCamera, mainLight: effectiveMainLight, effects: doc.effects,
                             world: world, objectID: objectID, animationElapsed: sourceAnimationTime)
+                        PerfTrace.event(preview.lastFrameReused ? .studioCharacterFrameReused : .studioCharacterFrameBuilt)
                         if liveSourceShaders { applyLiveSourceShaders(&rendered, id: o.id, preview: preview, lines: &liveLines) }
                         items += rendered.items; skinSets.merge(rendered.skinSets) { _, new in new }
                         bounds.expand(rendered.sceneBounds)
@@ -4746,7 +4748,7 @@ final class StudioModel: ViewportInputHandler, LivePacedHandler {
         guard poseMode == .fk else { return [] }
         let rig = preview.preview.source.rig
         let pose = try preview.editedPose(fkRotations: object.sourceFKRotations ?? [:], faceValues: object.sourceFaceValues, bodyValues: object.sourceBodyValues, ikTargets: object.sourceIKOverrides ?? [:], kinematics: object.sourceKinematics, animationState: object.sourceAnimation, animationElapsed: sourceAnimationTime)
-        let evaluated = try rig.evaluate(pose)
+        let evaluated = try preview.evaluation(of: pose)  // the frame build's, for the same pose (#371)
         var result: [GizmoBatch] = []
         for target in preview.controller.targets where target.hasGuide {
             let matrix = world * evaluated.worldMatrices[target.node]

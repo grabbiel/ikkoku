@@ -111,6 +111,13 @@ final class PerfTrace {
         /// A Studio character build installed and left its frame to the next
         /// live step's refresh (R7 phase 2 item 6 follow-up).
         case studioInstallRefreshDeferred
+        /// A source character's refresh frame given back from its cache: its
+        /// inputs other than camera, light and effects were unchanged (R7
+        /// item 3, FK drag; `SourceStudioCharacterPreview.frame`).
+        case studioCharacterFrameReused
+        /// A source character's refresh frame built afresh on the main thread
+        /// (not one the live step prepared).
+        case studioCharacterFrameBuilt
     }
 
     /// SwiftUI bodies counted per recording. A count is one evaluation of that

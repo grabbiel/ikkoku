@@ -149,16 +149,12 @@ public struct SourceModCatalog: Sendable {
         return nil
     }
 
-    /// .NET String.Trim / Char.IsWhiteSpace; Foundation's whitespace set also
-    /// removes U+200B, which is a significant character in a source mod GUID.
+    /// The game's `String.Trim()`, as Sideloader applies it to every GUID
+    /// (manifest, ResolveInfo setter, lookups): Mono's `String.WhiteChars`
+    /// (`SourceMonoWhiteChars`), which includes U+200B and U+FEFF but not U+180E.
+    /// Not `char.IsWhiteSpace`, and not Foundation's whitespace set.
     public static func trimSourceGUID(_ value: String) -> String {
-        func whitespace(_ scalar: Unicode.Scalar) -> Bool {
-            switch scalar.value {
-            case 0x09...0x0d, 0x20, 0x85, 0xa0, 0x1680, 0x2000...0x200a,
-                 0x2028, 0x2029, 0x202f, 0x205f, 0x3000: return true
-            default: return false
-            }
-        }
+        func whitespace(_ scalar: Unicode.Scalar) -> Bool { SourceMonoWhiteChars.scalars.contains(scalar.value) }
         let scalars = value.unicodeScalars
         let start = scalars.firstIndex { !whitespace($0) } ?? scalars.endIndex
         let end = scalars.lastIndex { !whitespace($0) }.map { scalars.index(after: $0) } ?? start

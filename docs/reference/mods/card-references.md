@@ -51,7 +51,7 @@ map keys:
 
 | Wire key | Type | Missing-field default | Meaning |
 | --- | --- | --- | --- |
-| `ModID` | String or nil | nil | Mod GUID; setter trims .NET whitespace |
+| `ModID` | String or nil | nil | Mod GUID; setter trims with `String.Trim()` (Mono's `String.WhiteChars`) |
 | `Slot` | Int32 | 0 | Original catalog slot |
 | `LocalSlot` | Int32 | 0 | Previous session's generated runtime slot |
 | `Property` | String or nil | nil | Full destination path in the card |
@@ -67,9 +67,15 @@ from an ordinary MessagePack dictionary, whose source formatter rejects
 duplicate keys. Unknown data and duplicate wire fields remain in the retained
 raw record even when they do not affect the interpreted value.
 
-The GUID setter uses `String.Trim()`, which removes .NET whitespace characters
-including nonbreaking and ideographic spaces. It does not remove zero-width
-space or the byte-order-mark character. GUID and property comparisons are
+The GUID setter uses `String.Trim()`. In the game's Mono that removes the 27
+characters of `String.WhiteChars` from both ends (Unity-Technologies/mono,
+branch `unity-5.6`, `mcs/class/corlib/System/String.cs`, with its `NET_2_0` and
+`NET_2_1` blocks; the game's `mscorlib.dll` holds the same table). The set
+includes nonbreaking and ideographic spaces, zero-width space (U+200B) and the
+byte-order mark (U+FEFF), but not U+180E. It is not `char.IsWhiteSpace`. A
+GUID stored with leading EF BB BF bytes reads as U+FEFF (#418), which this trim
+removes. The native resolver, the package manifest GUID and the Python oracles
+use this set (`SourceMonoWhiteChars`, #419). GUID and property comparisons are
 case-sensitive and do not perform Unicode normalization.
 
 ## Binding to actual character destinations

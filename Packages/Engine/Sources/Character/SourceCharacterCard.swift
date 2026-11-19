@@ -334,7 +334,8 @@ struct CardReader {
             if index == 4 && byte > 7 { throw SourceCharacterCardError.invalid("Invalid .NET string length.") }
             count |= (byte & 127) << (index * 7)
             if byte & 128 == 0 {
-                guard count <= 1024 * 1024, let result = String(data: try take(count), encoding: .utf8) else {
+                // Decoded as BinaryReader.ReadString does: a leading U+FEFF is kept (SourceMonoUTF8).
+                guard count <= 1024 * 1024, let result = SourceMonoUTF8.string(try take(count)) else {
                     throw SourceCharacterCardError.invalid("Source card string is oversized or invalid UTF-8.")
                 }
                 return result

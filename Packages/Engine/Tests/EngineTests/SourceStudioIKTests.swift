@@ -139,3 +139,110 @@ func sourceStudioIKOriginalBindingsBindAndReportActualCoverage() throws {
     #expect(result.diagnostics.isEmpty)
     _ = try source.rig.evaluate(result.pose)
 }
+
+/// Every float of an IK result as a bit pattern, with its guides, target sets
+/// and diagnostics, so two results compare exactly (a signed zero counts).
+private func resultBits(_ result: SourceStudioIK.Result) -> [String] {
+    func bits(_ values: [Float]) -> String { values.map { String($0.bitPattern, radix: 16) }.joined(separator: ",") }
+    let pose = result.pose.localMatrices.map { m in bits((0..<4).flatMap { c in (0..<4).map { m[c][$0] } }) }
+    let guides = result.guides.map { g in
+        "\(g.targetID) \(String(describing: g.sourceKey)) \(g.group) \(g.rotationEnabled) \(g.active) "
+            + bits([g.position.x, g.position.y, g.position.z, g.rotation.vector.x, g.rotation.vector.y, g.rotation.vector.z, g.rotation.vector.w])
+    }
+    return pose + guides + [result.appliedTargetIDs.sorted().description, result.deferredTargetIDs.sorted().description,
+                            bits([result.bodyPullOffset.x, result.bodyPullOffset.y, result.bodyPullOffset.z])] + result.diagnostics
+}
+
+/// #371: `apply` skips the node comparison only for the rig the solver was
+/// built for (`RigDefinition.Identity` guarantees the same nodes). A rig with
+/// another identity still gets today's full comparison: with equal source IDs
+/// and parents it passes and solves bit for bit as the built-for rig, and with
+/// a changed node list it fails with today's message.
+@Test func sourceStudioIKSkipsTheNodeComparisonOnlyForItsOwnRig() throws {
+    let (rig, bindings) = try studioIKFixture()
+    let solver = try SourceStudioIK(rig: rig, bindings: bindings)
+    let saved = [Int32(3): KoikatsuBoneRecord(sourceKey: 12345, transform: KoikatsuChangeAmount(position: Float3(1.5, 0.8, -0.2),
+                                                                                              rotationDegrees: Float3(10, 20, 30), scale: Float3(repeating: 100)))]
+    func run(_ query: RigDefinition) throws -> SourceStudioIK.Result {
+        try solver.apply(rig: query, baseline: query.restPose, savedTargets: saved, enabled: true,
+                         activeGroups: [false, true, false, false, true], characterRoot: 0)
+    }
+    func node(_ index: Int, name: String? = nil, sourceID: String? = nil, parent: Int?? = nil) -> RigDefinition.Node {
+        let n = rig.nodes[index]
+        return .init(name: name ?? n.name, sourceID: sourceID ?? n.sourceID, parent: parent ?? n.parent, translation: n.translation,
+                     rotation: n.rotation, scale: n.scale, authoredMatrix: n.authoredMatrix, active: n.active)
+    }
+    func variant(_ index: Int, _ replacement: RigDefinition.Node) throws -> RigDefinition {
+        var nodes = rig.nodes.indices.map { node($0) }
+        nodes[index] = replacement
+        return try RigDefinition(nodes: nodes, skins: rig.skins)
+    }
+
+    // The rig it was built for, and a copy of that rig value: the identity path.
+    let reference = try resultBits(run(rig))
+    let copy = rig
+    for same in [rig, copy] {
+        #expect(solver.checked === same.identity)
+        #expect(solver.bound(to: same) && solver.walkMatches(same))
+        #expect(try resultBits(run(same)) == reference)
+    }
+
+    // Other identities with equal source IDs and parents (a rebuilt twin, and
+    // one with a node renamed, which the comparison has never read): the full
+    // comparison runs and passes, and the solve is the same bit for bit.
+    let equal = [try RigDefinition(nodes: rig.nodes, skins: rig.skins), try variant(7, node(7, name: "renamed"))]
+    for other in equal {
+        #expect(other.identity !== solver.checked)
+        #expect(solver.walkMatches(other) && solver.bound(to: other))
+        #expect(try resultBits(run(other)) == reference)
+    }
+
+    // Changed node lists: a source ID, a parent, one node more, one fewer.
+    var longer = rig.nodes.indices.map { node($0) }
+    longer.append(.init(name: "extra", sourceID: "n13", parent: 0))
+    let changed = [try variant(5, node(5, sourceID: "n5b")), try variant(4, node(4, parent: .some(1))),
+                   try RigDefinition(nodes: longer, skins: rig.skins), try RigDefinition(nodes: Array(rig.nodes.dropLast()), skins: rig.skins)]
+    for other in changed {
+        #expect(!solver.walkMatches(other) && !solver.bound(to: other))
+        do {
+            _ = try run(other)
+            Issue.record("a changed node list was accepted")
+        } catch {
+            #expect("\(error)" == "Studio IK frame does not match its bound hierarchy or activation state.")
+        }
+    }
+
+    // The skip never changes the answer: for every rig above, `bound(to:)` is
+    // the comparison `apply` made before #371.
+    for query in [rig, copy] + equal + changed { #expect(solver.bound(to: query) == solver.walkMatches(query)) }
+}
+
+/// #371: `baselineEvaluation` stands in for evaluating the baseline (the
+/// Studio passes makePose's evaluation of it). The result is the same bit
+/// for bit, the guard still answers first, and a solver without full-body
+/// settings keeps no initialization evaluation.
+@Test func sourceStudioIKUsesTheCallersBaselineEvaluation() throws {
+    let (rig, bindings) = try studioIKFixture()
+    let solver = try SourceStudioIK(rig: rig, bindings: bindings)
+    #expect(solver.initialWorld == nil)
+    var moved = rig.restPose
+    moved.localMatrices[1] = Transform.trs(Float3(0.5, 0.25, -1), simd_quatf(angle: 0.4, axis: Float3(0, 0, 1)), .one)
+    let saved = [Int32(3): KoikatsuBoneRecord(sourceKey: 1, transform: KoikatsuChangeAmount(position: Float3(1.5, 0.8, -0.2),
+                                                                                          rotationDegrees: Float3(10, 20, 30), scale: .one))]
+    for enabled in [false, true] {
+        for baseline in [rig.restPose, moved] {
+            let evaluating = try solver.apply(rig: rig, baseline: baseline, savedTargets: saved, enabled: enabled,
+                                              activeGroups: [true, true, false, true, true], characterRoot: 0)
+            let passed = try solver.apply(rig: rig, baseline: baseline, savedTargets: saved, enabled: enabled,
+                                          activeGroups: [true, true, false, true, true], characterRoot: 0, baselineEvaluation: try rig.evaluate(baseline))
+            #expect(resultBits(passed) == resultBits(evaluating), "enabled \(enabled)")
+        }
+    }
+    do {
+        _ = try solver.apply(rig: rig, baseline: rig.restPose, savedTargets: [:], enabled: false, activeGroups: [], characterRoot: 0,
+                             baselineEvaluation: try rig.evaluate(rig.restPose))
+        Issue.record("a wrong activation state was accepted")
+    } catch {
+        #expect("\(error)" == "Studio IK frame does not match its bound hierarchy or activation state.")
+    }
+}
