@@ -80,10 +80,12 @@ private func exportedSettings() throws -> [SourceStudioEyeMaterialSettings] {
 private func defaults(
     pupilX: Double = 0.5, pupilY: Double = 0.5,
     pupilWidth: Double = 0.9, pupilHeight: Double = 0.9,
-    hlUpY: Double = 0.5, hlDownY: Double = 0.5) -> SourceStudioIrisRendering.CardValues? {
+    hlUpY: Double = 0.5, hlDownY: Double = 0.5,
+    range: SourceShapeRateRange = .extended) -> SourceStudioIrisRendering.CardValues? {
     SourceStudioIrisRendering.cardOverrides(pupilX: pupilX, pupilY: pupilY,
                                             pupilWidth: pupilWidth, pupilHeight: pupilHeight,
-                                            hlUpY: hlUpY, hlDownY: hlDownY, sex: 1, exType: 0)
+                                            hlUpY: hlUpY, hlDownY: hlDownY, sex: 1, exType: 0,
+                                            range: range)
 }
 
 @Test func irisCardOverridesAtChaFileFaceDefaults() throws {
@@ -117,19 +119,43 @@ private func defaults(
 }
 
 @Test func irisCardOverridesClampOutOfRangeFields() throws {
-    // Mathf.Lerp clamps t to 0...1, so fields outside the slider range pin to
-    // the Lerp endpoints instead of extrapolating.
+    // Mathf.Lerp clamps t to 0...1, so without Slider Unlocker (`.vanilla`)
+    // fields outside the slider range pin to the Lerp endpoints instead of
+    // extrapolating.
     let low = try #require(defaults(pupilX: -3, pupilY: -1, pupilWidth: -0.5, pupilHeight: -2,
-                                    hlUpY: -1, hlDownY: -0.25))
+                                    hlUpY: -1, hlDownY: -0.25, range: .vanilla))
     #expect(low.offsetX == 0.2 && low.offsetY == -0.5)
     #expect(low.scale == SIMD2(1.8, 1.8))
     #expect(low.hlUp == 0.1 && low.hlDown == 0.1)
     let high = try #require(defaults(pupilX: 4, pupilY: 2, pupilWidth: 1.5, pupilHeight: 3,
-                                     hlUpY: 1.2, hlDownY: 8))
+                                     hlUpY: 1.2, hlDownY: 8, range: .vanilla))
     #expect(abs(high.offsetX - (-0.6)) <= 1e-7)
     #expect(high.offsetY == 0.5)
     #expect(abs(high.scale.x - (-0.2)) <= 1e-7 && abs(high.scale.y - (-0.2)) <= 1e-7)
     #expect(high.hlUp == -0.1 && high.hlDown == -0.1)
+}
+
+@Test func irisCardOverridesExtendOnlyTheHighlightsWithSliderUnlocker() throws {
+    // Slider Unlocker swaps the two highlight Y setters' Mathf.Lerp for
+    // Mathf.LerpUnclamped (hl = 0.1 + (-0.2) * t, any t); the pupil setters
+    // keep Mathf.Lerp, so their fields still clamp.
+    let low = try #require(defaults(pupilX: -3, pupilY: -1, pupilWidth: -0.5, pupilHeight: -2,
+                                    hlUpY: -1, hlDownY: -0.25, range: .extended))
+    #expect(low.offsetX == 0.2 && low.offsetY == -0.5)
+    #expect(low.scale == SIMD2(1.8, 1.8))
+    #expect(abs(low.hlUp - 0.3) <= 1e-12 && abs(low.hlDown - 0.15) <= 1e-12)
+    let high = try #require(defaults(pupilX: 4, pupilY: 2, pupilWidth: 1.5, pupilHeight: 3,
+                                     hlUpY: 1.2, hlDownY: 8, range: .extended))
+    #expect(abs(high.offsetX - (-0.6)) <= 1e-7)
+    #expect(high.offsetY == 0.5)
+    #expect(abs(high.scale.x - (-0.2)) <= 1e-7 && abs(high.scale.y - (-0.2)) <= 1e-7)
+    #expect(abs(high.hlUp - (-0.14)) <= 1e-12 && abs(high.hlDown - (-1.5)) <= 1e-12)
+    // In range both modes give the same bits.
+    for t in [0.0, 0.25, 0.5, 0.75, 1.0] {
+        let extended = try #require(defaults(hlUpY: t, hlDownY: 1 - t, range: .extended))
+        let vanilla = try #require(defaults(hlUpY: t, hlDownY: 1 - t, range: .vanilla))
+        #expect(extended.hlUp == vanilla.hlUp && extended.hlDown == vanilla.hlDown)
+    }
 }
 
 @Test func irisCardOverridesSkipKeepsThePrefabSnapshot() throws {

@@ -128,11 +128,12 @@
         "IKKOKU_MAKER_SCENARIO_REPORT": ".local/verification/reports/maker-scenario-async-selection.json"
       },
       "referenceTier": "app-smoke",
-      "tolerance": "Deterministic CPU-worker barriers exercise the production async selection path. Current preview/card/resources remain live before completion; shape/color/customization/ABMX-mode edits survive commit. Cancellation, supersession, no-op supersession, export, outfit, library, import and close reject held results without changing the new context or GPU resource counts. Export during preparation saves committed selections and current edits; reimport checks exact vanilla IDs, shape rates within 1e-5 and colors within 1/255. The barrier affects scheduling only, never assembly validation. Scripted API evidence, not UI or original-player parity.",
+      "tolerance": "Deterministic CPU-worker barriers exercise the production async selection path. Current preview/card/resources remain live before completion; shape/color/customization/ABMX-mode edits survive commit. Cancellation, supersession, no-op supersession, export, outfit, library, import and close reject held results without changing the new context or GPU resource counts. Export during preparation saves committed selections and current edits; reimport checks exact vanilla IDs, shape rates within 1e-5 and colors within 1/255. The barrier affects scheduling only, never assembly validation. The forced invalid rate is body slot 4 at 3e38 (an extended rate whose shape overflows); an extended body rate 2.0 (Slider Unlocker) commits and survives export/reimport. Scripted API evidence, not UI or original-player parity.",
       "artifacts": [
         {"path": ".local/verification/reports/maker-scenario-async-selection.json", "kind": "scenario-report"},
         {"path": ".local/verification/maker-scenario-exports/maker-async-base.png", "kind": "exported-card"},
-        {"path": ".local/verification/maker-scenario-exports/maker-async-edited.png", "kind": "exported-card"}
+        {"path": ".local/verification/maker-scenario-exports/maker-async-edited.png", "kind": "exported-card"},
+        {"path": ".local/verification/maker-scenario-exports/maker-async-extended.png", "kind": "exported-card"}
       ],
       "timeout": 600
     },
@@ -165,7 +166,7 @@
         "IKKOKU_MAKER_SCENARIO_REPORT": ".local/verification/reports/maker-scenario-head-female.json"
       },
       "referenceTier": "app-smoke",
-      "tolerance": "Normal female heads 0/200/201 use the production async transaction. A cold late pose failure, cancellation, outfit/mode invalidation and head/hair supersession preserve committed identity/resources. Latest shape/color edits and clock survive replacement; exact selected manifest/contracts are checked. Vanilla no-op keeps resources and warmed cycles do not grow them. Export/reimport retains selected head and edits at 1e-5 shape/1/255 color bounds. Scripted API checks, not source appearance parity.",
+      "tolerance": "Normal female heads 0/200/201 use the production async transaction. A cold late pose failure (body slot 4 at 3e38, an extended rate whose shape overflows), cancellation, outfit/mode invalidation and head/hair supersession preserve committed identity/resources. Latest shape/color edits and clock survive replacement; exact selected manifest/contracts are checked. Vanilla no-op keeps resources and warmed cycles do not grow them. Export/reimport retains selected head and edits at 1e-5 shape/1/255 color bounds; an extended body rate 2.0 (Slider Unlocker) commits and survives export/reimport. Scripted API checks, not source appearance parity.",
       "artifacts": [
         {
           "path": ".local/verification/reports/maker-scenario-head-female.json",
@@ -173,6 +174,10 @@
         },
         {
           "path": ".local/verification/maker-scenario-exports/maker-head-female-selected.png",
+          "kind": "exported-card"
+        },
+        {
+          "path": ".local/verification/maker-scenario-exports/maker-head-female-extended.png",
           "kind": "exported-card"
         }
       ],
@@ -249,7 +254,7 @@
         "IKKOKU_MAKER_SCENARIO_REPORT": ".local/verification/reports/maker-scenario-head-male.json"
       },
       "referenceTier": "app-smoke",
-      "tolerance": "Normal male heads 0/200/201 use the production async transaction. A cold late pose failure, cancellation, outfit/mode invalidation and head/hair supersession preserve committed identity/resources. Latest shape/color edits and clock survive replacement; exact selected manifest/contracts are checked. Vanilla no-op keeps resources and warmed cycles do not grow them. Export/reimport retains selected head and edits at 1e-5 shape/1/255 color bounds. Scripted API checks, not source appearance parity.",
+      "tolerance": "Normal male heads 0/200/201 use the production async transaction. A cold late pose failure (body slot 4 at 3e38, an extended rate whose shape overflows), cancellation, outfit/mode invalidation and head/hair supersession preserve committed identity/resources. Latest shape/color edits and clock survive replacement; exact selected manifest/contracts are checked. Vanilla no-op keeps resources and warmed cycles do not grow them. Export/reimport retains selected head and edits at 1e-5 shape/1/255 color bounds; an extended body rate 2.0 (Slider Unlocker) commits and survives export/reimport. Scripted API checks, not source appearance parity.",
       "artifacts": [
         {
           "path": ".local/verification/reports/maker-scenario-head-male.json",
@@ -257,6 +262,10 @@
         },
         {
           "path": ".local/verification/maker-scenario-exports/maker-head-male-selected.png",
+          "kind": "exported-card"
+        },
+        {
+          "path": ".local/verification/maker-scenario-exports/maker-head-male-extended.png",
           "kind": "exported-card"
         }
       ],

@@ -38,16 +38,21 @@ public enum SourceStudioIrisRendering {
     /// pupil/highlight fields.  Every ChangeSettingEye* returns early for a
     /// special male (sex 0 && exType 1), so this returns nil there and the
     /// prefab snapshot stays.  Mathf.Lerp clamps t to 0...1; a NaN t propagates
-    /// the way Mathf.Clamp01 leaves it.
+    /// the way Mathf.Clamp01 leaves it.  With Slider Unlocker loaded (`range`
+    /// `.extended`, the user's install) the two highlight Y setters lerp
+    /// unclamped instead (it swaps their Mathf.Lerp for Mathf.LerpUnclamped;
+    /// in KK it patches only the Y setters), so an extended highlight rate
+    /// moves past the slider's ends.
     public static func cardOverrides(pupilX: Double, pupilY: Double,
                                      pupilWidth: Double, pupilHeight: Double,
                                      hlUpY: Double, hlDownY: Double,
-                                     sex: Int, exType: Int) -> CardValues? {
+                                     sex: Int, exType: Int, range: SourceShapeRateRange = .configured) -> CardValues? {
         guard sex != 0 || exType != 1 else { return nil }
+        let highlight = range == .extended ? { (a: Double, b: Double, t: Double) in a + (b - a) * t } : lerp
         return CardValues(offsetX: lerp(0.2, -0.6, pupilX),
                           offsetY: lerp(-0.5, 0.5, pupilY),
                           scale: SIMD2(lerp(1.8, -0.2, pupilWidth), lerp(1.8, -0.2, pupilHeight)),
-                          hlUp: lerp(0.1, -0.1, hlUpY), hlDown: lerp(0.1, -0.1, hlDownY))
+                          hlUp: highlight(0.1, -0.1, hlUpY), hlDown: highlight(0.1, -0.1, hlDownY))
     }
 
     /// Mathf.Lerp: a + (b - a) * Mathf.Clamp01(t), so t outside 0...1 clamps

@@ -481,11 +481,11 @@ private final class DynamicsTopology: Sendable {
             walked[i] = result
         }
         for skin in skins {
-            let meshWorld = matrix(skin.mesh)
-            if skin.meshMoves {
-                guard abs(simd_determinant(meshWorld)) > 1e-12 else { throw RigError.invalid("Skin \(skin.index) has a singular mesh transform.") }
-            }
-            let meshInverse = simd_inverse(meshWorld), inverseBinds = rig.skins[skin.index].inverseBindMatrices
+            let meshWorld = matrix(skin.mesh), inverseBinds = rig.skins[skin.index].inverseBindMatrices
+            // `rig.evaluate` keeps a singular mesh world's palette in rig
+            // space (#404), so the same entries are checked without the
+            // mesh inverse there.
+            let meshInverse = RigDefinition.skinsInMeshSpace(meshWorld) ? simd_inverse(meshWorld) : matrix_identity_float4x4
             for entry in skin.entries {
                 guard RigDefinition.isFiniteAffine(meshInverse * matrix(entry.world) * inverseBinds[entry.position]) else {
                     throw RigError.invalid("Skin \(skin.index) produced a nonfinite palette.")
@@ -519,12 +519,12 @@ private struct DynamicsTransforms {
             guard rig.nodes[i].authoredMatrix == nil, rig.nodes[i].scale.x > 0, rig.nodes[i].scale.y > 0, rig.nodes[i].scale.z > 0,
                   finite(m.translation), finite(scale), min(scale.x, min(scale.y, scale.z)) > 1e-6,
                   m[0].w == 0, m[1].w == 0, m[2].w == 0, m[3].w == 1 else {
-                throw RigError.invalid("Dynamics requires finite positive local TRS.")
+                throw RigError.invalid("Dynamics requires finite positive local TRS; a zero shape scale on a dynamics bone or its ancestors is not simulated (#404; signed TRS is #406).")
             }
             let r = float3x3(m[0].xyz / scale.x, m[1].xyz / scale.y, m[2].xyz / scale.z)
             guard abs(simd_determinant(r) - 1) < 1e-3,
                   abs(dot(r[0], r[1])) < 1e-4, abs(dot(r[0], r[2])) < 1e-4, abs(dot(r[1], r[2])) < 1e-4 else {
-                throw RigError.invalid("Dynamics does not support local shear/reflection.")
+                throw RigError.invalid("Dynamics does not support local shear/reflection; a negative shape scale on a dynamics bone or its ancestors is not simulated (#404; signed TRS is #406).")
             }
             translations.append(m.translation); rotations.append(simd_quatf(r).normalized); scales.append(scale)
         }

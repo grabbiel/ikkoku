@@ -217,12 +217,13 @@ public struct SourceCharacterCard: Sendable {
         }
     }
 
-    /// The native shape evaluator takes face and body rates in 0...1 only.
+    /// The native shape evaluator takes any finite face and body rate; rates
+    /// outside 0...1 are extended ones (`SourceShapeRateRange`).
     /// `previewSettings` checks it; a Studio import checks it for the hidden
     /// characters it leaves unbuilt (`SourceStudioCharacterPreview.validateCard`).
     public static func validateNativeShapeRanges(_ source: Customization) throws {
-        guard source.faceValues.allSatisfy({ (0...1).contains($0) }), source.bodyValues.allSatisfy({ (0...1).contains($0) }) else {
-            throw SourceCharacterCardError.invalid("This card uses extended shape ranges not yet supported by the native shape evaluator.")
+        guard source.faceValues.allSatisfy(\.isFinite), source.bodyValues.allSatisfy(\.isFinite) else {
+            throw SourceCharacterCardError.invalid("This card has a shape rate that is not a finite number.")
         }
     }
 
