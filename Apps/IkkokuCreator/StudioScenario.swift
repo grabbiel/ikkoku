@@ -1797,12 +1797,13 @@ struct StudioScenario: Decodable {
                     record(step, false, "assertWorkspaceRows: published rows differ from a rebuild (\(published.entries.count) vs \(fresh.entries.count) rows, \(differing) differ)"); continue
                 }
                 // #410: the list keys its rows by position, which is safe only
-                // while a row holds no state of its own.
+                // while a row holds no state of its own: its entry, the list's
+                // eye focus with its slot and ring, and its actions.
                 let rowFields = Mirror(reflecting: WorkspaceRow(entry: published.entries.first ?? WorkspaceEntry(
                     id: UUID(), name: "", kind: .folder, visible: true, depth: 0, selected: false, cameraPlaceholder: false),
                     select: {}, toggleVisible: {})).children.map { $0.label ?? "?" }
-                guard rowFields == ["entry", "select", "toggleVisible"] else {
-                    record(step, false, "assertWorkspaceRows: WorkspaceRow holds more than its entry and actions (\(rowFields.joined(separator: ", "))), which positional row ids would hand to the wrong object"); continue
+                guard rowFields == ["entry", "focus", "slot", "focusShown", "select", "toggleVisible"] else {
+                    record(step, false, "assertWorkspaceRows: WorkspaceRow holds more than its entry, the list's eye focus and its actions (\(rowFields.joined(separator: ", "))), which positional row ids would hand to the wrong object"); continue
                 }
                 if let rows = step.rows, rows != published.entries.count {
                     record(step, false, "assertWorkspaceRows: \(published.entries.count) rows, expected \(rows)"); continue

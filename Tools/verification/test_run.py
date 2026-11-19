@@ -655,8 +655,9 @@ INSPECTOR_UI_OPS = {"select", "deselect", "focus", "type", "delete", "undo", "re
                     "tab", "addCharacter",
                     # Added for #383 (the Parent popup that replaced the Picker).
                     "parentMenu",
-                    # Added for #410 (the workspace stack's slots).
-                    "selectRow", "scrollWorkspace", "newScene", "addFolders"}
+                    # Added for #410 (the workspace stack's slots, and the eyes'
+                    # own focus ring).
+                    "selectRow", "scrollWorkspace", "newScene", "addFolders", "eyeFocus"}
 
 # ST-T11 `editRoute` settings: point edits name the point, route edits do not.
 ROUTE_POINT_SETTINGS = ("delete", "move", "speed", "ease", "connection", "link")
@@ -949,7 +950,7 @@ class StudioScenarioLaneTests(unittest.TestCase):
                       and not name.startswith(("maker-", "gameplay-")))
 
     def test_lane_validates_and_covers_every_scenario(self):
-        self.assertEqual(len(self.checks), 102)
+        self.assertEqual(len(self.checks), 103)
         referenced = set()
         for check in self.checks:
             scenario = check["env"]["IKKOKU_STUDIO_SCENARIO"]
@@ -986,6 +987,12 @@ class StudioScenarioLaneTests(unittest.TestCase):
             if op == "addFolders":
                 self.assertIs(type(step["count"]), int)
                 self.assertGreater(step["count"], 0)
+            if op == "eyeFocus":
+                self.assertIs(type(step.get("count", 2)), int)
+                self.assertGreater(step.get("count", 2), 0)
+                if "capture" in step:
+                    self.assertTrue(step["capture"].startswith(".local/verification/"),
+                                    "an eyeFocus capture must stay under .local/verification: %s" % path)
             if op == "type":
                 self.assertTrue(step["text"])
             if op == "cycle":
@@ -1006,8 +1013,9 @@ class StudioScenarioLaneTests(unittest.TestCase):
     def test_launch_arguments_are_known_per_process_settings(self):
         # #333: a check may pass per-process settings after the binary, through
         # the argument domain, never through System Settings: only these
-        # names and values, as name/value pairs.
-        allowed = {"-AppleShowScrollBars": {"Always", "WhenScrolling"}}
+        # names and values, as name/value pairs. #410: Full Keyboard Access
+        # (AppleKeyboardUIMode 2) for the workspace eyes' focus ring.
+        allowed = {"-AppleShowScrollBars": {"Always", "WhenScrolling"}, "-AppleKeyboardUIMode": {"2"}}
         for check in self.checks:
             extra = check["argv"][1:]
             self.assertEqual(len(extra) % 2, 0, check["id"])

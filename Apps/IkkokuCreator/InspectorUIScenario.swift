@@ -4,6 +4,7 @@ import SwiftUI
 import CryptoKit
 import Character
 import Studio
+import Renderer
 
 /// R7 phase 2, item 7: Object-tab checks that need the real window, entered
 /// through the Studio scenario mode (`{"steps": [], "inspectorUI": {"steps": [...]}}`).
@@ -34,8 +35,9 @@ struct InspectorUIScenario: Decodable {
         /// chooses that source key's object, or None for -1, and the document's parent
         /// follows). Added for #410: `"selectRow"` (`index`: selects the object at that
         /// workspace row), `"scrollWorkspace"` (`toEnd`: scrolls the workspace to
-        /// the end of its rows, or back to the top), `"newScene"` and
-        /// `"addFolders"` (`count` folders at the root).
+        /// the end of its rows, or back to the top), `"newScene"`,
+        /// `"addFolders"` (`count` folders at the root) and `"eyeFocus"`
+        /// (`count` focus moves; `capture`: see `eyeFocus(_:studio:moves:capture:settle:)`).
         let op: String
         let key: Int32?
         let keys: [Int32]?
@@ -88,6 +90,9 @@ struct InspectorUIScenario: Decodable {
         let workspaceGeometry: Bool?
         /// `scrollWorkspace`: to the end (true) or the top (false).
         let toEnd: Bool?
+        /// `eyeFocus`: where to write a PNG of the workspace with the first
+        /// eye that took keyboard focus.
+        let capture: String?
     }
 
     let steps: [Step]
@@ -244,6 +249,9 @@ struct InspectorUIScenario: Decodable {
                 await settle()
                 let state = studio.shownWorkspaceState
                 record(step.op, state.entries.count == count, "added \(count) folders: \(state.entries.count) rows in \(state.rowCapacity) slots")
+            case "eyeFocus":
+                let result = await Self.eyeFocus(window, studio: studio, moves: step.count ?? 2, capture: step.capture, settle: settle)
+                record(step.op, result.ok, result.detail)
             case "routePoint":
                 guard let index = step.index else { record(step.op, false, "no index"); continue }
                 studio.selectedRoutePoint = .init(index: index)
@@ -825,6 +833,223 @@ struct InspectorUIScenario: Decodable {
         detail += "; selected entries \(entries.filter(\.selected).count)"
         if !offenders.isEmpty { detail += "; " + offenders.prefix(8).joined(separator: "; ") }
         return (offenders.isEmpty, detail)
+    }
+
+    /// #410: the workspace eyes draw their own keyboard focus ring in place of
+    /// the system's focus effect. With Full Keyboard Access on (the lane passes
+    /// `-AppleKeyboardUIMode 2` in the app's argument domain, not System
+    /// Settings), this presses Tab, as real key events, from no first responder
+    /// until a workspace eye has keyboard focus (at most `maxTabs`), then
+    /// `moves` more times. It checks, against a render of the workspace with no
+    /// focus, that the focused eye's ring draws and that the ring leaves the
+    /// eye focus moves from; it counts the list, row and empty-slot bodies each
+    /// move evaluates (at most one list and two rows); and it presses the
+    /// focused eye through accessibility, as VoiceOver does, twice, which must
+    /// hide its object and show it again. The workspace is scrolled to the top
+    /// first, so the n-th eye on screen is row n. `capture` gets a PNG of the
+    /// workspace with the first focused eye.
+    @MainActor static func eyeFocus(_ window: NSWindow, studio: StudioModel, moves: Int, capture: String?,
+                                    settle: () async -> Void) async -> (ok: Bool, detail: String) {
+        guard let scroll = workspaceScrollView(window) else { return (false, "no workspace scroll view") }
+        var problems: [String] = [], seen: [String] = ["full keyboard access \(NSApp.isFullKeyboardAccessEnabled)"]
+        scrollWorkspace(scroll, toEnd: false)
+        window.makeFirstResponder(nil)
+        await settle()
+        let clipView = scroll.contentView
+        let clip = clipView.convert(clipView.bounds, to: nil)
+        guard let baseline = renderPixels(window, clip) else { return (false, "the workspace did not render") }
+        PerfTrace.scenarioBodyCounts = [Int](repeating: 0, count: PerfTrace.ViewBody.allCases.count)
+        defer { PerfTrace.scenarioBodyCounts = nil }
+        func bodies(_ view: PerfTrace.ViewBody) -> Int { PerfTrace.scenarioBodyCounts?[view.rawValue] ?? 0 }
+        func tab() {
+            for type in [NSEvent.EventType.keyDown, .keyUp] {
+                guard let event = NSEvent.keyEvent(with: type, location: .zero, modifierFlags: [],
+                                                   timestamp: ProcessInfo.processInfo.systemUptime, windowNumber: window.windowNumber,
+                                                   context: nil, characters: "\t", charactersIgnoringModifiers: "\t",
+                                                   isARepeat: false, keyCode: 48) else { continue }
+                NSApp.sendEvent(event)
+            }
+        }
+        func focused() -> (row: Int, eye: WorkspaceEye)? {
+            let eyes = workspaceEyes(window, scroll: scroll)
+            return eyes.firstIndex(where: \.focused).map { (row: $0, eye: eyes[$0]) }
+        }
+        // The ring's pixels: those around `eye` that differ from the render with no focus.
+        func ring(_ eye: WorkspaceEye, in pixels: Pixels) -> Int {
+            changedPixels(baseline, pixels, rect: clip, region: eye.frame.insetBy(dx: -4, dy: -4))
+        }
+        var tabs = 0
+        var found = focused()
+        while found == nil, tabs < Self.maxTabs {
+            tab(); tabs += 1
+            await settle()
+            found = focused()
+        }
+        guard var current = found else {
+            let eyes = workspaceEyes(window, scroll: scroll)
+            return (false, "no workspace eye took keyboard focus in \(tabs) Tabs (\(eyes.count) eyes on screen, first responder "
+                    + "\(describe(window.firstResponder))); " + seen.joined(separator: ", "))
+        }
+        seen.append("row \(current.row)'s eye focused after \(tabs) Tabs, label '\(current.eye.label)'")
+        guard let first = renderPixels(window, clip) else { return (false, "the workspace did not render with focus") }
+        let firstRing = ring(current.eye, in: first)
+        seen.append("ring \(firstRing) px")
+        if firstRing < Self.ringPixels { problems.append("row \(current.row)'s focused eye draws \(firstRing) px of ring, fewer than \(Self.ringPixels)") }
+        if let capture {
+            do {
+                _ = try CaptureOutput.writePNG(first.image, to: URL(fileURLWithPath: capture))
+                seen.append("capture \(first.width)x\(first.height) px")
+            } catch { problems.append("capture: \(error)") }
+        }
+        for move in 1...max(1, moves) {
+            let before = (bodies(.studioWorkspaceList), bodies(.studioWorkspaceRow), bodies(.studioWorkspacePlaceholder))
+            studio.endUndoCoalescing()
+            tab()
+            await settle()
+            let list = bodies(.studioWorkspaceList) - before.0, rows = bodies(.studioWorkspaceRow) - before.1
+            let slots = bodies(.studioWorkspacePlaceholder) - before.2
+            guard let next = focused(), let pixels = renderPixels(window, clip) else {
+                problems.append("move \(move): no workspace eye has focus"); break
+            }
+            let left = ring(current.eye, in: pixels), drawn = ring(next.eye, in: pixels)
+            seen.append("move \(move): row \(current.row) > \(next.row), list \(list), rows \(rows), empty slots \(slots), "
+                        + "ring left \(left) px, drawn \(drawn) px")
+            if next.row == current.row { problems.append("move \(move): focus stayed on row \(current.row)") }
+            if list > 1 { problems.append("move \(move) evaluated the list \(list) times") }
+            if rows > 2 { problems.append("move \(move) evaluated \(rows) rows") }
+            if slots > 0 { problems.append("move \(move) evaluated \(slots) empty slots") }
+            if drawn < Self.ringPixels { problems.append("move \(move): row \(next.row)'s eye draws \(drawn) px of ring") }
+            if left > Self.ringResidue { problems.append("move \(move): row \(current.row)'s eye still differs by \(left) px") }
+            current = next
+        }
+        // VoiceOver reaches the eye and presses it: hide, then show again.
+        let entries = studio.shownWorkspaceState.entries
+        if entries.indices.contains(current.row) {
+            let id = entries[current.row].id
+            for press in 1...2 {
+                let was = studio.doc.object(id)?.visible
+                studio.endUndoCoalescing()
+                guard let eye = workspaceEyes(window, scroll: scroll).dropFirst(current.row).first, eye.pressable else {
+                    problems.append("press \(press): row \(current.row)'s eye has no accessibility press"); break
+                }
+                _ = eye.element.perform(NSSelectorFromString("accessibilityPerformPress"))
+                await settle()
+                let now = studio.doc.object(id)?.visible
+                seen.append("press \(press): visible \(was.map { "\($0)" } ?? "-") > \(now.map { "\($0)" } ?? "-")")
+                if was == nil || now != was.map({ !$0 }) { problems.append("press \(press) did not toggle row \(current.row)'s visibility") }
+            }
+        } else { problems.append("no entry for row \(current.row)") }
+        window.makeFirstResponder(nil)
+        await settle()
+        return (problems.isEmpty, (problems + ["seen: " + seen.joined(separator: "; ")]).joined(separator: "; "))
+    }
+
+    /// `eyeFocus`: Tabs to reach a workspace eye, the ring's least pixels
+    /// (it is 2 pt wide, 1 to 3 pt outside the eye, about 160 px at 1x; each
+    /// eye is read within 4 pt of its frame, which no neighbour's ring
+    /// reaches) and the most pixels an eye may still differ by once focus
+    /// left it.
+    static let maxTabs = 120
+    static let ringPixels = 40
+    static let ringResidue = 8
+
+    struct WorkspaceEye {
+        let element: NSObject
+        /// In window coordinates.
+        let frame: CGRect
+        let focused: Bool
+        let pressable: Bool
+        let label: String
+    }
+
+    /// #410: the workspace's eye buttons on screen, top to bottom, read through
+    /// accessibility: the buttons that start in the visible area's trailing
+    /// 40 pt (a row's text ends before its eye).
+    @MainActor static func workspaceEyes(_ window: NSWindow, scroll: NSScrollView) -> [WorkspaceEye] {
+        let clipView = scroll.contentView
+        let clip = window.convertToScreen(clipView.convert(clipView.bounds, to: nil))
+        func get(_ object: NSObject, _ name: String) -> Any? {
+            let selector = NSSelectorFromString(name)
+            guard object.responds(to: selector) else { return nil }
+            return object.perform(selector)?.takeUnretainedValue()
+        }
+        typealias FrameGetter = @convention(c) (AnyObject, Selector) -> NSRect
+        typealias FlagGetter = @convention(c) (AnyObject, Selector) -> Bool
+        let frameSelector = NSSelectorFromString("accessibilityFrame"), focusSelector = NSSelectorFromString("isAccessibilityFocused")
+        let pressSelector = NSSelectorFromString("accessibilityPerformPress")
+        var eyes: [(element: NSObject, screen: CGRect)] = [], visited = 0
+        func visit(_ element: Any, depth: Int) {
+            guard depth < 80, visited < 20_000, let object = element as? NSObject else { return }
+            visited += 1
+            let role = get(object, "accessibilityRole") as? String ?? ""
+            if role == "AXScrollBar" { return }
+            if role == "AXButton", object.responds(to: frameSelector), let implementation = object.method(for: frameSelector) {
+                let frame = unsafeBitCast(implementation, to: FrameGetter.self)(object, frameSelector)
+                if frame.width > 0, frame.height > 0, frame.intersects(clip), frame.minX > clip.maxX - 40 { eyes.append((object, frame)) }
+            }
+            (get(object, "accessibilityChildren") as? [Any] ?? []).forEach { visit($0, depth: depth + 1) }
+        }
+        visit(scroll, depth: 0)
+        return eyes.sorted { $0.screen.midY > $1.screen.midY }.map { eye -> WorkspaceEye in
+            var focused = false
+            if eye.element.responds(to: focusSelector), let implementation = eye.element.method(for: focusSelector) {
+                focused = unsafeBitCast(implementation, to: FlagGetter.self)(eye.element, focusSelector)
+            }
+            let label = ["accessibilityLabel", "accessibilityTitle"].compactMap { get(eye.element, $0) as? String }.first { !$0.isEmpty } ?? ""
+            return WorkspaceEye(element: eye.element, frame: window.convertFromScreen(eye.screen), focused: focused,
+                                pressable: eye.element.responds(to: pressSelector), label: label)
+        }
+    }
+
+    /// A render of part of the window, as 8-bit RGBA rows from the top.
+    struct Pixels {
+        let image: CGImage
+        let width: Int, height: Int
+        let bytes: [UInt8]
+    }
+
+    /// Draws `rect` (window coordinates) of the window's content the way the
+    /// UI capture does (`cacheDisplay`, no screen recording).
+    @MainActor static func renderPixels(_ window: NSWindow, _ rect: CGRect) -> Pixels? {
+        guard let content = window.contentView else { return nil }
+        let area = content.convert(rect, from: nil)
+        guard let rep = content.bitmapImageRepForCachingDisplay(in: area) else { return nil }
+        content.cacheDisplay(in: area, to: rep)
+        guard let image = rep.cgImage, let space = CGColorSpace(name: CGColorSpace.sRGB) else { return nil }
+        let width = image.width, height = image.height
+        var bytes = [UInt8](repeating: 0, count: width * height * 4)
+        let drawn = bytes.withUnsafeMutableBytes { buffer -> Bool in
+            guard let context = CGContext(data: buffer.baseAddress, width: width, height: height, bitsPerComponent: 8,
+                                          bytesPerRow: width * 4, space: space,
+                                          bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue) else { return false }
+            context.draw(image, in: CGRect(x: 0, y: 0, width: width, height: height))
+            return true
+        }
+        return drawn ? Pixels(image: image, width: width, height: height, bytes: bytes) : nil
+    }
+
+    /// How many pixels of `region` (window coordinates, within `rect`, the
+    /// area both renders show) differ by more than 24 in a channel.
+    static func changedPixels(_ a: Pixels, _ b: Pixels, rect: CGRect, region: CGRect) -> Int {
+        guard a.width == b.width, a.height == b.height, rect.width > 0, rect.height > 0 else { return -1 }
+        let area = region.intersection(rect)
+        guard !area.isNull, !area.isEmpty else { return 0 }
+        let sx = CGFloat(a.width) / rect.width, sy = CGFloat(a.height) / rect.height
+        let x0 = max(0, Int(((area.minX - rect.minX) * sx).rounded(.down))), x1 = min(a.width, Int(((area.maxX - rect.minX) * sx).rounded(.up)))
+        // Rows run from the top; window y grows upwards.
+        let y0 = max(0, Int(((rect.maxY - area.maxY) * sy).rounded(.down))), y1 = min(a.height, Int(((rect.maxY - area.minY) * sy).rounded(.up)))
+        guard x0 < x1, y0 < y1 else { return 0 }
+        var changed = 0
+        for y in y0..<y1 {
+            for x in x0..<x1 {
+                let offset = (y * a.width + x) * 4
+                for channel in 0..<4 where abs(Int(a.bytes[offset + channel]) - Int(b.bytes[offset + channel])) > 24 {
+                    changed += 1
+                    break
+                }
+            }
+        }
+        return changed
     }
 
     /// Each segmented control in the inspector's document view, top to bottom, as

@@ -484,7 +484,8 @@ workspace list. It runs `studio-load` through `perf_trace.py run` (65 s by
 default, every launch through `--wrap`). It takes two `heap --forkCorpse -s`
 snapshots of the app by pid, at 12 s and 56 s after launch, and counts the
 loads between the snapshots it read from the report. A snapshot whose `heap`
-fails is retried once, 2 s later. Then it compares the counts of AppKit's
+fails is tried again 2 s later, up to four attempts in all, and each
+attempt's start and exit are printed. Then it compares the counts of AppKit's
 `NSKeyValueDependency`, `NSKeyValueDependencyContext`, `__NSMallocBlock__`
 and `__NSExactBlockVariable__`, and of every SwiftUI `AnyHashableBox<T>`, one
 row per payload type `T`.
@@ -499,6 +500,15 @@ row per payload type `T`.
 - The snapshot schedule changed once, before any run with it: the first two
   runs' 8 s snapshot failed (`heap` exit 255), so the early snapshot moved to
   12 s and gained the retry. The bar did not change.
+- The snapshot procedure changed again in v2.2, before any run with it.
+  Three v2.1 runs of one build were each invalid, because both attempts at
+  one snapshot exited 255. Each snapshot now gets up to four attempts. The
+  loads are still counted between the attempts that were read, so a late
+  attempt only narrows the window. The bar, the rows, the flags and the
+  other validity rules did not change. v2.2 runs are a new registration, not
+  pooled with v2.1 runs. Before its first run on a fix, v2.2 was run on the
+  slots-only build (03f056de) as a positive control, and failed it as
+  required: about 41 per load on the four AppKit rows.
 - The rows changed once (v2.1), and only to make the check stricter. The
   first version counted only `AnyHashableBox<UUID>`, and a list keyed by
   position moved the same growth to `AnyHashableBox<Int>`, which it did not
@@ -508,8 +518,8 @@ row per payload type `T`.
 - It writes `workspace-growth.json` with the raw counts, every snapshot
   attempt and the flags, and exits 0 (pass), 1 (fail) or 2 (invalid).
 - [test_workspace_growth_check.py](../../Tools/verification/test_workspace_growth_check.py)
-  covers the heap reader, the load count, the bar, the retry, the box rows
-  and the flags with synthetic data.
+  covers the heap reader, the load count, the bar, the attempts, the box
+  rows and the flags with synthetic data.
 
 The check needs the private source scene (`perf_trace.py`'s environment
 map), so no lane runs it. Results are in

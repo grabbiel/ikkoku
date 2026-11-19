@@ -3726,7 +3726,7 @@
         "IKKOKU_STUDIO_SCENARIO_REPORT": ".local/verification/reports/studio-scenario-workspace-rows-by-position.json"
       },
       "referenceTier": "app-smoke",
-      "tolerance": "#410: the workspace list keys its rows by position, so each row must show the object at its index and hold no state of its own. Three folders added to the source scene (Row A, Row B, Row C) are its last three rows. After Row A is deleted and Row C renamed, Row B is the second-to-last row and the renamed Row C the last; after Row B is selected and duplicated, the copy is the last row and the only selected one; three Undos bring Row A back, third from the end. The scene then exports and reimports. Every assertWorkspaceRows also checks that the published rows equal a rebuild and that WorkspaceRow has only its entry and two actions.",
+      "tolerance": "#410: the workspace list keys its rows by position, so each row must show the object at its index and hold no state of its own. Three folders added to the source scene (Row A, Row B, Row C) are its last three rows. After Row A is deleted and Row C renamed, Row B is the second-to-last row and the renamed Row C the last; after Row B is selected and duplicated, the copy is the last row and the only selected one; three Undos bring Row A back, third from the end. The scene then exports and reimports. Every assertWorkspaceRows also checks that the published rows equal a rebuild and that WorkspaceRow has only its entry, the list's eye focus (the binding, its slot and whether its ring shows) and two actions.",
       "artifacts": [
         {
           "path": ".local/verification/reports/studio-scenario-workspace-rows-by-position.json",
@@ -3765,6 +3765,42 @@
         {
           "path": ".local/verification/reports/studio-scenario-workspace-list-geometry.json",
           "kind": "scenario-report"
+        }
+      ],
+      "timeout": 600
+    },
+    {
+      "id": "studio-scenario-workspace-eye-focus",
+      "argv": [
+        ".local/build/Build/Products/Debug/Ikkoku.app/Contents/MacOS/Ikkoku",
+        "-AppleKeyboardUIMode",
+        "2"
+      ],
+      "fixtures": [
+        {
+          "env": "IKKOKU_SOURCE_SCENE",
+          "kind": "file",
+          "from": "IKKOKU_STUDIO_SCENARIO_SCENE"
+        },
+        {
+          "env": "IKKOKU_SOURCE_AVATAR",
+          "kind": "file"
+        }
+      ],
+      "env": {
+        "IKKOKU_STUDIO_SCENARIO": "Tools/verification/scenarios/workspace-eye-focus.json",
+        "IKKOKU_STUDIO_SCENARIO_REPORT": ".local/verification/reports/studio-scenario-workspace-eye-focus.json"
+      },
+      "referenceTier": "app-smoke",
+      "tolerance": "#410: the workspace eye buttons have no system focus effect (each one SwiftUI showed added a focus ring view, and an AppKit dependency that was never removed, to the list's scroll view on every load) and draw their own ring instead. With Full Keyboard Access for the app process only (-AppleKeyboardUIMode 2 in the argument domain, not System Settings), Tab key events from no first responder must reach an eye on the source scene's list; against a render of the list with no focus (cacheDisplay, as the UI capture draws), the focused eye draws at least 40 px of ring within 4 pt of it. Three more Tabs must each move focus to another eye, draw its ring, leave at most 8 px of the ring it left and evaluate the list at most once, at most two rows and no empty slot. Pressing the focused eye through accessibility, as VoiceOver does, must hide its object, and again show it. The PNG is the list with the first focused eye, for the visual pass.",
+      "artifacts": [
+        {
+          "path": ".local/verification/reports/studio-scenario-workspace-eye-focus.json",
+          "kind": "scenario-report"
+        },
+        {
+          "path": ".local/verification/scenario-exports/workspace-eye-focus.png",
+          "kind": "render-capture"
         }
       ],
       "timeout": 600

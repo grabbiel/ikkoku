@@ -121,12 +121,19 @@ struct StudioWorkspaceContent: View, Equatable {
     /// `entries.count`.
     let rowCapacity: Int
     let objectCount: Int
+    /// #410: the slot whose eye button has keyboard focus. The eye draws its
+    /// own focus ring (`WorkspaceRow.focusShown`) in place of the system's
+    /// focus effect, which it disables. The list holds the focus, not the
+    /// row, so a focus move evaluates this body once and the two rows whose
+    /// ring changes.
+    @FocusState private var focusedEye: Int?
 
     static func == (a: Self, b: Self) -> Bool {
         a.model === b.model && a.entries == b.entries && a.rowCapacity == b.rowCapacity && a.objectCount == b.objectCount
     }
 
     var body: some View {
+        let _ = PerfTrace.body(.studioWorkspaceList)
         VStack(spacing: 0) {
             HStack {
                 Text("Workspace").font(.headline)
@@ -152,7 +159,8 @@ struct StudioWorkspaceContent: View, Equatable {
             ScrollView {
                 LazyVStack(spacing: 0) {
                     ForEach(0..<max(rowCapacity, entries.count), id: \.self) { index in
-                        WorkspaceSlot(model: model, entry: index < entries.count ? entries[index] : nil, first: index == 0)
+                        WorkspaceSlot(model: model, entry: index < entries.count ? entries[index] : nil, first: index == 0,
+                                      focus: $focusedEye, slot: index, focusShown: focusedEye == index)
                             .equatable()
                     }
                 }.padding(4)
@@ -533,14 +541,23 @@ struct WorkspaceSlot: View, Equatable {
     let model: StudioModel
     let entry: WorkspaceEntry?
     let first: Bool
+    /// The list's eye focus (`StudioWorkspaceContent.focusedEye`), this
+    /// slot's index in it and whether this slot's eye has it.
+    let focus: FocusState<Int?>.Binding
+    let slot: Int
+    let focusShown: Bool
 
-    /// The row's actions call the model with the row's id, so the entry decides equality.
-    static func == (a: Self, b: Self) -> Bool { a.model === b.model && a.entry == b.entry && a.first == b.first }
+    /// The row's actions call the model with the row's id, so the entry
+    /// decides equality, with the focus ring; the focus binding is the list's,
+    /// the same for every slot.
+    static func == (a: Self, b: Self) -> Bool {
+        a.model === b.model && a.entry == b.entry && a.first == b.first && a.slot == b.slot && a.focusShown == b.focusShown
+    }
 
     var body: some View {
         VStack(spacing: 0) {
             if let entry {
-                WorkspaceRow(entry: entry) {
+                WorkspaceRow(entry: entry, focus: focus, slot: slot, focusShown: focusShown) {
                     model.selection = entry.id
                 } toggleVisible: {
                     model.update(entry.id) { $0.visible.toggle() }
@@ -555,6 +572,17 @@ struct WorkspaceSlot: View, Equatable {
     }
 }
 
+/// #410: ties a workspace eye to the list's focus at its slot, or nothing
+/// for a row drawn alone.
+struct WorkspaceEyeFocus: ViewModifier {
+    let focus: FocusState<Int?>.Binding?
+    let slot: Int
+
+    func body(content: Content) -> some View {
+        if let focus { content.focused(focus, equals: slot) } else { content }
+    }
+}
+
 extension WorkspaceRow {
     /// #410: the height the workspace stack gives `entry`'s row at `width`
     /// (its fitting height), for the geometry scenario and the slot
@@ -566,15 +594,25 @@ extension WorkspaceRow {
 
 /// One workspace row. It holds no state (no @State, focus, hover or drag):
 /// the stack keys its slots by position (#410), so state here would stay with
-/// the slot, not the object, after a delete or a duplicate. The scenario
-/// step `assertWorkspaceRows` checks that it has only these three fields.
+/// the slot, not the object, after a delete or a duplicate. The eye's keyboard
+/// focus is the list's (`StudioWorkspaceContent.focusedEye`), by slot, so it
+/// too stays at its position, as a list's focus does when the row under it
+/// changes. The scenario step `assertWorkspaceRows` checks that it has only
+/// these six fields.
 struct WorkspaceRow: View, Equatable {
     let entry: WorkspaceEntry
+    /// The list's eye focus and this row's slot in it; nil where a row is
+    /// drawn alone (`fittingHeight`).
+    var focus: FocusState<Int?>.Binding? = nil
+    var slot = 0
+    /// Whether the eye has keyboard focus, so it draws its focus ring.
+    var focusShown = false
     let select: () -> Void
     let toggleVisible: () -> Void
 
-    /// The actions call the model with the row's id, so the entry decides equality.
-    static func == (a: Self, b: Self) -> Bool { a.entry == b.entry }
+    /// The actions call the model with the row's id, so the entry decides
+    /// equality, with the slot and the focus ring.
+    static func == (a: Self, b: Self) -> Bool { a.entry == b.entry && a.slot == b.slot && a.focusShown == b.focusShown }
 
     var icon: String {
         if entry.cameraPlaceholder { return "camera.fill" }
@@ -611,8 +649,17 @@ struct WorkspaceRow: View, Equatable {
             // container, and AppKit's drag-region update keeps a dependency on
             // the container for each one it adds, so every load that rebuilt
             // the rows added about 41 dependencies that were never removed.
+            // The eye draws its own ring instead, in the system's focus colour,
+            // while it has keyboard focus (Full Keyboard Access); the ring is
+            // always there, transparent without focus, so focus changes no
+            // view's structure.
             Button(action: toggleVisible) { Image(systemName: entry.visible ? "eye" : "eye.slash").foregroundStyle(.secondary) }.buttonStyle(.plain)
                 .focusEffectDisabled()
+                .modifier(WorkspaceEyeFocus(focus: focus, slot: slot))
+                .overlay {
+                    RoundedRectangle(cornerRadius: 4).strokeBorder(Color(nsColor: .keyboardFocusIndicatorColor), lineWidth: 2)
+                        .padding(-3).opacity(focusShown ? 1 : 0).allowsHitTesting(false)
+                }
         }
         .padding(.vertical, 3).padding(.horizontal, 6)
         .background(RoundedRectangle(cornerRadius: 5).fill(entry.selected ? Color.accentColor.opacity(0.3) : .clear))
