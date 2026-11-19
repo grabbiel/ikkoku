@@ -594,7 +594,8 @@ private struct DynamicsTransforms {
             }
             // No record and one collapsed axis (`collapsedAxisBasis`).
             let collapsed = (0..<3).filter { scale[$0] <= 1e-6 }
-            guard trs, collapsed.count == 1 else { throw Self.unrecorded }
+            guard trs else { throw rig.nodes[i].authoredMatrix == nil ? Self.unrecorded : Self.authored }
+            guard collapsed.count == 1 else { throw Self.unrecorded }
             guard let r = SourceDynamicBone.collapsedAxisBasis(m, scale: scale, axis: collapsed[0]) else { throw Self.shear }
             translations.append(m.translation); rotations.append(simd_quatf(r).normalized); scales.append(scale)
         }
@@ -605,6 +606,7 @@ private struct DynamicsTransforms {
     }
     static let unrecorded = RigError.invalid("Dynamics has no signed TRS record for a negative scale, or for two collapsed axes, on a dynamics bone or its ancestors. The rest pose and the shape stages record one; a later writer (an ABMX scale record, an animation) leaves none, so that chain is not simulated (#406 residual).")
     static let shear = RigError.invalid("Dynamics does not support local shear on a dynamics bone or its ancestors (#406).")
+    static let authored = RigError.invalid("Dynamics does not simulate a matrix-authored transform on a dynamics bone or its ancestors.")
 
     /// Where `slot`'s parent chain maps the world point `p`, the way Unity's
     /// position setter finds the local position: each ancestor's TRS is

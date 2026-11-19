@@ -196,7 +196,8 @@ func sourceDynamicsLocalOriginalHairRigWhenRequested() throws {
 /// world. #406: a zero axis on the chain itself simulates, recorded or not
 /// (one collapsed axis is rebuilt from the other two); a negative scale
 /// simulates with its signed record and is refused without one, naming #406.
-/// A record that no longer describes its matrix is ignored.
+/// A record that no longer describes its matrix is ignored, and a
+/// matrix-authored chain node is refused with its own message.
 @Test func sourceDynamicsValidatedStepAcceptsACollapsedRendererLikeEvaluate() throws {
     let rig = try RigDefinition(nodes: try dynamicsRig().nodes + [.init(name: "flat", sourceID: "flat", parent: 0, scale: Float3(0, 1, 1))],
                                 skins: [.init(name: "hair", meshNode: 3, joints: [2], inverseBindMatrices: [matrix_identity_float4x4])])
@@ -237,6 +238,16 @@ func sourceDynamicsLocalOriginalHairRigWhenRequested() throws {
     stale.localMatrices[1] = Transform.scale(Float3(-1, 1.5, 1))
     #expect(stale.signedTRS?[1] != nil && stale.validSignedTRS(1) == nil)
     #expect(throws: RigError.self) { try SourceDynamicBone(rig: rig, pose: stale, definition: config) }
+    // A matrix-authored chain node has no TRS to simulate and says so.
+    let authored = try RigDefinition(nodes: [.init(name: "owner", sourceID: "owner", parent: nil),
+        .init(name: "root", sourceID: "root", parent: 0, authoredMatrix: matrix_identity_float4x4),
+        .init(name: "tip", sourceID: "tip", parent: 1, translation: Float3(0, -1, 0))], skins: [])
+    do {
+        _ = try SourceDynamicBone(rig: authored, definition: config)
+        Issue.record("A matrix-authored node on the dynamics chain must be refused.")
+    } catch {
+        #expect("\(error)".contains("matrix-authored"), "\(error)")
+    }
 }
 
 /// `RigDefinition.isFiniteAffine` became four-lane (2026-11-17). The test above

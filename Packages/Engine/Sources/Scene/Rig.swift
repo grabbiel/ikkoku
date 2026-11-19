@@ -207,8 +207,9 @@ public struct SignedTRS: Sendable {
 public struct RigPose: Sendable {
     public var localMatrices: [float4x4]
     /// Signed TRS records of nodes whose scale has a component at or below
-    /// zero, keyed by node (#406). Only the rest pose and the shape stages
-    /// write them; a record counts only while it still `describes` its node's
+    /// zero, keyed by node (#406). The rest pose, the shape stages and the
+    /// dynamics write-back write them; full-body IK carries its input's table.
+    /// A record counts only while it still `describes` its node's
     /// local matrix, so any other writer invalidates it by writing the matrix.
     /// Nil, with nothing allocated or retained on a copy, when no node has one.
     public var signedTRS: [Int: SignedTRS]?
