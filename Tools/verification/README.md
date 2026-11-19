@@ -1359,7 +1359,9 @@ get wrong:
   variant (camera slots 1-5 only in the camera menu). The app logs both
   variants' ideal widths per mode after the capture, and the check also needs
   the shown variant to be the first that fits the shown state, with no
-  second variant left in the window.
+  second variant left in the window. Both rules use the available width the
+  probe measured, so a capture with `IKKOKU_CAPTURE_UI_WINDOW_W` (a window width
+  near a boundary, #425) is judged at the width it actually got.
 
 The Tab walk of `keyLoop` focuses each field in turn, and focusing a
 Transform field commits the value it shows (as `inspector-edit-deselect`

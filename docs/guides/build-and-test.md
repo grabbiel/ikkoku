@@ -408,6 +408,12 @@ viewport show that mode. The selection must then be a character: otherwise the
 capture exits 1 with a message naming the selection, rather than capture a
 toolbar without the pose controls.
 
+`IKKOKU_CAPTURE_UI_WINDOW_W` (a whole number of points, at least 1180; studio
+mode only, #425) sets the window's frame width at the first readiness poll that
+has a window, before the selections, keeping its height. A width wider than the
+screen's visible width, or one the window does not take, exits 1; it is never
+clamped. Unset, the window keeps the size it opened at.
+
 Capture outputs are read back after writing: the UI PNG and
 `IKKOKU_CAPTURE_UI_REPORT`, thumbnails, offscreen PNGs and JSON reports. Each
 must be nonempty and byte-identical to what was written, and a PNG must be
@@ -525,8 +531,9 @@ These combinations used to run and now exit 1 at startup:
   timeline must be finite numbers, and presets one of face, upper or full (rig
   capture: only `face`). Flags must be 0 or 1, `IKKOKU_CAPTURE_SEX` m or f and
   `IKKOKU_CAPTURE_UI_MODE` maker or studio. `IKKOKU_CAPTURE_UI_SELECT` must
-  list 1 to 16 source keys or `none`, and `IKKOKU_CAPTURE_UI_POSE_MODE` be
-  object, fk or ik. `IKKOKU_PERF_WORKLOAD` must be a
+  list 1 to 16 source keys or `none`, `IKKOKU_CAPTURE_UI_POSE_MODE` be
+  object, fk or ik, and `IKKOKU_CAPTURE_UI_WINDOW_W` an integer of at least
+  1180. `IKKOKU_PERF_WORKLOAD` must be a
   documented workload and the other `IKKOKU_PERF_*` values integers in range. Expression keys must be eyes, mouth,
   brows, head or gaze, with well-formed `key=value` lists. Focus events must be
   0/1 lists of at most 64. Native scene capture rejects `GRID=1` and `GIZMOS=1`.

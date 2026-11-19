@@ -55,6 +55,9 @@ final class AppState {
     /// `IKKOKU_CAPTURE_UI_POSE_MODE` (#425): the pose mode to set, in its own readiness poll, once the
     /// selections are made; nil once set (or when not requested).
     @ObservationIgnored private var uiCapturePoseMode: PoseMode?
+    /// `IKKOKU_CAPTURE_UI_WINDOW_W` (#425) is set and the first readiness poll with a window has not
+    /// resized it yet.
+    @ObservationIgnored private var uiCaptureWindowWidthPending = false
 
     init() {
         let env = ProcessInfo.processInfo.environment
@@ -1051,6 +1054,8 @@ final class AppState {
                     }
                     studio.inspectorTab = tab
                 }
+                // The first readiness poll with a window applies it (checked against that screen).
+                uiCaptureWindowWidthPending = env[UICaptureWindowWidth.variable] != nil
                 if let text = env["IKKOKU_CAPTURE_UI_POSE_MODE"] {
                     // CaptureRequest admits only object, fk and ik; anything else is still refused here.
                     guard let poseMode = PoseMode.allCases.first(where: { $0.rawValue.lowercased() == text }) else {
@@ -1095,6 +1100,28 @@ final class AppState {
         studio.poseMode = poseMode
     }
 
+    /// #425: sets `IKKOKU_CAPTURE_UI_WINDOW_W` as the window's frame width, keeping its height and
+    /// keeping it on its screen. A width the screen cannot show, or one AppKit does not apply,
+    /// refuses the capture.
+    private func applyUICaptureWindowWidth(_ window: NSWindow, _ env: [String: String]) {
+        let visible = (window.screen ?? NSScreen.main)?.visibleFrame ?? .zero
+        let width: Int
+        do {
+            guard let parsed = try UICaptureWindowWidth.fromEnvironment(env, visibleWidth: Double(visible.width)) else { return }
+            width = parsed
+        } catch {
+            print("[ikkoku] ui snapshot failed: \(error)"); exit(1)
+        }
+        var frame = window.frame
+        frame.size.width = CGFloat(width)
+        frame.origin.x = min(max(frame.minX, visible.minX), visible.maxX - frame.width)
+        window.setFrame(frame, display: true)
+        guard Int(window.frame.width.rounded()) == width else {
+            print("[ikkoku] ui snapshot failed: \(UICaptureWindowWidth.variable)=\(width) left the window \(window.frame.width) points wide")
+            exit(1)
+        }
+    }
+
     /// Arms the `IKKOKU_CAPTURE_UI` readiness poll at the end of startup (A-T05). Instead of a
     /// fixed delay, a main-run-loop timer observes the window every
     /// `UICaptureReadiness.pollInterval` seconds and captures once the content has appeared in a
@@ -1121,6 +1148,14 @@ final class AppState {
     private func pollUICapture(elapsed: Double) {
         let env = ProcessInfo.processInfo.environment
         guard var tracker = uiCaptureTracker, let out = env["IKKOKU_CAPTURE_UI"] else { return }
+        // #425: the window width first, as soon as there is a window, so every later step lays out
+        // at that width; this poll observes nothing and the stable count starts after it.
+        if uiCaptureWindowWidthPending, let window = NSApp?.windows.first(where: { $0.isVisible && $0.contentView != nil }) {
+            uiCaptureWindowWidthPending = false
+            applyUICaptureWindowWidth(window, env)
+            logUICaptureFit("window-width", elapsed: elapsed)
+            return
+        }
         if !uiCapturePendingSelections.isEmpty, let studio {
             logUICaptureFit("select", elapsed: elapsed)
             studio.selection = uiCapturePendingSelections.removeFirst()
