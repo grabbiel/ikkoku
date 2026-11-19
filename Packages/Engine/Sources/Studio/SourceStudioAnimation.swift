@@ -105,7 +105,11 @@ public struct SourceStudioAnimation: Sendable {
         guard height.isFinite else { throw RigError.invalid("Studio animation height is not finite.") }
         // Normal AnimeLoadInfo sets height but deliberately does not set motion
         // or the H-only option parameters, even when the saved fields are nonzero.
-        return library.parameters.contains(where: { $0.name == "height" && $0.type == "float" }) ? ["height": height] : [:]
+        // Body rate 0 is the parameter; a vanilla card load clamps it to 0...1
+        // (`SourceShapeRateRange`), Slider Unlocker keeps it. The blend clamps
+        // at its thresholds either way.
+        return library.parameters.contains(where: { $0.name == "height" && $0.type == "float" })
+            ? ["height": SourceShapeRateRange.configured.drawn(height)] : [:]
     }
     public func clock(state: SourceStudioAnimationState, elapsed: Float, height: Float) throws -> Clock {
         var playback = Playback()

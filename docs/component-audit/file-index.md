@@ -14,7 +14,7 @@ the ST-T07 eye look reference and solver-port files, the ST-T07s eye look
 Studio preview runtime files, the ST-T07u iris rendering files and the ST-T04
 studio item shader contract and record color files and the ST-T08 first-slice
 original motion capture/replay files. The 2026-10-23 ST-T08e skirt slice updates runtime, exporter, fixture, test and reference files and adds its paired
-Studio save/load scenarios; it does not represent a new code audit. The 2026-10-25 ST-T03i plug-in data slice adds its rule, test, rule-parity, survey and original-player probe files. The 2026-10-26 texture-loading slice (the parallel-test pool deadlock) adds the in-line texture loader, its identity, corpus and upload tests, and 19 synthetic decoder fixtures. The 2026-10-26 ST-T05a legacy-scene slice adds its reader, test, timing, original-player probe and scenario files. The 2026-11-01 #321 slice adds the deep-scene stack test. The 2026-11-02 ST-T04 catalog slice adds the item catalog generator and its synthetic test. The 2026-11-18 #394 slice adds the stable dictionary encoding and its test. The 2026-11-18 #391 slice adds the source Euler commit test. The 2026-11-18 frame-preparation slice adds the encoder state record, the draw-order test and the encoder state test. It lists every present Git-visible
+Studio save/load scenarios; it does not represent a new code audit. The 2026-10-25 ST-T03i plug-in data slice adds its rule, test, rule-parity, survey and original-player probe files. The 2026-10-26 texture-loading slice (the parallel-test pool deadlock) adds the in-line texture loader, its identity, corpus and upload tests, and 19 synthetic decoder fixtures. The 2026-10-26 ST-T05a legacy-scene slice adds its reader, test, timing, original-player probe and scenario files. The 2026-11-01 #321 slice adds the deep-scene stack test. The 2026-11-02 ST-T04 catalog slice adds the item catalog generator and its synthetic test. The 2026-11-18 #394 slice adds the stable dictionary encoding and its test. The 2026-11-18 #391 slice adds the source Euler commit test. The 2026-11-18 frame-preparation slice adds the encoder state record, the draw-order test and the encoder state test. The 2026-11-18 #384 slice adds the Studio undo history, its test and the undo scene-replacement scenario. The 2026-11-18 extended shape rate slice adds its original-player probe, driver and test, and the engine comparison with the probe's capture. It lists every present Git-visible
 tracked/untracked non-ignored repository file outside
 `docs/component-audit/`. It excludes private `.local/`, dependency/build caches
 and ignored intermediate assets. Binary assets are inventoried, not reviewed as
@@ -23,7 +23,7 @@ branch was tested or every asset matches the original game. Feature status,
 specific comments and pending tasks are in the linked reports. Shared behavior
 may be discussed in more than one report; one primary owner is listed here.
 
-**1106 files indexed; 1106 assigned; 0 unassigned.**
+**1114 files indexed; 1114 assigned; 0 unassigned.**
 
 Counts include the website and clothes-group additions listed below. Runtime and
 test totals include their specialized role descriptions; this is inventory
@@ -32,21 +32,21 @@ bookkeeping, not a new full source audit.
 | Primary report | Files |
 | --- | ---: |
 | [App / gameplay / plugins](app-gameplay-and-plugins.md) | 110 |
-| [Character / Maker / mods](character-and-mods.md) | 135 |
-| [Studio / IK / animation](studio.md) | 262 |
+| [Character / Maker / mods](character-and-mods.md) | 139 |
+| [Studio / IK / animation](studio.md) | 264 |
 | [Renderer / foundation / assets](renderer-and-foundation.md) | 368 |
-| [Toolchain / verification / historical docs](toolchain-and-verification.md) | 221 |
+| [Toolchain / verification / historical docs](toolchain-and-verification.md) | 223 |
 
 | File role | Files |
 | --- | ---: |
 | App resource metadata / icon | 16 |
 | Build / repository configuration | 9 |
-| Conversion / recovery / verification tool | 257 |
+| Conversion / recovery / verification tool | 260 |
 | Documentation / historical evidence | 65 |
 | Generated asset / catalog / fixture | 205 |
-| Reference host / controlled fixture | 38 |
-| Runtime / shared shader declaration | 239 |
-| Test / validation | 237 |
+| Reference host / controlled fixture | 39 |
+| Runtime / shared shader declaration | 240 |
+| Test / validation | 240 |
 | Public synthetic body/face input fixture | 1 |
 
 ## App / gameplay / plugins
@@ -307,6 +307,10 @@ Feature assessment: [character-and-mods.md](character-and-mods.md).
 | [Packages/Engine/Tests/EngineTests/SourceCharacterCardSelectionTests.swift](../../Packages/Engine/Tests/EngineTests/SourceCharacterCardSelectionTests.swift) | Test / validation |
 | [Packages/Engine/Sources/Character/SourceBodyLateCorrection.swift](../../Packages/Engine/Sources/Character/SourceBodyLateCorrection.swift) | Runtime / shared shader declaration |
 | [Packages/Engine/Tests/EngineTests/SourceBodyLateCorrectionTests.swift](../../Packages/Engine/Tests/EngineTests/SourceBodyLateCorrectionTests.swift) | Test / validation |
+| [Tools/reverse/fixtures/OriginalSliderProbe.cs](../../Tools/reverse/fixtures/OriginalSliderProbe.cs) | Reference host / controlled fixture |
+| [Tools/reverse/original_slider_probe.py](../../Tools/reverse/original_slider_probe.py) | Conversion / recovery / verification tool |
+| [Tools/reverse/test_original_slider_probe.py](../../Tools/reverse/test_original_slider_probe.py) | Test / validation |
+| [Packages/Engine/Tests/EngineTests/SourceSliderOracleTests.swift](../../Packages/Engine/Tests/EngineTests/SourceSliderOracleTests.swift) | Test / validation |
 
 ## Studio / IK / animation
 
@@ -393,6 +397,7 @@ Feature assessment: [studio.md](studio.md).
 | [Packages/Engine/Sources/Studio/SourceStudioWear.swift](../../Packages/Engine/Sources/Studio/SourceStudioWear.swift) | Runtime / shared shader declaration |
 | [Packages/Engine/Sources/Studio/SourceStudioWorldTransform.swift](../../Packages/Engine/Sources/Studio/SourceStudioWorldTransform.swift) | Runtime / shared shader declaration |
 | [Packages/Engine/Sources/Studio/StudioDocument.swift](../../Packages/Engine/Sources/Studio/StudioDocument.swift) | Runtime / shared shader declaration |
+| [Packages/Engine/Sources/Studio/StudioUndoHistory.swift](../../Packages/Engine/Sources/Studio/StudioUndoHistory.swift) | Runtime / shared shader declaration |
 | [Packages/Engine/Sources/Studio/StudioUndoSteps.swift](../../Packages/Engine/Sources/Studio/StudioUndoSteps.swift) | Runtime / shared shader declaration |
 | [Packages/Engine/Sources/Studio/StudioWalkMemo.swift](../../Packages/Engine/Sources/Studio/StudioWalkMemo.swift) | Runtime / shared shader declaration |
 | [Packages/Engine/Sources/Studio/StudioStatusText.swift](../../Packages/Engine/Sources/Studio/StudioStatusText.swift) | Runtime / shared shader declaration |
@@ -472,6 +477,7 @@ Feature assessment: [studio.md](studio.md).
 | [Packages/Engine/Tests/EngineTests/SourceStudioWorldTransformTests.swift](../../Packages/Engine/Tests/EngineTests/SourceStudioWorldTransformTests.swift) | Test / validation |
 | [Packages/Engine/Tests/EngineTests/SourceTrigonometricIKTests.swift](../../Packages/Engine/Tests/EngineTests/SourceTrigonometricIKTests.swift) | Test / validation |
 | [Packages/Engine/Tests/EngineTests/StudioHierarchyTests.swift](../../Packages/Engine/Tests/EngineTests/StudioHierarchyTests.swift) | Test / validation |
+| [Packages/Engine/Tests/EngineTests/StudioUndoHistoryTests.swift](../../Packages/Engine/Tests/EngineTests/StudioUndoHistoryTests.swift) | Test / validation |
 | [Packages/Engine/Tests/EngineTests/StudioUndoStepsTests.swift](../../Packages/Engine/Tests/EngineTests/StudioUndoStepsTests.swift) | Test / validation |
 | [Packages/Engine/Tests/EngineTests/StudioWalkMemoTests.swift](../../Packages/Engine/Tests/EngineTests/StudioWalkMemoTests.swift) | Test / validation |
 | [Packages/Engine/Tests/EngineTests/StudioStatusTextTests.swift](../../Packages/Engine/Tests/EngineTests/StudioStatusTextTests.swift) | Test / validation |
@@ -1033,6 +1039,7 @@ Feature assessment: [toolchain-and-verification.md](toolchain-and-verification.m
 | [Tools/verification/scenarios/clothes-toggle.json](../../Tools/verification/scenarios/clothes-toggle.json) | Conversion / recovery / verification tool |
 | [Tools/verification/scenarios/color-edit.json](../../Tools/verification/scenarios/color-edit.json) | Conversion / recovery / verification tool |
 | [Tools/verification/scenarios/color-visual-reset.json](../../Tools/verification/scenarios/color-visual-reset.json) | Conversion / recovery / verification tool |
+| [Tools/verification/scenarios/extended-shape-rates.json](../../Tools/verification/scenarios/extended-shape-rates.json) | Conversion / recovery / verification tool |
 | [Tools/verification/scenarios/eye-look-orbit.json](../../Tools/verification/scenarios/eye-look-orbit.json) | Conversion / recovery / verification tool |
 | [Tools/verification/scenarios/face-shape.json](../../Tools/verification/scenarios/face-shape.json) | Conversion / recovery / verification tool |
 | [Tools/verification/scenarios/fk-edit.json](../../Tools/verification/scenarios/fk-edit.json) | Conversion / recovery / verification tool |
@@ -1103,6 +1110,7 @@ Feature assessment: [toolchain-and-verification.md](toolchain-and-verification.m
 | [Tools/verification/scenarios/undo-no-catalog.json](../../Tools/verification/scenarios/undo-no-catalog.json) | Conversion / recovery / verification tool |
 | [Tools/verification/scenarios/undo-props.json](../../Tools/verification/scenarios/undo-props.json) | Conversion / recovery / verification tool |
 | [Tools/verification/scenarios/undo-route.json](../../Tools/verification/scenarios/undo-route.json) | Conversion / recovery / verification tool |
+| [Tools/verification/scenarios/undo-scene-replacements.json](../../Tools/verification/scenarios/undo-scene-replacements.json) | Conversion / recovery / verification tool |
 | [Tools/verification/scenarios/visibility-folder.json](../../Tools/verification/scenarios/visibility-folder.json) | Conversion / recovery / verification tool |
 | [Tools/verification/test_doctor.py](../../Tools/verification/test_doctor.py) | Test / validation |
 | [Tools/verification/test_inspect_app_bundle.py](../../Tools/verification/test_inspect_app_bundle.py) | Test / validation |

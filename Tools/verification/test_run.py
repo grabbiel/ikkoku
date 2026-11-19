@@ -629,6 +629,8 @@ class CheckExecutionTests(unittest.TestCase):
 
 SCENARIO_OPS = {"select", "setVisible", "rename", "toggleCamera", "toggleRoute",
                 "undo", "redo", "newScene", "saveDocument", "loadDocument",
+                # #384: an Open that must be refused, and Import Scene (a merge).
+                "loadDocumentRejected", "importDocument",
                 "setFace", "setBody", "setColor", "resetShape", "resetColors", "setOutfit",
                 "setClothesState", "setAccessoryVisible", "setShoesType", "setExpression", "resetExpression", "setAnimation", "setAnimationSpeed",
                 "setForceLoop", "setFKEnabled", "setFK", "setPoseMode", "selectBone",
@@ -945,7 +947,7 @@ class StudioScenarioLaneTests(unittest.TestCase):
                       and not name.startswith(("maker-", "gameplay-")))
 
     def test_lane_validates_and_covers_every_scenario(self):
-        self.assertEqual(len(self.checks), 98)
+        self.assertEqual(len(self.checks), 100)
         referenced = set()
         for check in self.checks:
             scenario = check["env"]["IKKOKU_STUDIO_SCENARIO"]
@@ -1229,7 +1231,8 @@ class StudioScenarioLaneTests(unittest.TestCase):
                         self.assertEqual(len(edit["position"]), 3)
                     if "refused" in edit:
                         self.assertTrue(edit["refused"], "a refused route edit needs a specific diagnostic")
-                if op in ("export", "reimport", "saveDocument", "loadDocument", "exportRejected"):
+                if op in ("export", "reimport", "saveDocument", "loadDocument", "exportRejected",
+                          "loadDocumentRejected", "importDocument"):
                     self.assertTrue(step["path"].startswith(".local/"),
                                     "scene writes must stay under .local/: %s" % step["path"])
                 if op in ("assert", "assertRejected"):
@@ -1241,8 +1244,13 @@ class StudioScenarioLaneTests(unittest.TestCase):
                                             "characterBuilt", "exportedAnimation", "treeLabel", "view", "render",
                                             "exportIdenticalToSource", "outfit", "clothes", "ik", "expression", "accessoryLabels", "pluginMount",
                                             "children", "absent", "activeCopyOf", "route", "routeLines", "sourceMap",
-                                            "liveSamplers") if k in step]
+                                            "liveSamplers", "undoDepth", "redoDepth", "objectCount") if k in step]
                     self.assertTrue(declared, "assert declares nothing: %s" % path)
+                    for name in ("undoDepth", "redoDepth", "objectCount"):
+                        if name in step:
+                            # #384: history depths and the document's object count.
+                            self.assertIs(type(step[name]), int)
+                            self.assertGreaterEqual(step[name], 0)
                     if "characterBuilt" in step:
                         # #373 lazy hidden characters: one source key and whether its character is built.
                         self.assertEqual(set(step["characterBuilt"]), {"key", "built"})
@@ -1456,6 +1464,29 @@ class StudioScenarioLaneTests(unittest.TestCase):
                     first = json.load(handle)["steps"][0]
                 self.assertEqual((first["op"], first["path"]), ("loadDocument", steps[saved]["path"]),
                                  "the check after %s must load what it saved" % check["id"])
+            elif check["id"] == "studio-scenario-undo-scene-replacements":
+                # #384: the undo history across every scene replacement in
+                # one process. It saves a native document and opens it again
+                # (an Open), refuses an Open of the exported original-format
+                # scene, merges the saved document (Import Scene) and reimports
+                # the export (an original scene import), so it mixes both file
+                # formats on purpose and has no fresh-process partner.
+                self.assertEqual((ops.count("saveDocument"), ops.count("loadDocument")), (1, 1))
+                self.assertEqual((ops.count("export"), ops.count("reimport")), (1, 1))
+                self.assertEqual((ops.count("loadDocumentRejected"), ops.count("importDocument"), ops.count("newScene")), (1, 1, 1))
+                saved, loaded = ops.index("saveDocument"), ops.index("loadDocument")
+                exported, imported = ops.index("export"), ops.index("reimport")
+                refused, merged = ops.index("loadDocumentRejected"), ops.index("importDocument")
+                self.assertLess(saved, ops.index("newScene"))
+                self.assertLess(ops.index("newScene"), loaded)
+                self.assertLess(loaded, refused)
+                self.assertLess(refused, merged)
+                self.assertLess(merged, imported)
+                self.assertLess(exported, refused)
+                self.assertEqual(steps[saved]["path"], steps[loaded]["path"])
+                self.assertEqual(steps[saved]["path"], steps[merged]["path"])
+                self.assertEqual(steps[exported]["path"], steps[refused]["path"])
+                self.assertEqual(steps[exported]["path"], steps[imported]["path"])
             elif "saveDocument" in ops or "loadDocument" in ops:
                 self.assertNotIn("export", ops,
                                  "a save/load scenario must not mix in the "

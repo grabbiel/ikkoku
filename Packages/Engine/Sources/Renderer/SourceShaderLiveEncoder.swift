@@ -237,7 +237,9 @@ final class SourceShaderLiveEncoder: @unchecked Sendable {
         let basis = UnityCoordinates.basis
         switch name {
         case "unity_ObjectToWorld": return basis * model * basis
-        case "unity_WorldToObject": return (basis * model * basis).inverse
+        // A zero shape scale (#404) leaves no inverse: InverseSafe's zero
+        // on the collapsed axis instead, and exactly `inverse` otherwise.
+        case "unity_WorldToObject": return Transform.inverseSafe(basis * model * basis)
         case "unity_MatrixV": return state.view * basis
         case "glstate_matrix_projection", "unity_CameraProjection": return state.projection
         case "unity_MatrixVP": return state.projection * state.view * basis

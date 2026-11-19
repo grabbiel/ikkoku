@@ -189,6 +189,33 @@ func sourceDynamicsLocalOriginalHairRigWhenRequested() throws {
     }
 }
 
+/// #404: a renderer under a zero scale (hair under a collapsed HairParent)
+/// keeps its palette in rig space, so `rig.evaluate` accepts it. The
+/// validated step checks the palette entries the chain moves the same way and
+/// agrees with the whole-rig step; before #404 it inverted the singular mesh
+/// world. A zero scale on the chain itself is still refused, naming #404.
+@Test func sourceDynamicsValidatedStepAcceptsACollapsedRendererLikeEvaluate() throws {
+    let rig = try RigDefinition(nodes: try dynamicsRig().nodes + [.init(name: "flat", sourceID: "flat", parent: 0, scale: Float3(0, 1, 1))],
+                                skins: [.init(name: "hair", meshNode: 3, joints: [2], inverseBindMatrices: [matrix_identity_float4x4])])
+    #expect(try rig.evaluate(rig.restPose).collapsedSkins == [0])
+    let config = dynamicsConfig(force: Float3(0.02, 0, 0))
+    var whole = try SourceDynamicBone(rig: rig, definition: config), changed = whole
+    for _ in 0..<20 {
+        let expected = try whole.step(deltaTime: 1 / 60, rig: rig, pose: rig.restPose)
+        let actual = try changed.step(deltaTime: 1 / 60, rig: rig, pose: rig.restPose, validatedInput: true)
+        #expect(expected.localMatrices == actual.localMatrices)
+    }
+    #expect(whole.lastStepCount > 0)
+    var collapsed = rig.restPose
+    collapsed.localMatrices[1] = Transform.scale(Float3(0, 1, 1))
+    do {
+        _ = try SourceDynamicBone(rig: rig, pose: collapsed, definition: config)
+        Issue.record("A zero scale on the dynamics chain must be refused.")
+    } catch {
+        #expect("\(error)".contains("#404") && "\(error)".contains("#406"), "\(error)")
+    }
+}
+
 /// `RigDefinition.isFiniteAffine` became four-lane (2026-11-17). The test above
 /// reaches the validated step's world and palette checks; this one reaches
 /// its local check: a node under the tip that no particle owns keeps its

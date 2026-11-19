@@ -40,15 +40,31 @@ private func expectMatrix(_ actual: float4x4, _ expected: float4x4, tolerance: F
     }
 }
 
-@Test func fullRigRejectsInvalidHierarchyBindsAndSingularMeshPose() throws {
+@Test func fullRigRejectsInvalidHierarchyBindsAndCollapsesASingularMeshPose() throws {
     #expect(throws: RigError.self) { try RigDefinition(nodes: [.init(name: "a", sourceID: "a", parent: 1), .init(name: "b", sourceID: "b", parent: 0)], skins: []) }
     #expect(throws: RigError.self) { try RigDefinition(nodes: [.init(name: "a", sourceID: "a", parent: nil), .init(name: "b", sourceID: "a", parent: nil)], skins: []) }
-    let nodes: [RigDefinition.Node] = [.init(name: "mesh", sourceID: "a", parent: nil), .init(name: "joint", sourceID: "b", parent: nil)]
+    let nodes: [RigDefinition.Node] = [.init(name: "mesh", sourceID: "a", parent: nil),
+                                       .init(name: "joint", sourceID: "b", parent: nil, translation: Float3(0, 2, 0))]
     #expect(throws: RigError.self) { try RigDefinition(nodes: nodes, skins: [.init(name: "bad", meshNode: 0, joints: [1], inverseBindMatrices: [])]) }
-    let rig = try RigDefinition(nodes: nodes, skins: [.init(name: "valid", meshNode: 0, joints: [1], inverseBindMatrices: [matrix_identity_float4x4])])
+    let bind = Transform.translation(Float3(0, -2, 0))
+    let rig = try RigDefinition(nodes: nodes, skins: [.init(name: "valid", meshNode: 0, joints: [1], inverseBindMatrices: [bind])])
+    let rest = try rig.evaluate(rig.restPose)
+    #expect(rest.collapsedSkins.isEmpty)
+    #expect(rest.model(skin: 0, meshNode: 0) == rest.worldMatrices[0])
+    // #404: a zero scale on the renderer's own node is not refused. Its skin
+    // stays in rig space (joint world · inverse bind, as Unity skins from the
+    // bones alone) and draws with the identity model.
     var pose = rig.restPose
     pose.localMatrices[0] = Transform.scale(Float3(1, 0, 1))
-    #expect(throws: RigError.self) { try rig.evaluate(pose) }
+    let collapsed = try rig.evaluate(pose)
+    #expect(collapsed.collapsedSkins == [0])
+    #expect(collapsed.model(skin: 0, meshNode: 0) == matrix_identity_float4x4)
+    #expect(collapsed.palettes[0][0] == collapsed.worldMatrices[1] * bind)
+    // Continuity: a nearly collapsed renderer draws the same product.
+    pose.localMatrices[0] = Transform.scale(Float3(1, 1e-3, 1))
+    let nearly = try rig.evaluate(pose)
+    #expect(nearly.collapsedSkins.isEmpty)
+    expectMatrix(nearly.model(skin: 0, meshNode: 0) * nearly.palettes[0][0], collapsed.palettes[0][0], tolerance: 1e-4)
 }
 
 private func sourceRigFixture() -> [String: Any] {
