@@ -290,6 +290,44 @@
       "timeout": 600
     },
     {
+      "id": "studio-scenario-toolbar-drag-steady",
+      "argv": [
+        ".local/build/Build/Products/Debug/Ikkoku.app/Contents/MacOS/Ikkoku"
+      ],
+      "fixtures": [
+        {
+          "env": "IKKOKU_SOURCE_SCENE",
+          "kind": "file",
+          "from": "IKKOKU_STUDIO_SCENARIO_SCENE"
+        },
+        {
+          "env": "IKKOKU_SOURCE_AVATAR",
+          "kind": "file"
+        },
+        {
+          "env": "IKKOKU_STUDIO_ANIMATION_CATALOG",
+          "kind": "file"
+        }
+      ],
+      "env": {
+        "IKKOKU_STUDIO_SCENARIO": "Tools/verification/scenarios/toolbar-drag-steady.json",
+        "IKKOKU_STUDIO_SCENARIO_REPORT": ".local/verification/reports/studio-scenario-toolbar-drag-steady.json"
+      },
+      "referenceTier": "app-smoke",
+      "tolerance": "#425: the Studio toolbar holds still over a gizmo drag, so its .equatable() controls (StudioToolbarControls, on StudioToolbarState) skip every drag frame and nothing invalidates StudioToolbar's body. Two drags of the REAL mouse handlers (mouseDown / eight mouseDragged / mouseUp, left button, no modifiers) over the GPU pick pass on source character 65: first, after focusing the view on it (the F key; the scene's own view shows none of its IK guides), its Left hand IK guide (index 3), selected and put in IK mode as the Pose tab's IK guide picker does, grabbed on the x translate arrow found by a \u00b1120 px pick scan around the guide's projected origin and dragged 30,0 px, which must leave a new IK override on that guide (setSourceIKValue); then bone 19's z rotate ring as in fk-mouse-drag, dragged 60,40 px, which must leave a non-zero FK rotation. With toolbarSteady each drag reads StudioToolbarState after the mouseDown, every mouseDragged and the mouseUp: the mouseDown may change only canUndo (its undo snapshot), and every later state must equal the mouseDown's. Observation tracking of that state, re-armed after each write, must see no write during the nine later events (the published toolbar state, C4; with IKKOKU_PERF_PANEL_STATE=document the toolbar reads the document and the writes are only reported). A build whose StudioToolbarState carries a field the drag changes on every step fails both drag steps. After the drags the left-hand guide (bone 21) is captured; export and reimport must put it back within 0.02.",
+      "artifacts": [
+        {
+          "path": ".local/verification/reports/studio-scenario-toolbar-drag-steady.json",
+          "kind": "scenario-report"
+        },
+        {
+          "path": ".local/verification/scenario-exports/toolbar-drag-steady.png",
+          "kind": "exported-scene"
+        }
+      ],
+      "timeout": 600
+    },
+    {
       "id": "studio-scenario-item-props",
       "argv": [
         ".local/build/Build/Products/Debug/Ikkoku.app/Contents/MacOS/Ikkoku"

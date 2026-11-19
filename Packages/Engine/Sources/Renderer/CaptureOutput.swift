@@ -275,6 +275,39 @@ public struct CaptureOutputBatch: Sendable {
 /// converged; a change of either, or an unready poll, restarts the count. If that does not happen within `timeout` seconds of arming, the
 /// capture fails with the last unready reason instead of snapshotting whatever
 /// is on screen.
+/// #425: `IKKOKU_CAPTURE_UI_WINDOW_W`, the frame width in points a Studio window capture sets
+/// on its window before anything else. Unset, the capture leaves the window as it opened.
+public enum UICaptureWindowWidth {
+    public static let variable = "IKKOKU_CAPTURE_UI_WINDOW_W"
+    /// The app window's minimum width (the content's `minWidth`).
+    public static let minimum = 1180
+
+    public enum ConfigurationError: Error, Equatable, CustomStringConvertible {
+        case invalid(String)
+        case widerThanScreen(Int, visible: Int)
+
+        public var description: String {
+            switch self {
+            case .invalid(let text):
+                return "\(UICaptureWindowWidth.variable) must be a whole number of points from \(UICaptureWindowWidth.minimum), got '\(text)'"
+            case .widerThanScreen(let width, let visible):
+                return "\(UICaptureWindowWidth.variable)=\(width) is wider than the screen's visible width of \(visible) points"
+            }
+        }
+    }
+
+    /// nil when the variable is unset. Otherwise the width, an integer from `minimum` to
+    /// `visibleWidth` (the screen's visible width); any other value is refused, never clamped.
+    public static func fromEnvironment(_ environment: [String: String], visibleWidth: Double) throws -> Int? {
+        guard let text = environment[variable] else { return nil }
+        guard let width = Int(text), width >= minimum else { throw ConfigurationError.invalid(text) }
+        guard Double(width) <= visibleWidth else {
+            throw ConfigurationError.widerThanScreen(width, visible: Int(visibleWidth.rounded(.down)))
+        }
+        return width
+    }
+}
+
 public struct UICaptureReadiness: Sendable, Equatable {
     /// Overrides `timeout`, in seconds.
     public static let timeoutVariable = "IKKOKU_CAPTURE_UI_TIMEOUT"

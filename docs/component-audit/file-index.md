@@ -23,7 +23,7 @@ branch was tested or every asset matches the original game. Feature status,
 specific comments and pending tasks are in the linked reports. Shared behavior
 may be discussed in more than one report; one primary owner is listed here.
 
-**1129 files indexed; 1129 assigned; 0 unassigned.**
+**1130 files indexed; 1130 assigned; 0 unassigned.**
 
 Counts include the website and clothes-group additions listed below. Runtime and
 test totals include their specialized role descriptions; this is inventory
@@ -35,13 +35,13 @@ bookkeeping, not a new full source audit.
 | [Character / Maker / mods](character-and-mods.md) | 145 |
 | [Studio / IK / animation](studio.md) | 267 |
 | [Renderer / foundation / assets](renderer-and-foundation.md) | 373 |
-| [Toolchain / verification / historical docs](toolchain-and-verification.md) | 224 |
+| [Toolchain / verification / historical docs](toolchain-and-verification.md) | 225 |
 
 | File role | Files |
 | --- | ---: |
 | App resource metadata / icon | 16 |
 | Build / repository configuration | 9 |
-| Conversion / recovery / verification tool | 262 |
+| Conversion / recovery / verification tool | 263 |
 | Documentation / historical evidence | 65 |
 | Generated asset / catalog / fixture | 205 |
 | Reference host / controlled fixture | 39 |
@@ -1121,6 +1121,7 @@ Feature assessment: [toolchain-and-verification.md](toolchain-and-verification.m
 | [Tools/verification/scenarios/source-map.json](../../Tools/verification/scenarios/source-map.json) | Conversion / recovery / verification tool |
 | [Tools/verification/scenarios/source-map34.json](../../Tools/verification/scenarios/source-map34.json) | Conversion / recovery / verification tool |
 | [Tools/verification/scenarios/source-map41.json](../../Tools/verification/scenarios/source-map41.json) | Conversion / recovery / verification tool |
+| [Tools/verification/scenarios/toolbar-drag-steady.json](../../Tools/verification/scenarios/toolbar-drag-steady.json) | Conversion / recovery / verification tool |
 | [Tools/verification/scenarios/undo-camera.json](../../Tools/verification/scenarios/undo-camera.json) | Conversion / recovery / verification tool |
 | [Tools/verification/scenarios/undo-no-catalog.json](../../Tools/verification/scenarios/undo-no-catalog.json) | Conversion / recovery / verification tool |
 | [Tools/verification/scenarios/undo-props.json](../../Tools/verification/scenarios/undo-props.json) | Conversion / recovery / verification tool |
