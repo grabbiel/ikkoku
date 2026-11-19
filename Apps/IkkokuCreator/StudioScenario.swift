@@ -25,6 +25,7 @@ struct StudioScenario: Decodable {
         /// `"setClothesState"`, `"setAccessoryVisible"`, `"setShoesType"`, `"setExpression"`, `"resetExpression"`,
         /// `"setAnimation"`, `"setAnimationSpeed"`, `"setForceLoop"`, `"setFKEnabled"`,
         /// `"setFK"`, `"setPoseMode"`, `"selectBone"`, `"dragGizmo"`, `"dragIKGuide"`, `"hoverGizmo"`,
+        /// `"setSourceIKEnabled"`, `"clickIKGuide"`,
         /// `"captureBone"`, `"captureObject"`, `"captureRender"`, `"advance"`, `"orbit"`,
         /// `"setAutomaticBlink"`, `"addCharacter"`, `"setIKEnabled"`, `"setIKTarget"`,
         /// `"captureIKPose"`, `"editDuringAdvance"`, `"backgroundBuild"`, `"delete"`, `"setParent"`, `"duplicate"`,
@@ -138,6 +139,16 @@ struct StudioScenario: Decodable {
         /// set canUndo (its undo snapshot); and no drag event may write
         /// anything the toolbar's body reads, so the body is not invalidated.
         let toolbarSteady: Bool?
+        /// setSourceIKEnabled (#439): the Pose tab's IK group toggle to set,
+        /// 0-4 in `SourceStudioIKEditing.groupLabels` order; without it, the
+        /// "IK enabled" toggle. `on` is the value either way.
+        let ikGroup: Int?
+        /// clickIKGuide (#439): whether the click must select the guide, which
+        /// it can only while the guide is drawn, that is active.
+        let selects: Bool?
+        /// assert only (#439): a source character's IK guides as the frame
+        /// draws them, and its kinematic flags.
+        let sourceIK: SourceIKValue?
         /// assert only: the live animation state the preview plays for the
         /// named character (the inspector readback); every field is optional
         /// and only the keys present in the JSON are compared — like the
@@ -486,6 +497,18 @@ struct StudioScenario: Decodable {
             let speed: Float?
             let forceLoop: Bool?
         }
+        struct SourceIKValue: Decodable {
+            let key: Int32
+            /// the target IDs (0-12) whose guide handles the frame draws; the
+            /// character must be selected in IK pose mode.
+            let drawn: [Int32]?
+            /// the object's kinematic flags (`sourceKinematics`, else the saved record's).
+            let enableIK: Bool?
+            let activeIK: [Bool]?
+            /// whether the Pose tab says the selected guide is hidden
+            /// (`selectedSourceIKGuideHidden`, the caption under the picker).
+            let selectedHidden: Bool?
+        }
         struct FKValue: Decodable {
             let key: Int32
             let bone: Int32
@@ -589,7 +612,7 @@ struct StudioScenario: Decodable {
                  activeCamera, routePlaying, sourceRuntime, diagnosticContains, statusContains, statusLacks, characterBuilt, exportedAnimation,
                  indicatorContains, treeLabel, view,
                  group, category, no, speed, on, bone, rotation, animation, fk, position,
-                 seconds, dx, dy, eyeLook, blink, handPattern, mode, axis, pixels, toolbarSteady,
+                 seconds, dx, dy, eyeLook, blink, handPattern, mode, axis, pixels, toolbarSteady, ikGroup, selects, sourceIK,
                  render, exportIdenticalToSource, errorContains, outfit, accessoryLabels, pluginMount, state, clothes, expression,
                  sex, character, chain, delta, ik, edit, build, parent, children, absent, copy, added, activeCopyOf,
                  undoDepth, redoDepth, objectCount, aid, routeEdit, route, routeLines, sourceMap, liveSamplers
@@ -681,6 +704,9 @@ struct StudioScenario: Decodable {
             axis = try c.decodeIfPresent(String.self, forKey: .axis)
             pixels = try c.decodeIfPresent([Float].self, forKey: .pixels)
             toolbarSteady = try c.decodeIfPresent(Bool.self, forKey: .toolbarSteady)
+            ikGroup = try c.decodeIfPresent(Int.self, forKey: .ikGroup)
+            selects = try c.decodeIfPresent(Bool.self, forKey: .selects)
+            sourceIK = try c.decodeIfPresent(SourceIKValue.self, forKey: .sourceIK)
             // `decodeIfPresent` reads both `null` and an absent key as `nil`;
             // `contains` distinguishes "assert the orbit view" from "no
             // camera check declared", so the camera check is decoded by hand.
@@ -2266,6 +2292,10 @@ struct StudioScenario: Decodable {
                 studio.selection = id
                 studio.selectedSourceIK = target
                 studio.poseMode = .ik
+                // #439: only active guides are drawn, so an inactive one has no arrow to grab.
+                guard !studio.selectedSourceIKGuideHidden else {
+                    record(step, false, "dragIKGuide: IK guide \(index) (\(SourceStudioIKEditing.labels[index])) is inactive (IK off or its group off), so it is not drawn: switch IK on first (setSourceIKEnabled)"); continue
+                }
                 let view = studio.viewportSize
                 guard let anchor = studio.sourceIKGuidePixel(of: target), anchor.x >= 0, anchor.y >= 0, anchor.x < view.x, anchor.y < view.y else {
                     let at = studio.sourceIKGuidePixel(of: target).map { " (it projects to (\($0.x), \($0.y)))" } ?? ""
@@ -2283,6 +2313,68 @@ struct StudioScenario: Decodable {
                 let moved = "drag IK guide \(index) (\(SourceStudioIKEditing.labels[index])) axis \(axisName) from pixel (\(start.x), \(start.y)), picked id \(pickedID), over \(pixels) px: "
                     + "position (\(held.position.x), \(held.position.y), \(held.position.z))"
                 record(step, drag.failures.isEmpty, (drag.failures.isEmpty ? "" : drag.failures.joined(separator: "; ") + " | ") + moved + (drag.detail.isEmpty ? "" : "; " + drag.detail))
+            case "setSourceIKEnabled":
+                // #439: the Pose tab's "IK enabled" toggle, or with `ikGroup`
+                // one group's toggle. They act on the selection, so the
+                // character is selected first, and they are disabled while
+                // the character has no IK guides.
+                guard let id = object(step) else { record(step, false, "setSourceIKEnabled: no object with source key \(step.key ?? -1)"); continue }
+                guard let on = step.on else { record(step, false, "setSourceIKEnabled: on is required"); continue }
+                guard studio.sourceShapePreview(for: id) != nil else {
+                    record(step, false, "setSourceIKEnabled: object \(step.key!) is not a rendered source character"); continue
+                }
+                studio.selection = id
+                guard studio.sourceIKAvailable else { record(step, false, "setSourceIKEnabled: source key \(step.key!) has no IK guides (the toggles are disabled)"); continue }
+                if let group = step.ikGroup {
+                    guard SourceStudioIKEditing.groupLabels.indices.contains(group) else {
+                        record(step, false, "setSourceIKEnabled: ikGroup \(group) is not 0-\(SourceStudioIKEditing.groupLabels.count - 1)"); continue
+                    }
+                    studio.setSourceIKGroup(group, enabled: on)
+                } else {
+                    studio.setSourceIKEnabled(on)
+                }
+                guard let state = studio.selectedSourceIKState else { record(step, false, "setSourceIKEnabled: no kinematic state after the toggle"); continue }
+                let took = step.ikGroup.map { state.activeIK[$0] == on } ?? (state.enableIK == on)
+                record(step, took, "source key \(step.key!) enableIK \(state.enableIK) activeIK \(state.activeIK)" + (took ? "" : ": the toggle did not take"))
+            case "clickIKGuide":
+                // #439: a real click (mouseDown and mouseUp, left button, no
+                // modifiers) at an IK guide's projected pixel in IK pose mode,
+                // with no guide selected. It must select the guide exactly
+                // when `selects`, and change neither the object's kinematic
+                // flags nor the undo history.
+                guard let id = object(step) else { record(step, false, "clickIKGuide: no object with source key \(step.key ?? -1)"); continue }
+                guard let index = step.index, SourceStudioIKEditing.labels.indices.contains(index), let selects = step.selects else {
+                    record(step, false, "clickIKGuide: index (the IK guide, 0-12) and selects are required"); continue
+                }
+                guard studio.sourceShapePreview(for: id) != nil else {
+                    record(step, false, "clickIKGuide: object \(step.key!) is not a rendered source character"); continue
+                }
+                let target = Int32(index)
+                studio.selection = id
+                studio.selectedSourceIK = nil
+                studio.poseMode = .ik
+                let view = studio.viewportSize
+                guard let pixel = studio.sourceIKGuidePixel(of: target), pixel.x >= 0, pixel.y >= 0, pixel.x < view.x, pixel.y < view.y else {
+                    let at = studio.sourceIKGuidePixel(of: target).map { " (it projects to (\($0.x), \($0.y)))" } ?? ""
+                    record(step, false, "clickIKGuide: IK guide \(index) (\(SourceStudioIKEditing.labels[index])) is not inside the \(Int(view.x)) x \(Int(view.y)) px view\(at)"); continue
+                }
+                let kinematics = studio.doc.object(id)?.sourceKinematics, undoDepth = studio.undoStack.count
+                let picked = studio.pickID(at: pixel)
+                studio.mouseDown(at: pixel, button: 0, modifiers: NSEvent.ModifierFlags())
+                studio.mouseUp(at: pixel, button: 0, modifiers: NSEvent.ModifierFlags())
+                var failures: [String] = []
+                if (studio.selectedSourceIK == target) != selects {
+                    failures.append(selects ? "the click did not select IK guide \(index)" : "the click selected IK guide \(index)")
+                }
+                let after = studio.doc.object(id)?.sourceKinematics
+                if after != kinematics {
+                    failures.append("the click changed the kinematic flags to enableIK \(after.map { "\($0.enableIK)" } ?? "nil") activeIK \(after.map { "\($0.activeIK)" } ?? "nil")")
+                }
+                if studio.undoStack.count != undoDepth { failures.append("the click pushed \(studio.undoStack.count - undoDepth) undo step(s)") }
+                let pickedText = SourceStudioIKEditing.targetID(fromPick: picked).map { "IK guide \($0)" } ?? "no IK guide"
+                record(step, failures.isEmpty, (failures.isEmpty ? "" : failures.joined(separator: "; ") + " | ")
+                       + "click IK guide \(index) (\(SourceStudioIKEditing.labels[index])) at pixel (\(pixel.x), \(pixel.y)): picked id \(picked) (\(pickedText)); "
+                       + "selected IK guide \(studio.selectedSourceIK.map(String.init) ?? "none")")
             case "hoverGizmo":
                 // R7 phase 2, item 5: the REAL `mouseMoved` hover, which picks
                 // asynchronously for the latest position only. Moves go over
@@ -3414,6 +3506,34 @@ struct StudioScenario: Decodable {
                         if let problem = assertFK(step, id: fkID) { problems.append(problem) }
                     } else {
                         problems.append("assert fk: no object with source key \(edit.key)")
+                    }
+                }
+                if let check = step.sourceIK {
+                    // #439: the IK guide handles in the frame the app built, and the kinematic flags.
+                    if let ikID = studio.doc.objects.first(where: { $0.sourceObjectKey == check.key })?.id, let preview = studio.sourceShapePreview(for: ikID),
+                       let object = studio.doc.object(ikID) {
+                        if let expected = check.drawn {
+                            let drawn = Set(studio.frame.gizmos.compactMap { SourceStudioIKEditing.targetID(fromPick: $0.objectID) })
+                            if studio.selection != ikID || studio.poseMode != .ik {
+                                problems.append("assert sourceIK drawn: source key \(check.key) must be selected in IK pose mode")
+                            } else if drawn != Set(expected) {
+                                problems.append("assert sourceIK drawn: the frame draws IK guides \(drawn.sorted()), expected \(expected.sorted())")
+                            } else {
+                                details.append("IK guides drawn \(drawn.sorted()), \(studio.frame.gizmos.count) gizmo batches in the frame")
+                            }
+                        }
+                        let state = object.sourceKinematics ?? SourceStudioKinematicState(record: preview.record)
+                        if let expected = check.enableIK, state.enableIK != expected {
+                            problems.append("assert sourceIK: enableIK \(state.enableIK), expected \(expected)")
+                        }
+                        if let expected = check.activeIK, state.activeIK != expected {
+                            problems.append("assert sourceIK: activeIK \(state.activeIK), expected \(expected)")
+                        }
+                        if let expected = check.selectedHidden, studio.selectedSourceIKGuideHidden != expected {
+                            problems.append("assert sourceIK: the selected guide (\(studio.selectedSourceIK.map(String.init) ?? "none")) reads hidden \(!expected), expected \(expected)")
+                        }
+                    } else {
+                        problems.append("assert sourceIK: no rendered source character with source key \(check.key)")
                     }
                 }
                 // The eye look, blink and hand-pattern checks resolve their

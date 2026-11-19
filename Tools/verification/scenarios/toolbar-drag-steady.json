@@ -1,6 +1,7 @@
 {
   "steps": [
     {"op": "focus", "key": 65},
+    {"op": "setSourceIKEnabled", "key": 65, "on": true},
     {"op": "dragIKGuide", "key": 65, "index": 3, "axis": "x", "pixels": [30, 0], "toolbarSteady": true},
     {"op": "setPoseMode", "mode": "fk"},
     {"op": "selectBone", "key": 65, "bone": 19},
