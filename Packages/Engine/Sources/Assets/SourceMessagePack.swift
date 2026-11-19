@@ -107,14 +107,17 @@ public enum SourceMessagePack {
             return result
         }
 
-        mutating func data(_ count: Int) throws -> Data {
+        mutating func span(_ count: Int) throws -> Range<Int> {
             guard count >= 0, count <= bytes.count - offset else { throw SourceMessagePackError.invalid("truncated byte payload") }
             defer { offset += count }
-            return Data(bytes[offset..<(offset + count)])
+            return offset..<(offset + count)
         }
 
+        mutating func data(_ count: Int) throws -> Data { Data(bytes[try span(count)]) }
+
+        /// Decoded as the game does: a leading U+FEFF is kept (`SourceMonoUTF8`).
         mutating func string(_ count: Int) throws -> SourceMessagePackValue {
-            guard let result = String(data: try data(count), encoding: .utf8) else {
+            guard let result = SourceMonoUTF8.string(bytes[try span(count)]) else {
                 throw SourceMessagePackError.invalid("string is not valid UTF-8")
             }
             return .string(result)

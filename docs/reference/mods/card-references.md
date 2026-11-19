@@ -72,9 +72,10 @@ characters of `String.WhiteChars` from both ends (Unity-Technologies/mono,
 branch `unity-5.6`, `mcs/class/corlib/System/String.cs`, with its `NET_2_0` and
 `NET_2_1` blocks; the game's `mscorlib.dll` holds the same table). The set
 includes nonbreaking and ideographic spaces, zero-width space (U+200B) and the
-byte-order mark (U+FEFF), but not U+180E. It is not `char.IsWhiteSpace`. The
-native resolver, the package manifest GUID and the Python oracles use this set
-(`SourceMonoWhiteChars`, #419). GUID and property comparisons are
+byte-order mark (U+FEFF), but not U+180E. It is not `char.IsWhiteSpace`. A
+GUID stored with leading EF BB BF bytes reads as U+FEFF (#418), which this trim
+removes. The native resolver, the package manifest GUID and the Python oracles
+use this set (`SourceMonoWhiteChars`, #419). GUID and property comparisons are
 case-sensitive and do not perform Unicode normalization.
 
 ## Binding to actual character destinations

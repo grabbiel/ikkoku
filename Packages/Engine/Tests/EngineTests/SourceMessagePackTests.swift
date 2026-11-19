@@ -222,3 +222,56 @@ func sourceMessagePackOptionalOriginalABMXPayloadIsAnArray() throws {
         #expect(fields.first?.stringValue != nil)
     }
 }
+
+// #418: the game decodes strings with Mono's UTF8Encoding (firstpass MessagePack
+// StringEncoding.UTF8; BinaryReader.ReadString), which keeps a leading EF BB BF
+// as U+FEFF. Foundation's UTF-8 initializers drop it.
+@Test func sourceMonoUTF8KeepsALeadingBOMAndRefusesWhatFoundationRefuses() throws {
+    let bom: [UInt8] = [0xef, 0xbb, 0xbf]
+    #expect(SourceMonoUTF8.string(bom + Array("A".utf8)) == "\u{feff}A")
+    #expect(SourceMonoUTF8.string(bom) == "\u{feff}")
+    #expect(SourceMonoUTF8.string(bom + bom) == "\u{feff}\u{feff}")
+    #expect(SourceMonoUTF8.string([UInt8]()) == "")
+    #expect(SourceMonoUTF8.string(Array("骨\u{feff}x".utf8)) == "骨\u{feff}x")
+    // Foundation drops the mark: the difference this helper exists for.
+    #expect(String(data: Data(bom + [0x41]), encoding: .utf8) == "A")
+    // Data, an ArraySlice that does not start at 0, and a collection with no
+    // contiguous storage take the same path.
+    let framed: [UInt8] = [0x00] + bom + [0x41, 0x00]
+    #expect(SourceMonoUTF8.string(Data(bom + [0x41])) == "\u{feff}A")
+    #expect(SourceMonoUTF8.string(framed[1..<5]) == "\u{feff}A")
+    #expect(SourceMonoUTF8.string((bom + [0x41]).lazy.map { $0 }) == "\u{feff}A")
+    // Invalid input still returns nil: an overlong NUL, an encoded surrogate,
+    // bytes never valid, truncated sequences, and a truncated four-byte
+    // sequence whose single U+FFFD repair has the same byte count.
+    let invalid: [[UInt8]] = [[0xc0, 0x80], [0xed, 0xa0, 0x80], [0xff], [0xfe], [0x80], [0xe2, 0x82],
+                              [0xf0, 0x90, 0x80], [0xf0, 0x90, 0x80, 0x41], [0xef, 0xbb], [0xf4, 0x90, 0x80, 0x80]]
+    for bytes in invalid {
+        #expect(SourceMonoUTF8.string(bytes) == nil, "\(bytes)")
+        #expect(SourceMonoUTF8.string(bom + bytes) == nil, "\(bytes)")
+        #expect(String(data: Data(bytes), encoding: .utf8) == nil, "Foundation refuses \(bytes) too")
+    }
+}
+
+@Test func sourceMessagePackKeepsALeadingBOMInEveryStringFormat() throws {
+    let bom: [UInt8] = [0xef, 0xbb, 0xbf], text = Array("bone".utf8)
+    let long = bom + Array(repeating: UInt8(0x61), count: 300)
+    let cases: [([UInt8], String)] = [
+        ([0xa7] + bom + text, "\u{feff}bone"),
+        ([0xa3] + bom, "\u{feff}"),
+        ([0xd9, 7] + bom + text, "\u{feff}bone"),
+        ([0xda, 0, 7] + bom + text, "\u{feff}bone"),
+        ([0xdb, 0, 0, 0, 7] + bom + text, "\u{feff}bone"),
+        ([0xda, 1, 47] + long, "\u{feff}" + String(repeating: "a", count: 300)),
+    ]
+    for (bytes, expected) in cases {
+        #expect(try SourceMessagePack.decode(Data(bytes)) == .string(expected), "\(bytes.prefix(3))")
+    }
+    // A key with the mark is its own key, as in the game's Dictionary<string, T>.
+    let map = try SourceMessagePack.decode(Data([0x82, 0xa4] + bom + [0x6b, 1, 0xa1, 0x6b, 2])).stringKeyedMap()
+    #expect(map == ["\u{feff}k": .integer(1), "k": .integer(2)])
+    // The refusal and its message are unchanged (#423 tracks the game's repair).
+    for bytes: [UInt8] in [[0xa2, 0xc0, 0x80], [0xa3, 0xed, 0xa0, 0x80], [0xa4, 0xf0, 0x90, 0x80, 0x41], [0xa5] + bom + [0xc0, 0x80]] {
+        #expect(throws: SourceMessagePackError.invalid("string is not valid UTF-8")) { try SourceMessagePack.decode(Data(bytes)) }
+    }
+}

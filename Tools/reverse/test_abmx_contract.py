@@ -48,6 +48,14 @@ class ABMXContractTests(unittest.TestCase):
         self.assertNotEqual(a["source"]["payloadSHA256"], b["source"]["payloadSHA256"])
         self.assertEqual(abmx.source_payload([]), packed([]))
 
+    def test_bone_names_keep_a_leading_bom(self):
+        # #418 mirror: a "\ufeffbone" record names another bone; the hash is over the original bytes.
+        raw = packed([modifier("\ufeffsynthetic_bone"), modifier("synthetic_bone", location=0)])
+        for payload in (raw, wrapped(raw)):
+            result = abmx.convert(payload)
+            self.assertEqual([m["boneName"] for m in result["modifiers"]], ["\ufeffsynthetic_bone", "synthetic_bone"])
+            self.assertEqual(result["source"]["payloadSHA256"], abmx.sha(payload))
+
     def test_current_card_and_coordinate_versions_preserve_data(self):
         payload = packed([modifier()])
         for kind, version in [("card", 2), ("coordinate", 3)]:
