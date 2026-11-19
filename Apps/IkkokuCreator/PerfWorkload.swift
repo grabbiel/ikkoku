@@ -55,7 +55,7 @@ final class PerfWorkloadDriver {
     private var pendingAction: (name: String, measured: Bool, start: CFTimeInterval, end: CFTimeInterval, bodies: [Int])?
     private var finishedActions: [(name: String, measured: Bool, start: CFTimeInterval, end: CFTimeInterval, ready: CFTimeInterval,
                                    status: String, error: String?, footprint: UInt64, metal: Int, objects: Int,
-                                   bodies: [Int], workspaceRows: Int, workspaceCapacity: Int)] = []
+                                   bodies: [Int], workspaceRows: Int)] = []
     /// #410: the workspace bodies counted per action, from its call to the
     /// next action's (`workspaceBodies`), in this order.
     private static let workspaceBodyViews: [PerfTrace.ViewBody] = [.studioWorkspaceRow, .studioWorkspacePlaceholder]
@@ -736,7 +736,7 @@ final class PerfWorkloadDriver {
             trace.details["workspaceSlotCapOverride"] = StudioWorkspaceState.slotCapOverride.map { $0 as Any } ?? NSNull()
             // The most rows any window could show at once: the tallest
             // screen's visible height over a one-line row and its 1 pt gap.
-            // A slot cap must stay above it (with the stack's overscan).
+            // The slots (`workspaceSlotCap`) must stay above it.
             if let entry = studio.shownWorkspaceState.entries.first {
                 let rowHeight = Double(WorkspaceRow.fittingHeight(entry, width: 242))
                 let screen = Double(NSScreen.screens.map(\.visibleFrame.height).max() ?? 0)
@@ -772,7 +772,7 @@ final class PerfWorkloadDriver {
             scrolls.append(["toEnd": toEnd, "documentHeight": Double(document.frame.height),
                             "visibleHeight": Double(scroll.contentView.bounds.height),
                             "endGapBefore": PerfTrace.round(Double(InspectorUIScenario.workspaceEndGap(scroll))),
-                            "flipped": document.isFlipped, "rows": state?.entries.count ?? -1, "slots": state?.rowCapacity ?? -1])
+                            "flipped": document.isFlipped, "rows": state?.entries.count ?? -1])
             trace.details["workspaceScrolls"] = scrolls
         }
         InspectorUIScenario.scrollWorkspace(scroll, toEnd: toEnd)
@@ -866,10 +866,9 @@ final class PerfWorkloadDriver {
         // flat across repeated loads means nothing accumulates per cycle. The
         // document's object count (read after the timed span) shows what an
         // edit added or an undo restored.
-        let workspace = app.studio?.shownWorkspaceState
         finishedActions.append((action.name, action.measured, action.start, action.end, ready, app.studio?.status ?? "", error,
                                 PerfTrace.footprint(), trace.device?.currentAllocatedSize ?? 0, app.studio?.doc.objects.count ?? -1,
-                                action.bodies, workspace?.entries.count ?? -1, workspace?.rowCapacity ?? -1))
+                                action.bodies, app.studio?.shownWorkspaceState.entries.count ?? -1))
         pendingAction = nil
         DispatchQueue.main.asyncAfter(deadline: .now() + (action.measured ? 0.5 : 0.2)) { self.runNextAction() }
     }
@@ -909,8 +908,7 @@ final class PerfWorkloadDriver {
                     "status": action.status, "error": action.error.map { $0 as Any } ?? NSNull(),
                     "footprintBytes": action.footprint, "metalAllocatedBytes": action.metal,
                     "documentObjects": action.objects,
-                    "workspaceBodies": bodies, "workspaceRows": action.workspaceRows,
-                    "workspaceRowCapacity": action.workspaceCapacity]
+                    "workspaceBodies": bodies, "workspaceRows": action.workspaceRows]
         }
     }
 

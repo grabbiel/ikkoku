@@ -27,23 +27,14 @@ enum StudioPanelStateMode: String, Sendable {
 struct StudioWorkspaceState: Equatable {
     var entries: [WorkspaceEntry] = []
     var objectCount = 0
-    /// #410: the slots the workspace stack keeps: the slots it kept last
-    /// (`StudioModel.workspaceRowCapacity`) up to `slotCap`, and at least
-    /// `entries.count`. A load that shows fewer rows leaves empty slots
-    /// instead of removing rows (`WorkspaceSlot`).
-    var rowCapacity = 0
-
-    /// #410: the most slots kept while a scene shows fewer rows: the stack
-    /// keeps `max(rows, min(slots kept, slotCap))`. It is the most rows the
-    /// tallest screen could show at once, its visible height over a one-line
-    /// row and its gap (`rowPitch`), plus `slotMargin`: the rows a load builds
-    /// lie within it, so they are never inserted into the stack. Without the
-    /// cap a short scene after a long one kept thousands of empty slots, and
-    /// the stack, which estimates a slot it has not laid out at a row's
-    /// height, made the document tens of thousands of points too tall. Under
-    /// it at most `slotCap - rows` slots are estimated, until the stack lays
-    /// them out. `IKKOKU_PERF_WORKSPACE_SLOT_CAP=<k>` is a measurement control,
-    /// read once at launch, that replaces it.
+    /// #410: the workspace slots, the rows the list builds ahead of any
+    /// scroll (`StudioWorkspaceContent`): the most rows the tallest screen
+    /// could show at once, its visible height over a one-line row and its gap
+    /// (`rowPitch`), plus `slotMargin`, so the rows a load builds are slots
+    /// and a load never inserts a row that is built. A slot past the scene's
+    /// rows is empty and 0 pt high. Rows past the slots are in a lazy stack.
+    /// `IKKOKU_PERF_WORKSPACE_SLOT_CAP=<k>` is a measurement control, read
+    /// once at launch, that replaces it (0: every row in the lazy stack).
     @MainActor static var slotCap: Int {
         if let override = slotCapOverride { return override }
         let tallest = NSScreen.screens.map(\.visibleFrame.height).max() ?? 0
@@ -80,7 +71,6 @@ struct StudioWorkspaceState: Equatable {
                                   cameraPlaceholder: label.sourceCamera, keyDetail: label.keyDetail, cameraMarker: marker)
         }
         objectCount = doc.objects.count
-        rowCapacity = max(min(model.workspaceRowCapacity, Self.slotCap), entries.count)
     }
 
     /// These rows with `selection` selected: what `init(model:)` builds when

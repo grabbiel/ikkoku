@@ -108,7 +108,7 @@ struct StudioWorkspacePanel: View {
     var body: some View {
         let _ = PerfTrace.body(.studioWorkspace)
         let state = model.shownWorkspaceState
-        StudioWorkspaceContent(model: model, entries: state.entries, rowCapacity: state.rowCapacity,
+        StudioWorkspaceContent(model: model, entries: state.entries, slotCount: StudioWorkspaceState.slotCap,
                                objectCount: state.objectCount).equatable()
     }
 }
@@ -116,10 +116,8 @@ struct StudioWorkspacePanel: View {
 struct StudioWorkspaceContent: View, Equatable {
     let model: StudioModel
     let entries: [WorkspaceEntry]
-    /// The slots the stack keeps (`StudioWorkspaceState.rowCapacity`): the
-    /// rows it has shown, up to `StudioWorkspaceState.slotCap`, and at least
-    /// `entries.count`.
-    let rowCapacity: Int
+    /// The slots built ahead of any scroll (`StudioWorkspaceState.slotCap`).
+    let slotCount: Int
     let objectCount: Int
     /// #410: the slot whose eye button has keyboard focus. The eye draws its
     /// own focus ring (`WorkspaceRow.focusShown`) in place of the system's
@@ -129,7 +127,7 @@ struct StudioWorkspaceContent: View, Equatable {
     @FocusState private var focusedEye: Int?
 
     static func == (a: Self, b: Self) -> Bool {
-        a.model === b.model && a.entries == b.entries && a.rowCapacity == b.rowCapacity && a.objectCount == b.objectCount
+        a.model === b.model && a.entries == b.entries && a.slotCount == b.slotCount && a.objectCount == b.objectCount
     }
 
     var body: some View {
@@ -141,27 +139,40 @@ struct StudioWorkspaceContent: View, Equatable {
                 StudioAddMenu(model: model)
             }.padding(8)
             Divider()
-            // #410: the lazy stack keeps slots for the rows it has shown, up
-            // to the most rows a screen can show plus a margin (`rowCapacity`,
-            // `StudioWorkspaceState.slotCap`), and a slot past the scene's
-            // rows shows nothing. New Scene and Open used to remove and insert
-            // rows, and a lazy stack keeps, per inserted row it builds and for
-            // the whole session, an entry in SwiftUI's child cache and an
-            // AppKit dependency on the scroll view's container, whatever the
-            // row ids. The rows a load builds lie within the slots kept, so a
-            // load changes what those slots show instead of inserting them;
-            // slots past the cap come and go unbuilt. Slots
-            // are keyed by position, which is safe because a row holds no
-            // state (`WorkspaceRow`); inserts and removals show as content
-            // changes, with no row animation. Spacing 0 with the 1 pt gap
-            // inside each row but the first, so an empty slot adds no height.
-            // (A List instead re-evaluated each row about 22 times per load.)
+            // #410: the first `slotCount` rows are slots in a plain stack, all
+            // of them built, and a slot past the scene's rows shows nothing;
+            // the rows after them, in a large scene, are a lazy stack. New
+            // Scene and Open used to remove and insert every row, and a lazy
+            // stack keeps, per inserted row it builds and for the whole
+            // session, an entry in SwiftUI's child cache, whatever the row
+            // ids. Now a load changes what the slots show and inserts only
+            // rows past them, which the lazy stack builds only when they are
+            // scrolled to; `slotCount` covers the rows a screen can show, so
+            // the rows a load builds are slots. The slots are built eagerly
+            // because a lazy stack estimates a child it has not built at a
+            // row's height, and an empty slot so estimated left a blank tail
+            // below the last row that scrolling did not always clear; built,
+            // an empty slot is exactly 0 pt. Slots and rows are keyed by
+            // position, which is safe because a row holds no state
+            // (`WorkspaceRow`); inserts and removals show as content changes,
+            // with no row animation. Spacing 0 with the 1 pt gap inside each
+            // row but the first, so an empty slot adds no height. (A List
+            // instead re-evaluated each row about 22 times per load.)
             ScrollView {
-                LazyVStack(spacing: 0) {
-                    ForEach(0..<max(rowCapacity, entries.count), id: \.self) { index in
-                        WorkspaceSlot(model: model, entry: index < entries.count ? entries[index] : nil, first: index == 0,
-                                      focus: $focusedEye, slot: index, focusShown: focusedEye == index)
-                            .equatable()
+                VStack(spacing: 0) {
+                    VStack(spacing: 0) {
+                        ForEach(0..<slotCount, id: \.self) { index in
+                            WorkspaceSlot(model: model, entry: index < entries.count ? entries[index] : nil, first: index == 0,
+                                          focus: $focusedEye, slot: index, focusShown: focusedEye == index)
+                                .equatable()
+                        }
+                    }
+                    LazyVStack(spacing: 0) {
+                        ForEach(slotCount..<max(slotCount, entries.count), id: \.self) { index in
+                            WorkspaceSlot(model: model, entry: entries[index], first: index == 0,
+                                          focus: $focusedEye, slot: index, focusShown: focusedEye == index)
+                                .equatable()
+                        }
                     }
                 }.padding(4)
             }
@@ -531,12 +542,13 @@ struct StudioStatusLine: View {
     }
 }
 
-/// One slot of the workspace stack (#410): a row, with the 1 pt gap above it
+/// One slot of the workspace list (#410): a row, with the 1 pt gap above it
 /// for every row but the first, or, past the scene's rows, nothing: zero
 /// height, hidden from accessibility, not focusable and with no tap, so
-/// keyboard navigation and the selection skip it. The stack wraps either in
-/// one `VStack`, so a slot is always one child of the stack and what it
-/// shows never inserts or removes a child.
+/// keyboard navigation and the selection skip it. The list wraps either in
+/// one `VStack`, so a slot is always one child of its stack and what it
+/// shows never inserts or removes a child. The rows past the slots, in the
+/// lazy stack, use it too, always with a row.
 struct WorkspaceSlot: View, Equatable {
     let model: StudioModel
     let entry: WorkspaceEntry?
@@ -555,6 +567,7 @@ struct WorkspaceSlot: View, Equatable {
     }
 
     var body: some View {
+        let _ = PerfTrace.body(.studioWorkspaceSlot)
         VStack(spacing: 0) {
             if let entry {
                 WorkspaceRow(entry: entry, focus: focus, slot: slot, focusShown: focusShown) {
