@@ -120,6 +120,8 @@ public final class SourceStudioCharacterBatch: @unchecked Sendable {
     /// the thread before `gate` opens, and the caller takes it out of its
     /// box: the caller then holds its only reference, so a decoded tree
     /// dies where the caller drops it, not whenever this thread ends (#326).
+    /// `afterHandOff` (tests only) runs on the thread once the result is
+    /// handed over, while the thread still holds everything it captured.
     ///
     /// Why a lock and not a semaphore: priority inversion. A main-thread save
     /// or clock rebase (`SourceStudioAnimationClock.savedStates`) blocks on
@@ -129,7 +131,8 @@ public final class SourceStudioCharacterBatch: @unchecked Sendable {
     /// main thread's priority reaches the warm-up and, through `gate`, this
     /// decode. A semaphore has no owner: the chain would stop at the warm-up
     /// and the main thread would wait on a utility-QoS decode.
-    static func onDecodeThread<T: Sendable>(_ name: String, _ body: @escaping @Sendable () -> T) -> T {
+    static func onDecodeThread<T: Sendable>(_ name: String, afterHandOff: (@Sendable () -> Void)? = nil,
+                                            _ body: @escaping @Sendable () -> T) -> T {
         let gate = OSAllocatedUnfairLock(), started = DispatchSemaphore(value: 0)
         let result = OSAllocatedUnfairLock<T?>(initialState: nil)
         let qos = DispatchQoS.QoSClass(rawValue: qos_class_self()) ?? .default
@@ -141,6 +144,7 @@ public final class SourceStudioCharacterBatch: @unchecked Sendable {
                 result.withLock { $0 = value }
             }
             gate.unlock()
+            afterHandOff?()
         }
         started.wait()
         gate.lock(); gate.unlock()

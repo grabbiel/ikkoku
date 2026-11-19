@@ -524,21 +524,21 @@ private struct DecodeThreadState: Sendable, Equatable {
 private final class Handed: Sendable {}
 
 /// The decode thread hands its result over and keeps none of it (#326):
-/// once the caller drops what came back, it is gone, whether or not the
-/// thread has ended. A decoded tree therefore dies where its caller drops
-/// it (`theDeepestPreviewRecordHoldsNoSubtree`). The thread usually ends
-/// first, so a hand-off that kept the result fails only some rounds.
+/// once the caller drops what came back, it is gone while the thread still
+/// exists (it waits in `afterHandOff` until the check is done). A decoded
+/// tree therefore dies where its caller drops it
+/// (`theDeepestPreviewRecordHoldsNoSubtree`).
 @Test func theDecodeThreadKeepsNoReferenceToItsResult() {
-    var kept = 0
-    for _ in 0..<1000 {
-        weak var handed: Handed?
-        do {
-            let value = SourceStudioCharacterBatch.onDecodeThread("Ikkoku test") { Handed() }
-            handed = value
-        }
-        if handed != nil { kept += 1 }
+    let checked = DispatchSemaphore(value: 0)
+    defer { checked.signal() }
+    weak var handed: Handed?
+    do {
+        let value = SourceStudioCharacterBatch.onDecodeThread("Ikkoku test", afterHandOff: {
+            _ = checked.wait(timeout: .now() + 10)
+        }) { Handed() }
+        handed = value
     }
-    #expect(kept == 0, "\(kept) of 1,000 results outlived their caller's reference")
+    #expect(handed == nil, "the decode thread kept its result")
 }
 
 /// The clock's warm-up (#326, P1) runs on a utility GCD worker and reads
