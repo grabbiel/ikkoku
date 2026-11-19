@@ -454,7 +454,10 @@ Any task that may change the app's speed measures it this way:
 6. **Renderer cost without the window**: `IKKOKU_AUTOCAPTURE` with
    `IKKOKU_BENCHMARK_OUTPUT`, `IKKOKU_CAPTURE_W`/`_H` and
    `IKKOKU_BENCHMARK_FRAMES` renders the frame offscreen and records CPU
-   encode, GPU and completion times.
+   encode, GPU and completion times. `IKKOKU_BENCHMARK_MAP_SHADOW=every-frame`
+   redraws a map sun's shadow map in every measured frame, which measures
+   the frame where the casters, the sun or the camera target change
+   (`mapShadowEveryFrame` and `mapShadowMap` in the report).
 7. **Speed never changes output silently.** A change that should not alter
    pixels keeps byte-identical captures. A quality trade-off is opt-in and
    reported separately.
@@ -4011,6 +4014,60 @@ method above (GPU × about 4.75, CPU × 1.25):
 - No Metal System Trace was recorded, so map 11's GPU difference is not
   attributed.
 - No `studio-idle` or orbit runs, and no M1 run.
+
+### Slice 5: the sun and its shadows (P4)
+
+Added 2026-11-18 with the fifth maps slice
+([maps: performance](studio/maps.md#performance)). P4 is an offscreen A/B in
+one quiet window (2026-11-18, 01:25:19–01:38:18). It runs `main` (`02fec873`)
+against the change (`a4868c68`), and the change with
+`IKKOKU_BENCHMARK_MAP_SHADOW=every-frame`, on 9 map scenes and the showoff
+scene without a map. Each run is 1996×1824 with 3 warm-up and 120 measured
+frames, and there are 4 rounds in alternating order, 116 units, all valid.
+The display ran at 60 Hz with the monitor off.
+
+- **Fails the registered GPU budget:** the steady state adds +0.12 to
+  +0.21 ms of GPU p50 on maps 01, 15, 21, 22, 27, 34 and 40 (budget +0.10),
+  and +0.185 to +0.234 ms of p95 on maps 01, 34 and 40 (budget +0.15).
+  Map 11 is at +0.095 / +0.106 and map 38, without a sun, at +0.012.
+- **Passes:** CPU encode (−0.036 to +0.012 ms), Metal (+16.7 to +17.3 MB per
+  sun map against 24, map 38 −0.2 MB), the change frame (GPU p95 at most
+  +0.260 against 0.50, encode p95 at most +0.020 against 0.30) and the scene
+  without a map (GPU p50 +0.006, encode p50 +0.009, within ±0.03).
+- The full table and the attribution are in
+  [maps: performance](studio/maps.md#performance).
+
+### Slice 5: the fix (P5)
+
+Added 2026-11-18. P5 measures the fix for P4's GPU cost in one quiet window
+(2026-11-18, 21:33:40–21:49:04 UTC).
+
+- **The fix** (`7e5fbf3d`) has three parts:
+  - it skips the sun block where n·l ≤ 0;
+  - it filters the shadow compares with a 3×3 tent in 4 bilinear taps;
+  - it draws the ambient-lit map surfaces with the toon pipelines.
+- **The runs:**
+  - `main` (`02fec873`, P4's base binary) against the fix, and the fix with
+    `IKKOKU_BENCHMARK_MAP_SHADOW=every-frame`;
+  - P4's 10 scenes, runs and bars;
+  - the plan was frozen before the window (SHA-256 `fe282e2f`).
+- **The base-spread rule:** a scene whose first-block base GPU p50 spread
+  exceeded 0.04 ms got one rerun block, and that block decides its verdict.
+  It triggered for maps 11 and 15.
+- **Passes, all 75 rows:**
+  - steady-state GPU p50 −0.047 to +0.036 ms (budget +0.10; P4 +0.095 to
+    +0.205 on the sun maps), and p95 −0.032 to +0.057 ms (budget +0.15);
+  - CPU encode −0.014 to +0.006 ms;
+  - Metal +16.7 to +17.3 MB per sun map, and map 38 −0.2 MB;
+  - the change frame: GPU p95 at most +0.212 ms against 0.50, and encode p95
+    at most +0.029 against 0.30;
+  - the scene without a map: GPU p50 +0.004 and encode p50 +0.014, within
+    ±0.03.
+- **Map 11's rerun block** had a base spread of 0.078, above 0.04 again. As
+  registered, it decides as is: there is no third block and no exclusion.
+- **Validity:** 140 units, all valid in the end. 9 first attempts were rerun
+  once, 8 for an intruder and 1 for an unread display mode.
+- The full table is in [maps: performance](studio/maps.md#performance).
 
 ## ST-T03i: scene plug-in data rewrites
 

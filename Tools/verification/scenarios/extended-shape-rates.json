@@ -1,0 +1,19 @@
+{
+  "steps": [
+    {"op": "setBody", "key": 65, "index": 0, "value": 1.5},
+    {"op": "assert", "key": 65, "body": {"index": 0, "value": 1.5}},
+    {"op": "setFace", "key": 0, "index": 3, "value": -0.25},
+    {"op": "assert", "key": 0, "face": {"index": 3, "value": -0.25}},
+    {"op": "export", "path": ".local/verification/scenario-exports/extended-shape-rates.png"},
+    {"op": "reimport", "path": ".local/verification/scenario-exports/extended-shape-rates.png"},
+    {"op": "assert", "key": 65, "body": {"index": 0, "value": 1.5}},
+    {"op": "assert", "key": 0, "face": {"index": 3, "value": -0.25}},
+    {"op": "setBody", "key": 65, "index": 1, "value": 0.4},
+    {"op": "assert", "key": 65, "body": {"index": 0, "value": 1.5}},
+    {"op": "export", "path": ".local/verification/scenario-exports/extended-shape-rates-edited.png"},
+    {"op": "reimport", "path": ".local/verification/scenario-exports/extended-shape-rates-edited.png"},
+    {"op": "assert", "key": 65, "body": {"index": 0, "value": 1.5}},
+    {"op": "assert", "key": 65, "body": {"index": 1, "value": 0.4}},
+    {"op": "assert", "key": 0, "face": {"index": 3, "value": -0.25}}
+  ]
+}

@@ -41,6 +41,8 @@ public final class SourceStudioCharacterPreview {
     /// Import-time messages plus one-shot runtime notices (for example the FK
     /// neck conflict reported by editedPose); never grows per frame.
     public private(set) var diagnostics: [String]
+    /// Whether the one-shot collapsed-renderer notice (#404) was reported.
+    private var reportedCollapsedRenderers = false
     public let record: KoikatsuCharacterRecord
     public let selections: [SourceMakerLibrary.Selection]
     /// The outfit this preview assembled: the `coordinate` init argument when
@@ -750,10 +752,7 @@ public final class SourceStudioCharacterPreview {
         // Only colors whose material actually changed count as editable here.
         appliedColorFields = appearanceAppliedFields.intersection(Set(draftColors.map(\.id)))
         shapeBoneModifiers = settings.boneModifiers
-        // ChangeSettingEyeTilt lerps face shape value 33 unclamped (Mathf.Lerp),
-        // L from +0.02 toward -0.02 and R as its negation (SetEyeRot negates the
-        // shared value for the R eye).
-        let eyeTilt = 0.02 - 0.04 * Double(settings.faceValues[33])
+        let eyeTilt = Self.eyeTilt(faceRate: settings.faceValues[33])
         irisRotations = [eyeTilt, -eyeTilt]
         struct Catalog: Decodable { let bones: [SourceStudioPose.Bone] }
         let catalog = try JSONDecoder().decode(Catalog.self, from: Self.read(URL(fileURLWithPath: reference.boneCatalogFile), maximum: 16 * 1024 * 1024))
@@ -952,6 +951,11 @@ public final class SourceStudioCharacterPreview {
         lastFrameReused = false
         var frame = try preview.frame(camera: camera, mainLight: mainLight, effects: effects, expression: expression, poseOverride: pose,
             hiddenParts: wearEvaluation.hiddenParts, sourceBodyAlpha: wearEvaluation.bodyAlpha)
+        if !reportedCollapsedRenderers, !preview.collapsedSkins.isEmpty {
+            reportedCollapsedRenderers = true
+            let collapsed = preview.source.parts.filter { preview.collapsedSkins.contains($0.skin) }.count
+            diagnostics.append("\(collapsed) renderer(s) sit under a zero shape scale (#404) and draw flattened from their bones, as Unity's SkinnedMeshRenderer does.")
+        }
         for i in frame.items.indices { frame.items[i].model = world * frame.items[i].model; frame.items[i].objectID = objectID }
         applyIrisTransforms(to: &frame)
         frame.sceneBounds = frame.sceneBounds.transformed(by: world)
@@ -1243,6 +1247,14 @@ public final class SourceStudioCharacterPreview {
     /// repeat of the same arrays only pays the comparison; a rejected edit
     /// throws before any state is mutated. Export diffs the document's arrays
     /// against `savedFaceValues`/`savedBodyValues` for the card writeback.
+    /// The L eye's tilt for face shape value 33 (ChangeSettingEyeTilt): a
+    /// Mathf.Lerp from +0.02 toward -0.02 (SetEyeRot negates it for the R
+    /// eye). Mathf.Lerp clamps its rate to 0...1 and Slider Unlocker does not
+    /// patch this setter, so an extended rate tilts no further than 0 or 1.
+    static func eyeTilt(faceRate: Float) -> Double {
+        0.02 - 0.04 * min(max(Double(faceRate), 0), 1)
+    }
+
     public func setShapeValues(face: [Float]?, body: [Float]?) throws {
         guard face != sourceFaceValues || body != sourceBodyValues else { return }
         func validate(_ values: [Float]?, _ id: String) throws {
@@ -1253,8 +1265,11 @@ public final class SourceStudioCharacterPreview {
             guard values.count == domain.valueCount else {
                 throw RigError.invalid("Edited \(id) shape values must contain exactly \(domain.valueCount) rates in contract order.")
             }
-            guard values.allSatisfy({ $0.isFinite && (0...1).contains($0) }) else {
-                throw RigError.invalid("Edited \(id) shape values must be finite and between 0 and 1.")
+            // Any finite rate: a card made with Slider Unlocker carries rates
+            // outside 0...1, and editing one slot resends the others as saved
+            // (SourceShapeRateRange decides how they are drawn).
+            guard values.allSatisfy(\.isFinite) else {
+                throw RigError.invalid("Edited \(id) shape values must be finite.")
             }
         }
         try validate(face, "face")
@@ -1301,7 +1316,7 @@ public final class SourceStudioCharacterPreview {
         sourceBodyValues = body
         // The eye tilt reads face shape value 33 (ChangeSettingEyeTilt), so an
         // edited face array re-derives it exactly as the import did.
-        let tilt = 0.02 - 0.04 * Double((face ?? savedFaceValues)[33])
+        let tilt = Self.eyeTilt(faceRate: (face ?? savedFaceValues)[33])
         irisRotations = [tilt, -tilt]
         // The look runtimes and the animation clock carry the replaced
         // baseline's geometry; restart them the way a scene reload does. Init
@@ -1722,12 +1737,7 @@ public final class SourceStudioCharacterPreview {
         let geometryPose = evaluatedCache?.preOverride ?? pose
         let world = try preview.source.rig.evaluate(geometryPose).worldMatrices
         func node(_ name: String) throws -> SourceStudioEyeLookGeometry.Node {
-            let matrix = UnityCoordinates.matrix(world[try preview.source.rig.uniqueNode(named: name)])
-            let q = matrix.rotationQuaternion
-            let scale = matrix.scaleFactors
-            return .init(position: SIMD3(Double(matrix.translation.x), Double(matrix.translation.y), Double(matrix.translation.z)),
-                         rotation: simd_quatd(ix: Double(q.imag.x), iy: Double(q.imag.y), iz: Double(q.imag.z), r: Double(q.real)),
-                         lossyScale: SIMD3(Double(scale.x), Double(scale.y), Double(scale.z)))
+            .init(unityWorld: UnityCoordinates.matrix(world[try preview.source.rig.uniqueNode(named: name)]))
         }
         func position(_ name: String) throws -> SIMD3<Double> { try node(name).position }
         let root = try node("cf_j_head")

@@ -38,6 +38,10 @@ public struct RenderFrameStatistics: Sendable, Equatable {
     /// Where the frame's uniforms were placed. Nonzero overflow means the frame
     /// needed more than its ring region, or found every region still in flight.
     public var uniforms = FrameRing.Statistics()
+    /// Maps slice 5: whether this frame redraws the map sun's shadow map, and
+    /// its indexed draws when it does (one per caster run).
+    public var mapShadowRedrawn = false
+    public var mapShadowDraws = 0
     public init() {}
 }
 
@@ -172,6 +176,28 @@ public struct RenderStatusReporter: Sendable {
 /// thread-safe Metal or store object (`pickQueue` and `retirementQueue` are serial dispatch queues).
 public final class Renderer: @unchecked Sendable {
     public static let shadowMapSize = 2048
+    /// Maps slice 5: the map sun's shadow map (`mapShadowMap`), its square
+    /// half-width around the camera target in metres, and how far the target
+    /// may move before it is fitted and drawn again.
+    public static let mapShadowMapSize = 2048
+    public static let mapShadowRadius: Float = 40
+    public static let mapShadowRefitDistance: Float = mapShadowRadius / 4
+    /// The map sun's shadow filter reach, in texels. The tent
+    /// (`mapShadowVisibility`: 4 bilinear compares) reads texel centres up to 2
+    /// texels from the receiver, so Unity's constant bias (in world texels) and
+    /// its normal bias are scaled by it (`mapSunBiases`). The value was fitted
+    /// against the original's own shadow mask (#399). It is not Unity 5.6.2's
+    /// constant, which is unknown.
+    static let mapShadowFilterReach: Float = 2
+
+    /// The map sun's compare bias (depth units at the receiver's compare) and
+    /// caster normal offset (metres): Unity's `shadowBias` and
+    /// `shadowNormalBias`, in world texels, × the filter's reach.
+    static func mapSunBiases(shadowBias: Float, normalBias: Float, texelWorld: Float, depthRange: Float)
+        -> (compare: Float, normalOffset: Float) {
+        (compare: mapShadowFilterReach * shadowBias * texelWorld / depthRange,
+         normalOffset: mapShadowFilterReach * normalBias * texelWorld)
+    }
 
     public let gpu: GPUContext
     public let resources: ResourceStore
@@ -230,6 +256,12 @@ public final class Renderer: @unchecked Sendable {
     private var skipRedundantState = true
     var liveEncoder: SourceShaderLiveEncoder?
     var liveEncoderError: String?
+    /// Maps slice 5: the map sun's shadow map, made on the first frame that
+    /// draws one (16 MiB), what it holds, and the measurement control that
+    /// redraws it every frame. Protected by renderLock.
+    private var mapShadowMap: (any MTLTexture)?
+    private var mapShadowContent: MapShadowContent?
+    private var mapShadowEveryFrame = false
 
     /// Guards `submitObservers`, `drawingViewports` and `retirementScheduled`;
     /// never held while taking another lock.
@@ -283,6 +315,15 @@ public final class Renderer: @unchecked Sendable {
         get { renderLock.lock(); defer { renderLock.unlock() }; return skipUnchanged }
         set { renderLock.lock(); skipUnchanged = newValue; renderLock.unlock() }
     }
+    /// Maps slice 5 measurement control (default false): redraw the map sun's
+    /// shadow map on every frame instead of only when its casters, sun or
+    /// camera target change, so a benchmark measures the change frame.
+    public var redrawsMapShadowEveryFrame: Bool {
+        get { renderLock.lock(); defer { renderLock.unlock() }; return mapShadowEveryFrame }
+        set { renderLock.lock(); mapShadowEveryFrame = newValue; renderLock.unlock() }
+    }
+    /// Whether the map sun's shadow map has been made (it costs 16 MiB).
+    public var hasMapShadowMap: Bool { renderLock.lock(); defer { renderLock.unlock() }; return mapShadowMap != nil }
     /// Whether the geometry passes skip encoder calls that repeat the state
     /// the encoder already holds (`EncoderState`; default true). False sets
     /// every state for every draw, as before: the reference of the
@@ -891,6 +932,8 @@ public final class Renderer: @unchecked Sendable {
         let draw: FrameAllocation
         let material: FrameAllocation
         let distance: Float
+        /// Maps slice 5: a mixed map mesh's per-vertex receive bytes (nil: the dummy stays bound).
+        var receiveBuffer: (any MTLBuffer)? = nil
     }
 
     struct DeformRecord {
@@ -925,6 +968,12 @@ public final class Renderer: @unchecked Sendable {
         let lights: FrameAllocation
         let post: FrameAllocation
         let background: FrameAllocation?
+        /// Maps slice 5: `MapLightingUniforms` (zero, with no sun, without map lighting).
+        let mapLighting: FrameAllocation
+        /// Whether any draw uses `map_fragment`, which reads `mapLighting`.
+        let hasMapDraws: Bool
+        /// Maps slice 5: the map shadow map's casters when this frame redraws it.
+        var mapShadow: MapShadowPlan? = nil
         let opaque: [DrawRecord]
         let transparent: [DrawRecord]
         /// ST-A11 map sky draws (`MaterialKindSky`): drawn after the background
@@ -940,6 +989,50 @@ public final class Renderer: @unchecked Sendable {
         var live: [LiveRecord] = []
         /// The stencil-capable main pass, set exactly when `live` is non-empty.
         var liveMainPass: LiveMainPass? = nil
+    }
+
+    /// Maps slice 5: what the map shadow map holds (the revision of the casters
+    /// and sun it was drawn from, the camera target it was fitted around) and
+    /// the clip space it was drawn in.
+    struct MapShadowContent: Equatable {
+        let revision: UInt64
+        let center: Float3
+        let toLight: Float3
+        let viewProjection: float4x4
+        /// Metres per shadow-map texel, and the depth range's length.
+        let texelWorld: Float
+        let depthRange: Float
+    }
+
+    /// A redraw of the map shadow map: its content once drawn and the casters.
+    struct MapShadowPlan {
+        let content: MapShadowContent
+        let casters: [MapShadowCaster]
+        let normalOffset: Float
+    }
+
+    /// The map shadow map's clip space: an orthographic light view of
+    /// ±`radius` around `center`, looking along -`toLight`, whose depth range
+    /// holds the casters' bounds and the receivers within `radius`.
+    static func mapShadowFit(toLight: Float3, center: Float3, radius: Float, casterBounds: AABB) -> MapShadowContent {
+        let l = simd_normalize(toLight)
+        // A sun near the zenith needs another up vector than +y.
+        let up = abs(l.y) > 0.99 ? Float3(0, 0, 1) : Float3(0, 1, 0)
+        let view = Projection.lookAt(eye: center + l, center: center, up: up)
+        var bounds = casterBounds
+        bounds.expand(AABB(min: center - Float3(repeating: radius), max: center + Float3(repeating: radius)))
+        // The view looks down -z: a point's distance along -l from the eye is -z.
+        var nearest = Float.greatestFiniteMagnitude, farthest = -Float.greatestFiniteMagnitude
+        for i in 0..<8 {
+            let p = Float3(i & 1 == 0 ? bounds.min.x : bounds.max.x, i & 2 == 0 ? bounds.min.y : bounds.max.y,
+                           i & 4 == 0 ? bounds.min.z : bounds.max.z)
+            let z = -(view * Float4(p.x, p.y, p.z, 1)).z
+            nearest = min(nearest, z); farthest = max(farthest, z)
+        }
+        let near = nearest - 1, far = farthest + 1
+        let projection = Projection.orthographicReverseZ(left: -radius, right: radius, bottom: -radius, top: radius, near: near, far: far)
+        return MapShadowContent(revision: 0, center: center, toLight: l, viewProjection: projection * view,
+                                texelWorld: 2 * radius / Float(mapShadowMapSize), depthRange: far - near)
     }
 
     /// What a main pass with live source-shader draws needs beyond the
@@ -1177,6 +1270,7 @@ public final class Renderer: @unchecked Sendable {
         var deformed: [UInt64: any MTLBuffer] = [:]
         var deformHeld = 0
         var liveCandidates: [DrawRecord] = []
+        var hasMapDraws = false
 
         for item in frame.items where item.visible {
             guard let mesh = resources.mesh(item.mesh) else { continue }
@@ -1233,6 +1327,8 @@ public final class Renderer: @unchecked Sendable {
                 }
             }
             let hb = item.hiddenKey.flatMap { resources.hiddenBuffer(key: $0) }.flatMap { $0.length >= mesh.vertexCount ? $0 : nil }
+            // Maps slice 5: a per-vertex receive flag needs its bytes, one per vertex.
+            let receive = item.vertexReceive.map(\.buffer).flatMap { $0.length >= mesh.vertexCount ? $0 : nil }
             var du = DrawUniforms()
             du.model = item.model
             du.normalMatrix = Transform.normalMatrix(from: item.model)
@@ -1247,10 +1343,16 @@ public final class Renderer: @unchecked Sendable {
             if frame.texture(item.material.base, resources: resources) == nil { mu.flags &= ~MaterialFlagHasBaseTexture.rawValue }
             if frame.texture(item.material.bodyMask, resources: resources) == nil { mu.flags &= ~MaterialFlagHasBodyMask.rawValue }
             if mesh.colors != nil { mu.flags |= MaterialFlagHasVertexColor.rawValue } else { mu.flags &= ~MaterialFlagHasVertexColor.rawValue }
+            if mu.flags & MaterialFlagMapReceivePerVertex.rawValue != 0, receive == nil {
+                // Without its bytes the draw receives no shadow rather than a wrong one.
+                mu.flags &= ~(MaterialFlagMapReceivePerVertex.rawValue | MaterialFlagReceiveShadow.rawValue)
+            }
+            if mu.kind == UInt32(MaterialKindMap.rawValue) { hasMapDraws = true }
             let materialUniforms = try frameRing.allocate(mu)
             let c = item.model.transformPoint(item.sortCenter ?? mesh.bounds.center)
-            let rec = DrawRecord(item: item, mesh: mesh, vertexBuffer: vb, hiddenBuffer: hb, draw: drawUniforms,
+            var rec = DrawRecord(item: item, mesh: mesh, vertexBuffer: vb, hiddenBuffer: hb, draw: drawUniforms,
                                  material: materialUniforms, distance: length(c - cp))
+            if mu.flags & MaterialFlagMapReceivePerVertex.rawValue != 0 { rec.receiveBuffer = receive }
             if isSky { sky.append(rec); continue }
             if item.sourceShader != nil { liveCandidates.append(rec) }
             else if item.material.transparent { transparent.append(rec) } else { opaque.append(rec) }
@@ -1291,9 +1393,46 @@ public final class Renderer: @unchecked Sendable {
             let draw = try frameRing.allocate(du)
             gizmos.append(GizmoRecord(batch: g, vertices: vertices, draw: draw))
         }
+        var lightingUniforms = Renderer.mapLightingUniforms(frame.mapLighting)
+        var mapShadow: MapShadowPlan?
+        // Maps slice 5: only a frame that draws the map lights it or draws its shadow map.
+        if !forPick, hasMapDraws, let lighting = frame.mapLighting, let sun = lighting.sun, sun.shadowStrength > 0,
+           !lighting.casters.isEmpty, !lighting.casterBounds.isEmpty {
+            // Redrawn only when the casters, the sun or the camera target change (or for the measurement control).
+            let target = cam.target
+            var content: MapShadowContent
+            if let current = mapShadowContent, !mapShadowEveryFrame, current.revision == lighting.revision,
+               current.toLight == simd_normalize(sun.directionToLight),
+               simd_distance(current.center, target) <= Renderer.mapShadowRefitDistance {
+                content = current
+            } else {
+                let fit = Renderer.mapShadowFit(toLight: sun.directionToLight, center: target, radius: Renderer.mapShadowRadius,
+                                                casterBounds: lighting.casterBounds)
+                content = MapShadowContent(revision: lighting.revision, center: fit.center, toLight: fit.toLight,
+                                           viewProjection: fit.viewProjection, texelWorld: fit.texelWorld, depthRange: fit.depthRange)
+                let biases = Renderer.mapSunBiases(shadowBias: sun.shadowBias, normalBias: sun.shadowNormalBias,
+                                                   texelWorld: fit.texelWorld, depthRange: fit.depthRange)
+                mapShadow = MapShadowPlan(content: content, casters: lighting.casters, normalOffset: biases.normalOffset)
+                statistics.mapShadowRedrawn = true
+                statistics.mapShadowDraws = lighting.casters.reduce(0) { $0 + $1.runs.count }
+            }
+            lightingUniforms.shadowViewProjection = content.viewProjection
+            // The light's constant bias (Unity's units: world texels) × the tent's reach, at the receiver's compare.
+            let compare = Renderer.mapSunBiases(shadowBias: sun.shadowBias, normalBias: sun.shadowNormalBias,
+                                                texelWorld: content.texelWorld, depthRange: content.depthRange).compare
+            lightingUniforms.shadowParams = Float4(sun.shadowStrength, 1 / Float(Renderer.mapShadowMapSize), compare, 1)
+        }
+        let mapLighting = try frameRing.allocate(lightingUniforms)
         return FrameContext(frame: frame, frameUniforms: frameUniforms, lights: lights, post: post, background: background,
-                            opaque: opaque, transparent: transparent, sky: Self.sortedOpaque(sky), shadowCasters: casters, deforms: deforms,
+                            mapLighting: mapLighting, hasMapDraws: hasMapDraws, mapShadow: mapShadow, opaque: opaque, transparent: transparent, sky: Self.sortedOpaque(sky), shadowCasters: casters, deforms: deforms,
                             gizmos: gizmos, width: W, height: H, live: live, liveMainPass: liveMainPass)
+    }
+
+    /// ST-A11 slice 5: a map draw lit by the map's ambient (no lightmap) takes the ToonMapProbeLit pipelines
+    /// in both main-pass variants; silhouette, unlit and particle draws keep map_fragment's own branches.
+    static func drawsAmbientLitMap(_ u: MaterialUniforms) -> Bool {
+        let own = MaterialFlagMapSilhouette.rawValue | MaterialFlagMapUnlit.rawValue | MaterialFlagMapParticle.rawValue
+        return (u.flags & MaterialFlagMapProbeLit.rawValue) != 0 && (u.flags & own) == 0
     }
 
     /// The opaque order: draw order, then material kind, then mesh id; equal
@@ -1352,6 +1491,7 @@ public final class Renderer: @unchecked Sendable {
         let writes = encodeDeform(ctx, cb)
         if !ctx.live.isEmpty { encodeLiveInputs(ctx, cb) }
         encodeShadow(ctx, cb)
+        encodeMapShadow(ctx, cb)
         encodeMain(ctx, targets: targets, cb)
         encodePost(ctx, targets: targets, target: target, cb)
         encodeOverlay(ctx, targets: targets, target: target, cb)
@@ -1429,6 +1569,89 @@ public final class Renderer: @unchecked Sendable {
         s.setFrontFacing(.counterClockwise)
     }
 
+    /// Maps slice 5, once per main pass: toon_vertex's receive bytes (the shared
+    /// dummy; only a mixed map mesh binds its own, in `bindDraw`), and for a
+    /// frame with map draws `map_fragment`'s lighting and shadow map. Without a
+    /// map shadow map the character one stands in, unread (strength 0).
+    func bindMapCommon(_ s: EncoderState, _ ctx: FrameContext) {
+        s.setVertexBuffer(resources.dummyBuffer, offset: 0, index: Int(BufferIndexVertexReceive.rawValue))
+        guard ctx.hasMapDraws else { return }
+        s.setFragmentBuffer(ctx.mapLighting.buffer, offset: ctx.mapLighting.offset, index: Int(BufferIndexMapLighting.rawValue))
+        s.setFragmentTexture(mapShadowMap ?? shadowMap, index: Int(TextureIndexMapShadow.rawValue))
+    }
+
+    /// Maps slice 5: draws the map sun's shadow map when the frame's plan asks
+    /// (a change frame), and records what it holds. The 2048² depth texture is
+    /// made on first use. Casters cull as Unity's cast mode says and move
+    /// along their normals by the light's normal bias; a slope-scaled bias
+    /// pushes them away from the light.
+    private func encodeMapShadow(_ ctx: FrameContext, _ cb: any MTLCommandBuffer) {
+        guard let plan = ctx.mapShadow else { return }
+        if mapShadowMap == nil {
+            let d = MTLTextureDescriptor.texture2DDescriptor(pixelFormat: Pipelines.depthFormat, width: Renderer.mapShadowMapSize,
+                                                             height: Renderer.mapShadowMapSize, mipmapped: false)
+            d.usage = [.renderTarget, .shaderRead]
+            d.storageMode = .private
+            guard let texture = gpu.device.makeTexture(descriptor: d) else { return }
+            texture.label = "MapShadowMap"
+            mapShadowMap = texture
+        }
+        guard let texture = mapShadowMap else { return }
+        let pass = MTLRenderPassDescriptor()
+        pass.depthAttachment.texture = texture
+        pass.depthAttachment.loadAction = .clear
+        pass.depthAttachment.storeAction = .store
+        pass.depthAttachment.clearDepth = 0
+        guard let enc = cb.makeRenderCommandEncoder(descriptor: pass) else { return }
+        enc.label = "MapShadow"
+        enc.setRenderPipelineState(pipelines.mapShadow)
+        enc.setDepthStencilState(pipelines.depthWrite)
+        // Reverse Z: a negative slope bias moves a caster away from the light, at most half a metre.
+        enc.setDepthBias(0, slopeScale: -2, clamp: -0.5 / max(plan.content.depthRange, 1))
+        let l = plan.content.toLight
+        for caster in plan.casters {
+            guard let mesh = resources.mesh(caster.mesh) else { continue }
+            var u = MapShadowDrawUniforms()
+            u.viewProjection = plan.content.viewProjection
+            u.model = caster.model
+            u.normalMatrix = Transform.normalMatrix(from: caster.model)
+            u.toLight = Float4(l.x, l.y, l.z, plan.normalOffset)
+            var base: (any MTLTexture)?
+            if let material = caster.alphaTest {
+                base = ctx.frame.texture(material.base, resources: resources)
+                u.alphaTest = Float4(1, material.uniforms.params.w, material.uniforms.baseColor.w, base == nil ? 0 : 1)
+            }
+            enc.setFrontFacing(simd_determinant(caster.model.upperLeft3x3) < 0 ? .clockwise : .counterClockwise)
+            enc.setCullMode(caster.twoSided ? .none : .back)
+            enc.setVertexBuffer(mesh.baseVertices, offset: 0, index: Int(BufferIndexVertices.rawValue))
+            enc.setVertexBuffer(mesh.texcoords, offset: 0, index: Int(BufferIndexTexcoords.rawValue))
+            enc.setVertexBytes(&u, length: MemoryLayout<MapShadowDrawUniforms>.stride, index: Int(BufferIndexDrawUniforms.rawValue))
+            enc.setFragmentBytes(&u, length: MemoryLayout<MapShadowDrawUniforms>.stride, index: Int(BufferIndexDrawUniforms.rawValue))
+            enc.setFragmentTexture(base ?? resources.whiteTexture, index: Int(TextureIndexBase.rawValue))
+            for run in caster.runs where run.count > 0 && run.first + run.count <= mesh.indexCount {
+                enc.drawIndexedPrimitives(type: .triangle, indexCount: run.count, indexType: .uint32, indexBuffer: mesh.indices,
+                                          indexBufferOffset: run.first * MemoryLayout<UInt32>.stride)
+            }
+        }
+        enc.endEncoding()
+        mapShadowContent = plan.content
+    }
+
+    /// `MapLightingUniforms` for a frame's map lighting; all zero (no sun) without it.
+    static func mapLightingUniforms(_ lighting: MapLighting?) -> MapLightingUniforms {
+        var u = MapLightingUniforms()
+        u.shadowViewProjection = matrix_identity_float4x4
+        guard let lighting else { return u }
+        let sh = lighting.sh
+        u.sh = (sh[0], sh[1], sh[2], sh[3], sh[4], sh[5], sh[6])
+        if let sun = lighting.sun {
+            let d = sun.directionToLight
+            u.sunDirection = Float4(d.x, d.y, d.z, 1)
+            u.sunColor = Float4(sun.color.x, sun.color.y, sun.color.z, 1)
+        }
+        return u
+    }
+
     private func bindDraw(_ s: EncoderState, _ rec: DrawRecord) {
         // Mirrored scene nodes reverse triangle orientation in every geometry pass.
         s.setFrontFacing(simd_determinant(rec.item.model.upperLeft3x3) < 0 ? .clockwise : .counterClockwise)
@@ -1440,6 +1663,8 @@ public final class Renderer: @unchecked Sendable {
         s.setVertexBuffer(rec.draw.buffer, offset: rec.draw.offset, index: Int(BufferIndexDrawUniforms.rawValue))
         s.setVertexBuffer(rec.material.buffer, offset: rec.material.offset, index: Int(BufferIndexMaterial.rawValue))
         s.setVertexBuffer(rec.hiddenBuffer ?? resources.dummyBuffer, offset: 0, index: Int(BufferIndexVertexHidden.rawValue))
+        // Read only under MaterialFlagMapReceivePerVertex, which only these draws keep.
+        if let receive = rec.receiveBuffer { s.setVertexBuffer(receive, offset: 0, index: Int(BufferIndexVertexReceive.rawValue)) }
         s.setFragmentBuffer(rec.draw.buffer, offset: rec.draw.offset, index: Int(BufferIndexDrawUniforms.rawValue))
         s.setFragmentBuffer(rec.material.buffer, offset: rec.material.offset, index: Int(BufferIndexMaterial.rawValue))
     }
@@ -1552,6 +1777,7 @@ public final class Renderer: @unchecked Sendable {
         enc.label = "Main"
         let s = EncoderState(enc, skips: skipRedundantState)
         bindCommon(s, ctx)
+        bindMapCommon(s, ctx)
 
         if !fx.transparentBackground, let background = ctx.background {
             enc.pushDebugGroup("Background")
@@ -1601,7 +1827,8 @@ public final class Renderer: @unchecked Sendable {
             }
             let nativeEye = m.uniforms.kind == UInt32(MaterialKindEye.rawValue) && (m.uniforms.flags & MaterialFlagSourceIrisHighlights.rawValue) == 0
             let isMap = m.uniforms.kind == UInt32(MaterialKindMap.rawValue)
-            s.setPipeline(isMap ? main.map : nativeEye ? main.eye : main.toonOpaque)
+            let ambientLit = isMap && Self.drawsAmbientLitMap(m.uniforms)
+            s.setPipeline(ambientLit ? main.toonMapProbeLit : isMap ? main.map : nativeEye ? main.eye : main.toonOpaque)
             s.setDepthStencil(pipelines.depthWrite)
             s.setCull((m.uniforms.flags & MaterialFlagDoubleSided.rawValue) != 0 ? .none : .back)
             drawIndexed(s, rec.mesh)
@@ -1617,6 +1844,7 @@ public final class Renderer: @unchecked Sendable {
             // passes that follow.
             s.forget()
             bindCommon(s, ctx)
+            bindMapCommon(s, ctx)
             enc.popDebugGroup()
         }
 
@@ -1644,7 +1872,8 @@ public final class Renderer: @unchecked Sendable {
                     s.setDepthStencil(pipelines.depthTest)
                     continue
                 }
-                s.setPipeline(isMap ? main.mapBlend : nativeEye ? main.eyeBlend : main.toonBlend)
+                let ambientLit = isMap && Self.drawsAmbientLitMap(material)
+                s.setPipeline(ambientLit ? main.toonMapProbeLitBlend : isMap ? main.mapBlend : nativeEye ? main.eyeBlend : main.toonBlend)
                 drawIndexed(s, rec.mesh)
             }
             enc.popDebugGroup()

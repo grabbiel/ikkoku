@@ -348,13 +348,19 @@ enum OriginalCardFixture {
     #expect(card.preservedData == bytes)
 }
 
-@Test func sourceCharacterCardPreviewRejectsUnsupportedIdentityAndAppliedShapeRanges() throws {
+/// Unsupported identities are rejected. Shape rates outside 0...1 (cards made
+/// with Slider Unlocker) are previewed as saved, since drawing decides how
+/// they look (`SourceShapeRateRange`); a rate that is not finite is not a
+/// card the reader accepts at all.
+@Test func sourceCharacterCardPreviewRejectsUnsupportedIdentityAndKeepsExtendedShapeRates() throws {
     let contract = try OriginalCardFixture.contract()
     var face = OriginalCardFixture.faceValues; face[0] = .float(-0.01)
     var body = OriginalCardFixture.bodyValues; body[2] = .float(1.01)
-    let unsupported = [OriginalCardFixture.blocks(custom: OriginalCardFixture.custom(face: face)),
-                       OriginalCardFixture.blocks(custom: OriginalCardFixture.custom(body: body)),
-                       OriginalCardFixture.blocks(custom: OriginalCardFixture.custom(head: .integer(1))),
+    let extendedFace = try SourceCharacterCard.decode(OriginalCardFixture.card(blocks: OriginalCardFixture.blocks(custom: OriginalCardFixture.custom(face: face))))
+    #expect(try extendedFace.previewSettings(contract: contract).faceValues[0] == -0.01)
+    let extendedBody = try SourceCharacterCard.decode(OriginalCardFixture.card(blocks: OriginalCardFixture.blocks(custom: OriginalCardFixture.custom(body: body))))
+    #expect(try extendedBody.previewSettings(contract: contract).bodyValues[2] == 1.01)
+    let unsupported = [OriginalCardFixture.blocks(custom: OriginalCardFixture.custom(head: .integer(1))),
                        OriginalCardFixture.blocks(custom: OriginalCardFixture.custom(boneType: .integer(1))),
                        OriginalCardFixture.blocks(sex: .integer(0))]
     for blocks in unsupported {
@@ -366,9 +372,15 @@ enum OriginalCardFixture {
     #expect(throws: SourceCharacterCardError.self) { try card.previewSettings(contract: OriginalCardFixture.contract(faceCount: 51)) }
     #expect(throws: SourceCharacterCardError.self) { try card.previewSettings(contract: OriginalCardFixture.contract(bodyCount: 43)) }
     body = OriginalCardFixture.bodyValues; body[43] = .float(1.5)
-    let unapplied = try SourceCharacterCard.decode(OriginalCardFixture.card(blocks: OriginalCardFixture.blocks(custom: OriginalCardFixture.custom(body: body))))
-    #expect(try unapplied.customization().bodyValues[43] == 1.5)
-    #expect(throws: SourceCharacterCardError.self) { try unapplied.previewSettings(contract: contract) }
+    let tall = try SourceCharacterCard.decode(OriginalCardFixture.card(blocks: OriginalCardFixture.blocks(custom: OriginalCardFixture.custom(body: body))))
+    #expect(try tall.customization().bodyValues[43] == 1.5)
+    #expect(try tall.previewSettings(contract: contract).bodyValues[43] == 1.5)
+    for value: Float in [.nan, .infinity, -.infinity] {
+        body = OriginalCardFixture.bodyValues; body[1] = .float(Double(value))
+        let broken = try SourceCharacterCard.decode(OriginalCardFixture.card(blocks: OriginalCardFixture.blocks(custom: OriginalCardFixture.custom(body: body))))
+        #expect(throws: SourceCharacterCardError.self) { try broken.customization() }
+        #expect(throws: SourceCharacterCardError.self) { try broken.previewSettings(contract: contract) }
+    }
     let male = try SourceCharacterCard.decode(OriginalCardFixture.card(blocks: OriginalCardFixture.blocks(sex: .integer(0))))
     #expect(try male.previewSettings(contract: contract, sex: 0).bodyValues == (0..<44).map { Float($0) / 43 })
     let alternate = try SourceCharacterCard.decode(OriginalCardFixture.card(blocks: OriginalCardFixture.blocks(custom: OriginalCardFixture.custom(head: .integer(2), boneType: .integer(1)))))

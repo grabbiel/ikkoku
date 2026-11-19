@@ -291,8 +291,12 @@ func sourceStudioAnimationClockWithoutPreviewMatchesBuiltCharacterWhenSupplied()
 /// cannot convert as the eager import retains its failed build. The card
 /// check (`validateCard`, run off the main thread by `CardCheck`) must reject
 /// what the build rejects, with the build's own error, and pass a card the
-/// build converts. Shape rates outside 0...1 (body or face) are the case the
-/// user scene corpus has; the fixture's card is edited to carry them.
+/// build converts. Shape rates outside 0...1 (body or face), the case the
+/// user scene corpus has, now build (`SourceShapeRateRange`), so both pass;
+/// a rate that is not a finite number (NaN, +inf, -inf) is rejected by both.
+/// The fixture's card is edited to carry them (the non-finite ones by
+/// patching a marker rate's bytes, since the card editor writes only finite
+/// numbers).
 @Test(.enabled(if: SourceFixtureSupport.shouldRun(["IKKOKU_STUDIO_EXPANSION", "IKKOKU_MAKER_LIBRARY", "IKKOKU_SOURCE_AVATAR", "IKKOKU_STUDIO_POSE_CONTRACT"]) && MTLCreateSystemDefaultDevice() != nil,
                "Requires IKKOKU_STUDIO_EXPANSION, IKKOKU_MAKER_LIBRARY, IKKOKU_SOURCE_AVATAR, IKKOKU_STUDIO_POSE_CONTRACT and a Metal device"))
 func sourceStudioCardCheckRejectsWhatTheBuildRejectsWhenSupplied() throws {
@@ -306,11 +310,30 @@ func sourceStudioCardCheckRejectsWhatTheBuildRejectsWhenSupplied() throws {
     let shape = try record.card().customization()
     var body = shape.bodyValues; body[0] = 1.5
     var face = shape.faceValues; face[3] = -0.25
+    // A marker rate whose MessagePack float32 token (0xca + big-endian bits)
+    // is then overwritten with a non-finite value.
+    let marker = Float(bitPattern: 0x3EDD_1234)
+    var marked = shape.bodyValues; marked[2] = marker
+    func token(_ bits: UInt32) -> Data { Data([0xca, UInt8(bits >> 24), UInt8(bits >> 16 & 0xff), UInt8(bits >> 8 & 0xff), UInt8(bits & 0xff)]) }
+    func patchedScene(_ value: Float) throws -> Data {
+        var bytes = try original.editedData(.init(cards: [10: .init(bodyValues: marked)]))
+        var found: [Range<Data.Index>] = [], start = bytes.startIndex
+        while let range = bytes.range(of: token(marker.bitPattern), in: start..<bytes.endIndex) { found.append(range); start = range.upperBound }
+        try #require(found.count == 1, "the marker token occurs \(found.count) times")
+        bytes.replaceSubrange(found[0], with: token(value.bitPattern))
+        return bytes
+    }
     let device = try #require(MTLCreateSystemDefaultDevice())
     var records = [record]
     var buildErrors: [String?] = [nil]
-    for (name, edit) in [("body 1.5", SourceCharacterCard.Edits(bodyValues: body)), ("face -0.25", SourceCharacterCard.Edits(faceValues: face))] {
-        let bytes = try original.editedData(.init(cards: [10: edit]))
+    let cases: [(name: String, bytes: Data, rejected: Bool)] = [
+        ("body 1.5", try original.editedData(.init(cards: [10: .init(bodyValues: body)])), false),
+        ("face -0.25", try original.editedData(.init(cards: [10: .init(faceValues: face)])), false),
+        ("body NaN", try patchedScene(.nan), true),
+        ("body +inf", try patchedScene(.infinity), true),
+        ("body -inf", try patchedScene(-.infinity), true),
+    ]
+    for (name, bytes, rejected) in cases {
         let fixture = input.deletingLastPathComponent().appendingPathComponent("card-check-" + UUID().uuidString + ".png")
         defer { try? FileManager.default.removeItem(at: fixture) }
         try bytes.write(to: fixture)
@@ -322,8 +345,9 @@ func sourceStudioCardCheckRejectsWhatTheBuildRejectsWhenSupplied() throws {
         do { _ = try SourceStudioCharacterPreview(reference: reference, resources: ResourceStore(device: device)) } catch { buildError = "\(error)" }
         var checkError: String?
         do { try SourceStudioCharacterPreview.validateCard(of: edited) } catch { checkError = "\(error)" }
-        #expect(buildError != nil && checkError == buildError, "\(name): build \(buildError ?? "built"), check \(checkError ?? "passed")")
-        #expect(checkError?.contains("extended shape ranges") == true, "\(name)")
+        #expect(checkError == buildError, "\(name): build \(buildError ?? "built"), check \(checkError ?? "passed")")
+        #expect((buildError != nil) == rejected, "\(name): build \(buildError ?? "built")")
+        if rejected { #expect(checkError?.contains("not a finite") == true, "\(name): \(checkError ?? "passed")") }
         records.append(edited); buildErrors.append(buildError)
     }
     // The fixture's own card passes (its build is covered by the clock test).

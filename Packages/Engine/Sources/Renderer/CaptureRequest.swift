@@ -426,6 +426,7 @@ extension CaptureRequest {
         ScopedOption("IKKOKU_SOURCE_SCENE_EDITS", [.appCapture]),
         ScopedOption("IKKOKU_BENCHMARK_OUTPUT", [.appCapture]),
         ScopedOption("IKKOKU_BENCHMARK_FRAMES", [.appCapture]),
+        ScopedOption("IKKOKU_BENCHMARK_MAP_SHADOW", [.appCapture]),
         ScopedOption("IKKOKU_BENCHMARK_SIMULATION_FRAMES", [.appCapture]),
         ScopedOption("IKKOKU_PERF_WORKLOAD", [.perfTrace]),
         ScopedOption("IKKOKU_PERF_SECONDS", [.perfTrace]),
@@ -503,6 +504,7 @@ extension CaptureRequest {
         Dependency("IKKOKU_SOURCE_SCENE_EDITS", requires: "IKKOKU_SOURCE_SCENE"),
         Dependency("IKKOKU_SOURCE_MAP_PROBE", requires: "IKKOKU_SOURCE_SCENE"),
         Dependency("IKKOKU_BENCHMARK_FRAMES", requires: "IKKOKU_BENCHMARK_OUTPUT"),
+        Dependency("IKKOKU_BENCHMARK_MAP_SHADOW", requires: "IKKOKU_BENCHMARK_OUTPUT"),
         Dependency("IKKOKU_BENCHMARK_SIMULATION_FRAMES", requires: "IKKOKU_BENCHMARK_OUTPUT"),
         Dependency("IKKOKU_BENCHMARK_SIMULATION_FRAMES", requires: "IKKOKU_SOURCE_SCENE"),
         Dependency("IKKOKU_SOURCE_PLUGIN_DELTA", requires: "IKKOKU_SOURCE_PLUGIN_STEPS"),
@@ -554,6 +556,8 @@ extension CaptureRequest {
         ValueRule("IKKOKU_CAPTURE_TIMELINE", .finiteNumber),
         // The renderer and Studio benchmarks check their own frame ranges.
         ValueRule("IKKOKU_BENCHMARK_FRAMES", .integer(1...Int.max)),
+        // Maps slice 5: redraw the map sun's shadow map in every measured frame.
+        ValueRule("IKKOKU_BENCHMARK_MAP_SHADOW", .oneOf(["every-frame"])),
         ValueRule("IKKOKU_BENCHMARK_SIMULATION_FRAMES", .integer(1...Int.max)),
         ValueRule("IKKOKU_CAPTURE_EXPR", .pairs(keys: ["eyes", "mouth", "brows", "head", "gaze"], integerValues: true)),
         ValueRule("IKKOKU_CAPTURE_SLIDERS", .pairs(keys: nil, integerValues: false)),

@@ -3,6 +3,7 @@ import Testing
 import simd
 import CoreMath
 import Scene
+import Character
 
 /// `RigDefinition.isFiniteAffine` became four-lane on 2026-11-17 (r7l2: during
 /// a Studio FK drag it took 28.6 ms/s of the main thread, more than the rest of
@@ -170,6 +171,52 @@ private func setting(_ matrix: float4x4, _ column: Int, _ row: Int, _ value: Flo
                                             .init(name: "joint", sourceID: "joint", parent: 0, translation: Float3(3e38, 0, 0))],
                                     skins: [.init(name: "skin", meshNode: 0, joints: [1], inverseBindMatrices: [far])])
     #expect(rejection { _ = try skinned.evaluate(skinned.restPose) } == "Skin 0 produced a nonfinite palette.")
+}
+
+/// #404 keeps a singular mesh world's palette in rig space. Every pose here
+/// keeps its mesh worlds regular (face shapes at 0, 0.5, 1 and random rates
+/// on the head rig; rest and randomly rotated and scaled poses, reflections
+/// included, on both avatars), so `rig.evaluate` must return bit for bit what
+/// `referenceEvaluate` (the pre-#404 form) returns, with no collapsed skin
+/// and each skin drawn with its mesh node's world.
+@Test(.enabled(if: SourceFixtureSupport.shouldRun(["IKKOKU_HEAD_RIG", "IKKOKU_SHAPE_CONTRACT", "IKKOKU_SOURCE_AVATAR", "IKKOKU_SOURCE_MALE_AVATAR"]),
+               "Requires IKKOKU_HEAD_RIG, IKKOKU_SHAPE_CONTRACT, IKKOKU_SOURCE_AVATAR, IKKOKU_SOURCE_MALE_AVATAR"))
+func rigEvaluationKeepsRegularFixturePosesBitIdentical() throws {
+    let head = try SourceRig.load(url: URL(fileURLWithPath: try SourceFixtureSupport.require("IKKOKU_HEAD_RIG")))
+    let contract = try SourceShapeContract.decode(Data(contentsOf: URL(fileURLWithPath: try SourceFixtureSupport.require("IKKOKU_SHAPE_CONTRACT"))))
+    let face = try #require(contract.domain("face"))
+    var random = FiniteAffineSeed(state: 404)
+    var cases: [(rig: RigDefinition, pose: RigPose)] = []
+    for rate: Float in [0, 0.5, 1] {
+        cases.append((head.rig, try SourceFaceShapePose.make(rig: head.rig, domain: face, values: Array(repeating: rate, count: face.valueCount))))
+    }
+    for _ in 0..<4 {
+        let values = (0..<face.valueCount).map { _ in Float.random(in: 0...1, using: &random) }
+        cases.append((head.rig, try SourceFaceShapePose.make(rig: head.rig, domain: face, values: values)))
+    }
+    for variable in ["IKKOKU_SOURCE_AVATAR", "IKKOKU_SOURCE_MALE_AVATAR"] {
+        let rig = try SourceRig.loadModel(url: URL(fileURLWithPath: try SourceFixtureSupport.require(variable))).rig
+        cases.append((rig, rig.restPose))
+        for reflect in [false, true] {
+            var pose = rig.restPose
+            for index in pose.localMatrices.indices where Int.random(in: 0..<4, using: &random) == 0 {
+                let axis = simd_normalize(Float3(Float.random(in: -1...1, using: &random), Float.random(in: -1...1, using: &random), 1))
+                var scale = Float3((0..<3).map { _ in Float.random(in: 0.8...1.25, using: &random) })
+                if reflect, Int.random(in: 0..<3, using: &random) == 0 { scale.x = -scale.x }
+                pose.localMatrices[index] = pose.localMatrices[index] * Transform.trs(.zero, simd_quatf(angle: Float.random(in: -0.5...0.5, using: &random), axis: axis), scale)
+            }
+            cases.append((rig, pose))
+        }
+    }
+    for (rig, pose) in cases {
+        let evaluation = try rig.evaluate(pose), reference = try referenceEvaluate(rig, pose)
+        #expect(evaluation.collapsedSkins.isEmpty)
+        #expect(finiteAffineBits(evaluation.worldMatrices) == finiteAffineBits(reference.world))
+        #expect(finiteAffineBits(evaluation.palettes.flatMap { $0 }) == finiteAffineBits(reference.palettes.flatMap { $0 }))
+        #expect(finiteAffineBits(rig.skins.indices.map { evaluation.model(skin: $0, meshNode: rig.skins[$0].meshNode) })
+                == finiteAffineBits(rig.skins.map { reference.world[$0.meshNode] }))
+    }
+    #expect(cases.count == 13)
 }
 
 /// Opt-in Release timing probe (IKKOKU_FINITE_AFFINE_PERF=1 plus
