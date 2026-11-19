@@ -4,6 +4,7 @@ import struct
 import unittest
 
 from analysis import card_contract as card
+from analysis import mono_int32
 from analysis import resolver_contract as resolver
 
 
@@ -74,6 +75,18 @@ class ResolverContractTests(unittest.TestCase):
         migrated = resolver.migrate_record({"ModID": "\u200bold", "Slot": 1, "CategoryNo": 122}, [rule], {"new"})
         self.assertEqual(migrated["ModID"], "new")
 
+    def test_source_csv_trims_lines_with_mono_white_chars(self):
+        # #421: Lists.LoadCSV's String.Trim() calls and ManifestVersionComparer's use String.WhiteChars. Same fixture
+        # and expectations as SourceModCatalogTests.sourceModCatalogTrimsListLinesWithMonoWhiteChars.
+        csv = ("\u200b122\ufeff,ignored\n\u3000 0\u0085\nAssets/list.bytes\u180e\ufeff,ignored\n"
+               "\ufeffID,Name,Possess\u200b\n\ufeff 7,a\u180e,0\u200b\n\u200b\ufeff\n8,ignored,0\n")
+        parsed = resolver.catalog.source_csv(csv.encode("utf-8"))
+        self.assertEqual((parsed["categoryNo"], parsed["distributionNo"], parsed["filePath"]), (122, 0, "Assets/list.bytes\u180e"))
+        self.assertEqual(parsed["columns"], ["ID", "Name", "Possess"])
+        self.assertEqual((parsed["rows"], parsed["stoppedAtLine"]), ([["7", "a\u180e", "0"]], 6))
+        self.assertEqual(resolver.catalog.trim("\u180e\u200b x \ufeff\u0085"), "\u180e\u200b x")
+        self.assertEqual(resolver.catalog.version_tokens("\ufeffv1.2\u200b"), resolver.catalog.version_tokens("1.2"))
+
     def test_bad_record_types_overflows_null_records_and_truncations(self):
         for value in (None, [], 1, {"Slot": None}, {"Slot": True}, {"Slot": 2**31}, {"LocalSlot": -2**31 - 1},
                       {"CategoryNo": 1.0}, {"Property": b"x"}, {None: 1}):
@@ -95,6 +108,26 @@ class ResolverContractTests(unittest.TestCase):
                 resolver.record(b"\x81" + resolver.pack("Slot") + token + struct.pack(">q", 7))
         raw = b"\x81" + resolver.pack("Slot") + b"\xce" + struct.pack(">I", 7)
         self.assertEqual(resolver.record(raw)["Slot"], 7)
+
+    def test_source_list_numbers_use_mono_int32_parse(self):
+        # #427: the game parses list numbers with Mono's int.Parse: the category and distribution (Lists.LoadCSV) and
+        # each row ID (UniversalAutoResolver.GenerateResolutionInfo). Its white space is char.IsWhiteSpace, which
+        # includes U+200B but not U+180E or U+FEFF, and a NUL ends the number. Same fixture and expectations as
+        # SourceModCatalogTests.sourceModCatalogParsesListNumbersWithMonoInt32Parse.
+        csv = "122\0junk,ignored\n0\0\nAssets/list.bytes\nID,Name,Possess\n7\u200b,a,0\n8\0x,b,0\n"
+        parsed = resolver.catalog.source_csv(csv.encode("utf-8"))
+        self.assertEqual((parsed["categoryNo"], parsed["distributionNo"]), (122, 0))
+        keys = {"Category": 0, "DistributionNo": 1, "ID": 2, "Name": 3, "Possess": 4}
+        generated = resolver.catalog.generate_resolution(parsed, "fixture.mod", 100000000,
+                                                         [resolver.catalog.ACCESSORY_PROPERTY], keys)
+        self.assertEqual([row["sourceSlot"] for row in generated["rows"]], [7, 8])
+        int32 = resolver.catalog.int32
+        self.assertEqual([int32(text) for text in ("\u200b5", "12\0x", "-2147483648\0", " +3\u2029", "\u30004\u205f")],
+                         [5, 12, -2**31, 3, 4])
+        for text in ("\u180e5", "5\ufeff", "2147483647\0x", " \0", "\u200b", "2147483648"):
+            with self.subTest(text=text), self.assertRaises(ValueError):
+                int32(text)
+        self.assertEqual(sum(map(mono_int32.is_white_space, map(chr, range(0x10000)))), 26)
 
     def test_record_count_and_size_bounds(self):
         with self.assertRaisesRegex(ValueError, "byte bound"):

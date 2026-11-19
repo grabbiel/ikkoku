@@ -214,6 +214,10 @@ locked `PerfDrawLog`. Everything else is recorded on the main thread.
   draw (`frameRing`), excluding unchanged callbacks: skin palettes and
   palette KiB per draw, palette buffers created while recording (0 once the
   ring is warm), and draws that used overflow buffers;
+- per rendered draw (`drawCounts`, ST-T04): the main pass's records and the
+  draws they took, the static item records drawn instanced and their runs,
+  and the shadow casters and their draws
+  ([instanced static items](renderer.md#instanced-static-items-st-t04-slice-1-part-b));
 - when each drawable was really presented (`addPresentedHandler`), giving
   actual presented FPS and raw presented-interval percentiles. Schema 5 also
   reports `activePresentedIntervalMs`: adjacent presentation intervals minus
@@ -462,10 +466,17 @@ Any task that may change the app's speed measures it this way:
 6. **Renderer cost without the window**: `IKKOKU_AUTOCAPTURE` with
    `IKKOKU_BENCHMARK_OUTPUT`, `IKKOKU_CAPTURE_W`/`_H` and
    `IKKOKU_BENCHMARK_FRAMES` renders the frame offscreen and records CPU
-   encode, GPU and completion times. `IKKOKU_BENCHMARK_MAP_SHADOW=every-frame`
-   redraws a map sun's shadow map in every measured frame, which measures
-   the frame where the casters, the sun or the camera target change
-   (`mapShadowEveryFrame` and `mapShadowMap` in the report).
+   encode, GPU and completion times. `IKKOKU_BENCHMARK_ORBIT=<turns>` makes it
+   a scripted orbit (ST-T04 B2): the frame camera's yaw turns that many times
+   about its target, evenly over the warmup and measured samples, with the
+   pitch, target, distance and lights unchanged. The report's `orbit` block
+   lists each sample's yaw (`sampleYaws`), so two builds can be checked for
+   the same camera path. The report's `drawCounts` gives the same counters
+   as the perf trace's, over the measured samples.
+   `IKKOKU_BENCHMARK_MAP_SHADOW=every-frame` redraws a map sun's shadow map
+   in every measured frame, which measures the frame where the casters, the
+   sun or the camera target change (`mapShadowEveryFrame` and `mapShadowMap`
+   in the report).
 7. **Speed never changes output silently.** A change that should not alter
    pixels keeps byte-identical captures. A quality trade-off is opt-in and
    reported separately.

@@ -729,7 +729,7 @@ class AppOutputArtifactTests(unittest.TestCase):
         self.assertEqual(capture["env"]["IKKOKU_CAPTURE_UI_SELECT"], "0,622,963")
         self.assertEqual(validate["argv"][:3], ["python3", "Tools/verification/checks/inspector_fit_log.py",
                                                 capture["env"]["IKKOKU_CAPTURE_UI_FIT_LOG"]])
-        self.assertEqual(validate["argv"][3:], ["--selection", "963", "--tab", "Clothes"])
+        self.assertEqual(validate["argv"][3:], ["--selection", "963", "--tab", "Clothes", "--pose-picker"])
 
     def test_ui_capture_does_not_discover_a_maker_library(self):
         # The synthetic scene's minimal card exercises the source-pose inspector,
@@ -746,6 +746,9 @@ class AppOutputArtifactTests(unittest.TestCase):
         self.assertEqual(fixtures["IKKOKU_SOURCE_SCENE"]["from"], "IKKOKU_STUDIO_HALF_STATE_SCENE")
         self.assertFalse(fixtures["IKKOKU_SOURCE_SCENE"].get("optional", False))
         self.assertIn("IKKOKU_SOURCE_PLUGIN_PROFILE", fixtures)
+        # The scene needs the original avatar: without it an automated run reaches the
+        # source-tree fallback, which only the main checkout has (2026-11-19).
+        self.assertIn("IKKOKU_SOURCE_AVATAR", fixtures)
 
     def test_release_smoke_renders_with_the_optimized_app(self):
         # R6 (2026-10-23): every Release render crashed while the Debug lanes

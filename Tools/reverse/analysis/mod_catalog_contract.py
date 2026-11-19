@@ -15,39 +15,43 @@ import json
 from pathlib import Path
 import re
 
+try:
+    from . import mono_int32
+except ImportError:
+    import mono_int32
+
 
 REPO = Path(__file__).resolve().parents[3]
 SOURCE = REPO / ".local/reverse/mods/decompiled"
 CONTROL = REPO / ".local/reverse/decompiled/Character/Koikatu/ChaControl.cs"
 PACKAGE = REPO / ".local/reverse/mods/packages/no-hair-accessories/manifest.json"
 ACCESSORY_PROPERTY = "ChaFileAccessory.PartsInfo.id"
-WHITESPACE = "\t\n\v\f\r \u0085\u00a0\u1680\u2000\u2001\u2002\u2003\u2004\u2005\u2006\u2007\u2008\u2009\u200a\u2028\u2029\u202f\u205f\u3000"
 
 
-# Sideloader trims every GUID with String.Trim(): in the game's Mono that is
-# String.WhiteChars (Unity-Technologies/mono unity-5.6, String.cs, with its
-# NET_2_0 and NET_2_1 blocks; SourceMonoWhiteChars.swift), 27 entries including
-# U+200B and U+FEFF. The CSV fields above still use WHITESPACE (#421).
+# Sideloader's String.Trim() calls (GUIDs; Lists.LoadCSV's preamble, header and
+# row lines; ManifestVersionComparer) are, in the game's Mono, String.WhiteChars
+# (Unity-Technologies/mono unity-5.6, String.cs, with its NET_2_0 and NET_2_1
+# blocks; SourceMonoWhiteChars.swift): 27 entries including U+200B and U+FEFF,
+# not U+180E (#419, #421).
 MONO_WHITE_CHARS = "".join(map(chr, [0x09, 0x0A, 0x0B, 0x0C, 0x0D, 0x85, 0x1680, 0x2028, 0x2029, 0x20, 0xA0,
                                      0x3000, 0xFEFF, 0x202F, 0x205F, *range(0x2000, 0x200C)]))
 
 
 def trim(value: str) -> str:
-    return value.strip(WHITESPACE)
-
-
-def trim_guid(value: str) -> str:
     return value.strip(MONO_WHITE_CHARS)
 
 
+def trim_guid(value: str) -> str:
+    return trim(value)
+
+
 def int32(value: str) -> int:
-    value = trim(value)
-    if not re.fullmatch(r"[+-]?[0-9]+", value):
-        raise ValueError("Source Int32 parse failed")
-    number = int(value)
-    if not -(2**31) <= number < 2**31:
-        raise ValueError("Source Int32 overflow")
-    return number
+    """Mono's int.Parse / int.TryParse (mono_int32, #427). The game applies it to list numbers in three places:
+    - Sideloader's Lists.LoadCSV parses the category and distribution;
+    - UniversalAutoResolver.GenerateResolutionInfo parses each row ID;
+    - ListInfoBase.GetInfoInt parses DistributionNo.
+    The white space is char.IsWhiteSpace, not the String.Trim() set, and a NUL ends the number. Raises ValueError."""
+    return mono_int32.int32(value)
 
 
 def stream_reader_text(data: bytes) -> tuple[str, str]:
