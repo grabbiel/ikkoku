@@ -57,6 +57,12 @@ public struct SourceStudioIK: Sendable {
     }
     private let ids: [String]
     private let parents: [Int?]
+    /// The rig this solver was built for (#371). `RigDefinition.Identity`
+    /// (Rig.swift) guarantees that a rig with this identity has the same
+    /// nodes, so `apply` skips comparing them for it; any other rig is
+    /// compared node by node as before. Internal, not private, so the #371
+    /// test can check which path a rig takes.
+    let checked: RigDefinition.Identity
     private let bindings: Bindings
     private let targetNodes: [Int32: Int]
     private let limbs: [Limb]
@@ -117,7 +123,17 @@ public struct SourceStudioIK: Sendable {
         }
         self.initializationPose = initializationPose ?? rig.restPose
         self.bindings = bindings; targetNodes = targets; self.limbs = loaded
-        ids = rig.nodes.map(\.sourceID); parents = rig.nodes.map(\.parent)
+        ids = rig.nodes.map(\.sourceID); parents = rig.nodes.map(\.parent); checked = rig.identity
+    }
+
+    /// Whether `rig` has the hierarchy this solver was bound to: true for
+    /// the rig it was built for, otherwise the node-by-node comparison.
+    func bound(to rig: RigDefinition) -> Bool { rig.identity === checked || walkMatches(rig) }
+
+    /// The comparison `apply` made for every rig before #371. Internal, not
+    /// private, so the #371 test can compare it with `bound(to:)`.
+    func walkMatches(_ rig: RigDefinition) -> Bool {
+        rig.nodes.map(\.sourceID) == ids && rig.nodes.map(\.parent) == parents
     }
 
     /// `savedTargets` and `guideOverrides` contain raw Unity-local ChangeAmount
@@ -125,7 +141,7 @@ public struct SourceStudioIK: Sendable {
     public func apply(rig: RigDefinition, baseline: RigPose, savedTargets: [Int32: KoikatsuBoneRecord],
                       enabled: Bool, activeGroups: [Bool], characterRoot: Int,
                       guideOverrides: [Int32: KoikatsuChangeAmount] = [:]) throws -> Result {
-        guard rig.nodes.map(\.sourceID) == ids, rig.nodes.map(\.parent) == parents,
+        guard bound(to: rig),
               activeGroups.count == 5, rig.nodes.indices.contains(characterRoot),
               guideOverrides.keys.allSatisfy({ (0...12).contains($0) }) else {
             throw RigError.invalid("Studio IK frame does not match its bound hierarchy or activation state.")
