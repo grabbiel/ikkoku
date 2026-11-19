@@ -68,16 +68,86 @@ for index in states.indices {
 Supply a clean upstream animation/customization pose each frame. Maker does this
 and invalidates particle state when relevant customization changes. Simulation
 commits only after validating the resulting particles and pose. Missing identities,
-invalid parents, duplicate particles, nonfinite configuration, local reflection,
-singular scale and local shear on required transforms fail explicitly. A failed frame does not partially
-commit simulation state.
+invalid parents, duplicate particles, nonfinite configuration, local shear and the
+signed scales listed under [Signed and zero scales (#406)](#signed-and-zero-scales-406)
+fail explicitly. A failed frame does not partially commit simulation state.
 
 The current exporter/runtime supports direct real-transform particle trees with
-positive local TRS. Virtual end particles, exclusions, general `notRolls` reparenting, distance disabling,
-signed local scales and the separate `DynamicBone_Ver01`/`Ver02` systems are
-unimplemented. The schema-2 garment path below additionally supports non-reparenting notRoll chain truncation. Full-body and motion IK are separate from this simulation. Actual-player
+positive local TRS, signed TRS with a record, or one collapsed axis (#406, below).
+Virtual end particles, exclusions, general `notRolls` reparenting, distance disabling
+and the separate `DynamicBone_Ver01`/`Ver02` systems are unimplemented. The schema-2 garment path below additionally supports non-reparenting notRoll chain truncation. Full-body and motion IK are separate from this simulation. Actual-player
 parameter/curve comparisons now exist, but exact running-Unity particle trajectory
 parity and source frame-time parity are not established.
+
+### Signed and zero scales (#406)
+
+Unity keeps each Transform's signed local TRS, and a matrix alone cannot tell a
+negative axis from a rotation. `RigPose.signedTRS` (Rig.swift:214) is an optional
+table of signed translation, rotation and scale by node. It stays nil when no node
+needs one, so a positive pose copies no table (`MemoryLayout<RigPose>.size` went
+from 8 to 16). An entry counts only while `Transform.trs` of it is, bit for bit,
+the node's local matrix (`SignedTRS.describes`, Rig.swift:199). A writer that
+changes the matrix without recording leaves a stale entry, which is ignored.
+
+Writers record through the same `Transform.trs` they write the matrix with
+(`recordTRS`, Rig.swift:228):
+
+- the rest pose, for authored non-positive rest scales (`restSignedTRS`,
+  Rig.swift:99–102);
+- the face and body shape stages (SourceFaceShapePose.swift:92,
+  SourceBodyShapePose.swift:184);
+- the dynamics write-back, when a slot took a record or a collapsed axis or the
+  pose already has a table (SourceDynamicBone.swift:655–657);
+- full-body IK, which returns its input pose with only the matrices replaced, so
+  the table travels with it (SourceFullBodyBiped.swift:150).
+
+`DynamicsTransforms` (SourceDynamicBone.swift:551) reads each chain node in this
+order:
+
+1. A valid record gives the rotation and signed scale that the Unity Transform
+   keeps (:576).
+2. Without one, a positive rest TRS with every axis above 1e-6 takes the previous
+   decomposition, unchanged (:589). `Fixtures/dynamics-positive-golden.json`,
+   recorded at da7da61a, checks it bit for bit.
+3. Without one, a node with exactly one axis at or below 1e-6 gets a right-handed
+   basis: the other two columns normalized and the third their cross product, so
+   det is +1 (`collapsedAxisBasis`, :337).
+4. Anything else is refused: a negative axis or two collapsed axes without a
+   record (:614), shear (:615) and a matrix-authored node (:616).
+
+Placement follows the recovered ApplyParticlesToTransforms (decompiled
+DynamicBone.cs:612–680). For each negative axis of the owner's localScale, or
+else of its parent's, it reflects the bone vector across that transform's world
+axis (:617–651, MirrorVector :607). It then turns the parent with FromToRotation
+from TransformDirection (:673–674) and sets the position (:678). The native step
+takes the flags from the owner and its parent only (SourceDynamicBone.swift:249,
+:285), and a chain with no record and no collapsed axis builds no mirror at all. A parent whose world basis is singular (|det| ≤ 1e-12) has no inverse.
+The local position is then found the way Unity's position setter does it: each
+ancestor TRS is undone from the root down, and a scale of |s| ≤ 1e-5 inverts to 0
+(InverseSafe; `inverseSafeLocal`, :623, used at :265–271). A positive chain never
+takes that path, and the golden test checks that its count stays 0.
+
+The independent oracle `Tools/reverse/analysis/dynamics_reference.py --signed`
+writes `Tools/reverse/fixtures/dynamics-signed-reference.json`. Its 21 scenarios
+put negative axes on the base, the owner's parent and the owner, add single and
+double collapsed axes, and include mirror pairs. `SourceDynamicBoneSignedTests`
+matches the Swift step to it within 1e-5 over 200 frames.
+
+Still refused (#406 residuals):
+
+- ABMX scale-only modifiers write a matrix and no record
+  (SourceBoneModifiers.swift:271–282). A negative ABMX axis on a chain node is
+  refused; a zero ABMX axis is rebuilt as in step 3.
+- An animation clip, or any other matrix writer, that leaves a negative axis on
+  the chain records nothing.
+- A node with two collapsed axes, or a zero and a negative axis, without a record.
+- `SourceShapePoseBaseline.components` (SourceShapePoseBaseline.swift:8–24) still
+  requires a positive TRS. Its callers (late correction, hand pose, the rig
+  preview and the shape stages' incoming baseline) refuse a reflected or
+  collapsed matrix before dynamics runs.
+- The Studio dynamics cache compares only `localMatrices`
+  (SourceStudioDynamics.swift:48), so two records that give the same matrix would
+  reuse one output. Every writer today changes the matrix along with the record.
 
 ## Verification and reproduction
 
@@ -136,9 +206,10 @@ Binding uses exact source CAB/path identities; only the assembled hair namespace
 may change when empty slots compact the assembly. It never matches a different
 asset by bone name or catalog number. Components belonging to other selected hair
 assets remain unattached with diagnostics. Signed/matrix-authored transforms in
-unrelated accessories are preserved; particle, owner and collider ancestors still
-require positive local TRS. A zero or negative shape scale there (an extended
-face slider, #404) is refused with a message naming it. Signed TRS is #406.
+unrelated accessories are preserved. A zero or negative shape scale on a particle,
+owner or collider ancestor (an extended face slider, #404) simulates as described
+under [Signed and zero scales (#406)](#signed-and-zero-scales-406), which lists
+the cases still refused.
 
 The strict exporter can now enumerate all converted original Maker hair assets:
 

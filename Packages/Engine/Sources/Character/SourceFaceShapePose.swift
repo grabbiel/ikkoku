@@ -87,6 +87,9 @@ public enum SourceFaceShapePose {
                 throw RigError.invalid("Face target '\(node.name)' has a nonfinite scale.")
             }
             pose.localMatrices[index] = Transform.trs(position, rotation, scale)
+            // The signed record keeps a reflected or collapsed bone's rotation
+            // for DynamicBone (#406).
+            pose.recordTRS(index, translation: position, rotation: rotation, scale: scale)
         }
         // Validate ancestor input and finite world/palette output before exposing a pose.
         _ = try rig.evaluate(pose)
