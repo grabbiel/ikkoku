@@ -2324,4 +2324,18 @@ The eye now has no system focus effect (`.focusEffectDisabled()`) and draws its 
 
 ### Evidence
 
-{RESULTS}
+- **Growth check v2.2** on Release builds: `studio-load` on the corpus scene 4b87a4f49c81, New Scene then Open repeated, with `heap` snapshots at 12 s and 56 s. The growth is per load, and the bar is 1 per load plus 64:
+
+  | Build | Loads | `NSKeyValueDependency` | Context | `__NSMallocBlock__` | `__NSExactBlockVariable__` | Row id boxes | Row bodies per load | Verdict |
+  |---|---|---|---|---|---|---|---|---|
+  | main 0d7eb327 | 53 | 41.00 | 41.00 | 40.96 | 41.00 | UUID 40.00 | 39.5 | fail |
+  | slots in the lazy stack, system focus effect (03f056de; the positive control) | 53 | 41.00 | 41.00 | 40.96 | 41.00 | Int 0.00 | 40.3 | fail |
+  | no system focus effect (82bde896) | 65 | 1.00 | 1.00 | 0.98 | 1.00 | Int 0.00 | 40.3 | pass |
+  | the eye's own focus ring (b0941aa2) | 53 | 1.00 | 1.00 | 0.85 | 1.00 | Int 0.00 | 40.3 | pass |
+  | slots built ahead of any scroll (6d19740c) | 53 | 1.00 | 1.00 | 0.94 | 1.00 | Int 0.00 | 64.0 | pass |
+
+  - About one dependency (with its context and blocks) per load remains. It is within the bar and not attributed.
+  - The 82bde896 run flagged `_ContiguousArrayStorage<Int>` at 2.00 per load. That is the harness's own record: `studio-load`'s per-action body counts, two small Int arrays per load. It was reviewed and not counted.
+  - A v2.1 run of main 0d7eb327 showed 58 flags that a v2.2 rerun of the same executable did not reproduce (0 flags); they are not attributed.
+- **The workspace checks**, on 6d19740c and again after merging main 977d87c2: `workspace-rows-by-position` 25 of 25 steps, `workspace-list-geometry` 44 of 44, `workspace-eye-focus` 3 of 3 (the render path; Full Keyboard Access was off) and `workspace-bodies` 18 of 18.
+- **Cost** (an unregistered smoke run, not timing): the gc22 workload on Release builds, 6d19740c against main 0d7eb327, in the order head, base, base, head, in one hold of the app lock. The main thread's own busy time per load (median) was 219.9 and 217.8 ms on the head against 189.5 and 198.1 ms on main, about 25 ms more. The time until a load was ready was unchanged: 117.5 and 116.6 ms against 115.9 and 114.6 ms. The cost matches the 64 rows a load builds instead of 40, about 1 ms per added row; it was not profiled. The head runs had the higher system load (load1 31.3 and 12.8 at their starts, against 15.4 and 7.2).
