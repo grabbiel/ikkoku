@@ -170,8 +170,9 @@ remain separate and are not substitutes for those source adapters.
   through each kind's `Load` (OIFolderInfo.cs:34, OIItemInfo.cs:117,
   OIRouteInfo.cs:73, OICharInfo.cs:246). Its only limit is the stack of
   Unity's main thread. Ours is the decode's stack: every scene decode runs on
-  an 8 MiB stack (#321), and 200 levels fit with room to spare
-  (`SourceSceneDeepStackTests`, synthetic scenes).
+  an 8 MiB stack (#321; the hidden characters' clock since #326, which read
+  its scene on a 512 KiB GCD worker before), and 200 levels fit with room to
+  spare (`SourceSceneDeepStackTests`, synthetic scenes).
 
 The binary reader never follows paths in a source Pattern record, loads assets
 or executes source code. `KoikatsuSceneDocument.extensions()` separately exposes

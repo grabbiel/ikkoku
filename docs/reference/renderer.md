@@ -2296,8 +2296,11 @@ keeps nothing (measurement control).
   stack through nested folders and 3,449 KiB through nested characters in
   Debug (`SourceSceneDeepStackTests`, synthetic scenes). Every other scene
   decode and record walk in the Studio runs on the main thread, which
-  also has 8 MiB. There the export, insertion and layout import take at
-  most 3,491 KiB on the same scenes.
+  also has 8 MiB, except the hidden characters' clock: its warm-up and an
+  export's states run on GCD workers, so it reads its scene on a thread of
+  the batch's size (`SourceStudioCharacterBatch.onDecodeThread`, #326).
+  There the export, insertion and layout import take at most 3,491 KiB on
+  the same scenes.
 - The init starts one worker, which starts the others, so the calling
   thread pays one thread start. For a 22-wide batch it takes 25–26 µs in
   Release (26 µs in Debug), against 12–14 µs (18 µs) for the GCD
