@@ -260,8 +260,8 @@
     },
     {
       "op": "setBody",
-      "index": 0,
-      "value": 2.0
+      "index": 4,
+      "value": 3.0e38
     },
     {
       "op": "selectAsset",
@@ -289,9 +289,14 @@
       "op": "assert",
       "resourcesAtMost": "lateFailure",
       "body": {
-        "index": 0,
-        "value": 2.0
+        "index": 4,
+        "value": 3.0e38
       }
+    },
+    {
+      "op": "setBody",
+      "index": 4,
+      "value": 0.5
     },
     {
       "op": "setBody",

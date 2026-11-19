@@ -321,10 +321,10 @@ registered heads 0, 200 and 201, or reuses a matching open source rig. **Open
 Source Rig…** remains available for explicit local manifests. The settings
 adapter checks sex and head identity, selects standard or corrected body-bone
 options, and requires complete 44-body/52-face destination bindings. Special
-`exType` assemblies and resolver-backed mod heads are rejected. All applied shape values must be in
-`0...1`; extended ranges cause an explicit preview error. The writer can still
-retain and serialize finite extended shape values without claiming they can be
-rendered by this preview.
+`exType` assemblies and resolver-backed mod heads are rejected. Applied shape
+values may be any finite rate. Rates outside `0...1` (cards made with Slider
+Unlocker) are drawn as that plug-in draws them, and the writer retains them byte
+for byte; see [extended shape rates](contracts.md#extended-shape-rates-slider-unlocker).
 
 Maker validates the candidate rendered pose and bounds before replacing settings.
 It enables customization and ABMX, selects coordinate zero, retains the original
