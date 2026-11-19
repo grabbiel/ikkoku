@@ -138,6 +138,14 @@ def read_entry(archive: zipfile.ZipFile, info: zipfile.ZipInfo, bound: int) -> b
     return data
 
 
+# Sideloader's Manifest trims the GUID with String.Trim(): Mono's
+# String.WhiteChars (Unity-Technologies/mono unity-5.6, String.cs, with its
+# NET_2_0 and NET_2_1 blocks), the same 27 entries as SourceMonoWhiteChars.swift.
+# Not str.strip(), which also removes U+001C-U+001F and keeps U+200B and U+FEFF.
+MONO_WHITE_CHARS = "".join(map(chr, [0x09, 0x0A, 0x0B, 0x0C, 0x0D, 0x85, 0x1680, 0x2028, 0x2029, 0x20, 0xA0,
+                                     0x3000, 0xFEFF, 0x202F, 0x205F, *range(0x2000, 0x200C)]))
+
+
 def parse_manifest(data: bytes) -> tuple[dict, list[dict]]:
     try:
         text = data.decode("utf-8-sig")
@@ -151,7 +159,8 @@ def parse_manifest(data: bytes) -> tuple[dict, list[dict]]:
     for field in ("guid", "name", "version"):
         if len(root.findall(field)) > 1:
             raise ImportFailure(f"Duplicate manifest {field} field")
-    fields = {key: (root.findtext(key) or "").strip() for key in ("guid", "version", "name")}
+    fields = {key: (root.findtext(key) or "").strip() for key in ("version", "name")}
+    fields = {"guid": (root.findtext("guid") or "").strip(MONO_WHITE_CHARS), **fields}
     if not fields["guid"]:
         raise ImportFailure("Manifest GUID must be nonempty")
     fields["games"] = [e.text.strip() for e in root.findall("game") if e.text and e.text.strip()]

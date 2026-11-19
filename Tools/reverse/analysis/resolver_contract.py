@@ -72,7 +72,7 @@ def record(data: bytes, *, strict: bool = False) -> dict:
         else:
             unknown.append(key)
     if values["ModID"] is not None:
-        values["ModID"] = catalog.trim(values["ModID"])
+        values["ModID"] = catalog.trim_guid(values["ModID"])
     return {**values, "sha256": card.sha(data), "bytes": len(data), "consumedBytes": reader.offset,
             "trailingBytes": len(data) - reader.offset,
             "duplicateKeys": [key for key, count in occurrences.items() if count > 1],
@@ -131,7 +131,7 @@ def direct_resolution(records: list[dict], destinations: list[dict], loaded: lis
     for target in destinations:
         ext = next((item for item in records if item["Property"] == target["property"]), None)
         entry = {"destination": target, "recordOrdinal": ext.get("ordinal") if ext else None}
-        if ext is None or ext["ModID"] is None or not catalog.trim(ext["ModID"]):
+        if ext is None or ext["ModID"] is None or not catalog.trim_guid(ext["ModID"]):
             entry.update(status="requires-compatibility-resolution", selected=None)
         else:
             selected = next((item for item in loaded if item["Slot"] == ext["Slot"]
@@ -148,21 +148,21 @@ def migrate_record(item: dict, migrations: list[dict], installed_guids: set[str]
     """One original MigrateData pass. This is evidence, not native migration support."""
     result = copy.deepcopy(item)
     guid = result["ModID"]
-    if guid is None or not catalog.trim(guid):
+    if guid is None or not catalog.trim_guid(guid):
         return result
-    matches = [rule for rule in migrations if rule["GUIDOld"] == catalog.trim(guid)]
+    matches = [rule for rule in migrations if rule["GUIDOld"] == catalog.trim_guid(guid)]
     if any(rule["MigrationType"] == "StripAll" for rule in matches):
         result["ModID"] = ""
         return result
     for rule in matches:
         if (rule.get("IDOld", 0) == result["Slot"] and rule.get("Category", 0) == result["CategoryNo"]
-                and rule["GUIDNew"] and catalog.trim(rule["GUIDNew"]) in installed_guids):
-            result["ModID"], result["Slot"] = catalog.trim(rule["GUIDNew"]), rule.get("IDNew", 0)
+                and rule["GUIDNew"] and catalog.trim_guid(rule["GUIDNew"]) in installed_guids):
+            result["ModID"], result["Slot"] = catalog.trim_guid(rule["GUIDNew"]), rule.get("IDNew", 0)
             return result
     for rule in matches:
         if (rule["MigrationType"] == "MigrateAll" and rule["GUIDNew"]
-                and catalog.trim(rule["GUIDNew"]) in installed_guids):
-            result["ModID"] = catalog.trim(rule["GUIDNew"])
+                and catalog.trim_guid(rule["GUIDNew"]) in installed_guids):
+            result["ModID"] = catalog.trim_guid(rule["GUIDNew"])
             break
     return result
 
@@ -236,7 +236,7 @@ def evidence() -> dict:
             "pluginPrecedence": [EC_ID, KK_ID], "versionReadBySource": False,
             "field": "info", "encoding": "array of binary MessagePack string-key ResolveInfo maps; uncompressed",
             "stringFields": list(STRINGS), "integerFields": list(INTEGERS),
-            "defaults": "String fields nil; Int32 fields 0. GUID setter uses .NET Char.IsWhiteSpace Trim.",
+            "defaults": "String fields nil; Int32 fields 0. GUID setter uses String.Trim(): Mono String.WhiteChars, which includes U+200B and U+FEFF.",
             "duplicates": "Known map keys last wins after each value validates; full Property records first wins.",
             "sourceIntegerTokens": "ReadInt32 accepts fixints, cc/cd/ce and d0/d1/d2 only; cf/d3 rejected even when value fits Int32. UInt32 conversion checked.",
             "lookup": "record Slot + actual destination category + unprefixed property + trimmed ordinal GUID; first loaded record wins",
