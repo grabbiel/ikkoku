@@ -746,6 +746,9 @@ class AppOutputArtifactTests(unittest.TestCase):
         self.assertEqual(fixtures["IKKOKU_SOURCE_SCENE"]["from"], "IKKOKU_STUDIO_HALF_STATE_SCENE")
         self.assertFalse(fixtures["IKKOKU_SOURCE_SCENE"].get("optional", False))
         self.assertIn("IKKOKU_SOURCE_PLUGIN_PROFILE", fixtures)
+        # The scene needs the original avatar: without it an automated run reaches the
+        # source-tree fallback, which only the main checkout has (2026-11-19).
+        self.assertIn("IKKOKU_SOURCE_AVATAR", fixtures)
 
     def test_release_smoke_renders_with_the_optimized_app(self):
         # R6 (2026-10-23): every Release render crashed while the Debug lanes
