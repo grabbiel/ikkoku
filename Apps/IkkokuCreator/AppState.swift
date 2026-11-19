@@ -1202,6 +1202,8 @@ final class AppState {
         // #363/#366: the toolbar pickers' and the inspector rows' layout, before
         // " | fits", which inspector_fit_log.py reads to the end of the line.
         line += " | layout " + InspectorUIScenario.layoutProbe(window, afterCapture: accessibility)
+        // #425: after the capture only, so the hosted copies cannot change what is captured.
+        if accessibility { line += " | toolbar ideal " + toolbarIdealWidths() }
         if accessibility {
             let fit = InspectorUIScenario.inspectorFit(window)
             line += " | fits \(fit.fits): \(fit.detail)"
@@ -1216,6 +1218,22 @@ final class AppState {
             handle.seekToEndOfFile(); handle.write(data); try? handle.close()
         }
     }
+    /// #425: the Studio toolbar's ideal (scroll content) width with nothing selected and with a character in
+    /// Object, FK and IK mode, from this model's state: each a `StudioToolbarControls` copy hosted off screen at
+    /// the toolbar's small control size, measured with `fittingSize`. Capture fit log only.
+    private func toolbarIdealWidths() -> String {
+        guard let studio else { return "no studio" }
+        let state = StudioToolbarState(model: studio)
+        let modes: [(String, Bool, PoseMode)] = [("none", false, .object), ("object", true, .object), ("fk", true, .fk), ("ik", true, .ik)]
+        return modes.map { name, character, mode in
+            var shown = state
+            shown.selectedIsCharacter = character
+            shown.poseMode = mode
+            let host = NSHostingView(rootView: StudioToolbarControls(model: studio, state: shown).environment(self).controlSize(.small))
+            return name + " " + String(format: "%.1f", host.fittingSize.width)
+        }.joined(separator: " ")
+    }
+
     /// Whether this launch has written its first `IKKOKU_CAPTURE_UI_FIT_LOG` line.
     @ObservationIgnored private var uiCaptureFitLogStarted = false
 

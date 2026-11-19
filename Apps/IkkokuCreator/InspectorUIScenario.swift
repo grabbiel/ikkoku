@@ -608,6 +608,26 @@ struct InspectorUIScenario: Decodable {
             let shown = toolbarScroll.hasHorizontalScroller && !(toolbarScroll.horizontalScroller?.isHidden ?? true)
             line += "; scroll clip \(f(toolbarScroll.contentView.bounds.width)) content \(f(toolbarScroll.documentView?.frame.width ?? 0))"
                 + " at \(f(toolbarScroll.contentView.bounds.minX)) scroller \(shown ? "shown" : "not shown")"
+            // #425: every AppKit control in the toolbar's content, left to right, as kind@x+width.
+            var items: [(x: CGFloat, text: String)] = []
+            func findItems(_ view: NSView) {
+                guard items.count < 40 else { return }
+                if let control = view as? NSControl {
+                    let frame = rect(control)
+                    let kind: String
+                    switch control {
+                    case is NSSegmentedControl: kind = "segmented"
+                    case is NSPopUpButton: kind = "popup"
+                    case let button as NSButton: kind = button.title.isEmpty ? "button" : "button(\(button.title.prefix(8)))"
+                    default: kind = String(describing: type(of: control))
+                    }
+                    items.append((frame.minX, "\(kind)@\(f(frame.minX))+\(f(frame.width))"))
+                    return
+                }
+                view.subviews.forEach(findItems)
+            }
+            if let document = toolbarScroll.documentView { findItems(document) }
+            line += "; items " + (items.isEmpty ? "none" : items.sorted { $0.x < $1.x }.map(\.text).joined(separator: " "))
         }
         guard let scroll, let document = scroll.documentView else { return line + " | rows: no inspector scroll view" }
         let clip = scroll.contentView, top = rect(clip).maxY

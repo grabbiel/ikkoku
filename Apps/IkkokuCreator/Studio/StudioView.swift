@@ -206,16 +206,11 @@ struct StudioToolbarState: Equatable {
     var liveAnimation: Bool
     var showTimeline: Bool
     var showGrid: Bool
-}
 
-struct StudioToolbar: View {
-    let model: StudioModel
-
-    var body: some View {
-        let _ = PerfTrace.body(.studioToolbar)
-        // The document's part is published (C4); the rest are the model's settings.
+    /// The toolbar's state now; the document's part is published (C4), the rest are the model's settings.
+    @MainActor init(model: StudioModel) {
         let shown = model.shownToolbarDocumentState
-        let state = StudioToolbarState(
+        self.init(
             gizmoMode: model.gizmoMode, localSpace: model.localSpace,
             selectedIsCharacter: shown.selectedIsCharacter,
             poseMode: model.poseMode, fkGroup: model.fkGroup,
@@ -223,6 +218,25 @@ struct StudioToolbar: View {
             canUndo: !model.undoStack.isEmpty, canRedo: !model.redoStack.isEmpty,
             showGizmos: model.showGizmos, liveAnimation: model.liveAnimation, showTimeline: model.showTimeline,
             showGrid: shown.showGrid)
+    }
+
+    init(gizmoMode: GizmoMode, localSpace: Bool, selectedIsCharacter: Bool, poseMode: PoseMode, fkGroup: FKGroup,
+         cameraSlotsFilled: [Bool], hasSourceRoutes: Bool, canUndo: Bool, canRedo: Bool, showGizmos: Bool,
+         liveAnimation: Bool, showTimeline: Bool, showGrid: Bool) {
+        self.gizmoMode = gizmoMode; self.localSpace = localSpace; self.selectedIsCharacter = selectedIsCharacter
+        self.poseMode = poseMode; self.fkGroup = fkGroup; self.cameraSlotsFilled = cameraSlotsFilled
+        self.hasSourceRoutes = hasSourceRoutes; self.canUndo = canUndo; self.canRedo = canRedo
+        self.showGizmos = showGizmos; self.liveAnimation = liveAnimation; self.showTimeline = showTimeline
+        self.showGrid = showGrid
+    }
+}
+
+struct StudioToolbar: View {
+    let model: StudioModel
+
+    var body: some View {
+        let _ = PerfTrace.body(.studioToolbar)
+        let state = StudioToolbarState(model: model)
         // Overlay content must fit the viewport without widening either side panel.
         ScrollView(.horizontal) {
             StudioToolbarControls(model: model, state: state).equatable()
