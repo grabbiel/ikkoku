@@ -525,7 +525,7 @@ private final class SourceAppearanceInputReader {
         }
         let data = try SourceMakerPreparationTimings.read(timings, .rgbaRead) {
             let file = try FileHandle(forReadingFrom: url); defer { try? file.close() }
-            return try file.read(upToCount: expected + 1) ?? Data()
+            return try file.pooledRead(upToCount: expected + 1) ?? Data()
         }
         totalBytes += data.count
         guard totalBytes <= maximumBytes, data.count == expected,
