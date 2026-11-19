@@ -91,11 +91,13 @@ final class SourceSceneImportJob {
     /// Characters whose build finished (successfully or not).
     var builtCount: Int { characters.lazy.filter { $0 != nil }.count }
 
-    /// Drops the decoded scene on the main thread (#326): after the commit,
-    /// whatever its outcome, when the import is cancelled or replaced, and
-    /// when the model goes.
+    /// Drops the decoded scene on the main thread (#326) and stops the hidden
+    /// card check nobody will ask (#432): after the commit, whatever its
+    /// outcome, when the import is cancelled or replaced, and when the model
+    /// goes.
     func tearDown() {
         source = nil
+        hiddenCardCheck.cancel()
     }
 
     deinit {
