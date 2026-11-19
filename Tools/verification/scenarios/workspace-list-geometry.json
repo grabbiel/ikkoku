@@ -1,0 +1,37 @@
+{
+  "steps": [],
+  "inspectorUI": {
+    "steps": [
+      {
+        "op": "deselect"
+      },
+      {
+        "op": "assert",
+        "workspaceGeometry": true
+      },
+      {
+        "op": "selectRow",
+        "index": 1
+      },
+      {
+        "op": "assert",
+        "workspaceGeometry": true
+      },
+      {
+        "op": "selectRow",
+        "index": 0
+      },
+      {
+        "op": "assert",
+        "workspaceGeometry": true
+      },
+      {
+        "op": "deselect"
+      },
+      {
+        "op": "assert",
+        "workspaceGeometry": true
+      }
+    ]
+  }
+}

@@ -127,29 +127,35 @@ struct StudioWorkspaceContent: View, Equatable {
                 StudioAddMenu(model: model)
             }.padding(8)
             Divider()
-            ScrollView {
-                LazyVStack(spacing: 1) {
-                    // #410: rows are keyed by position, not by object id.
-                    // Each Open or New Scene brings new ids, and the lazy
-                    // stack keeps an entry for every row id it ever showed:
-                    // SwiftUI's child cache, and AppKit's KVO dependencies on
-                    // the scroll view's container, so one scroll view for the
-                    // session grew with every load. Keyed by position, a load
-                    // updates the rows already built, and the caches stay at
-                    // the most rows ever built. Safe because a row holds no
-                    // state (`WorkspaceRow`); inserts and removals show as
-                    // content changes, with no row animation.
-                    ForEach(entries.indices, id: \.self) { index in
-                        let entry = entries[index]
-                        WorkspaceRow(entry: entry) {
-                            model.selection = entry.id
-                        } toggleVisible: {
-                            model.update(entry.id) { $0.visible.toggle() }
-                        }
-                        .equatable()
+            // #410: a List, not a ScrollView of a LazyVStack. New Scene and
+            // Open remove and insert every row, and a lazy stack kept per
+            // inserted row, for the whole session, an entry in SwiftUI's
+            // child cache and an AppKit dependency on the scroll view's
+            // container, whatever the row ids. The List's table reuses its
+            // row views, so what it keeps is bounded by the rows on screen.
+            // The rows are keyed by position, which is safe because a row
+            // holds no state (`WorkspaceRow`). Inserts and removals show as
+            // content changes, with no row animation. The insets and the
+            // minimum row height keep the stack's look: 1 pt between rows,
+            // 4 pt around them, no separators or list background.
+            List {
+                ForEach(entries.indices, id: \.self) { index in
+                    let entry = entries[index]
+                    WorkspaceRow(entry: entry) {
+                        model.selection = entry.id
+                    } toggleVisible: {
+                        model.update(entry.id) { $0.visible.toggle() }
                     }
-                }.padding(4)
+                    .equatable()
+                    .listRowInsets(EdgeInsets(top: 0.5, leading: 4, bottom: 0.5, trailing: 4))
+                    .listRowSeparator(.hidden)
+                    .listRowBackground(Color.clear)
+                }
             }
+            .listStyle(.plain)
+            .scrollContentBackground(.hidden)
+            .environment(\.defaultMinListRowHeight, 1)
+            .contentMargins(.vertical, 3.5, for: .scrollContent)
             Divider()
             HStack {
                 Button { model.duplicateSelection() } label: { Image(systemName: "plus.square.on.square") }.help("Duplicate")

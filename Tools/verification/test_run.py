@@ -654,7 +654,9 @@ INSPECTOR_UI_OPS = {"select", "deselect", "focus", "type", "delete", "undo", "re
                     # Added for #333 (the Clothes tab laid out wider than the inspector).
                     "tab", "addCharacter",
                     # Added for #383 (the Parent popup that replaced the Picker).
-                    "parentMenu"}
+                    "parentMenu",
+                    # Added for #410 (the workspace list became a List).
+                    "selectRow"}
 
 # ST-T11 `editRoute` settings: point edits name the point, route edits do not.
 ROUTE_POINT_SETTINGS = ("delete", "move", "speed", "ease", "connection", "link")
@@ -947,7 +949,7 @@ class StudioScenarioLaneTests(unittest.TestCase):
                       and not name.startswith(("maker-", "gameplay-")))
 
     def test_lane_validates_and_covers_every_scenario(self):
-        self.assertEqual(len(self.checks), 101)
+        self.assertEqual(len(self.checks), 102)
         referenced = set()
         for check in self.checks:
             scenario = check["env"]["IKKOKU_STUDIO_SCENARIO"]
@@ -976,7 +978,7 @@ class StudioScenarioLaneTests(unittest.TestCase):
                 self.assertIn(step["sex"], ("female", "male"))
             if op == "parentMenu" and "key" in step:
                 self.assertIs(type(step["key"]), int)
-            if op in ("routePoint", "outfit"):
+            if op in ("routePoint", "outfit", "selectRow"):
                 self.assertIs(type(step["index"]), int)
                 self.assertGreaterEqual(step["index"], 0)
             if op == "type":
@@ -989,7 +991,7 @@ class StudioScenarioLaneTests(unittest.TestCase):
             for name in ("undoCount", "redoCount", "keyViews", "hiddenKeyViews", "activeWells"):
                 if name in step:
                     self.assertIs(type(step[name]), int)
-            for name in ("probeHit", "probeFocusable", "editing", "unchanged", "exists", "inspectorFits"):
+            for name in ("probeHit", "probeFocusable", "editing", "unchanged", "exists", "inspectorFits", "workspaceGeometry"):
                 if name in step:
                     self.assertIs(type(step[name]), bool)
             for name in ("axContains", "axAbsent"):

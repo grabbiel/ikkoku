@@ -3738,6 +3738,36 @@
         }
       ],
       "timeout": 600
+    },
+    {
+      "id": "studio-scenario-workspace-list-geometry",
+      "argv": [
+        ".local/build/Build/Products/Debug/Ikkoku.app/Contents/MacOS/Ikkoku"
+      ],
+      "fixtures": [
+        {
+          "env": "IKKOKU_SOURCE_SCENE",
+          "kind": "file",
+          "from": "IKKOKU_STUDIO_SCENARIO_SCENE"
+        },
+        {
+          "env": "IKKOKU_SOURCE_AVATAR",
+          "kind": "file"
+        }
+      ],
+      "env": {
+        "IKKOKU_STUDIO_SCENARIO": "Tools/verification/scenarios/workspace-list-geometry.json",
+        "IKKOKU_STUDIO_SCENARIO_REPORT": ".local/verification/reports/studio-scenario-workspace-list-geometry.json"
+      },
+      "referenceTier": "app-smoke",
+      "tolerance": "#410: the workspace list became a List, and its rows must keep the lazy stack's geometry, read through accessibility in the window: each fully visible row is WorkspaceRow's own height for its entry, 1 pt from the next, with 4 pt between the rows and the visible area's leading and trailing edges and above the first row (the values StudioView.swift defined at 47ac6316, lines 131, 151, 540, 541 and 563, within 0.51 pt), and the list itself selects no row, so the only selection drawn is the row's own. Checked with nothing selected, with rows 1 and 0 selected, and after deselecting. Hover and the selection's look are for the visual pass.",
+      "artifacts": [
+        {
+          "path": ".local/verification/reports/studio-scenario-workspace-list-geometry.json",
+          "kind": "scenario-report"
+        }
+      ],
+      "timeout": 600
     }
   ]
 }

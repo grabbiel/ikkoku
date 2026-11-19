@@ -1,5 +1,6 @@
 import Foundation
 import AppKit
+import SwiftUI
 import CryptoKit
 import Character
 import Studio
@@ -31,7 +32,8 @@ struct InspectorUIScenario: Decodable {
         /// opened, its options are the Picker's, None and then every object that is not
         /// the selection or one of its descendants, in document order; with `key`, it
         /// chooses that source key's object, or None for -1, and the document's parent
-        /// follows).
+        /// follows). Added for #410: `"selectRow"` (`index`: selects the object at that
+        /// workspace row).
         let op: String
         let key: Int32?
         let keys: [Int32]?
@@ -77,6 +79,11 @@ struct InspectorUIScenario: Decodable {
         /// Whether everything in the inspector's scroll view lies within its
         /// visible width: see `inspectorFit(_:)`.
         let inspectorFits: Bool?
+        // Added for #410 (the workspace list became a List).
+        /// Whether every fully visible workspace row keeps the lazy stack's
+        /// geometry, and the list draws no selection of its own: see
+        /// `workspaceGeometry(_:studio:)`.
+        let workspaceGeometry: Bool?
     }
 
     let steps: [Step]
@@ -194,6 +201,14 @@ struct InspectorUIScenario: Decodable {
                 well.activate(true)
                 await settle()
                 record(step.op, well.isActive, "colour well active \(well.isActive)")
+            case "selectRow":
+                let entries = studio.shownWorkspaceState.entries
+                guard let index = step.index, entries.indices.contains(index) else {
+                    record(step.op, false, "no workspace row \(step.index ?? -1) of \(entries.count)"); continue
+                }
+                studio.selection = entries[index].id
+                await settle()
+                record(step.op, true, "selected workspace row \(index)")
             case "routePoint":
                 guard let index = step.index else { record(step.op, false, "no index"); continue }
                 studio.selectedRoutePoint = .init(index: index)
@@ -330,6 +345,11 @@ struct InspectorUIScenario: Decodable {
                     let fit = Self.inspectorFit(window)
                     seen.append(fit.detail)
                     if expected != fit.fits { problems.append("inspector fits \(fit.fits), expected \(expected)") }
+                }
+                if let expected = step.workspaceGeometry {
+                    let geometry = Self.workspaceGeometry(window, studio: studio)
+                    seen.append(geometry.detail)
+                    if expected != geometry.ok { problems.append("workspace geometry \(geometry.ok), expected \(expected)") }
                 }
                 if step.probeHit != nil || step.probeFocusable != nil {
                     if let probe, let content = window.contentView {
@@ -598,6 +618,121 @@ struct InspectorUIScenario: Decodable {
         if !offenders.isEmpty { detail += ": " + offenders.prefix(8).joined(separator: "; ") }
         detail += "; segmented rows (natural/width lead+trail): " + (rows.isEmpty ? "none" : rows.joined(separator: ", "))
         return (judgement.fits, detail)
+    }
+
+    /// #410: the workspace rows' geometry as the lazy stack in a scroll view
+    /// defined it before the list became a `List`, at 47ac6316 in
+    /// `Apps/IkkokuCreator/Studio/StudioView.swift`.
+    enum WorkspaceGeometry {
+        /// `LazyVStack(spacing: 1)`, line 131: between two rows.
+        static let rowGap: CGFloat = 1
+        /// `}.padding(4)`, line 151: around the rows (leading, trailing, above the first).
+        static let inset: CGFloat = 4
+        /// `WorkspaceRow`: `.padding(.vertical, 3).padding(.horizontal, 6)`, line 563.
+        static let rowPadding: CGFloat = 6
+        /// `HStack(spacing: 6)`, line 540, after `Spacer().frame(width: CGFloat(entry.depth) * 14)`, line 541.
+        static let rowSpacing: CGFloat = 6
+        static let indent: CGFloat = 14
+        /// Half a point at 2x, for rounding.
+        static let tolerance: CGFloat = 0.51
+    }
+
+    /// #410: whether the workspace list, now a `List`, keeps the lazy stack's
+    /// geometry (`WorkspaceGeometry`) on every fully visible row, read through
+    /// accessibility in the window. A row's height is `WorkspaceRow`'s own for
+    /// that entry (its fitting height, as the stack laid it out); its centre is
+    /// the icon's (the row's `HStack` centres its children), so its top and
+    /// bottom follow. Each pair of measured rows must be `rowGap` apart; each
+    /// row's icon must start `inset + rowPadding + indent x depth + rowSpacing`
+    /// after the visible area's leading edge and its eye button end
+    /// `rowPadding + inset` before the trailing edge; and with the list at its
+    /// start, the first row's top must be `inset` below the top. The selection
+    /// must be drawn by the rows alone: the table selects no row (the stack had
+    /// no selection chrome). The detail gives the raw values.
+    @MainActor static func workspaceGeometry(_ window: NSWindow, studio: StudioModel) -> (ok: Bool, detail: String) {
+        typealias G = WorkspaceGeometry
+        let entries = studio.shownWorkspaceState.entries
+        var tables: [NSTableView] = []
+        func find(_ view: NSView) {
+            if let table = view as? NSTableView, !table.isHiddenOrHasHiddenAncestor { tables.append(table); return }
+            view.subviews.forEach(find)
+        }
+        if let content = window.contentView { find(content) }
+        guard let table = tables.first(where: { $0.numberOfRows == entries.count && $0.numberOfRows > 0 }),
+              let scroll = table.enclosingScrollView else {
+            return (false, "no workspace table with \(entries.count) rows; tables: "
+                    + (tables.isEmpty ? "none" : tables.map { "\(type(of: $0)) \($0.numberOfRows) rows" }.joined(separator: ", ")))
+        }
+        let clipView = scroll.contentView
+        let clip = window.convertToScreen(clipView.convert(clipView.bounds, to: nil))
+        func get(_ object: NSObject, _ name: String) -> Any? {
+            let selector = NSSelectorFromString(name)
+            guard object.responds(to: selector) else { return nil }
+            return object.perform(selector)?.takeUnretainedValue()
+        }
+        typealias FrameGetter = @convention(c) (AnyObject, Selector) -> NSRect
+        let frameSelector = NSSelectorFromString("accessibilityFrame")
+        func frame(_ object: NSObject) -> CGRect? {
+            guard object.responds(to: frameSelector), let implementation = object.method(for: frameSelector) else { return nil }
+            return unsafeBitCast(implementation, to: FrameGetter.self)(object, frameSelector)
+        }
+        func leaves(_ element: Any, depth: Int, into out: inout [(role: String, frame: CGRect)]) {
+            guard depth < 40, out.count < 64, let object = element as? NSObject else { return }
+            let children = get(object, "accessibilityChildren") as? [Any] ?? []
+            if children.isEmpty, let f = frame(object), f.width > 0, f.height > 0 {
+                out.append((get(object, "accessibilityRole") as? String ?? "", f))
+            }
+            children.forEach { leaves($0, depth: depth + 1, into: &out) }
+        }
+        let visible = table.rows(in: table.visibleRect)
+        var measured: [(row: Int, top: CGFloat, bottom: CGFloat)] = [], offenders: [String] = []
+        var leading: [CGFloat] = [], trailing: [CGFloat] = [], heights: [CGFloat] = [], roles = Set<String>()
+        for row in visible.location..<(visible.location + visible.length) {
+            guard let rowView = table.rowView(atRow: row, makeIfNecessary: false) else { continue }
+            var found: [(role: String, frame: CGRect)] = []
+            leaves(rowView, depth: 0, into: &found)
+            guard let icon = found.min(by: { $0.frame.minX < $1.frame.minX }),
+                  let eye = found.max(by: { $0.frame.maxX < $1.frame.maxX }) else { continue }
+            let entry = entries[row]
+            let width = clip.width - 2 * G.inset
+            let height = NSHostingView(rootView: WorkspaceRow(entry: entry, select: {}, toggleVisible: {}).frame(width: width)).fittingSize.height
+            let top = icon.frame.midY + height / 2, bottom = icon.frame.midY - height / 2
+            guard top <= clip.maxY + G.tolerance, bottom >= clip.minY - G.tolerance else { continue }
+            roles.insert("\(icon.role)/\(eye.role)")
+            let lead = icon.frame.minX - clip.minX - (G.rowPadding + G.indent * CGFloat(entry.depth) + G.rowSpacing)
+            let trail = clip.maxX - eye.frame.maxX - G.rowPadding
+            leading.append(lead); trailing.append(trail); heights.append(height)
+            if abs(lead - G.inset) > G.tolerance { offenders.append("row \(row) leading inset \(lead)") }
+            if abs(trail - G.inset) > G.tolerance { offenders.append("row \(row) trailing inset \(trail)") }
+            measured.append((row, top, bottom))
+        }
+        var gaps: [CGFloat] = []
+        for (a, b) in zip(measured, measured.dropFirst()) where b.row == a.row + 1 {
+            let gap = a.bottom - b.top
+            gaps.append(gap)
+            if abs(gap - G.rowGap) > G.tolerance { offenders.append("rows \(a.row)-\(b.row) gap \(gap)") }
+        }
+        var topInset = "not at the start"
+        if let first = measured.first, first.row == 0, clipView.bounds.minY <= -clipView.contentInsets.top + G.tolerance {
+            let inset = clip.maxY - first.top
+            topInset = "\(inset)"
+            if abs(inset - G.inset) > G.tolerance { offenders.append("top inset \(inset)") }
+        }
+        let selected = entries.indices.filter { entries[$0].selected }
+        let tableSelected = table.selectedRowIndexes.count
+        if tableSelected != 0 { offenders.append("the table selects \(tableSelected) rows") }
+        if measured.count < 2 { offenders.append("only \(measured.count) rows measured") }
+        func range(_ values: [CGFloat]) -> String {
+            guard let low = values.min(), let high = values.max() else { return "-" }
+            return low == high ? String(format: "%.2f", low) : String(format: "%.2f-%.2f", low, high)
+        }
+        var detail = "workspace \(type(of: table)) \(entries.count) rows, visible \(visible.location)+\(visible.length), measured \(measured.count)"
+        detail += " (\(roles.sorted().joined(separator: ", "))); heights \(range(heights)), gaps \(range(gaps)), leading \(range(leading)),"
+        detail += " trailing \(range(trailing)), top inset \(topInset); selected entries \(selected.count)"
+        detail += selected.first.map { " (row \($0)\(visible.contains($0) ? ", visible" : ""))" } ?? ""
+        detail += ", table selection \(tableSelected), highlight style \(table.selectionHighlightStyle.rawValue)"
+        if !offenders.isEmpty { detail += "; " + offenders.prefix(8).joined(separator: "; ") }
+        return (offenders.isEmpty, detail)
     }
 
     /// Each segmented control in the inspector's document view, top to bottom, as
