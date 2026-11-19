@@ -199,6 +199,16 @@ final class PerfTrace {
         /// shows, lowercased ("object", the default, "pose", "face",
         /// "clothes" or "scene").
         let inspectorTab: String?
+        /// `IKKOKU_PERF_EDITS`: how many single-object edits
+        /// `studio-edit-steps` makes (#409, default 90).
+        let edits: Int
+        /// `IKKOKU_PERF_PAUSE_AT`: after how many of those edits it holds
+        /// (0 is before the first) so an outside tool can read the process,
+        /// for `IKKOKU_PERF_PAUSE_SECONDS` (default 10), after writing its
+        /// process id to `pause-<n>.pid` in `IKKOKU_PERF_PAUSE_MARKER`.
+        let pauseAt: Set<Int>
+        let pauseSeconds: Double
+        let pauseMarker: String?
 
         /// Reads `IKKOKU_PERF_*`; `CaptureRequest.validate` already checked the values.
         static func from(_ env: [String: String]) -> Configuration? {
@@ -227,7 +237,11 @@ final class PerfTrace {
                 installRefresh: env["IKKOKU_PERF_INSTALL_REFRESH"] ?? "step",
                 outfit: env["IKKOKU_PERF_OUTFIT"].flatMap { Int($0) },
                 selectKeys: env["IKKOKU_PERF_SELECT_KEYS"].map { $0.split(separator: ",").compactMap { Int32($0) } },
-                inspectorTab: env["IKKOKU_PERF_INSPECTOR_TAB"])
+                inspectorTab: env["IKKOKU_PERF_INSPECTOR_TAB"],
+                edits: int("IKKOKU_PERF_EDITS", 90),
+                pauseAt: Set((env["IKKOKU_PERF_PAUSE_AT"] ?? "").split(separator: ",").compactMap { Int($0) }),
+                pauseSeconds: Double(int("IKKOKU_PERF_PAUSE_SECONDS", 10)),
+                pauseMarker: env["IKKOKU_PERF_PAUSE_MARKER"])
         }
     }
 

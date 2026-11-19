@@ -453,6 +453,10 @@ extension CaptureRequest {
         ScopedOption("IKKOKU_PERF_INSPECTOR_TAB", [.perfTrace]),
         ScopedOption("IKKOKU_PERF_KEEP_MOUNTED", [.perfTrace]),
         ScopedOption("IKKOKU_PERF_PANEL_STATE", [.perfTrace]),
+        ScopedOption("IKKOKU_PERF_EDITS", [.perfTrace]),
+        ScopedOption("IKKOKU_PERF_PAUSE_AT", [.perfTrace]),
+        ScopedOption("IKKOKU_PERF_PAUSE_SECONDS", [.perfTrace]),
+        ScopedOption("IKKOKU_PERF_PAUSE_MARKER", [.perfTrace]),
     ]
 
     /// Options read only by the window capture.
@@ -605,6 +609,13 @@ extension CaptureRequest {
         // what they show (item 7 follow-ups, C4): each body as before, or the
         // state the model publishes (the default).
         ValueRule("IKKOKU_PERF_PANEL_STATE", .oneOf(["document", "published"])),
+        // `studio-edit-steps` (#409): how many single-object edits it makes,
+        // after which edits it holds for an outside reader, and how long.
+        // The marker folder (`IKKOKU_PERF_PAUSE_MARKER`) must lie under a
+        // `.local` folder; the workload checks it.
+        ValueRule("IKKOKU_PERF_EDITS", .integer(1...500)),
+        ValueRule("IKKOKU_PERF_PAUSE_AT", .integerList(0...500, maxCount: 32)),
+        ValueRule("IKKOKU_PERF_PAUSE_SECONDS", .integer(1...30)),
     ]
 
     /// `IKKOKU_PERF_WORKLOAD` values, in the order `docs/reference/performance.md` lists them.
@@ -613,7 +624,7 @@ extension CaptureRequest {
         "studio-native", "viewport-lifecycle", "startup", "studio-static", "studio-orbit-bursts",
         "studio-duplicate", "studio-undo-delete", "studio-timeline",
         "studio-outfit", "studio-export", "studio-redo", "studio-load", "studio-select",
-        "studio-export-import", "studio-show-hidden", "studio-clock-first",
+        "studio-export-import", "studio-show-hidden", "studio-clock-first", "studio-edit-steps",
     ]
 }
 

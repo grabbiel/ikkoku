@@ -126,6 +126,7 @@ the run.
 | `studio-export-import` | as `studio-idle` | File ▸ Export Edited Original Scene (`AppState.exportSourceScene(to:)`) of the startup scene as imported, unedited, repeated, live animation on. A hidden character the import left unbuilt has no edit, so the export builds no baseline for it; its saved animation time comes from its data-only clock ([lazy hidden characters](#lazy-hidden-characters-at-import)). Each export writes a new file and removes the previous one |
 | `studio-show-hidden` | as `studio-idle` | Visible on (the inspector's toggle, `StudioModel.update`) for each hidden object of the startup scene that holds source characters (its own flag off, its ancestors shown), in workspace order, each followed by Visible off again (unmeasured), repeated, live animation on. An action's first run shows characters the import left unbuilt, so its ready time holds their builds; later runs find them built. Each action is named `show <source key> (<n> characters)` |
 | `studio-clock-first` | as `studio-idle` | the first clock rebase and the first native save after the import, then repeated, live animation on: `rebase` sets the first drawn character with a converted saved clip to its own animation speed (`setSourceAnimationSpeed`, which bakes every character's clock), `save` is File ▸ Save (`saveScene(to:)`) to a scratch file. The first bake's time is the `sourceClockBake` mark pair |
+| `studio-edit-steps` | as `studio-idle` | #409's memory count: `IKKOKU_PERF_EDITS` (default 90) single-object edits of the `IKKOKU_PERF_ACTION_KEY` object through the inspector's call (`StudioModel.update`), each its own undo step, its x position moved 0.001; each followed by a same-value write, which takes no undo step (#390), as the control. Each action also records the undo and redo depth and the distinct `objects` buffers the document and both stacks hold, with their malloc bytes (`StudioObjectStorageCensus`). After the edits `IKKOKU_PERF_PAUSE_AT` lists it holds for an outside reader. The actions run once, and the run stops after the last |
 
 Other options:
 
@@ -157,6 +158,13 @@ Other options:
   use source key 963 or the first source character. `studio-fk-drag` drags
   bone 19 of the character it names instead of source key 65.
 - `IKKOKU_PERF_OUTFIT` (0–6): the saved outfit `studio-outfit` selects.
+- `IKKOKU_PERF_EDITS` (1–500, default 90): the edits `studio-edit-steps`
+  makes. `IKKOKU_PERF_PAUSE_AT` (up to 32 comma-separated edit counts,
+  0–500; 0 is before the first edit): after those edits it writes its
+  process id to `pause-<n>.pid` in `IKKOKU_PERF_PAUSE_MARKER`, a folder that
+  must lie under a `.local` folder, and holds for `IKKOKU_PERF_PAUSE_SECONDS`
+  (1–30, default 10) so `footprint`, `vmmap` and `heap` can read the process
+  by that id. The hold is a timer, so the main run loop sleeps.
 - `IKKOKU_PERF_SELECT_KEYS` (1–64 comma-separated source keys): the objects
   `studio-select` selects in turn, and `IKKOKU_PERF_INSPECTOR_TAB`
   (`object`, `pose`, `face`, `clothes` or `scene`): the inspector tab it

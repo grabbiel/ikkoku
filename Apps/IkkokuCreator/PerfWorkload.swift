@@ -54,7 +54,16 @@ final class PerfWorkloadDriver {
     private var actionIndex = 0
     private var pendingAction: (name: String, measured: Bool, start: CFTimeInterval, end: CFTimeInterval)?
     private var finishedActions: [(name: String, measured: Bool, start: CFTimeInterval, end: CFTimeInterval, ready: CFTimeInterval,
-                                   status: String, error: String?, footprint: UInt64, metal: Int, objects: Int)] = []
+                                   status: String, error: String?, footprint: UInt64, metal: Int, objects: Int,
+                                   history: (undo: Int, redo: Int, storage: StudioObjectStorageCensus.Count)?)] = []
+    /// `studio-edit-steps` (#409): the actions run once, not repeated, and
+    /// the run stops after the last; each finished action records the undo
+    /// and redo depth and the `objects` buffers they and the document hold.
+    private var stopAfterActions = false
+    private var countHistoryStorage = false
+    /// A pause step's hold: no action starts before this media time (0: none).
+    private var holdUntil: CFTimeInterval = 0
+    private var stopped = false
     /// The temporary folder `studio-export` and `studio-load` write scene
     /// files to, removed when the run stops.
     private var scratchFolder: URL?
@@ -195,6 +204,8 @@ final class PerfWorkloadDriver {
     }
 
     private func stop() {
+        guard !stopped else { return }
+        stopped = true
         inputTimer?.invalidate(); inputTimer = nil
         loadTimer?.invalidate(); loadTimer = nil
         if !lifecycle.isEmpty { finishLifecycle() }
@@ -242,6 +253,7 @@ final class PerfWorkloadDriver {
         case "studio-export-import": try prepareStudioExportImport()
         case "studio-show-hidden": try prepareStudioShowHidden()
         case "studio-clock-first": try prepareStudioClockFirst()
+        case "studio-edit-steps": try prepareStudioEditSteps()
         default: throw RigError.invalid("unknown workload \(workload)")
         }
     }
@@ -711,6 +723,70 @@ final class PerfWorkloadDriver {
         trace.details["gesture"] = "File ▸ New Scene, then File ▸ Open of the source scene saved as an Ikkoku scene, repeated; live animation on"
     }
 
+    /// `studio-edit-steps` (#409): `IKKOKU_PERF_EDITS` single-object edits
+    /// of `actionTarget`'s object through the inspector's call
+    /// (`StudioModel.update`), each its own undo step (`endUndoCoalescing`
+    /// first, as the scenario runner does per step): its x position moves
+    /// 0.001. Each edit is followed by a same-value write, `update` with the
+    /// value it has, which takes no undo step (#390): the control on the same
+    /// path. Every action records the undo and redo depth and the distinct
+    /// `objects` buffers the document and both stacks hold
+    /// (`StudioObjectStorageCensus`). After the edits `IKKOKU_PERF_PAUSE_AT`
+    /// lists (0: before the first) a pause step holds the run for an outside
+    /// reader (`pause(after:)`). The actions run once, and the run stops
+    /// after the last.
+    private func prepareStudioEditSteps() throws {
+        let studio = try prepareStudioSource(selectKey: nil)
+        let target = try actionTarget(studio)
+        let id = target.id
+        if !configuration.pauseAt.isEmpty {
+            guard let marker = configuration.pauseMarker, marker.split(separator: "/").contains(".local") else {
+                throw RigError.invalid("IKKOKU_PERF_PAUSE_AT needs IKKOKU_PERF_PAUSE_MARKER, a folder under a .local folder")
+            }
+            try FileManager.default.createDirectory(at: URL(fileURLWithPath: marker), withIntermediateDirectories: true)
+        }
+        var steps: [(name: String, measured: Bool, run: () -> Void)] = []
+        func pauseStep(_ edits: Int) {
+            guard configuration.pauseAt.contains(edits) else { return }
+            steps.append(("pause \(edits)", false, { [weak self] in self?.pause(after: edits) }))
+        }
+        pauseStep(0)
+        for edit in 1...configuration.edits {
+            steps.append(("edit \(edit)", true, {
+                studio.endUndoCoalescing()
+                studio.update(id) { $0.transform.position.x += 0.001 }
+            }))
+            steps.append(("same-value write \(edit)", true, {
+                studio.endUndoCoalescing()
+                studio.update(id) { $0.transform.position.x = $0.transform.position.x }
+            }))
+            pauseStep(edit)
+        }
+        actionSteps = steps
+        stopAfterActions = true
+        countHistoryStorage = true
+        trace.details["actionSourceKey"] = Int(target.sourceObjectKey ?? -1)
+        trace.details["actionObjectKind"] = "\(target.kind)"
+        trace.details["edits"] = configuration.edits
+        trace.details["pauseAt"] = configuration.pauseAt.sorted()
+        trace.details["studioObjectStride"] = MemoryLayout<StudioObject>.stride
+        trace.details["undoLimit"] = StudioUndoHistory<StudioDocument>.limit
+        trace.details["gesture"] = "\(configuration.edits) single-object edits (x + 0.001, each its own undo step) on source key "
+            + "\(target.sourceObjectKey ?? -1), each followed by a same-value write; live animation on; run once"
+    }
+
+    /// Writes this process's id to `pause-<n>.pid` in `IKKOKU_PERF_PAUSE_MARKER`
+    /// and holds the next action for `IKKOKU_PERF_PAUSE_SECONDS`. The hold is a
+    /// timer, not a block, so the main run loop sleeps while an outside tool
+    /// (footprint, vmmap, heap) reads this process by that id.
+    private func pause(after edits: Int) {
+        guard let marker = configuration.pauseMarker else { return }
+        let file = URL(fileURLWithPath: marker).appendingPathComponent("pause-\(edits).pid")
+        do { try Data("\(ProcessInfo.processInfo.processIdentifier)\n".utf8).write(to: file, options: .atomic) }
+        catch { print("[ikkoku] perf pause \(edits): marker not written: \(error)") }
+        holdUntil = CACurrentMediaTime() + configuration.pauseSeconds
+    }
+
     /// `studio-select` (R7 phase 2, item 7): the selection a click makes
     /// (`selection = id`, the call of a workspace row's tap and of a viewport
     /// click on an object; a click on empty space sets nil) through a fixed
@@ -773,6 +849,12 @@ final class PerfWorkloadDriver {
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.01) { self.runNextAction() }
             return
         }
+        if holdUntil > 0 {
+            let wait = holdUntil - CACurrentMediaTime()
+            if wait > 0 { DispatchQueue.main.asyncAfter(deadline: .now() + wait) { self.runNextAction() }; return }
+            holdUntil = 0
+        }
+        if stopAfterActions, actionIndex >= actionSteps.count { stop(); return }
         let step = actionSteps[actionIndex % actionSteps.count]
         actionIndex += 1
         let start = CACurrentMediaTime()
@@ -798,8 +880,13 @@ final class PerfWorkloadDriver {
         // flat across repeated loads means nothing accumulates per cycle. The
         // document's object count (read after the timed span) shows what an
         // edit added or an undo restored.
+        let history = countHistoryStorage ? app.studio.map { studio in
+            (studio.undoStack.count, studio.redoStack.count,
+             StudioObjectStorageCensus.count([studio.doc] + studio.undoStack + studio.redoStack))
+        } : nil
         finishedActions.append((action.name, action.measured, action.start, action.end, ready, app.studio?.status ?? "", error,
-                                PerfTrace.footprint(), trace.device?.currentAllocatedSize ?? 0, app.studio?.doc.objects.count ?? -1))
+                                PerfTrace.footprint(), trace.device?.currentAllocatedSize ?? 0, app.studio?.doc.objects.count ?? -1,
+                                history))
         pendingAction = nil
         DispatchQueue.main.asyncAfter(deadline: .now() + (action.measured ? 0.5 : 0.2)) { self.runNextAction() }
     }
@@ -823,7 +910,7 @@ final class PerfWorkloadDriver {
             let overlapping = busy.filter { $0.end > action.start && $0.start <= action.ready }
             let lengths = overlapping.map { ($0.end - max($0.start, action.start)) * 1000 }
             let own = overlapping.map { max(0, min($0.end, next) - max($0.start, action.start)) * 1000 }
-            return ["name": action.name, "measured": action.measured,
+            var row: [String: Any] = ["name": action.name, "measured": action.measured,
                     "startSeconds": PerfTrace.round(action.start - recordingStart),
                     "callMs": PerfTrace.round((action.end - action.start) * 1000),
                     "readyMs": PerfTrace.round((action.ready - action.start) * 1000),
@@ -833,6 +920,12 @@ final class PerfWorkloadDriver {
                     "status": action.status, "error": action.error.map { $0 as Any } ?? NSNull(),
                     "footprintBytes": action.footprint, "metalAllocatedBytes": action.metal,
                     "documentObjects": action.objects]
+            if let history = action.history {
+                row["undoSteps"] = history.undo; row["redoSteps"] = history.redo
+                row["objectBuffers"] = history.storage.buffers; row["objectBufferCapacity"] = history.storage.capacity
+                row["objectBufferBytes"] = history.storage.bytes
+            }
+            return row
         }
     }
 
