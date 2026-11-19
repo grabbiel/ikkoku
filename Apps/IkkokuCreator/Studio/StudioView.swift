@@ -108,16 +108,22 @@ struct StudioWorkspacePanel: View {
     var body: some View {
         let _ = PerfTrace.body(.studioWorkspace)
         let state = model.shownWorkspaceState
-        StudioWorkspaceContent(model: model, entries: state.entries, objectCount: state.objectCount).equatable()
+        StudioWorkspaceContent(model: model, entries: state.entries, rowCapacity: state.rowCapacity,
+                               objectCount: state.objectCount).equatable()
     }
 }
 
 struct StudioWorkspaceContent: View, Equatable {
     let model: StudioModel
     let entries: [WorkspaceEntry]
+    /// The most rows this panel has shown (`StudioWorkspaceState.rowCapacity`):
+    /// the slots the stack keeps, at least `entries.count`.
+    let rowCapacity: Int
     let objectCount: Int
 
-    static func == (a: Self, b: Self) -> Bool { a.model === b.model && a.entries == b.entries && a.objectCount == b.objectCount }
+    static func == (a: Self, b: Self) -> Bool {
+        a.model === b.model && a.entries == b.entries && a.rowCapacity == b.rowCapacity && a.objectCount == b.objectCount
+    }
 
     var body: some View {
         VStack(spacing: 0) {
@@ -127,35 +133,27 @@ struct StudioWorkspaceContent: View, Equatable {
                 StudioAddMenu(model: model)
             }.padding(8)
             Divider()
-            // #410: a List, not a ScrollView of a LazyVStack. New Scene and
-            // Open remove and insert every row, and a lazy stack kept per
-            // inserted row, for the whole session, an entry in SwiftUI's
-            // child cache and an AppKit dependency on the scroll view's
-            // container, whatever the row ids. The List's table reuses its
-            // row views, so what it keeps is bounded by the rows on screen.
-            // The rows are keyed by position, which is safe because a row
-            // holds no state (`WorkspaceRow`). Inserts and removals show as
-            // content changes, with no row animation. The insets and the
-            // minimum row height keep the stack's look: 1 pt between rows,
-            // 4 pt around them, no separators or list background.
-            List {
-                ForEach(entries.indices, id: \.self) { index in
-                    let entry = entries[index]
-                    WorkspaceRow(entry: entry) {
-                        model.selection = entry.id
-                    } toggleVisible: {
-                        model.update(entry.id) { $0.visible.toggle() }
+            // #410: the lazy stack keeps one slot per row this panel has
+            // ever shown (`rowCapacity`), and a slot past the scene's rows
+            // shows nothing. New Scene and Open used to remove and insert
+            // rows, and a lazy stack keeps, per inserted row and for the whole
+            // session, an entry in SwiftUI's child cache and an AppKit
+            // dependency on the scroll view's container, whatever the row ids.
+            // The slots are only ever added, past the most rows shown, so a
+            // load changes what slots show instead of inserting rows. Slots
+            // are keyed by position, which is safe because a row holds no
+            // state (`WorkspaceRow`); inserts and removals show as content
+            // changes, with no row animation. Spacing 0 with the 1 pt gap
+            // inside each row but the first, so an empty slot adds no height.
+            // (A List instead re-evaluated each row about 22 times per load.)
+            ScrollView {
+                LazyVStack(spacing: 0) {
+                    ForEach(0..<max(rowCapacity, entries.count), id: \.self) { index in
+                        WorkspaceSlot(model: model, entry: index < entries.count ? entries[index] : nil, first: index == 0)
+                            .equatable()
                     }
-                    .equatable()
-                    .listRowInsets(EdgeInsets(top: 0.5, leading: 4, bottom: 0.5, trailing: 4))
-                    .listRowSeparator(.hidden)
-                    .listRowBackground(Color.clear)
-                }
+                }.padding(4)
             }
-            .listStyle(.plain)
-            .scrollContentBackground(.hidden)
-            .environment(\.defaultMinListRowHeight, 1)
-            .contentMargins(.vertical, 3.5, for: .scrollContent)
             Divider()
             HStack {
                 Button { model.duplicateSelection() } label: { Image(systemName: "plus.square.on.square") }.help("Duplicate")
@@ -522,8 +520,40 @@ struct StudioStatusLine: View {
     }
 }
 
+/// One slot of the workspace stack (#410): a row, with the 1 pt gap above it
+/// for every row but the first, or, past the scene's rows, nothing: zero
+/// height, hidden from accessibility, not focusable and with no tap, so
+/// keyboard navigation and the selection skip it. The stack wraps either in
+/// one `VStack`, so a slot is always one child of the stack and what it
+/// shows never inserts or removes a child.
+struct WorkspaceSlot: View, Equatable {
+    let model: StudioModel
+    let entry: WorkspaceEntry?
+    let first: Bool
+
+    /// The row's actions call the model with the row's id, so the entry decides equality.
+    static func == (a: Self, b: Self) -> Bool { a.model === b.model && a.entry == b.entry && a.first == b.first }
+
+    var body: some View {
+        VStack(spacing: 0) {
+            if let entry {
+                WorkspaceRow(entry: entry) {
+                    model.selection = entry.id
+                } toggleVisible: {
+                    model.update(entry.id) { $0.visible.toggle() }
+                }
+                .equatable()
+                .padding(.top, first ? 0 : 1)
+            } else {
+                let _ = PerfTrace.body(.studioWorkspacePlaceholder)
+                Color.clear.frame(height: 0).accessibilityHidden(true)
+            }
+        }
+    }
+}
+
 /// One workspace row. It holds no state (no @State, focus, hover or drag):
-/// the list keys its rows by position (#410), so state here would stay with
+/// the stack keys its slots by position (#410), so state here would stay with
 /// the slot, not the object, after a delete or a duplicate. The scenario
 /// step `assertWorkspaceRows` checks that it has only these three fields.
 struct WorkspaceRow: View, Equatable {

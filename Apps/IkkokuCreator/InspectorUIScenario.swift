@@ -33,7 +33,8 @@ struct InspectorUIScenario: Decodable {
         /// the selection or one of its descendants, in document order; with `key`, it
         /// chooses that source key's object, or None for -1, and the document's parent
         /// follows). Added for #410: `"selectRow"` (`index`: selects the object at that
-        /// workspace row).
+        /// workspace row) and `"scrollWorkspace"` (`toEnd`: scrolls the workspace to
+        /// the end of its rows, or back to the top).
         let op: String
         let key: Int32?
         let keys: [Int32]?
@@ -79,11 +80,13 @@ struct InspectorUIScenario: Decodable {
         /// Whether everything in the inspector's scroll view lies within its
         /// visible width: see `inspectorFit(_:)`.
         let inspectorFits: Bool?
-        // Added for #410 (the workspace list became a List).
-        /// Whether every fully visible workspace row keeps the lazy stack's
-        /// geometry, and the list draws no selection of its own: see
+        // Added for #410 (the workspace stack keeps empty slots).
+        /// Whether every fully visible workspace row keeps the stack's
+        /// geometry and the empty slots add nothing: see
         /// `workspaceGeometry(_:studio:)`.
         let workspaceGeometry: Bool?
+        /// `scrollWorkspace`: to the end (true) or the top (false).
+        let toEnd: Bool?
     }
 
     let steps: [Step]
@@ -209,6 +212,23 @@ struct InspectorUIScenario: Decodable {
                 studio.selection = entries[index].id
                 await settle()
                 record(step.op, true, "selected workspace row \(index)")
+            case "scrollWorkspace":
+                guard let scroll = Self.workspaceScrollView(window), let document = scroll.documentView else {
+                    record(step.op, false, "no workspace scroll view"); continue
+                }
+                // The lazy stack may correct the document's height once it lays
+                // out what the scroll shows, so scroll again until it holds.
+                let toEnd = step.toEnd ?? true
+                var heights: [Int] = []
+                for _ in 0..<4 {
+                    let height = document.frame.height
+                    Self.scrollWorkspace(scroll, toEnd: toEnd)
+                    await settle()
+                    heights.append(Int(document.frame.height))
+                    if document.frame.height == height { break }
+                }
+                record(step.op, true, "workspace scrolled to the \(toEnd ? "end" : "top") in \(heights.count) scrolls, "
+                       + "document \(heights.map(String.init).joined(separator: " > ")) pt")
             case "routePoint":
                 guard let index = step.index else { record(step.op, false, "no index"); continue }
                 studio.selectedRoutePoint = .init(index: index)
@@ -621,12 +641,13 @@ struct InspectorUIScenario: Decodable {
     }
 
     /// #410: the workspace rows' geometry as the lazy stack in a scroll view
-    /// defined it before the list became a `List`, at 47ac6316 in
+    /// defined it before its empty slots, at 47ac6316 in
     /// `Apps/IkkokuCreator/Studio/StudioView.swift`.
     enum WorkspaceGeometry {
-        /// `LazyVStack(spacing: 1)`, line 131: between two rows.
+        /// `LazyVStack(spacing: 1)`, line 131: between two rows (now the top
+        /// padding of every row but the first, `WorkspaceSlot`).
         static let rowGap: CGFloat = 1
-        /// `}.padding(4)`, line 151: around the rows (leading, trailing, above the first).
+        /// `}.padding(4)`, line 151: around the rows (leading, trailing, above the first, below the last).
         static let inset: CGFloat = 4
         /// `WorkspaceRow`: `.padding(.vertical, 3).padding(.horizontal, 6)`, line 563.
         static let rowPadding: CGFloat = 6
@@ -637,31 +658,67 @@ struct InspectorUIScenario: Decodable {
         static let tolerance: CGFloat = 0.51
     }
 
-    /// #410: whether the workspace list, now a `List`, keeps the lazy stack's
-    /// geometry (`WorkspaceGeometry`) on every fully visible row, read through
-    /// accessibility in the window. A row's height is `WorkspaceRow`'s own for
-    /// that entry (its fitting height, as the stack laid it out); its centre is
-    /// the icon's (the row's `HStack` centres its children), so its top and
-    /// bottom follow. Each pair of measured rows must be `rowGap` apart; each
-    /// row's icon must start `inset + rowPadding + indent x depth + rowSpacing`
-    /// after the visible area's leading edge and its eye button end
-    /// `rowPadding + inset` before the trailing edge; and with the list at its
-    /// start, the first row's top must be `inset` below the top. The selection
-    /// must be drawn by the rows alone: the table selects no row (the stack had
-    /// no selection chrome). The detail gives the raw values.
+    /// #410: the workspace column's scroll view: the tallest scroll view at
+    /// the window's leading edge that is not inside another scroll view.
+    @MainActor static func workspaceScrollView(_ window: NSWindow) -> NSScrollView? {
+        guard let content = window.contentView else { return nil }
+        let edge = content.convert(content.bounds, to: nil).minX
+        var found: [NSScrollView] = []
+        func visit(_ view: NSView) {
+            if let scroll = view as? NSScrollView {
+                if !scroll.isHiddenOrHasHiddenAncestor, abs(scroll.convert(scroll.bounds, to: nil).minX - edge) <= 2 {
+                    found.append(scroll)
+                }
+                return
+            }
+            view.subviews.forEach(visit)
+        }
+        visit(content)
+        return found.max { $0.bounds.height < $1.bounds.height }
+    }
+
+    /// #410: scrolls `scroll` to the end of its document or back to its top,
+    /// as dragging the scroller there would.
+    @MainActor static func scrollWorkspace(_ scroll: NSScrollView, toEnd: Bool) {
+        guard let document = scroll.documentView else { return }
+        let clip = scroll.contentView, insets = clip.contentInsets
+        let travel = document.frame.height - clip.bounds.height
+        // A flipped document starts at y 0, an unflipped one at its height.
+        let y = document.isFlipped ? (toEnd ? max(-insets.top, travel + insets.bottom) : -insets.top)
+                                   : (toEnd ? -insets.bottom : max(-insets.bottom, travel + insets.top))
+        clip.scroll(to: NSPoint(x: clip.bounds.minX, y: y))
+        scroll.reflectScrolledClipView(clip)
+    }
+
+    /// #410: how far the visible area of `scroll` is from the end of its
+    /// document, in points (0 at the end).
+    @MainActor static func workspaceEndGap(_ scroll: NSScrollView) -> CGFloat {
+        guard let document = scroll.documentView else { return 0 }
+        let clip = scroll.contentView, insets = clip.contentInsets
+        return document.isFlipped ? document.frame.height + insets.bottom - clip.bounds.maxY : clip.bounds.minY + insets.bottom
+    }
+
+    /// #410: whether the workspace stack keeps its geometry
+    /// (`WorkspaceGeometry`) on every fully visible row, read through
+    /// accessibility in the window, and whether its empty slots add nothing.
+    /// A row is found by its eye button, the trailing button; its icon is the
+    /// leading element on the eye's line. Its height is `WorkspaceRow`'s own
+    /// for its entry (the fitting height, as the stack lays it out), centred
+    /// on the icon, so its top and bottom follow. The list must be at its
+    /// start (rows numbered from the first) or its end (from the last). Each
+    /// pair of rows must be `rowGap` apart; each icon must start
+    /// `inset + rowPadding + indent x depth + rowSpacing` after the visible
+    /// area's leading edge and each eye end `rowPadding + inset` before its
+    /// trailing edge. At the start the first row's top is `inset` below the
+    /// top; at the end the last row's bottom is `inset` above the bottom, and
+    /// nothing accessible lies below it, so the empty slots (`WorkspaceSlot`)
+    /// add no height and no element. The detail gives the raw values.
     @MainActor static func workspaceGeometry(_ window: NSWindow, studio: StudioModel) -> (ok: Bool, detail: String) {
         typealias G = WorkspaceGeometry
-        let entries = studio.shownWorkspaceState.entries
-        var tables: [NSTableView] = []
-        func find(_ view: NSView) {
-            if let table = view as? NSTableView, !table.isHiddenOrHasHiddenAncestor { tables.append(table); return }
-            view.subviews.forEach(find)
-        }
-        if let content = window.contentView { find(content) }
-        guard let table = tables.first(where: { $0.numberOfRows == entries.count && $0.numberOfRows > 0 }),
-              let scroll = table.enclosingScrollView else {
-            return (false, "no workspace table with \(entries.count) rows; tables: "
-                    + (tables.isEmpty ? "none" : tables.map { "\(type(of: $0)) \($0.numberOfRows) rows" }.joined(separator: ", ")))
+        let state = studio.shownWorkspaceState
+        let entries = state.entries
+        guard let scroll = workspaceScrollView(window), let document = scroll.documentView else {
+            return (false, "no workspace scroll view")
         }
         let clipView = scroll.contentView
         let clip = window.convertToScreen(clipView.convert(clipView.bounds, to: nil))
@@ -676,29 +733,44 @@ struct InspectorUIScenario: Decodable {
             guard object.responds(to: frameSelector), let implementation = object.method(for: frameSelector) else { return nil }
             return unsafeBitCast(implementation, to: FrameGetter.self)(object, frameSelector)
         }
-        func leaves(_ element: Any, depth: Int, into out: inout [(role: String, frame: CGRect)]) {
-            guard depth < 40, out.count < 64, let object = element as? NSObject else { return }
+        var leaves: [(role: String, frame: CGRect)] = [], visited = 0
+        func visit(_ element: Any, depth: Int) {
+            guard depth < 80, visited < 20_000, let object = element as? NSObject else { return }
+            visited += 1
+            let role = get(object, "accessibilityRole") as? String ?? ""
+            if role == "AXScrollBar" { return }
             let children = get(object, "accessibilityChildren") as? [Any] ?? []
-            if children.isEmpty, let f = frame(object), f.width > 0, f.height > 0 {
-                out.append((get(object, "accessibilityRole") as? String ?? "", f))
+            if children.isEmpty, let f = frame(object), f.width > 0, f.height > 0, f.intersects(clip) {
+                leaves.append((role, f))
             }
-            children.forEach { leaves($0, depth: depth + 1, into: &out) }
+            children.forEach { visit($0, depth: depth + 1) }
         }
-        let visible = table.rows(in: table.visibleRect)
-        var measured: [(row: Int, top: CGFloat, bottom: CGFloat)] = [], offenders: [String] = []
-        var leading: [CGFloat] = [], trailing: [CGFloat] = [], heights: [CGFloat] = [], roles = Set<String>()
-        for row in visible.location..<(visible.location + visible.length) {
-            guard let rowView = table.rowView(atRow: row, makeIfNecessary: false) else { continue }
-            var found: [(role: String, frame: CGRect)] = []
-            leaves(rowView, depth: 0, into: &found)
-            guard let icon = found.min(by: { $0.frame.minX < $1.frame.minX }),
-                  let eye = found.max(by: { $0.frame.maxX < $1.frame.maxX }) else { continue }
+        visit(scroll, depth: 0)
+        // One row per eye button: the element that starts in the trailing
+        // 40 pt (a row's text ends before its eye), top to bottom (screen y
+        // grows upwards). The button or its image, whichever is the leaf.
+        let eyes = leaves.filter { $0.frame.minX > clip.maxX - 40 }.sorted { $0.frame.midY > $1.frame.midY }
+        let flipped = document.isFlipped
+        let atStart = flipped ? clipView.bounds.minY <= -clipView.contentInsets.top + G.tolerance
+                              : clipView.bounds.maxY >= document.frame.height + clipView.contentInsets.top - G.tolerance
+        let atEnd = flipped ? clipView.bounds.maxY >= document.frame.height + clipView.contentInsets.bottom - G.tolerance
+                            : clipView.bounds.minY <= -clipView.contentInsets.bottom + G.tolerance
+        var offenders: [String] = []
+        guard atStart || atEnd else {
+            return (false, "workspace neither at its start nor at its end (clip \(clipView.bounds), document \(document.frame.height) pt)")
+        }
+        let width = clip.width - 2 * G.inset
+        var measured: [(row: Int, top: CGFloat, bottom: CGFloat)] = []
+        var leading: [CGFloat] = [], trailing: [CGFloat] = [], heights: [CGFloat] = []
+        for (order, eye) in eyes.enumerated() {
+            let row = atStart ? order : entries.count - eyes.count + order
+            guard entries.indices.contains(row) else { offenders.append("eye \(order) maps to no row (\(row) of \(entries.count))"); continue }
+            let line = leaves.filter { abs($0.frame.midY - eye.frame.midY) <= 3 }
+            guard let icon = line.min(by: { $0.frame.minX < $1.frame.minX }) else { continue }
             let entry = entries[row]
-            let width = clip.width - 2 * G.inset
             let height = NSHostingView(rootView: WorkspaceRow(entry: entry, select: {}, toggleVisible: {}).frame(width: width)).fittingSize.height
             let top = icon.frame.midY + height / 2, bottom = icon.frame.midY - height / 2
             guard top <= clip.maxY + G.tolerance, bottom >= clip.minY - G.tolerance else { continue }
-            roles.insert("\(icon.role)/\(eye.role)")
             let lead = icon.frame.minX - clip.minX - (G.rowPadding + G.indent * CGFloat(entry.depth) + G.rowSpacing)
             let trail = clip.maxX - eye.frame.maxX - G.rowPadding
             leading.append(lead); trailing.append(trail); heights.append(height)
@@ -712,25 +784,30 @@ struct InspectorUIScenario: Decodable {
             gaps.append(gap)
             if abs(gap - G.rowGap) > G.tolerance { offenders.append("rows \(a.row)-\(b.row) gap \(gap)") }
         }
-        var topInset = "not at the start"
-        if let first = measured.first, first.row == 0, clipView.bounds.minY <= -clipView.contentInsets.top + G.tolerance {
+        var edges: [String] = []
+        if atStart, let first = measured.first, first.row == 0 {
             let inset = clip.maxY - first.top
-            topInset = "\(inset)"
+            edges.append(String(format: "top inset %.2f", inset))
             if abs(inset - G.inset) > G.tolerance { offenders.append("top inset \(inset)") }
         }
-        let selected = entries.indices.filter { entries[$0].selected }
-        let tableSelected = table.selectedRowIndexes.count
-        if tableSelected != 0 { offenders.append("the table selects \(tableSelected) rows") }
+        if atEnd, let last = measured.last, last.row == entries.count - 1 {
+            let inset = last.bottom - clip.minY
+            edges.append(String(format: "bottom inset %.2f", inset))
+            if abs(inset - G.inset) > G.tolerance { offenders.append("bottom inset \(inset) (the empty slots add height)") }
+            let below = leaves.filter { $0.frame.maxY < last.bottom - G.tolerance }
+            if !below.isEmpty { offenders.append("\(below.count) elements below the last row (\(Set(below.map(\.role)).sorted().joined(separator: ", ")))") }
+        }
         if measured.count < 2 { offenders.append("only \(measured.count) rows measured") }
         func range(_ values: [CGFloat]) -> String {
             guard let low = values.min(), let high = values.max() else { return "-" }
             return low == high ? String(format: "%.2f", low) : String(format: "%.2f-%.2f", low, high)
         }
-        var detail = "workspace \(type(of: table)) \(entries.count) rows, visible \(visible.location)+\(visible.length), measured \(measured.count)"
-        detail += " (\(roles.sorted().joined(separator: ", "))); heights \(range(heights)), gaps \(range(gaps)), leading \(range(leading)),"
-        detail += " trailing \(range(trailing)), top inset \(topInset); selected entries \(selected.count)"
-        detail += selected.first.map { " (row \($0)\(visible.contains($0) ? ", visible" : ""))" } ?? ""
-        detail += ", table selection \(tableSelected), highlight style \(table.selectionHighlightStyle.rawValue)"
+        var detail = "workspace \(entries.count) rows in \(state.rowCapacity) slots (\(max(0, state.rowCapacity - entries.count)) empty), "
+        detail += "\(atStart ? "at the start" : "")\(atStart && atEnd ? " and " : "")\(atEnd ? "at the end" : ""), "
+        detail += "document \(Int(document.frame.height)) pt; eyes \(eyes.count), measured \(measured.count); heights \(range(heights)), "
+        detail += "gaps \(range(gaps)), leading \(range(leading)), trailing \(range(trailing))"
+        detail += edges.isEmpty ? "" : "; " + edges.joined(separator: ", ")
+        detail += "; selected entries \(entries.filter(\.selected).count)"
         if !offenders.isEmpty { detail += "; " + offenders.prefix(8).joined(separator: "; ") }
         return (offenders.isEmpty, detail)
     }

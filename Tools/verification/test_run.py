@@ -655,8 +655,8 @@ INSPECTOR_UI_OPS = {"select", "deselect", "focus", "type", "delete", "undo", "re
                     "tab", "addCharacter",
                     # Added for #383 (the Parent popup that replaced the Picker).
                     "parentMenu",
-                    # Added for #410 (the workspace list became a List).
-                    "selectRow"}
+                    # Added for #410 (the workspace stack's slots).
+                    "selectRow", "scrollWorkspace"}
 
 # ST-T11 `editRoute` settings: point edits name the point, route edits do not.
 ROUTE_POINT_SETTINGS = ("delete", "move", "speed", "ease", "connection", "link")
@@ -981,6 +981,8 @@ class StudioScenarioLaneTests(unittest.TestCase):
             if op in ("routePoint", "outfit", "selectRow"):
                 self.assertIs(type(step["index"]), int)
                 self.assertGreaterEqual(step["index"], 0)
+            if op == "scrollWorkspace":
+                self.assertIs(type(step["toEnd"]), bool)
             if op == "type":
                 self.assertTrue(step["text"])
             if op == "cycle":

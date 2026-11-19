@@ -52,9 +52,13 @@ final class PerfWorkloadDriver {
     /// status line and any error alert they left.
     private var actionSteps: [(name: String, measured: Bool, run: () -> Void)] = []
     private var actionIndex = 0
-    private var pendingAction: (name: String, measured: Bool, start: CFTimeInterval, end: CFTimeInterval)?
+    private var pendingAction: (name: String, measured: Bool, start: CFTimeInterval, end: CFTimeInterval, bodies: [Int])?
     private var finishedActions: [(name: String, measured: Bool, start: CFTimeInterval, end: CFTimeInterval, ready: CFTimeInterval,
-                                   status: String, error: String?, footprint: UInt64, metal: Int, objects: Int)] = []
+                                   status: String, error: String?, footprint: UInt64, metal: Int, objects: Int,
+                                   bodies: [Int], workspaceRows: Int, workspaceCapacity: Int)] = []
+    /// #410: the workspace bodies counted per action, from its call to the
+    /// next action's (`workspaceBodies`), in this order.
+    private static let workspaceBodyViews: [PerfTrace.ViewBody] = [.studioWorkspaceRow, .studioWorkspacePlaceholder]
     /// The temporary folder `studio-export` and `studio-load` write scene
     /// files to, removed when the run stops.
     private var scratchFolder: URL?
@@ -702,13 +706,64 @@ final class PerfWorkloadDriver {
     /// characters is rehydrated from the scene file. (A load over the same
     /// scene keeps the runtime its ids already have, and rehydrates nothing.)
     /// Live animation stays on.
+    ///
+    /// #410: with `IKKOKU_PERF_LOAD_SMALL_OBJECTS=<n>` it alternates the source
+    /// scene with a small scene of `n` folders instead of New Scene, so the
+    /// workspace keeps the big scene's rows as slots while the small one shows,
+    /// and scrolls the workspace to its end and back in the small scene:
+    /// "load" (the source scene), "load small", "scroll workspace to end"
+    /// (measured) and "scroll workspace to top" (not measured), repeated.
+    /// `details.workspaceScrolls` records the first scrolls' document heights.
     private func prepareStudioLoad() throws {
         let studio = try prepareStudioSource(selectKey: nil)
-        let scene = try makeScratchFolder().appendingPathComponent("scene.png")
+        let folder = try makeScratchFolder()
+        let scene = folder.appendingPathComponent("scene.png")
         try studio.saveScene(to: scene)
+        if let text = ProcessInfo.processInfo.environment["IKKOKU_PERF_LOAD_SMALL_OBJECTS"] {
+            guard let count = Int(text), count > 0 else { throw RigError.invalid("IKKOKU_PERF_LOAD_SMALL_OBJECTS: \(text)") }
+            studio.newScene()
+            // Unselected, so each folder lands at the root (`add` nests a new
+            // object in a selected folder): a flat list of `count` rows.
+            for index in 0..<count { studio.add(StudioObject(name: "Folder \(index + 1)", kind: .folder), select: false) }
+            let small = folder.appendingPathComponent("small.png")
+            try studio.saveScene(to: small)
+            actionSteps = [("load", true, { [weak self] in self?.app.openScene(at: scene, importing: false) }),
+                           ("load small", true, { [weak self] in self?.app.openScene(at: small, importing: false) }),
+                           ("scroll workspace to end", true, { [weak self] in self?.scrollWorkspace(toEnd: true) }),
+                           ("scroll workspace to top", false, { [weak self] in self?.scrollWorkspace(toEnd: false) })]
+            trace.details["smallSceneObjects"] = count
+            trace.details["gesture"] = "File ▸ Open of the source scene saved as an Ikkoku scene, then of a scene of \(count) folders, "
+                + "then the workspace scrolled to its end and back, repeated; live animation on"
+            return
+        }
         actionSteps = [("new scene", false, { studio.newScene() }),
                        ("load", true, { [weak self] in self?.app.openScene(at: scene, importing: false) })]
         trace.details["gesture"] = "File ▸ New Scene, then File ▸ Open of the source scene saved as an Ikkoku scene, repeated; live animation on"
+    }
+
+    /// #410: scrolls the workspace's scroll view to the end of its document or
+    /// back to the top, as dragging the scroller would. The first 16 scrolls
+    /// record, before scrolling, the document and visible heights and how far
+    /// the view is from the document's end, so a scroll to the top shows
+    /// whether the scroll before it reached the end once the stack had laid
+    /// out the rows there; and the rows and slots shown
+    /// (`details.workspaceScrolls`).
+    private func scrollWorkspace(toEnd: Bool) {
+        guard let window = NSApp.windows.first(where: { $0.isVisible && $0.contentView != nil }),
+              let scroll = InspectorUIScenario.workspaceScrollView(window), let document = scroll.documentView else {
+            app.errorMessage = "no workspace scroll view"
+            return
+        }
+        var scrolls = trace.details["workspaceScrolls"] as? [[String: Any]] ?? []
+        if scrolls.count < 16 {
+            let state = app.studio?.shownWorkspaceState
+            scrolls.append(["toEnd": toEnd, "documentHeight": Double(document.frame.height),
+                            "visibleHeight": Double(scroll.contentView.bounds.height),
+                            "endGapBefore": PerfTrace.round(Double(InspectorUIScenario.workspaceEndGap(scroll))),
+                            "flipped": document.isFlipped, "rows": state?.entries.count ?? -1, "slots": state?.rowCapacity ?? -1])
+            trace.details["workspaceScrolls"] = scrolls
+        }
+        InspectorUIScenario.scrollWorkspace(scroll, toEnd: toEnd)
     }
 
     /// `studio-select` (R7 phase 2, item 7): the selection a click makes
@@ -775,9 +830,10 @@ final class PerfWorkloadDriver {
         }
         let step = actionSteps[actionIndex % actionSteps.count]
         actionIndex += 1
+        let bodies = Self.workspaceBodyViews.map(PerfTrace.bodyCount)
         let start = CACurrentMediaTime()
         step.run()
-        pendingAction = (step.name, step.measured, start, CACurrentMediaTime())
+        pendingAction = (step.name, step.measured, start, CACurrentMediaTime(), bodies)
         waitForAction()
     }
 
@@ -798,8 +854,10 @@ final class PerfWorkloadDriver {
         // flat across repeated loads means nothing accumulates per cycle. The
         // document's object count (read after the timed span) shows what an
         // edit added or an undo restored.
+        let workspace = app.studio?.shownWorkspaceState
         finishedActions.append((action.name, action.measured, action.start, action.end, ready, app.studio?.status ?? "", error,
-                                PerfTrace.footprint(), trace.device?.currentAllocatedSize ?? 0, app.studio?.doc.objects.count ?? -1))
+                                PerfTrace.footprint(), trace.device?.currentAllocatedSize ?? 0, app.studio?.doc.objects.count ?? -1,
+                                action.bodies, workspace?.entries.count ?? -1, workspace?.rowCapacity ?? -1))
         pendingAction = nil
         DispatchQueue.main.asyncAfter(deadline: .now() + (action.measured ? 0.5 : 0.2)) { self.runNextAction() }
     }
@@ -817,9 +875,15 @@ final class PerfWorkloadDriver {
         // The period still running (the stop timer may fire in the same
         // run-loop pass as a long action) counts until now.
         let busy = trace.busyIntervals + (trace.openBusyStart.map { [($0, CACurrentMediaTime())] } ?? [])
+        let bodiesNow = Self.workspaceBodyViews.map(PerfTrace.bodyCount)
         trace.details["actions"] = finishedActions.indices.map { index -> [String: Any] in
             let action = finishedActions[index]
             let next = index + 1 < finishedActions.count ? finishedActions[index + 1].start : .infinity
+            // #410: bodies from this call to the next action's call (or until now).
+            let bodiesEnd = index + 1 < finishedActions.count ? finishedActions[index + 1].bodies : bodiesNow
+            let bodies = Dictionary(uniqueKeysWithValues: Self.workspaceBodyViews.indices.map {
+                (Self.workspaceBodyViews[$0].name, bodiesEnd[$0] - action.bodies[$0])
+            })
             let overlapping = busy.filter { $0.end > action.start && $0.start <= action.ready }
             let lengths = overlapping.map { ($0.end - max($0.start, action.start)) * 1000 }
             let own = overlapping.map { max(0, min($0.end, next) - max($0.start, action.start)) * 1000 }
@@ -832,7 +896,9 @@ final class PerfWorkloadDriver {
                     "longestStallMs": PerfTrace.round(lengths.max() ?? 0),
                     "status": action.status, "error": action.error.map { $0 as Any } ?? NSNull(),
                     "footprintBytes": action.footprint, "metalAllocatedBytes": action.metal,
-                    "documentObjects": action.objects]
+                    "documentObjects": action.objects,
+                    "workspaceBodies": bodies, "workspaceRows": action.workspaceRows,
+                    "workspaceRowCapacity": action.workspaceCapacity]
         }
     }
 

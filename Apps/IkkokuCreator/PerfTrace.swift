@@ -122,6 +122,8 @@ final class PerfTrace {
         case studioWindow, studioWorkspace, studioWorkspaceRow, studioToolbar, studioTimeline, studioInspector, studioStatus
         case objectInspector, objectInspectorContent, objectInspectorSection, poseInspector, sourcePoseInspector, sourceAnimationInspector, faceInspector, clothesInspector, sceneInspector
         case makerWindow, makerRigPanel, makerShapeRow
+        /// #410: an empty workspace slot, past the scene's rows (`WorkspaceSlot`).
+        case studioWorkspacePlaceholder
 
         var name: String { String(describing: self) }
     }
@@ -391,6 +393,13 @@ final class PerfTrace {
     static func body(_ view: ViewBody) {
         guard let trace = active, trace.recording else { return }
         trace.bodyCounts[view.rawValue] += 1
+    }
+
+    /// How many bodies of `view` this recording has counted so far: 0 when no
+    /// trace records. The workload reads it per action (#410).
+    static func bodyCount(_ view: ViewBody) -> Int {
+        guard let trace = active, trace.recording else { return 0 }
+        return trace.bodyCounts[view.rawValue]
     }
 
     // MARK: Recording window
