@@ -43,6 +43,18 @@ class StudioSceneContractTests(unittest.TestCase):
         self.assertTrue(result["roots"]["10"]["enableFK"] and result["roots"]["10"]["enableIK"])
 
 
+    def test_strings_keep_a_leading_bom_and_round_trip(self):
+        # #418 mirror: BinaryReader.ReadString keeps a leading EF BB BF as U+FEFF; writing it back is byte-identical.
+        for value in ("\ufeff", "\ufeffFolder", "\ufeff" + "y" * 200):
+            writer = Writer(); writer.s(value)
+            reader = Reader(bytes(writer.data))
+            read = reader.s()
+            self.assertEqual((read, reader.pos), (value, len(writer.data)))
+            again = Writer(); again.s(read)
+            self.assertEqual(again.data, writer.data)
+        with self.assertRaises(ValueError):
+            Reader(b"\x05\xef\xbb\xbf\xc0\x80").s()
+
     def test_the_depth_cap_matches_the_swift_reader(self):
         # #326: KoikatsuBinaryReader.maximumLevels, roots at depth 0.
         self.assertEqual(MAX_LEVELS, 200)
