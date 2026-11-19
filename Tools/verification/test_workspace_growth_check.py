@@ -1,5 +1,5 @@
 """Self-tests for workspace_growth_check.py (#410): the heap -s reader, the
-load count, the frozen bar and the snapshot retry. No app is needed; the heap output is synthetic
+load count, the frozen bar, the snapshot retry, and v2.1's box rows and flags. No app is needed; the heap output is synthetic
 text in the shape `heap -s` writes."""
 
 import os
@@ -38,15 +38,27 @@ def report(loads_at, begin=3.5):
 
 
 class ParseHeapTests(unittest.TestCase):
-    def test_reads_the_five_types_exactly(self):
+    def test_reads_the_types_and_every_box_exactly(self):
         counts = check.parse_heap(HEAP)
         self.assertEqual(counts, {"NSKeyValueDependency": 6230, "NSKeyValueDependencyContext": 4773,
                                   "__NSMallocBlock__": 5396, "__NSExactBlockVariable__": 4824,
-                                  "AnyHashableBox<UUID>": 4120})
+                                  "AnyHashableBox<Foundation.UUID>": 4120, "AnyHashableBox<Swift.Int>": 0,
+                                  "AnyHashableBox<SwiftUI.UniqueID>": 258,
+                                  "AnyHashableBox<Swift.Optional<Foundation.UUID>>": 9})
 
     def test_missing_type_counts_zero(self):
         text = "\n".join(line for line in HEAP.splitlines() if "Foundation.UUID>  Swift" not in line)
-        self.assertEqual(check.parse_heap(text)["AnyHashableBox<UUID>"], 0)
+        self.assertEqual(check.parse_heap(text)["AnyHashableBox<Foundation.UUID>"], 0)
+
+    def test_a_box_from_another_build_counts_in_the_same_row(self):
+        text = HEAP + "     700      22400      32.0   SwiftUI.(_AnyHashableBox in $1d0f00000)<Swift.Int>  Swift   SwiftUI\n"
+        self.assertEqual(check.parse_heap(text)["AnyHashableBox<Swift.Int>"], 700)
+
+    def test_reads_every_class_for_the_flags(self):
+        classes = check.parse_classes(HEAP)
+        self.assertEqual(classes["NSKeyValueDependencyInfo"], 146)
+        self.assertEqual(classes["NSKeyValueDependencyInfo._classInfo (struct NSDPClassInfo)"], 50)
+        self.assertIsNone(check.parse_classes("heap: could not enumerate zone\n"))
 
     def test_output_without_a_class_table_is_unreadable(self):
         self.assertIsNone(check.parse_heap("heap: could not enumerate zone\n"))
@@ -65,7 +77,9 @@ class CountLoadsTests(unittest.TestCase):
 
 class JudgeTests(unittest.TestCase):
     def counts(self, value):
-        return {name: value for name, _ in check.TYPES}
+        counts = {name: value for name, _ in check.TYPES}
+        counts.update({name: value for name in check.ALWAYS_BOXES})
+        return counts
 
     def test_the_bar_is_frozen(self):
         self.assertEqual((check.PER_LOAD, check.SCENE_ALLOWANCE, check.MIN_LOADS), (1, 64, 40))
@@ -87,13 +101,46 @@ class JudgeTests(unittest.TestCase):
 
     def test_one_type_over_the_bar_fails(self):
         late = self.counts(800)
-        late["AnyHashableBox<UUID>"] = 800 + 105
+        late["AnyHashableBox<Foundation.UUID>"] = 800 + 105
         self.assertEqual(check.judge(self.counts(800), late, 40)[0], "fail")
+
+    def test_the_growth_moved_to_int_boxes_fails(self):
+        # #410 B (gc-b): UUID boxes flat, Int boxes 666 -> 2906 over 56 loads.
+        early, late = self.counts(800), self.counts(800)
+        early["AnyHashableBox<Swift.Int>"], late["AnyHashableBox<Swift.Int>"] = 666, 2906
+        verdict, rows = check.judge(early, late, 56)
+        self.assertEqual(verdict, "fail")
+        self.assertEqual([row["type"] for row in rows if not row["ok"]], ["AnyHashableBox<Swift.Int>"])
+
+    def test_a_box_only_in_one_snapshot_is_judged(self):
+        late = dict(self.counts(800), **{"AnyHashableBox<Some.NewID>": 41 * 48})
+        verdict, rows = check.judge(self.counts(800), late, 48)
+        self.assertEqual(verdict, "fail")
+        row = [row for row in rows if row["type"] == "AnyHashableBox<Some.NewID>"][0]
+        self.assertEqual((row["early"], row["growth"], row["ok"]), (0, 41 * 48, False))
 
     def test_too_few_loads_or_an_unread_snapshot_is_invalid(self):
         self.assertEqual(check.judge(self.counts(800), self.counts(800), 39)[0], "invalid")
         self.assertEqual(check.judge(None, self.counts(800), 48)[0], "invalid")
         self.assertEqual(check.judge(self.counts(800), None, 48)[0], "invalid")
+
+
+class FlagTests(unittest.TestCase):
+    def test_other_classes_growing_by_the_bar_are_flagged_largest_first(self):
+        early = {"NSKeyValueDependency": 800, "Some.Container": 100, "Other.Cache": 10, "Steady": 500}
+        late = {"NSKeyValueDependency": 4000, "Some.Container": 100 + 112, "Other.Cache": 10 + 300, "Steady": 520}
+        out = check.flags(early, late, 48)
+        self.assertEqual([(row["type"], row["growth"], row["bar"]) for row in out],
+                         [("Other.Cache", 300, 112), ("Some.Container", 112, 112)])
+
+    def test_rows_are_not_flagged_and_a_class_new_in_late_is(self):
+        early = {"SwiftUI.(_AnyHashableBox in $23c934774)<Swift.Int>": 0}
+        late = {"SwiftUI.(_AnyHashableBox in $23c934774)<Swift.Int>": 5000, "New.Thing": 200}
+        self.assertEqual([row["type"] for row in check.flags(early, late, 48)], ["New.Thing"])
+
+    def test_no_flags_without_a_valid_window(self):
+        self.assertEqual(check.flags(None, {"A": 9999}, 48), [])
+        self.assertEqual(check.flags({"A": 0}, {"A": 9999}, 39), [])
 
 
 class SnapshotTests(unittest.TestCase):
