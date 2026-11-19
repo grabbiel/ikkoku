@@ -1235,3 +1235,30 @@ private final class SeedChargeDecoder: SourceRigDecoding {
     print("sourceMakerImportSeeding files=\(files) otherHeadFiles=\(otherHeadFiles) variantFiles=\(variantFiles.count)"
           + " maleFiles=\(maleFiles.count) controlAdmitted=\(ledger.maximumEntries - files)")
 }
+
+/// #332: a pooled read's bytes are freed with its `Data` on a thread that
+/// turns no run loop (a test body, like the main actor during a Maker card
+/// import). The probe is the bytes' address, because a `Data` bridged to
+/// `NSData` is a new wrapper that a weak reference cannot tie to the read's
+/// own object. The bytes count as held while `malloc_size` reports their
+/// block and it still starts with this test's random sentinel (a freed block
+/// may be reused by another test). Control: a plain `read(upToCount:)`
+/// leaves them in the thread's autorelease pool after its `Data` is gone.
+@Test(arguments: [true, false])
+func pooledReadFreesItsBytesWithItsData(pooled: Bool) throws {
+    let url = FileManager.default.temporaryDirectory.appendingPathComponent("pooled-read-\(UUID().uuidString).bin")
+    defer { try? FileManager.default.removeItem(at: url) }
+    let sentinel = (0..<64).map { _ in UInt8.random(in: 0...255) }
+    let size = 3 << 20
+    try Data(sentinel + [UInt8](repeating: 7, count: size - sentinel.count)).write(to: url)
+    let handle = try FileHandle(forReadingFrom: url); defer { try? handle.close() }
+    var address: UnsafeRawPointer?
+    do {
+        let data = try #require(pooled ? handle.pooledRead(upToCount: size + 1) : handle.read(upToCount: size + 1))
+        #expect(data.count == size)
+        address = data.withUnsafeBytes { UnsafeRawPointer($0.baseAddress) }
+    }
+    let bytes = try #require(address)
+    let held = malloc_size(bytes) > 0 && memcmp(bytes, sentinel, sentinel.count) == 0
+    #expect(held == !pooled, "pooled \(pooled): the read's bytes are \(held ? "still held" : "freed")")
+}
