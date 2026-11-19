@@ -23,7 +23,7 @@ branch was tested or every asset matches the original game. Feature status,
 specific comments and pending tasks are in the linked reports. Shared behavior
 may be discussed in more than one report; one primary owner is listed here.
 
-**1117 files indexed; 1117 assigned; 0 unassigned.**
+**1118 files indexed; 1118 assigned; 0 unassigned.**
 
 Counts include the website and clothes-group additions listed below. Runtime and
 test totals include their specialized role descriptions; this is inventory
@@ -32,7 +32,7 @@ bookkeeping, not a new full source audit.
 | Primary report | Files |
 | --- | ---: |
 | [App / gameplay / plugins](app-gameplay-and-plugins.md) | 110 |
-| [Character / Maker / mods](character-and-mods.md) | 141 |
+| [Character / Maker / mods](character-and-mods.md) | 142 |
 | [Studio / IK / animation](studio.md) | 264 |
 | [Renderer / foundation / assets](renderer-and-foundation.md) | 369 |
 | [Toolchain / verification / historical docs](toolchain-and-verification.md) | 223 |
@@ -45,7 +45,7 @@ bookkeeping, not a new full source audit.
 | Documentation / historical evidence | 65 |
 | Generated asset / catalog / fixture | 205 |
 | Reference host / controlled fixture | 39 |
-| Runtime / shared shader declaration | 241 |
+| Runtime / shared shader declaration | 242 |
 | Test / validation | 241 |
 | Public synthetic body/face input fixture | 1 |
 
@@ -184,6 +184,7 @@ Feature assessment: [character-and-mods.md](character-and-mods.md).
 | [Packages/Engine/Sources/Assets/SourceModCatalog.swift](../../Packages/Engine/Sources/Assets/SourceModCatalog.swift) | Runtime / shared shader declaration |
 | [Packages/Engine/Sources/Assets/SourceModPackage.swift](../../Packages/Engine/Sources/Assets/SourceModPackage.swift) | Runtime / shared shader declaration |
 | [Packages/Engine/Sources/Assets/SourceModProfile.swift](../../Packages/Engine/Sources/Assets/SourceModProfile.swift) | Runtime / shared shader declaration |
+| [Packages/Engine/Sources/Assets/SourceMonoWhiteChars.swift](../../Packages/Engine/Sources/Assets/SourceMonoWhiteChars.swift) | Runtime / shared shader declaration |
 | [Packages/Engine/Sources/Character/AssetLibrary.swift](../../Packages/Engine/Sources/Character/AssetLibrary.swift) | Runtime / shared shader declaration |
 | [Packages/Engine/Sources/Character/BodyCoverage.swift](../../Packages/Engine/Sources/Character/BodyCoverage.swift) | Runtime / shared shader declaration |
 | [Packages/Engine/Sources/Character/CardIO.swift](../../Packages/Engine/Sources/Character/CardIO.swift) | Runtime / shared shader declaration |

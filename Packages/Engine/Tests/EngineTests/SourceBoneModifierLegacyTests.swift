@@ -28,25 +28,37 @@ private func legacyBits(_ text: String) -> UInt32? {
     return value.bitPattern
 }
 
-@Test func sourceBoneModifierLegacySplitsOnTheDotNetWhitespaceSetOnly() throws {
+@Test func sourceBoneModifierLegacySplitsOnMonoWhiteCharsOnly() throws {
     // aa has 8 fields; when a separator does not split, bb joins aa's field 7,
     // which is never read, and only aa remains.
     let a = legacyToken("aa", length: "2", extra: ["0"]), b = legacyToken("bb", "3", "3", "3", length: "3")
-    let splitting = [" ", "\n", "\r\n", "\r", "\t", "\u{0B}", "\u{0C}", "\u{85}", "\u{A0}", "\u{1680}", "\u{180E}",
-                     "\u{2000}", "\u{2005}", "\u{200A}", "\u{2028}", "\u{2029}", "\u{202F}", "\u{205F}", "\u{3000}", " \r\n\t  "]
+    // The 17 separators checked in the original player (#403, #417): true when
+    // the original split there.
+    let observed: [(UInt32, Bool)] = [
+        (0x0009, true), (0x000B, true), (0x001C, false), (0x001F, false), (0x0085, true), (0x00A0, true),
+        (0x1680, true), (0x180E, false), (0x2000, true), (0x200A, true), (0x200B, true), (0x2028, true),
+        (0x2029, true), (0x202F, true), (0x205F, true), (0x3000, true), (0xFEFF, true),
+    ]
+    #expect(observed.count == 17)
+    for (scalar, splits) in observed {
+        let separator = String(Character(Unicode.Scalar(scalar)!))
+        let decoded = try SourceBoneModifiers.decodeLegacyText(a + separator + b)
+        #expect(decoded.modifiers.map(\.boneName) == (splits ? ["aa", "bb"] : ["aa"]), "U+\(String(scalar, radix: 16))")
+        #expect(decoded.modifiers.first?.coordinateModifiers.map(\.lengthModifier) == [2])
+        #expect(decoded.diagnostics?.isEmpty == true)
+    }
+    // The rest of the set, and runs of separators at either end.
+    let splitting = [" ", "\n", "\r\n", "\r", "\t", "\u{0C}", "\u{2005}", "\u{FEFF}\u{200B}", " \r\n\t  "]
     for separator in splitting {
         let decoded = try SourceBoneModifiers.decodeLegacyText(separator + a + separator + separator + b + separator)
         #expect(decoded.modifiers.map(\.boneName) == ["aa", "bb"], "\(separator.unicodeScalars.map(\.value))")
         #expect(decoded.diagnostics?.isEmpty == true)
     }
-    // char.IsWhiteSpace excludes U+001C-U+001F (Python's str.split includes
-    // them), U+200B and U+FEFF.
-    for separator in ["\u{1C}", "\u{1D}", "\u{1E}", "\u{1F}", "\u{200B}", "\u{FEFF}"] {
-        let decoded = try SourceBoneModifiers.decodeLegacyText(a + separator + b)
-        #expect(decoded.modifiers.map(\.boneName) == ["aa"], "\(separator.unicodeScalars.map(\.value))")
-        #expect(decoded.modifiers.first?.coordinateModifiers.map(\.lengthModifier) == [2])
+    // Python's str.split would also split on U+001D and U+001E.
+    for separator in ["\u{1D}", "\u{1E}"] {
+        #expect(try SourceBoneModifiers.decodeLegacyText(a + separator + b).modifiers.map(\.boneName) == ["aa"])
     }
-    #expect(SourceBoneModifiers.legacyWhitespace.count == 26)
+    #expect(SourceBoneModifiers.legacyWhitespace.count == 27)
 }
 
 @Test func sourceBoneModifierLegacyFieldCountsKeepEmptyFields() throws {

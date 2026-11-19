@@ -118,7 +118,7 @@ The text is a list of tokens, each `field0,name,field2,x,y,z[,length]`:
 
 | Step | Original | Native |
 | --- | --- | --- |
-| Tokens | `text.Split()` with no separators, then `Trim()`; empty tokens are dropped | split on the `char.IsWhiteSpace` set below |
+| Tokens | `text.Split()` with no separators, then `Trim()`; empty tokens are dropped | split on Mono's `String.WhiteChars` set below |
 | Fields | `Split(',')`, empty fields kept; tokens with fewer than 6 fields dropped | same |
 | Group key | the name (field 1) without a trailing `__<one character>`: it is trimmed when its UTF-16 units `[len-2]` and `[len-3]` are both `_` | same, in UTF-16 units |
 | Group order | `GroupBy`: first occurrence | same |
@@ -140,11 +140,11 @@ Whole-card outcomes:
 Divergences and `[corlib]` assumptions. Mono's corlib (`string.Split`, `string.Trim`, `float.Parse`) is not in the recovered set. Where a rule depends on it, the documented .NET behaviour is used. The original player's results for each are from the #403 phase in [Checked against the original](#checked-against-the-original):
 
 - **Culture.** The original parses with the current culture and orders names with a culture-sensitive comparer. The native decoder parses with the invariant culture (`.` decimal) and orders by ordinal UTF-16. Fields are split on `,`, so a comma-decimal culture would split the numbers themselves: the original's own field count needs the `.` decimal. The two orderings agree on the suffix forms in use (none, or `__` plus a digit). They differ only for other suffix characters, for example `__A` against `__a` or `___`. Observed in the original player: the group `cc` with the names `cc__a`, `cc___`, `cc__A`, `cc__1`, `cc__0`, `cc__2`, `cc__3`, in that input order, is read in the order `cc___`, `cc__0`, `cc__1`, `cc__2`, `cc__3`, `cc__a`, `cc__A`. The native ordinal order is `cc__0`, `cc__1`, `cc__2`, `cc__3`, `cc__A`, `cc___`, `cc__a`.
-- **Whitespace** `[corlib]`: `char.IsWhiteSpace`, spelled out as U+0009–U+000D, U+0020, U+0085, U+00A0, U+1680, U+180E, U+2000–U+200A, U+2028, U+2029, U+202F, U+205F and U+3000. U+180E is included because Mono's Unicode data predates its move out of Zs. U+001C–U+001F, U+200B and U+FEFF do not separate tokens; Python's `str.split()` would split on U+001C–U+001F, so the converter uses this explicit set. Checked in the original player on 17 separators, each placed between two tokens: U+0009, U+000B, U+001C, U+001F, U+0085, U+00A0, U+1680, U+180E, U+2000, U+200A, U+200B, U+2028, U+2029, U+202F, U+205F, U+3000 and U+FEFF. Fourteen agree with this set. Three differ, so the original's `Split()` is not `char.IsWhiteSpace` for them:
-  - U+180E does not separate tokens in the original;
-  - U+200B and U+FEFF do.
+- **Whitespace.** `string.Split()` with no separators is not `char.IsWhiteSpace` in this Mono. It splits on `String.WhiteChars` (Unity-Technologies/mono, branch `unity-5.6`, `mcs/class/corlib/System/String.cs`), whose `NET_2_0` and `NET_2_1` blocks are both compiled in. The game's own `mscorlib.dll` (SHA-256 `37e0d42a…`) holds that 27-entry table in source order:
+  - U+0009–U+000D, U+0020, U+0085, U+00A0 and U+1680;
+  - U+2000–U+200B, U+2028, U+2029, U+202F, U+205F, U+3000 and U+FEFF.
 
-  The native set is unchanged for now; #417 aligns it with the original. Only tokens containing these three characters read differently, and the corpus separates tokens with CR+LF only.
+  `Trim()` (`FindNotWhiteSpace`) uses the same set, so trimming a token never changes it. U+180E and U+001C–U+001F do not separate tokens; Python's `str.split()` would split on U+001C–U+001F, so the converter uses this explicit set. The original player was checked on 17 separators, each placed between two tokens: U+0009, U+000B, U+001C, U+001F, U+0085, U+00A0, U+1680, U+180E, U+2000, U+200A, U+200B, U+2028, U+2029, U+202F, U+205F, U+3000 and U+FEFF. This set reproduces all 17. The first native set (#403) was `char.IsWhiteSpace` and differed on U+180E, U+200B and U+FEFF; #417 aligned it. The corpus separates tokens with CR+LF only.
 - **Number grammar** `[corlib]`: `NumberStyles.Float | AllowThousands`, invariant. A token has no whitespace or commas left, so the accepted forms are `[+-]?(d+(.d*)?|.d+)([eE][+-]?d+)?` and the case-sensitive symbols `Infinity`, `-Infinity` and `NaN`. Only ASCII digits are accepted. The value is parsed as a double, then rounded to float32, as Mono does. `-0` keeps its sign. Checked in the original player on 22 strings:
   - The 11 finite strings give the same float32 bits, including `1e-45`, `1e-50`, `3.4028234663852886e38`, and `1.0000000596046448` → `3f800000`, which is a double-rounding case.
   - The 6 strings this grammar rejects (`infinity`, `+Infinity`, `0x10`, `1e`, a full-width digit and `1_0`) are skipped by the original too.
@@ -340,8 +340,9 @@ selection, identity/reset behavior, repeated application, signed scale without
 rotation, scope filtering, ambiguous/missing targets, and unsupported dynamics.
 It includes the two-negative-authored-scale regression.
 `SourceBoneModifierLegacyTests.swift` and the Python `LegacyABMXTests` cover the
-card-v1 rules case for case, on synthetic text: the whitespace set (including
-U+001C–U+001F, which do not split), field counts, suffix trimming in UTF-16,
+card-v1 rules case for case, on synthetic text: the whitespace set (the 17
+separators checked in the original player, and U+001C–U+001F, which do not
+split), field counts, suffix trimming in UTF-16,
 group and in-group order, the last-7/last-1 rule, parse failures, the number
 grammar as float32 bit patterns, non-finite and out-of-range refusals, the
 whole-card drop, limits, the card bridge and an apply equal to the matching
@@ -435,6 +436,6 @@ unknown sibling payloads. CMT-05 in the linked audit defines acceptance.
 - **Nine synthetic texts,** read by ABMX's own reader:
   - These match: token counts and the last-7/last-1 rule, field counts and empty fields, the two whole-card drops (an empty list, the exception caught and logged) and blank text.
   - These are the documented divergences, recorded in [Card v1 legacy text](#card-v1-legacy-text): number range, non-finite values and culture order.
-  - Whitespace differs on 3 of 17 separators (#417).
+  - Whitespace: 14 of 17 separators agreed with the first native set. #417 aligned the other 3 (U+180E, U+200B and U+FEFF) with the original's `String.WhiteChars`, so all 17 now agree.
 
 **Not checked against the original:** accessory locations, coordinate (outfit) records, the dynamic-baseline families, `BoneEffect` callbacks, and saving to a card or coordinate file.
