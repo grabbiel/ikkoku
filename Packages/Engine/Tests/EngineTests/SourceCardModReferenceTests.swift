@@ -35,8 +35,12 @@ private enum ResolverFixture {
     #expect(value.property == "Access.id" && value.category == 122 && value.author == "Author")
     #expect(value.website == nil && value.name == "Name" && value.preservedData == bytes)
     #expect(value.sourceSHA256 == SHA256.hash(data: bytes).map { String(format: "%02x", $0) }.joined())
-    let significant = try #require(ResolverFixture.decode([ResolverFixture.record(guid: "\u{200b}fixture.mod\u{feff}")]).records.first)
-    #expect(significant.modGUID == "\u{200b}fixture.mod\u{feff}")
+    // The setter's String.Trim() is Mono's String.WhiteChars: U+200B and U+FEFF
+    // are trimmed, U+180E is not (#419).
+    let zeroWidth = try #require(ResolverFixture.decode([ResolverFixture.record(guid: "\u{200b}fixture.mod\u{feff}")]).records.first)
+    #expect(zeroWidth.modGUID == "fixture.mod")
+    let significant = try #require(ResolverFixture.decode([ResolverFixture.record(guid: "\u{180e}fixture.mod")]).records.first)
+    #expect(significant.modGUID == "\u{180e}fixture.mod")
 }
 
 @Test func sourceCardResolverFormatterDefaultsAndLastValidatedDuplicateWins() throws {
@@ -121,7 +125,7 @@ private enum ResolverFixture {
     #expect(try references.report(destinations: nil).resolutions.first?.status == "metadataOnly")
     #expect(try references.report(destinations: destinations).resolutions.first?.status == "libraryNotLoaded")
     #expect(try references.report(destinations: destinations, library: library).resolutions.first?.status == "catalogUnavailable")
-    for guid in ["missing.mod", "Fixture.mod", "\u{200b}fixture.mod"] {
+    for guid in ["missing.mod", "Fixture.mod", "\u{180e}fixture.mod", "fixture.\u{200b}mod"] {
         let missing = try ResolverFixture.decode([ResolverFixture.record(guid: guid)])
         #expect(try missing.report(destinations: destinations, library: library, catalog: catalog).resolutions.first?.status == "modNotMounted")
     }
@@ -130,14 +134,27 @@ private enum ResolverFixture {
     #expect(throws: (any Error).self) { try references.report(destinations: destinations + destinations) }
 }
 
-@Test func sourceModCatalogResolverKeepsSourceGUIDWhitespaceAndOrdinalIdentity() throws {
+@Test func sourceModCatalogResolverTrimsMonoWhiteCharsAndKeepsOrdinalIdentity() throws {
     let directory = try catalogTestDirectory(); defer { try? FileManager.default.removeItem(at: directory) }
     let library = try SourceModLibrary(packages: [catalogTestPackage(directory, guid: "fixture.\u{e9}", csvs: ["122\n0\ntarget\nID,Name\n7,fixture\n"])])
     let catalog = try SourceModCatalog(library: library, contract: catalogTestContract())
     #expect(catalog.resolve(modGUID: " \u{85}fixture.\u{e9}\u{3000}", category: 122, sourceSlot: 7) != nil)
     #expect(catalog.resolve(modGUID: "fixture.e\u{301}", category: 122, sourceSlot: 7) == nil)
-    #expect(catalog.resolve(modGUID: "\u{200b}fixture.\u{e9}", category: 122, sourceSlot: 7) == nil)
-    #expect(SourceModCatalog.trimSourceGUID("\u{3000}\u{85}\n").isEmpty)
+    // Mono's String.Trim() removes U+200B and U+FEFF (String.WhiteChars), not
+    // U+180E, and only at the ends.
+    #expect(catalog.resolve(modGUID: "\u{200b}fixture.\u{e9}\u{feff}", category: 122, sourceSlot: 7) != nil)
+    #expect(catalog.resolve(modGUID: "\u{180e}fixture.\u{e9}", category: 122, sourceSlot: 7) == nil)
+    #expect(catalog.resolve(modGUID: "fixture.\u{200b}\u{e9}", category: 122, sourceSlot: 7) == nil)
+    #expect(SourceModCatalog.trimSourceGUID("\u{3000}\u{85}\n\u{200b}\u{feff}").isEmpty)
+    #expect(SourceModCatalog.trimSourceGUID("\u{1c}a\u{1f}") == "\u{1c}a\u{1f}")
+}
+
+@Test func sourceModPackageTrimsTheManifestGUIDAsSideloaderDoes() throws {
+    let directory = try catalogTestDirectory(); defer { try? FileManager.default.removeItem(at: directory) }
+    // Manifest.cs: GUID = ...Value.Trim(), then accepted.
+    let package = try catalogTestPackage(directory.appendingPathComponent("trimmed"), guid: "\u{200b} fixture.mod\u{feff}\n", csvs: [])
+    #expect(package.source.guid == "fixture.mod")
+    #expect(throws: SourceModError.self) { try catalogTestPackage(directory.appendingPathComponent("blank"), guid: "\u{feff} \u{200b}", csvs: []) }
 }
 
 private struct ResolverOracle: Decodable {
