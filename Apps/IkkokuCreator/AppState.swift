@@ -855,10 +855,17 @@ final class AppState {
                     orbit = ["turns": turns, "target": [base.target.x, base.target.y, base.target.z],
                              "distance": base.distance, "pitch": base.pitch, "fovDegrees": base.fovDegrees]
                 }
+                // Maps slice 5: `IKKOKU_BENCHMARK_MAP_SHADOW=every-frame` redraws the map
+                // sun's shadow map in every measured frame (the change frame's cost).
+                let shadowEveryFrame = env["IKKOKU_BENCHMARK_MAP_SHADOW"] == "every-frame"
+                host.renderer.redrawsMapShadowEveryFrame = shadowEveryFrame
                 let report = try host.renderer.benchmark(frame: frame, width: w, height: h,
                     warmupFrames: warmup, measuredFrames: measured, camera: camera)
+                host.renderer.redrawsMapShadowEveryFrame = false
                 let encoder = JSONEncoder(); encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
                 var document = try JSONSerialization.jsonObject(with: encoder.encode(report)) as! [String: Any]
+                document["mapShadowEveryFrame"] = shadowEveryFrame
+                document["mapShadowMap"] = host.renderer.hasMapShadowMap
                 if var orbit {
                     orbit["sampleYaws"] = yaws.values
                     document["orbit"] = orbit

@@ -38,6 +38,8 @@
   "IKKOKU_SHADER_BINDING_PROBE": "/absolute/path/to/r1c/probe",
   "IKKOKU_SHADER_BINDING_SUPPLEMENT": "/absolute/path/to/r1-live-bindings/supplement.json",
   "IKKOKU_SHAPE_CONTRACT": "/absolute/path/to/reverse/rigs/character-shape-contract.json",
+  "IKKOKU_SLIDER_ORACLE": "/absolute/path/to/slider-unlock/oracle",
+  "IKKOKU_SLIDER_ORACLE_CASES": "/absolute/path/to/slider-unlock/oracle/cases.tsv",
   "IKKOKU_SOURCE_AVATAR": "/absolute/path/to/reverse/rigs/source-avatar.json",
   "IKKOKU_SOURCE_CARD_FIXTURE": "/absolute/path/to/reverse/cards/synthetic-current.png",
   "IKKOKU_SOURCE_CARD_ORACLE": "/absolute/path/to/reverse/cards/synthetic-current.json",

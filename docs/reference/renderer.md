@@ -719,6 +719,40 @@ pre-skin values because a unique transformed normal is unavailable. Position and
 usable tangent transforms still apply, allowing intentional zero-scale geometry;
 nonfinite transformed positions retain their pre-skin position.
 
+**Zero and negative scales (#404).** An extended face slider can give a face
+target a zero or negative scale, which Unity's `Transform.SetLocalScale`
+accepts. A basis is singular when the |det| of its upper-left 3×3 is at most
+`Transform.singularDeterminant` (1e-12, the mesh-world bound `Rig.evaluate`
+already used). Each site below keeps its previous formula, bit for bit, above
+that bound. A test compares them over random nonsingular matrices, reflections
+included, and over the fixture rigs.
+
+- `Rig.evaluate` skins a renderer with a singular mesh world in rig space. Its
+  palette is `world · inverseBind`, it draws with the identity model, and it is
+  listed in `RigEvaluation.collapsedSkins`. This is how Unity's
+  SkinnedMeshRenderer works: it skins from the bones and ignores its own
+  transform. The result is also the limit of `model · meshInverse · world ·
+  inverseBind` as det → 0. Hair under a collapsed HairParent therefore draws
+  flattened instead of being refused. Studio reports such renderers once in
+  its diagnostics.
+- `Transform.normalMatrix` uses the cofactor matrix times the determinant's sign
+  for a singular basis, the same construction as the deform kernel, scaled to a
+  largest entry of 1. It falls back to the identity when fewer than two columns
+  are independent. The toon, outline and live vertex shaders are unchanged, so
+  a normal the cofactor maps to zero on a zero-scale non-character item is
+  still left to them (#407).
+- The source shaders' `unity_WorldToObject` uses `Transform.inverseSafe`. For a
+  singular basis each column `c` becomes the row `c / |c|²`, and a column no
+  longer than 1e-5 becomes 0, as in Unity's `Vector3f` InverseSafe. A collapsed
+  axis maps to 0.
+- Eye look divides by lossyScale through the same InverseSafe. A collapsed eye
+  node reads its rotation from the axes that remain. lossyScale stays unsigned,
+  because the recovered source does not confirm where Unity's lossyScale keeps
+  a negative sign.
+- DynamicBone still refuses a zero or negative local scale on its chain, and the
+  message names #404; signed TRS is #406. A collapsed renderer that is not on
+  the chain is validated the same way `Rig.evaluate` treats it.
+
 ### DrawUniforms by instance (ST-T04 B0, 2026-11-18)
 
 `toon_vertex`, `outline_vertex`, `shadow_vertex` and `pick_vertex` take

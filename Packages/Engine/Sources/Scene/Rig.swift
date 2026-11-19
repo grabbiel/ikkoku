@@ -126,15 +126,33 @@ public struct RigDefinition: Sendable {
             world[index] = nodes[index].parent.map { world[$0] * local } ?? local
             guard Self.isFiniteAffine(world[index]) else { throw RigError.invalid("Pose hierarchy overflow at node \(index).") }
         }
+        var collapsed = Set<Int>()
         let palettes = try skins.enumerated().map { index, skin -> [float4x4] in
             let meshWorld = world[skin.meshNode]
-            guard abs(simd_determinant(meshWorld)) > 1e-12 else { throw RigError.invalid("Skin \(index) has a singular mesh transform.") }
-            let meshInverse = simd_inverse(meshWorld)
-            let matrices = zip(skin.joints, skin.inverseBindMatrices).map { meshInverse * world[$0] * $1 }
+            let matrices: [float4x4]
+            if Self.skinsInMeshSpace(meshWorld) {
+                let meshInverse = simd_inverse(meshWorld)
+                matrices = zip(skin.joints, skin.inverseBindMatrices).map { meshInverse * world[$0] * $1 }
+            } else {
+                // #404: a zero shape scale above the renderer (hair under
+                // HairParent, for one) leaves no mesh space to skin into.
+                // Unity's SkinnedMeshRenderer skins from the bones alone and
+                // ignores its own transform, so this skin's palette stays in
+                // rig space, drawn with the identity: the limit of
+                // meshWorld · meshInverse · world · inverseBind as det → 0.
+                collapsed.insert(index)
+                matrices = zip(skin.joints, skin.inverseBindMatrices).map { world[$0] * $1 }
+            }
             guard matrices.allSatisfy(Self.isFiniteAffine) else { throw RigError.invalid("Skin \(index) produced a nonfinite palette.") }
             return matrices
         }
-        return RigEvaluation(worldMatrices: world, palettes: palettes)
+        return RigEvaluation(worldMatrices: world, palettes: palettes, collapsedSkins: collapsed)
+    }
+
+    /// True when `evaluate` skins `meshWorld`'s renderer in mesh space; false
+    /// for a singular mesh world, whose palette stays in rig space (#404).
+    public static func skinsInMeshSpace(_ meshWorld: float4x4) -> Bool {
+        abs(simd_determinant(meshWorld)) > Transform.singularDeterminant
     }
 
     /// Every element is finite and the bottom row is (0, 0, 0, 1) within 1e-5.
@@ -160,6 +178,17 @@ public struct RigPose: Sendable {
 
 public struct RigEvaluation: Sendable {
     public let worldMatrices: [float4x4]
-    /// Mesh-local palettes. Draw with the corresponding mesh node's world matrix.
+    /// Mesh-local palettes, drawn with `model(skin:meshNode:)`.
     public let palettes: [[float4x4]]
+    /// Skins whose mesh world is singular (|det| at most
+    /// `Transform.singularDeterminant`, #404). Their palettes are in rig
+    /// space and draw with the identity model; the set is empty, with no
+    /// allocation, when every mesh world is regular.
+    public let collapsedSkins: Set<Int>
+
+    /// The model matrix `palettes[skin]` is drawn with: the renderer node's
+    /// world, or the identity for a collapsed skin.
+    public func model(skin: Int, meshNode: Int) -> float4x4 {
+        collapsedSkins.contains(skin) ? matrix_identity_float4x4 : worldMatrices[meshNode]
+    }
 }

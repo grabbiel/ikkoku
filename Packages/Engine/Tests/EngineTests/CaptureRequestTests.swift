@@ -420,6 +420,8 @@ private struct CaptureRecipe {
     #expect(problems("IKKOKU_BENCHMARK_ORBIT", "1", in: benchmark).isEmpty)
     #expect(problems("IKKOKU_BENCHMARK_ORBIT", "once", in: benchmark) == orbit)
     #expect(problems("IKKOKU_BENCHMARK_ORBIT", "1") == orbit)
+    #expect(problems("IKKOKU_BENCHMARK_MAP_SHADOW", "always", in: benchmark) == [["IKKOKU_BENCHMARK_MAP_SHADOW"]])
+    #expect(problems("IKKOKU_BENCHMARK_MAP_SHADOW", "every-frame", in: benchmark).isEmpty)
 
     // Mode-specific values: rig capture frames only the face preset, and native
     // scene capture always hides the grid and gizmos.

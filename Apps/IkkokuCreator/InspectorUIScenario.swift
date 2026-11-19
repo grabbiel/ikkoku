@@ -26,7 +26,12 @@ struct InspectorUIScenario: Decodable {
         /// that point of the selected route) and `"closeColorPanel"`. Added for
         /// #333: `"tab"` (`label`: shows that inspector tab, such as `clothes`) and
         /// `"addCharacter"` (`sex`: `female` or `male`; the toolbar's Add ▸ Character,
-        /// which adds a native character and selects it).
+        /// which adds a native character and selects it). Added for #383:
+        /// `"parentMenu"` (the Parent popup: closed it holds only the current parent;
+        /// opened, its options are the Picker's, None and then every object that is not
+        /// the selection or one of its descendants, in document order; with `key`, it
+        /// chooses that source key's object, or None for -1, and the document's parent
+        /// follows).
         let op: String
         let key: Int32?
         let keys: [Int32]?
@@ -225,6 +230,46 @@ struct InspectorUIScenario: Decodable {
                     record(step.op, false, "addCharacter: no new selected native character: \(studio.status)"); continue
                 }
                 record(step.op, true, "added native \(step.sex!) character \"\(added.name)\"")
+            case "parentMenu":
+                guard let id = studio.selection, let popup = Self.parentPopUp(in: window), let menu = popup.menu else {
+                    record(step.op, false, "no selection or no visible Parent popup"); continue
+                }
+                var problems: [String] = []
+                let doc = studio.doc
+                let current = doc.object(id)?.parent
+                let title = current.map { doc.object($0)?.name ?? "" } ?? "None"
+                if popup.numberOfItems != 1 || popup.titleOfSelectedItem != title {
+                    problems.append("closed: \(popup.numberOfItems) items, title '\(popup.titleOfSelectedItem ?? "-")', expected 1 item '\(title)'")
+                }
+                // What AppKit asks the delegate when the menu opens.
+                menu.delegate?.menuNeedsUpdate?(menu)
+                // The SwiftUI Picker's options, by the document's linear functions.
+                let options = doc.objects.filter { $0.id != id && !doc.isDescendant($0.id, of: id) }
+                let ids = menu.items.map { $0.representedObject as? UUID }
+                if menu.items.map(\.title) != ["None"] + options.map(\.name) || ids != [nil] + options.map(\.id) {
+                    problems.append("opened: \(menu.items.count) options, expected \(options.count + 1) in document order")
+                }
+                if (popup.selectedItem?.representedObject as? UUID) != current { problems.append("opened: the current parent is not the selected option") }
+                var chose = ""
+                if let key = step.key {
+                    let target: UUID? = key < 0 ? nil : object(key)?.id
+                    if let item = menu.items.first(where: { ($0.representedObject as? UUID) == target }), key < 0 || target != nil {
+                        popup.select(item)
+                        _ = popup.sendAction(popup.action, to: popup.target)
+                        chose = ", chose '\(item.title)'"
+                    } else { problems.append("no option for source key \(key)") }
+                }
+                menu.delegate?.menuDidClose?(menu)
+                await settle()
+                let after = studio.doc.object(id)?.parent
+                if let key = step.key, after != (key < 0 ? nil : object(key)?.id) {
+                    problems.append("parent after the choice is not source key \(key): \(studio.status)")
+                }
+                let afterTitle = after.map { studio.doc.object($0)?.name ?? "" } ?? "None"
+                if popup.numberOfItems != 1 || popup.titleOfSelectedItem != afterTitle {
+                    problems.append("closed again: \(popup.numberOfItems) items, title '\(popup.titleOfSelectedItem ?? "-")', expected 1 item '\(afterTitle)'")
+                }
+                record(step.op, problems.isEmpty, (problems + ["\(options.count + 1) options\(chose), parent '\(afterTitle)'"]).joined(separator: "; "))
             case "closeColorPanel":
                 if NSColorPanel.sharedColorPanelExists { NSColorPanel.shared.orderOut(nil) }
                 await settle()
@@ -341,6 +386,18 @@ struct InspectorUIScenario: Decodable {
         let top = nameField.convert(nameField.bounds, to: nil).minY
         let numbers = visibleTextFields(in: scope).filter { $0 !== nameField && $0.convert($0.bounds, to: nil).maxY <= top }
         return index < numbers.count ? numbers[index] : nil
+    }
+
+    /// The Object tab's visible Parent popup (`StudioParentPopUp`).
+    @MainActor static func parentPopUp(in window: NSWindow) -> NSPopUpButton? {
+        var found: NSPopUpButton?
+        func visit(_ v: NSView) {
+            if found == nil, let popup = v as? NSPopUpButton, popup.accessibilityLabel() == "Parent",
+               !popup.isHiddenOrHasHiddenAncestor, !popup.visibleRect.isEmpty { found = popup }
+            v.subviews.forEach(visit)
+        }
+        if let content = window.contentView { visit(content) }
+        return found
     }
 
     /// The colour wells in the window.

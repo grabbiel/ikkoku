@@ -22,7 +22,7 @@
         "IKKOKU_STUDIO_SCENARIO_REPORT": ".local/verification/reports/studio-scenario-visibility-folder.json"
       },
       "referenceTier": "app-smoke",
-      "tolerance": "Hides source object key 622 (folder), exports the original scene and reimports it: the folder reads back hidden and the character inside it stays visible. The CharaStudio side of ST-T03 visibility (reloading the exported scene in the original player) is not covered here.",
+      "tolerance": "Hides source object key 622 (folder), exports the original scene and reimports it: the folder reads back hidden and the character inside it stays visible. The CharaStudio side of ST-T03 visibility (reloading the exported scene in the original player) is not covered here. On the way (#387 round 3), the published workspace rows equal a full rebuild after each selection change: the character inside the hidden folder, the hidden folder, the same again and none before the export; after the reimport, shown again, renamed, and none.",
       "artifacts": [
         {
           "path": ".local/verification/reports/studio-scenario-visibility-folder.json",
@@ -98,6 +98,44 @@
         },
         {
           "path": ".local/verification/scenario-exports/face-shape.png",
+          "kind": "exported-scene"
+        }
+      ],
+      "timeout": 600
+    },
+    {
+      "id": "studio-scenario-extended-shape-rates",
+      "argv": [
+        ".local/build/Build/Products/Debug/Ikkoku.app/Contents/MacOS/Ikkoku"
+      ],
+      "fixtures": [
+        {
+          "env": "IKKOKU_SOURCE_SCENE",
+          "kind": "file",
+          "from": "IKKOKU_STUDIO_SCENARIO_SCENE"
+        },
+        {
+          "env": "IKKOKU_SOURCE_AVATAR",
+          "kind": "file"
+        }
+      ],
+      "env": {
+        "IKKOKU_STUDIO_SCENARIO": "Tools/verification/scenarios/extended-shape-rates.json",
+        "IKKOKU_STUDIO_SCENARIO_REPORT": ".local/verification/reports/studio-scenario-extended-shape-rates.json"
+      },
+      "referenceTier": "app-smoke",
+      "tolerance": "Slider Unlocker extended rates: sets body slot 0 on character key 65 to 1.5 and face slot 3 on key 0 to -0.25, exports the original scene and reimports it (the card check and the build accept the extended cards), then edits body slot 1 on the reimported extended card (slot 0 is resent as saved), exports and reimports again: every rate reads back within 1e-5. Byte identity of the shape arrays is the Engine test sourceCardEditingExtendedShapeRatesRoundTripByteForByte; the drawn pose is sourceShapeExtendedSlotsFollowTheRuleOnTheRecoveredContract. No original-player oracle yet (VM queue).",
+      "artifacts": [
+        {
+          "path": ".local/verification/reports/studio-scenario-extended-shape-rates.json",
+          "kind": "scenario-report"
+        },
+        {
+          "path": ".local/verification/scenario-exports/extended-shape-rates.png",
+          "kind": "exported-scene"
+        },
+        {
+          "path": ".local/verification/scenario-exports/extended-shape-rates-edited.png",
           "kind": "exported-scene"
         }
       ],
@@ -2484,6 +2522,44 @@
       "timeout": 600
     },
     {
+      "id": "studio-scenario-undo-scene-replacements",
+      "argv": [
+        ".local/build/Build/Products/Debug/Ikkoku.app/Contents/MacOS/Ikkoku"
+      ],
+      "fixtures": [
+        {
+          "env": "IKKOKU_SOURCE_SCENE",
+          "kind": "file",
+          "from": "IKKOKU_CAMERA_OBJECT_PROBE_SCENE"
+        },
+        {
+          "env": "IKKOKU_SOURCE_AVATAR",
+          "kind": "file"
+        }
+      ],
+      "env": {
+        "IKKOKU_STUDIO_SCENARIO": "Tools/verification/scenarios/undo-scene-replacements.json",
+        "IKKOKU_STUDIO_SCENARIO_REPORT": ".local/verification/reports/studio-scenario-undo-scene-replacements.json"
+      },
+      "referenceTier": "app-smoke",
+      "tolerance": "#384 undo history across scene replacements, on scene-x: a rename, then New Scene, Add Folder, Open of the saved scene, an Open refused after reading the file (an original-format scene), Import Scene of the saved scene (a merge) and a reimport of the exported original scene (an original scene import). Each replacement keeps only the scene it replaced: after New Scene and after the Open the history holds 2 steps; the refused Open changes neither the document nor the history; the merge adds a step and drops none; after the reimport two undos reach the opened scene and stop (0 undo, 2 redo), and two redos return. One assertRejected negative control proves the depth check fails on a wrong value. CharaStudio clears its whole history in InitScene; keeping one earlier scene is a deliberate difference (docs/reference/studio/scene-editing.md).",
+      "artifacts": [
+        {
+          "path": ".local/verification/reports/studio-scenario-undo-scene-replacements.json",
+          "kind": "scenario-report"
+        },
+        {
+          "path": ".local/verification/scenario-exports/undo-scene-replacements.png",
+          "kind": "saved-document"
+        },
+        {
+          "path": ".local/verification/scenario-exports/undo-scene-replacements-source.png",
+          "kind": "exported-scene"
+        }
+      ],
+      "timeout": 600
+    },
+    {
       "id": "studio-scenario-topology-reparent",
       "argv": [
         ".local/build/Build/Products/Debug/Ikkoku.app/Contents/MacOS/Ikkoku"
@@ -3239,6 +3315,36 @@
       "artifacts": [
         {
           "path": ".local/verification/reports/studio-scenario-inspector-kept-views.json",
+          "kind": "scenario-report"
+        }
+      ],
+      "timeout": 600
+    },
+    {
+      "id": "studio-scenario-inspector-parent-popup",
+      "argv": [
+        ".local/build/Build/Products/Debug/Ikkoku.app/Contents/MacOS/Ikkoku"
+      ],
+      "fixtures": [
+        {
+          "env": "IKKOKU_SOURCE_SCENE",
+          "kind": "file",
+          "from": "IKKOKU_STUDIO_SCENARIO_SCENE"
+        },
+        {
+          "env": "IKKOKU_SOURCE_AVATAR",
+          "kind": "file"
+        }
+      ],
+      "env": {
+        "IKKOKU_STUDIO_SCENARIO": "Tools/verification/scenarios/inspector-parent-popup.json",
+        "IKKOKU_STUDIO_SCENARIO_REPORT": ".local/verification/reports/studio-scenario-inspector-parent-popup.json"
+      },
+      "referenceTier": "app-smoke",
+      "tolerance": "#383 F3, in the window: the Object tab's Parent popup holds only the current parent while closed; opened, its options are the SwiftUI Picker's (None, then every object that is not the selection or one of its descendants, in document order) with the current parent selected; a choice reparents through StudioModel.setParent (item 623 under 962, then to the root), Undo restores the parent and the popup shows it.",
+      "artifacts": [
+        {
+          "path": ".local/verification/reports/studio-scenario-inspector-parent-popup.json",
           "kind": "scenario-report"
         }
       ],

@@ -1171,7 +1171,10 @@ public enum SourceShaderBindingDerivation {
             builder.setTexture("_MainTex", bodyComposite(draw: draw),
                                source: "ChaControl.CreateBodyTexture → customTexCtrlBody")
             apply(&builder, texture: "_overtex1", catalogTexture(423, table: "mt_nip", id: "body.nipId", key: "NipTex"), source: "ChaControl.ChangeSettingNip")
-            applyNumber(&builder, "_nipsize", "body.areolaSize", method: "ChangeSettingAreolaSize")
+            // The card load clamps areolaSize to 0...1 unless Slider Unlocker
+            // skips that check (`SourceShapeRateRange`); the setter writes it as is.
+            applyNumber(&builder, "_nipsize", "body.areolaSize", method: "ChangeSettingAreolaSize",
+                        transform: SourceShapeRateRange.configured.drawn)
             applyColor(&builder, "_overcolor1", "body.nipColor", method: "ChangeSettingNipColor")
             applyNumber(&builder, "_nip_specular", "body.nipGlossPower", method: "ChangeSettingNipGlossPower")
             apply(&builder, texture: "_overtex2", catalogTexture(424, table: "mt_underhair", id: "body.underhairId", key: "UnderhairTex"), source: "ChaControl.ChangeSettingUnderhair")

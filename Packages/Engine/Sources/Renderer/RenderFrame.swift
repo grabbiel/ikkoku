@@ -166,11 +166,86 @@ public struct RenderItem: Sendable {
     /// checks every condition). false (the default) keeps every other record,
     /// characters and maps included, on its own draw.
     public var staticItem: Bool = false
+    /// Maps slice 5: per-vertex receive bytes (1 = receives the map sun's
+    /// shadow) for a map mesh that mixes receivers, read under
+    /// `MaterialFlagMapReceivePerVertex`. nil (the default) for every other
+    /// draw, which binds the shared dummy and reads the material's flag.
+    public var vertexReceive: VertexBytes? = nil
 
     public init(mesh: MeshHandle, material: MaterialState, model: float4x4, objectID: UInt32,
                 deformKey: UInt64? = nil, skinSet: UInt64? = nil, morphWeights: [(index: Int, weight: Float)] = []) {
         self.mesh = mesh; self.material = material; self.model = model; self.objectID = objectID
         self.deformKey = deformKey; self.skinSet = skinSet; self.morphWeights = morphWeights
+    }
+}
+
+/// One byte per vertex of a mesh, owned by whoever built it (ST-A11 maps:
+/// the loaded map asset). A frame that names it keeps the buffer alive.
+public struct VertexBytes: @unchecked Sendable, Equatable {
+    public let buffer: any MTLBuffer
+    public init(buffer: any MTLBuffer) { self.buffer = buffer }
+    public static func == (a: VertexBytes, b: VertexBytes) -> Bool { a.buffer === b.buffer }
+}
+
+/// Maps slice 5: the loaded map's ambient and realtime sun for one frame
+/// (`map_fragment`, `MapLightingUniforms`), and the sun's shadow casters for
+/// the map shadow map. Built by the map's owner once per placement (record's
+/// map transform, sun type and map option); nil draws no map lighting.
+public struct MapLighting: Sendable {
+    /// Unity's seven SH constants (`unity_SHAr` … `unity_SHC`) in the engine
+    /// basis (z reflected). A flat-ambient map holds its colour in the three
+    /// constant terms.
+    public var sh: [Float4]
+    public var sun: Sun?
+    /// The sun's shadow casters (`Renderer.encodeMapShadow`); empty draws no
+    /// map shadow map, and nothing is shadowed.
+    public var casters: [MapShadowCaster] = []
+    /// World bounds of every caster: the map shadow map's depth range.
+    public var casterBounds: AABB = .empty
+    /// Names this placement's casters and sun. The renderer redraws the map
+    /// shadow map when it changes (and when the camera target moves away);
+    /// equal revisions must mean equal casters and sun.
+    public var revision: UInt64 = 0
+
+    public struct Sun: Sendable, Equatable {
+        /// Unit direction to the light, engine world.
+        public var directionToLight: Float3
+        /// `_LightColor0`: GammaToLinearSpace(colour × intensity), linear.
+        public var color: Float3
+        /// The light's shadow strength (1 − `_LightShadowData.r`); 0 when the
+        /// light casts no shadows.
+        public var shadowStrength: Float
+        /// The light's shadow bias and normal bias, in Unity's units (scaled by
+        /// the shadow map's world texel size when drawn).
+        public var shadowBias: Float = 0
+        public var shadowNormalBias: Float = 0
+        public init(directionToLight: Float3, color: Float3, shadowStrength: Float, shadowBias: Float = 0, shadowNormalBias: Float = 0) {
+            self.directionToLight = directionToLight; self.color = color; self.shadowStrength = shadowStrength
+            self.shadowBias = shadowBias; self.shadowNormalBias = shadowNormalBias
+        }
+    }
+
+    public init(sh: [Float4], sun: Sun?) {
+        precondition(sh.count == 7, "MapLighting needs Unity's seven SH constants")
+        self.sh = sh; self.sun = sun
+    }
+}
+
+/// One draw of the map shadow map: index runs of a mesh placed by `model`.
+public struct MapShadowCaster: Sendable {
+    public var mesh: MeshHandle
+    public var model: float4x4
+    /// (first index, index count) runs, in index order.
+    public var runs: [(first: Int, count: Int)]
+    /// Unity's cast mode On culls the faces turned away from the light; Two
+    /// Sided culls nothing.
+    public var twoSided: Bool
+    /// An alpha-tested caster's material (`map_shadow_fragment` clips its
+    /// base alpha × baseColor.a at params.w); nil for an opaque one.
+    public var alphaTest: MaterialState?
+
+    public init(mesh: MeshHandle, model: float4x4, runs: [(first: Int, count: Int)], twoSided: Bool, alphaTest: MaterialState? = nil) {
+        self.mesh = mesh; self.model = model; self.runs = runs; self.twoSided = twoSided; self.alphaTest = alphaTest
     }
 }
 
@@ -273,6 +348,8 @@ public struct RenderFrame: Sendable {
     public var gizmos: [GizmoBatch]
     public var effects: SceneEffects
     public var sceneBounds: AABB          // used to fit the shadow map
+    /// Maps slice 5: the loaded map's ambient and sun (nil: no map lighting).
+    public var mapLighting: MapLighting? = nil
     public var time: Double = 0
     // Metal resources support concurrent reference ownership. The snapshot never
     // mutates texture contents and its dictionary is copied with this frame value.
@@ -307,6 +384,13 @@ public struct RenderFrame: Sendable {
                     else { unresolved.insert(handle) }
                 }
             }
+        }
+        // Maps slice 5: an alpha-tested map shadow caster samples its base texture in the shadow pass.
+        for caster in mapLighting?.casters ?? [] {
+            guard let handle = caster.alphaTest?.base, snapshot[handle] == nil, !unresolved.contains(handle) else { continue }
+            if let retained = previous[handle] { snapshot[handle] = retained }
+            else if let texture = resources.texture(handle) { snapshot[handle] = RetainedTexture(texture: texture) }
+            else { unresolved.insert(handle) }
         }
         retainedTextures = snapshot
     }

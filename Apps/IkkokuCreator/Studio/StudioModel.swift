@@ -158,14 +158,21 @@ final class StudioModel: ViewportInputHandler, LivePacedHandler {
 
     /// Publishes the workspace, toolbar and timeline states (C4), each only
     /// when it differs. The workspace rows are rebuilt only when their inputs
-    /// changed (`workspaceKey`): building them copies every object, about
-    /// 0.1 ms a refresh in a 32-object scene.
+    /// changed (`workspaceKey`), and a change of the selection alone only
+    /// rewrites the rows' `selected` flags (#387 round 3): a rebuild was
+    /// 8-9 ms in a 3,769-object scene.
     private func refreshPanelState() {
         PerfTrace.measure(.studioPanelState, "StudioPanelState") {
             let key = workspaceKey()
-            if key != workspaceStateKey {
+            // `key != workspaceStateKey`, split into the rows' inputs and the
+            // selection; every field of `StudioWorkspaceKey` but `selection`
+            // goes in `rowsSame`.
+            let old = workspaceStateKey
+            let rowsSame = old.map { $0.items == key.items && $0.sceneSHA256 == key.sceneSHA256 && $0.activeCamera == key.activeCamera } ?? false
+            assert((rowsSame && old?.selection == key.selection) == (old == key), "StudioWorkspaceKey has a field refreshPanelState does not compare")
+            if !rowsSame || old?.selection != key.selection {
                 workspaceStateKey = key
-                let workspace = StudioWorkspaceState(model: self)
+                let workspace = rowsSame ? workspaceStateStorage.selecting(key.selection) : StudioWorkspaceState(model: self)
                 if workspace != workspaceStateStorage { withMutation(keyPath: \.workspaceState) { workspaceStateStorage = workspace } }
             }
             let toolbar = StudioToolbarDocumentState(model: self)
@@ -277,8 +284,12 @@ final class StudioModel: ViewportInputHandler, LivePacedHandler {
     @ObservationIgnored private var frameSerial: UInt64 = 0
     var captureSize: (Int, Int) { (doc.captureWidth, doc.captureHeight) }
     var sceneURL: URL?
-    private(set) var undoStack: [StudioDocument] = []
-    private(set) var redoStack: [StudioDocument] = []
+    /// The undo and redo steps (#384). A scene replacement (New Scene, Open,
+    /// an original scene import) keeps only the scene it replaced, not the
+    /// scenes before it; see `StudioUndoHistory`.
+    private var history = StudioUndoHistory<StudioDocument>()
+    var undoStack: [StudioDocument] { history.undoStack }
+    var redoStack: [StudioDocument] { history.redoStack }
     @ObservationIgnored private var instances: [UUID: CharacterInstance] = [:]
     @ObservationIgnored private var renderStatus = RenderStatusReporter()
     @ObservationIgnored private var sourceInstanceStorage: [UUID: SourceStudioCharacterPreview] = [:]
@@ -473,6 +484,9 @@ final class StudioModel: ViewportInputHandler, LivePacedHandler {
     @ObservationIgnored var sourceMapAsset: SourceStudioMapAsset?
     @ObservationIgnored var sourceMapLoad: SourceStudioMapLoad?
     @ObservationIgnored var sourceMapItems: [RenderItem]?
+    /// Maps slice 5: the request's ambient, sun and sun casters (nil for an
+    /// export without map lighting), placed with `sourceMapItems`.
+    @ObservationIgnored var sourceMapLighting: MapLighting?
     @ObservationIgnored var sourceMapFailure: Error?
     @ObservationIgnored var sourceMapInstallSeconds: Double = 0
     /// What `sourceMapLine` was last built from, so `refresh()` rebuilds it
@@ -601,13 +615,20 @@ final class StudioModel: ViewportInputHandler, LivePacedHandler {
     /// camera reads the same everywhere; any other object its name. The row
     /// draws `keyDetail` ("camera 2") under the name.
     func workspaceLabel(of object: StudioObject, sceneSHA256: String?) -> (title: String, keyDetail: String?, sourceCamera: Bool) {
-        guard let entry = sourceCameras[object.id], entry.sceneSHA256 == sceneSHA256 else { return (object.name, nil, false) }
+        workspaceLabel(id: object.id, name: object.name, sourceObjectKey: object.sourceObjectKey,
+                       sourceDuplicateOf: object.sourceDuplicateOf, sceneSHA256: sceneSHA256)
+    }
+    /// `workspaceLabel(of:sceneSHA256:)` from the fields it reads, for the
+    /// rows built in place (#387 round 3).
+    func workspaceLabel(id: UUID, name: String, sourceObjectKey: Int32?, sourceDuplicateOf: Int32?,
+                        sceneSHA256: String?) -> (title: String, keyDetail: String?, sourceCamera: Bool) {
+        guard let entry = sourceCameras[id], entry.sceneSHA256 == sceneSHA256 else { return (name, nil, false) }
         // A copy has no record key until export; it names the camera it copies.
-        if object.sourceObjectKey == nil, object.sourceDuplicateOf != nil {
-            return ("\(object.name) (copy of camera \(entry.objectKey))", "copy of camera \(entry.objectKey)", true)
+        if sourceObjectKey == nil, sourceDuplicateOf != nil {
+            return ("\(name) (copy of camera \(entry.objectKey))", "copy of camera \(entry.objectKey)", true)
         }
-        return (SourceStudioCameraLabel.title(name: object.name, key: entry.objectKey),
-                SourceStudioCameraLabel.keyDetail(name: object.name, key: entry.objectKey), true)
+        return (SourceStudioCameraLabel.title(name: name, key: entry.objectKey),
+                SourceStudioCameraLabel.keyDetail(name: name, key: entry.objectKey), true)
     }
     /// The inputs of `StudioWorkspaceState` (see `StudioWorkspaceKey`), read
     /// in place from the document without copying its objects.
@@ -2037,16 +2058,18 @@ final class StudioModel: ViewportInputHandler, LivePacedHandler {
 
     // MARK: Object management
 
-    func pushUndo(force: Bool = false) {
-        guard undoSteps.startsStep(at: Date(), force: force) else { return }
-        appendUndoSnapshot()
+    /// `replacingScene`: the caller is about to replace the whole document
+    /// (New Scene, Open, an original scene import), so the step is forced and
+    /// the scenes before the one it replaces leave the history (#384). A merge
+    /// into the current scene is an ordinary step.
+    func pushUndo(force: Bool = false, replacingScene: Bool = false) {
+        guard undoSteps.startsStep(at: Date(), force: force || replacingScene) else { return }
+        appendUndoSnapshot(replacingScene: replacingScene)
     }
 
     /// The document as it is now, as the newest undo step.
-    private func appendUndoSnapshot() {
-        undoStack.append(doc)
-        if undoStack.count > 60 { undoStack.removeFirst() }
-        redoStack.removeAll()
+    private func appendUndoSnapshot(replacingScene: Bool = false) {
+        history.record(doc, replacingScene: replacingScene)
     }
 
     /// Closes the edit-coalescing window, so the next edit takes its own undo
@@ -2083,7 +2106,7 @@ final class StudioModel: ViewportInputHandler, LivePacedHandler {
                 .init(blockedObjects: $0.blockedObjects, animationElapsed: sourceAnimationTime)
             })
             defer { plugins.abort() }
-            undoStack.removeLast(); redoStack.append(doc)
+            history.stepBack(leaving: doc)
             applyHistoryDocument(candidate, plugins: plugins, resources: resources)
             status = "Undo"
         } catch { status = "Plugin restore: \(error)" }
@@ -2097,7 +2120,7 @@ final class StudioModel: ViewportInputHandler, LivePacedHandler {
                 .init(blockedObjects: $0.blockedObjects, animationElapsed: sourceAnimationTime)
             })
             defer { plugins.abort() }
-            redoStack.removeLast(); undoStack.append(doc)
+            history.stepForward(leaving: doc)
             applyHistoryDocument(candidate, plugins: plugins, resources: resources)
             status = "Redo"
         } catch { status = "Plugin restore: \(error)" }
@@ -2718,7 +2741,8 @@ final class StudioModel: ViewportInputHandler, LivePacedHandler {
         imported.cameraSlots = try source.settings.cameraSlots.map { try $0.nativeCamera() }
         // Route copies still building for the replaced document stop.
         cancelSourceRouteCharacterBuilds()
-        pushUndo(force: true)
+        // The import replaces the whole document (#384).
+        pushUndo(replacingScene: true)
         sourceAnimationCatalog = job.animationCatalog; sourceAnimationCatalogError = job.animationCatalogError
         // The replaced scene's characters stay borrowable for an undo.
         keepSourceDonations(sourceInstances.filter { previews[$0.key] !== $0.value }.values)
@@ -3148,7 +3172,7 @@ final class StudioModel: ViewportInputHandler, LivePacedHandler {
 
     func newScene() {
         cancelSourceBuilds()
-        pushUndo(force: true); sourcePluginSession = nil; sourcePluginsRunning = false; stopSourceVoices()
+        pushUndo(replacingScene: true); sourcePluginSession = nil; sourcePluginsRunning = false; stopSourceVoices()
         sourceHideStudioUI?.reveal()
         // The SHA-gated camera/item/light caches survive a New Scene as they
         // survive undo/redo: the empty document matches none of them (its
@@ -3643,7 +3667,9 @@ final class StudioModel: ViewportInputHandler, LivePacedHandler {
         defer { preparedPlugins.abort() }
         for line in resources.diagnostics { print("[ikkoku] \(url.lastPathComponent): \(line)") }
         cancelSourceBuilds()
-        pushUndo(force: true)
+        // Every step that can fail ran above, so a failed Open leaves the
+        // history as it was (#384).
+        pushUndo(replacingScene: true)
         stopSourceVoices()
         releaseInstances { _ in true }
         sourceInstances.removeAll()
@@ -3915,6 +3941,19 @@ final class StudioModel: ViewportInputHandler, LivePacedHandler {
         let animated = !doc.timeline.keyframes.isEmpty
         var animatedDoc = doc
         if animated { for i in animatedDoc.objects.indices { animatedDoc.objects[i] = timelineState(animatedDoc.objects[i]) } }
+        // #383: hashed lookups for this walk instead of a scan of every object
+        // per parent step and per visibility test. Both are built from the
+        // lists the walk reads (the document is not written during it) and
+        // dropped on return. Visibility reads the document's own objects, as
+        // `doc.isVisible` did. #387: each object's world matrix is evaluated
+        // once (`SourceWorldWalk`), and every object's visibility comes from
+        // one pass; `visible[i]` answers for `animatedDoc.objects[i]`, whose
+        // id is `doc.objects[i]`'s. Round 3: both walk by index (the walk's
+        // `indices`), built per frame like the lookup.
+        let walk = SourceWorldWalk(lookup: StudioDocument.Lookup(animatedDoc.objects)) { [unowned self] report in
+            self.reportSourceRouteDiagnostics(report.lines, routeKey: report.routeKey)
+        }
+        let visible = animated ? StudioDocument.Lookup(doc.objects).visibleFlags() : walk.lookup.visibleFlags(walk.indices)
         sourceRouteEditor.worlds.removeAll(keepingCapacity: true)
         // The source character's preview for this frame: the cached one, or
         // one built now (the frame's batch already ran its first half). Nil
@@ -3946,13 +3985,17 @@ final class StudioModel: ViewportInputHandler, LivePacedHandler {
         }
         let selectionBuild = sourceSelectionBuild
         for (index, o) in animatedDoc.objects.enumerated() {
+            // This iteration may install or step `o`'s preview (see
+            // `SourceWorldWalk`): later queries re-evaluate the matrices that
+            // read it.
+            defer { walk.memo.invalidate(o.id) }
             let objectID = UInt32(index + 1)
             // A hidden object draws nothing, so its world matrix is not
             // needed. Checking first keeps an object attached to a hidden,
             // unbuilt character (a lazy import or a native reload) from
             // reporting "Attachment parent has no converted character." A
             // hidden character the selection needs still builds, undrawn.
-            guard doc.isVisible(o.id) else {
+            guard visible[index] else {
                 if o.id == selectionBuild, let reference = o.sourceCharacter, !resourceBlockedObjects.contains(o.id) {
                     do {
                         // The document's wear and face state, as a drawn
@@ -3969,7 +4012,7 @@ final class StudioModel: ViewportInputHandler, LivePacedHandler {
                 continue
             }
             let world: float4x4
-            do { world = try sourceWorldMatrix(of: o.id, document: animatedDoc, previews: sourceInstances) }
+            do { world = try sourceWorldMatrix(at: walk.indices.first[index], document: animatedDoc, previews: sourceInstances, walk: walk) }
             catch {
                 // An object attached to a character still building in the
                 // background waits for it without a message.
@@ -4196,6 +4239,8 @@ final class StudioModel: ViewportInputHandler, LivePacedHandler {
         if bounds.isEmpty { bounds = AABB(min: Float3(-1, 0, -1), max: Float3(1, 2, 1)) }
         var f = RenderFrame(camera: viewCamera, mainLight: effectiveMainLight, lights: lights, items: items, gizmos: gizmos, effects: doc.effects, sceneBounds: bounds)
         f.skinSets = skinSets
+        // Maps slice 5: the map's ambient and sun, only while its draws are.
+        if !mapItems.isEmpty { f.mapLighting = sourceMapLighting }
         frame = f
         host.renderer.submit(f)
         if liveSourceShaders { publishLiveSourceShaderStatus(liveLines) }
@@ -4207,9 +4252,42 @@ final class StudioModel: ViewportInputHandler, LivePacedHandler {
         }
     }
 
+    /// The frame walk's state (#387): the hashed lookup over the walked
+    /// objects (#383) and the memo of each one's world matrix
+    /// (`StudioWalkMemo`), dropped when the frame is built.
+    ///
+    /// The memo's keys are attachment parents' ids. An attachment frame reads
+    /// the parent's preview (`previews[id]` or its route character preview):
+    /// whether it is there, and its pose state. The item loop installs or
+    /// steps a preview only in its own object's iteration (`sourcePreview`,
+    /// `setWear`, `setExpressionState`, `frame`, the live step's output, live
+    /// shaders, the selected character's gizmos), so each iteration ends by
+    /// invalidating its object's id. Route playback reads nothing the loop
+    /// writes; its diagnostics are the memo's events, so a memoized matrix
+    /// reports them again, in the order a walk without the memo reports them.
+    /// The animated document, the routes and the animation time do not
+    /// change during the walk.
+    private final class SourceWorldWalk {
+        struct RouteReport { let lines: [String]; let routeKey: Int32 }
+        let lookup: StudioDocument.Lookup
+        /// Each walked object's first index and its parent's (round 3): the
+        /// walk reads objects by index, in place, without hashing their ids.
+        let indices: StudioDocument.Lookup.Indices
+        let memo: StudioWalkMemo<UUID, float4x4, RouteReport>
+        init(lookup: StudioDocument.Lookup, report: @escaping (RouteReport) -> Void) {
+            self.lookup = lookup
+            indices = lookup.indices()
+            memo = StudioWalkMemo(count: lookup.objects.count, sink: report)
+        }
+    }
+
+    /// `walk`, when given, must be built from `document.objects`: its lookup
+    /// replaces the `document.object` scans and its memo the repeated
+    /// evaluations (#387).
     private func sourceWorldMatrix(of id: UUID, document: StudioDocument,
-                                   previews: [UUID: SourceStudioCharacterPreview]) throws -> float4x4 {
-        try sourceWorldMatrix(of: id, document: document, previews: previews, visited: [])
+                                   previews: [UUID: SourceStudioCharacterPreview],
+                                   walk: SourceWorldWalk? = nil) throws -> float4x4 {
+        try sourceWorldMatrix(of: id, document: document, previews: previews, visited: [], walk: walk)
     }
 
     /// Read-only: the world matrix `refresh()` places one current-document
@@ -4228,20 +4306,86 @@ final class StudioModel: ViewportInputHandler, LivePacedHandler {
     /// exactly as `StudioDocument.worldMatrix(of:)` places it.
     private func sourceWorldMatrix(of id: UUID, document: StudioDocument,
                                    previews: [UUID: SourceStudioCharacterPreview],
-                                   visited: Set<UUID>) throws -> float4x4 {
+                                   visited: Set<UUID>, walk: SourceWorldWalk? = nil) throws -> float4x4 {
+        if let walk {
+            guard let index = walk.lookup.index(of: id) else { throw RigError.invalid("Missing Studio object.") }
+            return try sourceWorldMatrix(at: index, document: document, previews: previews, walk: walk)
+        }
         let (object, parentFrame) = try sourceParentFrame(of: id, document: document, previews: previews, visited: visited)
+        return try Self.composedSourceWorld(parentFrame: parentFrame, sourceRecordKey: object.sourceRecordKey,
+            sourceRecordKind: object.sourceRecordKind, kind: object.kind, transform: object.transform)
+    }
+
+    /// `sourceWorldMatrix` in the frame walk, for the object at first index
+    /// `index` (`walk.indices.first`). Each object is evaluated once (#387).
+    /// The memo's in-progress mark is the cycle check the visited set makes
+    /// in `sourceParentFrame`; it also stops a cycle through a route object,
+    /// which restarts the visited set and used to recurse without end.
+    /// Round 3: the walk reads the objects in place by index, with the same
+    /// answers, errors and route reports as the id-based walk.
+    private func sourceWorldMatrix(at index: Int, document: StudioDocument,
+                                   previews: [UUID: SourceStudioCharacterPreview],
+                                   walk: SourceWorldWalk) throws -> float4x4 {
+        try walk.memo.value(at: index, cycle: { RigError.invalid("Invalid Studio parent hierarchy.") }) {
+            let objects = walk.lookup.objects
+            let parentFrame = try walkedSourceParentFrame(at: index, document: document, previews: previews, walk: walk)
+            return try Self.composedSourceWorld(parentFrame: parentFrame, sourceRecordKey: objects[index].sourceRecordKey,
+                sourceRecordKind: objects[index].sourceRecordKind, kind: objects[index].kind,
+                transform: objects[index].transform)
+        }
+    }
+
+    /// `sourceWorldMatrix`'s composition of an object's own transform under its parent frame.
+    private static func composedSourceWorld(parentFrame: float4x4, sourceRecordKey: Int32?,
+                                            sourceRecordKind: KoikatsuObjectKind?, kind: StudioObjectKind,
+                                            transform: StudioTransform) throws -> float4x4 {
         // Native objects (no source key) keep the native full-TRS composition
         // of `StudioDocument.worldMatrix(of:)`, which setParent and native
         // gizmo edits also use; only source records follow the Studio rule.
-        guard object.sourceRecordKey != nil else { return parentFrame * object.transform.matrix }
+        guard sourceRecordKey != nil else { return parentFrame * transform.matrix }
         // Documents saved before `sourceRecordKind` was recorded carry no
         // record kind; their import made every non-character placeholder a
         // `.folder`, so those fall back to the non-scalable rule (an item's
         // authored scale is then dropped) and characters stay scalable.
-        let scalable = object.sourceRecordKind.map(SourceStudioWorldTransform.isScalable) ?? (object.kind != .folder)
+        let scalable = sourceRecordKind.map(SourceStudioWorldTransform.isScalable) ?? (kind != .folder)
         return try SourceStudioWorldTransform.world(parentFrame: parentFrame,
-            localPosition: object.transform.position, localRotation: object.transform.quaternion,
-            localScale: object.transform.scale, scalable: scalable)
+            localPosition: transform.position, localRotation: transform.quaternion,
+            localScale: transform.scale, scalable: scalable)
+    }
+
+    /// `sourceParentFrame` in the frame walk, by first index: the same
+    /// frame, the same errors in the same order, and the route report as a
+    /// memo event. Only an attachment copies its parent (its pose fields).
+    private func walkedSourceParentFrame(at index: Int, document: StudioDocument,
+                                         previews: [UUID: SourceStudioCharacterPreview],
+                                         walk: SourceWorldWalk) throws -> float4x4 {
+        let objects = walk.lookup.objects
+        guard let parentID = objects[index].parent else { return matrix_identity_float4x4 }
+        let parentIndex = walk.indices.parent[index]
+        guard parentIndex >= 0 else { throw RigError.invalid("Invalid Studio parent hierarchy.") }
+        // `sourceRouteRuntime` answers nil without a route; most scenes have none.
+        if !sourceRoutes.isEmpty, let route = sourceRouteRuntime(id: parentID, document: document) {
+            // See `sourceParentFrame`: `childRoot` replaces the route object
+            // as the parent frame, and the walk stops there.
+            let (matrix, diagnostics) = try routeChildRootWorld(id: parentID, route: route,
+                document: document, previews: previews, walk: walk)
+            // A memo event, replayed with every later answer from this matrix
+            // (an empty report reports nothing).
+            if !diagnostics.isEmpty { walk.memo.emit(.init(lines: diagnostics, routeKey: route.objectKey)) }
+            return matrix
+        }
+        var parentFrame = try sourceWorldMatrix(at: parentIndex, document: document, previews: previews, walk: walk)
+        if let point = objects[index].sourceAttachmentPoint {
+            // The parent's preview, present or not, is read here.
+            walk.memo.depend(on: parentID)
+            if let preview = previews[parentID] {
+                let parent = objects[parentIndex]
+                parentFrame *= try preview.attachmentMatrix(pointID: point, fkRotations: parent.sourceFKRotations ?? [:], faceValues: parent.sourceFaceValues, bodyValues: parent.sourceBodyValues, ikTargets: parent.sourceIKOverrides ?? [:], kinematics: parent.sourceKinematics, animationState: parent.sourceAnimation, animationElapsed: sourceAnimationTime)
+            } else if let preview = sourceRouteCharacterPreview(of: parentID, document: document) {
+                parentFrame *= try preview.attachmentMatrix(pointID: point, animationElapsed: sourceAnimationTime)
+            } else { throw RigError.invalid("Attachment parent has no converted character.") }
+        }
+        return parentFrame
     }
 
     /// The object `id` and the frame `sourceWorldMatrix` composes its own
@@ -4250,6 +4394,7 @@ final class StudioModel: ViewportInputHandler, LivePacedHandler {
     private func sourceParentFrame(of id: UUID, document: StudioDocument,
                                    previews: [UUID: SourceStudioCharacterPreview],
                                    visited: Set<UUID>) throws -> (object: StudioObject, frame: float4x4) {
+        // The frame walk has its own copy of this by index (`walkedSourceParentFrame`).
         guard let object = document.object(id) else { throw RigError.invalid("Missing Studio object.") }
         var visited = visited
         guard visited.insert(id).inserted else { throw RigError.invalid("Invalid Studio parent hierarchy.") }
@@ -4332,9 +4477,10 @@ final class StudioModel: ViewportInputHandler, LivePacedHandler {
     /// 10-minute cap fallback) is `SourceStudioRouteClock`'s.
     private func routeChildRootWorld(id: UUID, route: SourceRouteRuntime,
                                      document: StudioDocument,
-                                     previews: [UUID: SourceStudioCharacterPreview]) throws
+                                     previews: [UUID: SourceStudioCharacterPreview],
+                                     walk: SourceWorldWalk? = nil) throws
         -> (matrix: float4x4, diagnostics: [String]) {
-        let routeWorld = try sourceWorldMatrix(of: id, document: document, previews: previews)
+        let routeWorld = try sourceWorldMatrix(of: id, document: document, previews: previews, walk: walk)
         let state = sourceRoutePlayState[id] ?? (playing: route.route.active, start: 0)
         let clock: SourceStudioRouteClock
         if let existing = sourceRouteClocks[id] {
