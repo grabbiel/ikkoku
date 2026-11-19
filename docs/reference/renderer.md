@@ -2302,24 +2302,32 @@ keeps nothing (measurement control).
   two; QoS user-initiated), in request order. They stay off the Swift
   concurrency pool because the builds block on file reads, on each other's
   rig decodes and on MetalKit's synchronous texture loads.
-- Each worker has an 8 MiB stack (`SourceStudioCharacterBatch.stackSize`,
-  #321), not a GCD worker's 512 KiB. A first half decodes the whole scene,
-  and the decode recurses once per nesting level, up to the reader's limit
-  of 200 levels (`KoikatsuBinaryReader.maximumLevels`, #326; 65 before).
-  A first half on the deepest scene the reader accepts takes 1,552 KiB of
-  stack through nested folders and 3,449 KiB through nested characters in
-  Debug (`SourceSceneDeepStackTests`, synthetic scenes). Every other scene
-  decode and record walk in the Studio runs on the main thread, which
-  also has 8 MiB, except the hidden characters' clock: its warm-up and an
-  export's states run on GCD workers, so it reads its scene on a thread of
-  the batch's size (`SourceStudioCharacterBatch.onDecodeThread`, #326).
-  There the export, insertion and layout import take at most 3,491 KiB on
-  the same scenes.
+- Each worker has a 64 MiB stack (`SourceStudioCharacterBatch.stackSize`,
+  #321, #326), not a GCD worker's 512 KiB or the main thread's 8 MiB. It is
+  address space: a page is committed only when the stack reaches it. A
+  first half decodes the whole scene, and the decode recurses once per
+  nesting level, up to the reader's limit of 1,000 levels
+  (`KoikatsuBinaryReader.maximumLevels`, #326; 65 before). A first half on
+  the deepest scene the reader accepts takes 7.5 MiB of stack through
+  nested folders and 16.7 MiB through nested characters in Debug (2.1 and
+  3.0 MiB in Release; `SourceSceneDeepStackTests`, synthetic scenes).
+- Every other operation that recurses through a decoded scene runs on a
+  stack of the same size (`SourceStudioCharacterBatch.onDecodeStack`,
+  #326): the decode, the legacy upgrade, the insertion stage, the export's
+  edit and the layout import. Called from a smaller stack, each starts one
+  thread of its own (`onDecodeThread`, at the caller's QoS) and waits for
+  it; on a worker it runs in line. The hidden characters' clock reads its
+  scene the same way. The record walks left on the main thread are
+  iterative or take at most 2.5 MiB in Debug on the same scenes.
 - The init starts one worker, which starts the others, so the calling
   thread pays one thread start. For a 22-wide batch it takes 25–26 µs in
   Release (26 µs in Debug), against 12–14 µs (18 µs) for the GCD
   dispatches before #321. Every worker has reported after 225–257 µs
   (239 µs), against 145–156 µs (152 µs). These are medians of 50 rounds.
+  With 64 MiB stacks (#326) the start takes 28–31 µs and every worker has
+  reported after 262–286 µs in Release, against 25–26 µs and 219–266 µs
+  with 8 MiB in the same alternating runs (base and head, four each). The
+  decode hop (`onDecodeThread`) takes a median of 32–41 µs (32–33 µs).
   A first half that does real work takes milliseconds.
 - The owner runs the second halves one at a time, in request order, on a
   thread it chooses: `build(_:)` on the calling thread, or

@@ -2,10 +2,12 @@
 """Independent synthetic full Studio 1.0.4.2 framing fixture and offset oracle."""
 from __future__ import annotations
 import argparse
+from contextlib import contextmanager
 import hashlib
 import json
 from pathlib import Path
 import struct
+import sys
 import msgpack
 try:
     from .card_contract import blank_png, dotnet_string, fixture_bytes, parse_card, png_end, Limits
@@ -15,7 +17,20 @@ except ImportError:
 REPO = Path(__file__).resolve().parents[3]
 # The most nesting levels a scene may have: the Swift reader's
 # KoikatsuBinaryReader.maximumLevels (#326). Roots are depth 0.
-MAX_LEVELS = 200
+MAX_LEVELS = 1000
+
+
+@contextmanager
+def nesting_room():
+    """Python frames for MAX_LEVELS nested objects above the caller's (#326):
+    at most four a level (obj, map, its lambda and, before Python 3.12, the
+    list comprehension). The limit is restored afterwards."""
+    limit = sys.getrecursionlimit()
+    sys.setrecursionlimit(limit + 4 * MAX_LEVELS)
+    try:
+        yield
+    finally:
+        sys.setrecursionlimit(limit)
 
 
 class Writer:
@@ -129,14 +144,17 @@ class Reader:
             self.take(9); self.take(self.i())
         raw = self.data[start:self.pos]; parse_card(raw)
         return {"bytes": len(raw), "sha256": hashlib.sha256(raw).hexdigest()}
-    def obj(self, depth=0):
+    def obj(self):
+        """A root object and everything it holds."""
+        with nesting_room(): return self.nested(0)
+    def nested(self, depth):
         if depth >= MAX_LEVELS: raise ValueError(f"objects nested more than {MAX_LEVELS} levels deep")
         result = {"kind": self.i(), "key": self.i(), "transform": self.transform(), "treeState": self.i(), "visible": self.b()}
         kind = result["kind"]
         if kind == 0:
             result["sex"] = self.i(); result["card"] = self.card()
             result["bones"] = self.map(self.bone); result["ik"] = self.map(self.bone)
-            result["accessories"] = self.map(lambda: [self.obj(depth + 1) for _ in range(self.count())])
+            result["accessories"] = self.map(lambda: [self.nested(depth + 1) for _ in range(self.count())])
             result["kinematicMode"] = self.i(); result["animation"] = [self.i() for _ in range(3)]
             result["hands"] = [self.i() for _ in range(2)]; result["nipple"] = self.f()
             result["fluidLevels"] = list(self.take(5)); result["mouthOpen"] = self.f(); result["lipSync"] = self.b()
@@ -159,14 +177,14 @@ class Reader:
             for _ in range(self.count()):
                 name = self.s(); bones[name] = self.bone()
             result.update(bones=bones, dynamicBone=self.b(), animationTime=self.f())
-            result["children"] = [self.obj(depth + 1) for _ in range(self.count())]
+            result["children"] = [self.nested(depth + 1) for _ in range(self.count())]
         elif kind == 2:
             result.update(number=self.i(), color=self.vector(4), intensity=self.f(), range=self.f(), spotAngle=self.f(),
                           shadow=self.b(), enabled=self.b(), drawTarget=self.b())
         elif kind == 5:
             result.update(name=self.s(), active=self.b())
         elif kind in (3, 4):
-            result["name"] = self.s(); result["children"] = [self.obj(depth + 1) for _ in range(self.count())]
+            result["name"] = self.s(); result["children"] = [self.nested(depth + 1) for _ in range(self.count())]
             if kind == 4:
                 result["points"] = []
                 for _ in range(self.count()):

@@ -216,7 +216,7 @@ struct KoikatsuBinaryReader {
     /// this depth each walk takes less than half the stack it runs on, in
     /// Debug and Release (`SourceSceneDeepStackTests`). The installed scenes
     /// go 65 levels deep at most. Before #326 the reader stopped at 65.
-    static let maximumLevels = 200
+    static let maximumLevels = 1000
 
     /// Refuses an object `depth` levels below a root (roots are depth 0)
     /// once the scene would pass `maximumLevels`.

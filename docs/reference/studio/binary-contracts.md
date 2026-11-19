@@ -157,22 +157,38 @@ remain separate and are not substitutes for those source adapters.
   length prefix). Before ST-T05a the error named the byte after the string
   (`vectorJSONErrorsPointAtTheStartOfTheString`).
 - Limits of 256 MiB per input, 1 MiB per string, 100,000 objects per scene or
-  entries per collection, and 200 nesting levels (roots are level 1).
+  entries per collection, and 1,000 nesting levels (roots are level 1).
 - The level cap is one constant, `KoikatsuBinaryReader.maximumLevels` (#326).
   The reader and the topology and insertion writers share it, and the Python
   contract mirrors it (`studio_scene_contract.py`, `MAX_LEVELS`, tested at
-  200 and 201 levels). A deeper scene is
-  refused with an error that names the cap: "objects nested more than 200
-  levels deep (Ikkoku reads at most 200)". Before #326 the reader stopped at
-  65 levels, and its message said "hierarchy depth exceeds 64".
+  1,000 and 1,001 levels and against the Swift constant; its walk raises
+  Python's recursion limit only while it runs). A deeper scene is refused
+  with an error that names the cap: "objects nested more than 1000 levels
+  deep (Ikkoku reads at most 1000)". The reader stops at the cap, so a scene
+  of 2,000 levels is refused on the same stack as one of 1,000. Before #326
+  the reader stopped at 65 levels, and its message said "hierarchy depth
+  exceeds 64".
 - CharaStudio itself has no depth cap. `ObjectInfoAssist.LoadChild`
   (ObjectInfoAssist.cs:9–62) takes no depth and recurses once per level,
   through each kind's `Load` (OIFolderInfo.cs:34, OIItemInfo.cs:117,
   OIRouteInfo.cs:73, OICharInfo.cs:246). Its only limit is the stack of
-  Unity's main thread. Ours is the decode's stack: every scene decode runs on
-  an 8 MiB stack (#321; the hidden characters' clock since #326, which read
-  its scene on a 512 KiB GCD worker before), and 200 levels fit with room to
-  spare (`SourceSceneDeepStackTests`, synthetic scenes).
+  Unity's main thread. Ours is the decode stack, 64 MiB
+  (`SourceStudioCharacterBatch.stackSize`, #326). Every operation that
+  recurses once per level through a decoded tree runs on it
+  (`onDecodeStack`): the decode, the legacy upgrade (its read-back compares
+  records), the insertion stage, the export's edit and the layout import.
+  On a smaller stack (the main thread's 8 MiB, a GCD worker's 512 KiB) each
+  hops once onto a thread of its own; the character batch's workers have it
+  and run in line. At 1,000 levels the deepest of them, an export of nested
+  characters, takes 17 MiB of stack in Debug and 3 MiB in Release, under
+  half the decode stack. The walks left on a caller's stack are iterative or
+  take at most 2.5 MiB in Debug (0.7 MiB in Release), under half the main
+  thread's, and no deep tree is released on a GCD worker. In Debug a root
+  read or a record comparison (`KoikatsuObjectRecord.==`) on a smaller stack
+  fails (`requireDecodeStack`, `checkComparisonStack`), so a path that skips
+  the hop fails a test (`SourceSceneDeepStackTests`, synthetic scenes of
+  nested folders, nested characters and a mixed chain). The installed scenes
+  go 65 levels deep at most.
 
 The binary reader never follows paths in a source Pattern record, loads assets
 or executes source code. `KoikatsuSceneDocument.extensions()` separately exposes

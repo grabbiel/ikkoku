@@ -52,6 +52,27 @@ private func deepScene(levels: Int, chain: DeepChain) -> Data {
     return scene.data
 }
 
+/// Every kind that holds children, in turn: a folder holds an item, which
+/// holds a route, which holds a character, whose accessory point 0 holds
+/// the next folder, down to object `levels - 1`.
+private func mixedScene(levels: Int) -> Data {
+    var scene = TopologyScene(roots: [])
+    var node: TopologyNode?
+    for key in stride(from: Int32(levels - 1), through: 0, by: -1) {
+        let children = node.map { [$0] } ?? []
+        switch key % 4 {
+        case 0: node = .folder(key, children)
+        case 1: node = .item(key, children)
+        case 2: node = .route(key, children)
+        default:
+            node = .character(key, [(point: Int32(0), children: children)])
+            scene.lookAt[key] = 1000 + key
+        }
+    }
+    scene.roots = node.map { [$0] } ?? []
+    return scene.data
+}
+
 /// The scene written to `folder`, and a reference whose object key the
 /// scene does not hold: a first half decodes the whole scene, walks every
 /// object, finds no record and refuses before it reads any other file.
@@ -173,6 +194,45 @@ private final class Observed: @unchecked Sendable {
     }
     #expect(deepest == deepestLevels)
     #expect(refusal == #"limitExceeded("objects nested more than \#(deepestLevels) levels deep (Ikkoku reads at most \#(deepestLevels))")"#)
+}
+
+/// The cap on each chain (#326): nested folders, nested characters and the
+/// mixed chain (`mixedScene`). 65 levels (the cap before #326) and the cap
+/// decode, and a no-edit export of the cap writes the same bytes. One level
+/// more is refused with the cap's message, and so is a scene twice as deep,
+/// at the cap: its refusal takes no more stack than the cap's decode.
+@Test func eachChainDecodesToTheCapAndIsRefusedPastIt() async throws {
+    let refused = #"limitExceeded("objects nested more than \#(deepestLevels) levels deep (Ikkoku reads at most \#(deepestLevels))")"#
+    for chain in ["folders", "characters", "mixed"] {
+        @Sendable func scene(_ levels: Int) -> Data {
+            switch chain {
+            case "folders": deepScene(levels: levels, chain: .folders)
+            case "characters": deepScene(levels: levels, chain: .characters)
+            default: mixedScene(levels: levels)
+            }
+        }
+        // Where it all runs in line, so that `stackTaken` sees every frame.
+        let outcome = try await onThread(stack: measuringStack) { () -> (levels: [Int], identical: Bool, refusals: [String], cap: Int, twice: Int) in
+            let levels = try [65, deepestLevels].map { levelCount(try KoikatsuSceneReader.decodeDocument(scene($0)).snapshot.roots).levels }
+            let data = scene(deepestLevels)
+            var document: KoikatsuSceneDocument?
+            let cap = try stackTaken { document = try KoikatsuSceneReader.decodeDocument(data) }
+            let identical = try document?.editedData(SourceSceneEdits()) == data
+            document = nil
+            func refusal(_ data: Data) -> String {
+                do { _ = try KoikatsuSceneReader.decodeDocument(data); return "decoded" } catch { return String(describing: error) }
+            }
+            var refusals = [refusal(scene(deepestLevels + 1))]
+            let twiceAsDeep = scene(2 * deepestLevels)
+            let twice = stackTaken { refusals.append(refusal(twiceAsDeep)) }
+            return (levels, identical, refusals, cap, twice)
+        }
+        print("[#326 deep stack] \(chain): the cap's decode took \(outcome.cap / 1024) KiB, the refusal of \(2 * deepestLevels) levels \(outcome.twice / 1024) KiB")
+        #expect(outcome.levels == [65, deepestLevels], "\(chain)")
+        #expect(outcome.identical, "\(chain): the no-edit export changed the scene")
+        #expect(outcome.refusals == [refused, refused], "\(chain)")
+        #expect(outcome.twice < outcome.cap + 64 * 1024, "\(chain): \(outcome.twice) bytes against \(outcome.cap)")
+    }
 }
 
 /// The negative control: the stack the first half takes on the deepest
