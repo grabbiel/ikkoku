@@ -29,7 +29,7 @@ struct StudioScenario: Decodable {
         /// `"captureIKPose"`, `"editDuringAdvance"`, `"backgroundBuild"`, `"delete"`, `"setParent"`, `"duplicate"`,
         /// `"addFolder"`, `"addCamera"`, `"addLight"`, `"export"`, `"exportRejected"`, `"reimport"`,
         /// `"focus"`, `"selectRoutePoint"`, `"dragRoutePoint"`, `"editRoute"`, `"captureRoute"`, `"setShowSourceMap"`, `"setUnlimitedLights"`,
-        /// `"deselect"`, `"assertWorkspaceRows"`, `"assert"`, `"assertRejected"`.
+        /// `"deselect"`, `"assertWorkspaceRows"`, `"pressDigit"`, `"assert"`, `"assertRejected"`.
         let op: String
         let key: Int32?
         /// ST-T03: with `key`, address the n-th copy (document order) of that
@@ -112,7 +112,8 @@ struct StudioScenario: Decodable {
         let no: Int32?
         /// setAnimationSpeed: the inspector speed rate (finite and >= 0).
         let speed: Float?
-        /// setForceLoop / setFKEnabled / setUnlimitedLights: the flag to set.
+        /// setForceLoop / setFKEnabled / setUnlimitedLights: the flag to set;
+        /// pressDigit: Shift is held (`index` is the digit 0-9).
         let on: Bool?
         /// setFK / captureBone: the pose-contract catalog bone id whose world
         /// guide the edit or the capture addresses.
@@ -501,6 +502,9 @@ struct StudioScenario: Decodable {
             /// world position and forward, read through the same placement
             /// walk `refresh()` uses, and not the saved camera.
             let key: Int32?
+            /// #425: camera slot N (1-10): the view must be exactly the saved
+            /// camera, and that camera must be exactly what slot N holds.
+            let slot: Int?
         }
         struct PositionValue: Decodable {
             let key: Int32
@@ -1381,12 +1385,24 @@ struct StudioScenario: Decodable {
         /// named camera object's world placement.
         func assertView(_ step: Step, details: inout [String]) -> String? {
             guard let check = step.view else { return nil }
-            guard (check.saved == true) != (check.key != nil), check.saved != false else {
-                return "assert view: name exactly one of saved: true or key"
+            guard [check.saved == true, check.key != nil, check.slot != nil].filter({ $0 }).count == 1, check.saved != false else {
+                return "assert view: name exactly one of saved: true, key or slot"
             }
             let view = studio.viewCamera, saved = studio.doc.camera
             let at = "(\(view.position.x), \(view.position.y), \(view.position.z))"
             let looking = "(\(view.forward.x), \(view.forward.y), \(view.forward.z))"
+            if let slot = check.slot {
+                guard (1...studio.doc.cameraSlots.count).contains(slot) else {
+                    return "assert view: slot \(slot) is outside 1-\(studio.doc.cameraSlots.count)"
+                }
+                guard let held = studio.doc.cameraSlots[slot - 1] else { return "assert view: camera slot \(slot) is empty" }
+                guard view == saved, saved == held else {
+                    return "assert view: renders from \(at), expected camera slot \(slot) at (\(held.position.x), \(held.position.y), \(held.position.z))"
+                        + (view == saved ? "" : " through the saved camera")
+                }
+                details.append("view is camera slot \(slot) at \(at) looking \(looking)")
+                return nil
+            }
             if check.saved == true {
                 guard view == saved else {
                     return "assert view: renders from \(at), expected the saved camera at (\(saved.position.x), \(saved.position.y), \(saved.position.z))"
@@ -2864,6 +2880,31 @@ struct StudioScenario: Decodable {
                 }
                 studio.orbitCamera(dx: dx, dy: dy)
                 record(step, true, "orbit dx=\(dx) dy=\(dy): yaw \(studio.doc.camera.yaw), pitch \(studio.doc.camera.pitch)")
+            case "pressDigit":
+                // A digit-row key as the keyboard hands it to the viewport: the
+                // physical ANSI key code, Shift in the flags, and the characters
+                // the current layout gives that key (Shift+1 is "!" on a US
+                // layout), so the run reaches `keyDown` the way typing does.
+                guard let digit = step.index, (0...9).contains(digit) else {
+                    record(step, false, "pressDigit: index (the digit 0-9) is required"); continue
+                }
+                let shift = step.on == true
+                let keyCode = StudioModel.digitRowKeyCodes[digit]
+                let flags: NSEvent.ModifierFlags = shift ? .shift : []
+                guard let bare = NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: [], timestamp: 0,
+                          windowNumber: 0, context: nil, characters: "\(digit)", charactersIgnoringModifiers: "\(digit)",
+                          isARepeat: false, keyCode: keyCode),
+                      let typed = bare.characters(byApplyingModifiers: flags),
+                      let event = NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: flags, timestamp: 0,
+                          windowNumber: 0, context: nil, characters: typed, charactersIgnoringModifiers: typed,
+                          isARepeat: false, keyCode: keyCode) else {
+                    record(step, false, "pressDigit: no key event for \(shift ? "Shift+" : "")\(digit)"); continue
+                }
+                let handled = studio.keyDown(event)
+                let camera = studio.doc.camera.position
+                record(step, handled, "\(shift ? "Shift+" : "")\(digit) (key code \(keyCode), characters \"\(typed)\") "
+                    + (handled ? "handled: saved camera at (\(camera.x), \(camera.y), \(camera.z))\(shift ? ", status \(studio.status)" : "")"
+                       : "not handled by the viewport"))
             case "setUnlimitedLights":
                 // #320, File ▸ Original Scene Export Keeps Unlimited Lights, for this run only.
                 guard let on = step.on else { record(step, false, "setUnlimitedLights: on is required"); continue }

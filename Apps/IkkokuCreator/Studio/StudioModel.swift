@@ -5232,6 +5232,12 @@ final class StudioModel: ViewportInputHandler, LivePacedHandler {
         documentCamera.dolly(amount * 10)
     }
 
+    /// The digit row's physical keys, kVK_ANSI_0 through kVK_ANSI_9, as CharaStudio's
+    /// Studio.ShortcutKeyCtrl binds its camera keys (Alpha1-Alpha0, not the keypad). By key, not
+    /// by character: Shift (this port's slot save; the original's keys only load) turns the
+    /// characters into "!", "@" and so on, and some layouts need Shift for the digits.
+    static let digitRowKeyCodes: [UInt16] = [29, 18, 19, 20, 21, 23, 22, 26, 28, 25]
+
     func keyDown(_ event: NSEvent) -> Bool {
         let chars = event.charactersIgnoringModifiers ?? ""
         let mods = event.modifierFlags
@@ -5244,7 +5250,7 @@ final class StudioModel: ViewportInputHandler, LivePacedHandler {
         case .toggleVisibility: toggleSourceInterface(); return true
         case .continueViewport: break
         }
-        if let n = Int(chars), chars.count == 1, !mods.contains(.command) {
+        if !mods.contains(.command), let n = Self.digitRowKeyCodes.firstIndex(of: event.keyCode) {
             let slot = n == 0 ? 9 : n - 1
             if mods.contains(.shift) { saveCameraSlot(slot) } else { loadCameraSlot(slot) }
             return true

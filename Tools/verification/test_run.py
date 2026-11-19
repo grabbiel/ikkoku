@@ -642,7 +642,9 @@ SCENARIO_OPS = {"select", "setVisible", "rename", "toggleCamera", "toggleRoute",
                 "focus", "selectRoutePoint", "dragRoutePoint", "captureRoute", "editRoute", "setShowSourceMap",
                 "setUnlimitedLights",
                 # Added for #387 round 3 (the workspace rows a selection change patches).
-                "deselect", "assertWorkspaceRows"}
+                "deselect", "assertWorkspaceRows",
+                # A digit-row key press: camera slot load, and save with Shift.
+                "pressDigit"}
 
 # R7 phase 2, item 7: the window-run inspector checks (`"inspectorUI": {"steps": [...]}`).
 INSPECTOR_UI_OPS = {"select", "deselect", "focus", "type", "delete", "undo", "redo", "cycle",
@@ -950,7 +952,7 @@ class StudioScenarioLaneTests(unittest.TestCase):
                       and not name.startswith(("maker-", "gameplay-")))
 
     def test_lane_validates_and_covers_every_scenario(self):
-        self.assertEqual(len(self.checks), 100)
+        self.assertEqual(len(self.checks), 101)
         referenced = set()
         for check in self.checks:
             scenario = check["env"]["IKKOKU_STUDIO_SCENARIO"]
@@ -1238,6 +1240,12 @@ class StudioScenarioLaneTests(unittest.TestCase):
                           "loadDocumentRejected", "importDocument"):
                     self.assertTrue(step["path"].startswith(".local/"),
                                     "scene writes must stay under .local/: %s" % step["path"])
+                if op == "pressDigit":
+                    # the digit 0-9 and, for a slot save, Shift
+                    self.assertIn(step["index"], range(10))
+                    self.assertIs(type(step["index"]), int)
+                    if "on" in step:
+                        self.assertIs(type(step["on"]), bool)
                 if op in ("assert", "assertRejected"):
                     declared = [k for k in ("name", "visible", "face", "body", "color",
                                             "activeCamera", "routePlaying",
@@ -1338,11 +1346,13 @@ class StudioScenarioLaneTests(unittest.TestCase):
                         self.assertIsInstance(step["position"]["key"], int)
                         self.assertTrue(step["position"]["from"])
                     if "view" in step:
-                        # exactly one target: the saved camera or one camera object
+                        # exactly one target: the saved camera, one camera object or one camera slot
                         view = step["view"]
-                        self.assertEqual(len(view), 1, "a view assert names saved or key: %s" % path)
+                        self.assertEqual(len(view), 1, "a view assert names saved, key or slot: %s" % path)
                         if "saved" in view:
                             self.assertIs(view["saved"], True)
+                        elif "slot" in view:
+                            self.assertIn(view["slot"], range(1, 11))
                         else:
                             self.assertIsInstance(view["key"], int)
                     for text in ("statusContains", "indicatorContains", "treeLabel"):
