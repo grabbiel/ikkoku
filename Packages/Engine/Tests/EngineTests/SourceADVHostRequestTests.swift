@@ -28,7 +28,6 @@ private let current = Int32.max
 @Test func sourceCLRInt32ParseFollowsMonoFastPath() {
     func value(_ text: String) -> Int32? { if case .value(let v) = SourceCLR.int32(text) { return v }; return nil }
     func throwsFormat(_ text: String) -> Bool { if case .exception = SourceCLR.int32(text) { return true }; return false }
-    func unsupported(_ text: String) -> Bool { if case .unsupported = SourceCLR.int32(text) { return true }; return false }
     #expect(value("42") == 42)
     #expect(value(" \t-7 ") == -7)
     #expect(value("+3") == 3)
@@ -39,7 +38,8 @@ private let current = Int32.max
     for text in ["", " ", "+", "-", "+-1", "1 2", "2147483648", "-2147483649", "mobNo", "通常", "１", "1.5", "0x10"] {
         #expect(throwsFormat(text), "\(text)")
     }
-    #expect(unsupported("\u{200B}5")) // Unicode-version dependent white space class.
+    #expect(value("\u{200B}5") == 5)  // A space separator in Mono's CategoryData (#427).
+    for text in ["\u{180E}5", "5\u{FEFF}"] { #expect(throwsFormat(text), "\(text)") } // Format characters there.
 }
 
 @Test func sourceCLRSingleParseIsInvariantAndConservative() {

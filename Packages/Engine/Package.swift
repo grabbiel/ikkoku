@@ -20,7 +20,7 @@ let package = Package(
         .target(name: "Character", dependencies: ["CoreMath", "ShaderTypes", "Assets", "Scene", "GPU", "Renderer"]),
         .target(name: "Renderer", dependencies: ["GPU", "CoreMath", "ShaderTypes", "Assets", "Scene"]),
         .target(name: "Studio", dependencies: ["CoreMath", "ShaderTypes", "Assets", "Scene", "Character", "Renderer", "Gameplay"]),
-        .target(name: "Gameplay"),
+        .target(name: "Gameplay", dependencies: ["Assets"]),
         .testTarget(name: "CoreMathTests", dependencies: ["CoreMath", "ShaderTypes"]),
         .testTarget(name: "EngineTests", dependencies: ["Assets", "Scene", "Character", "Studio", "CoreMath", "ShaderTypes", "Gameplay"]),
     ]
