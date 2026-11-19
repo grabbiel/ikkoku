@@ -108,7 +108,8 @@ struct StudioWorkspacePanel: View {
     var body: some View {
         let _ = PerfTrace.body(.studioWorkspace)
         let state = model.shownWorkspaceState
-        StudioWorkspaceContent(model: model, entries: state.entries, objectCount: state.objectCount).equatable()
+        StudioWorkspaceContent(model: model, entries: state.entries, objectCount: state.objectCount,
+                               listGeneration: model.workspaceListGeneration).equatable()
     }
 }
 
@@ -116,8 +117,12 @@ struct StudioWorkspaceContent: View, Equatable {
     let model: StudioModel
     let entries: [WorkspaceEntry]
     let objectCount: Int
+    /// `StudioModel.workspaceListGeneration` (#410).
+    let listGeneration: UInt64
 
-    static func == (a: Self, b: Self) -> Bool { a.model === b.model && a.entries == b.entries && a.objectCount == b.objectCount }
+    static func == (a: Self, b: Self) -> Bool {
+        a.model === b.model && a.entries == b.entries && a.objectCount == b.objectCount && a.listGeneration == b.listGeneration
+    }
 
     var body: some View {
         VStack(spacing: 0) {
@@ -139,6 +144,13 @@ struct StudioWorkspaceContent: View, Equatable {
                     }
                 }.padding(4)
             }
+            // #410: a new scroll view per scene. The rows are keyed by object
+            // id, and each Open or New Scene brings new ids; the lazy stack's
+            // child cache (SwiftUI) and the scroll view's KVO dependencies
+            // (AppKit) keep an entry for every row id they ever showed, so
+            // one scroll view for the whole session grew with every load.
+            // Only the scroll position resets: the rows hold no state.
+            .id(listGeneration)
             Divider()
             HStack {
                 Button { model.duplicateSelection() } label: { Image(systemName: "plus.square.on.square") }.help("Duplicate")

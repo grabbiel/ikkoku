@@ -168,6 +168,72 @@ private struct Editor {
     }
 }
 
+/// #410: `sceneGeneration`, the workspace scroll view's identity. A
+/// replacement and an Undo or Redo across one change it; nothing else does.
+@Test func sceneGenerationChangesOnlyWithTheScene() {
+    var editor = Editor("A")
+    #expect(editor.history.sceneGeneration == 0)
+    editor.edit("A1")
+    editor.merge(into: "A1+C")
+    editor.undo(); editor.redo()
+    // Edits, a merge (Import Scene) and Undo/Redo within one scene: none.
+    #expect(editor.history.sceneGeneration == 0)
+    editor.replace(with: "E")
+    #expect(editor.history.sceneGeneration == 1)
+    editor.edit("E1")
+    #expect(editor.history.sceneGeneration == 1)
+    // Undo of the edit stays in E; the next Undo crosses back into A.
+    editor.undo()
+    #expect(editor.document == "E" && editor.history.sceneGeneration == 1)
+    editor.undo()
+    #expect(editor.document == "A1+C" && editor.history.sceneGeneration == 2)
+    // Undo within A, then Redo back to A's last state: within A, no change.
+    editor.undo(); editor.redo()
+    #expect(editor.history.sceneGeneration == 2)
+    // Redo across the replacement, then the edit after it.
+    editor.redo()
+    #expect(editor.document == "E" && editor.history.sceneGeneration == 3)
+    editor.redo()
+    #expect(editor.document == "E1" && editor.history.sceneGeneration == 3)
+    // Open of B, then the studio-load cycle: two per New Scene + Open.
+    editor.replace(with: "B")
+    #expect(editor.history.sceneGeneration == 4)
+    for cycle in 1...10 {
+        editor.replace(with: "E"); editor.replace(with: "L\(cycle)")
+    }
+    #expect(editor.history.sceneGeneration == 24)
+    // Nothing to undo or redo: no change.
+    while editor.redo() {}
+    #expect(editor.history.sceneGeneration == 24)
+}
+
+@Test func sceneGenerationFollowsTheDocumentsScene() {
+    // Seeded walks: the generation changes exactly when the document moves to
+    // another scene. Each document string carries its scene ("s3:e17"), so a
+    // step that changes the scene part must change the generation, and one
+    // that keeps it must not.
+    for seed in 1...200 {
+        var random = SplitMix(seed: UInt64(seed))
+        var scene = 0
+        var editor = Editor("s0:start")
+        for step in 0..<400 {
+            let before = (editor.document, editor.history.sceneGeneration)
+            switch random.next() % 10 {
+            case 0...3: editor.edit("\(sceneOf(editor.document)):e\(step)")
+            case 4: editor.merge(into: "\(sceneOf(editor.document)):m\(step)")
+            case 5: scene += 1; editor.replace(with: "s\(scene):r\(step)")
+            case 6...7: editor.undo()
+            default: editor.redo()
+            }
+            let sceneChanged = sceneOf(before.0) != sceneOf(editor.document)
+            #expect((editor.history.sceneGeneration != before.1) == sceneChanged)
+            #expect(editor.history.sceneGeneration &- before.1 <= 1)
+        }
+    }
+}
+
+private func sceneOf(_ document: String) -> Substring { document.prefix { $0 != ":" } }
+
 private struct SplitMix {
     var state: UInt64
     init(seed: UInt64) { state = seed }

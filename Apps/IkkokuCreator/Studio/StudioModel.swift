@@ -287,9 +287,19 @@ final class StudioModel: ViewportInputHandler, LivePacedHandler {
     /// The undo and redo steps (#384). A scene replacement (New Scene, Open,
     /// an original scene import) keeps only the scene it replaced, not the
     /// scenes before it; see `StudioUndoHistory`.
-    private var history = StudioUndoHistory<StudioDocument>()
+    private var history = StudioUndoHistory<StudioDocument>() { didSet { syncWorkspaceListGeneration() } }
     var undoStack: [StudioDocument] { history.undoStack }
     var redoStack: [StudioDocument] { history.redoStack }
+    /// The workspace scroll view's identity (#410): `history.sceneGeneration`,
+    /// copied so the panel observes the scene changes alone, not every undo
+    /// step. It changes on a New Scene, an Open, an original scene import and
+    /// an Undo or Redo across one of them, never on an edit or an Import
+    /// Scene, so the lazy row list and its per-row caches start over with
+    /// each scene instead of keeping every row identity a session showed.
+    private(set) var workspaceListGeneration: UInt64 = 0
+    private func syncWorkspaceListGeneration() {
+        if workspaceListGeneration != history.sceneGeneration { workspaceListGeneration = history.sceneGeneration }
+    }
     @ObservationIgnored private var instances: [UUID: CharacterInstance] = [:]
     @ObservationIgnored private var renderStatus = RenderStatusReporter()
     @ObservationIgnored private var sourceInstanceStorage: [UUID: SourceStudioCharacterPreview] = [:]

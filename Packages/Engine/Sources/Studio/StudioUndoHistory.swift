@@ -23,6 +23,13 @@ import Foundation
 /// carries it to the redo step it makes, and Redo carries it back, so a
 /// replacement that is undone and redone is still the one the next
 /// replacement trims. There is at most one mark in both stacks together.
+///
+/// **Scene generation (#410).** `sceneGeneration` counts the times the
+/// document changed scene through the history: a replacement recorded, and
+/// an Undo or Redo across a replacement's step. Edits, merges and Undo or
+/// Redo within one scene leave it as it is. The workspace panel keys its
+/// scroll view on it, so the lazy row list's per-row caches, which SwiftUI
+/// and AppKit never prune, go with the scene they were built for.
 public struct StudioUndoHistory<Document> {
     public static var limit: Int { 60 }
 
@@ -32,6 +39,8 @@ public struct StudioUndoHistory<Document> {
     /// after it replaced the scene.
     private var undoReplaces: [Bool] = []
     private var redoReplaces: [Bool] = []
+    /// See **Scene generation** above. It wraps rather than traps.
+    public private(set) var sceneGeneration: UInt64 = 0
 
     public init() {}
 
@@ -47,6 +56,7 @@ public struct StudioUndoHistory<Document> {
         }
         undoStack.append(current)
         undoReplaces.append(replacingScene)
+        if replacingScene { sceneGeneration &+= 1 }
         if undoStack.count > Self.limit {
             undoStack.removeFirst()
             undoReplaces.removeFirst()
@@ -62,7 +72,9 @@ public struct StudioUndoHistory<Document> {
     public mutating func stepBack(leaving current: Document) -> Document? {
         guard let step = undoStack.popLast() else { return nil }
         redoStack.append(current)
-        redoReplaces.append(undoReplaces.removeLast())
+        let replaced = undoReplaces.removeLast()
+        redoReplaces.append(replaced)
+        if replaced { sceneGeneration &+= 1 }
         return step
     }
 
@@ -71,7 +83,9 @@ public struct StudioUndoHistory<Document> {
     public mutating func stepForward(leaving current: Document) -> Document? {
         guard let step = redoStack.popLast() else { return nil }
         undoStack.append(current)
-        undoReplaces.append(redoReplaces.removeLast())
+        let replaced = redoReplaces.removeLast()
+        undoReplaces.append(replaced)
+        if replaced { sceneGeneration &+= 1 }
         return step
     }
 
