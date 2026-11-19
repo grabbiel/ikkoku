@@ -1662,8 +1662,10 @@ may lie far from its bones; character 65's lie about 0.8 m from them.
   picker is one `Text` in both states, shown by opacity. Undo restores the
   group, and the flags survive export and reimport.
 
-A build that draws inactive guides fails the first assert. A build whose pick
-switches IK on fails both clicks.
+A build that draws inactive guides fails the first assert, and its first
+click selects the hidden guide. A build whose pick still switches the group
+on fails the second click with an empty undo step. Its first click cannot
+reach that call, because the inactive guide is not drawn.
 
 ## Maker scenario hook (T-T04)
 
