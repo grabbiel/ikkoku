@@ -593,6 +593,22 @@ struct InspectorUIScenario: Decodable {
         }
         findPickers(content)
         var line = "toolbar " + (pickers.isEmpty ? "no pickers" : pickers.joined(separator: "; "))
+        // The toolbar's horizontal scroll view (the pickers' enclosing one): its visible
+        // width, its content's width and whether a horizontal scroller shows.
+        var toolbarScroll: NSScrollView?
+        func findToolbarScroll(_ view: NSView) {
+            if toolbarScroll == nil, let control = view as? NSSegmentedControl, control.segmentCount == 3,
+               let enclosing = control.enclosingScrollView, enclosing !== scroll {
+                toolbarScroll = enclosing
+            }
+            if toolbarScroll == nil { view.subviews.forEach(findToolbarScroll) }
+        }
+        findToolbarScroll(content)
+        if let toolbarScroll {
+            let shown = toolbarScroll.hasHorizontalScroller && !(toolbarScroll.horizontalScroller?.isHidden ?? true)
+            line += "; scroll clip \(f(toolbarScroll.contentView.bounds.width)) content \(f(toolbarScroll.documentView?.frame.width ?? 0))"
+                + " at \(f(toolbarScroll.contentView.bounds.minX)) scroller \(shown ? "shown" : "not shown")"
+        }
         guard let scroll, let document = scroll.documentView else { return line + " | rows: no inspector scroll view" }
         let clip = scroll.contentView, top = rect(clip).maxY
         var rows: [(top: CGFloat, text: String)] = [], name: NSTextField? = nil, popup: NSPopUpButton? = nil
