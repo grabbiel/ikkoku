@@ -41,7 +41,7 @@ vertex ToonVertexOut toon_vertex(
     if (draw.depthBias != 0.0) wp.xyz += normalize(frame.cameraPosition.xyz - wp.xyz) * draw.depthBias;
     o.position = frame.viewProjection * wp;
     float3x3 nm = float3x3(draw.normalMatrix[0].xyz, draw.normalMatrix[1].xyz, draw.normalMatrix[2].xyz);
-    o.worldNormal = normalize(nm * v.normal);
+    o.worldNormal = guardedNormal(nm * v.normal);
     // Tangents are surface directions, not normals: use the model's linear part.
     // A mirrored instance also reverses the tangent basis orientation.
     float3x3 linearModel = float3x3(draw.model[0].xyz, draw.model[1].xyz, draw.model[2].xyz);

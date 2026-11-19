@@ -23,7 +23,7 @@ branch was tested or every asset matches the original game. Feature status,
 specific comments and pending tasks are in the linked reports. Shared behavior
 may be discussed in more than one report; one primary owner is listed here.
 
-**1125 files indexed; 1125 assigned; 0 unassigned.**
+**1126 files indexed; 1126 assigned; 0 unassigned.**
 
 Counts include the website and clothes-group additions listed below. Runtime and
 test totals include their specialized role descriptions; this is inventory
@@ -34,7 +34,7 @@ bookkeeping, not a new full source audit.
 | [App / gameplay / plugins](app-gameplay-and-plugins.md) | 110 |
 | [Character / Maker / mods](character-and-mods.md) | 143 |
 | [Studio / IK / animation](studio.md) | 267 |
-| [Renderer / foundation / assets](renderer-and-foundation.md) | 372 |
+| [Renderer / foundation / assets](renderer-and-foundation.md) | 373 |
 | [Toolchain / verification / historical docs](toolchain-and-verification.md) | 223 |
 
 | File role | Files |
@@ -897,6 +897,7 @@ Feature assessment: [renderer-and-foundation.md](renderer-and-foundation.md).
 | [Packages/Engine/Tests/EngineTests/RigTests.swift](../../Packages/Engine/Tests/EngineTests/RigTests.swift) | Test / validation |
 | [Packages/Engine/Tests/EngineTests/RigFiniteAffineTests.swift](../../Packages/Engine/Tests/EngineTests/RigFiniteAffineTests.swift) | Test / validation |
 | [Packages/Engine/Tests/EngineTests/SingularScaleTests.swift](../../Packages/Engine/Tests/EngineTests/SingularScaleTests.swift) | Test / zero and negative shape scales: singular normal matrix, InverseSafe world-to-object, collapse-safe rotation, collapsed skins drawn in rig space (#404) |
+| [Packages/Engine/Tests/EngineTests/SingularNormalShaderTests.swift](../../Packages/Engine/Tests/EngineTests/SingularNormalShaderTests.swift) | Test / a singular model's vertex normals: finite toon, map, outline and live-probe output, and bit for bit the pre-guard normalize on nonsingular models (#407) |
 | [Packages/Engine/Tests/EngineTests/SourceAvatarTests.swift](../../Packages/Engine/Tests/EngineTests/SourceAvatarTests.swift) | Test / validation |
 | [Packages/Engine/Tests/EngineTests/SourceMaleAvatarTests.swift](../../Packages/Engine/Tests/EngineTests/SourceMaleAvatarTests.swift) | Test / validation |
 | [Packages/Engine/Tests/EngineTests/SourceMorphGPUTests.swift](../../Packages/Engine/Tests/EngineTests/SourceMorphGPUTests.swift) | Test / validation |
