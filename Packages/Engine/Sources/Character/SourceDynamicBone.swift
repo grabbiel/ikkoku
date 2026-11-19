@@ -246,7 +246,7 @@ public struct SourceDynamicBone: Sendable {
             constrain(state: state, objectScale: objectScale, simulate: false)
         }
         guard positions.allSatisfy(finite), previousPositions.allSatisfy(finite) else { throw RigError.invalid("Dynamic particles overflowed.") }
-        let mirror = Mirror(state: state, owner: owner, ownerParent: topology.parent[owner])
+        let mirror = state.signed ? Mirror(state: state, owner: owner, ownerParent: topology.parent[owner]) : nil
         for i in 1..<nodes.count {
             let parent = definition.particles[i].parent!, parentNode = nodes[parent], node = nodes[i]
             if topology.childCount[parentNode] <= 1 {
@@ -554,6 +554,9 @@ private struct DynamicsTransforms {
     var changed: [Bool]
     let original: [float4x4]
     let topology: DynamicsTopology
+    /// A slot took a signed record or a collapsed axis (#406). False on a
+    /// positive chain, which then builds no Mirror and records nothing.
+    let signed: Bool
     init(topology: DynamicsTopology, rig: RigDefinition, pose: RigPose) throws {
         guard pose.localMatrices.count == rig.nodes.count else { throw RigError.invalid("Dynamics pose count mismatch.") }
         let count = topology.nodes.count
@@ -564,6 +567,7 @@ private struct DynamicsTransforms {
         // carried through verbatim. Only particle/collider/owner ancestors
         // need local quaternion decomposition for this component.
         let records = pose.signedTRS != nil
+        var signed = false
         for i in topology.nodes {
             let m = original[i]
             // A signed record that still describes the matrix (#406): the
@@ -574,6 +578,7 @@ private struct DynamicsTransforms {
                     throw RigError.invalid("Dynamics requires a finite signed TRS record (#406).")
                 }
                 translations.append(record.translation); rotations.append(record.rotation); scales.append(record.scale)
+                signed = true
                 continue
             }
             let scale = m.scaleFactors
@@ -598,7 +603,9 @@ private struct DynamicsTransforms {
             guard collapsed.count == 1 else { throw Self.unrecorded }
             guard let r = SourceDynamicBone.collapsedAxisBasis(m, scale: scale, axis: collapsed[0]) else { throw Self.shear }
             translations.append(m.translation); rotations.append(simd_quatf(r).normalized); scales.append(scale)
+            signed = true
         }
+        self.signed = signed
         world = .init(repeating: matrix_identity_float4x4, count: count)
         worldRotations = .init(repeating: .identity, count: count)
         changed = .init(repeating: false, count: count)
@@ -640,10 +647,15 @@ private struct DynamicsTransforms {
     func pose(_ input: RigPose, rig: RigDefinition, validatedInput: Bool) throws -> RigPose {
         var value = input
         for slot in changed.indices where changed[slot] {
-            let node = topology.nodes[slot]
-            value.localMatrices[node] = Transform.trs(translations[slot], rotations[slot], scales[slot])
-            // The next component reads this output; a signed scale keeps its record (#406).
-            value.recordTRS(node, translation: translations[slot], rotation: rotations[slot], scale: scales[slot])
+            value.localMatrices[topology.nodes[slot]] = Transform.trs(translations[slot], rotations[slot], scales[slot])
+        }
+        // The next component reads this output; a signed or collapsed scale
+        // keeps its record, and a positive write drops a stale one (#406). A
+        // positive chain without a table has neither.
+        if signed || value.signedTRS != nil {
+            for slot in changed.indices where changed[slot] {
+                value.recordTRS(topology.nodes[slot], translation: translations[slot], rotation: rotations[slot], scale: scales[slot])
+            }
         }
         if validatedInput { try topology.validateChanges(value, rig: rig, world: world) } else { _ = try rig.evaluate(value) }
         return value
