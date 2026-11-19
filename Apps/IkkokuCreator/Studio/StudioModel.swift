@@ -136,10 +136,11 @@ final class StudioModel: ViewportInputHandler, LivePacedHandler {
     var timelineDocumentState: StudioTimelineDocumentState { access(keyPath: \.timelineDocumentState); return timelineDocumentStateStorage }
     /// The inputs `workspaceStateStorage` was last built from; nil before the first build.
     @ObservationIgnored private var workspaceStateKey: StudioWorkspaceKey?
-    /// #410: the most workspace rows published this session, which the
-    /// workspace stack keeps as slots (`StudioWorkspaceState.rowCapacity`).
-    /// Only `refreshPanelState` raises it. With `IKKOKU_PERF_PANEL_STATE=document`
-    /// nothing is published, so it stays 0 and the stack has one slot per row.
+    /// #410: the slots the workspace stack kept in the state last published
+    /// (`StudioWorkspaceState.rowCapacity`): the next state keeps them up to
+    /// `StudioWorkspaceState.slotCap`. Only `refreshPanelState` sets it. With
+    /// `IKKOKU_PERF_PANEL_STATE=document` nothing is published, so it stays 0
+    /// and the stack has one slot per row.
     @ObservationIgnored private(set) var workspaceRowCapacity = 0
 
     /// The Object tab's state as the model is now: nil when nothing in the

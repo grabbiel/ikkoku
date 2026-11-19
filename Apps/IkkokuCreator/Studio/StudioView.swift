@@ -116,8 +116,9 @@ struct StudioWorkspacePanel: View {
 struct StudioWorkspaceContent: View, Equatable {
     let model: StudioModel
     let entries: [WorkspaceEntry]
-    /// The most rows this panel has shown (`StudioWorkspaceState.rowCapacity`):
-    /// the slots the stack keeps, at least `entries.count`.
+    /// The slots the stack keeps (`StudioWorkspaceState.rowCapacity`): the
+    /// rows it has shown, up to `StudioWorkspaceState.slotCap`, and at least
+    /// `entries.count`.
     let rowCapacity: Int
     let objectCount: Int
 
@@ -133,14 +134,16 @@ struct StudioWorkspaceContent: View, Equatable {
                 StudioAddMenu(model: model)
             }.padding(8)
             Divider()
-            // #410: the lazy stack keeps one slot per row this panel has
-            // ever shown (`rowCapacity`), and a slot past the scene's rows
-            // shows nothing. New Scene and Open used to remove and insert
-            // rows, and a lazy stack keeps, per inserted row and for the whole
-            // session, an entry in SwiftUI's child cache and an AppKit
-            // dependency on the scroll view's container, whatever the row ids.
-            // The slots are only ever added, past the most rows shown, so a
-            // load changes what slots show instead of inserting rows. Slots
+            // #410: the lazy stack keeps slots for the rows it has shown, up
+            // to the most rows a screen can show plus a margin (`rowCapacity`,
+            // `StudioWorkspaceState.slotCap`), and a slot past the scene's
+            // rows shows nothing. New Scene and Open used to remove and insert
+            // rows, and a lazy stack keeps, per inserted row it builds and for
+            // the whole session, an entry in SwiftUI's child cache and an
+            // AppKit dependency on the scroll view's container, whatever the
+            // row ids. The rows a load builds lie within the slots kept, so a
+            // load changes what those slots show instead of inserting them;
+            // slots past the cap come and go unbuilt. Slots
             // are keyed by position, which is safe because a row holds no
             // state (`WorkspaceRow`); inserts and removals show as content
             // changes, with no row animation. Spacing 0 with the 1 pt gap

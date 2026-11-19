@@ -732,7 +732,8 @@ final class PerfWorkloadDriver {
                            ("scroll workspace to end", true, { [weak self] in self?.scrollWorkspace(toEnd: true) }),
                            ("scroll workspace to top", false, { [weak self] in self?.scrollWorkspace(toEnd: false) })]
             trace.details["smallSceneObjects"] = count
-            trace.details["workspaceSlotCap"] = StudioWorkspaceState.slotCap.map { $0 as Any } ?? NSNull()
+            trace.details["workspaceSlotCap"] = StudioWorkspaceState.slotCap
+            trace.details["workspaceSlotCapOverride"] = StudioWorkspaceState.slotCapOverride.map { $0 as Any } ?? NSNull()
             // The most rows any window could show at once: the tallest
             // screen's visible height over a one-line row and its 1 pt gap.
             // A slot cap must stay above it (with the stack's overscan).

@@ -33,8 +33,9 @@ struct InspectorUIScenario: Decodable {
         /// the selection or one of its descendants, in document order; with `key`, it
         /// chooses that source key's object, or None for -1, and the document's parent
         /// follows). Added for #410: `"selectRow"` (`index`: selects the object at that
-        /// workspace row) and `"scrollWorkspace"` (`toEnd`: scrolls the workspace to
-        /// the end of its rows, or back to the top).
+        /// workspace row), `"scrollWorkspace"` (`toEnd`: scrolls the workspace to
+        /// the end of its rows, or back to the top), `"newScene"` and
+        /// `"addFolders"` (`count` folders at the root).
         let op: String
         let key: Int32?
         let keys: [Int32]?
@@ -229,6 +230,20 @@ struct InspectorUIScenario: Decodable {
                 }
                 record(step.op, true, "workspace scrolled to the \(toEnd ? "end" : "top") in \(heights.count) scrolls, "
                        + "document \(heights.map(String.init).joined(separator: " > ")) pt")
+            case "newScene":
+                studio.newScene()
+                await settle()
+                let state = studio.shownWorkspaceState
+                record(step.op, studio.doc.objects.isEmpty, "new scene: \(state.entries.count) rows in \(state.rowCapacity) slots")
+            case "addFolders":
+                // #410: `count` folders at the root (none selected, as `add`
+                // nests a new object in a selected folder).
+                guard let count = step.count, count > 0 else { record(step.op, false, "addFolders needs a count"); continue }
+                studio.selection = nil
+                for index in 0..<count { studio.add(StudioObject(name: "Folder \(index + 1)", kind: .folder), select: false) }
+                await settle()
+                let state = studio.shownWorkspaceState
+                record(step.op, state.entries.count == count, "added \(count) folders: \(state.entries.count) rows in \(state.rowCapacity) slots")
             case "routePoint":
                 guard let index = step.index else { record(step.op, false, "no index"); continue }
                 studio.selectedRoutePoint = .init(index: index)

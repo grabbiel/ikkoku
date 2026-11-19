@@ -656,7 +656,7 @@ INSPECTOR_UI_OPS = {"select", "deselect", "focus", "type", "delete", "undo", "re
                     # Added for #383 (the Parent popup that replaced the Picker).
                     "parentMenu",
                     # Added for #410 (the workspace stack's slots).
-                    "selectRow", "scrollWorkspace"}
+                    "selectRow", "scrollWorkspace", "newScene", "addFolders"}
 
 # ST-T11 `editRoute` settings: point edits name the point, route edits do not.
 ROUTE_POINT_SETTINGS = ("delete", "move", "speed", "ease", "connection", "link")
@@ -983,6 +983,9 @@ class StudioScenarioLaneTests(unittest.TestCase):
                 self.assertGreaterEqual(step["index"], 0)
             if op == "scrollWorkspace":
                 self.assertIs(type(step["toEnd"]), bool)
+            if op == "addFolders":
+                self.assertIs(type(step["count"]), int)
+                self.assertGreater(step["count"], 0)
             if op == "type":
                 self.assertTrue(step["text"])
             if op == "cycle":

@@ -54,6 +54,29 @@
       {
         "op": "assert",
         "workspaceGeometry": true
+      },
+      {
+        "op": "newScene"
+      },
+      {
+        "op": "addFolders",
+        "count": 56
+      },
+      {
+        "op": "scrollWorkspace",
+        "toEnd": true
+      },
+      {
+        "op": "assert",
+        "workspaceGeometry": true
+      },
+      {
+        "op": "scrollWorkspace",
+        "toEnd": false
+      },
+      {
+        "op": "assert",
+        "workspaceGeometry": true
       }
     ]
   }

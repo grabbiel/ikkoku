@@ -1,4 +1,5 @@
 import Foundation
+import AppKit
 import Renderer
 import Studio
 
@@ -26,18 +27,32 @@ enum StudioPanelStateMode: String, Sendable {
 struct StudioWorkspaceState: Equatable {
     var entries: [WorkspaceEntry] = []
     var objectCount = 0
-    /// #410: the slots the workspace stack keeps, the most rows published
-    /// this session (`StudioModel.workspaceRowCapacity`), at most `slotCap`,
-    /// and at least `entries.count`. It does not shrink below that, so a
-    /// load that shows fewer rows leaves empty slots instead of removing rows
-    /// (`WorkspaceSlot`).
+    /// #410: the slots the workspace stack keeps: the slots it kept last
+    /// (`StudioModel.workspaceRowCapacity`) up to `slotCap`, and at least
+    /// `entries.count`. A load that shows fewer rows leaves empty slots
+    /// instead of removing rows (`WorkspaceSlot`).
     var rowCapacity = 0
 
     /// #410: the most slots kept while a scene shows fewer rows: the stack
-    /// keeps `max(rows, min(most rows shown, slotCap))`. Nil keeps them all.
-    /// `IKKOKU_PERF_WORKSPACE_SLOT_CAP=<k>` is a measurement control, read
-    /// once at launch, that sets it.
-    static let slotCap: Int? =
+    /// keeps `max(rows, min(slots kept, slotCap))`. It is the most rows the
+    /// tallest screen could show at once, its visible height over a one-line
+    /// row and its gap (`rowPitch`), plus `slotMargin`: the rows a load builds
+    /// lie within it, so they are never inserted into the stack. Without the
+    /// cap a short scene after a long one kept thousands of empty slots, and
+    /// the stack, which estimates a slot it has not laid out at a row's
+    /// height, made the document tens of thousands of points too tall. Under
+    /// it at most `slotCap - rows` slots are estimated, until the stack lays
+    /// them out. `IKKOKU_PERF_WORKSPACE_SLOT_CAP=<k>` is a measurement control,
+    /// read once at launch, that replaces it.
+    @MainActor static var slotCap: Int {
+        if let override = slotCapOverride { return override }
+        let tallest = NSScreen.screens.map(\.visibleFrame.height).max() ?? 0
+        return Int((max(tallest, 1_000) / rowPitch).rounded(.up)) + slotMargin
+    }
+    /// A one-line `WorkspaceRow` (21 pt, `workspaceRowHeight` in `studio-load`) and the 1 pt gap.
+    static let rowPitch: CGFloat = 22
+    static let slotMargin = 16
+    static let slotCapOverride: Int? =
         ProcessInfo.processInfo.environment["IKKOKU_PERF_WORKSPACE_SLOT_CAP"].flatMap { Int($0) }.map { max(0, $0) }
 
     @MainActor init() {}
@@ -65,7 +80,7 @@ struct StudioWorkspaceState: Equatable {
                                   cameraPlaceholder: label.sourceCamera, keyDetail: label.keyDetail, cameraMarker: marker)
         }
         objectCount = doc.objects.count
-        rowCapacity = max(Self.slotCap.map { min(model.workspaceRowCapacity, $0) } ?? model.workspaceRowCapacity, entries.count)
+        rowCapacity = max(min(model.workspaceRowCapacity, Self.slotCap), entries.count)
     }
 
     /// These rows with `selection` selected: what `init(model:)` builds when
