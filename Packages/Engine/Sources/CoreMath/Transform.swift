@@ -117,7 +117,8 @@ public enum Transform {
     /// Deform.metal skins normals), scaled to a largest entry of 1, and the
     /// identity when fewer than two columns are independent (#404). A
     /// collapsed surface's normals point along the plane normal it keeps.
-    /// A normal the cofactor maps to zero is left to the caller (#407).
+    /// A normal the cofactor maps to zero becomes 0, not NaN, in the vertex
+    /// stages (`guardedNormal` in Shaders/Common.h, #407).
     public static func normalMatrix3(from m: float4x4) -> float3x3 {
         let basis = m.upperLeft3x3
         guard abs(simd_determinant(basis)) <= singularDeterminant else { return basis.inverse.transpose }
