@@ -170,8 +170,10 @@ it or interpreting arbitrary managed objects.
 
 The supported ABMX entry uses data identity `KKABMPlugin.ABMData`, version `2`,
 and binary field `boneData`. The nested bytes are the original ABMX plain or
-LZ4 MessagePack payload; the native decoder consumes them directly. This identity
-differs from the ABMX plugin GUID. See [ABMX behavior and limits](../mods/abmx.md)
+LZ4 MessagePack payload; the native decoder consumes them directly. Version `1`
+entries hold `boneData` as legacy text, which the native decoder migrates as the
+original does ([card v1 legacy text](../mods/abmx.md#card-v1-legacy-text), #403).
+This identity differs from the ABMX plugin GUID. See [ABMX behavior and limits](../mods/abmx.md)
 for coordinate defaults, null-entry repairs, transform order, and unsupported
 accessory/dynamic behavior.
 

@@ -57,15 +57,16 @@ public struct SourceBoneModifiers: Decodable, Sendable {
 
     /// Decode the original PluginData.data["boneData"] bytes, retaining Unity
     /// coordinates. Supports the installed ABMX card v2 / coordinate v3 arrays,
-    /// either plain MessagePack or its LZ4 extension 99 wrapper. Legacy migration
-    /// and accessory/dynamic evaluation remain outside the static pose contract.
+    /// either plain MessagePack or its LZ4 extension 99 wrapper. Card v1 text is
+    /// `decodeLegacyText`; coordinate v2 migration and accessory/dynamic
+    /// evaluation remain outside the static pose contract.
     public static func decodeBoneData(
         _ data: Data, dataKind: String, dataVersion: Int,
         assemblySHA256: String = "f3e2d9877b08b2b25187cbc101478ea0d484bcfe4856244050ba3119578e9f68"
     ) throws -> Self {
         guard (dataKind == "card" && dataVersion == 2) ||
                 (dataKind == "coordinate" && dataVersion == 3), isHash(assemblySHA256) else {
-            throw RigError.invalid("Supported ABMX versions are card v2 and coordinate v3 with valid assembly provenance; legacy migration is not implemented.")
+            throw RigError.invalid("Supported ABMX binary versions are card v2 and coordinate v3 with valid assembly provenance; card v1 is legacy text (decodeLegacyText), and coordinate v2 migration is not implemented.")
         }
         guard !data.isEmpty, data.count <= 16 * 1024 * 1024 else {
             throw RigError.invalid("ABMX boneData must contain 1 byte through 16 MiB.")
@@ -181,12 +182,12 @@ public struct SourceBoneModifiers: Decodable, Sendable {
         return result
     }
 
-    private func validate() throws {
+    func validate() throws {
         guard schemaVersion == 1, kind == "ikkoku-source-bone-modifiers",
               coordinateSpace == "unity-left-handed-y-up", angleUnit == "degrees", mode == "staticBaseline",
               source.pluginGUID == "KKABMX.Core", source.dataGUID == "KKABMPlugin.ABMData",
               source.pluginVersion == "5.4",
-              (source.dataKind == "card" && source.dataVersion == 2) ||
+              (source.dataKind == "card" && (source.dataVersion == 1 || source.dataVersion == 2)) ||
                 (source.dataKind == "coordinate" && source.dataVersion == 3),
               Self.isHash(source.assemblySHA256), Self.isHash(source.payloadSHA256) else {
             throw RigError.invalid("Unsupported ABMX document, data version, or coordinate convention.")
@@ -284,7 +285,7 @@ public struct SourceBoneModifiers: Decodable, Sendable {
         return result
     }
 
-    private static let dynamicInfluencePrefixes = ["cf_d_sk_", "cf_j_bust0", "cf_d_siri01_", "cf_j_siri_"]
+    static let dynamicInfluencePrefixes = ["cf_d_sk_", "cf_j_bust0", "cf_d_siri01_", "cf_j_siri_"]
     private static func bodyNode(named name: String, rig: RigDefinition) throws -> Int {
         let roots = rig.nodes(named: "p_cf_body_bone")
         guard roots.count <= 1 else { throw RigError.invalid("ABMX BodyTop has multiple source skeleton roots.") }
@@ -307,7 +308,7 @@ public struct SourceBoneModifiers: Decodable, Sendable {
         }
         return candidates[0]
     }
-    private static func isHash(_ value: String) -> Bool {
+    static func isHash(_ value: String) -> Bool {
         value.utf8.count == 64 && value.utf8.allSatisfy { (48...57).contains($0) || (97...102).contains($0) }
     }
 }

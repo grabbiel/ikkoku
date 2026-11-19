@@ -1,7 +1,8 @@
 # ABMX static bone modifier bridge
 
 Reviewed 2026-09-25. Current card-v2/coordinate-v3 decoding and ordinary static
-bone adjustments are implemented; full ABMX compatibility remains **mid-stage**.
+bone adjustments are implemented, and card-v1 legacy text is migrated as the
+original migrates it (2026-11-18, #403); full ABMX compatibility remains **mid-stage**.
 The [character/mod audit](../../component-audit/character-and-mods.md) (CM-39,
 CMT-05) tracks dynamic/accessory scopes, legacy data and a future plugin writer.
 
@@ -43,7 +44,7 @@ plugin GUID. The relevant `PluginData.data` key is **`boneData`**.
 
 | Container | Current written version | Source versions read | Native converter |
 | --- | ---: | --- | --- |
-| Character card | 2 | 1, 2 | 2 |
+| Character card | 2 | 1, 2 | 1 (legacy text), 2 |
 | Coordinate/outfit | 3 | 2, 3 | 3 |
 
 Current card-v2 and coordinate-v3 values contain an LZ4 MessagePack
@@ -91,7 +92,8 @@ followed by a raw LZ4 block. Its writer forces an ext32 header and a signed-int3
 size header. The converter accepts both the plain and compressed forms.
 
 The original plugin additionally migrates legacy card text and coordinate-v2
-dictionaries. That migration is not ported. The converter matches the current
+dictionaries. Card v1 text is ported ([below](#card-v1-legacy-text)); the
+coordinate-v2 migration is not. The converter matches the current
 serialization constructor's repair of individual null coordinate entries to
 identity values, retaining one warning per repaired entry in `diagnostics`.
 A null whole coordinate array or an empty array is rejected, matching the
@@ -101,6 +103,63 @@ These behaviors are confirmed in the installed constructor; no inference from
 empty-array behavior in `GetModifier` is needed. The standalone Python converter
 consumes extracted `boneData`; it does not parse whole cards. The native `SourceCharacterCard` layer now performs card framing and
 Extended Save selection before calling the binary decoder described below.
+
+## Card v1 legacy text
+
+A card whose `KKABMPlugin.ABMData` record has version **1** stores `boneData` as
+a **string**. `BoneController.ReadModifiers` passes it to
+`OldDataConverter.MigrateOldExtData`, whose rules the native decoder
+(`SourceBoneModifiers.decodeLegacyText`) and the Python converter
+(`convert_legacy`) follow, with the same messages. Recovered source: the same
+`KKABMX.dll` f3e2d987 (`OldDataConverter.cs`, `BoneController.cs` 396–419,
+`BoneModifier.cs` 92–126).
+
+The text is a list of tokens, each `field0,name,field2,x,y,z[,length]`:
+
+| Step | Original | Native |
+| --- | --- | --- |
+| Tokens | `text.Split()` with no separators, then `Trim()`; empty tokens are dropped | split on the `char.IsWhiteSpace` set below |
+| Fields | `Split(',')`, empty fields kept; tokens with fewer than 6 fields dropped | same |
+| Group key | the name (field 1) without a trailing `__<one character>`: it is trimmed when its UTF-16 units `[len-2]` and `[len-3]` are both `_` | same, in UTF-16 units |
+| Group order | `GroupBy`: first occurrence | same |
+| Order in a group | `OrderBy` on the full name, stable | ordinal UTF-16 order, stable (see culture below) |
+| Values | Scale = `float.Parse` of fields 3–5; Length = field 6, or 1 when the token has 6 fields; fields 0, 2 and 7 onward are never read | same; Position and Rotation (0,0,0) |
+| Parse failure | the token is skipped and logged | skipped, with a `skipped-legacy-line` warning (token number, bone, field) |
+| Coordinate list | more than 7 parsed tokens: the last 7; 2 to 6: the last 1; 1 and 7 unchanged | same, with a `legacy-coordinates-truncated` warning when tokens are dropped |
+| Group with no parsed token | no modifier | same |
+| Record | `new BoneModifier(key, Unknown, list)`: location 0 | location 0, and the same dynamic-family warning as card v2 |
+
+Whole-card outcomes:
+
+- **Bone name too short to index.** `GetTrimmedName` reads `name[len-2]`, then `name[len-3]` only when the first is `_`. A name shorter than 2 units, or `_` plus one unit, throws. `GroupBy` evaluates every token before the first group is read, so `ReadModifiers` catches the exception and the character loads with **no ABMX at all**. The native decoder returns an empty document with a `legacy-data-dropped` warning ("…the original drops all ABMX data for this card").
+- **Empty key.** A name of `__` plus one unit trims to an empty key. Once its group has a parsed token, the `BoneModifier` constructor throws for it, with the same outcome and the same warning.
+- **Missing or empty text.** No modifiers. `MigrateOldExtData` returns null for a missing key or an empty string, and `OnReload` then groups over that null and throws, so a freshly loaded character has no ABMX. Not ported: on a reload into an existing character, the earlier modifier list would stay. Whitespace-only text reads as an empty list, with the same result.
+- **`boneData` not a string.** The original's reader returns null, as above. The native decoder returns an empty document with a `legacy-bone-data-not-text` warning.
+- **Other plug-in versions.** The original reads them as empty (`NotSupportedException`, caught). The native decoder still refuses them (unchanged).
+
+Divergences and `[corlib]` assumptions. Mono's corlib (`string.Split`, `string.Trim`, `float.Parse`) is not in the recovered set. Where a rule depends on it, the documented .NET behaviour is used. The original player's results for each are from the #403 phase in [Checked against the original](#checked-against-the-original):
+
+- **Culture.** The original parses with the current culture and orders names with a culture-sensitive comparer. The native decoder parses with the invariant culture (`.` decimal) and orders by ordinal UTF-16. Fields are split on `,`, so a comma-decimal culture would split the numbers themselves: the original's own field count needs the `.` decimal. The two orderings agree on the suffix forms in use (none, or `__` plus a digit). They differ only for other suffix characters, for example `__A` against `__a` or `___`. Observed in the original player: the group `cc` with the names `cc__a`, `cc___`, `cc__A`, `cc__1`, `cc__0`, `cc__2`, `cc__3`, in that input order, is read in the order `cc___`, `cc__0`, `cc__1`, `cc__2`, `cc__3`, `cc__a`, `cc__A`. The native ordinal order is `cc__0`, `cc__1`, `cc__2`, `cc__3`, `cc__A`, `cc___`, `cc__a`.
+- **Whitespace** `[corlib]`: `char.IsWhiteSpace`, spelled out as U+0009–U+000D, U+0020, U+0085, U+00A0, U+1680, U+180E, U+2000–U+200A, U+2028, U+2029, U+202F, U+205F and U+3000. U+180E is included because Mono's Unicode data predates its move out of Zs. U+001C–U+001F, U+200B and U+FEFF do not separate tokens; Python's `str.split()` would split on U+001C–U+001F, so the converter uses this explicit set. Checked in the original player on 17 separators, each placed between two tokens: U+0009, U+000B, U+001C, U+001F, U+0085, U+00A0, U+1680, U+180E, U+2000, U+200A, U+200B, U+2028, U+2029, U+202F, U+205F, U+3000 and U+FEFF. Fourteen agree with this set. Three differ, so the original's `Split()` is not `char.IsWhiteSpace` for them:
+  - U+180E does not separate tokens in the original;
+  - U+200B and U+FEFF do.
+
+  The native set is unchanged for now; #417 aligns it with the original. Only tokens containing these three characters read differently, and the corpus separates tokens with CR+LF only.
+- **Number grammar** `[corlib]`: `NumberStyles.Float | AllowThousands`, invariant. A token has no whitespace or commas left, so the accepted forms are `[+-]?(d+(.d*)?|.d+)([eE][+-]?d+)?` and the case-sensitive symbols `Infinity`, `-Infinity` and `NaN`. Only ASCII digits are accepted. The value is parsed as a double, then rounded to float32, as Mono does. `-0` keeps its sign. Checked in the original player on 22 strings:
+  - The 11 finite strings give the same float32 bits, including `1e-45`, `1e-50`, `3.4028234663852886e38`, and `1.0000000596046448` → `3f800000`, which is a double-rounding case.
+  - The 6 strings this grammar rejects (`infinity`, `+Infinity`, `0x10`, `1e`, a full-width digit and `1_0`) are skipped by the original too.
+- **Non-finite values.** The original applies `NaN` and `±Infinity`; the player read them as `ffc00000`, `7f800000` and `ff800000`. The native decoder refuses the character: "…has a non-finite or out-of-range value in field K; ABMX modifier values must be finite float32 numbers." Only the tokens that reach the character count. A token that is skipped, or that the last-7/last-1 rule drops, does not refuse it.
+- **Beyond float32 range.** A value whose double magnitude exceeds `float.MaxValue` refuses the character in either direction, with the same message, even when it would round to `float.MaxValue`. The original differs, as checked in the player:
+  - A positive value above `float.MaxValue` is skipped as a parse failure ("Number overflow"). This includes `1e39` and `3.4028235e38`.
+  - A negative value between −`double.MaxValue` and −`float.MaxValue` is applied as −∞ (`-1e39` → `ff800000`).
+  - A value beyond the double range is skipped in either sign (`1e400`, `-1e400`).
+- **Native limits** (not the original's): 16 MiB of text, 10,000 groups, and bone names of at most 1,024 characters with no NUL. These are refusals with the card-v2 messages.
+
+A local census of the version-1 characters in the corpus scenes gives the shapes these rules meet: 12 unique characters and 765 tokens.
+- Tokens: every one is CR+LF-separated and has 7 fields; 756 names have a `__` plus digit suffix and 9 have none.
+- Values: 3,009 integer strings and 51 decimals, the largest magnitude 1.2. No parse failures and no non-finite values.
+- Groups: 108 have 7 tokens and 9 have 1, so the last-7/last-1 rule drops nothing.
+- No short names and no repeated full names.
 
 ## Reproduction and conversion
 
@@ -134,6 +193,8 @@ To convert an actual extracted `boneData` byte array:
 ```
 
 For a current outfit payload, use `--data-kind coordinate --data-version 3`.
+For card v1, `--data-version 1` reads the file as the `boneData` string's UTF-8
+text and applies the [legacy rules](#card-v1-legacy-text).
 The converter validates sizes, finite numeric values, vector arity, duplicate
 record identities, and the array layouts above. It records the payload SHA-256
 and preserves bone names, coordinate entries, and location numbers without
@@ -191,7 +252,10 @@ scope diagnostics as the Python converter. Native limits also cap decoded values
 at one million and container nesting at 64.
 
 `SourceCharacterCard` locates the selected plug-in record in current `KKEx` blocks
-or legacy card trailers and invokes that binary decoder. Maker's **File → Import
+or legacy card trailers and invokes that binary decoder. A version-1 record goes to
+`SourceBoneModifiers.decodeLegacyText(_:)` instead (`legacyNotText()` when its
+`boneData` is not a string); the document then has data version 1 and the text's
+UTF-8 SHA-256. Maker's **File → Import
 Source Card Settings…** applies the supported shape and modifier subset while
 retaining all original card bytes. The associated [card report](../character/cards.md)
 describes precedence and the supported surgical shape/color writer. Original-card
@@ -275,6 +339,13 @@ rotation composition, the distinction between length and scale, coordinate
 selection, identity/reset behavior, repeated application, signed scale without
 rotation, scope filtering, ambiguous/missing targets, and unsupported dynamics.
 It includes the two-negative-authored-scale regression.
+`SourceBoneModifierLegacyTests.swift` and the Python `LegacyABMXTests` cover the
+card-v1 rules case for case, on synthetic text: the whitespace set (including
+U+001C–U+001F, which do not split), field counts, suffix trimming in UTF-16,
+group and in-group order, the last-7/last-1 rule, parse failures, the number
+grammar as float32 bit patterns, non-finite and out-of-range refusals, the
+whole-card drop, limits, the card bridge and an apply equal to the matching
+card-v2 document.
 
 The private fixture applies original array records with independent NumPy
 position/scale operations and quaternion composition, then reflects complete
@@ -309,7 +380,7 @@ unknown sibling payloads. CMT-05 in the linked audit defines acceptance.
 ## Checked against the original
 
 **Setup.** The original CharaStudio player (Unity 5.6.2f1) ran with KKABMX 5.4 (`KKABMX.dll` f3e2d987), KKAPI 1.46.1 and ExtensibleSaveFormat 21.1.2.1.
-- There were three phases, one probe exec each, on 2026-11-18 (`Tools/reverse/original_abmx_probe.py`).
+- There were four phases, one probe exec each, on 2026-11-18 (`Tools/reverse/original_abmx_probe.py`).
 - The probe reads uploaded scene records only. Nothing in the game folder is written, and the plug-ins and configs are checked by SHA-256. Each phase left the guest clean.
 - The scene records and captures stay local.
 
@@ -349,5 +420,21 @@ unknown sibling payloads. CMT-05 in the linked audit defines acceptance.
   - Both decoders read them back bit for bit, as ABMX's own `ReadModifiers` does.
   - ABMX resolved the location-0 request to BodyTop when the row was added and saved it as 1. So this writer produces no stored location 0; reading one is covered by phase 1.
   - The payload is the test vector in `sourceBoneModifierDecodesTheOriginalSaveModifiersPayloadBitForBit`.
+
+**Phase 4, card v1 legacy text (#403).** The comparison was pre-registered before the run. Two v1 characters from the corpus scenes were used: a female with 18 groups (9 with 7 tokens and 9 with 1) and the corpus's only male v1 character (9 groups of 7).
+- **Provenance.** Each card's ABMX entry is version 1, with a string `boneData` whose UTF-8 SHA-256 equals the native document's payload hash.
+- **The decoder.** ABMX's own `ReadModifiers` equals the native decoder and the Python mirror on all 27 records:
+  - names, order and location 0;
+  - every Scale, Length, Position and Rotation value as float32 bits.
+
+  The two decoders also agree on the diagnostics: 9 dynamic-family warnings per character and nothing else.
+- **Live, observed, unverified.** Once the characters are loaded, ABMX's live controller holds every record whose bone is on the body, with the same values, at BodyTop (1).
+  - It holds no record whose bone is not on that body: `cf_d_sk_top` on the female, and all 9 skirt (`cf_d_sk_`) groups on the male body.
+  - The native decoder warns on these same dynamic groups.
+  - Those bones do not exist on that body, so nothing visible differs.
+- **Nine synthetic texts,** read by ABMX's own reader:
+  - These match: token counts and the last-7/last-1 rule, field counts and empty fields, the two whole-card drops (an empty list, the exception caught and logged) and blank text.
+  - These are the documented divergences, recorded in [Card v1 legacy text](#card-v1-legacy-text): number range, non-finite values and culture order.
+  - Whitespace differs on 3 of 17 separators (#417).
 
 **Not checked against the original:** accessory locations, coordinate (outfit) records, the dynamic-baseline families, `BoneEffect` callbacks, and saving to a card or coordinate file.
