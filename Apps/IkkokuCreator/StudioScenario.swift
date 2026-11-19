@@ -2266,8 +2266,10 @@ struct StudioScenario: Decodable {
                 studio.selection = id
                 studio.selectedSourceIK = target
                 studio.poseMode = .ik
-                guard let anchor = studio.sourceIKGuidePixel(of: target) else {
-                    record(step, false, "dragIKGuide: IK guide \(index) (\(SourceStudioIKEditing.labels[index])) does not project into the view camera"); continue
+                let view = studio.viewportSize
+                guard let anchor = studio.sourceIKGuidePixel(of: target), anchor.x >= 0, anchor.y >= 0, anchor.x < view.x, anchor.y < view.y else {
+                    let at = studio.sourceIKGuidePixel(of: target).map { " (it projects to (\($0.x), \($0.y)))" } ?? ""
+                    record(step, false, "dragIKGuide: IK guide \(index) (\(SourceStudioIKEditing.labels[index])) is not inside the \(Int(view.x)) x \(Int(view.y)) px view\(at)"); continue
                 }
                 guard let start = scanAxisPixel(step, anchor: anchor, axis: axis, axisName: axisName, of: "IK guide \(index)", shape: "arrow") else { continue }
                 let pickedID = studio.pickID(at: start)

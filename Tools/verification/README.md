@@ -1621,8 +1621,9 @@ each of the eight mouseDragged calls and after the mouseUp:
   `IKKOKU_PERF_PANEL_STATE=document` the toolbar reads the document, and the
   writes are reported but not failed.
 
-The scenario drags character 65's Body IK guide on its x arrow, then bone 19's
-z ring, both with `toolbarSteady`. It then exports and reimports the scene.
+The scenario focuses the view on character 65, since the scene's own view shows
+none of its IK guides. It then drags the Left hand IK guide on its x arrow, then
+bone 19's z ring, both with `toolbarSteady`. It then exports and reimports the scene.
 A build whose `StudioToolbarState` has a field that every drag step changes
 fails both drag steps. The bodies a real drag runs need a displayed window,
 and are not counted here.
