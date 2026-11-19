@@ -128,8 +128,11 @@ func instancedRunsBreakAtEveryRecordThatCannotMergeWithItsNeighbours() throws {
     // their draw, whether it is not instanceable at all or instanceable with
     // different bindings or state; on its own it is drawn per record.
     func pairs(_ odd: RenderItem) -> [RenderItem] { [item(0, order: 0), item(1, order: 0), odd, item(3, order: 2), item(4, order: 2)] }
+    // Maps slice 5: per-vertex receive bytes (one per vertex of the 24-vertex cube).
+    let receive = VertexBytes(buffer: try #require(renderer.gpu.device.makeBuffer(length: 24, options: .storageModeShared)))
     let notInstanceable: [(String, (inout RenderItem) -> Void)] = [
         ("not a Studio prop (a character part)", { $0.staticItem = false }),
+        ("per-vertex receive bytes", { $0.vertexReceive = receive }),
         ("hidden regions", { $0.hiddenRegions = 1 }),
         ("hidden buffer key", { $0.hiddenKey = 77 }),
         ("deformation key", { $0.deformKey = 78 }),
@@ -139,6 +142,16 @@ func instancedRunsBreakAtEveryRecordThatCannotMergeWithItsNeighbours() throws {
         let counts = try passCounts(renderer, pairs(item(2, order: 1, edit)))
         #expect(counts.mainPassRuns == 3 && counts.instancedRuns == 2 && counts.instancedRecords == 4, "\(label): \(counts)")
     }
+    // The guard itself (maps slice 5): a run binds its first record's buffers
+    // once, so a record that brings its own receive bytes never instances,
+    // even a static item that meets every other condition. Today only map
+    // meshes carry them, and maps never instance.
+    let gpuCube = try #require(resources.mesh(cube))
+    #expect(Renderer.instanceable(item(2, order: 1), mesh: gpuCube, isSky: false))
+    #expect(!Renderer.instanceable(item(2, order: 1) { $0.vertexReceive = receive }, mesh: gpuCube, isSky: false))
+    let receiving = try passCounts(renderer, [item(0, order: 0) { $0.vertexReceive = receive }, item(1, order: 0) { $0.vertexReceive = receive },
+                                              item(2, order: 0) { $0.vertexReceive = receive }])
+    #expect(receiving.mainPassRuns == 3 && receiving.instancedRuns == 0 && receiving.instancedRecords == 0, "\(receiving)")
     let different: [(String, (inout RenderItem) -> Void)] = [
         ("another mesh", { $0.mesh = otherCube }),
         ("a base texture", { $0.material.base = checker; $0.material.setFlag(MaterialFlagHasBaseTexture, true) }),
