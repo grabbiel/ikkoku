@@ -2,6 +2,7 @@ import Foundation
 import CryptoKit
 import Darwin
 import Metal
+import os
 import Testing
 import Renderer
 @testable import Studio
@@ -293,4 +294,142 @@ func theCharacterBatchThreadHopCostsMicroseconds() async throws {
                  + "GCD workers create %.0f µs, all %.0f µs", width, rounds, median(times.create), median(times.all),
                  median(times.gcdCreate), median(times.gcdAll)))
     #expect(times.reported == Array(repeating: width, count: rounds))
+}
+
+// #326, the hidden characters' clock: `SourceStudioAnimationClock` reads its
+// scene on GCD workers (its utility warm-up, an export's user-initiated
+// worker), with 512 KiB of stack, so its read, decode and drop run on a
+// thread of the batch's size (`SourceStudioCharacterBatch.onDecodeThread`).
+
+/// Runs `body` on a thread of its own with a GCD worker's stack and `qos`,
+/// as the clock's warm-up and an export's worker run.
+private func onSmallThread<T: Sendable>(qos: QualityOfService, _ body: @escaping @Sendable () -> T) async -> T {
+    await withCheckedContinuation { continuation in
+        let thread = Thread { continuation.resume(returning: body()) }
+        thread.stackSize = gcdWorkerStack
+        thread.qualityOfService = qos
+        thread.start()
+    }
+}
+
+/// Under 1 MiB: a GCD worker's stack, or a thread given its 512 KiB (pthread
+/// reports 524 KiB for both).
+private func isSmallStack(_ bytes: Int) -> Bool { bytes < 1 << 20 }
+
+/// A thread's stack, QoS and whether the decode's stack check passes there.
+private struct DecodeThreadState: Sendable, Equatable {
+    let stack: Int, qos: UInt32, checkPasses: Bool
+    static var current: Self {
+        let passes = (try? SourceStudioCharacterBatch.requireDecodeStack()) != nil
+        return .init(stack: pthread_get_stacksize_np(pthread_self()), qos: qos_class_self().rawValue, checkPasses: passes)
+    }
+}
+
+/// The decode thread has the batch's stack and its caller's QoS, here a
+/// utility thread with a GCD worker's 512 KiB. In Debug the stack check
+/// refuses the caller's thread and passes on the decode thread.
+@Test func theDecodeThreadHasTheBatchStackAndItsCallersQoS() async {
+    let (caller, decode) = await onSmallThread(qos: .utility) { () -> (DecodeThreadState, DecodeThreadState) in
+        (.current, SourceStudioCharacterBatch.onDecodeThread("test") { .current })
+    }
+    let utility = QOS_CLASS_UTILITY.rawValue
+    #if DEBUG
+    let checkPasses = false
+    #else
+    let checkPasses = true
+    #endif
+    #expect(isSmallStack(caller.stack) && caller.qos == utility && caller.checkPasses == checkPasses, "\(caller)")
+    #expect(decode.stack >= SourceStudioCharacterBatch.stackSize && decode.qos == utility && decode.checkPasses, "\(decode)")
+}
+
+/// The hand-off under repetition: 1,000 calls from a utility thread with a
+/// GCD worker's stack. Each result comes from the decode thread (another
+/// thread, with the batch's stack), and the body's last write is visible
+/// when the call returns, so the caller never ran ahead of it. Also prints
+/// the cost of a hop, the clock's added cost per scene file it reads.
+@Test func theDecodeThreadHandOffNeverRunsAhead() async {
+    let rounds = 1000
+    let (failures, times) = await onSmallThread(qos: .utility) { () -> ([String], [Double]) in
+        let caller = pthread_mach_thread_np(pthread_self())
+        let finished = OSAllocatedUnfairLock(initialState: 0)
+        var failures: [String] = [], times: [Double] = []
+        for round in 1...rounds {
+            let start = DispatchTime.now().uptimeNanoseconds
+            let seen = SourceStudioCharacterBatch.onDecodeThread("test") { () -> (thread: UInt32, stack: Int) in
+                let seen = (thread: pthread_mach_thread_np(pthread_self()), stack: pthread_get_stacksize_np(pthread_self()))
+                finished.withLock { $0 = round }
+                return seen
+            }
+            let done = finished.withLock { $0 }
+            times.append(Double(DispatchTime.now().uptimeNanoseconds - start) / 1000)
+            if seen.thread == caller || seen.stack < SourceStudioCharacterBatch.stackSize || done != round {
+                failures.append("round \(round): thread \(seen.thread), \(seen.stack) bytes, finished \(done)")
+            }
+        }
+        return (failures, times)
+    }
+    #expect(failures.isEmpty, "\(failures.count) failures, first \(failures.prefix(3))")
+    let sorted = times.sorted()
+    print(String(format: "[#326 decode hop] %d calls from a utility thread: median %.0f µs, p95 %.0f µs",
+                 rounds, sorted[rounds / 2], sorted[rounds * 95 / 100]))
+}
+
+/// The clock's warm-up (#326, P1) runs on a utility GCD worker and reads
+/// its scene there; the read, the decode and the drop of the records run on
+/// the decode thread instead (`readSeeds`). On the deepest character chain
+/// the reader accepts, the root's and the deepest character's seeds load.
+/// Without the hop, a Debug run refuses the decode (`requireDecodeStack`)
+/// and the seeds are that error; a Release one would overflow the worker.
+@Test func theClockWarmUpDecodesTheDeepestCharacterChainOnTheDecodeThread() async throws {
+    let folder = try temporaryFolder()
+    defer { try? FileManager.default.removeItem(at: folder) }
+    // Written, and decoded for the expected states, off the pool: both recurse.
+    let (scene, expected) = try await liveTickOffPool { () -> (SourceStudioCharacterReference, [Int32: SourceStudioAnimationState]) in
+        let data = deepScene(levels: deepestLevels, chain: .characters)
+        var expected: [Int32: SourceStudioAnimationState] = [:]
+        var level = try KoikatsuSceneReader.decodeDocument(data).snapshot.roots
+        while let object = level.first, let character = object.character {
+            expected[object.sourceKey] = SourceStudioAnimationState(record: character)
+            level = character.accessoryChildren[0] ?? []
+        }
+        return (try deepReference(data, chain: .characters, in: folder), expected)
+    }
+    #expect(expected.count == deepestLevels)
+    let keys: [Int32] = [0, Int32(deepestLevels - 1)]
+    let references = keys.map {
+        SourceStudioCharacterReference(sceneFile: scene.sceneFile, sceneSHA256: scene.sceneSHA256, rigFile: scene.rigFile,
+                                       boneCatalogFile: scene.boneCatalogFile, objectKey: $0)
+    }
+    let clock = SourceStudioAnimationClock()
+    let warmUp = await withCheckedContinuation { continuation in
+        let requests = references.map { SourceStudioAnimationClock.Request(reference: $0, edited: nil, bodyValues: nil) }
+        clock.beginWarmUp(requests, generation: clock.generation) { loaded in
+            continuation.resume(returning: (loaded: loaded, stack: pthread_get_stacksize_np(pthread_self())))
+        }
+    }
+    #expect(warmUp.loaded && isSmallStack(warmUp.stack), "\(warmUp)")
+    for (key, reference) in zip(keys, references) {
+        let seed = clock.cachedSeed(reference)
+        #expect((try? seed?.get().saved) == expected[key], "\(key): \(String(describing: seed))")
+    }
+}
+
+/// The hidden card check (#326, P3) keeps shallow copies of its records,
+/// with no accessory children, and its worker's block captures no record:
+/// a worker that drops the last reference releases no subtree. Here the
+/// character's accessory child dies with the caller's records, before the
+/// check is asked for its problems.
+@Test func theHiddenCardCheckHoldsNoSceneSubtree() throws {
+    weak var child: KoikatsuObjectRecord?
+    var hadChild = false
+    let check = try { () throws -> SourceStudioCharacterPreview.CardCheck in
+        let document = try KoikatsuSceneReader.decodeDocument(deepScene(levels: 2, chain: .characters))
+        let character = try #require(document.snapshot.roots.first?.character)
+        child = character.accessoryChildren[0]?.first
+        hadChild = child != nil
+        return SourceStudioCharacterPreview.CardCheck(records: [character])
+    }()
+    #expect(hadChild && child == nil)
+    #expect(check.records.count == 1 && check.records.allSatisfy { $0.accessoryChildren.isEmpty })
+    #expect(check.problems().count == 1)
 }
