@@ -7446,5 +7446,31 @@ commit each with its own test:
 
 ### A/B
 
-To come with the new registration: `studio-fk-drag`, base against head,
-in a window the coordinator schedules.
+Registered A/B, 2026-11-19 (W16). The plan was frozen before measuring and
+verified by the coordinator.
+- **Arms:** base `main` `0d7eb327` against head `3b170522` (`0d7eb327` plus
+  this change), both Release.
+- **Run:** `studio-fk-drag` for 10 s, ABBA × 2, so 8 units and n = 4 per
+  arm. Each launch held the app lock on its own, at 60 Hz with the monitor
+  off.
+- **Gates:** the entry and after gates use the strict 20% intruder rule,
+  and the pre-launch snapshot invalidates too.
+- **Reruns:** an invalid unit is rerun at most twice.
+- **Statistic:** the median of the per-run refresh means.
+
+All 8 units were valid. One head unit's first attempt was invalid
+(`corespotlightd` at 362% in its after gate) and was rerun under the plan.
+
+| | base | head |
+|---|---:|---:|
+| refresh, median of run means (ms) | 2.257 (2.200–2.375) | 1.258 (1.198–1.293) |
+| main busy, median (ms/s) | 287.3 | 178.7 |
+| frames built / reused per refresh | — | 1 / 6 in every run |
+
+- **(a)** The refresh is 55.7% of base, against ≤ 70%: pass.
+- **(b)** Main busy is 62.2% of base, against ≤ base: pass.
+- **(c)** Every head run builds 1 frame and reuses 6, inside the bands:
+  pass.
+
+The ranges do not overlap. A dev A/B of the same binaries, run 15 minutes
+earlier, gave 55.5%.
