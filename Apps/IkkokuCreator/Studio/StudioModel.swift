@@ -530,8 +530,12 @@ final class StudioModel: ViewportInputHandler, LivePacedHandler {
     /// undo/redo and New Scene (see `undo()`). The saved record colors and
     /// alpha ride along so the frame builder can tint the parts without
     /// re-reading the scene file.
-    @ObservationIgnored private var sourceItemAssets: [UUID: (sceneSHA256: String, key: String, path: String,
-        colors: [SIMD4<Float>], alpha: Float)] = [:]
+    /// ST-T04 (B4): `materials` holds the untinted materials of the entry's
+    /// asset, built once per asset instance instead of on every refresh. The
+    /// entries of one file share one set (the import and the rehydration make
+    /// one per file), and only these entries hold it, so it goes with them
+    /// whenever an import or a rehydration replaces `sourceItemAssets`.
+    @ObservationIgnored private var sourceItemAssets: [UUID: SourceItemAssetEntry] = [:]
     /// A-T02: objects of opened scenes whose resource check (`resolvingResources`)
     /// left a reference missing, changed or outside its library, so their files
     /// are never read: `refresh()` skips them and rehydration and plugin
@@ -2570,7 +2574,7 @@ final class StudioModel: ViewportInputHandler, LivePacedHandler {
         var routes: [UUID: SourceRouteRuntime] = [:]
         var routeCharacterPreviews: [UUID: SourceStudioCharacterPreview] = [:]
         var cameras: [UUID: (sceneSHA256: String, objectKey: Int32, name: String)] = [:]
-        var itemAssets: [UUID: (sceneSHA256: String, key: String, path: String, colors: [SIMD4<Float>], alpha: Float)] = [:]
+        var itemAssets: [UUID: SourceItemAssetEntry] = [:], itemMaterialSets: [String: SourceStudioItemMaterialSet] = [:]
         var unmappedItemKeys: [String: Int] = [:]
         // ST-T04: why a key is unmapped, when the catalog lists what it could not convert.
         var notConvertedReasons: [String: String] = [:], notInCatalogKeys: Set<String> = []
@@ -2646,8 +2650,10 @@ final class StudioModel: ViewportInputHandler, LivePacedHandler {
                 do {
                     let asset = try job.item(index, library: library)
                     object.name = "\(asset.name) (source item \(record.sourceKey))"
+                    let materials = itemMaterialSets[asset.url.path, default: SourceStudioItemMaterialSet()]
+                    itemMaterialSets[asset.url.path] = materials
                     itemAssets[object.id] = (sceneSHA256: hash, key: itemKey, path: asset.url.path,
-                        colors: item.colors, alpha: item.alpha)
+                        colors: item.colors, alpha: item.alpha, materials: materials)
                 } catch {
                     // The catalog's name where it maps the key, with an
                     // explicit unrendered marker; otherwise the placeholder.
@@ -3980,6 +3986,8 @@ final class StudioModel: ViewportInputHandler, LivePacedHandler {
             return fresh
         }
         let selectionBuild = sourceSelectionBuild
+        // Read once: the item and camera entries below compare it per object.
+        let sceneSHA256 = doc.sourceSceneSHA256
         for (index, o) in animatedDoc.objects.enumerated() {
             // This iteration may install or step `o`'s preview (see
             // `SourceWorldWalk`): later queries re-evaluate the matrices that
@@ -4100,6 +4108,7 @@ final class StudioModel: ViewportInputHandler, LivePacedHandler {
                     let model = world * part.worldMatrix
                     var ri = RenderItem(mesh: part.mesh, material: mat, model: model, objectID: objectID)
                     ri.order = 35
+                    ri.staticItem = true   // ST-T04: may draw instanced
                     items.append(ri)
                     bounds.expand(part.bounds.transformed(by: model))
                 }
@@ -4145,26 +4154,23 @@ final class StudioModel: ViewportInputHandler, LivePacedHandler {
                 // serialized `_Color`/`_alpha` with the record's saved color
                 // and alpha, as `UpdateColor` does at runtime; patterns,
                 // animation, FK and dynamics are not applied.
-                if let entry = sourceItemAssets[o.id], entry.sceneSHA256 == doc.sourceSceneSHA256,
+                if let entry = sourceItemAssets[o.id], entry.sceneSHA256 == sceneSHA256,
                    let a = library.asset(entry.path) {
-                    for part in a.parts {
-                        let tint = SourceStudioItemColor.tint(colors: entry.colors, alpha: entry.alpha,
-                            extras: part.material.extras)
-                        var mat = MaterialBuilder.itemMaterial(for: part, asset: a, tint: nil, emissive: 0)
-                        if let tint {
-                            // The exported factor is the serialized `_Color`
-                            // (and, for BLEND, `_alpha`); UpdateColor replaces
-                            // both, so the record values replace the factor
-                            // rather than multiplying it. Toon.metal outputs
-                            // `baseColor.w × tex.a`, the `_MainTex.a · _alpha`
-                            // contract.
-                            let c = tint.color.linear
-                            mat.uniforms.baseColor.x = c.x; mat.uniforms.baseColor.y = c.y; mat.uniforms.baseColor.z = c.z
-                            if let alpha = tint.alpha { mat.uniforms.baseColor.w = alpha }
+                    // B4: the parts' untinted materials, built once per asset
+                    // instance and shared by the file's entries; the record's
+                    // tint goes on a copy (`SourceStudioItemColor.apply`).
+                    let materials = entry.materials.materials(for: a)
+                    for i in a.parts.indices {
+                        let part = a.parts[i]
+                        var mat = materials[i]
+                        if let tint = SourceStudioItemColor.tint(colors: entry.colors, alpha: entry.alpha,
+                                                                 extras: part.material.extras) {
+                            SourceStudioItemColor.apply(tint, to: &mat)
                         }
                         let model = world * part.worldMatrix
                         var ri = RenderItem(mesh: part.mesh, material: mat, model: model, objectID: objectID)
                         ri.order = 35
+                        ri.staticItem = true   // ST-T04: may draw instanced
                         items.append(ri)
                         bounds.expand(part.bounds.transformed(by: model))
                     }
@@ -4188,7 +4194,7 @@ final class StudioModel: ViewportInputHandler, LivePacedHandler {
                 // active one hides its icon, the others keep it. The view
                 // direction is the object's world rotation looking along
                 // native (0, 0, -1) — scale is ignored, like `LateUpdate`.
-                if let entry = sourceCameras[o.id], entry.sceneSHA256 == doc.sourceSceneSHA256,
+                if let entry = sourceCameras[o.id], entry.sceneSHA256 == sceneSHA256,
                    activeSourceCamera != o.id {
                     let p = world.translation
                     let f = world.rotationQuaternion.act(Float3(0, 0, -1))
