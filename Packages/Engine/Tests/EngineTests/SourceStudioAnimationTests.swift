@@ -58,7 +58,7 @@ func sourceStudioAnimationClockMatchesRecoveredBinary32TraceWhenSupplied() throw
     #expect(changed.cardData == original.cardData && changed.bones == original.bones && changed.ikTargets == original.ikTargets)
     #expect(changed.voices == original.voices && changed.handPatterns == original.handPatterns && changed.neckData == original.neckData)
     #expect(changed.animationOptionVisible == original.animationOptionVisible && changed.expressions == original.expressions)
-    #expect(after.snapshot.roots[1] == source.snapshot.roots[1] && after.settings == source.settings && after.trailingData == source.trailingData)
+    #expect(try onDecodeStack { after.snapshot.roots[1] == source.snapshot.roots[1] } && after.settings == source.settings && after.trailingData == source.trailingData)
     #expect(try after.editedData(.init(animations: [10: .init(record: original)])) == bytes)
     #expect(throws: (any Error).self) { try source.editedData(.init(animations: [20: edit])) }
     edit.pattern = .infinity

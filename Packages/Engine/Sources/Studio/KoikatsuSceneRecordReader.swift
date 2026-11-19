@@ -247,14 +247,17 @@ public extension KoikatsuSceneReader {
     /// Complete installed 1.0.4.2 writer framing, or an older scene with
     /// the values CharaStudio 1.0.4.2's load gives the fields it lacks; keeps
     /// all bytes, including unsupported plug-in trailers. It does not
-    /// instantiate runtime objects.
+    /// instantiate runtime objects. The read recurses once per nesting
+    /// level, so it runs on the decode stack (`onDecodeStack`, #326).
     static func decodeDocument(_ data: Data) throws -> KoikatsuSceneDocument {
-        var reader = try KoikatsuBinaryReader(data)
-        let snapshot = try reader.snapshot()
-        let settings = try reader.sceneSettings()
-        guard try reader.string() == "【KStudio】" else { throw reader.invalid("missing original Studio writer marker") }
-        let end = reader.offset
-        return KoikatsuSceneDocument(snapshot: snapshot, settings: settings, baseSceneEndOffset: end,
-            trailingData: try reader.take(data.count - end), preservedData: data)
+        try SourceStudioCharacterBatch.onDecodeStack("Ikkoku scene decode") {
+            var reader = try KoikatsuBinaryReader(data)
+            let snapshot = try reader.snapshot()
+            let settings = try reader.sceneSettings()
+            guard try reader.string() == "【KStudio】" else { throw reader.invalid("missing original Studio writer marker") }
+            let end = reader.offset
+            return KoikatsuSceneDocument(snapshot: snapshot, settings: settings, baseSceneEndOffset: end,
+                trailingData: try reader.take(data.count - end), preservedData: data)
+        }
     }
 }

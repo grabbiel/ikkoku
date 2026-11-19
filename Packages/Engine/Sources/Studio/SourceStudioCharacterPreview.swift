@@ -529,6 +529,23 @@ public final class SourceStudioCharacterPreview {
         }
     }
 
+    /// The character record `key` names in `scene`, as a shallow copy
+    /// (#326): an assembly and its preview read the card, the bones and the
+    /// saved states, never the accessory children, a scene subtree that
+    /// would otherwise die wherever the preview does, the Studio's build
+    /// queue (GCD) included.
+    static func characterRecord(_ key: Int32, in scene: KoikatsuSceneDocument) throws -> KoikatsuCharacterRecord {
+        var stack = scene.snapshot.roots, match: KoikatsuCharacterRecord?
+        while let object = stack.popLast() {
+            if object.sourceKey == key { match = object.character; break }
+            stack += object.children
+            if let character = object.character { stack += character.accessoryChildren.values.flatMap { $0 } }
+        }
+        guard var record = match else { throw RigError.invalid("Source character record is missing.") }
+        record.accessoryChildren = [:]
+        return record
+    }
+
     /// The first half of a build (see `Assembly`). `sharing` is a loaded
     /// preview's `donation`: when it shows the same reference (scene
     /// SHA-256, record key and converted files) and outfit on the same
@@ -544,13 +561,7 @@ public final class SourceStudioCharacterPreview {
             throw RigError.invalid("The referenced source scene changed; import it again to update this preview.")
         }
         let scene = try KoikatsuSceneReader.decodeDocument(data)
-        var stack = scene.snapshot.roots, match: KoikatsuCharacterRecord?
-        while let object = stack.popLast() {
-            if object.sourceKey == reference.objectKey { match = object.character; break }
-            stack += object.children
-            if let character = object.character { stack += character.accessoryChildren.values.flatMap { $0 } }
-        }
-        guard let record = match else { throw RigError.invalid("Source character record is missing.") }
+        let record = try characterRecord(reference.objectKey, in: scene)
         let (card, identity, status, savedCoordinate) = try cardInputs(record)
         let outfitCount = (try? card.coordinateCount()) ?? 0
         if let selectedCoordinate {
