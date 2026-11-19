@@ -552,6 +552,15 @@ struct WorkspaceSlot: View, Equatable {
     }
 }
 
+extension WorkspaceRow {
+    /// #410: the height the workspace stack gives `entry`'s row at `width`
+    /// (its fitting height), for the geometry scenario and the slot
+    /// measurement in `studio-load`.
+    @MainActor static func fittingHeight(_ entry: WorkspaceEntry, width: CGFloat) -> CGFloat {
+        NSHostingView(rootView: WorkspaceRow(entry: entry, select: {}, toggleVisible: {}).frame(width: width)).fittingSize.height
+    }
+}
+
 /// One workspace row. It holds no state (no @State, focus, hover or drag):
 /// the stack keys its slots by position (#410), so state here would stay with
 /// the slot, not the object, after a delete or a duplicate. The scenario

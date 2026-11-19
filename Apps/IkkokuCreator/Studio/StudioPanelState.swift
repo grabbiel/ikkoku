@@ -27,10 +27,18 @@ struct StudioWorkspaceState: Equatable {
     var entries: [WorkspaceEntry] = []
     var objectCount = 0
     /// #410: the slots the workspace stack keeps, the most rows published
-    /// this session (`StudioModel.workspaceRowCapacity`) and at least
-    /// `entries.count`. It never shrinks, so a load that shows fewer rows
-    /// leaves empty slots instead of removing rows (`WorkspaceSlot`).
+    /// this session (`StudioModel.workspaceRowCapacity`), at most `slotCap`,
+    /// and at least `entries.count`. It does not shrink below that, so a
+    /// load that shows fewer rows leaves empty slots instead of removing rows
+    /// (`WorkspaceSlot`).
     var rowCapacity = 0
+
+    /// #410: the most slots kept while a scene shows fewer rows: the stack
+    /// keeps `max(rows, min(most rows shown, slotCap))`. Nil keeps them all.
+    /// `IKKOKU_PERF_WORKSPACE_SLOT_CAP=<k>` is a measurement control, read
+    /// once at launch, that sets it.
+    static let slotCap: Int? =
+        ProcessInfo.processInfo.environment["IKKOKU_PERF_WORKSPACE_SLOT_CAP"].flatMap { Int($0) }.map { max(0, $0) }
 
     @MainActor init() {}
 
@@ -57,7 +65,7 @@ struct StudioWorkspaceState: Equatable {
                                   cameraPlaceholder: label.sourceCamera, keyDetail: label.keyDetail, cameraMarker: marker)
         }
         objectCount = doc.objects.count
-        rowCapacity = max(model.workspaceRowCapacity, entries.count)
+        rowCapacity = max(Self.slotCap.map { min(model.workspaceRowCapacity, $0) } ?? model.workspaceRowCapacity, entries.count)
     }
 
     /// These rows with `selection` selected: what `init(model:)` builds when

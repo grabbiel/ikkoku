@@ -768,7 +768,7 @@ struct InspectorUIScenario: Decodable {
             let line = leaves.filter { abs($0.frame.midY - eye.frame.midY) <= 3 }
             guard let icon = line.min(by: { $0.frame.minX < $1.frame.minX }) else { continue }
             let entry = entries[row]
-            let height = NSHostingView(rootView: WorkspaceRow(entry: entry, select: {}, toggleVisible: {}).frame(width: width)).fittingSize.height
+            let height = WorkspaceRow.fittingHeight(entry, width: width)
             let top = icon.frame.midY + height / 2, bottom = icon.frame.midY - height / 2
             guard top <= clip.maxY + G.tolerance, bottom >= clip.minY - G.tolerance else { continue }
             let lead = icon.frame.minX - clip.minX - (G.rowPadding + G.indent * CGFloat(entry.depth) + G.rowSpacing)

@@ -732,6 +732,17 @@ final class PerfWorkloadDriver {
                            ("scroll workspace to end", true, { [weak self] in self?.scrollWorkspace(toEnd: true) }),
                            ("scroll workspace to top", false, { [weak self] in self?.scrollWorkspace(toEnd: false) })]
             trace.details["smallSceneObjects"] = count
+            trace.details["workspaceSlotCap"] = StudioWorkspaceState.slotCap.map { $0 as Any } ?? NSNull()
+            // The most rows any window could show at once: the tallest
+            // screen's visible height over a one-line row and its 1 pt gap.
+            // A slot cap must stay above it (with the stack's overscan).
+            if let entry = studio.shownWorkspaceState.entries.first {
+                let rowHeight = Double(WorkspaceRow.fittingHeight(entry, width: 242))
+                let screen = Double(NSScreen.screens.map(\.visibleFrame.height).max() ?? 0)
+                trace.details["workspaceRowHeight"] = PerfTrace.round(rowHeight)
+                trace.details["tallestScreenVisibleHeight"] = screen
+                trace.details["workspaceMaxVisibleRows"] = rowHeight > 0 ? Int((screen / (rowHeight + 1)).rounded(.up)) : -1
+            }
             trace.details["gesture"] = "File ▸ Open of the source scene saved as an Ikkoku scene, then of a scene of \(count) folders, "
                 + "then the workspace scrolled to its end and back, repeated; live animation on"
             return

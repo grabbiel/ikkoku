@@ -453,6 +453,8 @@ extension CaptureRequest {
         ScopedOption("IKKOKU_PERF_INSPECTOR_TAB", [.perfTrace]),
         ScopedOption("IKKOKU_PERF_KEEP_MOUNTED", [.perfTrace]),
         ScopedOption("IKKOKU_PERF_PANEL_STATE", [.perfTrace]),
+        ScopedOption("IKKOKU_PERF_LOAD_SMALL_OBJECTS", [.perfTrace]),
+        ScopedOption("IKKOKU_PERF_WORKSPACE_SLOT_CAP", [.perfTrace]),
     ]
 
     /// Options read only by the window capture.
@@ -605,6 +607,11 @@ extension CaptureRequest {
         // what they show (item 7 follow-ups, C4): each body as before, or the
         // state the model publishes (the default).
         ValueRule("IKKOKU_PERF_PANEL_STATE", .oneOf(["document", "published"])),
+        // #410: the folders of the small scene `studio-load` alternates with
+        // the source scene, and the most workspace slots kept while a scene
+        // shows fewer rows.
+        ValueRule("IKKOKU_PERF_LOAD_SMALL_OBJECTS", .integer(1...10_000)),
+        ValueRule("IKKOKU_PERF_WORKSPACE_SLOT_CAP", .integer(0...100_000)),
     ]
 
     /// `IKKOKU_PERF_WORKLOAD` values, in the order `docs/reference/performance.md` lists them.
