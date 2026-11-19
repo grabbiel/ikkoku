@@ -1346,6 +1346,11 @@ get wrong:
   a launch's first line; `checks/inspector_fit_log.py` then needs exactly
   one captured line, on character 963 and the Clothes tab, with the
   document no wider than the clip and the accessibility fit check passing.
+  With `--pose-picker` (#363) it also needs the toolbar's pose-mode picker
+  (Object/FK/IK) laid out at its intrinsic width, read from the log's layout
+  probe. This start rebuilds the picker after the folder selection; under its
+  former fixed 150 pt frame (the control is 165 pt) a fresh build laid it out
+  compressed and a rebuild at full width, so captures split between the two.
 
 The Tab walk of `keyLoop` focuses each field in turn, and focusing a
 Transform field commits the value it shows (as `inspector-edit-deselect`
