@@ -606,7 +606,13 @@ struct WorkspaceRow: View, Equatable {
                 Text(entry.name).lineLimit(1).font(.callout)
             }
             Spacer()
+            // #410: no system focus effect. For each eye button it shows,
+            // SwiftUI adds a `_FocusRingView` to the scroll view's group
+            // container, and AppKit's drag-region update keeps a dependency on
+            // the container for each one it adds, so every load that rebuilt
+            // the rows added about 41 dependencies that were never removed.
             Button(action: toggleVisible) { Image(systemName: entry.visible ? "eye" : "eye.slash").foregroundStyle(.secondary) }.buttonStyle(.plain)
+                .focusEffectDisabled()
         }
         .padding(.vertical, 3).padding(.horizontal, 6)
         .background(RoundedRectangle(cornerRadius: 5).fill(entry.selected ? Color.accentColor.opacity(0.3) : .clear))
