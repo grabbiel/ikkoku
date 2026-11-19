@@ -392,13 +392,23 @@ def one_minus_reflectivity(metallic):
     return ONE_MINUS_DIELECTRIC_SPEC - metallic * ONE_MINUS_DIELECTRIC_SPEC
 
 
-def standard_inputs(colors, floats, keywords, emission_image=None, emission_srgb=True, metallic_map_mean=None):
+def standard_inputs(colors, floats, keywords, emission_image=None, emission_srgb=True, metallic_map_mean=None,
+                    gloss_map_alpha_mean=None, albedo_alpha_mean=None):
     """What the app's baked-lightmap material needs from a Standard material: albedo and
     emission colours in Linear, and diffColor's factor. With `_METALLICGLOSSMAP` Standard reads
     metallic per texel from `_MetallicGlossMap.r` (UnityStandardInput.cginc L153-L164); the app
     draws no metallic map, so the texture's mean (as the sampler returns it, sRGB decoded when
     the texture is sRGB) stands in and says so. With the keyword but no texture Unity samples
-    the property's default, white: metallic 1."""
+    the property's default, white: metallic 1.
+
+    Smoothness (maps slice 5: the sun's Disney diffuse reads perceptualRoughness = 1 - smoothness)
+    follows the same function, MetallicGloss (UnityStandardInput.cginc): under
+    `_SMOOTHNESS_TEXTURE_ALBEDO_CHANNEL_A` the albedo alpha times `_GlossMapScale`, with or without
+    `_METALLICGLOSSMAP` (metallic still comes from the map's R); else under `_METALLICGLOSSMAP` the
+    map's alpha times `_GlossMapScale`; else `_Glossiness`. A texture's alpha stands in by its mean
+    (never sRGB decoded) and says so, like metallic; a missing texture is the white default, alpha 1.
+    The keyword flags ForwardBase also reads are recorded: `_SPECULARHIGHLIGHTS_OFF`,
+    `_GLOSSYREFLECTIONS_OFF` and `_ALPHAPREMULTIPLY_ON` (Transparent mode: diffColor times alpha)."""
     color = colors.get("_Color", [1, 1, 1, 1])
     words = set(keywords)
     if "_METALLICGLOSSMAP" in words:
@@ -407,9 +417,25 @@ def standard_inputs(colors, floats, keywords, emission_image=None, emission_srgb
                   else "_MetallicGlossMap.r mean over the texture (per-texel metallic is not drawn)")
     else:
         metallic, source = floats.get("_Metallic", 0.0), "_Metallic"
+    if "_SMOOTHNESS_TEXTURE_ALBEDO_CHANNEL_A" in words:
+        alpha, smoothness_source, texture_name = albedo_alpha_mean, "albedoAlphaMean", "_MainTex"
+    elif "_METALLICGLOSSMAP" in words:
+        alpha, smoothness_source, texture_name = gloss_map_alpha_mean, "metallicGlossMapAlphaMean", "_MetallicGlossMap"
+    else:
+        alpha, smoothness_source, texture_name = None, "glossiness", None
+    if texture_name is None:
+        smoothness, factor, approximation = floats.get("_Glossiness", 0.5), None, None
+    else:
+        factor = floats.get("_GlossMapScale", 1.0)
+        smoothness = (1.0 if alpha is None else alpha) * factor
+        approximation = (f"{texture_name} absent: the white default (alpha 1)" if alpha is None
+                         else f"{texture_name}.a mean over the texture (per-texel smoothness is not drawn)")
     result = {"albedoLinear": [gamma_to_linear_exact(c) for c in color[:3]] + [color[3]],
               "metallic": metallic, "oneMinusReflectivity": one_minus_reflectivity(metallic),
-              "metallicSource": source, "emission": None}
+              "metallicSource": source, "smoothness": smoothness, "smoothnessSource": smoothness_source,
+              "smoothnessFactor": factor, "smoothnessApproximation": approximation,
+              "specularHighlights": "_SPECULARHIGHLIGHTS_OFF" not in words, "glossyReflections": "_GLOSSYREFLECTIONS_OFF" not in words,
+              "premultiplyAlpha": "_ALPHAPREMULTIPLY_ON" in words, "emission": None}
     if "_EMISSION" in words:
         # Without a texture Unity samples the property's default, "white" (image None).
         emission = colors.get("_EmissionColor", [0, 0, 0, 1])
@@ -420,9 +446,10 @@ def standard_inputs(colors, floats, keywords, emission_image=None, emission_srgb
 
 def texture_channel_mean(texture, channel):
     """Mean of one channel of a texture's top mip as a sampler returns it: 0-1, decoded from
-    sRGB when the texture is sRGB (m_ColorSpace 1) in a Linear player."""
+    sRGB when the texture is sRGB (m_ColorSpace 1) in a Linear player. Alpha (channel 3) is
+    never decoded."""
     values = [value / 255.0 for value in texture.image.convert("RGBA").getchannel(channel).getdata()]
-    if texture.m_ColorSpace == 1:
+    if texture.m_ColorSpace == 1 and channel != 3:
         values = [gamma_to_linear_exact(value) for value in values]
     return sum(values) / len(values)
 
@@ -1330,6 +1357,10 @@ def lights_of(map_scene, active):
                        "color": [color.r, color.g, color.b, color.a], "intensity": light.m_Intensity, "range": light.m_Range,
                        "spotAngle": light.m_SpotAngle, "lightmapping": light.m_Lightmapping,
                        "shadows": light.m_Shadows.m_Type, "cullingMask": light.m_CullingMask.m_Bits,
+                       # Slice 5: the rest of m_Shadows (resolution -1 means "from the quality settings").
+                       "shadowStrength": light.m_Shadows.m_Strength, "shadowBias": light.m_Shadows.m_Bias,
+                       "shadowNormalBias": light.m_Shadows.m_NormalBias, "shadowNearPlane": light.m_Shadows.m_NearPlane,
+                       "shadowResolution": light.m_Shadows.m_Resolution, "shadowCustomResolution": light.m_Shadows.m_CustomResolution,
                        "visibleFor": visibility_keys(host, map_scene.parents, active),
                        "underMapRoot": map_scene.under_map_root(host),
                        "worldForwardUnity": normalized(apply_linear(linear(world), [0, 0, 1])),
@@ -1348,6 +1379,93 @@ def render_settings_of(map_scene):
                 "skyboxMaterial": shader_name(r.m_SkyboxMaterial.read()) if r.m_SkyboxMaterial.path_id else None,
                 "subtractiveShadowColor": rgba(r.m_SubtractiveShadowColor)}
     return None
+
+
+# ---------------------------------------------------------------- maps slice 5: lighting (unit tested)
+#
+# What a map's Standard draws need beyond the baked lightmaps, as the slice-5 plan's offline checks
+# against the slice-4 oracle measured them (maps.md, "Slice 5"): the ambient Unity lights a
+# renderer without a lightmap with (no map has light probes, so it is RenderSettings' own), and the
+# realtime directional sun with its shadow settings, per sun type. The converter writes data only;
+# the app applies the rules.
+
+AMBIENT_MODES = {0: "skybox", 1: "trilight", 3: "flat"}
+SHADOW_TYPES = {0: "none", 1: "hard", 2: "soft"}
+# The map shaders Unity lights with the sun and the ambient (the GI-lit families); only their
+# draws carry shadow runs.
+LIT_SHADERS = STANDARD_SHADERS + ("Legacy Shaders/Diffuse",)
+DIRECTIONAL = 1  # LIGHT_TYPES
+
+
+def mul3(a, b):
+    return [[sum(a[i][k] * b[k][j] for k in range(3)) for j in range(3)] for i in range(3)]
+
+
+def transpose3(m):
+    return [[m[j][i] for j in range(3)] for i in range(3)]
+
+
+def euler_matrix(angles):
+    """Unity's Quaternion.Euler(x, y, z), degrees, as a row-major 3x3: z first, then x, then y."""
+    cx, cy, cz = (math.cos(math.radians(a)) for a in angles)
+    sx, sy, sz = (math.sin(math.radians(a)) for a in angles)
+    rx = [[1, 0, 0], [0, cx, -sx], [0, sx, cx]]
+    ry = [[cy, 0, sy], [0, 1, 0], [-sy, 0, cy]]
+    rz = [[cz, -sz, 0], [sz, cz, 0], [0, 0, 1]]
+    return mul3(ry, mul3(rx, rz))
+
+
+def direction_to_light(rotation):
+    """A directional light's Unity rotation (3x3) to the unit direction towards the light, Z reflected
+    to the glTF basis (the light shines along its +Z, Transform.forward)."""
+    forward = normalized(apply_linear(rotation, [0.0, 0.0, 1.0]))
+    return reflect([-c for c in forward])
+
+
+def ambient_record(mode, sky, equator, ground, intensity, probe):
+    """RenderSettings' ambient as the app needs it. `probe` is m_AmbientProbe's 27 coefficients
+    (red 0-8, green 9-17, blue 18-26), or None when the scene file has none."""
+    if mode not in AMBIENT_MODES:
+        raise ValueError(f"Ambient mode {mode} is not one Unity 5.6 serializes")
+    if probe is not None and (len(probe) != 27 or not all(math.isfinite(c) for c in probe)):
+        raise ValueError("m_AmbientProbe is not 27 finite coefficients")
+    return {"mode": AMBIENT_MODES[mode], "unityMode": mode, "intensity": intensity,
+            "skyColor": sky, "equatorColor": equator, "groundColor": ground, "probe": probe,
+            "rule": ("no map has light probes, so a Standard renderer without a lightmap reads the ambient "
+                     "probe: in flat mode the linearised skyColor * intensity (the serialized probe is stale "
+                     "there), otherwise SH9 of the serialized probe at the world normal; a lightmapped one reads none")}
+
+
+def select_sun(lights, target_path_id):
+    """The map's sun: its one enabled, realtime directional light that some sun type shows.
+    Returns (light, is SunLightInfo's target) or (None, False). A baked or mixed directional light,
+    or more than one, is refused by name: no verified map has one."""
+    shown = [l for l in lights if l["type"] == DIRECTIONAL and l["enabled"] and l["visibleFor"]]
+    other = [l["path"] for l in shown if LIGHT_MODES.get(l["lightmapping"]) != "realtime"]
+    if other:
+        raise ValueError(f"Directional lights that are not realtime: {other}")
+    if len(shown) > 1:
+        raise ValueError(f"More than one shown directional light: {[l['path'] for l in shown]}")
+    if not shown:
+        return None, False
+    return shown[0], target_path_id is not None and shown[0]["pathID"] == target_path_id
+
+
+def sun_type_entry(entries, sun_type):
+    """SunLightInfo.Set's entry for a sun type: the first entry of that type (FirstOrDefault)."""
+    return next((e for e in entries if e["type"] == sun_type), None) if sun_type in SUN_TYPES else None
+
+
+def shadow_runs(entries):
+    """[(first index, index count, cast, receive, in the sun's mask), ...] in index order, merged
+    into runs of consecutive entries with equal flags."""
+    runs = []
+    for first, count, *flags in entries:
+        if runs and runs[-1][0] + runs[-1][1] == first and runs[-1][2:] == flags:
+            runs[-1][1] += count
+        else:
+            runs.append([first, count, *flags])
+    return runs
 
 
 # ---------------------------------------------------------------- export
@@ -1556,10 +1674,14 @@ class MapExporter(Exporter):
             if "_EMISSION" in keywords_of(material) and emission_map and emission_map.m_Texture.path_id:
                 image = self.gltf["textures"][self.texture(emission_map.m_Texture)]["source"]
                 srgb = emission_map.m_Texture.read().m_ColorSpace == 1
-            metallic_map, mean = envs.get("_MetallicGlossMap"), None
+            metallic_map, mean, gloss_mean, albedo_alpha = envs.get("_MetallicGlossMap"), None, None, None
             if "_METALLICGLOSSMAP" in keywords_of(material) and metallic_map and metallic_map.m_Texture.path_id:
                 mean = texture_channel_mean(metallic_map.m_Texture.read(), 0)
-            result["extras"]["ikkokuStandard"] = standard_inputs(colors_of(material), floats, keywords_of(material), image, srgb, mean)
+                gloss_mean = texture_channel_mean(metallic_map.m_Texture.read(), 3)
+            if "_SMOOTHNESS_TEXTURE_ALBEDO_CHANNEL_A" in keywords_of(material) and main and main.m_Texture.path_id:
+                albedo_alpha = texture_channel_mean(main.m_Texture.read(), 3)
+            result["extras"]["ikkokuStandard"] = standard_inputs(colors_of(material), floats, keywords_of(material), image, srgb, mean,
+                                                                 gloss_mean, albedo_alpha)
         if rule.get("draw") == "legacyDiffuse":
             result["extras"]["ikkokuStandard"] = legacy_diffuse_inputs(colors_of(material))
         index = len(self.gltf["materials"])
@@ -1669,6 +1791,11 @@ def export(bundles, scene, map_no, output, max_texture=None, builtin_resources=N
     if option_roots:
         active = {key_: {**states, **{node: True for node in option_roots}} for key_, states in active.items()}
     option_counts = {"renderers": 0, "triangles": 0}
+    # Slice 5: the sun, found before the renderers so each lit draw can record its shadow flags.
+    lights = lights_of(map_scene, active)
+    sun_info = summarize_sun(map_scene, sun_tree, infos)
+    sun, sun_is_target = select_sun(lights, (sun_info or {}).get("targetLightPathID"))
+    shadows_only = []  # (pid, renderer, host, path, keys, option): drawn only into the sun's shadow map
     for pid, reader in sorted(map_scene.of_type("MeshRenderer")):
         renderer = reader.read()
         host = map_scene.transform_of_object[renderer.m_GameObject.path_id]
@@ -1678,6 +1805,8 @@ def export(bundles, scene, map_no, output, max_texture=None, builtin_resources=N
         if not renderer.m_Enabled or not keys:
             skipped.append({"path": path, "reason": "disabled renderer" if not renderer.m_Enabled else "never active"})
             continue
+        if sun is not None and getattr(renderer, "m_CastShadows", 1) == SHADOWS_ONLY:
+            shadows_only.append((pid, renderer, host, path, keys, option))
         undrawn = undrawn_reason(renderer, renderer.m_GameObject.read(), path)
         if undrawn:
             skipped.append({"path": path, "reason": undrawn})
@@ -1731,6 +1860,13 @@ def export(bundles, scene, map_no, output, max_texture=None, builtin_resources=N
             [renderer.m_LightmapTilingOffset.x, renderer.m_LightmapTilingOffset.y,
              renderer.m_LightmapTilingOffset.z, renderer.m_LightmapTilingOffset.w], prefab_lightmaps.get(pid))
         lightmap_sources[lm_source] += 1
+        # Slice 5: Renderer.shadowCastingMode (0 off, 1 on, 2 two-sided), receiveShadows, and whether
+        # the sun's cullingMask holds the renderer's layer (the sun lights and shadows only those).
+        shadow_flags = None
+        if sun is not None:
+            layer = renderer.m_GameObject.read().m_Layer
+            shadow_flags = [int(getattr(renderer, "m_CastShadows", 1)), bool(getattr(renderer, "m_ReceiveShadows", 1)),
+                            bool((sun["cullingMask"] >> layer) & 1)]
         for submesh, pointer in enumerate(materials):
             if not pointer.path_id:
                 skipped.append({"path": path, "submesh": submesh, "reason": "no material"})
@@ -1811,6 +1947,8 @@ def export(bundles, scene, map_no, output, max_texture=None, builtin_resources=N
             converted = convert_triangles([[remap[i] for i in triangle] for triangle in triangles[submesh]], len(group["positions"]))
             if mirrored:  # a mirroring transform reverses the authored winding once more
                 converted = [converted[i + j] for i in range(0, len(converted), 3) for j in (0, 2, 1)]
+            if shadow_flags is not None and name in LIT_SHADERS:
+                group.setdefault("shadow", []).append([len(group["indices"]), len(converted), *shadow_flags])
             group["indices"].extend(converted)
             group["renderers"].append({"path": path, "submesh": submesh, "vertices": len(used), "triangles": len(triangles[submesh]),
                                        "lightmapIndex": group_lightmap, "lightmapScaleOffset": lm_offset if group_lightmap != NO_LIGHTMAP else None,
@@ -1842,6 +1980,14 @@ def export(bundles, scene, map_no, output, max_texture=None, builtin_resources=N
         if "sortCenter" in group:
             extras["ikkokuMap"]["sortCenter"] = group["sortCenter"]
             extras["ikkokuMap"]["sortSubmesh"] = group["sortSubmesh"]
+        if "shadow" in group:
+            # Slice 5: [first index, index count, cast mode, receives, in the sun's mask] runs that
+            # cover the mesh's indices in order (each renderer's triangles are contiguous).
+            runs = shadow_runs(group["shadow"])
+            if runs[0][0] != 0 or any(a[0] + a[1] != b[0] for a, b in zip(runs, runs[1:])) \
+                    or runs[-1][0] + runs[-1][1] != len(group["indices"]):
+                raise ValueError(f"Shadow runs do not cover the indices of group {group_key}")
+            extras["ikkokuMap"]["shadowRuns"] = runs
         suffix = ""
         if option:
             extras["ikkokuMap"]["option"] = True
@@ -1866,7 +2012,9 @@ def export(bundles, scene, map_no, output, max_texture=None, builtin_resources=N
         raise ValueError("The map scene has no drawable static meshes")
     if any(m.get("extensions", {}).get("KHR_materials_unlit") is not None for m in exporter.gltf["materials"]):
         exporter.gltf["extensionsUsed"] = ["KHR_materials_unlit"]
-    lights = lights_of(map_scene, active)
+    # Slice 5: written after every mesh and sky, so their accessors and bytes stay as they were.
+    casters, caster_skipped = shadow_only_casters(map_scene, exporter, shadows_only, sun, handlers, map_root_world_inverse)
+    lighting = map_lighting(map_scene, sun, sun_is_target, sun_info, casters)
     mixed_lights = sum(1 for light in lights if light["enabled"] and light["visibleFor"] and LIGHT_MODES.get(light["lightmapping"]) == "mixed")
     lightmaps, lightmap_mode, lightmap_export = export_lightmaps(map_scene, output, mixed_lights)
     lightmap_extras = lightmap_export.pop("extras", None)
@@ -1878,6 +2026,7 @@ def export(bundles, scene, map_no, output, max_texture=None, builtin_resources=N
     if exporter.block_images or exporter.cubes:
         extras["ikkokuBlockImages"] = {"kind": "ikkoku.unityBlockImages", "version": 1, "rows": "topDown",
                                        "images": exporter.block_images, "cubes": exporter.cubes}
+    extras["ikkokuMapLighting"] = lighting
     if extras:
         exporter.gltf["extras"] = extras
     exporter.gltf["buffers"] = [{"uri": stem + ".bin", "byteLength": len(exporter.blob)}]
@@ -1924,6 +2073,22 @@ def export(bundles, scene, map_no, output, max_texture=None, builtin_resources=N
     realtime_gi = realtime_gi_of(map_scene, dynamic_gi)
     if realtime_gi:
         provenance["realtimeGI"] = realtime_gi
+    # Slice 5: what the lighting extras hold, in counts.
+    run_meshes = [m["extras"]["ikkokuMap"]["shadowRuns"] for m in exporter.gltf["meshes"] if "shadowRuns" in m["extras"]["ikkokuMap"]]
+    provenance["lighting"] = {
+        "ambientMode": lighting["ambient"]["mode"], "sun": sun["path"] if sun else None,
+        "meshesWithShadowRuns": len(run_meshes), "shadowRuns": sum(len(r) for r in run_meshes),
+        "meshesMixingReceiveOrMask": sum(1 for r in run_meshes if len({(x[3], x[4]) for x in r}) > 1),
+        "shadowOnlyCasters": {"renderers": sum(c["renderers"] for c in casters), "triangles": sum(c["triangles"] for c in casters),
+                              "groups": len(casters), "skipped": caster_skipped},
+        "standardInputs": standard_input_counts(exporter.gltf["materials"])}
+    provenance["conversion"]["lighting"] = (
+        "glTF extras ikkokuMapLighting: RenderSettings' ambient (mode, colours as serialized, intensity, the 27 "
+        "m_AmbientProbe coefficients) and the sun (the one shown realtime directional light: shadow settings, cullingMask, "
+        "and per sun type its colour, intensity and direction to the light in its role's frame, Z reflected); each lit "
+        "mesh's ikkokuMap.shadowRuns; ShadowsOnly renderers in the sun's mask as position/index accessors after every mesh's data; "
+        "ikkokuStandard adds smoothness (Standard's MetallicGloss: albedo alpha, the metallic map's alpha or _Glossiness; texture "
+        "alphas by their mean) and the _SPECULARHIGHLIGHTS_OFF, _GLOSSYREFLECTIONS_OFF and _ALPHAPREMULTIPLY_ON flags")
     if block_only_images:
         provenance["conversion"]["blockImages"] = ("BC1/BC3 images as their serialized blocks only, every mip, block and pixel "
                                                    "rows reversed to top-down (lossless; the top level decodes to the PNG's pixels, "
@@ -1942,6 +2107,135 @@ def export(bundles, scene, map_no, output, max_texture=None, builtin_resources=N
 
 def file_record(path):
     return {"path": str(path), "sha256": hashlib.sha256(path.read_bytes()).hexdigest(), "bytes": path.stat().st_size}
+
+
+def standard_input_counts(materials):
+    """Slice 5 provenance: how the Standard materials' smoothness was found, how many stand in by a
+    texture mean, and the ForwardBase keyword flags, in counts."""
+    inputs = [m["extras"]["ikkokuStandard"] for m in materials if "smoothness" in m.get("extras", {}).get("ikkokuStandard", {})]
+    sources = {}
+    for s in inputs:
+        sources[s["smoothnessSource"]] = sources.get(s["smoothnessSource"], 0) + 1
+    return {"materials": len(inputs), "smoothnessSources": dict(sorted(sources.items())),
+            "smoothnessApproximations": sum(1 for s in inputs if s["smoothnessApproximation"]),
+            "specularHighlightsOff": sum(1 for s in inputs if not s["specularHighlights"]),
+            "glossyReflectionsOff": sum(1 for s in inputs if not s["glossyReflections"]),
+            "premultiplyAlpha": sum(1 for s in inputs if s["premultiplyAlpha"])}
+
+
+def world_rotation(map_scene, transform_id):
+    """Transform.rotation as a row-major 3x3: the local rotations from the root down, scale left out."""
+    chain, current = [], transform_id
+    while current is not None:
+        chain.append(current)
+        current = map_scene.parents[current]
+    rotation = [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]]
+    for node in reversed(chain):
+        rotation = mul3(rotation, quaternion_matrix(map_scene.local_trs(map_scene.transforms[node])[1]))
+    return rotation
+
+
+def map_lighting(map_scene, sun, is_target, sun_info, casters):
+    """The scene's ikkokuMapLighting extras (slice 5)."""
+    settings = render_settings_of(map_scene)
+    probe = ambient_probe_of(map_scene)
+    if settings is None or probe is None:
+        raise ValueError("The map scene has no RenderSettings")
+    result = {"kind": "ikkoku.mapLighting", "version": 1,
+              "ambient": ambient_record(settings["ambientMode"], settings["ambientSky"], settings["ambientEquator"],
+                                        settings["ambientGround"], settings["ambientIntensity"], probe["coefficients"]),
+              "sun": None}
+    if sun is not None:
+        light = map_scene.objects[int(sun["pathID"])].read()
+        host = map_scene.transform_of_object[light.m_GameObject.path_id]
+        parent = map_scene.parents[host]
+        # A light under mapRoot turns with it: its direction is written in mapRoot's frame.
+        frame = transpose3(world_rotation(map_scene, map_scene.map_root)) if sun["underMapRoot"] else \
+            [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]]
+        parent_rotation = world_rotation(map_scene, parent) if parent is not None else [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]]
+        by_type = {}
+        for key_ in sun["visibleFor"]:
+            # SunLightInfo.Set (on its target light) sets localEulerAngles, color and intensity from the
+            # sun type's entry; a key without an entry keeps the authored light.
+            entry = sun_type_entry(sun_info["entries"], key_) if is_target else None
+            if entry is not None:
+                rotation = mul3(frame, mul3(parent_rotation, euler_matrix(entry["angle"])))
+                by_type[str(key_)] = {"color": entry["color"], "intensity": entry["intensity"], "angle": entry["angle"],
+                                      "directionToLight": direction_to_light(rotation)}
+            else:
+                rotation = mul3(frame, world_rotation(map_scene, host))
+                by_type[str(key_)] = {"color": sun["color"], "intensity": sun["intensity"], "angle": None,
+                                      "directionToLight": direction_to_light(rotation)}
+        result["sun"] = {
+            "path": sun["path"], "role": "mapRoot" if sun["underMapRoot"] else "scene", "cullingMask": sun["cullingMask"],
+            "visibleFor": sun["visibleFor"], "sunLightInfoTarget": is_target,
+            "shadows": {"type": SHADOW_TYPES.get(sun["shadows"], sun["shadows"]), "strength": sun["shadowStrength"],
+                        "bias": sun["shadowBias"], "normalBias": sun["shadowNormalBias"], "nearPlane": sun["shadowNearPlane"],
+                        "resolution": sun["shadowResolution"], "customResolution": sun["shadowCustomResolution"]},
+            "bySunType": by_type,
+            "rule": ("linear colour = GammaToLinearSpace(color.rgb * intensity) (lightsUseLinearIntensity off); Standard "
+                     "diffuse = DisneyDiffuse * n.l; shadow attenuation = mix(1, visibility, strength); lights and shadows only "
+                     "the cullingMask's layers")}
+    if casters:
+        result["shadowCasters"] = casters
+    return result
+
+
+def shadow_only_casters(map_scene, exporter, shadows_only, sun, handlers, map_root_world_inverse):
+    """ShadowsOnly renderers in the sun's cullingMask, merged per (role, visibility, option) into
+    position and index accessors for the sun's shadow map (slice 5). A submesh whose material
+    has no verified opaque shadow-caster pass is left out and listed."""
+    from UnityPy.helpers.MeshHelper import MeshHandler
+    groups, skipped = {}, []
+    for pid, renderer, host, path, keys, option in shadows_only:
+        layer = renderer.m_GameObject.read().m_Layer
+        if not (sun["cullingMask"] >> layer) & 1:
+            skipped.append({"path": path, "reason": f"layer {layer} is outside the sun's cullingMask"})
+            continue
+        components = {p.type.name: p for p in map_scene.components(renderer.m_GameObject.read())}
+        pointer = components["MeshFilter"].read().m_Mesh if "MeshFilter" in components else None
+        if pointer is None or not pointer.path_id:
+            skipped.append({"path": path, "reason": "no mesh"})
+            continue
+        identity = key(pointer)
+        if identity not in handlers:
+            handler = MeshHandler(pointer.read())
+            handler.process()
+            handlers[identity] = (handler, handler.get_triangles())
+        handler, triangles = handlers[identity]
+        role = "mapRoot" if map_scene.under_map_root(host) else "scene"
+        world = map_scene.world[host]
+        matrix = matmul(map_root_world_inverse, world) if role == "mapRoot" else world
+        mirrored = det3(linear(matrix)) < 0
+        group = groups.setdefault((role, tuple(keys), option), {"positions": [], "indices": [], "renderers": set(), "triangles": 0})
+        for submesh, material in enumerate(list(renderer.m_Materials)[:len(triangles)]):
+            name = shader_name(material.read()) if material.path_id else None
+            opaque = name in LIT_SHADERS and (name not in STANDARD_SHADERS or standard_contract(
+                colors_of(material.read()), dict(material.read().m_SavedProperties.m_Floats), keywords_of(material.read()))["alphaMode"] == "OPAQUE")
+            if not opaque:
+                skipped.append({"path": path, "submesh": submesh, "shader": name, "reason": "not an opaque lit shader"})
+                continue
+            used = sorted({i for triangle in triangles[submesh] for i in triangle})
+            remap = {old: len(group["positions"]) + new for new, old in enumerate(used)}
+            for old in used:
+                group["positions"].append(reflect(apply_point(matrix, handler.m_Vertices[old])))
+            converted = convert_triangles([[remap[i] for i in triangle] for triangle in triangles[submesh]], len(group["positions"]))
+            if mirrored:
+                converted = [converted[i + j] for i in range(0, len(converted), 3) for j in (0, 2, 1)]
+            group["indices"].extend(converted)
+            group["renderers"].add(pid)
+            group["triangles"] += len(converted) // 3
+    casters = []
+    for (role, keys, option), group in sorted(groups.items(), key=lambda kv: (kv[0][0], kv[0][1], kv[0][2])):
+        if not group["indices"]:
+            continue
+        record = {"role": role, "visibleFor": list(keys), "renderers": len(group["renderers"]), "triangles": group["triangles"],
+                  "positions": exporter.accessor(group["positions"], "VEC3", bounds=True),
+                  "indices": exporter.accessor(group["indices"], "SCALAR", integer=True)}
+        if option:
+            record["option"] = True
+        casters.append(record)
+    return casters, skipped
 
 
 def export_skies(exporter, skies, handlers):

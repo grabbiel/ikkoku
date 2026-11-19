@@ -22,7 +22,7 @@
         "IKKOKU_STUDIO_SCENARIO_REPORT": ".local/verification/reports/studio-scenario-visibility-folder.json"
       },
       "referenceTier": "app-smoke",
-      "tolerance": "Hides source object key 622 (folder), exports the original scene and reimports it: the folder reads back hidden and the character inside it stays visible. The CharaStudio side of ST-T03 visibility (reloading the exported scene in the original player) is not covered here.",
+      "tolerance": "Hides source object key 622 (folder), exports the original scene and reimports it: the folder reads back hidden and the character inside it stays visible. The CharaStudio side of ST-T03 visibility (reloading the exported scene in the original player) is not covered here. On the way (#387 round 3), the published workspace rows equal a full rebuild after each selection change: the character inside the hidden folder, the hidden folder, the same again and none before the export; after the reimport, shown again, renamed, and none.",
       "artifacts": [
         {
           "path": ".local/verification/reports/studio-scenario-visibility-folder.json",
@@ -2484,6 +2484,44 @@
       "timeout": 600
     },
     {
+      "id": "studio-scenario-undo-scene-replacements",
+      "argv": [
+        ".local/build/Build/Products/Debug/Ikkoku.app/Contents/MacOS/Ikkoku"
+      ],
+      "fixtures": [
+        {
+          "env": "IKKOKU_SOURCE_SCENE",
+          "kind": "file",
+          "from": "IKKOKU_CAMERA_OBJECT_PROBE_SCENE"
+        },
+        {
+          "env": "IKKOKU_SOURCE_AVATAR",
+          "kind": "file"
+        }
+      ],
+      "env": {
+        "IKKOKU_STUDIO_SCENARIO": "Tools/verification/scenarios/undo-scene-replacements.json",
+        "IKKOKU_STUDIO_SCENARIO_REPORT": ".local/verification/reports/studio-scenario-undo-scene-replacements.json"
+      },
+      "referenceTier": "app-smoke",
+      "tolerance": "#384 undo history across scene replacements, on scene-x: a rename, then New Scene, Add Folder, Open of the saved scene, an Open refused after reading the file (an original-format scene), Import Scene of the saved scene (a merge) and a reimport of the exported original scene (an original scene import). Each replacement keeps only the scene it replaced: after New Scene and after the Open the history holds 2 steps; the refused Open changes neither the document nor the history; the merge adds a step and drops none; after the reimport two undos reach the opened scene and stop (0 undo, 2 redo), and two redos return. One assertRejected negative control proves the depth check fails on a wrong value. CharaStudio clears its whole history in InitScene; keeping one earlier scene is a deliberate difference (docs/reference/studio/scene-editing.md).",
+      "artifacts": [
+        {
+          "path": ".local/verification/reports/studio-scenario-undo-scene-replacements.json",
+          "kind": "scenario-report"
+        },
+        {
+          "path": ".local/verification/scenario-exports/undo-scene-replacements.png",
+          "kind": "saved-document"
+        },
+        {
+          "path": ".local/verification/scenario-exports/undo-scene-replacements-source.png",
+          "kind": "exported-scene"
+        }
+      ],
+      "timeout": 600
+    },
+    {
       "id": "studio-scenario-topology-reparent",
       "argv": [
         ".local/build/Build/Products/Debug/Ikkoku.app/Contents/MacOS/Ikkoku"
@@ -2504,7 +2542,7 @@
         "IKKOKU_STUDIO_SCENARIO_REPORT": ".local/verification/reports/studio-scenario-topology-reparent.json"
       },
       "referenceTier": "app-smoke",
-      "tolerance": "ST-T03/ST-S09 reparenting on koikatu_cs0002591: move item 623 into folder 962, character 65 into folder 626 and item 1129 to the root through the inspector's Parent path, and delete folder 1298 with its character and three items. Each moved record must be appended after its new siblings and keep its world position within 1e-4 m and rotation within 0.01 degrees in session; four undos restore the original tree and four redos repeat it; after export and reimport the tree must match and every moved object (plus an unmoved neighbour) must hold its world pose within 5e-4 m and 0.05 degrees. Negative controls prove the position check fails on a moved capture and on the wrong capture.",
+      "tolerance": "ST-T03/ST-S09 reparenting on source scene `029f0b1d`: move item 623 into folder 962, character 65 into folder 626 and item 1129 to the root through the inspector's Parent path, and delete folder 1298 with its character and three items. Each moved record must be appended after its new siblings and keep its world position within 1e-4 m and rotation within 0.01 degrees in session; four undos restore the original tree and four redos repeat it; after export and reimport the tree must match and every moved object (plus an unmoved neighbour) must hold its world pose within 5e-4 m and 0.05 degrees. Negative controls prove the position check fails on a moved capture and on the wrong capture.",
       "artifacts": [
         {
           "path": ".local/verification/reports/studio-scenario-topology-reparent.json",
@@ -2698,7 +2736,7 @@
         "IKKOKU_STUDIO_SCENARIO_REPORT": ".local/verification/reports/studio-scenario-topology-duplicate.json"
       },
       "referenceTier": "app-smoke",
-      "tolerance": "ST-T03/ST-S09/ST-D03 duplicate and add on koikatu_cs0002591 through the workspace Duplicate and Add buttons: duplicate folder 962 with its character and three items, root item 1540 and folder item 1127, then add a folder, a camera and a point light. Every copy is appended after its original's last sibling and holds its original's world pose within 1e-4 m and 0.01 degrees; six undos restore the original tree and six redos repeat it. After export and reimport the copies and new objects carry the keys an independent Python GetNewIndex walk allocates (113 with 114, 331, 332, 333; 334; 335 in folder 962; 336, 337, 338) and hold their world poses within 5e-4 m and 0.05 degrees. Negative controls prove the position and child-order checks fail on the wrong values.",
+      "tolerance": "ST-T03/ST-S09/ST-D03 duplicate and add on source scene `029f0b1d` through the workspace Duplicate and Add buttons: duplicate folder 962 with its character and three items, root item 1540 and folder item 1127, then add a folder, a camera and a point light. Every copy is appended after its original's last sibling and holds its original's world pose within 1e-4 m and 0.01 degrees; six undos restore the original tree and six redos repeat it. After export and reimport the copies and new objects carry the keys an independent Python GetNewIndex walk allocates (113 with 114, 331, 332, 333; 334; 335 in folder 962; 336, 337, 338) and hold their world poses within 5e-4 m and 0.05 degrees. Negative controls prove the position and child-order checks fail on the wrong values.",
       "artifacts": [
         {
           "path": ".local/verification/reports/studio-scenario-topology-duplicate.json",
@@ -2732,7 +2770,7 @@
         "IKKOKU_STUDIO_SCENARIO_REPORT": ".local/verification/reports/studio-scenario-light-limit.json"
       },
       "referenceTier": "app-smoke",
-      "tolerance": "#320 light limit on koikatu_cs0002591 (no lights): add a point, a spot and a directional light at the root. With the export setting off (CharaStudio 1.0.4.2's two-light limit, SceneInfo.isLightCheck) the export is refused with the light count 3 and no file is written; with it on (KK_Fix_UnlimitedMapLights) the export writes all three lights and the status names the three lights and what a CharaStudio without the fix drops. After reimport the lights carry keys 113, 114 and 115 (the first free keys) after the eight source roots. A negative control proves the child-order check fails without key 115.",
+      "tolerance": "#320 light limit on source scene `029f0b1d` (no lights): add a point, a spot and a directional light at the root. With the export setting off (CharaStudio 1.0.4.2's two-light limit, SceneInfo.isLightCheck) the export is refused with the light count 3 and no file is written; with it on (KK_Fix_UnlimitedMapLights) the export writes all three lights and the status names the three lights and what a CharaStudio without the fix drops. After reimport the lights carry keys 113, 114 and 115 (the first free keys) after the eight source roots. A negative control proves the child-order check fails without key 115.",
       "artifacts": [
         {
           "path": ".local/verification/reports/studio-scenario-light-limit.json",
@@ -3111,7 +3149,7 @@
         "IKKOKU_STUDIO_SCENARIO_REPORT": ".local/verification/reports/studio-scenario-source-map-none.json"
       },
       "referenceTier": "app-smoke",
-      "tolerance": "koikatu_cs0002591.png names no map (-1): with the map catalog supplied there is no map request, no draws and no status line before and after an original-format round trip, and the export is byte-identical to the source. ST-A11.",
+      "tolerance": "Source scene `029f0b1d` names no map (-1): with the map catalog supplied there is no map request, no draws and no status line before and after an original-format round trip, and the export is byte-identical to the source. ST-A11.",
       "artifacts": [
         {
           "path": ".local/verification/reports/studio-scenario-source-map-none.json",
@@ -3245,6 +3283,36 @@
       "timeout": 600
     },
     {
+      "id": "studio-scenario-inspector-parent-popup",
+      "argv": [
+        ".local/build/Build/Products/Debug/Ikkoku.app/Contents/MacOS/Ikkoku"
+      ],
+      "fixtures": [
+        {
+          "env": "IKKOKU_SOURCE_SCENE",
+          "kind": "file",
+          "from": "IKKOKU_STUDIO_SCENARIO_SCENE"
+        },
+        {
+          "env": "IKKOKU_SOURCE_AVATAR",
+          "kind": "file"
+        }
+      ],
+      "env": {
+        "IKKOKU_STUDIO_SCENARIO": "Tools/verification/scenarios/inspector-parent-popup.json",
+        "IKKOKU_STUDIO_SCENARIO_REPORT": ".local/verification/reports/studio-scenario-inspector-parent-popup.json"
+      },
+      "referenceTier": "app-smoke",
+      "tolerance": "#383 F3, in the window: the Object tab's Parent popup holds only the current parent while closed; opened, its options are the SwiftUI Picker's (None, then every object that is not the selection or one of its descendants, in document order) with the current parent selected; a choice reparents through StudioModel.setParent (item 623 under 962, then to the root), Undo restores the parent and the popup shows it.",
+      "artifacts": [
+        {
+          "path": ".local/verification/reports/studio-scenario-inspector-parent-popup.json",
+          "kind": "scenario-report"
+        }
+      ],
+      "timeout": 600
+    },
+    {
       "id": "studio-scenario-inspector-kept-route",
       "argv": [
         ".local/build/Build/Products/Debug/Ikkoku.app/Contents/MacOS/Ikkoku"
@@ -3270,6 +3338,331 @@
         {
           "path": ".local/verification/reports/studio-scenario-inspector-kept-route.json",
           "kind": "scenario-report"
+        }
+      ],
+      "timeout": 600
+    },
+    {
+      "id": "studio-scenario-live-samplers",
+      "argv": [
+        ".local/build/Build/Products/Debug/Ikkoku.app/Contents/MacOS/Ikkoku"
+      ],
+      "fixtures": [
+        {
+          "env": "IKKOKU_SOURCE_SCENE",
+          "kind": "file",
+          "from": "IKKOKU_STUDIO_SCENARIO_SCENE"
+        },
+        {
+          "env": "IKKOKU_SOURCE_AVATAR",
+          "kind": "file"
+        },
+        {
+          "env": "IKKOKU_MAKER_LIBRARY",
+          "kind": "file"
+        },
+        {
+          "env": "IKKOKU_LIVE_SOURCE_PROGRAMS",
+          "kind": "directory"
+        },
+        {
+          "env": "IKKOKU_LIVE_SOURCE_TEXTURES",
+          "kind": "file"
+        },
+        {
+          "env": "IKKOKU_LIVE_SOURCE_STREAMS",
+          "kind": "file"
+        },
+        {
+          "env": "IKKOKU_SHADER_BINDING_SUPPLEMENT",
+          "kind": "file"
+        },
+        {
+          "env": "IKKOKU_HEAD_MATERIAL_CONTRACT",
+          "kind": "file"
+        }
+      ],
+      "env": {
+        "IKKOKU_LIVE_SOURCE_SHADERS": "1",
+        "IKKOKU_STUDIO_SCENARIO": "Tools/verification/scenarios/live-samplers.json",
+        "IKKOKU_STUDIO_SCENARIO_REPORT": ".local/verification/reports/studio-scenario-live-samplers.json"
+      },
+      "referenceTier": "app-smoke",
+      "tolerance": "#338, the live source-shader path's sampler state in the Studio (IKKOKU_LIVE_SOURCE_SHADERS=1 on the scenario scene): each listed character's live assembly must exist, and its resolved materials' bound textures, counted by effective sampler state (SourceShaderLiveAssembly.samplerSummary, max anisotropy x mip filter), must equal the scenario's counts exactly. Under the player's ForceEnable, Bilinear and Trilinear textures with aniso above 0 read 'aniso 9, mips linear'. This pins the anisotropic mode the Studio call site passes: with it reverted to none, the Bilinear textures read 'aniso 1, mips nearest' and the check fails. Only materials that resolve live are counted. Most of the scene's slots stay toon while CharaStudio's scene globals are unresolved, so the counts cover the slots that do resolve. The same counts must hold after the original-format export and reimport.",
+      "artifacts": [
+        {
+          "path": ".local/verification/reports/studio-scenario-live-samplers.json",
+          "kind": "scenario-report"
+        },
+        {
+          "path": ".local/verification/scenario-exports/live-samplers.png",
+          "kind": "exported-scene"
+        }
+      ],
+      "timeout": 600
+    },
+    {
+      "id": "studio-scenario-inspector-clothes-fit-legacy",
+      "argv": [
+        ".local/build/Build/Products/Debug/Ikkoku.app/Contents/MacOS/Ikkoku",
+        "-AppleShowScrollBars",
+        "Always"
+      ],
+      "fixtures": [
+        {
+          "env": "IKKOKU_SOURCE_SCENE",
+          "kind": "file",
+          "from": "IKKOKU_STUDIO_SCENARIO_SCENE"
+        },
+        {
+          "env": "IKKOKU_SOURCE_AVATAR",
+          "kind": "file"
+        }
+      ],
+      "env": {
+        "IKKOKU_STUDIO_SCENARIO": "Tools/verification/scenarios/inspector-clothes-fit.json",
+        "IKKOKU_STUDIO_SCENARIO_REPORT": ".local/verification/reports/studio-scenario-inspector-clothes-fit-legacy.json"
+      },
+      "referenceTier": "app-smoke",
+      "tolerance": "#333: the Clothes tab after character 0, folder 622 and character 963, five times, with legacy scrollers for the app process only (-AppleShowScrollBars Always in the argument domain, not System Settings): the inspector's scroll view is no wider than its visible width, and no accessibility element in it extends past that width on either side, so no label is cut off at the leading edge.",
+      "artifacts": [
+        {
+          "path": ".local/verification/reports/studio-scenario-inspector-clothes-fit-legacy.json",
+          "kind": "scenario-report"
+        }
+      ],
+      "timeout": 600
+    },
+    {
+      "id": "studio-scenario-inspector-clothes-fit-overlay",
+      "argv": [
+        ".local/build/Build/Products/Debug/Ikkoku.app/Contents/MacOS/Ikkoku",
+        "-AppleShowScrollBars",
+        "WhenScrolling"
+      ],
+      "fixtures": [
+        {
+          "env": "IKKOKU_SOURCE_SCENE",
+          "kind": "file",
+          "from": "IKKOKU_STUDIO_SCENARIO_SCENE"
+        },
+        {
+          "env": "IKKOKU_SOURCE_AVATAR",
+          "kind": "file"
+        }
+      ],
+      "env": {
+        "IKKOKU_STUDIO_SCENARIO": "Tools/verification/scenarios/inspector-clothes-fit.json",
+        "IKKOKU_STUDIO_SCENARIO_REPORT": ".local/verification/reports/studio-scenario-inspector-clothes-fit-overlay.json"
+      },
+      "referenceTier": "app-smoke",
+      "tolerance": "#333: the Clothes tab after character 0, folder 622 and character 963, five times, with overlay scrollers for the app process only (-AppleShowScrollBars WhenScrolling in the argument domain, not System Settings): the inspector's scroll view is no wider than its visible width, and no accessibility element in it extends past that width on either side, so no label is cut off at the leading edge.",
+      "artifacts": [
+        {
+          "path": ".local/verification/reports/studio-scenario-inspector-clothes-fit-overlay.json",
+          "kind": "scenario-report"
+        }
+      ],
+      "timeout": 600
+    },
+    {
+      "id": "studio-scenario-inspector-clothes-fit-native-legacy",
+      "argv": [
+        ".local/build/Build/Products/Debug/Ikkoku.app/Contents/MacOS/Ikkoku",
+        "-AppleShowScrollBars",
+        "Always"
+      ],
+      "fixtures": [
+        {
+          "env": "IKKOKU_SOURCE_SCENE",
+          "kind": "file",
+          "from": "IKKOKU_STUDIO_SCENARIO_SCENE"
+        },
+        {
+          "env": "IKKOKU_SOURCE_AVATAR",
+          "kind": "file"
+        }
+      ],
+      "env": {
+        "IKKOKU_STUDIO_SCENARIO": "Tools/verification/scenarios/inspector-clothes-fit-native.json",
+        "IKKOKU_STUDIO_SCENARIO_REPORT": ".local/verification/reports/studio-scenario-inspector-clothes-fit-native-legacy.json"
+      },
+      "referenceTier": "app-smoke",
+      "tolerance": "#333: the Clothes tab of a native character (the toolbar's Add > Character, female and then male defaults), whose clothing-state rows use the small three-state segmented control, with legacy scrollers for the app process only (-AppleShowScrollBars Always in the argument domain, not System Settings): the inspector's scroll view is no wider than its visible width, and no accessibility element in it extends past that width on either side. The report gives each row's natural width, laid-out width and margins.",
+      "artifacts": [
+        {
+          "path": ".local/verification/reports/studio-scenario-inspector-clothes-fit-native-legacy.json",
+          "kind": "scenario-report"
+        }
+      ],
+      "timeout": 600
+    },
+    {
+      "id": "studio-scenario-inspector-clothes-fit-native-overlay",
+      "argv": [
+        ".local/build/Build/Products/Debug/Ikkoku.app/Contents/MacOS/Ikkoku",
+        "-AppleShowScrollBars",
+        "WhenScrolling"
+      ],
+      "fixtures": [
+        {
+          "env": "IKKOKU_SOURCE_SCENE",
+          "kind": "file",
+          "from": "IKKOKU_STUDIO_SCENARIO_SCENE"
+        },
+        {
+          "env": "IKKOKU_SOURCE_AVATAR",
+          "kind": "file"
+        }
+      ],
+      "env": {
+        "IKKOKU_STUDIO_SCENARIO": "Tools/verification/scenarios/inspector-clothes-fit-native.json",
+        "IKKOKU_STUDIO_SCENARIO_REPORT": ".local/verification/reports/studio-scenario-inspector-clothes-fit-native-overlay.json"
+      },
+      "referenceTier": "app-smoke",
+      "tolerance": "#333: the Clothes tab of a native character (the toolbar's Add > Character, female and then male defaults), whose clothing-state rows use the small three-state segmented control, with overlay scrollers for the app process only (-AppleShowScrollBars WhenScrolling in the argument domain, not System Settings): the inspector's scroll view is no wider than its visible width, and no accessibility element in it extends past that width on either side. The report gives each row's natural width, laid-out width and margins.",
+      "artifacts": [
+        {
+          "path": ".local/verification/reports/studio-scenario-inspector-clothes-fit-native-overlay.json",
+          "kind": "scenario-report"
+        }
+      ],
+      "timeout": 600
+    },
+    {
+      "id": "studio-scenario-hidden-character-build",
+      "argv": [
+        ".local/build/Build/Products/Debug/Ikkoku.app/Contents/MacOS/Ikkoku"
+      ],
+      "fixtures": [
+        {
+          "env": "IKKOKU_SOURCE_SCENE",
+          "kind": "file",
+          "from": "IKKOKU_STUDIO_SCENARIO_SCENE"
+        },
+        {
+          "env": "IKKOKU_SOURCE_AVATAR",
+          "kind": "file"
+        },
+        {
+          "env": "IKKOKU_MAKER_LIBRARY",
+          "kind": "file"
+        },
+        {
+          "env": "IKKOKU_STUDIO_ANIMATION_CATALOG",
+          "kind": "file"
+        }
+      ],
+      "env": {
+        "IKKOKU_STUDIO_SCENARIO": "Tools/verification/scenarios/hidden-character-build.json",
+        "IKKOKU_STUDIO_SCENARIO_REPORT": ".local/verification/reports/studio-scenario-hidden-character-build.json"
+      },
+      "referenceTier": "app-smoke",
+      "tolerance": "Hides folder key 622, exports and reimports: the character inside it (key 0) is hidden and the import leaves it unbuilt (status and diagnostic say so). Selecting it builds it without drawing it (render unchanged). An outfit and an FK edit made while it is hidden apply; showing the folder draws it with both, and an export and reimport keep the outfit. Lazy hidden characters at import (cxs1 gap list, item 7).",
+      "artifacts": [
+        {
+          "path": ".local/verification/reports/studio-scenario-hidden-character-build.json",
+          "kind": "scenario-report"
+        },
+        {
+          "path": ".local/verification/scenario-exports/hidden-character-build.png",
+          "kind": "exported-scene"
+        },
+        {
+          "path": ".local/verification/scenario-exports/hidden-character-build-shown.png",
+          "kind": "exported-scene"
+        }
+      ],
+      "timeout": 600
+    },
+    {
+      "id": "studio-scenario-hidden-attachment-status",
+      "argv": [
+        ".local/build/Build/Products/Debug/Ikkoku.app/Contents/MacOS/Ikkoku"
+      ],
+      "fixtures": [
+        {
+          "env": "IKKOKU_SOURCE_SCENE",
+          "kind": "file",
+          "from": "IKKOKU_STUDIO_ACCESSORY_SCENE"
+        },
+        {
+          "env": "IKKOKU_SOURCE_AVATAR",
+          "kind": "file"
+        },
+        {
+          "env": "IKKOKU_MAKER_LIBRARY",
+          "kind": "file"
+        }
+      ],
+      "env": {
+        "IKKOKU_STUDIO_SCENARIO": "Tools/verification/scenarios/hidden-attachment-status.json",
+        "IKKOKU_STUDIO_SCENARIO_REPORT": ".local/verification/reports/studio-scenario-hidden-attachment-status.json"
+      },
+      "referenceTier": "app-smoke",
+      "tolerance": "Hides character key 10, which carries an attached folder (key 11), exports and reimports it; then saves and loads the document natively. While the character is unbuilt (after the import and after the native load), the status line must not report \"Attachment parent has no converted character\". Selecting the attached folder builds its character, and showing the character builds it.",
+      "artifacts": [
+        {
+          "path": ".local/verification/reports/studio-scenario-hidden-attachment-status.json",
+          "kind": "scenario-report"
+        },
+        {
+          "path": ".local/verification/scenario-exports/hidden-attachment-status.png",
+          "kind": "exported-scene"
+        },
+        {
+          "path": ".local/verification/scenario-exports/hidden-attachment-status-document.png",
+          "kind": "saved-document"
+        }
+      ],
+      "timeout": 600
+    },
+    {
+      "id": "studio-scenario-hidden-animation-clock",
+      "argv": [
+        ".local/build/Build/Products/Debug/Ikkoku.app/Contents/MacOS/Ikkoku"
+      ],
+      "fixtures": [
+        {
+          "env": "IKKOKU_SOURCE_SCENE",
+          "kind": "file",
+          "from": "IKKOKU_STUDIO_SCENARIO_SCENE"
+        },
+        {
+          "env": "IKKOKU_SOURCE_AVATAR",
+          "kind": "file"
+        },
+        {
+          "env": "IKKOKU_MAKER_LIBRARY",
+          "kind": "file"
+        },
+        {
+          "env": "IKKOKU_STUDIO_ANIMATION_CATALOG",
+          "kind": "file"
+        }
+      ],
+      "env": {
+        "IKKOKU_STUDIO_SCENARIO": "Tools/verification/scenarios/hidden-animation-clock.json",
+        "IKKOKU_STUDIO_SCENARIO_REPORT": ".local/verification/reports/studio-scenario-hidden-animation-clock.json"
+      },
+      "referenceTier": "app-smoke",
+      "tolerance": "Gives character key 0 a converted clip at speed 1.7, hides its folder (key 622), exports and reimports: the character stays unbuilt. After 2.5 s of the Studio clock an export saves a later normalizedTime (its data-only clock ran). A native save and load, 1 s more of clock and an export save the same state as reimporting that export and running 1 s of clock, and the time keeps increasing; the character stays unbuilt throughout. Lazy hidden characters at import (cxs1 gap list, item 7).",
+      "artifacts": [
+        {
+          "path": ".local/verification/reports/studio-scenario-hidden-animation-clock.json",
+          "kind": "scenario-report"
+        },
+        {
+          "path": ".local/verification/scenario-exports/hidden-animation-clock-b.png",
+          "kind": "exported-scene"
+        },
+        {
+          "path": ".local/verification/scenario-exports/hidden-animation-clock-d.png",
+          "kind": "exported-scene"
+        },
+        {
+          "path": ".local/verification/scenario-exports/hidden-animation-clock-document.png",
+          "kind": "saved-document"
         }
       ],
       "timeout": 600

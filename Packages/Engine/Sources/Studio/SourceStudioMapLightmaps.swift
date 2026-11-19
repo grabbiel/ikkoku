@@ -314,6 +314,15 @@ public struct SourceStudioStandardInputs: Sendable, Equatable {
     public let emissionImage: Int?
     /// Whether that texture is sRGB (Unity m_ColorSpace 1).
     public let emissionSRGB: Bool
+    /// Maps slice 5: Standard's smoothness (`MetallicGloss`), nil for an
+    /// export before slice 5 and for Legacy Shaders/Diffuse, which has none.
+    public var smoothness: Float? = nil
+    /// Standard without `_SPECULARHIGHLIGHTS_OFF`: the sun's direct specular
+    /// term is drawn (true before slice 5, where nothing reads it).
+    public var specularHighlights: Bool = true
+    /// `_ALPHAPREMULTIPLY_ON` (Transparent mode). Recorded, not drawn: the
+    /// draw blends as Fade (see maps.md, "Engine (slice 5)").
+    public var premultiplyAlpha: Bool = false
 
     public static func parse(_ extras: JSONValue?) throws -> SourceStudioStandardInputs? {
         guard let value = extras?["ikkokuStandard"] else { return nil }
@@ -339,25 +348,44 @@ public struct SourceStudioStandardInputs: Sendable, Equatable {
             emission = Float3(Float(rgb[0]), Float(rgb[1]), Float(rgb[2]))
             srgb = isSRGB
         }
-        return SourceStudioStandardInputs(albedo: Float4(Float(color[0]), Float(color[1]), Float(color[2]), Float(color[3])),
-                                          oneMinusReflectivity: Float(reflectivity), emissionColor: emission, emissionImage: image,
-                                          emissionSRGB: srgb)
+        var inputs = SourceStudioStandardInputs(albedo: Float4(Float(color[0]), Float(color[1]), Float(color[2]), Float(color[3])),
+                                                oneMinusReflectivity: Float(reflectivity), emissionColor: emission, emissionImage: image,
+                                                emissionSRGB: srgb)
+        if let json = value["smoothness"], json != .null {
+            guard let smoothness = json.doubleValue, smoothness.isFinite, (0...1).contains(smoothness),
+                  let highlights = value["specularHighlights"]?.boolValue, let premultiply = value["premultiplyAlpha"]?.boolValue else {
+                throw RigError.invalid("A map material's Standard smoothness or its flags are incomplete.")
+            }
+            inputs.smoothness = Float(smoothness)
+            inputs.specularHighlights = highlights
+            inputs.premultiplyAlpha = premultiply
+        }
+        return inputs
     }
 }
 
-/// `MaterialKindMap`: the Standard baked-lightmap subset `map_fragment` draws.
+/// `MaterialKindMap`: the Standard subset `map_fragment` draws: the baked
+/// lightmap (slice 2), or without one the map's ambient (slice 5,
+/// `MaterialFlagMapProbeLit`), plus the sun where the loader turns it on.
 public enum SourceStudioMapMaterial {
+    /// `lightmap` nil: gi.diffuse is the map's ambient (an export with map
+    /// lighting only). `lambert`: Legacy Shaders/Diffuse (no smoothness and
+    /// no specular term). Smoothness goes to params.x.
     public static func make(_ material: MaterialData, standard: SourceStudioStandardInputs, base: TextureHandle?,
-                            emission: TextureHandle?, lightmap: TextureHandle, direction: TextureHandle?,
-                            range: Float, exponent: Float) -> MaterialState {
+                            emission: TextureHandle?, lightmap: TextureHandle?, direction: TextureHandle?,
+                            range: Float, exponent: Float, lambert: Bool = false) -> MaterialState {
         var m = MaterialState(uniforms: .make(kind: MaterialKindMap))
         m.uniforms.flags = MaterialFlagNoOutline.rawValue
         m.uniforms.baseColor = standard.albedo
         m.base = base
         m.setFlag(MaterialFlagHasBaseTexture, base != nil)
         m.lightmap = lightmap
-        m.lightmapDirection = direction
-        m.setFlag(MaterialFlagMapDirectionalLightmap, direction != nil)
+        m.lightmapDirection = lightmap == nil ? nil : direction
+        m.setFlag(MaterialFlagMapDirectionalLightmap, lightmap != nil && direction != nil)
+        m.setFlag(MaterialFlagMapProbeLit, lightmap == nil)
+        m.setFlag(MaterialFlagMapLambert, lambert)
+        m.setFlag(MaterialFlagMapSpecularHighlights, !lambert && standard.specularHighlights)
+        m.uniforms.params.x = standard.smoothness ?? 0
         m.uniforms.lightmapRange = range
         m.uniforms.lightmapExponent = exponent
         m.uniforms.oneMinusReflectivity = standard.oneMinusReflectivity
@@ -390,13 +418,15 @@ public enum SourceStudioMapMaterial {
     /// `material` drawn for the irradiance image: the same lightmaps, decode
     /// and directional term with a white albedo, no base or emission texture,
     /// a diffColor factor of 1 and no alpha, so `map_fragment` writes the
-    /// decoded lightmap alone. nil for any draw but the lightmapped one (the
-    /// others sample no lightmap).
+    /// decoded lightmap alone (slice 5: without the sun's term). nil for any
+    /// draw but the lightmapped one (the others sample no lightmap).
     public static func irradiance(_ material: MaterialState, variant: IrradianceVariant = .decoded) -> MaterialState? {
         guard SourceStudioMapAsset.Draw(material) == .lightmapped else { return nil }
         var m = material
         m.base = nil
         m.emission = nil
+        m.setFlag(MaterialFlagMapSunLit, false)
+        m.setFlag(MaterialFlagMapSpecularHighlights, false)
         m.setFlag(MaterialFlagHasBaseTexture, false)
         m.setFlag(MaterialFlagAlphaTest, false)
         m.setFlag(MaterialFlagAlphaBlend, false)

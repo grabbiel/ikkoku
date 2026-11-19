@@ -60,6 +60,8 @@ remains separate.
 
 The app exports supported existing transforms, per-object visibility, folder/camera/route renames, camera active flags (only after the user switches the looked-through camera, then for every camera record), route play-state `active` flags, FK/IK and activation flags, animation, voice and cameras to a **new file** after checking the source SHA. It renders an explicit edited thumbnail. The app populates `edits.cards` with source face/body shape values and edited card colors that differ from the embedded card's saved values (ST-T06); shape and color edits on one character merge into a single `Edits`, and a value edited back to the saved rate or rgba writes nothing and the file stays byte-identical. Only colors that actually bound a material on the assembled character are exported; an edited color whose ID binds nothing still renders as saved. Its inspector diagnostic says it remains in the native document but is skipped by original-scene export. A selected outfit other than the card's saved one is merged into the same `Edits` as `coordinateType` (ST-C03); choosing the saved outfit again writes nothing. Clothes states, accessory flags and the shoes type that differ from the card's saved `Status` are merged the same way; a state edited back to the saved bytes writes nothing. Thumbnail and other card destinations remain unpopulated, and a native `object.card` override is rejected. Deleted objects and objects moved between the root and folders are exported as [topology edits](#topology-edits-deletion-and-reparenting-st-t03-st-s09), and copies of source records and new folders, cameras and lights as [inserted records](#duplicates-and-added-records-st-t03-st-s09-st-d03). Route point and setting edits, and route copies, are exported as [route edits](#route-points-and-settings-st-t11-st-t03).
 
+**Object transforms and the Transform rows (#391).** An imported object keeps its exact quaternion (`rotationOverride`) and the Z-X-Y Euler angles the scene stores for it (`StudioTransform.sourceEuler`), recorded together with the bits of that quaternion. Its Transform rows show CharaStudio's numbers: Position, those angles and Scale, each to 3 decimals. CharaStudio's own end-of-edit (`Studio.GuideInput.OnEndEditPos/Rot/Scale`) re-parses a field's 3-decimal text and writes it only when it differs from the stored component, rotation modulo 360 with the sign kept. The rows commit the same way (`StudioTransform.set`), and a rotation commit rebuilds the quaternion from the three angles. Export (`StudioTransform.sourceChangeAmount`) writes the stored angles while the quaternion is still the one they were recorded for, so committing one field's unedited text changes only that component, to the float of its text. Any other rotation write (gizmo, reparenting, plug-in clone, an engine-Euler edit) changes or clears the quaternion, which retires the angles whatever path made it; such an object exports a fresh Z-X-Y decomposition of its quaternion, as before. Documents saved before #391 have no stored angles and behave that way too. Native objects keep whole-degree X-Y-Z rows.
+
 The export validator rejects new characters and items, the topology and insertion cases those sections list as refused, type changes, and name edits for any record kind other than folder, camera or route (a renamed character keeps its name in its card), plus native assets/materials/cards/hand/appearance overrides, light/effect/timeline changes, live typed plugin state, and the plug-in data cases [plug-in data](#plug-in-data-st-t03i) refuses. A retained source file is not serialization for those edits.
 
 Implement the missing field writers, new characters and items and the refused topology cases under `ST-T03`, a real source-card edit workflow under `ST-T06`, and GUID-specific plugin serialization under `ST-T13`. Each writer must preserve unknown siblings, verify a no-op byte match, reverse supported changes exactly where possible, and validate an edited file in the original loader before widening its compatibility claim.
@@ -149,7 +151,7 @@ The app's Delete and Set Parent commands (`deleteSelection`, `setParent`) are un
   The full Engine suite with the shared fixture map ran 917 tests, and 915 passed. One failure is `sourceDynamicsOriginalHairMatchesIndependentOracleWhenRequested`: it reads `.local/reverse` relative to the checkout and passes once the worktree links it. The other is `liveSourceShadersMeetTheControlledOriginalFrameGates`, whose 6 expectations fail identically on main `aee4287` (a store-manifest fixture mismatch, not part of this slice).
 - **Lanes.** Five `studio-scenarios` checks call the same `StudioModel` methods the UI uses. Each includes negative controls (`assertRejected`) or an export that is meant to fail (`exportRejected`):
   - `topology-delete.json` (scene-x): delete folder 1, undo and redo, export and reimport. Expects root `[0]`, keys 1 and 2 absent, and no active camera.
-  - `topology-reparent.json` (koikatu_cs0002591): item 623 moves from folder 622 to folder 962, character 65 from the root to folder 626, and item 1129 from folder 962 to the root; folder 1298 is deleted with its character and items. Asserts the child lists and that world pose holds within 1e-4 m and 0.01°, through 4 undos and 4 redos. After export and reimport it holds within 5e-4 m and 0.05°.
+  - `topology-reparent.json` (source scene `029f0b1d`): item 623 moves from folder 622 to folder 962, character 65 from the root to folder 626, and item 1129 from folder 962 to the root; folder 1298 is deleted with its character and items. Asserts the child lists and that world pose holds within 1e-4 m and 0.01°, through 4 undos and 4 redos. After export and reimport it holds within 5e-4 m and 0.05°.
   - `reload-save-topology.json` and `reload-load-topology.json` (scene-x): camera 2 moves to the root and folder 1 is deleted, then native save, a fresh process, load, export and reimport. Expects root `[0, 2]` with camera 2 still looked through.
   - `topology-refused.json` (mirrored-camera scene): moving item children and moving under items is refused with its reason and writes no file; deleting camera 3 then exports and reimports.
 
@@ -283,7 +285,7 @@ Our reader keeps every nested light, which is what an install with the fix loads
   - a copied folder that holds a light (3);
   - lights under a route, a character's accessory point and an item, each copied beside its original (7).
 
-  Deleting a light before adding two, and a three-light source that takes only a new folder, export under both policies. With the policy check removed, the test fails on its first unlimited case. The `studio-scenario-light-limit` lane check (`light-limit.json`, koikatu_cs0002591, which has no lights) adds a point, a spot and a directional light. With the setting off the export is refused and writes no file. With it on the export writes the three lights, the status names them, and the reimport has keys 113, 114 and 115 after the eight source roots. A negative control proves the child-order assert fails without key 115.
+  Deleting a light before adding two, and a three-light source that takes only a new folder, export under both policies. With the policy check removed, the test fails on its first unlimited case. The `studio-scenario-light-limit` lane check (`light-limit.json`, source scene `029f0b1d`, which has no lights) adds a point, a spot and a directional light. With the setting off the export is refused and writes no file. With it on the export writes the three lights, the status names them, and the reimport has keys 113, 114 and 115 after the eight source roots. A negative control proves the child-order assert fails without key 115.
 
 ### Evidence
 
@@ -300,7 +302,7 @@ Our reader keeps every nested light, which is what an install with the fix loads
 
   `SourceSceneExportValidationTests` adds the app translation: a document with a copy subtree, a new folder and a moved copy stages keys `[0, 4, 6, 7, 8]` and exports roots `[10, 20, 0, 6, 8]`. The full Engine suite (`swift test --package-path Packages/Engine` with every fixture of the shared map, after merging main at 872d2ec) ran 942 tests. 12 were skipped: opt-in timing probes and fixtures that are not present. 1 failed, the pre-existing `liveSourceShadersMeetTheControlledOriginalFrameGates`, whose local store fixture has 52 entries where the test expects 62.
 - **Lanes.** Four new `studio-scenarios` checks drive the same `StudioModel` methods the UI uses, with negative controls:
-  - `topology-duplicate.json` (koikatu_cs0002591): Duplicate folder 962 (a character and three items), item 1540 and item 1127, then Add Folder, Add Camera and Add Light (point). It asserts the tree labels, each copy's world position against its original within 1e-4 m and 0.01°, and six undos and redos. After export and reimport the roots are `[622, 65, 962, 626, 1130, 794, 1298, 1540, 113, 334, 336, 337, 338]`, copy 113 holds `[114, 331, 332, 333]` and folder 962 holds `[963, 1127, 1128, 1129, 335]`, the keys an independent Python allocation over the source file predicts. Every copy and new record is within 5e-4 m and 0.05° of its pre-export capture. Two `assertRejected` controls (a wrong position source and a wrong child order) must fail.
+  - `topology-duplicate.json` (source scene `029f0b1d`): Duplicate folder 962 (a character and three items), item 1540 and item 1127, then Add Folder, Add Camera and Add Light (point). It asserts the tree labels, each copy's world position against its original within 1e-4 m and 0.01°, and six undos and redos. After export and reimport the roots are `[622, 65, 962, 626, 1130, 794, 1298, 1540, 113, 334, 336, 337, 338]`, copy 113 holds `[114, 331, 332, 333]` and folder 962 holds `[963, 1127, 1128, 1129, 335]`, the keys an independent Python allocation over the source file predicts. Every copy and new record is within 5e-4 m and 0.05° of its pre-export capture. Two `assertRejected` controls (a wrong position source and a wrong child order) must fail.
   - `topology-insert-refused.json` (mirrored-camera scene): a new character, and a new folder moved under an item, are each refused with their reason and write no file. Duplicating camera 2 inside item 0 hands it the view, and the reimport has item 0 `[2, 4]` with camera 4 looked through.
   - `reload-save-duplicate.json` and `reload-load-duplicate.json` (scene-x): duplicate camera 2, undo and redo, add a folder and save natively. A fresh process loads it with three camera cache entries after one rehydration, switches to the copy, exports and reimports root `[0, 1, 4]`, folder 1 `[2, 3]`, camera 3 looked through at camera 2's world position.
 
@@ -315,7 +317,7 @@ Our reader keeps every nested light, which is what an install with the fix loads
   The parallels.log errno-24 count was 0 before and after the run. The private root was removed, and no game process was left.
 - **Performance.** Export costs did not change. Duplicating a character in the app stalls the main thread for about 0.6 s per character. An item copy costs about 1.6 ms.
 
-  The export was timed with `SourceSceneTopologyPerformanceTests`, in Release (`swift test -c release`) on koikatu_cs0002591, with one test per process and 60 calls each:
+  The export was timed with `SourceSceneTopologyPerformanceTests`, in Release (`swift test -c release`) on source scene `029f0b1d`, with one test per process and 60 calls each:
 
   | Call (median / p90 ms) | main d6b61a2 | this branch |
   | --- | --- | --- |
@@ -1065,7 +1067,7 @@ The refusal is the engine's message, which names each plug-in and its reason. Th
   - **Card links.** No installed scene's cards name KKAnimationController links, as in survey 2.
 
 - **Performance** (Release, `SourceScenePluginDataPerformanceTests`, 60 calls each, median; the tables, both builds and the method are in [performance](../performance.md#st-t03i-scene-plug-in-data-rewrites)). The numbers come from the second change's quiet window (2026-10-26, 07:19), with the rewrites and the lazy card hash.
-  - **Showoff scene.** `koikatu_cs0002591` has no plug-in data. A one-transform export takes 4.97 ms and a subtree deletion 4.80 ms. The plug-in step takes 0.049 and 0.044 ms of that: one search of the written bytes for KKAnimationController data, then a return.
+  - **Showoff scene.** Source scene `029f0b1d` has no plug-in data. A one-transform export takes 4.97 ms and a subtree deletion 4.80 ms. The plug-in step takes 0.049 and 0.044 ms of that: one search of the written bytes for KKAnimationController data, then a return.
   - **Fix found by the probe (first change).** Before that early exit, the step built its edit model for every export: 0.85 ms in Debug, now 0.05 ms.
   - **Phase-A fixture.** A delete with the Sideloader rewrite exports in 0.61 ms and a move in 0.67 ms. The plug-in step takes 0.040 and 0.047 ms.
   - **Phase-B fixture** (every plug-in's entries). A light delete exports in 0.66 ms and a move in 0.70 ms. The plug-in step takes 0.025 and 0.059 ms. An item delete, which rewrites KKPE and MaterialEditor, exports in 0.65 ms with a 0.072 ms plug-in step.
@@ -1361,7 +1363,7 @@ native load was stale: undo after an outfit switch missed the loaded capture by
 138,276 pixels.
 
 Evidence, 2026-10-17 (headless, no VM): the complete `studio-scenarios` lane
-passed 37/37 with `--strict` and 0 skipped. Source scene `koikatu_cs0002591.png`
+passed 37/37 with `--strict` and 0 skipped. Source scene `029f0b1d`
 has SHA-256 `029f0b1d248ba71158b08b8d237be14810819d411d62f529f77f3a612a8bea04`
 (595,127 bytes). Character key 65 has saved outfit 0 with `backCoordinateType`
 0; key 0 also saves outfit 0. Both cards carry all seven coordinates.
@@ -1405,7 +1407,7 @@ The clothes state and accessory visibility that this slice left unconsumed
 
 Reviewed 2026-10-22. The defect this slice fixes: the embedded card's
 `Status.clothesState` and `showAccessory` were never read, so source character
-key 0 of `koikatu_cs0002591.png` rendered clothed, although its card saves
+key 0 of source scene `029f0b1d` rendered clothed, although its card saves
 `clothesState` = `c4 09 03 03 03 03 03 03 03 03 03` (all nine kinds off,
 `shoesType` 1, every accessory flag true). The pre-fix lane build showed its
 reference top, reference bottom and converted outdoor shoes drawn.
@@ -2066,6 +2068,86 @@ Reset/Undo and exact-pixel checks: **7/7 save and 16/16 load steps pass**; the
 83-step edit scenario also passes again. This does not generalize support to hidden
 characters carrying only older shape/wear edits.
 
+## Hidden characters at import (lazy builds)
+
+An import builds the characters it draws and leaves a hidden one unbuilt
+(cxs1 gap list, item 7). A character is hidden when its own `visible` flag or
+any ancestor's is off; accessory children follow their character. Route
+characters stay eager, hidden or not. The scene corpus has 558 hidden
+characters in 29 scenes and no route characters.
+
+### Recovered rules
+
+- Hiding a character (`OCIChar.OnVisible`) sets `ChaControl.visibleAll` and
+  the guide and option-item visibility, nothing else. `visibleAll` is read
+  only as one flag of `YS_Assist.SetActiveControl`, which switches the
+  GameObjects of the body, head, tongue, hair, clothes, parts and accessory
+  renderers on or off.
+- The body Animator is on the root of the `p_cf_body_bone` prefab
+  (`p_cf_body_bone_low` for low detail) in `chara/oo_base.unity3d`, under the
+  character's top object. Hiding never touches either GameObject. Both
+  prefabs' Animators cull with AlwaysAnimate and update in Normal mode, and
+  no recovered code changes the culling mode. So a hidden character keeps
+  animating.
+- A save reads the live `normalizedTime` of the Animator's current state
+  (`OCIChar` save), so a hidden character saves the time it has reached.
+- A scene load selects nothing: `InitScene` clears the tree selection and
+  the load never selects a node.
+
+### App translation
+
+- The import plans every character and builds the drawn ones. A hidden one
+  gets its reference and no build. The status line adds "N hidden, built when
+  shown" and the diagnostics add "N hidden character(s) not built at import;
+  each builds when shown or selected."
+- A hidden character whose embedded card alone shows it cannot convert is
+  retained as the eager import retains a failed build: a placeholder entry
+  with no character reference, and the same diagnostic, "Character N retained
+  without rendering: <reason>". The check
+  (`SourceStudioCharacterPreview.validateCard`) runs the build's card-only
+  steps in the build's order: the card and customization decode, the scene
+  and card sex identities, the assembly identity, the saved outfit index,
+  the assembly kind (exType 0) and the shape rates (0...1). It reads no
+  converted file and runs on a worker from the import's preparation
+  (`CardCheck`); the commit collects it. A card that fails it cannot build,
+  and the reason is the build's own error unless a converted-file step the
+  build runs before the shape check fails first (the head assembly lookup,
+  the rig and appearance reads). A card that passes may still fail in those
+  steps; that failure is reported when the character is shown or selected.
+- A hidden character builds when it is shown, when it is selected, or when a
+  selected object hangs from it (an attached folder, for example). A hidden
+  selection builds without being drawn, so its inspectors and edits work.
+  While it builds, its Face, Clothes and Pose inspectors show "Building this
+  character…".
+- An object attached to an unbuilt hidden character reports no
+  "Attachment parent has no converted character" error: visibility is checked
+  before the attachment's world matrix.
+- The default selection after an import is the first drawn character, or
+  nothing when none is drawn, so the selection builds no hidden character.
+  This is a native convenience; CharaStudio selects nothing.
+- A character with no preview (unbuilt, not yet built after a native load,
+  or whose build failed) saves the animation time it has reached, like
+  CharaStudio's hidden characters. `SourceStudioAnimationClock` reads only
+  its card's body height and the catalog clip (no rig, no GPU) and calls
+  `SourceStudioAnimation.savedState`, the time advance a built character's
+  `savedAnimationState` calls. A native save, a clock rebase (an animation
+  edit) and an export all use it. Every character's animation is saved at
+  the Studio clock of the moment the export was chosen. When the import's
+  warm-up has loaded what the clocks read
+  (`SourceStudioAnimationClock.isLoaded`, which never waits), an export with
+  no baseline to build runs at once on the main thread, as before this
+  change; the clocks cost about a millisecond there. Before that (the
+  warm-up still running), the background export advances them on a worker
+  thread and shows its progress line.
+- This also fixes the native reload path. Before, a character hidden when a
+  native document was saved had its animation baked into the document, the
+  reload left it unbuilt, and the export failed with "Animation edits
+  require a loaded source character."
+
+### Evidence
+
+EVIDENCE_PLACEHOLDER
+
 ## CharaStudio reload acceptance
 
 Reviewed 2026-09-30. This closes the "reload in the original CharaStudio" half of the ST-T03 edit destinations: our app's own exported scene records are loaded into the real CharaStudio player, and the state the player shows is recorded and compared claim by claim.
@@ -2131,3 +2213,54 @@ Our side: `Tools/verification/scenarios/route-children-motion.json` and `neck-ta
 A later card-free author scene, `mirrored-camera` (2026-10-23, R4/ST-A06), saves `scene-mirrored-camera.png`: a camera under an item scaled (−1, 1, 1) and a control camera under an unmirrored copy. Its capture and the lane check that runs it are in [Mirrored camera parent](scene-records.md#mirrored-camera-parent-original-capture-r4).
 
 Observation, not changed in this slice: `ikkoku-inspect look-data` and `SourceStudioNeckLookOverride.resolve` still report TARGET/AWAY as "Neck gaze solver pending; animated pose kept.". The Studio preview meanwhile runs the live `SourceStudioNeckLookRuntime` and says "Neck look override live: TARGET|AWAY follows the Studio camera from the saved fixAngle.". The data-only reason text is stale.
+
+## Undo across scene replacements (#384)
+
+`StudioModel` keeps its undo and redo steps in `StudioUndoHistory` (Engine, `Packages/Engine/Sources/Studio/StudioUndoHistory.swift`). Each step is a snapshot of the whole document, and the undo side holds at most 60.
+
+**The rule.** A path that replaces the whole document records the document it replaces as a marked step. The next replacement drops that marked step and every step before it.
+- Undo after a replacement brings back the scene it replaced, with that scene's own edits, but not the scenes before it.
+- The mark belongs to the change from a step to the state after it. Undo carries it to the redo step and Redo carries it back, so a replacement that was undone and redone is still the one the next replacement trims.
+- The trim and the new step are one call (`record(_:replacingScene:)`). Each replacement path runs every step that can fail before it records, so a failed one leaves the document and both stacks exactly as they were.
+
+**How each path is classified.**
+
+| Path | Code | Classified as |
+| --- | --- | --- |
+| File ▸ New Scene | `newScene()` | replaces the document: marked |
+| File ▸ Open (an Ikkoku scene) | `loadScene(from:)` | replaces the document: marked. Decoding, hierarchy and camera validation and plug-in preparation all run before it records. |
+| Import of an original CharaStudio scene (also the scenario `reimport`) | `importSourceScenePreview` → `commitSourceSceneImport` | replaces the document with a freshly built one: marked. The preparation and the character frames run before it records. |
+| File ▸ Import Scene (an Ikkoku scene) | `importScene(from:)` | merges objects into the current scene: an ordinary step, trims nothing |
+| Koikatsu layout import | `importKoikatsuLayout` | merges objects into the current scene: an ordinary step |
+| Edits, adds, deletes, plug-in load and unload | `pushUndo`, `update` | ordinary steps |
+
+**Why.** Each Open decodes a fresh document that shares no storage with earlier ones. Before #384, New Scene and Open each pushed a forced step, so a run of loads kept 30 decoded scenes in the 60 steps. On the 3,769-object corpus scene each kept scene is about 6 MB of `StudioObject` storage (about 1.6 KB per object) plus its strings. The `studio-load` workload's footprint therefore rose about 7 MB per cycle until cycle 31, and then held at 414–464 MB.
+
+**Known difference from CharaStudio (deliberate).** CharaStudio clears its whole undo and redo history in `Studio.InitScene`, which both New Scene and scene loading run. Its scene import (a merge) keeps the history. CharaStudio also clears the history when an object is added or deleted. Ikkoku keeps one earlier scene across a replacement, and keeps its history across adds and deletes, as before.
+
+**Not changed here.**
+- An edit step still copies the whole objects array, about 6 MB per step on the corpus scene (#409).
+- A small unbounded per-load growth in KVO and SwiftUI bookkeeping, about 8.6 KB per cycle, is tracked separately (#410).
+
+### Evidence
+
+- `Packages/Engine/Tests/EngineTests/StudioUndoHistoryTests.swift` covers:
+  - 100 New Scene and Open cycles keeping one earlier scene;
+  - Undo of a New Scene with the scene's edits;
+  - a second replacement stopping at the previous scene;
+  - a merge keeping every earlier step;
+  - the 60-step limit within one scene;
+  - an undone and redone replacement;
+  - a replacement after undoing one;
+  - 200 seeded random histories (at most one mark, Undo and Redo inverse).
+- The `studio-scenario-undo-scene-replacements` check (`Tools/verification/scenarios/undo-scene-replacements.json`, scene-x) drives each replacement path and the merge in one process, checking the undo and redo depths after each, then an Open refused after reading the file, which leaves the document and both stacks unchanged.
+- **Footprint A/B.** Release builds; `studio-load` for 120 s on the corpus scene 4b87a4f49c81, A B B A, every launch through the app lock. It measures memory only, so no quiet window was used.
+
+  | Arm | Slope, cycles 2–30 | Median from cycle 41 (range) | Max |
+  | --- | ---: | ---: | ---: |
+  | A: main `c44ff94d` | +5.4 and +7.4 MB per cycle | 425 and 427 MB (401–447) | 442 and 462 MB |
+  | B: this change | −1.5 and +0.5 MB per cycle | 229 and 223 MB (196–255) | 286 and 281 MB |
+
+  - Metal stays at 73.3 MB on both arms.
+  - A memory graph at cycle 35 holds 31 `StudioObject` arrays on A (30 held by the undo steps). On B it holds 2: the one undo step and a load in flight.
+  - Ready time per load was 481 and 493 ms on A, 481 and 494 ms on B. That is informational only: the runs were not in a quiet slot.

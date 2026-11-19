@@ -54,7 +54,7 @@ final class PerfWorkloadDriver {
     private var actionIndex = 0
     private var pendingAction: (name: String, measured: Bool, start: CFTimeInterval, end: CFTimeInterval)?
     private var finishedActions: [(name: String, measured: Bool, start: CFTimeInterval, end: CFTimeInterval, ready: CFTimeInterval,
-                                   status: String, error: String?)] = []
+                                   status: String, error: String?, footprint: UInt64, metal: Int, objects: Int)] = []
     /// The temporary folder `studio-export` and `studio-load` write scene
     /// files to, removed when the run stops.
     private var scratchFolder: URL?
@@ -239,6 +239,9 @@ final class PerfWorkloadDriver {
         case "studio-export": try prepareStudioExport()
         case "studio-load": try prepareStudioLoad()
         case "studio-select": try prepareStudioSelect()
+        case "studio-export-import": try prepareStudioExportImport()
+        case "studio-show-hidden": try prepareStudioShowHidden()
+        case "studio-clock-first": try prepareStudioClockFirst()
         default: throw RigError.invalid("unknown workload \(workload)")
         }
     }
@@ -259,13 +262,19 @@ final class PerfWorkloadDriver {
         // A character riding a route renders behind a folder-kind placeholder,
         // so a scene whose only characters ride routes also qualifies (ST-T11).
         let routeCharacters = studio.sourceRouteCharacterPreviews.count
-        guard !characters.isEmpty || routeCharacters > 0 else { throw RigError.invalid("needs IKKOKU_SOURCE_SCENE with converted source characters") }
+        // A scene of converted source items alone (ST-T04, the item catalog)
+        // also qualifies.
+        let sourceItems = studio.sourceRuntimeCounts().items
+        guard !characters.isEmpty || routeCharacters > 0 || sourceItems > 0 else {
+            throw RigError.invalid("needs IKKOKU_SOURCE_SCENE with converted source characters or items")
+        }
         app.mode = .studio
         studio.liveAnimation = liveAnimation
         trace.details["liveAnimation"] = liveAnimation
         studio.selection = selectKey.flatMap { key in studio.doc.objects.first { $0.sourceObjectKey == key }?.id }
         trace.details["sourceCharacters"] = characters.count
         trace.details["sourceRouteCharacters"] = routeCharacters
+        trace.details["sourceItems"] = sourceItems
         trace.details["documentObjects"] = studio.doc.objects.count
         trace.details["selectedSourceKey"] = selectKey.map { Int($0) } ?? -1
         if let path = ProcessInfo.processInfo.environment["IKKOKU_SOURCE_SCENE"],
@@ -591,6 +600,101 @@ final class PerfWorkloadDriver {
         trace.details["gesture"] = "File ▸ Export Edited Original Scene with source key \(target.sourceObjectKey ?? -1) hidden, a cheek edit and no preview, repeated; live animation on"
     }
 
+    /// `studio-export-import` (lazy hidden characters): File ▸ Export Edited
+    /// Original Scene (`AppState.exportSourceScene(to:)`) of the startup
+    /// scene as imported, unedited, repeated, with live animation on. A
+    /// hidden character the import left unbuilt has no edit, so the export
+    /// builds no baseline for it. Each export writes a new file and removes
+    /// the previous one.
+    private func prepareStudioExportImport() throws {
+        try prepareStudioSource(selectKey: nil)
+        let folder = try makeScratchFolder()
+        var count = 0
+        var previous: URL?
+        actionSteps = [("export", true, { [weak self] in
+            if let previous { try? FileManager.default.removeItem(at: previous) }
+            count += 1
+            let url = folder.appendingPathComponent("export-\(count).png")
+            previous = url
+            self?.app.exportSourceScene(to: url)
+        })]
+        trace.details["gesture"] = "File ▸ Export Edited Original Scene of the imported startup scene, unedited, repeated; live animation on"
+    }
+
+    /// `studio-show-hidden` (lazy hidden characters): Visible on (the
+    /// inspector's toggle, `update`) for each hidden object of the startup
+    /// scene that holds source characters (its own flag off, its ancestors
+    /// shown), in workspace order, each followed by Visible off again
+    /// (unmeasured), repeated, with live animation on. An action's first run
+    /// shows characters the import left unbuilt, so its ready time holds
+    /// their build; later runs find them built. Each action is named
+    /// "show <source key> (<n> characters)".
+    private func prepareStudioShowHidden() throws {
+        let studio = try prepareStudioSource(selectKey: nil)
+        let doc = studio.doc
+        let characters = doc.objects.filter { $0.kind == .character && $0.sourceCharacter != nil }
+        func holds(_ root: UUID) -> Int {
+            characters.filter { character in
+                var current: UUID? = character.id, steps = 0
+                while let id = current, steps <= doc.objects.count {
+                    if id == root { return true }
+                    current = doc.object(id)?.parent; steps += 1
+                }
+                return false
+            }.count
+        }
+        let roots = doc.flattened().map(\.object).filter { object in
+            !object.visible && (object.parent.map { doc.isVisible($0) } ?? true) && holds(object.id) > 0
+        }
+        guard !roots.isEmpty else { throw RigError.invalid("studio-show-hidden needs a hidden object holding source characters") }
+        var steps: [(name: String, measured: Bool, run: () -> Void)] = []
+        for root in roots {
+            let id = root.id
+            steps.append(("show \(root.sourceObjectKey ?? -1) (\(holds(id)) characters)", true, { studio.update(id) { $0.visible = true } }))
+            steps.append(("hide", false, { studio.update(id) { $0.visible = false } }))
+        }
+        actionSteps = steps
+        trace.details["hiddenRoots"] = roots.map { ["sourceKey": Int($0.sourceObjectKey ?? -1), "characters": holds($0.id)] }
+        trace.details["gesture"] = "Visible on, then off, for each of \(roots.count) hidden objects holding source characters, repeated; live animation on"
+    }
+
+    /// `studio-clock-first` (lazy hidden characters): the first clock rebase
+    /// and the first native save after the import, then repeated. "rebase"
+    /// sets the first drawn character with a converted saved clip to its own
+    /// animation speed (`setSourceAnimationSpeed`, which bakes every
+    /// character's clock and restarts it); "save" is File ▸ Save
+    /// (`saveScene(to:)`) to a scratch file, removed before the next one.
+    /// Live animation on, so each runs on an advanced clock.
+    private func prepareStudioClockFirst() throws {
+        let studio = try prepareStudioSource(selectKey: nil)
+        let doc = studio.doc
+        guard let target = doc.objects.first(where: { object in
+            object.kind == .character && doc.isVisible(object.id) && studio.sourceShapePreview(for: object.id)?.hasSavedAnimation == true
+        }) else { throw RigError.invalid("studio-clock-first needs a drawn character with a converted saved clip") }
+        let folder = try makeScratchFolder()
+        var count = 0
+        var previous: URL?
+        let id = target.id
+        actionSteps = [
+            ("rebase", true, { [weak self] in
+                guard let preview = studio.sourceShapePreview(for: id), let i = studio.doc.index(of: id) else {
+                    self?.app.errorMessage = "studio-clock-first: the target character has no preview"; return
+                }
+                let speed = (studio.doc.objects[i].sourceAnimation ?? SourceStudioAnimationState(record: preview.record)).speed
+                do { try studio.setSourceAnimationSpeed(id, speed) } catch { self?.app.errorMessage = "\(error)" }
+            }),
+            ("save", true, { [weak self] in
+                if let previous { try? FileManager.default.removeItem(at: previous) }
+                count += 1
+                let url = folder.appendingPathComponent("save-\(count).png")
+                previous = url
+                do { try studio.saveScene(to: url) } catch { self?.app.errorMessage = "\(error)" }
+            }),
+        ]
+        trace.details["clockTarget"] = Int(target.sourceObjectKey ?? -1)
+        trace.details["gesture"] = "Animation speed set to its own value (a clock rebase), then File ▸ Save, repeated; live animation on"
+    }
+
     /// `studio-load`: File ▸ Open (`AppState.openScene(at:importing:)`) of the
     /// source scene saved as an Ikkoku scene, after File ▸ New Scene
     /// (unmeasured), repeated. Each load replaces the empty document, so its
@@ -690,7 +794,12 @@ final class PerfWorkloadDriver {
         let ready = installed >= action.start ? max(action.end, installed) : action.end
         let error = app.errorMessage
         app.errorMessage = nil
-        finishedActions.append((action.name, action.measured, action.start, action.end, ready, app.studio?.status ?? "", error))
+        // The process footprint and Metal allocation when the action is ready:
+        // flat across repeated loads means nothing accumulates per cycle. The
+        // document's object count (read after the timed span) shows what an
+        // edit added or an undo restored.
+        finishedActions.append((action.name, action.measured, action.start, action.end, ready, app.studio?.status ?? "", error,
+                                PerfTrace.footprint(), trace.device?.currentAllocatedSize ?? 0, app.studio?.doc.objects.count ?? -1))
         pendingAction = nil
         DispatchQueue.main.asyncAfter(deadline: .now() + (action.measured ? 0.5 : 0.2)) { self.runNextAction() }
     }
@@ -700,21 +809,30 @@ final class PerfWorkloadDriver {
     /// were installed, and the main thread's busy time and longest busy
     /// period (a stall) from the call until then. A busy period that began
     /// before the call counts from the call; one that is still running when
-    /// the action is ready counts whole.
+    /// the action is ready counts whole. `busyOwnMs` is the same busy time
+    /// clipped at the next action's call: a busy period lasts until the run
+    /// loop sleeps, and when an action's SwiftUI update outlasts the gap to
+    /// the next action, `busyMs` of both counts the shared period.
     private func finishActions() {
         // The period still running (the stop timer may fire in the same
         // run-loop pass as a long action) counts until now.
         let busy = trace.busyIntervals + (trace.openBusyStart.map { [($0, CACurrentMediaTime())] } ?? [])
-        trace.details["actions"] = finishedActions.map { action -> [String: Any] in
+        trace.details["actions"] = finishedActions.indices.map { index -> [String: Any] in
+            let action = finishedActions[index]
+            let next = index + 1 < finishedActions.count ? finishedActions[index + 1].start : .infinity
             let overlapping = busy.filter { $0.end > action.start && $0.start <= action.ready }
             let lengths = overlapping.map { ($0.end - max($0.start, action.start)) * 1000 }
+            let own = overlapping.map { max(0, min($0.end, next) - max($0.start, action.start)) * 1000 }
             return ["name": action.name, "measured": action.measured,
                     "startSeconds": PerfTrace.round(action.start - recordingStart),
                     "callMs": PerfTrace.round((action.end - action.start) * 1000),
                     "readyMs": PerfTrace.round((action.ready - action.start) * 1000),
                     "busyMs": PerfTrace.round(lengths.reduce(0, +)),
+                    "busyOwnMs": PerfTrace.round(own.reduce(0, +)),
                     "longestStallMs": PerfTrace.round(lengths.max() ?? 0),
-                    "status": action.status, "error": action.error.map { $0 as Any } ?? NSNull()]
+                    "status": action.status, "error": action.error.map { $0 as Any } ?? NSNull(),
+                    "footprintBytes": action.footprint, "metalAllocatedBytes": action.metal,
+                    "documentObjects": action.objects]
         }
     }
 

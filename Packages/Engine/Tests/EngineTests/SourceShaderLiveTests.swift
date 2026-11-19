@@ -11,6 +11,7 @@ import ShaderTypes
 import GPU
 import Character
 import Studio
+@testable import Scene
 @testable import Renderer
 
 // R1/CMT-04 live source-shader path. Synthetic translated programs (written in
@@ -161,11 +162,11 @@ private final class StubTextureProvider: SourceShaderLiveTextureProvider, @unche
 typealias BindingSet = SourceShaderBindingSet
 
 func liveMaterial(shader: String, queue: Int? = 2450, color: [Float]? = [0.5, 0.5, 0.5, 1], texture: String? = "tex_main",
-                          unresolved: String? = nil) -> BindingSet.Material {
+                          unresolved: String? = nil, filter: String = "Bilinear", aniso: Int = 1) -> BindingSet.Material {
     var vectors: [String: BindingSet.Vector] = [:]
     if let color { vectors["_Color"] = .init(color, source: "card") }
     let identity = texture.map { BindingSet.TextureIdentity(kind: .asset, name: $0, bundle: "chara/test.unity3d", pathID: "1",
-                                                            filter: "Bilinear", wrap: "Repeat", aniso: 1) }
+                                                            filter: filter, wrap: "Repeat", aniso: aniso) }
     return BindingSet.Material(name: "m_test", shader: shader, queue: queue, queueSource: queue == nil ? "unresolved" : "prefab",
                                vectors: vectors, textures: ["_MainTex": .init(identity: identity, identitySource: "prefab", scale: [1, 1], offset: [0, 0], transformSource: "prefab")],
                                unresolved: unresolved)
@@ -342,6 +343,85 @@ func liveSourceMaterialResolutionIsAllOrNothing() throws {
     #expect(reason { try resolve(liveMaterial(shader: "Legacy Shaders/Diffuse")) } == "shader Legacy Shaders/Diffuse is not a translated Shader Forge family")
 }
 
+/// The Studio's live assemblies sample like the player: CharaStudio runs
+/// `QualitySettings.anisotropicFiltering` ForceEnable, which raises every
+/// non-Point texture with aniso above 0 to 9, with D3D11's linear mips. Before,
+/// the Studio passed no mode, so a Bilinear texture sampled with nearest mips
+/// and no anisotropy.
+@Test(.enabled(if: MTLCreateSystemDefaultDevice() != nil))
+func studioLiveAssembliesSampleWithThePlayersForcedAnisotropy() throws {
+    let device = try #require(MTLCreateSystemDefaultDevice())
+    let resources = ResourceStore(device: device)
+    let directory = try LiveProgramFixture.temporaryDirectory()
+    defer { try? FileManager.default.removeItem(at: directory) }
+    try LiveProgramFixture.write(LiveProgramFixture.lineSpec(outline: false), family: "live_line", to: directory)
+    try LiveProgramFixture.write(LiveProgramFixture.lineSpec(outline: true), family: "live_line_outline", to: directory)
+    let textures: [(filter: String, aniso: Int)] = [("Bilinear", 1), ("Trilinear", 1), ("Point", 1), ("Bilinear", 0)]
+    let bindings = BindingSet(scope: "synthetic", renderers: textures.enumerated().map { index, texture in
+        liveRenderer("o_line\(index)", material: liveMaterial(shader: "Shader Forge/live_line", filter: texture.filter, aniso: texture.aniso))
+    }, globalVectors: ["_LineColorG": .init([0.5, 0.5, 0.5, 0], source: "scene")])
+    func assembly(_ mode: String?) -> SourceShaderLiveAssembly {
+        SourceShaderLiveAssembly(bindings: bindings, programs: directory, resources: resources,
+                                 textures: StubTextureProvider(device: device, names: ["tex_main"]), streams: [:],
+                                 anisotropicFiltering: mode)
+    }
+    func samplers(_ mode: String?) throws -> [TranslatedSourceProgram.SamplerConfiguration] {
+        let assembly = assembly(mode)
+        return try textures.indices.map { try #require(try assembly.materials[$0]?.get().samplers["_MainTex"]) }
+    }
+    #expect(SourceShaderLiveConfiguration.playerAnisotropicFiltering == "ForceEnable")
+    let studio = try samplers(SourceShaderLiveConfiguration.playerAnisotropicFiltering)
+    #expect(studio.map(\.maxAnisotropy) == [9, 9, 1, 1])
+    #expect(studio.map(\.mipFilter.rawValue) == [MTLSamplerMipFilter.linear, .linear, .nearest, .nearest].map(\.rawValue))
+    #expect(studio.map(\.minFilter.rawValue) == [MTLSamplerMinMagFilter.linear, .linear, .nearest, .linear].map(\.rawValue))
+    #expect(studio.allSatisfy { $0.sAddressMode == .repeat && $0.tAddressMode == .repeat })
+    // Without the player's mode (the Studio before this change), Bilinear took nearest mips and no anisotropy.
+    let unforced = try samplers(nil)
+    #expect(unforced.map(\.maxAnisotropy) == [1, 1, 1, 1])
+    #expect(unforced.map(\.mipFilter.rawValue) == [MTLSamplerMipFilter.nearest, .linear, .nearest, .nearest].map(\.rawValue))
+    // The Studio's live report and the studio-scenario-live-samplers check read these counts.
+    #expect(assembly(SourceShaderLiveConfiguration.playerAnisotropicFiltering).samplerSummary
+        == ["aniso 9, mips linear": 2, "aniso 1, mips nearest": 2])
+    #expect(assembly(nil).samplerSummary == ["aniso 1, mips nearest": 3, "aniso 1, mips linear": 1])
+    let first = try #require(try assembly(nil).materials[0]?.get())
+    #expect(first.samplerSummary == ["aniso 1, mips nearest": 1])
+}
+
+/// Materials resolved from the native store share one sampler state per
+/// configuration, through the cache composite inputs use, instead of one per
+/// texture per material.
+@Test(.enabled(if: MTLCreateSystemDefaultDevice() != nil))
+func liveMaterialsFromTheStoreShareOneSamplerPerConfiguration() throws {
+    let device = try #require(MTLCreateSystemDefaultDevice())
+    let resources = ResourceStore(device: device)
+    let directory = try LiveProgramFixture.temporaryDirectory()
+    defer { try? FileManager.default.removeItem(at: directory) }
+    try LiveProgramFixture.write(LiveProgramFixture.lineSpec(outline: false), family: "live_line", to: directory)
+    let url = try nativeTextureStoreFixture()
+    defer { try? FileManager.default.removeItem(at: url.deletingLastPathComponent()) }
+    let store = try SourceShaderTextureStore(url: url)
+    var material = liveMaterial(shader: "Shader Forge/live_line")
+    material.textures["_MainTex"] = .init(identity: nativeTextureIdentity, identitySource: "prefab", scale: [1, 1], offset: [0, 0], transformSource: "prefab")
+    let bindings = BindingSet(scope: "synthetic", renderers: [liveRenderer("o_a", material: material), liveRenderer("o_b", material: material)],
+                              globalVectors: ["_LineColorG": .init([0.5, 0.5, 0.5, 0], source: "scene")])
+    func resolve(_ index: Int, _ mode: String?) throws -> SourceShaderLiveMaterial {
+        try SourceShaderLiveMaterial.resolve(renderer: bindings.renderers[index], bindings: bindings, programs: directory,
+                                             resources: resources, textures: store, anisotropicFiltering: mode)
+    }
+    let first = try resolve(0, "ForceEnable"), second = try resolve(1, "ForceEnable")
+    let a = try #require(first.textures["_MainTex"]?.sampler), b = try #require(second.textures["_MainTex"]?.sampler)
+    #expect(a === b)
+    #expect(first.samplerSummary == ["aniso 9, mips linear": 1])
+    #expect(store.compositeInputStatistics(for: resources).samplers == 1)
+    // Another configuration gets its own sampler, also cached.
+    let unforced = try resolve(0, nil), again = try resolve(1, nil)
+    let c = try #require(unforced.textures["_MainTex"]?.sampler), d = try #require(again.textures["_MainTex"]?.sampler)
+    #expect(c !== a)
+    #expect(c === d)
+    #expect(unforced.samplerSummary == ["aniso 1, mips nearest": 1])
+    #expect(store.compositeInputStatistics(for: resources).samplers == 2)
+}
+
 // MARK: - Vertex inputs
 
 @Test(.enabled(if: MTLCreateSystemDefaultDevice() != nil))
@@ -498,6 +578,161 @@ func liveSourceDrawsRunInTheProductionMainPassAndLeaveToonFramesUnchanged() thro
     // The live draw replaced the toon draw; a frame without live items renders as before.
     #expect(live != toonBefore)
     #expect(toonAfter == toonBefore)
+}
+
+/// A skinned one-triangle rig whose mesh carries native UV1 (the `live_uv`
+/// program reads TEXCOORD1), so its preview items draw live once deformed.
+private func liveSkinnedRig() throws -> SourceRig {
+    let rig = try RigDefinition(nodes: [
+        .init(name: "mesh", sourceID: "mesh", parent: nil),
+        .init(name: "joint", sourceID: "joint", parent: nil)], skins: [
+            .init(name: "skin", meshNode: 0, joints: [1], inverseBindMatrices: [matrix_identity_float4x4])])
+    let mesh = MeshData(name: "o_uv/0", positions: [.zero, Float3(1, 0, 0), Float3(0, 1, 0)],
+                        normals: [Float3](repeating: Float3(0, 0, 1), count: 3),
+                        uvs: [Float2](repeating: Float2(0.25, 0.25), count: 3), uvs1: [Float2](repeating: Float2(1, 1), count: 3),
+                        joints: [SIMD4<UInt16>](repeating: .zero, count: 3),
+                        weights: [Float4](repeating: Float4(1, 0, 0, 0), count: 3), indices: [0, 1, 2])
+    return SourceRig(sourcePrefab: "live", rig: rig, parts: [SourceRig.Part(mesh: mesh, node: 0, skin: 0, rendererEnabled: true)],
+                     morphChannelCount: 0)
+}
+
+/// #337: the live encoder's converted inputs leave with their vertex source,
+/// on the store's release events. A skinned preview's (deformed) inputs go with
+/// its deformation keys when it is dropped, a static mesh's with the mesh when
+/// it is unregistered or its retirement completes. Building and dropping these
+/// owners repeatedly returns the encoder to its baseline; a frame prepared
+/// after a release, which still names the released resources, re-creates none.
+@Test(.enabled(if: MTLCreateSystemDefaultDevice() != nil))
+func liveSourceInputBuffersLeaveWithTheirMeshesAndDeformationKeys() throws {
+    let renderer = try makeLiveTestRenderer()
+    let resources = renderer.resources
+    let directory = try LiveProgramFixture.temporaryDirectory()
+    defer { try? FileManager.default.removeItem(at: directory) }
+    let program = try resources.translatedPipelines.program(url: try LiveProgramFixture.write(LiveProgramFixture.uv, family: "live_uv", to: directory))
+    let material = SourceShaderLiveMaterial(label: "o_uv slot 0", family: "live_uv", queue: 2000, passes: [program],
+                                            vectors: ["_Color": [0, 0, 1, 1]], textures: [:], conventions: [], textureSources: [:])
+    func live(_ item: RenderItem) -> RenderItem {
+        var item = item
+        item.sourceShader = SourceShaderLiveDraw(material: material, streams: nil, sourceOrder: 0)
+        return item
+    }
+    func staticItem(_ mesh: MeshHandle) -> RenderItem {
+        live(RenderItem(mesh: mesh, material: MaterialState(uniforms: .make(kind: MaterialKindItem)), model: matrix_identity_float4x4, objectID: 2))
+    }
+    func frame(_ items: [RenderItem], skinSets: [UInt64: [float4x4]] = [:], submitted: Bool = false) -> RenderFrame {
+        var frame = RenderFrame(items: items)
+        frame.skinSets = skinSets
+        frame.submitted = submitted
+        return frame
+    }
+    func liveDraws(_ items: [RenderItem], submitted: Bool = false) throws -> Int {
+        try liveDraws(frame(items, submitted: submitted))
+    }
+    func liveDraws(_ frame: RenderFrame) throws -> Int {
+        _ = try #require(renderer.capture(frame: frame, width: 8, height: 8))
+        let frameError = renderer.lastFrameError
+        #expect(frameError == nil, "\(String(describing: frameError))")
+        return renderer.lastSourceShaderLive.draws
+    }
+    let cover = coverMesh("o_uv/0", uvs1: Array(repeating: Float2(1, 1), count: 3))
+
+    // A live mesh that stays registered throughout: no release evicts it.
+    let kept = staticItem(try resources.register(mesh: cover))
+    #expect(try liveDraws([kept]) == 1)
+    let encoder = try #require(renderer.liveEncoder)
+    let baseline = encoder.bufferCount
+    #expect(baseline == 1)
+
+    /// One build-draw-drop cycle per owner kind; `hold` keeps the owners
+    /// instead (the control), so their inputs must stay.
+    func cycle(hold: inout [SourceRigPreview], holdMeshes: inout [MeshHandle], holding: Bool) throws {
+        let before = encoder.bufferCount
+        // A skinned preview: dropping it unregisters its meshes and releases
+        // its deformation keys (`SourceRigPreview.deinit`).
+        var preview: SourceRigPreview? = try SourceRigPreview(source: liveSkinnedRig(), contract: nil, resources: resources)
+        let previewFrame = try #require(preview).frame(camera: OrbitCamera())
+        let previewItems = previewFrame.items.map(live)
+        #expect(previewItems.count == 1 && previewItems.allSatisfy { $0.deformKey != nil })
+        // A static mesh unregistered at once, and one retired (Studio maps and
+        // library assets), which completes when a later submitted frame is prepared.
+        let dropped = try resources.register(mesh: cover), retired = try resources.register(mesh: cover)
+        let all = frame([kept] + previewItems + [staticItem(dropped), staticItem(retired)], skinSets: previewFrame.skinSets)
+        #expect(try liveDraws(all) == 4)
+        #expect(encoder.bufferCount == before + 3)
+
+        if holding {
+            hold.append(try #require(preview)); holdMeshes += [dropped, retired]
+            return
+        }
+        preview = nil
+        resources.unregister(mesh: dropped)
+        resources.retire(meshes: [retired])
+        #expect(encoder.bufferCount == before + 1) // the retired mesh's frames may still be pending
+        #expect(try liveDraws([kept], submitted: true) == 1)
+        #expect(encoder.bufferCount == before)
+        // A frame built before the releases skips the released meshes.
+        #expect(try liveDraws(all) == 1)
+        #expect(encoder.bufferCount == before)
+    }
+
+    var held: [SourceRigPreview] = [], heldMeshes: [MeshHandle] = []
+    for _ in 0..<8 { try cycle(hold: &held, holdMeshes: &heldMeshes, holding: false) }
+    #expect(encoder.bufferCount == baseline)
+
+    // Control: owners that are kept keep their inputs, so the count grows.
+    for _ in 0..<3 { try cycle(hold: &held, holdMeshes: &heldMeshes, holding: true) }
+    #expect(encoder.bufferCount == baseline + 9)
+    held.removeAll()
+    for mesh in heldMeshes { resources.unregister(mesh: mesh) }
+    #expect(encoder.bufferCount == baseline)
+    #expect(try liveDraws([kept]) == 1)
+    #expect(encoder.bufferCount == baseline)
+
+    // A deformed entry leaves with its mesh or with its deformation key,
+    // whichever an owner releases first.
+    let preview = try SourceRigPreview(source: liveSkinnedRig(), contract: nil, resources: resources)
+    let previewFrame = try preview.frame(camera: OrbitCamera())
+    let previewItem = try #require(previewFrame.items.first)
+    let previewKey = try #require(previewItem.deformKey)
+    #expect(try liveDraws(frame([kept, live(previewItem)], skinSets: previewFrame.skinSets)) == 2)
+    #expect(encoder.bufferCount == baseline + 1)
+    resources.releaseDeformBuffers(keys: [previewKey]) // the mesh stays
+    #expect(encoder.bufferCount == baseline)
+    #expect(try liveDraws(frame([kept, live(previewItem)], skinSets: previewFrame.skinSets)) == 2)
+    #expect(encoder.bufferCount == baseline + 1)
+    resources.unregister(mesh: previewItem.mesh) // the key stays
+    #expect(encoder.bufferCount == baseline)
+
+    // A frame being prepared while its mesh is released (a render thread and
+    // the main thread): the release evicted before the entry existed, so the
+    // new entry is dropped at once; that frame still gets its buffer.
+    let released = try resources.register(mesh: cover)
+    resources.unregister(mesh: released)
+    let layout = try #require(SourceShaderLiveEncoder.layout(program))
+    let raced = renderer.liveInput(encoder, .init(vertices: SourceShaderLiveEncoder.staticSource(mesh: released.id), layout: layout),
+                                   mesh: released, deformKey: nil, vertexCount: 3)
+    #expect(raced != nil)
+    #expect(encoder.bufferCount == baseline)
+
+    // The same race for a deformation key released while its mesh stays
+    // registered: the new entry is dropped because the store no longer holds
+    // the key. While the store holds it, the entry stays.
+    let keyed = try SourceRigPreview(source: liveSkinnedRig(), contract: nil, resources: resources)
+    let keyedFrame = try keyed.frame(camera: OrbitCamera())
+    let keyedItem = try #require(keyedFrame.items.first)
+    let keyedKey = try #require(keyedItem.deformKey)
+    #expect(try liveDraws(frame([kept, live(keyedItem)], skinSets: keyedFrame.skinSets)) == 2)
+    #expect(encoder.bufferCount == baseline + 1)
+    resources.releaseDeformBuffers(keys: [keyedKey])
+    #expect(encoder.bufferCount == baseline)
+    #expect(resources.mesh(keyedItem.mesh) != nil)
+    let keyRaced = renderer.liveInput(encoder, .init(vertices: keyedKey, layout: layout), mesh: keyedItem.mesh, deformKey: keyedKey, vertexCount: 3)
+    #expect(keyRaced != nil)
+    #expect(encoder.bufferCount == baseline)
+    #expect(try liveDraws(frame([kept, live(keyedItem)], skinSets: keyedFrame.skinSets)) == 2)
+    #expect(encoder.bufferCount == baseline + 1)
+    withExtendedLifetime(keyed) {}
+    withExtendedLifetime(preview) {}
 }
 
 @Test(.enabled(if: MTLCreateSystemDefaultDevice() != nil))

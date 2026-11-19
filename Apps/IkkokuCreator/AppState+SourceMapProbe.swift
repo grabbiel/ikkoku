@@ -17,13 +17,14 @@ extension AppState {
 
     /// The map-only passes compare the map's solid draws, as the original probe
     /// does (its renderers whose materials are all `RenderType=Opaque`, the tag
-    /// Unity's depth-normals replacement selects by): item and lightmapped draws
-    /// without alpha test or blending. Sky, particle, cutout and blended draws
-    /// are counted, not drawn.
+    /// Unity's depth-normals replacement selects by): item, lightmapped and
+    /// ambient-lit (slice 5) draws without alpha test or blending. Sky,
+    /// particle, cutout and blended draws are counted, not drawn.
     static func isSolidSourceMapDraw(_ item: RenderItem) -> Bool {
         let draw = SourceStudioMapAsset.Draw(item.material)
         let alpha = MaterialFlagAlphaTest.rawValue | MaterialFlagAlphaBlend.rawValue
-        return (draw == .item || draw == .lightmapped) && !item.material.transparent && item.material.uniforms.flags & alpha == 0
+        return (draw == .item || draw == .lightmapped || draw == .probeLit) && !item.material.transparent
+            && item.material.uniforms.flags & alpha == 0
     }
 
     /// ST-A11 evidence, `IKKOKU_SOURCE_MAP_PROBE=<directory>` with

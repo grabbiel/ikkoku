@@ -198,6 +198,34 @@ private func studioPoseNear(_ actual: float4x4, _ expected: float4x4, tolerance:
     #expect(throws: RigError.self) { try signed.applyingLateUpdate(rig: signedRig, pose: signedRig.restPose) }
 }
 
+/// `RigDefinition.isFiniteAffine` became four-lane (2026-11-17). Each of the
+/// three appliers the Studio's pose solve runs still rejects a non-finite or
+/// projective incoming local matrix, with `rig.evaluate`'s message, with FK
+/// on and off.
+@Test func sourceStudioPoseAppliersRejectNonfiniteIncomingMatrices() throws {
+    let rig = try studioPoseRig()
+    for fk in [false, true] {
+        var controller = try studioPoseController(rig)
+        if fk { _ = controller.activateMode(.fk, active: true) }
+        let transition = controller.activateFK(mask: .rightHand, active: true)
+        // Typed: CI's Swift 6.3.3 mis-infers untyped numeric literals in tuple arrays.
+        let bad: [(Int, Int, Float)] = [(0, 1, .nan), (3, 2, .infinity), (1, 1, -.infinity), (2, 3, 0.25), (3, 3, 0.999)]
+        for (column, row, value) in bad {
+            var pose = rig.restPose
+            pose.localMatrices[5][column][row] = value
+            func message(_ body: () throws -> RigPose) -> String? {
+                do { _ = try body(); return nil } catch { return "\(error)" }
+            }
+            let expected = "Pose node 5 has an invalid matrix."
+            #expect(message { _ = try rig.evaluate(pose); return pose } == expected)
+            #expect(message { try controller.applying(transition, rig: rig, pose: pose) } == expected, "fk \(fk) [\(column)][\(row)]")
+            #expect(message { try controller.applyingLateUpdate(rig: rig, pose: pose) } == expected, "fk \(fk) [\(column)][\(row)]")
+            #expect(message { try controller.applyingActivations(ik: transition, fk: transition, rig: rig, pose: pose) } == expected,
+                    "fk \(fk) [\(column)][\(row)]")
+        }
+    }
+}
+
 private func studioPoseEffectJSON(_ effect: SourceStudioPose.Effect) -> [Any] {
     switch effect {
     case .neckLookPattern(let value): return ["neck", value]

@@ -79,6 +79,7 @@ extension StudioModel {
     func installSourceMap(_ request: SourceMapRequest?, load: SourceStudioMapLoad? = nil) {
         sourceMapRequest = request
         sourceMapItems = nil
+        sourceMapLighting = nil
         sourceMapFailure = nil
         if let load, load !== sourceMapLoad { sourceMapLoad?.cancel(); sourceMapLoad = load }
         guard let target = request?.converted else {
@@ -143,9 +144,12 @@ extension StudioModel {
         do {
             sourceMapItems = try asset.items(transform: request.transform, sunLightType: request.sunLightType,
                                              mapOption: request.mapOption)
+            sourceMapLighting = try asset.lighting(transform: request.transform, sunLightType: request.sunLightType,
+                                                   mapOption: request.mapOption)
             sourceMapFailure = nil
         } catch {
             sourceMapItems = nil
+            sourceMapLighting = nil
             sourceMapFailure = error
         }
         sourceMapInstallSeconds = Double(DispatchTime.now().uptimeNanoseconds - start) / 1e9
@@ -156,10 +160,12 @@ extension StudioModel {
             // keeps the first mark.
             PerfTrace.mark("sourceMapReady")
             let draws = items.map { SourceStudioMapAsset.Draw($0.material) }
-            print(String(format: "[ikkoku] source map: %d draws (%d lightmapped, %d particle, %d sky, %d unlit, %d silhouette; %d option parts, option %@), %d triangles, %d texture bytes (%d in %d lightmaps, %d in %d sky cubes; images: %d as BC blocks, %d decoded, source %@); loaded in %.1f ms on a worker, placed in %.2f ms on the main thread",
-                         items.count, draws.filter { $0 == .lightmapped }.count, draws.filter { $0 == .particle }.count,
+            print(String(format: "[ikkoku] source map: %d draws (%d lightmapped, %d by the map's ambient, %d sun-lit, %d particle, %d sky, %d unlit, %d silhouette; %d option parts, option %@; %d sun casters), %d triangles, %d texture bytes (%d in %d lightmaps, %d in %d sky cubes; images: %d as BC blocks, %d decoded, source %@); loaded in %.1f ms on a worker, placed in %.2f ms on the main thread",
+                         items.count, draws.filter { $0 == .lightmapped }.count, draws.filter { $0 == .probeLit }.count,
+                         items.filter { $0.material.uniforms.flags & MaterialFlagMapSunLit.rawValue != 0 }.count,
+                         draws.filter { $0 == .particle }.count,
                          draws.filter { $0 == .sky }.count, draws.filter { $0 == .unlit }.count, draws.filter { $0 == .silhouette }.count,
-                         asset.optionParts, request.mapOption ? "on" : "off",
+                         asset.optionParts, request.mapOption ? "on" : "off", sourceMapLighting?.casters.count ?? 0,
                          asset.triangles, asset.textureBytes, asset.lightmapBytes, asset.lightmapTextures,
                          asset.cubeBytes, asset.cubeTextures, asset.blockImages, asset.decodedImages, asset.imageSource.rawValue,
                          asset.loadSeconds * 1000, sourceMapInstallSeconds * 1000))
@@ -224,6 +230,13 @@ extension StudioModel {
         /// Worker wall time of the asset's load, and main-thread time of the
         /// last install (placing the draws), in milliseconds.
         let loadMilliseconds: Double?, installMilliseconds: Double?
+        /// Slice 5: Standard draws lit by the map's ambient instead of a
+        /// lightmap; draws with the realtime sun's term; those receiving its
+        /// shadow (everywhere or per vertex) and per vertex alone; the shadow
+        /// map's casters (one per draw, cull mode and placement, plus the
+        /// ShadowsOnly groups); the sun's shadow strength (0 without one).
+        let probeLitDraws: Int, sunLitDraws: Int, receivingDraws: Int, perVertexReceiveDraws: Int
+        let sunCasters: Int, sunShadowStrength: Float
     }
     func sourceMapCensus() -> SourceMapCensus {
         let request = sourceMapRequest.flatMap { $0.sceneSHA256 == doc.sourceSceneSHA256 ? $0 : nil }
@@ -237,6 +250,13 @@ extension StudioModel {
             cubeBytes: asset?.cubeBytes ?? 0, blockImages: asset?.blockImages ?? 0, decodedImages: asset?.decodedImages ?? 0,
             unlitDraws: draws.filter { $0 == .unlit }.count, silhouetteDraws: draws.filter { $0 == .silhouette }.count,
             optionDraws: items.isEmpty ? 0 : request.flatMap { r in asset?.optionDraws(sunLightType: r.sunLightType, mapOption: r.mapOption) } ?? 0,
-            loadMilliseconds: asset.map { $0.loadSeconds * 1000 }, installMilliseconds: asset == nil ? nil : sourceMapInstallSeconds * 1000)
+            loadMilliseconds: asset.map { $0.loadSeconds * 1000 }, installMilliseconds: asset == nil ? nil : sourceMapInstallSeconds * 1000,
+            probeLitDraws: draws.filter { $0 == .probeLit }.count,
+            sunLitDraws: items.filter { $0.material.uniforms.flags & MaterialFlagMapSunLit.rawValue != 0 }.count,
+            receivingDraws: items.filter { $0.material.uniforms.flags & (MaterialFlagReceiveShadow.rawValue | MaterialFlagMapReceivePerVertex.rawValue) != 0
+                && $0.material.uniforms.flags & MaterialFlagMapSunLit.rawValue != 0 }.count,
+            perVertexReceiveDraws: items.filter { $0.material.uniforms.flags & MaterialFlagMapReceivePerVertex.rawValue != 0 }.count,
+            sunCasters: items.isEmpty ? 0 : sourceMapLighting?.casters.count ?? 0,
+            sunShadowStrength: items.isEmpty ? 0 : sourceMapLighting?.sun?.shadowStrength ?? 0)
     }
 }

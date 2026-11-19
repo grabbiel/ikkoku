@@ -569,3 +569,236 @@ private func shapeReuseFailure(_ action: () throws -> Void) -> [String: String] 
     let expressionFailure = compareFailure(hashCalls: 1, decodeCalls: nil)
     #expect(expressionFailure.1.intervals["expressionDecode"]?.failures == 1)
 }
+
+// MARK: #192 import seed
+
+/// Seeds `data` through an import replacement and publishes it.
+@MainActor private func shapeReuseSeed(_ owner: SourceMakerShapeReuse, _ data: Data,
+                                       timings: SourceMakerPreparationTimings? = nil) throws -> SourceMakerShapeReuse.Sample {
+    let replacement = owner.prospectiveReplacement()
+    let seeded = try SourceMakerShapeReuse.seededDecode(data, for: replacement, timings: timings)
+    #expect(owner.commitReplacement(replacement, candidate: seeded.candidate))
+    return seeded.sample
+}
+
+/// The import's decode stages its contract; after another head's selection,
+/// the return to the imported head hits and skips its decode.
+@MainActor @Test func sourceMakerShapeReuseImportSeedHitsOnTheReturn() throws {
+    let ledger = SourceShapeReuseAdmission(), owner = SourceMakerShapeReuse(admission: ledger)
+    let imported = try shapeReuseData(), other = try shapeReuseData(label: "高")
+    let replacement = owner.prospectiveReplacement(), timings = SourceMakerPreparationTimings()
+    let seeded = try SourceMakerShapeReuse.seededDecode(imported, for: replacement, timings: timings)
+    let seededBytes = try shapeReuseEncoded(seeded.contract), plainBytes = try shapeReuseEncoded(SourceShapeContract.decode(imported))
+    #expect(seededBytes == plainBytes)
+    // The import's added work is one SHA-256 of the bytes it decodes anyway.
+    #expect(timings.sample.intervals["shapeReuseSHA"]?.calls == 1 && timings.sample.bytesHashed["shapeReuseSHA"] == imported.count)
+    #expect(timings.sample.intervals["shapeDecode"]?.calls == 1 && timings.sample.intervals["shapeReuseAdmission"]?.calls == 1)
+    #expect(seeded.sample.misses == 1 && seeded.sample.admitted == 1 && seeded.sample.retainedEntries == 1)
+    // Staging publishes nothing; the old (empty) session stays current.
+    #expect(owner.input().snapshot == nil && owner.input().epoch == replacement.expected)
+    #expect(owner.commitReplacement(replacement, candidate: seeded.candidate))
+    #expect(owner.input().epoch == replacement.epoch && owner.input().snapshot?.entries.count == 1)
+    // Another head's selection misses and joins the seed.
+    try {
+        let worker = SourceShapeReuseWorker(owner.input()); _ = try worker.decode(other, timings: nil)
+        let (candidate, sample) = worker.finish()
+        #expect(sample.hits == 0 && sample.misses == 1 && sample.retainedEntries == 2)
+        #expect(owner.commit(candidate))
+    }()
+    // The return: one hit, no shapeDecode, the same contract.
+    let worker = SourceShapeReuseWorker(owner.input()), back = SourceMakerPreparationTimings()
+    let returned = try worker.decode(imported, timings: back)
+    let (_, sample) = worker.finish()
+    #expect(sample.hits == 1 && sample.misses == 0)
+    #expect(back.sample.intervals["shapeDecode"] == nil && back.sample.intervals["shapeReuseSHA"]?.calls == 1)
+    let returnedBytes = try shapeReuseEncoded(returned)
+    #expect(returnedBytes == plainBytes)
+    // Bounded: two entries under the default ledger (6 entries, 8 MiB logical, 4 snapshots).
+    #expect(ledger.counts.entries == 2 && ledger.counts.logicalBytes <= ledger.maximumBytes)
+}
+
+/// The seed's key is the bytes of the selected head's own bounded companion
+/// read, so the head preparation of the imported assembly hits it.
+@MainActor @Test func sourceMakerShapeImportSeedServesTheHeadPreparationRead() throws {
+    let directory = try AppearanceTestFixture.directory(); defer { try? FileManager.default.removeItem(at: directory) }
+    let libraryURL = directory.appendingPathComponent("library.json"), manifestURL = directory.appendingPathComponent("source-avatar.json")
+    try JSONSerialization.data(withJSONObject: ["schemaVersion": 1, "entries": [], "assemblies": []]).write(to: libraryURL)
+    let library = try SourceMakerLibrary.load(url: libraryURL), card = try AppearanceTestFixture.card()
+    let manifest: [String: Any] = ["schemaVersion": 1, "kind": "koikatsu-female-avatar", "name": "fixture", "sex": 1, "headID": 0,
+        "bodySkeleton": "missing-body-master.json", "headSkeleton": "missing-head-master.json",
+        "body": ["file": "missing-body.json"], "head": ["file": "missing-head.json"], "clothes": [], "hair": []]
+    try JSONSerialization.data(withJSONObject: manifest).write(to: manifestURL)
+    let data = try shapeReuseData()
+    try data.write(to: directory.appendingPathComponent("character-shape-contract.json"))
+    let owner = SourceMakerShapeReuse()
+    // The import reads the same file it decodes (MakerModel.openSourceRig).
+    let read = try Data(contentsOf: directory.appendingPathComponent("character-shape-contract.json"))
+    _ = try shapeReuseSeed(owner, read)
+    // The fixture has no expression contract: the preparation fails after the shape step.
+    let timings = SourceMakerPreparationTimings()
+    let failure = shapeReuseFailure { _ = try SourceMakerHeadPreparation.prepare(card: card, library: library,
+        coordinate: 0, baseURL: manifestURL, timings: timings, shapeReuse: owner.input()) }
+    #expect(!failure.isEmpty && timings.sample.intervals["expressionRead"]?.failures == 1)
+    #expect(timings.sample.intervals["shapeReuseSHA"]?.calls == 1 && timings.sample.intervals["shapeDecode"] == nil)
+    #expect(timings.sample.bytesRead["shapeRead"] == data.count)
+}
+
+/// A reimport of another card replaces the session without carrying it: the
+/// previous card's contract misses, a captured pre-reimport input cannot
+/// publish, and the replaced entry is released.
+@MainActor @Test func sourceMakerShapeReuseReimportOfAnotherCardMisses() throws {
+    let ledger = SourceShapeReuseAdmission(), owner = SourceMakerShapeReuse(admission: ledger)
+    let first = try shapeReuseData(), second = try shapeReuseData(label: "高")
+    _ = try shapeReuseSeed(owner, first)
+    var captured: SourceMakerShapeReuse.Input? = owner.input(); weak var replaced = captured?.snapshot
+    let sample = try shapeReuseSeed(owner, second)
+    // The old session still holds its entry while the seed is staged.
+    #expect(sample.admitted == 1 && sample.liveEntries == 2)
+    // Scoped so the workers' entries and candidates die before the ledger check.
+    try {
+        let lookup = SourceShapeReuseWorker(owner.input()), timings = SourceMakerPreparationTimings()
+        _ = try lookup.decode(first, timings: timings); _ = try lookup.decode(second, timings: timings)
+        let (_, result) = lookup.finish()
+        #expect(result.hits == 1 && result.misses == 1 && timings.sample.intervals["shapeDecode"]?.calls == 1)
+    }()
+    // A selection prepared before the reimport cannot publish into its session.
+    try {
+        let stale = SourceShapeReuseWorker(captured!); _ = try stale.decode(first, timings: nil)
+        #expect(!owner.commit(stale.finish().0))
+    }()
+    captured = nil
+    #expect(replaced == nil && ledger.counts.entries == 1 && ledger.counts.snapshots == 1)
+}
+
+/// The key is the contract bytes: a changed contract file misses the seed and
+/// decodes the changed contract; a same-length change cannot alias it.
+@MainActor @Test func sourceMakerShapeReuseChangedContractMissesTheSeed() throws {
+    let owner = SourceMakerShapeReuse(), original = try shapeReuseData(), changed = try shapeReuseData(label: "高")
+    #expect(original.count == changed.count && original != changed)
+    _ = try shapeReuseSeed(owner, original)
+    let worker = SourceShapeReuseWorker(owner.input()), timings = SourceMakerPreparationTimings()
+    let decoded = try worker.decode(changed, timings: timings)
+    let (_, sample) = worker.finish()
+    #expect(sample.hits == 0 && sample.misses == 1 && timings.sample.intervals["shapeDecode"]?.calls == 1)
+    #expect(decoded.domains[0].slots[0].label == "高")
+}
+
+/// Only the session a replacement replaces can take it, once; a reset, an
+/// earlier replacement, another owner or another epoch's candidate makes it stale.
+@MainActor @Test func sourceMakerShapeReuseReplacementRejectsStaleForeignAndReplayed() throws {
+    let ledger = SourceShapeReuseAdmission(), owner = SourceMakerShapeReuse(admission: ledger)
+    let data = try shapeReuseData(), other = try shapeReuseData(label: "高")
+    let a = owner.prospectiveReplacement(), b = owner.prospectiveReplacement()
+    let seedA = try SourceMakerShapeReuse.seededDecode(data, for: a), seedB = try SourceMakerShapeReuse.seededDecode(other, for: b)
+    // A seed is not an ordinary selection candidate of the current session.
+    #expect(!owner.commit(seedA.candidate))
+    // Another epoch's candidate, or another owner's replacement, changes nothing.
+    #expect(!owner.commitReplacement(a, candidate: seedB.candidate))
+    let foreign = SourceMakerShapeReuse().prospectiveReplacement()
+    #expect(!owner.commitReplacement(foreign, candidate: nil))
+    #expect(owner.input().snapshot == nil && owner.input().epoch == a.expected)
+    #expect(owner.commitReplacement(a, candidate: seedA.candidate))
+    let published = owner.input().snapshot
+    // The sibling replacement and a replay are now stale.
+    #expect(!owner.commitReplacement(b, candidate: seedB.candidate) && !owner.commitReplacement(a, candidate: seedA.candidate))
+    let unchanged = owner.input().snapshot === published
+    #expect(unchanged && owner.input().epoch == a.epoch)
+    // A reset between staging and publication drops the seed.
+    let c = owner.prospectiveReplacement(), seedC = try SourceMakerShapeReuse.seededDecode(other, for: c)
+    owner.reset()
+    #expect(!owner.commitReplacement(c, candidate: seedC.candidate) && owner.input().snapshot == nil)
+    // A nil candidate (no contract file) publishes an empty session.
+    let d = owner.prospectiveReplacement()
+    #expect(owner.commitReplacement(d, candidate: nil) && owner.input().snapshot == nil && owner.input().epoch == d.epoch)
+}
+
+/// A seed the ledger cannot admit still decodes and publishes an empty
+/// session, as the reset did; a throw stages nothing.
+@MainActor @Test func sourceMakerShapeReuseSeedBypassesPublishEmpty() throws {
+    let ledger = SourceShapeReuseAdmission(maximumEntries: 1), owner = SourceMakerShapeReuse(admission: ledger)
+    let data = try shapeReuseData(), other = try shapeReuseData(label: "高")
+    _ = try shapeReuseSeed(owner, data)
+    weak var old = owner.input().snapshot
+    // Capacity: the replaced session holds the only entry permit.
+    let replacement = owner.prospectiveReplacement()
+    let full = try SourceMakerShapeReuse.seededDecode(other, for: replacement)
+    #expect(full.contract.domains[0].slots[0].label == "高")
+    #expect(full.sample.capacityBypasses == 1 && full.sample.clearOnCommit && full.candidate.snapshot == nil)
+    #expect(owner.commitReplacement(replacement, candidate: full.candidate))
+    #expect(owner.input().snapshot == nil && old == nil && ledger.counts == .init())
+    // Intrinsic: a contract larger than the byte bound is never admitted.
+    let empty = SourceMakerShapeReuse(admission: SourceShapeReuseAdmission(maximumBytes: 0))
+    let intrinsic = try shapeReuseSeed(empty, data)
+    #expect(intrinsic.intrinsicBypasses == 1 && intrinsic.retainedEntries == 0 && empty.input().snapshot == nil)
+    // A malformed contract throws the decoder's error; the session is unchanged.
+    _ = try shapeReuseSeed(owner, data)
+    let current = owner.input().snapshot, counts = ledger.counts
+    let doomed = owner.prospectiveReplacement()
+    let thrown = shapeReuseFailure { _ = try SourceMakerShapeReuse.seededDecode(Data("{".utf8), for: doomed) }
+    let expected = shapeReuseFailure { _ = try SourceShapeContract.decode(Data("{".utf8)) }
+    let same = owner.input().snapshot === current
+    #expect(thrown == expected && same && ledger.counts == counts)
+}
+
+/// A 44-body/52-face contract `previewSettings` accepts, as bytes (the
+/// same document as `OriginalCardFixture.contract()`).
+private func shapeReuseCardContractData() throws -> Data {
+    func domain(_ name: String, count: Int) -> [String: Any] {
+        ["id": name, "valueCount": count, "defaultValues": Array(repeating: 0.375, count: count),
+         "sourceNames": [], "destinationNames": [], "channels": [], "directTargets": [], "unportedDestinationNames": [],
+         "slots": (0..<count).map { ["index": $0, "label": "Synthetic", "bindings": []] as [String: Any] }]
+    }
+    return try JSONSerialization.data(withJSONObject: [
+        "schemaVersion": 1, "coordinateSystem": "UnityLeftHandedYUp", "rotationUnit": "degrees", "valueRange": [0, 1],
+        "domains": [domain("body", count: 44), domain("face", count: 52)]] as [String: Any], options: .sortedKeys)
+}
+
+/// Guard: two cards on one assembly read byte-identical contract bytes, so
+/// they share entries. The entry holds only what the bytes decode to; each
+/// card's values come from `previewSettings` after the decode.
+@MainActor @Test func sourceMakerShapeReuseCardsOnOneAssemblyShareTheContractNotTheirValues() throws {
+    typealias Fixture = OriginalCardFixture
+    let bytes = try shapeReuseCardContractData(), plainContract = try SourceShapeContract.decode(bytes)
+    let first = try SourceCharacterCard.decode(Fixture.card())
+    let face: [Fixture.Value] = (0..<52).map { Fixture.Value.float(Double(Float(51 - $0) / 51)) }
+    let body: [Fixture.Value] = (0..<44).map { Fixture.Value.float(Double(Float(43 - $0) / 43)) }
+    let second = try SourceCharacterCard.decode(Fixture.card(blocks: Fixture.blocks(custom: Fixture.custom(face: face, body: body))))
+    let expectedFace: [Float] = (0..<52).map { Float(51 - $0) / 51 }
+    let expectedBody: [Float] = (0..<44).map { Float(43 - $0) / 43 }
+    let owner = SourceMakerShapeReuse()
+    // The first card's import seeds the shared assembly's contract.
+    let firstReplacement = owner.prospectiveReplacement()
+    let firstSeed = try SourceMakerShapeReuse.seededDecode(bytes, for: firstReplacement)
+    #expect(owner.commitReplacement(firstReplacement, candidate: firstSeed.candidate))
+    let firstSettings = try first.previewSettings(contract: firstSeed.contract)
+    // A preparation for the second card in that session hits the first card's
+    // entry and still yields the second card's values.
+    try {
+        let worker = SourceShapeReuseWorker(owner.input()), timings = SourceMakerPreparationTimings()
+        let shared = try worker.decode(bytes, timings: timings)
+        let (_, sample) = worker.finish()
+        #expect(sample.hits == 1 && timings.sample.intervals["shapeDecode"] == nil)
+        let settings = try second.previewSettings(contract: shared)
+        #expect(settings.faceValues == expectedFace && settings.bodyValues == expectedBody)
+        #expect(settings.faceValues != firstSettings.faceValues && settings.bodyValues != firstSettings.bodyValues)
+    }()
+    // The second card's import replaces the session (no carry, so its own
+    // decode runs) and stages an entry with the same key. Its return hits.
+    let secondReplacement = owner.prospectiveReplacement()
+    let secondSeed = try SourceMakerShapeReuse.seededDecode(bytes, for: secondReplacement)
+    #expect(secondSeed.sample.misses == 1 && secondSeed.sample.hits == 0 && secondSeed.sample.admitted == 1)
+    #expect(owner.commitReplacement(secondReplacement, candidate: secondSeed.candidate))
+    let imported = try second.previewSettings(contract: secondSeed.contract)
+    #expect(imported.faceValues == expectedFace && imported.bodyValues == expectedBody)
+    let worker = SourceShapeReuseWorker(owner.input())
+    let returned = try worker.decode(bytes, timings: nil)
+    #expect(worker.finish().1.hits == 1)
+    let back = try second.previewSettings(contract: returned)
+    #expect(back.faceValues == expectedFace && back.bodyValues == expectedBody)
+    // Nothing card-specific is cached: every contract equals the plain decode.
+    let expected = try shapeReuseEncoded(plainContract)
+    for contract in [firstSeed.contract, secondSeed.contract, returned] {
+        let actual = try shapeReuseEncoded(contract)
+        #expect(actual == expected)
+    }
+}

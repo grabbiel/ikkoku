@@ -246,6 +246,12 @@ public final class TranslatedSourceProgram: @unchecked Sendable {
             hasher.combine(tAddressMode.rawValue); hasher.combine(maxAnisotropy)
         }
 
+        /// `"aniso 9, mips linear"`: the two fields the anisotropic mode changes.
+        var summaryKey: String {
+            let mips = mipFilter == .linear ? "linear" : mipFilter == .nearest ? "nearest" : "none"
+            return "aniso \(maxAnisotropy), mips \(mips)"
+        }
+
         func makeDescriptor() -> MTLSamplerDescriptor {
             let sampler = MTLSamplerDescriptor()
             sampler.minFilter = minFilter; sampler.magFilter = magFilter; sampler.mipFilter = mipFilter

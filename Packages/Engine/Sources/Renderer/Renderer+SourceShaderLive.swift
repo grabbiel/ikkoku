@@ -50,8 +50,12 @@ extension Renderer {
             if record.item.material.transparent { transparent.append(record) } else { opaque.append(record) }
         }
         if liveEncoder == nil, liveEncoderError == nil {
-            do { liveEncoder = try SourceShaderLiveEncoder(device: gpu.device) }
-            catch { liveEncoderError = "\(error)" }
+            do {
+                let created = try SourceShaderLiveEncoder(device: gpu.device)
+                liveEncoder = created
+                // #337: the store's release events evict this encoder's inputs.
+                resources.attachLiveInputs(created)
+            } catch { liveEncoderError = "\(error)" }
         }
         guard let encoder = liveEncoder else {
             for record in candidates { fallBack(record, "live vertex-input kernel unavailable (\(liveEncoderError ?? "unknown"))") }
@@ -69,7 +73,7 @@ extension Renderer {
             if mesh.needsDeform && deform == nil { fallBack(record, "deformed mesh has no deformation this frame"); continue }
             // Converted inputs are keyed by the vertex source: a deformation
             // key (per character mesh instance) or the static mesh.
-            let source = mesh.needsDeform ? (record.item.deformKey ?? 0) : (UInt64(1) << 63 | UInt64(record.item.mesh.id))
+            let source = mesh.needsDeform ? (record.item.deformKey ?? 0) : SourceShaderLiveEncoder.staticSource(mesh: record.item.mesh.id)
             var inputs: [[UInt32]: any MTLBuffer] = [:], jobs: [LiveInputJob] = [], failure: String?
             for program in draw.material.passes {
                 guard let layout = SourceShaderLiveEncoder.layout(program) else { failure = "\(program.name) reads an unsupported vertex input"; break }
@@ -88,7 +92,8 @@ extension Renderer {
                 if inputs[layout] != nil { continue }
                 let key = SourceShaderLiveEncoder.BufferKey(vertices: source, layout: layout)
                 if let existing = seen[key] { inputs[layout] = existing; continue }
-                guard let output = encoder.inputBuffer(key, vertexCount: mesh.vertexCount) else { failure = "vertex input buffer allocation failed"; break }
+                guard let output = liveInput(encoder, key, mesh: record.item.mesh, deformKey: mesh.needsDeform ? source : nil,
+                                             vertexCount: mesh.vertexCount) else { failure = "vertex input buffer allocation failed"; break }
                 seen[key] = output; inputs[layout] = output
                 jobs.append(LiveInputJob(layout: layout, output: output, mesh: mesh, deformed: record.vertexBuffer,
                                          skinBuffer: deform?.skinBuffer, skinOffset: deform?.skinOffset ?? 0, boneCount: deform?.boneCount ?? 0,
@@ -106,6 +111,35 @@ extension Renderer {
             if $0.record.item.objectID != $1.record.item.objectID { return $0.record.item.objectID < $1.record.item.objectID }
             return $0.draw.sourceOrder < $1.draw.sourceOrder
         }
+    }
+
+    /// The live encoder's input buffer for one draw's mesh; `deformKey` is the
+    /// item's deformation key when the mesh is deformed. A frame resolves its
+    /// meshes and deformation buffers when preparation starts; the owner may
+    /// release either on the main thread before this runs, and its eviction
+    /// then misses the entry this call creates. A newly allocated entry is
+    /// therefore checked against the store afterwards. It is dropped when its
+    /// mesh is gone, or when the store no longer holds its deformation key
+    /// (looked up without creating one). A release removes the mesh or key
+    /// before it evicts, so either the check sees it gone or the eviction runs
+    /// after the entry exists (#337). This frame still uses the buffer. Only
+    /// an allocation pays the lookups, never a reused buffer. A stale frame
+    /// (one older than a completed retirement) deforms into transient buffers,
+    /// so its new entries are dropped too; the next current frame keeps them.
+    /// The same holds for an owner dropped during preparation, and for a
+    /// retiring mesh: a key without a cached buffer then gets a transient
+    /// one (#344), which the store does not hold, so the new entry is
+    /// dropped. If the key's buffer was already cached, a retiring mesh's
+    /// entry stays, and completing the retirement evicts it by mesh; an
+    /// unregistered mesh's entry is dropped by the mesh check.
+    func liveInput(_ encoder: SourceShaderLiveEncoder, _ key: SourceShaderLiveEncoder.BufferKey, mesh handle: MeshHandle,
+                   deformKey: UInt64?, vertexCount: Int) -> (any MTLBuffer)? {
+        guard let input = encoder.inputBuffer(key, mesh: handle.id, vertexCount: vertexCount) else { return nil }
+        guard input.created else { return input.buffer }
+        let meshGone = resources.mesh(handle) == nil
+        let releasedKeys = deformKey.map { resources.holdsDeformBuffer(key: $0) ? [] : [$0] } ?? []
+        if meshGone || !releasedKeys.isEmpty { encoder.evict(meshes: meshGone ? [handle.id] : [], deformKeys: releasedKeys) }
+        return input.buffer
     }
 
     func encodeLiveInputs(_ ctx: FrameContext, _ cb: any MTLCommandBuffer) {

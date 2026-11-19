@@ -188,3 +188,27 @@ func sourceDynamicsLocalOriginalHairRigWhenRequested() throws {
         print("[validated-step] \(test.name): \(successes) steps agree on a pose, \(failures.count) on \(failures.first ?? "-")")
     }
 }
+
+/// `RigDefinition.isFiniteAffine` became four-lane (2026-11-17). The test above
+/// reaches the validated step's world and palette checks; this one reaches
+/// its local check: a node under the tip that no particle owns keeps its
+/// input local matrix, here a non-finite or projective one. The validated
+/// step and the whole-rig step both reject it with `rig.evaluate`'s message.
+@Test func sourceDynamicsValidatedStepRejectsNonfiniteLocalUnderTheRootParticle() throws {
+    let rig = try RigDefinition(nodes: try dynamicsRig().nodes + [.init(name: "child", sourceID: "child", parent: 2, translation: Float3(0, -0.5, 0))], skins: [])
+    // Typed: CI's Swift 6.3.3 mis-infers untyped numeric literals in tuple arrays.
+    let bad: [(Int, Int, Float)] = [(3, 1, .nan), (0, 0, .infinity), (2, 1, -.infinity), (1, 3, 0.25), (3, 3, 2)]
+    for (column, row, value) in bad {
+        var pose = rig.restPose
+        pose.localMatrices[3][column][row] = value
+        for validated in [false, true] {
+            var state = try SourceDynamicBone(rig: rig, definition: dynamicsConfig(force: Float3(0.02, 0, 0)))
+            do {
+                _ = try state.step(deltaTime: 1 / 60, rig: rig, pose: pose, validatedInput: validated)
+                Issue.record("validated \(validated) [\(column)][\(row)] = \(value) was accepted")
+            } catch {
+                #expect("\(error)" == "Pose node 3 has an invalid matrix.", "validated \(validated) [\(column)][\(row)]")
+            }
+        }
+    }
+}

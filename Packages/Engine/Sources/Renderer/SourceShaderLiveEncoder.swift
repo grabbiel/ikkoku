@@ -53,10 +53,13 @@ final class SourceShaderLiveEncoder: @unchecked Sendable {
 
     struct BufferKey: Hashable { let vertices: UInt64; let layout: [UInt32] }
 
+    /// A converted input and the store mesh it was converted for (#337).
+    private struct Entry { let buffer: any MTLBuffer; var mesh: UInt32 }
+
     let device: any MTLDevice
     let convert: any MTLComputePipelineState
     private let lock = NSLock()
-    private var buffers: [BufferKey: any MTLBuffer] = [:]
+    private var buffers: [BufferKey: Entry] = [:]
 
     init(device: any MTLDevice) throws {
         self.device = device
@@ -66,19 +69,52 @@ final class SourceShaderLiveEncoder: @unchecked Sendable {
         convert = try device.makeComputePipelineState(function: function)
     }
 
+    /// The vertex source of a static (undeformed) mesh's converted inputs. A
+    /// deformed mesh's source is its item's deformation key.
+    static func staticSource(mesh id: UInt32) -> UInt64 { UInt64(1) << 63 | UInt64(id) }
+
     /// One reusable input buffer per (vertex source, layout), like the
-    /// renderer's per-key deform buffers.
-    func inputBuffer(_ key: BufferKey, vertexCount: Int) -> (any MTLBuffer)? {
+    /// renderer's per-key deform buffers, for the store mesh `mesh`. Entries
+    /// leave with their mesh or vertex source (`evict`), as deform buffers
+    /// leave with their key. `created` is true when this call allocated the
+    /// buffer, so the caller can check that the mesh was not released while
+    /// the frame was being prepared (`Renderer.liveInput`).
+    func inputBuffer(_ key: BufferKey, mesh: UInt32, vertexCount: Int) -> (buffer: any MTLBuffer, created: Bool)? {
         lock.lock(); defer { lock.unlock() }
         let length = max(16, vertexCount * key.layout.count * 16)
-        if let buffer = buffers[key], buffer.length >= length { return buffer }
+        if let entry = buffers[key], entry.buffer.length >= length {
+            if entry.mesh != mesh { buffers[key]?.mesh = mesh }
+            return (entry.buffer, false)
+        }
         guard let buffer = device.makeBuffer(length: length, options: .storageModePrivate) else { return nil }
         buffer.label = "source-input.\(key.vertices).\(key.layout.map(String.init).joined())"
-        buffers[key] = buffer
-        return buffer
+        buffers[key] = Entry(buffer: buffer, mesh: mesh)
+        return (buffer, true)
     }
 
     func releaseBuffers() { lock.lock(); buffers = [:]; lock.unlock() }
+
+    /// #337: drops the converted inputs the resource store released: every
+    /// entry converted for a mesh it unregistered or whose retirement
+    /// completed (static or deformed), and every entry keyed by a deformation
+    /// key it released or retired. The store calls this on those release
+    /// events only, never per frame. Encoded command buffers keep their own
+    /// references to the buffers they bind.
+    ///
+    /// A frame prepared after a release skips the released mesh at its lookup.
+    /// One already being prepared on a render thread may still allocate an
+    /// entry for it after this call; `Renderer.liveInput` drops such an entry
+    /// at once, because a release removes the mesh or key before it evicts.
+    func evict(meshes: [UInt32], deformKeys: [UInt64]) {
+        guard !meshes.isEmpty || !deformKeys.isEmpty else { return }
+        let meshes = Set(meshes), keys = Set(deformKeys)
+        lock.lock(); defer { lock.unlock() }
+        guard !buffers.isEmpty else { return }
+        buffers = buffers.filter { !meshes.contains($0.value.mesh) && !keys.contains($0.key.vertices) }
+    }
+
+    /// Converted-input buffers held now (tests).
+    var bufferCount: Int { lock.lock(); defer { lock.unlock() }; return buffers.count }
 
     /// Unity's renderer-local vertex inputs from the native buffers:
     /// POSITION and TANGENT from the deformed vertex (Z mirrored into Unity's

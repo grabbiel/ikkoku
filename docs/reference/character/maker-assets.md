@@ -329,6 +329,13 @@ cache entry stays unchanged and the candidate keeps an appearance-owned lease.
 Successful uncontended loads retain the existing persistent cache behavior.
 Composed texture leases and preview mesh cleanup continue to own their respective
 resources. This boundary avoids treating resource-count changes as ownership.
+Two Engine tests pin that ownership for
+[#332](https://github.com/grabbiel/ikkoku/issues/332), where the Maker footprint
+grows on every reimport of the same card. A completed Metal composition leaves
+its command buffer, output and batch in no autorelease pool. Ten card
+replacements in a row free each previous preview's mesh buffers, deformation
+buffer and composed texture. Weak references to those Metal objects check this,
+with and without a per-step pool.
 
 The Maker lane includes paired selection/fresh-process reload checks for female
 and male head-0 inputs. It requires `IKKOKU_MAKER_HEAD_FEMALE_CARD`,
@@ -1474,3 +1481,35 @@ parity claim. Nested and inclusive timing intervals are not additive.
 Private evidence is retained in
 `.local/codex-continue-2026-10-24/rolling/maker-rgba-digest-reuse/`, including
 unchanged original failures, raw-first retention and the per-head/cycle analysis.
+
+These owner numbers predate `8a871c50` (2026-10-25: one compositor command
+queue per device) and are superseded by the
+[#192-D owner split](../performance.md#maker-head-selection-attribution-192-d).
+
+### Texture-load stages and main-actor gap phases (#192-D)
+
+Two more diagnostics for normal-head selection, both attribution only. They
+change no cache key, publication, lease, pixel or scheduling.
+
+- **Texture-load stages.** `ResourceTextureLoadTimings` now also splits
+  `metalTextureLoad` into the in-line loader's stages (`loaderMilliseconds`
+  and `loaderCalls` in `baseAppearanceStages.textureLoads`). The stages are
+  `destinationAllocation`, `permitWait`, `decode`, `stagingAllocation`,
+  `conversion`, `encodeSubmit`, `completionWait` and `cleanup`, summed over
+  every texture the load created. They are nested inside `metalTextureLoad`,
+  not added to it. A cache hit creates no texture and adds no stage. The
+  collector reads one clock for both levels. A nil collector reads no clock:
+  `ResourceStore` passes no observer to the loader, and
+  `ResourceTextureLoadTimingTests` checks the exact read counts against a
+  counting clock.
+- **Gap phases.** `SourceSelectionTiming.phaseUptimes` records the selection's
+  start, snapshot end, preparation end and commit end as absolute
+  `systemUptime` seconds. The scenario heartbeat keeps its three longest
+  gaps, and each `selectAsset` step reports them as `mainActorGaps`. Every gap
+  gets its offsets from the selection start and its split over
+  `beforeSelection`, `snapshot`, `preparation`, `commit` and `afterCommit`;
+  `phase` names the largest part. The step fails if the longest gap is not
+  the reported maximum, or if its split does not add up to it.
+
+The paired control-versus-instrumented timing run is in
+[performance.md](../performance.md#maker-head-selection-attribution-192-d).
