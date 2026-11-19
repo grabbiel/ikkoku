@@ -145,7 +145,9 @@ private final class BodyTransforms {
         var matrices = originalPose.localMatrices
         for i in required { matrices[i] = UnityCoordinates.matrix(Transform.trs(positions[i],rotations[i],scales[i])) }
         guard matrices.allSatisfy({ m in (0..<4).allSatisfy { c in (0..<4).allSatisfy { m[c][$0].isFinite } } }) else { throw RigError.invalid("Full-body solve produced a nonfinite pose.") }
-        var result = rig.restPose; result.localMatrices = matrices; return result
+        // The input pose's signed TRS records (#406) carry over; a record of a
+        // node the solve rewrote no longer describes its matrix.
+        var result = originalPose; result.localMatrices = matrices; return result
     }
 }
 

@@ -117,7 +117,7 @@ private func goldenPose(_ scenario: GoldenScenario, frame: Int, random: inout Go
     return pose
 }
 
-private struct GoldenRun { var hash: String, bound: Bool, failedFrames: Int }
+private struct GoldenRun { var hash: String, bound: Bool, failedFrames: Int, inverseSafe = 0 }
 
 /// One scenario's hash over every frame, from a seed.
 private func goldenRun(seed: UInt64) throws -> GoldenRun {
@@ -145,7 +145,8 @@ private func goldenRun(seed: UInt64) throws -> GoldenRun {
         for p in state.previousPositions { hasher.add(p) }
         hasher.add(state.remainder); hasher.add(state.lastStepCount); hasher.add(state.weight)
     }
-    return GoldenRun(hash: hasher.finish(), bound: true, failedFrames: failedFrames)
+    // Not hashed: the InverseSafe count arrived with #406 (it must stay 0 here).
+    return GoldenRun(hash: hasher.finish(), bound: true, failedFrames: failedFrames, inverseSafe: state.inverseSafePlacements)
 }
 
 /// Static collider queries through positive matrices.
@@ -178,8 +179,10 @@ private struct GoldenFile: Codable {
         try (encoder.encode(GoldenFile(base: "da7da61a", scenarios: scenarios, queries: queries)) + Data("\n".utf8)).write(to: goldenURL)
         return
     }
-    // Every positive chain binds and steps without an error at the base.
+    // Every positive chain binds and steps without an error at the base, and
+    // never reaches the InverseSafe placement of a singular parent (#406).
     #expect(runs.allSatisfy { $0.bound && $0.failedFrames == 0 })
+    #expect(runs.allSatisfy { $0.inverseSafe == 0 })
     let golden = try JSONDecoder().decode(GoldenFile.self, from: Data(contentsOf: goldenURL))
     #expect(golden.scenarios.count == scenarioCount)
     for (i, (expected, actual)) in zip(golden.scenarios, scenarios).enumerated() {

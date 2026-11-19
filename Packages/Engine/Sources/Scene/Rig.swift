@@ -54,6 +54,10 @@ public struct RigDefinition: Sendable {
     public let order: [Int]
     public let activeNodes: [Bool]
     public let identity = Identity()
+    /// The rest pose's signed TRS records (#406): one per TRS node whose rest
+    /// scale has a component at or below zero, nil (no allocation) when there
+    /// is none, the usual case.
+    public let restSignedTRS: [Int: SignedTRS]?
     private let names: [String: [Int]]
 
     public init(nodes: [Node], skins: [Skin]) throws {
@@ -91,6 +95,11 @@ public struct RigDefinition: Sendable {
             }
         }
         self.nodes = nodes; self.skins = skins; self.order = order; self.activeNodes = active; self.names = names
+        var rest: [Int: SignedTRS] = [:]
+        for (index, node) in nodes.enumerated() where node.authoredMatrix == nil && SignedTRS.needsRecord(node.scale) {
+            rest[index] = SignedTRS(translation: node.translation, rotation: node.rotation, scale: node.scale)
+        }
+        restSignedTRS = rest.isEmpty ? nil : rest
     }
 
     public func nodes(named name: String) -> [Int] { names[name] ?? [] }
@@ -98,7 +107,8 @@ public struct RigDefinition: Sendable {
     /// retained element/string payloads; dictionary bucket capacity is excluded.
     func addLogicalPayload(to charge: inout SourceRigLogicalCharge) -> Bool {
         guard charge.array(nodes), charge.array(skins), charge.array(order), charge.array(activeNodes),
-              charge.product(names.count, MemoryLayout<(String, [Int])>.stride) else { return false }
+              charge.product(names.count, MemoryLayout<(String, [Int])>.stride),
+              charge.product(restSignedTRS?.count ?? 0, MemoryLayout<(Int, SignedTRS)>.stride) else { return false }
         for node in nodes {
             guard charge.string(node.name), charge.string(node.sourceID) else { return false }
         }
@@ -171,9 +181,60 @@ public struct RigDefinition: Sendable {
     }
 }
 
+/// A local transform as its writer set it: translation, rotation and a
+/// signed scale (#406). Unity keeps a Transform's localScale signed, so a
+/// reflected or collapsed shape bone still has a rotation, which its
+/// descendants' world rotation and DynamicBone's mirror compensation read; a
+/// matrix alone cannot give that rotation back.
+public struct SignedTRS: Sendable {
+    public var translation: Float3, rotation: simd_quatf, scale: Float3
+    public init(translation: Float3, rotation: simd_quatf, scale: Float3) {
+        self.translation = translation; self.rotation = rotation; self.scale = scale
+    }
+    /// A scale with a component at or below zero (negative zero included):
+    /// the only scales a record is kept for.
+    @inline(__always) public static func needsRecord(_ scale: Float3) -> Bool { scale.x <= 0 || scale.y <= 0 || scale.z <= 0 }
+    /// True while `local` is, bit for bit, `Transform.trs` of this record:
+    /// any writer that changed the matrix since invalidated the record.
+    public func describes(_ local: float4x4) -> Bool {
+        let m = Transform.trs(translation, rotation, scale)
+        func bits(_ c: Float4) -> SIMD4<UInt32> { unsafeBitCast(c, to: SIMD4<UInt32>.self) }
+        return bits(m.columns.0) == bits(local.columns.0) && bits(m.columns.1) == bits(local.columns.1)
+            && bits(m.columns.2) == bits(local.columns.2) && bits(m.columns.3) == bits(local.columns.3)
+    }
+}
+
 public struct RigPose: Sendable {
     public var localMatrices: [float4x4]
-    public init(rig: RigDefinition) { localMatrices = rig.nodes.map(\.localMatrix) }
+    /// Signed TRS records of nodes whose scale has a component at or below
+    /// zero, keyed by node (#406). Only the rest pose and the shape stages
+    /// write them; a record counts only while it still `describes` its node's
+    /// local matrix, so any other writer invalidates it by writing the matrix.
+    /// Nil, with nothing allocated or retained on a copy, when no node has one.
+    public var signedTRS: [Int: SignedTRS]?
+    public init(rig: RigDefinition) { localMatrices = rig.nodes.map(\.localMatrix); signedTRS = rig.restSignedTRS }
+
+    /// The record for `node` if it still describes the node's local matrix.
+    @inline(__always) public func validSignedTRS(_ node: Int) -> SignedTRS? {
+        guard let record = signedTRS?[node], record.describes(localMatrices[node]) else { return nil }
+        return record
+    }
+
+    /// Keeps the table in step after a writer set `localMatrices[node]` to
+    /// `Transform.trs(translation, rotation, scale)`: a non-positive scale is
+    /// recorded, and a positive one drops any earlier record for the node.
+    /// A positive write to a node without a record touches nothing.
+    @inline(__always) public mutating func recordTRS(_ node: Int, translation: Float3, rotation: simd_quatf, scale: Float3) {
+        if SignedTRS.needsRecord(scale) {
+            if signedTRS == nil { signedTRS = [:] }
+            signedTRS![node] = SignedTRS(translation: translation, rotation: rotation, scale: scale)
+        } else if signedTRS?[node] != nil {
+            // Checked first: removing an absent key would still copy a table
+            // this pose shares with the pose it was copied from.
+            signedTRS![node] = nil
+            if signedTRS!.isEmpty { signedTRS = nil }
+        }
+    }
 }
 
 public struct RigEvaluation: Sendable {

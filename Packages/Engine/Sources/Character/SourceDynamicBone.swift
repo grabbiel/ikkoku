@@ -94,6 +94,10 @@ public struct SourceDynamicBone: Sendable {
     public private(set) var remainder: Float = 0
     public private(set) var lastStepCount = 0
     public private(set) var weight: Float = 1
+    /// Particles placed under a singular parent world through InverseSafe
+    /// (#406), counted over the component's life. A chain whose scales are
+    /// all positive never reaches that path, so this stays 0 for it.
+    package private(set) var inverseSafePlacements = 0
     public let definition: SourceDynamicsDocument.Component
     /// Compact transform slots (see `DynamicsTopology`) of the particles, the
     /// colliders and the owner.
@@ -242,11 +246,13 @@ public struct SourceDynamicBone: Sendable {
             constrain(state: state, objectScale: objectScale, simulate: false)
         }
         guard positions.allSatisfy(finite), previousPositions.allSatisfy(finite) else { throw RigError.invalid("Dynamic particles overflowed.") }
+        let mirror = Mirror(state: state, owner: owner, ownerParent: topology.parent[owner])
         for i in 1..<nodes.count {
             let parent = definition.particles[i].parent!, parentNode = nodes[parent], node = nodes[i]
             if topology.childCount[parentNode] <= 1 {
                 let from = state.worldRotations[parentNode].act(state.translations[node])
-                let to = positions[i] - positions[parent]
+                var to = positions[i] - positions[parent]
+                if let mirror { to = mirror.apply(to) }
                 if length_squared(from) > 1e-12 && length_squared(to) > 1e-12 {
                     let rotation = simd_quatf.rotation(from: from, to: to) * state.worldRotations[parentNode]
                     let grandparent = topology.parent[parentNode]
@@ -256,12 +262,40 @@ public struct SourceDynamicBone: Sendable {
             }
             let nodeParent = topology.parent[node]
             if nodeParent >= 0 {
-                guard abs(simd_determinant(state.world[nodeParent])) > 1e-12 else { throw RigError.invalid("Singular dynamics parent.") }
-                state.translations[node] = state.world[nodeParent].inverse.transformPoint(positions[i])
+                if abs(simd_determinant(state.world[nodeParent])) > 1e-12 {
+                    state.translations[node] = state.world[nodeParent].inverse.transformPoint(positions[i])
+                } else {
+                    // A collapsed ancestor (#406) leaves no inverse: Unity's
+                    // position setter maps the collapsed axis to 0.
+                    state.translations[node] = state.inverseSafeLocal(positions[i], parent: nodeParent)
+                    inverseSafePlacements += 1
+                }
             } else { state.translations[node] = positions[i] }
             state.changed[node] = true; state.updateSubtree(node)
         }
         return state
+    }
+
+    /// Illusion's mirror compensation in ApplyParticlesToTransforms (#406):
+    /// for each axis whose local scale is negative on the owner, or else on
+    /// the owner's parent, the bone vector is reflected across that
+    /// transform's world axis (rotation only) before the parent is turned onto
+    /// it. Nil, the usual case, when neither has a negative scale; only a
+    /// signed TRS record gives one.
+    private struct Mirror {
+        let axes: [Float3]
+        init?(state: DynamicsTransforms, owner: Int, ownerParent: Int) {
+            let ownerScale = state.scales[owner], parentScale = ownerParent >= 0 ? state.scales[ownerParent] : .one
+            guard min(ownerScale.x, min(ownerScale.y, ownerScale.z)) < 0 || min(parentScale.x, min(parentScale.y, parentScale.z)) < 0 else { return nil }
+            var axes: [Float3] = []
+            for k in 0..<3 {
+                var axis = Float3.zero; axis[k] = 1
+                if ownerScale[k] < 0 { axes.append(state.worldRotations[owner].act(axis)) }
+                else if parentScale[k] < 0 { axes.append(state.worldRotations[ownerParent].act(axis)) }
+            }
+            self.axes = axes
+        }
+        func apply(_ v: Float3) -> Float3 { axes.reduce(v) { $0 - $1 * (dot($0, $1) * 2) } }
     }
 
     private mutating func constrain(state: DynamicsTransforms, objectScale: Float, simulate: Bool) {
@@ -293,6 +327,20 @@ public struct SourceDynamicBone: Sendable {
             let delta = positions[parent] - positions[i], distance = length(delta)
             if distance > 0 { positions[i] += delta * ((distance - boneLength) / distance) }
         }
+    }
+
+    /// The rotation basis of a local matrix with one collapsed axis `axis`
+    /// and no signed record (#406). A zero has no sign, so the two axes that
+    /// remain give the rotation, taken as positive, and their cross product
+    /// in the cyclic order (axis + 1, axis + 2) completes it with det +1.
+    /// Nil when the remaining axes are not orthogonal (shear).
+    package static func collapsedAxisBasis(_ m: float4x4, scale: Float3, axis k: Int) -> float3x3? {
+        let a = (k + 1) % 3, b = (k + 2) % 3
+        let columnA = m[a].xyz / scale[a], columnB = m[b].xyz / scale[b]
+        guard abs(dot(columnA, columnB)) < 1e-4 else { return nil }
+        var r = matrix_identity_float3x3
+        r[a] = columnA; r[b] = columnB; r[k] = normalize(cross(columnA, columnB))
+        return r
     }
 
     /// Source collider uses abs(lossyScale.z), (height-radius)/2, and radius PLUS
@@ -345,6 +393,7 @@ public struct SourceDynamicBone: Sendable {
 }
 
 private func finite(_ v: Float3) -> Bool { v.x.isFinite && v.y.isFinite && v.z.isFinite }
+private func finite(_ v: SIMD4<Float>) -> Bool { v.x.isFinite && v.y.isFinite && v.z.isFinite && v.w.isFinite }
 private func normalizedOrZero(_ v: Float3) -> Float3 { let n = length(v); return n > 1e-5 ? v / n : .zero }
 private extension SIMD4 where Scalar == Float { var xyz: Float3 { Float3(x, y, z) } }
 
@@ -514,24 +563,64 @@ private struct DynamicsTransforms {
         // Unrelated authored matrices (for example a mirrored accessory) are
         // carried through verbatim. Only particle/collider/owner ancestors
         // need local quaternion decomposition for this component.
+        let records = pose.signedTRS != nil
         for i in topology.nodes {
-            let m = original[i], scale = m.scaleFactors
-            guard rig.nodes[i].authoredMatrix == nil, rig.nodes[i].scale.x > 0, rig.nodes[i].scale.y > 0, rig.nodes[i].scale.z > 0,
-                  finite(m.translation), finite(scale), min(scale.x, min(scale.y, scale.z)) > 1e-6,
-                  m[0].w == 0, m[1].w == 0, m[2].w == 0, m[3].w == 1 else {
-                throw RigError.invalid("Dynamics requires finite positive local TRS; a zero shape scale on a dynamics bone or its ancestors is not simulated (#404; signed TRS is #406).")
+            let m = original[i]
+            // A signed record that still describes the matrix (#406): the
+            // writer's own rotation and signed scale, as a Unity Transform
+            // keeps them.
+            if records, let record = pose.validSignedTRS(i) {
+                guard finite(record.translation), finite(record.scale), finite(record.rotation.vector) else {
+                    throw RigError.invalid("Dynamics requires a finite signed TRS record (#406).")
+                }
+                translations.append(record.translation); rotations.append(record.rotation); scales.append(record.scale)
+                continue
             }
-            let r = float3x3(m[0].xyz / scale.x, m[1].xyz / scale.y, m[2].xyz / scale.z)
-            guard abs(simd_determinant(r) - 1) < 1e-3,
-                  abs(dot(r[0], r[1])) < 1e-4, abs(dot(r[0], r[2])) < 1e-4, abs(dot(r[1], r[2])) < 1e-4 else {
-                throw RigError.invalid("Dynamics does not support local shear/reflection; a negative shape scale on a dynamics bone or its ancestors is not simulated (#404; signed TRS is #406).")
+            let scale = m.scaleFactors
+            guard finite(m.translation), finite(scale), m[0].w == 0, m[1].w == 0, m[2].w == 0, m[3].w == 1 else {
+                throw RigError.invalid("Dynamics requires a finite affine local transform on a dynamics bone and its ancestors.")
             }
+            let trs = rig.nodes[i].authoredMatrix == nil && rig.nodes[i].scale.x > 0 && rig.nodes[i].scale.y > 0 && rig.nodes[i].scale.z > 0
+            if trs && min(scale.x, min(scale.y, scale.z)) > 1e-6 {
+                let r = float3x3(m[0].xyz / scale.x, m[1].xyz / scale.y, m[2].xyz / scale.z)
+                guard abs(simd_determinant(r) - 1) < 1e-3,
+                      abs(dot(r[0], r[1])) < 1e-4, abs(dot(r[0], r[2])) < 1e-4, abs(dot(r[1], r[2])) < 1e-4 else {
+                    if abs(dot(r[0], r[1])) < 1e-4, abs(dot(r[0], r[2])) < 1e-4, abs(dot(r[1], r[2])) < 1e-4,
+                       abs(simd_determinant(r) + 1) < 1e-3 { throw Self.unrecorded }
+                    throw Self.shear
+                }
+                translations.append(m.translation); rotations.append(simd_quatf(r).normalized); scales.append(scale)
+                continue
+            }
+            // No record and one collapsed axis (`collapsedAxisBasis`).
+            let collapsed = (0..<3).filter { scale[$0] <= 1e-6 }
+            guard trs, collapsed.count == 1 else { throw Self.unrecorded }
+            guard let r = SourceDynamicBone.collapsedAxisBasis(m, scale: scale, axis: collapsed[0]) else { throw Self.shear }
             translations.append(m.translation); rotations.append(simd_quatf(r).normalized); scales.append(scale)
         }
         world = .init(repeating: matrix_identity_float4x4, count: count)
         worldRotations = .init(repeating: .identity, count: count)
         changed = .init(repeating: false, count: count)
         for slot in topology.order { updateNode(slot) }
+    }
+    static let unrecorded = RigError.invalid("Dynamics has no signed TRS record for a negative scale, or for two collapsed axes, on a dynamics bone or its ancestors. The rest pose and the shape stages record one; a later writer (an ABMX scale record, an animation) leaves none, so that chain is not simulated (#406 residual).")
+    static let shear = RigError.invalid("Dynamics does not support local shear on a dynamics bone or its ancestors (#406).")
+
+    /// Where `slot`'s parent chain maps the world point `p`, the way Unity's
+    /// position setter finds the local position: each ancestor's TRS is
+    /// undone from the root down, its scale through InverseSafe (an axis whose
+    /// |scale| is at most `Transform.inverseSafeEpsilon` maps to 0). Used only
+    /// for a singular parent world, which has no inverse.
+    func inverseSafeLocal(_ p: Float3, parent slot: Int) -> Float3 {
+        var chain: [Int] = [], cursor = slot
+        while cursor >= 0 { chain.append(cursor); cursor = topology.parent[cursor] }
+        var local = p
+        for s in chain.reversed() {
+            let v = rotations[s].inverse.act(local - translations[s]), scale = scales[s]
+            func inverse(_ x: Float) -> Float { abs(x) > Transform.inverseSafeEpsilon ? 1 / x : 0 }
+            local = Float3(v.x * inverse(scale.x), v.y * inverse(scale.y), v.z * inverse(scale.z))
+        }
+        return local
     }
     mutating func updateSubtree(_ root: Int) {
         var pending = [root]
@@ -549,7 +638,10 @@ private struct DynamicsTransforms {
     func pose(_ input: RigPose, rig: RigDefinition, validatedInput: Bool) throws -> RigPose {
         var value = input
         for slot in changed.indices where changed[slot] {
-            value.localMatrices[topology.nodes[slot]] = Transform.trs(translations[slot], rotations[slot], scales[slot])
+            let node = topology.nodes[slot]
+            value.localMatrices[node] = Transform.trs(translations[slot], rotations[slot], scales[slot])
+            // The next component reads this output; a signed scale keeps its record (#406).
+            value.recordTRS(node, translation: translations[slot], rotation: rotations[slot], scale: scales[slot])
         }
         if validatedInput { try topology.validateChanges(value, rig: rig, world: world) } else { _ = try rig.evaluate(value) }
         return value

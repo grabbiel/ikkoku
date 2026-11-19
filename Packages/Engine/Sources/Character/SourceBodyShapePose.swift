@@ -179,6 +179,9 @@ public enum SourceBodyShapePose {
             throw RigError.invalid("Nonfinite body shape matrix for '\(name)'.")
         }
         pose.localMatrices[index] = matrix
+        // The signed record keeps a reflected or collapsed bone's rotation for
+        // DynamicBone (#406).
+        pose.recordTRS(index, translation: value.position, rotation: value.rotation, scale: value.scale)
     }
     private static func finite(_ value: SourceShapeTransform) -> Bool {
         (0..<3).allSatisfy { value.position[$0].isFinite && value.rotationDegrees[$0].isFinite && value.scale[$0].isFinite }
