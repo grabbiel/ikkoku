@@ -459,6 +459,16 @@
           "env": "IKKOKU_STUDIO_MAP_CATALOG",
           "kind": "file",
           "optional": true
+        },
+        {
+          "env": "IKKOKU_SLIDER_ORACLE",
+          "kind": "directory",
+          "optional": true
+        },
+        {
+          "env": "IKKOKU_SLIDER_ORACLE_CASES",
+          "kind": "file",
+          "optional": true
         }
       ],
       "env": {
