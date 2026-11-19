@@ -129,6 +129,13 @@ final class PerfTrace {
         case studioWindow, studioWorkspace, studioWorkspaceRow, studioToolbar, studioTimeline, studioInspector, studioStatus
         case objectInspector, objectInspectorContent, objectInspectorSection, poseInspector, sourcePoseInspector, sourceAnimationInspector, faceInspector, clothesInspector, sceneInspector
         case makerWindow, makerRigPanel, makerShapeRow
+        /// #410: an empty workspace slot, past the scene's rows (`WorkspaceSlot`).
+        case studioWorkspacePlaceholder
+        /// #410: the workspace list (`StudioWorkspaceContent`), which a load
+        /// and a move of the eyes' keyboard focus evaluate.
+        case studioWorkspaceList
+        /// #410: one workspace slot (`WorkspaceSlot`), with a row or empty.
+        case studioWorkspaceSlot
 
         var name: String { String(describing: self) }
     }
@@ -391,13 +398,30 @@ final class PerfTrace {
         trace.hoverPicks.append((applied, latency * 1000, gpuTime * 1000))
     }
 
-    /// Counts one SwiftUI body evaluation while recording; called as
-    /// `let _ = PerfTrace.body(.name)` at the top of the body. Costs one
-    /// optional check when no trace runs.
+    /// Counts one SwiftUI body evaluation while recording, or into
+    /// `scenarioBodyCounts` while a scenario step counts; called as
+    /// `let _ = PerfTrace.body(.name)` at the top of the body. Costs two
+    /// optional checks when neither runs.
     @inline(__always)
     static func body(_ view: ViewBody) {
-        guard let trace = active, trace.recording else { return }
-        trace.bodyCounts[view.rawValue] += 1
+        if let trace = active {
+            if trace.recording { trace.bodyCounts[view.rawValue] += 1 }
+        } else if scenarioBodyCounts != nil {
+            scenarioBodyCounts![view.rawValue] += 1
+        }
+    }
+
+    /// #410: body counts outside a perf trace, indexed by `ViewBody.rawValue`,
+    /// for a scenario step that counts what each keyboard focus move,
+    /// selection change, eye toggle or idle refresh evaluates. nil (not
+    /// counting) unless a scenario step sets it.
+    static var scenarioBodyCounts: [Int]?
+
+    /// How many bodies of `view` this recording has counted so far: 0 when no
+    /// trace records. The workload reads it per action (#410).
+    static func bodyCount(_ view: ViewBody) -> Int {
+        guard let trace = active, trace.recording else { return 0 }
+        return trace.bodyCounts[view.rawValue]
     }
 
     // MARK: Recording window

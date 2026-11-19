@@ -1,5 +1,5 @@
 """Self-tests for workspace_growth_check.py (#410): the heap -s reader, the
-load count, the frozen bar, the snapshot retry, and v2.1's box rows and flags. No app is needed; the heap output is synthetic
+load count, the frozen bar, the snapshot attempts (v2.2: up to 4), and v2.1's box rows and flags. No app is needed; the heap output is synthetic
 text in the shape `heap -s` writes."""
 
 import os
@@ -163,6 +163,7 @@ class SnapshotTests(unittest.TestCase):
 
     def test_the_schedule_is_frozen(self):
         self.assertEqual((check.EARLY_SECONDS, check.LATE_SECONDS, check.RETRY_AFTER), (12.0, 56.0, 2.0))
+        self.assertEqual((check.SNAPSHOT_ATTEMPTS, check.CHECK_VERSION), (4, "2.2"))
 
     def test_a_good_snapshot_is_taken_once(self):
         attempts, text, waits, calls = self.take([0])
@@ -175,10 +176,17 @@ class SnapshotTests(unittest.TestCase):
         self.assertEqual((text, waits), (HEAP, [2.0]))
         self.assertIsNotNone(check.parse_heap(text))
 
-    def test_a_second_failure_is_not_retried(self):
-        attempts, text, waits, calls = self.take([255, 255])
-        self.assertEqual([a["exit"] for a in attempts], [255, 255])
-        self.assertEqual((waits, len(calls)), ([2.0], 2))
+    def test_a_fourth_attempt_can_succeed(self):
+        # v2.2: attempts 2 s after each failure, at 10, 15, 20 and 25 s.
+        attempts, text, waits, _ = self.take([255, 255, 255, 0])
+        self.assertEqual(attempts, [{"seconds": 10.0, "exit": 255}, {"seconds": 15.0, "exit": 255},
+                                    {"seconds": 20.0, "exit": 255}, {"seconds": 25.0, "exit": 0}])
+        self.assertEqual((text, waits), (HEAP, [2.0, 2.0, 2.0]))
+
+    def test_a_fourth_failure_is_not_retried(self):
+        attempts, text, waits, calls = self.take([255, 255, 255, 255])
+        self.assertEqual([a["exit"] for a in attempts], [255, 255, 255, 255])
+        self.assertEqual((waits, len(calls)), ([2.0, 2.0, 2.0], 4))
         self.assertIsNone(check.parse_heap(text))
 
     def test_loads_are_counted_from_the_snapshot_that_was_read(self):

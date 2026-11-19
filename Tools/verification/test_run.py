@@ -655,8 +655,10 @@ INSPECTOR_UI_OPS = {"select", "deselect", "focus", "type", "delete", "undo", "re
                     "tab", "addCharacter",
                     # Added for #383 (the Parent popup that replaced the Picker).
                     "parentMenu",
-                    # Added for #410 (the workspace list became a List).
-                    "selectRow"}
+                    # Added for #410 (the workspace list's slots, the eyes' own
+                    # focus ring and what each workspace action evaluates).
+                    "selectRow", "scrollWorkspace", "newScene", "addFolders", "eyeFocus",
+                    "workspaceBodies"}
 
 # ST-T11 `editRoute` settings: point edits name the point, route edits do not.
 ROUTE_POINT_SETTINGS = ("delete", "move", "speed", "ease", "connection", "link")
@@ -949,7 +951,7 @@ class StudioScenarioLaneTests(unittest.TestCase):
                       and not name.startswith(("maker-", "gameplay-")))
 
     def test_lane_validates_and_covers_every_scenario(self):
-        self.assertEqual(len(self.checks), 102)
+        self.assertEqual(len(self.checks), 104)
         referenced = set()
         for check in self.checks:
             scenario = check["env"]["IKKOKU_STUDIO_SCENARIO"]
@@ -981,6 +983,23 @@ class StudioScenarioLaneTests(unittest.TestCase):
             if op in ("routePoint", "outfit", "selectRow"):
                 self.assertIs(type(step["index"]), int)
                 self.assertGreaterEqual(step["index"], 0)
+            if op == "scrollWorkspace":
+                self.assertIs(type(step["toEnd"]), bool)
+            if op == "addFolders":
+                self.assertIs(type(step["count"]), int)
+                self.assertGreater(step["count"], 0)
+            if op == "workspaceBodies":
+                self.assertIn(step["label"], ("select", "toggle", "refresh"))
+                for name in ("count", "index"):
+                    if name in step:
+                        self.assertIs(type(step[name]), int)
+                        self.assertGreaterEqual(step[name], 1 if name == "count" else 0)
+            if op == "eyeFocus":
+                self.assertIs(type(step.get("count", 2)), int)
+                self.assertGreater(step.get("count", 2), 0)
+                if "capture" in step:
+                    self.assertTrue(step["capture"].startswith(".local/verification/"),
+                                    "an eyeFocus capture must stay under .local/verification: %s" % path)
             if op == "type":
                 self.assertTrue(step["text"])
             if op == "cycle":

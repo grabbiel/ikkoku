@@ -121,7 +121,7 @@ the run.
 | `studio-redo` | as `studio-idle` | as `studio-duplicate`, with Duplicate, Undo, Redo and Undo; the Redo of a route's Duplicate (`IKKOKU_PERF_ACTION_KEY`) rehydrates the scene's route runtime with its route characters |
 | `studio-outfit` | as `studio-idle` | the Clothes tab's outfit picker (`StudioModel.selectSourceOutfit`) on the `studio-duplicate` character: another saved outfit (`IKKOKU_PERF_OUTFIT`, else the first other one), then the shown one back, repeated, live animation on. After the first selection each one borrows the outfit's kept assembly; `IKKOKU_PERF_DONATIONS=off` builds every one from its files |
 | `studio-export` | as `studio-idle` | File ▸ Export Edited Original Scene (`AppState.exportSourceScene(to:)`), repeated, after a setup through the UI's calls: a cheek edit on the `studio-duplicate` character, Visible off, then Save Scene and Open of that file, so the hidden character has no preview and each export builds its validation baseline. Exports go to a temporary folder, removed at the end |
-| `studio-load` | as `studio-idle` | File ▸ New Scene (unmeasured), then File ▸ Open (`AppState.openScene(at:importing:)`) of the source scene saved as an Ikkoku scene, repeated; each load builds the characters again and rehydrates the route characters (a load over the same scene would keep its runtime and rehydrate nothing) |
+| `studio-load` | as `studio-idle` | File ▸ New Scene (unmeasured), then File ▸ Open (`AppState.openScene(at:importing:)`) of the source scene saved as an Ikkoku scene, repeated; each load builds the characters again and rehydrates the route characters (a load over the same scene would keep its runtime and rehydrate nothing). With `IKKOKU_PERF_LOAD_SMALL_OBJECTS=<n>` (#410) it alternates the source scene with a saved scene of `n` folders instead of New Scene, and in the small scene scrolls the workspace to its end (measured) and back; `details.workspaceScrolls` records, before each of the first 16 scrolls, the document and visible heights and how far the view is from the end, so a scroll back shows whether the scroll to the end reached it. It also records `workspaceRowHeight` (a one-line row), `tallestScreenVisibleHeight` and `workspaceMaxVisibleRows`, the most rows any window could show. `IKKOKU_PERF_WORKSPACE_SLOT_CAP=<k>`, read once at launch, replaces the workspace slots, the rows the list builds ahead of any scroll (`StudioWorkspaceState.slotCap`; recorded as `workspaceSlotCap` and `workspaceSlotCapOverride`) |
 | `studio-select` | as `studio-idle` | the selection a click makes (`StudioModel.selection`, which a workspace row's tap and a viewport click on an object set; a click on empty space clears it) through a fixed list, repeated, live animation on: nothing selected, then each listed object in turn. The list is `IKKOKU_PERF_SELECT_KEYS`, else the first object of each kind the Object tab shows differently (source character, route, source camera, item, light, camera, folder) in workspace order. The inspector shows `IKKOKU_PERF_INSPECTOR_TAB` (default `object`). The actions are named for what they select (`select route`, `select source character from nothing`, `deselect`); each one's main-thread time is the busy period it ran in, which holds SwiftUI's update of the panels ([phase 2, item 7](#phase-2-item-7-selection-and-the-inspector)) |
 | `studio-export-import` | as `studio-idle` | File ▸ Export Edited Original Scene (`AppState.exportSourceScene(to:)`) of the startup scene as imported, unedited, repeated, live animation on. A hidden character the import left unbuilt has no edit, so the export builds no baseline for it; its saved animation time comes from its data-only clock ([lazy hidden characters](#lazy-hidden-characters-at-import)). Each export writes a new file and removes the previous one |
 | `studio-show-hidden` | as `studio-idle` | Visible on (the inspector's toggle, `StudioModel.update`) for each hidden object of the startup scene that holds source characters (its own flag off, its ancestors shown), in workspace order, each followed by Visible off again (unmeasured), repeated, live animation on. An action's first run shows characters the import left unbuilt, so its ready time holds their builds; later runs find them built. Each action is named `show <source key> (<n> characters)` |
@@ -176,6 +176,12 @@ Other options:
   workspace tree, the toolbar and the timeline bar read the document in
   their bodies, as before, and `published` has them read what the model
   publishes when it changes. The app reads it once at launch.
+- `IKKOKU_PERF_LOAD_SMALL_OBJECTS` (1–10,000) and
+  `IKKOKU_PERF_WORKSPACE_SLOT_CAP` (0 or more), measurement controls for
+  #410's workspace slots: the folders of the small scene `studio-load`
+  alternates with the source scene, and the workspace slots, the rows the
+  list builds ahead of any scroll, in place of `StudioWorkspaceState.slotCap`
+  (0 puts every row in the lazy stack). The app reads the cap once at launch.
 - Measurement controls for the
   [item 6 follow-up](#phase-2-item-6-follow-up-route-copies-prefetch-and-kept-donations),
   all defaulting to the shipped behavior:
@@ -277,7 +283,11 @@ locked `PerfDrawLog`. Everything else is recorded on the main thread.
   `phys_footprint` and Metal allocation when it was ready (`footprintBytes`,
   `metalAllocatedBytes`; ST-T04), so repeated loads show whether memory
   accumulates per cycle, and the document's object count then
-  (`documentObjects`), so an edit's and its undo's effect can be checked. `summarize` prints the
+  (`documentObjects`), so an edit's and its undo's effect can be checked.
+  Since #410 each action also records the workspace row and empty-slot
+  bodies evaluated from its call to the next action's (`workspaceBodies`),
+  and the workspace rows it left (`workspaceRows`; the slots are
+  `workspaceSlotCap`, fixed for the run). `summarize` prints the
   medians per action (the own busy time in parentheses after the busy time, when
   the report has it), with the 120 Hz refresh periods the median and the
   longest stall cover (a 100 ms stall drops 12 frames), and warns about an
@@ -485,7 +495,8 @@ workspace list. It runs `studio-load` through `perf_trace.py run` (65 s by
 default, every launch through `--wrap`). It takes two `heap --forkCorpse -s`
 snapshots of the app by pid, at 12 s and 56 s after launch, and counts the
 loads between the snapshots it read from the report. A snapshot whose `heap`
-fails is retried once, 2 s later. Then it compares the counts of AppKit's
+fails is tried again 2 s later, up to four attempts in all, and each
+attempt's start and exit are printed. Then it compares the counts of AppKit's
 `NSKeyValueDependency`, `NSKeyValueDependencyContext`, `__NSMallocBlock__`
 and `__NSExactBlockVariable__`, and of every SwiftUI `AnyHashableBox<T>`, one
 row per payload type `T`.
@@ -500,6 +511,15 @@ row per payload type `T`.
 - The snapshot schedule changed once, before any run with it: the first two
   runs' 8 s snapshot failed (`heap` exit 255), so the early snapshot moved to
   12 s and gained the retry. The bar did not change.
+- The snapshot procedure changed again in v2.2, before any run with it.
+  Three v2.1 runs of one build were each invalid, because both attempts at
+  one snapshot exited 255. Each snapshot now gets up to four attempts. The
+  loads are still counted between the attempts that were read, so a late
+  attempt only narrows the window. The bar, the rows, the flags and the
+  other validity rules did not change. v2.2 runs are a new registration, not
+  pooled with v2.1 runs. Before its first run on a fix, v2.2 was run on the
+  slots-only build (03f056de) as a positive control, and failed it as
+  required: about 41 per load on the four AppKit rows.
 - The rows changed once (v2.1), and only to make the check stricter. The
   first version counted only `AnyHashableBox<UUID>`, and a list keyed by
   position moved the same growth to `AnyHashableBox<Int>`, which it did not
@@ -509,8 +529,8 @@ row per payload type `T`.
 - It writes `workspace-growth.json` with the raw counts, every snapshot
   attempt and the flags, and exits 0 (pass), 1 (fail) or 2 (invalid).
 - [test_workspace_growth_check.py](../../Tools/verification/test_workspace_growth_check.py)
-  covers the heap reader, the load count, the bar, the retry, the box rows
-  and the flags with synthetic data.
+  covers the heap reader, the load count, the bar, the attempts, the box
+  rows and the flags with synthetic data.
 
 The check needs the private source scene (`perf_trace.py`'s environment
 map), so no lane runs it. Results are in

@@ -1,4 +1,5 @@
 import Foundation
+import AppKit
 import Renderer
 import Studio
 
@@ -26,6 +27,24 @@ enum StudioPanelStateMode: String, Sendable {
 struct StudioWorkspaceState: Equatable {
     var entries: [WorkspaceEntry] = []
     var objectCount = 0
+    /// #410: the workspace slots, the rows the list builds ahead of any
+    /// scroll (`StudioWorkspaceContent`): the most rows the tallest screen
+    /// could show at once, its visible height over a one-line row and its gap
+    /// (`rowPitch`), plus `slotMargin`, so the rows a load builds are slots
+    /// and a load never inserts a row that is built. A slot past the scene's
+    /// rows is empty and 0 pt high. Rows past the slots are in a lazy stack.
+    /// `IKKOKU_PERF_WORKSPACE_SLOT_CAP=<k>` is a measurement control, read
+    /// once at launch, that replaces it (0: every row in the lazy stack).
+    @MainActor static var slotCap: Int {
+        if let override = slotCapOverride { return override }
+        let tallest = NSScreen.screens.map(\.visibleFrame.height).max() ?? 0
+        return Int((max(tallest, 1_000) / rowPitch).rounded(.up)) + slotMargin
+    }
+    /// A one-line `WorkspaceRow` (21 pt, `workspaceRowHeight` in `studio-load`) and the 1 pt gap.
+    static let rowPitch: CGFloat = 22
+    static let slotMargin = 16
+    static let slotCapOverride: Int? =
+        ProcessInfo.processInfo.environment["IKKOKU_PERF_WORKSPACE_SLOT_CAP"].flatMap { Int($0) }.map { max(0, $0) }
 
     @MainActor init() {}
 

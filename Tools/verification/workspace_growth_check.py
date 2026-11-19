@@ -34,6 +34,15 @@ non-zero is retried once, RETRY_AFTER seconds later. The loads are counted
 between the snapshots that were read, so a retry only moves the window. The
 bar is unchanged.
 
+Snapshot attempts (v2.2, "gc22", set before any run with this version,
+after three v2.1 runs of one build were each invalid on one snapshot whose
+two attempts exited 255 while AttributeGraph's zone was being modified):
+a snapshot is tried up to SNAPSHOT_ATTEMPTS (4) times, RETRY_AFTER seconds
+apart, and each attempt's start and exit are printed and written. The loads
+are still counted between the attempts that were read, so a later snapshot
+only narrows the window. Bar, rows, flags, the other validity rules and the
+workload are unchanged from v2.1.
+
 Rows (v2.1, stricter, set before any run with this version): a fix keyed
 by position (#410 B) moved the child-cache growth from `AnyHashableBox<UUID>`
 to `AnyHashableBox<Int>`, which v2 did not count. Every `_AnyHashableBox<T>`
@@ -64,6 +73,8 @@ MIN_LOADS = 40
 EARLY_SECONDS = 12.0
 LATE_SECONDS = 56.0
 RETRY_AFTER = 2.0
+SNAPSHOT_ATTEMPTS = 4
+CHECK_VERSION = "2.2"
 
 # heap -s class names: AppKit's dependency set, one row each.
 TYPES = (
@@ -159,11 +170,12 @@ def judge(early_counts, late_counts, loads):
 
 
 def snapshot(pid, clock, run_heap, wait, retry_after=RETRY_AFTER):
-    """Takes one `heap -s` snapshot, retried once `retry_after` seconds after a
-    non-zero exit. Returns (attempts, text): attempts lists each try's start
-    (clock()) and exit; text is the output of the last try."""
+    """Takes one `heap -s` snapshot, tried up to SNAPSHOT_ATTEMPTS times,
+    `retry_after` seconds after each non-zero exit. Returns (attempts, text):
+    attempts lists each try's start (clock()) and exit; text is the output of
+    the last try."""
     attempts = []
-    for attempt in range(2):
+    for attempt in range(SNAPSHOT_ATTEMPTS):
         if attempt:
             wait(retry_after)
         start = clock()
@@ -219,6 +231,7 @@ def main(argv=None):
             with open(os.path.join(args.out, "heap-%s.txt" % name), "w") as handle:
                 handle.write(text)
             last = attempts[-1]
+            print("snapshot %s: %s" % (name, ", ".join("%.3f s exit %d" % (a["seconds"], a["exit"]) for a in attempts)), flush=True)
             snaps[name] = {"seconds": last["seconds"], "exit": last["exit"], "attempts": attempts,
                            "counts": parse_heap(text) if last["exit"] == 0 else None}
             classes[name] = parse_classes(text) if last["exit"] == 0 else None
@@ -230,7 +243,7 @@ def main(argv=None):
             loads = count_loads(json.load(handle), snaps["early"]["seconds"], snaps["late"]["seconds"])
     verdict, rows = judge(snaps.get("early", {}).get("counts"), snaps.get("late", {}).get("counts"), loads)
     flagged = flags(classes.get("early"), classes.get("late"), loads) if verdict != "invalid" else []
-    result = {"verdict": verdict, "loads": loads, "minLoads": MIN_LOADS, "perLoad": PER_LOAD,
+    result = {"checkVersion": CHECK_VERSION, "verdict": verdict, "loads": loads, "minLoads": MIN_LOADS, "perLoad": PER_LOAD,
               "sceneAllowance": SCENE_ALLOWANCE, "snapshots": snaps, "rows": rows, "flags": flagged,
               "perfTraceExit": code}
     with open(os.path.join(args.out, "workspace-growth.json"), "w") as handle:

@@ -26,7 +26,142 @@
         "workspaceGeometry": true
       },
       {
+        "op": "delete",
+        "key": 963
+      },
+      {
+        "op": "scrollWorkspace",
+        "toEnd": true
+      },
+      {
+        "op": "assert",
+        "workspaceGeometry": true
+      },
+      {
+        "op": "scrollWorkspace",
+        "toEnd": false
+      },
+      {
+        "op": "assert",
+        "workspaceGeometry": true
+      },
+      {
+        "op": "undo"
+      },
+      {
         "op": "deselect"
+      },
+      {
+        "op": "assert",
+        "workspaceGeometry": true
+      },
+      {
+        "op": "addFolders",
+        "count": 40
+      },
+      {
+        "op": "scrollWorkspace",
+        "toEnd": true
+      },
+      {
+        "op": "assert",
+        "workspaceGeometry": true
+      },
+      {
+        "op": "scrollWorkspace",
+        "toEnd": false
+      },
+      {
+        "op": "assert",
+        "workspaceGeometry": true
+      },
+      {
+        "op": "newScene"
+      },
+      {
+        "op": "addFolders",
+        "count": 56
+      },
+      {
+        "op": "scrollWorkspace",
+        "toEnd": true
+      },
+      {
+        "op": "assert",
+        "workspaceGeometry": true
+      },
+      {
+        "op": "scrollWorkspace",
+        "toEnd": false
+      },
+      {
+        "op": "assert",
+        "workspaceGeometry": true
+      },
+      {
+        "op": "newScene"
+      },
+      {
+        "op": "addFolders",
+        "count": 56
+      },
+      {
+        "op": "scrollWorkspace",
+        "toEnd": true
+      },
+      {
+        "op": "assert",
+        "workspaceGeometry": true
+      },
+      {
+        "op": "scrollWorkspace",
+        "toEnd": false
+      },
+      {
+        "op": "assert",
+        "workspaceGeometry": true
+      },
+      {
+        "op": "newScene"
+      },
+      {
+        "op": "addFolders",
+        "count": 56
+      },
+      {
+        "op": "scrollWorkspace",
+        "toEnd": true
+      },
+      {
+        "op": "assert",
+        "workspaceGeometry": true
+      },
+      {
+        "op": "scrollWorkspace",
+        "toEnd": false
+      },
+      {
+        "op": "assert",
+        "workspaceGeometry": true
+      },
+      {
+        "op": "newScene"
+      },
+      {
+        "op": "addFolders",
+        "count": 1
+      },
+      {
+        "op": "scrollWorkspace",
+        "toEnd": true
+      },
+      {
+        "op": "assert",
+        "workspaceGeometry": true
+      },
+      {
+        "op": "scrollWorkspace",
+        "toEnd": false
       },
       {
         "op": "assert",
