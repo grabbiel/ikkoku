@@ -15,14 +15,17 @@ import json
 from pathlib import Path
 import re
 
+try:
+    from . import mono_int32
+except ImportError:
+    import mono_int32
+
 
 REPO = Path(__file__).resolve().parents[3]
 SOURCE = REPO / ".local/reverse/mods/decompiled"
 CONTROL = REPO / ".local/reverse/decompiled/Character/Koikatu/ChaControl.cs"
 PACKAGE = REPO / ".local/reverse/mods/packages/no-hair-accessories/manifest.json"
 ACCESSORY_PROPERTY = "ChaFileAccessory.PartsInfo.id"
-# int32() keeps this allowance for int.Parse; it is not string.Trim().
-WHITESPACE = "\t\n\v\f\r \u0085\u00a0\u1680\u2000\u2001\u2002\u2003\u2004\u2005\u2006\u2007\u2008\u2009\u200a\u2028\u2029\u202f\u205f\u3000"
 
 
 # Sideloader's String.Trim() calls (GUIDs; Lists.LoadCSV's preamble, header and
@@ -43,13 +46,12 @@ def trim_guid(value: str) -> str:
 
 
 def int32(value: str) -> int:
-    value = value.strip(WHITESPACE)
-    if not re.fullmatch(r"[+-]?[0-9]+", value):
-        raise ValueError("Source Int32 parse failed")
-    number = int(value)
-    if not -(2**31) <= number < 2**31:
-        raise ValueError("Source Int32 overflow")
-    return number
+    """Mono's int.Parse / int.TryParse (mono_int32, #427). The game applies it to list numbers in three places:
+    - Sideloader's Lists.LoadCSV parses the category and distribution;
+    - UniversalAutoResolver.GenerateResolutionInfo parses each row ID;
+    - ListInfoBase.GetInfoInt parses DistributionNo.
+    The white space is char.IsWhiteSpace, not the String.Trim() set, and a NUL ends the number. Raises ValueError."""
+    return mono_int32.int32(value)
 
 
 def stream_reader_text(data: bytes) -> tuple[str, str]:

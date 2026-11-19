@@ -539,6 +539,120 @@ struct InspectorUIScenario: Decodable {
         return found.max { $0.bounds.height < $1.bounds.height }
     }
 
+    /// #363 and #366's diagnostic, a part of `IKKOKU_CAPTURE_UI_FIT_LOG`'s lines
+    /// (`AppState.logUICaptureFit`), so nothing runs unless that log is on. It
+    /// reads AppKit state only and lays nothing out:
+    /// - the toolbar's three-segment pickers, the pose mode's Object/FK/IK
+    ///   (`pose`) and the gizmo's images (`gizmo`): frame and host frame in
+    ///   window points, intrinsic width, segment distribution, control size,
+    ///   font size and each segment's set width (0 is automatic) (#363);
+    /// - the inspector clip's top and scroll offset, then the AppKit controls in
+    ///   its document view in reading order, each as its distance from the
+    ///   clip's top and its height, marked `(off)` while disabled (a kept view
+    ///   hidden behind the shown one); the name field's sizing; the Parent
+    ///   popup's intrinsic height; the window's first responder (#366).
+    /// After the capture (`afterCapture`), and only then, it also reads each
+    /// picker segment's accessibility frame, as `inspectorFit` reads its elements.
+    @MainActor static func layoutProbe(_ window: NSWindow, afterCapture: Bool) -> String {
+        guard let content = window.contentView else { return "no content view" }
+        let scroll = inspectorScrollView(window)
+        func rect(_ view: NSView) -> NSRect { view.convert(view.bounds, to: nil) }
+        func f(_ value: CGFloat) -> String { String(format: "%.1f", value) }
+        typealias FrameGetter = @convention(c) (AnyObject, Selector) -> NSRect
+        let frameSelector = NSSelectorFromString("accessibilityFrame")
+        let childrenSelector = NSSelectorFromString("accessibilityChildren")
+        func segmentFrames(_ control: NSSegmentedControl) -> String {
+            guard control.responds(to: childrenSelector),
+                  let children = control.perform(childrenSelector)?.takeUnretainedValue() as? [Any] else { return "?" }
+            let frames: [String] = children.compactMap { child in
+                guard let object = child as? NSObject, object.responds(to: frameSelector),
+                      let implementation = object.method(for: frameSelector) else { return nil }
+                let frame = window.convertFromScreen(unsafeBitCast(implementation, to: FrameGetter.self)(object, frameSelector))
+                return "\(f(frame.minX))+\(f(frame.width))"
+            }
+            return frames.isEmpty ? "?" : frames.joined(separator: " ")
+        }
+        var pickers: [String] = []
+        func findPickers(_ view: NSView) {
+            if let control = view as? NSSegmentedControl, control.segmentCount == 3,
+               !(scroll.map { control.isDescendant(of: $0) } ?? false) {
+                let labels = (0..<3).map { control.label(forSegment: $0) ?? "" }
+                let name = labels == ["Object", "FK", "IK"] ? "pose" : labels.allSatisfy(\.isEmpty) ? "gizmo" : labels.joined(separator: "/")
+                let frame = rect(control), host = control.superview.map(rect) ?? .zero
+                var text = "\(name) x \(f(frame.minX))+\(f(frame.width)) y \(f(frame.minY))+\(f(frame.height))"
+                    + " host \(f(host.minX))+\(f(host.width)) intrinsic \(f(control.intrinsicContentSize.width))"
+                    + " distribution \(control.segmentDistribution.rawValue) size \(control.controlSize.rawValue)"
+                    + " font \(f(control.font?.pointSize ?? 0)) widths " + (0..<3).map { f(control.width(forSegment: $0)) }.joined(separator: "/")
+                if control.needsLayout { text += " needsLayout" }
+                if control.isHiddenOrHasHiddenAncestor { text += " hidden" }
+                if afterCapture { text += " segments " + segmentFrames(control) }
+                pickers.append(text)
+                return
+            }
+            view.subviews.forEach(findPickers)
+        }
+        findPickers(content)
+        var line = "toolbar " + (pickers.isEmpty ? "no pickers" : pickers.joined(separator: "; "))
+        // The toolbar's horizontal scroll view (the pickers' enclosing one): its visible
+        // width, its content's width and whether a horizontal scroller shows.
+        var toolbarScroll: NSScrollView?
+        func findToolbarScroll(_ view: NSView) {
+            if toolbarScroll == nil, let control = view as? NSSegmentedControl, control.segmentCount == 3,
+               let enclosing = control.enclosingScrollView, enclosing !== scroll {
+                toolbarScroll = enclosing
+            }
+            if toolbarScroll == nil { view.subviews.forEach(findToolbarScroll) }
+        }
+        findToolbarScroll(content)
+        if let toolbarScroll {
+            let shown = toolbarScroll.hasHorizontalScroller && !(toolbarScroll.horizontalScroller?.isHidden ?? true)
+            line += "; scroll clip \(f(toolbarScroll.contentView.bounds.width)) content \(f(toolbarScroll.documentView?.frame.width ?? 0))"
+                + " at \(f(toolbarScroll.contentView.bounds.minX)) scroller \(shown ? "shown" : "not shown")"
+        }
+        guard let scroll, let document = scroll.documentView else { return line + " | rows: no inspector scroll view" }
+        let clip = scroll.contentView, top = rect(clip).maxY
+        var rows: [(top: CGFloat, text: String)] = [], name: NSTextField? = nil, popup: NSPopUpButton? = nil
+        func findControls(_ view: NSView) {
+            guard rows.count < 64 else { return }
+            if let control = view as? NSControl, !control.isHiddenOrHasHiddenAncestor {
+                let frame = rect(control)
+                let kind: String
+                switch control {
+                case let field as NSTextField:
+                    if field.placeholderString == "Name", name == nil { name = field }
+                    kind = field.placeholderString == "Name" ? "name" : field.isEditable ? "field" : "text"
+                case let button as NSPopUpButton:
+                    if popup == nil { popup = button }
+                    kind = "popup"
+                case let button as NSButton: kind = "button(\(button.title.prefix(8)))"
+                case is NSSegmentedControl: kind = "segmented"
+                case is NSStepper: kind = "stepper"
+                case is NSSlider: kind = "slider"
+                default: kind = "\(type(of: control))"
+                }
+                rows.append((top - frame.maxY, "\(kind)@\(f(top - frame.maxY))+\(f(frame.height))" + (control.isEnabled ? "" : "(off)")))
+            }
+            view.subviews.forEach(findControls)
+        }
+        findControls(document)
+        rows.sort { $0.top < $1.top }
+        line += " | inspector top \(f(top)) offset \(f(clip.bounds.minY)) document height \(f(document.frame.height))"
+        line += " | rows " + rows.prefix(20).map { $0.text }.joined(separator: " ")
+        if let name {
+            line += " | name height \(f(name.frame.height)) intrinsic \(f(name.intrinsicContentSize.height)) size \(name.controlSize.rawValue)"
+                + " bezel \(name.isBezeled ? Int(name.bezelStyle.rawValue) : -1) font \(f(name.font?.pointSize ?? 0))"
+        } else {
+            line += " | no name field"
+        }
+        if let popup { line += " | popup height \(f(popup.frame.height)) intrinsic \(f(popup.intrinsicContentSize.height))" }
+        let responder = window.firstResponder
+        var responderText = responder.map { "\(type(of: $0))" } ?? "none"
+        if let editor = responder as? NSTextView, editor.isFieldEditor {
+            responderText += " editing " + (editor.delegate.map { $0 === name ? "name" : "\(type(of: $0))" } ?? "nothing")
+        }
+        return line + " | first responder " + responderText
+    }
+
     /// Whether everything in the inspector's scroll view lies within its visible
     /// width (#333): its document view is no wider than its clip view, and no
     /// accessibility element inside it (SwiftUI's text is not an NSView, so

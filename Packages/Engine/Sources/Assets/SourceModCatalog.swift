@@ -183,8 +183,15 @@ public struct SourceModCatalog: Sendable {
     private struct Table {
         let category: Int, distribution: Int, filePath: String, columns: [String], rows: [[String]]
     }
+    /// Mono's `int.Parse` / `int.TryParse` (`SourceMonoInt32`, #427), as the game
+    /// applies them to list numbers. Sideloader parses the category and
+    /// distribution in `Lists.LoadCSV` and each row ID in
+    /// `UniversalAutoResolver.GenerateResolutionInfo`. `ListInfoBase.GetInfoInt`
+    /// parses `DistributionNo`. The white space is `char.IsWhiteSpace`, not
+    /// `string.Trim()`'s set, and a NUL ends the number.
     private static func integer(_ text: String) -> Int? {
-        Int32(text.trimmingCharacters(in: .whitespacesAndNewlines)).map(Int.init)
+        guard case .success(let value) = SourceMonoInt32.parse(text) else { return nil }
+        return Int(value)
     }
     private static func readSourceCSV(_ data: Data) throws -> Table {
         guard data.count <= 8 * 1024 * 1024 else { throw SourceModError.invalid("Source catalog exceeds the native parser limit.") }

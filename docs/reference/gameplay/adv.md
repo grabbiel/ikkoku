@@ -208,15 +208,17 @@ stops the source coroutine; the native kernel faults at that pc.
 
 **Parsing.** `SourceCLR` reproduces Unity Mono's `mscorlib` (decompiled from the
 installed `Managed/mscorlib.dll`): `int.Parse`/`TryParse` (invariant fast path:
-white space, one sign, ASCII digits, NUL terminates, overflow throws),
+`char.IsWhiteSpace`, one sign, ASCII digits, NUL terminates, overflow throws;
+shared with the mod catalog as `SourceMonoInt32`, see
+[catalog](../mods/catalog.md), #427),
 `float.Parse` (`(float)double.Parse(s, Float | AllowThousands)` state machine plus
 Mono's positive-overflow check, so `3.4028235e38` throws), `bool.Parse` (`Trim`
 then ignore-case comparison). Results the kernel cannot reproduce exactly fault
 as unsupported instead of guessing, even where the source would swallow an
-exception: non-ASCII digits or white space, `,` (culture group/decimal
-separator), culture NaN/Infinity symbols, non-canonical digit strings for the
-native `Double.ParseImpl`, Unicode-version-dependent white space (U+180E, U+200B,
-U+FEFF), and culture-sensitive string comparisons (`Check`, `Enum.FindIndex`,
+exception: non-ASCII text in `float.Parse` and `Convert.ChangeType`, `,`
+(culture group/decimal separator), culture NaN/Infinity symbols, non-canonical
+digit strings for the native `Double.ParseImpl`, and culture-sensitive string
+comparisons (`Check`, `Enum.FindIndex`,
 `Compare`) that differ only in punctuation, spaces or non-ASCII characters. The
 current culture is assumed to be non-Turkic with `.` as decimal separator (as in
 the game's Japanese environment).
