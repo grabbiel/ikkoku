@@ -55,6 +55,10 @@ All integer and float fields below use .NET BinaryWriter little-endian encoding.
 `bool` occupies one byte; `string` is a seven-bit encoded **UTF-8 byte count**
 followed by those bytes. This is an explicitly serialized stream, not a dump of
 CLR object layout. Reproducing native struct padding would not reproduce it.
+The bytes decode as Mono's `BinaryReader.ReadString` decodes them: a leading
+EF BB BF is the character U+FEFF, not a byte-order mark to drop. MessagePack
+strings in cards and plug-in data follow the same rule (`SourceMonoUTF8`, #418).
+Ikkoku refuses invalid UTF-8, which the game repairs (#423).
 
 `Studio.SceneInfo.Save(string)` writes a complete 320×180 PNG, then immediately
 appends the scene version string and the object dictionary. There is no iTXt JSON

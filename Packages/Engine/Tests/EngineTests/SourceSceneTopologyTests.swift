@@ -449,3 +449,47 @@ private func refusal(_ body: () throws -> Any) -> String {
     #expect(refusal { try mismatched.editedData(.init(reparents: [.init(object: 7, parent: nil)])) }.contains("another root already uses key 7"))
     #expect(try original.editedData(.init()) == base().data, "refusals leave the source document unchanged")
 }
+
+@Test func sourceSceneKeepsALeadingBOMThroughReadAndRewrite() throws {
+    // #418: BinaryReader.ReadString keeps a leading EF BB BF as U+FEFF. Before,
+    // the native read dropped it, so writing a name back as read lost 3 bytes.
+    for value in ["\u{feff}", "\u{feff}x", "\u{feff}" + String(repeating: "y", count: 200)] {
+        let bytes = try KoikatsuBinaryReader.dotNetString(value)
+        var reader = try KoikatsuBinaryReader(bytes)
+        let read = try reader.string()
+        #expect(read == value && reader.offset == bytes.count)
+        #expect(try KoikatsuBinaryReader.dotNetString(read) == bytes)
+    }
+    var invalid = try KoikatsuBinaryReader(Data([5, 0xef, 0xbb, 0xbf, 0xc0, 0x80]))
+    #expect(throws: KoikatsuReadError.invalidValue(offset: 6, description: "invalid UTF-8")) { try invalid.string() }
+
+    var scene = base(); scene.names = [6: "\u{feff}Folder 6", 9: "\u{feff}"]
+    let original = try document(scene)
+    let folder = original.snapshot.roots[2], inner = original.snapshot.roots[3].children[0]
+    #expect(folder.sourceKey == 6 && folder.name == "\u{feff}Folder 6")
+    #expect(inner.sourceKey == 9 && inner.name == "\u{feff}")
+    #expect(try original.editedData(.init(names: [6: try #require(folder.name), 9: try #require(inner.name)])) == scene.data)
+    let edited = try original.editedData(.init(names: [6: "\u{feff}Renamed"], deletions: [12]))
+    var expected = TopologyScene(roots: [cameraA, folderF(), folderH(), routeR, characterC()])
+    expected.names = [6: "\u{feff}Renamed", 9: "\u{feff}"]
+    #expect(edited == expected.data)
+}
+
+@Test func sourceScenePluginIDsKeepALeadingBOM() throws {
+    // #418: ExtendedSave's Dictionary<string, PluginData> keys keep a leading
+    // U+FEFF, so "\u{feff}example.scene" is another plug-in than
+    // "example.scene" (before, the trailer refused as a duplicate ID), and a
+    // marked Sideloader ID is an unknown plug-in, not Sideloader's data.
+    typealias F = OriginalCardFixture
+    let pair = TopologyScene.kkex(F.map([("example.scene", .null), ("\u{feff}example.scene", .null)]))
+    let parsed = try SourceSceneKKEx.parse(pair)
+    #expect(parsed.entries.map(\.id) == ["example.scene", "\u{feff}example.scene"])
+    // Only nil entries: a delete keeps the trailer byte for byte.
+    let deleted = try document(base(trailer: pair)).editedData(.init(deletions: [12]))
+    var expected = TopologyScene(roots: [cameraA, folderF(), folderH(), routeR, characterC()]); expected.trailer = pair
+    #expect(deleted == expected.data)
+    let marked = TopologyScene.kkex(F.map([("\u{feff}" + SourceScenePluginData.sideloader,
+                                            F.plugin(0, data: F.map([("k", .integer(12))])))]))
+    let text = refusal { try document(base(trailer: marked)).editedData(.init(deletions: [12])) }
+    #expect(text.contains("plug-in data '\u{feff}\(SourceScenePluginData.sideloader)' has no rule in this writer"), "\(text)")
+}
