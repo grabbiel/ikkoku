@@ -26,7 +26,7 @@ vertex OutlineVertexOut outline_vertex(
     OutlineVertexOut o;
     float4 wp = draw.model * float4(v.position, 1.0);
     float3x3 nm = float3x3(draw.normalMatrix[0].xyz, draw.normalMatrix[1].xyz, draw.normalMatrix[2].xyz);
-    float3 wn = normalize(nm * v.normal);
+    float3 wn = guardedNormal(nm * v.normal);
     float4 clip = frame.viewProjection * wp;
     float4 clipN = frame.viewProjection * float4(wn, 0.0);
     // Screen-space width in pixels, scaled by the material and the per-vertex weight.

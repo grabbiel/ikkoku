@@ -14,7 +14,7 @@ the ST-T07 eye look reference and solver-port files, the ST-T07s eye look
 Studio preview runtime files, the ST-T07u iris rendering files and the ST-T04
 studio item shader contract and record color files and the ST-T08 first-slice
 original motion capture/replay files. The 2026-10-23 ST-T08e skirt slice updates runtime, exporter, fixture, test and reference files and adds its paired
-Studio save/load scenarios; it does not represent a new code audit. The 2026-10-25 ST-T03i plug-in data slice adds its rule, test, rule-parity, survey and original-player probe files. The 2026-10-26 texture-loading slice (the parallel-test pool deadlock) adds the in-line texture loader, its identity, corpus and upload tests, and 19 synthetic decoder fixtures. The 2026-10-26 ST-T05a legacy-scene slice adds its reader, test, timing, original-player probe and scenario files. The 2026-11-01 #321 slice adds the deep-scene stack test. The 2026-11-02 ST-T04 catalog slice adds the item catalog generator and its synthetic test. The 2026-11-18 #394 slice adds the stable dictionary encoding and its test. The 2026-11-18 #391 slice adds the source Euler commit test. The 2026-11-18 frame-preparation slice adds the encoder state record, the draw-order test and the encoder state test. The 2026-11-18 #384 slice adds the Studio undo history, its test and the undo scene-replacement scenario. The 2026-11-18 extended shape rate slice adds its original-player probe, driver and test, and the engine comparison with the probe's capture. The 2026-11-18 ST-T04 instancing slice adds the Studio item material cache, the instanced item shaders and the instanced item draw tests. It lists every present Git-visible
+Studio save/load scenarios; it does not represent a new code audit. The 2026-10-25 ST-T03i plug-in data slice adds its rule, test, rule-parity, survey and original-player probe files. The 2026-10-26 texture-loading slice (the parallel-test pool deadlock) adds the in-line texture loader, its identity, corpus and upload tests, and 19 synthetic decoder fixtures. The 2026-10-26 ST-T05a legacy-scene slice adds its reader, test, timing, original-player probe and scenario files. The 2026-11-01 #321 slice adds the deep-scene stack test. The 2026-11-02 ST-T04 catalog slice adds the item catalog generator and its synthetic test. The 2026-11-18 #394 slice adds the stable dictionary encoding and its test. The 2026-11-18 #391 slice adds the source Euler commit test. The 2026-11-18 frame-preparation slice adds the encoder state record, the draw-order test and the encoder state test. The 2026-11-18 #384 slice adds the Studio undo history, its test and the undo scene-replacement scenario. The 2026-11-18 extended shape rate slice adds its original-player probe, driver and test, and the engine comparison with the probe's capture. The 2026-11-18 ST-T04 instancing slice adds the Studio item material cache, the instanced item shaders and the instanced item draw tests. The 2026-11-19 #427 slice adds the shared Mono `int.Parse` parser in Swift and Python. It lists every present Git-visible
 tracked/untracked non-ignored repository file outside
 `docs/component-audit/`. It excludes private `.local/`, dependency/build caches
 and ignored intermediate assets. Binary assets are inventoried, not reviewed as
@@ -23,7 +23,7 @@ branch was tested or every asset matches the original game. Feature status,
 specific comments and pending tasks are in the linked reports. Shared behavior
 may be discussed in more than one report; one primary owner is listed here.
 
-**1125 files indexed; 1125 assigned; 0 unassigned.**
+**1129 files indexed; 1129 assigned; 0 unassigned.**
 
 Counts include the website and clothes-group additions listed below. Runtime and
 test totals include their specialized role descriptions; this is inventory
@@ -32,20 +32,20 @@ bookkeeping, not a new full source audit.
 | Primary report | Files |
 | --- | ---: |
 | [App / gameplay / plugins](app-gameplay-and-plugins.md) | 110 |
-| [Character / Maker / mods](character-and-mods.md) | 143 |
+| [Character / Maker / mods](character-and-mods.md) | 145 |
 | [Studio / IK / animation](studio.md) | 267 |
-| [Renderer / foundation / assets](renderer-and-foundation.md) | 372 |
-| [Toolchain / verification / historical docs](toolchain-and-verification.md) | 223 |
+| [Renderer / foundation / assets](renderer-and-foundation.md) | 373 |
+| [Toolchain / verification / historical docs](toolchain-and-verification.md) | 224 |
 
 | File role | Files |
 | --- | ---: |
 | App resource metadata / icon | 16 |
 | Build / repository configuration | 9 |
-| Conversion / recovery / verification tool | 260 |
+| Conversion / recovery / verification tool | 262 |
 | Documentation / historical evidence | 65 |
 | Generated asset / catalog / fixture | 205 |
 | Reference host / controlled fixture | 39 |
-| Runtime / shared shader declaration | 245 |
+| Runtime / shared shader declaration | 246 |
 | Test / validation | 245 |
 | Public synthetic body/face input fixture | 1 |
 
@@ -184,6 +184,7 @@ Feature assessment: [character-and-mods.md](character-and-mods.md).
 | [Packages/Engine/Sources/Assets/SourceModCatalog.swift](../../Packages/Engine/Sources/Assets/SourceModCatalog.swift) | Runtime / shared shader declaration |
 | [Packages/Engine/Sources/Assets/SourceModPackage.swift](../../Packages/Engine/Sources/Assets/SourceModPackage.swift) | Runtime / shared shader declaration |
 | [Packages/Engine/Sources/Assets/SourceModProfile.swift](../../Packages/Engine/Sources/Assets/SourceModProfile.swift) | Runtime / shared shader declaration |
+| [Packages/Engine/Sources/Assets/SourceMonoInt32.swift](../../Packages/Engine/Sources/Assets/SourceMonoInt32.swift) | Runtime / shared shader declaration |
 | [Packages/Engine/Sources/Assets/SourceMonoUTF8.swift](../../Packages/Engine/Sources/Assets/SourceMonoUTF8.swift) | Runtime / shared shader declaration |
 | [Packages/Engine/Sources/Assets/SourceMonoWhiteChars.swift](../../Packages/Engine/Sources/Assets/SourceMonoWhiteChars.swift) | Runtime / shared shader declaration |
 | [Packages/Engine/Sources/Character/AssetLibrary.swift](../../Packages/Engine/Sources/Character/AssetLibrary.swift) | Runtime / shared shader declaration |
@@ -280,6 +281,7 @@ Feature assessment: [character-and-mods.md](character-and-mods.md).
 | [Tools/reverse/analysis/expression_contract.py](../../Tools/reverse/analysis/expression_contract.py) | Conversion / recovery / verification tool |
 | [Tools/reverse/analysis/maker_roundtrip.py](../../Tools/reverse/analysis/maker_roundtrip.py) | Conversion / recovery / verification tool |
 | [Tools/reverse/analysis/mod_catalog_contract.py](../../Tools/reverse/analysis/mod_catalog_contract.py) | Conversion / recovery / verification tool |
+| [Tools/reverse/analysis/mono_int32.py](../../Tools/reverse/analysis/mono_int32.py) | Conversion / recovery / verification tool |
 | [Tools/reverse/analysis/resolver_contract.py](../../Tools/reverse/analysis/resolver_contract.py) | Conversion / recovery / verification tool |
 | [Tools/reverse/build_preview_appearance.py](../../Tools/reverse/build_preview_appearance.py) | Conversion / recovery / verification tool |
 | [Tools/reverse/card_appearance_bindings.py](../../Tools/reverse/card_appearance_bindings.py) | Conversion / recovery / verification tool |
@@ -897,6 +899,7 @@ Feature assessment: [renderer-and-foundation.md](renderer-and-foundation.md).
 | [Packages/Engine/Tests/EngineTests/RigTests.swift](../../Packages/Engine/Tests/EngineTests/RigTests.swift) | Test / validation |
 | [Packages/Engine/Tests/EngineTests/RigFiniteAffineTests.swift](../../Packages/Engine/Tests/EngineTests/RigFiniteAffineTests.swift) | Test / validation |
 | [Packages/Engine/Tests/EngineTests/SingularScaleTests.swift](../../Packages/Engine/Tests/EngineTests/SingularScaleTests.swift) | Test / zero and negative shape scales: singular normal matrix, InverseSafe world-to-object, collapse-safe rotation, collapsed skins drawn in rig space (#404) |
+| [Packages/Engine/Tests/EngineTests/SingularNormalShaderTests.swift](../../Packages/Engine/Tests/EngineTests/SingularNormalShaderTests.swift) | Test / a singular model's vertex normals: finite toon, map, outline and live-probe output, and bit for bit the pre-guard normalize on nonsingular models (#407) |
 | [Packages/Engine/Tests/EngineTests/SourceAvatarTests.swift](../../Packages/Engine/Tests/EngineTests/SourceAvatarTests.swift) | Test / validation |
 | [Packages/Engine/Tests/EngineTests/SourceMaleAvatarTests.swift](../../Packages/Engine/Tests/EngineTests/SourceMaleAvatarTests.swift) | Test / validation |
 | [Packages/Engine/Tests/EngineTests/SourceMorphGPUTests.swift](../../Packages/Engine/Tests/EngineTests/SourceMorphGPUTests.swift) | Test / validation |
@@ -1041,6 +1044,7 @@ Feature assessment: [toolchain-and-verification.md](toolchain-and-verification.m
 | [Tools/verification/scenarios/camera-deactivate.json](../../Tools/verification/scenarios/camera-deactivate.json) | Conversion / recovery / verification tool |
 | [Tools/verification/scenarios/camera-load-winner.json](../../Tools/verification/scenarios/camera-load-winner.json) | Conversion / recovery / verification tool |
 | [Tools/verification/scenarios/camera-rename.json](../../Tools/verification/scenarios/camera-rename.json) | Conversion / recovery / verification tool |
+| [Tools/verification/scenarios/camera-slot-keys.json](../../Tools/verification/scenarios/camera-slot-keys.json) | Conversion / recovery / verification tool |
 | [Tools/verification/scenarios/charastudio-camera-switch.json](../../Tools/verification/scenarios/charastudio-camera-switch.json) | Conversion / recovery / verification tool |
 | [Tools/verification/scenarios/charastudio-fk-edit.json](../../Tools/verification/scenarios/charastudio-fk-edit.json) | Conversion / recovery / verification tool |
 | [Tools/verification/scenarios/charastudio-hide-rename.json](../../Tools/verification/scenarios/charastudio-hide-rename.json) | Conversion / recovery / verification tool |

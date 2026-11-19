@@ -130,6 +130,30 @@ func catalogTestPackage(_ directory: URL, guid: String = "fixture.mod", csvs: [S
     #expect(catalog.entries.map { $0.info("DistributionNo") } == ["9", "-5", "not-int", "2147483648", "", "7"])
 }
 
+@Test func sourceModCatalogParsesListNumbersWithMonoInt32Parse() throws {
+    // #427: the game parses list numbers with Mono's int.Parse / int.TryParse:
+    // the category and distribution (Lists.LoadCSV), each row ID
+    // (UniversalAutoResolver.GenerateResolutionInfo) and the DistributionNo
+    // column (ListInfoBase.GetInfoInt). Its white space is char.IsWhiteSpace,
+    // which includes U+200B but not U+180E or U+FEFF, and a NUL ends the number.
+    // Foundation's Int32(_:) refused every NUL. test_resolver_contract.py holds
+    // the same first list and expectations for the Python oracle, which does not
+    // model GetInfoInt.
+    let directory = try catalogTestDirectory(); defer { try? FileManager.default.removeItem(at: directory) }
+    let csv = "122\u{0}junk,ignored\n0\u{0}\nAssets/list.bytes\nID,Name,Possess\n7\u{200b},a,0\n8\u{0}x,b,0\n"
+    let column = "122\n3\ntarget\nID,Name,DistributionNo\n9,c,\u{200b}6\u{0}x\n"
+    let library = try SourceModLibrary(packages: [catalogTestPackage(directory, csvs: [csv, column])])
+    let catalog = try SourceModCatalog(library: library, contract: catalogTestContract())
+    #expect(catalog.entries.map(\.key.sourceSlot) == [7, 8, 9])
+    #expect(catalog.entries.map(\.key.category) == [122, 122, 122] && catalog.entries.map(\.distribution) == [0, 0, 6])
+    func value(_ text: String) -> Int32? { try? SourceMonoInt32.parse(text).get() }
+    #expect(["\u{200b}5", "12\u{0}x", "-2147483648\u{0}", " +3\u{2029}", "\u{3000}4\u{205f}"].map(value) == [5, 12, .min, 3, 4])
+    for text in ["\u{180e}5", "5\u{feff}", "2147483647\u{0}x", " \u{0}", "\u{200b}", "2147483648"] {
+        #expect(value(text) == nil, "\(text.unicodeScalars.map { String($0.value, radix: 16) })")
+    }
+    #expect((UInt32(0)...0xFFFF).compactMap { Unicode.Scalar($0) }.filter(SourceMonoInt32.isWhiteSpace).count == 26)
+}
+
 @Test func sourceModCatalogResolvesOriginalGUIDCategorySlotPropertyAndFirstDuplicate() throws {
     let directory = try catalogTestDirectory(); defer { try? FileManager.default.removeItem(at: directory) }
     let duplicates = "122\n0\ntarget\nID,Name\n7,first\n7,second\n"
