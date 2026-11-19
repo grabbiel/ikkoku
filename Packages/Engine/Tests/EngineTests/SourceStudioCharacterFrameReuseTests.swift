@@ -263,6 +263,73 @@ extension SourceStudioLiveTickFixtureTests {
         #expect(run.failures.isEmpty, "\(run.failures.prefix(20))")
     }
 
+    /// #371: `evaluation(of:)` keeps the last evaluation, which an FK-drag
+    /// refresh's frame build and bone handles share. For every pose it must
+    /// equal `rig.evaluate(pose)` bit for bit: through an FK drag, an
+    /// unchanged refresh, a copy of the pose in other storage, a dynamics
+    /// checkpoint restored over a later edit (the undo path), an attachment
+    /// read checkpoint and a cleared step. A repeated call for one pose gives
+    /// the kept evaluation back; a pose in other storage is evaluated afresh.
+    @Test(.enabled(if: SourceFixtureSupport.shouldRun(frameReuseVariables) && MTLCreateSystemDefaultDevice() != nil,
+                   "Requires the Studio scenario scene and its import fixtures (\(frameReuseVariables.joined(separator: ", "))) and a Metal device"))
+    func sourceStudioCharacterKeptEvaluationMatchesAFreshEvaluation() async throws {
+        let run = try await liveTickOffPool { () throws -> (failures: [String], line: String) in
+            guard let device = MTLCreateSystemDefaultDevice() else { throw LiveTickFailure(description: "no Metal device") }
+            let preview = try liveTickFixturePreviews(resources: ResourceStore(device: device))[0]
+            let rig = preview.preview.source.rig
+            func bits(_ evaluation: RigEvaluation) -> [UInt32] {
+                func m(_ x: float4x4) -> [UInt32] { (0..<4).flatMap { c in (0..<4).map { x[c][$0].bitPattern } } }
+                return evaluation.worldMatrices.flatMap(m) + evaluation.palettes.flatMap { $0.flatMap(m) } + evaluation.collapsedSkins.sorted().map(UInt32.init)
+            }
+            var failures: [String] = [], checked = 0, kept = 0
+            let body = try #require(preview.controller.targets.first(where: { $0.hasGuide && $0.bone.fkGroup == .body })?.bone.id)
+            var request = FrameReuseRequest(world: liveTickWorld(character: 0), objectID: 1, elapsed: 3)
+            func check(_ label: String) throws {
+                _ = try request.frame(preview)
+                let pose = try preview.editedPose(fkRotations: request.fk, faceValues: request.face, ikTargets: request.ik, animationElapsed: request.elapsed)
+                let first = try preview.evaluation(of: pose), again = try preview.evaluation(of: pose)
+                let fresh = try rig.evaluate(pose)
+                if bits(first) != bits(fresh) { failures.append("\(label): the kept evaluation differs from a fresh one") }
+                if !SourceStudioCharacterPreview.sameStorage(first.worldMatrices, again.worldMatrices) {
+                    failures.append("\(label): a repeated call for the same pose evaluated again")
+                } else { kept += 1 }
+                // The same values in other storage: evaluated afresh, the same bits.
+                let copy = RigPose(rig: rig), values = pose.localMatrices.map { $0 }
+                var other = copy; other.localMatrices = values
+                let copied = try preview.evaluation(of: other)
+                if SourceStudioCharacterPreview.sameStorage(copied.worldMatrices, first.worldMatrices) {
+                    failures.append("\(label): a pose in other storage got the kept evaluation")
+                }
+                if bits(copied) != bits(fresh) { failures.append("\(label): the copy's evaluation differs") }
+                checked += 1
+            }
+            try check("settle")
+            try check("unchanged")
+            for (index, angle) in ([8, 9.5, 11, 11] as [Float]).enumerated() {
+                request.fk = [body: Float3(angle, -angle * 0.5, 2)]
+                try check("FK drag \(index)")
+            }
+            // Undo: a dynamics checkpoint taken here, a later edit, then the restore.
+            let dynamics = preview.captureDynamicsCheckpoint(), attachment = preview.captureAttachmentReadCheckpoint()
+            let held = request.fk
+            request.fk = [body: Float3(-20, 15, 4)]
+            try check("edit after the checkpoint")
+            try preview.restoreDynamicsCheckpoint(dynamics)
+            request.fk = held
+            try check("dynamics checkpoint restored")
+            request.fk = [body: Float3(30, 0, -6)]
+            try check("edit before the attachment checkpoint restore")
+            preview.restoreAttachmentReadCheckpoint(attachment)
+            request.fk = held
+            try check("attachment checkpoint restored")
+            preview.clearDynamicsStep()
+            try check("cleared step")
+            return (failures, "[kept-evaluation] checked=\(checked) kept=\(kept)")
+        }
+        print(run.line)
+        #expect(run.failures.isEmpty, "\(run.failures)")
+    }
+
     /// The cache lives on the preview: dropping the characters frees their
     /// cached frames with them. The store ends where the twin store without
     /// reuse ends, and every texture a cached frame held whose owner gave it

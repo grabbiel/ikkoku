@@ -38,6 +38,9 @@ public struct KoikatsuCharacterRecord: Sendable, Equatable {
     public struct PoseResult: Sendable {
         public let controller: SourceStudioPose
         public let pose: RigPose
+        /// `rig.evaluate(pose)` for the rig `makePose` was given: the last
+        /// evaluation `makePose` makes (#371), so a caller need not repeat it.
+        public let evaluation: RigEvaluation
         public let deferredEffects: [SourceStudioPose.Effect]
         public let diagnostics: [String]
     }
@@ -146,8 +149,9 @@ public struct KoikatsuCharacterRecord: Sendable, Equatable {
     /// the FK late update on `baseline`. `rig` is the rig `binding` was made
     /// with.
     public func makePose(binding: PoseBinding, rig: RigDefinition, baseline: RigPose) throws -> PoseResult {
-        let pose = try binding.controller.applyingActivations(ik: binding.ik, fk: binding.fk, rig: rig, pose: baseline)
-        return PoseResult(controller: binding.controller, pose: pose, deferredEffects: binding.effects, diagnostics: binding.diagnostics)
+        let (pose, evaluation) = try binding.controller.evaluatedActivations(ik: binding.ik, fk: binding.fk, rig: rig, pose: baseline)
+        return PoseResult(controller: binding.controller, pose: pose, evaluation: evaluation, deferredEffects: binding.effects,
+                          diagnostics: binding.diagnostics)
     }
 }
 

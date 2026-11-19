@@ -245,6 +245,10 @@ public final class SourceStudioCharacterPreview {
     var reusesFrames = true
     /// Whether the last `frame` call gave back the cached frame.
     public private(set) var lastFrameReused = false
+    /// `evaluation(of:)`'s last evaluation, with the rig and the pose it
+    /// was made from (#371). Derived output only: no checkpoint, undo state
+    /// or document field holds it.
+    private var keptEvaluation: (rig: RigDefinition.Identity, pose: RigPose, evaluation: RigEvaluation)?
     /// The animated, FK/IK-solved pose (`preOverride`) with the kinematic
     /// state and guides it was solved with, for the same key as
     /// `evaluatedCache` plus whether the animation was required. A Studio tick
@@ -949,8 +953,10 @@ public final class SourceStudioCharacterPreview {
             return frame
         }
         lastFrameReused = false
+        // Kept for the bone handles, which evaluate this same pose (#371).
+        let poseEvaluation = try evaluation(of: pose)
         var frame = try preview.frame(camera: camera, mainLight: mainLight, effects: effects, expression: expression, poseOverride: pose,
-            hiddenParts: wearEvaluation.hiddenParts, sourceBodyAlpha: wearEvaluation.bodyAlpha)
+            poseEvaluation: poseEvaluation, hiddenParts: wearEvaluation.hiddenParts, sourceBodyAlpha: wearEvaluation.bodyAlpha)
         if !reportedCollapsedRenderers, !preview.collapsedSkins.isEmpty {
             reportedCollapsedRenderers = true
             let collapsed = preview.source.parts.filter { preview.collapsedSkins.contains($0.skin) }.count
@@ -961,6 +967,30 @@ public final class SourceStudioCharacterPreview {
         frame.sceneBounds = frame.sceneBounds.transformed(by: world)
         cachedFrame = reusesFrames ? (key, frame) : nil
         return frame
+    }
+
+    /// `preview.source.rig.evaluate(pose)`, kept for the last pose it was
+    /// asked about (#371). An FK-drag refresh evaluated the edited pose
+    /// twice: for the frame build and for the bone handles. The kept
+    /// evaluation serves a later call only for the same rig and a pose whose
+    /// matrices share the kept pose's storage. The kept pose holds that
+    /// storage, so it is never written in place: shared storage means the
+    /// same values, and `evaluate` gives the same result for them. Any other
+    /// pose is evaluated afresh and replaces it; a failed evaluation throws
+    /// as before and keeps nothing.
+    public func evaluation(of pose: RigPose) throws -> RigEvaluation {
+        let rig = preview.source.rig
+        if let kept = keptEvaluation, kept.rig === rig.identity, Self.sameStorage(kept.pose.localMatrices, pose.localMatrices) {
+            return kept.evaluation
+        }
+        let evaluation = try rig.evaluate(pose)
+        keptEvaluation = (rig.identity, pose, evaluation)
+        return evaluation
+    }
+
+    /// True when both arrays are views of one buffer.
+    static func sameStorage(_ a: [float4x4], _ b: [float4x4]) -> Bool {
+        a.withUnsafeBufferPointer { pa in b.withUnsafeBufferPointer { pb in pa.baseAddress == pb.baseAddress && pa.count == pb.count } }
     }
 
     /// `cachedFrame`'s key: everything `frame` reads besides camera, light and
@@ -1475,8 +1505,11 @@ public final class SourceStudioCharacterPreview {
         result = restored.pose
         var guides: [SourceStudioIK.Guide] = []
         if let ikSolver {
+            // `restored.evaluation` is `rig.evaluate(result)`: makePose's last
+            // evaluation, with this same rig (#371).
             let solved = try ikSolver.apply(rig: preview.source.rig, baseline: result, savedTargets: record.ikTargets,
-                enabled: edited.enableIK, activeGroups: edited.activeIK, characterRoot: characterRoot, guideOverrides: ikTargets.mapValues(\.transform))
+                enabled: edited.enableIK, activeGroups: edited.activeIK, characterRoot: characterRoot, guideOverrides: ikTargets.mapValues(\.transform),
+                baselineEvaluation: restored.evaluation)
             result = solved.pose; guides = solved.guides
         } else if !ikTargets.isEmpty { throw RigError.invalid("Source IK bindings are unavailable for guide editing.") }
         return (result, effective, guides)

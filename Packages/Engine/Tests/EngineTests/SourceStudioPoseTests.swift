@@ -226,6 +226,68 @@ private func studioPoseNear(_ actual: float4x4, _ expected: float4x4, tolerance:
     }
 }
 
+/// Every world and palette matrix of an evaluation as bit patterns, with
+/// its collapsed skins: two evaluations compare exactly.
+private func studioPoseEvaluationBits(_ evaluation: RigEvaluation) -> [[UInt32]] {
+    func bits(_ m: float4x4) -> [UInt32] { (0..<4).flatMap { c in (0..<4).map { m[c][$0].bitPattern } } }
+    return evaluation.worldMatrices.map(bits) + evaluation.palettes.flatMap { $0.map(bits) }
+        + [evaluation.collapsedSkins.sorted().map(UInt32.init)]
+}
+
+/// #371: `evaluatedActivations` returns `applyingActivations`' pose with
+/// `rig.evaluate` of that pose, on every path (FK off or on, either
+/// transition empty or resetting nodes), and throws what it throws.
+@Test func sourceStudioPoseActivationsReturnTheEvaluationOfTheirPose() throws {
+    let rig = try studioPoseRig()
+    var base = try studioPoseController(rig)
+    try base.setRotation(boneID: 3, degrees: Float3(40, -25, 10))
+    let all = SourceStudioPose.Group.fkParts.reduce(SourceStudioPose.Group()) { $0.union($1) }
+    var resetting = base, unchanged = base
+    let reset = resetting.activateFK(mask: all, active: false, force: true)
+    let empty = unchanged.activateFK(mask: .rightHand, active: true)
+    #expect(!reset.identityResetNodes.isEmpty && empty.identityResetNodes.isEmpty)
+    var moved = rig.restPose
+    moved.localMatrices[4] = Transform.trs(Float3(0.5, -1, 2), simd_quatf(angle: 0.3, axis: Float3(0, 1, 0)), Float3(1, 2, 0.5))
+    func bits(_ pose: RigPose) -> [[UInt32]] { pose.localMatrices.map { m in (0..<4).flatMap { c in (0..<4).map { m[c][$0].bitPattern } } } }
+    var paths = 0
+    for fk in [false, true] {
+        var controller = base
+        if fk { _ = controller.activateMode(.fk, active: true) }
+        for (ik, fkTransition) in [(empty, empty), (reset, empty), (empty, reset), (reset, reset)] {
+            for input in [rig.restPose, moved] {
+                let (pose, evaluation) = try controller.evaluatedActivations(ik: ik, fk: fkTransition, rig: rig, pose: input)
+                #expect(bits(pose) == bits(try controller.applyingActivations(ik: ik, fk: fkTransition, rig: rig, pose: input)))
+                #expect(studioPoseEvaluationBits(evaluation) == studioPoseEvaluationBits(try rig.evaluate(pose)), "fk \(fk)")
+                paths += 1
+            }
+        }
+        // With FK on, the late update moves the rotated bone, so the input's
+        // evaluation is not the returned pose's.
+        if fk {
+            let (pose, _) = try controller.evaluatedActivations(ik: empty, fk: empty, rig: rig, pose: rig.restPose)
+            #expect(bits(pose) != bits(rig.restPose))
+        }
+    }
+    #expect(paths == 16)
+
+    // The same throws: a bad incoming matrix, and a rig of another hierarchy.
+    func message(_ body: () throws -> Any) -> String? {
+        do { _ = try body(); return nil } catch { return "\(error)" }
+    }
+    var bad = rig.restPose
+    bad.localMatrices[5][0][1] = .nan
+    let other = try RigDefinition(nodes: [.init(name: "root", sourceID: "other", parent: nil)], skins: [])
+    for (query, pose) in [(rig, bad), (other, other.restPose)] {
+        for fk in [false, true] {
+            var controller = base
+            if fk { _ = controller.activateMode(.fk, active: true) }
+            let expected = message { try controller.applyingActivations(ik: reset, fk: empty, rig: query, pose: pose) }
+            #expect(expected != nil)
+            #expect(message { try controller.evaluatedActivations(ik: reset, fk: empty, rig: query, pose: pose) } == expected)
+        }
+    }
+}
+
 private func studioPoseEffectJSON(_ effect: SourceStudioPose.Effect) -> [Any] {
     switch effect {
     case .neckLookPattern(let value): return ["neck", value]

@@ -4742,7 +4742,7 @@ final class StudioModel: ViewportInputHandler, LivePacedHandler {
         guard poseMode == .fk else { return [] }
         let rig = preview.preview.source.rig
         let pose = try preview.editedPose(fkRotations: object.sourceFKRotations ?? [:], faceValues: object.sourceFaceValues, bodyValues: object.sourceBodyValues, ikTargets: object.sourceIKOverrides ?? [:], kinematics: object.sourceKinematics, animationState: object.sourceAnimation, animationElapsed: sourceAnimationTime)
-        let evaluated = try rig.evaluate(pose)
+        let evaluated = try preview.evaluation(of: pose)  // the frame build's, for the same pose (#371)
         var result: [GizmoBatch] = []
         for target in preview.controller.targets where target.hasGuide {
             let matrix = world * evaluated.worldMatrices[target.node]

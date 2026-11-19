@@ -216,3 +216,33 @@ private func resultBits(_ result: SourceStudioIK.Result) -> [String] {
     // the comparison `apply` made before #371.
     for query in [rig, copy] + equal + changed { #expect(solver.bound(to: query) == solver.walkMatches(query)) }
 }
+
+/// #371: `baselineEvaluation` stands in for evaluating the baseline (the
+/// Studio passes makePose's evaluation of it). The result is the same bit
+/// for bit, the guard still answers first, and a solver without full-body
+/// settings keeps no initialization evaluation.
+@Test func sourceStudioIKUsesTheCallersBaselineEvaluation() throws {
+    let (rig, bindings) = try studioIKFixture()
+    let solver = try SourceStudioIK(rig: rig, bindings: bindings)
+    #expect(solver.initialWorld == nil)
+    var moved = rig.restPose
+    moved.localMatrices[1] = Transform.trs(Float3(0.5, 0.25, -1), simd_quatf(angle: 0.4, axis: Float3(0, 0, 1)), .one)
+    let saved = [Int32(3): KoikatsuBoneRecord(sourceKey: 1, transform: KoikatsuChangeAmount(position: Float3(1.5, 0.8, -0.2),
+                                                                                          rotationDegrees: Float3(10, 20, 30), scale: .one))]
+    for enabled in [false, true] {
+        for baseline in [rig.restPose, moved] {
+            let evaluating = try solver.apply(rig: rig, baseline: baseline, savedTargets: saved, enabled: enabled,
+                                              activeGroups: [true, true, false, true, true], characterRoot: 0)
+            let passed = try solver.apply(rig: rig, baseline: baseline, savedTargets: saved, enabled: enabled,
+                                          activeGroups: [true, true, false, true, true], characterRoot: 0, baselineEvaluation: try rig.evaluate(baseline))
+            #expect(resultBits(passed) == resultBits(evaluating), "enabled \(enabled)")
+        }
+    }
+    do {
+        _ = try solver.apply(rig: rig, baseline: rig.restPose, savedTargets: [:], enabled: false, activeGroups: [], characterRoot: 0,
+                             baselineEvaluation: try rig.evaluate(rig.restPose))
+        Issue.record("a wrong activation state was accepted")
+    } catch {
+        #expect("\(error)" == "Studio IK frame does not match its bound hierarchy or activation state.")
+    }
+}
