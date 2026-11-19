@@ -49,3 +49,58 @@ private func bits(_ batch: GizmoBatch) -> [UInt32] {
     // The table is the unit octahedron's corners: ±1 on one axis, 0 elsewhere.
     #expect(Set(GizmoBuilder.unitOctahedron.map { [$0.x, $0.y, $0.z].map(\.bitPattern) }).count == 6)
 }
+
+// #371: `GizmoBuilder.build(.rotate)` takes its ring positions from a table
+// that `ring(axis:radius: 0.9, thickness: 0.025, color:)` builds once per
+// axis. Every rotate gizmo must equal the batches the code before #371 built,
+// bit for bit.
+
+/// The batches `build(mode: .rotate, ...)` built before #371.
+private func rotateBeforeTable(origin: Float3, orientation: simd_quatf, size: Float, highlight: GizmoAxis?) -> [GizmoBatch] {
+    let axes: [(GizmoAxis, Float3, Float4)] = [(.x, Float3(1, 0, 0), GizmoBuilder.colX), (.y, Float3(0, 1, 0), GizmoBuilder.colY),
+                                               (.z, Float3(0, 0, 1), GizmoBuilder.colZ)]
+    let m = Transform.trs(origin, orientation, Float3(repeating: size))
+    var batches: [GizmoBatch] = []
+    for (axis, dir, col) in axes {
+        let c = highlight == axis ? GizmoBuilder.colHi : col
+        batches.append(GizmoBatch(primitive: .triangles, vertices: GizmoBuilder.ring(axis: dir, radius: 0.9, thickness: 0.025, color: c),
+                                  model: m, depthTest: false, objectID: PickIDs.gizmo(axis)))
+    }
+    return batches
+}
+
+@Test func gizmoRotateRingsEqualTheConstructionBeforeTheTableBitForBit() {
+    // Each axis's table row is that axis's ring, position for position.
+    for (index, dir) in [Float3(1, 0, 0), Float3(0, 1, 0), Float3(0, 0, 1)].enumerated() {
+        let ring = GizmoBuilder.ring(axis: dir, radius: 0.9, thickness: 0.025, color: GizmoBuilder.colHi)
+        #expect(ring.count == 48 * 12 && GizmoBuilder.rotateRings[index].count == ring.count)
+        #expect(GizmoBuilder.rotateRings[index].map { [$0.x, $0.y, $0.z].map(\.bitPattern) } == ring.map { [$0.position.x, $0.position.y, $0.position.z].map(\.bitPattern) },
+                "axis \(dir)")
+    }
+    // Whole gizmos: origins, orientations (local space passes the bone's
+    // world rotation), sizes (pixels × world units per pixel × 90) and every
+    // highlight, including axes a rotate gizmo has no ring for.
+    let origins: [Float3] = [.zero, Float3(-0.0, -0.0, -0.0), Float3(-0.37, 1.25, -2.5), Float3(1e6, -3.5e5, 98765.43)]
+    let orientations: [simd_quatf] = [.identity, simd_quatf(angle: 0.7, axis: normalize(Float3(1, 2, 3))),
+                                      simd_quatf(angle: -2.9, axis: Float3(0, 1, 0)), simd_quatf(ix: 0.5, iy: -0.5, iz: 0.5, r: -0.5)]
+    let sizes: [Float] = [1, 90 * 0.0123, 0.03, 250.7]
+    let highlights: [GizmoAxis?] = [nil, .x, .y, .z, .xy, .all]
+    var compared = 0
+    for origin in origins {
+        for orientation in orientations {
+            for size in sizes {
+                for highlight in highlights {
+                    let table = GizmoBuilder.build(mode: .rotate, origin: origin, orientation: orientation, size: size, highlight: highlight)
+                    let before = rotateBeforeTable(origin: origin, orientation: orientation, size: size, highlight: highlight)
+                    #expect(table.count == 3 && before.count == 3)
+                    for (t, b) in zip(table, before) {
+                        #expect(t.primitive == b.primitive && t.depthTest == b.depthTest && t.objectID == b.objectID)
+                        #expect(bits(t) == bits(b), "rotate at \(origin), \(orientation), size \(size), highlight \(String(describing: highlight))")
+                        compared += 1
+                    }
+                }
+            }
+        }
+    }
+    #expect(compared == 4 * 4 * 4 * 6 * 3)
+}
