@@ -6841,6 +6841,35 @@ animation off in the scenario. They show no FPS or live-animation result. Raw
 reports, snapshots, the scripts and the summaries stay under
 `.local/stt03k-maker-reimport/timing/run1/`.
 
+### Footprint follow-up (#332)
+
+The held growth per reimport is tracked in
+[#332](https://github.com/grabbiel/ikkoku/issues/332). Code reading found no
+holder in the resource store or the renderer, and the smoke's own counts show
+one preview's worth after five reimports. Two Engine tests pin that card
+composition and preview replacement free their Metal objects
+([maker-assets.md](character/maker-assets.md)).
+
+To split the rest, the harness records more for each reimport that sets
+`footprint`. Before and after the import it adds:
+
+- the device's `currentAllocatedSize`, with its peak sampled alongside the
+  footprint;
+- the totals of every malloc zone: blocks and bytes in use, the most in use,
+  and bytes allocated;
+- the resource store's counts.
+
+A `pause` step holds the scenario so `vmmap`, `footprint` and `heap` can read
+this one process. It takes `seconds`, from just over 0 up to 30, and `path`, a
+marker under `.local/`. It writes the process's own id to the marker, then
+waits. The wait is an await, so the main run loop can drain its autorelease
+pool there.
+
+With this harness, [#355](https://github.com/grabbiel/ikkoku/pull/355) found
+the CPU holder in the reimport's autoreleased file reads. With each read in its
+own autorelease pool, the malloc held after a back-to-back reimport fell from
++42.7 MB to +2.4 MB.
+
 ## Maker head-selection attribution (#192-D)
 
 #192-D step 1 adds two diagnostics to the normal-head selection report and
