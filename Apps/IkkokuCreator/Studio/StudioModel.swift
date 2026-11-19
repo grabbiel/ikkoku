@@ -284,8 +284,12 @@ final class StudioModel: ViewportInputHandler, LivePacedHandler {
     @ObservationIgnored private var frameSerial: UInt64 = 0
     var captureSize: (Int, Int) { (doc.captureWidth, doc.captureHeight) }
     var sceneURL: URL?
-    private(set) var undoStack: [StudioDocument] = []
-    private(set) var redoStack: [StudioDocument] = []
+    /// The undo and redo steps (#384). A scene replacement (New Scene, Open,
+    /// an original scene import) keeps only the scene it replaced, not the
+    /// scenes before it; see `StudioUndoHistory`.
+    private var history = StudioUndoHistory<StudioDocument>()
+    var undoStack: [StudioDocument] { history.undoStack }
+    var redoStack: [StudioDocument] { history.redoStack }
     @ObservationIgnored private var instances: [UUID: CharacterInstance] = [:]
     @ObservationIgnored private var renderStatus = RenderStatusReporter()
     @ObservationIgnored private var sourceInstanceStorage: [UUID: SourceStudioCharacterPreview] = [:]
@@ -2050,16 +2054,18 @@ final class StudioModel: ViewportInputHandler, LivePacedHandler {
 
     // MARK: Object management
 
-    func pushUndo(force: Bool = false) {
-        guard undoSteps.startsStep(at: Date(), force: force) else { return }
-        appendUndoSnapshot()
+    /// `replacingScene`: the caller is about to replace the whole document
+    /// (New Scene, Open, an original scene import), so the step is forced and
+    /// the scenes before the one it replaces leave the history (#384). A merge
+    /// into the current scene is an ordinary step.
+    func pushUndo(force: Bool = false, replacingScene: Bool = false) {
+        guard undoSteps.startsStep(at: Date(), force: force || replacingScene) else { return }
+        appendUndoSnapshot(replacingScene: replacingScene)
     }
 
     /// The document as it is now, as the newest undo step.
-    private func appendUndoSnapshot() {
-        undoStack.append(doc)
-        if undoStack.count > 60 { undoStack.removeFirst() }
-        redoStack.removeAll()
+    private func appendUndoSnapshot(replacingScene: Bool = false) {
+        history.record(doc, replacingScene: replacingScene)
     }
 
     /// Closes the edit-coalescing window, so the next edit takes its own undo
@@ -2096,7 +2102,7 @@ final class StudioModel: ViewportInputHandler, LivePacedHandler {
                 .init(blockedObjects: $0.blockedObjects, animationElapsed: sourceAnimationTime)
             })
             defer { plugins.abort() }
-            undoStack.removeLast(); redoStack.append(doc)
+            history.stepBack(leaving: doc)
             applyHistoryDocument(candidate, plugins: plugins, resources: resources)
             status = "Undo"
         } catch { status = "Plugin restore: \(error)" }
@@ -2110,7 +2116,7 @@ final class StudioModel: ViewportInputHandler, LivePacedHandler {
                 .init(blockedObjects: $0.blockedObjects, animationElapsed: sourceAnimationTime)
             })
             defer { plugins.abort() }
-            redoStack.removeLast(); undoStack.append(doc)
+            history.stepForward(leaving: doc)
             applyHistoryDocument(candidate, plugins: plugins, resources: resources)
             status = "Redo"
         } catch { status = "Plugin restore: \(error)" }
@@ -2731,7 +2737,8 @@ final class StudioModel: ViewportInputHandler, LivePacedHandler {
         imported.cameraSlots = try source.settings.cameraSlots.map { try $0.nativeCamera() }
         // Route copies still building for the replaced document stop.
         cancelSourceRouteCharacterBuilds()
-        pushUndo(force: true)
+        // The import replaces the whole document (#384).
+        pushUndo(replacingScene: true)
         sourceAnimationCatalog = job.animationCatalog; sourceAnimationCatalogError = job.animationCatalogError
         // The replaced scene's characters stay borrowable for an undo.
         keepSourceDonations(sourceInstances.filter { previews[$0.key] !== $0.value }.values)
@@ -3161,7 +3168,7 @@ final class StudioModel: ViewportInputHandler, LivePacedHandler {
 
     func newScene() {
         cancelSourceBuilds()
-        pushUndo(force: true); sourcePluginSession = nil; sourcePluginsRunning = false; stopSourceVoices()
+        pushUndo(replacingScene: true); sourcePluginSession = nil; sourcePluginsRunning = false; stopSourceVoices()
         sourceHideStudioUI?.reveal()
         // The SHA-gated camera/item/light caches survive a New Scene as they
         // survive undo/redo: the empty document matches none of them (its
@@ -3656,7 +3663,9 @@ final class StudioModel: ViewportInputHandler, LivePacedHandler {
         defer { preparedPlugins.abort() }
         for line in resources.diagnostics { print("[ikkoku] \(url.lastPathComponent): \(line)") }
         cancelSourceBuilds()
-        pushUndo(force: true)
+        // Every step that can fail ran above, so a failed Open leaves the
+        // history as it was (#384).
+        pushUndo(replacingScene: true)
         stopSourceVoices()
         releaseInstances { _ in true }
         sourceInstances.removeAll()

@@ -2484,6 +2484,44 @@
       "timeout": 600
     },
     {
+      "id": "studio-scenario-undo-scene-replacements",
+      "argv": [
+        ".local/build/Build/Products/Debug/Ikkoku.app/Contents/MacOS/Ikkoku"
+      ],
+      "fixtures": [
+        {
+          "env": "IKKOKU_SOURCE_SCENE",
+          "kind": "file",
+          "from": "IKKOKU_CAMERA_OBJECT_PROBE_SCENE"
+        },
+        {
+          "env": "IKKOKU_SOURCE_AVATAR",
+          "kind": "file"
+        }
+      ],
+      "env": {
+        "IKKOKU_STUDIO_SCENARIO": "Tools/verification/scenarios/undo-scene-replacements.json",
+        "IKKOKU_STUDIO_SCENARIO_REPORT": ".local/verification/reports/studio-scenario-undo-scene-replacements.json"
+      },
+      "referenceTier": "app-smoke",
+      "tolerance": "#384 undo history across scene replacements, on scene-x: a rename, then New Scene, Add Folder, Open of the saved scene, an Open refused after reading the file (an original-format scene), Import Scene of the saved scene (a merge) and a reimport of the exported original scene (an original scene import). Each replacement keeps only the scene it replaced: after New Scene and after the Open the history holds 2 steps; the refused Open changes neither the document nor the history; the merge adds a step and drops none; after the reimport two undos reach the opened scene and stop (0 undo, 2 redo), and two redos return. One assertRejected negative control proves the depth check fails on a wrong value. CharaStudio clears its whole history in InitScene; keeping one earlier scene is a deliberate difference (docs/reference/studio/scene-editing.md).",
+      "artifacts": [
+        {
+          "path": ".local/verification/reports/studio-scenario-undo-scene-replacements.json",
+          "kind": "scenario-report"
+        },
+        {
+          "path": ".local/verification/scenario-exports/undo-scene-replacements.png",
+          "kind": "saved-document"
+        },
+        {
+          "path": ".local/verification/scenario-exports/undo-scene-replacements-source.png",
+          "kind": "exported-scene"
+        }
+      ],
+      "timeout": 600
+    },
+    {
       "id": "studio-scenario-topology-reparent",
       "argv": [
         ".local/build/Build/Products/Debug/Ikkoku.app/Contents/MacOS/Ikkoku"

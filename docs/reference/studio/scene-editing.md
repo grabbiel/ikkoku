@@ -2213,3 +2213,54 @@ Our side: `Tools/verification/scenarios/route-children-motion.json` and `neck-ta
 A later card-free author scene, `mirrored-camera` (2026-10-23, R4/ST-A06), saves `scene-mirrored-camera.png`: a camera under an item scaled (−1, 1, 1) and a control camera under an unmirrored copy. Its capture and the lane check that runs it are in [Mirrored camera parent](scene-records.md#mirrored-camera-parent-original-capture-r4).
 
 Observation, not changed in this slice: `ikkoku-inspect look-data` and `SourceStudioNeckLookOverride.resolve` still report TARGET/AWAY as "Neck gaze solver pending; animated pose kept.". The Studio preview meanwhile runs the live `SourceStudioNeckLookRuntime` and says "Neck look override live: TARGET|AWAY follows the Studio camera from the saved fixAngle.". The data-only reason text is stale.
+
+## Undo across scene replacements (#384)
+
+`StudioModel` keeps its undo and redo steps in `StudioUndoHistory` (Engine, `Packages/Engine/Sources/Studio/StudioUndoHistory.swift`). Each step is a snapshot of the whole document, and the undo side holds at most 60.
+
+**The rule.** A path that replaces the whole document records the document it replaces as a marked step. The next replacement drops that marked step and every step before it.
+- Undo after a replacement brings back the scene it replaced, with that scene's own edits, but not the scenes before it.
+- The mark belongs to the change from a step to the state after it. Undo carries it to the redo step and Redo carries it back, so a replacement that was undone and redone is still the one the next replacement trims.
+- The trim and the new step are one call (`record(_:replacingScene:)`). Each replacement path runs every step that can fail before it records, so a failed one leaves the document and both stacks exactly as they were.
+
+**How each path is classified.**
+
+| Path | Code | Classified as |
+| --- | --- | --- |
+| File ▸ New Scene | `newScene()` | replaces the document: marked |
+| File ▸ Open (an Ikkoku scene) | `loadScene(from:)` | replaces the document: marked. Decoding, hierarchy and camera validation and plug-in preparation all run before it records. |
+| Import of an original CharaStudio scene (also the scenario `reimport`) | `importSourceScenePreview` → `commitSourceSceneImport` | replaces the document with a freshly built one: marked. The preparation and the character frames run before it records. |
+| File ▸ Import Scene (an Ikkoku scene) | `importScene(from:)` | merges objects into the current scene: an ordinary step, trims nothing |
+| Koikatsu layout import | `importKoikatsuLayout` | merges objects into the current scene: an ordinary step |
+| Edits, adds, deletes, plug-in load and unload | `pushUndo`, `update` | ordinary steps |
+
+**Why.** Each Open decodes a fresh document that shares no storage with earlier ones. Before #384, New Scene and Open each pushed a forced step, so a run of loads kept 30 decoded scenes in the 60 steps. On the 3,769-object corpus scene each kept scene is about 6 MB of `StudioObject` storage (about 1.6 KB per object) plus its strings. The `studio-load` workload's footprint therefore rose about 7 MB per cycle until cycle 31, and then held at 414–464 MB.
+
+**Known difference from CharaStudio (deliberate).** CharaStudio clears its whole undo and redo history in `Studio.InitScene`, which both New Scene and scene loading run. Its scene import (a merge) keeps the history. CharaStudio also clears the history when an object is added or deleted. Ikkoku keeps one earlier scene across a replacement, and keeps its history across adds and deletes, as before.
+
+**Not changed here.**
+- An edit step still copies the whole objects array, about 6 MB per step on the corpus scene (#409).
+- A small unbounded per-load growth in KVO and SwiftUI bookkeeping, about 8.6 KB per cycle, is tracked separately (#410).
+
+### Evidence
+
+- `Packages/Engine/Tests/EngineTests/StudioUndoHistoryTests.swift` covers:
+  - 100 New Scene and Open cycles keeping one earlier scene;
+  - Undo of a New Scene with the scene's edits;
+  - a second replacement stopping at the previous scene;
+  - a merge keeping every earlier step;
+  - the 60-step limit within one scene;
+  - an undone and redone replacement;
+  - a replacement after undoing one;
+  - 200 seeded random histories (at most one mark, Undo and Redo inverse).
+- The `studio-scenario-undo-scene-replacements` check (`Tools/verification/scenarios/undo-scene-replacements.json`, scene-x) drives each replacement path and the merge in one process, checking the undo and redo depths after each, then an Open refused after reading the file, which leaves the document and both stacks unchanged.
+- **Footprint A/B.** Release builds; `studio-load` for 120 s on the corpus scene 4b87a4f49c81, A B B A, every launch through the app lock. It measures memory only, so no quiet window was used.
+
+  | Arm | Slope, cycles 2–30 | Median from cycle 41 (range) | Max |
+  | --- | ---: | ---: | ---: |
+  | A: main `c44ff94d` | +5.4 and +7.4 MB per cycle | 425 and 427 MB (401–447) | 442 and 462 MB |
+  | B: this change | −1.5 and +0.5 MB per cycle | 229 and 223 MB (196–255) | 286 and 281 MB |
+
+  - Metal stays at 73.3 MB on both arms.
+  - A memory graph at cycle 35 holds 31 `StudioObject` arrays on A (30 held by the undo steps). On B it holds 2: the one undo step and a load in flight.
+  - Ready time per load was 481 and 493 ms on A, 481 and 494 ms on B. That is informational only: the runs were not in a quiet slot.
