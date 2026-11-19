@@ -589,7 +589,7 @@ struct StudioScenario: Decodable {
                  activeCamera, routePlaying, sourceRuntime, diagnosticContains, statusContains, statusLacks, characterBuilt, exportedAnimation,
                  indicatorContains, treeLabel, view,
                  group, category, no, speed, on, bone, rotation, animation, fk, position,
-                 seconds, dx, dy, eyeLook, blink, handPattern, mode, axis, pixels,
+                 seconds, dx, dy, eyeLook, blink, handPattern, mode, axis, pixels, toolbarSteady,
                  render, exportIdenticalToSource, errorContains, outfit, accessoryLabels, pluginMount, state, clothes, expression,
                  sex, character, chain, delta, ik, edit, build, parent, children, absent, copy, added, activeCopyOf,
                  undoDepth, redoDepth, objectCount, aid, routeEdit, route, routeLines, sourceMap, liveSamplers
@@ -680,6 +680,7 @@ struct StudioScenario: Decodable {
             mode = try c.decodeIfPresent(String.self, forKey: .mode)
             axis = try c.decodeIfPresent(String.self, forKey: .axis)
             pixels = try c.decodeIfPresent([Float].self, forKey: .pixels)
+            toolbarSteady = try c.decodeIfPresent(Bool.self, forKey: .toolbarSteady)
             // `decodeIfPresent` reads both `null` and an absent key as `nil`;
             // `contains` distinguishes "assert the orbit view" from "no
             // camera check declared", so the camera check is decoded by hand.
