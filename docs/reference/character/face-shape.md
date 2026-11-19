@@ -100,7 +100,13 @@ with Unity; independent source-space comparison is a separate verification.
   composed parent scales also fail because Unity's signed/sheared `lossyScale`
   behavior has not been independently verified. The recovered standalone
   head-00 hierarchy has positive local scales.
-- Nonpositive resulting face scales and nonfinite input values fail explicitly.
+- Resulting face scales may be zero or negative, as Unity's
+  `Transform.SetLocalScale` allows (an extended slider rate, #404). The face is
+  drawn collapsed or mirrored; see the renderer reference's
+  [zero and negative scales](../renderer.md#deformation-safety). Nonfinite input
+  values and nonfinite computed scales fail explicitly. The incoming-target rule
+  above is unchanged, so a re-shape over a pose that already has a reflected or
+  zero target still fails.
 - The caller owns optional mouth-shape masking, body correction inputs, and head
   collision-volume scaling from `ChaControl.UpdateShapeFace`. Those surrounding
   behaviors are not part of this stage.

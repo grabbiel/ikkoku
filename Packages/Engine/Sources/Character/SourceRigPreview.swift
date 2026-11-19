@@ -36,6 +36,9 @@ public final class SourceRigPreview {
     /// fixed source and contract, and a live tick asks for the same input
     /// until a blink or an edit changes it. Keyed by the input's bit patterns.
     private var expressionCache: (key: ExpressionKey, weights: [String: [(index: Int, weight: Float)]])?
+    /// The skins the last `frame` drew with a collapsed (singular) mesh
+    /// world, flattened from their bones in rig space (#404).
+    public private(set) var collapsedSkins: Set<Int> = []
 
     public init(source: SourceRig, contract: SourceShapeContract?, resources: ResourceStore, appearance: SourcePreviewAppearance? = nil,
                 expressionContract: SourceExpressionContract? = nil,
@@ -227,6 +230,7 @@ public final class SourceRigPreview {
         let evaluation = try poseOverride.map { try source.rig.evaluate($0) }
             ?? evaluation(heightScale: heightScale, bodyValues: bodyValues, faceValues: faceValues, boneModifiers: boneModifiers, coordinate: coordinate)
         let morphWeights = try expressionWeights(expression)
+        collapsedSkins = evaluation.collapsedSkins
         var items: [RenderItem] = []
         // `hiddenParts` are renderers whose GameObject the source switched
         // off at runtime (ChaControl.UpdateVisible); `sourceBodyAlpha` is the
@@ -241,7 +245,7 @@ public final class SourceRigPreview {
                 if let alpha = sourceBodyAlpha, (surface.uniforms.flags & MaterialFlagSourceBodyMask.rawValue) != 0 {
                     surface.uniforms.sourceAlphaA = alpha.x; surface.uniforms.sourceAlphaB = alpha.y
                 }
-                var item = RenderItem(mesh: meshes[index], material: surface, model: evaluation.worldMatrices[part.node], objectID: 1,
+                var item = RenderItem(mesh: meshes[index], material: surface, model: evaluation.model(skin: part.skin, meshNode: part.node), objectID: 1,
                                       deformKey: keyBase | UInt64(index), skinSet: keyBase | UInt64(part.skin),
                                       morphWeights: morphWeights[part.mesh.name] ?? [])
                 item.order = pass

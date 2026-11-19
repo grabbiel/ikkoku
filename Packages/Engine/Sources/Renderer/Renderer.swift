@@ -182,6 +182,22 @@ public final class Renderer: @unchecked Sendable {
     public static let mapShadowMapSize = 2048
     public static let mapShadowRadius: Float = 40
     public static let mapShadowRefitDistance: Float = mapShadowRadius / 4
+    /// The map sun's shadow filter reach, in texels. The tent
+    /// (`mapShadowVisibility`: 4 bilinear compares) reads texel centres up to 2
+    /// texels from the receiver, so Unity's constant bias (in world texels) and
+    /// its normal bias are scaled by it (`mapSunBiases`). The value was fitted
+    /// against the original's own shadow mask (#399). It is not Unity 5.6.2's
+    /// constant, which is unknown.
+    static let mapShadowFilterReach: Float = 2
+
+    /// The map sun's compare bias (depth units at the receiver's compare) and
+    /// caster normal offset (metres): Unity's `shadowBias` and
+    /// `shadowNormalBias`, in world texels, × the filter's reach.
+    static func mapSunBiases(shadowBias: Float, normalBias: Float, texelWorld: Float, depthRange: Float)
+        -> (compare: Float, normalOffset: Float) {
+        (compare: mapShadowFilterReach * shadowBias * texelWorld / depthRange,
+         normalOffset: mapShadowFilterReach * normalBias * texelWorld)
+    }
 
     public let gpu: GPUContext
     public let resources: ResourceStore
@@ -1394,14 +1410,17 @@ public final class Renderer: @unchecked Sendable {
                                                 casterBounds: lighting.casterBounds)
                 content = MapShadowContent(revision: lighting.revision, center: fit.center, toLight: fit.toLight,
                                            viewProjection: fit.viewProjection, texelWorld: fit.texelWorld, depthRange: fit.depthRange)
-                mapShadow = MapShadowPlan(content: content, casters: lighting.casters, normalOffset: sun.shadowNormalBias * fit.texelWorld)
+                let biases = Renderer.mapSunBiases(shadowBias: sun.shadowBias, normalBias: sun.shadowNormalBias,
+                                                   texelWorld: fit.texelWorld, depthRange: fit.depthRange)
+                mapShadow = MapShadowPlan(content: content, casters: lighting.casters, normalOffset: biases.normalOffset)
                 statistics.mapShadowRedrawn = true
                 statistics.mapShadowDraws = lighting.casters.reduce(0) { $0 + $1.runs.count }
             }
             lightingUniforms.shadowViewProjection = content.viewProjection
-            // The light's constant bias (Unity's units: world texels) at the receiver's compare.
-            lightingUniforms.shadowParams = Float4(sun.shadowStrength, 1 / Float(Renderer.mapShadowMapSize),
-                                                   sun.shadowBias * content.texelWorld / content.depthRange, 1)
+            // The light's constant bias (Unity's units: world texels) × the tent's reach, at the receiver's compare.
+            let compare = Renderer.mapSunBiases(shadowBias: sun.shadowBias, normalBias: sun.shadowNormalBias,
+                                                texelWorld: content.texelWorld, depthRange: content.depthRange).compare
+            lightingUniforms.shadowParams = Float4(sun.shadowStrength, 1 / Float(Renderer.mapShadowMapSize), compare, 1)
         }
         let mapLighting = try frameRing.allocate(lightingUniforms)
         return FrameContext(frame: frame, frameUniforms: frameUniforms, lights: lights, post: post, background: background,

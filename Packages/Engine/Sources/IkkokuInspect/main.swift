@@ -389,7 +389,10 @@ do {
             for matrix in evaluation.palettes[index] {
                 for column in 0..<4 { for row in 0..<4 { residual = max(residual, abs(matrix[column][row] - (column == row ? 1 : 0))) } }
             }
-            return ["name": skin.name, "jointCount": skin.joints.count, "meshNode": skin.meshNode, "paletteIdentityResidual": residual]
+            var binding: [String: Any] = ["name": skin.name, "jointCount": skin.joints.count, "meshNode": skin.meshNode, "paletteIdentityResidual": residual]
+            // A singular mesh world keeps this palette in rig space (#404).
+            if evaluation.collapsedSkins.contains(index) { binding["paletteSpace"] = "rig" }
+            return binding
         }
         if !bounds.isEmpty { report["bounds"] = ["min": values(bounds.min), "max": values(bounds.max)] }
         if rigSnapshot {

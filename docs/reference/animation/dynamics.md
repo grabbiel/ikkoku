@@ -137,7 +137,8 @@ may change when empty slots compact the assembly. It never matches a different
 asset by bone name or catalog number. Components belonging to other selected hair
 assets remain unattached with diagnostics. Signed/matrix-authored transforms in
 unrelated accessories are preserved; particle, owner and collider ancestors still
-require positive local TRS.
+require positive local TRS. A zero or negative shape scale there (an extended
+face slider, #404) is refused with a message naming it. Signed TRS is #406.
 
 The strict exporter can now enumerate all converted original Maker hair assets:
 

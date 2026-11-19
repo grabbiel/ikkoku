@@ -76,8 +76,15 @@ public enum SourceFaceShapePose {
                 scale = Float3(correctedY / parentScale.x + (value.scale.x - 1),
                                correctedY / parentScale.y, correctedY / parentScale.z)
             }
-            guard (0..<3).allSatisfy({ scale[$0].isFinite && scale[$0] > 0 }) else {
-                throw RigError.invalid("Face target '\(node.name)' has a nonpositive or nonfinite scale.")
+            // ShapeHeadInfoFemale writes these through Transform.SetLocalScale,
+            // which takes any finite value. An extended slider rate can give a
+            // negative or zero scale (#404); the source draws it reflected or
+            // collapsed, so this stage does too. Rig evaluation only multiplies
+            // local matrices and skins a renderer under a zero scale from its
+            // bones, and the deform pass keeps a reflection's normal sign and
+            // the pre-skin normal for a singular palette.
+            guard (0..<3).allSatisfy({ scale[$0].isFinite }) else {
+                throw RigError.invalid("Face target '\(node.name)' has a nonfinite scale.")
             }
             pose.localMatrices[index] = Transform.trs(position, rotation, scale)
         }
