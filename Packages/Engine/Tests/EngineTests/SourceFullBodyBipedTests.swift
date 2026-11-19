@@ -216,6 +216,34 @@ private func fullBodyResultBits(_ result: SourceStudioIK.Result) -> [String] {
     }
     #expect(compared == 16)
 
+    // Pinning case (main, 2026-11-18): a rig with the same parents and one
+    // bone's rest offset changed. `apply` with it does not take the kept
+    // evaluation (another identity) and evaluates the stored initialization
+    // pose afresh. That gives the kept world matrices exactly:
+    // RigDefinition.evaluate's world loop (Rig.swift:124-126) reads only the
+    // pose's local matrices, `order` (built from the parents, Rig.swift:77-82)
+    // and the parents, never a node's rest transform, and the pose is the one
+    // stored at init (SourceStudioIK.swift:128). So the kept evaluation would
+    // be right for this rig too; the identity check is a defence.
+    let moved = try RigDefinition(nodes: rig.nodes.enumerated().map { index, n in
+        RigDefinition.Node(name: n.name, sourceID: n.sourceID, parent: n.parent,
+                           translation: index == spine ? n.translation + Float3(0.05, 0.1, -0.02) : n.translation,
+                           rotation: n.rotation, scale: n.scale, authoredMatrix: n.authoredMatrix, active: n.active)
+    }, skins: rig.skins)
+    #expect(moved.restPose.localMatrices[spine] != rig.restPose.localMatrices[spine])
+    for initialization in [rig.restPose, animated] {
+        let solver = try SourceStudioIK(rig: rig, bindings: bindings, initializationPose: initialization)
+        #expect(solver.checked !== moved.identity && solver.bound(to: moved))
+        #expect(world(try moved.evaluate(initialization).worldMatrices) == world(solver.initialWorld))
+        for baseline in [rig.restPose, animated] {
+            let kept = try solver.apply(rig: rig, baseline: baseline, savedTargets: saved, enabled: false,
+                                        activeGroups: [true, true, true, true, true], characterRoot: 0)
+            let afresh = try solver.apply(rig: moved, baseline: baseline, savedTargets: saved, enabled: false,
+                                          activeGroups: [true, true, true, true, true], characterRoot: 0)
+            #expect(fullBodyResultBits(afresh) == fullBodyResultBits(kept))
+        }
+    }
+
     // An initialization pose that does not evaluate (a non-finite matrix on a
     // node the full-body solver does not read): `init` succeeds and keeps
     // nothing, and `apply` throws the evaluation's error for either rig.
