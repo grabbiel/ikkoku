@@ -644,7 +644,9 @@ SCENARIO_OPS = {"select", "setVisible", "rename", "toggleCamera", "toggleRoute",
                 # Added for #387 round 3 (the workspace rows a selection change patches).
                 "deselect", "assertWorkspaceRows",
                 # A digit-row key press: camera slot load, and save with Shift.
-                "pressDigit"}
+                "pressDigit",
+                # #425: a source IK guide's mouse drag (the toolbar-steady check).
+                "dragIKGuide"}
 
 # R7 phase 2, item 7: the window-run inspector checks (`"inspectorUI": {"steps": [...]}`).
 INSPECTOR_UI_OPS = {"select", "deselect", "focus", "type", "delete", "undo", "redo", "cycle",
@@ -731,7 +733,7 @@ class AppOutputArtifactTests(unittest.TestCase):
         self.assertEqual(capture["env"]["IKKOKU_CAPTURE_UI_SELECT"], "0,622,963")
         self.assertEqual(validate["argv"][:3], ["python3", "Tools/verification/checks/inspector_fit_log.py",
                                                 capture["env"]["IKKOKU_CAPTURE_UI_FIT_LOG"]])
-        self.assertEqual(validate["argv"][3:], ["--selection", "963", "--tab", "Clothes", "--pose-picker"])
+        self.assertEqual(validate["argv"][3:], ["--selection", "963", "--tab", "Clothes", "--pose-picker", "--toolbar-fits"])
 
     def test_ui_capture_does_not_discover_a_maker_library(self):
         # The synthetic scene's minimal card exercises the source-pose inspector,
@@ -952,7 +954,7 @@ class StudioScenarioLaneTests(unittest.TestCase):
                       and not name.startswith(("maker-", "gameplay-")))
 
     def test_lane_validates_and_covers_every_scenario(self):
-        self.assertEqual(len(self.checks), 101)
+        self.assertEqual(len(self.checks), 102)
         referenced = set()
         for check in self.checks:
             scenario = check["env"]["IKKOKU_STUDIO_SCENARIO"]
@@ -1165,6 +1167,17 @@ class StudioScenarioLaneTests(unittest.TestCase):
                     self.assertIn(step["axis"], ("x", "y", "z"))
                     self.assertEqual(len(step["pixels"]), 2)
                     self.assertTrue(all(isinstance(c, (int, float)) for c in step["pixels"]))
+                if op == "dragIKGuide":
+                    # the IK guide 0-12 (SourceStudioIKEditing.labels) and its translate arrow
+                    self.assertIs(type(step["key"]), int)
+                    self.assertIs(type(step["index"]), int)
+                    self.assertIn(step["index"], range(13))
+                    self.assertIn(step["axis"], ("x", "y", "z"))
+                    self.assertEqual(len(step["pixels"]), 2)
+                    self.assertTrue(all(isinstance(c, (int, float)) for c in step["pixels"]))
+                if "toolbarSteady" in step:
+                    self.assertIn(op, ("dragGizmo", "dragIKGuide"))
+                    self.assertIs(type(step["toolbarSteady"]), bool)
                 if op == "hoverGizmo":
                     self.assertIsInstance(step["key"], int)
                     self.assertIsInstance(step["bone"], int)

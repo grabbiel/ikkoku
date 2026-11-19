@@ -460,6 +460,12 @@ extension CaptureRequest {
     static let windowOptions: [String] = [
         "IKKOKU_CAPTURE_UI_TAB", "IKKOKU_CAPTURE_UI_MODE", "IKKOKU_CAPTURE_UI_STUDIO_TAB",
         "IKKOKU_CAPTURE_UI_SELECT", "IKKOKU_CAPTURE_UI_REPORT", UICaptureReadiness.timeoutVariable,
+        // #425: the Studio pose mode (Object, FK or IK) set once the selections are made; the
+        // selection must then be a character, or the capture is refused.
+        "IKKOKU_CAPTURE_UI_POSE_MODE",
+        // #425: the Studio window's width for the capture (`UICaptureWindowWidth`); the app checks it
+        // against the screen's visible width once the window is up.
+        UICaptureWindowWidth.variable,
         // #333's diagnostic: the inspector's width at each readiness poll.
         "IKKOKU_CAPTURE_UI_FIT_LOG",
     ]
@@ -512,6 +518,8 @@ extension CaptureRequest {
         Dependency("IKKOKU_SOURCE_PLUGIN_DELTA", requires: "IKKOKU_SOURCE_PLUGIN_STEPS"),
         Dependency("IKKOKU_CAPTURE_UI_STUDIO_TAB", requires: "IKKOKU_CAPTURE_UI_MODE", value: "studio"),
         Dependency("IKKOKU_CAPTURE_UI_SELECT", requires: "IKKOKU_CAPTURE_UI_MODE", value: "studio"),
+        Dependency("IKKOKU_CAPTURE_UI_POSE_MODE", requires: "IKKOKU_CAPTURE_UI_MODE", value: "studio"),
+        Dependency(UICaptureWindowWidth.variable, requires: "IKKOKU_CAPTURE_UI_MODE", value: "studio"),
         Dependency("IKKOKU_ORIGINAL_FRAME_FAMILY_SETS", requires: "IKKOKU_ORIGINAL_FRAME_FAMILIES", value: "1"),
         Dependency("IKKOKU_ORIGINAL_FRAME_TRACE_PIXELS", requires: "IKKOKU_ORIGINAL_FRAME_FAMILIES", value: "1"),
         Dependency("IKKOKU_ORIGINAL_FRAME_DEPTH24", requires: "IKKOKU_ORIGINAL_FRAME_FAMILIES", value: "1", when: "1"),
@@ -552,6 +560,8 @@ extension CaptureRequest {
         ValueRule("IKKOKU_CAPTURE_SEX", .oneOf(["m", "f"])),
         ValueRule("IKKOKU_CAPTURE_UI_MODE", .oneOf(["maker", "studio"])),
         ValueRule("IKKOKU_CAPTURE_UI_SELECT", .integerList(0...Int(Int32.max), maxCount: 16, words: ["none"])),
+        ValueRule("IKKOKU_CAPTURE_UI_POSE_MODE", .oneOf(["object", "fk", "ik"])),
+        ValueRule(UICaptureWindowWidth.variable, .integer(UICaptureWindowWidth.minimum...Int.max)),
         ValueRule("IKKOKU_CAPTURE_TICKS", .integer(0...Int.max)),
         ValueRule("IKKOKU_CAPTURE_OUTFIT", .integer(0...Int.max)),
         ValueRule("IKKOKU_SOURCE_COORDINATE", .integer(0...Int.max)),
