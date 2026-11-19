@@ -1,5 +1,5 @@
 """Self-tests for workspace_growth_check.py (#410): the heap -s reader, the
-load count and the frozen bar. No app is needed; the heap output is synthetic
+load count, the frozen bar and the snapshot retry. No app is needed; the heap output is synthetic
 text in the shape `heap -s` writes."""
 
 import os
@@ -94,6 +94,52 @@ class JudgeTests(unittest.TestCase):
         self.assertEqual(check.judge(self.counts(800), self.counts(800), 39)[0], "invalid")
         self.assertEqual(check.judge(None, self.counts(800), 48)[0], "invalid")
         self.assertEqual(check.judge(self.counts(800), None, 48)[0], "invalid")
+
+
+class SnapshotTests(unittest.TestCase):
+    def take(self, exits):
+        """Runs snapshot() with a fake heap that exits with `exits` in turn
+        and a fake clock that the fake heap and wait advance."""
+        now, waits, calls = [10.0], [], []
+
+        def run_heap(pid):
+            calls.append(pid)
+            now[0] += 3.0
+            code = exits[len(calls) - 1]
+            return code, HEAP if code == 0 else "heap: zone enumeration failed"
+
+        def wait(seconds):
+            waits.append(seconds)
+            now[0] += seconds
+        attempts, text = check.snapshot(42, lambda: now[0], run_heap, wait)
+        return attempts, text, waits, calls
+
+    def test_the_schedule_is_frozen(self):
+        self.assertEqual((check.EARLY_SECONDS, check.LATE_SECONDS, check.RETRY_AFTER), (12.0, 56.0, 2.0))
+
+    def test_a_good_snapshot_is_taken_once(self):
+        attempts, text, waits, calls = self.take([0])
+        self.assertEqual(attempts, [{"seconds": 10.0, "exit": 0}])
+        self.assertEqual((text, waits, calls), (HEAP, [], [42]))
+
+    def test_a_failed_snapshot_is_retried_once_two_seconds_later(self):
+        attempts, text, waits, _ = self.take([255, 0])
+        self.assertEqual(attempts, [{"seconds": 10.0, "exit": 255}, {"seconds": 15.0, "exit": 0}])
+        self.assertEqual((text, waits), (HEAP, [2.0]))
+        self.assertIsNotNone(check.parse_heap(text))
+
+    def test_a_second_failure_is_not_retried(self):
+        attempts, text, waits, calls = self.take([255, 255])
+        self.assertEqual([a["exit"] for a in attempts], [255, 255])
+        self.assertEqual((waits, len(calls)), ([2.0], 2))
+        self.assertIsNone(check.parse_heap(text))
+
+    def test_loads_are_counted_from_the_snapshot_that_was_read(self):
+        # Loads 1 s apart from 5 s on. A retried early snapshot read at 15 s
+        # instead of 10 s drops the loads that started before 15 s.
+        rep = report([5 + i for i in range(60)])
+        self.assertEqual(check.count_loads(rep, 10.0, 56.0), 46)
+        self.assertEqual(check.count_loads(rep, 15.0, 56.0), 41)
 
 
 if __name__ == "__main__":

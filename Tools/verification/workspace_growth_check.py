@@ -27,10 +27,17 @@ is shown, with its rows built, or in the New Scene gap, with none, so even a
 fix that frees everything reads up to about +-44 between two snapshots. At
 40 loads the bar is 104, so a residual leak of 3 per load (120) fails.
 
+Snapshots (v2, changed a priori after two runs whose 8 s snapshot failed,
+before any run with this version): the early snapshot is taken at
+EARLY_SECONDS (12 s) instead of 8 s, and a snapshot whose `heap` exits
+non-zero is retried once, RETRY_AFTER seconds later. The loads are counted
+between the snapshots that were read, so a retry only moves the window. The
+bar is unchanged.
+
 Usage (every app launch goes through the machine's app lock with --wrap):
   workspace_growth_check.py --app <.../Ikkoku.app/Contents/MacOS/Ikkoku>
       --environment <environment.json> --out <dir> [--wrap <lock script>]
-      [--seconds 65] [--early 8] [--late 56]
+      [--seconds 65] [--early 12] [--late 56]
 Exit 0 pass, 1 fail, 2 invalid. Writes <out>/workspace-growth.json with the
 raw counts. Self-tests: test_workspace_growth_check.py.
 """
@@ -45,6 +52,9 @@ import time
 PER_LOAD = 1
 SCENE_ALLOWANCE = 64
 MIN_LOADS = 40
+EARLY_SECONDS = 12.0
+LATE_SECONDS = 56.0
+RETRY_AFTER = 2.0
 
 # heap -s class names. The SwiftUI box's mangled context differs by build.
 TYPES = (
@@ -96,10 +106,31 @@ def judge(early_counts, late_counts, loads):
     return ("pass" if all(row["ok"] for row in rows) else "fail"), rows
 
 
+def snapshot(pid, clock, run_heap, wait, retry_after=RETRY_AFTER):
+    """Takes one `heap -s` snapshot, retried once `retry_after` seconds after a
+    non-zero exit. Returns (attempts, text): attempts lists each try's start
+    (clock()) and exit; text is the output of the last try."""
+    attempts = []
+    for attempt in range(2):
+        if attempt:
+            wait(retry_after)
+        start = clock()
+        code, text = run_heap(pid)
+        attempts.append({"seconds": round(start, 3), "exit": code})
+        if code == 0:
+            break
+    return attempts, text
+
+
 def app_pid(app):
     result = subprocess.run(["pgrep", "-f", "-x", app], capture_output=True, text=True)
     pids = [int(p) for p in result.stdout.split()]
     return pids[0] if len(pids) == 1 else None
+
+
+def run_heap(pid):
+    heap = subprocess.run(["heap", "--forkCorpse", "-s", "-q", str(pid)], capture_output=True, text=True)
+    return heap.returncode, heap.stdout + (heap.stderr if heap.returncode else "")
 
 
 def main(argv=None):
@@ -109,8 +140,8 @@ def main(argv=None):
     parser.add_argument("--out", required=True)
     parser.add_argument("--wrap")
     parser.add_argument("--seconds", type=int, default=65)
-    parser.add_argument("--early", type=float, default=8)
-    parser.add_argument("--late", type=float, default=56)
+    parser.add_argument("--early", type=float, default=EARLY_SECONDS)
+    parser.add_argument("--late", type=float, default=LATE_SECONDS)
     args = parser.parse_args(argv)
     os.makedirs(args.out, exist_ok=True)
     perf = os.path.join(os.path.dirname(os.path.abspath(__file__)), "perf_trace.py")
@@ -132,12 +163,12 @@ def main(argv=None):
                 time.sleep(0.05)
             if not pid or run.poll() is not None:
                 break
-            start = time.monotonic() - launched
-            heap = subprocess.run(["heap", "--forkCorpse", "-s", "-q", str(pid)], capture_output=True, text=True)
+            attempts, text = snapshot(pid, lambda: time.monotonic() - launched, run_heap, time.sleep)
             with open(os.path.join(args.out, "heap-%s.txt" % name), "w") as handle:
-                handle.write(heap.stdout + heap.stderr)
-            snaps[name] = {"seconds": round(start, 3), "exit": heap.returncode,
-                           "counts": parse_heap(heap.stdout) if heap.returncode == 0 else None}
+                handle.write(text)
+            last = attempts[-1]
+            snaps[name] = {"seconds": last["seconds"], "exit": last["exit"], "attempts": attempts,
+                           "counts": parse_heap(text) if last["exit"] == 0 else None}
         code = run.wait()
     loads = 0
     report_path = os.path.join(args.out, "studio-load.json")
