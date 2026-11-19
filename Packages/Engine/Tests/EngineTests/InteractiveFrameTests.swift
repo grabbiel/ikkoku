@@ -598,3 +598,174 @@ extension InteractiveFrameTests {
         expectDispatched(try submitAndDraw(f), reference, "live, morph back")
     }
 }
+
+// #368: a viewport that does not draw (hidden, minimized, stopped, or none)
+// prepares no frame, so the renderer completes mesh and key retirements at
+// submit, on its utility queue under the render lock. A drawing viewport
+// leaves them to the prepare of its next frame. These fixtures register no
+// viewport, as when every viewport is hidden.
+extension InteractiveFrameTests {
+    private func retiredTriangle(_ f: InteractiveFixture) throws -> MeshHandle {
+        try f.renderer.resources.register(mesh: MeshData(name: "retired", positions: [Float3(0, 0, 0), Float3(1, 0, 0), Float3(0, 1, 0)],
+                                                         normals: [Float3](repeating: Float3(0, 0, 1), count: 3), indices: [0, 1, 2]))
+    }
+
+    /// Test 1. No prepare follows the submit, yet the mesh, the key and the
+    /// hidden mask go, and so does the key's content record, which held its
+    /// buffer.
+    @Test func withNoViewportDrawingASubmitCompletesRetirementsWithoutAPrepare() throws {
+        let f = try InteractiveFixture()
+        let r = f.renderer.resources
+        #expect(r.setHiddenBuffer(key: 43, bytes: [0, 0, 0]))
+        #expect(try f.draw().0.statistics.deformDispatches == 1)
+        #expect(f.renderer.holdsDeformContent(key: 42) && r.holdsDeformBuffer(key: 42))
+        r.retire(meshes: [f.mesh], deformKeys: [42], hiddenKeys: [43])
+        let retiring = r.statistics()
+        #expect(retiring.retiringMeshes == 1 && retiring.retiringDeformKeys == 1 && retiring.retiringHiddenKeys == 1, "\(retiring)")
+        let scheduled = f.renderer.scheduledRetirementCount
+        f.renderer.submit(RenderFrame())
+        f.renderer.waitForScheduledRetirements()
+        #expect(f.renderer.scheduledRetirementCount == scheduled + 1)
+        let completed = r.statistics()
+        #expect(completed.retiring == 0 && completed.deformBuffers == 0 && completed.hiddenBuffers == 0, "\(completed)")
+        #expect(r.mesh(f.mesh) == nil)
+        #expect(!f.renderer.holdsDeformContent(key: 42), "the record held the released buffer")
+    }
+
+    #if DEBUG // `ResourceStore.beforeDeformBuffer` is a DEBUG-only test hook.
+    /// Test 2. A completion that finds the render lock held (here by a
+    /// capture, inside its prepare) leaves the retirements in place, and the
+    /// prepare of the next submitted frame completes them.
+    @Test func aCompletionThatFindsAFrameBeingPreparedLeavesItToTheNextPrepare() throws {
+        let f = try InteractiveFixture()
+        let renderer = f.renderer, r = renderer.resources
+        let retired = try retiredTriangle(f)
+        final class Hook: @unchecked Sendable { var ran = false; var during: ResourceStore.Statistics? }
+        let hook = Hook()
+        let scheduled = renderer.scheduledRetirementCount
+        r.beforeDeformBuffer = { key in
+            guard key == 42, !hook.ran else { return }
+            hook.ran = true
+            // On the capturing thread, under the render lock.
+            r.retire(meshes: [retired])
+            renderer.submit(RenderFrame())
+            renderer.waitForScheduledRetirements()
+            hook.during = r.statistics()
+        }
+        defer { r.beforeDeformBuffer = nil }
+        #expect(renderer.capture(frame: f.frame, width: 16, height: 16) != nil)
+        #expect(hook.ran && renderer.scheduledRetirementCount == scheduled + 1)
+        #expect(hook.during?.retiringMeshes == 1, "\(String(describing: hook.during))")
+        // The capture's frame was not submitted, so its prepare completed nothing.
+        #expect(r.statistics().retiringMeshes == 1 && r.mesh(retired) != nil)
+        #expect(try f.draw().0.outcome == .rendered)
+        #expect(r.statistics().retiring == 0 && r.mesh(retired) == nil)
+    }
+    #endif
+
+    /// Test 3. A copy of a frame created before the retirement, prepared after
+    /// a completion at submit, gets a transient deformation buffer every time
+    /// and never re-creates the released key's buffer.
+    @Test func anOldCopyPreparedAfterACompletionAtSubmitGetsTransientBuffers() throws {
+        let f = try InteractiveFixture()
+        let r = f.renderer.resources
+        let a = try f.draw()
+        #expect(a.0.statistics.deformDispatches == 1)
+        let old = f.frame
+        r.retire(deformKeys: [42])
+        f.renderer.submit(RenderFrame())
+        f.renderer.waitForScheduledRetirements()
+        #expect(r.statistics().retiring == 0 && !r.holdsDeformBuffer(key: 42) && !f.renderer.holdsDeformContent(key: 42))
+        f.frame = old
+        expectDispatched(try submitAndDraw(f), a.1, "old copy, transient")
+        expectDispatched(try redraw(f), a.1, "old copy, transient again")
+        #expect(!r.holdsDeformBuffer(key: 42))
+    }
+
+    /// Test 4, functional part (the timing is the opt-in probe in
+    /// `CharacterLifetimeTests`). With nothing retiring a submit schedules
+    /// nothing. While a viewport draws, a retirement waits for its prepare.
+    /// Once it is hidden, the next submit schedules the completion.
+    @Test func aSubmitSchedulesACompletionOnlyWhileRetiringWithNoViewportDrawing() throws {
+        let f = try InteractiveFixture()
+        let renderer = f.renderer, r = renderer.resources
+        let start = renderer.scheduledRetirementCount
+        for _ in 0..<3 { renderer.submit(RenderFrame()) }
+        #expect(renderer.scheduledRetirementCount == start, "nothing retiring")
+
+        let viewport = NSObject()
+        renderer.setViewport(ObjectIdentifier(viewport), drawing: true)
+        let first = try retiredTriangle(f)
+        r.retire(meshes: [first])
+        renderer.submit(RenderFrame())
+        #expect(renderer.scheduledRetirementCount == start && r.mesh(first) != nil, "a viewport draws")
+        #expect(try f.draw().0.outcome == .rendered)
+        #expect(r.statistics().retiring == 0 && r.mesh(first) == nil)
+
+        renderer.setViewport(ObjectIdentifier(viewport), drawing: false)
+        let second = try retiredTriangle(f)
+        r.retire(meshes: [second])
+        renderer.submit(RenderFrame())
+        renderer.waitForScheduledRetirements()
+        #expect(renderer.scheduledRetirementCount == start + 1)
+        #expect(r.statistics().retiring == 0 && r.mesh(second) == nil)
+    }
+
+    /// Test 5. A submit of a new frame queues the completion, and before it
+    /// starts a submit puts back a copy of a frame created before the
+    /// retirement. The completion uses the pending copy's stamp, as its
+    /// prepare would, so the copy's mesh and key survive and it still draws
+    /// them. The prepare of the next new frame completes them.
+    @Test func aCompletionQueuedBeforeAnOldCopyIsSubmittedKeepsWhatTheCopyNames() throws {
+        let f = try InteractiveFixture()
+        let renderer = f.renderer, r = renderer.resources
+        let drawn = try f.draw()
+        #expect(drawn.0.statistics.deformDispatches == 1)
+        let old = f.frame
+        r.retire(meshes: [f.mesh], deformKeys: [42])
+        let start = renderer.scheduledRetirementCount
+        renderer.holdScheduledRetirements(true)
+        renderer.submit(RenderFrame())               // queues the completion
+        renderer.submit(old)                         // shares it; the old copy is pending
+        renderer.holdScheduledRetirements(false)
+        renderer.waitForScheduledRetirements()
+        #expect(renderer.scheduledRetirementCount == start + 1)
+        let kept = r.statistics()
+        #expect(kept.retiringMeshes == 1 && kept.retiringDeformKeys == 1, "\(kept)")
+        #expect(r.mesh(f.mesh) != nil && r.holdsDeformBuffer(key: 42))
+        let copy = try f.draw()
+        // Its key's buffer is still cached and holds what the first draw wrote.
+        #expect(copy.0.outcome == .rendered && copy.0.statistics.deformReuses == 1, "\(copy.0.statistics)")
+        #expect(copy.1 == drawn.1, "the old copy still draws its mesh")
+        #expect(r.statistics().retiringMeshes == 1, "its own prepare completes nothing")
+
+        let viewport = NSObject()
+        renderer.setViewport(ObjectIdentifier(viewport), drawing: true)
+        renderer.submit(RenderFrame())
+        #expect(renderer.scheduledRetirementCount == start + 1)
+        #expect(try f.draw().0.outcome == .rendered)
+        #expect(r.statistics().retiring == 0 && r.mesh(f.mesh) == nil && !r.holdsDeformBuffer(key: 42))
+    }
+
+    /// With no submitted frame pending (nothing submitted yet), a completion
+    /// has no stamp and releases nothing.
+    @Test func aCompletionWithNoSubmittedFramePendingReleasesNothing() throws {
+        let renderer = try makeSourceShaderRenderer()
+        let r = renderer.resources
+        let mesh = try r.register(mesh: MeshData(name: "retired", positions: [Float3(0, 0, 0), Float3(1, 0, 0), Float3(0, 1, 0)],
+                                                 normals: [Float3](repeating: Float3(0, 0, 1), count: 3), indices: [0, 1, 2]))
+        #expect(r.setHiddenBuffer(key: 0x368, bytes: [0, 0, 0]))
+        r.retire(meshes: [mesh], deformKeys: [0x369], hiddenKeys: [0x368])
+        let before = r.statistics()
+        #expect(before.retiringMeshes == 1 && before.retiringDeformKeys == 1 && before.retiringHiddenKeys == 1, "\(before)")
+        renderer.completeScheduledRetirements()
+        let after = r.statistics()
+        #expect(after.retiring == before.retiring && after.meshes == before.meshes && after.hiddenBuffers == before.hiddenBuffers,
+                "\(after)")
+        #expect(r.mesh(mesh) != nil)
+        // The first submit of a later frame completes them.
+        renderer.submit(RenderFrame())
+        renderer.waitForScheduledRetirements()
+        #expect(r.statistics().retiring == 0 && r.mesh(mesh) == nil)
+    }
+}

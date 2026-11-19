@@ -55,6 +55,31 @@ BoneModifierData = [ScaleModifier, LengthModifier, PositionModifier, RotationMod
 Vector3 = [x, y, z]  // serialized float32 elements
 ```
 
+These are the arrays the current plugin writes. Its int-keyed formatters read
+an array of any length: a missing trailing key takes its type's default, and
+keys beyond the last known one are skipped. Older saves therefore load in the
+shorter layouts, and the converter reads them the same way:
+
+| Saved array | Read as |
+| --- | --- |
+| `[BoneName, CoordinateModifiers]` | `BoneLocation` 0 (`Unknown`) |
+| `[ScaleModifier, LengthModifier]` | position and rotation `(0,0,0)` |
+| `[ScaleModifier, LengthModifier, PositionModifier]` | rotation `(0,0,0)` |
+| any longer array | extra fields skipped, one `skipped-unknown-fields` warning each |
+
+The two-field record with two-field entries is the only layout found in a local
+corpus of version-2 character cards. Records with fewer than two fields are
+rejected, as the original's constructor rejects them. Coordinate entries with
+fewer than two fields are also rejected: the original would read them with a
+zero `ScaleModifier` or `LengthModifier`, which is not implemented, and no known
+card uses that layout. The generated object formatter for these two types is not
+in the recovered C#; the recovered `Vector3` formatter follows the same pattern.
+The installed plug-in confirms the defaults: reading a card saved in the
+two-field layout in CharaStudio, ABMX's own reader produced `BoneLocation` 0 and
+zero position and rotation, with scale and length as saved, and the converter
+matches that read exactly. After the load, ABMX resolves location 0 to BodyTop
+for bones it finds in the body.
+
 `CoordinateModifiers` contains one or more `BoneModifierData` arrays. One entry
 is coordinate-independent. Multiple entries are indexed by the current outfit;
 an index beyond the stored array supplies no modifier for that outfit. Defaults
@@ -70,7 +95,8 @@ dictionaries. That migration is not ported. The converter matches the current
 serialization constructor's repair of individual null coordinate entries to
 identity values, retaining one warning per repaired entry in `diagnostics`.
 A null whole coordinate array or an empty array is rejected, matching the
-constructor's explicit exceptions. Incomplete non-null records remain unsupported.
+constructor's explicit exceptions. Shorter and longer records and entries are
+read as described above.
 These behaviors are confirmed in the installed constructor; no inference from
 empty-array behavior in `GetModifier` is needed. The standalone Python converter
 consumes extracted `boneData`; it does not parse whole cards. The native `SourceCharacterCard` layer now performs card framing and
@@ -109,7 +135,7 @@ To convert an actual extracted `boneData` byte array:
 
 For a current outfit payload, use `--data-kind coordinate --data-version 3`.
 The converter validates sizes, finite numeric values, vector arity, duplicate
-record identities, and the current array layout. It records the payload SHA-256
+record identities, and the array layouts above. It records the payload SHA-256
 and preserves bone names, coordinate entries, and location numbers without
 renaming or mirroring. Accessory and dynamic records remain identifiable in
 the converted document with explicit scope diagnostics; the native static
@@ -279,3 +305,49 @@ payload before exposing modifier edits in original-card export. Then extend
 accessory lookup and dynamic baseline recollection with independently captured
 source traces, retaining the original data GUID, bone names, outfit records and
 unknown sibling payloads. CMT-05 in the linked audit defines acceptance.
+
+## Checked against the original
+
+**Setup.** The original CharaStudio player (Unity 5.6.2f1) ran with KKABMX 5.4 (`KKABMX.dll` f3e2d987), KKAPI 1.46.1 and ExtensibleSaveFormat 21.1.2.1.
+- There were three phases, one probe exec each, on 2026-11-18 (`Tools/reverse/original_abmx_probe.py`).
+- The probe reads uploaded scene records only. Nothing in the game folder is written, and the plug-ins and configs are checked by SHA-256. Each phase left the guest clean.
+- The scene records and captures stay local.
+
+**Phase 1, the decoder.** One male character whose card holds 7 records in the older two-field layout.
+- The native decoder and the Python mirror equal ABMX's own `ReadModifiers` on all 7 records, field by field as float32 bit patterns.
+- The records read as location 0 (Unknown). Once the character is loaded, ABMX's live controller holds the same values, with location 0 resolved to BodyTop (1).
+
+**Phase 2, scale.** The same character, framed by a probe camera.
+- On ABMX's collected baselines, the static evaluator reproduces the scale of the 7 live bones exactly.
+- In scale, the native shape baseline is within 1.4e-8 of ABMX's, and the full static result is within 1.8e-7 of the capture.
+- Skin silhouette at 960×720, pixel-centre coverage, against the original's skin render:
+  - the captured bones: IoU 0.99967 (3 px apart);
+  - the native evaluator: identical to that (0 px apart);
+  - no modifiers: IoU 0.739 (2,599 px).
+
+**Phase 3, length, position and rotation.** No saved card in the surveyed scenes carries Position or Rotation, and a Length other than 1 appears on one bone only.
+- **Length, from a card.** A second male character with 6 records, including a Length below 1 on `cf_d_kokan`.
+  - The captured local position equals baseline × length bit for bit in float32.
+  - The native decoder and evaluator reproduce all 6 bones with no difference.
+  - Silhouette: the captured bones and the native evaluator both have IoU 0.99975 (1 px). With no modifiers it is 0.711, mostly from `cf_n_height`'s scale.
+- **Five synthetic rows.** These were added in memory with ABMX's own `AddModifier` on the phase-1 character, on bones its card leaves alone:
+  - a 3-axis rotation (`cf_s_neck`);
+  - rotation plus position (`cf_s_forearm01_L`);
+  - length plus position on a joint with a 0.25 m offset (`cf_j_forearm01_R`);
+  - scale plus position (`cf_s_thigh01_L`);
+  - a request for location 0 (`cf_s_spine02`).
+
+  All five held still over two frames.
+
+  | Applied on ABMX's baselines | Rotation | Position | Scale |
+  |---|---|---|---|
+  | ABMX's formula (Euler Z, X, then Y) | within 2.4e-6° | within 4e-9 | within 9.2e-8 |
+  | The native evaluator | within 9.9e-7° | exact | within 1.3e-7 |
+
+  Silhouette: the captured bones have IoU 0.99968 (3 px), and the native evaluator is identical. Without the five rows it is 0.979 (196 px). The original's own renders before and after the five rows differ by 195 px.
+- **SaveModifiers.** ABMX serialized the five rows alone (PluginData version 2, 208 bytes).
+  - Both decoders read them back bit for bit, as ABMX's own `ReadModifiers` does.
+  - ABMX resolved the location-0 request to BodyTop when the row was added and saved it as 1. So this writer produces no stored location 0; reading one is covered by phase 1.
+  - The payload is the test vector in `sourceBoneModifierDecodesTheOriginalSaveModifiersPayloadBitForBit`.
+
+**Not checked against the original:** accessory locations, coordinate (outfit) records, the dynamic-baseline families, `BoneEffect` callbacks, and saving to a card or coordinate file.

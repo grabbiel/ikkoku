@@ -333,10 +333,10 @@ private func decodeBoneModifierWire(_ value: SourceMessagePackValue) throws -> S
     let valid = boneModifierWireRecord(.array([values]))
     let malformed: [SourceMessagePackValue] = [
         .null, .map([]), .binary(Data()), .ext(98, Data()),
-        .array([.null]), .array([.array([])]), .array([.array([.string("bone"), .array([values])])]),
-        .array([.array([.string("bone"), .array([values]), .integer(1), .null])]),
+        .array([.null]), .array([.array([])]), .array([.array([.string("bone")])]),
         .array([boneModifierWireRecord(.null)]), .array([boneModifierWireRecord(.array([]))]),
         .array([boneModifierWireRecord(.array([.array([])]))]),
+        .array([boneModifierWireRecord(.array([.array([.array([.float(1), .float(1), .float(1)])])]))]),
         .array([boneModifierWireRecord(.array([.array([.array([]), .float(1), .array([])])]))]),
         .array([boneModifierWireRecord(.array([values]), name: "")]),
         .array([boneModifierWireRecord(.array([values]), name: "bo\0ne")]),
@@ -440,5 +440,107 @@ func sourceBoneModifierNativeWireMatchesLocalPythonConversion() throws {
         let baseline = model.rig.restPose
         #expect(try native.applying(to: model.rig, baseline: baseline).localMatrices ==
             converted.applying(to: model.rig, baseline: baseline).localMatrices)
+    }
+}
+
+/// #401: the original's int-keyed MessagePack formatters read an array of any
+/// length, give a missing key its default and skip unknown keys. Saves from
+/// before BoneLocation ([BoneName, CoordinateModifiers]) and before Position and
+/// Rotation ([Scale, Length]) therefore load with location 0 (Unknown) and zero
+/// Position and Rotation. That is the only ABMX layout in the user's scene corpus.
+@Test func sourceBoneModifierNativeWireReadsOlderAndLongerLayoutsLikeTheSourceFormatter() throws {
+    func older(_ name: String, scale: [Double], length: Double) -> SourceMessagePackValue {
+        .array([.string(name), .array([.array([.array(scale.map { .float($0) }), .float(length)])])])
+    }
+    let packed = boneModifierLZ4(boneModifierWire(.array([older("bone", scale: [1.25, 0.5, 1], length: 1.5)])))
+    let decoded = try SourceBoneModifiers.decodeBoneData(packed, dataKind: "card", dataVersion: 2)
+    let current = try decodeBoneModifierWire(.array([boneModifierWireRecord(
+        .array([boneModifierWireValues(scale: [1.25, 0.5, 1], length: 1.5)]), location: .integer(0))]))
+    #expect(decoded.modifiers.map(\.boneLocation) == [0])
+    #expect(decoded.modifiers[0].coordinateModifiers == current.modifiers[0].coordinateModifiers)
+    #expect(decoded.modifiers[0].coordinateModifiers[0].positionModifier == [0, 0, 0])
+    #expect(decoded.modifiers[0].coordinateModifiers[0].rotationModifier == [0, 0, 0])
+    #expect(decoded.diagnostics?.isEmpty == true)
+    let rig = try boneModifierRig()
+    #expect(try decoded.applying(to: rig, baseline: rig.restPose).localMatrices ==
+        current.applying(to: rig, baseline: rig.restPose).localMatrices)
+    #expect(try decoded.applying(to: rig, baseline: rig.restPose).localMatrices != rig.restPose.localMatrices)
+
+    // The corpus layout at its size: twelve two-field records of one two-field entry each.
+    let twelve = try SourceBoneModifiers.decodeBoneData(boneModifierLZ4(boneModifierWire(.array(
+        (0..<12).map { older("b\($0)", scale: [1, 1 + Double($0) / 16, 1], length: 1) }))), dataKind: "card", dataVersion: 2)
+    #expect(twelve.count == 12 && twelve.coordinateCounts == Array(repeating: 1, count: 12))
+    #expect(twelve.modifiers.allSatisfy { $0.boneLocation == 0 } && twelve.diagnostics?.isEmpty == true)
+
+    // Three fields: Rotation is zero.
+    let three = try decodeBoneModifierWire(.array([boneModifierWireRecord(.array([.array([
+        .array([.float(1), .float(1), .float(1)]), .float(1), .array([.float(0.5), .float(0), .float(0)])])]))]))
+    #expect(three.modifiers[0].coordinateModifiers[0].positionModifier == [0.5, 0, 0])
+    #expect(three.modifiers[0].coordinateModifiers[0].rotationModifier == [0, 0, 0])
+
+    // Unknown trailing keys are skipped, each with a diagnostic.
+    let longer = try decodeBoneModifierWire(.array([.array([.string("bone"),
+        .array([.array((try #require(boneModifierWireValues().arrayValue)) + [.string("extra")])]), .integer(1), .null])]))
+    let identity = try decodeBoneModifierWire(.array([boneModifierWireRecord(.array([boneModifierWireValues()]))]))
+    #expect(longer.modifiers[0].coordinateModifiers == identity.modifiers[0].coordinateModifiers)
+    #expect(longer.modifiers[0].boneLocation == 1)
+    #expect(longer.diagnostics?.map(\.code) == ["skipped-unknown-fields", "skipped-unknown-fields"])
+    #expect(longer.diagnostics?.map(\.message) == [
+        "ABMX record 'bone' has 4 fields; fields after BoneLocation are skipped, as the original's formatter skips unknown keys.",
+        "ABMX coordinate #1 for 'bone' has 5 fields; fields after Rotation are skipped, as the original's formatter skips unknown keys.",
+    ])
+
+    // Entries with fewer than two fields keep their own refusal: the original
+    // would read them with default(T) (a zero Scale or Length).
+    for (entry, count) in [(SourceMessagePackValue.array([]), 0), (.array([.array([.float(1), .float(1), .float(1)])]), 1)] {
+        do {
+            _ = try decodeBoneModifierWire(.array([boneModifierWireRecord(.array([entry]))]))
+            Issue.record("A \(count)-field coordinate entry was accepted.")
+        } catch {
+            #expect(String(describing: error).contains("ABMX coordinate entry #1 for 'bone' has \(count) field(s). The original would read it with default values (a zero Scale or Length), which is not implemented; no known card uses this layout."))
+        }
+    }
+    do {
+        _ = try decodeBoneModifierWire(.array([.array([.string("bone")])]))
+        Issue.record("A record without CoordinateModifiers was accepted.")
+    } catch {
+        #expect(String(describing: error).contains("ABMX records require BoneName and CoordinateModifiers in source order (BoneLocation may follow)."))
+    }
+}
+
+/// Provenance: synthetic constants serialized by ABMX 5.4 SaveModifiers in the original player, no card data.
+/// The original CharaStudio player (KKABMX 5.4, KKABMX.dll f3e2d987) added five constant modifiers in memory
+/// with ABMX's own AddModifier, then serialized them alone with its internal SaveModifiers(modifiers, false):
+/// PluginData version 2, this boneData (208 bytes, LZ4 extension 99). Its ReadModifiers read the same five
+/// rows back. The fifth row asked for location 0; ABMX resolved it to BodyTop (1) when it was added, so it is
+/// saved as 1 (Tools/reverse/original_abmx_probe.py, synthetic mode; docs/reference/mods/abmx.md, "Checked against the original").
+@Test func sourceBoneModifierDecodesTheOriginalSaveModifiersPayloadBitForBit() throws {
+    let base64 = "yQAAAMpj0gAAAWb7BZWTqWNmX3NfbmVja5GUk8o/gAAABQBmk8oAAAAABQDxBJPKQUAAAMrBoAAAykDgAAABk7BDAL9mb3JlYXJt" +
+        "MDFfTEoABug8I9cKyjyj1wrKvHXCj1oAJEHISgAXakoAH1JKAAEzkzMzOgBBPPXCj5kAAxAABakAMQGTrpQAVXRoaWdokgAzjMzN3AAE" +
+        "CgASk40AATgAAE0ADkgAEaxIAHFzcGluZTAyjgAzhmZmRgAECgAMNgADEACgQSAAAMoAAAAAAQ=="
+    let payload = try #require(Data(base64Encoded: base64))
+    #expect(payload.count == 208)
+    #expect(SHA256.hash(data: payload).map { String(format: "%02x", $0) }.joined()
+        == "4af827eb5910bd5fe62cd1d2a0fbfdb8feb33c31098c3f67815a3e0694876b41")
+    let decoded = try SourceBoneModifiers.decodeBoneData(payload, dataKind: "card", dataVersion: 2)
+    #expect(decoded.source.payloadSHA256 == "4af827eb5910bd5fe62cd1d2a0fbfdb8feb33c31098c3f67815a3e0694876b41")
+    #expect((decoded.diagnostics ?? []).isEmpty)
+    // The probe's code constants: name, saved location, scale, length, position, rotation (degrees).
+    let rows: [(String, Int, [Float], Float, [Float], [Float])] = [
+        ("cf_s_neck", 1, [1, 1, 1], 1, [0, 0, 0], [12, -20, 7]),
+        ("cf_s_forearm01_L", 1, [1, 1, 1], 1, [0.01, 0.02, -0.015], [0, 0, 25]),
+        ("cf_j_forearm01_R", 1, [1, 1, 1], 1.15, [0, 0.03, 0], [0, 0, 0]),
+        ("cf_s_thigh01_L", 1, [1.1, 1, 1.1], 1, [0.02, 0, 0.03], [0, 0, 0]),
+        ("cf_s_spine02", 1, [1.05, 1, 1.05], 1, [0, 0, 0], [0, 10, 0]),
+    ]
+    #expect(decoded.modifiers.map(\.boneName) == rows.map(\.0))
+    #expect(decoded.modifiers.map(\.boneLocation) == rows.map(\.1))
+    #expect(decoded.coordinateCounts == [1, 1, 1, 1, 1])
+    for (modifier, row) in zip(decoded.modifiers, rows) {
+        let values = try #require(modifier.coordinateModifiers.first)
+        #expect(values.scaleModifier.map(\.bitPattern) == row.2.map(\.bitPattern), "\(row.0) scale")
+        #expect(values.lengthModifier.bitPattern == row.3.bitPattern, "\(row.0) length")
+        #expect(values.positionModifier.map(\.bitPattern) == row.4.map(\.bitPattern), "\(row.0) position")
+        #expect(values.rotationModifier.map(\.bitPattern) == row.5.map(\.bitPattern), "\(row.0) rotation")
     }
 }

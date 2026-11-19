@@ -26,7 +26,12 @@ struct InspectorUIScenario: Decodable {
         /// that point of the selected route) and `"closeColorPanel"`. Added for
         /// #333: `"tab"` (`label`: shows that inspector tab, such as `clothes`) and
         /// `"addCharacter"` (`sex`: `female` or `male`; the toolbar's Add ▸ Character,
-        /// which adds a native character and selects it).
+        /// which adds a native character and selects it). Added for #383:
+        /// `"parentMenu"` (the Parent popup: closed it holds only the current parent;
+        /// opened, its options are the Picker's, None and then every object that is not
+        /// the selection or one of its descendants, in document order; with `key`, it
+        /// chooses that source key's object, or None for -1, and the document's parent
+        /// follows).
         let op: String
         let key: Int32?
         let keys: [Int32]?
@@ -225,6 +230,46 @@ struct InspectorUIScenario: Decodable {
                     record(step.op, false, "addCharacter: no new selected native character: \(studio.status)"); continue
                 }
                 record(step.op, true, "added native \(step.sex!) character \"\(added.name)\"")
+            case "parentMenu":
+                guard let id = studio.selection, let popup = Self.parentPopUp(in: window), let menu = popup.menu else {
+                    record(step.op, false, "no selection or no visible Parent popup"); continue
+                }
+                var problems: [String] = []
+                let doc = studio.doc
+                let current = doc.object(id)?.parent
+                let title = current.map { doc.object($0)?.name ?? "" } ?? "None"
+                if popup.numberOfItems != 1 || popup.titleOfSelectedItem != title {
+                    problems.append("closed: \(popup.numberOfItems) items, title '\(popup.titleOfSelectedItem ?? "-")', expected 1 item '\(title)'")
+                }
+                // What AppKit asks the delegate when the menu opens.
+                menu.delegate?.menuNeedsUpdate?(menu)
+                // The SwiftUI Picker's options, by the document's linear functions.
+                let options = doc.objects.filter { $0.id != id && !doc.isDescendant($0.id, of: id) }
+                let ids = menu.items.map { $0.representedObject as? UUID }
+                if menu.items.map(\.title) != ["None"] + options.map(\.name) || ids != [nil] + options.map(\.id) {
+                    problems.append("opened: \(menu.items.count) options, expected \(options.count + 1) in document order")
+                }
+                if (popup.selectedItem?.representedObject as? UUID) != current { problems.append("opened: the current parent is not the selected option") }
+                var chose = ""
+                if let key = step.key {
+                    let target: UUID? = key < 0 ? nil : object(key)?.id
+                    if let item = menu.items.first(where: { ($0.representedObject as? UUID) == target }), key < 0 || target != nil {
+                        popup.select(item)
+                        _ = popup.sendAction(popup.action, to: popup.target)
+                        chose = ", chose '\(item.title)'"
+                    } else { problems.append("no option for source key \(key)") }
+                }
+                menu.delegate?.menuDidClose?(menu)
+                await settle()
+                let after = studio.doc.object(id)?.parent
+                if let key = step.key, after != (key < 0 ? nil : object(key)?.id) {
+                    problems.append("parent after the choice is not source key \(key): \(studio.status)")
+                }
+                let afterTitle = after.map { studio.doc.object($0)?.name ?? "" } ?? "None"
+                if popup.numberOfItems != 1 || popup.titleOfSelectedItem != afterTitle {
+                    problems.append("closed again: \(popup.numberOfItems) items, title '\(popup.titleOfSelectedItem ?? "-")', expected 1 item '\(afterTitle)'")
+                }
+                record(step.op, problems.isEmpty, (problems + ["\(options.count + 1) options\(chose), parent '\(afterTitle)'"]).joined(separator: "; "))
             case "closeColorPanel":
                 if NSColorPanel.sharedColorPanelExists { NSColorPanel.shared.orderOut(nil) }
                 await settle()
@@ -233,7 +278,9 @@ struct InspectorUIScenario: Decodable {
                 snapshot = (studio.doc, studio.undoStack.count, studio.redoStack.count)
                 record(step.op, true, "undo \(studio.undoStack.count), redo \(studio.redoStack.count)")
             case "keyLoop":
-                let loop = Self.keyLoop(window)
+                // Each Tab is its own gesture, as each step is, and the views
+                // re-render before the next one (#390).
+                let loop = await Self.keyLoop(window, beforeEachMove: { studio.endUndoCoalescing() }, afterEachMove: { await settle() })
                 let ok = (step.hiddenKeyViews.map { loop.hidden <= $0 } ?? true) && (step.keyViews.map { loop.views.count == $0 } ?? true)
                 record(step.op, ok, "\(loop.views.count) key views, \(loop.hidden) outside the visible window, sha \(loop.sha): " + loop.views.joined(separator: " > "))
             case "assert":
@@ -341,6 +388,18 @@ struct InspectorUIScenario: Decodable {
         return index < numbers.count ? numbers[index] : nil
     }
 
+    /// The Object tab's visible Parent popup (`StudioParentPopUp`).
+    @MainActor static func parentPopUp(in window: NSWindow) -> NSPopUpButton? {
+        var found: NSPopUpButton?
+        func visit(_ v: NSView) {
+            if found == nil, let popup = v as? NSPopUpButton, popup.accessibilityLabel() == "Parent",
+               !popup.isHiddenOrHasHiddenAncestor, !popup.visibleRect.isEmpty { found = popup }
+            v.subviews.forEach(visit)
+        }
+        if let content = window.contentView { visit(content) }
+        return found
+    }
+
     /// The colour wells in the window.
     @MainActor static func colorWells(in window: NSWindow) -> [NSColorWell] {
         var found: [NSColorWell] = []
@@ -421,12 +480,20 @@ struct InspectorUIScenario: Decodable {
 
     /// Walks the Tab key-view loop from the window's first key view and back to
     /// it (at most 80 steps), naming each view; `hidden` counts the views that
-    /// lie outside the visible window. Ends with no first responder.
-    @MainActor static func keyLoop(_ window: NSWindow) -> (views: [String], hidden: Int, sha: String) {
+    /// lie outside the visible window. Ends with no first responder. Each move
+    /// (the start, every Tab and the end) runs between `beforeEachMove` and
+    /// `afterEachMove`; the runner uses them to make each Tab its own gesture
+    /// and let the views re-render before the next one (#390), as separate Tab
+    /// presses would. A view is named as it is right after the move.
+    @MainActor static func keyLoop(_ window: NSWindow, beforeEachMove: () -> Void = {},
+                                   afterEachMove: () async -> Void = {}) async -> (views: [String], hidden: Int, sha: String) {
+        beforeEachMove()
         window.makeFirstResponder(nil)
+        await afterEachMove()
         var views: [String] = [], hidden = 0
         var first: NSView?
         for _ in 0..<80 {
+            beforeEachMove()
             // From a field being edited, step from the field: its field editor is not in the loop.
             if let current = editedField(window) ?? (window.firstResponder as? NSView) {
                 window.selectKeyView(following: current)
@@ -435,14 +502,21 @@ struct InspectorUIScenario: Decodable {
             }
             let responder = window.firstResponder
             let view: NSView? = editedField(window) ?? (responder as? NSView)
-            guard let view else { break }
+            let named = view.map { view in
+                let frame = view.convert(view.bounds, to: nil)
+                return (name: "\(describe(view))@\(Int(frame.minX)),\(Int(frame.minY))",
+                        hidden: view.visibleRect.isEmpty || view.isHiddenOrHasHiddenAncestor)
+            }
+            await afterEachMove()
+            guard let view, let named else { break }
             if view === first { break }
             if first == nil { first = view }
-            let frame = view.convert(view.bounds, to: nil)
-            if view.visibleRect.isEmpty || view.isHiddenOrHasHiddenAncestor { hidden += 1 }
-            views.append("\(describe(view))@\(Int(frame.minX)),\(Int(frame.minY))")
+            if named.hidden { hidden += 1 }
+            views.append(named.name)
         }
+        beforeEachMove()
         window.makeFirstResponder(nil)
+        await afterEachMove()
         return (views, hidden, sha(views))
     }
 

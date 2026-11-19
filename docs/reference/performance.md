@@ -104,7 +104,7 @@ the run.
 
 | `IKKOKU_PERF_WORKLOAD` | Fixtures | What it does |
 | --- | --- | --- |
-| `studio-idle` (default) | `IKKOKU_SOURCE_SCENE` | Studio, live animation on, nothing selected; blink, neck/eye look, hair dynamics and route clocks tick at 30 Hz. The scene needs one converted source character; a character riding a route counts (`details.sourceRouteCharacters`), so a route scene such as the route-children fixture measures a playing route |
+| `studio-idle` (default) | `IKKOKU_SOURCE_SCENE` | Studio, live animation on, nothing selected; blink, neck/eye look, hair dynamics and route clocks tick at 30 Hz. The scene needs one converted source character; a character riding a route counts (`details.sourceRouteCharacters`), so a route scene such as the route-children fixture measures a playing route. A scene whose only converted content is source items (`IKKOKU_STUDIO_ITEM_CATALOG`, `details.sourceItems`) also qualifies (ST-T04) |
 | `studio-orbit` | same | `studio-idle` plus a right-button orbit drag: one `mouseDragged` per input tick |
 | `studio-fk-drag` | same | selects source key 65 (or `IKKOKU_PERF_ACTION_KEY`), FK mode, bone 19 (the `fk-mouse-drag` scenario's grab), grabs the z ring found by `pickID` and drags it around a 40 px circle, one turn per 2 s; checks that the grab pushed exactly one undo snapshot |
 | `studio-hover` | same | character selected, mouse moves over the viewport (`mouseMoved`, gizmo hover pick) |
@@ -123,6 +123,9 @@ the run.
 | `studio-export` | as `studio-idle` | File ▸ Export Edited Original Scene (`AppState.exportSourceScene(to:)`), repeated, after a setup through the UI's calls: a cheek edit on the `studio-duplicate` character, Visible off, then Save Scene and Open of that file, so the hidden character has no preview and each export builds its validation baseline. Exports go to a temporary folder, removed at the end |
 | `studio-load` | as `studio-idle` | File ▸ New Scene (unmeasured), then File ▸ Open (`AppState.openScene(at:importing:)`) of the source scene saved as an Ikkoku scene, repeated; each load builds the characters again and rehydrates the route characters (a load over the same scene would keep its runtime and rehydrate nothing) |
 | `studio-select` | as `studio-idle` | the selection a click makes (`StudioModel.selection`, which a workspace row's tap and a viewport click on an object set; a click on empty space clears it) through a fixed list, repeated, live animation on: nothing selected, then each listed object in turn. The list is `IKKOKU_PERF_SELECT_KEYS`, else the first object of each kind the Object tab shows differently (source character, route, source camera, item, light, camera, folder) in workspace order. The inspector shows `IKKOKU_PERF_INSPECTOR_TAB` (default `object`). The actions are named for what they select (`select route`, `select source character from nothing`, `deselect`); each one's main-thread time is the busy period it ran in, which holds SwiftUI's update of the panels ([phase 2, item 7](#phase-2-item-7-selection-and-the-inspector)) |
+| `studio-export-import` | as `studio-idle` | File ▸ Export Edited Original Scene (`AppState.exportSourceScene(to:)`) of the startup scene as imported, unedited, repeated, live animation on. A hidden character the import left unbuilt has no edit, so the export builds no baseline for it; its saved animation time comes from its data-only clock ([lazy hidden characters](#lazy-hidden-characters-at-import)). Each export writes a new file and removes the previous one |
+| `studio-show-hidden` | as `studio-idle` | Visible on (the inspector's toggle, `StudioModel.update`) for each hidden object of the startup scene that holds source characters (its own flag off, its ancestors shown), in workspace order, each followed by Visible off again (unmeasured), repeated, live animation on. An action's first run shows characters the import left unbuilt, so its ready time holds their builds; later runs find them built. Each action is named `show <source key> (<n> characters)` |
+| `studio-clock-first` | as `studio-idle` | the first clock rebase and the first native save after the import, then repeated, live animation on: `rebase` sets the first drawn character with a converted saved clip to its own animation speed (`setSourceAnimationSpeed`, which bakes every character's clock), `save` is File ▸ Save (`saveScene(to:)`) to a scratch file. The first bake's time is the `sourceClockBake` mark pair |
 
 Other options:
 
@@ -260,9 +263,19 @@ locked `PerfDrawLog`. Everything else is recorded on the main thread.
   action (`details.actions`): its call time, the time until its builds were
   installed or its other background work finished
   (`PerfTrace.characterInstalled`, `backgroundWorkFinished`), the main
-  thread's busy time and longest busy period from the call until then, and
-  the status line and any error alert it left. `summarize` prints the
-  medians per action, with the 120 Hz refresh periods the median and the
+  thread's busy time and longest busy period from the call until then
+  (`busyMs`, `longestStallMs`; a busy period lasts until the run loop sleeps,
+  so when an action's SwiftUI update outlasts the gap to the next action, both
+  actions count the shared period), the same busy time clipped at the next
+  action's call (`busyOwnMs`, added for #383: back-to-back actions then add up
+  to the main thread's time instead of counting it twice), and
+  the status line and any error alert it left, and the process
+  `phys_footprint` and Metal allocation when it was ready (`footprintBytes`,
+  `metalAllocatedBytes`; ST-T04), so repeated loads show whether memory
+  accumulates per cycle, and the document's object count then
+  (`documentObjects`), so an edit's and its undo's effect can be checked. `summarize` prints the
+  medians per action (the own busy time in parentheses after the busy time, when
+  the report has it), with the 120 Hz refresh periods the median and the
   longest stall cover (a 100 ms stall drops 12 frames), and warns about an
   action that left an error;
 - the build: Debug/Release, the app's and the Engine package's own assert
@@ -4002,6 +4015,60 @@ method above (GPU × about 4.75, CPU × 1.25):
   attributed.
 - No `studio-idle` or orbit runs, and no M1 run.
 
+### Slice 5: the sun and its shadows (P4)
+
+Added 2026-11-18 with the fifth maps slice
+([maps: performance](studio/maps.md#performance)). P4 is an offscreen A/B in
+one quiet window (2026-11-18, 01:25:19–01:38:18). It runs `main` (`02fec873`)
+against the change (`a4868c68`), and the change with
+`IKKOKU_BENCHMARK_MAP_SHADOW=every-frame`, on 9 map scenes and the showoff
+scene without a map. Each run is 1996×1824 with 3 warm-up and 120 measured
+frames, and there are 4 rounds in alternating order, 116 units, all valid.
+The display ran at 60 Hz with the monitor off.
+
+- **Fails the registered GPU budget:** the steady state adds +0.12 to
+  +0.21 ms of GPU p50 on maps 01, 15, 21, 22, 27, 34 and 40 (budget +0.10),
+  and +0.185 to +0.234 ms of p95 on maps 01, 34 and 40 (budget +0.15).
+  Map 11 is at +0.095 / +0.106 and map 38, without a sun, at +0.012.
+- **Passes:** CPU encode (−0.036 to +0.012 ms), Metal (+16.7 to +17.3 MB per
+  sun map against 24, map 38 −0.2 MB), the change frame (GPU p95 at most
+  +0.260 against 0.50, encode p95 at most +0.020 against 0.30) and the scene
+  without a map (GPU p50 +0.006, encode p50 +0.009, within ±0.03).
+- The full table and the attribution are in
+  [maps: performance](studio/maps.md#performance).
+
+### Slice 5: the fix (P5)
+
+Added 2026-11-18. P5 measures the fix for P4's GPU cost in one quiet window
+(2026-11-18, 21:33:40–21:49:04 UTC).
+
+- **The fix** (`7e5fbf3d`) has three parts:
+  - it skips the sun block where n·l ≤ 0;
+  - it filters the shadow compares with a 3×3 tent in 4 bilinear taps;
+  - it draws the ambient-lit map surfaces with the toon pipelines.
+- **The runs:**
+  - `main` (`02fec873`, P4's base binary) against the fix, and the fix with
+    `IKKOKU_BENCHMARK_MAP_SHADOW=every-frame`;
+  - P4's 10 scenes, runs and bars;
+  - the plan was frozen before the window (SHA-256 `fe282e2f`).
+- **The base-spread rule:** a scene whose first-block base GPU p50 spread
+  exceeded 0.04 ms got one rerun block, and that block decides its verdict.
+  It triggered for maps 11 and 15.
+- **Passes, all 75 rows:**
+  - steady-state GPU p50 −0.047 to +0.036 ms (budget +0.10; P4 +0.095 to
+    +0.205 on the sun maps), and p95 −0.032 to +0.057 ms (budget +0.15);
+  - CPU encode −0.014 to +0.006 ms;
+  - Metal +16.7 to +17.3 MB per sun map, and map 38 −0.2 MB;
+  - the change frame: GPU p95 at most +0.212 ms against 0.50, and encode p95
+    at most +0.029 against 0.30;
+  - the scene without a map: GPU p50 +0.004 and encode p50 +0.014, within
+    ±0.03.
+- **Map 11's rerun block** had a base spread of 0.078, above 0.04 again. As
+  registered, it decides as is: there is no third block and no exclusion.
+- **Validity:** 140 units, all valid in the end. 9 first attempts were rerun
+  once, 8 for an intruder and 1 for an unread display mode.
+- The full table is in [maps: performance](studio/maps.md#performance).
+
 ## ST-T03i: scene plug-in data rewrites
 
 Added 2026-10-26 with the second plug-in data change ([plug-in data](studio/scene-editing.md#plug-in-data-st-t03i)).
@@ -6894,6 +6961,226 @@ loader, so an upload group would gain little. In order:
 1. A Time Profiler sample, attached by pid during cold head-200 selections,
    names what holds the main actor during preparation.
 2. A worker pre-decode of the base-appearance pixels follows as its own PR.
+
+## Lazy hidden characters at import
+
+An import builds only the characters it draws
+([scene editing](studio/scene-editing.md#hidden-characters-at-import-lazy-builds)).
+Hidden characters build when shown or selected. Their saved animation time
+comes from a data-only clock. These numbers compare the change with its
+merge base.
+
+### Window and validity (W3, 2026-11-17)
+
+- **Builds and order.** Release builds of both arms: head
+  `claude/stt03k-lazy-hidden` c825850c, base fb3aecd9 (the merge base plus
+  the three new workloads). Runs alternate ABBA.
+- **Scenes.** The 70-character user scene (45 of its characters cannot
+  convert, see below) and a median user scene with hidden characters.
+- **Display: 60 Hz, monitor off.** Every unit read 60.00 Hz, Online, before
+  and after. With the monitor off no frame is presented, so frame pacing and
+  presentation metrics were not measured. Startup runs used `--retries 0`;
+  their marks, main-thread and memory numbers do not need presentation.
+- **Validity.** A process outside our own work above 20% CPU in the
+  snapshot before or after a unit invalidates it. Three of 28 units were
+  invalid, and each was rerun valid:
+  - large startup base: corespotlightd 126%;
+  - median startup head: WD Discovery 21%;
+  - large export-import head: ecosystemd, trustd, plugin-container and
+    ecosystemanalyticsd.
+- **Noted, still valid.** plugin-container 40% (one unit); launchd 27–28.5%
+  (two units).
+
+All numbers are medians (min–max), 60 Hz, monitor off.
+
+### Startup (n = 4 per arm)
+
+| Scene | Metric | Base | Head |
+|---|---|---|---|
+| 70 characters | scene ready | 3.62 s (3.57–3.64) | 1.45 s (1.45–1.46) |
+| | main-thread busy until ready | 762 ms | 646 ms |
+| | longest stall | 396 ms | 390 ms |
+| | stalls over 100 ms | 2 | 2 |
+| | peak footprint | 1542 MiB | 1228 MiB |
+| | import call | 43.0 ms | 42.8 ms |
+| | clock warm-up (utility worker, after ready) | – | 170 ms |
+| median | scene ready | 1.58 s | 1.03 s |
+| | main-thread busy until ready | 617 ms | 576 ms |
+| | longest stall | 349 ms | 341 ms |
+| | peak footprint | 841 MiB | 855 MiB |
+| | maximum resident | about 1200 MiB | about 725 MiB |
+| | peak Metal allocation | 344 MiB | 231 MiB |
+| | clock warm-up | – | 58 ms |
+
+- **Median-scene footprint.** On the median scene the head builds less
+  (resident memory and Metal allocations both fall) while the footprint
+  stays level. Base's extra memory is mostly clean file-backed pages, which
+  the footprint does not count. One head unit read a 391 MiB footprint with
+  the same ready time, main-thread time, warm-up and Metal allocation as the
+  other head units, so it loaded everything. The difference (about
+  465 MiB) is most likely freed memory that run's allocator had already
+  returned. W3b found the same split again (see below). The median above
+  includes that unit.
+
+### Actions on the 70-character scene
+
+| Workload (n units per arm) | Action | Base | Head |
+|---|---|---|---|
+| `studio-clock-first` (2) | first `sourceClockBake` | – | 1.0 ms |
+| | first rebase, main busy | 34.5 ms | 22.0 ms |
+| | later rebases | 26.8 ms | 19.8 ms |
+| | first save, main busy | 37.9 ms | 37.6 ms |
+| | later saves | 36.2 ms | 41.4 ms (24–48) |
+| `studio-show-hidden` (1) | first show of a hidden folder, ready | 11–17 ms (5 characters) | 1.11–1.16 s (14 characters) |
+| | first show, main busy | 14–21 ms | 186–203 ms |
+| | first show, longest stall | 14–21 ms | 19–25 ms |
+| | show again, main busy | 11–14 ms | 16–26 ms |
+| `studio-select` (1) | first select of an unbuilt hidden character, ready | 10–15 ms (built at import) | 434–439 ms |
+| | its main busy / longest stall | 61–97 ms / 61–97 ms | 103–153 ms / 57–110 ms |
+| | later selects, main busy | 60–116 ms | 69–112 ms |
+| `studio-export-import` (2) | export, ready | 41.6 ms | 63.0 ms |
+| | export, main busy | 54.7 ms | 68.8 ms |
+
+- **Clock.** The first bake of the data-only clocks costs 1.0 ms on the main
+  thread, within the 8 ms target. A save costs the same in both arms; its
+  time is the scene's serialization.
+- **First show and first select.** The cost of a hidden character moves from
+  the import to its first show or selection. The builds run on workers, so
+  the longest stall stays 19–25 ms on a first show. A first selection's
+  stall (57–110 ms) is the size of the selection's existing inspector gap
+  (60–115 ms). A follow-up could pre-build a hidden character on hover or at
+  idle.
+- **Export.** In W3 the head exported through the background path whenever
+  a character had no preview: a worker hop for the clock states, a main
+  hop, and the status line's progress row shown and hidden, which costs
+  layout. The trace shows about 13.6 ms of main-thread time between the
+  call and the export, before the live refresh could run. The export now
+  runs in line when the import's warm-up has loaded every clock
+  (`SourceStudioAnimationClock.isLoaded`), as base does. W3b (below) times
+  the final code.
+
+### Final code (W3b, 2026-11-17)
+
+- **Builds.**
+  - Head: the final code, Release (34804c13). It adds the hidden card check
+    and the in-line export.
+  - Base: unchanged (fb3aecd9).
+- **Method.** Same as W3: ABBA, 60 Hz with the monitor off, the same
+  validity rule.
+- **Validity.** 15 units ran, 13 planned plus 2 reruns.
+  - One was invalid: show-hidden head, codex at 39% after the unit. Its
+    rerun was valid.
+  - The window's first launch (70-character startup, base) read the scene
+    from a spun-down external disk. Its import call took 18.6 s, and the
+    scene was ready after 22.2 s.
+    - The unit passed the validity rule. It was left out after its result
+      was seen, which is a post-hoc exclusion. It is accepted only because
+      leaving it out favours base.
+    - It was rerun. The table shows the base row both ways.
+
+| Workload (n per arm) | Metric | Base | Head |
+|---|---|---|---|
+| startup, 70 characters (base 2 without the cold unit, 3 with it; head 2) | scene ready | 3.60 s (3.59–3.61); with it 3.61 s (3.59–22.15) | 1.56 s (1.44–1.68) |
+| | main-thread busy until ready | 738 ms; with it 758 ms (718–19249) | 633 ms |
+| | longest stall | 386 ms; with it 391 ms (382–18908) | 380 ms |
+| | peak footprint | 1524 MiB; with it 1517 MiB | 1248 MiB |
+| | clock warm-up | – | 121 ms |
+| startup, median (2) | scene ready | 1.59 s | 1.02 s |
+| | main-thread busy until ready | 615 ms | 554 ms |
+| | longest stall | 364 ms | 294 ms |
+| | peak footprint | 842 MiB (841–843) | 676 MiB (495–857) |
+| `studio-export-import` (2) | export, ready | 42.4 ms | 58.1 ms |
+| | export, main busy | 55.1 ms | 63.0 ms |
+| `studio-show-hidden` (head only, 1) | first show of a hidden folder, ready | – | 745–766 ms (5 characters) |
+| | first show, main busy / longest stall | – | 113–120 ms / 19–27 ms |
+
+- **Export.**
+  - The head now exports in line: the call takes as long as the export. In
+    W3 the call returned in 0.9 ms and the export finished 63 ms later.
+  - The gap to base narrows from 21 to 16 ms (ready) and from 14 to 8 ms
+    (main-thread busy).
+  - The Q1 profile below finds the clocks' own cost at 0.17–0.29 ms per
+    export. The rest of the gap is attributed to the run environment.
+- **First show.** The card check keeps the hidden characters that cannot
+  convert as placeholders, so a first show now builds 5 characters instead
+  of 14. It is ready in about 0.75 s, with about 115 ms of main-thread time.
+  This changes again once extended shape rates (#379) make those characters
+  convertible; #379's own measurement covers it.
+- **Median-scene footprint.** It is bimodal on the head.
+  - Of the six head units (W3 and W3b), four read 855–861 MiB, about
+    15 MiB above base's 837–847 MiB.
+  - The other two read 391 and 495 MiB, with the same ready and main-thread
+    times.
+  - Resident memory and Metal allocations fall on the head (W3 table).
+
+### Export profile (Q1, 2026-11-18)
+
+W3b measured the head's export 16 ms slower to ready than base's (58.1
+against 42.4 ms). A Time Profiler run looked for where that time goes.
+
+- **Builds.**
+  - Head: 7939fd97 (this branch with main a281573b merged), Release.
+  - Base: main a281573b plus the three perf-workload commits, Release. Both
+    arms include #374.
+- **Method.** One `studio-export-import` unit per arm on the 70-character
+  scene. Each unit is one launch under the app lock, with
+  `perf_trace.py --xctrace "Time Profiler"` attached by process id.
+  - An entry gate ran before queuing for the lock and again inside it. It
+    required no build or test from any agent, no other process above 20%
+    CPU, and indexing daemons at or below 4%.
+  - The display read 60 Hz with the monitor off before and after every unit.
+- **Validity.** Two units were invalid, each with a Spotlight process above
+  20% in a snapshot, and each was rerun once. The valid pair below is the
+  evidence.
+- **Samples.** The main-thread samples inside
+  `StudioModel.exportSourceScene` were cut into the 18 exports and paired in
+  order with the report's export calls. This Mac's E cores are CPUs 0–3 and
+  12–15; its P cores are 4–11 and 16–23.
+
+| | Base | Head |
+|---|---|---|
+| main-thread samples on P cores | 100% | 98% |
+| export samples on P cores | 100% | 99% |
+| exports with at least 80% of their samples on P cores | 18 of 18 | 18 of 18 |
+| export call, median (min–max) | 43.4 ms (38.6–50.0) | 43.5 ms (36.7–60.7) |
+| export call, exports after the first (W3b's measure) | 43.4 ms | 49.2 ms |
+| export main-thread busy, median | 54.8 ms | 47.8 ms |
+| `KoikatsuSceneReader.decodeDocument`, per export | 21.8 ms | 22.2 ms |
+| SHA-256 of the scene file | 7.9 ms | 8.8 ms |
+| `SourceSceneExportValidation.validate` | 2.3 ms | 2.7 ms |
+| `SourceStudioAnimationClock.savedStates` | – | 0.17 ms |
+| main-thread samples in the 10 s window | 4.0 s | 1.8 s |
+| `studioRefresh` p50 | 11.1 ms | 2.1 ms |
+
+- **Placement.** Both arms run the export on P cores, so P/E placement does
+  not explain the gap.
+- **Code.** The export calls the same functions in both arms. The only
+  addition is the data-only clocks of the 20 unbuilt characters: 0.17 ms per
+  export (0.29 ms in the invalid head unit).
+- **The head's slow phase.**
+  - The head's exports 1–9 took about 37 ms. Exports 10–18 took 49–61 ms.
+    All ran on P cores.
+  - In the slow phase the compute-bound callees took longer: decode 18.7 →
+    25.8 ms (+38%), SHA-256 6.2 → 11.4 ms (+84%), validation +29%. The file
+    read stayed at 1.0 ms and the write at 1.3–1.6 ms.
+  - So a P core ran slower (lower clock or contention); it was not more
+    work. The Time Profiler cannot tell the two apart.
+  - The slow phase ran from 02:06:22.0 to 02:06:26.5. Another agent's trace
+    analysis ran outside the lock from about 02:05:26 and finished at
+    02:06:21. That overlaps the fast phase (02:06:17.0–02:06:21.6), not the
+    slow one. What ran during the slow phase is unknown. The snapshot at
+    02:06:29 shows no process above 20%.
+  - The head process is lighter. Its main thread was busy 1.8 s of the 10 s,
+    against base's 4.0 s, and its refresh takes 2.1 ms against 11.1 ms,
+    because base builds every hidden character. A lighter process plausibly
+    runs at a lower clock in this monitor-off environment (see the #374 note
+    on CPU phases about 3.5 times slower).
+- **Result.** W3b's +16 ms stands as measured. In this window the medians
+  are equal (43.5 against 43.4 ms). Over the exports after the first, the
+  head reads 49.2 against 43.4 ms, because its slow phase began at export
+  10. The export's own added cost is the clock, 0.17–0.29 ms. Per export,
+  the head's main thread is busy 7 ms less than base's. The rest of W3b's
+  gap is attributed to the run environment, not to this change's code.
 
 ## Rig finite-affine check (#374, 2026-11-17)
 

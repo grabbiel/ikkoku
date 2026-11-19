@@ -19,7 +19,7 @@ import ShaderTypes
 struct StudioScenario: Decodable {
     struct Step: Decodable {
         /// `"select"`, `"setVisible"`, `"rename"`, `"toggleCamera"`, `"toggleRoute"`,
-        /// `"undo"`, `"redo"`, `"newScene"`, `"saveDocument"`, `"loadDocument"`,
+        /// `"undo"`, `"redo"`, `"newScene"`, `"saveDocument"`, `"loadDocument"`, `"loadDocumentRejected"`, `"importDocument"`,
         /// `"setFace"`, `"setBody"`, `"setColor"`, `"resetShape"`, `"resetColors"`, `"setOutfit"`,
         /// `"setClothesState"`, `"setAccessoryVisible"`, `"setShoesType"`, `"setExpression"`, `"resetExpression"`,
         /// `"setAnimation"`, `"setAnimationSpeed"`, `"setForceLoop"`, `"setFKEnabled"`,
@@ -29,7 +29,7 @@ struct StudioScenario: Decodable {
         /// `"captureIKPose"`, `"editDuringAdvance"`, `"backgroundBuild"`, `"delete"`, `"setParent"`, `"duplicate"`,
         /// `"addFolder"`, `"addCamera"`, `"addLight"`, `"export"`, `"exportRejected"`, `"reimport"`,
         /// `"focus"`, `"selectRoutePoint"`, `"dragRoutePoint"`, `"editRoute"`, `"captureRoute"`, `"setShowSourceMap"`, `"setUnlimitedLights"`,
-        /// `"assert"`, `"assertRejected"`.
+        /// `"deselect"`, `"assertWorkspaceRows"`, `"assert"`, `"assertRejected"`.
         let op: String
         let key: Int32?
         /// ST-T03: with `key`, address the n-th copy (document order) of that
@@ -42,6 +42,9 @@ struct StudioScenario: Decodable {
         /// assert only: the looked-through camera must be a copy of this
         /// source camera (`Studio.Duplicate` hands the view to the copy).
         let activeCopyOf: Int32?
+        /// assert only (#384): how many undo and redo steps the history holds,
+        /// and how many objects the document has.
+        let undoDepth: Int?, redoDepth: Int?, objectCount: Int?
         let visible: Bool?
         let name: String?
         let index: Int?
@@ -77,6 +80,19 @@ struct StudioScenario: Decodable {
         /// must contain, read after any `view` check in the same step, so a
         /// look-through rejection the render camera reported is visible.
         let statusContains: String?
+        /// assert only: a substring the status line must not contain (a
+        /// hidden character's attachments report no false parent error).
+        let statusLacks: String?
+        /// assert only: whether source character `key` has a built preview,
+        /// the data its Face, Clothes and Pose inspectors read. A hidden
+        /// character builds when shown or selected; with `built` true and the
+        /// character selected, its pose and animation state must be readable.
+        let characterBuilt: CharacterBuiltValue?
+        /// assert only: source character `key`'s saved animation state in
+        /// exported scene files (`paths`, read back from disk): with `agree`
+        /// every file saves the same state; with `increasing` each file's
+        /// normalizedTime is above the previous file's (the clock ran).
+        let exportedAnimation: ExportedAnimationValue?
         /// assert only: a substring the view indicator under the status line
         /// (`StudioModel.activeSourceCameraView`) must contain; with no source
         /// camera active the indicator is empty and contains nothing.
@@ -537,6 +553,18 @@ struct StudioScenario: Decodable {
             let pickSomethingAt: [[Float]]?
         }
 
+        struct CharacterBuiltValue: Decodable {
+            let key: Int32
+            let built: Bool
+        }
+
+        struct ExportedAnimationValue: Decodable {
+            let key: Int32
+            let paths: [String]
+            let agree: Bool?
+            let increasing: Bool?
+        }
+
         struct SourceRuntimeValue: Decodable {
             let cameras: Int?
             let items: Int?
@@ -548,12 +576,13 @@ struct StudioScenario: Decodable {
 
         private enum CodingKeys: String, CodingKey {
             case op, key, visible, name, index, value, id, rgba, path, face, body, color,
-                 activeCamera, routePlaying, sourceRuntime, diagnosticContains, statusContains, indicatorContains, treeLabel, view,
+                 activeCamera, routePlaying, sourceRuntime, diagnosticContains, statusContains, statusLacks, characterBuilt, exportedAnimation,
+                 indicatorContains, treeLabel, view,
                  group, category, no, speed, on, bone, rotation, animation, fk, position,
                  seconds, dx, dy, eyeLook, blink, handPattern, mode, axis, pixels,
                  render, exportIdenticalToSource, errorContains, outfit, accessoryLabels, pluginMount, state, clothes, expression,
                  sex, character, chain, delta, ik, edit, build, parent, children, absent, copy, added, activeCopyOf,
-                 aid, routeEdit, route, routeLines, sourceMap, liveSamplers
+                 undoDepth, redoDepth, objectCount, aid, routeEdit, route, routeLines, sourceMap, liveSamplers
         }
 
         init(from decoder: Decoder) throws {
@@ -587,6 +616,9 @@ struct StudioScenario: Decodable {
             sourceRuntime = try c.decodeIfPresent(SourceRuntimeValue.self, forKey: .sourceRuntime)
             diagnosticContains = try c.decodeIfPresent(String.self, forKey: .diagnosticContains)
             statusContains = try c.decodeIfPresent(String.self, forKey: .statusContains)
+            statusLacks = try c.decodeIfPresent(String.self, forKey: .statusLacks)
+            characterBuilt = try c.decodeIfPresent(CharacterBuiltValue.self, forKey: .characterBuilt)
+            exportedAnimation = try c.decodeIfPresent(ExportedAnimationValue.self, forKey: .exportedAnimation)
             indicatorContains = try c.decodeIfPresent(String.self, forKey: .indicatorContains)
             treeLabel = try c.decodeIfPresent(String.self, forKey: .treeLabel)
             view = try c.decodeIfPresent(ViewValue.self, forKey: .view)
@@ -660,6 +692,9 @@ struct StudioScenario: Decodable {
             copy = try c.decodeIfPresent(Int.self, forKey: .copy)
             added = try c.decodeIfPresent(String.self, forKey: .added)
             activeCopyOf = try c.decodeIfPresent(Int32.self, forKey: .activeCopyOf)
+            undoDepth = try c.decodeIfPresent(Int.self, forKey: .undoDepth)
+            redoDepth = try c.decodeIfPresent(Int.self, forKey: .redoDepth)
+            objectCount = try c.decodeIfPresent(Int.self, forKey: .objectCount)
             aid = try c.decodeIfPresent(Bool.self, forKey: .aid)
             routeEdit = try c.decodeIfPresent(RouteEditValue.self, forKey: .routeEdit)
             route = try c.decodeIfPresent(RouteValue.self, forKey: .route)
@@ -938,6 +973,36 @@ struct StudioScenario: Decodable {
                 return "assert exportIdenticalToSource: exported SHA256 \(exportedSHA) differs from initial source SHA256 \(sourceSHA)"
             }
             details.append("export \(path): \(exported.count) bytes; SHA256 \(exportedSHA) equals initial source")
+            return nil
+        }
+        /// `exportedAnimation`: reads each exported scene back from disk and
+        /// compares character `key`'s saved animation state across them.
+        func assertExportedAnimation(_ check: Step.ExportedAnimationValue, details: inout [String]) -> String? {
+            guard !check.paths.isEmpty, check.agree != nil || check.increasing != nil else {
+                return "assert exportedAnimation: needs paths and agree or increasing"
+            }
+            var states: [SourceStudioAnimationState] = []
+            for path in check.paths {
+                do {
+                    let scene = try KoikatsuSceneReader.decodeDocument(Data(contentsOf: URL(fileURLWithPath: path)))
+                    var stack = scene.snapshot.roots, found: KoikatsuCharacterRecord?
+                    while let object = stack.popLast() {
+                        if object.sourceKey == check.key { found = object.character; break }
+                        stack += object.children
+                        if let character = object.character { stack += character.accessoryChildren.values.flatMap { $0 } }
+                    }
+                    guard let record = found else { return "assert exportedAnimation: \"\(path)\" has no character \(check.key)" }
+                    states.append(SourceStudioAnimationState(record: record))
+                } catch { return "assert exportedAnimation: \"\(path)\" could not be read: \(error)" }
+            }
+            let times = states.map { "\($0.normalizedTime)" }.joined(separator: ", ")
+            if check.agree == true, states.contains(where: { $0 != states[0] }) {
+                return "assert exportedAnimation: character \(check.key)'s saved states differ (normalizedTime \(times))"
+            }
+            if check.increasing == true, zip(states, states.dropFirst()).contains(where: { $0.normalizedTime >= $1.normalizedTime }) {
+                return "assert exportedAnimation: character \(check.key)'s normalizedTime does not increase (\(times))"
+            }
+            details.append("character \(check.key) exported normalizedTime \(times)")
             return nil
         }
         /// The state the inspector shows for a source character: the document
@@ -1713,6 +1778,23 @@ struct StudioScenario: Decodable {
                 guard let id = object(step) else { record(step, false, "select: no object with source key \(step.key ?? -1)"); continue }
                 studio.selection = id
                 record(step, true, "selected source key \(step.key!)")
+            case "deselect":
+                studio.selection = nil
+                record(step, true, "selection cleared")
+            case "assertWorkspaceRows":
+                // #387 round 3: the published workspace rows, a selection
+                // change's patched ones included, equal a full rebuild.
+                guard StudioPanelStateMode.current.publishes else { record(step, true, "workspace rows read from the document (IKKOKU_PERF_PANEL_STATE=document)"); continue }
+                let published = studio.workspaceState, fresh = StudioWorkspaceState(model: studio)
+                let selected = published.entries.filter(\.selected).map { row in
+                    studio.doc.object(row.id)?.sourceObjectKey.map { "key \($0)" } ?? row.name
+                }
+                if published == fresh {
+                    record(step, true, "workspace rows equal a rebuild: \(published.entries.count) rows, selected \(selected.isEmpty ? "none" : selected.joined(separator: ", "))")
+                } else {
+                    let differing = zip(published.entries, fresh.entries).filter { $0 != $1 }.count
+                    record(step, false, "assertWorkspaceRows: published rows differ from a rebuild (\(published.entries.count) vs \(fresh.entries.count) rows, \(differing) differ)")
+                }
             case "setVisible":
                 guard let id = object(step) else { record(step, false, "setVisible: no object with source key \(step.key ?? -1)"); continue }
                 guard let visible = step.visible else { record(step, false, "setVisible: missing visible"); continue }
@@ -1784,6 +1866,33 @@ struct StudioScenario: Decodable {
                     record(step, false, "loadDocument failed, stopping: \(error)")
                     stopped = true; break scenarioLoop
                 }
+            case "loadDocumentRejected":
+                // #384: an Open that fails after reading the file (a file that
+                // is not an Ikkoku scene) must leave the document and both
+                // history stacks exactly as they were.
+                guard let path = step.path, let url = insideLocal(path) else {
+                    record(step, false, "loadDocumentRejected: path must stay under .local/: \(step.path ?? "<missing>")"); continue
+                }
+                let (document, undo, redo) = (studio.doc, studio.undoStack, studio.redoStack)
+                do {
+                    try studio.loadScene(from: url)
+                    record(step, false, "loadDocumentRejected: \(path) loaded, expected a refusal")
+                } catch {
+                    let unchanged = studio.doc == document && studio.undoStack == undo && studio.redoStack == redo
+                    record(step, unchanged, unchanged
+                        ? "refused \(path) (\(error)); document and \(undo.count) undo / \(redo.count) redo steps unchanged"
+                        : "loadDocumentRejected: the refused Open changed the document or the history (undo \(undo.count) -> \(studio.undoStack.count), redo \(redo.count) -> \(studio.redoStack.count))")
+                }
+            case "importDocument":
+                // File ▸ Import Scene of an Ikkoku scene: merges its objects
+                // into the current scene, an ordinary undo step (#384).
+                guard let path = step.path, let url = insideLocal(path) else {
+                    record(step, false, "importDocument: path must stay under .local/: \(step.path ?? "<missing>")"); continue
+                }
+                do {
+                    try studio.importScene(from: url)
+                    record(step, true, "imported \(path): \(studio.doc.objects.count) objects")
+                } catch { record(step, false, "importDocument: \(error)") }
             case "setFace", "setBody":
                 let face = step.op == "setFace"
                 guard let id = object(step) else { record(step, false, "\(step.op): no object with source key \(step.key ?? -1)"); continue }
@@ -2138,11 +2247,9 @@ struct StudioScenario: Decodable {
                     guard let target = studio.doc.object(id)?.ikTargets[chain], target.enabled else {
                         record(step, false, "setIKTarget: \(chain.label) IK is off; run setIKEnabled first"); continue
                     }
-                    var position = target.position
-                    if let delta = step.delta { position[axis] = position[axis].advanced(by: delta) }
-                    else { position[axis] = step.value! }
+                    let value = step.delta.map { target.position[axis].advanced(by: $0) } ?? step.value!
                     studio.selection = id
-                    studio.setIKTarget(id, chain, position: position)
+                    studio.setIKTarget(id, chain, component: axis, to: value)
                     let now = studio.doc.object(id)?.ikTargets[chain]?.position ?? .zero
                     record(step, true, "\(chain.label) target \(describe(target.position)) → \(describe(now)); status \"\(studio.status)\"")
                 } catch { record(step, false, "setIKTarget: \(error)") }
@@ -3098,6 +3205,15 @@ struct StudioScenario: Decodable {
                         details.append("looking through a copy of camera \(key)")
                     }
                 }
+                if let expected = step.undoDepth, studio.undoStack.count != expected {
+                    problems.append("assert undoDepth: \(studio.undoStack.count) undo steps, expected \(expected)")
+                }
+                if let expected = step.redoDepth, studio.redoStack.count != expected {
+                    problems.append("assert redoDepth: \(studio.redoStack.count) redo steps, expected \(expected)")
+                }
+                if let expected = step.objectCount, studio.doc.objects.count != expected {
+                    problems.append("assert objectCount: \(studio.doc.objects.count) objects, expected \(expected)")
+                }
                 if let expectedKey = step.activeCamera {
                     let active = studio.activeSourceCamera.flatMap { studio.doc.object($0)?.sourceObjectKey }
                     if active != expectedKey {
@@ -3212,6 +3328,28 @@ struct StudioScenario: Decodable {
                 if let problem = assertView(step, details: &details) { problems.append(problem) }
                 if let needle = step.statusContains, !studio.status.contains(needle) {
                     problems.append("assert statusContains: status \"\(studio.status)\" does not contain \"\(needle)\"")
+                }
+                if let needle = step.statusLacks {
+                    if studio.status.contains(needle) {
+                        problems.append("assert statusLacks: status \"\(studio.status)\" contains \"\(needle)\"")
+                    } else { details.append("status lacks \"\(needle)\"") }
+                }
+                if let check = step.characterBuilt {
+                    let id = studio.doc.objects.first(where: { $0.sourceObjectKey == check.key })?.id
+                    let built = characterPreview(check.key) != nil
+                    if id == nil {
+                        problems.append("assert characterBuilt: no object with source key \(check.key)")
+                    } else if built != check.built {
+                        problems.append("assert characterBuilt: character \(check.key) is \(built ? "built" : "not built"), expected \(check.built ? "built" : "not built")")
+                    } else if built, studio.selection == id,
+                              studio.selectedSourceIKState == nil || studio.selectedSourceAnimationState == nil {
+                        problems.append("assert characterBuilt: selected character \(check.key) is built but its pose or animation state is unreadable")
+                    } else {
+                        details.append("character \(check.key) \(built ? "built" : "not built")\(studio.selection == id ? ", selected" : "")")
+                    }
+                }
+                if let check = step.exportedAnimation {
+                    if let problem = assertExportedAnimation(check, details: &details) { problems.append(problem) }
                 }
                 if let needle = step.indicatorContains {
                     let indicator = studio.activeSourceCameraView?.indicator ?? ""

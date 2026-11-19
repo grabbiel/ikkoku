@@ -1,0 +1,20 @@
+{
+  "steps": [
+    {"op": "setVisible", "key": 10, "visible": false},
+    {"op": "export", "path": ".local/verification/scenario-exports/hidden-attachment-status.png"},
+    {"op": "reimport", "path": ".local/verification/scenario-exports/hidden-attachment-status.png"},
+    {"op": "select", "key": 20},
+    {"op": "assert", "key": 10, "visible": false, "characterBuilt": {"key": 10, "built": false},
+     "statusLacks": "has no converted character"},
+    {"op": "select", "key": 11},
+    {"op": "assert", "characterBuilt": {"key": 10, "built": true}, "statusLacks": "has no converted character"},
+    {"op": "saveDocument", "path": ".local/verification/scenario-exports/hidden-attachment-status-document.png"},
+    {"op": "loadDocument", "path": ".local/verification/scenario-exports/hidden-attachment-status-document.png"},
+    {"op": "select", "key": 20},
+    {"op": "assert", "key": 10, "visible": false, "characterBuilt": {"key": 10, "built": false},
+     "statusLacks": "has no converted character"},
+    {"op": "setVisible", "key": 10, "visible": true},
+    {"op": "assert", "key": 10, "visible": true, "characterBuilt": {"key": 10, "built": true},
+     "statusLacks": "has no converted character"}
+  ]
+}

@@ -25,11 +25,15 @@ vertex ToonVertexOut toon_vertex(
     device const float2* uvs2 [[buffer(BufferIndexTexcoords2)]],
     device const uchar4* colors [[buffer(BufferIndexVertexColors)]],
     constant FrameUniforms& frame [[buffer(BufferIndexFrameUniforms)]],
-    constant DrawUniforms& draw [[buffer(BufferIndexDrawUniforms)]],
+    uint iid [[instance_id]],
+    constant DrawUniforms* draws [[buffer(BufferIndexDrawUniforms)]],
     constant MaterialUniforms& mat [[buffer(BufferIndexMaterial)]],
     device const uchar* hiddenBuf [[buffer(BufferIndexVertexHidden)]],
     device const uchar* receiveBuf [[buffer(BufferIndexVertexReceive)]])
 {
+    // DrawUniforms by instance (ST-T04 B0): a per-draw record is bound as a one-element
+    // array at its own offset (instance_id 0); an instanced draw indexes its table.
+    constant DrawUniforms& draw = draws[iid];
     VSInput v = fetchVertex(vid, verts, uvs, colors, (mat.flags & MaterialFlagHasVertexColor) != 0);
     ToonVertexOut o;
     float4 wp = draw.model * float4(v.position, 1.0);
@@ -192,25 +196,17 @@ inline float3 shadeToon(Surface s, ToonVertexOut in, constant FrameUniforms& fra
     return color;
 }
 
-fragment float4 toon_fragment(
-    ToonVertexOut in [[stage_in]],
-    bool isFront [[front_facing]],
-    constant FrameUniforms& frame [[buffer(BufferIndexFrameUniforms)]],
-    constant DrawUniforms& draw [[buffer(BufferIndexDrawUniforms)]],
-    constant MaterialUniforms& mat [[buffer(BufferIndexMaterial)]],
-    constant LightsUniforms& lights [[buffer(BufferIndexLights)]],
-    texture2d<float> baseTex [[texture(TextureIndexBase)]],
-    texture2d<float> colorMask [[texture(TextureIndexColorMask)]],
-    texture2d<float> detailTex [[texture(TextureIndexDetail)]],
-    texture2d<float> lineTex [[texture(TextureIndexLine)]],
-    texture2d<float> normalTex [[texture(TextureIndexNormal)]],
-    texture2d<float> overlay0 [[texture(TextureIndexOverlay0)]],
-    texture2d<float> overlay1 [[texture(TextureIndexOverlay1)]],
-    texture2d<float> overlay2 [[texture(TextureIndexOverlay2)]],
-    depth2d<float> shadowMap [[texture(TextureIndexShadowMap)]],
-    texture2d<float> hairGloss [[texture(TextureIndexHairGloss)]],
-    texture2d<float> patternTex [[texture(TextureIndexPattern)]],
-    texture2d<float> bodyMask [[texture(TextureIndexBodyMask)]])
+// ST-A11 slice 5: an ambient-lit map surface (defined with map_fragment below).
+inline float4 mapAmbientLitSurface(ToonVertexOut in, constant FrameUniforms& frame, constant MaterialUniforms& mat,
+                                   constant MapLightingUniforms& mapLight, texture2d<float> baseTex, texture2d<float> normalTex,
+                                   texture2d<float> emissionTex, depth2d<float> mapShadow);
+
+// The toon surface: toon_fragment's body, shared with toon_map_probe_lit_fragment.
+inline float4 toonSurface(ToonVertexOut in, bool isFront, constant FrameUniforms& frame, constant DrawUniforms& draw,
+                          constant MaterialUniforms& mat, constant LightsUniforms& lights, texture2d<float> baseTex,
+                          texture2d<float> colorMask, texture2d<float> detailTex, texture2d<float> lineTex, texture2d<float> normalTex,
+                          texture2d<float> overlay0, texture2d<float> overlay1, texture2d<float> overlay2, depth2d<float> shadowMap,
+                          texture2d<float> hairGloss, texture2d<float> patternTex, texture2d<float> bodyMask)
 {
     if (in.hidden > 0.5) discard_fragment();
     if (bodyMaskDiscards(bodyMask, in.uv, mat)) discard_fragment();
@@ -300,6 +296,61 @@ fragment float4 toon_fragment(
         color = shadeToon(s, in, frame, mat, lights, shadowMap, hairGloss);
     }
     return float4(color, alpha);
+}
+
+fragment float4 toon_fragment(
+    ToonVertexOut in [[stage_in]],
+    bool isFront [[front_facing]],
+    constant FrameUniforms& frame [[buffer(BufferIndexFrameUniforms)]],
+    constant DrawUniforms& draw [[buffer(BufferIndexDrawUniforms)]],
+    constant MaterialUniforms& mat [[buffer(BufferIndexMaterial)]],
+    constant LightsUniforms& lights [[buffer(BufferIndexLights)]],
+    texture2d<float> baseTex [[texture(TextureIndexBase)]],
+    texture2d<float> colorMask [[texture(TextureIndexColorMask)]],
+    texture2d<float> detailTex [[texture(TextureIndexDetail)]],
+    texture2d<float> lineTex [[texture(TextureIndexLine)]],
+    texture2d<float> normalTex [[texture(TextureIndexNormal)]],
+    texture2d<float> overlay0 [[texture(TextureIndexOverlay0)]],
+    texture2d<float> overlay1 [[texture(TextureIndexOverlay1)]],
+    texture2d<float> overlay2 [[texture(TextureIndexOverlay2)]],
+    depth2d<float> shadowMap [[texture(TextureIndexShadowMap)]],
+    texture2d<float> hairGloss [[texture(TextureIndexHairGloss)]],
+    texture2d<float> patternTex [[texture(TextureIndexPattern)]],
+    texture2d<float> bodyMask [[texture(TextureIndexBodyMask)]])
+{
+    return toonSurface(in, isFront, frame, draw, mat, lights, baseTex, colorMask, detailTex, lineTex, normalTex, overlay0, overlay1, overlay2,
+                       shadowMap, hairGloss, patternTex, bodyMask);
+}
+
+// ST-A11 slice 5: the ToonMapProbeLit pipelines' fragment. The renderer routes only ambient-lit map surfaces here;
+// the kind test stays a runtime test, so the function keeps the toon item path compiled in: the shape the P4
+// attribution measured (W11 f3; docs/reference/studio/maps.md, "Engine (slice 5)").
+fragment float4 toon_map_probe_lit_fragment(
+    ToonVertexOut in [[stage_in]],
+    bool isFront [[front_facing]],
+    constant FrameUniforms& frame [[buffer(BufferIndexFrameUniforms)]],
+    constant DrawUniforms& draw [[buffer(BufferIndexDrawUniforms)]],
+    constant MaterialUniforms& mat [[buffer(BufferIndexMaterial)]],
+    constant LightsUniforms& lights [[buffer(BufferIndexLights)]],
+    texture2d<float> baseTex [[texture(TextureIndexBase)]],
+    texture2d<float> colorMask [[texture(TextureIndexColorMask)]],
+    texture2d<float> detailTex [[texture(TextureIndexDetail)]],
+    texture2d<float> lineTex [[texture(TextureIndexLine)]],
+    texture2d<float> normalTex [[texture(TextureIndexNormal)]],
+    texture2d<float> overlay0 [[texture(TextureIndexOverlay0)]],
+    texture2d<float> overlay1 [[texture(TextureIndexOverlay1)]],
+    texture2d<float> overlay2 [[texture(TextureIndexOverlay2)]],
+    depth2d<float> shadowMap [[texture(TextureIndexShadowMap)]],
+    texture2d<float> hairGloss [[texture(TextureIndexHairGloss)]],
+    texture2d<float> patternTex [[texture(TextureIndexPattern)]],
+    texture2d<float> bodyMask [[texture(TextureIndexBodyMask)]],
+    constant MapLightingUniforms& mapLight [[buffer(BufferIndexMapLighting)]],
+    texture2d<float> emissionTex [[texture(TextureIndexEmission)]],
+    depth2d<float> mapShadow [[texture(TextureIndexMapShadow)]])
+{
+    if (mat.kind == MaterialKindMap) return mapAmbientLitSurface(in, frame, mat, mapLight, baseTex, normalTex, emissionTex, mapShadow);
+    return toonSurface(in, isFront, frame, draw, mat, lights, baseTex, colorMask, detailTex, lineTex, normalTex, overlay0, overlay1, overlay2,
+                       shadowMap, hairGloss, patternTex, bodyMask);
 }
 
 // ---- Eyes -------------------------------------------------------------------
@@ -473,7 +524,19 @@ inline float3 mapSunRadiance(float3 n, float3 v, float3 l, float3 albedo, float 
     return color;
 }
 
-/// The map shadow map's visibility at worldPos: 3x3 PCF of reverse-Z compares (1 = lit).
+/// Per-texel weights of a 3-texel-wide triangle filter at `offset` (-0.5...0.5 from the nearest
+/// texel corner): UnityShadowLibrary.cginc's _UnityInternalGetWeightPerTexel_3TexelsWideTriangleFilter.
+inline float4 mapTentWeights3(float offset) {
+    float a = (offset + 0.5) * (offset + 0.5) * 0.5;
+    float lo = min(offset, 0.0), hi = max(offset, 0.0);
+    return float4(a - offset, (1.0 - offset) - lo * lo, (1.0 + offset) - hi * hi, a) * 0.44444;
+}
+
+/// The map shadow map's visibility at worldPos (1 = lit): a 3x3-texel tent of reverse-Z compares
+/// taken as 4 bilinear compares, the arithmetic of UnityShadowLibrary.cginc's
+/// UnitySampleShadowmap_PCF3x3Tent. It is not a claim about Unity's kernel: 2017.2's screen-space
+/// collector filters with PCF7x7 on desktop and 5.6.2f1's is unverified (#392). The tent replaced
+/// 9 point-offset compares because its edge profile measured closer to Unity's (docs/reference/studio/maps.md).
 inline float mapShadowVisibility(float3 worldPos, constant MapLightingUniforms& light, depth2d<float> shadowMap) {
     float4 sc = light.shadowViewProjection * float4(worldPos, 1.0);
     float3 p = sc.xyz / sc.w;
@@ -482,12 +545,66 @@ inline float mapShadowVisibility(float3 worldPos, constant MapLightingUniforms& 
     // Past the depth range nothing casts: clamped, a receiver behind every caster still compares
     // against the cleared far depth (0) as lit.
     float ref = clamp(p.z + light.shadowParams.z, 0.0, 1.0);
-    float step = light.shadowParams.y * light.shadowParams.w;
-    float sum = 0.0;
-    for (int y = -1; y <= 1; ++y)
-        for (int x = -1; x <= 1; ++x)
-            sum += shadowMap.sample_compare(shadowSampler, uv + float2(x, y) * step, ref);
-    return sum / 9.0;
+    float texel = light.shadowParams.y;
+    float2 tc = uv / texel;
+    float2 center = floor(tc + 0.5);
+    float2 offset = tc - center;
+    float4 wu = mapTentWeights3(offset.x), wv = mapTentWeights3(offset.y);
+    float2 fu = wu.xz + wu.yw, fv = wv.xz + wv.yw;
+    float2 ou = (wu.yw / fu + float2(-1.5, 0.5)) * texel;
+    float2 ov = (wv.yw / fv + float2(-1.5, 0.5)) * texel;
+    float2 o = center * texel;
+    return fu.x * fv.x * shadowMap.sample_compare(shadowSampler, o + float2(ou.x, ov.x), ref)
+         + fu.y * fv.x * shadowMap.sample_compare(shadowSampler, o + float2(ou.y, ov.x), ref)
+         + fu.x * fv.y * shadowMap.sample_compare(shadowSampler, o + float2(ou.x, ov.y), ref)
+         + fu.y * fv.y * shadowMap.sample_compare(shadowSampler, o + float2(ou.y, ov.y), ref);
+}
+
+/// The Standard surface's albedo: baseColor times the base texture, alpha-tested at params.w.
+inline float4 mapStandardAlbedo(ToonVertexOut in, constant MaterialUniforms& mat, texture2d<float> baseTex) {
+    float4 albedo = mat.baseColor;
+    if (mat.flags & MaterialFlagHasBaseTexture) albedo *= baseTex.sample(forcedAnisoRepeat, in.uv);
+    if ((mat.flags & MaterialFlagAlphaTest) && albedo.a < mat.params.w) discard_fragment();
+    return albedo;
+}
+
+/// The Standard surface's shading normal: the interpolated normal, normalized, moved by the normal map under
+/// MaterialFlagMapNormal (slice 6: Unity's normalWorld feeds the lightmap decode, ShadeSH9 and the sun).
+inline float3 mapShadingNormal(ToonVertexOut in, constant MaterialUniforms& mat, texture2d<float> normalTex) {
+    float3 n = normalize(in.worldNormal);
+    if (mat.flags & MaterialFlagMapNormal) n = mapNormal(normalTex.sample(forcedAnisoRepeat, in.uv), mat.params.z, n, in.worldTangent);
+    return n;
+}
+
+/// The Standard surface from its diffuse GI (the lightmap's or the ambient's) at the unit normal n:
+/// diffColor * gi, the realtime sun with its shadow, and the emission.
+inline float4 mapStandardColor(float4 albedo, float3 n, float3 gi, ToonVertexOut in, constant FrameUniforms& frame,
+                               constant MaterialUniforms& mat, constant MapLightingUniforms& mapLight,
+                               texture2d<float> emissionTex, depth2d<float> mapShadow) {
+    float3 color = albedo.rgb * mat.oneMinusReflectivity * gi;
+    // Facing away from the sun (n.l <= 0) every sun term is multiplied by saturate(n.l) = 0 (mapSunRadiance), so
+    // the block adds exactly 0: skipping it (and its shadow compares) leaves every pixel unchanged.
+    if ((mat.flags & MaterialFlagMapSunLit) && mapLight.sunDirection.w > 0.0 && dot(n, mapLight.sunDirection.xyz) > 0.0) {
+        float atten = 1.0;
+        if (in.receive > 0.5 && mapLight.shadowParams.x > 0.0) {
+            atten = mix(1.0, mapShadowVisibility(in.worldPos, mapLight, mapShadow), mapLight.shadowParams.x);
+        }
+        float3 v = normalize(frame.cameraPosition.xyz - in.worldPos);
+        color += mapLight.sunColor.rgb * atten * mapSunRadiance(n, v, mapLight.sunDirection.xyz, albedo.rgb, mat.oneMinusReflectivity,
+            mat.params.x, (mat.flags & MaterialFlagMapLambert) != 0, (mat.flags & MaterialFlagMapSpecularHighlights) != 0);
+    }
+    if (mat.emissive.a > 0.0) color += emissionTex.sample(forcedAnisoRepeat, in.uv).rgb * mat.emissive.rgb * mat.emissive.a;
+    return float4(color, (mat.flags & MaterialFlagAlphaBlend) ? albedo.a : 1.0);
+}
+
+/// An ambient-lit Standard surface (no lightmap): ShadeSH9 of the map's ambient as gi.diffuse. map_fragment's
+/// ambient-lit draws and the ToonMapProbeLit pipelines' toon_fragment both draw through it.
+inline float4 mapAmbientLitSurface(ToonVertexOut in, constant FrameUniforms& frame, constant MaterialUniforms& mat,
+                                   constant MapLightingUniforms& mapLight, texture2d<float> baseTex, texture2d<float> normalTex,
+                                   texture2d<float> emissionTex, depth2d<float> mapShadow) {
+    float4 albedo = mapStandardAlbedo(in, mat, baseTex);
+    float3 n = mapShadingNormal(in, mat, normalTex);
+    return mapStandardColor(albedo, n, mapAmbient(mapLight, n), in, frame, mat, mapLight, emissionTex, mapShadow);
 }
 
 fragment float4 map_fragment(
@@ -527,34 +644,19 @@ fragment float4 map_fragment(
         }
         return 2.0 * in.color * mat.baseColor * texel;
     }
-    float4 albedo = mat.baseColor;
-    if (mat.flags & MaterialFlagHasBaseTexture) albedo *= baseTex.sample(forcedAnisoRepeat, in.uv);
-    if ((mat.flags & MaterialFlagAlphaTest) && albedo.a < mat.params.w) discard_fragment();
-    float3 n = normalize(in.worldNormal);
-    // Slice 6: the normal map moves every term below (Unity's normalWorld feeds the lightmap decode, ShadeSH9 and the sun).
-    if (mat.flags & MaterialFlagMapNormal) n = mapNormal(normalTex.sample(forcedAnisoRepeat, in.uv), mat.params.z, n, in.worldTangent);
-    float3 gi;
+    // The renderer draws ambient-lit surfaces with the ToonMapProbeLit pipelines; this path stays for any
+    // other map_fragment draw of them and is the reference those pipelines are tested against.
     if (mat.flags & MaterialFlagMapProbeLit) {
-        gi = mapAmbient(mapLight, n);
-    } else {
-        float2 luv = float2(in.uv1.x, 1.0 - in.uv1.y);
-        gi = decodeLightmapRGBM(lightmap.sample(forcedAnisoClamp, luv), mat.lightmapRange, mat.lightmapExponent);
-        if (mat.flags & MaterialFlagMapDirectionalLightmap) {
-            gi = decodeDirectionalLightmap(gi, lightmapDirection.sample(forcedAnisoClamp, luv), n);
-        }
+        return mapAmbientLitSurface(in, frame, mat, mapLight, baseTex, normalTex, emissionTex, mapShadow);
     }
-    float3 color = albedo.rgb * mat.oneMinusReflectivity * gi;
-    if ((mat.flags & MaterialFlagMapSunLit) && mapLight.sunDirection.w > 0.0) {
-        float atten = 1.0;
-        if (in.receive > 0.5 && mapLight.shadowParams.x > 0.0) {
-            atten = mix(1.0, mapShadowVisibility(in.worldPos, mapLight, mapShadow), mapLight.shadowParams.x);
-        }
-        float3 v = normalize(frame.cameraPosition.xyz - in.worldPos);
-        color += mapLight.sunColor.rgb * atten * mapSunRadiance(n, v, mapLight.sunDirection.xyz, albedo.rgb, mat.oneMinusReflectivity,
-            mat.params.x, (mat.flags & MaterialFlagMapLambert) != 0, (mat.flags & MaterialFlagMapSpecularHighlights) != 0);
+    float4 albedo = mapStandardAlbedo(in, mat, baseTex);
+    float3 n = mapShadingNormal(in, mat, normalTex);
+    float2 luv = float2(in.uv1.x, 1.0 - in.uv1.y);
+    float3 gi = decodeLightmapRGBM(lightmap.sample(forcedAnisoClamp, luv), mat.lightmapRange, mat.lightmapExponent);
+    if (mat.flags & MaterialFlagMapDirectionalLightmap) {
+        gi = decodeDirectionalLightmap(gi, lightmapDirection.sample(forcedAnisoClamp, luv), n);
     }
-    if (mat.emissive.a > 0.0) color += emissionTex.sample(forcedAnisoRepeat, in.uv).rgb * mat.emissive.rgb * mat.emissive.a;
-    return float4(color, (mat.flags & MaterialFlagAlphaBlend) ? albedo.a : 1.0);
+    return mapStandardColor(albedo, n, gi, in, frame, mat, mapLight, emissionTex, mapShadow);
 }
 
 // ---- ST-A11 map sky: Skybox/Cubemap on a mesh ------------------------------
