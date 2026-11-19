@@ -3517,7 +3517,7 @@ struct StudioScenario: Decodable {
                             if studio.selection != ikID || studio.poseMode != .ik {
                                 problems.append("assert sourceIK drawn: source key \(check.key) must be selected in IK pose mode")
                             } else if drawn != Set(expected) {
-                                problems.append("assert sourceIK drawn: the frame draws IK guides \(drawn.sorted()), expected \(expected.sorted())")
+                                problems.append("assert sourceIK drawn: the frame draws IK guides \(drawn.sorted()) (\(studio.frame.gizmos.count) gizmo batches), expected \(expected.sorted())")
                             } else {
                                 details.append("IK guides drawn \(drawn.sorted()), \(studio.frame.gizmos.count) gizmo batches in the frame")
                             }
