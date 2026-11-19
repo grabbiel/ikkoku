@@ -177,6 +177,13 @@ public struct SourceCharacterCard: Sendable {
     private static func boneModifiers(from extensions: Extensions) throws -> SourceBoneModifiers? {
         guard let plugin = extensions.plugins["KKABMPlugin.ABMData"] else { return nil }
         guard let value = plugin.data?["boneData"] else { return nil }
+        if plugin.version == 1 {
+            // OldDataConverter.MigrateOldExtData: legacy text. A missing or empty
+            // string reads as no modifiers; any other value type as none too,
+            // which the document reports (#403).
+            guard let text = value.stringValue else { return try SourceBoneModifiers.legacyNotText() }
+            return text.isEmpty ? nil : try SourceBoneModifiers.decodeLegacyText(text)
+        }
         guard let bytes = value.binaryValue else { throw SourceCharacterCardError.invalid("ABMX boneData is not a binary payload.") }
         return try SourceBoneModifiers.decodeBoneData(bytes, dataKind: "card", dataVersion: plugin.version)
     }

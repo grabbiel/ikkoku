@@ -86,10 +86,10 @@ class ABMXProbeTests(unittest.TestCase):
     def test_a_sixth_field_selects_the_synthetic_mode(self):
         other = self.dir / 'other.png'; other.write_bytes(b'\x89PNG\r\n\x1a\n' + b'another synthetic scene')
         label = sha(other.read_bytes())[:12] + '-2081'
-        self.write_cases([self.label, str(self.scene), self.sha, '3012', '0', 'synthetic'], [label, str(other), sha(other.read_bytes()), '2081', '0', 'card'])
+        self.write_cases([self.label, str(self.scene), self.sha, '3012', '0', 'synthetic'], [label, str(other), sha(other.read_bytes()), '2081', '0', 'legacy'])
         uploads, cases_tsv, records = probe.cases_from(self.cases)
-        self.assertEqual(cases_tsv.decode(), f'{self.label}\t3012\t0\tsynthetic\n{label}\t2081\t0\tcard\n')
-        self.assertEqual([r['mode'] for r in records], ['synthetic', 'card'])
+        self.assertEqual(cases_tsv.decode(), f'{self.label}\t3012\t0\tsynthetic\n{label}\t2081\t0\tlegacy\n')
+        self.assertEqual([r['mode'] for r in records], ['synthetic', 'legacy'])
         self.assertEqual(sorted(uploads), sorted([f'abmx-{self.label}.png', f'abmx-{label}.png']))
 
     def test_bad_cases_are_refused(self):
@@ -169,7 +169,9 @@ class ABMXProbeTests(unittest.TestCase):
                       '"KKABMX.Core.BoneController"', '"ReadModifiers"', '"GetAllModifiers"', '"BoneLocation"', '"CoordinateModifiers"',
                       '"ScaleModifier"', '"LengthModifier"', '"PositionModifier"', '"RotationModifier"', '"_sclBaseline"', '"_posBaseline"', '"_rotBaseline"',
                       'Quaternion.LookRotation(-forward,up)', '"boneRootToCharacter"', '"whitePixels"',
-                      '-color.png"', '-character.png"', '-skin.png"', 'Path.Combine(dir,"abmx-cases.tsv")', 'RenderSettings.fog=false'):
+                      '-color.png"', '-character.png"', '-skin.png"', 'Path.Combine(dir,"abmx-cases.tsv")', 'RenderSettings.fog=false',
+                      # #403: a version-1 entry's boneData is a string; its UTF-8 text ties the capture to the card.
+                      'var text=value as string;', 'Encoding.UTF8.GetBytes(text)', '"boneDataText",textRecord', '"boneDataType"', '"\\"-Infinity\\""'):
             self.assertIn(piece, source)
 
     def test_the_synthetic_mode_uses_abmx_own_api_and_never_reloads_the_card(self):
@@ -180,6 +182,14 @@ class ABMXProbeTests(unittest.TestCase):
                       'var first=Sample(added,cha.transform);', 'var second=Sample(added,cha.transform);', 'Convert.ToBase64String(raw)'):
             self.assertIn(piece, source)
         self.assertNotIn('"NeedsFullRefresh"', source); self.assertNotIn('NeedsFullRefresh=', source)
+        # #403 legacy mode: synthetic card-v1 texts through ABMX's own ReadModifiers, values as float32 bit patterns.
+        for piece in ('f[3]!="legacy"', 'row[3]=="legacy"', 'record["legacyTexts"]=LegacyRuns(entry)', 'Activator.CreateInstance(type);SetMember(data,"version",1);',
+                      'values["boneData"]=row[1];SetMember(data,"data",values);', 'modifiers=Bits(ReadModifiers(data));', 'ToString("x8")'):
+            self.assertIn(piece, source)
+        texts = source[source.index('static readonly string[][] LegacyTexts={'):source.index('};', source.index('static readonly string[][] LegacyTexts={'))]
+        self.assertEqual([line.split('"')[1] for line in texts.splitlines() if line.strip().startswith('new[]{"')],
+                         ['range', 'whitespace', 'numbers', 'order', 'counts', 'fields', 'drop-short', 'drop-empty-key', 'blank'])
+        self.assertIn('0,probe_pos,0,1e39,1,1,1', texts); self.assertIn('0,probe_neg,0,-1e39,1,1,1', texts)
         rows = source[source.index('static readonly Row[] SyntheticRows={'):source.index('};', source.index('static readonly Row[] SyntheticRows={'))]
         self.assertEqual(rows.count('new Row('), 5)
         for bone in ('cf_s_neck', 'cf_s_forearm01_L', 'cf_j_forearm01_R', 'cf_s_thigh01_L', 'cf_s_spine02'): self.assertIn(f'new Row("{bone}",', rows)
