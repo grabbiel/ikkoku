@@ -236,6 +236,7 @@ struct StudioToolbar: View {
 
     var body: some View {
         let _ = PerfTrace.body(.studioToolbar)
+        let _ = StudioToolbarFitCounts.count(.toolbar)
         let state = StudioToolbarState(model: model)
         // Overlay content must fit the viewport without widening either side panel (#425): the full
         // toolbar where it fits, else the compact one (camera slots 1-5 only in the camera menu), else
@@ -261,17 +262,53 @@ struct StudioToolbar: View {
     }
 }
 
-/// #425: counts the toolbar's layout measurements while a PerfTrace recording runs, one per
-/// `sizeThatFits` of its ViewThatFits, so a report shows whether it measures again on every
-/// refresh; otherwise a pass-through for its one subview.
+/// #425: counts the toolbar's layout measurements while a PerfTrace recording runs, or with the
+/// capture fit log (`StudioToolbarFitCounts`), one per `sizeThatFits` of its ViewThatFits, so a
+/// report shows whether it measures again on every refresh; otherwise a pass-through for its one
+/// subview.
 struct StudioToolbarMeasureCounter: Layout {
     func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
-        MainActor.assumeIsolated { PerfTrace.event(.studioToolbarMeasured) }
+        MainActor.assumeIsolated { PerfTrace.event(.studioToolbarMeasured); StudioToolbarFitCounts.count(.measure) }
         return subviews.first?.sizeThatFits(proposal) ?? .zero
     }
 
     func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
         subviews.first?.place(at: bounds.origin, proposal: ProposedViewSize(bounds.size))
+    }
+}
+
+/// #425: the toolbar's work for the capture fit log (`IKKOKU_CAPTURE_UI_FIT_LOG`): how many times
+/// `StudioToolbar` and `StudioToolbarControls` ran their bodies and the toolbar's ViewThatFits
+/// measured (`StudioToolbarMeasureCounter`). Each fit-log line carries the totals and what changed
+/// since the line before, so a capture shows the work per poll, per selection and per pose mode.
+/// With the log off a count is one Bool test.
+@MainActor enum StudioToolbarFitCounts {
+    enum Site { case toolbar, controls, measure }
+    private static var toolbar = 0, controls = 0, measures = 0
+    private static var logged = (toolbar: 0, controls: 0, measures: 0)
+
+    @inline(__always) static func count(_ site: Site) {
+        guard InspectorUIScenario.toolbarMarkers else { return }
+        switch site {
+        case .toolbar: toolbar += 1
+        case .controls: controls += 1
+        case .measure: measures += 1
+        }
+    }
+
+    /// The totals, each with its change since the last call: "toolbar T (+t) controls C (+c) measured M (+m)".
+    static func logText() -> String {
+        defer { logged = (toolbar, controls, measures) }
+        return "toolbar \(toolbar) (+\(toolbar - logged.toolbar)) controls \(controls) (+\(controls - logged.controls))"
+            + " measured \(measures) (+\(measures - logged.measures))"
+    }
+
+    /// Runs `body` without counting: the fit log's off-screen toolbar copies (`toolbarIdealWidths`)
+    /// run bodies the window's toolbar did not.
+    static func uncounted<T>(_ body: () -> T) -> T {
+        let saved = (toolbar, controls, measures)
+        defer { (toolbar, controls, measures) = saved }
+        return body()
     }
 }
 
@@ -301,6 +338,7 @@ struct StudioToolbarControls: View, Equatable {
 
     var body: some View {
         let _ = PerfTrace.body(.studioToolbarControls)
+        let _ = StudioToolbarFitCounts.count(.controls)
         let state = state
         HStack(spacing: 8) {
             // #425: at its own width, as the pose picker (#363), with no empty label.

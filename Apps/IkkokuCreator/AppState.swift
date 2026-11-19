@@ -1266,11 +1266,15 @@ final class AppState {
                     + (scroll.isHiddenOrHasHiddenAncestor ? " hidden" : "") + ": " + chain.joined(separator: " < ")
             }
         }
+        // #425: the toolbar's body runs and measurements so far, and since the line before; read
+        // before the probes below, so their own walks are not counted as the window's work.
+        if mode == .studio { line += " | toolbar work " + StudioToolbarFitCounts.logText() }
         // #363/#366: the toolbar pickers' and the inspector rows' layout, before
         // " | fits", which inspector_fit_log.py reads to the end of the line.
         line += " | layout " + InspectorUIScenario.layoutProbe(window, afterCapture: accessibility)
-        // #425: after the capture only, so the hosted copies cannot change what is captured.
-        if accessibility { line += " | toolbar ideal " + toolbarIdealWidths() }
+        // #425: after the capture only, so the hosted copies cannot change what is captured; their
+        // bodies are not the window toolbar's work.
+        if accessibility { line += " | toolbar ideal " + StudioToolbarFitCounts.uncounted { toolbarIdealWidths() } }
         if accessibility {
             let fit = InspectorUIScenario.inspectorFit(window)
             line += " | fits \(fit.fits): \(fit.detail)"

@@ -1,0 +1,14 @@
+{
+  "steps": [
+    {"op": "select", "key": 65},
+    {"op": "dragIKGuide", "key": 65, "index": 0, "axis": "x", "pixels": [40, 0], "toolbarSteady": true},
+    {"op": "setPoseMode", "mode": "fk"},
+    {"op": "selectBone", "key": 65, "bone": 19},
+    {"op": "dragGizmo", "key": 65, "bone": 19, "axis": "z", "pixels": [60, 40], "toolbarSteady": true},
+    {"op": "assert", "fk": {"key": 65, "bone": 19, "nonZero": true}},
+    {"op": "captureBone", "key": 65, "bone": 21, "name": "handL-dragged"},
+    {"op": "export", "path": ".local/verification/scenario-exports/toolbar-drag-steady.png"},
+    {"op": "reimport", "path": ".local/verification/scenario-exports/toolbar-drag-steady.png"},
+    {"op": "assert", "fk": {"key": 65, "bone": 21, "from": "handL-dragged", "within": 0.02}}
+  ]
+}

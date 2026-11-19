@@ -520,12 +520,13 @@ struct InspectorUIScenario: Decodable {
         return (views, hidden, sha(views))
     }
 
-    /// The inspector column's scroll view: the tallest scroll view at the
-    /// window's trailing edge that is not inside another scroll view.
-    /// #425: whether the Studio toolbar adds its empty marker views (`StudioToolbarMarker`): only while
-    /// `IKKOKU_CAPTURE_UI_FIT_LOG` is set, so a normal launch's toolbar has none.
+    /// #425: whether the Studio toolbar adds its empty marker views (`StudioToolbarMarker`) and counts
+    /// its work (`StudioToolbarFitCounts`): only while `IKKOKU_CAPTURE_UI_FIT_LOG` is set, so a normal
+    /// launch's toolbar has no markers and pays one Bool test per count.
     static let toolbarMarkers = ProcessInfo.processInfo.environment["IKKOKU_CAPTURE_UI_FIT_LOG"] != nil
 
+    /// The inspector column's scroll view: the tallest scroll view at the
+    /// window's trailing edge that is not inside another scroll view.
     @MainActor static func inspectorScrollView(_ window: NSWindow) -> NSScrollView? {
         guard let content = window.contentView else { return nil }
         let edge = content.convert(content.bounds, to: nil).maxX
