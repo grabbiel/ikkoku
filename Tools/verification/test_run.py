@@ -731,7 +731,7 @@ class AppOutputArtifactTests(unittest.TestCase):
         self.assertEqual(capture["env"]["IKKOKU_CAPTURE_UI_SELECT"], "0,622,963")
         self.assertEqual(validate["argv"][:3], ["python3", "Tools/verification/checks/inspector_fit_log.py",
                                                 capture["env"]["IKKOKU_CAPTURE_UI_FIT_LOG"]])
-        self.assertEqual(validate["argv"][3:], ["--selection", "963", "--tab", "Clothes", "--pose-picker"])
+        self.assertEqual(validate["argv"][3:], ["--selection", "963", "--tab", "Clothes", "--pose-picker", "--toolbar-fits"])
 
     def test_ui_capture_does_not_discover_a_maker_library(self):
         # The synthetic scene's minimal card exercises the source-pose inspector,

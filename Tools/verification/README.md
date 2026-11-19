@@ -1354,6 +1354,12 @@ get wrong:
   probe. This start rebuilds the picker after the folder selection; under its
   former fixed 150 pt frame (the control is 165 pt) a fresh build laid it out
   compressed and a rebuild at full width, so captures split between the two.
+  With `--toolbar-fits` (#425) the toolbar must fit the capture window without
+  its scroll view in Object, FK and IK mode, in its full or its compact
+  variant (camera slots 1-5 only in the camera menu). The app logs both
+  variants' ideal widths per mode after the capture, and the check also needs
+  the shown variant to be the first that fits the shown state, with no
+  second variant left in the window.
 
 The Tab walk of `keyLoop` focuses each field in turn, and focusing a
 Transform field commits the value it shows (as `inspector-edit-deselect`

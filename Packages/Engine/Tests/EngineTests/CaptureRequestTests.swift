@@ -593,3 +593,31 @@ private struct CaptureRecipe {
     #expect(captureRequestMessage(maker).contains("IKKOKU_CAPTURE_UI_MODE=studio"))
     #expect(captureRequestProblems(["IKKOKU_CAPTURE_UI_SELECT": "0"]) == rejected)
 }
+
+// #425: a Studio window capture can set the pose mode (Object, FK or IK) after its selections.
+@Test func captureRequestAcceptsAStudioWindowPoseMode() {
+    let studio: [String: String] = ["IKKOKU_SOURCE_SCENE": "/scenes/scene.png", "IKKOKU_SOURCE_AVATAR": "/rigs/source-avatar.json",
+                                    "IKKOKU_CAPTURE_UI": "/ui.png", "IKKOKU_CAPTURE_UI_MODE": "studio",
+                                    "IKKOKU_CAPTURE_UI_SELECT": "0,963"]
+    for value in ["object", "fk", "ik"] {
+        var environment = studio
+        environment["IKKOKU_CAPTURE_UI_POSE_MODE"] = value
+        #expect(captureRequestProblems(environment).isEmpty, Comment(rawValue: value))
+        environment["IKKOKU_CAPTURE_UI_SELECT"] = nil
+        #expect(captureRequestProblems(environment).isEmpty, Comment(rawValue: value + " without selections"))
+    }
+    let rejected: [[String]] = [["IKKOKU_CAPTURE_UI_POSE_MODE"]]
+    for value in ["", "FK", "Object", "pose", "fk,ik", "1"] {
+        var environment = studio
+        environment["IKKOKU_CAPTURE_UI_POSE_MODE"] = value
+        #expect(captureRequestProblems(environment) == rejected, Comment(rawValue: value))
+    }
+    var maker = studio
+    maker["IKKOKU_CAPTURE_UI_MODE"] = "maker"
+    maker["IKKOKU_CAPTURE_UI_SELECT"] = nil
+    maker["IKKOKU_CAPTURE_UI_POSE_MODE"] = "fk"
+    #expect(captureRequestProblems(maker) == rejected)
+    #expect(captureRequestMessage(maker).contains("IKKOKU_CAPTURE_UI_MODE=studio"))
+    #expect(captureRequestProblems(["IKKOKU_CAPTURE_UI_POSE_MODE": "fk"]) == rejected)
+    #expect(captureRequestMessage(["IKKOKU_CAPTURE_UI_POSE_MODE": "fk"]).contains("IKKOKU_CAPTURE_UI is not set"))
+}

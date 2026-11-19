@@ -237,10 +237,21 @@ struct StudioToolbar: View {
     var body: some View {
         let _ = PerfTrace.body(.studioToolbar)
         let state = StudioToolbarState(model: model)
-        // Overlay content must fit the viewport without widening either side panel.
-        ScrollView(.horizontal) {
-            StudioToolbarControls(model: model, state: state).equatable()
+        // Overlay content must fit the viewport without widening either side panel (#425): the full
+        // toolbar where it fits, else the compact one (camera slots 1-5 only in the camera menu), else
+        // the compact one in a horizontal scroll view. ViewThatFits sits outside the scroll view: a
+        // horizontal ScrollView proposes unbounded width, so inside one the full toolbar always "fits".
+        StudioToolbarMeasureCounter {
+            ViewThatFits(in: .horizontal) {
+                StudioToolbarControls(model: model, state: state, compact: false).equatable()
+                StudioToolbarControls(model: model, state: state, compact: true).equatable()
+                ScrollView(.horizontal) {
+                    StudioToolbarControls(model: model, state: state, compact: true).equatable()
+                }
+            }
         }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background { if InspectorUIScenario.toolbarMarkers { StudioToolbarMarker(name: "studio.toolbar.available") } }
         .fixedSize(horizontal: false, vertical: true)
         .controlSize(.small)
         .padding(8)
@@ -250,36 +261,71 @@ struct StudioToolbar: View {
     }
 }
 
+/// #425: counts the toolbar's layout measurements while a PerfTrace recording runs, one per
+/// `sizeThatFits` of its ViewThatFits, so a report shows whether it measures again on every
+/// refresh; otherwise a pass-through for its one subview.
+struct StudioToolbarMeasureCounter: Layout {
+    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
+        MainActor.assumeIsolated { PerfTrace.event(.studioToolbarMeasured) }
+        return subviews.first?.sizeThatFits(proposal) ?? .zero
+    }
+
+    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
+        subviews.first?.place(at: bounds.origin, proposal: ProposedViewSize(bounds.size))
+    }
+}
+
+/// #425: an empty AppKit view named for the capture fit log, added only when that log is on
+/// (`InspectorUIScenario.toolbarMarkers`), so `layoutProbe` can read the toolbar's available
+/// width and which variant it shows.
+struct StudioToolbarMarker: NSViewRepresentable {
+    let name: String
+
+    func makeNSView(context: Context) -> NSView {
+        let view = NSView()
+        view.identifier = NSUserInterfaceItemIdentifier(name)
+        return view
+    }
+
+    func updateNSView(_ view: NSView, context: Context) {}
+}
+
 struct StudioToolbarControls: View, Equatable {
     let model: StudioModel
     let state: StudioToolbarState
+    /// #425: camera slots 1-5 only in the camera menu (keys 1-5 and Shift+1-5 still load and save).
+    var compact = false
     @Environment(AppState.self) private var app
 
-    static func == (a: Self, b: Self) -> Bool { a.model === b.model && a.state == b.state }
+    static func == (a: Self, b: Self) -> Bool { a.model === b.model && a.state == b.state && a.compact == b.compact }
 
     var body: some View {
+        let _ = PerfTrace.body(.studioToolbarControls)
         let state = state
         HStack(spacing: 8) {
+            // #425: at its own width, as the pose picker (#363), with no empty label.
             Picker("", selection: Binding(get: { state.gizmoMode }, set: { model.gizmoMode = $0 })) {
                 Image(systemName: "arrow.up.and.down.and.arrow.left.and.right").tag(GizmoMode.translate)
                 Image(systemName: "arrow.triangle.2.circlepath").tag(GizmoMode.rotate)
                 Image(systemName: "arrow.up.left.and.arrow.down.right").tag(GizmoMode.scale)
-            }.pickerStyle(.segmented).frame(width: 120).help("Gizmo: T / R / S")
+            }.pickerStyle(.segmented).labelsHidden().fixedSize().help("Gizmo: T / R / S")
             Toggle(isOn: Binding(get: { state.localSpace }, set: { model.localSpace = $0 })) { Text(state.localSpace ? "Local" : "World").frame(width: 42) }.toggleStyle(.button)
             if state.selectedIsCharacter {
                 Divider().frame(height: 18)
                 // At its ideal width (#363): a fixed frame narrower than the control (150 pt for
                 // 165) laid it out compressed on a fresh build and at full width on a rebuild.
-                Picker("", selection: Binding(get: { state.poseMode }, set: { model.poseMode = $0 })) { ForEach(PoseMode.allCases) { Text($0.rawValue).tag($0) } }.pickerStyle(.segmented).fixedSize()
+                Picker("", selection: Binding(get: { state.poseMode }, set: { model.poseMode = $0 })) { ForEach(PoseMode.allCases) { Text($0.rawValue).tag($0) } }.pickerStyle(.segmented).labelsHidden().fixedSize()
                 if state.poseMode == .fk {
-                    Picker("", selection: Binding(get: { state.fkGroup }, set: { model.fkGroup = $0 })) { ForEach(FKGroup.allCases) { Text($0.rawValue).tag($0) } }.frame(width: 120)
+                    Picker("", selection: Binding(get: { state.fkGroup }, set: { model.fkGroup = $0 })) { ForEach(FKGroup.allCases) { Text($0.rawValue).tag($0) } }.labelsHidden().frame(width: 120)
                 }
             }
             Divider().frame(height: 18)
-            ForEach(0..<5, id: \.self) { i in
-                Button { model.loadCameraSlot(i) } label: { Text("\(i + 1)").frame(width: 14) }
-                    .foregroundStyle(state.cameraSlotsFilled[i] ? .primary : .secondary)
-                    .help("Camera slot \(i + 1) (Shift+\(i + 1) saves)")
+            if !compact {
+                ForEach(0..<5, id: \.self) { i in
+                    Button { model.loadCameraSlot(i) } label: { Text("\(i + 1)").frame(width: 14) }
+                        .foregroundStyle(state.cameraSlotsFilled[i] ? .primary : .secondary)
+                        .help("Camera slot \(i + 1) (Shift+\(i + 1) saves)")
+                }
             }
             Menu {
                 ForEach(0..<10, id: \.self) { i in Button("Save slot \(i + 1)") { model.saveCameraSlot(i) } }
@@ -289,6 +335,7 @@ struct StudioToolbarControls: View, Equatable {
                 Button("Focus selection (F)") { model.focusSelection() }
                 Button("Reset camera") { model.resetCamera() }
             } label: { Image(systemName: "camera") }.fixedSize()
+                .help(compact ? "Camera slots (1-5 load, Shift+1-5 save)" : "Camera")
             if state.hasSourceRoutes {
                 Menu {
                     Button("Play all routes") { model.playAllSourceRoutes() }
@@ -307,9 +354,12 @@ struct StudioToolbarControls: View, Equatable {
             Toggle(isOn: Binding(get: { state.liveAnimation }, set: { model.liveAnimation = $0 })) { Image(systemName: "wind") }.toggleStyle(.button).help("Idle animation (blink, breathing)")
             Toggle(isOn: Binding(get: { state.showTimeline }, set: { model.showTimeline = $0 })) { Image(systemName: "timeline.selection") }.toggleStyle(.button).help("Timeline")
             Toggle(isOn: Binding(get: { state.showGrid }, set: { model.doc.effects.showGrid = $0 })) { Image(systemName: "grid") }.toggleStyle(.button).help("Grid (G)")
-            Button { app.captureScreenshot() } label: { Label("Capture", systemImage: "camera.viewfinder") }
+            // #425: an icon like its neighbours; the label stays for accessibility.
+            Button { app.captureScreenshot() } label: { Label("Capture", systemImage: "camera.viewfinder").labelStyle(.iconOnly) }
+                .help("Capture")
         }
         .fixedSize(horizontal: true, vertical: true)
+        .background { if InspectorUIScenario.toolbarMarkers { StudioToolbarMarker(name: compact ? "studio.toolbar.compact" : "studio.toolbar.full") } }
     }
 }
 

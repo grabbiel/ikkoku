@@ -522,6 +522,10 @@ struct InspectorUIScenario: Decodable {
 
     /// The inspector column's scroll view: the tallest scroll view at the
     /// window's trailing edge that is not inside another scroll view.
+    /// #425: whether the Studio toolbar adds its empty marker views (`StudioToolbarMarker`): only while
+    /// `IKKOKU_CAPTURE_UI_FIT_LOG` is set, so a normal launch's toolbar has none.
+    static let toolbarMarkers = ProcessInfo.processInfo.environment["IKKOKU_CAPTURE_UI_FIT_LOG"] != nil
+
     @MainActor static func inspectorScrollView(_ window: NSWindow) -> NSScrollView? {
         guard let content = window.contentView else { return nil }
         let edge = content.convert(content.bounds, to: nil).maxX
@@ -604,16 +608,15 @@ struct InspectorUIScenario: Decodable {
             if toolbarScroll == nil { view.subviews.forEach(findToolbarScroll) }
         }
         findToolbarScroll(content)
-        if let toolbarScroll {
-            let shown = toolbarScroll.hasHorizontalScroller && !(toolbarScroll.horizontalScroller?.isHidden ?? true)
-            line += "; scroll clip \(f(toolbarScroll.contentView.bounds.width)) content \(f(toolbarScroll.documentView?.frame.width ?? 0))"
-                + " at \(f(toolbarScroll.contentView.bounds.minX)) scroller \(shown ? "shown" : "not shown")"
-            // #425: every AppKit control in the toolbar's content, left to right, as kind@x+width.
+        // #425: every AppKit control in the toolbar's content, left to right, as kind@x+width: under
+        // `root`, and inside `region` (window coordinates) when one is given.
+        func toolbarItems(_ root: NSView, region: NSRect?) -> String {
             var items: [(x: CGFloat, text: String)] = []
             func findItems(_ view: NSView) {
-                guard items.count < 40 else { return }
+                guard items.count < 40, !(scroll.map { view === $0 } ?? false) else { return }
                 if let control = view as? NSControl {
                     let frame = rect(control)
+                    guard region.map({ $0.insetBy(dx: -1, dy: -1).contains(frame) }) ?? true else { return }
                     let kind: String
                     switch control {
                     case is NSSegmentedControl: kind = "segmented"
@@ -626,8 +629,35 @@ struct InspectorUIScenario: Decodable {
                 }
                 view.subviews.forEach(findItems)
             }
-            if let document = toolbarScroll.documentView { findItems(document) }
-            line += "; items " + (items.isEmpty ? "none" : items.sorted { $0.x < $1.x }.map(\.text).joined(separator: " "))
+            findItems(root)
+            return "; items " + (items.isEmpty ? "none" : items.sorted { $0.x < $1.x }.map(\.text).joined(separator: " "))
+        }
+        if let toolbarScroll {
+            let shown = toolbarScroll.hasHorizontalScroller && !(toolbarScroll.horizontalScroller?.isHidden ?? true)
+            line += "; scroll clip \(f(toolbarScroll.contentView.bounds.width)) content \(f(toolbarScroll.documentView?.frame.width ?? 0))"
+                + " at \(f(toolbarScroll.contentView.bounds.minX)) scroller \(shown ? "shown" : "not shown")"
+            if let document = toolbarScroll.documentView { line += toolbarItems(document, region: nil) }
+        }
+        // #425: the toolbar variant ViewThatFits shows (full, compact, or compact in the scroll
+        // view), its width, and the width it was offered, from the fit log's marker views.
+        var markers: [String: NSView] = [:]
+        func findMarkers(_ view: NSView) {
+            if let name = view.identifier?.rawValue, name.hasPrefix("studio.toolbar.") { markers[name] = view }
+            view.subviews.forEach(findMarkers)
+        }
+        findMarkers(content)
+        if let shown = markers["studio.toolbar.full"] ?? markers["studio.toolbar.compact"] {
+            let variant = shown.identifier?.rawValue == "studio.toolbar.full" ? "full"
+                : shown.enclosingScrollView != nil ? "scroll" : "compact"
+            line += "; variant \(variant) width \(f(rect(shown).width)) available "
+                + (markers["studio.toolbar.available"].map { f(rect($0).width) } ?? "?")
+            // Both markers at once would mean ViewThatFits kept a variant it does not show.
+            if markers["studio.toolbar.full"] != nil, markers["studio.toolbar.compact"] != nil { line += " (both markers)" }
+            if toolbarScroll == nil, let available = markers["studio.toolbar.available"] {
+                line += toolbarItems(content, region: rect(available))
+            }
+        } else if toolbarScroll == nil {
+            line += "; variant none"
         }
         guard let scroll, let document = scroll.documentView else { return line + " | rows: no inspector scroll view" }
         let clip = scroll.contentView, top = rect(clip).maxY
