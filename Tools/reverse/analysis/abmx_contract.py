@@ -161,11 +161,13 @@ def convert(payload: bytes, data_kind: str = "card", data_version: int = 2) -> d
 # ABMX card PluginData version 1: the legacy text boneData that KKABMX 5.4 reads
 # through OldDataConverter.MigrateOldExtData (#403). Mirrors
 # SourceBoneModifiersLegacy.swift rule for rule, with the same messages.
-# char.IsWhiteSpace, which string.Split() with no separators uses: U+0009-U+000D,
-# U+0085 and the Zs, Zl and Zp characters; U+180E because Mono's Unicode data
-# predates its move out of Zs. Not str.split(), which also splits on U+001C-U+001F.
-LEGACY_WHITESPACE = frozenset([0x09, 0x0A, 0x0B, 0x0C, 0x0D, 0x20, 0x85, 0xA0, 0x1680, 0x180E,
-                               0x2028, 0x2029, 0x202F, 0x205F, 0x3000, *range(0x2000, 0x200B)])
+# The separators of string.Split() with no arguments, which is not
+# char.IsWhiteSpace: Mono's String.WhiteChars (Unity-Technologies/mono branch
+# unity-5.6, mcs/class/corlib/System/String.cs, built with its NET_2_0 and
+# NET_2_1 blocks, as in the game's mscorlib), 27 entries. Trim() uses the same
+# set. U+180E is not a separator; nor is U+001C-U+001F, so not str.split().
+LEGACY_WHITESPACE = frozenset([0x09, 0x0A, 0x0B, 0x0C, 0x0D, 0x85, 0x1680, 0x2028, 0x2029, 0x20, 0xA0,
+                               0x3000, 0xFEFF, 0x202F, 0x205F, *range(0x2000, 0x200C)])
 LEGACY_NUMBER = re.compile(r"[+-]?([0-9]+(\.[0-9]*)?|\.[0-9]+)([eE][+-]?[0-9]+)?")
 LEGACY_FAILURE = object()
 

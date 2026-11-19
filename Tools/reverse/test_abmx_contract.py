@@ -210,22 +210,32 @@ def non_finite(line, name, field):
 class LegacyABMXTests(unittest.TestCase):
     """Card v1 legacy text (#403), mirroring SourceBoneModifierLegacyTests.swift."""
 
-    def test_splits_on_the_dotnet_whitespace_set_only(self):
+    def test_splits_on_mono_white_chars_only(self):
         a, b = legacy_token("aa", length="2", extra=["0"]), legacy_token("bb", "3", "3", "3", length="3")
-        for separator in [" ", "\n", "\r\n", "\r", "\t", "\x0b", "\x0c", "\x85", "\xa0", " ", "᠎",
-                          " ", " ", " ", " ", " ", " ", " ", "　", " \r\n\t  "]:
+        # The 17 separators checked in the original player (#403, #417): True
+        # when the original split there.
+        observed = [(0x0009, True), (0x000B, True), (0x001C, False), (0x001F, False), (0x0085, True), (0x00A0, True),
+                    (0x1680, True), (0x180E, False), (0x2000, True), (0x200A, True), (0x200B, True), (0x2028, True),
+                    (0x2029, True), (0x202F, True), (0x205F, True), (0x3000, True), (0xFEFF, True)]
+        self.assertEqual(len(observed), 17)
+        for scalar, splits in observed:
+            with self.subTest(separator=hex(scalar)):
+                document = abmx.convert_legacy(a + chr(scalar) + b)
+                self.assertEqual(names(document), ["aa", "bb"] if splits else ["aa"])
+                self.assertEqual([v["lengthModifier"] for v in document["modifiers"][0]["coordinateModifiers"]], [2.0])
+                self.assertEqual(document["diagnostics"], [])
+        # The rest of the set, and runs of separators at either end.
+        for separator in [" ", "\n", "\r\n", "\r", "\t", "\x0c", "\u2005", "\ufeff\u200b", " \r\n\t  "]:
             with self.subTest(separator=[hex(ord(c)) for c in separator]):
                 document = abmx.convert_legacy(separator + a + separator + separator + b + separator)
                 self.assertEqual(names(document), ["aa", "bb"])
                 self.assertEqual(document["diagnostics"], [])
-        # str.split() splits on U+001C-U+001F; char.IsWhiteSpace does not.
-        for separator in ["\x1c", "\x1d", "\x1e", "\x1f", "​", "﻿"]:
+        # str.split() splits on U+001C-U+001F; Mono's WhiteChars does not.
+        for separator in ["\x1c", "\x1d", "\x1e", "\x1f"]:
             with self.subTest(separator=hex(ord(separator))):
-                self.assertEqual(len((a + separator + b).split()), 1 if separator in "​﻿" else 2)
-                document = abmx.convert_legacy(a + separator + b)
-                self.assertEqual(names(document), ["aa"])
-                self.assertEqual([v["lengthModifier"] for v in document["modifiers"][0]["coordinateModifiers"]], [2.0])
-        self.assertEqual(len(abmx.LEGACY_WHITESPACE), 26)
+                self.assertEqual(len((a + separator + b).split()), 2)
+                self.assertEqual(names(abmx.convert_legacy(a + separator + b)), ["aa"])
+        self.assertEqual(len(abmx.LEGACY_WHITESPACE), 27)
 
     def test_field_counts_keep_empty_fields(self):
         document = legacy(["0,five,0,2,2", legacy_token("six", "2", "3", "4", length=None),

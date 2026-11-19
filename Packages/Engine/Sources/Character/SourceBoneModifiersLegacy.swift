@@ -1,18 +1,18 @@
 import Foundation
+import Assets
 import CryptoKit
 import Scene
 
 /// ABMX card PluginData version 1: the legacy text `boneData` that KKABMX 5.4
 /// reads through `OldDataConverter.MigrateOldExtData` (#403). The rules follow
-/// the recovered source line by line; where they depend on Mono's corlib
-/// (`string.Split()`, `float.Parse`), the documented .NET behaviour is used and
-/// `docs/reference/mods/abmx.md` lists the assumptions.
+/// the recovered source line by line. Where they depend on Mono's corlib
+/// (`string.Split()`, `float.Parse`), `docs/reference/mods/abmx.md` lists the
+/// rule used and what the original player showed.
 extension SourceBoneModifiers {
-    /// `char.IsWhiteSpace`, which `string.Split()` with no separators uses:
-    /// U+0009–U+000D, U+0085 and the Zs, Zl and Zp characters. U+180E is
-    /// included because Mono's Unicode data predates its move out of Zs.
-    static let legacyWhitespace: Set<UInt32> = Set([0x09, 0x0A, 0x0B, 0x0C, 0x0D, 0x20, 0x85, 0xA0, 0x1680, 0x180E,
-                                                   0x2028, 0x2029, 0x202F, 0x205F, 0x3000] + Array(0x2000...0x200A))
+    /// The token separators of `text.Split()`: Mono's `String.WhiteChars`
+    /// (`SourceMonoWhiteChars`), not `char.IsWhiteSpace`. `Trim()` uses the same
+    /// set, so it never changes a token.
+    static let legacyWhitespace: Set<UInt32> = SourceMonoWhiteChars.scalars
 
     /// The character loads without ABMX: version 1 data whose `boneData` is
     /// not a string reads as no modifiers in the original.
