@@ -127,6 +127,8 @@ final class PerfTrace {
         /// #410: the workspace list (`StudioWorkspaceContent`), which a load
         /// and a move of the eyes' keyboard focus evaluate.
         case studioWorkspaceList
+        /// #410: one workspace slot (`WorkspaceSlot`), with a row or empty.
+        case studioWorkspaceSlot
 
         var name: String { String(describing: self) }
     }
@@ -403,8 +405,9 @@ final class PerfTrace {
     }
 
     /// #410: body counts outside a perf trace, indexed by `ViewBody.rawValue`,
-    /// for a scenario step that counts what each keyboard focus move
-    /// evaluates. nil (not counting) unless a scenario step sets it.
+    /// for a scenario step that counts what each keyboard focus move,
+    /// selection change, eye toggle or idle refresh evaluates. nil (not
+    /// counting) unless a scenario step sets it.
     static var scenarioBodyCounts: [Int]?
 
     /// How many bodies of `view` this recording has counted so far: 0 when no

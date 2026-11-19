@@ -36,8 +36,10 @@ struct InspectorUIScenario: Decodable {
         /// follows). Added for #410: `"selectRow"` (`index`: selects the object at that
         /// workspace row), `"scrollWorkspace"` (`toEnd`: scrolls the workspace to
         /// the end of its rows, or back to the top), `"newScene"`,
-        /// `"addFolders"` (`count` folders at the root) and `"eyeFocus"`
-        /// (`count` focus moves; `capture`: see `eyeFocus(_:studio:moves:capture:settle:)`).
+        /// `"addFolders"` (`count` folders at the root), `"eyeFocus"` (`count`
+        /// focus moves; `capture`: see `eyeFocus(_:studio:moves:capture:settle:)`)
+        /// and `"workspaceBodies"` (`label`: `select`, `toggle` or `refresh`;
+        /// `count` actions from row `index`: see `workspaceBodies(_:action:count:index:settle:)`).
         let op: String
         let key: Int32?
         let keys: [Int32]?
@@ -101,6 +103,9 @@ struct InspectorUIScenario: Decodable {
     static let windowTimeout: Double = 30
     /// Each step's settle time: enough run-loop turns for SwiftUI to commit a selection.
     static let settleNanoseconds: UInt64 = 300_000_000
+    /// #410: `scrollWorkspace` waits this many settles after its one jump
+    /// (0.9 s, fixed before any run with it), with no further scroll input.
+    static let scrollSettles = 3
 
     @MainActor func run(studio: StudioModel) async -> StudioScenario.Report {
         var rows: [StudioScenario.Report.StepResult] = []
@@ -222,33 +227,41 @@ struct InspectorUIScenario: Decodable {
                 guard let scroll = Self.workspaceScrollView(window), let document = scroll.documentView else {
                     record(step.op, false, "no workspace scroll view"); continue
                 }
-                // The lazy stack may correct the document's height once it lays
-                // out what the scroll shows, so scroll again until it holds.
+                // One jump, as dragging the scroller there would, then no more
+                // scroll input: a lazy stack may correct the document's height
+                // once it lays out what the jump shows (#410: it estimates the
+                // children it has not built), so wait `scrollSettles` settles
+                // and log the height after each. The geometry assert that
+                // follows judges what is left.
                 let toEnd = step.toEnd ?? true
-                var heights: [Int] = []
-                for _ in 0..<4 {
-                    let height = document.frame.height
-                    Self.scrollWorkspace(scroll, toEnd: toEnd)
+                var heights = [Int(document.frame.height)]
+                Self.scrollWorkspace(scroll, toEnd: toEnd)
+                for _ in 0..<Self.scrollSettles {
                     await settle()
                     heights.append(Int(document.frame.height))
-                    if document.frame.height == height { break }
                 }
-                record(step.op, true, "workspace scrolled to the \(toEnd ? "end" : "top") in \(heights.count) scrolls, "
-                       + "document \(heights.map(String.init).joined(separator: " > ")) pt")
+                record(step.op, true, "workspace scrolled to the \(toEnd ? "end" : "top") in one jump; document "
+                       + "\(heights.map(String.init).joined(separator: " > ")) pt (before, then after each of \(Self.scrollSettles) settles of "
+                       + "\(Self.settleNanoseconds / 1_000_000) ms)")
             case "newScene":
                 studio.newScene()
                 await settle()
                 let state = studio.shownWorkspaceState
-                record(step.op, studio.doc.objects.isEmpty, "new scene: \(state.entries.count) rows in \(state.rowCapacity) slots")
+                record(step.op, studio.doc.objects.isEmpty, "new scene: \(state.entries.count) rows, \(StudioWorkspaceState.slotCap) slots")
             case "addFolders":
                 // #410: `count` folders at the root (none selected, as `add`
                 // nests a new object in a selected folder).
                 guard let count = step.count, count > 0 else { record(step.op, false, "addFolders needs a count"); continue }
                 studio.selection = nil
+                let before = studio.shownWorkspaceState.entries.count
                 for index in 0..<count { studio.add(StudioObject(name: "Folder \(index + 1)", kind: .folder), select: false) }
                 await settle()
                 let state = studio.shownWorkspaceState
-                record(step.op, state.entries.count == count, "added \(count) folders: \(state.entries.count) rows in \(state.rowCapacity) slots")
+                record(step.op, state.entries.count == before + count, "added \(count) folders: \(state.entries.count) rows, \(StudioWorkspaceState.slotCap) slots")
+            case "workspaceBodies":
+                let result = await Self.workspaceBodies(studio, action: step.label ?? "", count: step.count ?? 3,
+                                                        index: step.index ?? 1, settle: settle)
+                record(step.op, result.ok, result.detail)
             case "eyeFocus":
                 let result = await Self.eyeFocus(window, studio: studio, moves: step.count ?? 2, capture: step.capture, settle: settle)
                 record(step.op, result.ok, result.detail)
@@ -677,6 +690,11 @@ struct InspectorUIScenario: Decodable {
         /// `HStack(spacing: 6)`, line 540, after `Spacer().frame(width: CGFloat(entry.depth) * 14)`, line 541.
         static let rowSpacing: CGFloat = 6
         static let indent: CGFloat = 14
+        /// The row icon's `.frame(width: 16)`, lines 545 and 548. Accessibility
+        /// gives an image the bounds of its symbol, which can be narrower, so
+        /// the icon is placed by its centre and the eye (line 561, no frame) by
+        /// its centre and its laid-out width (`eyeWidth(visible:)`).
+        static let iconWidth: CGFloat = 16
         /// Half a point at 2x, for rounding.
         static let tolerance: CGFloat = 0.51
     }
@@ -785,6 +803,7 @@ struct InspectorUIScenario: Decodable {
         let width = clip.width - 2 * G.inset
         var measured: [(row: Int, top: CGFloat, bottom: CGFloat)] = []
         var leading: [CGFloat] = [], trailing: [CGFloat] = [], heights: [CGFloat] = []
+        var iconWidths: [CGFloat] = [], eyeWidths: [CGFloat] = [], diagnostics: [String] = []
         for (order, eye) in eyes.enumerated() {
             let row = atStart ? order : entries.count - eyes.count + order
             guard entries.indices.contains(row) else { offenders.append("eye \(order) maps to no row (\(row) of \(entries.count))"); continue }
@@ -794,9 +813,11 @@ struct InspectorUIScenario: Decodable {
             let height = WorkspaceRow.fittingHeight(entry, width: width)
             let top = icon.frame.midY + height / 2, bottom = icon.frame.midY - height / 2
             guard top <= clip.maxY + G.tolerance, bottom >= clip.minY - G.tolerance else { continue }
-            let lead = icon.frame.minX - clip.minX - (G.rowPadding + G.indent * CGFloat(entry.depth) + G.rowSpacing)
-            let trail = clip.maxX - eye.frame.maxX - G.rowPadding
+            let lead = icon.frame.midX - G.iconWidth / 2 - clip.minX - (G.rowPadding + G.indent * CGFloat(entry.depth) + G.rowSpacing)
+            let trail = clip.maxX - (eye.frame.midX + eyeWidth(visible: entry.visible) / 2) - G.rowPadding
             leading.append(lead); trailing.append(trail); heights.append(height)
+            iconWidths.append(icon.frame.width); eyeWidths.append(eye.frame.width)
+            if diagnostics.count < 3 { diagnostics.append(String(format: "row %d depth %d icon %@ x %.1f w %.1f, eye %@ x %.1f w %.1f h %.1f", row, entry.depth, icon.role, icon.frame.minX - clip.minX, icon.frame.width, eye.role, clip.maxX - eye.frame.maxX, eye.frame.width, eye.frame.height)) }
             if abs(lead - G.inset) > G.tolerance { offenders.append("row \(row) leading inset \(lead)") }
             if abs(trail - G.inset) > G.tolerance { offenders.append("row \(row) trailing inset \(trail)") }
             measured.append((row, top, bottom))
@@ -814,50 +835,139 @@ struct InspectorUIScenario: Decodable {
             if abs(inset - G.inset) > G.tolerance { offenders.append("top inset \(inset)") }
         }
         if atEnd, let last = measured.last, last.row == entries.count - 1 {
-            let inset = last.bottom - clip.minY
-            edges.append(String(format: "bottom inset %.2f", inset))
+            // A list shorter than the visible area ends at its document's end.
+            let documentFrame = window.convertToScreen(document.convert(document.bounds, to: nil))
+            let floor = max(clip.minY, documentFrame.minY)
+            let inset = last.bottom - floor
+            edges.append(String(format: "bottom inset %.2f%@", inset, floor > clip.minY ? " (from the document's end)" : ""))
             if abs(inset - G.inset) > G.tolerance { offenders.append("bottom inset \(inset) (the empty slots add height)") }
             let below = leaves.filter { $0.frame.maxY < last.bottom - G.tolerance }
             if !below.isEmpty { offenders.append("\(below.count) elements below the last row (\(Set(below.map(\.role)).sorted().joined(separator: ", ")))") }
         }
-        if measured.count < 2 { offenders.append("only \(measured.count) rows measured") }
+        // Two rows give a gap; a one-row scene (#410: 63 empty slots) has only its row.
+        if measured.count < min(2, entries.count) { offenders.append("only \(measured.count) rows measured") }
         func range(_ values: [CGFloat]) -> String {
             guard let low = values.min(), let high = values.max() else { return "-" }
             return low == high ? String(format: "%.2f", low) : String(format: "%.2f-%.2f", low, high)
         }
-        var detail = "workspace \(entries.count) rows in \(state.rowCapacity) slots (\(max(0, state.rowCapacity - entries.count)) empty), "
+        let slots = StudioWorkspaceState.slotCap
+        var detail = "workspace \(entries.count) rows, \(slots) slots (\(max(0, slots - entries.count)) empty), "
         detail += "\(atStart ? "at the start" : "")\(atStart && atEnd ? " and " : "")\(atEnd ? "at the end" : ""), "
         detail += "document \(Int(document.frame.height)) pt; eyes \(eyes.count), measured \(measured.count); heights \(range(heights)), "
         detail += "gaps \(range(gaps)), leading \(range(leading)), trailing \(range(trailing))"
+        detail += ", icon widths \(range(iconWidths)), eye widths \(range(eyeWidths)), clip width \(String(format: "%.1f", clip.width)) [" + diagnostics.joined(separator: "; ") + "]"
         detail += edges.isEmpty ? "" : "; " + edges.joined(separator: ", ")
         detail += "; selected entries \(entries.filter(\.selected).count)"
         if !offenders.isEmpty { detail += "; " + offenders.prefix(8).joined(separator: "; ") }
         return (offenders.isEmpty, detail)
     }
 
+    /// #410: the workspace bodies each of `count` actions evaluates: the
+    /// panel (`StudioWorkspacePanel`), the list, slots, rows and empty slots.
+    /// `select` moves the selection between rows `index` and `index + 1`;
+    /// `toggle` hides and shows again, as its eye does, the object of the
+    /// first row from `index` on with no children (not a camera); `refresh`
+    /// runs the Studio refresh with nothing changed. A selection change or a
+    /// toggle may evaluate the list once, at most two slots and two rows and
+    /// no empty slot, so the eager slots never re-evaluate as a whole; an
+    /// idle refresh may evaluate none of them.
+    @MainActor static func workspaceBodies(_ studio: StudioModel, action: String, count: Int, index: Int,
+                                           settle: () async -> Void) async -> (ok: Bool, detail: String) {
+        let entries = studio.shownWorkspaceState.entries
+        var target = index
+        switch action {
+        case "select":
+            guard index + 1 < entries.count else { return (false, "no workspace rows \(index) and \(index + 1) of \(entries.count)") }
+        case "toggle":
+            guard let leaf = entries.indices.dropFirst(index).first(where: {
+                !entries[$0].cameraPlaceholder && entries[$0].kind != .camera
+                    && ($0 + 1 == entries.count || entries[$0 + 1].depth <= entries[$0].depth)
+            }) else { return (false, "no workspace row from \(index) of \(entries.count) to toggle") }
+            target = leaf
+        case "refresh": break
+        default: return (false, "workspaceBodies needs the label select, toggle or refresh")
+        }
+        let views: [PerfTrace.ViewBody] = [.studioWorkspace, .studioWorkspaceList, .studioWorkspaceSlot,
+                                           .studioWorkspaceRow, .studioWorkspacePlaceholder]
+        PerfTrace.scenarioBodyCounts = [Int](repeating: 0, count: PerfTrace.ViewBody.allCases.count)
+        defer { PerfTrace.scenarioBodyCounts = nil }
+        func counts() -> [Int] { views.map { PerfTrace.scenarioBodyCounts?[$0.rawValue] ?? 0 } }
+        var per: [String] = [], problems: [String] = []
+        for step in 0..<max(1, count) {
+            let before = counts()
+            studio.endUndoCoalescing()
+            switch action {
+            case "select": studio.selection = entries[index + step % 2].id
+            case "toggle": studio.update(entries[target].id) { $0.visible.toggle() }
+            default: studio.refresh()
+            }
+            await settle()
+            let delta = zip(counts(), before).map { $0 - $1 }
+            let (list, slots, rows, empty) = (delta[1], delta[2], delta[3], delta[4])
+            per.append(delta.map(String.init).joined(separator: "/"))
+            let name = "\(action) \(step + 1)"
+            if action == "refresh" {
+                if list + slots + rows + empty > 0 {
+                    problems.append("\(name) evaluated the list \(list), \(slots) slots, \(rows) rows, \(empty) empty slots")
+                }
+            } else {
+                if list > 1 { problems.append("\(name) evaluated the list \(list) times") }
+                if slots > 2 { problems.append("\(name) evaluated \(slots) slots") }
+                if rows > 2 { problems.append("\(name) evaluated \(rows) rows") }
+                if empty > 0 { problems.append("\(name) evaluated \(empty) empty slots") }
+            }
+        }
+        var detail = "\(action) ×\(max(1, count))" + (action == "refresh" ? "" : " from row \(target)")
+        detail += " in \(entries.count) rows, \(StudioWorkspaceState.slotCap) slots; panel/list/slots/rows/empty slots per action: "
+        detail += per.joined(separator: ", ")
+        if !problems.isEmpty { detail += "; " + problems.joined(separator: "; ") }
+        return (problems.isEmpty, detail)
+    }
+
     /// #410: the workspace eyes draw their own keyboard focus ring in place of
-    /// the system's focus effect. With Full Keyboard Access on (the lane passes
-    /// `-AppleKeyboardUIMode 2` in the app's argument domain, not System
-    /// Settings), this presses Tab, as real key events, from no first responder
-    /// until a workspace eye has keyboard focus (at most `maxTabs`), then
-    /// `moves` more times. It checks, against a render of the workspace with no
-    /// focus, that the focused eye's ring draws and that the ring leaves the
-    /// eye focus moves from; it counts the list, row and empty-slot bodies each
-    /// move evaluates (at most one list and two rows); and it presses the
-    /// focused eye through accessibility, as VoiceOver does, twice, which must
-    /// hide its object and show it again. The workspace is scrolled to the top
-    /// first, so the n-th eye on screen is row n. `capture` gets a PNG of the
-    /// workspace with the first focused eye.
+    /// the system's focus effect. This moves keyboard focus onto a workspace
+    /// eye by the first way that works, and says which:
+    /// - "Tab": with Full Keyboard Access on (System Settings), Tab key
+    ///   events from no first responder until an eye has focus (at most
+    ///   `maxTabs`). `-AppleKeyboardUIMode 2` in the app's argument domain does
+    ///   not turn it on (AppKit does not read it from there; the detail gives
+    ///   both values), so a machine with it off skips this.
+    /// - "accessibility": setting the eye's accessibility focus, as an
+    ///   assistive app moving the keyboard focus does.
+    /// - "render" when neither takes: the row drawn alone (`ImageRenderer`)
+    ///   with and without `focusShown` must differ by the ring, around the eye
+    ///   only.
+    /// With real focus it checks, against a render of the workspace with no
+    /// focus (`cacheDisplay`, as the UI capture draws), that the focused eye's
+    /// ring draws, and then makes `moves` more moves, each to the next eye,
+    /// checking that the ring follows and counting the list, row and
+    /// empty-slot bodies each move evaluates (at most one list and two rows).
+    /// In every case it presses an eye through accessibility, as VoiceOver
+    /// does, twice, which must hide its object and show it again. The
+    /// workspace is scrolled to the top first, so the n-th eye on screen is
+    /// row n. `capture` gets a PNG of the workspace with the first focused eye
+    /// (or, for "render", of the focused row).
     @MainActor static func eyeFocus(_ window: NSWindow, studio: StudioModel, moves: Int, capture: String?,
                                     settle: () async -> Void) async -> (ok: Bool, detail: String) {
         guard let scroll = workspaceScrollView(window) else { return (false, "no workspace scroll view") }
-        var problems: [String] = [], seen: [String] = ["full keyboard access \(NSApp.isFullKeyboardAccessEnabled)"]
+        let mode = UserDefaults.standard.volatileDomain(forName: UserDefaults.argumentDomain)["AppleKeyboardUIMode"]
+        let fullKeyboardAccess = NSApp.isFullKeyboardAccessEnabled
+        var problems: [String] = [], seen: [String] = ["full keyboard access \(fullKeyboardAccess) "
+            + "(AppleKeyboardUIMode: argument \(mode.map { "\($0)" } ?? "none"), defaults \(UserDefaults.standard.integer(forKey: "AppleKeyboardUIMode")))"]
         scrollWorkspace(scroll, toEnd: false)
         window.makeFirstResponder(nil)
+        // The window's accessibility tree is built when it is first read.
+        _ = accessibilityStrings(window)
         await settle()
         let clipView = scroll.contentView
         let clip = clipView.convert(clipView.bounds, to: nil)
         guard let baseline = renderPixels(window, clip) else { return (false, "the workspace did not render") }
+        let startEyes = workspaceEyes(window, scroll: scroll)
+        seen.append("\(startEyes.count) eyes on screen")
+        guard startEyes.count > moves + 1 else {
+            return (false, "\(startEyes.count) workspace eyes on screen, too few for \(moves) moves; trailing elements: "
+                    + trailingElements(window, scroll: scroll).prefix(4).joined(separator: " | "))
+        }
         PerfTrace.scenarioBodyCounts = [Int](repeating: 0, count: PerfTrace.ViewBody.allCases.count)
         defer { PerfTrace.scenarioBodyCounts = nil }
         func bodies(_ view: PerfTrace.ViewBody) -> Int { PerfTrace.scenarioBodyCounts?[view.rawValue] ?? 0 }
@@ -870,6 +980,13 @@ struct InspectorUIScenario: Decodable {
                 NSApp.sendEvent(event)
             }
         }
+        typealias FocusSetter = @convention(c) (AnyObject, Selector, Bool) -> Void
+        let setFocusSelector = NSSelectorFromString("setAccessibilityFocused:")
+        func focusThroughAccessibility(_ row: Int) {
+            guard let eye = workspaceEyes(window, scroll: scroll).dropFirst(row).first,
+                  eye.element.responds(to: setFocusSelector), let implementation = eye.element.method(for: setFocusSelector) else { return }
+            unsafeBitCast(implementation, to: FocusSetter.self)(eye.element, setFocusSelector, true)
+        }
         func focused() -> (row: Int, eye: WorkspaceEye)? {
             let eyes = workspaceEyes(window, scroll: scroll)
             return eyes.firstIndex(where: \.focused).map { (row: $0, eye: eyes[$0]) }
@@ -878,67 +995,102 @@ struct InspectorUIScenario: Decodable {
         func ring(_ eye: WorkspaceEye, in pixels: Pixels) -> Int {
             changedPixels(baseline, pixels, rect: clip, region: eye.frame.insetBy(dx: -4, dy: -4))
         }
-        var tabs = 0
-        var found = focused()
-        while found == nil, tabs < Self.maxTabs {
-            tab(); tabs += 1
+        var path = "render", found: (row: Int, eye: WorkspaceEye)?, tabs = 0
+        if fullKeyboardAccess {
+            while found == nil, tabs < Self.maxTabs {
+                tab(); tabs += 1
+                await settle()
+                found = focused()
+            }
+            if found != nil { path = "Tab" } else { seen.append("no eye took focus in \(tabs) Tabs") }
+        }
+        if found == nil {
+            focusThroughAccessibility(0)
             await settle()
             found = focused()
+            if found != nil { path = "accessibility" }
         }
-        guard var current = found else {
-            let eyes = workspaceEyes(window, scroll: scroll)
-            return (false, "no workspace eye took keyboard focus in \(tabs) Tabs (\(eyes.count) eyes on screen, first responder "
-                    + "\(describe(window.firstResponder))); " + seen.joined(separator: ", "))
-        }
-        seen.append("row \(current.row)'s eye focused after \(tabs) Tabs, label '\(current.eye.label)'")
-        guard let first = renderPixels(window, clip) else { return (false, "the workspace did not render with focus") }
-        let firstRing = ring(current.eye, in: first)
-        seen.append("ring \(firstRing) px")
-        if firstRing < Self.ringPixels { problems.append("row \(current.row)'s focused eye draws \(firstRing) px of ring, fewer than \(Self.ringPixels)") }
-        if let capture {
-            do {
-                _ = try CaptureOutput.writePNG(first.image, to: URL(fileURLWithPath: capture))
-                seen.append("capture \(first.width)x\(first.height) px")
-            } catch { problems.append("capture: \(error)") }
-        }
-        for move in 1...max(1, moves) {
-            let before = (bodies(.studioWorkspaceList), bodies(.studioWorkspaceRow), bodies(.studioWorkspacePlaceholder))
-            studio.endUndoCoalescing()
-            tab()
-            await settle()
-            let list = bodies(.studioWorkspaceList) - before.0, rows = bodies(.studioWorkspaceRow) - before.1
-            let slots = bodies(.studioWorkspacePlaceholder) - before.2
-            guard let next = focused(), let pixels = renderPixels(window, clip) else {
-                problems.append("move \(move): no workspace eye has focus"); break
+        seen.append("focus check: \(path)")
+        var pressRow = 0
+        if var current = found {
+            seen.append("row \(current.row)'s eye focused" + (path == "Tab" ? " after \(tabs) Tabs" : "") + ", label '\(current.eye.label)'")
+            pressRow = current.row
+            guard let first = renderPixels(window, clip) else { return (false, "the workspace did not render with focus") }
+            let firstRing = ring(current.eye, in: first)
+            seen.append("ring \(firstRing) px")
+            if firstRing < Self.ringPixels { problems.append("row \(current.row)'s focused eye draws \(firstRing) px of ring, fewer than \(Self.ringPixels)") }
+            if let capture {
+                do {
+                    _ = try CaptureOutput.writePNG(first.image, to: URL(fileURLWithPath: capture))
+                    seen.append("capture \(first.width)x\(first.height) px")
+                } catch { problems.append("capture: \(error)") }
             }
-            let left = ring(current.eye, in: pixels), drawn = ring(next.eye, in: pixels)
-            seen.append("move \(move): row \(current.row) > \(next.row), list \(list), rows \(rows), empty slots \(slots), "
-                        + "ring left \(left) px, drawn \(drawn) px")
-            if next.row == current.row { problems.append("move \(move): focus stayed on row \(current.row)") }
-            if list > 1 { problems.append("move \(move) evaluated the list \(list) times") }
-            if rows > 2 { problems.append("move \(move) evaluated \(rows) rows") }
-            if slots > 0 { problems.append("move \(move) evaluated \(slots) empty slots") }
-            if drawn < Self.ringPixels { problems.append("move \(move): row \(next.row)'s eye draws \(drawn) px of ring") }
-            if left > Self.ringResidue { problems.append("move \(move): row \(current.row)'s eye still differs by \(left) px") }
-            current = next
+            for move in 1...max(1, moves) {
+                let before = (bodies(.studioWorkspaceList), bodies(.studioWorkspaceRow), bodies(.studioWorkspacePlaceholder))
+                studio.endUndoCoalescing()
+                if path == "Tab" { tab() } else { focusThroughAccessibility(current.row + 1) }
+                await settle()
+                let list = bodies(.studioWorkspaceList) - before.0, rows = bodies(.studioWorkspaceRow) - before.1
+                let slots = bodies(.studioWorkspacePlaceholder) - before.2
+                guard let next = focused(), let pixels = renderPixels(window, clip) else {
+                    problems.append("move \(move): no workspace eye has focus"); break
+                }
+                let left = ring(current.eye, in: pixels), drawn = ring(next.eye, in: pixels)
+                seen.append("move \(move): row \(current.row) > \(next.row), list \(list), rows \(rows), empty slots \(slots), "
+                            + "ring left \(left) px, drawn \(drawn) px")
+                if next.row == current.row { problems.append("move \(move): focus stayed on row \(current.row)") }
+                if list > 1 { problems.append("move \(move) evaluated the list \(list) times") }
+                if rows > 2 { problems.append("move \(move) evaluated \(rows) rows") }
+                if slots > 0 { problems.append("move \(move) evaluated \(slots) empty slots") }
+                if drawn < Self.ringPixels { problems.append("move \(move): row \(next.row)'s eye draws \(drawn) px of ring") }
+                if left > Self.ringResidue { problems.append("move \(move): row \(current.row)'s eye still differs by \(left) px") }
+                current = next
+            }
+            pressRow = current.row
+        } else {
+            // No real focus: the row drawn alone, with and without the ring.
+            let entries = studio.shownWorkspaceState.entries
+            guard let entry = entries.first else { return (false, "no workspace rows") }
+            let width = clip.width - 2 * WorkspaceGeometry.inset
+            let ringOn = renderRow(entry, width: width, focusShown: true), ringOff = renderRow(entry, width: width, focusShown: false)
+            if let ringOn, let ringOff, let changes = changedBounds(ringOff, ringOn) {
+                let bounds = changes.bounds
+                seen.append(String(format: "ring %d px in %.1fx%.1f pt at %.1f pt from the row's trailing edge (row %.1fx%.1f pt)",
+                                   changes.count, bounds.width, bounds.height, width - bounds.maxX, width, CGFloat(ringOn.height) / changes.scale))
+                if changes.count < Self.ringPixels { problems.append("the focused row draws \(changes.count) px of ring") }
+                // The ring surrounds the eye, the row's last element, and nothing else changes.
+                if width - bounds.maxX > WorkspaceGeometry.rowPadding { problems.append("the ring is not at the row's trailing end") }
+                if bounds.width > 40 || bounds.height > 30 { problems.append("the focused row changes more than the eye's ring") }
+                if let capture {
+                    do {
+                        _ = try CaptureOutput.writePNG(ringOn.image, to: URL(fileURLWithPath: capture))
+                        seen.append("capture \(ringOn.width)x\(ringOn.height) px")
+                    } catch { problems.append("capture: \(error)") }
+                }
+            } else if ringOn == nil || ringOff == nil {
+                problems.append("the row did not render")
+            } else {
+                problems.append("the focused row draws no ring")
+            }
         }
         // VoiceOver reaches the eye and presses it: hide, then show again.
         let entries = studio.shownWorkspaceState.entries
-        if entries.indices.contains(current.row) {
-            let id = entries[current.row].id
+        if entries.indices.contains(pressRow) {
+            let id = entries[pressRow].id
             for press in 1...2 {
                 let was = studio.doc.object(id)?.visible
                 studio.endUndoCoalescing()
-                guard let eye = workspaceEyes(window, scroll: scroll).dropFirst(current.row).first, eye.pressable else {
-                    problems.append("press \(press): row \(current.row)'s eye has no accessibility press"); break
+                guard let eye = workspaceEyes(window, scroll: scroll).dropFirst(pressRow).first, eye.pressable else {
+                    problems.append("press \(press): row \(pressRow)'s eye has no accessibility press"); break
                 }
+                if press == 1 { seen.append("row \(pressRow)'s eye: accessibility button '\(eye.label)'") }
                 _ = eye.element.perform(NSSelectorFromString("accessibilityPerformPress"))
                 await settle()
                 let now = studio.doc.object(id)?.visible
                 seen.append("press \(press): visible \(was.map { "\($0)" } ?? "-") > \(now.map { "\($0)" } ?? "-")")
-                if was == nil || now != was.map({ !$0 }) { problems.append("press \(press) did not toggle row \(current.row)'s visibility") }
+                if was == nil || now != was.map({ !$0 }) { problems.append("press \(press) did not toggle row \(pressRow)'s visibility") }
             }
-        } else { problems.append("no entry for row \(current.row)") }
+        } else { problems.append("no entry for row \(pressRow)") }
         window.makeFirstResponder(nil)
         await settle()
         return (problems.isEmpty, (problems + ["seen: " + seen.joined(separator: "; ")]).joined(separator: "; "))
@@ -952,6 +1104,37 @@ struct InspectorUIScenario: Decodable {
     static let maxTabs = 120
     static let ringPixels = 40
     static let ringResidue = 8
+
+    /// `eyeFocus` "render": `entry`'s row alone at `width`, with or without its
+    /// focus ring, at the main screen's scale.
+    @MainActor static func renderRow(_ entry: WorkspaceEntry, width: CGFloat, focusShown: Bool) -> Pixels? {
+        let renderer = ImageRenderer(content: WorkspaceRow(entry: entry, focusShown: focusShown, select: {}, toggleVisible: {})
+            .frame(width: width))
+        renderer.scale = NSScreen.main?.backingScaleFactor ?? 2
+        guard let image = renderer.cgImage else { return nil }
+        return pixels(of: image)
+    }
+
+    /// The pixels that differ between two renders of the same size (more than
+    /// 24 in a channel), and their bounds in points.
+    static func changedBounds(_ a: Pixels, _ b: Pixels) -> (count: Int, bounds: CGRect, scale: CGFloat)? {
+        guard a.width == b.width, a.height == b.height, a.width > 0 else { return nil }
+        var count = 0, minX = a.width, minY = a.height, maxX = -1, maxY = -1
+        for y in 0..<a.height {
+            for x in 0..<a.width {
+                let offset = (y * a.width + x) * 4
+                for channel in 0..<4 where abs(Int(a.bytes[offset + channel]) - Int(b.bytes[offset + channel])) > 24 {
+                    count += 1
+                    minX = min(minX, x); maxX = max(maxX, x); minY = min(minY, y); maxY = max(maxY, y)
+                    break
+                }
+            }
+        }
+        guard count > 0 else { return nil }
+        let scale = NSScreen.main?.backingScaleFactor ?? 2
+        return (count, CGRect(x: CGFloat(minX) / scale, y: CGFloat(minY) / scale,
+                              width: CGFloat(maxX - minX + 1) / scale, height: CGFloat(maxY - minY + 1) / scale), scale)
+    }
 
     struct WorkspaceEye {
         let element: NSObject
@@ -1001,6 +1184,45 @@ struct InspectorUIScenario: Decodable {
         }
     }
 
+    /// The laid-out width of the eye button's symbol (`WorkspaceRow`), which
+    /// has no frame of its own.
+    @MainActor static func eyeWidth(visible: Bool) -> CGFloat {
+        NSHostingView(rootView: Image(systemName: visible ? "eye" : "eye.slash")).fittingSize.width
+    }
+
+    /// The first accessibility elements in the workspace's trailing 40 pt, for
+    /// a failure's detail: role, offset from the trailing edge, size, children
+    /// and whether each takes a press.
+    @MainActor static func trailingElements(_ window: NSWindow, scroll: NSScrollView) -> [String] {
+        let clipView = scroll.contentView
+        let clip = window.convertToScreen(clipView.convert(clipView.bounds, to: nil))
+        func get(_ object: NSObject, _ name: String) -> Any? {
+            let selector = NSSelectorFromString(name)
+            guard object.responds(to: selector) else { return nil }
+            return object.perform(selector)?.takeUnretainedValue()
+        }
+        typealias FrameGetter = @convention(c) (AnyObject, Selector) -> NSRect
+        let frameSelector = NSSelectorFromString("accessibilityFrame")
+        var found: [String] = [], visited = 0
+        func visit(_ element: Any, depth: Int) {
+            guard depth < 80, visited < 20_000, found.count < 8, let object = element as? NSObject else { return }
+            visited += 1
+            let role = get(object, "accessibilityRole") as? String ?? "?"
+            let children = get(object, "accessibilityChildren") as? [Any] ?? []
+            if object.responds(to: frameSelector), let implementation = object.method(for: frameSelector) {
+                let frame = unsafeBitCast(implementation, to: FrameGetter.self)(object, frameSelector)
+                if frame.width > 0, frame.height > 0, frame.intersects(clip), frame.minX > clip.maxX - 40 {
+                    found.append(String(format: "%@ d%d at -%.1f %.1fx%.1f, %d children%@", role, depth, clip.maxX - frame.minX,
+                                        frame.width, frame.height, children.count,
+                                        object.responds(to: NSSelectorFromString("accessibilityPerformPress")) ? ", press" : ""))
+                }
+            }
+            children.forEach { visit($0, depth: depth + 1) }
+        }
+        visit(scroll, depth: 0)
+        return found
+    }
+
     /// A render of part of the window, as 8-bit RGBA rows from the top.
     struct Pixels {
         let image: CGImage
@@ -1015,7 +1237,13 @@ struct InspectorUIScenario: Decodable {
         let area = content.convert(rect, from: nil)
         guard let rep = content.bitmapImageRepForCachingDisplay(in: area) else { return nil }
         content.cacheDisplay(in: area, to: rep)
-        guard let image = rep.cgImage, let space = CGColorSpace(name: CGColorSpace.sRGB) else { return nil }
+        guard let image = rep.cgImage else { return nil }
+        return pixels(of: image)
+    }
+
+    /// `image` as 8-bit RGBA rows from the top.
+    static func pixels(of image: CGImage) -> Pixels? {
+        guard let space = CGColorSpace(name: CGColorSpace.sRGB) else { return nil }
         let width = image.width, height = image.height
         var bytes = [UInt8](repeating: 0, count: width * height * 4)
         let drawn = bytes.withUnsafeMutableBytes { buffer -> Bool in

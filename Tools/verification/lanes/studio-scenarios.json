@@ -3760,7 +3760,7 @@
         "IKKOKU_STUDIO_SCENARIO_REPORT": ".local/verification/reports/studio-scenario-workspace-list-geometry.json"
       },
       "referenceTier": "app-smoke",
-      "tolerance": "#410: the workspace stack keeps slots for the rows it has shown, up to the most rows the tallest screen could show plus 16, and its rows must keep the geometry they had before the slots, read through accessibility in the window: each fully visible row is WorkspaceRow's own height for its entry, 1 pt from the next, with 4 pt between the rows and the visible area's leading and trailing edges, above the first row at the start and below the last row at the end (the values StudioView.swift defined at 47ac6316, lines 131, 151, 540, 541 and 563, within 0.51 pt). At the end, the empty slots add no height and nothing accessible. Checked with nothing selected, with rows 1 and 0 selected, after deleting source key 963 at the end and back at the top, after undoing the delete, and in a new scene of 56 folders, which leaves empty slots, at the end and back at the top. Hover and the selection's look are for the visual pass.",
+      "tolerance": "#410: the workspace list builds, ahead of any scroll, slots for the most rows the tallest screen could show plus 16, with the rows past them in a lazy stack, and its rows must keep the geometry they had before the slots, read through accessibility in the window: each fully visible row is WorkspaceRow's own height for its entry, 1 pt from the next, with 4 pt between the rows and the visible area's leading and trailing edges, above the first row at the start and below the last row at the end (the values StudioView.swift defined at 47ac6316, lines 131, 151, 540, 541, 545, 548 and 563, within 0.51 pt). Accessibility gives a symbol image its symbol's own bounds, so the icon is placed by its centre in its 16 pt frame and the eye by its centre and its laid-out width; a list shorter than the visible area is measured to its document's end. At the end, the empty slots add no height and nothing accessible. Each scroll is one jump, to the end or the top, then three settles of 300 ms with no more scroll input, and the geometry must hold after them (a lazy stack's estimate of empty slots it had not built once left a blank tail below the last row). Checked with nothing selected, with rows 1 and 0 selected, after deleting source key 963 at the end and back at the top, after undoing the delete, with 40 more folders, rows past the slots, at the end and back at the top, then in three new scenes of 56 folders, each leaving the slots past its rows empty, and in a new scene of one folder after them (one row, so no gap to measure), at the end and back at the top. Hover and the selection's look are for the visual pass.",
       "artifacts": [
         {
           "path": ".local/verification/reports/studio-scenario-workspace-list-geometry.json",
@@ -3772,9 +3772,7 @@
     {
       "id": "studio-scenario-workspace-eye-focus",
       "argv": [
-        ".local/build/Build/Products/Debug/Ikkoku.app/Contents/MacOS/Ikkoku",
-        "-AppleKeyboardUIMode",
-        "2"
+        ".local/build/Build/Products/Debug/Ikkoku.app/Contents/MacOS/Ikkoku"
       ],
       "fixtures": [
         {
@@ -3792,7 +3790,7 @@
         "IKKOKU_STUDIO_SCENARIO_REPORT": ".local/verification/reports/studio-scenario-workspace-eye-focus.json"
       },
       "referenceTier": "app-smoke",
-      "tolerance": "#410: the workspace eye buttons have no system focus effect (each one SwiftUI showed added a focus ring view, and an AppKit dependency that was never removed, to the list's scroll view on every load) and draw their own ring instead. With Full Keyboard Access for the app process only (-AppleKeyboardUIMode 2 in the argument domain, not System Settings), Tab key events from no first responder must reach an eye on the source scene's list; against a render of the list with no focus (cacheDisplay, as the UI capture draws), the focused eye draws at least 40 px of ring within 4 pt of it. Three more Tabs must each move focus to another eye, draw its ring, leave at most 8 px of the ring it left and evaluate the list at most once, at most two rows and no empty slot. Pressing the focused eye through accessibility, as VoiceOver does, must hide its object, and again show it. The PNG is the list with the first focused eye, for the visual pass.",
+      "tolerance": "#410: the workspace eye buttons have no system focus effect (each one SwiftUI showed added a focus ring view, and an AppKit dependency that was never removed, to the list's scroll view on every load) and draw their own ring instead. The step moves keyboard focus onto an eye by the first way that works and reports it: Tab key events from no first responder when Full Keyboard Access is on (System Settings; -AppleKeyboardUIMode in the app's argument domain does not turn it on), else the eye's accessibility focus. With real focus, against a render of the list with no focus (cacheDisplay, as the UI capture draws), the focused eye draws at least 40 px of ring within 4 pt of it, and three more moves each move the ring to the next eye, leave at most 8 px of the ring it left and evaluate the list at most once, at most two rows and no empty slot. When neither takes focus, the first row is drawn alone (ImageRenderer) with and without its ring: at least 40 px must change, all within the eye's ring at the row's trailing end. Either way, pressing an eye through accessibility, as VoiceOver does, must hide its object and then show it again. The PNG is the list with the first focused eye, or the row drawn with its ring, for the visual pass.",
       "artifacts": [
         {
           "path": ".local/verification/reports/studio-scenario-workspace-eye-focus.json",
@@ -3801,6 +3799,36 @@
         {
           "path": ".local/verification/scenario-exports/workspace-eye-focus.png",
           "kind": "render-capture"
+        }
+      ],
+      "timeout": 600
+    },
+    {
+      "id": "studio-scenario-workspace-bodies",
+      "argv": [
+        ".local/build/Build/Products/Debug/Ikkoku.app/Contents/MacOS/Ikkoku"
+      ],
+      "fixtures": [
+        {
+          "env": "IKKOKU_SOURCE_SCENE",
+          "kind": "file",
+          "from": "IKKOKU_STUDIO_SCENARIO_SCENE"
+        },
+        {
+          "env": "IKKOKU_SOURCE_AVATAR",
+          "kind": "file"
+        }
+      ],
+      "env": {
+        "IKKOKU_STUDIO_SCENARIO": "Tools/verification/scenarios/workspace-bodies.json",
+        "IKKOKU_STUDIO_SCENARIO_REPORT": ".local/verification/reports/studio-scenario-workspace-bodies.json"
+      },
+      "referenceTier": "app-smoke",
+      "tolerance": "#410: what a selection change, an eye toggle and an idle refresh evaluate in the workspace, counted per action outside a trace (PerfTrace bodies): the panel, the list, its slots, its rows and its empty slots. In the source scene, with 100 more folders (rows past the slots, in the lazy stack) at the top and again at the end, and in a new scene of one folder: four selection changes between two rows, four toggles of a row's visibility (hidden, then shown, as its eye does) and four Studio refreshes with nothing changed. A selection change or a toggle may evaluate the list once, at most two slots and two rows and no empty slot, so the slots built ahead of any scroll never re-evaluate as a whole; an idle refresh evaluates none of them. The panel's count is reported, not checked.",
+      "artifacts": [
+        {
+          "path": ".local/verification/reports/studio-scenario-workspace-bodies.json",
+          "kind": "scenario-report"
         }
       ],
       "timeout": 600

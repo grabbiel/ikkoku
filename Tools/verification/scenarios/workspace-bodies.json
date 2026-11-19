@@ -1,0 +1,91 @@
+{
+  "steps": [],
+  "inspectorUI": {
+    "steps": [
+      {
+        "op": "deselect"
+      },
+      {
+        "op": "workspaceBodies",
+        "label": "select",
+        "index": 1,
+        "count": 4
+      },
+      {
+        "op": "workspaceBodies",
+        "label": "toggle",
+        "index": 1,
+        "count": 4
+      },
+      {
+        "op": "workspaceBodies",
+        "label": "refresh",
+        "count": 4
+      },
+      {
+        "op": "addFolders",
+        "count": 100
+      },
+      {
+        "op": "workspaceBodies",
+        "label": "select",
+        "index": 2,
+        "count": 4
+      },
+      {
+        "op": "workspaceBodies",
+        "label": "toggle",
+        "index": 3,
+        "count": 4
+      },
+      {
+        "op": "workspaceBodies",
+        "label": "refresh",
+        "count": 4
+      },
+      {
+        "op": "scrollWorkspace",
+        "toEnd": true
+      },
+      {
+        "op": "workspaceBodies",
+        "label": "select",
+        "index": 128,
+        "count": 4
+      },
+      {
+        "op": "workspaceBodies",
+        "label": "toggle",
+        "index": 129,
+        "count": 4
+      },
+      {
+        "op": "workspaceBodies",
+        "label": "refresh",
+        "count": 4
+      },
+      {
+        "op": "scrollWorkspace",
+        "toEnd": false
+      },
+      {
+        "op": "newScene"
+      },
+      {
+        "op": "addFolders",
+        "count": 1
+      },
+      {
+        "op": "workspaceBodies",
+        "label": "toggle",
+        "index": 0,
+        "count": 4
+      },
+      {
+        "op": "workspaceBodies",
+        "label": "refresh",
+        "count": 4
+      }
+    ]
+  }
+}
