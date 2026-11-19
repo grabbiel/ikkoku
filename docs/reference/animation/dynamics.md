@@ -96,7 +96,8 @@ Writers record through the same `Transform.trs` they write the matrix with
   Rig.swift:99–102);
 - the face and body shape stages (SourceFaceShapePose.swift:92,
   SourceBodyShapePose.swift:184);
-- the dynamics write-back (SourceDynamicBone.swift:646);
+- the dynamics write-back, when a slot took a record or a collapsed axis or the
+  pose already has a table (SourceDynamicBone.swift:655–657);
 - full-body IK, which returns its input pose with only the matrices replaced, so
   the table travels with it (SourceFullBodyBiped.swift:150).
 
@@ -104,15 +105,15 @@ Writers record through the same `Transform.trs` they write the matrix with
 order:
 
 1. A valid record gives the rotation and signed scale that the Unity Transform
-   keeps (:572).
+   keeps (:576).
 2. Without one, a positive rest TRS with every axis above 1e-6 takes the previous
-   decomposition, unchanged (:584). `Fixtures/dynamics-positive-golden.json`,
+   decomposition, unchanged (:589). `Fixtures/dynamics-positive-golden.json`,
    recorded at da7da61a, checks it bit for bit.
 3. Without one, a node with exactly one axis at or below 1e-6 gets a right-handed
    basis: the other two columns normalized and the third their cross product, so
    det is +1 (`collapsedAxisBasis`, :337).
 4. Anything else is refused: a negative axis or two collapsed axes without a
-   record (:607), shear (:608) and a matrix-authored node (:609).
+   record (:614), shear (:615) and a matrix-authored node (:616).
 
 Placement follows the recovered ApplyParticlesToTransforms (decompiled
 DynamicBone.cs:612–680). For each negative axis of the owner's localScale, or
@@ -120,10 +121,10 @@ else of its parent's, it reflects the bone vector across that transform's world
 axis (:617–651, MirrorVector :607). It then turns the parent with FromToRotation
 from TransformDirection (:673–674) and sets the position (:678). The native step
 takes the flags from the owner and its parent only (SourceDynamicBone.swift:249,
-:285). A parent whose world basis is singular (|det| ≤ 1e-12) has no inverse.
+:285), and a chain with no record and no collapsed axis builds no mirror at all. A parent whose world basis is singular (|det| ≤ 1e-12) has no inverse.
 The local position is then found the way Unity's position setter does it: each
 ancestor TRS is undone from the root down, and a scale of |s| ≤ 1e-5 inverts to 0
-(InverseSafe; `inverseSafeLocal`, :616, used at :265–271). A positive chain never
+(InverseSafe; `inverseSafeLocal`, :623, used at :265–271). A positive chain never
 takes that path, and the golden test checks that its count stays 0.
 
 The independent oracle `Tools/reverse/analysis/dynamics_reference.py --signed`
