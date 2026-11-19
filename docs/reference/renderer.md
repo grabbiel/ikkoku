@@ -658,12 +658,24 @@ record does on its own.
   `mainPassRuns` (the draws: one per record drawn on its own and one per
   instanced draw, per pipeline), `instancedRecords` and `instancedRuns` (the
   instanced draws), and `shadowCasters` and `shadowDraws`.
-- **Studio material cache (B4).** `SourceStudioItemMaterials` builds the
-  untinted materials of an item asset's parts once. It is keyed by file, in part
-  order, and holds a weak reference to the asset it was built from, so a
-  re-imported asset rebuilds. The Studio clears it wherever an import replaces
-  the scene's item assets: the preview import's commit and
-  `installSourceRuntime`. `refresh()` then only applies each record's tint.
+- **Studio material cache (B4).** `SourceStudioItemMaterialSet` holds the
+  untinted materials of one item asset instance's parts, in part order, built
+  once instead of on every refresh. `MaterialBuilder.itemMaterial` reads only
+  the part's own material data, the asset instance's image cache and the item
+  defaults, with no tint and no emission: no per-object or per-scene state
+  enters it. So the import and the rehydration give every entry of one file
+  the same set, and `refresh()` tints a copy per record
+  (`SourceStudioItemColor.apply`). A set keeps its asset strongly and rebuilds
+  when it sees another instance (a repeated import of the file). Only the
+  Studio's item asset entries hold sets, so a set and its asset go with the
+  entries when an import or a rehydration replaces them. A material whose image
+  did not load is returned but not kept, so the next refresh tries again, as
+  before the cache.
+  - B2-v3 history: the first B4 (in #372 at `e38ad63e`) was a file-keyed
+    dictionary with a weak asset reference, looked up per object per refresh;
+    that lookup and its loop cost about 0.5 µs per item on the main thread and
+    missed the W2 margin. B' moves the set into the entry, so a refresh does no
+    lookup.
 
 Tests (`InstancedItemDrawTests.swift`):
 - B1: equal records merge; a tint is part of the material, so stretches of
@@ -684,8 +696,12 @@ Tests (`InstancedItemDrawTests.swift`):
   wide outlines and a per-draw twin of the first cube, byte for byte as per
   draw; its controls check that ties follow the members' order and the
   outlines reach the image.
-- B4: the cache returns exactly what `MaterialBuilder.itemMaterial` builds,
-  builds once per asset, and stays at one file over 12 imports of the same file.
+- B4: a set returns exactly what `MaterialBuilder.itemMaterial` builds and
+  builds once per asset instance; over 12 imports of the same file each new
+  instance rebuilds and the set lets the previous one go. Two records that
+  share one set with different colours and alphas each get the freshly built
+  material with their own tint, and the set stays untinted. A part whose image
+  does not load is rebuilt on every lookup and never kept.
 - B2-v2, repeated encoder state: the B3 grid scene, instanced, renders, shades
   and picks byte for byte with and without the skipping (`EncoderStateTests`
   covers records drawn on their own).

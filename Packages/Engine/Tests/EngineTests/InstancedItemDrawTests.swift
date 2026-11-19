@@ -441,12 +441,12 @@ func coplanarOutlinedDuplicatesInOneRunDrawByteForByteLikePerDrawRecords() throw
 
 // MARK: - B4: the Studio's item material cache
 
-@Test func sourceItemMaterialsAreBuiltOncePerAssetAndDroppedWithTheImport() throws {
-    let fm = FileManager.default
-    let base = fm.temporaryDirectory.appendingPathComponent("ikkoku-item-materials-\(UUID().uuidString)", isDirectory: true)
-    defer { try? fm.removeItem(at: base) }
-    try fm.createDirectory(at: base, withIntermediateDirectories: true)
-    // Two parts (two meshes, two materials) of one triangle each.
+/// A two-part static asset (two meshes, two materials, one triangle each),
+/// written to `base`: part 0 opaque with the record colour in `_Color`
+/// (`itemColorSlot` 0), part 1 BLEND with `_Color` and `_alpha`. With
+/// `missingImage`, part 0 also names a base colour image whose file holds no
+/// image, so it never loads.
+private func writeItemAsset(_ base: URL, missingImage: Bool = false) throws -> URL {
     var bytes = Data()
     for value: Float in [0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 1, 0, 0, 1] {
         withUnsafeBytes(of: value.bitPattern.littleEndian) { bytes.append(contentsOf: $0) }
@@ -454,51 +454,135 @@ func coplanarOutlinedDuplicatesInOneRunDrawByteForByteLikePerDrawRecords() throw
     try bytes.write(to: base.appendingPathComponent("shape.bin"))
     let positions: [String: Any] = ["bufferView": 0, "componentType": 5126, "count": 3, "type": "VEC3", "min": [0, 0, 0], "max": [1, 1, 0]]
     let normals: [String: Any] = ["bufferView": 1, "componentType": 5126, "count": 3, "type": "VEC3"]
-    let root: [String: Any] = [
+    var opaque: [String: Any] = ["pbrMetallicRoughness": ["baseColorFactor": [1, 0.5, 0.25, 1]], "extras": ["itemColorSlot": 0]]
+    if missingImage {
+        opaque["pbrMetallicRoughness"] = ["baseColorFactor": [1, 0.5, 0.25, 1], "baseColorTexture": ["index": 0]]
+    }
+    var root: [String: Any] = [
         "asset": ["version": "2.0"], "buffers": [["byteLength": 72, "uri": "shape.bin"]],
         "bufferViews": [["buffer": 0, "byteLength": 36], ["buffer": 0, "byteOffset": 36, "byteLength": 36]],
         "accessors": [positions, normals],
-        "materials": [["pbrMetallicRoughness": ["baseColorFactor": [1, 0.5, 0.25, 1]]],
-                      ["pbrMetallicRoughness": ["baseColorFactor": [0.2, 0.4, 0.8, 0.5]], "alphaMode": "BLEND"]],
+        "materials": [opaque,
+                      ["pbrMetallicRoughness": ["baseColorFactor": [0.2, 0.4, 0.8, 0.5]], "alphaMode": "BLEND",
+                       "extras": ["itemColorSlot": 0, "itemAlphaProperty": "_alpha"]]],
         "meshes": [["primitives": [["attributes": ["POSITION": 0, "NORMAL": 1], "material": 0]]],
                    ["primitives": [["attributes": ["POSITION": 0, "NORMAL": 1], "material": 1]]]],
         "nodes": [["mesh": 0], ["mesh": 1]], "scenes": [["nodes": [0, 1]]], "scene": 0]
-    let url = base.appendingPathComponent("shape.gltf")
+    if missingImage {
+        try Data("not an image".utf8).write(to: base.appendingPathComponent("broken.png"))
+        root["images"] = [["uri": "broken.png"]]
+        root["textures"] = [["source": 0]]
+    }
+    let url = base.appendingPathComponent(missingImage ? "shape-missing.gltf" : "shape.gltf")
     try JSONSerialization.data(withJSONObject: root, options: [.sortedKeys]).write(to: url)
+    return url
+}
 
+private func temporaryFolder(_ name: String) throws -> URL {
+    let base = FileManager.default.temporaryDirectory.appendingPathComponent("ikkoku-\(name)-\(UUID().uuidString)", isDirectory: true)
+    try FileManager.default.createDirectory(at: base, withIntermediateDirectories: true)
+    return base
+}
+
+/// What the frame builder built for every part on every refresh before the cache.
+private func builtFresh(_ asset: LoadedAsset) -> [MaterialState] {
+    asset.parts.map { MaterialBuilder.itemMaterial(for: $0, asset: asset, tint: nil, emissive: 0) }
+}
+
+@Test func sourceItemMaterialSetIsBuiltOncePerAssetInstance() throws {
+    let base = try temporaryFolder("item-materials")
+    defer { try? FileManager.default.removeItem(at: base) }
+    let url = try writeItemAsset(base)
     let gpu = try #require(GPUContext())
     let library = AssetLibrary(resources: ResourceStore(device: gpu.device), root: base)
-    var cache = SourceStudioItemMaterials()
-    let first = try library.importStaticAsset(url: url, packageRoot: base)
-    #expect(first.parts.count == 2)
-    let materials = cache.materials(for: first, file: url.path)
-    // Exactly what the frame builder built on every refresh before the cache.
-    #expect(materials == first.parts.map { MaterialBuilder.itemMaterial(for: $0, asset: first, tint: nil, emissive: 0) })
+    let set = SourceStudioItemMaterialSet()
+    var current = try library.importStaticAsset(url: url, packageRoot: base)
+    #expect(current.parts.count == 2)
+    let materials = set.materials(for: current)
+    #expect(materials == builtFresh(current))
     #expect(materials[1].transparent && !materials[0].transparent)
-    // Every later refresh reads the cache.
-    for _ in 0..<5 { #expect(cache.materials(for: first, file: url.path) == materials) }
-    #expect(cache.built == 2 && cache.count == 1)
+    // Every later refresh reads the kept materials.
+    for _ in 0..<5 { #expect(set.materials(for: current) == materials) }
+    #expect(set.builds == 2 && set.asset === current)
 
     // Twelve imports of the same file: each replaces the library's asset (new
-    // meshes), so its first lookup rebuilds, and the import's clear keeps the
-    // cache at one file.
-    var previous = first
+    // meshes), so the first lookup with the new instance rebuilds, and the set
+    // lets the previous instance go.
     for cycle in 1...12 {
-        cache.removeAll()
-        #expect(cache.count == 0)
-        let asset = try library.importStaticAsset(url: url, packageRoot: base)
-        #expect(asset !== previous)
-        let rebuilt = cache.materials(for: asset, file: url.path)
-        #expect(rebuilt == asset.parts.map { MaterialBuilder.itemMaterial(for: $0, asset: asset, tint: nil, emissive: 0) })
-        _ = cache.materials(for: asset, file: url.path)
-        #expect(cache.count == 1 && cache.built == 2 * (cycle + 1), "cycle \(cycle)")
-        previous = asset
+        weak var previous = current
+        current = try library.importStaticAsset(url: url, packageRoot: base)
+        #expect(current !== previous)
+        let rebuilt = set.materials(for: current)
+        #expect(rebuilt == builtFresh(current))
+        _ = set.materials(for: current)
+        #expect(set.builds == 2 * (cycle + 1) && set.asset === current, "cycle \(cycle)")
+        #expect(previous == nil, "cycle \(cycle): the set keeps only the instance it was built for")
     }
-    // Without a clear, a replaced asset still rebuilds rather than returning
-    // the previous instance's materials.
-    let replaced = try library.importStaticAsset(url: url, packageRoot: base)
-    _ = cache.materials(for: replaced, file: url.path)
-    #expect(cache.count == 1 && cache.built == 2 * 14)
+}
+
+/// The cache key holds: no per-object state enters the untinted materials, so
+/// two objects that draw one asset share its set and each still gets its own
+/// colour and alpha, on a copy.
+@Test func objectsSharingAnItemMaterialSetKeepTheirOwnTints() throws {
+    let base = try temporaryFolder("item-materials-shared")
+    defer { try? FileManager.default.removeItem(at: base) }
+    let url = try writeItemAsset(base)
+    let gpu = try #require(GPUContext())
+    let library = AssetLibrary(resources: ResourceStore(device: gpu.device), root: base)
+    let asset = try library.importStaticAsset(url: url, packageRoot: base)
+    let set = SourceStudioItemMaterialSet()
+    // Two records of the same item with different saved colours and alphas.
+    let records: [(colors: [SIMD4<Float>], alpha: Float)] = [
+        ([SIMD4(1, 0, 0, 1), SIMD4(0, 1, 0, 1), SIMD4(0, 0, 1, 1)], 0.25),
+        ([SIMD4(0.1, 0.9, 0.3, 1), SIMD4(1, 1, 1, 1), SIMD4(1, 1, 1, 1)], 0.75),
+    ]
+    var drawn: [[MaterialState]] = []
+    for record in records {
+        let materials = set.materials(for: asset)
+        drawn.append(asset.parts.indices.map { i in
+            var material = materials[i]
+            if let tint = SourceStudioItemColor.tint(colors: record.colors, alpha: record.alpha,
+                                                     extras: asset.parts[i].material.extras) {
+                SourceStudioItemColor.apply(tint, to: &material)
+            }
+            return material
+        })
+    }
+    #expect(set.builds == 2, "One build for both objects")
+    for (record, materials) in zip(records, drawn) {
+        // The same as building the part afresh for this record and tinting it.
+        for i in asset.parts.indices {
+            var expected = builtFresh(asset)[i]
+            let c = RGB(record.colors[0].x, record.colors[0].y, record.colors[0].z).linear
+            expected.uniforms.baseColor.x = c.x; expected.uniforms.baseColor.y = c.y; expected.uniforms.baseColor.z = c.z
+            if i == 1 { expected.uniforms.baseColor.w = record.alpha }
+            #expect(materials[i] == expected, "part \(i)")
+        }
+    }
+    #expect(drawn[0][0] != drawn[1][0] && drawn[0][1] != drawn[1][1])
+    #expect(drawn[0][1].uniforms.baseColor.w == 0.25 && drawn[1][1].uniforms.baseColor.w == 0.75)
+    // The shared set itself stays untinted.
+    #expect(set.materials(for: asset) == builtFresh(asset))
+}
+
+/// A part whose image never loads: the materials are what the builder makes
+/// (no base texture), but they are not kept, so every refresh tries again as
+/// it did before the cache.
+@Test func itemMaterialSetDoesNotKeepMaterialsWithAFailedImage() throws {
+    let base = try temporaryFolder("item-materials-missing")
+    defer { try? FileManager.default.removeItem(at: base) }
+    let url = try writeItemAsset(base, missingImage: true)
+    let gpu = try #require(GPUContext())
+    let library = AssetLibrary(resources: ResourceStore(device: gpu.device), root: base)
+    let asset = try library.importStaticAsset(url: url, packageRoot: base)
+    #expect(asset.parts[0].material.baseColorImage != nil)
+    let set = SourceStudioItemMaterialSet()
+    for lookup in 1...3 {
+        let materials = set.materials(for: asset)
+        #expect(materials == builtFresh(asset))
+        #expect(materials[0].base == nil)
+        #expect(set.asset == nil && set.builds == 2 * lookup, "lookup \(lookup)")
+    }
 }
 
 // MARK: - B2-v2: skipping repeated encoder state, instanced
