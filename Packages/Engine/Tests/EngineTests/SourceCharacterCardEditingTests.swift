@@ -619,3 +619,23 @@ private func faceStatus(eyesLookPtn: UInt8 = 1, neckLookPtn: UInt8 = 3) -> Data 
     let newer = try SourceCharacterCard.decode(outfitCard(statusVersion: "0.0.1", status: faceStatus()))
     #expect(throws: (any Error).self) { try newer.editedData(.init(faceState: .init(mouthPtn: 3))) }
 }
+
+@Test func sourceCardEditingKeepsABOMKeyApartFromTheFieldItShadows() throws {
+    // #418: MessagePack keys keep a leading U+FEFF as the game reads them, so
+    // "\u{feff}coordinateType" is another key, which ChaFileStatus ignores.
+    // The real field is the one read and written; the marked key's bytes stay.
+    // Before, both keys read as "coordinateType" and the card refused.
+    typealias F = OriginalCardFixture
+    let status = EditingFixture.fields([("version", .string("0.0.0")), ("\u{feff}coordinateType", .integer(5)),
+        ("coordinateType", .integer(1)), ("backCoordinateType", .integer(2)),
+        ("clothesState", .binary(Data([0, 1, 2, 3, 0, 0, 0, 0, 0]))),
+        ("showAccessory", .array(Array(repeating: .bool(true), count: 20)))])
+    let bytes = try outfitCard(status: status), original = try SourceCharacterCard.decode(bytes)
+    #expect(try original.savedCoordinateType() == 1)
+    #expect(try original.editedData(.init(coordinateType: 1)) == bytes)
+    let edited = try SourceCharacterCard.decode(original.editedData(.init(coordinateType: 0)))
+    let fields = try SourceMessagePack.decode(try #require(edited.block(named: "Status")).data).stringKeyedMap()
+    #expect(fields["coordinateType"]?.integerValue == 0 && fields["\u{feff}coordinateType"]?.integerValue == 5)
+    let token = F.pack(.string("\u{feff}coordinateType")) + F.pack(.integer(5))
+    #expect(try #require(edited.block(named: "Status")).data.range(of: token) != nil)
+}

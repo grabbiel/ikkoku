@@ -149,21 +149,11 @@ public struct SourceModCatalog: Sendable {
         return nil
     }
 
-    /// .NET String.Trim / Char.IsWhiteSpace; Foundation's whitespace set also
-    /// removes U+200B, which is a significant character in a source mod GUID.
-    public static func trimSourceGUID(_ value: String) -> String {
-        func whitespace(_ scalar: Unicode.Scalar) -> Bool {
-            switch scalar.value {
-            case 0x09...0x0d, 0x20, 0x85, 0xa0, 0x1680, 0x2000...0x200a,
-                 0x2028, 0x2029, 0x202f, 0x205f, 0x3000: return true
-            default: return false
-            }
-        }
-        let scalars = value.unicodeScalars
-        let start = scalars.firstIndex { !whitespace($0) } ?? scalars.endIndex
-        let end = scalars.lastIndex { !whitespace($0) }.map { scalars.index(after: $0) } ?? start
-        return String(scalars[start..<end])
-    }
+    /// The game's `String.Trim()`, as Sideloader applies it to every GUID
+    /// (manifest, ResolveInfo setter, lookups): Mono's `String.WhiteChars`
+    /// (`SourceMonoWhiteChars`), which includes U+200B and U+FEFF but not U+180E.
+    /// Not `char.IsWhiteSpace`, and not Foundation's whitespace set.
+    public static func trimSourceGUID(_ value: String) -> String { SourceMonoWhiteChars.trim(value) }
 
     /// Source-only availability is an explicit inventory, never guessed from a
     /// filename. Unindexed base/mod assets stay unresolved rather than declared absent.
@@ -208,12 +198,16 @@ public struct SourceModCatalog: Sendable {
         }
         let lines = text.replacingOccurrences(of: "\r\n", with: "\n").replacingOccurrences(of: "\r", with: "\n").components(separatedBy: "\n")
         guard lines.count >= 4 else { throw SourceModError.invalid("Source catalog lacks its three preamble lines and header.") }
-        func preamble(_ index: Int) -> String { lines[index].components(separatedBy: ",")[0].trimmingCharacters(in: .whitespacesAndNewlines) }
+        // Sideloader's Lists.LoadCSV calls string.Trim() on the first field of each
+        // preamble line, on the header line and on each row line before it splits
+        // them: Mono's String.WhiteChars (SourceMonoWhiteChars), not Foundation's
+        // whitespace set, which keeps U+FEFF (#421). Cells are not trimmed.
+        func preamble(_ index: Int) -> String { SourceMonoWhiteChars.trim(lines[index].components(separatedBy: ",")[0]) }
         guard let category = integer(preamble(0)), let distribution = integer(preamble(1)) else { throw SourceModError.invalid("Invalid source category/distribution number.") }
-        let columns = lines[3].trimmingCharacters(in: .whitespacesAndNewlines).components(separatedBy: ",")
+        let columns = SourceMonoWhiteChars.trim(lines[3]).components(separatedBy: ",")
         var rows: [[String]] = []
         for line in lines.dropFirst(4) {
-            let value = line.trimmingCharacters(in: .whitespacesAndNewlines)
+            let value = SourceMonoWhiteChars.trim(line)
             if !value.contains(",") { break }
             rows.append(value.components(separatedBy: ","))
         }

@@ -1,5 +1,6 @@
 import Foundation
 import Character
+import Assets
 
 /// Raw Unity values recovered from CharaStudio's `Studio.ChangeAmount` stream.
 /// Convert the coordinate basis and Unity Euler order before rendering these values.
@@ -274,6 +275,7 @@ struct KoikatsuBinaryReader {
     }
     mutating func string() throws -> String {
         // BinaryWriter.Write(string): seven-bit encoded UTF-8 byte length, not character count.
+        // Decoded as BinaryReader.ReadString does: a leading U+FEFF is kept (SourceMonoUTF8).
         var length: UInt32 = 0
         for index in 0..<5 {
             let value = try byte()
@@ -281,7 +283,7 @@ struct KoikatsuBinaryReader {
             length |= UInt32(value & 0x7f) << (index * 7)
             if value & 0x80 == 0 {
                 guard length <= Self.maximumStringBytes else { throw KoikatsuReadError.limitExceeded("string exceeds 1 MiB") }
-                guard let string = String(data: try take(Int(length)), encoding: .utf8) else { throw invalid("invalid UTF-8") }
+                guard let string = SourceMonoUTF8.string(try take(Int(length))) else { throw invalid("invalid UTF-8") }
                 return string
             }
         }

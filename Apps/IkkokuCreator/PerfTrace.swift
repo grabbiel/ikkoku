@@ -111,6 +111,13 @@ final class PerfTrace {
         /// A Studio character build installed and left its frame to the next
         /// live step's refresh (R7 phase 2 item 6 follow-up).
         case studioInstallRefreshDeferred
+        /// A source character's refresh frame given back from its cache: its
+        /// inputs other than camera, light and effects were unchanged (R7
+        /// item 3, FK drag; `SourceStudioCharacterPreview.frame`).
+        case studioCharacterFrameReused
+        /// A source character's refresh frame built afresh on the main thread
+        /// (not one the live step prepared).
+        case studioCharacterFrameBuilt
     }
 
     /// SwiftUI bodies counted per recording. A count is one evaluation of that
@@ -661,6 +668,17 @@ final class PerfTrace {
                 "paletteBuffersCreated": rendered.reduce(0) { $0 + $1.ring.paletteBuffersCreated },
                 "drawsWithOverflow": rendered.filter { $0.ring.overflowBuffers > 0 }.count,
             ] as [String: Any],
+            // ST-T04: per rendered draw, the main pass's records and the draws
+            // they took, the instanced item records and runs, and the shadow
+            // casters and draws.
+            "drawCounts": [
+                "mainPassRecords": PerfTrace.statistics(rendered.map { Double($0.mainPassRecords) }),
+                "mainPassRuns": PerfTrace.statistics(rendered.map { Double($0.mainPassRuns) }),
+                "instancedRecords": PerfTrace.statistics(rendered.map { Double($0.instancedRecords) }),
+                "instancedRuns": PerfTrace.statistics(rendered.map { Double($0.instancedRuns) }),
+                "shadowCasters": PerfTrace.statistics(rendered.map { Double($0.shadowCasters) }),
+                "shadowDraws": PerfTrace.statistics(rendered.map { Double($0.shadowDraws) }),
+            ] as [String: Any],
             "processCPUCores": (cpuAtEnd.process - cpuAtStart.process) / window,
             "inputCalls": inputNames,
             "events": Dictionary(uniqueKeysWithValues: Event.allCases.compactMap { event -> (String, Any)? in
@@ -997,6 +1015,11 @@ nonisolated final class PerfDrawLog: Sendable {
         /// The update's `targetTimestamp`: when the system expects the frame's
         /// work to be finished (R7 phase 2, live pacing).
         var deadline: CFTimeInterval = 0
+        /// The main pass's records and the draws they took, instanced static
+        /// item records and their runs, and shadow casters and their draws
+        /// (ST-T04, `RenderFrameStatistics`).
+        var mainPassRecords = 0, mainPassRuns = 0, instancedRecords = 0, instancedRuns = 0
+        var shadowCasters = 0, shadowDraws = 0
         /// `Renderer.draw` plus the recorder's own bookkeeping, in ms.
         var drawMilliseconds: Double { (end - callback) * 1000 }
     }
@@ -1044,7 +1067,10 @@ nonisolated final class PerfDrawLog: Sendable {
                             onMainThread: pthread_main_np() != 0, ring: statistics.uniforms,
                             skinPalettes: statistics.skinPalettes, deformDispatches: statistics.deformDispatches,
                             deformReuses: statistics.deformReuses, deformUntracked: statistics.deformUntracked,
-                            linkHz: linkHz, deadline: deadline)
+                            linkHz: linkHz, deadline: deadline,
+                            mainPassRecords: statistics.mainPassRecords, mainPassRuns: statistics.mainPassRuns,
+                            instancedRecords: statistics.instancedRecords, instancedRuns: statistics.instancedRuns,
+                            shadowCasters: statistics.shadowCasters, shadowDraws: statistics.shadowDraws)
         return state.withLock { state in
             let first = result.outcome == .rendered && state.snapshot.firstDraw == nil
             if first { state.snapshot.firstDraw = end }

@@ -47,7 +47,7 @@ public struct SourceModPackage: Sendable {
         let manifest = try JSONDecoder().decode(Manifest.self, from: data)
         guard manifest.schemaVersion == 1, manifest.kind == "ikkoku-mod-package",
               manifest.converter.id == "ikkoku.zipmod", supportsConverter(manifest.converter.version),
-              !manifest.source.guid.isEmpty, manifest.source.guid == manifest.source.guid.trimmingCharacters(in: .whitespacesAndNewlines),
+              !SourceModCatalog.trimSourceGUID(manifest.source.guid).isEmpty,
               hashIsValid(manifest.source.archiveSHA256),
               Set(manifest.resources.map(\.id)).count == manifest.resources.count,
               Set(manifest.catalogs.map(\.sourcePath)).count == manifest.catalogs.count else {
@@ -115,7 +115,11 @@ public struct SourceModPackage: Sendable {
             try registerPath(catalog.path, hash: catalog.sha256)
             _ = try checkedRead(contained(catalog.path, directory: directory), hash: catalog.sha256)
         }
-        return Self(directory: directory, manifestData: data, converter: manifest.converter, source: manifest.source,
+        // Sideloader's Manifest trims the GUID with String.Trim() and accepts it
+        // (Manifest.cs, GUID = ...Value.Trim()); the trimmed GUID is the identity.
+        let source = Source(guid: SourceModCatalog.trimSourceGUID(manifest.source.guid), version: manifest.source.version,
+                            name: manifest.source.name, archiveSHA256: manifest.source.archiveSHA256, games: manifest.source.games)
+        return Self(directory: directory, manifestData: data, converter: manifest.converter, source: source,
                     resources: manifest.resources, catalogs: manifest.catalogs, diagnostics: manifest.diagnostics,
                     bundleRegistrationOrder: manifest.bundleRegistrationOrder)
     }

@@ -21,6 +21,10 @@ public struct RenderBenchmark: Encodable, Sendable {
     public let residentBytesBefore: UInt64?, residentBytesAfter: UInt64?, metalAllocatedBytes: Int
     public let visibleItems: Int, missingMeshes: Int, drawnTriangles: Int, uniqueVertices: Int
     public let resources: ResourceStore.Statistics
+    /// ST-T04: over the measured samples, the main pass's records and runs,
+    /// the instanced records and runs, and the shadow casters and draws
+    /// (`RenderFrameStatistics`), by those names.
+    public let drawCounts: [String: Distribution]
 
     static func residentBytes() -> UInt64? {
         var info = mach_task_basic_info()

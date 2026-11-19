@@ -21,9 +21,10 @@ endpoint; original_map_probe.exec_command, refused at EXEC_LIMIT characters). ru
    and no reparse point is under it.
 
 The cases come from --cases, a host TSV: <label> TAB <scene record> TAB <scene SHA-256> TAB <object key> TAB <sex>
-[TAB <mode>]. The mode is card (the default) or synthetic: a synthetic case also adds the probe's constant modifiers
-in memory with ABMX's own API, records the character again after them and serializes them with ABMX's own writer
-(see the probe's header). The label is the scene's SHA-256 prefix (12 hex) and the object key, e.g. 0123456789ab-1000, so no scene name
+[TAB <mode>]. The mode is card (the default), synthetic or legacy: a synthetic case also adds the probe's constant
+modifiers in memory with ABMX's own API, records the character again after them and serializes them with ABMX's own
+writer; a legacy case (#403) also reads the probe's synthetic card-v1 texts with ABMX's own reader before the load (see
+the probe's header). The label is the scene's SHA-256 prefix (12 hex) and the object key, e.g. 0123456789ab-1000, so no scene name
 reaches the VM or the evidence. Each scene record must hash as listed. Nothing in C:\\Illusion\\Koikatsu is written;
 abdata and CharaStudio_Data are scanned before and after (original_map_probe.with_junction_scans) and targetsChanged
 says whether the scans differ. The Parallels errno-24 count must equal --errno-baseline before the exec; it is
@@ -65,7 +66,7 @@ def cases_from(path):
         if len(fields) not in (5, 6): raise ValueError(f'case line {number}: expected 5 or 6 tab-separated fields')
         label, scene, sha, key, sex = fields[:5]
         mode = fields[5] if len(fields) == 6 else 'card'
-        if mode not in ('card', 'synthetic'): raise ValueError(f'case line {number}: mode must be card or synthetic')
+        if mode not in ('card', 'synthetic', 'legacy'): raise ValueError(f'case line {number}: mode must be card, synthetic or legacy')
         if not LABEL.fullmatch(label): raise ValueError(f'case line {number}: label must be <12 hex>-<key>')
         if not re.fullmatch(r'[0-9a-f]{64}', sha) or not sha.startswith(label[:12]): raise ValueError(f'case line {number}: SHA-256 must start with the label')
         if not key.isdigit() or label.split('-')[1] != key: raise ValueError(f'case line {number}: the label must end with the object key')

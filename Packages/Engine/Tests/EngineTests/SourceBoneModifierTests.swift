@@ -544,3 +544,28 @@ func sourceBoneModifierNativeWireMatchesLocalPythonConversion() throws {
         #expect(values.rotationModifier.map(\.bitPattern) == row.5.map(\.bitPattern), "\(row.0) rotation")
     }
 }
+
+@Test func sourceBoneModifierNativeWireKeepsALeadingBOMInTheBoneName() throws {
+    // #418: the game's MessagePack decode keeps a leading EF BB BF as U+FEFF, so
+    // a "\u{feff}bone" record names another bone than "bone". The payload hash
+    // is still over the original bytes.
+    let bytes = boneModifierWire(.array([boneModifierWireRecord(.array([boneModifierWireValues(scale: [2, 2, 2])]),
+                                                                name: "\u{feff}bone")]))
+    #expect(bytes.range(of: Data([0xef, 0xbb, 0xbf] + Array("bone".utf8))) != nil)
+    let compressed = boneModifierLZ4(bytes)
+    for (payload, kind, version) in [(bytes, "card", 2), (compressed, "coordinate", 3)] {
+        let decoded = try SourceBoneModifiers.decodeBoneData(payload, dataKind: kind, dataVersion: version)
+        #expect(decoded.modifiers.map(\.boneName) == ["\u{feff}bone"])
+        #expect(decoded.source.payloadSHA256 == SHA256.hash(data: payload).map { String(format: "%02x", $0) }.joined())
+        let rig = try boneModifierRig()
+        do {
+            _ = try decoded.applying(to: rig, baseline: rig.restPose)
+            Issue.record("a BOM-led bone name matched the rig's 'bone'")
+        } catch let RigError.invalid(message) {
+            #expect(message.contains("named '\u{feff}bone', found 0"), "\(message)")
+        }
+        let marked = try boneModifierRig(name: "\u{feff}bone")
+        let applied = try decoded.applying(to: marked, baseline: marked.restPose)
+        #expect(applied.localMatrices[1] != marked.restPose.localMatrices[1])
+    }
+}

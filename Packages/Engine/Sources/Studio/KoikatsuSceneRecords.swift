@@ -38,6 +38,9 @@ public struct KoikatsuCharacterRecord: Sendable, Equatable {
     public struct PoseResult: Sendable {
         public let controller: SourceStudioPose
         public let pose: RigPose
+        /// `rig.evaluate(pose)` for the rig `makePose` was given: the last
+        /// evaluation `makePose` makes (#371), so a caller need not repeat it.
+        public let evaluation: RigEvaluation
         public let deferredEffects: [SourceStudioPose.Effect]
         public let diagnostics: [String]
     }
@@ -51,9 +54,10 @@ public struct KoikatsuCharacterRecord: Sendable, Equatable {
     /// C3: the Studio tick used to rebind it for every pose).
     public struct PoseBinding: Sendable {
         public let controller: SourceStudioPose
-        fileprivate let ik: SourceStudioPose.Transition, fk: SourceStudioPose.Transition
-        fileprivate let effects: [SourceStudioPose.Effect]
-        fileprivate let diagnostics: [String]
+        // Internal, not fileprivate, so the rebind test can compare them with a fresh bind's.
+        let ik: SourceStudioPose.Transition, fk: SourceStudioPose.Transition
+        let effects: [SourceStudioPose.Effect]
+        let diagnostics: [String]
     }
 
     /// Replays source AddObjectFemale/Male's flag restoration order. The input
@@ -105,12 +109,49 @@ public struct KoikatsuCharacterRecord: Sendable, Equatable {
         return PoseBinding(controller: controller, ik: ik, fk: fk, effects: effects, diagnostics: diagnostics)
     }
 
+    /// `bindPose` for `fkOverrides`, made from `binding`, which `bindPose`
+    /// returned for `previous` with the same rig, catalog, roots, neck pattern
+    /// and kinematic state (#371: an FK drag changes one bone per input, and
+    /// a full bind looks up every catalog bone again). Only the targets'
+    /// rotations depend on the override values. The activations, transitions,
+    /// effects and diagnostics depend on the kinematic state and the target
+    /// set, and the values reach the target set only through `bindPose`'s
+    /// rule that a bone without a guide is bound only while it has a rotation.
+    /// So each key whose override changed (added, removed or different bits)
+    /// gets the rotation `bindPose` would merge (the override, else the saved
+    /// rotation, else zero), and everything else is kept.
+    ///
+    /// Returns nil, for a full bind, whenever that could differ or throw: a
+    /// changed key that is no bound target, a target without a guide left
+    /// without a rotation, a key outside Int32, or a non-finite rotation.
+    public func rebindPose(_ binding: PoseBinding, from previous: [Int: SIMD3<Float>],
+                           to fkOverrides: [Int: SIMD3<Float>]) -> PoseBinding? {
+        func sameBits(_ a: SIMD3<Float>?, _ b: SIMD3<Float>?) -> Bool {
+            switch (a, b) {
+            case (nil, nil): return true
+            case let (a?, b?): return a.x.bitPattern == b.x.bitPattern && a.y.bitPattern == b.y.bitPattern && a.z.bitPattern == b.z.bitPattern
+            default: return false
+            }
+        }
+        var controller = binding.controller
+        for key in Set(previous.keys).union(fkOverrides.keys) where !sameBits(previous[key], fkOverrides[key]) {
+            guard let id = Int32(exactly: key),
+                  let target = controller.targets.first(where: { $0.bone.id == key }) else { return nil }
+            let rotation = fkOverrides[key] ?? bones[id]?.transform.rotationDegrees
+            guard target.hasGuide || rotation != nil else { return nil }
+            // setRotation refuses a non-finite rotation, as the full bind does.
+            guard (try? controller.setRotation(boneID: key, degrees: rotation ?? .zero)) != nil else { return nil }
+        }
+        return PoseBinding(controller: controller, ik: binding.ik, fk: binding.fk, effects: binding.effects, diagnostics: binding.diagnostics)
+    }
+
     /// The pose half of `makePose`: the IK transition, the FK transition and
     /// the FK late update on `baseline`. `rig` is the rig `binding` was made
     /// with.
     public func makePose(binding: PoseBinding, rig: RigDefinition, baseline: RigPose) throws -> PoseResult {
-        let pose = try binding.controller.applyingActivations(ik: binding.ik, fk: binding.fk, rig: rig, pose: baseline)
-        return PoseResult(controller: binding.controller, pose: pose, deferredEffects: binding.effects, diagnostics: binding.diagnostics)
+        let (pose, evaluation) = try binding.controller.evaluatedActivations(ik: binding.ik, fk: binding.fk, rig: rig, pose: baseline)
+        return PoseResult(controller: binding.controller, pose: pose, evaluation: evaluation, deferredEffects: binding.effects,
+                          diagnostics: binding.diagnostics)
     }
 }
 

@@ -479,3 +479,22 @@ func sourceCharacterCardHashIsTheSHA256OfItsPreservedBytes() throws {
     for root in try KoikatsuSceneReader.decodeDocument(scene).snapshot.roots { try visit(root) }
     #expect(embedded >= 1)
 }
+
+@Test func sourceCharacterCardHeaderStringsKeepALeadingBOM() throws {
+    // #418: BinaryReader.ReadString keeps a leading EF BB BF as U+FEFF, so a
+    // marked card marker or version is not the expected string. Before, the
+    // native read dropped the mark and accepted both.
+    func refusal(_ bytes: Data) -> String {
+        do { _ = try SourceCharacterCard.decode(bytes); return "accepted" }
+        catch let error as SourceCharacterCardError { return error.description }
+        catch { return "other error: \(error)" }
+    }
+    #expect(refusal(OriginalCardFixture.card(marker: "\u{feff}【KoiKatuChara】"))
+        == "Unsupported source card product or character-card marker.")
+    #expect(refusal(OriginalCardFixture.card(version: "\u{feff}0.0.0")) == "Unsupported source character-card version '\u{feff}0.0.0'.")
+    // Invalid UTF-8 keeps its refusal and message.
+    var bytes = OriginalCardFixture.card(version: "0.0.0")
+    let version = try #require(bytes.range(of: Data([5] + Array("0.0.0".utf8))))
+    bytes.replaceSubrange(version, with: Data([5, 0xef, 0xbb, 0xbf, 0xc0, 0x80]))
+    #expect(refusal(bytes) == "Source card string is oversized or invalid UTF-8.")
+}

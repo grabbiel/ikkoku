@@ -184,7 +184,7 @@ private func makeLiveTestRenderer() throws -> Renderer {
     func read(_ file: String) throws -> String { try String(contentsOf: root.appendingPathComponent(file), encoding: .utf8) }
     let header = try read("Packages/Engine/Sources/ShaderTypes/include/ShaderTypes.h")
     let common = try read("Shaders/Common.h").replacingOccurrences(of: "#include \"ShaderTypes.h\"", with: "")
-    let shaders = try ["Deform", "Toon", "Shadow", "Outline", "Overlay", "Post"].map {
+    let shaders = try ["Deform", "Toon", "Shadow", "Outline", "Overlay", "Post", "InstancedItems"].map {
         try read("Shaders/\($0).metal").replacingOccurrences(of: "#include \"Common.h\"", with: "")
     }.joined(separator: "\n")
     let library = try gpu.device.makeLibrary(source: "#include <metal_stdlib>\nusing namespace metal;\n" + header + common + shaders, options: nil)

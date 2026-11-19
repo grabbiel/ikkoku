@@ -30,6 +30,14 @@ The script needs the ignored local source evidence produced during this investig
 | Line 4 | Trim the whole line, then split on literal commas into header names |
 | Later lines | Trim the whole line, then split on literal commas; stop entirely at the first line without a comma |
 
+Each trim is the game's `String.Trim()`: Mono's `String.WhiteChars`, 27
+characters that include U+200B and U+FEFF but not U+180E (see
+[card references](card-references.md)). `SourceModCatalog` and the Python
+oracle trim with that set (`SourceMonoWhiteChars`, #421); Foundation's
+whitespace set keeps U+FEFF, and the oracle's former list kept U+200B too. The
+numbers then go through `int.Parse`, whose own whitespace allowance is not this
+trim.
+
 Individual header and data cells are not trimmed. Quotes have no escaping or grouping function. Blank lines terminate reading instead of being skipped. The second line is distribution metadata, not an archive priority or asset-root selector. The third line is retained but is not used by `Lists.LoadList` to route injection: that method selects an already-existing dictionary by category number.
 
 The source stream reader detects BOMs and uses decoder replacement for malformed byte sequences; it does not guess CP932. The package importer's RFC CSV/CP932 interpretation is analytical metadata;
