@@ -137,12 +137,12 @@ pose from leaving the UI's activation state ahead of the rendered character.
 Effect consumers should likewise run only after the staged native update is
 accepted. Do not reuse a transition for a different controller or hierarchy.
 
-The current matrix-based pose representation does not retain signed TRS
-components. Rotation replacement therefore accepts positive, finite, orthogonal
-local TRS and rejects signed authored scales, authored matrices, singular axes,
-reflections, and shear. Upstream pose writers must preserve positive scale; two
-negative axes cannot be distinguished from a different rotation using a matrix
-alone. This is a stated native representation limit, not a source restriction.
+FK rotation replacement works on the local matrix. It does not read the signed
+TRS records that `RigPose` carries for DynamicBone (#406). It therefore accepts
+positive, finite, orthogonal local TRS and rejects signed authored scales,
+authored matrices, singular axes, reflections, and shear. Upstream pose writers
+must preserve positive scale; two negative axes cannot be distinguished from a
+different rotation using a matrix alone. This is a stated native representation limit, not a source restriction.
 Disabled FK does not decompose or rewrite the upstream pose. All produced poses
 are validated through rig evaluation before returning them.
 
