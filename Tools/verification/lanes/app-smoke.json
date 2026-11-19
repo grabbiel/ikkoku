@@ -93,10 +93,10 @@
     },
     {
       "id": "studio-inspector-clothes-fit-validate",
-      "argv": ["python3", "Tools/verification/checks/inspector_fit_log.py", ".local/verification/captures/studio-clothes-fit.fit.txt", "--selection", "963", "--tab", "Clothes"],
+      "argv": ["python3", "Tools/verification/checks/inspector_fit_log.py", ".local/verification/captures/studio-clothes-fit.fit.txt", "--selection", "963", "--tab", "Clothes", "--pose-picker"],
       "env": {},
       "referenceTier": "app-smoke",
-      "tolerance": "Validates the fit log of studio-inspector-clothes-fit-capture: exactly one captured line, showing character 963 on the Clothes tab, with the inspector's document view no wider than its clip view and the accessibility fit check after the capture passing (InspectorFitRule). A log without the inspector's scroll view, the state of #333's bad captures, fails.",
+      "tolerance": "Validates the fit log of studio-inspector-clothes-fit-capture: exactly one captured line, showing character 963 on the Clothes tab, with the inspector's document view no wider than its clip view and the accessibility fit check after the capture passing (InspectorFitRule). A log without the inspector's scroll view, the state of #333's bad captures, fails. With --pose-picker (#363), the toolbar's pose-mode picker must also be laid out at its intrinsic width at the capture (the fit log's layout probe): under a fixed frame narrower than the control it was laid out compressed on a fresh build and at full width on a rebuild, as here after the folder selection.",
       "timeout": 120
     },
     {

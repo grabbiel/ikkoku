@@ -11,4 +11,13 @@
 public enum SourceMonoWhiteChars {
     public static let scalars: Set<UInt32> = Set([0x09, 0x0A, 0x0B, 0x0C, 0x0D, 0x85, 0x1680, 0x2028, 0x2029, 0x20, 0xA0,
                                                   0x3000, 0xFEFF, 0x202F, 0x205F] + Array(0x2000...0x200B))
+
+    /// The game's `string.Trim()`: these scalars removed from both ends.
+    public static func trim(_ value: String) -> String {
+        func white(_ scalar: Unicode.Scalar) -> Bool { scalars.contains(scalar.value) }
+        let view = value.unicodeScalars
+        let start = view.firstIndex { !white($0) } ?? view.endIndex
+        let end = view.lastIndex { !white($0) }.map { view.index(after: $0) } ?? start
+        return String(view[start..<end])
+    }
 }

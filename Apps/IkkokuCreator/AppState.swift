@@ -1150,7 +1150,8 @@ final class AppState {
     /// readiness poll and after the capture, appends the elapsed time, the window size, the
     /// selection, the inspector tab, the inspector scroll view's clip and document widths and the
     /// horizontal extent of the views in its document view, and every scroll view's frame with its
-    /// ancestors' frames, to find when and how the Clothes tab is laid out wider than the inspector. Only after the capture, so that it cannot
+    /// ancestors' frames, to find when and how the Clothes tab is laid out wider than the inspector, and
+    /// (#363, #366) the toolbar pickers' and the inspector rows' layout (`InspectorUIScenario.layoutProbe`). Only after the capture, so that it cannot
     /// change what the capture shows, does it also walk the accessibility elements
     /// (`InspectorUIScenario.inspectorFit`, with each segmented row's natural width and margins).
     /// The first line of a launch creates the file's folder and replaces the file, so the log holds
@@ -1198,6 +1199,9 @@ final class AppState {
                     + (scroll.isHiddenOrHasHiddenAncestor ? " hidden" : "") + ": " + chain.joined(separator: " < ")
             }
         }
+        // #363/#366: the toolbar pickers' and the inspector rows' layout, before
+        // " | fits", which inspector_fit_log.py reads to the end of the line.
+        line += " | layout " + InspectorUIScenario.layoutProbe(window, afterCapture: accessibility)
         if accessibility {
             let fit = InspectorUIScenario.inspectorFit(window)
             line += " | fits \(fit.fits): \(fit.detail)"

@@ -75,8 +75,9 @@ includes nonbreaking and ideographic spaces, zero-width space (U+200B) and the
 byte-order mark (U+FEFF), but not U+180E. It is not `char.IsWhiteSpace`. A
 GUID stored with leading EF BB BF bytes reads as U+FEFF (#418), which this trim
 removes. The native resolver, the package manifest GUID and the Python oracles
-use this set (`SourceMonoWhiteChars`, #419). GUID and property comparisons are
-case-sensitive and do not perform Unicode normalization.
+use this set (`SourceMonoWhiteChars`, #419), as do the list CSV trims
+([catalog](catalog.md), #421). GUID and property comparisons are case-sensitive
+and do not perform Unicode normalization.
 
 ## Binding to actual character destinations
 
