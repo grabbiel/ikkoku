@@ -7408,6 +7408,42 @@ attribution then found three costs on the dragged character's path:
   test checks the shortcut against the walk and against a fresh resolution
   over 60 rig pairs.
 
+A dev A/B of those three (W13, n = 4 per arm, not registered) put the
+refresh at 63.6% of base: a 9.1% margin against the ≤ 70% bar, short of
+the 15% a registration needs. A head profile (e039ee56, 15 s) then showed
+the gizmos down from 30.8% to 14.6% of the refresh and the clip check
+gone. It also found three more costs, changed here in this order, one
+commit each with its own test:
+- **The IK node check.** `SourceStudioIK.apply` mapped the rig's node
+  list twice and compared source IDs and parents on every call (~3.2 ms/s
+  of the refresh). The solver now keeps the identity of the rig it was
+  built for and skips the comparison for that rig. Any other rig gets the
+  full comparison as before: equal source IDs and parents pass and solve
+  bit for bit, and a changed node list fails with the same message.
+- **The rotate gizmo's rings.** `build(.rotate)` rebuilt three rings of
+  576 vertices from sine and cosine on every call. Their positions depend
+  only on the axis: radius, thickness and segment count are constants,
+  the color only fills a field, and origin, orientation and size go into
+  the batch's model. A table built by the same `ring` call holds them. A
+  test compares 384 rotate gizmos with the former construction bit for bit.
+- **Repeated rig evaluations** (21.5 ms/s, of which IK 4.5, the frame 2.2
+  and the bone handles 1.6):
+  - The IK solver evaluated its full-body initialization pose on every call.
+    `init` now evaluates it once (with `try?`, full-body only), and `apply`
+    uses that for the rig the solver was built for. A failed evaluation is
+    not kept: `apply` evaluates and throws where it did before. `init` runs
+    at import and on a body or face shape edit, never during an FK drag.
+  - `applyingActivations` evaluates the pose it returns last, on every path.
+    `evaluatedActivations` keeps that evaluation, `makePose`'s result
+    carries it, and the IK solve takes it in place of evaluating the same
+    pose again.
+  - The character preview keeps its last pose evaluation. It is used again
+    only for the same rig and a pose that shares the kept pose's matrix
+    storage, which therefore holds the same values. The frame build and the
+    Studio's bone handles share it. No checkpoint, undo state or document
+    field holds it.
+  - Tests compare every path with `rig.evaluate`, bit for bit.
+
 ### A/B
 
 To come with the new registration: `studio-fk-drag`, base against head,
