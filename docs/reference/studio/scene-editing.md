@@ -2242,7 +2242,7 @@ Observation, not changed in this slice: `ikkoku-inspect look-data` and `SourceSt
 
 **Not changed here.**
 - An edit step still copies the whole objects array, about 6 MB per step on the corpus scene (#409).
-- A small unbounded per-load growth in KVO and SwiftUI bookkeeping, about 8.6 KB per cycle, is tracked separately (#410).
+- A small unbounded per-load growth in KVO and SwiftUI bookkeeping, about 8.6 KB per cycle, was tracked separately and is fixed in [Workspace list per scene (#410)](#workspace-list-per-scene-410).
 
 ### Evidence
 
@@ -2266,3 +2266,32 @@ Observation, not changed in this slice: `ikkoku-inspect look-data` and `SourceSt
   - Metal stays at 73.3 MB on both arms.
   - A memory graph at cycle 35 holds 31 `StudioObject` arrays on A (30 held by the undo steps). On B it holds 2: the one undo step and a load in flight.
   - Ready time per load was 481 and 493 ms on A, 481 and 494 ms on B. That is informational only: the runs were not in a quiet slot.
+
+## Workspace list per scene (#410)
+
+The workspace panel lists the scene's objects (`StudioView.swift`, `StudioWorkspaceContent`). New Scene removes every row and Open inserts the new scene's rows.
+
+**The problem.** The rows were a `LazyVStack` in a `ScrollView`, and the panel keeps that scroll view for the whole session. The lazy stack keeps an entry for every row it inserts, and nothing prunes them:
+- SwiftUI's lazy-stack child cache (`_LazyLayoutViewCache.childCacheSeeds`) holds one `AnyHashableBox` of the row's id;
+- AppKit's dependency set on the scroll view's group container (`HostingScrollView.PlatformGroupContainer`, its `NSKeyValueDependencyInfo`) holds one `NSKeyValueDependency`, its context, an `__NSMallocBlock__` and an `__NSExactBlockVariable__`.
+
+On the 3,769-object corpus scene each load added about 40 of each, one per row the lazy stack built (the rows on screen), which is about 8.6 KB per load with no upper bound. Memory graphs from `studio-load` runs located both owners: `leaks --traceTree` on new instances of each type. The app itself registers no KVO for the list.
+
+**Two fixes that did not hold.**
+- A new scroll view per scene (`.id` on the `ScrollView`, bumped on every scene change) removed the SwiftUI boxes but not the dependency growth, which fell to about 8 to 17 per load. Each new scroll view's AppKit views register dependencies with the window's root views (`NSThemeFrame` and the window's hosting view), and those are never removed either. Rebuilding the scroll view on every load also cost 9 to 31 ms of main-thread time per load in an unregistered smoke run.
+- Rows keyed by position (`ForEach(entries.indices, id: \.self)`) kept the scroll view and changed only the ids. The boxes changed type, from `AnyHashableBox<UUID>` to `AnyHashableBox<Int>`, at the same 40 per load, and the dependencies stayed at 41 per load. The ids were never the cause: New Scene and Open remove and insert every row, and each insertion adds an entry. In a memory graph of that build, 1,860 of the 1,968 new dependency contexts (94.5%) sat on the scroll view's group container, and every sampled box sat in the lazy cache's `childCacheSeeds`.
+
+**The fix.** The rows are a `List`, still keyed by position: `ForEach(entries.indices, id: \.self)`, each row an `.equatable()` `WorkspaceRow` of `entries[index]`. The list's table reuses its row views, so what it keeps is bounded by the rows on screen, not by how many rows were ever inserted. On the corpus scene it builds the rows on screen, not 3,769. The row insets (0.5 pt above and below, 4 pt leading and trailing), a 3.5 pt vertical content margin and a minimum row height of 1 pt keep the stack's geometry: 1 pt between rows, 4 pt around them. Separators and the list background are hidden.
+
+**Why position is safe here.** Keyed by position, any state a row held would stay with the slot, not the object, after a delete or a duplicate. `WorkspaceRow` holds none: its only fields are the entry and its two actions, and its children have no `@State`, focus, hover, drag or drop. Renaming happens in the inspector's Name field, outside the list. The scenario step `assertWorkspaceRows` checks the three fields on every run.
+
+**What changes for the user.** Inserts and removals show as content changes of the rows below them, with no row animation, which the list never used. The geometry is checked to be the stack's. The list's hover and selection chrome are left to the visual pass: the rows draw their own selection, and the list selects nothing.
+
+**Checks.**
+- The scenario `workspace-rows-by-position` adds three folders to the source scene, deletes the first and renames the third, then selects and duplicates the second. After each step it checks every affected row's index, name and selection, and that the copy is the only selected row. Three Undos bring the first back, and the scene exports and reimports.
+- The scenario `workspace-list-geometry` reads the list through accessibility in the window, with nothing selected, with rows 1 and 0 selected, and after deselecting. Each fully visible row must be `WorkspaceRow`'s own height for its entry, 1 pt from the next, with 4 pt to the visible area's leading and trailing edges and above the first row. These are the values `StudioView.swift` defined for the stack at 47ac6316, lines 131, 151, 540, 541 and 563, within 0.51 pt. The table must select no row.
+- The growth check (v2.1) in [Per-load growth check (#410)](../performance.md#per-load-growth-check-410).
+
+### Evidence
+
+{RESULTS}

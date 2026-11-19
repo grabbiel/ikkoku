@@ -466,6 +466,45 @@ A new workload is added in three places: `PerfWorkload.swift`, the
 `perfWorkloads` values in `CaptureRequest.swift` and `WORKLOADS` in
 `perf_trace.py`.
 
+### Per-load growth check (#410)
+
+[workspace_growth_check.py](../../Tools/verification/workspace_growth_check.py)
+checks that Studio scene loads leave no per-load objects behind in the
+workspace list. It runs `studio-load` through `perf_trace.py run` (65 s by
+default, every launch through `--wrap`). It takes two `heap --forkCorpse -s`
+snapshots of the app by pid, at 12 s and 56 s after launch, and counts the
+loads between the snapshots it read from the report. A snapshot whose `heap`
+fails is retried once, 2 s later. Then it compares the counts of AppKit's
+`NSKeyValueDependency`, `NSKeyValueDependencyContext`, `__NSMallocBlock__`
+and `__NSExactBlockVariable__`, and of every SwiftUI `AnyHashableBox<T>`, one
+row per payload type `T`.
+
+- The bar was frozen before the first run on the fix. Each type may grow by
+  at most 1 per load plus 64. A run is valid only with at least 40 loads
+  between the snapshots.
+- The 64 covers one scene's rows. A snapshot can land while the scene is
+  shown, with its rows built, or in the New Scene gap, with none. So even a
+  list that frees everything reads up to about ±44 between two snapshots.
+  At 40 loads the bar is 104, so a residual leak of 3 per load (120) fails.
+- The snapshot schedule changed once, before any run with it: the first two
+  runs' 8 s snapshot failed (`heap` exit 255), so the early snapshot moved to
+  12 s and gained the retry. The bar did not change.
+- The rows changed once (v2.1), and only to make the check stricter. The
+  first version counted only `AnyHashableBox<UUID>`, and a list keyed by
+  position moved the same growth to `AnyHashableBox<Int>`, which it did not
+  count. Every box type is now a row of its own. Any other class that grows
+  by at least the bar is printed as a FLAG for review; a flag does not change
+  the verdict.
+- It writes `workspace-growth.json` with the raw counts, every snapshot
+  attempt and the flags, and exits 0 (pass), 1 (fail) or 2 (invalid).
+- [test_workspace_growth_check.py](../../Tools/verification/test_workspace_growth_check.py)
+  covers the heap reader, the load count, the bar, the retry, the box rows
+  and the flags with synthetic data.
+
+The check needs the private source scene (`perf_trace.py`'s environment
+map), so no lane runs it. Results are in
+[Workspace list per scene (#410)](studio/scene-editing.md#workspace-list-per-scene-410).
+
 ## Measurement setup
 
 Reference machine: Mac Studio `Mac14,14`, Apple M2 Ultra (24 CPU cores
