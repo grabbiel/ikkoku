@@ -9,6 +9,7 @@ import Character
 import Gameplay
 import Studio
 import ShaderTypes
+import Observation
 
 /// JSON-driven Studio scenario: a scripted sequence of checklist moves over the
 /// imported source scene, run headlessly behind `IKKOKU_STUDIO_SCENARIO` so the
@@ -23,7 +24,7 @@ struct StudioScenario: Decodable {
         /// `"setFace"`, `"setBody"`, `"setColor"`, `"resetShape"`, `"resetColors"`, `"setOutfit"`,
         /// `"setClothesState"`, `"setAccessoryVisible"`, `"setShoesType"`, `"setExpression"`, `"resetExpression"`,
         /// `"setAnimation"`, `"setAnimationSpeed"`, `"setForceLoop"`, `"setFKEnabled"`,
-        /// `"setFK"`, `"setPoseMode"`, `"selectBone"`, `"dragGizmo"`, `"hoverGizmo"`,
+        /// `"setFK"`, `"setPoseMode"`, `"selectBone"`, `"dragGizmo"`, `"dragIKGuide"`, `"hoverGizmo"`,
         /// `"captureBone"`, `"captureObject"`, `"captureRender"`, `"advance"`, `"orbit"`,
         /// `"setAutomaticBlink"`, `"addCharacter"`, `"setIKEnabled"`, `"setIKTarget"`,
         /// `"captureIKPose"`, `"editDuringAdvance"`, `"backgroundBuild"`, `"delete"`, `"setParent"`, `"duplicate"`,
@@ -130,11 +131,19 @@ struct StudioScenario: Decodable {
         /// setPoseMode: the mode to select, the lowercase words "object",
         /// "fk" or "ik" (the inspector's mode picker choices).
         let mode: String?
-        /// dragGizmo: the rotate-gizmo axis to grab, "x", "y" or "z".
+        /// dragGizmo: the rotate-gizmo axis to grab, "x", "y" or "z";
+        /// dragIKGuide: the translate arrow's.
         let axis: String?
-        /// dragGizmo: the [dx, dy] pixel offset the mouse drag travels
-        /// (viewport pixels, origin top-left like the view's own events).
+        /// dragGizmo / dragIKGuide: the [dx, dy] pixel offset the mouse drag
+        /// travels (viewport pixels, origin top-left like the view's own events).
         let pixels: [Float]?
+        /// dragGizmo / dragIKGuide (#425): also require the toolbar to hold
+        /// still over the drag. Its controls are `.equatable()` on
+        /// `StudioToolbarState`, so that state must be the same after every
+        /// mouseDragged and the mouseUp as after the mouseDown, which may only
+        /// set canUndo (its undo snapshot); and no drag event may write
+        /// anything the toolbar's body reads, so the body is not invalidated.
+        let toolbarSteady: Bool?
         /// assert only: the live animation state the preview plays for the
         /// named character (the inspector readback); every field is optional
         /// and only the keys present in the JSON are compared — like the
@@ -586,7 +595,7 @@ struct StudioScenario: Decodable {
                  activeCamera, routePlaying, sourceRuntime, diagnosticContains, statusContains, statusLacks, characterBuilt, exportedAnimation,
                  indicatorContains, treeLabel, view,
                  group, category, no, speed, on, bone, rotation, animation, fk, position,
-                 seconds, dx, dy, eyeLook, blink, handPattern, mode, axis, pixels,
+                 seconds, dx, dy, eyeLook, blink, handPattern, mode, axis, pixels, toolbarSteady,
                  render, exportIdenticalToSource, errorContains, outfit, accessoryLabels, pluginMount, state, clothes, expression,
                  sex, character, chain, delta, ik, edit, build, parent, children, absent, copy, added, activeCopyOf,
                  undoDepth, redoDepth, objectCount, rows, selected, aid, routeEdit, route, routeLines, sourceMap, liveSamplers
@@ -677,6 +686,7 @@ struct StudioScenario: Decodable {
             mode = try c.decodeIfPresent(String.self, forKey: .mode)
             axis = try c.decodeIfPresent(String.self, forKey: .axis)
             pixels = try c.decodeIfPresent([Float].self, forKey: .pixels)
+            toolbarSteady = try c.decodeIfPresent(Bool.self, forKey: .toolbarSteady)
             // `decodeIfPresent` reads both `null` and an absent key as `nil`;
             // `contains` distinguishes "assert the orbit view" from "no
             // camera check declared", so the camera check is decoded by hand.
@@ -1737,17 +1747,27 @@ struct StudioScenario: Decodable {
             guard let anchor = studio.sourceGuidePixel(of: Int(boneID)) else {
                 record(step, false, "\(op): bone \(boneID) does not project into the view camera"); return nil
             }
+            guard let start = scanAxisPixel(step, anchor: anchor, axis: axis, axisName: axisName, of: "bone \(boneID)", shape: "ring") else { return nil }
+            return (id, boneID, axis, axisName, anchor, start)
+        }
+
+        /// The pixel scan `locateGuideAxis` and `dragIKGuide` share: a pixel
+        /// near `anchor` (the guide's projected origin) whose pick id is the
+        /// gizmo `axis`. Records the failure, naming the axes the scan does
+        /// see, and returns nil otherwise.
+        func scanAxisPixel(_ step: Step, anchor: SIMD2<Float>, axis: GizmoAxis, axisName: String, of subject: String, shape: String) -> SIMD2<Float>? {
             let wanted = PickIDs.gizmo(axis)
             func picked(_ p: SIMD2<Float>) -> UInt32 { studio.pickID(at: p) }
             // The rotate ring of a selected guide is about 0.9 * 90
             // world-units-per-pixel (~81 px) in radius and only a few px
-            // wide, so a ±120 px box around the bone's projected origin
-            // covers it: a coarse pass locates the ring, a fine pass
+            // wide, and a translate arrow's cone (#425's IK guides) sits
+            // 72-95 px out, so a ±120 px box around the guide's projected
+            // origin covers either: a coarse pass locates it, a fine pass
             // around that hit lands squarely on it. The pass records the
-            // first pixel of every axis ring — a ring turned nearly
-            // edge-on to the camera projects to a sub-pixel sliver no
-            // pixel picks, and then the failure has to name which rings
-            // the camera does show.
+            // first pixel of every axis — a ring turned nearly edge-on to
+            // the camera projects to a sub-pixel sliver no pixel picks (an
+            // arrow pointing at it, to a dot), and then the failure has to
+            // name which axes the camera does show.
             func scan(_ radius: Float, by: Float, centeredAt center: SIMD2<Float>) -> [GizmoAxis: SIMD2<Float>] {
                 var hits: [GizmoAxis: SIMD2<Float>] = [:]
                 var y = center.y - radius
@@ -1771,14 +1791,86 @@ struct StudioScenario: Decodable {
                 let axisWord: (GizmoAxis) -> String = { $0 == .x ? "x" : $0 == .y ? "y" : "z" }
                 let seen = [GizmoAxis.x, .y, .z].compactMap { a -> String? in
                     guard let p = coarse[a] else { return nil }
-                    return "\(axisWord(a)) ring at (\(p.x), \(p.y))"
+                    return "\(axisWord(a)) \(shape) at (\(p.x), \(p.y))"
                 }
-                record(step, false, "\(op): no pixel within ±120 px of bone \(boneID)'s projection (\(anchor.x), \(anchor.y)) picks axis \(axisName) (id \(wanted)); "
-                    + (seen.isEmpty ? "the scan sees no axis ring at all (anchor pixel picks \(picked(anchor)))"
-                                    : "the scan sees \(seen.joined(separator: " and ")) but not the \(axisName) ring (edge-on to the camera?)"))
+                record(step, false, "\(step.op): no pixel within ±120 px of \(subject)'s projection (\(anchor.x), \(anchor.y)) picks axis \(axisName) (id \(wanted)); "
+                    + (seen.isEmpty ? "the scan sees no axis \(shape) at all (anchor pixel picks \(picked(anchor)))"
+                                    : "the scan sees \(seen.joined(separator: " and ")) but not the \(axisName) \(shape) (edge-on to the camera?)"))
                 return nil
             }
-            return (id, boneID, axis, axisName, anchor, start)
+            return start
+        }
+
+        /// #425 (`toolbarSteady`): the toolbar state's fields that differ, as "name old -> new".
+        func toolbarDifference(_ a: StudioToolbarState, _ b: StudioToolbarState) -> String {
+            zip(Mirror(reflecting: a).children, Mirror(reflecting: b).children)
+                .filter { "\($0.value)" != "\($1.value)" }
+                .map { "\($0.label ?? "?") \($0.value) -> \($1.value)" }
+                .joined(separator: ", ")
+        }
+
+        /// One mouseDown at `start`, eight interpolated mouseDragged steps to
+        /// `start + pixels`, one mouseUp: the view's own coordinator path
+        /// (left button, no modifiers), nothing re-implemented. Nil, after
+        /// the mouseUp, when the mouseDown grabbed no guide (pushed no undo
+        /// snapshot). With `toolbarSteady` (#425) it also reads the toolbar's
+        /// state after every event and watches, with observation tracking,
+        /// for a write to anything `StudioToolbar`'s body reads; `failures`
+        /// says where either moved and `detail` what held.
+        func mouseDrag(from start: SIMD2<Float>, by pixels: [Float], toolbarSteady: Bool) -> (end: SIMD2<Float>, failures: [String], detail: String)? {
+            let noModifiers = NSEvent.ModifierFlags()
+            let undoDepth = studio.undoStack.count
+            let before = StudioToolbarState(model: studio)
+            studio.mouseDown(at: start, button: 0, modifiers: noModifiers)
+            guard studio.undoStack.count == undoDepth + 1 else {
+                studio.mouseUp(at: start, button: 0, modifiers: noModifiers)
+                return nil
+            }
+            var failures: [String] = []
+            let grabbed = StudioToolbarState(model: studio)
+            var expected = before
+            expected.canUndo = true
+            if toolbarSteady, grabbed != expected {
+                failures.append("mouseDown changed the toolbar beyond canUndo: " + toolbarDifference(before, grabbed))
+            }
+            // One arming at a time: onChange runs once, at the first write to
+            // anything the arming read, and the next arming follows that event.
+            let observed = StudioToolbarObservation()
+            func arm() {
+                withObservationTracking { _ = StudioToolbarState(model: studio) } onChange: { [observed] in observed.writes.append(observed.event) }
+            }
+            if toolbarSteady { arm() }
+            var changed: [String] = []
+            func check(_ event: String) {
+                guard toolbarSteady else { return }
+                let now = StudioToolbarState(model: studio)
+                if now != grabbed { changed.append(event + ": " + toolbarDifference(grabbed, now)) }
+                if observed.writes.last == event { arm() }
+            }
+            var point = start
+            var previous = start
+            for i in 1...8 {
+                observed.event = "drag step \(i)"
+                point = start + SIMD2<Float>(pixels[0], pixels[1]) * (Float(i) / 8)
+                studio.mouseDragged(to: point, delta: point - previous, button: 0, modifiers: noModifiers)
+                previous = point
+                check(observed.event)
+            }
+            observed.event = "mouseUp"
+            studio.mouseUp(at: point, button: 0, modifiers: noModifiers)
+            check(observed.event)
+            guard toolbarSteady else { return (point, [], "") }
+            if !changed.isEmpty { failures.append("the toolbar state changed at " + changed.joined(separator: "; ")) }
+            // With IKKOKU_PERF_PANEL_STATE=document the toolbar reads the document itself, so every
+            // drag event invalidates it by design; only the published state (the default) must not.
+            let writes = observed.writes.joined(separator: ", ")
+            if StudioPanelStateMode.current.publishes, !observed.writes.isEmpty {
+                failures.append("\(observed.writes.count) of 9 drag events wrote what StudioToolbar reads (\(writes))")
+            }
+            let undo = before.canUndo ? "canUndo stayed on" : "canUndo turned on"
+            let held = changed.isEmpty ? "toolbar state held over 8 drag steps and the mouseUp" : "toolbar state changed at \(changed.count) of 9 drag events"
+            return (point, failures, held + " (\(undo) at mouseDown); "
+                + "\(observed.writes.count) drag events wrote what StudioToolbar reads" + (writes.isEmpty ? "" : " (\(writes))"))
         }
 
         // #354: each step drains its own autorelease pool and then gives the
@@ -2182,31 +2274,52 @@ struct StudioScenario: Decodable {
                 }
                 guard let located = locateGuideAxis(step) else { continue }
                 let (id, boneID, axisName, start) = (located.id, located.boneID, located.axisName, located.start)
-                func picked(_ p: SIMD2<Float>) -> UInt32 { studio.pickID(at: p) }
-                let pickedID = picked(start)
-                // One mouseDown, eight interpolated mouseDragged steps to the
-                // requested offset, one mouseUp — the view's own coordinator
-                // path (left button, no modifiers), nothing re-implemented.
-                let noModifiers = NSEvent.ModifierFlags()
-                let undoDepth = studio.undoStack.count
-                studio.mouseDown(at: start, button: 0, modifiers: noModifiers)
-                guard studio.undoStack.count == undoDepth + 1 else {
-                    studio.mouseUp(at: start, button: 0, modifiers: noModifiers)
+                let pickedID = studio.pickID(at: start)
+                guard let drag = mouseDrag(from: start, by: pixels, toolbarSteady: step.toolbarSteady == true) else {
                     record(step, false, "dragGizmo: mouseDown picked the ring but grabbed no guide (picked id \(pickedID))"); continue
                 }
-                var point = start
-                var previous = start
-                for i in 1...8 {
-                    point = start + SIMD2<Float>(pixels[0], pixels[1]) * (Float(i) / 8)
-                    studio.mouseDragged(to: point, delta: point - previous, button: 0, modifiers: noModifiers)
-                    previous = point
-                }
-                studio.mouseUp(at: point, button: 0, modifiers: noModifiers)
                 let degrees = studio.doc.object(id)?.sourceFKRotations?[Int(boneID)]
                 guard let held = degrees else {
                     record(step, false, "dragGizmo: the drag left no FK rotation on bone \(boneID) — mouseDragged never reached setSourceFKRotation"); continue
                 }
-                record(step, true, "drag bone \(boneID) axis \(axisName) from pixel (\(start.x), \(start.y)), picked id \(pickedID), over \(pixels) px: FK (\(held.x), \(held.y), \(held.z)) degrees")
+                let moved = "drag bone \(boneID) axis \(axisName) from pixel (\(start.x), \(start.y)), picked id \(pickedID), over \(pixels) px: FK (\(held.x), \(held.y), \(held.z)) degrees"
+                record(step, drag.failures.isEmpty, (drag.failures.isEmpty ? "" : drag.failures.joined(separator: "; ") + " | ") + moved + (drag.detail.isEmpty ? "" : "; " + drag.detail))
+            case "dragIKGuide":
+                // #425: dragGizmo's IK counterpart. The Pose tab's IK guide
+                // picker selects the guide and IK mode (after the character,
+                // whose selection clears the guide); then the same mouseDown,
+                // eight mouseDragged and mouseUp over the guide's translate
+                // arrow reach setSourceIKValue as a viewport drag does.
+                guard let id = object(step) else { record(step, false, "dragIKGuide: no object with source key \(step.key ?? -1)"); continue }
+                guard let index = step.index, SourceStudioIKEditing.labels.indices.contains(index), let axisName = step.axis,
+                      let axis = GizmoAxis(rawValue: ["x": 1, "y": 2, "z": 3][axisName] ?? -1),
+                      let pixels = step.pixels, pixels.count == 2, pixels.allSatisfy({ $0.isFinite }) else {
+                    record(step, false, "dragIKGuide: index (the IK guide, 0-12), axis (\"x\", \"y\" or \"z\") and pixels [dx, dy] are required"); continue
+                }
+                guard studio.sourceShapePreview(for: id) != nil else {
+                    record(step, false, "dragIKGuide: object \(step.key!) is not a rendered source character"); continue
+                }
+                let target = Int32(index)
+                studio.selection = id
+                studio.selectedSourceIK = target
+                studio.poseMode = .ik
+                let view = studio.viewportSize
+                guard let anchor = studio.sourceIKGuidePixel(of: target), anchor.x >= 0, anchor.y >= 0, anchor.x < view.x, anchor.y < view.y else {
+                    let at = studio.sourceIKGuidePixel(of: target).map { " (it projects to (\($0.x), \($0.y)))" } ?? ""
+                    record(step, false, "dragIKGuide: IK guide \(index) (\(SourceStudioIKEditing.labels[index])) is not inside the \(Int(view.x)) x \(Int(view.y)) px view\(at)"); continue
+                }
+                guard let start = scanAxisPixel(step, anchor: anchor, axis: axis, axisName: axisName, of: "IK guide \(index)", shape: "arrow") else { continue }
+                let pickedID = studio.pickID(at: start)
+                let before = studio.doc.object(id)?.sourceIKOverrides?[target]
+                guard let drag = mouseDrag(from: start, by: pixels, toolbarSteady: step.toolbarSteady == true) else {
+                    record(step, false, "dragIKGuide: mouseDown picked the arrow but grabbed no guide (picked id \(pickedID); status \"\(studio.status)\")"); continue
+                }
+                guard let held = studio.doc.object(id)?.sourceIKOverrides?[target], held != before else {
+                    record(step, false, "dragIKGuide: the drag left IK guide \(index) where it was — mouseDragged never reached setSourceIKValue (status \"\(studio.status)\")"); continue
+                }
+                let moved = "drag IK guide \(index) (\(SourceStudioIKEditing.labels[index])) axis \(axisName) from pixel (\(start.x), \(start.y)), picked id \(pickedID), over \(pixels) px: "
+                    + "position (\(held.position.x), \(held.position.y), \(held.position.z))"
+                record(step, drag.failures.isEmpty, (drag.failures.isEmpty ? "" : drag.failures.joined(separator: "; ") + " | ") + moved + (drag.detail.isEmpty ? "" : "; " + drag.detail))
             case "hoverGizmo":
                 // R7 phase 2, item 5: the REAL `mouseMoved` hover, which picks
                 // asynchronously for the latest position only. Moves go over
@@ -3457,4 +3570,13 @@ struct StudioScenario: Decodable {
         let passed = results.filter(\.ok).count
         return Report(steps: results, passed: passed, failed: results.count - passed)
     }
+}
+
+/// #425: what a `toolbarSteady` drag's observation tracking saw: the event
+/// under way and each event during which something `StudioToolbar` reads was
+/// written. Main thread only: `withObservationTracking` runs `onChange`
+/// inside the write.
+nonisolated private final class StudioToolbarObservation: @unchecked Sendable {
+    var event = ""
+    var writes: [String] = []
 }

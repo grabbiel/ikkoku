@@ -5016,6 +5016,20 @@ final class StudioModel: ViewportInputHandler, LivePacedHandler {
         } catch { return nil }
     }
 
+    /// #425: the viewport pixel of the selected source character's IK guide
+    /// `target` (0-12), projected with the view camera from the world point
+    /// `sourceIKGizmos` centers that guide's gizmo on and `mouseDown` grabs,
+    /// so the scenario's `dragIKGuide` op can scan around the arrows it is
+    /// about to click. Nil when nothing resolves.
+    func sourceIKGuidePixel(of target: Int32) -> SIMD2<Float>? {
+        guard let sel = selectedObject, let preview = sourceInstances[sel.id] else { return nil }
+        do {
+            guard let guide = try sourceGuides(sel, preview: preview).first(where: { $0.targetID == target }) else { return nil }
+            let world = try sourceWorldMatrix(of: sel.id, document: doc, previews: sourceInstances)
+            return viewCamera.project(world.transformPoint(guide.position), viewport: viewportSize)
+        } catch { return nil }
+    }
+
     func mouseDown(at p: SIMD2<Float>, button: Int, modifiers: NSEvent.ModifierFlags) {
         // The highlight answers the last mouse move before a click or a drag
         // starts, as the synchronous hover pick guaranteed; a result arriving

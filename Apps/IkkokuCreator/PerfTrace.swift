@@ -118,6 +118,8 @@ final class PerfTrace {
         /// A source character's refresh frame built afresh on the main thread
         /// (not one the live step prepared).
         case studioCharacterFrameBuilt
+        /// One layout measurement of the Studio toolbar's ViewThatFits (#425).
+        case studioToolbarMeasured
     }
 
     /// SwiftUI bodies counted per recording. A count is one evaluation of that
@@ -127,6 +129,8 @@ final class PerfTrace {
     enum ViewBody: Int, CaseIterable {
         case appCommands, contentView
         case studioWindow, studioWorkspace, studioWorkspaceRow, studioToolbar, studioTimeline, studioInspector, studioStatus
+        /// #425: each toolbar variant's controls (full, compact, compact in the scroll view).
+        case studioToolbarControls
         case objectInspector, objectInspectorContent, objectInspectorSection, poseInspector, sourcePoseInspector, sourceAnimationInspector, faceInspector, clothesInspector, sceneInspector
         case makerWindow, makerRigPanel, makerShapeRow
         /// #410: an empty workspace slot, past the scene's rows (`WorkspaceSlot`).

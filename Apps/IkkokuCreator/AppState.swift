@@ -52,6 +52,12 @@ final class AppState {
     /// second `onAppear` from queueing them again.
     @ObservationIgnored private var uiCapturePendingSelections: [UUID?] = []
     @ObservationIgnored private var uiCaptureContentPrepared = false
+    /// `IKKOKU_CAPTURE_UI_POSE_MODE` (#425): the pose mode to set, in its own readiness poll, once the
+    /// selections are made; nil once set (or when not requested).
+    @ObservationIgnored private var uiCapturePoseMode: PoseMode?
+    /// `IKKOKU_CAPTURE_UI_WINDOW_W` (#425) is set and the first readiness poll with a window has not
+    /// resized it yet.
+    @ObservationIgnored private var uiCaptureWindowWidthPending = false
 
     init() {
         let env = ProcessInfo.processInfo.environment
@@ -1048,6 +1054,16 @@ final class AppState {
                     }
                     studio.inspectorTab = tab
                 }
+                // The first readiness poll with a window applies it (checked against that screen).
+                uiCaptureWindowWidthPending = env[UICaptureWindowWidth.variable] != nil
+                if let text = env["IKKOKU_CAPTURE_UI_POSE_MODE"] {
+                    // CaptureRequest admits only object, fk and ik; anything else is still refused here.
+                    guard let poseMode = PoseMode.allCases.first(where: { $0.rawValue.lowercased() == text }) else {
+                        print("[ikkoku] unknown IKKOKU_CAPTURE_UI_POSE_MODE '\(text)'")
+                        exit(1)
+                    }
+                    uiCapturePoseMode = poseMode
+                }
                 if let text = env["IKKOKU_CAPTURE_UI_SELECT"] {
                     let tree = studio.doc.flattened().map(\.object)
                     var selections: [UUID?] = []
@@ -1064,9 +1080,46 @@ final class AppState {
                     uiCapturePendingSelections = selections
                     return
                 }
+                // The readiness poll sets the pose mode, as a click after the selection would.
+                if uiCapturePoseMode != nil { return }
             }
         }
         uiCaptureContentAppeared = true
+    }
+
+    /// #425: sets `IKKOKU_CAPTURE_UI_POSE_MODE` on the selection the capture will show, which must be a
+    /// character (only a character has the pose controls); any other selection refuses the capture.
+    private func applyUICapturePoseMode(_ studio: StudioModel) {
+        guard let poseMode = uiCapturePoseMode else { return }
+        uiCapturePoseMode = nil
+        guard let object = studio.selectedObject, object.kind == .character else {
+            let shown = studio.selectedObject.map { "a \($0.kind)" + ($0.sourceObjectKey.map { " (source key \($0))" } ?? "") } ?? "nothing"
+            print("[ikkoku] ui snapshot failed: IKKOKU_CAPTURE_UI_POSE_MODE=\(poseMode.rawValue.lowercased()) needs a character selected, but the selection is \(shown)")
+            exit(1)
+        }
+        studio.poseMode = poseMode
+    }
+
+    /// #425: sets `IKKOKU_CAPTURE_UI_WINDOW_W` as the window's frame width, keeping its height and
+    /// keeping it on its screen. A width the screen cannot show, or one AppKit does not apply,
+    /// refuses the capture.
+    private func applyUICaptureWindowWidth(_ window: NSWindow, _ env: [String: String]) {
+        let visible = (window.screen ?? NSScreen.main)?.visibleFrame ?? .zero
+        let width: Int
+        do {
+            guard let parsed = try UICaptureWindowWidth.fromEnvironment(env, visibleWidth: Double(visible.width)) else { return }
+            width = parsed
+        } catch {
+            print("[ikkoku] ui snapshot failed: \(error)"); exit(1)
+        }
+        var frame = window.frame
+        frame.size.width = CGFloat(width)
+        frame.origin.x = min(max(frame.minX, visible.minX), visible.maxX - frame.width)
+        window.setFrame(frame, display: true)
+        guard Int(window.frame.width.rounded()) == width else {
+            print("[ikkoku] ui snapshot failed: \(UICaptureWindowWidth.variable)=\(width) left the window \(window.frame.width) points wide")
+            exit(1)
+        }
     }
 
     /// Arms the `IKKOKU_CAPTURE_UI` readiness poll at the end of startup (A-T05). Instead of a
@@ -1095,10 +1148,24 @@ final class AppState {
     private func pollUICapture(elapsed: Double) {
         let env = ProcessInfo.processInfo.environment
         guard var tracker = uiCaptureTracker, let out = env["IKKOKU_CAPTURE_UI"] else { return }
+        // #425: the window width first, as soon as there is a window, so every later step lays out
+        // at that width; this poll observes nothing and the stable count starts after it.
+        if uiCaptureWindowWidthPending, let window = NSApp?.windows.first(where: { $0.isVisible && $0.contentView != nil }) {
+            uiCaptureWindowWidthPending = false
+            applyUICaptureWindowWidth(window, env)
+            logUICaptureFit("window-width", elapsed: elapsed)
+            return
+        }
         if !uiCapturePendingSelections.isEmpty, let studio {
             logUICaptureFit("select", elapsed: elapsed)
             studio.selection = uiCapturePendingSelections.removeFirst()
-            if uiCapturePendingSelections.isEmpty { uiCaptureContentAppeared = true }
+            if uiCapturePendingSelections.isEmpty, uiCapturePoseMode == nil { uiCaptureContentAppeared = true }
+            return
+        }
+        if uiCapturePoseMode != nil, let studio {
+            logUICaptureFit("pose-mode", elapsed: elapsed)
+            applyUICapturePoseMode(studio)
+            uiCaptureContentAppeared = true
             return
         }
         let window = NSApp?.windows.first(where: { $0.isVisible && $0.contentView != nil })
@@ -1199,9 +1266,15 @@ final class AppState {
                     + (scroll.isHiddenOrHasHiddenAncestor ? " hidden" : "") + ": " + chain.joined(separator: " < ")
             }
         }
+        // #425: the toolbar's body runs and measurements so far, and since the line before; read
+        // before the probes below, so their own walks are not counted as the window's work.
+        if mode == .studio { line += " | toolbar work " + StudioToolbarFitCounts.logText() }
         // #363/#366: the toolbar pickers' and the inspector rows' layout, before
         // " | fits", which inspector_fit_log.py reads to the end of the line.
         line += " | layout " + InspectorUIScenario.layoutProbe(window, afterCapture: accessibility)
+        // #425: after the capture only, so the hosted copies cannot change what is captured; their
+        // bodies are not the window toolbar's work.
+        if accessibility { line += " | toolbar ideal " + StudioToolbarFitCounts.uncounted { toolbarIdealWidths() } }
         if accessibility {
             let fit = InspectorUIScenario.inspectorFit(window)
             line += " | fits \(fit.fits): \(fit.detail)"
@@ -1216,6 +1289,28 @@ final class AppState {
             handle.seekToEndOfFile(); handle.write(data); try? handle.close()
         }
     }
+    /// #425: the Studio toolbar's ideal width, full/compact, with nothing selected and with a character in
+    /// Object, FK and IK mode, from this model's state: each a `StudioToolbarControls` copy hosted off screen at
+    /// the toolbar's small control size, measured with `fittingSize`; then the state shown now. Capture fit
+    /// log only (`inspector_fit_log.py --toolbar-fits` reads it).
+    private func toolbarIdealWidths() -> String {
+        guard let studio else { return "no studio" }
+        let state = StudioToolbarState(model: studio)
+        let modes: [(String, Bool, PoseMode)] = [("none", false, .object), ("object", true, .object), ("fk", true, .fk), ("ik", true, .ik)]
+        let widths = modes.map { name, character, mode in
+            var shown = state
+            shown.selectedIsCharacter = character
+            shown.poseMode = mode
+            let full = NSHostingView(rootView: StudioToolbarControls(model: studio, state: shown, compact: false)
+                .environment(self).controlSize(.small)).fittingSize.width
+            let compact = NSHostingView(rootView: StudioToolbarControls(model: studio, state: shown, compact: true)
+                .environment(self).controlSize(.small)).fittingSize.width
+            return name + " " + String(format: "%.1f/%.1f", full, compact)
+        }
+        let now = state.selectedIsCharacter ? state.poseMode.rawValue.lowercased() : "none"
+        return widths.joined(separator: " ") + " state " + now
+    }
+
     /// Whether this launch has written its first `IKKOKU_CAPTURE_UI_FIT_LOG` line.
     @ObservationIgnored private var uiCaptureFitLogStarted = false
 
