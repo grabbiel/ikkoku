@@ -642,7 +642,9 @@ SCENARIO_OPS = {"select", "setVisible", "rename", "toggleCamera", "toggleRoute",
                 "focus", "selectRoutePoint", "dragRoutePoint", "captureRoute", "editRoute", "setShowSourceMap",
                 "setUnlimitedLights",
                 # Added for #387 round 3 (the workspace rows a selection change patches).
-                "deselect", "assertWorkspaceRows"}
+                "deselect", "assertWorkspaceRows",
+                # A digit-row key press: camera slot load, and save with Shift.
+                "pressDigit"}
 
 # R7 phase 2, item 7: the window-run inspector checks (`"inspectorUI": {"steps": [...]}`).
 INSPECTOR_UI_OPS = {"select", "deselect", "focus", "type", "delete", "undo", "redo", "cycle",
@@ -733,7 +735,7 @@ class AppOutputArtifactTests(unittest.TestCase):
         self.assertEqual(capture["env"]["IKKOKU_CAPTURE_UI_SELECT"], "0,622,963")
         self.assertEqual(validate["argv"][:3], ["python3", "Tools/verification/checks/inspector_fit_log.py",
                                                 capture["env"]["IKKOKU_CAPTURE_UI_FIT_LOG"]])
-        self.assertEqual(validate["argv"][3:], ["--selection", "963", "--tab", "Clothes"])
+        self.assertEqual(validate["argv"][3:], ["--selection", "963", "--tab", "Clothes", "--pose-picker"])
 
     def test_ui_capture_does_not_discover_a_maker_library(self):
         # The synthetic scene's minimal card exercises the source-pose inspector,
@@ -750,6 +752,9 @@ class AppOutputArtifactTests(unittest.TestCase):
         self.assertEqual(fixtures["IKKOKU_SOURCE_SCENE"]["from"], "IKKOKU_STUDIO_HALF_STATE_SCENE")
         self.assertFalse(fixtures["IKKOKU_SOURCE_SCENE"].get("optional", False))
         self.assertIn("IKKOKU_SOURCE_PLUGIN_PROFILE", fixtures)
+        # The scene needs the original avatar: without it an automated run reaches the
+        # source-tree fallback, which only the main checkout has (2026-11-19).
+        self.assertIn("IKKOKU_SOURCE_AVATAR", fixtures)
 
     def test_release_smoke_renders_with_the_optimized_app(self):
         # R6 (2026-10-23): every Release render crashed while the Debug lanes
@@ -951,7 +956,7 @@ class StudioScenarioLaneTests(unittest.TestCase):
                       and not name.startswith(("maker-", "gameplay-")))
 
     def test_lane_validates_and_covers_every_scenario(self):
-        self.assertEqual(len(self.checks), 104)
+        self.assertEqual(len(self.checks), 105)
         referenced = set()
         for check in self.checks:
             scenario = check["env"]["IKKOKU_STUDIO_SCENARIO"]
@@ -1277,6 +1282,12 @@ class StudioScenarioLaneTests(unittest.TestCase):
                           "loadDocumentRejected", "importDocument"):
                     self.assertTrue(step["path"].startswith(".local/"),
                                     "scene writes must stay under .local/: %s" % step["path"])
+                if op == "pressDigit":
+                    # the digit 0-9 and, for a slot save, Shift
+                    self.assertIn(step["index"], range(10))
+                    self.assertIs(type(step["index"]), int)
+                    if "on" in step:
+                        self.assertIs(type(step["on"]), bool)
                 if op in ("assert", "assertRejected"):
                     declared = [k for k in ("name", "visible", "face", "body", "color",
                                             "activeCamera", "routePlaying",
@@ -1377,11 +1388,13 @@ class StudioScenarioLaneTests(unittest.TestCase):
                         self.assertIsInstance(step["position"]["key"], int)
                         self.assertTrue(step["position"]["from"])
                     if "view" in step:
-                        # exactly one target: the saved camera or one camera object
+                        # exactly one target: the saved camera, one camera object or one camera slot
                         view = step["view"]
-                        self.assertEqual(len(view), 1, "a view assert names saved or key: %s" % path)
+                        self.assertEqual(len(view), 1, "a view assert names saved, key or slot: %s" % path)
                         if "saved" in view:
                             self.assertIs(view["saved"], True)
+                        elif "slot" in view:
+                            self.assertIn(view["slot"], range(1, 11))
                         else:
                             self.assertIsInstance(view["key"], int)
                     for text in ("statusContains", "indicatorContains", "treeLabel"):

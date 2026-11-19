@@ -291,7 +291,9 @@ struct StudioToolbarControls: View, Equatable {
             Toggle(isOn: Binding(get: { state.localSpace }, set: { model.localSpace = $0 })) { Text(state.localSpace ? "Local" : "World").frame(width: 42) }.toggleStyle(.button)
             if state.selectedIsCharacter {
                 Divider().frame(height: 18)
-                Picker("", selection: Binding(get: { state.poseMode }, set: { model.poseMode = $0 })) { ForEach(PoseMode.allCases) { Text($0.rawValue).tag($0) } }.pickerStyle(.segmented).frame(width: 150)
+                // At its ideal width (#363): a fixed frame narrower than the control (150 pt for
+                // 165) laid it out compressed on a fresh build and at full width on a rebuild.
+                Picker("", selection: Binding(get: { state.poseMode }, set: { model.poseMode = $0 })) { ForEach(PoseMode.allCases) { Text($0.rawValue).tag($0) } }.pickerStyle(.segmented).fixedSize()
                 if state.poseMode == .fk {
                     Picker("", selection: Binding(get: { state.fkGroup }, set: { model.fkGroup = $0 })) { ForEach(FKGroup.allCases) { Text($0.rawValue).tag($0) } }.frame(width: 120)
                 }

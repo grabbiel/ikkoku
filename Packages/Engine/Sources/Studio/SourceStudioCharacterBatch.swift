@@ -1,6 +1,8 @@
 import Foundation
+import os
 import Character
 import Renderer
+import Scene
 
 /// R7 phase 2 item 6 (S1): the source character builds of one Studio
 /// operation (a scene import, an undo or redo rebuild, a duplicate).
@@ -35,7 +37,8 @@ import Renderer
 /// 3,449 KiB through nested characters, several times a GCD worker's
 /// 512 KiB (`SourceSceneDeepStackTests`). The workers
 /// get `stackSize`, the main thread's 8 MiB, where the Studio's other scene
-/// decodes run.
+/// decodes run. The hidden characters' clock decodes its scene on a thread
+/// of the same size (`onDecodeThread`, #326).
 public final class SourceStudioCharacterBatch: @unchecked Sendable {
     public struct Request: Sendable {
         public let reference: SourceStudioCharacterReference
@@ -89,11 +92,67 @@ public final class SourceStudioCharacterBatch: @unchecked Sendable {
 
     private static func startWorker(_ index: Int, of count: Int, qos: DispatchQoS.QoSClass,
                                     _ body: @escaping @Sendable () -> Void) {
+        startThread("Ikkoku character assembly \(index) of \(count)", qos: QualityOfService(qos), body)
+    }
+
+    /// Starts `body` on a thread of its own with `stackSize`.
+    private static func startThread(_ name: String, qos: QualityOfService, _ body: @escaping @Sendable () -> Void) {
         let thread = Thread(block: body)
         thread.stackSize = stackSize
-        thread.qualityOfService = QualityOfService(qos)
-        thread.name = "Ikkoku character assembly \(index) of \(count)"
+        thread.qualityOfService = qos
+        thread.name = name
         thread.start()
+    }
+
+    /// #326: runs `body` on a thread of its own with `stackSize`, at the
+    /// calling thread's QoS, and returns its result. It serves a scene
+    /// decode whose caller may be a GCD worker, with 512 KiB of stack: the
+    /// hidden characters' clock (`SourceStudioAnimationClock.readSeeds`)
+    /// reads its scene on its utility warm-up and on an export's worker. One
+    /// thread per call (`theDecodeThreadHandOffNeverRunsAhead` prints the
+    /// cost).
+    ///
+    /// The hand-off: the thread takes `gate` and only then signals
+    /// `started`. The caller waits on `started` (the thread's start, a few
+    /// microseconds), then blocks on `gate` until `body` has returned, so it
+    /// can never take `gate` first and read no result.
+    ///
+    /// Why a lock and not a semaphore: priority inversion. A main-thread save
+    /// or clock rebase (`SourceStudioAnimationClock.savedStates`) blocks on
+    /// the clock's unfair lock, which the utility warm-up holds while it
+    /// loads; the warm-up blocks here, on `gate`, which this thread holds.
+    /// An unfair lock passes a waiter's priority to its owner, so the
+    /// main thread's priority reaches the warm-up and, through `gate`, this
+    /// decode. A semaphore has no owner: the chain would stop at the warm-up
+    /// and the main thread would wait on a utility-QoS decode.
+    static func onDecodeThread<T: Sendable>(_ name: String, _ body: @escaping @Sendable () -> T) -> T {
+        let gate = OSAllocatedUnfairLock(), started = DispatchSemaphore(value: 0)
+        let result = OSAllocatedUnfairLock<T?>(initialState: nil)
+        let qos = DispatchQoS.QoSClass(rawValue: qos_class_self()) ?? .default
+        startThread(name, qos: QualityOfService(qos)) {
+            gate.lock()
+            started.signal()
+            let value = body()
+            result.withLock { $0 = value }
+            gate.unlock()
+        }
+        started.wait()
+        gate.lock(); gate.unlock()
+        return result.withLock { $0 }!
+    }
+
+    /// #326, Debug: throws unless the calling thread has at least
+    /// `stackSize` of stack, so a scene decode that would run on a GCD
+    /// worker's 512 KiB fails with this error instead of overflowing it. The
+    /// tests' check that the clock decodes on `onDecodeThread`. Nothing in
+    /// Release.
+    static func requireDecodeStack() throws {
+        #if DEBUG
+        let size = pthread_get_stacksize_np(pthread_self())
+        guard size >= stackSize else {
+            throw RigError.invalid("A scene decode ran on a \(size / 1024) KiB stack, not \(stackSize / 1024) KiB (#326).")
+        }
+        #endif
     }
 
     /// The worker count: the performance cores less one for the main thread

@@ -333,7 +333,8 @@ public extension Renderer {
                                  constant float4x4 &model [[buffer(3)]], constant float4x4 &normalMatrix [[buffer(4)]]) {
         Out out; float4 p = view * (model * float4(vertices[index].position.xyz, 1));
         out.position = projection * p; out.eyeDepth = -p.z;
-        float3 n = normalize((normalMatrix * float4(vertices[index].normal.xyz, 0)).xyz);
+        float3 n = (normalMatrix * float4(vertices[index].normal.xyz, 0)).xyz;
+        n = dot(n, n) >= FLT_MIN ? normalize(n) : float3(0.0f); // #407: Common.h's guardedNormal
         out.normal = float3x3(view[0].xyz, view[1].xyz, view[2].xyz) * n;
         return out;
     }
