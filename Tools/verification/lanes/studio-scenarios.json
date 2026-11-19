@@ -3704,6 +3704,40 @@
         }
       ],
       "timeout": 600
+    },
+    {
+      "id": "studio-scenario-workspace-rows-by-position",
+      "argv": [
+        ".local/build/Build/Products/Debug/Ikkoku.app/Contents/MacOS/Ikkoku"
+      ],
+      "fixtures": [
+        {
+          "env": "IKKOKU_SOURCE_SCENE",
+          "kind": "file",
+          "from": "IKKOKU_STUDIO_SCENARIO_SCENE"
+        },
+        {
+          "env": "IKKOKU_SOURCE_AVATAR",
+          "kind": "file"
+        }
+      ],
+      "env": {
+        "IKKOKU_STUDIO_SCENARIO": "Tools/verification/scenarios/workspace-rows-by-position.json",
+        "IKKOKU_STUDIO_SCENARIO_REPORT": ".local/verification/reports/studio-scenario-workspace-rows-by-position.json"
+      },
+      "referenceTier": "app-smoke",
+      "tolerance": "#410: the workspace list keys its rows by position, so each row must show the object at its index and hold no state of its own. Three folders added to the source scene (Row A, Row B, Row C) are its last three rows. After Row A is deleted and Row C renamed, Row B is the second-to-last row and the renamed Row C the last; after Row B is selected and duplicated, the copy is the last row and the only selected one; three Undos bring Row A back, third from the end. The scene then exports and reimports. Every assertWorkspaceRows also checks that the published rows equal a rebuild and that WorkspaceRow has only its entry and two actions.",
+      "artifacts": [
+        {
+          "path": ".local/verification/reports/studio-scenario-workspace-rows-by-position.json",
+          "kind": "scenario-report"
+        },
+        {
+          "path": ".local/verification/scenario-exports/workspace-rows-by-position.png",
+          "kind": "exported-scene"
+        }
+      ],
+      "timeout": 600
     }
   ]
 }

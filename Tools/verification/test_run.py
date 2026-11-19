@@ -947,7 +947,7 @@ class StudioScenarioLaneTests(unittest.TestCase):
                       and not name.startswith(("maker-", "gameplay-")))
 
     def test_lane_validates_and_covers_every_scenario(self):
-        self.assertEqual(len(self.checks), 100)
+        self.assertEqual(len(self.checks), 101)
         referenced = set()
         for check in self.checks:
             scenario = check["env"]["IKKOKU_STUDIO_SCENARIO"]
@@ -1102,6 +1102,25 @@ class StudioScenarioLaneTests(unittest.TestCase):
                     self.assertIsInstance(step["visible"], bool)
                 if op == "rename":
                     self.assertTrue(step["name"])
+                if op == "assertWorkspaceRows":
+                    # #410: a row check names its object (a source key, with
+                    # `copy` for a copy, or `added`), then its row index
+                    # (negative from the end), name and selection; `rows` is
+                    # the row count.
+                    if "rows" in step:
+                        self.assertIs(type(step["rows"]), int)
+                        self.assertGreaterEqual(step["rows"], 0)
+                    if {"index", "name", "selected"} & set(step):
+                        self.assertTrue(type(step.get("key")) is int or step.get("added"),
+                                        "a row check names its object: %s" % path)
+                        self.assertFalse("key" in step and "added" in step)
+                    if "index" in step:
+                        # negative counts from the end (-1 is the last row)
+                        self.assertIs(type(step["index"]), int)
+                    if "name" in step:
+                        self.assertTrue(step["name"])
+                    if "selected" in step:
+                        self.assertIs(type(step["selected"]), bool)
                 if op in ("setFace", "setBody"):
                     self.assertIsInstance(step["index"], int)
                     self.assertIsInstance(step["value"], float)
@@ -1176,7 +1195,8 @@ class StudioScenarioLaneTests(unittest.TestCase):
                 if op == "addCharacter":
                     self.assertIn(step["sex"], ("female", "male"))
                 if op == "duplicate":
-                    self.assertIsInstance(step["key"], int)
+                    # a source key (with `copy` for a copy), or `added` (#410)
+                    self.assertTrue(isinstance(step.get("key"), int) or step.get("added"))
                 if op == "addLight":
                     self.assertIn(step["mode"], ("directional", "point", "spot"))
                 if op in ("setIKEnabled", "setIKTarget", "captureIKPose"):
@@ -1195,7 +1215,8 @@ class StudioScenarioLaneTests(unittest.TestCase):
                     self.assertTrue(step["name"],
                                     "a captured IK pose needs a label to compare against: %s" % path)
                 if op == "delete":
-                    self.assertIs(type(step["key"]), int)
+                    # a source key, or `added` for an object the scenario added (#410)
+                    self.assertTrue(type(step.get("key")) is int or step.get("added"))
                 if op == "setParent":
                     # parent null is the root; the object (a source key, or
                     # `added` for one the scenario added) must be named either way

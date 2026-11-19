@@ -23,7 +23,7 @@ branch was tested or every asset matches the original game. Feature status,
 specific comments and pending tasks are in the linked reports. Shared behavior
 may be discussed in more than one report; one primary owner is listed here.
 
-**1115 files indexed; 1115 assigned; 0 unassigned.**
+**1118 files indexed; 1118 assigned; 0 unassigned.**
 
 Counts include the website and clothes-group additions listed below. Runtime and
 test totals include their specialized role descriptions; this is inventory
@@ -35,18 +35,18 @@ bookkeeping, not a new full source audit.
 | [Character / Maker / mods](character-and-mods.md) | 139 |
 | [Studio / IK / animation](studio.md) | 264 |
 | [Renderer / foundation / assets](renderer-and-foundation.md) | 369 |
-| [Toolchain / verification / historical docs](toolchain-and-verification.md) | 223 |
+| [Toolchain / verification / historical docs](toolchain-and-verification.md) | 226 |
 
 | File role | Files |
 | --- | ---: |
 | App resource metadata / icon | 16 |
 | Build / repository configuration | 9 |
-| Conversion / recovery / verification tool | 260 |
+| Conversion / recovery / verification tool | 262 |
 | Documentation / historical evidence | 65 |
 | Generated asset / catalog / fixture | 205 |
 | Reference host / controlled fixture | 39 |
 | Runtime / shared shader declaration | 240 |
-| Test / validation | 240 |
+| Test / validation | 241 |
 | Public synthetic body/face input fixture | 1 |
 
 ## App / gameplay / plugins
@@ -1113,10 +1113,13 @@ Feature assessment: [toolchain-and-verification.md](toolchain-and-verification.m
 | [Tools/verification/scenarios/undo-route.json](../../Tools/verification/scenarios/undo-route.json) | Conversion / recovery / verification tool |
 | [Tools/verification/scenarios/undo-scene-replacements.json](../../Tools/verification/scenarios/undo-scene-replacements.json) | Conversion / recovery / verification tool |
 | [Tools/verification/scenarios/visibility-folder.json](../../Tools/verification/scenarios/visibility-folder.json) | Conversion / recovery / verification tool |
+| [Tools/verification/scenarios/workspace-rows-by-position.json](../../Tools/verification/scenarios/workspace-rows-by-position.json) | Conversion / recovery / verification tool |
 | [Tools/verification/test_doctor.py](../../Tools/verification/test_doctor.py) | Test / validation |
 | [Tools/verification/test_inspect_app_bundle.py](../../Tools/verification/test_inspect_app_bundle.py) | Test / validation |
 | [Tools/verification/test_perf_trace.py](../../Tools/verification/test_perf_trace.py) | Test / validation |
 | [Tools/verification/test_run.py](../../Tools/verification/test_run.py) | Test / validation |
+| [Tools/verification/test_workspace_growth_check.py](../../Tools/verification/test_workspace_growth_check.py) | Test / validation |
+| [Tools/verification/workspace_growth_check.py](../../Tools/verification/workspace_growth_check.py) | Conversion / recovery / verification tool |
 | [docs/README.md](../../docs/README.md) | Documentation / historical evidence |
 | [docs/architecture.md](../../docs/architecture.md) | Documentation / historical evidence |
 | [docs/archive/2026-09-09-plan.md](../../docs/archive/2026-09-09-plan.md) | Documentation / historical evidence |

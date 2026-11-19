@@ -108,8 +108,7 @@ struct StudioWorkspacePanel: View {
     var body: some View {
         let _ = PerfTrace.body(.studioWorkspace)
         let state = model.shownWorkspaceState
-        StudioWorkspaceContent(model: model, entries: state.entries, objectCount: state.objectCount,
-                               listGeneration: model.workspaceListGeneration).equatable()
+        StudioWorkspaceContent(model: model, entries: state.entries, objectCount: state.objectCount).equatable()
     }
 }
 
@@ -117,12 +116,8 @@ struct StudioWorkspaceContent: View, Equatable {
     let model: StudioModel
     let entries: [WorkspaceEntry]
     let objectCount: Int
-    /// `StudioModel.workspaceListGeneration` (#410).
-    let listGeneration: UInt64
 
-    static func == (a: Self, b: Self) -> Bool {
-        a.model === b.model && a.entries == b.entries && a.objectCount == b.objectCount && a.listGeneration == b.listGeneration
-    }
+    static func == (a: Self, b: Self) -> Bool { a.model === b.model && a.entries == b.entries && a.objectCount == b.objectCount }
 
     var body: some View {
         VStack(spacing: 0) {
@@ -134,7 +129,18 @@ struct StudioWorkspaceContent: View, Equatable {
             Divider()
             ScrollView {
                 LazyVStack(spacing: 1) {
-                    ForEach(entries) { entry in
+                    // #410: rows are keyed by position, not by object id.
+                    // Each Open or New Scene brings new ids, and the lazy
+                    // stack keeps an entry for every row id it ever showed:
+                    // SwiftUI's child cache, and AppKit's KVO dependencies on
+                    // the scroll view's container, so one scroll view for the
+                    // session grew with every load. Keyed by position, a load
+                    // updates the rows already built, and the caches stay at
+                    // the most rows ever built. Safe because a row holds no
+                    // state (`WorkspaceRow`); inserts and removals show as
+                    // content changes, with no row animation.
+                    ForEach(entries.indices, id: \.self) { index in
+                        let entry = entries[index]
                         WorkspaceRow(entry: entry) {
                             model.selection = entry.id
                         } toggleVisible: {
@@ -144,13 +150,6 @@ struct StudioWorkspaceContent: View, Equatable {
                     }
                 }.padding(4)
             }
-            // #410: a new scroll view per scene. The rows are keyed by object
-            // id, and each Open or New Scene brings new ids; the lazy stack's
-            // child cache (SwiftUI) and the scroll view's KVO dependencies
-            // (AppKit) keep an entry for every row id they ever showed, so
-            // one scroll view for the whole session grew with every load.
-            // Only the scroll position resets: the rows hold no state.
-            .id(listGeneration)
             Divider()
             HStack {
                 Button { model.duplicateSelection() } label: { Image(systemName: "plus.square.on.square") }.help("Duplicate")
@@ -517,6 +516,10 @@ struct StudioStatusLine: View {
     }
 }
 
+/// One workspace row. It holds no state (no @State, focus, hover or drag):
+/// the list keys its rows by position (#410), so state here would stay with
+/// the slot, not the object, after a delete or a duplicate. The scenario
+/// step `assertWorkspaceRows` checks that it has only these three fields.
 struct WorkspaceRow: View, Equatable {
     let entry: WorkspaceEntry
     let select: () -> Void
