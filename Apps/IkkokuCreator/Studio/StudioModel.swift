@@ -5016,6 +5016,20 @@ final class StudioModel: ViewportInputHandler, LivePacedHandler {
         } catch { return nil }
     }
 
+    /// #425: the viewport pixel of the selected source character's IK guide
+    /// `target` (0-12), projected with the view camera from the world point
+    /// `sourceIKGizmos` centers that guide's gizmo on and `mouseDown` grabs,
+    /// so the scenario's `dragIKGuide` op can scan around the arrows it is
+    /// about to click. Nil when nothing resolves.
+    func sourceIKGuidePixel(of target: Int32) -> SIMD2<Float>? {
+        guard let sel = selectedObject, let preview = sourceInstances[sel.id] else { return nil }
+        do {
+            guard let guide = try sourceGuides(sel, preview: preview).first(where: { $0.targetID == target }) else { return nil }
+            let world = try sourceWorldMatrix(of: sel.id, document: doc, previews: sourceInstances)
+            return viewCamera.project(world.transformPoint(guide.position), viewport: viewportSize)
+        } catch { return nil }
+    }
+
     func mouseDown(at p: SIMD2<Float>, button: Int, modifiers: NSEvent.ModifierFlags) {
         // The highlight answers the last mouse move before a click or a drag
         // starts, as the synchronous hover pick guaranteed; a result arriving
@@ -5232,6 +5246,12 @@ final class StudioModel: ViewportInputHandler, LivePacedHandler {
         documentCamera.dolly(amount * 10)
     }
 
+    /// The digit row's physical keys, kVK_ANSI_0 through kVK_ANSI_9, as CharaStudio's
+    /// Studio.ShortcutKeyCtrl binds its camera keys (Alpha1-Alpha0, not the keypad). By key, not
+    /// by character: Shift (this port's slot save; the original's keys only load) turns the
+    /// characters into "!", "@" and so on, and some layouts need Shift for the digits.
+    static let digitRowKeyCodes: [UInt16] = [29, 18, 19, 20, 21, 23, 22, 26, 28, 25]
+
     func keyDown(_ event: NSEvent) -> Bool {
         let chars = event.charactersIgnoringModifiers ?? ""
         let mods = event.modifierFlags
@@ -5244,7 +5264,7 @@ final class StudioModel: ViewportInputHandler, LivePacedHandler {
         case .toggleVisibility: toggleSourceInterface(); return true
         case .continueViewport: break
         }
-        if let n = Int(chars), chars.count == 1, !mods.contains(.command) {
+        if !mods.contains(.command), let n = Self.digitRowKeyCodes.firstIndex(of: event.keyCode) {
             let slot = n == 0 ? 9 : n - 1
             if mods.contains(.shift) { saveCameraSlot(slot) } else { loadCameraSlot(slot) }
             return true

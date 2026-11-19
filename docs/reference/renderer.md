@@ -754,9 +754,23 @@ included, and over the fixture rigs.
 - `Transform.normalMatrix` uses the cofactor matrix times the determinant's sign
   for a singular basis, the same construction as the deform kernel, scaled to a
   largest entry of 1. It falls back to the identity when fewer than two columns
-  are independent. The toon, outline and live vertex shaders are unchanged, so
-  a normal the cofactor maps to zero on a zero-scale non-character item is
-  still left to them (#407).
+  are independent. The cofactor maps every normal perpendicular to the
+  collapsed axis to zero. On a zero-scale non-character item those are, for
+  example, the rim of a flattened sphere. The toon, outline and live probe
+  vertex stages (`guardedNormal` in Shaders/Common.h, #407) give such a normal
+  0 instead of `normalize(0)`, which is NaN. Before the guard that NaN reached
+  every fragment of the triangle. On Apple GPUs the interpolator turned it into
+  FLT_MAX, so the pixels were finite but wrongly shaded. Each triangle now takes
+  its side of the collapsed surface from its other vertices. Any normal with
+  |n|² ≥ FLT_MIN is still exactly `normalize(n)`, so nonsingular draws do not
+  change. `SingularNormalShaderTests` checks both, bit for bit under the
+  default fast math the shaders compile with.
+  This differs from Unity for degenerate scales. Unity's world normal,
+  `normalize(mul(n, (float3x3)unity_WorldToObject))` with the InverseSafe
+  matrix below, keeps only the in-plane part. It is zero (NaN on D3D11) for the
+  normals parallel to the collapsed axis, which are the faces that stay visible.
+  The native draws keep #404's cofactor and aim for a finite result, not that
+  NaN. The source shaders keep Unity's math unchanged.
 - The source shaders' `unity_WorldToObject` uses `Transform.inverseSafe`. For a
   singular basis each column `c` becomes the row `c / |c|²`, and a column no
   longer than 1e-5 becomes 0, as in Unity's `Vector3f` InverseSafe. A collapsed
@@ -2298,8 +2312,11 @@ keeps nothing (measurement control).
   stack through nested folders and 3,449 KiB through nested characters in
   Debug (`SourceSceneDeepStackTests`, synthetic scenes). Every other scene
   decode and record walk in the Studio runs on the main thread, which
-  also has 8 MiB. There the export, insertion and layout import take at
-  most 3,491 KiB on the same scenes.
+  also has 8 MiB, except the hidden characters' clock: its warm-up and an
+  export's states run on GCD workers, so it reads its scene on a thread of
+  the batch's size (`SourceStudioCharacterBatch.onDecodeThread`, #326).
+  There the export, insertion and layout import take at most 3,491 KiB on
+  the same scenes.
 - The init starts one worker, which starts the others, so the calling
   thread pays one thread start. For a 22-wide batch it takes 25–26 µs in
   Release (26 µs in Debug), against 12–14 µs (18 µs) for the GCD

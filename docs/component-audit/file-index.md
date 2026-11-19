@@ -23,7 +23,7 @@ branch was tested or every asset matches the original game. Feature status,
 specific comments and pending tasks are in the linked reports. Shared behavior
 may be discussed in more than one report; one primary owner is listed here.
 
-**1132 files indexed; 1132 assigned; 0 unassigned.**
+**1135 files indexed; 1135 assigned; 0 unassigned.**
 
 Counts include the website and clothes-group additions listed below. Runtime and
 test totals include their specialized role descriptions; this is inventory
@@ -34,14 +34,14 @@ bookkeeping, not a new full source audit.
 | [App / gameplay / plugins](app-gameplay-and-plugins.md) | 110 |
 | [Character / Maker / mods](character-and-mods.md) | 145 |
 | [Studio / IK / animation](studio.md) | 272 |
-| [Renderer / foundation / assets](renderer-and-foundation.md) | 372 |
-| [Toolchain / verification / historical docs](toolchain-and-verification.md) | 223 |
+| [Renderer / foundation / assets](renderer-and-foundation.md) | 373 |
+| [Toolchain / verification / historical docs](toolchain-and-verification.md) | 225 |
 
 | File role | Files |
 | --- | ---: |
 | App resource metadata / icon | 16 |
 | Build / repository configuration | 9 |
-| Conversion / recovery / verification tool | 261 |
+| Conversion / recovery / verification tool | 263 |
 | Documentation / historical evidence | 65 |
 | Generated asset / catalog / fixture | 205 |
 | Reference host / controlled fixture | 41 |
@@ -904,6 +904,7 @@ Feature assessment: [renderer-and-foundation.md](renderer-and-foundation.md).
 | [Packages/Engine/Tests/EngineTests/RigTests.swift](../../Packages/Engine/Tests/EngineTests/RigTests.swift) | Test / validation |
 | [Packages/Engine/Tests/EngineTests/RigFiniteAffineTests.swift](../../Packages/Engine/Tests/EngineTests/RigFiniteAffineTests.swift) | Test / validation |
 | [Packages/Engine/Tests/EngineTests/SingularScaleTests.swift](../../Packages/Engine/Tests/EngineTests/SingularScaleTests.swift) | Test / zero and negative shape scales: singular normal matrix, InverseSafe world-to-object, collapse-safe rotation, collapsed skins drawn in rig space (#404) |
+| [Packages/Engine/Tests/EngineTests/SingularNormalShaderTests.swift](../../Packages/Engine/Tests/EngineTests/SingularNormalShaderTests.swift) | Test / a singular model's vertex normals: finite toon, map, outline and live-probe output, and bit for bit the pre-guard normalize on nonsingular models (#407) |
 | [Packages/Engine/Tests/EngineTests/SourceAvatarTests.swift](../../Packages/Engine/Tests/EngineTests/SourceAvatarTests.swift) | Test / validation |
 | [Packages/Engine/Tests/EngineTests/SourceMaleAvatarTests.swift](../../Packages/Engine/Tests/EngineTests/SourceMaleAvatarTests.swift) | Test / validation |
 | [Packages/Engine/Tests/EngineTests/SourceMorphGPUTests.swift](../../Packages/Engine/Tests/EngineTests/SourceMorphGPUTests.swift) | Test / validation |
@@ -1048,6 +1049,7 @@ Feature assessment: [toolchain-and-verification.md](toolchain-and-verification.m
 | [Tools/verification/scenarios/camera-deactivate.json](../../Tools/verification/scenarios/camera-deactivate.json) | Conversion / recovery / verification tool |
 | [Tools/verification/scenarios/camera-load-winner.json](../../Tools/verification/scenarios/camera-load-winner.json) | Conversion / recovery / verification tool |
 | [Tools/verification/scenarios/camera-rename.json](../../Tools/verification/scenarios/camera-rename.json) | Conversion / recovery / verification tool |
+| [Tools/verification/scenarios/camera-slot-keys.json](../../Tools/verification/scenarios/camera-slot-keys.json) | Conversion / recovery / verification tool |
 | [Tools/verification/scenarios/charastudio-camera-switch.json](../../Tools/verification/scenarios/charastudio-camera-switch.json) | Conversion / recovery / verification tool |
 | [Tools/verification/scenarios/charastudio-fk-edit.json](../../Tools/verification/scenarios/charastudio-fk-edit.json) | Conversion / recovery / verification tool |
 | [Tools/verification/scenarios/charastudio-hide-rename.json](../../Tools/verification/scenarios/charastudio-hide-rename.json) | Conversion / recovery / verification tool |
@@ -1124,6 +1126,7 @@ Feature assessment: [toolchain-and-verification.md](toolchain-and-verification.m
 | [Tools/verification/scenarios/source-map.json](../../Tools/verification/scenarios/source-map.json) | Conversion / recovery / verification tool |
 | [Tools/verification/scenarios/source-map34.json](../../Tools/verification/scenarios/source-map34.json) | Conversion / recovery / verification tool |
 | [Tools/verification/scenarios/source-map41.json](../../Tools/verification/scenarios/source-map41.json) | Conversion / recovery / verification tool |
+| [Tools/verification/scenarios/toolbar-drag-steady.json](../../Tools/verification/scenarios/toolbar-drag-steady.json) | Conversion / recovery / verification tool |
 | [Tools/verification/scenarios/undo-camera.json](../../Tools/verification/scenarios/undo-camera.json) | Conversion / recovery / verification tool |
 | [Tools/verification/scenarios/undo-no-catalog.json](../../Tools/verification/scenarios/undo-no-catalog.json) | Conversion / recovery / verification tool |
 | [Tools/verification/scenarios/undo-props.json](../../Tools/verification/scenarios/undo-props.json) | Conversion / recovery / verification tool |

@@ -290,6 +290,44 @@
       "timeout": 600
     },
     {
+      "id": "studio-scenario-toolbar-drag-steady",
+      "argv": [
+        ".local/build/Build/Products/Debug/Ikkoku.app/Contents/MacOS/Ikkoku"
+      ],
+      "fixtures": [
+        {
+          "env": "IKKOKU_SOURCE_SCENE",
+          "kind": "file",
+          "from": "IKKOKU_STUDIO_SCENARIO_SCENE"
+        },
+        {
+          "env": "IKKOKU_SOURCE_AVATAR",
+          "kind": "file"
+        },
+        {
+          "env": "IKKOKU_STUDIO_ANIMATION_CATALOG",
+          "kind": "file"
+        }
+      ],
+      "env": {
+        "IKKOKU_STUDIO_SCENARIO": "Tools/verification/scenarios/toolbar-drag-steady.json",
+        "IKKOKU_STUDIO_SCENARIO_REPORT": ".local/verification/reports/studio-scenario-toolbar-drag-steady.json"
+      },
+      "referenceTier": "app-smoke",
+      "tolerance": "#425: the Studio toolbar holds still over a gizmo drag, so its .equatable() controls (StudioToolbarControls, on StudioToolbarState) skip every drag frame and nothing invalidates StudioToolbar's body. Two drags of the REAL mouse handlers (mouseDown / eight mouseDragged / mouseUp, left button, no modifiers) over the GPU pick pass on source character 65: first, after focusing the view on it (the F key; the scene's own view shows none of its IK guides), its Left hand IK guide (index 3), selected and put in IK mode as the Pose tab's IK guide picker does, grabbed on the x translate arrow found by a \u00b1120 px pick scan around the guide's projected origin and dragged 30,0 px, which must leave a new IK override on that guide (setSourceIKValue); then bone 19's z rotate ring as in fk-mouse-drag, dragged 60,40 px, which must leave a non-zero FK rotation. With toolbarSteady each drag reads StudioToolbarState after the mouseDown, every mouseDragged and the mouseUp: the mouseDown may change only canUndo (its undo snapshot), and every later state must equal the mouseDown's. Observation tracking of that state, re-armed after each write, must see no write during the nine later events (the published toolbar state, C4; with IKKOKU_PERF_PANEL_STATE=document the toolbar reads the document and the writes are only reported). A build whose StudioToolbarState carries a field the drag changes on every step fails both drag steps. After the drags the left-hand guide (bone 21) is captured; export and reimport must put it back within 0.02.",
+      "artifacts": [
+        {
+          "path": ".local/verification/reports/studio-scenario-toolbar-drag-steady.json",
+          "kind": "scenario-report"
+        },
+        {
+          "path": ".local/verification/scenario-exports/toolbar-drag-steady.png",
+          "kind": "exported-scene"
+        }
+      ],
+      "timeout": 600
+    },
+    {
       "id": "studio-scenario-item-props",
       "argv": [
         ".local/build/Build/Products/Debug/Ikkoku.app/Contents/MacOS/Ikkoku"
@@ -3701,6 +3739,40 @@
         {
           "path": ".local/verification/scenario-exports/hidden-animation-clock-document.png",
           "kind": "saved-document"
+        }
+      ],
+      "timeout": 600
+    },
+    {
+      "id": "studio-scenario-camera-slot-keys",
+      "argv": [
+        ".local/build/Build/Products/Debug/Ikkoku.app/Contents/MacOS/Ikkoku"
+      ],
+      "fixtures": [
+        {
+          "env": "IKKOKU_SOURCE_SCENE",
+          "kind": "file",
+          "from": "IKKOKU_STUDIO_SCENARIO_SCENE"
+        },
+        {
+          "env": "IKKOKU_SOURCE_AVATAR",
+          "kind": "file"
+        }
+      ],
+      "env": {
+        "IKKOKU_STUDIO_SCENARIO": "Tools/verification/scenarios/camera-slot-keys.json",
+        "IKKOKU_STUDIO_SCENARIO_REPORT": ".local/verification/reports/studio-scenario-camera-slot-keys.json"
+      },
+      "referenceTier": "app-smoke",
+      "tolerance": "#433 camera slot keys on source scene `029f0b1d`, whose ten slots hold the source cameras. Each key press reaches the viewport's keyDown the way typing does: the digit row's physical key code, Shift in the flags, and the characters the current layout gives that key (Shift+1 is \"!\" on a US layout). Five orbits, each followed by Shift+N (N = 1-5), must save the view into slot N with the status \"Camera slot N saved\". After one more orbit, plain N must load slot N exactly (the view equals what slot N holds), and before each load the view must not already be slot N. The scene then exports and reimports, and keys 1 and 5 still load their slots. On a build whose keyDown reads the digit from charactersIgnoringModifiers (the code before the fix), the five Shift presses are not handled and the run fails.",
+      "artifacts": [
+        {
+          "path": ".local/verification/reports/studio-scenario-camera-slot-keys.json",
+          "kind": "scenario-report"
+        },
+        {
+          "path": ".local/verification/scenario-exports/camera-slot-keys.png",
+          "kind": "exported-scene"
         }
       ],
       "timeout": 600

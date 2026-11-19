@@ -2111,11 +2111,13 @@ characters in 29 scenes and no route characters.
   outside 0...1, from Slider Unlocker, build; see
   [extended shape rates](../character/contracts.md#extended-shape-rates-slider-unlocker)). It reads no
   converted file and runs on a worker from the import's preparation
-  (`CardCheck`); the commit collects it. A card that fails it cannot build,
-  and the reason is the build's own error unless a converted-file step the
-  build runs before the shape check fails first (the head assembly lookup,
-  the rig and appearance reads). A card that passes may still fail in those
-  steps; that failure is reported when the character is shown or selected.
+  (`CardCheck`, which keeps the records without their accessory children, so
+  a worker never releases a scene subtree, #326); the commit collects it. A
+  card that fails it cannot build, and the reason is the build's own error
+  unless a converted-file step the build runs before the shape check fails
+  first (the head assembly lookup, the rig and appearance reads). A card
+  that passes may still fail in those steps; that failure is reported when
+  the character is shown or selected.
 - A hidden character builds when it is shown, when it is selected, or when a
   selected object hangs from it (an attached folder, for example). A hidden
   selection builds without being drawn, so its inspectors and edits work.
@@ -2141,6 +2143,12 @@ characters in 29 scenes and no route characters.
   change; the clocks cost about a millisecond there. Before that (the
   warm-up still running), the background export advances them on a worker
   thread and shows its progress line.
+- The clock reads a scene file on a thread of its own with 8 MiB of stack
+  (`SourceStudioCharacterBatch.onDecodeThread`, #326), at its caller's QoS,
+  and drops the decoded records there. The warm-up and the background export
+  run on GCD workers with 512 KiB, which a deep scene's decode overflows
+  (`SourceSceneDeepStackTests`). The caller waits on a lock the thread holds,
+  so a main-thread save waiting for the warm-up raises the decode's priority.
 - This also fixes the native reload path. Before, a character hidden when a
   native document was saved had its animation baked into the document, the
   reload left it unbuilt, and the export failed with "Animation edits

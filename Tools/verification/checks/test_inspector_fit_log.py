@@ -29,6 +29,11 @@ LAYOUT = (" | layout toolbar gizmo x 296.0+75.0 y 907.0+20.0 host 296.0+75.0 int
           "content 1020.0 at 0.0 scroller shown | inspector top 906.0 offset 0.0 document height 1200.0")
 GOOD_POSE = GOOD.replace(" | fits true:", LAYOUT + " | fits true:")
 COMPRESSED = GOOD_POSE.replace("pose x 473.0+165.0", "pose x 484.0+142.0")
+# #425: the shown toolbar variant and the width it was offered (layout probe), and the ideal widths, full/compact,
+# the app logs after the capture: at 1600 pt Object and IK fit in full, FK only in compact.
+VARIANT = "; variant full width 925.0 available 962.0"
+IDEAL = " | toolbar ideal none 735.0/525.0 object 925.0/715.0 fk 1053.0/843.0 ik 925.0/715.0 state object"
+GOOD_TOOLBAR = GOOD_POSE.replace(" | inspector top", VARIANT + " | inspector top").replace(" | fits true:", IDEAL + " | fits true:")
 BAD = ("   1.20 captured window 1600x998 selection 963 tab Clothes no inspector scroll view | content 1600 | "
        "3 scroll views | #2 document 362: HostingScrollView@1235+379 | fits false: no inspector scroll view")
 
@@ -86,6 +91,41 @@ class ValidateLogTests(unittest.TestCase):
         line = GOOD + "; pose x 473.0+165.0 y 907.0+20.0 host 473.0+165.0 intrinsic 165.0"
         self.assertFalse(validator.validate_log(line, pose_picker=True)[0])
 
+    def test_a_fitting_toolbar_in_the_first_variant_that_fits_passes(self):
+        passed, reasons, _ = validator.validate_log(GOOD_TOOLBAR, "963", "Clothes", pose_picker=True, toolbar_fits=True)
+        self.assertTrue(passed, reasons)
+        fk = GOOD_TOOLBAR.replace("variant full width 925.0", "variant compact width 843.0").replace("state object", "state fk")
+        self.assertTrue(validator.validate_log(fk, toolbar_fits=True)[0])
+
+    def test_a_mode_that_fits_in_neither_variant_fails(self):
+        line = GOOD_TOOLBAR.replace("fk 1053.0/843.0", "fk 1156.0/990.0")
+        passed, reasons, _ = validator.validate_log(line, toolbar_fits=True)
+        self.assertFalse(passed)
+        self.assertEqual(reasons, ["in fk mode the toolbar does not fit: full 1156 pt, compact 990 pt, available 962 pt"])
+
+    def test_the_wrong_variant_for_the_state_fails(self):
+        # Compact shown where full fits, and the scroll fallback where compact fits.
+        line = GOOD_TOOLBAR.replace("variant full width 925.0", "variant compact width 715.0")
+        passed, reasons, _ = validator.validate_log(line, toolbar_fits=True)
+        self.assertFalse(passed)
+        self.assertEqual(reasons, ["the toolbar shows compact, expected full for state object "
+                                   "(full 925 pt, compact 715 pt, available 962 pt)"])
+        scroll = GOOD_TOOLBAR.replace("variant full", "variant scroll").replace("state object", "state fk")
+        self.assertFalse(validator.validate_log(scroll, toolbar_fits=True)[0])
+        # A variant ViewThatFits kept in the window besides the shown one.
+        both = GOOD_TOOLBAR.replace("available 962.0", "available 962.0 (both markers)")
+        passed, reasons, _ = validator.validate_log(both, toolbar_fits=True)
+        self.assertFalse(passed)
+        self.assertEqual(reasons, ["the window holds both the full and the compact toolbar"])
+
+    def test_toolbar_fits_needs_the_logged_widths(self):
+        self.assertTrue(validator.validate_log(GOOD_POSE, pose_picker=True)[0])
+        passed, reasons, _ = validator.validate_log(GOOD_POSE, toolbar_fits=True)
+        self.assertFalse(passed)
+        self.assertEqual(reasons, ["no toolbar variant or ideal widths in the fit log at the capture"])
+        # Widths after " | fits" (the accessibility detail) do not count.
+        self.assertFalse(validator.validate_log(GOOD_POSE + VARIANT + IDEAL, toolbar_fits=True)[0])
+
     def test_main_fails_on_a_missing_log_and_passes_a_good_one(self):
         with tempfile.TemporaryDirectory() as directory:
             path = os.path.join(directory, "fit.txt")
@@ -97,6 +137,11 @@ class ValidateLogTests(unittest.TestCase):
             with open(path, "w", encoding="utf-8") as handle:
                 handle.write(GOOD_POSE + "\n")
             self.assertEqual(validator.main(["x", path, "--selection", "963", "--tab", "Clothes", "--pose-picker"]), 0)
+            self.assertEqual(validator.main(["x", path, "--pose-picker", "--toolbar-fits"]), 1)
+            with open(path, "w", encoding="utf-8") as handle:
+                handle.write(GOOD_TOOLBAR + "\n")
+            self.assertEqual(validator.main(["x", path, "--selection", "963", "--tab", "Clothes", "--pose-picker",
+                                             "--toolbar-fits"]), 0)
 
 
 if __name__ == "__main__":
