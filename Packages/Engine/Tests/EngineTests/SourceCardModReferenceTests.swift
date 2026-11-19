@@ -39,6 +39,12 @@ private enum ResolverFixture {
     // are trimmed, U+180E is not (#419).
     let zeroWidth = try #require(ResolverFixture.decode([ResolverFixture.record(guid: "\u{200b}fixture.mod\u{feff}")]).records.first)
     #expect(zeroWidth.modGUID == "fixture.mod")
+    // A leading EF BB BF now reaches the setter as U+FEFF (#418), which the
+    // same Trim() removes: the record still resolves to the bare GUID.
+    let marked = ResolverFixture.record(guid: "\u{feff}fixture.mod")
+    #expect(marked.range(of: Data([0xef, 0xbb, 0xbf] + Array("fixture.mod".utf8))) != nil)
+    let bom = try #require(ResolverFixture.decode([marked]).records.first)
+    #expect(bom.modGUID == "fixture.mod" && bom.preservedData == marked)
     let significant = try #require(ResolverFixture.decode([ResolverFixture.record(guid: "\u{180e}fixture.mod")]).records.first)
     #expect(significant.modGUID == "\u{180e}fixture.mod")
 }

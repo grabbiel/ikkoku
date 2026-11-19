@@ -64,12 +64,27 @@ class ResolverContractTests(unittest.TestCase):
         # U+200B and U+FEFF but not U+180E or U+001C-U+001F, at the ends only.
         self.assertEqual(resolver.record(resolver.pack({"ModID": "\u0085\u00a0id\u3000"}))["ModID"], "id")
         self.assertEqual(resolver.record(resolver.pack({"ModID": "\u200b\ufeffid\u200b\ufeff"}))["ModID"], "id")
+        # #418: a leading EF BB BF decodes to U+FEFF, and Trim() removes it.
+        self.assertTrue(resolver.pack({"ModID": "\ufeffid"}).endswith(b"\xef\xbb\xbfid"))
+        self.assertEqual(resolver.record(resolver.pack({"ModID": "\ufeffid"}))["ModID"], "id")
         for value in ("\u180eid\u180e", "\x1cid\x1f", "i\u200bd"):
             self.assertEqual(resolver.record(resolver.pack({"ModID": value}))["ModID"], value)
         self.assertEqual(len(set(resolver.catalog.MONO_WHITE_CHARS)), 27)
         rule = {"MigrationType": "MigrateAll", "GUIDOld": "old", "GUIDNew": "\ufeffnew\u200b"}
         migrated = resolver.migrate_record({"ModID": "\u200bold", "Slot": 1, "CategoryNo": 122}, [rule], {"new"})
         self.assertEqual(migrated["ModID"], "new")
+
+    def test_source_csv_trims_lines_with_mono_white_chars(self):
+        # #421: Lists.LoadCSV's String.Trim() calls and ManifestVersionComparer's use String.WhiteChars. Same fixture
+        # and expectations as SourceModCatalogTests.sourceModCatalogTrimsListLinesWithMonoWhiteChars.
+        csv = ("\u200b122\ufeff,ignored\n\u3000 0\u0085\nAssets/list.bytes\u180e\ufeff,ignored\n"
+               "\ufeffID,Name,Possess\u200b\n\ufeff 7,a\u180e,0\u200b\n\u200b\ufeff\n8,ignored,0\n")
+        parsed = resolver.catalog.source_csv(csv.encode("utf-8"))
+        self.assertEqual((parsed["categoryNo"], parsed["distributionNo"], parsed["filePath"]), (122, 0, "Assets/list.bytes\u180e"))
+        self.assertEqual(parsed["columns"], ["ID", "Name", "Possess"])
+        self.assertEqual((parsed["rows"], parsed["stoppedAtLine"]), ([["7", "a\u180e", "0"]], 6))
+        self.assertEqual(resolver.catalog.trim("\u180e\u200b x \ufeff\u0085"), "\u180e\u200b x")
+        self.assertEqual(resolver.catalog.version_tokens("\ufeffv1.2\u200b"), resolver.catalog.version_tokens("1.2"))
 
     def test_bad_record_types_overflows_null_records_and_truncations(self):
         for value in (None, [], 1, {"Slot": None}, {"Slot": True}, {"Slot": 2**31}, {"LocalSlot": -2**31 - 1},

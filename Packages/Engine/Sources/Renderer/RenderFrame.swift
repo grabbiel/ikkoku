@@ -37,12 +37,47 @@ public struct MaterialState: Sendable, Equatable {
     public init(uniforms: MaterialUniforms) { self.uniforms = uniforms }
 
     public static func == (a: MaterialState, b: MaterialState) -> Bool {
-        withUnsafeBytes(of: a.uniforms) { ab in withUnsafeBytes(of: b.uniforms) { bb in ab.elementsEqual(bb) } }
-        && a.base == b.base && a.colorMask == b.colorMask && a.detail == b.detail && a.line == b.line && a.normal == b.normal
-        && a.overlay0 == b.overlay0 && a.overlay1 == b.overlay1 && a.overlay2 == b.overlay2 && a.pattern == b.pattern
-        && a.hairGloss == b.hairGloss && a.bodyMask == b.bodyMask && a.lightmap == b.lightmap
-        && a.lightmapDirection == b.lightmapDirection && a.emission == b.emission && a.cubemap == b.cubemap
-        && a.transparent == b.transparent && a.depthBias == b.depthBias
+        // Byte equality of the uniforms, as one memcmp: the render thread compares
+        // neighbouring item records' materials every frame (ST-T04 instanced runs).
+        withUnsafeBytes(of: a.uniforms) { ab in withUnsafeBytes(of: b.uniforms) { bb in memcmp(ab.baseAddress!, bb.baseAddress!, ab.count) == 0 } }
+        && a.sameTexturesAndState(b)
+    }
+
+    /// `==` apart from `uniforms.baseColor`, without copying either material:
+    /// the uniforms' bytes before and after the base colour, and the rest.
+    /// Neighbouring static item records that pass merge into one instanced run
+    /// (`Renderer.mergesWith`, ST-T04).
+    func equalsApartFromBaseColor(_ other: MaterialState) -> Bool {
+        withUnsafePointer(to: self) { a in withUnsafePointer(to: other) { b in Self.equalApartFromBaseColor(a, b) } }
+    }
+
+    /// `equalsApartFromBaseColor` on two materials read where they lie, such
+    /// as inside draw records in their array's buffer (`Renderer.mergesWith`):
+    /// the uniforms' bytes before and after the base colour, compared in
+    /// place, and the rest field by field. The pointers are only read, and
+    /// only for the duration of the call.
+    @inline(__always)
+    static func equalApartFromBaseColor(_ a: UnsafePointer<MaterialState>, _ b: UnsafePointer<MaterialState>) -> Bool {
+        let colour = MemoryLayout<MaterialUniforms>.offset(of: \.baseColor)!, after = colour + MemoryLayout<Float4>.size
+        let count = MemoryLayout<MaterialUniforms>.size, uniforms = MemoryLayout<MaterialState>.offset(of: \.uniforms)!
+        let x = UnsafeRawPointer(a) + uniforms, y = UnsafeRawPointer(b) + uniforms
+        return memcmp(x, y, colour) == 0 && memcmp(x + after, y + after, count - after) == 0 && sameTexturesAndState(a, b)
+    }
+
+    private func sameTexturesAndState(_ other: MaterialState) -> Bool {
+        withUnsafePointer(to: self) { a in withUnsafePointer(to: other) { b in Self.sameTexturesAndState(a, b) } }
+    }
+
+    @inline(__always)
+    private static func sameTexturesAndState(_ a: UnsafePointer<MaterialState>, _ b: UnsafePointer<MaterialState>) -> Bool {
+        a.pointee.base == b.pointee.base && a.pointee.colorMask == b.pointee.colorMask && a.pointee.detail == b.pointee.detail
+            && a.pointee.line == b.pointee.line && a.pointee.normal == b.pointee.normal
+            && a.pointee.overlay0 == b.pointee.overlay0 && a.pointee.overlay1 == b.pointee.overlay1
+            && a.pointee.overlay2 == b.pointee.overlay2 && a.pointee.pattern == b.pointee.pattern
+            && a.pointee.hairGloss == b.pointee.hairGloss && a.pointee.bodyMask == b.pointee.bodyMask
+            && a.pointee.lightmap == b.pointee.lightmap && a.pointee.lightmapDirection == b.pointee.lightmapDirection
+            && a.pointee.emission == b.pointee.emission && a.pointee.cubemap == b.pointee.cubemap
+            && a.pointee.transparent == b.pointee.transparent && a.pointee.depthBias == b.pointee.depthBias
     }
 
     /// All explicit texture references, without fallback textures.
@@ -125,6 +160,12 @@ public struct RenderItem: Sendable {
     /// "Transparent" queue) unless set, so the order is unchanged without it;
     /// map particle materials carry their own (slice 4).
     public var renderQueue: Int = 3000
+    /// A static Studio prop (ST-T04): the Studio frame builder sets it on the
+    /// parts of `.item` objects and of source item placeholders, and only such
+    /// records may merge into an instanced run (`Renderer.instanceable` still
+    /// checks every condition). false (the default) keeps every other record,
+    /// characters and maps included, on its own draw.
+    public var staticItem: Bool = false
     /// Maps slice 5: per-vertex receive bytes (1 = receives the map sun's
     /// shadow) for a map mesh that mixes receivers, read under
     /// `MaterialFlagMapReceivePerVertex`. nil (the default) for every other

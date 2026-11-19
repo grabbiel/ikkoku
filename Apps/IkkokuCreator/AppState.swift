@@ -835,17 +835,41 @@ final class AppState {
         if env["IKKOKU_CAPTURE_GIZMOS"] == "0" { frame.gizmos = [] }
         if let output = env["IKKOKU_BENCHMARK_OUTPUT"] {
             do {
+                let warmup = 3, measured = Int(env["IKKOKU_BENCHMARK_FRAMES"] ?? "20") ?? 20
+                // IKKOKU_BENCHMARK_ORBIT=<turns> (ST-T04 B2): a scripted orbit,
+                // the same path in every build. The frame camera's yaw turns
+                // `turns` times about its target, evenly over the warmup and
+                // measured samples; its pitch, target, distance and the lights
+                // stay. Each sample's yaw is recorded as it is drawn.
+                var camera: ((Int) -> OrbitCamera)?
+                var orbit: [String: Any]?
+                let yaws = BenchmarkYaws()
+                if let text = env["IKKOKU_BENCHMARK_ORBIT"], let turns = Float(text) {
+                    let base = frame.camera, samples = Float(warmup + measured)
+                    camera = { sample in
+                        var c = base
+                        c.yaw = base.yaw + 2 * .pi * turns * Float(sample) / samples
+                        yaws.values.append(c.yaw)
+                        return c
+                    }
+                    orbit = ["turns": turns, "target": [base.target.x, base.target.y, base.target.z],
+                             "distance": base.distance, "pitch": base.pitch, "fovDegrees": base.fovDegrees]
+                }
                 // Maps slice 5: `IKKOKU_BENCHMARK_MAP_SHADOW=every-frame` redraws the map
                 // sun's shadow map in every measured frame (the change frame's cost).
                 let shadowEveryFrame = env["IKKOKU_BENCHMARK_MAP_SHADOW"] == "every-frame"
                 host.renderer.redrawsMapShadowEveryFrame = shadowEveryFrame
                 let report = try host.renderer.benchmark(frame: frame, width: w, height: h,
-                    measuredFrames: Int(env["IKKOKU_BENCHMARK_FRAMES"] ?? "20") ?? 20)
+                    warmupFrames: warmup, measuredFrames: measured, camera: camera)
                 host.renderer.redrawsMapShadowEveryFrame = false
                 let encoder = JSONEncoder(); encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
                 var document = try JSONSerialization.jsonObject(with: encoder.encode(report)) as! [String: Any]
                 document["mapShadowEveryFrame"] = shadowEveryFrame
                 document["mapShadowMap"] = host.renderer.hasMapShadowMap
+                if var orbit {
+                    orbit["sampleYaws"] = yaws.values
+                    document["orbit"] = orbit
+                }
                 document["sourceCardSHA256"] = maker.importedSourceCard?.sourceSHA256
                 document["assembly"] = maker.sourceRigURL?.path
                 document["coordinate"] = maker.sourceBoneModifierCoordinate
@@ -1387,4 +1411,10 @@ final class AppState {
         studio?.status = message
         maker?.status = message
     }
+}
+
+/// The yaws an orbit benchmark (`IKKOKU_BENCHMARK_ORBIT`) drew, in sample
+/// order, so two builds' reports show the same camera path (ST-T04 B2).
+private final class BenchmarkYaws {
+    var values: [Float] = []
 }
