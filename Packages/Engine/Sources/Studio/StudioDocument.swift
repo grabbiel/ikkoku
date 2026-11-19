@@ -124,6 +124,22 @@ public struct StudioTransform: Codable, Sendable, Equatable {
 }
 
 /// One node of the studio workspace tree.
+///
+/// #409: every undo step keeps its own copy of the `objects` array once an
+/// edit writes to it, so each inline byte of an object is paid again per
+/// step. The ten fields that are large inline and seldom edited (the
+/// character card, the source character reference, its expression,
+/// kinematics, animation, voice and route state, the pose delta, the light
+/// and the saved camera) therefore live in one shared box,
+/// `StudioObjectColdFields`, which takes the stride from 1,584 B to 432 B.
+/// They read and write like stored properties. A write first copies the box
+/// unless this value holds the only reference to it, so no copy of an object
+/// ever sees another copy's edits, and an edit of any other field leaves the
+/// box shared with the undo steps. Objects whose boxed fields are all nil or
+/// default (most items and folders) share one empty box that is never
+/// written (`StudioObjectColdFields.empty`). `Codable` keeps the synthesized format of
+/// the unboxed struct (flat keys, in declaration order, optionals omitted
+/// when nil; see `CodingKeys`), and `==` compares every field.
 public struct StudioObject: Codable, Sendable, Equatable, Identifiable {
     public var id = UUID()
     public var name: String
@@ -132,9 +148,18 @@ public struct StudioObject: Codable, Sendable, Equatable, Identifiable {
     public var visible = true
     public var locked = false
     public var transform = StudioTransform()
+    /// The boxed fields, shared between copies of this object until one of
+    /// them writes a boxed field (`uniqueCold()`).
+    private(set) var cold: StudioObjectColdFields
     // character
-    public var card: CharacterCard?
-    public var sourceCharacter: SourceStudioCharacterReference?
+    public var card: CharacterCard? {
+        get { cold.card }
+        _modify { let box = uniqueCold(); yield &box.card }
+    }
+    public var sourceCharacter: SourceStudioCharacterReference? {
+        get { cold.sourceCharacter }
+        _modify { let box = uniqueCold(); yield &box.sourceCharacter }
+    }
     /// Import baselines let original-format export reject native rename/type
     /// edits without confusing retained placeholders with rendered characters.
     public var sourcePreviewName: String?
@@ -178,17 +203,35 @@ public struct StudioObject: Codable, Sendable, Equatable, Identifiable {
     /// leaves. Export writes the changed Status fields into the embedded card
     /// and mouthOpen/lipSync into the character record. Older documents
     /// decode nil.
-    public var sourceExpression: SourceStudioExpressionState?
-    public var sourceKinematics: SourceStudioKinematicState?
+    public var sourceExpression: SourceStudioExpressionState? {
+        get { cold.sourceExpression }
+        _modify { let box = uniqueCold(); yield &box.sourceExpression }
+    }
+    public var sourceKinematics: SourceStudioKinematicState? {
+        get { cold.sourceKinematics }
+        _modify { let box = uniqueCold(); yield &box.sourceKinematics }
+    }
     /// Original catalog IDs and timing; nil resumes the source scene's values.
-    public var sourceAnimation: SourceStudioAnimationState?
-    public var sourceVoice: SourceStudioVoiceState?
+    public var sourceAnimation: SourceStudioAnimationState? {
+        get { cold.sourceAnimation }
+        _modify { let box = uniqueCold(); yield &box.sourceAnimation }
+    }
+    public var sourceVoice: SourceStudioVoiceState? {
+        get { cold.sourceVoice }
+        _modify { let box = uniqueCold(); yield &box.sourceVoice }
+    }
     /// ST-T11: an imported route's edited points and settings (CharaStudio's
     /// route point guides and route panels); nil keeps the record's own.
     /// Set on a route record or a copy of one; export writes it into the
     /// record (`SourceSceneEdits.routes`). Older documents decode nil.
-    public var sourceRoute: SourceStudioRouteState?
-    public var poseDelta = PoseDelta()
+    public var sourceRoute: SourceStudioRouteState? {
+        get { cold.sourceRoute }
+        _modify { let box = uniqueCold(); yield &box.sourceRoute }
+    }
+    public var poseDelta: PoseDelta {
+        get { cold.poseDelta }
+        _modify { let box = uniqueCold(); yield &box.poseDelta }
+    }
     public var ikTargets: [IKChain: IKTarget] = [:]
     public var animationPreset: String?
     public var clothingVisible = true
@@ -216,12 +259,32 @@ public struct StudioObject: Codable, Sendable, Equatable, Identifiable {
     public var tint: RGB?
     public var emissive: Float = 0
     // light
-    public var light: SceneLight?
+    public var light: SceneLight? {
+        get { cold.light }
+        _modify { let box = uniqueCold(); yield &box.light }
+    }
     // camera
     public var fov: Float = 30
-    public var savedCamera: OrbitCamera?
+    public var savedCamera: OrbitCamera? {
+        get { cold.savedCamera }
+        _modify { let box = uniqueCold(); yield &box.savedCamera }
+    }
 
-    public init(name: String, kind: StudioObjectKind) { self.name = name; self.kind = kind }
+    public init(name: String, kind: StudioObjectKind) {
+        self.name = name; self.kind = kind; cold = .empty
+    }
+
+    /// The box, made this value's own before a boxed field is written: the
+    /// shared empty box, or a box another value also holds (an undo step, a
+    /// snapshot, a copy sent to another task), is copied first and the other
+    /// holders keep the original. The empty box is recognised by identity, so
+    /// it is never written whatever its reference count.
+    private mutating func uniqueCold() -> StudioObjectColdFields {
+        if cold === StudioObjectColdFields.empty || !isKnownUniquelyReferenced(&cold) {
+            cold = StudioObjectColdFields(copying: cold)
+        }
+        return cold
+    }
 
     public static func character(_ card: CharacterCard) -> StudioObject {
         var o = StudioObject(name: card.profile.name, kind: .character)
@@ -254,6 +317,212 @@ public struct StudioObject: Codable, Sendable, Equatable, Identifiable {
     public mutating func setIKTarget(_ chain: IKChain, component: Int, to value: Float) {
         guard (0..<3).contains(component) else { return }
         ikTargets[chain]?.position[component] = value
+    }
+}
+
+// MARK: - The boxed fields (#409)
+
+/// `StudioObject`'s boxed fields, in their declaration order there.
+///
+/// `@unchecked Sendable` is sound because a box is never written while
+/// another value can see it. `StudioObject` writes a field only through
+/// `uniqueCold()`, which copies the box when it is the shared `empty` box or
+/// `isKnownUniquelyReferenced` does not hold, and keeps no other reference to
+/// it. So once a second object value holds the box (an undo step, a
+/// snapshot, a copy sent to another task), no one writes it again; it is
+/// read-only from then on, like the buffer of a standard library collection.
+/// Every field is a `Sendable` value.
+final class StudioObjectColdFields: @unchecked Sendable {
+    var card: CharacterCard?
+    var sourceCharacter: SourceStudioCharacterReference?
+    var sourceExpression: SourceStudioExpressionState?
+    var sourceKinematics: SourceStudioKinematicState?
+    var sourceAnimation: SourceStudioAnimationState?
+    var sourceVoice: SourceStudioVoiceState?
+    var sourceRoute: SourceStudioRouteState?
+    var poseDelta: PoseDelta
+    var light: SceneLight?
+    var savedCamera: OrbitCamera?
+
+    /// The box of every object whose boxed fields are all nil or default:
+    /// most of a scene's items and folders. One instance is shared by all of
+    /// them and never written (`uniqueCold()` checks for it by identity), so
+    /// such an object costs only its inline bytes, and a load allocates no box
+    /// for it.
+    static let empty = StudioObjectColdFields(card: nil, sourceCharacter: nil, sourceExpression: nil, sourceKinematics: nil,
+                                              sourceAnimation: nil, sourceVoice: nil, sourceRoute: nil,
+                                              poseDelta: PoseDelta(), light: nil, savedCamera: nil)
+
+    private init(card: CharacterCard?, sourceCharacter: SourceStudioCharacterReference?,
+                 sourceExpression: SourceStudioExpressionState?, sourceKinematics: SourceStudioKinematicState?,
+                 sourceAnimation: SourceStudioAnimationState?, sourceVoice: SourceStudioVoiceState?,
+                 sourceRoute: SourceStudioRouteState?, poseDelta: PoseDelta, light: SceneLight?, savedCamera: OrbitCamera?) {
+        self.card = card; self.sourceCharacter = sourceCharacter; self.sourceExpression = sourceExpression
+        self.sourceKinematics = sourceKinematics; self.sourceAnimation = sourceAnimation; self.sourceVoice = sourceVoice
+        self.sourceRoute = sourceRoute; self.poseDelta = poseDelta; self.light = light; self.savedCamera = savedCamera
+    }
+
+    /// A new box with `other`'s fields, for the value about to write one.
+    convenience init(copying other: StudioObjectColdFields) {
+        self.init(card: other.card, sourceCharacter: other.sourceCharacter, sourceExpression: other.sourceExpression,
+                  sourceKinematics: other.sourceKinematics, sourceAnimation: other.sourceAnimation,
+                  sourceVoice: other.sourceVoice, sourceRoute: other.sourceRoute, poseDelta: other.poseDelta,
+                  light: other.light, savedCamera: other.savedCamera)
+    }
+
+    /// The box for these fields: the shared `empty` box when every one is nil
+    /// or default, otherwise a new one.
+    static func holding(card: CharacterCard?, sourceCharacter: SourceStudioCharacterReference?,
+                        sourceExpression: SourceStudioExpressionState?, sourceKinematics: SourceStudioKinematicState?,
+                        sourceAnimation: SourceStudioAnimationState?, sourceVoice: SourceStudioVoiceState?,
+                        sourceRoute: SourceStudioRouteState?, poseDelta: PoseDelta, light: SceneLight?,
+                        savedCamera: OrbitCamera?) -> StudioObjectColdFields {
+        if card == nil, sourceCharacter == nil, sourceExpression == nil, sourceKinematics == nil, sourceAnimation == nil,
+           sourceVoice == nil, sourceRoute == nil, poseDelta == PoseDelta(), light == nil, savedCamera == nil {
+            return empty
+        }
+        return StudioObjectColdFields(card: card, sourceCharacter: sourceCharacter, sourceExpression: sourceExpression,
+                                      sourceKinematics: sourceKinematics, sourceAnimation: sourceAnimation,
+                                      sourceVoice: sourceVoice, sourceRoute: sourceRoute, poseDelta: poseDelta,
+                                      light: light, savedCamera: savedCamera)
+    }
+
+    /// Whether every field is nil or default, as in `empty`.
+    var holdsDefaults: Bool {
+        card == nil && sourceCharacter == nil && sourceExpression == nil && sourceKinematics == nil && sourceAnimation == nil
+            && sourceVoice == nil && sourceRoute == nil && poseDelta == PoseDelta() && light == nil && savedCamera == nil
+    }
+}
+
+extension StudioObjectColdFields: Equatable {
+    /// The same box, or boxes whose fields are all equal. An object and its
+    /// undo steps share a box until a boxed field is written, so the identity
+    /// test skips comparing the card in nearly every comparison.
+    static func == (lhs: StudioObjectColdFields, rhs: StudioObjectColdFields) -> Bool {
+        lhs === rhs || (lhs.card == rhs.card && lhs.sourceCharacter == rhs.sourceCharacter
+            && lhs.sourceExpression == rhs.sourceExpression && lhs.sourceKinematics == rhs.sourceKinematics
+            && lhs.sourceAnimation == rhs.sourceAnimation && lhs.sourceVoice == rhs.sourceVoice
+            && lhs.sourceRoute == rhs.sourceRoute && lhs.poseDelta == rhs.poseDelta && lhs.light == rhs.light
+            && lhs.savedCamera == rhs.savedCamera)
+    }
+}
+
+extension StudioObject {
+    /// The keys the synthesized conformance of the unboxed struct used: every
+    /// stored field, boxed ones included, in declaration order. Saved scene
+    /// cards keep them flat; the box itself has no key.
+    enum CodingKeys: String, CodingKey, CaseIterable {
+        case id, name, kind, parent, visible, locked, transform, card, sourceCharacter, sourcePreviewName,
+             sourcePreviewKind, sourceAttachmentPoint, sourceFKRotations, sourceIKOverrides, sourceFaceValues,
+             sourceBodyValues, sourceColorEdits, sourceOutfit, sourceClothesState, sourceShowAccessory,
+             sourceShoesType, sourceExpression, sourceKinematics, sourceAnimation, sourceVoice, sourceRoute,
+             poseDelta, ikTargets, animationPreset, clothingVisible, accessoriesVisible, handGestureL,
+             handGestureR, itemID, assetFile, sourceObjectKey, sourceDuplicateOf, sourceRecordKind, tint,
+             emissive, light, fov, savedCamera
+    }
+
+    /// Decodes as the synthesized conformance did: in key order, a
+    /// non-optional field's key is required (its default is not used), an
+    /// optional one's may be missing, and unknown keys are ignored. An object
+    /// whose boxed fields are all nil or default gets the shared empty box.
+    public init(from decoder: any Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        id = try c.decode(UUID.self, forKey: .id)
+        name = try c.decode(String.self, forKey: .name)
+        kind = try c.decode(StudioObjectKind.self, forKey: .kind)
+        parent = try c.decodeIfPresent(UUID.self, forKey: .parent)
+        visible = try c.decode(Bool.self, forKey: .visible)
+        locked = try c.decode(Bool.self, forKey: .locked)
+        transform = try c.decode(StudioTransform.self, forKey: .transform)
+        let card = try c.decodeIfPresent(CharacterCard.self, forKey: .card)
+        let sourceCharacter = try c.decodeIfPresent(SourceStudioCharacterReference.self, forKey: .sourceCharacter)
+        sourcePreviewName = try c.decodeIfPresent(String.self, forKey: .sourcePreviewName)
+        sourcePreviewKind = try c.decodeIfPresent(StudioObjectKind.self, forKey: .sourcePreviewKind)
+        sourceAttachmentPoint = try c.decodeIfPresent(Int32.self, forKey: .sourceAttachmentPoint)
+        sourceFKRotations = try c.decodeIfPresent([Int: Float3].self, forKey: .sourceFKRotations)
+        sourceIKOverrides = try c.decodeIfPresent([Int32: SourceStudioIKEdit].self, forKey: .sourceIKOverrides)
+        sourceFaceValues = try c.decodeIfPresent([Float].self, forKey: .sourceFaceValues)
+        sourceBodyValues = try c.decodeIfPresent([Float].self, forKey: .sourceBodyValues)
+        sourceColorEdits = try c.decodeIfPresent([String: Float4].self, forKey: .sourceColorEdits)
+        sourceOutfit = try c.decodeIfPresent(Int.self, forKey: .sourceOutfit)
+        sourceClothesState = try c.decodeIfPresent([UInt8].self, forKey: .sourceClothesState)
+        sourceShowAccessory = try c.decodeIfPresent([Bool].self, forKey: .sourceShowAccessory)
+        sourceShoesType = try c.decodeIfPresent(Int.self, forKey: .sourceShoesType)
+        let sourceExpression = try c.decodeIfPresent(SourceStudioExpressionState.self, forKey: .sourceExpression)
+        let sourceKinematics = try c.decodeIfPresent(SourceStudioKinematicState.self, forKey: .sourceKinematics)
+        let sourceAnimation = try c.decodeIfPresent(SourceStudioAnimationState.self, forKey: .sourceAnimation)
+        let sourceVoice = try c.decodeIfPresent(SourceStudioVoiceState.self, forKey: .sourceVoice)
+        let sourceRoute = try c.decodeIfPresent(SourceStudioRouteState.self, forKey: .sourceRoute)
+        let poseDelta = try c.decode(PoseDelta.self, forKey: .poseDelta)
+        ikTargets = try c.decode([IKChain: IKTarget].self, forKey: .ikTargets)
+        animationPreset = try c.decodeIfPresent(String.self, forKey: .animationPreset)
+        clothingVisible = try c.decode(Bool.self, forKey: .clothingVisible)
+        accessoriesVisible = try c.decode(Bool.self, forKey: .accessoriesVisible)
+        handGestureL = try c.decode(Int.self, forKey: .handGestureL)
+        handGestureR = try c.decode(Int.self, forKey: .handGestureR)
+        itemID = try c.decodeIfPresent(String.self, forKey: .itemID)
+        assetFile = try c.decodeIfPresent(String.self, forKey: .assetFile)
+        sourceObjectKey = try c.decodeIfPresent(Int32.self, forKey: .sourceObjectKey)
+        sourceDuplicateOf = try c.decodeIfPresent(Int32.self, forKey: .sourceDuplicateOf)
+        sourceRecordKind = try c.decodeIfPresent(KoikatsuObjectKind.self, forKey: .sourceRecordKind)
+        tint = try c.decodeIfPresent(RGB.self, forKey: .tint)
+        emissive = try c.decode(Float.self, forKey: .emissive)
+        let light = try c.decodeIfPresent(SceneLight.self, forKey: .light)
+        fov = try c.decode(Float.self, forKey: .fov)
+        let savedCamera = try c.decodeIfPresent(OrbitCamera.self, forKey: .savedCamera)
+        cold = .holding(card: card, sourceCharacter: sourceCharacter, sourceExpression: sourceExpression,
+                        sourceKinematics: sourceKinematics, sourceAnimation: sourceAnimation, sourceVoice: sourceVoice,
+                        sourceRoute: sourceRoute, poseDelta: poseDelta, light: light, savedCamera: savedCamera)
+    }
+
+    /// Encodes as the synthesized conformance did: every key in
+    /// `CodingKeys` order, a nil optional writes no key, and a dictionary
+    /// keyed by `StableEncodingKey` takes the key-ordered overload (#394).
+    public func encode(to encoder: any Encoder) throws {
+        var c = encoder.container(keyedBy: CodingKeys.self)
+        try c.encode(id, forKey: .id)
+        try c.encode(name, forKey: .name)
+        try c.encode(kind, forKey: .kind)
+        try c.encodeIfPresent(parent, forKey: .parent)
+        try c.encode(visible, forKey: .visible)
+        try c.encode(locked, forKey: .locked)
+        try c.encode(transform, forKey: .transform)
+        try c.encodeIfPresent(cold.card, forKey: .card)
+        try c.encodeIfPresent(cold.sourceCharacter, forKey: .sourceCharacter)
+        try c.encodeIfPresent(sourcePreviewName, forKey: .sourcePreviewName)
+        try c.encodeIfPresent(sourcePreviewKind, forKey: .sourcePreviewKind)
+        try c.encodeIfPresent(sourceAttachmentPoint, forKey: .sourceAttachmentPoint)
+        try c.encodeIfPresent(sourceFKRotations, forKey: .sourceFKRotations)
+        try c.encodeIfPresent(sourceIKOverrides, forKey: .sourceIKOverrides)
+        try c.encodeIfPresent(sourceFaceValues, forKey: .sourceFaceValues)
+        try c.encodeIfPresent(sourceBodyValues, forKey: .sourceBodyValues)
+        try c.encodeIfPresent(sourceColorEdits, forKey: .sourceColorEdits)
+        try c.encodeIfPresent(sourceOutfit, forKey: .sourceOutfit)
+        try c.encodeIfPresent(sourceClothesState, forKey: .sourceClothesState)
+        try c.encodeIfPresent(sourceShowAccessory, forKey: .sourceShowAccessory)
+        try c.encodeIfPresent(sourceShoesType, forKey: .sourceShoesType)
+        try c.encodeIfPresent(cold.sourceExpression, forKey: .sourceExpression)
+        try c.encodeIfPresent(cold.sourceKinematics, forKey: .sourceKinematics)
+        try c.encodeIfPresent(cold.sourceAnimation, forKey: .sourceAnimation)
+        try c.encodeIfPresent(cold.sourceVoice, forKey: .sourceVoice)
+        try c.encodeIfPresent(cold.sourceRoute, forKey: .sourceRoute)
+        try c.encode(cold.poseDelta, forKey: .poseDelta)
+        try c.encode(ikTargets, forKey: .ikTargets)
+        try c.encodeIfPresent(animationPreset, forKey: .animationPreset)
+        try c.encode(clothingVisible, forKey: .clothingVisible)
+        try c.encode(accessoriesVisible, forKey: .accessoriesVisible)
+        try c.encode(handGestureL, forKey: .handGestureL)
+        try c.encode(handGestureR, forKey: .handGestureR)
+        try c.encodeIfPresent(itemID, forKey: .itemID)
+        try c.encodeIfPresent(assetFile, forKey: .assetFile)
+        try c.encodeIfPresent(sourceObjectKey, forKey: .sourceObjectKey)
+        try c.encodeIfPresent(sourceDuplicateOf, forKey: .sourceDuplicateOf)
+        try c.encodeIfPresent(sourceRecordKind, forKey: .sourceRecordKind)
+        try c.encodeIfPresent(tint, forKey: .tint)
+        try c.encode(emissive, forKey: .emissive)
+        try c.encodeIfPresent(cold.light, forKey: .light)
+        try c.encode(fov, forKey: .fov)
+        try c.encodeIfPresent(cold.savedCamera, forKey: .savedCamera)
     }
 }
 

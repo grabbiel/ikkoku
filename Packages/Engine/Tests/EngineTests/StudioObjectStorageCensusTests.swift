@@ -4,7 +4,7 @@ import CoreMath
 import Assets
 import Scene
 import Character
-import Studio
+@testable import Studio
 
 /// #409: the `objects` buffer census the `studio-edit-steps` workload records
 /// (`StudioObjectStorageCensus`), and `StudioObject`'s inline layout, which
@@ -56,16 +56,18 @@ private func document(objects: Int) -> StudioDocument {
     #expect(census([StudioDocument(), StudioDocument()]) == StudioObjectStorageCensus.Count())
 }
 
-/// Records `StudioObject`'s size, stride and each field's offset and inline
-/// size (#409 scoping: stride 1,584 B at df0077c0, `card` the largest field).
+/// Records `StudioObject`'s size, stride and each stored field's offset and
+/// inline size. #409 scoping found stride 1,584 B at df0077c0, `card` the
+/// largest field; the ten large, seldom-edited fields now share one box
+/// (`cold`, one reference), which leaves 432 B. A new stored field changes
+/// the stride: box it with the others if it is large and seldom edited.
 @Test func studioObjectLayout() {
     typealias O = StudioObject
     let fields: [(String, PartialKeyPath<O>, Int)] = [
         ("id", \O.id, MemoryLayout<UUID>.size), ("name", \O.name, MemoryLayout<String>.size),
         ("kind", \O.kind, MemoryLayout<StudioObjectKind>.size), ("parent", \O.parent, MemoryLayout<UUID?>.size),
         ("visible", \O.visible, 1), ("locked", \O.locked, 1),
-        ("transform", \O.transform, MemoryLayout<StudioTransform>.size), ("card", \O.card, MemoryLayout<CharacterCard?>.size),
-        ("sourceCharacter", \O.sourceCharacter, MemoryLayout<SourceStudioCharacterReference?>.size),
+        ("transform", \O.transform, MemoryLayout<StudioTransform>.size), ("cold", \O.cold, MemoryLayout<StudioObjectColdFields>.size),
         ("sourcePreviewName", \O.sourcePreviewName, MemoryLayout<String?>.size),
         ("sourcePreviewKind", \O.sourcePreviewKind, MemoryLayout<StudioObjectKind?>.size),
         ("sourceAttachmentPoint", \O.sourceAttachmentPoint, MemoryLayout<Int32?>.size),
@@ -78,12 +80,6 @@ private func document(objects: Int) -> StudioDocument {
         ("sourceClothesState", \O.sourceClothesState, MemoryLayout<[UInt8]?>.size),
         ("sourceShowAccessory", \O.sourceShowAccessory, MemoryLayout<[Bool]?>.size),
         ("sourceShoesType", \O.sourceShoesType, MemoryLayout<Int?>.size),
-        ("sourceExpression", \O.sourceExpression, MemoryLayout<SourceStudioExpressionState?>.size),
-        ("sourceKinematics", \O.sourceKinematics, MemoryLayout<SourceStudioKinematicState?>.size),
-        ("sourceAnimation", \O.sourceAnimation, MemoryLayout<SourceStudioAnimationState?>.size),
-        ("sourceVoice", \O.sourceVoice, MemoryLayout<SourceStudioVoiceState?>.size),
-        ("sourceRoute", \O.sourceRoute, MemoryLayout<SourceStudioRouteState?>.size),
-        ("poseDelta", \O.poseDelta, MemoryLayout<PoseDelta>.size),
         ("ikTargets", \O.ikTargets, MemoryLayout<[IKChain: IKTarget]>.size),
         ("animationPreset", \O.animationPreset, MemoryLayout<String?>.size),
         ("clothingVisible", \O.clothingVisible, 1), ("accessoriesVisible", \O.accessoriesVisible, 1),
@@ -92,9 +88,7 @@ private func document(objects: Int) -> StudioDocument {
         ("sourceObjectKey", \O.sourceObjectKey, MemoryLayout<Int32?>.size),
         ("sourceDuplicateOf", \O.sourceDuplicateOf, MemoryLayout<Int32?>.size),
         ("sourceRecordKind", \O.sourceRecordKind, MemoryLayout<KoikatsuObjectKind?>.size),
-        ("tint", \O.tint, MemoryLayout<RGB?>.size), ("emissive", \O.emissive, 4),
-        ("light", \O.light, MemoryLayout<SceneLight?>.size), ("fov", \O.fov, 4),
-        ("savedCamera", \O.savedCamera, MemoryLayout<OrbitCamera?>.size),
+        ("tint", \O.tint, MemoryLayout<RGB?>.size), ("emissive", \O.emissive, 4), ("fov", \O.fov, 4),
     ]
     let stride = MemoryLayout<O>.stride
     print("[layout] StudioObject size \(MemoryLayout<O>.size) stride \(stride) alignment \(MemoryLayout<O>.alignment)")
@@ -107,4 +101,5 @@ private func document(objects: Int) -> StudioDocument {
         #expect(field.2 <= span)
     }
     #expect(stride % MemoryLayout<O>.alignment == 0)
+    #expect(stride == 432)
 }
