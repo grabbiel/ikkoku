@@ -282,6 +282,7 @@ func particleBranchDrawsTwiceVertexColorTimesTintTimesTexture() throws {
     descriptor.fragmentFunction = library.makeFunction(name: "map_fragment")
     descriptor.colorAttachments[0].pixelFormat = .rgba32Float
     let pipeline = try device.makeRenderPipelineState(descriptor: descriptor)
+    let mapShadow = try mapShadowPlaceholder(device)
     let queue = try #require(device.makeCommandQueue())
     let targetDescriptor = MTLTextureDescriptor.texture2DDescriptor(pixelFormat: .rgba32Float, width: 1, height: 1, mipmapped: false)
     targetDescriptor.usage = [.renderTarget, .shaderRead]; targetDescriptor.storageMode = .shared
@@ -311,13 +312,14 @@ func particleBranchDrawsTwiceVertexColorTimesTintTimesTexture() throws {
         encoder.setRenderPipelineState(pipeline)
         for (buffer, index) in [(mesh.baseVertices, BufferIndexVertices), (mesh.texcoords, BufferIndexTexcoords),
             (mesh.texcoords1, BufferIndexTexcoords1), (mesh.texcoords2, BufferIndexTexcoords2),
-            (mesh.colors ?? resources.dummyBuffer, BufferIndexVertexColors), (resources.dummyBuffer, BufferIndexVertexHidden)] {
+            (mesh.colors ?? resources.dummyBuffer, BufferIndexVertexColors), (resources.dummyBuffer, BufferIndexVertexHidden), (resources.dummyBuffer, BufferIndexVertexReceive)] {
             encoder.setVertexBuffer(buffer, offset: 0, index: Int(index.rawValue))
         }
         encoder.setVertexBytes(&frame, length: MemoryLayout<FrameUniforms>.stride, index: Int(BufferIndexFrameUniforms.rawValue))
         encoder.setVertexBytes(&draw, length: MemoryLayout<DrawUniforms>.stride, index: Int(BufferIndexDrawUniforms.rawValue))
         encoder.setVertexBytes(&material, length: MemoryLayout<MaterialUniforms>.stride, index: Int(BufferIndexMaterial.rawValue))
         encoder.setFragmentBytes(&material, length: MemoryLayout<MaterialUniforms>.stride, index: Int(BufferIndexMaterial.rawValue))
+        bindMapLighting(encoder, frame: frame, shadow: mapShadow)
         // White texture; a bright lightmap that must not be read.
         encoder.setFragmentTexture(resources.whiteTexture, index: Int(TextureIndexBase.rawValue))
         encoder.setFragmentTexture(resources.whiteTexture, index: Int(TextureIndexLightmap.rawValue))
@@ -381,6 +383,7 @@ func mapTexturesSampleWithThePlayersForcedAnisotropy() throws {
     descriptor.fragmentFunction = library.makeFunction(name: "map_fragment")
     descriptor.colorAttachments[0].pixelFormat = .rgba32Float
     let pipeline = try device.makeRenderPipelineState(descriptor: descriptor)
+    let mapShadow = try mapShadowPlaceholder(device)
     let queue = try #require(device.makeCommandQueue())
     let size = 64
     let targetDescriptor = MTLTextureDescriptor.texture2DDescriptor(pixelFormat: .rgba32Float, width: size, height: size, mipmapped: false)
@@ -415,13 +418,14 @@ func mapTexturesSampleWithThePlayersForcedAnisotropy() throws {
         encoder.setRenderPipelineState(pipeline)
         for (buffer, index) in [(mesh.baseVertices, BufferIndexVertices), (mesh.texcoords, BufferIndexTexcoords),
             (mesh.texcoords1, BufferIndexTexcoords1), (mesh.texcoords2, BufferIndexTexcoords2),
-            (resources.dummyBuffer, BufferIndexVertexColors), (resources.dummyBuffer, BufferIndexVertexHidden)] {
+            (resources.dummyBuffer, BufferIndexVertexColors), (resources.dummyBuffer, BufferIndexVertexHidden), (resources.dummyBuffer, BufferIndexVertexReceive)] {
             encoder.setVertexBuffer(buffer, offset: 0, index: Int(index.rawValue))
         }
         encoder.setVertexBytes(&frame, length: MemoryLayout<FrameUniforms>.stride, index: Int(BufferIndexFrameUniforms.rawValue))
         encoder.setVertexBytes(&draw, length: MemoryLayout<DrawUniforms>.stride, index: Int(BufferIndexDrawUniforms.rawValue))
         encoder.setVertexBytes(&material, length: MemoryLayout<MaterialUniforms>.stride, index: Int(BufferIndexMaterial.rawValue))
         encoder.setFragmentBytes(&material, length: MemoryLayout<MaterialUniforms>.stride, index: Int(BufferIndexMaterial.rawValue))
+        bindMapLighting(encoder, frame: frame, shadow: mapShadow)
         for index in [TextureIndexBase, TextureIndexLightmap, TextureIndexLightmapDirection, TextureIndexEmission] {
             let texture: any MTLTexture = levelsAt.contains(index) ? levels : (index == TextureIndexLightmap ? lightmap ?? resources.whiteTexture : resources.whiteTexture)
             encoder.setFragmentTexture(texture, index: Int(index.rawValue))
@@ -469,7 +473,8 @@ func depthOnlyAndStencilMainPassesCarryTheSameGroups() throws {
     let renderer = try makeSourceShaderRenderer()
     let depthOnly = renderer.pipelines.depthOnlyMainPass.labels
     let stencil = try renderer.pipelines.stencilMainPass().labels
-    #expect(depthOnly.contains("Sky") && depthOnly.contains("MapDepthOnly") && depthOnly.count == 12)
+    #expect(depthOnly.contains("Sky") && depthOnly.contains("MapDepthOnly") && depthOnly.count == 14)
+    #expect(depthOnly.contains("ToonMapProbeLit") && depthOnly.contains("ToonMapProbeLitBlend"))
     #expect(stencil == depthOnly.map { $0 + "Stencil" })
 }
 
@@ -774,7 +779,9 @@ func everyConvertedMapLoadsItsBlockImagesByteForByte() async throws {
         }
         #expect(asset.cubeTextures == (blocks?.cubes.count ?? 0) || asset.skyParts == 0, "map \(number)")
         if asset.skyParts == 0, asset.particleParts == 0, asset.lightmappedParts == asset.parts.count, asset.lightmappedParts > 0 {
-            #expect(SourceStudioMapStatus.loaded(entry, asset: asset).contains(": baked lightmaps; approximated: "), "map \(number)")
+            // Slice 5: a map with a realtime sun names it after the lightmaps.
+            let form = asset.lighting?.sun == nil ? ": baked lightmaps; approximated: " : ": baked lightmaps, realtime sun"
+            #expect(SourceStudioMapStatus.loaded(entry, asset: asset).contains(form), "map \(number)")
         }
         asset.release()
         guard blockOnly.isEmpty else {

@@ -1,0 +1,27 @@
+{
+  "steps": [
+    {"op": "rename", "key": 1, "name": "IKKOKU-U renamed"},
+    {"op": "saveDocument", "path": ".local/verification/scenario-exports/undo-scene-replacements.png"},
+    {"op": "export", "path": ".local/verification/scenario-exports/undo-scene-replacements-source.png"},
+    {"op": "newScene"},
+    {"op": "assert", "undoDepth": 2, "redoDepth": 0, "objectCount": 0},
+    {"op": "addFolder", "name": "IKKOKU-U folder"},
+    {"op": "assert", "undoDepth": 3, "objectCount": 1},
+    {"op": "loadDocument", "path": ".local/verification/scenario-exports/undo-scene-replacements.png"},
+    {"op": "assert", "undoDepth": 2, "redoDepth": 0, "key": 1, "name": "IKKOKU-U renamed"},
+    {"op": "loadDocumentRejected", "path": ".local/verification/scenario-exports/undo-scene-replacements-source.png"},
+    {"op": "assert", "undoDepth": 2, "redoDepth": 0, "key": 1, "name": "IKKOKU-U renamed"},
+    {"op": "importDocument", "path": ".local/verification/scenario-exports/undo-scene-replacements.png"},
+    {"op": "assert", "undoDepth": 3, "redoDepth": 0},
+    {"op": "reimport", "path": ".local/verification/scenario-exports/undo-scene-replacements-source.png"},
+    {"op": "assert", "undoDepth": 2, "redoDepth": 0, "key": 1, "name": "IKKOKU-U renamed"},
+    {"op": "undo"},
+    {"op": "assert", "undoDepth": 1, "redoDepth": 1},
+    {"op": "undo"},
+    {"op": "assert", "undoDepth": 0, "redoDepth": 2, "key": 1, "name": "IKKOKU-U renamed"},
+    {"op": "assertRejected", "undoDepth": 1, "errorContains": "0 undo steps, expected 1"},
+    {"op": "redo"},
+    {"op": "redo"},
+    {"op": "assert", "undoDepth": 2, "redoDepth": 0, "key": 1, "name": "IKKOKU-U renamed"}
+  ]
+}
