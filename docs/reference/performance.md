@@ -6865,6 +6865,11 @@ marker under `.local/`. It writes the process's own id to the marker, then
 waits. The wait is an await, so the main run loop can drain its autorelease
 pool there.
 
+With this harness, [#355](https://github.com/grabbiel/ikkoku/pull/355) found
+the CPU holder in the reimport's autoreleased file reads. With each read in its
+own autorelease pool, the malloc held after a back-to-back reimport fell from
++42.7 MB to +2.4 MB.
+
 ## Maker head-selection attribution (#192-D)
 
 #192-D step 1 adds two diagnostics to the normal-head selection report and
