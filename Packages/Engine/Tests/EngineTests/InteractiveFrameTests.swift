@@ -172,6 +172,21 @@ struct InteractiveFrameTests {
         #expect(f.renderer.resources.mesh(f.mesh) == nil)
     }
 
+    /// ST-T04 B2: the benchmark asks its camera closure once per sample, in
+    /// sample order with the warmup samples first, before it draws the sample.
+    @Test func benchmarkAsksTheCameraOfEachSampleInOrder() throws {
+        let f = try InteractiveFixture()
+        var asked: [Int] = []
+        let report = try f.renderer.benchmark(frame: f.frame, width: 32, height: 32, warmupFrames: 2, measuredFrames: 3) { sample in
+            asked.append(sample)
+            var camera = f.frame.camera
+            camera.yaw += Float(sample) * 0.5
+            return camera
+        }
+        #expect(asked == [0, 1, 2, 3, 4])
+        #expect(report.measuredFrames == 3)
+    }
+
     @Test func visibleLiveMaterialsRemainContinuousAndResourceGenerationsCoverMutations() throws {
         let f = try InteractiveFixture()
         let r = f.renderer.resources

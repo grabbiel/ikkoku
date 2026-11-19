@@ -85,6 +85,26 @@ func catalogTestPackage(_ directory: URL, guid: String = "fixture.mod", csvs: [S
     #expect(package.catalogs[0].rows == [["7", "a,b", "0"]])
 }
 
+@Test func sourceModCatalogTrimsListLinesWithMonoWhiteChars() throws {
+    // #421: Lists.LoadCSV's string.Trim() calls (each preamble value, the header
+    // line, each row line) use Mono's String.WhiteChars: U+200B and U+FEFF are
+    // trimmed, U+180E is not. Foundation's whitespace set keeps U+FEFF, which
+    // left "\u{feff}ID" as the first header and refused the list.
+    // test_resolver_contract.py holds the same fixture and expectations for the
+    // Python oracle.
+    let directory = try catalogTestDirectory(); defer { try? FileManager.default.removeItem(at: directory) }
+    let csv = "\u{200b}122\u{feff},ignored\n\u{3000} 0\u{85}\nAssets/list.bytes\u{180e}\u{feff},ignored\n"
+        + "\u{feff}ID,Name,Possess\u{200b}\n\u{feff} 7,a\u{180e},0\u{200b}\n\u{200b}\u{feff}\n8,ignored,0\n"
+    let library = try SourceModLibrary(packages: [catalogTestPackage(directory, csvs: [csv])])
+    let catalog = try SourceModCatalog(library: library, contract: catalogTestContract())
+    #expect(catalog.entries.count == 1, "the trimmed-empty line stops reading")
+    let entry = try #require(catalog.entries.first)
+    #expect(entry.key.category == 122 && entry.distribution == 0 && entry.key.sourceSlot == 7)
+    #expect(entry.sourceFilePath == "Assets/list.bytes\u{180e}" && entry.name == "a\u{180e}" && entry.info("Possess") == "1")
+    #expect(SourceMonoWhiteChars.trim("\u{180e}\u{200b} x \u{feff}\u{85}") == "\u{180e}\u{200b} x")
+    #expect(SourceMonoWhiteChars.trim("\u{200b}\u{feff}\u{3000}") == "")
+}
+
 @Test func sourceModCatalogDuplicateHeadersUseLastWriteAfterFirstPossessIsForced() throws {
     let directory = try catalogTestDirectory(); defer { try? FileManager.default.removeItem(at: directory) }
     let csv = "122\n3\nignored-target\nID, Name,Name,Name,Possess,Possess\n8,unknown,first,last,0,9\n"

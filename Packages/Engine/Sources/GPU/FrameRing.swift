@@ -6,6 +6,11 @@ import Metal
 public struct FrameAllocation {
     public let buffer: any MTLBuffer
     public let offset: Int
+
+    /// The range `bytes` further into the same allocation, such as one element
+    /// of an allocated array. The caller keeps it inside the allocation, and
+    /// 256-byte aligned when it binds it as a constant buffer.
+    public func advanced(by bytes: Int) -> FrameAllocation { FrameAllocation(buffer: buffer, offset: offset + bytes) }
 }
 
 /// Recoverable `FrameRing` failures. None of them terminates the process.

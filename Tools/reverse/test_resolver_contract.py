@@ -75,6 +75,18 @@ class ResolverContractTests(unittest.TestCase):
         migrated = resolver.migrate_record({"ModID": "\u200bold", "Slot": 1, "CategoryNo": 122}, [rule], {"new"})
         self.assertEqual(migrated["ModID"], "new")
 
+    def test_source_csv_trims_lines_with_mono_white_chars(self):
+        # #421: Lists.LoadCSV's String.Trim() calls and ManifestVersionComparer's use String.WhiteChars. Same fixture
+        # and expectations as SourceModCatalogTests.sourceModCatalogTrimsListLinesWithMonoWhiteChars.
+        csv = ("\u200b122\ufeff,ignored\n\u3000 0\u0085\nAssets/list.bytes\u180e\ufeff,ignored\n"
+               "\ufeffID,Name,Possess\u200b\n\ufeff 7,a\u180e,0\u200b\n\u200b\ufeff\n8,ignored,0\n")
+        parsed = resolver.catalog.source_csv(csv.encode("utf-8"))
+        self.assertEqual((parsed["categoryNo"], parsed["distributionNo"], parsed["filePath"]), (122, 0, "Assets/list.bytes\u180e"))
+        self.assertEqual(parsed["columns"], ["ID", "Name", "Possess"])
+        self.assertEqual((parsed["rows"], parsed["stoppedAtLine"]), ([["7", "a\u180e", "0"]], 6))
+        self.assertEqual(resolver.catalog.trim("\u180e\u200b x \ufeff\u0085"), "\u180e\u200b x")
+        self.assertEqual(resolver.catalog.version_tokens("\ufeffv1.2\u200b"), resolver.catalog.version_tokens("1.2"))
+
     def test_bad_record_types_overflows_null_records_and_truncations(self):
         for value in (None, [], 1, {"Slot": None}, {"Slot": True}, {"Slot": 2**31}, {"LocalSlot": -2**31 - 1},
                       {"CategoryNo": 1.0}, {"Property": b"x"}, {None: 1}):

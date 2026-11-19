@@ -415,6 +415,11 @@ private struct CaptureRecipe {
     let frames: [[String]] = [["IKKOKU_BENCHMARK_FRAMES"]]
     #expect(problems("IKKOKU_BENCHMARK_FRAMES", "0", in: benchmark) == frames)
     #expect(problems("IKKOKU_BENCHMARK_FRAMES", "20", in: benchmark).isEmpty)
+    // ST-T04 B2: the orbit benchmark turns a number of times, and needs the benchmark.
+    let orbit: [[String]] = [["IKKOKU_BENCHMARK_ORBIT"]]
+    #expect(problems("IKKOKU_BENCHMARK_ORBIT", "1", in: benchmark).isEmpty)
+    #expect(problems("IKKOKU_BENCHMARK_ORBIT", "once", in: benchmark) == orbit)
+    #expect(problems("IKKOKU_BENCHMARK_ORBIT", "1") == orbit)
     #expect(problems("IKKOKU_BENCHMARK_MAP_SHADOW", "always", in: benchmark) == [["IKKOKU_BENCHMARK_MAP_SHADOW"]])
     #expect(problems("IKKOKU_BENCHMARK_MAP_SHADOW", "every-frame", in: benchmark).isEmpty)
 
