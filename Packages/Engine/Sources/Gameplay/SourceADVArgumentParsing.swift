@@ -1,11 +1,12 @@
+import Assets
 import Foundation
 
 /// Result of one recovered Unity Mono parse or culture-sensitive comparison.
 ///
 /// `exception` means the recovered code path definitely throws, `unsupported`
-/// means its result depends on behaviour this kernel does not model (Unicode
-/// table versions, culture symbols, collation of punctuation, the native
-/// `Double.ParseImpl` on non-canonical digit strings). Callers fault on
+/// means its result depends on behaviour this kernel does not model
+/// (`char.IsDigit` beyond ASCII, culture symbols, collation of punctuation, the
+/// native `Double.ParseImpl` on non-canonical digit strings). Callers fault on
 /// `unsupported` even where the original swallows exceptions.
 enum SourceCLRResult<Value> {
     case value(Value)
@@ -19,55 +20,19 @@ enum SourceCLRResult<Value> {
 /// `Double.Parse(string, NumberStyles, IFormatProvider, bool, out double, out Exception)`,
 /// `Single.Parse(string)`, `Boolean.Parse(string)`).
 enum SourceCLR {
-    /// `char.IsWhiteSpace` for one UTF-16 code unit; nil where Mono's answer
-    /// depends on the Unicode version of its tables.
-    static func isWhiteSpace(_ scalar: Unicode.Scalar) -> Bool? {
-        switch scalar.value {
-        case 0x09...0x0D, 0x20, 0x85, 0xA0, 0x1680, 0x2000...0x200A, 0x2028, 0x2029, 0x202F, 0x205F, 0x3000: return true
-        case 0x180E, 0x200B, 0xFEFF: return nil
-        default: return false
-        }
-    }
+    /// `char.IsWhiteSpace` for one UTF-16 code unit: the shared
+    /// `SourceMonoInt32.isWhiteSpace` (Assets, #427).
+    static func isWhiteSpace(_ scalar: Unicode.Scalar) -> Bool { SourceMonoInt32.isWhiteSpace(scalar) }
 
-    /// `int.Parse(string)` / `int.TryParse(string, out int)`: culture-invariant
-    /// fast path. Leading/trailing white space, one sign, ASCII digits, NUL
-    /// terminates, overflow throws.
+    /// `int.Parse(string)` / `int.TryParse(string, out int)`: the shared
+    /// `SourceMonoInt32.parse` (Assets, #427). It is culture invariant: leading
+    /// and trailing white space, one sign, ASCII digits, a NUL ends the number,
+    /// and overflow throws.
     static func int32(_ text: String) -> SourceCLRResult<Int32> {
-        let s = Array(text.unicodeScalars)
-        var i = 0
-        while i < s.count {
-            guard let white = isWhiteSpace(s[i]) else { return .unsupported("Int32.Parse white space class of U+\(String(s[i].value, radix: 16))") }
-            if !white { break }
-            i += 1
+        switch SourceMonoInt32.parse(text) {
+        case .success(let value): return .value(value)
+        case .failure(let failure): return .exception(failure.description)
         }
-        if i == s.count { return .exception("Int32.Parse: no digits") }
-        var negative = false
-        if s[i] == "+" { i += 1 } else if s[i] == "-" { negative = true; i += 1 }
-        var number: Int32 = 0, digits = false
-        while i < s.count {
-            let c = s[i]
-            if c == "\0" { break }
-            if ("0"..."9").contains(c) {
-                let digit = Int32(c.value - 48)
-                if number < 214748364 { number = number * 10 + digit; digits = true; i += 1; continue }
-                if number == 214748364, digit <= 7 || (negative && digit <= 8) {
-                    let value: Int32 = negative ? -number * 10 - digit : number * 10 + digit
-                    switch trailingWhiteSpace(s, from: i + 1) {
-                    case true?: return .value(value)
-                    case false?: return .exception("Int32.Parse: trailing characters")
-                    case nil: return .unsupported("Int32.Parse trailing white space class")
-                    }
-                }
-                return .exception("Int32.Parse: overflow")
-            }
-            switch trailingWhiteSpace(s, from: i) {
-            case true?: i = s.count
-            case false?: return .exception("Int32.Parse: format")
-            case nil: return .unsupported("Int32.Parse trailing white space class")
-            }
-        }
-        guard digits else { return .exception("Int32.Parse: no digits") }
-        return .value(negative ? -number : number)
     }
 
     /// `Convert.ChangeType(string, typeof(int))`: `String.ToInt32(provider)` →
@@ -75,8 +40,8 @@ enum SourceCLR {
     /// parser (not the `int.Parse(string)` fast path): leading white space, a
     /// culture sign (`-`/`+`; `+` only when a character follows it), white
     /// space again, digits, trailing white space, then end or NUL. Overflow
-    /// throws. `char.IsWhiteSpace`/`char.IsDigit` beyond ASCII depend on
-    /// Mono's Unicode tables, so any non-ASCII input is unsupported.
+    /// throws. `char.IsDigit` beyond ASCII (and the digit value Mono then
+    /// computes) is not modelled, so any non-ASCII input is unsupported.
     static func int32Integer(_ text: String) -> SourceCLRResult<Int32> {
         let s = Array(text.utf16)
         if s.isEmpty { return .exception("Int32.Parse: empty string") }
@@ -114,14 +79,6 @@ enum SourceCLR {
         return .value(number)
     }
 
-    private static func trailingWhiteSpace(_ s: [Unicode.Scalar], from start: Int) -> Bool? {
-        for c in s[min(start, s.count)...] where c != "\0" {
-            guard let white = isWhiteSpace(c) else { return nil }
-            if !white { return false }
-        }
-        return true
-    }
-
     /// `float.Parse(string)`: `(float)double.Parse(s, Float | AllowThousands, null)`
     /// plus Mono's positive-overflow check. The decimal point is `.`; group
     /// separators, culture NaN/Infinity symbols and non-ASCII digits are
@@ -131,11 +88,7 @@ enum SourceCLR {
         let s = Array(text.unicodeScalars)
         if s.isEmpty { return .exception("Double.Parse: empty") }
         var i = 0
-        while i < s.count {
-            guard let white = isWhiteSpace(s[i]) else { return .unsupported("Double.Parse white space class") }
-            if !white { break }
-            i += 1
-        }
+        while i < s.count, isWhiteSpace(s[i]) { i += 1 }
         if i == s.count { return .exception("Double.Parse: white space only") }
         if s.contains(where: { !$0.isASCII }) { return .unsupported("Double.Parse non-ASCII character") }
         if s.contains(",") { return .unsupported("Double.Parse culture group/decimal separator ','") }
@@ -145,7 +98,7 @@ enum SourceCLR {
         scan: while i < s.count {
             let c = s[i]
             if c == "\0" { break }
-            let digit = ("0"..."9").contains(c), white = isWhiteSpace(c) == true
+            let digit = ("0"..."9").contains(c), white = isWhiteSpace(c)
             switch state {
             case 1, 2:
                 if state == 1 {

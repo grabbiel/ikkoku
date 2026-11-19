@@ -22,6 +22,11 @@ import math
 import re
 import struct
 
+try:
+    from . import mono_int32
+except ImportError:
+    import mono_int32
+
 INT_MAX = 2147483647
 CURRENT = str(INT_MAX)  # CommandBase.currentCharaDefaultIndex.ToString()
 
@@ -72,56 +77,21 @@ class Fault(Exception):
 
 # ------------------------------------------------------------ Mono mscorlib
 
-_WHITE = set(range(0x09, 0x0E)) | {0x20, 0x85, 0xA0, 0x1680, 0x2028, 0x2029, 0x202F, 0x205F, 0x3000} | set(range(0x2000, 0x200B))
-_TABLE_DEPENDENT = {0x180E, 0x200B, 0xFEFF}  # White space in some Unicode versions only.
 _ASCII_WHITE = "\t\n\v\f\r "
 
 
 def is_white(ch):
-    """`char.IsWhiteSpace`."""
-    if ord(ch) in _TABLE_DEPENDENT:
-        raise Unmodelled("char.IsWhiteSpace table version")
-    return ord(ch) in _WHITE
-
-
-def _trailing(s, start):
-    """`Int32.ProcessTrailingWhitespace`: NUL and white space only."""
-    for ch in s[start:]:
-        if ch != "\0" and not is_white(ch):
-            raise SourceException("Int32.Parse: format")
+    """`char.IsWhiteSpace`: the shared mono_int32.is_white_space (#427)."""
+    return mono_int32.is_white_space(ch)
 
 
 def int32(s):
-    """`Int32.Parse(string, bool tryParse, out int, out Exception)` fast path (culture invariant)."""
-    i, n = 0, len(s)
-    while i < n and is_white(s[i]):
-        i += 1
-    if i == n:
-        raise SourceException("Int32.Parse: empty")
-    sign = 1
-    if s[i] == "+":
-        i += 1
-    elif s[i] == "-":
-        sign, i = -1, i + 1
-    number, digits = 0, False
-    while i < n:
-        ch = s[i]
-        if ch == "\0":
-            break  # `i = length`: the rest is never inspected.
-        if "0" <= ch <= "9":
-            digit = ord(ch) - 48
-            if number < 214748364:
-                number, digits, i = number * 10 + digit, True, i + 1
-                continue
-            if number == 214748364 and (digit <= 7 or (sign == -1 and digit <= 8)):
-                _trailing(s, i + 1)
-                return number * 10 + digit if sign == 1 else -number * 10 - digit
-            raise SourceException("Int32.Parse: overflow")
-        _trailing(s, i)
-        break
-    if not digits:
-        raise SourceException("Int32.Parse: no digits")
-    return sign * number
+    """`Int32.Parse(string, bool tryParse, out int, out Exception)` fast path (culture invariant): the shared
+    mono_int32.int32 (#427), raising this module's SourceException."""
+    try:
+        return mono_int32.int32(s)
+    except mono_int32.ParseError as error:
+        raise SourceException(str(error)) from None
 
 
 _CANONICAL = re.compile(r"-?([0-9]+\.?[0-9]*|\.[0-9]+)([eE]-?[0-9]+)?")
