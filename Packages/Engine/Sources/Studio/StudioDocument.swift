@@ -132,10 +132,14 @@ public struct StudioTransform: Codable, Sendable, Equatable {
 /// kinematics, animation, voice and route state, the pose delta, the light
 /// and the saved camera) therefore live in one shared box,
 /// `StudioObjectColdFields`, which takes the stride from 1,584 B to 432 B.
-/// They read and write like stored properties. A write first copies the box
-/// unless this value holds the only reference to it, so no copy of an object
-/// ever sees another copy's edits, and an edit of any other field leaves the
-/// box shared with the undo steps. Objects whose boxed fields are all nil or
+/// They read and write like stored properties. A read borrows the field in
+/// the box (`_read`), so reading a member or testing for nil copies nothing.
+/// A write first copies the box unless this value holds the only reference to
+/// it, so no copy of an object ever sees another copy's edits, and an edit of
+/// any other field leaves the box shared with the undo steps. A repeated edit
+/// (a drag) should therefore write through the document's array in place
+/// (`doc.objects[i].field = …`), not through a copy of the object: a copy
+/// shares the box and makes every write copy it again. Objects whose boxed fields are all nil or
 /// default (most items and folders) share one empty box that is never
 /// written (`StudioObjectColdFields.empty`). `Codable` keeps the synthesized format of
 /// the unboxed struct (flat keys, in declaration order, optionals omitted
@@ -153,11 +157,11 @@ public struct StudioObject: Codable, Sendable, Equatable, Identifiable {
     private(set) var cold: StudioObjectColdFields
     // character
     public var card: CharacterCard? {
-        get { cold.card }
+        _read { yield cold.card }
         _modify { let box = uniqueCold(); yield &box.card }
     }
     public var sourceCharacter: SourceStudioCharacterReference? {
-        get { cold.sourceCharacter }
+        _read { yield cold.sourceCharacter }
         _modify { let box = uniqueCold(); yield &box.sourceCharacter }
     }
     /// Import baselines let original-format export reject native rename/type
@@ -204,20 +208,20 @@ public struct StudioObject: Codable, Sendable, Equatable, Identifiable {
     /// and mouthOpen/lipSync into the character record. Older documents
     /// decode nil.
     public var sourceExpression: SourceStudioExpressionState? {
-        get { cold.sourceExpression }
+        _read { yield cold.sourceExpression }
         _modify { let box = uniqueCold(); yield &box.sourceExpression }
     }
     public var sourceKinematics: SourceStudioKinematicState? {
-        get { cold.sourceKinematics }
+        _read { yield cold.sourceKinematics }
         _modify { let box = uniqueCold(); yield &box.sourceKinematics }
     }
     /// Original catalog IDs and timing; nil resumes the source scene's values.
     public var sourceAnimation: SourceStudioAnimationState? {
-        get { cold.sourceAnimation }
+        _read { yield cold.sourceAnimation }
         _modify { let box = uniqueCold(); yield &box.sourceAnimation }
     }
     public var sourceVoice: SourceStudioVoiceState? {
-        get { cold.sourceVoice }
+        _read { yield cold.sourceVoice }
         _modify { let box = uniqueCold(); yield &box.sourceVoice }
     }
     /// ST-T11: an imported route's edited points and settings (CharaStudio's
@@ -225,11 +229,11 @@ public struct StudioObject: Codable, Sendable, Equatable, Identifiable {
     /// Set on a route record or a copy of one; export writes it into the
     /// record (`SourceSceneEdits.routes`). Older documents decode nil.
     public var sourceRoute: SourceStudioRouteState? {
-        get { cold.sourceRoute }
+        _read { yield cold.sourceRoute }
         _modify { let box = uniqueCold(); yield &box.sourceRoute }
     }
     public var poseDelta: PoseDelta {
-        get { cold.poseDelta }
+        _read { yield cold.poseDelta }
         _modify { let box = uniqueCold(); yield &box.poseDelta }
     }
     public var ikTargets: [IKChain: IKTarget] = [:]
@@ -260,13 +264,13 @@ public struct StudioObject: Codable, Sendable, Equatable, Identifiable {
     public var emissive: Float = 0
     // light
     public var light: SceneLight? {
-        get { cold.light }
+        _read { yield cold.light }
         _modify { let box = uniqueCold(); yield &box.light }
     }
     // camera
     public var fov: Float = 30
     public var savedCamera: OrbitCamera? {
-        get { cold.savedCamera }
+        _read { yield cold.savedCamera }
         _modify { let box = uniqueCold(); yield &box.savedCamera }
     }
 
