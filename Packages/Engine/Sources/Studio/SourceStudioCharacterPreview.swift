@@ -480,17 +480,27 @@ public final class SourceStudioCharacterPreview {
     /// with its priority donated, or checks itself if the worker has not
     /// started.
     public final class CardCheck: @unchecked Sendable {
-        private let records: [KoikatsuCharacterRecord]
+        /// Shallow copies (#326): `validateCard` reads only the card and the
+        /// sex (`cardInputs`), and a record's accessory children are a scene
+        /// subtree. Without them, a worker that drops the last copy releases
+        /// no tree, whatever its depth.
+        let records: [KoikatsuCharacterRecord]
         private let lock = OSAllocatedUnfairLock()
         private var computed: [String?]?
         private let pending = OSAllocatedUnfairLock<DispatchWorkItem?>(uncheckedState: nil)
 
         public init(records: [KoikatsuCharacterRecord]) {
-            self.records = records
+            self.records = records.map { record in
+                var shallow = record
+                shallow.accessoryChildren = [:]
+                return shallow
+            }
             guard !records.isEmpty else { computed = []; return }
+            // `self.records`: the block captures the check alone, never the
+            // caller's records with their subtrees.
             let item = DispatchWorkItem(qos: .userInitiated) { [self] in
                 lock.lock(); defer { lock.unlock() }
-                if computed == nil { computed = Self.check(records) }
+                if computed == nil { computed = Self.check(self.records) }
             }
             pending.withLockUnchecked { $0 = item }
             DispatchQueue.global(qos: .userInitiated).async(execute: item)

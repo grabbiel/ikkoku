@@ -212,7 +212,9 @@ extension SourceStudioAnimation {
 /// height) and decoded clips are cached until `clear()`. `beginWarmUp` loads
 /// them on a utility worker after an import, so a save or a rebase finds
 /// them loaded; one that comes first waits for that work instead of loading
-/// on its own thread, and nothing is loaded twice.
+/// on its own thread, and nothing is loaded twice. Whichever thread asks, a
+/// scene file is read, decoded and dropped on a thread with 8 MiB of stack
+/// (`readSeeds`, #326).
 public final class SourceStudioAnimationClock: @unchecked Sendable {
     public struct Request: Sendable {
         public let reference: SourceStudioCharacterReference
@@ -224,7 +226,7 @@ public final class SourceStudioAnimationClock: @unchecked Sendable {
             self.reference = reference; self.edited = edited; self.bodyValues = bodyValues
         }
     }
-    private struct Seed { let saved: SourceStudioAnimationState, cardHeight: Result<Float, Error> }
+    struct Seed: Sendable { let saved: SourceStudioAnimationState, cardHeight: Result<Float, Error> }
     /// Guards the caches; a warm-up holds it while it loads. An unfair lock,
     /// so a waiter (the main thread's save or rebase) donates its priority to
     /// the utility-QoS warm-up that holds it instead of being inverted.
@@ -373,6 +375,12 @@ public final class SourceStudioAnimationClock: @unchecked Sendable {
 
     private static func seedKey(_ reference: SourceStudioCharacterReference) -> String { "\(reference.sceneSHA256)/\(reference.objectKey)" }
 
+    /// The seed loaded for `reference`, if any (tests).
+    func cachedSeed(_ reference: SourceStudioCharacterReference) -> Result<Seed, Error>? {
+        lock.lock(); defer { lock.unlock() }
+        return seeds[Self.seedKey(reference)]
+    }
+
     private func catalog(_ file: String) throws -> SourceStudioAnimationCatalog {
         if let cached = catalogs[file] { return try cached.get() }
         let loaded = Result { try SourceStudioAnimationCatalog.load(url: URL(fileURLWithPath: file)) }
@@ -391,22 +399,47 @@ public final class SourceStudioAnimationClock: @unchecked Sendable {
             }
         }
         for (file, wanted) in missing {
-            let document: Result<KoikatsuSceneDocument, Error>
-            if let scene, scene.sha256 == wanted.sha256 { document = .success(scene.document) } else {
-                document = Result { try Self.readScene(file, sha256: wanted.sha256) }
+            let keys = wanted.keys.filter { seeds["\(wanted.sha256)/\($0)"] == nil }
+            guard !keys.isEmpty else { continue }
+            let found: [Int32: Result<Seed, Error>]
+            if let scene, scene.sha256 == wanted.sha256 { found = Self.seeds(.success(scene.document), keys: keys) } else {
+                found = Self.readSeeds(file, sha256: wanted.sha256, keys: keys)
             }
-            let records = document.map { Self.characterRecords($0, keys: wanted.keys) }
-            for key in wanted.keys where seeds["\(wanted.sha256)/\(key)"] == nil {
-                seeds["\(wanted.sha256)/\(key)"] = records.flatMap { records in
-                    guard let record = records[key] else { return .failure(RigError.invalid("Source character record is missing.")) }
-                    let height = Result { SourceStudioAnimation.cardHeight(try record.card().customization().bodyValues) }
-                    return .success(Seed(saved: SourceStudioAnimationState(record: record), cardHeight: height))
-                }
-            }
+            for (key, seed) in found { seeds["\(wanted.sha256)/\(key)"] = seed }
         }
     }
 
+    /// #326: the seeds of `keys` in scene `file`, which is read, checked
+    /// against `sha256` and decoded on a thread with the batch's stack
+    /// (`SourceStudioCharacterBatch.onDecodeThread`), never on the caller's.
+    /// A warm-up runs on a utility GCD worker and an export's states on a
+    /// user-initiated one, each with 512 KiB, and the decode recurses once
+    /// per nesting level (`SourceSceneDeepStackTests`). The document and its
+    /// records are dropped on that thread too: only the seeds, plain values,
+    /// come back.
+    static func readSeeds(_ file: String, sha256: String, keys: Set<Int32>) -> [Int32: Result<Seed, Error>] {
+        SourceStudioCharacterBatch.onDecodeThread("Ikkoku scene clock decode") {
+            Self.seeds(Result { try Self.readScene(file, sha256: sha256) }, keys: keys)
+        }
+    }
+
+    /// Each key's seed: the saved state and card height of its character
+    /// record, or the error of the document or of a missing record.
+    private static func seeds(_ document: Result<KoikatsuSceneDocument, Error>, keys: Set<Int32>) -> [Int32: Result<Seed, Error>] {
+        let records = document.map { characterRecords($0, keys: keys) }
+        var seeds: [Int32: Result<Seed, Error>] = [:]
+        for key in keys {
+            seeds[key] = records.flatMap { records in
+                guard let record = records[key] else { return .failure(RigError.invalid("Source character record is missing.")) }
+                let height = Result { SourceStudioAnimation.cardHeight(try record.card().customization().bodyValues) }
+                return .success(Seed(saved: SourceStudioAnimationState(record: record), cardHeight: height))
+            }
+        }
+        return seeds
+    }
+
     private static func readScene(_ file: String, sha256: String) throws -> KoikatsuSceneDocument {
+        try SourceStudioCharacterBatch.requireDecodeStack()
         let maximum = 256 * 1024 * 1024
         let handle = try FileHandle(forReadingFrom: URL(fileURLWithPath: file)); defer { try? handle.close() }
         let data = try handle.read(upToCount: maximum + 1) ?? Data()
