@@ -1,4 +1,5 @@
 import Foundation
+import Metal
 import simd
 import CoreMath
 import Assets
@@ -109,6 +110,17 @@ public enum SourceStudioMapStatus {
     public static let lightmappedLabel = "baked lightmaps; approximated: no realtime sun or its shadows, "
         + "no specular or reflections, no normal, metallic or detail maps, no fog, no camera effects"
 
+    /// What a map with its lighting record still leaves out (slice 5): the
+    /// Standard parts read their lightmap or the map's ambient, and the
+    /// realtime sun is drawn with Standard's diffuse and direct specular
+    /// (`sunLabel`, with `shadowsLabel` when it casts). Its smoothness is not
+    /// yet checked against the original (no capture at smoothness above 0).
+    public static let litLabel = "approximated: no reflections, no normal, metallic or detail maps, no fog, no camera effects"
+    public static let sunLabel = "realtime sun"
+    public static let shadowsLabel = " with shadows"
+    public static let noSunLabel = "no realtime sun"
+    public static let premultipliedLabel = "Transparent mode drawn as Fade"
+
     static func title(_ entry: SourceStudioMapCatalog.Entry) -> String { "Map \(entry.no) \(entry.name) (\(entry.scene))" }
 
     /// The line for a resolution before or without a load. nil for no map.
@@ -146,11 +158,15 @@ public enum SourceStudioMapStatus {
         if asset.unlitParts > 0 { drawn += ", \(unlitLabel)" }
         if asset.silhouetteParts > 0 { drawn += ", \(silhouetteLabel)" }
         let label: String
+        if let lighting = asset.lighting {
+            label = litLine(asset, lighting: lighting, standard: standard, drawn: drawn)
+        } else {
         switch asset.lightmappedParts {
         case 0: label = approximationLabel + drawn.replacingOccurrences(of: ", ", with: "; ")
         case standard: label = lightmappedLabel.replacingOccurrences(of: "baked lightmaps;", with: "baked lightmaps\(drawn);")
         default: label = lightmappedLabel.replacingOccurrences(of: "baked lightmaps;",
             with: "baked lightmaps on \(asset.lightmappedParts) of \(standard) draws (the rest as items)\(drawn);")
+        }
         }
         var line = "\(title(entry)): \(label)"
         if let shaders = entry.approximations?.first(where: { $0.hasPrefix("shaders approximated") }) { line += "; \(shaders)" }
@@ -158,6 +174,32 @@ public enum SourceStudioMapStatus {
         if !mapOption, asset.optionParts > 0 { line += "; map option off: \(asset.optionParts) option draws hidden" }
         if let notDrawn = entry.notDrawn, !notDrawn.isEmpty { line += "; not reproduced: " + notDrawn.joined(separator: ", ") }
         return line
+    }
+
+    /// Slice 5: "baked lightmaps on 27 of 29 draws (2 by the map's ambient),
+    /// cubemap sky, realtime sun with shadows; approximated: …".
+    static func litLine(_ asset: SourceStudioMapAsset, lighting: SourceStudioMapLightingData, standard: Int, drawn: String) -> String {
+        let lightmapped = asset.lightmappedParts, ambient = asset.probeLitParts
+        var lit: String
+        if lightmapped == standard { lit = "baked lightmaps" }
+        else if ambient == standard { lit = "the map's ambient" }
+        else {
+            var rest: [String] = []
+            if ambient > 0 { rest.append("\(ambient) by the map's ambient") }
+            if lightmapped + ambient < standard { rest.append("the rest as items") }
+            lit = "baked lightmaps on \(lightmapped) of \(standard) draws (\(rest.joined(separator: ", ")))"
+        }
+        lit += drawn
+        var missing: [String] = []
+        if let sun = lighting.sun {
+            lit += ", \(sunLabel)" + (sun.casts && (asset.sunCounts.casterParts > 0 || !asset.shadowOnlyParts.isEmpty) ? shadowsLabel : "")
+        } else {
+            missing.append(noSunLabel)
+        }
+        if asset.premultipliedParts > 0 { missing.append(premultipliedLabel) }
+        let approximated = missing.isEmpty ? litLabel
+            : litLabel.replacingOccurrences(of: "approximated: ", with: "approximated: \(missing.joined(separator: ", ")), ")
+        return "\(lit); \(approximated)"
     }
 
     public static func failed(_ entry: SourceStudioMapCatalog.Entry, _ error: Error) -> String {
@@ -214,6 +256,9 @@ public final class SourceStudioMapAsset: @unchecked Sendable {
         case unlit
         /// Custom/Silhouette (`MaterialKindMap` + `MaterialFlagMapSilhouette`, slice 4).
         case silhouette
+        /// Standard without a lightmap, lit by the map's ambient
+        /// (`MaterialKindMap` + `MaterialFlagMapProbeLit`, slice 5).
+        case probeLit
 
         /// The draw a map part's material makes (for counting placed items).
         public init(_ material: MaterialState) {
@@ -223,6 +268,7 @@ public final class SourceStudioMapAsset: @unchecked Sendable {
                 if flags & MaterialFlagMapSilhouette.rawValue != 0 { self = .silhouette }
                 else if flags & MaterialFlagMapUnlit.rawValue != 0 { self = .unlit }
                 else if flags & MaterialFlagMapParticle.rawValue != 0 { self = .particle }
+                else if flags & MaterialFlagMapProbeLit.rawValue != 0 { self = .probeLit }
                 else { self = .lightmapped }
             } else { self = .item }
         }
@@ -243,7 +289,7 @@ public final class SourceStudioMapAsset: @unchecked Sendable {
 
     public struct Part: Sendable {
         public let mesh: MeshHandle
-        public let material: MaterialState
+        public internal(set) var material: MaterialState
         /// The part's matrix inside its role frame: under the "Map" root
         /// (`mapRoot`), or the map scene's world (`scene`).
         public let local: float4x4
@@ -264,6 +310,44 @@ public final class SourceStudioMapAsset: @unchecked Sendable {
         public var sortCenter: Float3? = nil
         public var sortSubmesh: Int = 0
         public var renderQueue: Int = 3000
+        /// Slice 5: a mesh mixing receivers' per-vertex receive bytes
+        /// (`MaterialFlagMapReceivePerVertex`), and the index runs that cast the
+        /// sun's shadow, (first, count, two-sided).
+        public var vertexReceive: VertexBytes? = nil
+        public var casterRuns: [(first: Int, count: Int, twoSided: Bool)] = []
+    }
+
+    /// Slice 5: a group of ShadowsOnly renderers (`shadowCasters`): drawn only
+    /// into the map shadow map.
+    public struct ShadowOnlyPart: Sendable {
+        public let mesh: MeshHandle
+        public let local: float4x4
+        public let role: Role
+        public let visibleFor: Set<Int32>
+        public let option: Bool
+        public let triangles: Int
+    }
+
+    /// Slice 5: how the loader met the sun's shadow runs.
+    public struct SunCounts: Sendable, Equatable {
+        /// Parts in the sun's culling mask (`MaterialFlagMapSunLit`).
+        public var sunLit = 0
+        /// Parts receiving everywhere, and per vertex (a mesh mixing receivers).
+        public var receiving = 0
+        public var receivingPerVertex = 0
+        /// Mixed meshes whose runs share a vertex, drawn receiving nothing
+        /// instead (0 in every slice-5 export).
+        public var receiveFallbacks = 0
+        /// Meshes whose runs mix the sun's mask, drawn without the sun (0 in
+        /// every slice-5 export).
+        public var sunMaskFallbacks = 0
+        /// Transparent (Fade) parts: Unity's forward path gives the
+        /// transparent queue no shadows, so they receive none.
+        public var transparentNotReceiving = 0
+        /// Parts with casting runs, and those runs.
+        public var casterParts = 0
+        public var casterRuns = 0
+        public init() {}
     }
 
     /// The decoder for a map image that is not block-only (its PNG or JPEG):
@@ -313,6 +397,16 @@ public final class SourceStudioMapAsset: @unchecked Sendable {
     public let triangles: Int
     /// Wall time of `load` on its worker.
     public let loadSeconds: Double
+    /// Slice 5: the map's ambient and sun (nil for an earlier export, whose
+    /// Standard parts without a lightmap keep the item material), the
+    /// ShadowsOnly casters, and how the shadow runs were met.
+    public private(set) var lighting: SourceStudioMapLightingData? = nil
+    public private(set) var shadowOnlyParts: [ShadowOnlyPart] = []
+    public private(set) var sunCounts = SunCounts()
+    public var probeLitParts: Int { parts.filter { $0.draw == .probeLit }.count }
+    /// Standard parts in the Transparent mode (`_ALPHAPREMULTIPLY_ON`), drawn
+    /// as Fade: the premultiplied diffuse is not drawn (slice 5).
+    public private(set) var premultipliedParts = 0
     private let resources: ResourceStore
     private let lock = NSLock()
     private var released = false
@@ -345,7 +439,8 @@ public final class SourceStudioMapAsset: @unchecked Sendable {
                             imageSource: ImageSource = .fromEnvironment(),
                             decoder: ImageDecoder = SourceStudioMapAsset.storeDecoder) throws -> SourceStudioMapAsset {
         let start = DispatchTime.now().uptimeNanoseconds
-        let loaded = try LoadedAsset.loadStatic(url: url, packageRoot: packageRoot, resources: resources)
+        let loaded = try LoadedAsset.loadStatic(url: url, packageRoot: packageRoot, resources: resources,
+                                                accessors: SourceStudioMapLightingData.casterAccessors)
         // Registration order, so a failure gives back everything at once.
         var registered: [TextureHandle] = []
         var images: [String: TextureHandle] = [:]
@@ -353,6 +448,7 @@ public final class SourceStudioMapAsset: @unchecked Sendable {
         var lightmapHandleList: [TextureHandle] = []
         var cubeHandles: [Int: TextureHandle] = [:]
         var blockImageCount = 0, decodedImageCount = 0
+        var shadowOnly: [ShadowOnlyPart] = []
         do {
             let gltf = loaded.asset
             // ST-A11 slice 2: nil for an export without lightmaps (every part
@@ -360,6 +456,10 @@ public final class SourceStudioMapAsset: @unchecked Sendable {
             let lightmaps = try SourceStudioLightmapSet.parse(gltf.extras, label: url.lastPathComponent)
             // Slice 3: nil for an export without block files.
             let blocks = try SourceStudioBlockImages.parse(gltf.extras, label: url.lastPathComponent)
+            // Slice 5: nil for an export without map lighting.
+            let lighting = try SourceStudioMapLightingData.parse(gltf.extras, label: url.lastPathComponent)
+            var sunCounts = SunCounts()
+            var premultiplied = 0
             let directory = url.deletingLastPathComponent()
             /// Private (uncached) registration of one glTF image: the asset owns it.
             /// Its BC blocks when the converter wrote them (sampled as `srgb`
@@ -522,8 +622,13 @@ public final class SourceStudioMapAsset: @unchecked Sendable {
                 var material = MaterialBuilder.itemMaterial(for: part, base: base)
                 var draw = Draw.item
                 let lightmapIndex = info["lightmapIndex"]?.doubleValue.flatMap { Int(exactly: $0) } ?? -1
-                if let lightmaps, lightmapIndex >= 0,
-                   let standard = try SourceStudioStandardInputs.parse(part.material.extras) {
+                let standard = try SourceStudioStandardInputs.parse(part.material.extras)
+                // Slice 5: Legacy Shaders/Diffuse is Lambert; the Standard family needs its smoothness.
+                let lambert = part.material.extras?["unityShader"]?.stringValue == "Legacy Shaders/Diffuse"
+                if let standard, lighting != nil, !lambert, standard.smoothness == nil {
+                    throw RigError.invalid("\(url.lastPathComponent): material \(part.materialName) has map lighting but no Standard smoothness.")
+                }
+                if let lightmaps, lightmapIndex >= 0, let standard {
                     guard let entry = lightmaps.entries[lightmapIndex] else {
                         throw RigError.invalid("\(url.lastPathComponent): mesh \(part.meshName) names lightmap \(lightmapIndex), which the map does not carry.")
                     }
@@ -534,22 +639,56 @@ public final class SourceStudioMapAsset: @unchecked Sendable {
                     let emission = try standard.emissionImage.map { try image($0, srgb: standard.emissionSRGB, material: part.materialName) }
                     material = SourceStudioMapMaterial.make(part.material, standard: standard, base: base, emission: emission,
                                                             lightmap: handles.light, direction: handles.direction,
-                                                            range: lightmaps.range, exponent: lightmaps.exponent)
+                                                            range: lightmaps.range, exponent: lightmaps.exponent, lambert: lambert)
                     draw = .lightmapped
+                } else if lighting != nil, let standard {
+                    // Slice 5: without a lightmap Standard reads the map's ambient, not the character light.
+                    let emission = try standard.emissionImage.map { try image($0, srgb: standard.emissionSRGB, material: part.materialName) }
+                    material = SourceStudioMapMaterial.make(part.material, standard: standard, base: base, emission: emission,
+                                                            lightmap: nil, direction: nil, range: 0, exponent: 0, lambert: lambert)
+                    draw = .probeLit
                 }
-                parts.append(Part(mesh: part.mesh, material: material, local: part.worldMatrix, role: role, visibleFor: visible,
-                                  triangles: indexCount / 3, draw: draw, option: option))
+                if draw != .item, standard?.premultiplyAlpha == true { premultiplied += 1 }
+                var placed = Part(mesh: part.mesh, material: material, local: part.worldMatrix, role: role, visibleFor: visible,
+                                  triangles: indexCount / 3, draw: draw, option: option)
+                if lighting?.sun != nil, draw == .lightmapped || draw == .probeLit,
+                   let runs = try SourceStudioMapShadowRuns.parse(info["shadowRuns"], indexCount: indexCount,
+                                                                  label: "\(url.lastPathComponent) mesh \(part.meshName)") {
+                    applySun(runs: runs, to: &placed, mesh: mesh, counts: &sunCounts, device: resources.device)
+                }
+                parts.append(placed)
+            }
+            // Slice 5: the ShadowsOnly casters, from the accessors the loader decoded.
+            for (index, group) in (lighting?.casterGroups ?? []).enumerated() {
+                guard case .floats(let xyz, 3)? = gltf.requestedAccessors[group.positions],
+                      case .integers(let indices, 1)? = gltf.requestedAccessors[group.indices],
+                      !indices.isEmpty, indices.count % 3 == 0, indices.count / 3 == group.triangles,
+                      indices.allSatisfy({ Int($0) < xyz.count / 3 }) else {
+                    throw RigError.invalid("\(url.lastPathComponent): shadow caster group \(index) has malformed positions or indices.")
+                }
+                let positions = stride(from: 0, to: xyz.count, by: 3).map { Float3(xyz[$0], xyz[$0 + 1], xyz[$0 + 2]) }
+                let data = MeshData(name: "\(url.lastPathComponent)#shadowCasters\(index)", positions: positions,
+                                    normals: MeshUtil.computeNormals(positions: positions, indices: indices), indices: indices)
+                let handle = try resources.register(mesh: data, smoothOutlineNormals: false)
+                shadowOnly.append(ShadowOnlyPart(mesh: handle, local: group.role == .mapRoot ? gltf.nodes[mapNode].localMatrix : matrix_identity_float4x4,
+                                                 role: group.role, visibleFor: group.visibleFor, option: group.option, triangles: group.triangles))
             }
             func bytes(_ handles: [TextureHandle]) -> Int { handles.reduce(0) { $0 + (resources.texture($1)?.allocatedSize ?? 0) } }
             let seconds = Double(DispatchTime.now().uptimeNanoseconds - start) / 1e9
             let cubes = Array(cubeHandles.values)
-            return SourceStudioMapAsset(url: loaded.url, parts: parts, textures: registered, textureBytes: bytes(registered),
-                                        lightmapBytes: bytes(lightmapHandleList), lightmapTextures: lightmapHandleList.count,
-                                        cubeBytes: bytes(cubes), cubeTextures: cubes.count, blockImages: blockImageCount,
-                                        decodedImages: decodedImageCount, imageSource: imageSource,
-                                        loadSeconds: seconds, resources: resources)
+            let asset = SourceStudioMapAsset(url: loaded.url, parts: parts, textures: registered, textureBytes: bytes(registered),
+                                             lightmapBytes: bytes(lightmapHandleList), lightmapTextures: lightmapHandleList.count,
+                                             cubeBytes: bytes(cubes), cubeTextures: cubes.count, blockImages: blockImageCount,
+                                             decodedImages: decodedImageCount, imageSource: imageSource,
+                                             loadSeconds: seconds, resources: resources)
+            asset.lighting = lighting
+            asset.shadowOnlyParts = shadowOnly
+            asset.sunCounts = sunCounts
+            asset.premultipliedParts = premultiplied
+            return asset
         } catch {
             for part in loaded.parts { resources.unregister(mesh: part.mesh) }
+            for part in shadowOnly { resources.unregister(mesh: part.mesh) }
             for handle in registered { resources.unregister(texture: handle) }
             throw error
         }
@@ -564,6 +703,44 @@ public final class SourceStudioMapAsset: @unchecked Sendable {
     /// early depth rejects the map pixels they cover. A particle submesh
     /// drawn alone keeps its sort centre and render queue, and orders by its
     /// submesh after them (slice 4).
+    /// Slice 5: a lit part's sun flags from its mesh's shadow runs. The sun's
+    /// term needs the whole mesh in the sun's culling mask (else it is drawn
+    /// without the sun, counted). Receiving is everywhere, nowhere, or per
+    /// vertex when the runs mix it and share no vertex (else nowhere,
+    /// counted). A transparent part receives nothing, as in Unity's forward
+    /// path. The casting runs are kept whatever the part draws.
+    static func applySun(runs: [SourceStudioMapShadowRuns.Run], to part: inout Part, mesh: GPUMesh?,
+                         counts: inout SunCounts, device: any MTLDevice) {
+        part.casterRuns = SourceStudioMapShadowRuns.casterRuns(runs)
+        if !part.casterRuns.isEmpty { counts.casterParts += 1; counts.casterRuns += part.casterRuns.count }
+        let inMask = Set(runs.map(\.inSunMask)), receives = Set(runs.map(\.receives))
+        guard inMask == [true] else {
+            if inMask.count > 1 { counts.sunMaskFallbacks += 1 }
+            return
+        }
+        part.material.setFlag(MaterialFlagMapSunLit, true)
+        counts.sunLit += 1
+        guard receives.contains(true) else { return }
+        if part.material.transparent { counts.transparentNotReceiving += 1; return }
+        if receives == [true] {
+            part.material.setFlag(MaterialFlagReceiveShadow, true)
+            counts.receiving += 1
+            return
+        }
+        guard let mesh else { counts.receiveFallbacks += 1; return }
+        let pointer = mesh.indices.contents().bindMemory(to: UInt32.self, capacity: mesh.indexCount)
+        let (bytes, _) = SourceStudioMapShadowRuns.vertexReceive(runs: runs, indices: UnsafeBufferPointer(start: pointer, count: mesh.indexCount),
+                                                                 vertexCount: mesh.vertexCount)
+        guard let bytes, let buffer = device.makeBuffer(bytes: bytes, length: bytes.count, options: .storageModeShared) else {
+            counts.receiveFallbacks += 1
+            return
+        }
+        buffer.label = "\(mesh.name) receive"
+        part.vertexReceive = VertexBytes(buffer: buffer)
+        part.material.setFlag(MaterialFlagMapReceivePerVertex, true)
+        counts.receivingPerVertex += 1
+    }
+
     public func items(transform: KoikatsuChangeAmount, sunLightType: Int32, mapOption: Bool) throws -> [RenderItem] {
         let root = try SourceStudioMapPlacement.mapRootMatrix(transform)
         let key = SourceStudioMapPlacement.sunTypeKey(sunLightType)
@@ -579,8 +756,53 @@ public final class SourceStudioMapAsset: @unchecked Sendable {
             item.order = 100 + part.sortSubmesh
             item.sortCenter = part.sortCenter
             item.renderQueue = part.renderQueue
+            item.vertexReceive = part.vertexReceive
             return item
         }
+    }
+
+    private static let revisionLock = NSLock()
+    nonisolated(unsafe) private static var nextRevision: UInt64 = 0
+
+    /// Slice 5: the frame's map lighting for one scene record: the ambient, the
+    /// sun of its sun type turned by the record's map transform, and the sun's
+    /// shadow casters among the parts `items` draws for the same arguments
+    /// (casting runs) plus the ShadowsOnly groups. nil for an export without
+    /// map lighting. Each call is a new placement (`MapLighting.revision`).
+    public func lighting(transform: KoikatsuChangeAmount, sunLightType: Int32, mapOption: Bool) throws -> MapLighting? {
+        guard let data = lighting else { return nil }
+        let root = try SourceStudioMapPlacement.mapRootMatrix(transform)
+        let key = SourceStudioMapPlacement.sunTypeKey(sunLightType)
+        var result = data.frame(mapRoot: root, sunTypeKey: key)
+        if let sun = result.sun, sun.shadowStrength > 0 {
+            var bounds = AABB.empty
+            for part in parts where !part.casterRuns.isEmpty && part.visibleFor.contains(key) && (mapOption || !part.option) {
+                let model = part.role == .mapRoot ? root * part.local : part.local
+                let alphaTest = part.material.uniforms.flags & (MaterialFlagAlphaTest.rawValue | MaterialFlagAlphaBlend.rawValue) != 0
+                var material = part.material
+                // Standard's ShadowCaster clips the blended modes at _Cutoff too (no dither mask).
+                if part.material.uniforms.flags & MaterialFlagAlphaTest.rawValue == 0 { material.uniforms.params.w = 0.5 }
+                for twoSided in [false, true] {
+                    let runs = part.casterRuns.filter { $0.twoSided == twoSided }.map { (first: $0.first, count: $0.count) }
+                    guard !runs.isEmpty else { continue }
+                    result.casters.append(MapShadowCaster(mesh: part.mesh, model: model, runs: runs, twoSided: twoSided,
+                                                          alphaTest: alphaTest ? material : nil))
+                }
+                if let mesh = resources.mesh(part.mesh) { bounds.expand(mesh.bounds.transformed(by: model)) }
+            }
+            for part in shadowOnlyParts where part.visibleFor.contains(key) && (mapOption || !part.option) {
+                let model = part.role == .mapRoot ? root * part.local : part.local
+                guard let mesh = resources.mesh(part.mesh) else { continue }
+                result.casters.append(MapShadowCaster(mesh: part.mesh, model: model, runs: [(0, mesh.indexCount)], twoSided: false))
+                bounds.expand(mesh.bounds.transformed(by: model))
+            }
+            result.casterBounds = bounds
+        }
+        Self.revisionLock.lock()
+        Self.nextRevision &+= 1
+        result.revision = Self.nextRevision
+        Self.revisionLock.unlock()
+        return result
     }
 
     /// How many of `items`' draws are option parts for this sun type and option.
@@ -600,7 +822,7 @@ public final class SourceStudioMapAsset: @unchecked Sendable {
         released = true
         lock.unlock()
         guard first else { return }
-        resources.retire(meshes: parts.map(\.mesh))
+        resources.retire(meshes: parts.map(\.mesh) + shadowOnlyParts.map(\.mesh))
         resources.retire(textures: textures)
     }
 }

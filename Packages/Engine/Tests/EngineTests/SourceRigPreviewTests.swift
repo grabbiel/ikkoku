@@ -35,13 +35,17 @@ func sourceRigPreviewReleasesMeshesAndDeformationBuffers() throws {
     let item = try #require(frame.items.first)
     let retainedMesh = try #require(resources.mesh(item.mesh))
     let key = try #require(item.deformKey)
-    let oldDeform = try #require(resources.deformBuffer(for: key, vertexCount: 3))
+    let oldDeform = try #require(resources.deformBuffer(for: key, mesh: item.mesh, vertexCount: 3))
+    #expect(resources.holdsDeformBuffer(key: key))
     preview = nil
     #expect(weakPreview == nil)
     #expect(resources.mesh(item.mesh) == nil)
+    #expect(!resources.holdsDeformBuffer(key: key))
     #expect(retainedMesh.vertexCount == 3) // A prepared frame can still retain its mesh.
-    let replacement = try #require(resources.deformBuffer(for: key, vertexCount: 3))
+    // A late request for the dropped preview's key gets a transient buffer (#344).
+    let replacement = try #require(resources.deformBuffer(for: key, mesh: item.mesh, vertexCount: 3))
     #expect(oldDeform !== replacement)
+    #expect(!resources.holdsDeformBuffer(key: key))
     resources.releaseDeformBuffers(keys: [key])
 }
 
@@ -76,7 +80,7 @@ func sourceRigPreviewCardReplacementReleasesThePreviousGPUObjects(perStepPool: B
         let mesh = try #require(resources.mesh(item.mesh))
         let texture = try #require(resources.texture(item.material.base))
         let key = try #require(item.deformKey)
-        let deform = try #require(resources.deformBuffer(for: key, vertexCount: mesh.vertexCount))
+        let deform = try #require(resources.deformBuffer(for: key, mesh: item.mesh, vertexCount: mesh.vertexCount))
         current = next
         return [mesh.baseVertices, mesh.indices, deform, texture].map { PreviewWeakGPUObject($0) }
     }

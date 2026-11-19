@@ -162,11 +162,11 @@ private final class StubTextureProvider: SourceShaderLiveTextureProvider, @unche
 typealias BindingSet = SourceShaderBindingSet
 
 func liveMaterial(shader: String, queue: Int? = 2450, color: [Float]? = [0.5, 0.5, 0.5, 1], texture: String? = "tex_main",
-                          unresolved: String? = nil) -> BindingSet.Material {
+                          unresolved: String? = nil, filter: String = "Bilinear", aniso: Int = 1) -> BindingSet.Material {
     var vectors: [String: BindingSet.Vector] = [:]
     if let color { vectors["_Color"] = .init(color, source: "card") }
     let identity = texture.map { BindingSet.TextureIdentity(kind: .asset, name: $0, bundle: "chara/test.unity3d", pathID: "1",
-                                                            filter: "Bilinear", wrap: "Repeat", aniso: 1) }
+                                                            filter: filter, wrap: "Repeat", aniso: aniso) }
     return BindingSet.Material(name: "m_test", shader: shader, queue: queue, queueSource: queue == nil ? "unresolved" : "prefab",
                                vectors: vectors, textures: ["_MainTex": .init(identity: identity, identitySource: "prefab", scale: [1, 1], offset: [0, 0], transformSource: "prefab")],
                                unresolved: unresolved)
@@ -341,6 +341,85 @@ func liveSourceMaterialResolutionIsAllOrNothing() throws {
     #expect(reason { try resolve(liveMaterial(shader: "Shader Forge/live_line", queue: nil)) } == "render queue not derived (unresolved)")
     #expect(reason { try resolve(liveMaterial(shader: "Shader Forge/untranslated")) } == "no translated program for Shader Forge/untranslated")
     #expect(reason { try resolve(liveMaterial(shader: "Legacy Shaders/Diffuse")) } == "shader Legacy Shaders/Diffuse is not a translated Shader Forge family")
+}
+
+/// The Studio's live assemblies sample like the player: CharaStudio runs
+/// `QualitySettings.anisotropicFiltering` ForceEnable, which raises every
+/// non-Point texture with aniso above 0 to 9, with D3D11's linear mips. Before,
+/// the Studio passed no mode, so a Bilinear texture sampled with nearest mips
+/// and no anisotropy.
+@Test(.enabled(if: MTLCreateSystemDefaultDevice() != nil))
+func studioLiveAssembliesSampleWithThePlayersForcedAnisotropy() throws {
+    let device = try #require(MTLCreateSystemDefaultDevice())
+    let resources = ResourceStore(device: device)
+    let directory = try LiveProgramFixture.temporaryDirectory()
+    defer { try? FileManager.default.removeItem(at: directory) }
+    try LiveProgramFixture.write(LiveProgramFixture.lineSpec(outline: false), family: "live_line", to: directory)
+    try LiveProgramFixture.write(LiveProgramFixture.lineSpec(outline: true), family: "live_line_outline", to: directory)
+    let textures: [(filter: String, aniso: Int)] = [("Bilinear", 1), ("Trilinear", 1), ("Point", 1), ("Bilinear", 0)]
+    let bindings = BindingSet(scope: "synthetic", renderers: textures.enumerated().map { index, texture in
+        liveRenderer("o_line\(index)", material: liveMaterial(shader: "Shader Forge/live_line", filter: texture.filter, aniso: texture.aniso))
+    }, globalVectors: ["_LineColorG": .init([0.5, 0.5, 0.5, 0], source: "scene")])
+    func assembly(_ mode: String?) -> SourceShaderLiveAssembly {
+        SourceShaderLiveAssembly(bindings: bindings, programs: directory, resources: resources,
+                                 textures: StubTextureProvider(device: device, names: ["tex_main"]), streams: [:],
+                                 anisotropicFiltering: mode)
+    }
+    func samplers(_ mode: String?) throws -> [TranslatedSourceProgram.SamplerConfiguration] {
+        let assembly = assembly(mode)
+        return try textures.indices.map { try #require(try assembly.materials[$0]?.get().samplers["_MainTex"]) }
+    }
+    #expect(SourceShaderLiveConfiguration.playerAnisotropicFiltering == "ForceEnable")
+    let studio = try samplers(SourceShaderLiveConfiguration.playerAnisotropicFiltering)
+    #expect(studio.map(\.maxAnisotropy) == [9, 9, 1, 1])
+    #expect(studio.map(\.mipFilter.rawValue) == [MTLSamplerMipFilter.linear, .linear, .nearest, .nearest].map(\.rawValue))
+    #expect(studio.map(\.minFilter.rawValue) == [MTLSamplerMinMagFilter.linear, .linear, .nearest, .linear].map(\.rawValue))
+    #expect(studio.allSatisfy { $0.sAddressMode == .repeat && $0.tAddressMode == .repeat })
+    // Without the player's mode (the Studio before this change), Bilinear took nearest mips and no anisotropy.
+    let unforced = try samplers(nil)
+    #expect(unforced.map(\.maxAnisotropy) == [1, 1, 1, 1])
+    #expect(unforced.map(\.mipFilter.rawValue) == [MTLSamplerMipFilter.nearest, .linear, .nearest, .nearest].map(\.rawValue))
+    // The Studio's live report and the studio-scenario-live-samplers check read these counts.
+    #expect(assembly(SourceShaderLiveConfiguration.playerAnisotropicFiltering).samplerSummary
+        == ["aniso 9, mips linear": 2, "aniso 1, mips nearest": 2])
+    #expect(assembly(nil).samplerSummary == ["aniso 1, mips nearest": 3, "aniso 1, mips linear": 1])
+    let first = try #require(try assembly(nil).materials[0]?.get())
+    #expect(first.samplerSummary == ["aniso 1, mips nearest": 1])
+}
+
+/// Materials resolved from the native store share one sampler state per
+/// configuration, through the cache composite inputs use, instead of one per
+/// texture per material.
+@Test(.enabled(if: MTLCreateSystemDefaultDevice() != nil))
+func liveMaterialsFromTheStoreShareOneSamplerPerConfiguration() throws {
+    let device = try #require(MTLCreateSystemDefaultDevice())
+    let resources = ResourceStore(device: device)
+    let directory = try LiveProgramFixture.temporaryDirectory()
+    defer { try? FileManager.default.removeItem(at: directory) }
+    try LiveProgramFixture.write(LiveProgramFixture.lineSpec(outline: false), family: "live_line", to: directory)
+    let url = try nativeTextureStoreFixture()
+    defer { try? FileManager.default.removeItem(at: url.deletingLastPathComponent()) }
+    let store = try SourceShaderTextureStore(url: url)
+    var material = liveMaterial(shader: "Shader Forge/live_line")
+    material.textures["_MainTex"] = .init(identity: nativeTextureIdentity, identitySource: "prefab", scale: [1, 1], offset: [0, 0], transformSource: "prefab")
+    let bindings = BindingSet(scope: "synthetic", renderers: [liveRenderer("o_a", material: material), liveRenderer("o_b", material: material)],
+                              globalVectors: ["_LineColorG": .init([0.5, 0.5, 0.5, 0], source: "scene")])
+    func resolve(_ index: Int, _ mode: String?) throws -> SourceShaderLiveMaterial {
+        try SourceShaderLiveMaterial.resolve(renderer: bindings.renderers[index], bindings: bindings, programs: directory,
+                                             resources: resources, textures: store, anisotropicFiltering: mode)
+    }
+    let first = try resolve(0, "ForceEnable"), second = try resolve(1, "ForceEnable")
+    let a = try #require(first.textures["_MainTex"]?.sampler), b = try #require(second.textures["_MainTex"]?.sampler)
+    #expect(a === b)
+    #expect(first.samplerSummary == ["aniso 9, mips linear": 1])
+    #expect(store.compositeInputStatistics(for: resources).samplers == 1)
+    // Another configuration gets its own sampler, also cached.
+    let unforced = try resolve(0, nil), again = try resolve(1, nil)
+    let c = try #require(unforced.textures["_MainTex"]?.sampler), d = try #require(again.textures["_MainTex"]?.sampler)
+    #expect(c !== a)
+    #expect(c === d)
+    #expect(unforced.samplerSummary == ["aniso 1, mips nearest": 1])
+    #expect(store.compositeInputStatistics(for: resources).samplers == 2)
 }
 
 // MARK: - Vertex inputs

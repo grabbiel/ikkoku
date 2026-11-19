@@ -117,8 +117,9 @@ driver behaviour, not a Metal contract. The tool measures no performance.
 # Public lane — safe without any private data:
 python3 Tools/verification/run.py --manifest Tools/verification/lanes/public.json
 
-# Private-source lane — the one Engine-suite check declares 61 fixture
-# variables, all `"optional": true`, so it runs whatever is supplied.
+# Private-source lane — the one Engine-suite check declares 90 fixture
+# variables, all `"optional": true`, so it runs whatever is supplied,
+# and sets two lane-owned output folders in its `env`.
 # Without an environment file it runs with none supplied and lists
 # everything under `missingFixtures` (a supplied-but-unreadable path
 # still fails the check):
@@ -181,10 +182,10 @@ them claims whole-game parity; read each `tolerance`.
 | Lane | Checks | Status 2026-09-26 |
 | --- | --- | --- |
 | `public.json` | Engine `swift test`, mod-tools / translation / runner-self / studio-validator `unittest` suites | 5/5 checks pass (Engine `swift test` runs 369 tests, plus Python suites). Gated Swift tests use PR #4 named skips; without PR #4, early returns would report as executed passes. |
-| `private-source.json` | One `engine-source-suite` check declaring every `IKKOKU_*` variable gated in `Packages/Engine/Tests` except `…_OUTPUT/_REPORT/_RESULT`, `IKKOKU_SAVE_SCENE` and `IKKOKU_EXPORT_SOURCE_SCENE` — all marked `optional` so the suite runs with whatever exists | 2026-10-23 (local-wave-verify; macOS 27.0.1, Xcode 27.0 / Swift 6.4; `.local/verification/environment.json`, 80 keys): on `66852dd` (main `134936c` merged), the non-strict run passed 1/1. Engine reported 711 tests: 709 executed and passed, 0 failed, and 2 named skips (`IKKOKU_APPEARANCE_REFERENCE_ROOT` with a Metal device, and the optional `IKKOKU_CARD_EDIT_OUTPUT` evidence). Under `--strict` it fails 0/1 before running, because `IKKOKU_APPEARANCE_REFERENCE_ROOT` is unset. With that variable set to `.local/reverse`, it still fails 0/1 with "fixture malformed or unreadable" ("fixture tree exceeds entry bound"). The test reads `rigs/` and `male/` under that root, which hold 528 MiB and 156 MiB, more than the runner's tree bounds of 4,096 entries and 512 MiB allow (open finding). On `2e732b9` (main `5e86b57`) the non-strict run reported 692 tests: 690 passed and the same 2 skips. Earlier: Runs with or without an environment file; unsupplied fixtures are recorded per check and only fail under `--strict`. With 32 local fixtures supplied on the integrated tree, Engine runs 379 tests: 359 passed, 20 named skips (via PR #4), 0 failed. |
+| `private-source.json` | One `engine-source-suite` check. It declares as fixtures every `IKKOKU_*` input that a `SourceFixtureSupport` gate in `Packages/Engine/Tests` names (90), all marked `optional` so the suite runs with whatever exists. Outputs the tests write are never fixtures, since a fixture is hashed and bounded as an input and an output tree changes between runs: the opt-in ones (`…_OUTPUT/_REPORT/_RESULT`, `IKKOKU_SAVE_SCENE`, `IKKOKU_EXPORT_SOURCE_SCENE`) stay unset, and the two output folders the plug-in probe tests' gates require, `IKKOKU_PLUGIN_SCENE_INPUTS` and `IKKOKU_PLUGIN_SCENE_INPUTS_C`, are set in the check's fixed `env` (as `app-smoke` sets its capture outputs) to lane-owned folders under the repo's `.local/verification/private-source/`. Those paths are written from `Packages/Engine` (`../../.local/…`), because `swift test --package-path` runs the tests in the package folder: a path written from the repo root lands in `Packages/Engine/.local/`. The lane regenerates those folders on every run and never writes the environment file's copies, which are the inputs that went to the player runs. `test_run.py` (`PrivateSourceManifestTests`) fails when a gate names a variable the check neither declares nor sets, or when an output path does not resolve from the package folder to `.local/verification/private-source/`. | 2026-11-02 (r7l-private-source-manifest; macOS 27.0.1, Xcode 27.0 / Swift 6.4; `.local/verification/environment.json`, 128 keys): the manifest went from 77 to 90 fixtures plus the two output folders. On `7b0d32f1` (main `cee2be31` merged), `--strict` passed 1/1 twice back to back, each run 1,207 Engine tests: 1,193 executed and passed, 0 failed, 14 named opt-in skips, no missing fixture (331.1 s and 337.4 s). The second run started with both output folders present and rewrote them to the same trees (`plugin-scene-inputs` 8 files, 132 KiB; `plugin-scene-inputs-c` 8 files, 960 KiB). Two failures before that are fixed: `IKKOKU_LEGACY_SCENE_UPLOADS` was "fixture malformed or unreadable" while its folder held symlinks, which the runner refuses (they are hard links now); and output paths written from the repo root landed in `Packages/Engine/.local/`. 2026-10-23 (local-wave-verify; macOS 27.0.1, Xcode 27.0 / Swift 6.4; `.local/verification/environment.json`, 80 keys): on `66852dd` (main `134936c` merged), the non-strict run passed 1/1. Engine reported 711 tests: 709 executed and passed, 0 failed, and 2 named skips (`IKKOKU_APPEARANCE_REFERENCE_ROOT` with a Metal device, and the optional `IKKOKU_CARD_EDIT_OUTPUT` evidence). Under `--strict` it fails 0/1 before running, because `IKKOKU_APPEARANCE_REFERENCE_ROOT` is unset. With that variable set to `.local/reverse`, it still fails 0/1 with "fixture malformed or unreadable" ("fixture tree exceeds entry bound"). The test reads `rigs/` and `male/` under that root, which hold 528 MiB and 156 MiB, more than the runner's tree bounds of 4,096 entries and 512 MiB allow (open finding). On `2e732b9` (main `5e86b57`) the non-strict run reported 692 tests: 690 passed and the same 2 skips. Earlier: Runs with or without an environment file; unsupplied fixtures are recorded per check and only fail under `--strict`. With 32 local fixtures supplied on the integrated tree, Engine runs 379 tests: 359 passed, 20 named skips (via PR #4), 0 failed. |
 | `maker.json` | Seven Swift `--filter` checks over converted Maker/card/material data plus `card_roundtrip.py` / `maker_roundtrip.py` audits | 2026-10-23 (local-wave-verify; macOS 27.0.1, Xcode 27.0 / Swift 6.4; `.local/verification/environment.json`, 80 keys): on `2e732b9`, `--strict` gave 6/9. The 6 Swift checks passed with 47 executed tests. Three checks failed, all open findings: `source-card-appearance` (`IKKOKU_APPEARANCE_REFERENCE_ROOT` unset, see `private-source`); `card-roundtrip-audit` (`IKKOKU_MANAGED_RECOVERY_EXPORT` is unset, because no managed recovery export was found to point it at); and `maker-roundtrip-audit`, which exits 1 with "Evidence output must remain under ignored .local". That last one has two causes: its argv passes neither `--inputs` nor `--output`, so the declared `IKKOKU_MAKER_COMPLETION_INPUTS` fixture is unused; and in a worktree whose `.local/reverse` is a symlink, the default output resolves outside `.local`. Run by hand from the main checkout with `--output` under `.local/local-wave-verify/`, it succeeded on the same inputs (SHA-256 `e9ccf7b4…`). Earlier: 6 checks pass (47 executed tests) and 3 skip: one Swift check skips because `IKKOKU_APPEARANCE_REFERENCE_ROOT` exceeds the 512 MiB hash bound when supplied; both roundtrip audits declare their real prerequisites (`IKKOKU_MANAGED_RECOVERY_EXPORT`, `IKKOKU_MAKER_COMPLETION_INPUTS`) as fixtures and skip with named reasons while absent — nothing shipped here fails on the reference machine. |
-| `app-smoke.json` | Debug `xcodebuild` build (built binary hashed as artifact), headless Mute-startup app capture (its plugin report and Maker PNG hashed as artifacts; the app accepts the adapter report only with `IKKOKU_AUTOCAPTURE`, A06), then two ordered checks: `studio-inspector-capture` runs the Debug app expecting the source-pose report and hashes both the UI PNG and that report, so an exit-0 run that leaves either missing or empty fails (A-T05); `studio-inspector-validate` runs `Tools/verification/checks/studio_inspector_report.py` against that JSON. Three Release guards follow (R6, 2026-10-23): `build-release-app` builds the Release app with the CI release-package flags, but signed. `release-startup-capture` then renders one bundled Maker frame with that build, with `IKKOKU_SOURCE_TREE_FALLBACKS=0` and no fixtures, and hashes the PNG. `engine-release-frame-ring` runs the FrameRing Engine tests with `swift test -c release` | 2026-10-23 (local-wave-verify; macOS 27.0.1, Xcode 27.0 / Swift 6.4; `.local/verification/environment.json`, 80 keys): `--strict` gave 6/7 on `2e732b9` and again on `3f58ff8` (main `f5587f5` merged, with the A-T04 fix). The passing checks: `build-debug-app`, `studio-inspector-capture`, `studio-inspector-validate`, and the three Release guards, `engine-release-frame-ring` taking 237.6 s. `startup-mute-capture` exits 1 before it captures, with `studio execution failed: IKKOKU_SOURCE_PLUGIN_PROFILE=…/native-adapter-capture-01/profile.json: Invalid translated plugin: Original plugin target does not bind uniquely.` The profile `environment.example.json` names binds `StudioMotionFixture` to source object key 10, and the check loads no source scene, so nothing can bind (open finding; the Mute behavior itself is checked by the A-T04 probe). Earlier: Debug build passes; `startup-mute-capture` skips (3 plugin fixtures absent locally); `studio-inspector-capture` and `studio-inspector-validate` pass when PR #5 UI report hooks are merged (report confirms `SourcePoseInspector observed == expected`), but fail with a clear missing-report result on this branch without PR #5, as stated in their tolerance text. The lane has not been rerun since A-T05 (2026-10-23) added the PNG and Mute-report artifacts, or since A06 added the Mute check's `IKKOKU_AUTOCAPTURE` (without it the app never exited, so the check could only time out). Release guards, 2026-10-23 (Xcode 27.0 / Swift 6.4), run outside the full lane: with the fix, `build-release-app` and `release-startup-capture` passed 2/2 under `--strict`. The PNG sha256 was `1cf309e14a1e…` and the capture took 1.0 s. `engine-release-frame-ring` passed 4/4 tests in 195.6 s, including the cold optimized build. Negative controls: the smoke check run on the unfixed Release binary of main `87cf261` exited −11 (SIGSEGV). The optimized test run with the unfixed `FrameRing.swift` ended with signal 10 inside `frameRingArrayAllocationReachesAThrowingCallerWithoutAnError`. |
-| `studio-scenarios.json` | Eighty-nine `app-smoke` checks, each running the Debug app binary with `IKKOKU_STUDIO_SCENARIO` pointed at one scenario JSON under `Tools/verification/scenarios/` (see below) | 2026-11-01 (cxs1-light-limit, #320): `studio-scenario-light-limit` (`light-limit.json`, see [the light limit](../../docs/reference/studio/scene-editing.md#the-light-limit-320)) brought the lane to 89 checks. On the Debug build of `92408e7` (`main` `2971878`), the full lane passed 89/89 under `--strict` under the app lock (0 skipped, 1,611.3 s). 2026-11-01 (sta11d-map-coverage, ST-A11 slice 4): `studio-scenario-source-map41` (`source-map41.json`, see [source maps](#source-maps-st-a11)) brought the lane to 87 checks (86 on `main`), and to 88 with `main`'s `studio-scenario-legacy-scene` (ST-T05a). 2026-10-26 (r7k-swiftui-select, R7 phase 2, item 7): the two kept-view checks, `inspector-kept-views` and `inspector-kept-route`, brought the lane to 84 checks, and to 86 with the two plug-in rewrite checks from `main`. Before them, the three [inspector UI checks](#inspector-ui-checks-r7-phase-2-item-7), `inspector-edit-deselect`, `inspector-hidden-route` and `inspector-hide-cycles`, brought the lane to 82 checks (from 79). 2026-10-26 (stt03j-plugin-rewrites, ST-T03i second change): `studio-scenario-plugin-rewrite-delete` and `studio-scenario-plugin-rewrite-duplicate` (see [plug-in data rewrites](#plug-in-data-rewrites-st-t03i)) brought the lane to 81 checks. On the Debug build of `256147d` (`main` `ca91cda` merged), with `IKKOKU_PLUGIN_REWRITE_SCENE`, the full lane passed 81/81 under `--strict` under the app lock (0 skipped, 1,409.6 s), and `maker-scenarios` passed 10/10 (188.6 s). 2026-10-26 (sta11c-map34, ST-A11 slice 3): `studio-scenario-source-map34` (`source-map34.json`, see [source maps](#source-maps-st-a11)) brought the lane to 79 checks (78 on `main` `4d60b73`). On the Debug build of `e7ac998` (`main` `4d60b73` merged), with the slice-3 export and `IKKOKU_STUDIO_MAP34_SCENE`, the full lane passed 79/79 under `--strict` under the app lock (0 skipped, 1,251.8 s), and `maker-scenarios` passed 10/10 (199.8 s). 2026-10-25 (sta11a-maps, ST-A11/ST-B03/ST-T04): the four [source map](#source-maps-st-a11) checks, `source-map`, `reload-save-source-map`, `reload-load-source-map` and `source-map-none`, brought the lane to 77 checks. On the Debug build of `ceccafa` (main `74cee1c`), the full lane passed 77/77 under `--strict` under the app lock (0 skipped, 1,228.3 s), and `maker-scenarios` passed 10/10 (204.6 s). On the merged head `c094f92` (main `6502803`, #275 live pacing), it passed 77/77 (0 skipped, 1,254.5 s), and `maker-scenarios` passed 10/10 (238.7 s). 2026-10-25 (stt11k-route-edit, ST-T11/ST-T03): four route-editing checks, `route-edit-export`, `route-children-edit`, `route-children-edit-load` and `route-move-playing` (see [route points and settings](../../docs/reference/studio/scene-editing.md#route-points-and-settings-st-t11-st-t03)), brought the lane to 72 checks; with main's `background-build` (R7 phase 2, item 6) it has 73. On the Debug build of `565040d` (main `2dc317f`), the full lane passed 72/72 under `--strict` under the app lock (0 skipped, 1,706.2 s), and `maker-scenarios` passed 10/10 (198.1 s). On the merged head `bfd6dd5` (main `ca17d8a`), it passed 73/73 (0 skipped, 1,193.2 s), and `maker-scenarios` passed 10/10 (204.5 s). 2026-10-24 (r7d-live-tick, R7 phase 2, item 3): `studio-scenario-live-step-edit` (`live-step-edit.json`, see [Edits during an off-main live step](#edits-during-an-off-main-live-step-r7-phase-2-item-3)) brought the lane to 53 checks. On the Debug build of `e69a3c0` (main `b23383b` merged), the full lane passed 53/53 under `--strict` under the app lock (0 skipped, 1,284.2 s), and `maker-scenarios` passed 5/5 (84.3 s). 2026-10-23 (local-wave-verify; macOS 27.0.1, Xcode 27.0 / Swift 6.4; `.local/verification/environment.json`, 80 keys): the full 47-check lane passed 47/47 under `--strict` (0 skipped, 1,571.7 s) on the Debug build of `2e732b9` (main `5e86b57` merged), including `reload-save-ik` and `reload-load-ik`. 2026-10-23 (local-wave-verify): the native IK reload pair `reload-save-ik`/`reload-load-ik` brought the lane to 47 checks (see [Native IK re-solve and unsolved status](#native-ik-re-solve-and-unsolved-status-r4-115-and-110)); a two-check cut passed 2/2 `--strict`. Before that, 2026-10-23: the mirrored-camera slice added `mirrored-camera` (`IKKOKU_MIRRORED_CAMERA_SCENE`), giving 45 after merging main. Before that merge its branch had 40 checks, and the full strict run on the Debug build of `6270e82` passed 40/40 (1,368 s; see [Mirrored camera parent](#mirrored-camera-parent-r4-st-a06)). On the merge with main `8d83f01` (`aa3c1cd`, 45 checks) the full strict run under the app lock passed 45/45 (0 skipped, 1,567.6 s), with `mirrored-camera` at 17/17. Earlier, 2026-10-23: merging the two CharaStudio-authored fixture checks from #111 brought the lane to 44. 2026-10-22: the five clothes-state/accessory checks were added, giving 42 checks before that merge (see [Clothes state and accessory visibility](#clothes-state-and-accessory-visibility-st-c03-second-slice)). On the Debug build of this change the complete lane passed 42/42 with `--strict` (0 skipped) and `maker-scenarios` passed 4/4. On the final merged head (with main at 9caa3f3), the full strict run passed 41/42. The one failure, `face-shape`, was terminated from outside the runner (SIGTERM: exit −15 after 0.6 s). A strict rerun passed 1/1, and `maker-scenarios` again passed 4/4. Earlier post-merge runs lost `blink-toggle`, `eye-look-orbit`, `neck-look-orbit` and `reload-save-clothes` the same way, and each passed when rerun. On the fixture-scenes branch (39 checks before this slice): 2026-10-22: the full 39-check run passed 39/39 with `--strict` (0 failed, 0 skipped; clean merge commit `e650c5a`, 1,321.5 s), including the two new CharaStudio-authored fixture checks `route-children-motion` (`IKKOKU_ROUTE_CHILDREN_SCENE`) and `neck-target-orbit` (`IKKOKU_NECK_TARGET_SCENE`). The lane was rerun after each later merge of main. Clean merges `12af3cc` and `4b39282` passed 39/39. Clean merges `a1e591c` and `a44e6c2` (main `4263de3`) passed 37/39. In each of those runs, two checks were killed by an outside SIGTERM: exit −15 with empty logs. The cause was another session running `pkill -x Ikkoku` while its own app runs were in progress. The killed checks were `route-children-motion` and `neck-look-orbit`, then `neck-look-orbit` and `color-visual-reset`. Both pairs passed a 2/2 `--strict` rerun on the same commit. 2026-10-17, before the outfit slice brought the lane to 37 checks: the full 34-check run passed 31 and failed three synthetic imports (0 skipped); pinning their optional Maker library off resolved all three in a 3/3 strict rerun, with fixtures unchanged. The shape/color visual checks passed 45/45 and 31/31 steps. Historical: 32/32 checks passed 2026-10-01 (including the four `charastudio-*` export checks whose PNGs the CharaStudio reload probe loads) with `IKKOKU_SOURCE_AVATAR` (+`IKKOKU_STUDIO_ITEM_CATALOG` for props, +`IKKOKU_STUDIO_ANIMATION_CATALOG` for the animation/FK scenarios, +`IKKOKU_STUDIO_LOOK_SETTINGS` for the eye/neck look scenarios, +`IKKOKU_STUDIO_HAND_PATTERNS` for `hand-patterns`) supplied; every save/import-side check fills `IKKOKU_SOURCE_SCENE` through the fixture `from` key: the seven character scenarios (including `undo-props` and the catalog-less `undo-no-catalog`) and the two look scenarios (`eye-look-orbit`, `neck-look-orbit`) from `IKKOKU_STUDIO_SCENARIO_SCENE` (source scene `029f0b1d`), the camera scenarios (`camera-*`, `undo-camera`, `reload-save-camera`) alias `IKKOKU_SOURCE_SCENE` from `IKKOKU_CAMERA_OBJECT_PROBE_SCENE` (scene-x), the route scenarios (`route-play-state`, `undo-route`, `reload-save-route`) from `IKKOKU_ROUTE_PROBE_SCENE` and the live-clock scenarios (`blink-toggle`, `hand-patterns`, `hand-patterns-kept` — a single character with saved hand patterns [5, 6]) from `IKKOKU_STUDIO_SCENARIO_SYNTHETIC_SCENE` (`synthetic-current.png`); the three `reload-load-*` checks declare no scene fixture on purpose (see below); every scenario report and exported scene hashed as an artifact. Earlier run: 12/12 passed 2026-09-29 before the reload pairs were added. |
+| `app-smoke.json` | Debug `xcodebuild` build (built binary hashed as artifact), headless Mute-startup app capture (its plugin report and Maker PNG hashed as artifacts; the app accepts the adapter report only with `IKKOKU_AUTOCAPTURE`, A06), then two ordered checks: `studio-inspector-capture` runs the Debug app expecting the source-pose report and hashes both the UI PNG and that report, so an exit-0 run that leaves either missing or empty fails (A-T05); `studio-inspector-validate` runs `Tools/verification/checks/studio_inspector_report.py` against that JSON. Two more follow for #333 (2026-11-02): `studio-inspector-clothes-fit-capture` starts the Debug app through the UI capture path on the Clothes tab with the selections 0, 622 and 963 and legacy scrollers (`-AppleShowScrollBars Always`, argument domain), and hashes its PNG, report and `IKKOKU_CAPTURE_UI_FIT_LOG`; `studio-inspector-clothes-fit-validate` runs `Tools/verification/checks/inspector_fit_log.py` on that log (see [inspector UI checks](#inspector-ui-checks-r7-phase-2-item-7)). Three Release guards follow (R6, 2026-10-23): `build-release-app` builds the Release app with the CI release-package flags, but signed. `release-startup-capture` then renders one bundled Maker frame with that build, with `IKKOKU_SOURCE_TREE_FALLBACKS=0` and no fixtures, and hashes the PNG. `engine-release-frame-ring` runs the FrameRing Engine tests with `swift test -c release` | 2026-10-23 (local-wave-verify; macOS 27.0.1, Xcode 27.0 / Swift 6.4; `.local/verification/environment.json`, 80 keys): `--strict` gave 6/7 on `2e732b9` and again on `3f58ff8` (main `f5587f5` merged, with the A-T04 fix). The passing checks: `build-debug-app`, `studio-inspector-capture`, `studio-inspector-validate`, and the three Release guards, `engine-release-frame-ring` taking 237.6 s. `startup-mute-capture` exits 1 before it captures, with `studio execution failed: IKKOKU_SOURCE_PLUGIN_PROFILE=…/native-adapter-capture-01/profile.json: Invalid translated plugin: Original plugin target does not bind uniquely.` The profile `environment.example.json` names binds `StudioMotionFixture` to source object key 10, and the check loads no source scene, so nothing can bind (open finding; the Mute behavior itself is checked by the A-T04 probe). Earlier: Debug build passes; `startup-mute-capture` skips (3 plugin fixtures absent locally); `studio-inspector-capture` and `studio-inspector-validate` pass when PR #5 UI report hooks are merged (report confirms `SourcePoseInspector observed == expected`), but fail with a clear missing-report result on this branch without PR #5, as stated in their tolerance text. The lane has not been rerun since A-T05 (2026-10-23) added the PNG and Mute-report artifacts, or since A06 added the Mute check's `IKKOKU_AUTOCAPTURE` (without it the app never exited, so the check could only time out). Release guards, 2026-10-23 (Xcode 27.0 / Swift 6.4), run outside the full lane: with the fix, `build-release-app` and `release-startup-capture` passed 2/2 under `--strict`. The PNG sha256 was `1cf309e14a1e…` and the capture took 1.0 s. `engine-release-frame-ring` passed 4/4 tests in 195.6 s, including the cold optimized build. Negative controls: the smoke check run on the unfixed Release binary of main `87cf261` exited −11 (SIGSEGV). The optimized test run with the unfixed `FrameRing.swift` ended with signal 10 inside `frameRingArrayAllocationReachesAThrowingCallerWithoutAnError`. |
+| `studio-scenarios.json` | Ninety-nine `app-smoke` checks, each running the Debug app binary with `IKKOKU_STUDIO_SCENARIO` pointed at one scenario JSON under `Tools/verification/scenarios/` (see below) | 2026-11-18 (cxs1c, #384): `studio-scenario-undo-scene-replacements` (`undo-scene-replacements.json`, see [undo across scene replacements](#undo-across-scene-replacements-384)) brought the lane to 99 checks, from main's 98. 2026-11-02 (r7l-inspector-fit, #333 fix): the native fit checks `inspector-clothes-fit-native-legacy` and `-native-overlay` (see [inspector UI checks](#inspector-ui-checks-r7-phase-2-item-7)) brought the lane to 93 checks on its branch, and to 94 with `main`'s `live-samplers`; the capture-path pair is in `app-smoke.json`. 2026-11-01 (sta11d-live-aniso, #338): `studio-scenario-live-samplers` (`live-samplers.json`, see [live source-shader samplers](#live-source-shader-samplers-338)) brought the lane to 90 checks. On the Debug build of `165db2c` it passed 1/1 under `--strict` under the app lock (15.4 s). The same check on a build with the Studio call site reverted to no anisotropic mode failed: 14 of its 16 steps, every character reading `aniso 1, mips nearest`. 2026-11-01 (r7l-inspector-fit, #333): `inspector-clothes-fit-legacy` and `inspector-clothes-fit-overlay` (see [inspector UI checks](#inspector-ui-checks-r7-phase-2-item-7)) brought the lane to 91 checks. 2026-11-01 (cxs1-light-limit, #320): `studio-scenario-light-limit` (`light-limit.json`, see [the light limit](../../docs/reference/studio/scene-editing.md#the-light-limit-320)) brought the lane to 89 checks. On the Debug build of `92408e7` (`main` `2971878`), the full lane passed 89/89 under `--strict` under the app lock (0 skipped, 1,611.3 s). 2026-11-01 (sta11d-map-coverage, ST-A11 slice 4): `studio-scenario-source-map41` (`source-map41.json`, see [source maps](#source-maps-st-a11)) brought the lane to 87 checks (86 on `main`), and to 88 with `main`'s `studio-scenario-legacy-scene` (ST-T05a). 2026-10-26 (r7k-swiftui-select, R7 phase 2, item 7): the two kept-view checks, `inspector-kept-views` and `inspector-kept-route`, brought the lane to 84 checks, and to 86 with the two plug-in rewrite checks from `main`. Before them, the three [inspector UI checks](#inspector-ui-checks-r7-phase-2-item-7), `inspector-edit-deselect`, `inspector-hidden-route` and `inspector-hide-cycles`, brought the lane to 82 checks (from 79). 2026-10-26 (stt03j-plugin-rewrites, ST-T03i second change): `studio-scenario-plugin-rewrite-delete` and `studio-scenario-plugin-rewrite-duplicate` (see [plug-in data rewrites](#plug-in-data-rewrites-st-t03i)) brought the lane to 81 checks. On the Debug build of `256147d` (`main` `ca91cda` merged), with `IKKOKU_PLUGIN_REWRITE_SCENE`, the full lane passed 81/81 under `--strict` under the app lock (0 skipped, 1,409.6 s), and `maker-scenarios` passed 10/10 (188.6 s). 2026-10-26 (sta11c-map34, ST-A11 slice 3): `studio-scenario-source-map34` (`source-map34.json`, see [source maps](#source-maps-st-a11)) brought the lane to 79 checks (78 on `main` `4d60b73`). On the Debug build of `e7ac998` (`main` `4d60b73` merged), with the slice-3 export and `IKKOKU_STUDIO_MAP34_SCENE`, the full lane passed 79/79 under `--strict` under the app lock (0 skipped, 1,251.8 s), and `maker-scenarios` passed 10/10 (199.8 s). 2026-10-25 (sta11a-maps, ST-A11/ST-B03/ST-T04): the four [source map](#source-maps-st-a11) checks, `source-map`, `reload-save-source-map`, `reload-load-source-map` and `source-map-none`, brought the lane to 77 checks. On the Debug build of `ceccafa` (main `74cee1c`), the full lane passed 77/77 under `--strict` under the app lock (0 skipped, 1,228.3 s), and `maker-scenarios` passed 10/10 (204.6 s). On the merged head `c094f92` (main `6502803`, #275 live pacing), it passed 77/77 (0 skipped, 1,254.5 s), and `maker-scenarios` passed 10/10 (238.7 s). 2026-10-25 (stt11k-route-edit, ST-T11/ST-T03): four route-editing checks, `route-edit-export`, `route-children-edit`, `route-children-edit-load` and `route-move-playing` (see [route points and settings](../../docs/reference/studio/scene-editing.md#route-points-and-settings-st-t11-st-t03)), brought the lane to 72 checks; with main's `background-build` (R7 phase 2, item 6) it has 73. On the Debug build of `565040d` (main `2dc317f`), the full lane passed 72/72 under `--strict` under the app lock (0 skipped, 1,706.2 s), and `maker-scenarios` passed 10/10 (198.1 s). On the merged head `bfd6dd5` (main `ca17d8a`), it passed 73/73 (0 skipped, 1,193.2 s), and `maker-scenarios` passed 10/10 (204.5 s). 2026-10-24 (r7d-live-tick, R7 phase 2, item 3): `studio-scenario-live-step-edit` (`live-step-edit.json`, see [Edits during an off-main live step](#edits-during-an-off-main-live-step-r7-phase-2-item-3)) brought the lane to 53 checks. On the Debug build of `e69a3c0` (main `b23383b` merged), the full lane passed 53/53 under `--strict` under the app lock (0 skipped, 1,284.2 s), and `maker-scenarios` passed 5/5 (84.3 s). 2026-10-23 (local-wave-verify; macOS 27.0.1, Xcode 27.0 / Swift 6.4; `.local/verification/environment.json`, 80 keys): the full 47-check lane passed 47/47 under `--strict` (0 skipped, 1,571.7 s) on the Debug build of `2e732b9` (main `5e86b57` merged), including `reload-save-ik` and `reload-load-ik`. 2026-10-23 (local-wave-verify): the native IK reload pair `reload-save-ik`/`reload-load-ik` brought the lane to 47 checks (see [Native IK re-solve and unsolved status](#native-ik-re-solve-and-unsolved-status-r4-115-and-110)); a two-check cut passed 2/2 `--strict`. Before that, 2026-10-23: the mirrored-camera slice added `mirrored-camera` (`IKKOKU_MIRRORED_CAMERA_SCENE`), giving 45 after merging main. Before that merge its branch had 40 checks, and the full strict run on the Debug build of `6270e82` passed 40/40 (1,368 s; see [Mirrored camera parent](#mirrored-camera-parent-r4-st-a06)). On the merge with main `8d83f01` (`aa3c1cd`, 45 checks) the full strict run under the app lock passed 45/45 (0 skipped, 1,567.6 s), with `mirrored-camera` at 17/17. Earlier, 2026-10-23: merging the two CharaStudio-authored fixture checks from #111 brought the lane to 44. 2026-10-22: the five clothes-state/accessory checks were added, giving 42 checks before that merge (see [Clothes state and accessory visibility](#clothes-state-and-accessory-visibility-st-c03-second-slice)). On the Debug build of this change the complete lane passed 42/42 with `--strict` (0 skipped) and `maker-scenarios` passed 4/4. On the final merged head (with main at 9caa3f3), the full strict run passed 41/42. The one failure, `face-shape`, was terminated from outside the runner (SIGTERM: exit −15 after 0.6 s). A strict rerun passed 1/1, and `maker-scenarios` again passed 4/4. Earlier post-merge runs lost `blink-toggle`, `eye-look-orbit`, `neck-look-orbit` and `reload-save-clothes` the same way, and each passed when rerun. On the fixture-scenes branch (39 checks before this slice): 2026-10-22: the full 39-check run passed 39/39 with `--strict` (0 failed, 0 skipped; clean merge commit `e650c5a`, 1,321.5 s), including the two new CharaStudio-authored fixture checks `route-children-motion` (`IKKOKU_ROUTE_CHILDREN_SCENE`) and `neck-target-orbit` (`IKKOKU_NECK_TARGET_SCENE`). The lane was rerun after each later merge of main. Clean merges `12af3cc` and `4b39282` passed 39/39. Clean merges `a1e591c` and `a44e6c2` (main `4263de3`) passed 37/39. In each of those runs, two checks were killed by an outside SIGTERM: exit −15 with empty logs. The cause was another session running `pkill -x Ikkoku` while its own app runs were in progress. The killed checks were `route-children-motion` and `neck-look-orbit`, then `neck-look-orbit` and `color-visual-reset`. Both pairs passed a 2/2 `--strict` rerun on the same commit. 2026-10-17, before the outfit slice brought the lane to 37 checks: the full 34-check run passed 31 and failed three synthetic imports (0 skipped); pinning their optional Maker library off resolved all three in a 3/3 strict rerun, with fixtures unchanged. The shape/color visual checks passed 45/45 and 31/31 steps. Historical: 32/32 checks passed 2026-10-01 (including the four `charastudio-*` export checks whose PNGs the CharaStudio reload probe loads) with `IKKOKU_SOURCE_AVATAR` (+`IKKOKU_STUDIO_ITEM_CATALOG` for props, +`IKKOKU_STUDIO_ANIMATION_CATALOG` for the animation/FK scenarios, +`IKKOKU_STUDIO_LOOK_SETTINGS` for the eye/neck look scenarios, +`IKKOKU_STUDIO_HAND_PATTERNS` for `hand-patterns`) supplied; every save/import-side check fills `IKKOKU_SOURCE_SCENE` through the fixture `from` key: the seven character scenarios (including `undo-props` and the catalog-less `undo-no-catalog`) and the two look scenarios (`eye-look-orbit`, `neck-look-orbit`) from `IKKOKU_STUDIO_SCENARIO_SCENE` (source scene `029f0b1d`), the camera scenarios (`camera-*`, `undo-camera`, `reload-save-camera`) alias `IKKOKU_SOURCE_SCENE` from `IKKOKU_CAMERA_OBJECT_PROBE_SCENE` (scene-x), the route scenarios (`route-play-state`, `undo-route`, `reload-save-route`) from `IKKOKU_ROUTE_PROBE_SCENE` and the live-clock scenarios (`blink-toggle`, `hand-patterns`, `hand-patterns-kept` — a single character with saved hand patterns [5, 6]) from `IKKOKU_STUDIO_SCENARIO_SYNTHETIC_SCENE` (`synthetic-current.png`); the three `reload-load-*` checks declare no scene fixture on purpose (see below); every scenario report and exported scene hashed as an artifact. Earlier run: 12/12 passed 2026-09-29 before the reload pairs were added. |
 | `maker-scenarios.json` | Four `app-smoke` checks, each running the Debug app binary with `IKKOKU_MAKER_SCENARIO` pointed at one `maker-*.json` scenario under `Tools/verification/scenarios/` (see below) | 2026-10-23 (local-wave-verify; macOS 27.0.1, Xcode 27.0 / Swift 6.4; `.local/verification/environment.json`, 80 keys): 4/4 under `--strict` (52.0 s) on `2e732b9`. Earlier: 4/4 checks passed 2026-09-29 under `--strict` with `IKKOKU_MAKER_SCENARIO_CARD` (the 7-coordinate `synthetic-appearance-card.png`) and `IKKOKU_SOURCE_AVATAR` in the environment file; every check fills `IKKOKU_SOURCE_CARD` through the fixture `from` key; every scenario report and exported card hashed as an artifact. |
 | `gameplay-scenarios.json` | One `app-smoke` check running the Debug app binary with `IKKOKU_GAMEPLAY_SCENARIO` pointed at `scenarios/gameplay-controlled-event.json` (A-T01; see below); no fixtures, synthetic catalog; the report and the three host snapshots are hashed artifacts | 2026-10-23 (local-wave-verify; macOS 27.0.1, Xcode 27.0 / Swift 6.4; `.local/verification/environment.json`, 80 keys): 1/1 under `--strict` on `2e732b9` (main `5e86b57`, 17 steps). Then 1/1 on `66852dd` (main `134936c`, with the G-T02 scenario): 20 of 20 steps, 4 reloads, `completedEvents` `[9001]`. The Engine test `sourceGameplayHostShippedScenarioPersistsReloadsAndResumesIdentically` runs the same scenario in CI, where the app path is only compiled. |
 
@@ -265,7 +266,9 @@ and names the JSON report to write (`{"steps":[{"op","ok","detail"}],
 (`sourceObjectKey`), never by runtime UUIDs; numeric compares use a 1e-5
 tolerance. A failing `assert`/edit step is recorded and the run
 continues; a failing `export`/`reimport` stops it. Both write only under
-`.local/`. Ops: `select`, `setVisible`, `rename`, `toggleCamera`,
+`.local/`. Ops: `select`, `deselect` (clears the selection), `assertWorkspaceRows`
+(the workspace tree's published rows must equal a full rebuild, which a
+selection change only patches; #387 round 3), `setVisible`, `rename`, `toggleCamera`,
 `toggleRoute`, `undo`, `redo`, `newScene`, `setFace`, `setBody`
 `{key,index,value}`, `setColor` `{key,id,rgba[4]}`, `resetShape`
 `{key,face:true|false}` (shared with the inspector; clears only the selected
@@ -373,7 +376,12 @@ the largest quaternion-component difference of its three bones and largest
 joint displacement — moved beyond the tolerance by default, or within `within`;
 the pose read is `CharacterInstance.currentPose()` of the rendered instance),
 `statusContains` (a substring of the app's status line, read after the step's
-`view` check so a rejected look-through has reported itself),
+`view` check so a rejected look-through has reported itself), `statusLacks`
+(a substring it must not contain), `characterBuilt` `{key,built}` (whether a
+source character has a preview; built and selected, its pose and animation
+state must be readable), `exportedAnimation` `{key,paths,agree?,increasing?}`
+(a character's saved animation state read back from exported scenes: the
+same in every file, or a normalizedTime rising file by file),
 `indicatorContains` (a substring of the view indicator under the status line,
 `StudioModel.activeSourceCameraView`; with no source camera active it is empty
 and contains nothing), `treeLabel` with `key` (the object's workspace tree
@@ -1086,9 +1094,9 @@ declares it, so the runner gives no other check a map.
      until slice 4 dropped a shadow-only shell), all 8
      images uploaded as BC blocks (`blockImages`, since slice 3), not
      loading. The status line holds the exact label `Map 33 空き部室 (bushitu):
-     baked lightmaps; approximated: no realtime sun or its shadows, no specular
-     or reflections, no normal, metallic or detail maps, no fog, no camera
-     effects`. Two map-only points pick nothing, and a character in front of
+     baked lightmaps, realtime sun with shadows; approximated: no reflections,
+     no normal, metallic or detail maps, no fog, no camera effects` (since
+     slice 5; all 7 draws sun-lit and receiving, none ambient-lit). Two map-only points pick nothing, and a character in front of
      the wall picks.
   2. `setShowSourceMap` off draws 0 parts, and the line says `hidden (View ▸
      Show Source Map)`.
@@ -1111,6 +1119,10 @@ declares it, so the runner gives no other check a map.
   renderer alone, 53 → 54), 54 images as BC blocks, and the exact label,
   `Map 34 空き教室 (akikyoushitu): baked lightmaps on 29 of 56 draws (the rest
   as items), cubemap sky, particles (no soft-particle fade); approximated: …`.
+  Since slice 5 the label reads `baked lightmaps on 29 of 56 draws (27 by the
+  map's ambient), cubemap sky, particles (no soft-particle fade), realtime sun
+  with shadows; approximated: …`, and 22 draws are ambient-lit, 51 sun-lit
+  and 44 receiving (the two blended draws receive nothing).
   Two map points pick nothing. The View toggle hides and restores all 54
   draws, sky included. The exports are byte-identical, and reimport, New Scene
   and undo restore the map.
@@ -1122,7 +1134,10 @@ declares it, so the runner gives no other check a map.
   draws), 28 images as BC blocks with no PNG copies, and the exact label,
   `Map 41 備品倉庫 (Warehouse): baked lightmaps on 27 of 29 draws (the rest as
   items); approximated: … · 24308 triangles, 29 draws; not reproduced:
-  realtime GI (Enlighten dynamic lightmaps on 21 renderers)`. Two map points
+  realtime GI (Enlighten dynamic lightmaps on 21 renderers)`. Since slice 5:
+  `baked lightmaps on 27 of 29 draws (2 by the map's ambient), realtime sun
+  with shadows; approximated: Transparent mode drawn as Fade, …`, with 29
+  sun-lit draws, 26 receiving and 3 of them per vertex. Two map points
   pick nothing. The View toggle
   hides and restores all 29 draws. The exports are byte-identical, and
   reimport, New Scene and undo restore the map.
@@ -1148,7 +1163,12 @@ export](../../docs/reference/studio/maps.md#installing-the-slice-4-export)).
 the report's detail line prints them with the sky cube bytes. Since slice 4
 they also take `unlitDraws`, `silhouetteDraws` and `optionDraws` (the
 placed draws under a map option root, 0 while the scene's map option is
-off).
+off). Since slice 5 they take `probeLitDraws` (`Standard` draws lit by the
+map's ambient instead of a lightmap), `sunLitDraws`, `receivingDraws` and
+`perVertexReceiveDraws` (the sun's term and its shadow), and `sunCasters`
+(the map shadow map's casters); the detail line prints them with the sun's
+shadow strength. `source-map`, `source-map34`, `source-map41` and the reload
+pair expect the slice-5 export's counts and labels.
 
 **Measurement switch.** `IKKOKU_SOURCE_MAP_DECODED_TEXTURES=1` makes a map
 load decode its PNGs to RGBA8 (MetalKit mips) instead of uploading the
@@ -1181,8 +1201,11 @@ gesture, and SwiftUI commits it (0.3 s) before the next step. The ops are:
 - `snapshot` keeps the document and the undo depths;
 - `keyLoop` walks the Tab key-view loop and names each view. It checks
   `keyViews` (the loop's length) and `hiddenKeyViews` (views outside the
-  visible window). Tabbing out of a Transform field can commit its rounded
-  value, so a loop can push undo steps;
+  visible window). Each move (the start, every Tab and the end) is its own
+  gesture: the runner closes the coalescing window before it and settles
+  after it, so the views re-render before the next Tab, as with separate key
+  presses. Tabbing out of a Transform field can commit its rounded value, so
+  a loop can push undo steps (see below);
 - `assert`: `name` and `positionX` of `key`'s object, `exists`, `undoCount`,
   `redoCount`, `unchanged` (since the snapshot), `editing` (a field editor is
   the first responder), `inspectorView`, and `axContains` and `axAbsent`.
@@ -1218,7 +1241,13 @@ kept the Object tab mounted:
   the field leaves the window without the end-of-editing commit: 1.23456
   typed into a three-decimal field stays 1.23456 and adds no undo step. The
   window becomes the first responder, and later typing reaches nothing. The
-  undo and redo depths and values are pinned through three undos.
+  undo and redo depths and values are pinned through three undos. Since
+  #390, only a write that changes the object takes an undo step, so focusing
+  the Name field or a field that already shows its exact value adds none.
+  The steps after the import are " X", 0.139, 1.5, 1.23456, " Z" and the
+  delete (7), and the three undos on character 0 revert 1.23456, 1.5 and
+  the 0.139 rounding. CharaStudio's end-of-edit rounds the same way (#391),
+  and Position keeps 3 decimals, so #391 leaves these counts as they were.
 - `inspector-hidden-route` (`IKKOKU_STUDIO_HALF_STATE_SCENE`: route 20,
   character 10, folder 11). Three selection cycles leave the document and
   the undo depths unchanged. The route section ("Add point", "Delete point",
@@ -1273,10 +1302,75 @@ get wrong:
   controls are absent from the accessibility tree, and the Tab loop has no
   view outside the visible window. Finally, a route point's x typed as
   0.75 shows 0.250 after an undo and 0.750 after a redo.
+- `inspector-clothes-fit-legacy` and `inspector-clothes-fit-overlay`
+  (`IKKOKU_STUDIO_SCENARIO_SCENE`, `inspector-clothes-fit.json`; #333). On
+  the Clothes tab (the `tab` op), character 0, folder 622 and character 963
+  are selected five times. After each character, the inspector's scroll
+  view must be no wider than its visible width, and no accessibility
+  element in it may extend past that width on either side
+  (`inspectorFits`, judged by `InspectorFitRule`). The scroll bars and
+  their parts are not counted. A section's disclosure triangle carries the
+  section's title itself (SwiftUI exposes no separate static text for it),
+  and its frame spans the chevron and the title from 10 pt before the
+  leading edge when the column fits. So a triangle past the width passes
+  only with a title, at that offset (within 1 pt) and within the trailing
+  edge; a column shifted sideways fails. The first assert also needs the clothes-state rows' labels and
+  the shoes-type segments in the accessibility tree. The report names the
+  scroller style, whether the vertical scroller shows, how many triangles
+  passed at the header offset, the elements past the width, and each
+  segmented row's natural width, laid-out width and leading and trailing
+  margins. The two checks run with legacy and with overlay scrollers for
+  the app process only (`-AppleShowScrollBars Always` or `WhenScrolling`,
+  in the argument domain; System Settings are not changed).
+- `inspector-clothes-fit-native-legacy` and `-native-overlay`
+  (`inspector-clothes-fit-native.json`). The same check on the Clothes tab
+  of a native character, added with the `addCharacter` op (the toolbar's
+  Add ▸ Character, female and then male defaults), whose clothing-state
+  rows use the three-state segmented control.
+- `inspector-parent-popup` (`IKKOKU_STUDIO_SCENARIO_SCENE`; #383). The
+  Object tab's Parent popup (`StudioParentPopUp`) through the `parentMenu`
+  op. Closed, it holds one item, the current parent. Opened (the menu
+  delegate's `menuNeedsUpdate`), its options must equal the SwiftUI
+  Picker's, computed with the document's linear functions: None, then every
+  object that is neither the selection nor one of its descendants, in
+  document order, with the current parent selected. Choosing folder 962 for
+  item 623, then None, reparents it through `StudioModel.setParent`. Each
+  Undo restores the parent, and the closed popup shows it again. Character
+  0's options are checked the same way.
+- `studio-inspector-clothes-fit-capture` and `-validate`, in
+  `app-smoke.json`. The same scene started through the UI capture path, as #319's `ui-sel-clothes` capture
+  starts it (`IKKOKU_CAPTURE_UI_STUDIO_TAB=clothes`,
+  `IKKOKU_CAPTURE_UI_SELECT=0,622,963`, legacy scrollers), with
+  `IKKOKU_CAPTURE_UI_FIT_LOG`. Before the fix this start laid the tab out
+  wider than the inspector in 6 of 10 launches. The app replaces the log on
+  a launch's first line; `checks/inspector_fit_log.py` then needs exactly
+  one captured line, on character 963 and the Clothes tab, with the
+  document no wider than the clip and the accessibility fit check passing.
 
-The Tab walk of `keyLoop` commits rounded values as it passes the fields
-(two undo entries in these scenes, on base and on head alike), so the
-checks assert an unchanged document before a walk, not across one.
+The Tab walk of `keyLoop` focuses each field in turn, and focusing a
+Transform field commits the value it shows (as `inspector-edit-deselect`
+pins) into its own component of the object as it is now. An object of the
+imported scene shows CharaStudio's numbers (#391): Position, its Z-X-Y Euler
+rotation and Scale, each to 3 decimals. As in CharaStudio's end-of-edit, a
+Rotation commit takes the value modulo 360 (sign kept) and rebuilds the
+rotation from the three angles, so the other two keep their exact values and
+export unchanged. Native objects show Rotation in whole degrees and Scale to
+2 decimals. A commit that leaves the object unchanged takes no undo step
+(#390), and every move is its own gesture, so a walk adds one step per field
+whose commit changes the object, however long the walk takes. In
+`inspector-hide-cycles` the walks on source character 0 and on object 622
+each add 4:
+- Position X, Y and Z, which have more decimals than the field shows;
+- Rotation Y (359.58267 on character 0, 5.5238795 on object 622), likewise.
+
+Rotation X (-0) and Z (0) read back unchanged, and so do the scales (1.12 and
+1). The Name field writes the same name, and the timeline's duration field
+writes the document without an undo step. With the scene import's step, the
+counts are 5, 5 and 9. Before #391 they were 6, 6 and 11: the Rotation row
+showed the engine's X-Y-Z angles in whole degrees, and committing Rotation X
+also dropped the imported rotation. Before #390 every write pushed a step but
+the walk's writes coalesced, so the count depended on how long the walk took.
+The checks assert an unchanged document before a walk, not across one.
 
 The Object tab reads its state from the model (`StudioModel.objectInspectorState`),
 and the compatibility details read `StudioModel.inspectorDiagnostics`. Since
@@ -1333,6 +1427,93 @@ data, plus data in all three plug-ins.
 
 On `256147d` the three exports' bytes after the PNG equal the Engine's
 exports of the same edits. Phase D ties those to CharaStudio's edits.
+
+### Live source-shader samplers (#338)
+
+`live-samplers` runs the scenario scene (`IKKOKU_STUDIO_SCENARIO_SCENE`, 7
+characters) with the opt-in live source-shader path on
+(`IKKOKU_LIVE_SOURCE_SHADERS=1`). Its inputs are the translated programs
+`IKKOKU_LIVE_SOURCE_PROGRAMS`, the native store `IKKOKU_LIVE_SOURCE_TEXTURES`,
+the streams `IKKOKU_LIVE_SOURCE_STREAMS`, `IKKOKU_SHADER_BINDING_SUPPLEMENT`,
+`IKKOKU_HEAD_MATERIAL_CONTRACT` and `IKKOKU_MAKER_LIBRARY`.
+
+An `assert` step with a `liveSamplers` object (`key`, `counts`) compares one
+character's `SourceShaderLiveAssembly.samplerSummary` whole. That summary
+counts the bound textures of the resolved materials by effective sampler
+state, for example `"aniso 9, mips linear": 1`.
+
+The scenario asserts all 7 characters, exports, reimports and asserts them
+again. It pins the anisotropic mode the Studio call site passes
+(`SourceShaderLiveConfiguration.playerAnisotropicFiltering`): reverted to no
+mode, the Bilinear textures read `"aniso 1, mips nearest"` and the check
+fails.
+
+Only slots that resolve live are counted. While CharaStudio's scene globals
+are unresolved, that is each character's nose line (`toon_nose_lod0`, one
+Bilinear `_MainTex` with aniso 1). See
+[live sampler state](../../docs/reference/renderer.md).
+
+On `165db2c` all 7 characters read `"aniso 9, mips linear": 1` before and
+after the round trip (1/1 `--strict`, 15.4 s). With the call site reverted
+to no mode, all 14 asserts failed with `"aniso 1, mips nearest": 1`.
+
+### Lazy hidden characters (cxs1 gap list, item 7)
+
+Three checks cover the import that leaves hidden characters unbuilt (see
+[hidden characters at import](../../docs/reference/studio/scene-editing.md#hidden-characters-at-import-lazy-builds)).
+Two new `assert` keys serve them: `characterBuilt` (`key`, `built`) checks
+whether a source character has a preview, and, when it is built and
+selected, that its pose and animation state are readable. `statusLacks`
+names a substring the status line must not contain.
+
+- `hidden-character-build` (scenario scene): hides folder key 622, exports
+  and reimports. Character 0 inside it stays unbuilt, and the status and
+  diagnostics say so. Selecting it builds it without changing the render.
+  An outfit and an FK edit made while it is hidden apply, and showing the
+  folder draws it with both. An export and reimport keep the outfit.
+- `hidden-attachment-status` (accessory scene): hides character key 10,
+  which carries an attached folder, exports and reimports, then saves and
+  loads natively. While the character is unbuilt the status line never
+  reports "has no converted character". Selecting the attached folder
+  builds the character.
+- `hidden-animation-clock` (scenario scene and animation catalog): gives
+  character 0 a converted clip at speed 1.7, hides its folder, exports and
+  reimports. A third assert key, `exportedAnimation` (`key`, `paths`,
+  `agree` or `increasing`), reads exported scenes back from disk. After
+  2.5 s of the Studio clock the export saves a later normalizedTime. After a
+  native save and load, 1 s more of clock exports the same state as
+  reimporting that export and running 1 s, and the character stays unbuilt
+  throughout.
+
+RESULTS_PLACEHOLDER
+
+### Undo across scene replacements (#384)
+
+`studio-scenario-undo-scene-replacements` (`undo-scene-replacements.json`,
+scene-x through `IKKOKU_CAMERA_OBJECT_PROBE_SCENE`) checks the undo rule of
+[undo across scene replacements](../../docs/reference/studio/scene-editing.md#undo-across-scene-replacements-384):
+a path that replaces the document keeps only the scene it replaced, and a
+merge keeps every step. It adds two ops and three `assert` keys:
+
+- `loadDocumentRejected` `{path}`: `loadScene(from:)` must throw, and the
+  document and both undo stacks must be unchanged afterwards.
+- `importDocument` `{path}`: File ▸ Import Scene (`importScene(from:)`), a
+  merge into the current scene.
+- `undoDepth`, `redoDepth` and `objectCount`: integers ≥ 0 for the undo and
+  redo stack sizes and the document's object count. `test_run.py` checks
+  their types.
+
+The scenario renames key 1, saves the document and exports the original
+scene. Then:
+1. New Scene leaves 2 undo steps and 0 objects, and Add Folder makes 3.
+2. Opening the saved document leaves 2 steps.
+3. An Open of the original-format export is refused, and the 2 steps stay.
+4. Import Scene makes 3, and the original scene reimport goes back to 2.
+5. Two undos reach the opened scene and stop at 0 undo and 2 redo steps.
+   One `assertRejected` control proves a wrong depth fails.
+6. Two redos return.
+
+`test_run.py` pins this check's op counts, order and paths.
 
 ## Maker scenario hook (T-T04)
 

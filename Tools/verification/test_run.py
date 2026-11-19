@@ -629,6 +629,8 @@ class CheckExecutionTests(unittest.TestCase):
 
 SCENARIO_OPS = {"select", "setVisible", "rename", "toggleCamera", "toggleRoute",
                 "undo", "redo", "newScene", "saveDocument", "loadDocument",
+                # #384: an Open that must be refused, and Import Scene (a merge).
+                "loadDocumentRejected", "importDocument",
                 "setFace", "setBody", "setColor", "resetShape", "resetColors", "setOutfit",
                 "setClothesState", "setAccessoryVisible", "setShoesType", "setExpression", "resetExpression", "setAnimation", "setAnimationSpeed",
                 "setForceLoop", "setFKEnabled", "setFK", "setPoseMode", "selectBone",
@@ -638,7 +640,9 @@ SCENARIO_OPS = {"select", "setVisible", "rename", "toggleCamera", "toggleRoute",
                 "export", "reimport", "assert", "assertRejected", "loadNativePlugin", "unloadPlugins", "measureAccessoryLabels",
                 "delete", "setParent", "exportRejected", "duplicate", "addFolder", "addCamera", "addLight",
                 "focus", "selectRoutePoint", "dragRoutePoint", "captureRoute", "editRoute", "setShowSourceMap",
-                "setUnlimitedLights"}
+                "setUnlimitedLights",
+                # Added for #387 round 3 (the workspace rows a selection change patches).
+                "deselect", "assertWorkspaceRows"}
 
 # R7 phase 2, item 7: the window-run inspector checks (`"inspectorUI": {"steps": [...]}`).
 INSPECTOR_UI_OPS = {"select", "deselect", "focus", "type", "delete", "undo", "redo", "cycle",
@@ -646,7 +650,11 @@ INSPECTOR_UI_OPS = {"select", "deselect", "focus", "type", "delete", "undo", "re
                     # Added with the kept inspector views (R7 phase 2, item 7).
                     "probe", "press", "activateWell", "routePoint", "closeColorPanel",
                     # Added with the model's Object tab state (R7 phase 2, item 7).
-                    "outfit"}
+                    "outfit",
+                    # Added for #333 (the Clothes tab laid out wider than the inspector).
+                    "tab", "addCharacter",
+                    # Added for #383 (the Parent popup that replaced the Picker).
+                    "parentMenu"}
 
 # ST-T11 `editRoute` settings: point edits name the point, route edits do not.
 ROUTE_POINT_SETTINGS = ("delete", "move", "speed", "ease", "connection", "link")
@@ -661,7 +669,7 @@ MAKER_SCENARIO_OPS = {"customization", "selectCoordinate", "setFace", "setBody",
                       "mode", "queueSelectionThenStudio", "advanceMotion", "liveAnimation", "mouthOpen"}
 
 # App settings that name a file the app is asked to write (A-T05).
-APP_OUTPUT_VARIABLES = ("IKKOKU_AUTOCAPTURE", "IKKOKU_CAPTURE_UI", "IKKOKU_CAPTURE_UI_REPORT",
+APP_OUTPUT_VARIABLES = ("IKKOKU_AUTOCAPTURE", "IKKOKU_CAPTURE_UI", "IKKOKU_CAPTURE_UI_REPORT", "IKKOKU_CAPTURE_UI_FIT_LOG",
                         "IKKOKU_NATIVE_PLUGIN_REPORT", "IKKOKU_BENCHMARK_OUTPUT",
                         "IKKOKU_STUDIO_SCENARIO_REPORT", "IKKOKU_MAKER_SCENARIO_REPORT",
                         "IKKOKU_GAMEPLAY_SCENARIO_REPORT",
@@ -707,6 +715,21 @@ class AppOutputArtifactTests(unittest.TestCase):
         self.assertTrue(capture["env"]["IKKOKU_CAPTURE_UI"].endswith(".png"))
         self.assertIn(capture["env"]["IKKOKU_CAPTURE_UI"], artifacts)
         self.assertIn(capture["env"]["IKKOKU_CAPTURE_UI_REPORT"], artifacts)
+
+    def test_clothes_fit_capture_log_is_validated_after_the_capture(self):
+        # #333: the capture path's start (ui-sel-clothes) with legacy scrollers; the
+        # validator reads the fit log that capture writes, after it in the lane.
+        order = [check["id"] for lane, check in self.app_smoke_checks() if lane == "app-smoke.json"]
+        self.assertLess(order.index("studio-inspector-clothes-fit-capture"), order.index("studio-inspector-clothes-fit-validate"))
+        checks = {check["id"]: check for lane, check in self.app_smoke_checks()
+                  if lane == "app-smoke.json"}
+        capture, validate = checks["studio-inspector-clothes-fit-capture"], checks["studio-inspector-clothes-fit-validate"]
+        self.assertEqual(capture["argv"][1:], ["-AppleShowScrollBars", "Always"])
+        self.assertEqual(capture["env"]["IKKOKU_CAPTURE_UI_STUDIO_TAB"], "clothes")
+        self.assertEqual(capture["env"]["IKKOKU_CAPTURE_UI_SELECT"], "0,622,963")
+        self.assertEqual(validate["argv"][:3], ["python3", "Tools/verification/checks/inspector_fit_log.py",
+                                                capture["env"]["IKKOKU_CAPTURE_UI_FIT_LOG"]])
+        self.assertEqual(validate["argv"][3:], ["--selection", "963", "--tab", "Clothes"])
 
     def test_ui_capture_does_not_discover_a_maker_library(self):
         # The synthetic scene's minimal card exercises the source-pose inspector,
@@ -808,6 +831,100 @@ class CaptureRequestInventoryTests(unittest.TestCase):
         self.assertEqual(stale, [], "the app no longer reads: %s" % stale)
 
 
+PRIVATE_SOURCE_MANIFEST = os.path.join(_HERE, "lanes", "private-source.json")
+ENGINE_TESTS = os.path.join(run.REPO_ROOT, "Packages", "Engine", "Tests")
+# The argument of a SourceFixtureSupport gate: a list, a literal or a name.
+FIXTURE_GATE = re.compile(r'SourceFixtureSupport\.(?:shouldRun|require)\(\s*(\[[^\]]*\]|"IKKOKU_\w+"|\w+)')
+# A `let` holding a variable name or a list of them, as gates use by name.
+FIXTURE_CONSTANT = re.compile(r'\blet\s+(\w+)\s*(?::\s*[\w\[\]]+\s*)?=\s*(\[[^\]]*\]|"IKKOKU_\w+")')
+# Written by the tests, never read (Tools/verification/README.md, private-source.json row).
+PRIVATE_SOURCE_OUTPUTS = re.compile(r"_(OUTPUT|REPORT|RESULT)$|^IKKOKU_(SAVE_SCENE|EXPORT_SOURCE_SCENE)$")
+
+
+def _gated_fixtures(text):
+    """The IKKOKU_* names one Swift file's SourceFixtureSupport gates take.
+
+    A name reaches a gate as a literal, or through a `let` constant or list in
+    the file. A function parameter (`require(key)`) is left to its callers'
+    gates.
+    """
+    constants = dict(FIXTURE_CONSTANT.findall(text))
+    names = set()
+
+    def resolve(expression, depth=0):
+        if expression.startswith("["):
+            for item in expression[1:-1].split(","):
+                if item.strip():
+                    resolve(item.strip(), depth + 1)
+        elif expression.startswith('"'):
+            names.add(expression.strip('"'))
+        elif expression in constants and depth < 4:
+            resolve(constants[expression], depth + 1)
+
+    for match in FIXTURE_GATE.finditer(text):
+        resolve(match.group(1))
+    return names
+
+
+class PrivateSourceManifestTests(unittest.TestCase):
+    """private-source.json supplies every variable an Engine test gates on.
+
+    run.py passes a check only the IKKOKU_* variables it declares, so a
+    variable a `SourceFixtureSupport` gate names but the manifest leaves out
+    skips its tests in the lane and fails them under --strict (2026-11-02:
+    15 had drifted, and the strict lane failed 24 tests). Inputs are
+    fixtures, hashed and bounded from the environment file. An output the
+    tests write is never a fixture: the opt-in ones (`PRIVATE_SOURCE_OUTPUTS`)
+    stay unset, and a gated output directory is a lane-owned path in the
+    check's `env`.
+    """
+
+    def private_source_check(self):
+        with open(PRIVATE_SOURCE_MANIFEST, encoding="utf-8") as handle:
+            (check,) = json.load(handle)["checks"]
+        return check
+
+    def test_every_gated_engine_fixture_is_declared(self):
+        gated = set()
+        for root, _, files in os.walk(ENGINE_TESTS):
+            for name in files:
+                # The helper and its own tests name made-up variables.
+                if name.endswith(".swift") and not name.startswith("SourceFixtureSupport"):
+                    with open(os.path.join(root, name), encoding="utf-8") as handle:
+                        gated |= _gated_fixtures(handle.read())
+        self.assertGreater(len(gated), 50, "the gate reader found almost nothing")
+        check = self.private_source_check()
+        declared = {fixture["env"] for fixture in check["fixtures"]} | set(check["env"])
+        missing = sorted(name for name in gated - declared if not PRIVATE_SOURCE_OUTPUTS.search(name))
+        self.assertEqual(missing, [], "declare these in private-source.json: %s" % missing)
+
+    def test_outputs_are_lane_owned_and_never_fixtures(self):
+        check = self.private_source_check()
+        fixtures = {fixture["env"] for fixture in check["fixtures"]}
+        self.assertEqual(sorted(name for name in fixtures if PRIVATE_SOURCE_OUTPUTS.search(name)), [])
+        self.assertEqual(sorted(fixtures & set(check["env"])), [])
+        # `swift test --package-path P` runs the tests with P as the working
+        # directory, so an output path resolves against it, not the repo root.
+        argv = check["argv"]
+        package = argv[argv.index("--package-path") + 1] if "--package-path" in argv else "."
+        for name, value in check["env"].items():
+            resolved = os.path.normpath(os.path.join(package, value))
+            self.assertFalse(os.path.isabs(value), "%s=%s must be relative" % (name, value))
+            self.assertTrue(resolved.startswith(os.path.join(".local", "verification", "private-source") + os.sep),
+                            "%s=%s resolves to %s, not a lane-owned output path" % (name, value, resolved))
+
+    def test_gate_reader_follows_constants_and_lists(self):
+        text = '''
+        private let probe = "IKKOKU_P"
+        private let pair: [String] = [probe, "IKKOKU_Q"]
+        @Test(.enabled(if: SourceFixtureSupport.shouldRun(pair) && SourceFixtureSupport.shouldRun(["IKKOKU_R"])))
+        func a() throws { _ = try SourceFixtureSupport.require("IKKOKU_S") }
+        func helper(key: String) throws { _ = try SourceFixtureSupport.require(key) }
+        let unrelated = "IKKOKU_T"
+        '''
+        self.assertEqual(_gated_fixtures(text), {"IKKOKU_P", "IKKOKU_Q", "IKKOKU_R", "IKKOKU_S"})
+
+
 class StudioScenarioLaneTests(unittest.TestCase):
     """The shipped studio-scenarios lane and its scenario files are well-formed.
 
@@ -830,7 +947,7 @@ class StudioScenarioLaneTests(unittest.TestCase):
                       and not name.startswith(("maker-", "gameplay-")))
 
     def test_lane_validates_and_covers_every_scenario(self):
-        self.assertEqual(len(self.checks), 89)
+        self.assertEqual(len(self.checks), 99)
         referenced = set()
         for check in self.checks:
             scenario = check["env"]["IKKOKU_STUDIO_SCENARIO"]
@@ -853,6 +970,12 @@ class StudioScenarioLaneTests(unittest.TestCase):
                 self.assertRegex(step["field"], r"^(name|vector[0-9]+)$")
             if op == "press":
                 self.assertTrue(step["label"])
+            if op == "tab":
+                self.assertIn(step["label"], ("object", "pose", "face", "clothes", "scene"))
+            if op == "addCharacter":
+                self.assertIn(step["sex"], ("female", "male"))
+            if op == "parentMenu" and "key" in step:
+                self.assertIs(type(step["key"]), int)
             if op in ("routePoint", "outfit"):
                 self.assertIs(type(step["index"]), int)
                 self.assertGreaterEqual(step["index"], 0)
@@ -866,12 +989,23 @@ class StudioScenarioLaneTests(unittest.TestCase):
             for name in ("undoCount", "redoCount", "keyViews", "hiddenKeyViews", "activeWells"):
                 if name in step:
                     self.assertIs(type(step[name]), int)
-            for name in ("probeHit", "probeFocusable", "editing", "unchanged", "exists"):
+            for name in ("probeHit", "probeFocusable", "editing", "unchanged", "exists", "inspectorFits"):
                 if name in step:
                     self.assertIs(type(step[name]), bool)
             for name in ("axContains", "axAbsent"):
                 if name in step:
                     self.assertTrue(all(isinstance(text, str) and text for text in step[name]))
+
+    def test_launch_arguments_are_known_per_process_settings(self):
+        # #333: a check may pass per-process settings after the binary, through
+        # the argument domain, never through System Settings: only these
+        # names and values, as name/value pairs.
+        allowed = {"-AppleShowScrollBars": {"Always", "WhenScrolling"}}
+        for check in self.checks:
+            extra = check["argv"][1:]
+            self.assertEqual(len(extra) % 2, 0, check["id"])
+            for name, value in zip(extra[::2], extra[1::2]):
+                self.assertIn(value, allowed.get(name, set()), "%s: %s %s" % (check["id"], name, value))
 
     def test_scenario_reports_are_artifacts(self):
         for check in self.checks:
@@ -930,6 +1064,15 @@ class StudioScenarioLaneTests(unittest.TestCase):
                     self.assertIs(type(step["index"]), int)
                     self.assertIn(step["index"], range(100, 2001))
                     self.assertEqual(step["key"], step["accessoryLabels"]["key"])
+                if "liveSamplers" in step:
+                    self.assertIn(op, ("assert", "assertRejected"))
+                    samplers = step["liveSamplers"]
+                    self.assertIs(type(samplers["key"]), int)
+                    self.assertTrue(samplers["counts"], "an empty count pins nothing: %s" % path)
+                    for state, count in samplers["counts"].items():
+                        self.assertRegex(state, r"^aniso ([1-9]|1[0-6]), mips (linear|nearest|none)$")
+                        self.assertIs(type(count), int)
+                        self.assertGreater(count, 0)
                 if "accessoryLabels" in step:
                     labels = step["accessoryLabels"]
                     self.assertIs(type(labels["key"]), int)
@@ -1088,7 +1231,8 @@ class StudioScenarioLaneTests(unittest.TestCase):
                         self.assertEqual(len(edit["position"]), 3)
                     if "refused" in edit:
                         self.assertTrue(edit["refused"], "a refused route edit needs a specific diagnostic")
-                if op in ("export", "reimport", "saveDocument", "loadDocument", "exportRejected"):
+                if op in ("export", "reimport", "saveDocument", "loadDocument", "exportRejected",
+                          "loadDocumentRejected", "importDocument"):
                     self.assertTrue(step["path"].startswith(".local/"),
                                     "scene writes must stay under .local/: %s" % step["path"])
                 if op in ("assert", "assertRejected"):
@@ -1096,23 +1240,36 @@ class StudioScenarioLaneTests(unittest.TestCase):
                                             "activeCamera", "routePlaying",
                                             "sourceRuntime", "animation", "fk", "position",
                                             "eyeLook", "blink", "handPattern",
-                                            "diagnosticContains", "statusContains", "indicatorContains",
-                                            "treeLabel", "view", "render",
+                                            "diagnosticContains", "statusContains", "statusLacks", "indicatorContains",
+                                            "characterBuilt", "exportedAnimation", "treeLabel", "view", "render",
                                             "exportIdenticalToSource", "outfit", "clothes", "ik", "expression", "accessoryLabels", "pluginMount",
-                                            "children", "absent", "activeCopyOf", "route", "routeLines", "sourceMap") if k in step]
+                                            "children", "absent", "activeCopyOf", "route", "routeLines", "sourceMap",
+                                            "liveSamplers", "undoDepth", "redoDepth", "objectCount") if k in step]
                     self.assertTrue(declared, "assert declares nothing: %s" % path)
+                    for name in ("undoDepth", "redoDepth", "objectCount"):
+                        if name in step:
+                            # #384: history depths and the document's object count.
+                            self.assertIs(type(step[name]), int)
+                            self.assertGreaterEqual(step[name], 0)
+                    if "characterBuilt" in step:
+                        # #373 lazy hidden characters: one source key and whether its character is built.
+                        self.assertEqual(set(step["characterBuilt"]), {"key", "built"})
+                        self.assertIs(type(step["characterBuilt"]["key"]), int)
+                        self.assertIs(type(step["characterBuilt"]["built"]), bool)
                     if "sourceMap" in step:
                         # ST-A11: `none`, or census fields; pick points are two viewport fractions.
                         source_map = step["sourceMap"]
                         self.assertTrue(set(source_map) <= {"none", "map", "draws", "lightmappedDraws", "particleDraws", "skyDraws", "blockImages",
                                                             "unlitDraws", "silhouetteDraws", "optionDraws",
+                                                            "probeLitDraws", "sunLitDraws", "receivingDraws", "perVertexReceiveDraws", "sunCasters",
                                                             "loading", "lineContains", "lineAbsent", "pickNothingAt", "pickSomethingAt"},
                                         "unknown sourceMap field: %s" % path)
                         self.assertTrue(source_map, "a sourceMap assert must name what it checks: %s" % path)
                         if source_map.get("none"):
                             self.assertEqual(set(source_map), {"none"}, "no map has no census to compare: %s" % path)
                         for name in ("map", "draws", "lightmappedDraws", "particleDraws", "skyDraws", "blockImages",
-                                     "unlitDraws", "silhouetteDraws", "optionDraws"):
+                                     "unlitDraws", "silhouetteDraws", "optionDraws",
+                                     "probeLitDraws", "sunLitDraws", "receivingDraws", "perVertexReceiveDraws", "sunCasters"):
                             if name in source_map:
                                 self.assertIs(type(source_map[name]), int)
                         for name in ("pickNothingAt", "pickSomethingAt"):
@@ -1270,6 +1427,22 @@ class StudioScenarioLaneTests(unittest.TestCase):
                 exported, imported = ops.index("export"), ops.index("reimport")
                 self.assertLess(exported, imported)
                 self.assertEqual(steps[exported]["path"], steps[imported]["path"])
+            elif check["id"] in ("studio-scenario-hidden-attachment-status", "studio-scenario-hidden-animation-clock"):
+                # #373 lazy hidden characters: a hidden character must stay
+                # unbuilt (and its data-only clock keep running) across the
+                # original-format export/reimport AND a same-process native
+                # save and load, so these checks run both round trips. They
+                # have no fresh-process partner (each reloads its own save).
+                self.assertEqual((ops.count("saveDocument"), ops.count("loadDocument")), (1, 1))
+                saved, loaded = ops.index("saveDocument"), ops.index("loadDocument")
+                self.assertLess(saved, loaded)
+                self.assertEqual(steps[saved]["path"], steps[loaded]["path"])
+                self.assertIn("reimport", ops)
+                self.assertLess(ops.index("export"), ops.index("reimport"))
+                for index, op in enumerate(ops):
+                    if op == "reimport":
+                        self.assertIn(steps[index]["path"], [steps[j]["path"] for j in range(index) if ops[j] == "export"],
+                                      "a reimport reads an earlier export: %s" % path)
             elif check["id"] == "studio-scenario-route-children-edit":
                 # ST-T11 route children: the save side reloads its native
                 # document in the same process, then exports and reimports the
@@ -1291,6 +1464,29 @@ class StudioScenarioLaneTests(unittest.TestCase):
                     first = json.load(handle)["steps"][0]
                 self.assertEqual((first["op"], first["path"]), ("loadDocument", steps[saved]["path"]),
                                  "the check after %s must load what it saved" % check["id"])
+            elif check["id"] == "studio-scenario-undo-scene-replacements":
+                # #384: the undo history across every scene replacement in
+                # one process. It saves a native document and opens it again
+                # (an Open), refuses an Open of the exported original-format
+                # scene, merges the saved document (Import Scene) and reimports
+                # the export (an original scene import), so it mixes both file
+                # formats on purpose and has no fresh-process partner.
+                self.assertEqual((ops.count("saveDocument"), ops.count("loadDocument")), (1, 1))
+                self.assertEqual((ops.count("export"), ops.count("reimport")), (1, 1))
+                self.assertEqual((ops.count("loadDocumentRejected"), ops.count("importDocument"), ops.count("newScene")), (1, 1, 1))
+                saved, loaded = ops.index("saveDocument"), ops.index("loadDocument")
+                exported, imported = ops.index("export"), ops.index("reimport")
+                refused, merged = ops.index("loadDocumentRejected"), ops.index("importDocument")
+                self.assertLess(saved, ops.index("newScene"))
+                self.assertLess(ops.index("newScene"), loaded)
+                self.assertLess(loaded, refused)
+                self.assertLess(refused, merged)
+                self.assertLess(merged, imported)
+                self.assertLess(exported, refused)
+                self.assertEqual(steps[saved]["path"], steps[loaded]["path"])
+                self.assertEqual(steps[saved]["path"], steps[merged]["path"])
+                self.assertEqual(steps[exported]["path"], steps[refused]["path"])
+                self.assertEqual(steps[exported]["path"], steps[imported]["path"])
             elif "saveDocument" in ops or "loadDocument" in ops:
                 self.assertNotIn("export", ops,
                                  "a save/load scenario must not mix in the "

@@ -1,6 +1,7 @@
 import Foundation
 import CryptoKit
 import Gameplay
+import Character // StableEncodingKey: objectIdentities saves in key order (#394)
 
 public struct SourceStudioPluginState: Codable, Sendable, Equatable {
     public struct PackageIdentity: Codable, Sendable, Equatable { public let guid: String, manifestSHA256: String }

@@ -385,8 +385,14 @@ IKKOKU_CAPTURE_UI="$PWD/.local/studio-ui.png" IKKOKU_CAPTURE_UI_MODE=studio \
 UI capture opens the application window; it is distinct from offscreen rendering.
 It waits for readiness rather than a fixed delay. SwiftUI `onAppear` must have
 run, and a visible window's laid-out bounds must be nonzero and unchanged for
-five polls 0.1 s apart. Otherwise it exits 1 after `IKKOKU_CAPTURE_UI_TIMEOUT`
-seconds (default 30, at most 600), naming what was not ready.
+five polls 0.1 s apart. In Studio, while the Pose tab shows a visible source
+character with a live eye pattern and the live step runs, the poll also waits
+for that character's first eye-look update, so the "Eye look" section is in the
+capture (#364). The live step runs only while the viewport's window shows (with
+the display off it never does, and the section stays out); a change of that
+restarts the five polls, and the log's `ui snapshot state` line names the
+captured state. Otherwise it exits 1 after `IKKOKU_CAPTURE_UI_TIMEOUT` seconds
+(default 30, at most 600), naming what was not ready.
 
 With `IKKOKU_CAPTURE_UI_MODE=studio`, `IKKOKU_CAPTURE_UI_SELECT` lists up to 16
 source keys, comma-separated, or `none` to clear the selection (R7 phase 2,
@@ -462,8 +468,8 @@ The app capture also reads `IKKOKU_CARD`, `IKKOKU_CAPTURE_SEX`,
 `IKKOKU_SOURCE_SCENE_EDITS` needs `IKKOKU_SOURCE_SCENE`. Card, scene and
 original-scene outputs are `IKKOKU_EXPORT_SOURCE_CARD`, `IKKOKU_SAVE_CARD`,
 `IKKOKU_SAVE_SCENE`, `IKKOKU_LOAD_SCENE` and `IKKOKU_EXPORT_SOURCE_SCENE`.
-`IKKOKU_BENCHMARK_OUTPUT` takes `…_FRAMES` and `…_SIMULATION_FRAMES`; the latter
-also needs `IKKOKU_SOURCE_SCENE`. Plugin evidence is `IKKOKU_NATIVE_PLUGIN_REPORT`
+`IKKOKU_BENCHMARK_OUTPUT` takes `…_FRAMES`, `…_MAP_SHADOW` (`every-frame`) and
+`…_SIMULATION_FRAMES`; the latter also needs `IKKOKU_SOURCE_SCENE`. Plugin evidence is `IKKOKU_NATIVE_PLUGIN_REPORT`
 and `IKKOKU_APPLICATION_FOCUS`.
 
 Startup inputs (`IKKOKU_SOURCE_SCENE`, `IKKOKU_SOURCE_CARD`, `IKKOKU_OPEN_RIG`,

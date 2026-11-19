@@ -14,6 +14,8 @@ The third slice adds Map 34 `空き教室` (`akikyoushitu`). It draws with its l
 
 The fourth slice converts the other 40 maps, so all 42 installed `Map_XX` rows draw. It adds unlit textures, animated particles, Studio's mob silhouettes and map option, and RGBA32 lightmaps. What the app cannot draw is skipped by class and named on the status line. The new maps' images are BC blocks only, without PNG copies. See [all maps](#all-maps-slice-4).
 
+The fifth slice draws the maps' realtime sun with its shadows, and lights the `Standard` parts without a lightmap by the map's ambient instead of as items. The sun's term is Standard's diffuse and direct specular at the material's smoothness. Map 33's line becomes `baked lightmaps, realtime sun with shadows; approximated: no reflections, no normal, metallic or detail maps, no fog, no camera effects`. Smoothness has no parity check against the original yet. See [lighting](#lighting-slice-5) and [the engine](#engine-slice-5).
+
 ## Recovered rules
 
 These rules come from the recovered managed code (`Studio.Map`, `Studio.MapCtrl`, `Studio.Info`, `SunLightInfo`, `LightmapPrefab`, `Manager.Scene`). The original player confirmed them in phase B (see [evidence](#evidence)).
@@ -78,7 +80,7 @@ With the first slice's export, the map's only shader, `Standard`, made the catal
   - The import job starts the load beside the characters. The commit hands both to the model. A cancelled or failed import cancels the load.
   - The result returns on the main queue. Synchronous paths (captures, scenarios) wait for the load instead, so their first frame already has the map.
   - A finished load nobody took is released.
-- **Textures.** Since slice 3, an image listed in `ikkokuBlockImages` uploads its BC blocks on the worker (see [block images](#block-images)), and the rest load through `ResourceStore` as before. Textures are registered privately (`cacheNew: false`). `release()` retires meshes and textures through `ResourceStore.retire(meshes:)` and the new `retire(textures:)`, so a frame already in flight keeps them until a later frame is prepared. Slice 2's lightmaps and emission maps are owned and released the same way. A load that fails part-way unregisters everything it registered.
+- **Textures.** Since slice 3, an image listed in `ikkokuBlockImages` uploads its BC blocks on the worker (see [block images](#block-images)), and the rest load through `ResourceStore` as before. Textures are registered privately (`cacheNew: false`). `release()` retires meshes and textures through `ResourceStore.retire(meshes:)` and the new `retire(textures:)`, so a frame already in flight keeps them: the meshes until a later submitted frame is prepared, the textures until a later frame is submitted. Slice 2's lightmaps and emission maps are owned and released the same way. A load that fails part-way unregisters everything it registered.
 - **Lightmapped parts (slice 2).** `SourceStudioLightmapSet.parse` reads the glTF's `ikkokuLightmaps` extras. An export without them gives nil, and every part keeps the item material. A part whose mesh has a lightmap index of 0 or more, and whose material has `ikkokuStandard` extras, is drawn with the map material (`MaterialKindMap`, see [the material](#the-map-material)). The load fails by name, and registers nothing, when such a part names a lightmap the map does not carry or has no TEXCOORD_1, or when a lightmap file's size or SHA-256 differs from the extras.
 - **Placement.** `SourceStudioMapPlacement.mapRootMatrix` computes `T(pos) · R(UnityCoordinates.eulerDegrees(rot))` in the engine basis, which is B · M_unity · B with B = diag(1, 1, -1, 1). A non-finite component is refused by name. `mapRoot` parts are drawn at `root × local`, and `scene` parts at their authored matrix.
 - **Timing.** Each placement sets the `sourceMapReady` startup mark (the perf report keeps the first) and prints `[ikkoku] source map: <draws> draws (<n> lightmapped, <n> particle, <n> sky), <triangles> triangles, <bytes> texture bytes (<bytes> in <n> lightmaps, <bytes> in <n> sky cubes; images: <n> as BC blocks, <n> decoded, source <blocks|decoded>); loaded in <ms> on a worker, placed in <ms> on the main thread`. The scenario census has the same fields. An import's load usually ends before the import commits, so the map is placed at the commit.
@@ -87,6 +89,7 @@ With the first slice's export, the map's only shader, `Standard`, made the catal
 - **Status line.** `sourceMapLine` sits under the Studio status line (`studio.status.map`). Its forms:
   - `Map 33 空き部室 (bushitu): baked lightmaps; approximated: no realtime sun or its shadows, no specular or reflections, no normal, metallic or detail maps, no fog, no camera effects · 1492 triangles, 8 draws` once the map is drawn with its lightmaps;
   - `…: baked lightmaps on <n> of <m> draws (the rest as items); approximated: …` when only some parts are lightmapped;
+  - since slice 5, for an export with map lighting: `…: baked lightmaps, realtime sun with shadows; approximated: no reflections, no normal, metallic or detail maps, no fog, no camera effects · …`. Partly lightmapped maps say `baked lightmaps on <n> of <m> draws (<k> by the map's ambient)`, and a map without a sun says `approximated: no realtime sun, …`. `Transparent mode drawn as Fade` is added when a lit part is in Standard's Transparent mode (see [the engine](#engine-slice-5));
   - `…: approximated: no baked lightmaps, map lights, sun-type lighting, fog or ambient; shaders approximated (Standard) · …` for an export without lightmaps;
   - `…: loading`;
   - `…: not converted (<bundle>); no map shown`;
@@ -474,9 +477,9 @@ Not drawn:
 
 ### Sampler state
 
-The player runs `QualitySettings.anisotropicFiltering` `ForceEnable`. The phase-map34 trace (`.local/sta11c-map34/phase-map34/map-trace.json`) records it in every case's `capture.quality` and `oracle.quality`, beside the lightmaps' `anisoLevel` 3 and the sky and particle textures' 1. Every mipmapped texture that is not point-filtered is then sampled with anisotropy clamped into Unity's forced limits, [9, 16]. No game assembly calls `Texture.SetGlobalAnisotropicFilteringLimits` or sets the quality value: only `UnityEngine.dll` names them. So the lightmaps' `anisoLevel` 3 and the particle and base textures' 1 are raised to 9. D3D11 samples an anisotropic texture with linear mips.
+The player runs `QualitySettings.anisotropicFiltering` `ForceEnable`. The phase-map34 trace (`.local/sta11c-map34/phase-map34/map-trace.json`) records it in every case's `capture.quality` and `oracle.quality`, beside the lightmaps' `anisoLevel` 3 and the sky and particle textures' 1. The code (`TranslatedSourceProgram.SamplerConfiguration`) then samples every texture that is not point-filtered and has `anisoLevel` above 0, mipmapped or not, with anisotropy clamped into Unity's forced limits, [9, 16]. For single-level textures this is shown by the frame, not by a direct player probe: a mutation check that left them unforced moved 3,871 character pixels on the controlled original frame, every family ended further from the player's frame, and `toon_eyew_lod0` failed its gate (p99 5 > 4). No game assembly calls `Texture.SetGlobalAnisotropicFilteringLimits` or sets the quality value: only `UnityEngine.dll` names them. So the lightmaps' `anisoLevel` 3 and the particle and base textures' 1 are raised to 9. D3D11 samples an anisotropic texture with linear mips.
 
-`map_fragment` now samples the light map, direction map, base, emission and particle textures with anisotropy 9 and linear mips (`lightmapSampler`, `mapForcedAnisoRepeat`). Character and item draws keep `linearRepeat`.
+`map_fragment` now samples the light map, direction map, base, emission and particle textures with anisotropy 9 and linear mips (`forcedAnisoClamp`, `forcedAnisoRepeat`). Since 2026-11-01, character and item draws do too ([renderer](../renderer.md#source-map-sky-particles-and-block-images-st-a11-slice-3-2026-10-26)).
 
 The probe gates found it. With trilinear sampling, map 34's irradiance failed on surfaces seen edge-on (baseboards, shelf boards), and the particles failed outright. A sampler sweep, with one rebuild and the four captures per state (`.local/sta11c-map34/exp/<state>/comparison.json`):
 
@@ -1005,6 +1008,255 @@ Release captures, 17 per set: slice 3's 16 and map 41's scene. They come from `m
 - **Scenes.** No scene in `environment.json` names a map other than 33, 34 and 41. The others name none, and the legacy scene prints no map line.
 - **Lanes.** `main`'s scenario files expect the slice-3 counts: map 33's 8 draws, and map 34's 30 lightmapped draws and 1 particle draw. So `source-map`, `-source-map34` and the reload pair would fail on the slice-4 export (inferred from the files; `main`'s lane was not run on it). Install it only once this change has merged, and merge `main` into branches that run the Studio lane.
 
+## Lighting (slice 5)
+
+Slice 5 draws the realtime sun, the ambient and the sun's shadows on the maps' `Standard` draws: the 64% of their triangles that have no lightmap, and the sun on the lightmapped ones too. It comes in two changes. This one is the converter's side: it writes the lighting data, and the app reads none of it yet. The engine change draws it.
+
+### What the offline checks found
+
+These were measured against the slice-4 oracle, before any code (`.local/sta11d-map-coverage/vm-maps`, the 14 cases with the irradiance pair). They use interior pixels and world normals decoded from the 8-bit depth-normals images. The scripts are in `.local/sta11d-pr-b/slice5/`.
+
+- **No light probes.** None of the 42 map scenes has one: their `LightProbes` assets are empty. So a `Standard` renderer without a lightmap takes RenderSettings' ambient probe.
+- **Flat maps use the colour.** Maps 1–7, 18, 28, 34 and 41 are in flat ambient mode (the other 31 use the skybox). Their probe-lit irradiance is exactly the linearised sky colour, (0.0370, 0.0421, 0.0546) in maps 1 and 41. The serialized `m_AmbientProbe` is stale in these maps and misses by 0.27.
+- **Skybox maps use the serialized probe.** In the 12 skybox cases, SH9 of `m_AmbientProbe` at the world normal matches with a mean error of 0.0003–0.002 and a p99 of at most 0.0094; those errors come from the 8-bit normals.
+  - It holds under all three sun types.
+  - It also holds in maps 19 and 25 with the map rotated by caMap (4, 25, −3), so the probe is in world space.
+  - The flat colour misses by 0.12–0.29.
+- **The sun's colour.** The term is `GammaToLinearSpace(color × intensity)` (Unity 5.6 with `lightsUseLinearIntensity` off), times Standard's Disney diffuse, times n·l.
+  - On map 21's probe-lit pixels, the unshadowed ratio is 0.9993. Map 11 gives 0.98 and map 15 gives 0.976.
+  - `linear(color) × intensity` gives ratios of 1.35–1.59, and Lambert gives 1.069.
+- **Shadow strength.** A shadowed pixel keeps 1 − strength of the sun: 0.104 in map 11, whose strength is 0.897.
+- **Direction.** `SunLightInfo` sets the sun's local Euler angles, so the sun turns with the map: its world rotation is mapRoot × Euler(angle). This matches map 41 at caMap (4, 25, −3) to 1e-5.
+- **Only the direct term.** On pixels facing away from the sun, `irradianceLit − irradiance` is exactly 0 in every case, maps 21 and 41 included. The lit pass changed no indirect light.
+- **Open.** Where lit, map 21's lightmapped surfaces read 0.74 of the modelled sun, or 0.96 beyond 30 m. This is not explained and not claimed. The next VM phase renders the lit pass once more with the sun's shadows off, which separates the shadow from the rest.
+- **The suns in the scene files.**
+  - All 33 suns have soft shadows, with the resolution from the quality settings.
+  - Their strength is 1, except in maps 5 (0.85), 11 (0.897), 16 (0.116) and 40 (0.5).
+  - Bias is 0–0.1, normal bias 0–0.4, and near plane 0.1–0.47.
+  - The culling mask is 2048 (layer 11) in 25 maps. In maps 4–7, 28, 34 and 41 it is 2064, which adds layer 4 (Water). Map 33's sun lights every layer but 0, 10 and 12.
+  - Nine maps show no sun: 29–32 and 35–39.
+
+### Converter (slice 5)
+
+`export_map_scene.py export` adds the following, and changes nothing else:
+
+- **`ikkokuMapLighting`** in the glTF's scene extras:
+  - **`ambient`:**
+    - the mode: `skybox`, `trilight` or `flat`, with Unity's number;
+    - the three colours as serialized (gamma);
+    - the intensity;
+    - the 27 `m_AmbientProbe` coefficients: red 0–8, green 9–17, blue 18–26.
+  - **`sun`,** or null when there is none. The sun is the one enabled realtime directional light that some sun type shows. A baked or mixed one, or a second one, is refused by name. The record holds:
+    - its path, role and culling mask;
+    - the sun types that show it, and whether it is `SunLightInfo`'s target;
+    - its shadow settings: type, strength, bias, normal bias, near plane and resolution;
+    - per sun type (0, 1 and 2, and −1 for the authored state): the colour and intensity as authored, and the unit direction to the light. The direction is Z reflected, in its role's frame. For a sun under mapRoot, that is mapRoot's frame, so the app turns it with the map.
+  - **`shadowCasters`:** the `ShadowsOnly` renderers in the sun's mask. These are the stand-ins for walls and pillars that only cast shadows. They are merged per role, visibility and option into one position accessor and one index accessor, written after every mesh's and sky's data. A submesh without an opaque lit shader is left out and listed in provenance.
+- **`ikkokuMap.shadowRuns`** on each lit mesh (`Standard`, `Custom/StandardDouble`, `Legacy Shaders/Diffuse`) of a map with a sun. Each run is `[first index, index count, cast mode, receives, in the sun's mask]`, and the runs cover the mesh's indices in order. Each renderer's triangles are contiguous, so the runs need no new vertex data.
+- **More of each material's `ikkokuStandard`** (`Standard` and `Custom/StandardDouble`), the inputs the sun's term reads beyond slice 2's albedo and metallic:
+  - **`smoothness`,** by Standard's `MetallicGloss`:
+    - under `_SMOOTHNESS_TEXTURE_ALBEDO_CHANNEL_A`, the albedo's alpha times `_GlossMapScale`, with or without `_METALLICGLOSSMAP` (metallic then still comes from the map's red channel);
+    - else, under `_METALLICGLOSSMAP`, the metallic map's alpha times `_GlossMapScale`;
+    - else `_Glossiness`.
+  - **`smoothnessSource`** (`glossiness`, `metallicGlossMapAlphaMean` or `albedoAlphaMean`) and **`smoothnessFactor`** (`_GlossMapScale`, or null for `_Glossiness`).
+  - **`smoothnessApproximation`.** A texture's alpha stands in by its mean over the texture, never sRGB-decoded, and this says so, as `metallicSource` does for metallic. A missing texture is Unity's white default, alpha 1. It is null for `_Glossiness`.
+  - **`specularHighlights`** and **`glossyReflections`:** false under `_SPECULARHIGHLIGHTS_OFF` and `_GLOSSYREFLECTIONS_OFF`.
+  - **`premultiplyAlpha`:** `_ALPHAPREMULTIPLY_ON`, the Transparent mode, which multiplies diffColor by alpha.
+
+  `Legacy Shaders/Diffuse` materials get no smoothness field at all, not 0.
+- **`provenance.json`:** `lighting` (counts, with `standardInputs`: the smoothness sources, the approximations and the three flags), each light's other shadow fields, and the conversion note.
+
+Tests (`test_export_map_scene.py`, `LightingTests`):
+
+- the Euler rule against Unity's `Quaternion.Euler`;
+- the direction to the light against the player's trace, at rest and turned with the map;
+- the world rotation, parents first and without scale;
+- the ambient record and the modes it refuses;
+- which light is the sun;
+- a sun type's entry;
+- merging the runs;
+- smoothness in each of the three cases, with and without its texture, and alpha means that are not sRGB-decoded;
+- the three keyword flags, and no smoothness on `Legacy Shaders/Diffuse`;
+- the provenance counts.
+
+### What Standard's sun reads (slice 5)
+
+Standard's ForwardBase pass lights a pixel with the sun from the albedo, metallic, smoothness, the normal and the light. Before the re-export, every material the 42 maps draw lit was checked against what `ikkokuStandard` carries (`.local/sta11d-slice5/tools/standard_audit.py`). There are 2,200 material records, counted once per map:
+
+- 2,189 `Standard`;
+- 11 `Custom/StandardDouble`;
+- no `Standard (Specular setup)` and no `Legacy Shaders/Diffuse`.
+
+| Input | Materials | In the export | Why |
+|---|---:|---|---|
+| Smoothness from `_Glossiness` | 1,719 | `smoothness` | 1,381 of them are above 0. |
+| Smoothness from `_MetallicGlossMap` alpha × `_GlossMapScale` | 476 | `smoothness`, the alpha's mean | Each has its texture. Per-texel smoothness needs the map drawn. |
+| Smoothness from albedo alpha × `_GlossMapScale` | 5 | `smoothness`, the alpha's mean | Maps 4–7 and 34, all opaque. None also has `_METALLICGLOSSMAP`. |
+| `_SPECULARHIGHLIGHTS_OFF` | 64 | `specularHighlights` | |
+| `_GLOSSYREFLECTIONS_OFF` | 66 | `glossyReflections` | The reflection probe's term, not the sun's. Recorded because it is a flag. |
+| `_ALPHAPREMULTIPLY_ON` (Transparent mode) | 35 | `premultiplyAlpha` | It multiplies diffColor by alpha before the sun's term. |
+| `Custom/StandardDouble` | 11 (map 28) | as `Standard`: `smoothness` from `_Glossiness` | See below. |
+| `_NORMALMAP` with a `_BumpMap` texture | 1,015 | no | The sun reads the per-texel normal. That needs the normal texture and tangents in the export, and the engine to draw them. `_BumpScale` scales that texture's normal, so it is not added without it. The other 111 with the keyword have no texture, so Unity's flat default changes nothing. |
+| `_DETAIL_MULX2` | 201 | no | Per-texel: 11 have a detail albedo texture and 190 a detail normal map. |
+| `_PARALLAXMAP` | 107 | no | Each has a height texture. The parallax offset moves every per-texel lookup, so it needs those textures drawn. |
+| An `_OcclusionMap` texture | 2 | no | Occlusion scales only the indirect light, not the sun's term. |
+| `_SpecColor`, `_SpecGlossMap` (Specular setup) | 0 | — | No such material. |
+
+No material carries a keyword combination outside the three smoothness cases. `_SmoothnessTextureChannel` is set only where its keyword is, and the two highlight floats always match their keywords. One `Standard` material in map 35 also carries `_ALPHA_A_ON` and `_ALPHA_B_ON`, which Standard does not read.
+
+`Custom/StandardDouble` reads the same inputs as `Standard`, from its own shader in map 28's bundle:
+
+- its 27 properties are `Standard`'s, by name and type, and its editor is `StandardShaderGUI`;
+- its ForwardBase variants cover only `_ALPHABLEND_ON`, `_ALPHATEST_ON`, `_DETAIL_MULX2`, `_EMISSION`, `_GLOSSYREFLECTIONS_OFF` and `_SPECULARHIGHLIGHTS_OFF`;
+- every variant's fragment program binds `_Color`, `_Glossiness` and `_Metallic`, and none binds `_MetallicGlossMap` or `_SpecColor`.
+
+So its smoothness is `_Glossiness`, the third case. Its first subshader culls nothing, which is the engine's matter, not the export's. The programs' bodies were not disassembled.
+
+The oracle's irradiance template is `_Glossiness` 0 and `_Metallic` 0, so the oracle cannot gate smoothness. The engine change tests it against a reference computed from Standard's BRDF, with smoothness above 0. A VM case for it is queued, and no parity is claimed until it runs.
+
+### The sun reference phase (tooling)
+
+`original_map_probe.py sun` (`OriginalMapProbe.cs`'s sun mode) is that VM case, and the reference for the sun's shadow filter. It reads already-authored map records back in the original player (`--scene <case>=<record>`, case `mapNN` or `mapNN-<suffix>`) and measures the sun at each record's saved camera. The measurements come from a probe camera with `Camera.main`'s settings and none of its image effects, into linear float targets at 960 × 720:
+
+- the lit frame;
+- the sun's screen-space shadow mask, soft as authored and with the sun's shadows set to Hard (the shadow-map texel grid). A command buffer on the sun copies it at `LightEvent.AfterScreenspaceMask`;
+- the frame without the sun's shadows, and without the sun;
+- the deferred GBuffer's normals and specular/smoothness, copied at `CameraEvent.AfterGBuffer`, and the normals and lit frame again with every map material's normal maps off.
+
+On the full frame the probe picks the strongest shadow edge on a continuous sunlit surface. It turns the Studio camera in place to look through that pixel with an eighth of the field of view, and saves that view as its own record (`scene-sun-<case>-zoom.png`), so the app can render the same pose. It repeats the lit passes and both masks there. `sun-trace.json` records the quality, light and tier shadow settings, the built-in shader modes, every map material's smoothness, metallic and normal-map inputs, the edge pick, and the zoom pose with its error.
+
+The phase is one `prlctl exec` under the same hygiene as the earlier phases: the 328-character bootstrap fetches `run.ps1` from the host-only endpoint, and the tool refuses any exec command of 3,500 characters or more. On top of the junction targets' scans, the run script:
+
+- waits up to 120 s for the player's processes, and any `WerFault` started during the run, to exit;
+- removes the root only when no process remains and no reparse point is left under it after the junctions;
+- reports `targetsChanged`.
+
+`--dry-run` makes every check and builds `run.ps1` without the VM. `test_original_map_probe.py` covers the subcommand, the dry run, the root guard, the exec limit and one-channel float images. The results land here once the phase has run.
+
+The first run lost every case before its first load. The probe's free-space check used `System.IO.DriveInfo`, which Unity 5.6's Mono does not implement (`NotImplementedException`). The local compile cannot catch that. The guest hygiene held: targets unchanged, root removed, no process left, errno 0/0. The probe now reads free space through `kernel32`'s `GetDiskFreeSpaceEx` and goes on without the check when it cannot. The trace extras, the edge pick and the deferred passes now fail on their own, after the lit passes and masks are written.
+
+### The slice-5 export
+
+All 42 maps were exported again with this converter, from the same bundles (checked by SHA-256) and with the shared fixture's settings: block-only images and the player's built-in resources. The export is in `.local/sta11d-slice5/exports/maps/`, with its catalog. The scripts and logs are in `.local/sta11d-slice5/`.
+
+- **It only adds.** `tools/verify_additive.py` checks each map against the shared fixture, and all 42 pass:
+  - the fixture's `.bin` is a byte prefix of the new one. 28 maps append 466,824 bytes in all, the shadow casters' data; the other 14 keep their `.bin` byte for byte;
+  - every other top-level glTF key is unchanged, and so is every mesh apart from its new `shadowRuns`;
+  - the existing accessors and buffer views are unchanged, and the 60 new accessors come after them;
+  - the scene extras are unchanged apart from the new `ikkokuMapLighting`;
+  - every material is unchanged apart from the new `ikkokuStandard` keys, and all 2,200 `Standard` and `Custom/StandardDouble` materials carry them;
+  - the mesh and triangle counts are unchanged in every map, and the catalog changes only in its 42 `provenanceSHA256` values.
+
+  So the app reads the new export exactly as it reads the fixture.
+- **The engine's census agrees.** `everyConvertedMapLoadsItsBlockImagesByteForByte` (Engine at `35f43e98`) passes on both catalogs. Every listed block image uploads byte for byte, and its 42 census lines are identical apart from the load times: the parts of each kind, the block images, the texture bytes and the status line (`.local/sta11d-slice5/logs/swift-census-{old,smooth}.txt`).
+- **What it holds.**
+  - 33 maps have a sun; 11 use the flat ambient and 31 the skybox.
+  - 2,322 meshes carry 2,894 shadow runs.
+  - 27 meshes in 7 maps mix the receive flag (maps 4, 5, 7, 20, 22, 27 and 41). No mesh mixes the sun's mask.
+  - 42 `ShadowsOnly` renderers (18,146 triangles) form 30 caster groups, and none is left out.
+  - Smoothness in the 2,200 materials comes from `_Glossiness` in 1,719, from the metallic map's alpha in 476 and from the albedo's alpha in 5. So 481 are approximations by a texture's mean, and none lacks its texture.
+  - 64 materials turn highlights off, 66 turn glossy reflections off, and 35 premultiply alpha.
+  - These are each map's `provenance.json` `lighting.standardInputs`, summed, and they match the [audit](#what-standards-sun-reads-slice-5).
+- **The sun's direction** in maps 41 and 11 (sun type 0) matches the player's trace: (0.977662, 0.210118, −0.005215) and (−0.851377, 0.27879, 0.444334).
+- **Space.** 113 files change: 42 glTF files, 42 provenance files, 28 `.bin` files and the catalog. The other 2,750 files are APFS clones of the fixture's (`cp -c`), and each changed `.bin` is a clone of the fixture's with its tail appended. So the export adds about 13.4 MB of new blocks: 11.9 MB of glTF JSON, 1.0 MB of provenance, 0.07 MB of catalog and 0.47 MB of tails.
+
+### Draw counts (slice 5)
+
+If the engine split each lit mesh where its receive flag changes, it would add these draws (`tools/draw_counts.py`, `draw-counts.json`). No other map adds any:
+
+| Map | Draws | Split | Growth |
+|---|---:|---:|---:|
+| 4 | 58 | 60 | +3.4% |
+| 5 | 58 | 59 | +1.7% |
+| 7 | 58 | 59 | +1.7% |
+| 20 | 102 | 109 | +6.9% |
+| 22 | 153 | 175 | +14.4% |
+| 27 | 118 | 168 | +42.4% |
+| 41 | 29 | 32 | +10.3% |
+
+Maps 22, 27 and 41 exceed the +10% budget.
+
+- **No split needed.** No vertex is shared between runs of different receive values, across the 30,848 vertices of the 27 mixed meshes (`tools/mixed_meshes.py`). So the receive flag can travel per vertex instead, and the main pass adds no draw.
+- **The shadow pass** draws each contiguous caster run and each caster group once: 0–171 draws per map. Map 28 has the most, because its casting runs alternate with non-casting ones within its 62 meshes.
+
+### Installing the slice-5 export
+
+The shared fixture (`.local/reverse/exports/maps/`) keeps the slice-4 export until this change merges. `environment.json` names only its `catalog.json` (`IKKOKU_STUDIO_MAP_CATALOG`), and the path does not change. The hashes are in `.local/sta11d-slice5/`:
+
+- `old-export.sha256` and `new-export.sha256` list every file;
+- `changed-files.txt` lists the 113 that differ;
+- `old-changed.sha256` has the fixture's hashes for those 113.
+
+The other 2,750 files are byte-identical in both trees. Both trees are on the same volume, so the two renames below are atomic.
+
+```sh
+cd /Users/rumpology/code/repo/ikkoku
+M=$PWD/.local/reverse/exports/maps        # the shared fixture
+H=$PWD/.local/sta11d-slice5
+N=$H/exports/maps                         # the slice-5 export
+(cd "$M" && shasum -a 256 -q -c "$H/old-export.sha256")
+(cd "$N" && shasum -a 256 -q -c "$H/new-export.sha256")
+mv "$M" "$H/slice4-maps" && mv "$N" "$M"
+(cd "$M" && shasum -a 256 -q -c "$H/new-export.sha256")
+```
+
+After the swap, the slice-4 folder's own blocks come to about 11.5 MB: its old glTF, provenance and catalog files. Everything else in it shares blocks with the new export, including its `.bin` files, which are the prefixes of the new ones. Its 113 changed files (84.5 MB as plain files, `old-changed.sha256`) are all that differs from the new export. The folder goes to the archive or the Trash and is not kept live.
+
+### Engine (slice 5)
+
+The app reads the slice-5 export's lighting. An export without `ikkokuMapLighting` draws as before, with the slice-2 to slice-4 labels.
+
+- **Loading** (`SourceStudioMapAsset.load`).
+  - `SourceStudioMapLightingData.parse` reads the record. Trilight ambient (no map uses it), a sun without a state for a sun type that shows it, a non-unit direction, a strength outside 0–1 and casters without a sun are refused by name.
+  - A `Standard` or `Custom/StandardDouble` part without a lightmap becomes a map draw lit by the map's ambient (`MaterialFlagMapProbeLit`, `Draw.probeLit`) instead of an item. Its material must carry `smoothness`, or the load fails by name. `Legacy Shaders/Diffuse` parts are Lambert (`MaterialFlagMapLambert`); none is drawn in the 42 maps.
+  - Each lit part's `shadowRuns` set its sun flags (`applySun`):
+    - the sun's term (`MaterialFlagMapSunLit`) needs the whole mesh in the sun's culling mask. A mesh that mixes the mask is drawn without the sun and counted (0 in the export);
+    - receiving is everywhere (`MaterialFlagReceiveShadow`), nowhere, or per vertex (`MaterialFlagMapReceivePerVertex`), so no draw is split. A per-vertex mesh gets one byte per vertex in a shared `MTLBuffer` (`RenderItem.vertexReceive`), checked at load: no vertex may belong to runs of both values. A mesh that fails the check receives nothing and is counted (0 in the export);
+    - a transparent part receives nothing. Unity's forward path gives the transparent queue no shadows; this is assumed, not measured;
+    - the casting runs are kept per part, merged where they touch with the same cull mode.
+  - The `ShadowsOnly` groups become meshes from the accessors the glTF loader decoded on request (`GLBLoader.load(accessors:)`, `GLTFAsset.requestedAccessors`), with computed normals. `release()` retires them with the parts.
+  - `SourceStudioMapAsset.lighting(transform:sunLightType:mapOption:)` gives the frame's `MapLighting` for a record: the ambient's seven SH constants, the sun of its sun type turned by the record's map transform, and the shadow casters among the draws `items` places for the same arguments, with their world bounds. Each call is a new placement (`revision`).
+- **The frame.** `StudioModel` stores the lighting with the placed draws and sets `RenderFrame.mapLighting` only while the map draws. The renderer lights and shadows only a frame that has map draws. A frame without a map binds nothing new, and the map's shadow map (16 MiB) is made only when a map with a casting sun first draws.
+- **`map_fragment`** (`Shaders/Toon.metal`, the formulas cited in `SourceStudioMapLighting.swift`):
+  - gi.diffuse is the lightmap, or for an ambient-lit draw ShadeSH9 of the map's ambient: the serialized `m_AmbientProbe` in skybox mode, the linearised sky colour × intensity in flat mode ([what the offline checks found](#what-the-offline-checks-found)). It is evaluated per pixel; Unity adds the L2 band per vertex.
+  - The sun adds `light × (diffColor × DisneyDiffuse × n·l + specularTerm × FresnelTerm(specColor, l·h))`, `BRDF1_Unity_PBS` with `UNITY_BRDF_GGX`: perceptualRoughness = 1 − smoothness, the Smith-joint GGX approximation and the GGX distribution. The specular term is 0 under `_SPECULARHIGHLIGHTS_OFF` and for a black specColor; specColor = lerp(0.04, albedo, metallic). Lambert draws albedo × light × n·l.
+  - Where n·l ≤ 0 the sun block is skipped with its shadow compares: every term is scaled by saturate(n·l) = 0 there, so the pixel is unchanged (`mapFragmentFacingAwayFromTheSunIsTheNoSunPixel`). One pixel does change: a degenerate interpolated normal (normalize gives NaN) now fails the n·l > 0 test and gets the ambient or lightmap alone, where before the NaN went through the sun's terms.
+  - light = `_LightColor0` × attenuation; `_LightColor0` = GammaToLinearSpace(colour × intensity), and attenuation = lerp(1 − strength, 1, visibility).
+  - Not drawn: the indirect specular (reflection probes), normal maps, per-texel smoothness and metallic, detail and parallax maps, fog. The Transparent mode (`_ALPHAPREMULTIPLY_ON`, 35 materials) blends as Fade: its diffColor is not multiplied by alpha.
+- **The ambient-lit draws' pipelines** (`ToonMapProbeLit`, `ToonMapProbeLitBlend`, `Pipelines.ambientLitMapFunctions`). The renderer draws the ambient-lit map draws (`MaterialFlagMapProbeLit`, not silhouette, unlit or particle; `Renderer.drawsAmbientLitMap`) with `toon_vertex` + `toon_map_probe_lit_fragment`, in both main-pass variants. Lightmapped, silhouette, unlit and particle draws keep the `Map` pipelines and `map_fragment`.
+  - `toon_map_probe_lit_fragment` draws a map material through `mapAmbientLitSurface`, the inline Standard helpers that `map_fragment`'s ambient-lit path calls too (the ambient, the sun with the n·l skip and the tent, emission), so its pixels are `map_fragment`'s bit for bit (`toonMapProbeLitDrawsAmbientLitMapSurfacesAsMapFragment`). Any other material runs `toon_fragment`'s body (`toonSurface`), so the function keeps the toon item path compiled in.
+  - Why: the P4 attribution measured the residual GPU cost of these draws, after the n·l skip and the tent, as the `Map` pipeline object itself (diagnostic window W11, 2026-11-18). The same draws and the same math on the toon pipeline recovered it: +0.105 ms on map 34 by day against a residual of +0.077, and +0.113 on map 40 against +0.103. A lean vertex stage in the map pipeline recovered nothing, and neither did a trivial fragment in it, so the cost is neither the vertex stage nor the fragment math. Drawing them in another order (fewer pipeline switches, W8) did not recover it either. What in the pipeline object costs more is not attributed further.
+  - `toon_fragment` keeps its signature and declares no function constants, so ToonOpaque and ToonBlend build it as before (`Pipelines.itemFunctions`, `itemPipelinesBuildToonFragmentWithNoFunctionConstants`). A first version specialized `toon_fragment` with a function constant on every pipeline; that moved 6 character pixels by one level. With the separate entry point, every map golden, the probe cases and a scene without a map are byte-identical to before.
+- **The sun's shadow map** (`Renderer.encodeMapShadow`, `Shaders/Shadow.metal`):
+  - one 2048² depth map, orthographic along the sun, ±40 m around the camera target. Its depth range holds every caster and the receivers within 40 m. Unity's shadow distance and cascades are not modelled: receivers farther than 40 m from the target are lit;
+  - drawn only on a change frame: a new placement, another sun direction, or the camera target 10 m from the fit's centre. `Renderer.redrawsMapShadowEveryFrame` (default false) redraws it every frame, a measurement control. `RenderFrameStatistics` counts `mapShadowRedrawn` and `mapShadowDraws`;
+  - casters cull as their cast mode says: On culls the faces turned away from the light, Two Sided culls nothing. The `ShadowsOnly` groups cull as On;
+  - each caster moves along its normal by the light's normal bias × the map's world texel × sin(n, l), as `UnityClipSpaceShadowCasterPos` does. The light's bias × texel is added at the receiver's compare. A slope-scaled raster bias (−2, at most 0.5 m) is added against acne; Unity has none, and its effect is not compared;
+  - alpha-tested casters clip at `_Cutoff`. Blended ones clip at 0.5, where D3D11's Standard ShadowCaster uses a dither mask (approximated);
+  - receivers filter the reverse-Z compares with a 3×3-texel tent in 4 bilinear compares, the arithmetic of `UnitySampleShadowmap_PCF3x3Tent` (UnityShadowLibrary.cginc), checked against the analytic triangle filter across an edge (`mapShadowVisibilityIsATriangleFilterOfTheCompares`). This is not Unity's kernel: 2017.2's screen-space collector uses PCF7x7 on desktop, 5.6.2f1's is unverified, and the cascades differ (#392). The tent replaced 9 point-offset compares on measurement: against the original's sun shadows captured in the VM (maps 1, 34 by day and 40, each in full view and zoomed), its edge profile is closer on all 6 poses, and it costs less in the P4 attribution. One edge got wider: map 40 at the zoomed pose measures 30.5 px, against 29.0 px before and 3.23 px in Unity.
+- **Census and lanes.** The scenario census adds `probeLitDraws`, `sunLitDraws`, `receivingDraws`, `perVertexReceiveDraws`, `sunCasters` and `sunShadowStrength`, and `sourceMap` asserts take the first five. The `[ikkoku] source map:` line adds the ambient-lit and sun-lit draws and the casters.
+
+Draws on the three lane maps, from the export alone (`.local/sta11d-slice5/tools/predict_census.py`), for every sun type and map option:
+
+| Map | Draws | Lightmapped | Ambient | Sun-lit | Receiving | Per vertex | Transparent, not receiving |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| 33 | 7 | 7 | 0 | 7 | 7 | 0 | 0 |
+| 34 (day) | 54 | 29 | 22 | 51 | 44 | 0 | 2 |
+| 41 | 29 | 27 | 2 | 29 | 26 | 3 | 1 |
+
+Map 34's draws are 53 and 50 in the evening and at night, with 21 and 18 ambient-lit.
+
+Tests (`SourceStudioMapSunTests.swift`):
+
+- the lighting record: SH from the probe, its z reflection against Unity's basis at the reflected normal, the flat colour (maps 1 and 41's (0.0370, 0.0421, 0.0546)), the sun's colour and turned direction, a sun type without the sun, and the refusals;
+- the shadow runs: coverage, per-vertex bytes, a shared vertex refused, and the merged casting runs;
+- `map_fragment` against `BRDF1_Unity_PBS` and `LightingLambert`, re-implemented in float64 from the formulas of Unity 5.6.2f1's built-in shader sources (`UnityStandardBRDF.cginc`, `UnityStandardUtils.cginc`, `Lighting.cginc`) independently of the engine's CPU mirror (`.local/sta11d-slice5/tools/brdf1_reference.py`; no shader text is copied): smoothness 0, 0.6 and 0.9 with highlights on and off, Lambert, outside the sun's mask, no sun, and the ambient. At smoothness 0.6 the highlight is about half the pixel, so a missing specular or roughness term cannot pass. This is the gate for smoothness until the VM case runs: no parity with the original is claimed for it;
+- the shadow map through the renderer: a caster darkens by the strength exactly, a back-facing caster is culled under On and drawn under Two Sided, a draw that does not receive and strength 0 stay lit, per-vertex receive splits one draw, a draw whose bytes are missing receives nothing, the map is reused for the same placement and redrawn under the measurement control, and a frame without map draws draws none;
+- the fit: casters and receivers inside the depth range, the zenith included;
+- the ambient-lit pipelines: their pixels against `map_fragment`'s, bit for bit (ambient, sun facing and facing away, Standard with and without highlights and Lambert, a receiver, emission, alpha test and blend), and the item pipelines built from `toon_fragment` with no function constants;
+- a converted map with lighting: ambient-lit parts, each receive case, the casting runs, the `ShadowsOnly` mesh in mapRoot's frame, the placed casters and bounds, the status line, release, and the two refusals.
+
+
 ## Performance
 
 Release, on the reference machine, in one quiet window. The full tables are in [performance: ST-A11](../performance.md#st-a11-original-studio-maps).
@@ -1051,21 +1303,68 @@ Slice 4 (all maps), Release, in one quiet window ([performance: slice 4](../perf
 - **Map 33** in the showoff scene, with one shell fewer, is ready at 0.89 s against 0.90 s, with the same peak Metal.
 - **Base M1 (estimates, scaled, not measured):** at most +0.06 ms of encode per frame from the split, about 2.0–3.5 ms of GPU for a new map filling the window, and about +0.5 ms in map 11 if its difference is real.
 
+Slice 5 (the sun and its shadows, P4), Release, in one quiet window on 2026-11-18 (01:25–01:38). It compares `main` (`02fec873`, A) against this change (`a4868c68`, B) and against B with the shadow map redrawn in every frame (C, `IKKOKU_BENCHMARK_MAP_SHADOW=every-frame`, the change frame's cost). The benchmark is offscreen (`IKKOKU_BENCHMARK_OUTPUT`) at 1996×1824 with the scene's own camera, 3 warm-up and 120 measured frames per run, and 4 rounds in alternating order. The display was on at 1920×1080 @ 60 Hz with the monitor off, and it was the same mode for every unit. Each figure is the median over the rounds of a run's p50 or p95, head minus base, in ms. The budgets were registered before the run, and **the GPU steady-state budget fails**:
+
+| Scene | B−A GPU p50 (≤ +0.10) | B−A GPU p95 (≤ +0.15) | B−A encode p50 / p95 (≤ +0.05 / +0.10) | B−A Metal MB (≤ +24; map 38 ≤ +1) | C−A GPU p95 (≤ +0.50) | C−A encode p95 (≤ +0.30) |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| map01 | **+0.194** | **+0.188** | −0.008 / −0.004 | +16.9 | +0.208 | +0.008 |
+| map11 | +0.095 | +0.106 | −0.015 / −0.017 | +17.3 | +0.141 | +0.014 |
+| map15 | **+0.115** | +0.139 | −0.017 / −0.036 | +16.7 | +0.219 | +0.002 |
+| map21 | **+0.123** | +0.146 | −0.017 / −0.013 | +16.8 | +0.168 | −0.011 |
+| map22 | **+0.133** | +0.145 | −0.005 / +0.012 | +16.8 | +0.191 | +0.006 |
+| map27 | **+0.117** | +0.124 | −0.006 / −0.034 | +16.8 | +0.154 | −0.022 |
+| map34-day | **+0.205** | **+0.234** | −0.002 / −0.010 | +16.7 | +0.260 | +0.002 |
+| map38 (no sun) | +0.012 | −0.008 | +0.000 / −0.000 | −0.2 | +0.010 | −0.001 |
+| map40 | **+0.185** | **+0.185** | −0.001 / −0.005 | +16.7 | +0.221 | +0.020 |
+
+- **No map:** GPU p50 +0.006 ms and encode p50 +0.009 ms (within ±0.03), Metal +0.0 MB. Pass.
+- **Fails:** 10 rows, all GPU in the steady state (7 p50, 3 p95). Encode, memory, the change frame and the scene without a map pass.
+- **Where it goes (inferred, not profiled):** redrawing the shadow map in every frame adds only +0.025 to +0.084 ms of GPU p50 over B, so most of the steady +0.12 to +0.21 ms is in `map_fragment` itself (the sun term and the 9 shadow compares per receiving pixel), not in the shadow-map pass. A diagnostic build attributes it before any fix; the fix is measured in a new registration with the same budgets.
+- **Validity:** 116 units, all valid in the end. 9 first attempts were rerun once for an intruder above the 20% rule (contactsd, Firefox's plugin-container, launchd above 30%, mds_stores, mdworker_shared).
+- Evidence: `.local/sta11d-slice5/perf/w4/` (`perf-window.log`, `summary.json`, `verdicts.txt`, `bench-png.sha256`).
+
+Slice 5 after the fix (P5), Release, in one quiet window on 2026-11-18 (21:33:40–21:49:04 UTC):
+- **What it compares:**
+  - `main` (`02fec873`, the same base binary as P4, A);
+  - the fix (`7e5fbf3d`, B): the n·l skip, the tent and the ambient-lit draws on the toon pipeline ([the engine](#engine-slice-5)). The measured binary was built from the same tree;
+  - B with the shadow map redrawn in every frame (C).
+- **How:** P4's 10 scenes, runs and bars, in a plan frozen before the window (`plan-p5-fix.json`, SHA-256 `fe282e2f`).
+- **The base-spread rule:** a scene whose first-block base GPU p50 spread exceeds 0.04 ms gets exactly one rerun block in the same window, and that block decides its verdict. It triggered for map 11 (0.119) and map 15 (0.044).
+
+| Scene | Block | B−A GPU p50 (≤ +0.10) | B−A GPU p95 (≤ +0.15) | B−A encode p50 / p95 (≤ +0.05 / +0.10) | B−A Metal MB (≤ +24; map 38 ≤ +1) | C−A GPU p95 (≤ +0.50) | C−A encode p95 (≤ +0.30) |
+| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| map01 | first | +0.036 | +0.057 | −0.002 / −0.001 | +16.9 | +0.195 | +0.015 |
+| map11 | rerun | −0.031 | −0.031 | −0.009 / −0.010 | +17.3 | +0.109 | +0.027 |
+| map15 | rerun | −0.009 | +0.026 | −0.014 / −0.010 | +16.7 | +0.212 | +0.029 |
+| map21 | first | +0.006 | +0.011 | −0.014 / −0.011 | +16.8 | +0.147 | +0.008 |
+| map22 | first | −0.047 | −0.032 | −0.003 / −0.002 | +16.8 | +0.094 | +0.009 |
+| map27 | first | +0.020 | +0.025 | −0.002 / −0.001 | +16.8 | +0.140 | +0.010 |
+| map34-day | first | +0.021 | +0.029 | +0.001 / +0.004 | +16.7 | +0.154 | +0.012 |
+| map38 (no sun) | first | +0.030 | +0.049 | +0.003 / +0.002 | −0.2 | +0.052 | +0.002 |
+| map40 | first | −0.013 | +0.013 | +0.000 / +0.006 | +16.7 | +0.091 | +0.010 |
+
+- **Passes:** all 75 rows are within their bars. P4's steady-state GPU p50 of +0.095 to +0.205 ms on the sun maps is now −0.047 to +0.036 ms.
+- **No map:** GPU p50 +0.004 ms and encode p50 +0.014 ms (within ±0.03), Metal +0.0 MB.
+- **The rerun blocks:** map 11's base spread in its rerun block was 0.078, above 0.04 again. As registered, that block decides its verdict as is: there is no third block and no exclusion. Map 15's rerun spread was 0.014.
+- **Validity:** 116 units in the first block and 24 in the rerun block, all valid in the end. 9 first attempts were rerun once:
+  - 8 for an intruder above the 20% rule (Firefox's plugin-container, launchd, airportd, contactsd);
+  - 1 whose display mode could not be read after the run.
+  - The display was 1920×1080 at 60 Hz, online, in every unit.
+- Evidence: `.local/sta11d-slice5/perf/p5-fix/` (`p5-decision.json`, `first/`, `rerun/`), and `p5-fix-run.log`.
+
 ## What remains
 
-- **Light-probe-lit parts.** Map 34's 32 `Standard` renderers without a lightmap (17,701 triangles) are drawn as items. Unity lights them with light probes and the realtime sun. They cover 77,159, 72,567 and 92,296 of the 691,200 pixels in the day, evening and night views (11–13%), and none in the showoff view. Drawing them needs the scene's light probes (spherical harmonics per probe, and the tetrahedral interpolation) and the sun term below.
-- **The realtime sun and its shadows.** Map 33's only map light, `Map/SunLight`, is realtime, and map 34's sun is too. Across the 40 slice-4 maps, 879,090 of the 1,367,623 `Standard` and `Custom/StandardDouble` triangles that Studio draws (64.3%) have no lightmap: they are probe-lit, or the map has none (each map's `provenance.json` `lightmapCoverage`). In 20 of the 40 maps that share is 50% or more. All of them draw as items until the sun, the ambient and the light probes are drawn. Its term is `diffColor × light.color × diffuseTerm` with its soft shadows. Drawing it needs:
-  - the sun as a scene light in the map's draws;
-  - the `SunLightInfo` angle, colour and intensity per sun type;
-  - a shadow map of the room.
+- **The sun's GPU cost: fixed in P5.** P4 ([performance](#performance)) put the steady sun and shadow term at +0.12 to +0.21 ms of GPU p50 on 7 of the 9 measured maps, over the registered +0.10 ms. After the fix, P5 measures −0.047 to +0.036 ms of GPU p50 and −0.032 to +0.057 ms of p95 on the 9 map scenes, and all 75 rows are within their bars.
 
-  In map33 the phase-C oracle shows the sun adding up to 0.70 of irradiance on 15,692 pixels, where it comes through the windows (`irradianceLit`).
-- **The rest of `Standard`.** Not drawn: specular and the reflection probe, normal maps, per-texel `_MetallicGlossMap` and detail maps.
+- **The sun's VM case.** Slice 5 draws the sun and its shadows without a capture of the original's lit pass with the engine change. The next VM phase renders the lit pass with the sun's shadows off and on, and a case at smoothness above 0; until then no parity is claimed for smoothness, the shadow edge or the biases. Map 21's lightmapped surfaces reading 0.74 of the modelled sun ([what the offline checks found](#what-the-offline-checks-found)) is still open.
+- **Shadow assumptions.** Transparent parts receive no shadow, blended casters clip at 0.5 instead of D3D11's dither mask, the Transparent mode blends as Fade, receivers more than 40 m from the camera target are unshadowed, and a slope-scaled bias is added. Each is named in [the engine](#engine-slice-5) and none is measured against the original.
+- **The rest of `Standard`.** Not drawn: the reflection probe's specular, normal maps, per-texel `_MetallicGlossMap` and smoothness, detail maps, parallax and occlusion maps. The [audit](#what-standards-sun-reads-slice-5) counts what the export leaves out and why. Normal maps (1,015 materials) need tangents in the export and a BC5 or DXT5nm decode.
+- **The catalog's approximations.** The catalog rows still list `realtime sun and its shadows`, `specular and reflections` and the light-probe count among each map's approximations. The status line reads only their `shaders approximated` entry and names the rest itself, but a re-export should update them.
 - **Particles.** Soft particles (the fade where the cards meet geometry) are not drawn. Particle renderers sort as Unity's do (see [particles, slice 4](#particles-slice-4)), but blended `Standard` materials are still merged across renderers (60 draws in 20 maps hold two or more), so their blend order within a draw is the mesh's triangle order.
 - **The sky's far plane.** The player's main camera clips at 1000 m, inside parts of map 34's sky spheres (about 450–1,200 m). Our infinite projection draws the whole sphere, so the full frame differs where the player shows black.
 - **Fog and camera effects.** RenderSettings fog was off at runtime in every phase-C and map 34 scene. The per-sun-type fog of `SunLightInfo` and CharaStudio's camera image effects are not drawn.
 - **The PNG copies of maps 33 and 34.** The 40 slice-4 maps have no PNG copies of their block images. Maps 33 and 34 keep theirs, which `IKKOKU_SOURCE_MAP_DECODED_TEXTURES` decodes; map 34's take 17 MB of its export.
-- **Forced anisotropy for characters and items.** The original forces anisotropy on every texture, character and item textures included. Only map textures sample that way here. Matching it elsewhere is a separate fidelity item with its own gates.
+- **Forced anisotropy for characters and items.** Done on 2026-11-01: the toon, eye, outline, shadow-caster and body-mask samples use the map's forced samplers ([renderer](../renderer.md)). The Studio's live source-shader path passes the player's ForceEnable separately.
 - **Vanish.** `Studio.CameraControl` hides the walls the camera's view capsule crosses (`isConfigVanish`, on by default). In the slice-4 phase the player hid nothing from eight outside cameras, so the app does not either. The next change records what the trigger needs (the time scale, the camera's layer, the collision matrix, physics steps) and a case where the original does hide a wall.
 - **Map 40's irradiance.** Its Standard materials all carry keywords, so the oracle had no keyword-free template, and its lightmaps are not gated. The next VM phase builds the template from `Shader.Find("Standard")`.
 - **The oracle's culling mask.** The oracle's geometry, depth-normals, irradiance and class passes draw every layer (`cullingMask ~0`). So they draw layer-0 solids that no Studio camera draws: `mo_koi_mi_balckback` (a black backdrop, `Standard`, no lightmap) in maps 19, 25 and 29, and a pot in map 15's outside view. The slice-4 converter leaves them out, as Studio does, and map 19's and 25's outside views fail geometry by exactly that backdrop ([the gates](#the-gates)). The next VM phase renders those passes with `Camera.main`'s mask (536874000).

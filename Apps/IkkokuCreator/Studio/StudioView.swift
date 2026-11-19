@@ -33,7 +33,7 @@ struct StudioView: View {
                 }
             }
             Divider().opacity(interfaceVisible ? 1 : 0)
-            StudioInspectorPanel(model: model).frame(width: 350).studioInterfaceVisibility(interfaceVisible)
+            StudioInspectorPanel(model: model).frame(width: InspectorLayout.width).studioInterfaceVisibility(interfaceVisible)
         }
     }
 }
@@ -63,7 +63,8 @@ struct WorkspaceEntry: Equatable, Identifiable {
     let kind: StudioObjectKind
     let visible: Bool
     let depth: Int
-    let selected: Bool
+    /// The one field a selection change rewrites in place (`StudioWorkspaceState.selecting`).
+    var selected: Bool
     let cameraPlaceholder: Bool
     /// A named source camera's key, "camera 2", drawn under its name.
     var keyDetail: String? = nil
@@ -371,6 +372,21 @@ struct StudioTimelineControls: View, Equatable {
 
 // MARK: Inspector
 
+/// The inspector column's layout. With a legacy scroller the column's visible
+/// width is 333 pt; the Clothes tab's segmented rows use small controls so that
+/// each row's natural width fits within it (#333: the four-state rows at the
+/// regular size asked for 240 pt and widened the tab's content past the column).
+enum InspectorLayout {
+    /// The inspector column's width.
+    static let width: CGFloat = 350
+    /// The padding around the selected tab's content.
+    static let padding: CGFloat = 12
+    /// The label column of the source character's clothes-state and shoes-type rows.
+    static let sourceRowLabel: CGFloat = 90
+    /// The label column of a native character's clothing-state rows.
+    static let nativeRowLabel: CGFloat = 120
+}
+
 /// The inspector column. Its body reads nothing; each part observes its own state.
 struct StudioInspectorPanel: View {
     let model: StudioModel
@@ -382,7 +398,7 @@ struct StudioInspectorPanel: View {
             ScrollView {
                 StudioCompatibilityDetails(model: model)
                 StudioLiveShaderDetails(model: model)
-                StudioInspectorTab(model: model).padding(12)
+                StudioInspectorTab(model: model).padding(InspectorLayout.padding)
             }
             Divider()
             StudioStatusLine(model: model)
@@ -600,14 +616,17 @@ struct ObjectInspector: View {
 
 /// Everything the Object tab shows for one object.
 struct ObjectInspectorState: Equatable {
-    struct Parent: Equatable, Identifiable { let id: UUID; let name: String }
     var id: UUID
     var name: String
     var visible: Bool
     var locked: Bool
     var parent: UUID?
-    var parents: [Parent]
+    /// What the Parent popup shows: "None", or the parent's name. Its
+    /// options are built when it opens (`StudioParentPopUp`).
+    var parentTitle: String
     var transform: StudioTransform
+    /// An object of the imported scene: its Transform rows show the original's numbers (#391).
+    var isSourceObject: Bool
     var kind: StudioObjectKind
     var cardName: String
     var isSourceCharacter: Bool
@@ -630,8 +649,9 @@ struct ObjectInspectorState: Equatable {
     @MainActor init(model: StudioModel, object o: StudioObject) {
         let doc = model.doc
         id = o.id; name = o.name; visible = o.visible; locked = o.locked; parent = o.parent
-        parents = doc.objects.filter { $0.id != o.id && !doc.isDescendant($0.id, of: o.id) }.map { Parent(id: $0.id, name: $0.name) }
+        parentTitle = o.parent.map { doc.object($0)?.name ?? "" } ?? "None"
         transform = o.transform; kind = o.kind
+        isSourceObject = o.sourceObjectKey != nil
         cardName = o.card?.profile.name ?? ""
         isSourceCharacter = o.sourceCharacter != nil
         clothingVisible = o.clothingVisible; accessoriesVisible = o.accessoriesVisible
@@ -691,10 +711,10 @@ struct ObjectInspectorContent: View, Equatable {
                 Toggle("Visible", isOn: Binding(get: { o.visible }, set: { v in update { $0.visible = v } }))
                 Toggle("Locked", isOn: Binding(get: { o.locked }, set: { v in update { $0.locked = v } }))
             }
-            Picker(selection: Binding(get: { o.parent }, set: { parent in if model.selection == id { model.setParent(id, to: parent) } })) {
-                Text("None").tag(UUID?.none)
-                ForEach(o.parents) { p in Text(p.name).tag(UUID?.some(p.id)) }
-            } label: { Text("Parent").inspectorKeptLabel() }
+            HStack {
+                Text("Parent").inspectorKeptLabel()
+                StudioParentPopUp(model: model, id: id, parent: o.parent, title: o.parentTitle)
+            }
             if let sectionsKept {
                 VStack(alignment: .leading, spacing: 0) {
                     transformSection
@@ -710,9 +730,14 @@ struct ObjectInspectorContent: View, Equatable {
     private var transformSection: some View {
         let o = state
         return SectionBox(title: "Transform") {
-            VectorRow(label: "Position", value: Binding(get: { o.transform.position }, set: { v in update { $0.transform.position = v } }), step: 0.05, format: "%.3f")
-            VectorRow(label: "Rotation", value: Binding(get: { o.transform.rotation }, set: { v in update { $0.transform.rotation = v } }), step: 5, format: "%.0f")
-            VectorRow(label: "Scale", value: Binding(get: { o.transform.scale }, set: { v in update { $0.transform.scale = v } }), step: 0.1, format: "%.2f")
+            // Each field writes its own component onto the current object (#390).
+            // A source object shows CharaStudio's numbers (#391): its Z-X-Y Euler
+            // angles, and three decimals in every row.
+            let source = o.isSourceObject
+            VectorRow(label: "Position", value: o.transform.position, step: 0.05, format: "%.3f") { i, v in update { $0.transform.set(.position, i, to: v) } }
+            VectorRow(label: "Rotation", value: source ? o.transform.sourceRotationDegrees : o.transform.rotation, step: 5,
+                      format: source ? "%.3f" : "%.0f") { i, v in update { $0.transform.set(source ? .sourceRotation : .rotation, i, to: v) } }
+            VectorRow(label: "Scale", value: o.transform.scale, step: 0.1, format: source ? "%.3f" : "%.2f") { i, v in update { $0.transform.set(.scale, i, to: v) } }
             Button("Reset transform") { update { $0.transform = StudioTransform() } }
         }
     }
@@ -777,7 +802,8 @@ struct PoseInspector: View {
                                     if t.enabled { Button("Select") { model.selectedIK = chain; model.poseMode = .ik }.controlSize(.small) }
                                 }
                                 if t.enabled {
-                                    VectorRow(label: "Target", value: Binding(get: { t.position }, set: { v in model.setIKTarget(o.id, chain, position: v) }), step: 0.02, format: "%.3f")
+                                    // One component onto the live target (#393), not `t` from this render.
+                                    VectorRow(label: "Target", value: t.position, step: 0.02, format: "%.3f") { component, v in model.setIKTarget(o.id, chain, component: component, to: v) }
                                 }
                             }
                         }
@@ -811,9 +837,11 @@ struct SourcePoseInspector: View {
                 }.disabled(!model.sourceIKAvailable)
                     .accessibilityIdentifier("studio.source.ik.guide")
                 if let target = model.selectedSourceIK, let value = model.selectedSourceIKValue {
-                    VectorRow(label: "Position", value: Binding(get: { value.position }, set: { model.setSourceIKValue(target, edit: .init(position: $0, rotationDegrees: value.rotationDegrees)) }), step: 0.02, format: "%.3f")
+                    // Each field writes one component onto the guide's live value (#393),
+                    // never `value` from this render, and never the other row's vector.
+                    VectorRow(label: "Position", value: value.position, step: 0.02, format: "%.3f") { component, v in model.setSourceIKComponent(target, .position, component, to: v) }
                     if SourceStudioIKEditing.allowsRotation(target) {
-                        VectorRow(label: "Rotate", value: Binding(get: { value.rotationDegrees }, set: { model.setSourceIKValue(target, edit: .init(position: value.position, rotationDegrees: $0)) }), step: 5, format: "%.0f")
+                        VectorRow(label: "Rotate", value: value.rotationDegrees, step: 5, format: "%.0f") { component, v in model.setSourceIKComponent(target, .rotation, component, to: v) }
                     }
                 }
                 Text("Select an FK bone or IK guide in the viewport, then drag its gizmo.").font(.caption).foregroundStyle(.secondary)
@@ -830,6 +858,11 @@ struct SourcePoseInspector: View {
                     Text("Rates follow the viewport camera; the iris shift itself comes in the next slice.").font(.caption).foregroundStyle(.secondary)
                 }
             }
+        } else if let o = model.selectedObject, model.sourceCharacterBuilding(o.id) {
+            // A character hidden at import or after a native reload builds
+            // when selected (`StudioModel.sourceSelectionBuild`).
+            Text("Building this character…").font(.caption).foregroundStyle(.secondary)
+                .accessibilityIdentifier("studio.source.building")
         } else {
             Text("The original character pose is not loaded.").font(.caption).foregroundStyle(.secondary)
         }
@@ -975,6 +1008,10 @@ struct FaceInspector: View {
             .onAppear { model.displayedInspectorView = "FaceInspector.sourceShape" }
             .onDisappear { if model.displayedInspectorView == "FaceInspector.sourceShape" { model.displayedInspectorView = "none" } }
             .accessibilityIdentifier("studio.face.source.shape")
+        } else if let o = model.selectedObject, o.kind == .character, o.sourceCharacter != nil, model.sourceCharacterBuilding(o.id) {
+            Text("Building this character…")
+                .font(.callout).foregroundStyle(.secondary)
+                .accessibilityIdentifier("studio.source.building")
         } else if let o = model.selectedObject, o.kind == .character, o.sourceCharacter != nil {
             Text("Shape editing is not available for this character reference.")
                 .font(.callout).foregroundStyle(.secondary)
@@ -1068,6 +1105,9 @@ struct ClothesInspector: View {
                 if let preview = model.sourceShapePreview(for: o.id) {
                     sourceOutfit(o, preview: preview)
                     sourceClothesState(o, preview: preview)
+                } else if model.sourceCharacterBuilding(o.id) {
+                    Text("Building this character…").font(.callout).foregroundStyle(.secondary)
+                        .accessibilityIdentifier("studio.source.building")
                 }
                 SectionBox(title: "Accessories") {
                     let labels = model.sourceAccessoryLabels(for: o.id)
@@ -1103,10 +1143,10 @@ struct ClothesInspector: View {
                     ForEach(ClothSlot.allCases, id: \.self) { slot in
                         if card.outfit.items[slot]?.itemID != nil {
                             HStack {
-                                Text(slot.label).font(.callout).frame(width: 120, alignment: .leading)
+                                Text(slot.label).font(.callout).frame(width: InspectorLayout.nativeRowLabel, alignment: .leading)
                                 Picker("", selection: Binding(get: { model.doc.objects[i].card?.outfit.states[slot] ?? .on }, set: { v in model.update(o.id) { $0.card?.outfit.states[slot] = v } })) {
                                     ForEach(ClothState.allCases, id: \.self) { Text($0.rawValue.capitalized).tag($0) }
-                                }.pickerStyle(.segmented).labelsHidden()
+                                }.pickerStyle(.segmented).labelsHidden().controlSize(.small)
                             }
                         }
                     }
@@ -1186,7 +1226,7 @@ extension ClothesInspector {
         SectionBox(title: "Clothes state") {
             ForEach(SourceStudioWear.studioKinds, id: \.self) { kind in
                 HStack {
-                    Text(labels[kind]).font(.callout).frame(width: 90, alignment: .leading)
+                    Text(labels[kind]).font(.callout).frame(width: InspectorLayout.sourceRowLabel, alignment: .leading)
                     if let allowed = preview.wearRules.allowed[kind] {
                         Picker(labels[kind], selection: Binding(get: { Int(preview.clothesState[kind]) }, set: { value in
                             do {
@@ -1198,7 +1238,7 @@ extension ClothesInspector {
                                 Text(SourceStudioWear.stateNames[Int(state)].capitalized).tag(Int(state))
                             }
                         }
-                        .pickerStyle(.segmented).labelsHidden()
+                        .pickerStyle(.segmented).labelsHidden().controlSize(.small)
                     } else {
                         Text("No garment").font(.caption).foregroundStyle(.secondary)
                     }
@@ -1216,7 +1256,7 @@ extension ClothesInspector {
             // CharaStudio's State panel shoes buttons (OnClickShoesType ->
             // OCIChar.SetShoesType): which shoe slot the shoes row shows.
             HStack {
-                Text("Shoes type").font(.callout).frame(width: 90, alignment: .leading)
+                Text("Shoes type").font(.callout).frame(width: InspectorLayout.sourceRowLabel, alignment: .leading)
                 Picker("Shoes type", selection: Binding(get: { preview.shoesType }, set: { value in
                     do { try model.setSourceShoesType(o.id, type: value); model.status = value == 0 ? "Indoor shoes" : "Outdoor shoes" }
                     catch { model.status = "Shoes type: \(error)" }
@@ -1224,7 +1264,7 @@ extension ClothesInspector {
                     Text("Indoor").tag(0)
                     Text("Outdoor").tag(1)
                 }
-                .pickerStyle(.segmented).labelsHidden()
+                .pickerStyle(.segmented).labelsHidden().controlSize(.small)
             }
             .accessibilityIdentifier("studio.source.shoesType")
             Text("The shoes row addresses the \(preview.shoesType == 0 ? "indoor" : preview.shoesType == 1 ? "outdoor" : "neither") shoes (shoesType \(preview.shoesType), saved \(preview.savedWear.shoesType)). Export writes an edited state or shoes type into the embedded card; the loaded values write nothing.")

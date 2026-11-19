@@ -1,0 +1,41 @@
+{
+  "steps": [],
+  "inspectorUI": {
+    "steps": [
+      {
+        "op": "select",
+        "key": 623
+      },
+      {
+        "op": "parentMenu"
+      },
+      {
+        "op": "parentMenu",
+        "key": 962
+      },
+      {
+        "op": "undo"
+      },
+      {
+        "op": "parentMenu"
+      },
+      {
+        "op": "parentMenu",
+        "key": -1
+      },
+      {
+        "op": "undo"
+      },
+      {
+        "op": "parentMenu"
+      },
+      {
+        "op": "select",
+        "key": 0
+      },
+      {
+        "op": "parentMenu"
+      }
+    ]
+  }
+}

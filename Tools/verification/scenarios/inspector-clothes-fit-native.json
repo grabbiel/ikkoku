@@ -1,0 +1,43 @@
+{
+  "steps": [],
+  "inspectorUI": {
+    "steps": [
+      {
+        "op": "tab",
+        "label": "clothes"
+      },
+      {
+        "op": "addCharacter",
+        "sex": "female"
+      },
+      {
+        "op": "assert",
+        "inspectorView": "ClothesInspector",
+        "axContains": [
+          "Clothing state",
+          "Underwear",
+          "On",
+          "Half",
+          "Off"
+        ],
+        "inspectorFits": true
+      },
+      {
+        "op": "addCharacter",
+        "sex": "male"
+      },
+      {
+        "op": "assert",
+        "inspectorView": "ClothesInspector",
+        "axContains": [
+          "Clothing state",
+          "Underwear",
+          "On",
+          "Half",
+          "Off"
+        ],
+        "inspectorFits": true
+      }
+    ]
+  }
+}

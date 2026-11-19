@@ -426,6 +426,7 @@ extension CaptureRequest {
         ScopedOption("IKKOKU_SOURCE_SCENE_EDITS", [.appCapture]),
         ScopedOption("IKKOKU_BENCHMARK_OUTPUT", [.appCapture]),
         ScopedOption("IKKOKU_BENCHMARK_FRAMES", [.appCapture]),
+        ScopedOption("IKKOKU_BENCHMARK_MAP_SHADOW", [.appCapture]),
         ScopedOption("IKKOKU_BENCHMARK_SIMULATION_FRAMES", [.appCapture]),
         ScopedOption("IKKOKU_PERF_WORKLOAD", [.perfTrace]),
         ScopedOption("IKKOKU_PERF_SECONDS", [.perfTrace]),
@@ -458,6 +459,8 @@ extension CaptureRequest {
     static let windowOptions: [String] = [
         "IKKOKU_CAPTURE_UI_TAB", "IKKOKU_CAPTURE_UI_MODE", "IKKOKU_CAPTURE_UI_STUDIO_TAB",
         "IKKOKU_CAPTURE_UI_SELECT", "IKKOKU_CAPTURE_UI_REPORT", UICaptureReadiness.timeoutVariable,
+        // #333's diagnostic: the inspector's width at each readiness poll.
+        "IKKOKU_CAPTURE_UI_FIT_LOG",
     ]
 
     /// Inputs startup loads in any mode that builds the Maker and Studio, including
@@ -501,6 +504,7 @@ extension CaptureRequest {
         Dependency("IKKOKU_SOURCE_SCENE_EDITS", requires: "IKKOKU_SOURCE_SCENE"),
         Dependency("IKKOKU_SOURCE_MAP_PROBE", requires: "IKKOKU_SOURCE_SCENE"),
         Dependency("IKKOKU_BENCHMARK_FRAMES", requires: "IKKOKU_BENCHMARK_OUTPUT"),
+        Dependency("IKKOKU_BENCHMARK_MAP_SHADOW", requires: "IKKOKU_BENCHMARK_OUTPUT"),
         Dependency("IKKOKU_BENCHMARK_SIMULATION_FRAMES", requires: "IKKOKU_BENCHMARK_OUTPUT"),
         Dependency("IKKOKU_BENCHMARK_SIMULATION_FRAMES", requires: "IKKOKU_SOURCE_SCENE"),
         Dependency("IKKOKU_SOURCE_PLUGIN_DELTA", requires: "IKKOKU_SOURCE_PLUGIN_STEPS"),
@@ -552,6 +556,8 @@ extension CaptureRequest {
         ValueRule("IKKOKU_CAPTURE_TIMELINE", .finiteNumber),
         // The renderer and Studio benchmarks check their own frame ranges.
         ValueRule("IKKOKU_BENCHMARK_FRAMES", .integer(1...Int.max)),
+        // Maps slice 5: redraw the map sun's shadow map in every measured frame.
+        ValueRule("IKKOKU_BENCHMARK_MAP_SHADOW", .oneOf(["every-frame"])),
         ValueRule("IKKOKU_BENCHMARK_SIMULATION_FRAMES", .integer(1...Int.max)),
         ValueRule("IKKOKU_CAPTURE_EXPR", .pairs(keys: ["eyes", "mouth", "brows", "head", "gaze"], integerValues: true)),
         ValueRule("IKKOKU_CAPTURE_SLIDERS", .pairs(keys: nil, integerValues: false)),
@@ -607,6 +613,7 @@ extension CaptureRequest {
         "studio-native", "viewport-lifecycle", "startup", "studio-static", "studio-orbit-bursts",
         "studio-duplicate", "studio-undo-delete", "studio-timeline",
         "studio-outfit", "studio-export", "studio-redo", "studio-load", "studio-select",
+        "studio-export-import", "studio-show-hidden", "studio-clock-first",
     ]
 }
 

@@ -108,6 +108,9 @@ nonisolated final class ViewportRenderThread: NSObject, CAMetalDisplayLinkDelega
         control.lock()
         guard !started, !stopRequested else { control.unlock(); return }
         started = true
+        // #368: the renderer leaves retirements to this viewport's draws while it
+        // draws. Told under `control`, so a later stop or visibility change wins.
+        renderer.setViewport(ObjectIdentifier(self), drawing: policy.visible)
         control.unlock()
         let thread = Thread { [self] in run() }
         renderer.invalidateInteractiveFrame()
@@ -129,6 +132,7 @@ nonisolated final class ViewportRenderThread: NSObject, CAMetalDisplayLinkDelega
     func stop() {
         control.lock()
         stopRequested = true
+        renderer.setViewport(ObjectIdentifier(self), drawing: false)
         let loop = runLoop
         let observer = submitObserver
         submitObserver = nil
@@ -250,6 +254,9 @@ nonisolated final class ViewportRenderThread: NSObject, CAMetalDisplayLinkDelega
         // Hidden: the link asks for no step.
         pacer.setVisible(visible)
         let changed = policy.setVisible(visible, at: CACurrentMediaTime())
+        // #368: a hidden viewport prepares nothing, so its renderer completes
+        // retirements at submit instead.
+        renderer.setViewport(ObjectIdentifier(self), drawing: visible && started && !stopRequested)
         let loop = changed ? runLoop : nil
         control.unlock()
         if returned { renderer.invalidateInteractiveFrame() }

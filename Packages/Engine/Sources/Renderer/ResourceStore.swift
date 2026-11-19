@@ -12,10 +12,20 @@ import ShaderTypes
 /// caller owns this collector; ResourceStore never retains or shares it.
 /// Image creation may defer decoding into the texture load. Neither interval
 /// is a measurement of CPU decoding or GPU execution alone.
+///
+/// #192-D: `metalTextureLoad` is also split into the loader's own stages
+/// (`InlineTextureLoadObservations`: decode, conversion, encodeSubmit,
+/// completionWait and the rest), summed over every load this collector saw.
+/// Those stages are nested inside `metalTextureLoad`, never added to it. Every
+/// clock read goes through `clock`; a nil collector reads no clock.
 public final class ResourceTextureLoadTimings {
     enum Phase: String { case dataCacheLookup, imageCreation, imageCacheLookup, metalTextureLoad, registration }
     public struct Sample: Encodable {
         public let milliseconds: [String: Double], calls: [String: Int], failures: [String: Int]
+        /// `InlineTextureLoader.texture` stages inside `metalTextureLoad`,
+        /// by stage name. Wall time between the loader's marks, not CPU
+        /// decoding or GPU execution alone; nested, not additional.
+        public let loaderMilliseconds: [String: Double], loaderCalls: [String: Int]
         /// Supplied encoded Data, including shared-cache hits. This is not a
         /// count of file reads, decoded pixels or retained texture memory.
         public let dataRequests: Int, encodedBytesPresented: Int
@@ -26,9 +36,22 @@ public final class ResourceTextureLoadTimings {
     private var dataRequests = 0, encodedBytesPresented = 0
     private var dataCacheHits = 0, dataCacheMisses = 0, imageCacheHits = 0, imageCacheMisses = 0
     private var registeredTextures = 0
-    public init() {}
+    let clock: () -> Double
+    /// The loader's stages for every texture this collector's loads made.
+    let loaderObservations: InlineTextureLoadObservations
+    public convenience init() { self.init(clock: { ProcessInfo.processInfo.systemUptime }) }
+    /// Tests inject a clock that counts its reads.
+    init(clock: @escaping () -> Double) {
+        self.clock = clock
+        loaderObservations = InlineTextureLoadObservations(clock: clock)
+    }
     public var sample: Sample {
-        Sample(milliseconds: milliseconds, calls: calls, failures: failures,
+        // Only stages a load reached: an unused stage is absent, not zero.
+        let reached = InlineTextureLoadObservations.Stage.allCases.filter { loaderObservations[$0].calls > 0 }
+        let loaderMilliseconds = Dictionary(uniqueKeysWithValues: reached.map { ("\($0)", loaderObservations[$0].milliseconds) })
+        let loaderCalls = Dictionary(uniqueKeysWithValues: reached.map { ("\($0)", loaderObservations[$0].calls) })
+        return Sample(milliseconds: milliseconds, calls: calls, failures: failures,
+            loaderMilliseconds: loaderMilliseconds, loaderCalls: loaderCalls,
             dataRequests: dataRequests, encodedBytesPresented: encodedBytesPresented,
             dataCacheHits: dataCacheHits, dataCacheMisses: dataCacheMisses,
             imageCacheHits: imageCacheHits, imageCacheMisses: imageCacheMisses,
@@ -46,10 +69,10 @@ public final class ResourceTextureLoadTimings {
     fileprivate static func measure<T>(_ timings: ResourceTextureLoadTimings?, _ phase: Phase,
                                        _ body: () throws -> T) rethrows -> T {
         guard let timings else { return try body() }
-        let start = ProcessInfo.processInfo.systemUptime
+        let start = timings.clock()
         var succeeded = false
         defer {
-            timings.milliseconds[phase.rawValue, default: 0] += (ProcessInfo.processInfo.systemUptime - start) * 1000
+            timings.milliseconds[phase.rawValue, default: 0] += (timings.clock() - start) * 1000
             timings.calls[phase.rawValue, default: 0] += 1
             if !succeeded { timings.failures[phase.rawValue, default: 0] += 1 }
         }
@@ -234,9 +257,13 @@ public final class ResourceStore: @unchecked Sendable {
     public struct Statistics: Encodable, Sendable {
         public let meshes: Int, textures: Int, deformBuffers: Int, hiddenBuffers: Int
         public let meshBufferBytes: Int, deformBufferBytes: Int, hiddenBufferBytes: Int
-        /// Retired meshes and keys still waiting for a later submitted frame (`retire`).
-        /// They are included in the counts above until then.
+        /// Retired resources still waiting for their release (`retire`): textures
+        /// until a frame created after the retirement is submitted, meshes and
+        /// keys until such a frame is prepared. They are included in the counts
+        /// above until then.
         public let retiring: Int
+        /// `retiring` by kind.
+        public let retiringMeshes: Int, retiringDeformKeys: Int, retiringHiddenKeys: Int, retiringTextures: Int
     }
 
     /// Counts store-owned resources; device allocation also includes render
@@ -254,7 +281,9 @@ public final class ResourceStore: @unchecked Sendable {
             hiddenBuffers: hiddenBuffers.count, meshBufferBytes: buffers.values.reduce(0) { $0 + $1.length },
             deformBufferBytes: deformBuffers.values.reduce(0) { $0 + $1.length },
             hiddenBufferBytes: hiddenBuffers.values.reduce(0) { $0 + $1.length },
-            retiring: retiringMeshes.count + retiringDeformKeys.count + retiringHiddenKeys.count + retiringTextures.count)
+            retiring: retiringMeshes.count + retiringDeformKeys.count + retiringHiddenKeys.count + retiringTextures.count,
+            retiringMeshes: retiringMeshes.count, retiringDeformKeys: retiringDeformKeys.count,
+            retiringHiddenKeys: retiringHiddenKeys.count, retiringTextures: retiringTextures.count)
     }
 
     @discardableResult
@@ -364,11 +393,28 @@ public final class ResourceStore: @unchecked Sendable {
         lock.lock(); liveInputs = encoder; lock.unlock()
     }
 
+    #if DEBUG
+    /// Tests only (#344): runs at the top of `deformBuffer`, before this
+    /// store's lock, so a test can drop an owner between the renderer's mesh
+    /// lookup and the buffer request, as the main thread can while a render
+    /// thread prepares. It runs inside `prepare`, under the renderer's
+    /// `renderLock`, on the capturing thread: a teardown it runs must not take
+    /// `renderLock` (it would deadlock), and it must not request a
+    /// deformation buffer itself (it would re-enter). Set before a capture and
+    /// cleared after it. Not in Release builds.
+    var beforeDeformBuffer: ((UInt64) -> Void)?
+    #endif
+
     /// The persistent deformation output for `key`, reallocated when a mesh needs
     /// more vertices. Nil when Metal refuses the allocation; the renderer reports it
     /// as a deformation error instead of terminating. `frameCreatedAt` is the
     /// requesting frame's `RenderFrame.createdAt`; nil means a frame created now.
-    func deformBuffer(for key: UInt64, vertexCount: Int, frameCreatedAt created: UInt64? = nil) -> (any MTLBuffer)? {
+    /// `mesh` is the requesting item's mesh: a new buffer is cached only while
+    /// it is registered and not retiring (#344, below).
+    func deformBuffer(for key: UInt64, mesh: MeshHandle, vertexCount: Int, frameCreatedAt created: UInt64? = nil) -> (any MTLBuffer)? {
+        #if DEBUG
+        beforeDeformBuffer?(key)
+        #endif
         lock.lock(); defer { lock.unlock() }
         let needed = MemoryLayout<DeformedVertex>.stride * max(vertexCount, 1)
         if let b = deformBuffers[key], b.length >= needed { return b }
@@ -376,7 +422,26 @@ public final class ResourceStore: @unchecked Sendable {
         // A frame created before a completed retirement may still name a key that
         // retirement released. Its buffer stays transient (the frame's own deform
         // pass fills it), so preparing such a frame cannot re-create the key.
-        if let created, created < newestCompletedRetirement {
+        let stale = created.map { $0 < newestCompletedRetirement } ?? false
+        // #344: the renderer resolves an item's mesh, then asks for its buffer,
+        // without holding this lock in between. The owner can drop both there:
+        // `SourceRigPreview.deinit` unregisters its meshes and then releases its
+        // keys on the main thread while a render thread prepares. A buffer
+        // cached after that release would outlive its owner, as nothing
+        // releases the key again. So a new buffer is cached only while its mesh
+        // is registered and not retiring, and is transient otherwise. The frame
+        // being prepared still deforms into it. Neither a later release nor
+        // `completeRetirements` then has a key re-cached behind its back: a
+        // retiring mesh's key may not be retiring itself. `unregister` and
+        // `retire` take this lock, so the check cannot interleave with them.
+        // Only a new buffer pays the check. A cached buffer too small for an
+        // unowned mesh stays cached, and the owner's release drops it; the
+        // request gets a transient one of the needed size. A retiring mesh's
+        // key without a cached buffer allocates a transient buffer on every
+        // preparation until the retirement completes, with the next submitted
+        // frame: that churn is accepted.
+        let owned = meshes[mesh.id] != nil && retiringMeshes[mesh.id] == nil
+        if stale || !owned {
             b.label = "deform.\(key).transient"
             return b
         }
@@ -426,22 +491,35 @@ public final class ResourceStore: @unchecked Sendable {
 
     // MARK: Deferred release (R6)
 
-    // A frame names meshes, deformation keys and hidden-mask keys, not buffers,
-    // until it is prepared, and it may be prepared after an owner gives them back:
-    // the renderer's pending frame, or a copy of it from `Renderer.currentFrame()`.
-    // Releasing at once would drop the mask and meshes that frame draws, and its
-    // preparation would re-create (and then keep forever) the owner's deformation
-    // buffers. `retire` therefore takes a `ResourceClock` stamp and leaves the
-    // resources in place. The release completes when the renderer prepares a
-    // submitted frame created after that stamp: the pending frame was replaced by
-    // one built without them. Encoded command buffers and prepared frames hold
-    // their own references, so completion never touches GPU work in flight.
+    // A frame names meshes, deformation keys, hidden-mask keys and textures by
+    // handle or key, not by buffer, and it may be prepared after an owner gives
+    // them back: the renderer's pending frame, or a copy of it from
+    // `Renderer.currentFrame()`. Releasing at once would drop the mask and meshes
+    // that frame draws, and its preparation would re-create (and then keep
+    // forever) the owner's deformation buffers. `retire` therefore takes a
+    // `ResourceClock` stamp and leaves the resources in place.
+    // - Meshes and keys are released when the renderer prepares a submitted
+    //   frame created after that stamp (`completeRetirements`): the pending frame
+    //   was replaced by one built without them. When no viewport is drawing
+    //   (hidden, minimized, or none), a submit has the renderer complete them off
+    //   the main thread instead, once it holds its render lock (#368,
+    //   `Renderer.submit`): no prepare runs then, so the same holds.
+    // - Textures are released earlier, when a frame created after that stamp is
+    //   submitted (`completeTextureRetirements`). Every submitted frame holds its
+    //   own references to the textures it names (`RenderFrame.retainTextures`),
+    //   so the frame it replaces and every copy of that frame keep drawing them.
+    //   A viewport that prepares nothing (occluded or minimized) therefore still
+    //   releases them (#368).
+    // Encoded command buffers and prepared frames hold their own references, so
+    // completion never touches GPU work in flight.
     private var retiringMeshes: [UInt32: UInt64] = [:]
     private var retiringDeformKeys: [UInt64: UInt64] = [:]
     private var retiringHiddenKeys: [UInt64: UInt64] = [:]
     private var retiringTextures: [UInt32: UInt64] = [:]
     /// Stamp of the newest completed retirement. A frame created before it gets
-    /// transient deformation buffers (see `deformBuffer`).
+    /// transient deformation buffers (see `deformBuffer`). It orders deformation
+    /// keys: a texture release at submit leaves it alone, or every frame created
+    /// before a texture retirement would get transient deformation buffers.
     private var newestCompletedRetirement: UInt64 = 0
 
     /// Gives an owner's resources back once no pending frame can name them (see
@@ -461,9 +539,10 @@ public final class ResourceStore: @unchecked Sendable {
     }
 
     /// `retire` for textures an owner registered itself (ST-A11 source map
-    /// textures). Their cache keys go at once, so a later load of the same
-    /// file creates its own textures; the handles keep resolving for a frame
-    /// created before this call until a later submitted frame is prepared.
+    /// textures). Their cache keys go at once, so a later load of the same file creates its own
+    /// textures. The handles keep resolving until a frame created after this
+    /// call is submitted (`completeTextureRetirements`); a frame created before
+    /// it and submitted later took its own references at its submit.
     /// `unregister(texture:)` releases at once and cancels the retirement.
     public func retire(textures handles: [TextureHandle]) {
         let stamp = ResourceClock.tick()
@@ -473,16 +552,40 @@ public final class ResourceStore: @unchecked Sendable {
         textureKeys = textureKeys.filter { !ids.contains($0.value.id) }
     }
 
-    /// Called while the renderer prepares a submitted frame created at `stamp`:
-    /// releases everything retired before that frame existed.
-    func completeRetirements(createdBefore stamp: UInt64) {
+    /// Called by `Renderer.submit` once the submitted snapshot holds its own
+    /// texture references: releases the textures retired before that frame was
+    /// created (see above). One lock and one check when nothing is retiring.
+    /// Unlike `completeRetirements`, it leaves `newestCompletedRetirement` alone.
+    /// Returns whether meshes or keys are retiring, from the same lock (#368).
+    @discardableResult
+    func completeTextureRetirements(createdBefore stamp: UInt64) -> Bool {
+        lock.lock(); defer { lock.unlock() }
+        let others = !retiringMeshes.isEmpty || !retiringDeformKeys.isEmpty || !retiringHiddenKeys.isEmpty
+        guard !retiringTextures.isEmpty else { return others }
+        var changed = false
+        for (id, retired) in retiringTextures where retired < stamp {
+            textures[id] = nil; retiringTextures[id] = nil; changed = true
+        }
+        if changed { generationValue &+= 1 }
+        return others
+    }
+
+    /// Called while the renderer holds its render lock, so no frame is being
+    /// prepared, and the pending frame was submitted at `stamp` or later: as it
+    /// prepares a submitted frame created at `stamp`, or from a submit's
+    /// completion off the main thread (#368). Releases everything retired
+    /// before that frame existed; textures retired before it normally went at
+    /// its submit already. Returns the released deformation keys, whose content
+    /// records the renderer drops.
+    @discardableResult
+    func completeRetirements(createdBefore stamp: UInt64) -> [UInt64] {
         var releasedMeshes: [UInt32] = [], releasedKeys: [UInt64] = []
         var live: SourceShaderLiveEncoder?
         // The live encoder's lock is taken after this store's lock is released.
         defer { live?.evict(meshes: releasedMeshes, deformKeys: releasedKeys) }
         lock.lock(); defer { lock.unlock() }
         guard !retiringMeshes.isEmpty || !retiringDeformKeys.isEmpty || !retiringHiddenKeys.isEmpty
-              || !retiringTextures.isEmpty else { return }
+              || !retiringTextures.isEmpty else { return [] }
         live = liveInputs
         var newest = newestCompletedRetirement
         var changed = false
@@ -502,6 +605,7 @@ public final class ResourceStore: @unchecked Sendable {
         }
         if changed { generationValue &+= 1 }
         newestCompletedRetirement = newest
+        return releasedKeys
     }
 
     // MARK: Textures
@@ -529,11 +633,13 @@ public final class ResourceStore: @unchecked Sendable {
     /// Every texture made from an image goes through here, on the calling
     /// thread (`InlineTextureLoader`). An image ImageIO decoded from a GPU
     /// texture container is rejected by name, whichever entry point it took.
-    func makeTexture(_ image: InlineTextureLoader.Image, srgb: Bool, name: String) throws -> any MTLTexture {
+    /// `observations` (#192-D) times the loader's stages; nil adds nothing.
+    func makeTexture(_ image: InlineTextureLoader.Image, srgb: Bool, name: String,
+                     observations: InlineTextureLoadObservations? = nil) throws -> any MTLTexture {
         if case .imageIO(let type) = image.source, let container = InlineTextureLoader.container(ofType: type) {
             throw ResourceError.unsupportedTextureContainer(container, name)
         }
-        return try InlineTextureLoader.texture(image, srgb: srgb, device: device, queue: uploadQueue)
+        return try InlineTextureLoader.texture(image, srgb: srgb, device: device, queue: uploadQueue, observations: observations)
     }
 
     public func texture(data: Data, key: String, srgb: Bool = true, cacheNew: Bool = true,
@@ -568,7 +674,9 @@ public final class ResourceStore: @unchecked Sendable {
         let cached = ResourceTextureLoadTimings.measure(timings, .imageCacheLookup) { lookup(key: key) }
         timings?.recordLookup(image: true, hit: cached != nil)
         if let cached { return cached }
-        let t = try ResourceTextureLoadTimings.measure(timings, .metalTextureLoad) { try makeTexture(image, srgb: srgb, name: key) }
+        let t = try ResourceTextureLoadTimings.measure(timings, .metalTextureLoad) {
+            try makeTexture(image, srgb: srgb, name: key, observations: timings?.loaderObservations)
+        }
         t.label = key
         let handle = ResourceTextureLoadTimings.measure(timings, .registration) {
             register(texture: t, key: cacheNew ? key : nil)

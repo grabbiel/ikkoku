@@ -57,9 +57,20 @@ vanish colliders, and scene-map41-showoff.png). Each case also records the vanis
 enabled flags, the view capsule and the colliders it overlaps) and the map option; the oracle adds
 -silhouettes.rgba.f32 and -unlit.rgba.f32 where a map has them and skips the irradiance pair, with the
 reason recorded, where a map has no lightmaps.
+
+`sun` (ST-A11 slices 5 and 6) reads already-authored map records back (--scene <case>=<scene png>, <case> =
+mapNN or mapNN-<suffix>, uploaded as reload-sun-<case>.png) and measures the sun at each saved camera:
+sun-<case>-lit.f32, the sun's screen-space shadow mask (-mask.r.f32, soft as authored, and -mask-hard.r.f32),
+-noshadow.f32 and -nosun.f32, the deferred GBuffer normals and specular/smoothness with and without the map's
+normal maps, and the same lit passes as sun-<case>-zoom-* at a zoomed view through the strongest shadow edge,
+which the player saves as scene-sun-<case>-zoom.png (see the probe's header). The float images are gzipped on
+arrival. The run script also drains the player's processes (and any WerFault started since the run began) for
+up to 120 s, removes the root only when none remain and no reparse point is left under it after the junctions,
+and reports targetsChanged (the junction targets' scans before and after differ). --dry-run makes every check
+the exec would make and builds its run.ps1 without touching the VM.
 """
 from __future__ import annotations
-import argparse, fnmatch, gzip, hashlib, http.server, io, json, re, subprocess, threading, uuid, zipfile
+import argparse, fnmatch, gzip, hashlib, http.server, io, json, re, shlex, subprocess, sys, threading, time, uuid, zipfile
 from pathlib import Path, PurePosixPath
 from original_wear_probe import Endpoint, bootstrap, errno_count, extract, fresh_root, guarded
 
@@ -371,6 +382,11 @@ SHOWOFF_UPLOAD = 'reload-showoff.png'
 
 
 MAP34_UPLOAD = 'reload-map34-showoff.png'
+SUN_PREFIX = 'reload-sun-'
+# A sun case: the probe reads the map number from its first two digits (OriginalMapProbe.SunMapNo).
+SUN_CASE = re.compile(r'map[0-9]{2}(-[a-z0-9]+)*')
+# Every prlctl exec command stays below this many characters (longer commands fail in Parallels).
+EXEC_LIMIT = 3500
 MAPS_UPLOAD = 'reload-maps-showoff.png'
 # The player root's junction targets, read only: file and directory counts, bytes and the newest write
 # time of each, taken in the same run.ps1 before the player is set up and after the root is removed.
@@ -389,6 +405,59 @@ def with_junction_scans(script):
     return head + sep + JUNCTION_SCAN + '\n$r.scanBefore=Scan\n' + rest[:-len(tail)] + 'try{$r.scanAfter=Scan}catch{$r.scanAfterError=$_.ToString()}\n' + tail
 
 
+# with_root_guard's pieces: a drain of the player's processes (and of WerFault started since the run began), the
+# root's removal only when no process remains and no reparse point is under it after the junctions are gone, and
+# targetsChanged from the junction scans.
+ROOT_GUARD_DRAIN = (r"""function Pending{@(Own)+@(Get-Process CharaStudio,Koikatu -ErrorAction SilentlyContinue)+@(Get-Process WerFault -ErrorAction SilentlyContinue|Where-Object{try{$_.StartTime -ge $t0}catch{$true}})}
+$w=[Diagnostics.Stopwatch]::StartNew();do{$q=@(Pending);if(-not $q.Count){break};Start-Sleep -Milliseconds 500}while($w.Elapsed.TotalSeconds -lt 120)
+$r.drainMilliseconds=[int]$w.Elapsed.TotalMilliseconds;$r.pending=@($q|ForEach-Object{$_.ProcessName+':'+$_.Id})
+""")
+ROOT_GUARD_REMOVAL = (r"""if($kept.Count){$r.cleanupError='junctions not removed: '+($kept -join ', ')}elseif($q.Count){$r.cleanupError='processes remain after 120 s: root kept'}elseif(Test-Path -LiteralPath $root){try{
+$st=New-Object Collections.Stack;$st.Push($root);$n=0;$found=@()
+while($st.Count){$d=$st.Pop();foreach($e in [IO.Directory]::EnumerateFileSystemEntries($d)){$n++;if($n -gt 200000){throw 'root scan exceeded 200000 entries: root kept'}
+$a=[IO.File]::GetAttributes($e);if($a -band [IO.FileAttributes]::ReparsePoint){$found+=$e}elseif($a -band [IO.FileAttributes]::Directory){$st.Push($e)}}}
+$r.rootEntries=$n;$r.reparsePoints=@($found)
+if($found.Count){$r.cleanupError='reparse points remain under the root: root kept'}else{Remove-Item -LiteralPath $root -Recurse -Force}
+}catch{$r.cleanupError=$_.ToString()}}
+""")
+ROOT_GUARD_TARGETS = '$r.targetsChanged=(($r.scanBefore|ConvertTo-Json -Compress -Depth 4) -ne ($r.scanAfter|ConvertTo-Json -Compress -Depth 4))\n'
+
+
+def with_root_guard(script):
+    """`script` (with_junction_scans' run.ps1) with the clean-up hardened: $t0 at the start, the drain after the
+    player's processes are stopped, the guarded root removal in place of the plain one, and targetsChanged."""
+    head = '$r=[ordered]@{root=$root}\n'
+    stopped = "$r.stoppedAtCleanup=@($left|ForEach-Object{$_.Id});Start-Sleep -Seconds 1\n"
+    removal = "if($kept.Count){$r.cleanupError='junctions not removed: '+($kept -join ', ')}elseif(Test-Path -LiteralPath $root){Remove-Item -LiteralPath $root -Recurse -Force}\n"
+    scanned = 'try{$r.scanAfter=Scan}catch{$r.scanAfterError=$_.ToString()}\n'
+    if any(script.count(piece) != 1 for piece in (head, stopped, removal, scanned)): raise ValueError('Unexpected run.ps1 layout')
+    return (script.replace(head, head + '$t0=[DateTime]::Now\n').replace(stopped, stopped + ROOT_GUARD_DRAIN)
+            .replace(removal, ROOT_GUARD_REMOVAL).replace(scanned, scanned + ROOT_GUARD_TARGETS))
+
+
+def probe_script(root, base, wait_seconds, uploads, scans=False, guard=False):
+    """run.ps1 for one exec of fixtures/OriginalMapProbe.cs (original_scene_reload_probe.once_script), with the
+    junction scans and the root guard when asked (the guard needs the scans)."""
+    from original_scene_reload_probe import once_script  # the reload probe's one-exec transport
+    if guard and not scans: raise ValueError('The root guard needs the junction scans')
+    script = once_script(root, base, wait_seconds, list(uploads), *MAP_PROBE_NAMES)
+    if scans: script = with_junction_scans(script)
+    if guard: script = with_root_guard(script)
+    return script
+
+
+def exec_command(vm, base):
+    """The one prlctl exec: PowerShell running bootstrap(base) as the current user; refused at EXEC_LIMIT characters."""
+    command = ['prlctl', 'exec', vm, '--current-user', 'powershell.exe', '-NoProfile', '-NonInteractive', '-Command', bootstrap(base)]
+    if len(shlex.join(command)) >= EXEC_LIMIT: raise ValueError(f'The exec command has {len(shlex.join(command))} characters, limit {EXEC_LIMIT}')
+    return command
+
+
+def log(text):
+    """A timestamped line on stderr (the phase log)."""
+    print(text + ' ' + time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime()), file=sys.stderr, flush=True)
+
+
 def scene_record(path, what):
     """A scene record's bytes; refused unless it is a PNG."""
     data = Path(path).read_bytes()
@@ -396,12 +465,11 @@ def scene_record(path, what):
     return data
 
 
-def run_probe(args, uploads, record, floats, scans=False):
+def run_probe(args, uploads, record, floats, scans=False, guard=False):
     """One `prlctl exec` of fixtures/OriginalMapProbe.cs with `uploads` ({reload-*.png name: bytes})
-    placed next to the plug-in (original_scene_reload_probe.once_script). `record` adds to run.json;
-    with `floats`, the received *.f32 images are gzipped (gzip_floats). Every guest hash is checked;
-    manifest.json lists what arrived."""
-    from original_scene_reload_probe import once_script  # the reload probe's one-exec transport
+    placed next to the plug-in (probe_script). `record` adds to run.json; with `floats`, the received
+    *.f32 images are gzipped (gzip_floats). Every guest hash is checked; manifest.json lists what
+    arrived. The endpoint's start and stop go to stderr."""
     output = private(args.output)
     if (output / 'run.json').exists(): raise RuntimeError(f'{output}/run.json exists: run the probe into a new output folder')
     source = MAP_PROBE.read_bytes()
@@ -411,14 +479,18 @@ def run_probe(args, uploads, record, floats, scans=False):
                   transport='one prlctl exec; run.ps1 over a host-only HTTP endpoint (original_scene_reload_probe.once_script)')
     output.mkdir(parents=True, exist_ok=True); dump(output / 'run.json', record)
     files = {MAP_PROBE_NAMES[0]: source, **uploads}
-    with Endpoint(args.host_address, files, upload='reload.zip') as endpoint:
-        script = once_script(root, endpoint.base, args.wait_seconds, list(uploads), *MAP_PROBE_NAMES)
-        if scans: script = with_junction_scans(script)
-        files['run.ps1'] = script.encode()
-        (output / 'run.ps1').write_text(script.replace(endpoint.base, '<endpoint>/'))
-        result = subprocess.run(['prlctl', 'exec', args.vm, '--current-user', 'powershell.exe', '-NoProfile', '-NonInteractive',
-                                 '-Command', bootstrap(endpoint.base)], text=True, capture_output=True, timeout=args.wait_seconds + 900)
-        upload = endpoint.upload
+    try:
+        with Endpoint(args.host_address, files, upload='reload.zip') as endpoint:
+            log('endpoint-start ' + endpoint.base.rsplit('/', 2)[0] + '/')
+            script = probe_script(root, endpoint.base, args.wait_seconds, uploads, scans, guard)
+            files['run.ps1'] = script.encode()
+            (output / 'run.ps1').write_text(script.replace(endpoint.base, '<endpoint>/'))
+            command = exec_command(args.vm, endpoint.base)
+            record['execCommandChars'] = len(shlex.join(command))
+            result = subprocess.run(command, text=True, capture_output=True, timeout=args.wait_seconds + 900)
+            upload = endpoint.upload
+    finally:
+        log('endpoint-stop')
     record['errnoAfter'] = errno_count()
     if result.returncode:
         record['execError'] = (result.stderr or result.stdout)[-4000:]; dump(output / 'run.json', record)
@@ -494,13 +566,13 @@ def oracle_scenes(items):
 
 
 def gzip_floats(output, names):
-    """Replaces each received *.f32 image (float32 RGB, or RGBA for *.rgba.f32) by <name>.gz;
-    returns {name: raw sha256, bytes}."""
+    """Replaces each received *.f32 image (float32 RGB, RGBA for *.rgba.f32, one channel for *.r.f32)
+    by <name>.gz; returns {name: raw sha256, bytes}."""
     raw = {}
     for name in sorted(n for n in names if n.endswith('.f32')):
         data = (output / name).read_bytes()
-        rgba = name.endswith('.rgba.f32')
-        if len(data) % (16 if rgba else 12): raise ValueError(f'{name} is not float32 {"RGBA" if rgba else "RGB"}')
+        kind, size = ('RGBA', 16) if name.endswith('.rgba.f32') else ('one-channel', 4) if name.endswith('.r.f32') else ('RGB', 12)
+        if len(data) % size: raise ValueError(f'{name} is not float32 {kind}')
         raw[name] = dict(sha256=digest(data), bytes=len(data), file=name + '.gz')
         (output / (name + '.gz')).write_bytes(gzip.compress(data, compresslevel=9, mtime=0)); (output / name).unlink()
     return raw
@@ -512,6 +584,36 @@ def oracle(args):
     scenes = oracle_scenes(args.scene)
     uploads = {f'reload-oracle-{label}.png': data for label, data in scenes.items()}
     return run_probe(args, uploads, dict(scenes={label: digest(data) for label, data in scenes.items()}), floats=True)
+
+
+def sun_uploads(items):
+    """--scene <case>=<png> pairs for the sun mode: oracle_scenes' checks, and every case a SUN_CASE."""
+    scenes = oracle_scenes(items)
+    bad = sorted(label for label in scenes if not SUN_CASE.fullmatch(label))
+    if bad: raise ValueError(f'sun cases must be mapNN or mapNN-<suffix>: {bad}')
+    return scenes, {f'{SUN_PREFIX}{label}.png': data for label, data in scenes.items()}
+
+
+def sun(args):
+    """The sun captures in one `prlctl exec` (see the module docstring); --dry-run stops before the VM."""
+    output = private(args.output)
+    if (output / 'run.json').exists(): raise RuntimeError(f'{args.output}/run.json exists: run sun into a new output folder')
+    scenes, uploads = sun_uploads(args.scene)
+    if args.dry_run:
+        base = f'http://{args.host_address}:1/{uuid.uuid4().hex}/'
+        script = probe_script(fresh_root(), base, args.wait_seconds, uploads, scans=True, guard=True)
+        source = MAP_PROBE.read_bytes()
+        return dict(dryRun=True, uploads={n: dict(bytes=len(d), sha256=digest(d)) for n, d in uploads.items()},
+                    source=dict(bytes=len(source), sha256=digest(source)), runScriptChars=len(script),
+                    execCommandChars=len(shlex.join(exec_command(args.vm, base))), execLimit=EXEC_LIMIT, errnoNow=errno_count())
+    result = run_probe(args, uploads, dict(mode='sun', scenes={label: digest(data) for label, data in scenes.items()}),
+                       floats=True, scans=True, guard=True)
+    guest = json.loads((output / 'run.json').read_text()).get('guest') or {}
+    result.update(scanBefore=guest.get('scanBefore'), scanAfter=guest.get('scanAfter'),
+                  scansEqual=guest.get('scanBefore') is not None and guest.get('scanBefore') == guest.get('scanAfter'),
+                  targetsChanged=guest.get('targetsChanged'), pending=guest.get('pending'), reparsePoints=guest.get('reparsePoints'),
+                  drainMilliseconds=guest.get('drainMilliseconds'))
+    return result
 
 
 def main():
@@ -554,8 +656,16 @@ def main():
     s.add_argument('--errno-baseline', type=int, required=True, help='Parallels errno-24 count that must hold before the exec')
     s.add_argument('--host-address', default='10.211.55.2', help="the Mac's address on the VM's host-only network")
     s.add_argument('--wait-seconds', type=int, default=3600, help='bound on the player run')
+    u = commands.add_parser('sun', help="measure the sun's lit frame, shadow mask, normals and a zoomed shadow edge at authored records")
+    u.add_argument('--vm', default='Windows 11'); u.add_argument('--output', type=Path, required=True)
+    u.add_argument('--scene', action='append', required=True, help='<case>=<scene png> (repeatable), case mapNN or mapNN-<suffix>, e.g. map01=scene-map01.png')
+    u.add_argument('--errno-baseline', type=int, help='Parallels errno-24 count that must hold before the exec (required without --dry-run)')
+    u.add_argument('--host-address', default='10.211.55.2', help="the Mac's address on the VM's host-only network")
+    u.add_argument('--wait-seconds', type=int, default=900, help='bound on the player run')
+    u.add_argument('--dry-run', action='store_true', help='make every check and build run.ps1, without the VM')
     args = p.parse_args()
-    run = dict(fetch=fetch, capture=capture, oracle=oracle, map34=map34, maps=maps)[args.command]
+    if args.command == 'sun' and not args.dry_run and args.errno_baseline is None: p.error('sun needs --errno-baseline without --dry-run')
+    run = dict(fetch=fetch, capture=capture, oracle=oracle, map34=map34, maps=maps, sun=sun)[args.command]
     print(json.dumps(run(args), indent=2))
 
 
