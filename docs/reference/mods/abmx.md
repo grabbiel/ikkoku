@@ -137,13 +137,22 @@ Whole-card outcomes:
 - **`boneData` not a string.** The original's reader returns null, as above. The native decoder returns an empty document with a `legacy-bone-data-not-text` warning.
 - **Other plug-in versions.** The original reads them as empty (`NotSupportedException`, caught). The native decoder still refuses them (unchanged).
 
-Divergences and `[corlib]` assumptions. Mono's corlib (`string.Split`, `string.Trim`, `float.Parse`) is not in the recovered set. Where a rule depends on it, the documented .NET behaviour is used:
+Divergences and `[corlib]` assumptions. Mono's corlib (`string.Split`, `string.Trim`, `float.Parse`) is not in the recovered set. Where a rule depends on it, the documented .NET behaviour is used. The original player's results for each are from the #403 phase in [Checked against the original](#checked-against-the-original):
 
-- **Culture.** The original parses with the current culture and orders names with a culture-sensitive comparer. The native decoder parses with the invariant culture (`.` decimal) and orders by ordinal UTF-16. Fields are split on `,`, so a comma-decimal culture would split the numbers themselves: the original's own field count needs the `.` decimal. The two orderings agree on the suffix forms in use (none, or `__` plus a digit). They differ only for other suffix characters, for example `__A` against `__a` or `___`.
-- **Whitespace** `[corlib]`: `char.IsWhiteSpace`, spelled out as U+0009–U+000D, U+0020, U+0085, U+00A0, U+1680, U+180E, U+2000–U+200A, U+2028, U+2029, U+202F, U+205F and U+3000. U+180E is included because Mono's Unicode data predates its move out of Zs. U+001C–U+001F, U+200B and U+FEFF do not separate tokens; Python's `str.split()` would split on U+001C–U+001F, so the converter uses this explicit set. If this Mono splits or trims on a different table, only tokens containing the differing characters read differently; the corpus separates tokens with CR+LF only.
-- **Number grammar** `[corlib]`: `NumberStyles.Float | AllowThousands`, invariant. A token has no whitespace or commas left, so the accepted forms are `[+-]?(d+(.d*)?|.d+)([eE][+-]?d+)?` and the case-sensitive symbols `Infinity`, `-Infinity` and `NaN`. Only ASCII digits are accepted. The value is parsed as a double, then rounded to float32, as Mono does. `-0` keeps its sign.
-- **Non-finite values.** The original applies `NaN` and `±Infinity`. The native decoder refuses the character: "…has a non-finite or out-of-range value in field K; ABMX modifier values must be finite float32 numbers." Only the tokens that reach the character count. A token that is skipped, or that the last-7/last-1 rule drops, does not refuse it.
-- **Beyond float32 range** `[corlib]`, unverified: a value whose double magnitude exceeds `float.MaxValue` refuses the character in either direction, with the same message, even when it would round to `float.MaxValue`. A reading of the Mono sources, not checked here: `Single.Parse` parses a double and throws `OverflowException` only above `+float.MaxValue`. If so, the original skips a too-large positive token as a parse failure and applies a too-large negative one as −∞.
+- **Culture.** The original parses with the current culture and orders names with a culture-sensitive comparer. The native decoder parses with the invariant culture (`.` decimal) and orders by ordinal UTF-16. Fields are split on `,`, so a comma-decimal culture would split the numbers themselves: the original's own field count needs the `.` decimal. The two orderings agree on the suffix forms in use (none, or `__` plus a digit). They differ only for other suffix characters, for example `__A` against `__a` or `___`. Observed in the original player: the group `cc` with the names `cc__a`, `cc___`, `cc__A`, `cc__1`, `cc__0`, `cc__2`, `cc__3`, in that input order, is read in the order `cc___`, `cc__0`, `cc__1`, `cc__2`, `cc__3`, `cc__a`, `cc__A`. The native ordinal order is `cc__0`, `cc__1`, `cc__2`, `cc__3`, `cc__A`, `cc___`, `cc__a`.
+- **Whitespace** `[corlib]`: `char.IsWhiteSpace`, spelled out as U+0009–U+000D, U+0020, U+0085, U+00A0, U+1680, U+180E, U+2000–U+200A, U+2028, U+2029, U+202F, U+205F and U+3000. U+180E is included because Mono's Unicode data predates its move out of Zs. U+001C–U+001F, U+200B and U+FEFF do not separate tokens; Python's `str.split()` would split on U+001C–U+001F, so the converter uses this explicit set. Checked in the original player on 17 separators, each placed between two tokens: U+0009, U+000B, U+001C, U+001F, U+0085, U+00A0, U+1680, U+180E, U+2000, U+200A, U+200B, U+2028, U+2029, U+202F, U+205F, U+3000 and U+FEFF. Fourteen agree with this set. Three differ, so the original's `Split()` is not `char.IsWhiteSpace` for them:
+  - U+180E does not separate tokens in the original;
+  - U+200B and U+FEFF do.
+
+  The native set is unchanged for now; #417 aligns it with the original. Only tokens containing these three characters read differently, and the corpus separates tokens with CR+LF only.
+- **Number grammar** `[corlib]`: `NumberStyles.Float | AllowThousands`, invariant. A token has no whitespace or commas left, so the accepted forms are `[+-]?(d+(.d*)?|.d+)([eE][+-]?d+)?` and the case-sensitive symbols `Infinity`, `-Infinity` and `NaN`. Only ASCII digits are accepted. The value is parsed as a double, then rounded to float32, as Mono does. `-0` keeps its sign. Checked in the original player on 22 strings:
+  - The 11 finite strings give the same float32 bits, including `1e-45`, `1e-50`, `3.4028234663852886e38`, and `1.0000000596046448` → `3f800000`, which is a double-rounding case.
+  - The 6 strings this grammar rejects (`infinity`, `+Infinity`, `0x10`, `1e`, a full-width digit and `1_0`) are skipped by the original too.
+- **Non-finite values.** The original applies `NaN` and `±Infinity`; the player read them as `ffc00000`, `7f800000` and `ff800000`. The native decoder refuses the character: "…has a non-finite or out-of-range value in field K; ABMX modifier values must be finite float32 numbers." Only the tokens that reach the character count. A token that is skipped, or that the last-7/last-1 rule drops, does not refuse it.
+- **Beyond float32 range.** A value whose double magnitude exceeds `float.MaxValue` refuses the character in either direction, with the same message, even when it would round to `float.MaxValue`. The original differs, as checked in the player:
+  - A positive value above `float.MaxValue` is skipped as a parse failure ("Number overflow"). This includes `1e39` and `3.4028235e38`.
+  - A negative value between −`double.MaxValue` and −`float.MaxValue` is applied as −∞ (`-1e39` → `ff800000`).
+  - A value beyond the double range is skipped in either sign (`1e400`, `-1e400`).
 - **Native limits** (not the original's): 16 MiB of text, 10,000 groups, and bone names of at most 1,024 characters with no NUL. These are refusals with the card-v2 messages.
 
 A local census of the version-1 characters in the corpus scenes gives the shapes these rules meet: 12 unique characters and 765 tokens.
@@ -371,7 +380,7 @@ unknown sibling payloads. CMT-05 in the linked audit defines acceptance.
 ## Checked against the original
 
 **Setup.** The original CharaStudio player (Unity 5.6.2f1) ran with KKABMX 5.4 (`KKABMX.dll` f3e2d987), KKAPI 1.46.1 and ExtensibleSaveFormat 21.1.2.1.
-- There were three phases, one probe exec each, on 2026-11-18 (`Tools/reverse/original_abmx_probe.py`).
+- There were four phases, one probe exec each, on 2026-11-18 (`Tools/reverse/original_abmx_probe.py`).
 - The probe reads uploaded scene records only. Nothing in the game folder is written, and the plug-ins and configs are checked by SHA-256. Each phase left the guest clean.
 - The scene records and captures stay local.
 
@@ -412,4 +421,20 @@ unknown sibling payloads. CMT-05 in the linked audit defines acceptance.
   - ABMX resolved the location-0 request to BodyTop when the row was added and saved it as 1. So this writer produces no stored location 0; reading one is covered by phase 1.
   - The payload is the test vector in `sourceBoneModifierDecodesTheOriginalSaveModifiersPayloadBitForBit`.
 
-**Not checked against the original:** card v1 migration (#403; recovered source and synthetic tests only, a player comparison is pre-registered), accessory locations, coordinate (outfit) records, the dynamic-baseline families, `BoneEffect` callbacks, and saving to a card or coordinate file.
+**Phase 4, card v1 legacy text (#403).** The comparison was pre-registered before the run. Two v1 characters from the corpus scenes were used: a female with 18 groups (9 with 7 tokens and 9 with 1) and the corpus's only male v1 character (9 groups of 7).
+- **Provenance.** Each card's ABMX entry is version 1, with a string `boneData` whose UTF-8 SHA-256 equals the native document's payload hash.
+- **The decoder.** ABMX's own `ReadModifiers` equals the native decoder and the Python mirror on all 27 records:
+  - names, order and location 0;
+  - every Scale, Length, Position and Rotation value as float32 bits.
+
+  The two decoders also agree on the diagnostics: 9 dynamic-family warnings per character and nothing else.
+- **Live, observed, unverified.** Once the characters are loaded, ABMX's live controller holds every record whose bone is on the body, with the same values, at BodyTop (1).
+  - It holds no record whose bone is not on that body: `cf_d_sk_top` on the female, and all 9 skirt (`cf_d_sk_`) groups on the male body.
+  - The native decoder warns on these same dynamic groups.
+  - Those bones do not exist on that body, so nothing visible differs.
+- **Nine synthetic texts,** read by ABMX's own reader:
+  - These match: token counts and the last-7/last-1 rule, field counts and empty fields, the two whole-card drops (an empty list, the exception caught and logged) and blank text.
+  - These are the documented divergences, recorded in [Card v1 legacy text](#card-v1-legacy-text): number range, non-finite values and culture order.
+  - Whitespace differs on 3 of 17 separators (#417).
+
+**Not checked against the original:** accessory locations, coordinate (outfit) records, the dynamic-baseline families, `BoneEffect` callbacks, and saving to a card or coordinate file.
