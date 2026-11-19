@@ -1,7 +1,8 @@
 import Foundation
 import CryptoKit
+import simd
 import Testing
-import Studio
+@testable import Studio
 import Scene
 import CoreMath
 import Assets
@@ -152,6 +153,128 @@ struct SceneDocumentBytes {
         }
         #expect(!result.deferredEffects.isEmpty && !result.diagnostics.isEmpty)
     }
+}
+
+/// #371: `rebindPose` updates a binding for changed FK overrides. Over random
+/// edit sequences it must equal a fresh `bindPose` (targets with rotation bits
+/// and enabled flags, controller state, both transitions, effects,
+/// diagnostics, and `makePose`'s pose bits), and give nil exactly in its
+/// listed cases. A fresh bind that throws must get nil.
+@Test func KoikatsuSceneRebindPoseEqualsAFreshBind() throws {
+    let record = try #require(KoikatsuSceneReader.decodeDocument(SceneDocumentBytes.scene().data).snapshot.roots[0].character)
+    let rotation = UnityCoordinates.eulerDegrees(Float3(10, 20, 30)), t = Float3(0.25, -0.5, 0.75), s = Float3(0.5, 2, 3)
+    // 0 root; 1 body root; 2 hair root; under body a, b, c, b2; under the hair root h1; under root only, outside.
+    let rig = try RigDefinition(nodes: [
+        .init(name: "root", sourceID: "root", parent: nil),
+        .init(name: "body", sourceID: "body", parent: 0, translation: t, rotation: rotation, scale: s),
+        .init(name: "hairRoot", sourceID: "hairRoot", parent: 0, translation: t, rotation: rotation, scale: s),
+        .init(name: "a", sourceID: "a", parent: 1, translation: t, rotation: rotation, scale: s),
+        .init(name: "b", sourceID: "b", parent: 1, translation: t, rotation: rotation, scale: s),
+        .init(name: "c", sourceID: "c", parent: 1, translation: t, rotation: rotation, scale: s),
+        .init(name: "b2", sourceID: "b2", parent: 1, translation: t, rotation: rotation, scale: s),
+        .init(name: "h1", sourceID: "h1", parent: 2, translation: t, rotation: rotation, scale: s),
+        .init(name: "outside", sourceID: "outside", parent: 0, translation: t, rotation: rotation, scale: s),
+    ], skins: [])
+    // Saved rotations exist for 1 and 2. Level 2 has no guide for a female;
+    // "outside" is not under the body root, so it has no guide either;
+    // "missing" is not in the rig, so it is never bound.
+    let catalog: [SourceStudioPose.Bone] = [
+        .init(id: 1, name: "a", group: 0, level: 0), .init(id: 2, name: "b", group: 0, level: 2),
+        .init(id: 3, name: "c", group: 5, level: 0), .init(id: 4, name: "h1", group: 7, level: 0),
+        .init(id: 5, name: "outside", group: 10, level: 0), .init(id: 6, name: "missing", group: 0, level: 0),
+        .init(id: 7, name: "b2", group: 11, level: 2),
+    ]
+    let keys = [1, 2, 3, 4, 5, 6, 7, 8, 1 << 40]
+    func bind(_ fk: [Int: Float3], _ kinematics: SourceStudioKinematicState) throws -> KoikatsuCharacterRecord.PoseBinding {
+        try record.bindPose(rig: rig, catalog: catalog, characterRoot: 0, bodyRoot: 1, hairRoot: 2, kinematics: kinematics, fkOverrides: fk)
+    }
+    func bits(_ v: Float3) -> SIMD3<UInt32> { SIMD3(v.x.bitPattern, v.y.bitPattern, v.z.bitPattern) }
+    // makePose's result, or its error message.
+    func pose(_ binding: KoikatsuCharacterRecord.PoseBinding) -> (result: KoikatsuCharacterRecord.PoseResult?, error: String?) {
+        do { return (try record.makePose(binding: binding, rig: rig, baseline: rig.restPose), nil) }
+        catch { return (nil, "\(error)") }
+    }
+    func sameBits(_ m: float4x4, _ n: float4x4) -> Bool {
+        for column in 0..<4 {
+            let a: SIMD4<Float> = m[column], b: SIMD4<Float> = n[column]
+            for row in 0..<4 where a[row].bitPattern != b[row].bitPattern { return false }
+        }
+        return true
+    }
+    func samePose(_ p: KoikatsuCharacterRecord.PoseResult, _ q: KoikatsuCharacterRecord.PoseResult) -> Bool {
+        guard p.deferredEffects == q.deferredEffects, p.diagnostics == q.diagnostics,
+              p.pose.localMatrices.count == q.pose.localMatrices.count else { return false }
+        for index in p.pose.localMatrices.indices where !sameBits(p.pose.localMatrices[index], q.pose.localMatrices[index]) { return false }
+        return true
+    }
+    func same(_ a: KoikatsuCharacterRecord.PoseBinding, _ b: KoikatsuCharacterRecord.PoseBinding) -> Bool {
+        let x = a.controller, y = b.controller
+        guard x.targets.count == y.targets.count else { return false }
+        for (t, u) in zip(x.targets, y.targets) {
+            guard t.bone == u.bone, t.node == u.node, t.hasGuide == u.hasGuide, t.enabled == u.enabled,
+                  bits(t.rotation) == bits(u.rotation) else { return false }
+        }
+        guard x.enableFK == y.enableFK, x.enableIK == y.enableIK, x.activeFK == y.activeFK, x.activeIK == y.activeIK,
+              x.neckLookPattern == y.neckLookPattern, x.previousNeckLookPattern == y.previousNeckLookPattern,
+              x.dynamicBreastLeft == y.dynamicBreastLeft, x.dynamicBreastRight == y.dynamicBreastRight,
+              a.ik.identityResetNodes == b.ik.identityResetNodes, a.ik.effects == b.ik.effects,
+              a.fk.identityResetNodes == b.fk.identityResetNodes, a.fk.effects == b.fk.effects,
+              a.effects == b.effects, a.diagnostics == b.diagnostics else { return false }
+        let p = pose(a), q = pose(b)
+        if let pr = p.result, let qr = q.result { return samePose(pr, qr) }
+        return p.result == nil && q.result == nil && p.error == q.error
+    }
+    var rebound = 0, fellBack = 0, freshThrew = 0
+    for seed in 0..<160 {
+        var random = LookupSeed(state: UInt64(seed) &* 0x2545_F491_4F6C_DD1D)
+        func angle() -> Float {
+            switch Int.random(in: 0..<20, using: &random) {
+            case 0: return 0
+            case 1: return -0.0
+            case 2: return .nan
+            case 3: return .infinity
+            default: return Float(Int.random(in: -720...720, using: &random)) / 4
+            }
+        }
+        let enableIK = Bool.random(using: &random), bothModes = Bool.random(using: &random)
+        let activeFK = (0..<7).map { _ in Bool.random(using: &random) }, activeIK = (0..<5).map { _ in Bool.random(using: &random) }
+        let kinematics = SourceStudioKinematicState(enableFK: !enableIK || bothModes, enableIK: enableIK, activeFK: activeFK, activeIK: activeIK)
+        var previous: [Int: Float3] = [:]
+        var binding = try bind(previous, kinematics)
+        for _ in 0..<12 {
+            var next = previous
+            for _ in 0..<Int.random(in: 1...3, using: &random) {
+                let key = keys.randomElement(using: &random)!
+                if next[key] != nil, Int.random(in: 0..<3, using: &random) == 0 { next[key] = nil }
+                else { next[key] = Float3(angle(), angle(), angle()) }
+            }
+            let fresh = Result { try bind(next, kinematics) }
+            let result = record.rebindPose(binding, from: previous, to: next)
+            // The listed cases, worked out here from the previous binding.
+            let listed = Set(previous.keys).union(next.keys).contains { key in
+                guard previous[key].map(bits) != next[key].map(bits) else { return false }
+                guard let id = Int32(exactly: key), let target = binding.controller.targets.first(where: { $0.bone.id == key }) else { return true }
+                let value = next[key] ?? record.bones[id]?.transform.rotationDegrees
+                return (!target.hasGuide && value == nil) || value.map { !($0.x.isFinite && $0.y.isFinite && $0.z.isFinite) } ?? false
+            }
+            switch (result, fresh) {
+            case let (rebind?, .success(full)):
+                #expect(!listed, "seed \(seed): rebound in a listed case")
+                #expect(same(rebind, full), "seed \(seed): rebound binding differs from a fresh bind for \(next)")
+                rebound += 1
+            case (_?, .failure(let error)):
+                Issue.record("seed \(seed): rebound although a fresh bind throws \(error)")
+            case (nil, let full):
+                #expect(listed, "seed \(seed): nil outside the listed cases for \(next)")
+                fellBack += 1
+                if case .failure = full { freshThrew += 1 }
+            }
+            // As the preview does: a bind that throws leaves the cached binding.
+            if case .success(let full) = fresh { binding = result ?? full; previous = next }
+        }
+    }
+    // Both paths, and fresh binds that throw, are exercised.
+    #expect(rebound > 150 && fellBack > 150 && freshThrew > 30, "rebound \(rebound), fell back \(fellBack), fresh threw \(freshThrew)")
 }
 
 @Test(.enabled(if: SourceFixtureSupport.shouldRun(["IKKOKU_STUDIO_SCENE_FIXTURES"]),
