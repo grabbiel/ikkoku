@@ -23,7 +23,7 @@ branch was tested or every asset matches the original game. Feature status,
 specific comments and pending tasks are in the linked reports. Shared behavior
 may be discussed in more than one report; one primary owner is listed here.
 
-**1135 files indexed; 1135 assigned; 0 unassigned.**
+**1136 files indexed; 1136 assigned; 0 unassigned.**
 
 Counts include the website and clothes-group additions listed below. Runtime and
 test totals include their specialized role descriptions; this is inventory
@@ -35,13 +35,13 @@ bookkeeping, not a new full source audit.
 | [Character / Maker / mods](character-and-mods.md) | 145 |
 | [Studio / IK / animation](studio.md) | 272 |
 | [Renderer / foundation / assets](renderer-and-foundation.md) | 373 |
-| [Toolchain / verification / historical docs](toolchain-and-verification.md) | 225 |
+| [Toolchain / verification / historical docs](toolchain-and-verification.md) | 226 |
 
 | File role | Files |
 | --- | ---: |
 | App resource metadata / icon | 16 |
 | Build / repository configuration | 9 |
-| Conversion / recovery / verification tool | 263 |
+| Conversion / recovery / verification tool | 264 |
 | Documentation / historical evidence | 65 |
 | Generated asset / catalog / fixture | 205 |
 | Reference host / controlled fixture | 41 |
@@ -1071,6 +1071,7 @@ Feature assessment: [toolchain-and-verification.md](toolchain-and-verification.m
 | [Tools/verification/scenarios/hidden-animation-clock.json](../../Tools/verification/scenarios/hidden-animation-clock.json) | Conversion / recovery / verification tool |
 | [Tools/verification/scenarios/hidden-attachment-status.json](../../Tools/verification/scenarios/hidden-attachment-status.json) | Conversion / recovery / verification tool |
 | [Tools/verification/scenarios/hidden-character-build.json](../../Tools/verification/scenarios/hidden-character-build.json) | Conversion / recovery / verification tool |
+| [Tools/verification/scenarios/ik-guides-hidden.json](../../Tools/verification/scenarios/ik-guides-hidden.json) | Conversion / recovery / verification tool |
 | [Tools/verification/scenarios/inspector-clothes-fit.json](../../Tools/verification/scenarios/inspector-clothes-fit.json) | Conversion / recovery / verification tool |
 | [Tools/verification/scenarios/inspector-clothes-fit-native.json](../../Tools/verification/scenarios/inspector-clothes-fit-native.json) | Conversion / recovery / verification tool |
 | [Tools/verification/scenarios/inspector-edit-deselect.json](../../Tools/verification/scenarios/inspector-edit-deselect.json) | Conversion / recovery / verification tool |

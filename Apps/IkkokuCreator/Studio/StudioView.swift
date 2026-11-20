@@ -923,6 +923,7 @@ struct PoseInspector: View {
 
 struct SourcePoseInspector: View {
     @Bindable var model: StudioModel
+    static let guideHiddenText = "IK is off for this guide's group; turn it on to show the guide."
     var body: some View {
         let _ = PerfTrace.body(.sourcePoseInspector)
         if let state = model.selectedSourceIKState {
@@ -940,6 +941,15 @@ struct SourcePoseInspector: View {
                     ForEach(0..<13, id: \.self) { id in Text(SourceStudioIKEditing.labels[id]).tag(Int32(id)) }
                 }.disabled(!model.sourceIKAvailable)
                     .accessibilityIdentifier("studio.source.ik.guide")
+                // #439: the viewport draws only active guides. One Text in both
+                // states, shown by opacity, so the section's structure and height
+                // never change with it (#440).
+                let guideHidden = model.selectedSourceIKGuideHidden
+                Text(Self.guideHiddenText).font(.caption).foregroundStyle(.secondary)
+                    .opacity(guideHidden ? 1 : 0)
+                    .accessibilityLabel(Self.guideHiddenText)
+                    .accessibilityHidden(!guideHidden)
+                    .accessibilityIdentifier("studio.source.ik.guide.hidden")
                 if let target = model.selectedSourceIK, let value = model.selectedSourceIKValue {
                     // Each field writes one component onto the guide's live value (#393),
                     // never `value` from this render, and never the other row's vector.
