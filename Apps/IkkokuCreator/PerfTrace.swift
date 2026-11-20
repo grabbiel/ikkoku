@@ -229,6 +229,9 @@ final class PerfTrace {
         /// it at the next live step's completion, odd edits after the step's
         /// commit and even edits before it (#409, #446).
         let editPhases: String
+        /// `IKKOKU_PERF_PARK_FILE` (#440): the growth check's park file; nil
+        /// (the default) never parks (`PerfWorkloadDriver.parkIfRequested`).
+        let parkFile: String?
 
         /// Reads `IKKOKU_PERF_*`; `CaptureRequest.validate` already checked the values.
         static func from(_ env: [String: String]) -> Configuration? {
@@ -263,7 +266,8 @@ final class PerfTrace {
                 pauseSeconds: Double(int("IKKOKU_PERF_PAUSE_SECONDS", 10)),
                 pauseMarker: env["IKKOKU_PERF_PAUSE_MARKER"],
                 editField: env["IKKOKU_PERF_EDIT_FIELD"] ?? "x",
-                editPhases: env["IKKOKU_PERF_EDIT_PHASES"] ?? "none")
+                editPhases: env["IKKOKU_PERF_EDIT_PHASES"] ?? "none",
+                parkFile: env["IKKOKU_PERF_PARK_FILE"])
         }
     }
 
@@ -819,6 +823,7 @@ final class PerfTrace {
                 "selectKeys": configuration.selectKeys.map { $0.map { Int($0) } as Any } ?? NSNull(),
                 "inspectorTab": configuration.inspectorTab.map { $0 as Any } ?? NSNull(),
                 "keepMounted": StudioInspectorMounting.current.rawValue,
+                "parked": configuration.parkFile != nil, "focusProbe": FocusProbe.count,
                 "panelState": StudioPanelStateMode.current.rawValue,
             ] as [String: Any],
             "build": PerfTrace.buildDescription(),

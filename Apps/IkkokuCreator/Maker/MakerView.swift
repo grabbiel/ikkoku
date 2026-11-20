@@ -19,6 +19,11 @@ struct MakerView: View {
                 .pickerStyle(.segmented).labelsHidden().padding(8)
                 Text(model.tab.rawValue).font(.title3.bold()).frame(maxWidth: .infinity, alignment: .leading).padding(.horizontal, 12)
                 ScrollView {
+                    // #440 measurement control (`IKKOKU_PERF_FOCUS_PROBE`): removed and
+                    // inserted at every tab switch, as the tab's controls are; nothing when unset.
+                    if FocusProbe.count > 0, MakerTab.allCases.firstIndex(of: model.tab).map({ $0 % 2 == 0 }) ?? false {
+                        FocusProbeButtons()
+                    }
                     Group {
                         switch model.tab {
                         case .face: FacePanel(model: model)
