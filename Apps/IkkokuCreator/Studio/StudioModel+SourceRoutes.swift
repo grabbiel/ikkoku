@@ -459,16 +459,21 @@ struct SourceRouteInspector: View {
     @ViewBuilder private func pointControls(_ index: Int) -> some View {
         let value = route.points[index]
         let locked = playing || route.speedAndEaseLocked(at: index)
+        // Each field writes only its own component onto the point as it is
+        // now (#393): `value` is the point captured at this render, and
+        // writing it back whole would let a second field, committed before
+        // the panel re-renders, undo the first. Both rows show 3 decimals,
+        // as CharaStudio's guide input does.
         if index == 0 {
-            VectorRow(label: "Rotation", value: Binding(get: { value.rotationDegrees }, set: { v in
+            VectorRow(label: "Rotation", value: value.rotationDegrees, step: 5, format: "%.3f") { component, v in
                 guard model.selection == id else { return }
-                model.editSourceRoute(id, .move) { try $0.rotateStart(to: v) }
-            }), step: 5, format: "%.1f")
+                model.editSourceRoute(id, .move) { try $0.rotateStart(component: component, to: v) }
+            }
         } else {
-            VectorRow(label: "Position", value: Binding(get: { value.position }, set: { v in
+            VectorRow(label: "Position", value: value.position, step: 0.05, format: "%.3f") { component, v in
                 guard model.selection == id else { return }
-                model.editSourceRoute(id, .move) { try $0.movePoint(index, to: v) }
-            }), step: 0.05, format: "%.3f")
+                model.editSourceRoute(id, .move) { try $0.movePoint(index, component: component, to: v) }
+            }
             Button("Delete point") { model.deleteSourceRoutePoint(id, index: index) }
         }
         FloatRow(label: "Speed", value: Binding(get: { value.speed }, set: { v in

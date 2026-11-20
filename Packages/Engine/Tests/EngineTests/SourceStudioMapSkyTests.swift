@@ -72,7 +72,7 @@ private func readBack(_ texture: any MTLTexture, format: SourceStudioBlockTextur
         for level in 0..<texture.mipmapLevelCount {
             blit.copy(from: texture, sourceSlice: slice, sourceLevel: level, sourceOrigin: MTLOrigin(x: 0, y: 0, z: 0),
                       sourceSize: MTLSize(width: width, height: height, depth: 1), to: buffer, destinationOffset: offset,
-                      destinationBytesPerRow: max(1, (width + 3) / 4) * format.blockBytes, destinationBytesPerImage: counts[level])
+                      destinationBytesPerRow: format.bytesPerRow(width: width), destinationBytesPerImage: counts[level])
             offset += counts[level]
             (width, height) = (max(1, width / 2), max(1, height / 2))
         }
@@ -282,6 +282,7 @@ func particleBranchDrawsTwiceVertexColorTimesTintTimesTexture() throws {
     descriptor.fragmentFunction = library.makeFunction(name: "map_fragment")
     descriptor.colorAttachments[0].pixelFormat = .rgba32Float
     let pipeline = try device.makeRenderPipelineState(descriptor: descriptor)
+    let mapShadow = try mapShadowPlaceholder(device)
     let queue = try #require(device.makeCommandQueue())
     let targetDescriptor = MTLTextureDescriptor.texture2DDescriptor(pixelFormat: .rgba32Float, width: 1, height: 1, mipmapped: false)
     targetDescriptor.usage = [.renderTarget, .shaderRead]; targetDescriptor.storageMode = .shared
@@ -311,13 +312,14 @@ func particleBranchDrawsTwiceVertexColorTimesTintTimesTexture() throws {
         encoder.setRenderPipelineState(pipeline)
         for (buffer, index) in [(mesh.baseVertices, BufferIndexVertices), (mesh.texcoords, BufferIndexTexcoords),
             (mesh.texcoords1, BufferIndexTexcoords1), (mesh.texcoords2, BufferIndexTexcoords2),
-            (mesh.colors ?? resources.dummyBuffer, BufferIndexVertexColors), (resources.dummyBuffer, BufferIndexVertexHidden)] {
+            (mesh.colors ?? resources.dummyBuffer, BufferIndexVertexColors), (resources.dummyBuffer, BufferIndexVertexHidden), (resources.dummyBuffer, BufferIndexVertexReceive)] {
             encoder.setVertexBuffer(buffer, offset: 0, index: Int(index.rawValue))
         }
         encoder.setVertexBytes(&frame, length: MemoryLayout<FrameUniforms>.stride, index: Int(BufferIndexFrameUniforms.rawValue))
         encoder.setVertexBytes(&draw, length: MemoryLayout<DrawUniforms>.stride, index: Int(BufferIndexDrawUniforms.rawValue))
         encoder.setVertexBytes(&material, length: MemoryLayout<MaterialUniforms>.stride, index: Int(BufferIndexMaterial.rawValue))
         encoder.setFragmentBytes(&material, length: MemoryLayout<MaterialUniforms>.stride, index: Int(BufferIndexMaterial.rawValue))
+        bindMapLighting(encoder, frame: frame, shadow: mapShadow)
         // White texture; a bright lightmap that must not be read.
         encoder.setFragmentTexture(resources.whiteTexture, index: Int(TextureIndexBase.rawValue))
         encoder.setFragmentTexture(resources.whiteTexture, index: Int(TextureIndexLightmap.rawValue))
@@ -381,6 +383,7 @@ func mapTexturesSampleWithThePlayersForcedAnisotropy() throws {
     descriptor.fragmentFunction = library.makeFunction(name: "map_fragment")
     descriptor.colorAttachments[0].pixelFormat = .rgba32Float
     let pipeline = try device.makeRenderPipelineState(descriptor: descriptor)
+    let mapShadow = try mapShadowPlaceholder(device)
     let queue = try #require(device.makeCommandQueue())
     let size = 64
     let targetDescriptor = MTLTextureDescriptor.texture2DDescriptor(pixelFormat: .rgba32Float, width: size, height: size, mipmapped: false)
@@ -415,13 +418,14 @@ func mapTexturesSampleWithThePlayersForcedAnisotropy() throws {
         encoder.setRenderPipelineState(pipeline)
         for (buffer, index) in [(mesh.baseVertices, BufferIndexVertices), (mesh.texcoords, BufferIndexTexcoords),
             (mesh.texcoords1, BufferIndexTexcoords1), (mesh.texcoords2, BufferIndexTexcoords2),
-            (resources.dummyBuffer, BufferIndexVertexColors), (resources.dummyBuffer, BufferIndexVertexHidden)] {
+            (resources.dummyBuffer, BufferIndexVertexColors), (resources.dummyBuffer, BufferIndexVertexHidden), (resources.dummyBuffer, BufferIndexVertexReceive)] {
             encoder.setVertexBuffer(buffer, offset: 0, index: Int(index.rawValue))
         }
         encoder.setVertexBytes(&frame, length: MemoryLayout<FrameUniforms>.stride, index: Int(BufferIndexFrameUniforms.rawValue))
         encoder.setVertexBytes(&draw, length: MemoryLayout<DrawUniforms>.stride, index: Int(BufferIndexDrawUniforms.rawValue))
         encoder.setVertexBytes(&material, length: MemoryLayout<MaterialUniforms>.stride, index: Int(BufferIndexMaterial.rawValue))
         encoder.setFragmentBytes(&material, length: MemoryLayout<MaterialUniforms>.stride, index: Int(BufferIndexMaterial.rawValue))
+        bindMapLighting(encoder, frame: frame, shadow: mapShadow)
         for index in [TextureIndexBase, TextureIndexLightmap, TextureIndexLightmapDirection, TextureIndexEmission] {
             let texture: any MTLTexture = levelsAt.contains(index) ? levels : (index == TextureIndexLightmap ? lightmap ?? resources.whiteTexture : resources.whiteTexture)
             encoder.setFragmentTexture(texture, index: Int(index.rawValue))
@@ -469,7 +473,8 @@ func depthOnlyAndStencilMainPassesCarryTheSameGroups() throws {
     let renderer = try makeSourceShaderRenderer()
     let depthOnly = renderer.pipelines.depthOnlyMainPass.labels
     let stencil = try renderer.pipelines.stencilMainPass().labels
-    #expect(depthOnly.contains("Sky") && depthOnly.count == 11)
+    #expect(depthOnly.contains("Sky") && depthOnly.contains("MapDepthOnly") && depthOnly.count == 14)
+    #expect(depthOnly.contains("ToonMapProbeLit") && depthOnly.contains("ToonMapProbeLitBlend"))
     #expect(stencil == depthOnly.map { $0 + "Stencil" })
 }
 
@@ -675,7 +680,7 @@ struct SourceStudioSkyMapTests {
         #expect(asset.blockImages == 1 && asset.decodedImages == 0 && asset.cubeTextures == 1 && asset.imageSource == .blocks)
         // The image, two lightmaps and the cube; the cube is six 8-byte faces.
         #expect(asset.textures.count == 4 && asset.cubeBytes >= 48 && asset.textureBytes > asset.lightmapBytes + asset.cubeBytes)
-        let items = try asset.items(transform: KoikatsuChangeAmount(position: .zero, rotationDegrees: .zero, scale: .one), sunLightType: 0)
+        let items = try asset.items(transform: KoikatsuChangeAmount(position: .zero, rotationDegrees: .zero, scale: .one), sunLightType: 0, mapOption: true)
         let sky = try #require(items.first { SourceStudioMapAsset.Draw($0.material) == .sky })
         let leaf = try #require(items.first { SourceStudioMapAsset.Draw($0.material) == .particle })
         let lit = try #require(items.first { SourceStudioMapAsset.Draw($0.material) == .lightmapped })
@@ -732,7 +737,9 @@ struct SourceStudioSkyMapTests {
 /// Every converted map in `IKKOKU_STUDIO_MAP_CATALOG` loads both ways
 /// (block images, and the measurement switch's decoded PNGs); each listed
 /// block image and cube uploads to its file byte for byte (blitted back); a
-/// map without a sky or particles keeps its slice-2 status line.
+/// map without a sky or particles keeps its slice-2 status line. A slice-4
+/// map with block-only images (no PNG) is refused by the switch by name, and
+/// its block-only image entries are exactly the listed block files.
 @Test(.enabled(if: SourceFixtureSupport.shouldRun(["IKKOKU_STUDIO_MAP_CATALOG"]) && MTLCreateSystemDefaultDevice() != nil),
       .timeLimit(.minutes(5)))
 func everyConvertedMapLoadsItsBlockImagesByteForByte() async throws {
@@ -754,15 +761,37 @@ func everyConvertedMapLoadsItsBlockImagesByteForByte() async throws {
             #expect(try readBack(texture, format: listed.format, slices: faces, device: device, queue: queue) == data,
                     "map \(number) \(listed.file)")
         }
+        let started = Date()
         let asset = try await liveTickOffPool {
             try SourceStudioMapAsset.load(url: file, packageRoot: packageRoot, resources: resources, imageSource: .blocks)
         }
+        // The structural census of every converted map (maps.md, slice 4): the status line, the loaded
+        // parts by draw and the texture bytes, with this (fixture-run, unquiet) load time.
+        print("[map census] \(number) load \(Int(Date().timeIntervalSince(started) * 1000)) ms, \(asset.parts.count) parts "
+              + "(\(asset.lightmappedParts) lightmapped, \(asset.skyParts) sky, \(asset.particleParts) particle, \(asset.unlitParts) unlit, "
+              + "\(asset.silhouetteParts) silhouette, \(asset.optionParts) option), \(asset.blockImages) block images, "
+              + "\(asset.textureBytes) texture bytes · \(SourceStudioMapStatus.loaded(entry, asset: asset))")
         #expect(blocks == nil ? asset.blockImages == 0 : asset.blockImages > 0, "map \(number)")
+        let blockOnly = gltf.images.indices.filter { gltf.images[$0].mimeType?.hasPrefix(SourceStudioMapAsset.blockOnlyMimePrefix) == true }
+        for index in blockOnly {
+            let listed = try #require(blocks?.images[index], "map \(number) image \(index)")
+            #expect(gltf.images[index].data == (try Data(contentsOf: directory.appendingPathComponent(listed.file))), "map \(number) image \(index)")
+        }
         #expect(asset.cubeTextures == (blocks?.cubes.count ?? 0) || asset.skyParts == 0, "map \(number)")
         if asset.skyParts == 0, asset.particleParts == 0, asset.lightmappedParts == asset.parts.count, asset.lightmappedParts > 0 {
-            #expect(SourceStudioMapStatus.loaded(entry, asset: asset).contains(": baked lightmaps; approximated: "), "map \(number)")
+            // Slice 5: a map with a realtime sun names it after the lightmaps.
+            let form = asset.lighting?.sun == nil ? ": baked lightmaps; approximated: " : ": baked lightmaps, realtime sun"
+            #expect(SourceStudioMapStatus.loaded(entry, asset: asset).contains(form), "map \(number)")
         }
         asset.release()
+        guard blockOnly.isEmpty else {
+            let refusal = try await liveTickOffPool { () -> String? in
+                do { try SourceStudioMapAsset.load(url: file, packageRoot: packageRoot, resources: resources, imageSource: .decoded).release(); return nil }
+                catch { return "\(error)" }
+            }
+            #expect(refusal?.contains("IKKOKU_SOURCE_MAP_DECODED_TEXTURES=1 cannot decode it") == true, "map \(number): \(refusal ?? "decoded")")
+            continue
+        }
         let decoded = try await liveTickOffPool {
             try SourceStudioMapAsset.load(url: file, packageRoot: packageRoot, resources: resources, imageSource: .decoded)
         }

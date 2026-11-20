@@ -1,6 +1,7 @@
 import Foundation
 import Assets
 import CryptoKit
+import os
 import simd
 import CoreMath
 import Scene
@@ -40,6 +41,8 @@ public final class SourceStudioCharacterPreview {
     /// Import-time messages plus one-shot runtime notices (for example the FK
     /// neck conflict reported by editedPose); never grows per frame.
     public private(set) var diagnostics: [String]
+    /// Whether the one-shot collapsed-renderer notice (#404) was reported.
+    private var reportedCollapsedRenderers = false
     public let record: KoikatsuCharacterRecord
     public let selections: [SourceMakerLibrary.Selection]
     /// The outfit this preview assembled: the `coordinate` init argument when
@@ -145,7 +148,7 @@ public final class SourceStudioCharacterPreview {
     /// The animation clip's height parameter follows the effective body height
     /// slot, the way rebuilding an original character recomputes the load-time
     /// height after a shape edit.
-    private var effectiveAnimationHeight: Float { sourceBodyValues?.first ?? animationHeight }
+    private var effectiveAnimationHeight: Float { SourceStudioAnimation.height(editedBody: sourceBodyValues, cardHeight: animationHeight) }
     private let characterRoot: Int
     private let poseCatalog: [SourceStudioPose.Bone]
     private var ikSolver: SourceStudioIK?
@@ -225,7 +228,27 @@ public final class SourceStudioCharacterPreview {
     /// from, the way the original LateUpdate runs NeckUpdateCalc after
     /// Animator/FK/IK and before its own rotation write.
     fileprivate typealias EvaluatedPose = (state: SourceStudioAnimationState, required: Bool, elapsed: Float, fk: [Int: Float3], ik: [Int32: SourceStudioIKEdit], kinematics: SourceStudioKinematicState?, pose: RigPose, preOverride: RigPose, guides: [SourceStudioIK.Guide])
-    private var evaluatedCache: EvaluatedPose?
+    private var evaluatedCache: EvaluatedPose? { didSet { poseGeneration &+= 1 } }
+    /// Bumped by every write to `evaluatedCache`: a solve, a clear or a
+    /// checkpoint restore. `editedPose` returns the cached pose without a
+    /// write, so an unchanged value after it means the same pose as before.
+    private var poseGeneration: UInt64 = 0
+    /// The last finished frame with what it was built from (R7 item 3, FK
+    /// drag). A refresh asks every character for a frame, and only the one
+    /// being edited changes, so the others give this one back with the new
+    /// camera, light and effects, the only fields that differ. Nothing else in
+    /// the frame reads them: the neck and eye gaze follow the camera through
+    /// the live step, which writes the pose and the eye rates in the key.
+    private var cachedFrame: (key: FrameKey, frame: RenderFrame)?
+    /// Whether `frame` keeps and reuses `cachedFrame`. Off only in the twin
+    /// test, which compares every frame with one built afresh.
+    var reusesFrames = true
+    /// Whether the last `frame` call gave back the cached frame.
+    public private(set) var lastFrameReused = false
+    /// `evaluation(of:)`'s last evaluation, with the rig and the pose it
+    /// was made from (#371). Derived output only: no checkpoint, undo state
+    /// or document field holds it.
+    private var keptEvaluation: (rig: RigDefinition.Identity, pose: RigPose, evaluation: RigEvaluation)?
     /// The animated, FK/IK-solved pose (`preOverride`) with the kinematic
     /// state and guides it was solved with, for the same key as
     /// `evaluatedCache` plus whether the animation was required. A Studio tick
@@ -243,7 +266,9 @@ public final class SourceStudioCharacterPreview {
     /// solve, with what it was bound from: the rig, the effective kinematic
     /// state and the FK overrides. The record, catalog and roots are fixed
     /// for a preview. The overrides are compared bit for bit, since a signed
-    /// zero angle can reach the matrices (R7 phase 2, item 3, C3).
+    /// zero angle can reach the matrices (R7 phase 2, item 3, C3). When only
+    /// the overrides differ, the binding is updated for the changed bones
+    /// instead of bound again (#371).
     private var poseBinding: (rig: RigDefinition.Identity, kinematics: SourceStudioKinematicState, fk: [Int: Float3],
                               binding: KoikatsuCharacterRecord.PoseBinding)?
     /// Checkpoints rewind dynamics/animation, not edits or gaze. Revisions
@@ -417,6 +442,135 @@ public final class SourceStudioCharacterPreview {
         public let sharedAssembly: Bool
     }
 
+    /// The embedded card's inputs a build reads first, with their checks, in
+    /// the build's order: the card and its customization decode, the scene
+    /// and card sex identities, the assembly identity, and the saved outfit
+    /// index. `assemble` and `validateCard` share them.
+    static func cardInputs(_ record: KoikatsuCharacterRecord) throws
+        -> (card: SourceCharacterCard, identity: SourceCharacterCard.Customization, status: [String: SourceMessagePackValue], savedCoordinate: Int) {
+        let card = try record.card(), identity = try card.customization()
+        guard identity.sex == Int(record.sex) else { throw RigError.invalid("Scene character/card sex identities differ.") }
+        try SourceMakerLibrary.validateAssemblyIdentity(card: card)
+        let status = try card.block(named: "Status").map { try SourceMessagePack.decode($0.data).stringKeyedMap() } ?? [:]
+        let savedCoordinate = status["coordinateType"]?.integerValue ?? 0
+        guard (0..<7).contains(savedCoordinate) else { throw RigError.invalid("Unsupported saved Studio outfit index.") }
+        return (card, identity, status, savedCoordinate)
+    }
+
+    /// Lazy hidden characters: the checks of a build that read only the
+    /// character's embedded card, in the build's order (`cardInputs`, then
+    /// the native preview's assembly kind and shape ranges, which
+    /// `previewSettings` checks after the converted files are read). A record
+    /// that fails cannot build, and the error is the one its build throws,
+    /// unless a converted-file step between them (the head assembly lookup,
+    /// rig and appearance reads) fails first. A record that passes may
+    /// still fail in those steps. No rig, no file read, no GPU.
+    public static func validateCard(of record: KoikatsuCharacterRecord) throws {
+        let identity = try cardInputs(record).identity
+        try SourceCharacterCard.validateNativeAssembly(identity)
+        try SourceCharacterCard.validateNativeShapeRanges(identity)
+    }
+
+    /// Lazy hidden characters: `validateCard` for the characters an import
+    /// leaves unbuilt, on a user-initiated worker started by the import's
+    /// preparation, so its commit retains the ones whose card cannot convert
+    /// as the eager import does, without decoding their cards on the main
+    /// thread. `problems()` waits for the worker once; the worker holds an
+    /// unfair lock while it checks, so any other caller waits on that lock
+    /// with its priority donated, or checks itself if the worker has not
+    /// started. The worker's block holds the check until it has run (#432):
+    /// a check nobody asks is freed when its worker finishes, or at once,
+    /// unrun, after `cancel()`.
+    public final class CardCheck: @unchecked Sendable {
+        /// Shallow copies (#326): `validateCard` reads only the card and the
+        /// sex (`cardInputs`), and a record's accessory children are a scene
+        /// subtree. Without them, a worker that drops the last copy releases
+        /// no tree, whatever its depth.
+        let records: [KoikatsuCharacterRecord]
+        private let lock = OSAllocatedUnfairLock()
+        private var computed: [String?]?
+        private let pending = OSAllocatedUnfairLock<DispatchWorkItem?>(uncheckedState: nil)
+
+        public convenience init(records: [KoikatsuCharacterRecord]) {
+            self.init(records: records, queue: .global(qos: .userInitiated))
+        }
+
+        /// `queue` runs the worker (a test passes a serial queue it drains).
+        init(records: [KoikatsuCharacterRecord], queue: DispatchQueue) {
+            self.records = records.map { record in
+                var shallow = record
+                shallow.accessoryChildren = [:]
+                return shallow
+            }
+            guard !records.isEmpty else { computed = []; return }
+            // `self.records`: the block captures the check alone, never the
+            // caller's records with their subtrees.
+            let item = DispatchWorkItem(qos: .userInitiated) { [self] in
+                do {
+                    lock.lock(); defer { lock.unlock() }
+                    if computed == nil { computed = Self.check(self.records) }
+                }
+                // #432: `pending` holds the item, which holds this check:
+                // dropping it here ends the cycle, asked or not.
+                pending.withLockUnchecked { $0 = nil }
+            }
+            pending.withLockUnchecked { $0 = item }
+            queue.async(execute: item)
+        }
+
+        /// For a check nobody will ask (#432, a cancelled import): a worker
+        /// that has not started never runs, and the check is freed with its
+        /// owner. `problems()` still answers, checking on its caller.
+        public func cancel() {
+            pending.withLockUnchecked { item -> DispatchWorkItem? in
+                defer { item = nil }
+                return item
+            }?.cancel()
+        }
+
+        /// Whether the problems are known (tests only).
+        var hasChecked: Bool { lock.lock(); defer { lock.unlock() }; return computed != nil }
+
+        /// Per record, in order: the description of the error `validateCard`
+        /// throws for it, or nil when its card passes.
+        public func problems() -> [String?] {
+            pending.withLockUnchecked { item -> DispatchWorkItem? in
+                defer { item = nil }
+                return item
+            }?.wait()
+            lock.lock(); defer { lock.unlock() }
+            if computed == nil { computed = Self.check(records) }
+            return computed ?? []
+        }
+
+        private static func check(_ records: [KoikatsuCharacterRecord]) -> [String?] {
+            let results = OSAllocatedUnfairLock(initialState: [String?](repeating: nil, count: records.count))
+            DispatchQueue.concurrentPerform(iterations: records.count) { i in
+                let problem: String?
+                do { try SourceStudioCharacterPreview.validateCard(of: records[i]); problem = nil } catch { problem = "\(error)" }
+                results.withLock { $0[i] = problem }
+            }
+            return results.withLock { $0 }
+        }
+    }
+
+    /// The character record `key` names in `scene`, as a shallow copy
+    /// (#326): an assembly and its preview read the card, the bones and the
+    /// saved states, never the accessory children, a scene subtree that
+    /// would otherwise die wherever the preview does, the Studio's build
+    /// queue (GCD) included.
+    static func characterRecord(_ key: Int32, in scene: KoikatsuSceneDocument) throws -> KoikatsuCharacterRecord {
+        var stack = scene.snapshot.roots, match: KoikatsuCharacterRecord?
+        while let object = stack.popLast() {
+            if object.sourceKey == key { match = object.character; break }
+            stack += object.children
+            if let character = object.character { stack += character.accessoryChildren.values.flatMap { $0 } }
+        }
+        guard var record = match else { throw RigError.invalid("Source character record is missing.") }
+        record.accessoryChildren = [:]
+        return record
+    }
+
     /// The first half of a build (see `Assembly`). `sharing` is a loaded
     /// preview's `donation`: when it shows the same reference (scene
     /// SHA-256, record key and converted files) and outfit on the same
@@ -432,19 +586,8 @@ public final class SourceStudioCharacterPreview {
             throw RigError.invalid("The referenced source scene changed; import it again to update this preview.")
         }
         let scene = try KoikatsuSceneReader.decodeDocument(data)
-        var stack = scene.snapshot.roots, match: KoikatsuCharacterRecord?
-        while let object = stack.popLast() {
-            if object.sourceKey == reference.objectKey { match = object.character; break }
-            stack += object.children
-            if let character = object.character { stack += character.accessoryChildren.values.flatMap { $0 } }
-        }
-        guard let record = match else { throw RigError.invalid("Source character record is missing.") }
-        let card = try record.card(), identity = try card.customization()
-        guard identity.sex == Int(record.sex) else { throw RigError.invalid("Scene character/card sex identities differ.") }
-        try SourceMakerLibrary.validateAssemblyIdentity(card: card)
-        let status = try card.block(named: "Status").map { try SourceMessagePack.decode($0.data).stringKeyedMap() } ?? [:]
-        let savedCoordinate = status["coordinateType"]?.integerValue ?? 0
-        guard (0..<7).contains(savedCoordinate) else { throw RigError.invalid("Unsupported saved Studio outfit index.") }
+        let record = try characterRecord(reference.objectKey, in: scene)
+        let (card, identity, status, savedCoordinate) = try cardInputs(record)
         let outfitCount = (try? card.coordinateCount()) ?? 0
         if let selectedCoordinate {
             guard (0..<7).contains(selectedCoordinate) else { throw RigError.invalid("Studio outfit index must be in 0...6.") }
@@ -659,17 +802,14 @@ public final class SourceStudioCharacterPreview {
         // Only colors whose material actually changed count as editable here.
         appliedColorFields = appearanceAppliedFields.intersection(Set(draftColors.map(\.id)))
         shapeBoneModifiers = settings.boneModifiers
-        // ChangeSettingEyeTilt lerps face shape value 33 unclamped (Mathf.Lerp),
-        // L from +0.02 toward -0.02 and R as its negation (SetEyeRot negates the
-        // shared value for the R eye).
-        let eyeTilt = 0.02 - 0.04 * Double(settings.faceValues[33])
+        let eyeTilt = Self.eyeTilt(faceRate: settings.faceValues[33])
         irisRotations = [eyeTilt, -eyeTilt]
         struct Catalog: Decodable { let bones: [SourceStudioPose.Bone] }
         let catalog = try JSONDecoder().decode(Catalog.self, from: Self.read(URL(fileURLWithPath: reference.boneCatalogFile), maximum: 16 * 1024 * 1024))
         poseCatalog = catalog.bones
         let roots = source.rig.nodes.indices.filter { source.rig.nodes[$0].parent == nil }
         guard roots.count == 1 else { throw RigError.invalid("Source scene preview requires a single assembled root.") }
-        characterRoot = roots[0]; animationHeight = identity.bodyValues.first ?? 0.5
+        characterRoot = roots[0]; animationHeight = SourceStudioAnimation.cardHeight(identity.bodyValues)
         animationDirectory = reference.animationCatalogFile.map { URL(fileURLWithPath: $0).deletingLastPathComponent() }
         animationCatalog = try assembly.animationCatalog.get()
         handPatternLibrary = try assembly.handPatterns.get()
@@ -843,13 +983,110 @@ public final class SourceStudioCharacterPreview {
     public func frame(camera: OrbitCamera, mainLight: MainLight, effects: SceneEffects,
                       world: float4x4, objectID: UInt32, fkRotations: [Int: Float3] = [:], faceValues: [Float]? = nil, bodyValues: [Float]? = nil, ikTargets: [Int32: SourceStudioIKEdit] = [:], kinematics: SourceStudioKinematicState? = nil, animationState: SourceStudioAnimationState? = nil,
                       animationElapsed: Float = 0) throws -> RenderFrame {
-        var frame = try preview.frame(camera: camera, mainLight: mainLight, effects: effects,
-            expression: effectiveExpressionInputs(), poseOverride: editedPose(fkRotations: fkRotations, faceValues: faceValues, bodyValues: bodyValues, ikTargets: ikTargets, kinematics: kinematics, animationState: animationState, animationElapsed: animationElapsed),
-            hiddenParts: wearEvaluation.hiddenParts, sourceBodyAlpha: wearEvaluation.bodyAlpha)
+        // Read first: a resource change while this frame is built leaves a
+        // key that no longer matches.
+        let resourceGeneration = resources.reuseGeneration
+        let expression = effectiveExpressionInputs()
+        let pose = try editedPose(fkRotations: fkRotations, faceValues: faceValues, bodyValues: bodyValues, ikTargets: ikTargets, kinematics: kinematics, animationState: animationState, animationElapsed: animationElapsed)
+        let key = FrameKey(resources: resourceGeneration, pose: poseGeneration, preview: ObjectIdentifier(preview),
+                           visibility: preview.visibilityGeneration, expression: expression, wear: wearEvaluation,
+                           world: world, objectID: objectID, eyeRates: eyeLookRates.map { ($0.horizontal, $0.vertical) },
+                           irisRotations: irisRotations)
+        if reusesFrames, let cached = cachedFrame, cached.key.matches(key) {
+            var frame = cached.frame
+            frame.camera = camera; frame.mainLight = mainLight; frame.effects = effects
+            lastFrameReused = true
+            return frame
+        }
+        lastFrameReused = false
+        // Kept for the bone handles, which evaluate this same pose (#371).
+        let poseEvaluation = try evaluation(of: pose)
+        var frame = try preview.frame(camera: camera, mainLight: mainLight, effects: effects, expression: expression, poseOverride: pose,
+            poseEvaluation: poseEvaluation, hiddenParts: wearEvaluation.hiddenParts, sourceBodyAlpha: wearEvaluation.bodyAlpha)
+        if !reportedCollapsedRenderers, !preview.collapsedSkins.isEmpty {
+            reportedCollapsedRenderers = true
+            let collapsed = preview.source.parts.filter { preview.collapsedSkins.contains($0.skin) }.count
+            diagnostics.append("\(collapsed) renderer(s) sit under a zero shape scale (#404) and draw flattened from their bones, as Unity's SkinnedMeshRenderer does.")
+        }
         for i in frame.items.indices { frame.items[i].model = world * frame.items[i].model; frame.items[i].objectID = objectID }
         applyIrisTransforms(to: &frame)
         frame.sceneBounds = frame.sceneBounds.transformed(by: world)
+        cachedFrame = reusesFrames ? (key, frame) : nil
         return frame
+    }
+
+    /// `preview.source.rig.evaluate(pose)`, kept for the last pose it was
+    /// asked about (#371). An FK-drag refresh evaluated the edited pose
+    /// twice: for the frame build and for the bone handles. The kept
+    /// evaluation serves a later call only for the same rig and a pose whose
+    /// matrices share the kept pose's storage. The kept pose holds that
+    /// storage, so it is never written in place: shared storage means the
+    /// same values, and `evaluate` gives the same result for them. Any other
+    /// pose is evaluated afresh and replaces it; a failed evaluation throws
+    /// as before and keeps nothing.
+    public func evaluation(of pose: RigPose) throws -> RigEvaluation {
+        let rig = preview.source.rig
+        if let kept = keptEvaluation, kept.rig === rig.identity, Self.sameStorage(kept.pose.localMatrices, pose.localMatrices) {
+            return kept.evaluation
+        }
+        let evaluation = try rig.evaluate(pose)
+        keptEvaluation = (rig.identity, pose, evaluation)
+        return evaluation
+    }
+
+    /// True when both arrays are views of one buffer.
+    static func sameStorage(_ a: [float4x4], _ b: [float4x4]) -> Bool {
+        a.withUnsafeBufferPointer { pa in b.withUnsafeBufferPointer { pb in pa.baseAddress == pb.baseAddress && pa.count == pb.count } }
+    }
+
+    /// `cachedFrame`'s key: everything `frame` reads besides camera, light and
+    /// effects, compared bit for bit (a signed zero or a NaN payload counts).
+    /// The pose is its generation; `preview` changes with a color edit; the
+    /// rig preview's visibility with `doubleTooth`; the expression with a blink
+    /// or a face edit; wear, world and object ID come from the document; the
+    /// eye rates with the eye gaze; the iris tilt with a face edit. The store's
+    /// `reuseGeneration` drops every cached frame on any resource change.
+    private struct FrameKey {
+        let resources: UInt64, pose: UInt64, preview: ObjectIdentifier, visibility: UInt64
+        let expression: SourceExpressionInputs?
+        let wear: SourceStudioWearLayout.Evaluation
+        let world: float4x4, objectID: UInt32
+        let eyeRates: (horizontal: [Double], vertical: Double)?
+        let irisRotations: [Double]
+
+        func matches(_ other: FrameKey) -> Bool {
+            guard resources == other.resources, pose == other.pose, preview == other.preview, visibility == other.visibility,
+                  objectID == other.objectID, wear.hiddenParts == other.wear.hiddenParts,
+                  Self.same(wear.bodyAlpha, other.wear.bodyAlpha), Self.same(expression, other.expression),
+                  Self.same(irisRotations, other.irisRotations) else { return false }
+            for column in 0..<4 where unsafeBitCast(world[column], to: SIMD4<UInt32>.self) != unsafeBitCast(other.world[column], to: SIMD4<UInt32>.self) {
+                return false
+            }
+            switch (eyeRates, other.eyeRates) {
+            case (nil, nil): return true
+            case let (a?, b?): return a.vertical.bitPattern == b.vertical.bitPattern && Self.same(a.horizontal, b.horizontal)
+            default: return false
+            }
+        }
+
+        private static func same(_ a: [Double], _ b: [Double]) -> Bool {
+            a.count == b.count && zip(a, b).allSatisfy { $0.bitPattern == $1.bitPattern }
+        }
+        private static func same(_ a: SIMD2<Float>, _ b: SIMD2<Float>) -> Bool {
+            unsafeBitCast(a, to: SIMD2<UInt32>.self) == unsafeBitCast(b, to: SIMD2<UInt32>.self)
+        }
+        private static func same(_ a: SourceExpressionInputs?, _ b: SourceExpressionInputs?) -> Bool {
+            switch (a, b) {
+            case (nil, nil): return true
+            case let (a?, b?):
+                return a.eyebrowPattern == b.eyebrowPattern && a.eyesPattern == b.eyesPattern && a.mouthPattern == b.mouthPattern
+                    && [a.eyebrowOpenRate, a.eyesOpenRate, a.mouthOpenRate, a.eyebrowOpenMax, a.eyesOpenMax, a.mouthOpenMax,
+                        a.blinkRate, a.mouthFixedRate].map(\.bitPattern)
+                    == [b.eyebrowOpenRate, b.eyesOpenRate, b.mouthOpenRate, b.eyebrowOpenMax, b.eyesOpenMax, b.mouthOpenMax,
+                        b.blinkRate, b.mouthFixedRate].map(\.bitPattern)
+            default: return false
+            }
+        }
     }
 
     /// The renderer-side half of EyeLookMaterialControll.Update: the frame's
@@ -1086,6 +1323,14 @@ public final class SourceStudioCharacterPreview {
     /// repeat of the same arrays only pays the comparison; a rejected edit
     /// throws before any state is mutated. Export diffs the document's arrays
     /// against `savedFaceValues`/`savedBodyValues` for the card writeback.
+    /// The L eye's tilt for face shape value 33 (ChangeSettingEyeTilt): a
+    /// Mathf.Lerp from +0.02 toward -0.02 (SetEyeRot negates it for the R
+    /// eye). Mathf.Lerp clamps its rate to 0...1 and Slider Unlocker does not
+    /// patch this setter, so an extended rate tilts no further than 0 or 1.
+    static func eyeTilt(faceRate: Float) -> Double {
+        0.02 - 0.04 * min(max(Double(faceRate), 0), 1)
+    }
+
     public func setShapeValues(face: [Float]?, body: [Float]?) throws {
         guard face != sourceFaceValues || body != sourceBodyValues else { return }
         func validate(_ values: [Float]?, _ id: String) throws {
@@ -1096,8 +1341,11 @@ public final class SourceStudioCharacterPreview {
             guard values.count == domain.valueCount else {
                 throw RigError.invalid("Edited \(id) shape values must contain exactly \(domain.valueCount) rates in contract order.")
             }
-            guard values.allSatisfy({ $0.isFinite && (0...1).contains($0) }) else {
-                throw RigError.invalid("Edited \(id) shape values must be finite and between 0 and 1.")
+            // Any finite rate: a card made with Slider Unlocker carries rates
+            // outside 0...1, and editing one slot resends the others as saved
+            // (SourceShapeRateRange decides how they are drawn).
+            guard values.allSatisfy(\.isFinite) else {
+                throw RigError.invalid("Edited \(id) shape values must be finite.")
             }
         }
         try validate(face, "face")
@@ -1144,7 +1392,7 @@ public final class SourceStudioCharacterPreview {
         sourceBodyValues = body
         // The eye tilt reads face shape value 33 (ChangeSettingEyeTilt), so an
         // edited face array re-derives it exactly as the import did.
-        let tilt = 0.02 - 0.04 * Double((face ?? savedFaceValues)[33])
+        let tilt = Self.eyeTilt(faceRate: (face ?? savedFaceValues)[33])
         irisRotations = [tilt, -tilt]
         // The look runtimes and the animation clock carry the replaced
         // baseline's geometry; restart them the way a scene reload does. Init
@@ -1208,6 +1456,8 @@ public final class SourceStudioCharacterPreview {
         preview = try SourceRigPreview(source: appearancePrepared?.source ?? preview.source, contract: preview.contract,
             resources: resources, appearance: appearance, expressionContract: preview.expressionContract,
             bodyOptions: preview.bodyOptions, lateCorrectionOptions: preview.lateCorrectionOptions, doubleTooth: preview.doubleTooth)
+        // The old frame names the old preview's meshes and holds its textures.
+        cachedFrame = nil
         sourceColorEdits = edits
         appliedColorFields = fields.intersection(supported)
         colorEditDiagnostics = edits == nil ? nil : messages
@@ -1284,6 +1534,12 @@ public final class SourceStudioCharacterPreview {
         let rig = preview.source.rig, binding: KoikatsuCharacterRecord.PoseBinding
         if let cached = poseBinding, cached.rig === rig.identity, cached.kinematics == effective, Self.sameBits(cached.fk, fkRotations) {
             binding = cached.binding
+        } else if let cached = poseBinding, cached.rig === rig.identity, cached.kinematics == effective,
+                  let rebound = record.rebindPose(cached.binding, from: cached.fk, to: fkRotations) {
+            // An FK drag: the same rig and kinematics, only some overrides
+            // changed. The binding equals a fresh bind (#371, `rebindPose`).
+            binding = rebound
+            poseBinding = (rig.identity, effective, fkRotations, rebound)
         } else {
             binding = try record.bindPose(rig: rig, catalog: poseCatalog,
                 characterRoot: characterRoot, bodyRoot: rig.uniqueNode(named: "p_cf_body_bone"),
@@ -1295,8 +1551,11 @@ public final class SourceStudioCharacterPreview {
         result = restored.pose
         var guides: [SourceStudioIK.Guide] = []
         if let ikSolver {
+            // `restored.evaluation` is `rig.evaluate(result)`: makePose's last
+            // evaluation, with this same rig (#371).
             let solved = try ikSolver.apply(rig: preview.source.rig, baseline: result, savedTargets: record.ikTargets,
-                enabled: edited.enableIK, activeGroups: edited.activeIK, characterRoot: characterRoot, guideOverrides: ikTargets.mapValues(\.transform))
+                enabled: edited.enableIK, activeGroups: edited.activeIK, characterRoot: characterRoot, guideOverrides: ikTargets.mapValues(\.transform),
+                baselineEvaluation: restored.evaluation)
             result = solved.pose; guides = solved.guides
         } else if !ikTargets.isEmpty { throw RigError.invalid("Source IK bindings are unavailable for guide editing.") }
         return (result, effective, guides)
@@ -1395,12 +1654,15 @@ public final class SourceStudioCharacterPreview {
          try SourceStudioGuide.rotation(node: characterRoot, rig: preview.source.rig, pose: pose))
     }
 
+    /// The state a save or an export writes after `animationElapsed`
+    /// seconds of the Studio clock (`SourceStudioAnimation.savedState`, which
+    /// a character with no preview runs too); the state unchanged when
+    /// nothing is edited and the saved clip does not resolve.
     public func savedAnimationState(animationState: SourceStudioAnimationState? = nil, animationElapsed: Float = 0) throws -> SourceStudioAnimationState {
-        var state = animationState ?? SourceStudioAnimationState(record: record)
-        if let animation = try resolvedAnimation(state, required: animationState != nil) {
-            state.normalizedTime = try animation.clock(state: state, elapsed: animationElapsed, height: effectiveAnimationHeight, playback: &animationPlayback).normalizedTime
-        }
-        return state
+        let saved = SourceStudioAnimationState(record: record)
+        let state = try SourceStudioAnimation.savedState(saved: saved, edited: animationState, elapsed: animationElapsed, height: effectiveAnimationHeight,
+            playback: &animationPlayback) { try resolvedAnimation($0, required: $1) }
+        return state ?? animationState ?? saved
     }
 
     public func resetAnimationPlayback() {
@@ -1554,12 +1816,7 @@ public final class SourceStudioCharacterPreview {
         let geometryPose = evaluatedCache?.preOverride ?? pose
         let world = try preview.source.rig.evaluate(geometryPose).worldMatrices
         func node(_ name: String) throws -> SourceStudioEyeLookGeometry.Node {
-            let matrix = UnityCoordinates.matrix(world[try preview.source.rig.uniqueNode(named: name)])
-            let q = matrix.rotationQuaternion
-            let scale = matrix.scaleFactors
-            return .init(position: SIMD3(Double(matrix.translation.x), Double(matrix.translation.y), Double(matrix.translation.z)),
-                         rotation: simd_quatd(ix: Double(q.imag.x), iy: Double(q.imag.y), iz: Double(q.imag.z), r: Double(q.real)),
-                         lossyScale: SIMD3(Double(scale.x), Double(scale.y), Double(scale.z)))
+            .init(unityWorld: UnityCoordinates.matrix(world[try preview.source.rig.uniqueNode(named: name)]))
         }
         func position(_ name: String) throws -> SIMD3<Double> { try node(name).position }
         let root = try node("cf_j_head")
@@ -1643,17 +1900,7 @@ public final class SourceStudioCharacterPreview {
     }
 
     private func resolvedAnimation(_ state: SourceStudioAnimationState, required: Bool) throws -> SourceStudioAnimation? {
-        let key = "\(state.group)/\(state.category)/\(state.no)"
-        if let cached = animationCache[key] { return cached }
-        guard let animationCatalog, let animationDirectory else {
-            if required { throw RigError.invalid("Studio animation catalog is not configured.") }
-            return nil
-        }
-        do {
-            let value = try animationCatalog.resolve(state, directory: animationDirectory)
-            animationCache[key] = value
-            return value
-        } catch { if required { throw error }; return nil }
+        try SourceStudioAnimationCatalog.resolve(state, catalog: animationCatalog, directory: animationDirectory, required: required, cache: &animationCache)
     }
 
     public func attachmentMatrix(pointID: Int32, fkRotations: [Int: Float3] = [:], faceValues: [Float]? = nil, bodyValues: [Float]? = nil, ikTargets: [Int32: SourceStudioIKEdit] = [:], kinematics: SourceStudioKinematicState? = nil, animationState: SourceStudioAnimationState? = nil, animationElapsed: Float = 0) throws -> float4x4 {

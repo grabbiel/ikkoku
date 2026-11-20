@@ -58,7 +58,7 @@ func sourceStudioAnimationClockMatchesRecoveredBinary32TraceWhenSupplied() throw
     #expect(changed.cardData == original.cardData && changed.bones == original.bones && changed.ikTargets == original.ikTargets)
     #expect(changed.voices == original.voices && changed.handPatterns == original.handPatterns && changed.neckData == original.neckData)
     #expect(changed.animationOptionVisible == original.animationOptionVisible && changed.expressions == original.expressions)
-    #expect(after.snapshot.roots[1] == source.snapshot.roots[1] && after.settings == source.settings && after.trailingData == source.trailingData)
+    #expect(try onDecodeStack { after.snapshot.roots[1] == source.snapshot.roots[1] } && after.settings == source.settings && after.trailingData == source.trailingData)
     #expect(try after.editedData(.init(animations: [10: .init(record: original)])) == bytes)
     #expect(throws: (any Error).self) { try source.editedData(.init(animations: [20: edit])) }
     edit.pattern = .infinity
@@ -180,4 +180,182 @@ func sourceStudioAnimationEvaluatesClothedPoseAttachmentsAndExportReloadWhenSupp
         try reloadBytes.write(to: path.appendingPathComponent("clothed-studio-animation-t05.png"))
         try JSONEncoder().encode(finalState).write(to: path.appendingPathComponent("expected-state-t05.json"))
     }
+}
+
+/// Lazy hidden characters: a character with no preview advances its saved
+/// animation through `SourceStudioAnimationClock` (card height and catalog
+/// clip only) and must save exactly what the built character's
+/// `savedAnimationState` saves, for the saved clip, a speed and state speed
+/// other than 1, a non-looping clip with and without forceLoop, and an
+/// edited body height, at elapsed times off the 60 Hz step.
+@Test(.enabled(if: SourceFixtureSupport.shouldRun(["IKKOKU_STUDIO_EXPANSION", "IKKOKU_MAKER_LIBRARY", "IKKOKU_SOURCE_AVATAR", "IKKOKU_STUDIO_POSE_CONTRACT", "IKKOKU_STUDIO_ANIMATION_CATALOG"]) && MTLCreateSystemDefaultDevice() != nil,
+               "Requires IKKOKU_STUDIO_EXPANSION, IKKOKU_MAKER_LIBRARY, IKKOKU_SOURCE_AVATAR, IKKOKU_STUDIO_POSE_CONTRACT, IKKOKU_STUDIO_ANIMATION_CATALOG and a Metal device"))
+func sourceStudioAnimationClockWithoutPreviewMatchesBuiltCharacterWhenSupplied() throws {
+    let folder = try SourceFixtureSupport.require("IKKOKU_STUDIO_EXPANSION")
+    let maker = try SourceFixtureSupport.require("IKKOKU_MAKER_LIBRARY")
+    let female = try SourceFixtureSupport.require("IKKOKU_SOURCE_AVATAR")
+    let bones = try SourceFixtureSupport.require("IKKOKU_STUDIO_POSE_CONTRACT")
+    let animations = try SourceFixtureSupport.require("IKKOKU_STUDIO_ANIMATION_CATALOG")
+    let input = URL(fileURLWithPath: folder).appendingPathComponent("studio-female-head200-bone1.png")
+    // The fixture's own saved clip is not converted: save a converted
+    // looping one mid-clip, as the export-reload test does.
+    let original = try KoikatsuSceneReader.decodeDocument(Data(contentsOf: input))
+    var savedClip = SourceStudioAnimationState(record: try #require(original.snapshot.roots[0].character))
+    savedClip.group = 0; savedClip.category = 4; savedClip.no = 13; savedClip.normalizedTime = 0.25; savedClip.speed = 0.75
+    let bytes = try original.editedData(.init(animations: [10: savedClip]))
+    let fixture = input.deletingLastPathComponent().appendingPathComponent("animation-clock-" + UUID().uuidString + ".png")
+    defer { try? FileManager.default.removeItem(at: fixture) }
+    try bytes.write(to: fixture)
+    func reference(catalog: String?) -> SourceStudioCharacterReference {
+        .init(sceneFile: fixture.path, sceneSHA256: OriginalCardFixture.hash(bytes), rigFile: female, boneCatalogFile: bones, objectKey: 10,
+              makerLibraryFile: maker,
+              attachmentCatalogFile: URL(fileURLWithPath: bones).deletingLastPathComponent().appendingPathComponent("attachments.json").path,
+              animationCatalogFile: catalog)
+    }
+    let character = reference(catalog: animations)
+    let built = try SourceStudioCharacterPreview(reference: character, resources: ResourceStore(device: try #require(MTLCreateSystemDefaultDevice())))
+    let saved = SourceStudioAnimationState(record: built.record)
+    #expect(saved == savedClip && built.hasSavedAnimation)
+    func edited(_ group: Int32, _ category: Int32, _ no: Int32, speed: Float, forceLoop: Bool, time: Float) -> SourceStudioAnimationState {
+        var state = saved
+        state.group = group; state.category = category; state.no = no
+        state.speed = speed; state.forceLoop = forceLoop; state.normalizedTime = time
+        return state
+    }
+    var short = built.savedBodyValues; short[0] = 0.1
+    // 0/1/0 has state speed 0.5 and loops; 0/4/9 does not loop; 0/7/5 does
+    // not loop and blends motions of different lengths by height, so its
+    // length follows the body height.
+    let blended = edited(0, 7, 5, speed: 1, forceLoop: false, time: 0.1)
+    let cases: [(name: String, state: SourceStudioAnimationState?, body: [Float]?)] = [
+        ("saved clip", nil, nil),
+        ("speed 1.7, state speed 0.5", edited(0, 1, 0, speed: 1.7, forceLoop: false, time: 0.3), nil),
+        ("non-looping", edited(0, 4, 9, speed: 1, forceLoop: false, time: 0.2), nil),
+        ("non-looping, forceLoop", edited(0, 4, 9, speed: 1.3, forceLoop: true, time: 0.2), nil),
+        ("height-blended clip, edited body height", blended, short),
+    ]
+    let clock = SourceStudioAnimationClock()
+    for elapsed: Float in [7.3, 61.25] {
+        for (name, state, body) in cases {
+            try built.setShapeValues(face: nil, body: body)
+            let eager = try built.savedAnimationState(animationState: state, animationElapsed: elapsed)
+            let request = SourceStudioAnimationClock.Request(reference: character, edited: state, bodyValues: body)
+            let lazy = try #require(try clock.savedStates([request], elapsed: elapsed)[0].get(), "\(name) resolves")
+            #expect(lazy == eager, "\(name) at \(elapsed) s")
+            if (state ?? saved).speed > 0 { #expect(lazy.normalizedTime != (state ?? saved).normalizedTime, "\(name) advanced") }
+        }
+    }
+    try built.setShapeValues(face: nil, body: nil)
+    // The height case exercises the height: the card's body gives another time.
+    let cardBody = try built.savedAnimationState(animationState: blended, animationElapsed: 7.3)
+    try built.setShapeValues(face: nil, body: short)
+    #expect(try built.savedAnimationState(animationState: blended, animationElapsed: 7.3) != cardBody)
+    try built.setShapeValues(face: nil, body: nil)
+    // The decoded scene, passed in, gives the same state as reading the file.
+    let fresh = SourceStudioAnimationClock(), request = SourceStudioAnimationClock.Request(reference: character, edited: nil, bodyValues: nil)
+    let fromScene = try fresh.savedStates([request], elapsed: 7.3,
+                                          scene: (try KoikatsuSceneReader.decodeDocument(bytes), character.sceneSHA256))[0].get()
+    #expect(fromScene == (try built.savedAnimationState(animationElapsed: 7.3)))
+    // A warm-up loads on a worker what the call then reads, with the same
+    // result; one for a generation `clear()` replaced does not run.
+    final class Outcome: @unchecked Sendable { var loaded: [Bool] = [] }
+    let outcome = Outcome(), done = DispatchSemaphore(value: 0), warmed = SourceStudioAnimationClock()
+    // `isLoaded` (an export computes its states in line only then): not
+    // before the warm-up, then for what it loaded, not for an edit to a clip
+    // it did not decode, and not after `clear()`.
+    let otherClip = SourceStudioAnimationClock.Request(reference: character, edited: edited(0, 4, 9, speed: 1, forceLoop: false, time: 0.2), bodyValues: nil)
+    #expect(!warmed.isLoaded([request]))
+    warmed.beginWarmUp([request], generation: warmed.generation) { outcome.loaded.append($0); done.signal() }
+    done.wait()
+    #expect(warmed.isLoaded([request]) && warmed.isLoaded([]))
+    #expect(!warmed.isLoaded([request, otherClip]))
+    #expect(try warmed.savedStates([request], elapsed: 7.3)[0].get() == (try built.savedAnimationState(animationElapsed: 7.3)))
+    // A second call after the same warm-up (a second export or save) must
+    // not wait on its work item again: libdispatch traps on that.
+    #expect(try warmed.savedStates([request], elapsed: 7.3)[0].get() == (try built.savedAnimationState(animationElapsed: 7.3)))
+    let stale = warmed.generation
+    warmed.clear()
+    #expect(!warmed.isLoaded([request]))
+    warmed.beginWarmUp([request], generation: stale) { outcome.loaded.append($0); done.signal() }
+    done.wait()
+    #expect(outcome.loaded == [true, false])
+    #expect(try warmed.savedStates([request], elapsed: 7.3)[0].get() == (try built.savedAnimationState(animationElapsed: 7.3)))
+    // Without a catalog the saved state is kept; an edit cannot be advanced.
+    let bare = SourceStudioAnimationClock.Request(reference: reference(catalog: nil), edited: nil, bodyValues: nil)
+    #expect(try clock.savedStates([bare], elapsed: 7.3)[0].get() == nil)
+    let bareEdit = SourceStudioAnimationClock.Request(reference: reference(catalog: nil), edited: saved, bodyValues: nil)
+    #expect(throws: (any Error).self) { try clock.savedStates([bareEdit], elapsed: 7.3)[0].get() }
+}
+
+/// Lazy hidden characters: an import retains a hidden character whose card
+/// cannot convert as the eager import retains its failed build. The card
+/// check (`validateCard`, run off the main thread by `CardCheck`) must reject
+/// what the build rejects, with the build's own error, and pass a card the
+/// build converts. Shape rates outside 0...1 (body or face), the case the
+/// user scene corpus has, now build (`SourceShapeRateRange`), so both pass;
+/// a rate that is not a finite number (NaN, +inf, -inf) is rejected by both.
+/// The fixture's card is edited to carry them (the non-finite ones by
+/// patching a marker rate's bytes, since the card editor writes only finite
+/// numbers).
+@Test(.enabled(if: SourceFixtureSupport.shouldRun(["IKKOKU_STUDIO_EXPANSION", "IKKOKU_MAKER_LIBRARY", "IKKOKU_SOURCE_AVATAR", "IKKOKU_STUDIO_POSE_CONTRACT"]) && MTLCreateSystemDefaultDevice() != nil,
+               "Requires IKKOKU_STUDIO_EXPANSION, IKKOKU_MAKER_LIBRARY, IKKOKU_SOURCE_AVATAR, IKKOKU_STUDIO_POSE_CONTRACT and a Metal device"))
+func sourceStudioCardCheckRejectsWhatTheBuildRejectsWhenSupplied() throws {
+    let folder = try SourceFixtureSupport.require("IKKOKU_STUDIO_EXPANSION")
+    let maker = try SourceFixtureSupport.require("IKKOKU_MAKER_LIBRARY")
+    let female = try SourceFixtureSupport.require("IKKOKU_SOURCE_AVATAR")
+    let bones = try SourceFixtureSupport.require("IKKOKU_STUDIO_POSE_CONTRACT")
+    let input = URL(fileURLWithPath: folder).appendingPathComponent("studio-female-head200-bone1.png")
+    let original = try KoikatsuSceneReader.decodeDocument(Data(contentsOf: input))
+    let record = try #require(original.snapshot.roots[0].character)
+    let shape = try record.card().customization()
+    var body = shape.bodyValues; body[0] = 1.5
+    var face = shape.faceValues; face[3] = -0.25
+    // A marker rate whose MessagePack float32 token (0xca + big-endian bits)
+    // is then overwritten with a non-finite value.
+    let marker = Float(bitPattern: 0x3EDD_1234)
+    var marked = shape.bodyValues; marked[2] = marker
+    func token(_ bits: UInt32) -> Data { Data([0xca, UInt8(bits >> 24), UInt8(bits >> 16 & 0xff), UInt8(bits >> 8 & 0xff), UInt8(bits & 0xff)]) }
+    func patchedScene(_ value: Float) throws -> Data {
+        var bytes = try original.editedData(.init(cards: [10: .init(bodyValues: marked)]))
+        var found: [Range<Data.Index>] = [], start = bytes.startIndex
+        while let range = bytes.range(of: token(marker.bitPattern), in: start..<bytes.endIndex) { found.append(range); start = range.upperBound }
+        try #require(found.count == 1, "the marker token occurs \(found.count) times")
+        bytes.replaceSubrange(found[0], with: token(value.bitPattern))
+        return bytes
+    }
+    let device = try #require(MTLCreateSystemDefaultDevice())
+    var records = [record]
+    var buildErrors: [String?] = [nil]
+    let cases: [(name: String, bytes: Data, rejected: Bool)] = [
+        ("body 1.5", try original.editedData(.init(cards: [10: .init(bodyValues: body)])), false),
+        ("face -0.25", try original.editedData(.init(cards: [10: .init(faceValues: face)])), false),
+        ("body NaN", try patchedScene(.nan), true),
+        ("body +inf", try patchedScene(.infinity), true),
+        ("body -inf", try patchedScene(-.infinity), true),
+    ]
+    for (name, bytes, rejected) in cases {
+        let fixture = input.deletingLastPathComponent().appendingPathComponent("card-check-" + UUID().uuidString + ".png")
+        defer { try? FileManager.default.removeItem(at: fixture) }
+        try bytes.write(to: fixture)
+        let edited = try #require(try KoikatsuSceneReader.decodeDocument(bytes).snapshot.roots[0].character)
+        let reference = SourceStudioCharacterReference(sceneFile: fixture.path, sceneSHA256: OriginalCardFixture.hash(bytes), rigFile: female,
+            boneCatalogFile: bones, objectKey: 10, makerLibraryFile: maker,
+            attachmentCatalogFile: URL(fileURLWithPath: bones).deletingLastPathComponent().appendingPathComponent("attachments.json").path)
+        var buildError: String?
+        do { _ = try SourceStudioCharacterPreview(reference: reference, resources: ResourceStore(device: device)) } catch { buildError = "\(error)" }
+        var checkError: String?
+        do { try SourceStudioCharacterPreview.validateCard(of: edited) } catch { checkError = "\(error)" }
+        #expect(checkError == buildError, "\(name): build \(buildError ?? "built"), check \(checkError ?? "passed")")
+        #expect((buildError != nil) == rejected, "\(name): build \(buildError ?? "built")")
+        if rejected { #expect(checkError?.contains("not a finite") == true, "\(name): \(checkError ?? "passed")") }
+        records.append(edited); buildErrors.append(buildError)
+    }
+    // The fixture's own card passes (its build is covered by the clock test).
+    try SourceStudioCharacterPreview.validateCard(of: record)
+    // The worker's results, in record order, and a second call (no second
+    // wait on its work item).
+    let check = SourceStudioCharacterPreview.CardCheck(records: records)
+    #expect(check.problems() == buildErrors)
+    #expect(check.problems() == buildErrors)
+    #expect(SourceStudioCharacterPreview.CardCheck(records: []).problems().isEmpty)
 }

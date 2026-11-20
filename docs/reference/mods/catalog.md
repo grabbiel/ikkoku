@@ -30,7 +30,47 @@ The script needs the ignored local source evidence produced during this investig
 | Line 4 | Trim the whole line, then split on literal commas into header names |
 | Later lines | Trim the whole line, then split on literal commas; stop entirely at the first line without a comma |
 
+Each trim is the game's `String.Trim()`: Mono's `String.WhiteChars`, 27
+characters that include U+200B and U+FEFF but not U+180E (see
+[card references](card-references.md)). `SourceModCatalog` and the Python
+oracle trim with that set (`SourceMonoWhiteChars`, #421); Foundation's
+whitespace set keeps U+FEFF, and the oracle's former list kept U+200B too. The
+numbers then go through `int.Parse`, whose own whitespace allowance is not this
+trim.
+
 Individual header and data cells are not trimmed. Quotes have no escaping or grouping function. Blank lines terminate reading instead of being skipped. The second line is distribution metadata, not an archive priority or asset-root selector. The third line is retained but is not used by `Lists.LoadList` to route injection: that method selects an already-existing dictionary by category number.
+
+The category, the distribution, each row's `ID` cell and the `DistributionNo`
+column are numbers. They are parsed in three places:
+
+- `Lists.LoadCSV` reads the category and distribution with `int.Parse`;
+- `UniversalAutoResolver.GenerateResolutionInfo` reads each row ID with `int.Parse`;
+- `ListInfoBase.GetInfoInt` reads `DistributionNo` with `int.TryParse`, and gives `-1` on failure.
+
+Both calls use Mono's culture-invariant `Int32.Parse` fast path
+(Unity-Technologies/mono, branch `unity-5.6`, `mcs/class/corlib/System/Int32.cs`,
+`Parse(string, bool, out int, out Exception)` and `ProcessTrailingWhitespace`).
+It skips `char.IsWhiteSpace` before and after one sign and the ASCII digits.
+
+That set is not the trim set. `Char.cs` `IsWhiteSpace` is true for:
+
+- the space, line and paragraph separators in the runtime's `CategoryData` table
+  (`mono/metadata/char-conversions.h`, which predates Unicode 3.2);
+- U+0009–U+000D, U+0085 and U+205F.
+
+The result is 26 code units. They include U+200B, but not U+180E or U+FEFF. A NUL
+among the digits ends the number, and trailing NULs are accepted, so `8\0x`
+reads as 8. A row ID's end before the first comma is never trimmed, so this
+white space decides it.
+
+`SourceModCatalog` and the Python oracle share this parser with the ADV
+handlers (`SourceMonoInt32`, `mono_int32.py`, #427). Before #427:
+
+- Foundation's `Int32(_:)` refused every NUL;
+- the oracle's list also lacked U+200B.
+
+`CategoryData` is compiled into mono.dll, not mscorlib. The set was checked
+against the branch source, not the installed binary.
 
 The source stream reader detects BOMs and uses decoder replacement for malformed byte sequences; it does not guess CP932. The package importer's RFC CSV/CP932 interpretation is analytical metadata;
 `SourceModCatalog` therefore reparses the preserved raw bytes using the source

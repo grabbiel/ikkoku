@@ -1,4 +1,5 @@
 import Foundation
+import Metal
 import Character
 import CoreMath
 import Renderer
@@ -42,14 +43,31 @@ struct MakerScenario: Decodable {
         let selection: SelectionValue?
         let expectFailure: Bool?, unchanged: Bool?
         let resourcesAtMost: String?
+        /// reimport only: sample the process footprint around the import
+        /// (#192-C timing), with Metal's allocated size, the malloc zones and
+        /// the resource store's counts before and after it (#332). Lane
+        /// scenarios leave it unset and sample nothing.
+        let footprint: Bool?
+        /// pause only (#332 measurement): how long to hold, 0 < seconds <= 30.
+        let seconds: Double?
         /// Any step: the decoded-rig hits and misses of the head selection it
         /// committed (`SourceSelectionTiming.headRigReuse`).
         let rigReuse: RigReuseValue?
+        /// Any step: the shape-contract hits and misses of the head selection
+        /// it committed (`SourceSelectionTiming.headShapeReuse`, #192).
+        let shapeReuse: RigReuseValue?
         /// Any step: outcomes of the current initial-load sample, the startup
         /// import's until a reimport or reload records its own (CXM1).
         let initialLoad: InitialLoadValue?
         struct RigReuseValue: Decodable { let hits: Int, misses: Int }
-        struct InitialLoadValue: Decodable { let geometry: String?, referenceLoad: String?, cachePublication: String? }
+        struct InitialLoadValue: Decodable {
+            let geometry: String?, referenceLoad: String?, cachePublication: String?
+            /// The import's shape-contract seed publication (#192).
+            let shapeCachePublication: String?
+            /// The staged seed's rigs carried from the replaced session and
+            /// decoded anew (#192-C, `stagedRigReuse`).
+            let carried: Int?, misses: Int?
+        }
         struct SelectionValue: Decodable {
             let kind: String, slot: Int, sourceID: Int
             let coordinate: Int?
@@ -81,7 +99,8 @@ struct MakerScenario: Decodable {
 
         private enum CodingKeys: String, CodingKey {
             case op, on, index, value, id, rgba, path, coordinate, face, body, color,
-                 colorApplied, diagnosticContains, selection, expectFailure, unchanged, resourcesAtMost, rigReuse, initialLoad
+                 colorApplied, diagnosticContains, selection, expectFailure, unchanged, resourcesAtMost, rigReuse, initialLoad,
+                 footprint, shapeReuse, seconds
         }
 
         init(from decoder: Decoder) throws {
@@ -108,7 +127,10 @@ struct MakerScenario: Decodable {
             unchanged = try c.decodeIfPresent(Bool.self, forKey: .unchanged)
             resourcesAtMost = try c.decodeIfPresent(String.self, forKey: .resourcesAtMost)
             rigReuse = try c.decodeIfPresent(RigReuseValue.self, forKey: .rigReuse)
+            shapeReuse = try c.decodeIfPresent(RigReuseValue.self, forKey: .shapeReuse)
             initialLoad = try c.decodeIfPresent(InitialLoadValue.self, forKey: .initialLoad)
+            footprint = try c.decodeIfPresent(Bool.self, forKey: .footprint)
+            seconds = try c.decodeIfPresent(Double.self, forKey: .seconds)
         }
     }
 
@@ -124,8 +146,48 @@ struct MakerScenario: Decodable {
             let initialLoad: MakerModel.SourceInitialLoadTiming?
             let mainActorMaximumGapMilliseconds: Double?
             let mainActorHeartbeatCount: Int?
+            /// #192-D: the step's longest main-actor gaps, longest first, each
+            /// placed in the selection phase it overlaps most.
+            let mainActorGaps: [MainActorGap]?
             let resourcesBefore: ResourceStore.Statistics?
             let resources: ResourceStore.Statistics?
+            let footprint: MakerScenarioFootprint.Sample?
+        }
+        /// One main-actor gap of a selection step (#192-D): the time between
+        /// two heartbeat samples. Offsets count from the selection's
+        /// `phaseUptimes.started`, negative before it. `overlapMilliseconds`
+        /// splits the gap over beforeSelection, snapshot, preparation, commit
+        /// and afterCommit, and `phase` names the largest. Both are nil when
+        /// the step published no phase uptimes (a failed or no-op selection).
+        struct MainActorGap: Encodable {
+            let milliseconds: Double
+            let startMilliseconds: Double?, endMilliseconds: Double?
+            let phase: String?
+            let overlapMilliseconds: [String: Double]?
+
+            init(_ gap: MakerSelectionHeartbeat.Gap, phases: MakerModel.SourceSelectionTiming.PhaseUptimes?) {
+                milliseconds = (gap.end - gap.start) * 1000
+                guard let phases else {
+                    startMilliseconds = nil; endMilliseconds = nil; phase = nil; overlapMilliseconds = nil
+                    return
+                }
+                startMilliseconds = (gap.start - phases.started) * 1000
+                endMilliseconds = (gap.end - phases.started) * 1000
+                let bounds: [(String, Double, Double)] = [
+                    ("beforeSelection", -.infinity, phases.started),
+                    ("snapshot", phases.started, phases.snapshotFinished),
+                    ("preparation", phases.snapshotFinished, phases.preparationFinished),
+                    ("commit", phases.preparationFinished, phases.commitFinished),
+                    ("afterCommit", phases.commitFinished, .infinity),
+                ]
+                var overlaps: [String: Double] = [:]
+                for (name, lower, upper) in bounds {
+                    let overlap = min(gap.end, upper) - max(gap.start, lower)
+                    if overlap > 0 { overlaps[name] = overlap * 1000 }
+                }
+                overlapMilliseconds = overlaps
+                phase = overlaps.max { $0.value < $1.value }?.key
+            }
         }
         let steps: [StepResult]
         let passed: Int
@@ -215,7 +277,8 @@ struct MakerScenario: Decodable {
         var resourceSnapshots: [String: ResourceStore.Statistics] = [:]
         @discardableResult
         func record(_ step: Step, _ ok: Bool, _ detail: String,
-                    initialLoad: MakerModel.SourceInitialLoadTiming? = nil) -> Bool {
+                    initialLoad: MakerModel.SourceInitialLoadTiming? = nil,
+                    footprint: MakerScenarioFootprint.Sample? = nil) -> Bool {
             var problems: [String] = []
             if let expected = step.rigReuse {
                 if let sample = maker.sourceSelectionTiming?.headRigReuse {
@@ -224,15 +287,38 @@ struct MakerScenario: Decodable {
                     }
                 } else { problems.append("rigReuse: no head selection sample") }
             }
+            if let expected = step.shapeReuse {
+                if let sample = maker.sourceSelectionTiming?.headShapeReuse {
+                    if sample.hits != expected.hits || sample.misses != expected.misses {
+                        problems.append("shapeReuse \(sample.hits)/\(sample.misses), expected \(expected.hits)/\(expected.misses)")
+                    }
+                } else { problems.append("shapeReuse: no head selection sample") }
+            }
             if let expected = step.initialLoad {
                 if let sample = (initialLoad ?? maker.sourceInitialLoadTiming)?.preparation {
                     for (name, actual, wanted) in [("geometry", sample.geometryOutcome.rawValue, expected.geometry),
                                                    ("referenceLoad", sample.referenceLoad.rawValue, expected.referenceLoad),
-                                                   ("cachePublication", sample.cachePublication.rawValue, expected.cachePublication)]
+                                                   ("cachePublication", sample.cachePublication.rawValue, expected.cachePublication),
+                                                   ("shapeCachePublication", sample.shapeCachePublication.rawValue, expected.shapeCachePublication)]
                     where wanted != nil && wanted != actual {
                         problems.append("initialLoad \(name) \(actual), expected \(wanted!)")
                     }
+                    for (name, actual, wanted) in [("carried", sample.stagedRigReuse?.carried, expected.carried),
+                                                   ("misses", sample.stagedRigReuse?.misses, expected.misses)]
+                    where wanted != nil && wanted != actual {
+                        problems.append("initialLoad \(name) \(actual.map(String.init) ?? "none"), expected \(wanted!)")
+                    }
                 } else { problems.append("initialLoad: no sample") }
+            }
+            let phases = maker.sourceSelectionTiming?.phaseUptimes
+            let gaps = heartbeat.map { $0.longest.map { Report.MainActorGap($0, phases: phases) } }
+            // The longest kept gap is the reported maximum, and the phases
+            // partition it; anything else is an instrumentation fault.
+            if let heartbeat, let first = gaps?.first {
+                let split = first.overlapMilliseconds?.values.reduce(0, +) ?? first.milliseconds
+                if abs(first.milliseconds - heartbeat.maximumGapMilliseconds) > 1e-6 || abs(split - first.milliseconds) > 1e-6 {
+                    problems.append("mainActorGaps: longest gap \(first.milliseconds) ms, split \(split) ms, maximum \(heartbeat.maximumGapMilliseconds) ms")
+                }
             }
             let passed = ok && problems.isEmpty
             let shown = problems.isEmpty ? detail : detail + "; " + problems.joined(separator: "; ")
@@ -242,8 +328,10 @@ struct MakerScenario: Decodable {
                 initialLoad: initialLoad,
                 mainActorMaximumGapMilliseconds: heartbeat?.maximumGapMilliseconds,
                 mainActorHeartbeatCount: heartbeat?.count,
+                mainActorGaps: gaps,
                 resourcesBefore: resourcesBefore,
-                resources: ["selectAsset", "captureResources", "beginSelection", "finishSelection"].contains(step.op) || step.resourcesAtMost != nil || resourcesBefore != nil ? maker.host.renderer.resources.statistics() : nil))
+                resources: ["selectAsset", "captureResources", "beginSelection", "finishSelection"].contains(step.op) || step.resourcesAtMost != nil || resourcesBefore != nil ? maker.host.renderer.resources.statistics() : nil,
+                footprint: footprint))
             return passed
         }
         func insideLocal(_ path: String) -> URL? {
@@ -472,6 +560,25 @@ struct MakerScenario: Decodable {
                 guard let id = step.id else { record(step, false, "captureResources: missing id"); continue }
                 resourceSnapshots[id] = maker.host.renderer.resources.statistics()
                 record(step, true, "captured resource counts: \(id)")
+            case "pause":
+                // #332 measurement: hold so an outside tool can read this process
+                // (vmmap, footprint, heap). The marker under .local/ receives this
+                // process's own id; the reader uses only that id. The hold is an
+                // await, so the main run loop can sleep and drain its pool here.
+                guard let seconds = step.seconds, seconds > 0, seconds <= 30,
+                      let path = step.path, let marker = insideLocal(path) else {
+                    record(step, false, "pause: needs 0 < seconds <= 30 and a marker path under .local/")
+                    break scenarioLoop
+                }
+                do {
+                    try FileManager.default.createDirectory(at: marker.deletingLastPathComponent(), withIntermediateDirectories: true)
+                    try Data("\(ProcessInfo.processInfo.processIdentifier)\n".utf8).write(to: marker, options: .atomic)
+                } catch {
+                    record(step, false, "pause: marker not written: \(error)")
+                    break scenarioLoop
+                }
+                try? await Task.sleep(for: .seconds(seconds))
+                record(step, true, "paused \(seconds) s after marking \(path)")
             case "setFace", "setBody":
                 let face = step.op == "setFace"
                 guard let index = step.index, let value = step.value, value.isFinite else {
@@ -546,16 +653,22 @@ struct MakerScenario: Decodable {
                 let beforeClock = expectsFailure ? maker.sourceAnimationTime : nil
                 let beforeResources = expectsFailure ? maker.host.renderer.resources.statistics() : nil
                 let hadInitialSample = maker.sourceInitialLoadTiming != nil
-                resourcesBefore = beforeResources
+                // #332: a footprint reimport also records the store's counts
+                // before it and, through `record`, after it.
+                resourcesBefore = beforeResources ?? (step.footprint == true ? maker.host.renderer.resources.statistics() : nil)
+                let sampler = step.footprint == true ? MakerScenarioFootprint(device: maker.host.renderer.resources.device) : nil
+                defer { _ = sampler?.finish() }
                 do {
                     try maker.importSourceCardSettings(url: url, recordInitialLoad: true)
+                    let footprint = sampler?.finish()
                     if expectsFailure {
                         record(step, false, "expected-failure reimport unexpectedly succeeded; stopping",
                                initialLoad: maker.sourceInitialLoadTiming)
                         break scenarioLoop
                     }
                     heldCardPath = url.path
-                    record(step, true, "reimported \(path): \(maker.status)", initialLoad: maker.sourceInitialLoadTiming)
+                    record(step, true, "reimported \(path): \(maker.status)", initialLoad: maker.sourceInitialLoadTiming,
+                           footprint: footprint)
                 } catch {
                     guard expectsFailure, let before, let beforeFrame, let beforeClock, let beforeResources else {
                         record(step, false, "reimport failed, stopping: \(error)")
@@ -701,13 +814,26 @@ nonisolated private final class MakerSelectionGate: @unchecked Sendable {
 
 /// Scenario-only responsiveness evidence. A presented frame can continue on the
 /// render thread even while input is blocked, so sample the actual main actor.
-private final class MakerSelectionHeartbeat {
+final class MakerSelectionHeartbeat {
+    /// The interval between two consecutive samples, as `systemUptime` seconds.
+    struct Gap { let start: Double, end: Double }
+    /// How many of the longest gaps are kept (#192-D).
+    static let kept = 3
     private var last = ProcessInfo.processInfo.systemUptime
     private(set) var maximumGapMilliseconds = 0.0
     private(set) var count = 0
+    /// The longest gaps so far, longest first; no extra clock read.
+    private(set) var longest: [Gap] = []
     func sample() {
         let now = ProcessInfo.processInfo.systemUptime
         maximumGapMilliseconds = max(maximumGapMilliseconds, (now - last) * 1000)
+        let length: Double = now - last
+        let shortestKept: Double = longest.last.map { $0.end - $0.start } ?? 0
+        if longest.count < Self.kept || length > shortestKept {
+            let index = longest.firstIndex { $0.end - $0.start < length } ?? longest.count
+            longest.insert(Gap(start: last, end: now), at: index)
+            if longest.count > Self.kept { longest.removeLast() }
+        }
         last = now; count += 1
     }
     func run() async {
@@ -715,5 +841,85 @@ private final class MakerSelectionHeartbeat {
             do { try await Task.sleep(for: .milliseconds(1)) } catch { return }
             sample()
         }
+    }
+}
+
+/// The process footprint around one scenario reimport (#192-C timing):
+/// `phys_footprint` before, sampled every millisecond on a thread of its own
+/// while the import runs on the main thread, and after it returns, plus the
+/// kernel's lifetime peak before and after, which catches a spike shorter
+/// than the sampling interval when it sets a new process maximum.
+///
+/// #332 adds two in-process splits of where held growth lives, before and
+/// after the import: the device's `currentAllocatedSize` (every Metal
+/// allocation, whoever holds it; its peak is sampled with the footprint) and
+/// the totals of every malloc zone. Live malloc bytes (`sizeInUseBytes`) that
+/// grow point at a CPU holder; allocated bytes that grow while live bytes stay
+/// flat point at allocator high-water. Only this process is read.
+nonisolated final class MakerScenarioFootprint: @unchecked Sendable {
+    nonisolated struct Malloc: Encodable, Sendable {
+        let blocksInUse: Int, sizeInUseBytes: Int, maxSizeInUseBytes: Int, sizeAllocatedBytes: Int
+    }
+    nonisolated struct Sample: Encodable, Sendable {
+        let beforeBytes: UInt64, peakBytes: UInt64, afterBytes: UInt64
+        let lifetimePeakBeforeBytes: Int64, lifetimePeakAfterBytes: Int64
+        let samples: Int
+        let metalAllocatedBeforeBytes: Int?, metalAllocatedPeakBytes: Int?, metalAllocatedAfterBytes: Int?
+        let mallocBefore: Malloc, mallocAfter: Malloc
+    }
+    private let lock = NSLock()
+    private var running = true, peak: UInt64 = 0, metalPeak = 0, count = 0, result: Sample?
+    private let before: (UInt64, Int64), done = DispatchSemaphore(value: 0)
+    private let device: (any MTLDevice)?, metalBefore: Int?, mallocBefore: Malloc
+    init(device: (any MTLDevice)? = nil) {
+        self.device = device
+        mallocBefore = Self.mallocTotals()
+        metalBefore = device?.currentAllocatedSize
+        before = Self.read()
+        peak = before.0
+        metalPeak = metalBefore ?? 0
+        let thread = Thread { [self] in
+            while lock.withLock({ running }) {
+                let now = Self.read().0, metal = self.device?.currentAllocatedSize ?? 0
+                lock.withLock { peak = max(peak, now); metalPeak = max(metalPeak, metal); count += 1 }
+                usleep(1000)
+            }
+            done.signal()
+        }
+        thread.qualityOfService = .userInitiated
+        thread.start()
+    }
+    /// Stops the sampler (once) and returns the sample.
+    func finish() -> Sample {
+        if let result = lock.withLock({ result }) { return result }
+        lock.withLock { running = false }
+        done.wait()
+        let after = Self.read()
+        let metalAfter = device?.currentAllocatedSize
+        let mallocAfter = Self.mallocTotals()
+        let sample = lock.withLock {
+            Sample(beforeBytes: before.0, peakBytes: max(peak, after.0), afterBytes: after.0,
+                   lifetimePeakBeforeBytes: before.1, lifetimePeakAfterBytes: after.1, samples: count,
+                   metalAllocatedBeforeBytes: metalBefore, metalAllocatedPeakBytes: metalAfter.map { max(metalPeak, $0) },
+                   metalAllocatedAfterBytes: metalAfter, mallocBefore: mallocBefore, mallocAfter: mallocAfter)
+        }
+        lock.withLock { result = sample }
+        return sample
+    }
+    /// Totals over every malloc zone (`malloc_zone_statistics` with no zone).
+    private static func mallocTotals() -> Malloc {
+        var stats = malloc_statistics_t()
+        malloc_zone_statistics(nil, &stats)
+        return Malloc(blocksInUse: Int(stats.blocks_in_use), sizeInUseBytes: Int(stats.size_in_use),
+                      maxSizeInUseBytes: Int(stats.max_size_in_use), sizeAllocatedBytes: Int(stats.size_allocated))
+    }
+    /// `phys_footprint` and `ledger_phys_footprint_peak` (TASK_VM_INFO).
+    private static func read() -> (UInt64, Int64) {
+        var info = task_vm_info_data_t()
+        var count = mach_msg_type_number_t(MemoryLayout<task_vm_info_data_t>.size / MemoryLayout<natural_t>.size)
+        let result = withUnsafeMutablePointer(to: &info) {
+            $0.withMemoryRebound(to: integer_t.self, capacity: Int(count)) { task_info(mach_task_self_, task_flavor_t(TASK_VM_INFO), $0, &count) }
+        }
+        return result == KERN_SUCCESS ? (info.phys_footprint, info.ledger_phys_footprint_peak) : (0, 0)
     }
 }

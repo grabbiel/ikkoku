@@ -1198,11 +1198,12 @@ struct SourceMessagePackSpans {
         for _ in 0..<count { try skip(depth: depth + 1) }
     }
 
-    /// A UTF-8 string value.
+    /// A UTF-8 string value, decoded as the game does: a leading U+FEFF is
+    /// kept (`SourceMonoUTF8`).
     mutating func string() throws -> String {
         guard case .string(let count) = try head() else { throw fail("expected a string") }
         let range = try payload(count)
-        guard let value = String(bytes: bytes[range], encoding: .utf8) else { throw fail("string is not valid UTF-8") }
+        guard let value = SourceMonoUTF8.string(bytes[range]) else { throw fail("string is not valid UTF-8") }
         return value
     }
 

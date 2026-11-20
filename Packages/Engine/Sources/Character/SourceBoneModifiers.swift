@@ -57,15 +57,16 @@ public struct SourceBoneModifiers: Decodable, Sendable {
 
     /// Decode the original PluginData.data["boneData"] bytes, retaining Unity
     /// coordinates. Supports the installed ABMX card v2 / coordinate v3 arrays,
-    /// either plain MessagePack or its LZ4 extension 99 wrapper. Legacy migration
-    /// and accessory/dynamic evaluation remain outside the static pose contract.
+    /// either plain MessagePack or its LZ4 extension 99 wrapper. Card v1 text is
+    /// `decodeLegacyText`; coordinate v2 migration and accessory/dynamic
+    /// evaluation remain outside the static pose contract.
     public static func decodeBoneData(
         _ data: Data, dataKind: String, dataVersion: Int,
         assemblySHA256: String = "f3e2d9877b08b2b25187cbc101478ea0d484bcfe4856244050ba3119578e9f68"
     ) throws -> Self {
         guard (dataKind == "card" && dataVersion == 2) ||
                 (dataKind == "coordinate" && dataVersion == 3), isHash(assemblySHA256) else {
-            throw RigError.invalid("Supported ABMX versions are card v2 and coordinate v3 with valid assembly provenance; legacy migration is not implemented.")
+            throw RigError.invalid("Supported ABMX binary versions are card v2 and coordinate v3 with valid assembly provenance; card v1 is legacy text (decodeLegacyText), and coordinate v2 migration is not implemented.")
         }
         guard !data.isEmpty, data.count <= 16 * 1024 * 1024 else {
             throw RigError.invalid("ABMX boneData must contain 1 byte through 16 MiB.")
@@ -103,15 +104,30 @@ public struct SourceBoneModifiers: Decodable, Sendable {
         var identities = Set<Data>()
         modifiers.reserveCapacity(records.count)
         for record in records {
-            guard let fields = record.arrayValue, fields.count == 3 else {
-                throw RigError.invalid("ABMX records require BoneName, CoordinateModifiers, and BoneLocation in source order.")
+            // BoneModifier is an int-keyed MessagePack object: Key 0 BoneName,
+            // 1 CoordinateModifiers, 2 BoneLocation. Its formatter reads an
+            // array of any length, gives a missing key default(T) and skips
+            // keys it does not know (#401). Saves from before BoneLocation have
+            // two fields, so the location is 0 (Unknown). The original's
+            // constructor fails without a name or coordinates, so fewer than
+            // two fields stays refused.
+            guard let fields = record.arrayValue, fields.count >= 2 else {
+                throw RigError.invalid("ABMX records require BoneName and CoordinateModifiers in source order (BoneLocation may follow).")
             }
             guard let name = fields[0].stringValue, !name.isEmpty,
                   name.unicodeScalars.count <= 1024, !name.contains("\0") else {
                 throw RigError.invalid("ABMX BoneName must contain 1 through 1024 source characters and no NUL.")
             }
-            guard let location = fields[2].integerValue, location >= 0 else {
-                throw RigError.invalid("ABMX BoneLocation must be a nonnegative integer representable by the native index type.")
+            let location: Int
+            if fields.count >= 3 {
+                guard let saved = fields[2].integerValue, saved >= 0 else {
+                    throw RigError.invalid("ABMX BoneLocation must be a nonnegative integer representable by the native index type.")
+                }
+                location = saved
+            } else { location = 0 }
+            if fields.count > 3 {
+                diagnostics.append(Diagnostic(code: "skipped-unknown-fields", severity: "warning",
+                    message: "ABMX record '\(name)' has \(fields.count) fields; fields after BoneLocation are skipped, as the original's formatter skips unknown keys."))
             }
             // Compare the original name bytes: Swift's canonical-equivalence
             // String equality would otherwise merge distinct source names.
@@ -130,11 +146,22 @@ public struct SourceBoneModifiers: Decodable, Sendable {
                         message: "ABMX repaired null coordinate #\(index + 1) for '\(name)' to identity; the converted document preserves this repair."))
                     continue
                 }
-                guard let fields = coordinate.arrayValue, fields.count == 4 else {
+                // BoneModifierData: Key 0 Scale, 1 Length, 2 Position, 3 Rotation.
+                // Saves from before Position and Rotation have two fields; a
+                // missing Position or Rotation is Vector3.zero, the identity.
+                guard let fields = coordinate.arrayValue else {
                     throw RigError.invalid("ABMX coordinate entries require Scale, Length, Position, and Rotation in source order.")
                 }
+                guard fields.count >= 2 else {
+                    throw RigError.invalid("ABMX coordinate entry #\(index + 1) for '\(name)' has \(fields.count) field(s). The original would read it with default values (a zero Scale or Length), which is not implemented; no known card uses this layout.")
+                }
+                if fields.count > 4 {
+                    diagnostics.append(Diagnostic(code: "skipped-unknown-fields", severity: "warning",
+                        message: "ABMX coordinate #\(index + 1) for '\(name)' has \(fields.count) fields; fields after Rotation are skipped, as the original's formatter skips unknown keys."))
+                }
                 values.append(try Values(scaleModifier: vector(fields[0]), lengthModifier: number(fields[1]),
-                                         positionModifier: vector(fields[2]), rotationModifier: vector(fields[3])))
+                                         positionModifier: fields.count > 2 ? vector(fields[2]) : [0, 0, 0],
+                                         rotationModifier: fields.count > 3 ? vector(fields[3]) : [0, 0, 0]))
             }
             modifiers.append(Modifier(boneName: name, boneLocation: location, coordinateModifiers: values))
             if location != 0 && location != 1 {
@@ -155,12 +182,12 @@ public struct SourceBoneModifiers: Decodable, Sendable {
         return result
     }
 
-    private func validate() throws {
+    func validate() throws {
         guard schemaVersion == 1, kind == "ikkoku-source-bone-modifiers",
               coordinateSpace == "unity-left-handed-y-up", angleUnit == "degrees", mode == "staticBaseline",
               source.pluginGUID == "KKABMX.Core", source.dataGUID == "KKABMPlugin.ABMData",
               source.pluginVersion == "5.4",
-              (source.dataKind == "card" && source.dataVersion == 2) ||
+              (source.dataKind == "card" && (source.dataVersion == 1 || source.dataVersion == 2)) ||
                 (source.dataKind == "coordinate" && source.dataVersion == 3),
               Self.isHash(source.assemblySHA256), Self.isHash(source.payloadSHA256) else {
             throw RigError.invalid("Unsupported ABMX document, data version, or coordinate convention.")
@@ -258,7 +285,7 @@ public struct SourceBoneModifiers: Decodable, Sendable {
         return result
     }
 
-    private static let dynamicInfluencePrefixes = ["cf_d_sk_", "cf_j_bust0", "cf_d_siri01_", "cf_j_siri_"]
+    static let dynamicInfluencePrefixes = ["cf_d_sk_", "cf_j_bust0", "cf_d_siri01_", "cf_j_siri_"]
     private static func bodyNode(named name: String, rig: RigDefinition) throws -> Int {
         let roots = rig.nodes(named: "p_cf_body_bone")
         guard roots.count <= 1 else { throw RigError.invalid("ABMX BodyTop has multiple source skeleton roots.") }
@@ -281,7 +308,7 @@ public struct SourceBoneModifiers: Decodable, Sendable {
         }
         return candidates[0]
     }
-    private static func isHash(_ value: String) -> Bool {
+    static func isHash(_ value: String) -> Bool {
         value.utf8.count == 64 && value.utf8.allSatisfy { (48...57).contains($0) || (97...102).contains($0) }
     }
 }

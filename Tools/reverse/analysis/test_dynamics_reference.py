@@ -4,7 +4,8 @@ import unittest
 
 import numpy as np
 
-from dynamics_reference import REPO, ParticleReference, checkout_evidence, collider, collide, node, synthetic_document, v
+from dynamics_reference import (REPO, AppliedTransforms, ParticleReference, checkout_evidence, collider, collide, node,
+                                signed_document, synthetic_document, v)
 
 
 class DynamicsReferenceTests(unittest.TestCase):
@@ -64,6 +65,42 @@ class DynamicsReferenceTests(unittest.TestCase):
     def test_checked_in_fixture_matches_generator(self):
         fixture = json.loads((REPO / 'Tools/reverse/fixtures/dynamics-reference.json').read_text())
         self.assertEqual(fixture, synthetic_document())
+
+    def test_signed_fixture_matches_generator_and_is_finite(self):
+        document = signed_document()
+        fixture = json.loads((REPO / 'Tools/reverse/fixtures/dynamics-signed-reference.json').read_text())
+        self.assertEqual(fixture, document)
+        self.assertEqual(len(document['scenarios']), 21)
+        self.assertEqual({len(frames) for frames in document['frameSets'].values()}, {200})
+        steps = {c['lastStepCount'] for s in document['scenarios'] for c in s['checkpoints']}
+        self.assertTrue({0, 1} <= steps)
+        for scenario in document['scenarios']:
+            for checkpoint in scenario['checkpoints']:
+                for key in ['positions', 'previousPositions', 'applied']:
+                    self.assertTrue(np.isfinite(checkpoint[key]).all(), (scenario['name'], key))
+
+    def test_signed_mirror_pairs_are_exactly_symmetric_in_the_source(self):
+        # An owner (plane x = 0.05) or base (plane x = 0) reflection, with the
+        # force mirrored, mirrors the positive run: particle state and the
+        # applied worlds, which Illusion's compensation keeps symmetric.
+        scenarios = {s['name']: s for s in signed_document()['scenarios']}
+        positive = scenarios['mirror-pair-positive']['checkpoints']
+        for name, plane in [('mirror-pair-owner-x', .05), ('mirror-pair-base-x', 0.)]:
+            for a, b in zip(positive, scenarios[name]['checkpoints']):
+                for key in ['positions', 'previousPositions']:
+                    mirrored = np.asarray(a[key]) * [-1, 1, 1] + [2 * plane, 0, 0]
+                    np.testing.assert_allclose(mirrored, b[key], rtol=0, atol=2e-6, err_msg=f'{name} {key}')
+                for wa, wb in zip(a['applied'], b['applied']):
+                    m = np.asarray(wa).reshape(4, 3) * [-1, 1, 1]
+                    m[3, 0] += 2 * plane
+                    np.testing.assert_allclose(m, np.asarray(wb).reshape(4, 3), rtol=0, atol=2e-6, err_msg=f'{name} applied')
+
+    def test_signed_inverse_safe_maps_a_collapsed_axis_to_zero(self):
+        nodes = [node('parent', None, (1, 2, 3), (2, 0, 4)), node('child', 0)]
+        transforms = AppliedTransforms(nodes)
+        np.testing.assert_allclose(transforms.inverse_point(0, [3, 7, 11]), [1, 0, 2], rtol=0, atol=1e-12)
+        transforms.set_position(1, [3, 7, 11])
+        np.testing.assert_allclose(transforms.world(1)[:3, 3], [3, 2, 11], rtol=0, atol=1e-6)
 
     def test_contract_evidence_is_recorded_with_absolute_checkout_paths(self):
         # Both original documents copy contract evidence; a relative entry

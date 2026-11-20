@@ -52,6 +52,12 @@ final class AppState {
     /// second `onAppear` from queueing them again.
     @ObservationIgnored private var uiCapturePendingSelections: [UUID?] = []
     @ObservationIgnored private var uiCaptureContentPrepared = false
+    /// `IKKOKU_CAPTURE_UI_POSE_MODE` (#425): the pose mode to set, in its own readiness poll, once the
+    /// selections are made; nil once set (or when not requested).
+    @ObservationIgnored private var uiCapturePoseMode: PoseMode?
+    /// `IKKOKU_CAPTURE_UI_WINDOW_W` (#425) is set and the first readiness poll with a window has not
+    /// resized it yet.
+    @ObservationIgnored private var uiCaptureWindowWidthPending = false
 
     init() {
         let env = ProcessInfo.processInfo.environment
@@ -65,6 +71,9 @@ final class AppState {
         // R7 phase 2, item 7: whether the inspector keeps hidden views
         // mounted, read once here (`IKKOKU_PERF_KEEP_MOUNTED`).
         _ = StudioInspectorMounting.current
+        // Item 7 follow-ups (C4): where the workspace, toolbar and timeline
+        // read the document (`IKKOKU_PERF_PANEL_STATE`), also read once here.
+        _ = StudioPanelStateMode.current
         // R7: the performance trace records startup marks from here on.
         PerfTrace.startIfRequested(env)
         // A-T01: the gameplay host scenario is its own headless mode. It needs
@@ -832,10 +841,41 @@ final class AppState {
         if env["IKKOKU_CAPTURE_GIZMOS"] == "0" { frame.gizmos = [] }
         if let output = env["IKKOKU_BENCHMARK_OUTPUT"] {
             do {
+                let warmup = 3, measured = Int(env["IKKOKU_BENCHMARK_FRAMES"] ?? "20") ?? 20
+                // IKKOKU_BENCHMARK_ORBIT=<turns> (ST-T04 B2): a scripted orbit,
+                // the same path in every build. The frame camera's yaw turns
+                // `turns` times about its target, evenly over the warmup and
+                // measured samples; its pitch, target, distance and the lights
+                // stay. Each sample's yaw is recorded as it is drawn.
+                var camera: ((Int) -> OrbitCamera)?
+                var orbit: [String: Any]?
+                let yaws = BenchmarkYaws()
+                if let text = env["IKKOKU_BENCHMARK_ORBIT"], let turns = Float(text) {
+                    let base = frame.camera, samples = Float(warmup + measured)
+                    camera = { sample in
+                        var c = base
+                        c.yaw = base.yaw + 2 * .pi * turns * Float(sample) / samples
+                        yaws.values.append(c.yaw)
+                        return c
+                    }
+                    orbit = ["turns": turns, "target": [base.target.x, base.target.y, base.target.z],
+                             "distance": base.distance, "pitch": base.pitch, "fovDegrees": base.fovDegrees]
+                }
+                // Maps slice 5: `IKKOKU_BENCHMARK_MAP_SHADOW=every-frame` redraws the map
+                // sun's shadow map in every measured frame (the change frame's cost).
+                let shadowEveryFrame = env["IKKOKU_BENCHMARK_MAP_SHADOW"] == "every-frame"
+                host.renderer.redrawsMapShadowEveryFrame = shadowEveryFrame
                 let report = try host.renderer.benchmark(frame: frame, width: w, height: h,
-                    measuredFrames: Int(env["IKKOKU_BENCHMARK_FRAMES"] ?? "20") ?? 20)
+                    warmupFrames: warmup, measuredFrames: measured, camera: camera)
+                host.renderer.redrawsMapShadowEveryFrame = false
                 let encoder = JSONEncoder(); encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
                 var document = try JSONSerialization.jsonObject(with: encoder.encode(report)) as! [String: Any]
+                document["mapShadowEveryFrame"] = shadowEveryFrame
+                document["mapShadowMap"] = host.renderer.hasMapShadowMap
+                if var orbit {
+                    orbit["sampleYaws"] = yaws.values
+                    document["orbit"] = orbit
+                }
                 document["sourceCardSHA256"] = maker.importedSourceCard?.sourceSHA256
                 document["assembly"] = maker.sourceRigURL?.path
                 document["coordinate"] = maker.sourceBoneModifierCoordinate
@@ -1014,6 +1054,16 @@ final class AppState {
                     }
                     studio.inspectorTab = tab
                 }
+                // The first readiness poll with a window applies it (checked against that screen).
+                uiCaptureWindowWidthPending = env[UICaptureWindowWidth.variable] != nil
+                if let text = env["IKKOKU_CAPTURE_UI_POSE_MODE"] {
+                    // CaptureRequest admits only object, fk and ik; anything else is still refused here.
+                    guard let poseMode = PoseMode.allCases.first(where: { $0.rawValue.lowercased() == text }) else {
+                        print("[ikkoku] unknown IKKOKU_CAPTURE_UI_POSE_MODE '\(text)'")
+                        exit(1)
+                    }
+                    uiCapturePoseMode = poseMode
+                }
                 if let text = env["IKKOKU_CAPTURE_UI_SELECT"] {
                     let tree = studio.doc.flattened().map(\.object)
                     var selections: [UUID?] = []
@@ -1030,9 +1080,46 @@ final class AppState {
                     uiCapturePendingSelections = selections
                     return
                 }
+                // The readiness poll sets the pose mode, as a click after the selection would.
+                if uiCapturePoseMode != nil { return }
             }
         }
         uiCaptureContentAppeared = true
+    }
+
+    /// #425: sets `IKKOKU_CAPTURE_UI_POSE_MODE` on the selection the capture will show, which must be a
+    /// character (only a character has the pose controls); any other selection refuses the capture.
+    private func applyUICapturePoseMode(_ studio: StudioModel) {
+        guard let poseMode = uiCapturePoseMode else { return }
+        uiCapturePoseMode = nil
+        guard let object = studio.selectedObject, object.kind == .character else {
+            let shown = studio.selectedObject.map { "a \($0.kind)" + ($0.sourceObjectKey.map { " (source key \($0))" } ?? "") } ?? "nothing"
+            print("[ikkoku] ui snapshot failed: IKKOKU_CAPTURE_UI_POSE_MODE=\(poseMode.rawValue.lowercased()) needs a character selected, but the selection is \(shown)")
+            exit(1)
+        }
+        studio.poseMode = poseMode
+    }
+
+    /// #425: sets `IKKOKU_CAPTURE_UI_WINDOW_W` as the window's frame width, keeping its height and
+    /// keeping it on its screen. A width the screen cannot show, or one AppKit does not apply,
+    /// refuses the capture.
+    private func applyUICaptureWindowWidth(_ window: NSWindow, _ env: [String: String]) {
+        let visible = (window.screen ?? NSScreen.main)?.visibleFrame ?? .zero
+        let width: Int
+        do {
+            guard let parsed = try UICaptureWindowWidth.fromEnvironment(env, visibleWidth: Double(visible.width)) else { return }
+            width = parsed
+        } catch {
+            print("[ikkoku] ui snapshot failed: \(error)"); exit(1)
+        }
+        var frame = window.frame
+        frame.size.width = CGFloat(width)
+        frame.origin.x = min(max(frame.minX, visible.minX), visible.maxX - frame.width)
+        window.setFrame(frame, display: true)
+        guard Int(window.frame.width.rounded()) == width else {
+            print("[ikkoku] ui snapshot failed: \(UICaptureWindowWidth.variable)=\(width) left the window \(window.frame.width) points wide")
+            exit(1)
+        }
     }
 
     /// Arms the `IKKOKU_CAPTURE_UI` readiness poll at the end of startup (A-T05). Instead of a
@@ -1061,18 +1148,41 @@ final class AppState {
     private func pollUICapture(elapsed: Double) {
         let env = ProcessInfo.processInfo.environment
         guard var tracker = uiCaptureTracker, let out = env["IKKOKU_CAPTURE_UI"] else { return }
+        // #425: the window width first, as soon as there is a window, so every later step lays out
+        // at that width; this poll observes nothing and the stable count starts after it.
+        if uiCaptureWindowWidthPending, let window = NSApp?.windows.first(where: { $0.isVisible && $0.contentView != nil }) {
+            uiCaptureWindowWidthPending = false
+            applyUICaptureWindowWidth(window, env)
+            logUICaptureFit("window-width", elapsed: elapsed)
+            return
+        }
         if !uiCapturePendingSelections.isEmpty, let studio {
+            logUICaptureFit("select", elapsed: elapsed)
             studio.selection = uiCapturePendingSelections.removeFirst()
-            if uiCapturePendingSelections.isEmpty { uiCaptureContentAppeared = true }
+            if uiCapturePendingSelections.isEmpty, uiCapturePoseMode == nil { uiCaptureContentAppeared = true }
+            return
+        }
+        if uiCapturePoseMode != nil, let studio {
+            logUICaptureFit("pose-mode", elapsed: elapsed)
+            applyUICapturePoseMode(studio)
+            uiCaptureContentAppeared = true
             return
         }
         let window = NSApp?.windows.first(where: { $0.isVisible && $0.contentView != nil })
         let view = window?.contentView
         view?.layoutSubtreeIfNeeded()
+        logUICaptureFit("poll", elapsed: elapsed)
         let bounds = view?.bounds ?? .zero
+        // #364: in Studio the Pose tab's "Eye look" section appears only after
+        // the live step's first eye update for the selected character, and
+        // only a driven live step (a viewport window that shows) makes one, so
+        // a flip of that restarts the stable count.
+        let pending = mode == .studio ? studio?.uiCaptureEyeLookPending : nil
+        let state = mode == .studio ? studio.map { $0.uiCaptureLiveStepsDriven ? "live steps driven" : "live steps not driven" } : nil
         let decision = tracker.observe(UICaptureReadiness.Observation(
             contentAppeared: uiCaptureContentAppeared, windowVisible: window != nil,
-            width: Double(bounds.width), height: Double(bounds.height)), elapsed: elapsed)
+            width: Double(bounds.width), height: Double(bounds.height),
+            pendingContent: pending, contentState: state), elapsed: elapsed)
         uiCaptureTracker = tracker
         switch decision {
         case .wait:
@@ -1091,6 +1201,8 @@ final class AppState {
                 }
                 let size = try writeWindowSnapshot(view, to: URL(fileURLWithPath: out))
                 print("[ikkoku] ui snapshot written to \(out) (\(size.width)x\(size.height) px, ready after \(String(format: "%.2f", elapsed)) s)")
+                if let state { print("[ikkoku] ui snapshot state: Studio \(state)") }
+                logUICaptureFit("captured", elapsed: elapsed, accessibility: true)
             } catch {
                 print("[ikkoku] ui snapshot failed: \(error)")
                 failed = true
@@ -1100,6 +1212,107 @@ final class AppState {
             exit(failed ? 1 : 0)
         }
     }
+
+    /// `IKKOKU_CAPTURE_UI_FIT_LOG=<path>` (#333's diagnostic): before each selection, at each
+    /// readiness poll and after the capture, appends the elapsed time, the window size, the
+    /// selection, the inspector tab, the inspector scroll view's clip and document widths and the
+    /// horizontal extent of the views in its document view, and every scroll view's frame with its
+    /// ancestors' frames, to find when and how the Clothes tab is laid out wider than the inspector, and
+    /// (#363, #366) the toolbar pickers' and the inspector rows' layout (`InspectorUIScenario.layoutProbe`). Only after the capture, so that it cannot
+    /// change what the capture shows, does it also walk the accessibility elements
+    /// (`InspectorUIScenario.inspectorFit`, with each segmented row's natural width and margins).
+    /// The first line of a launch creates the file's folder and replaces the file, so the log holds
+    /// one launch and a check that reads it (`inspector_fit_log.py`) cannot pass on an earlier
+    /// launch's lines.
+    private func logUICaptureFit(_ moment: String, elapsed: Double, accessibility: Bool = false) {
+        guard let path = ProcessInfo.processInfo.environment["IKKOKU_CAPTURE_UI_FIT_LOG"],
+              let window = NSApp?.windows.first(where: { $0.isVisible && $0.contentView != nil }) else { return }
+        var line = String(format: "%7.2f", elapsed) + " \(moment) window \(Int(window.frame.width))x\(Int(window.frame.height))"
+            + " selection \(studio?.selectedObject?.sourceObjectKey.map { String($0) } ?? "none")"
+            + " tab \(studio?.inspectorTab.rawValue ?? "-")"
+        if let scroll = InspectorUIScenario.inspectorScrollView(window) {
+            let clip = scroll.contentView
+            let left = clip.convert(clip.bounds, to: nil).minX
+            var extents: [String] = []
+            func visit(_ view: NSView, depth: Int) {
+                guard depth < 4, extents.count < 24 else { return }
+                let frame = view.convert(view.bounds, to: nil)
+                extents.append("\(type(of: view))@\(Int(frame.minX - left))+\(Int(frame.width))")
+                view.subviews.forEach { visit($0, depth: depth + 1) }
+            }
+            if let document = scroll.documentView { visit(document, depth: 0) }
+            line += " clip \(Int(clip.bounds.width)) document \(Int(scroll.documentView?.frame.width ?? 0))"
+                + " scrollers \(scroll.scrollerStyle == .legacy ? "legacy" : "overlay") views " + extents.joined(separator: " ")
+        } else {
+            line += " no inspector scroll view"
+        }
+        // Every scroll view at least 200 pt wide, with its frame and the frames of its ancestors up to the
+        // content view (the inspector column, its panel and the split's stacks), in window coordinates.
+        if let content = window.contentView {
+            var scrolls: [NSScrollView] = []
+            func find(_ view: NSView) {
+                if let scroll = view as? NSScrollView, scroll.frame.width >= 200 { scrolls.append(scroll) }
+                view.subviews.forEach(find)
+            }
+            find(content)
+            line += " | content \(Int(content.bounds.width)) | \(scrolls.count) scroll views"
+            for (index, scroll) in scrolls.enumerated() {
+                func extent(_ view: NSView) -> String {
+                    let frame = view.convert(view.bounds, to: nil)
+                    return "\(type(of: view))@\(Int(frame.minX))+\(Int(frame.width))" + (view.isHidden ? "(hidden)" : "")
+                }
+                let chain = sequence(first: scroll as NSView, next: \.superview).prefix { $0 !== content }.map(extent)
+                line += " | #\(index) document \(Int(scroll.documentView?.frame.width ?? 0))"
+                    + (scroll.isHiddenOrHasHiddenAncestor ? " hidden" : "") + ": " + chain.joined(separator: " < ")
+            }
+        }
+        // #425: the toolbar's body runs and measurements so far, and since the line before; read
+        // before the probes below, so their own walks are not counted as the window's work.
+        if mode == .studio { line += " | toolbar work " + StudioToolbarFitCounts.logText() }
+        // #363/#366: the toolbar pickers' and the inspector rows' layout, before
+        // " | fits", which inspector_fit_log.py reads to the end of the line.
+        line += " | layout " + InspectorUIScenario.layoutProbe(window, afterCapture: accessibility)
+        // #425: after the capture only, so the hosted copies cannot change what is captured; their
+        // bodies are not the window toolbar's work.
+        if accessibility { line += " | toolbar ideal " + StudioToolbarFitCounts.uncounted { toolbarIdealWidths() } }
+        if accessibility {
+            let fit = InspectorUIScenario.inspectorFit(window)
+            line += " | fits \(fit.fits): \(fit.detail)"
+        }
+        guard let data = (line + "\n").data(using: .utf8) else { return }
+        if !uiCaptureFitLogStarted {
+            uiCaptureFitLogStarted = true
+            try? FileManager.default.createDirectory(at: URL(fileURLWithPath: path).deletingLastPathComponent(),
+                                                     withIntermediateDirectories: true)
+            FileManager.default.createFile(atPath: path, contents: data)
+        } else if let handle = FileHandle(forWritingAtPath: path) {
+            handle.seekToEndOfFile(); handle.write(data); try? handle.close()
+        }
+    }
+    /// #425: the Studio toolbar's ideal width, full/compact, with nothing selected and with a character in
+    /// Object, FK and IK mode, from this model's state: each a `StudioToolbarControls` copy hosted off screen at
+    /// the toolbar's small control size, measured with `fittingSize`; then the state shown now. Capture fit
+    /// log only (`inspector_fit_log.py --toolbar-fits` reads it).
+    private func toolbarIdealWidths() -> String {
+        guard let studio else { return "no studio" }
+        let state = StudioToolbarState(model: studio)
+        let modes: [(String, Bool, PoseMode)] = [("none", false, .object), ("object", true, .object), ("fk", true, .fk), ("ik", true, .ik)]
+        let widths = modes.map { name, character, mode in
+            var shown = state
+            shown.selectedIsCharacter = character
+            shown.poseMode = mode
+            let full = NSHostingView(rootView: StudioToolbarControls(model: studio, state: shown, compact: false)
+                .environment(self).controlSize(.small)).fittingSize.width
+            let compact = NSHostingView(rootView: StudioToolbarControls(model: studio, state: shown, compact: true)
+                .environment(self).controlSize(.small)).fittingSize.width
+            return name + " " + String(format: "%.1f/%.1f", full, compact)
+        }
+        let now = state.selectedIsCharacter ? state.poseMode.rawValue.lowercased() : "none"
+        return widths.joined(separator: " ") + " state " + now
+    }
+
+    /// Whether this launch has written its first `IKKOKU_CAPTURE_UI_FIT_LOG` line.
+    @ObservationIgnored private var uiCaptureFitLogStarted = false
 
     /// Draws the window content into a bitmap and writes it as a verified PNG.
     private func writeWindowSnapshot(_ view: NSView, to url: URL) throws -> (width: Int, height: Int) {
@@ -1293,4 +1506,10 @@ final class AppState {
         studio?.status = message
         maker?.status = message
     }
+}
+
+/// The yaws an orbit benchmark (`IKKOKU_BENCHMARK_ORBIT`) drew, in sample
+/// order, so two builds' reports show the same camera path (ST-T04 B2).
+private final class BenchmarkYaws {
+    var values: [Float] = []
 }

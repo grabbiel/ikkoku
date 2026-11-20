@@ -30,12 +30,18 @@ public final class SourceRigPreview {
     /// Nil preserves the authored rig for cardless previews. This changes only
     /// cached visibility, never meshes, textures, poses or saved card bytes.
     public var doubleTooth: Bool? { didSet { updateCanineVisibility() } }
+    /// Bumped whenever the parts this preview draws are set again
+    /// (`doubleTooth`), so a cached frame built from them can tell.
+    public private(set) var visibilityGeneration: UInt64 = 0
     private var liveBounds: SourceRigBounds
     /// The last expression input with its weights (R7 phase 2, item 3, C5).
     /// `expressionWeights` is a pure function of the input for this preview's
     /// fixed source and contract, and a live tick asks for the same input
     /// until a blink or an edit changes it. Keyed by the input's bit patterns.
     private var expressionCache: (key: ExpressionKey, weights: [String: [(index: Int, weight: Float)]])?
+    /// The skins the last `frame` drew with a collapsed (singular) mesh
+    /// world, flattened from their bones in rig space (#404).
+    public private(set) var collapsedSkins: Set<Int> = []
 
     public init(source: SourceRig, contract: SourceShapeContract?, resources: ResourceStore, appearance: SourcePreviewAppearance? = nil,
                 expressionContract: SourceExpressionContract? = nil,
@@ -91,6 +97,7 @@ public final class SourceRigPreview {
     }
 
     private func updateCanineVisibility() {
+        visibilityGeneration &+= 1
         for part in canineParts {
             activeParts[part.index] = doubleTooth.map { $0 && part.enabled }
                 ?? source.rig.activeNodes[source.parts[part.index].node]
@@ -219,14 +226,20 @@ public final class SourceRigPreview {
                       heightScale: Float? = nil, bodyValues: [Float]? = nil, faceValues: [Float]? = nil,
                       expression: SourceExpressionInputs? = nil,
                       boneModifiers: SourceBoneModifiers? = nil, coordinate: Int = 0,
-                      showBones: Bool = false, poseOverride: RigPose? = nil,
+                      showBones: Bool = false, poseOverride: RigPose? = nil, poseEvaluation: RigEvaluation? = nil,
                       hiddenParts: Set<Int> = [], sourceBodyAlpha: SIMD2<Float>? = nil) throws -> RenderFrame {
         guard poseOverride == nil || (heightScale == nil && bodyValues == nil && faceValues == nil && boneModifiers == nil) else {
             throw RigError.invalid("A final source pose cannot also request shape or modifier evaluation.")
         }
-        let evaluation = try poseOverride.map { try source.rig.evaluate($0) }
+        // `poseEvaluation` is `source.rig.evaluate(poseOverride)` when the
+        // caller already has it (#371: the Studio character's edited pose).
+        guard poseEvaluation == nil || poseOverride != nil else {
+            throw RigError.invalid("A source pose evaluation needs the final source pose it was made from.")
+        }
+        let evaluation = try poseOverride.map { try poseEvaluation ?? source.rig.evaluate($0) }
             ?? evaluation(heightScale: heightScale, bodyValues: bodyValues, faceValues: faceValues, boneModifiers: boneModifiers, coordinate: coordinate)
         let morphWeights = try expressionWeights(expression)
+        collapsedSkins = evaluation.collapsedSkins
         var items: [RenderItem] = []
         // `hiddenParts` are renderers whose GameObject the source switched
         // off at runtime (ChaControl.UpdateVisible); `sourceBodyAlpha` is the
@@ -241,7 +254,7 @@ public final class SourceRigPreview {
                 if let alpha = sourceBodyAlpha, (surface.uniforms.flags & MaterialFlagSourceBodyMask.rawValue) != 0 {
                     surface.uniforms.sourceAlphaA = alpha.x; surface.uniforms.sourceAlphaB = alpha.y
                 }
-                var item = RenderItem(mesh: meshes[index], material: surface, model: evaluation.worldMatrices[part.node], objectID: 1,
+                var item = RenderItem(mesh: meshes[index], material: surface, model: evaluation.model(skin: part.skin, meshNode: part.node), objectID: 1,
                                       deformKey: keyBase | UInt64(index), skinSet: keyBase | UInt64(part.skin),
                                       morphWeights: morphWeights[part.mesh.name] ?? [])
                 item.order = pass

@@ -85,6 +85,26 @@ func catalogTestPackage(_ directory: URL, guid: String = "fixture.mod", csvs: [S
     #expect(package.catalogs[0].rows == [["7", "a,b", "0"]])
 }
 
+@Test func sourceModCatalogTrimsListLinesWithMonoWhiteChars() throws {
+    // #421: Lists.LoadCSV's string.Trim() calls (each preamble value, the header
+    // line, each row line) use Mono's String.WhiteChars: U+200B and U+FEFF are
+    // trimmed, U+180E is not. Foundation's whitespace set keeps U+FEFF, which
+    // left "\u{feff}ID" as the first header and refused the list.
+    // test_resolver_contract.py holds the same fixture and expectations for the
+    // Python oracle.
+    let directory = try catalogTestDirectory(); defer { try? FileManager.default.removeItem(at: directory) }
+    let csv = "\u{200b}122\u{feff},ignored\n\u{3000} 0\u{85}\nAssets/list.bytes\u{180e}\u{feff},ignored\n"
+        + "\u{feff}ID,Name,Possess\u{200b}\n\u{feff} 7,a\u{180e},0\u{200b}\n\u{200b}\u{feff}\n8,ignored,0\n"
+    let library = try SourceModLibrary(packages: [catalogTestPackage(directory, csvs: [csv])])
+    let catalog = try SourceModCatalog(library: library, contract: catalogTestContract())
+    #expect(catalog.entries.count == 1, "the trimmed-empty line stops reading")
+    let entry = try #require(catalog.entries.first)
+    #expect(entry.key.category == 122 && entry.distribution == 0 && entry.key.sourceSlot == 7)
+    #expect(entry.sourceFilePath == "Assets/list.bytes\u{180e}" && entry.name == "a\u{180e}" && entry.info("Possess") == "1")
+    #expect(SourceMonoWhiteChars.trim("\u{180e}\u{200b} x \u{feff}\u{85}") == "\u{180e}\u{200b} x")
+    #expect(SourceMonoWhiteChars.trim("\u{200b}\u{feff}\u{3000}") == "")
+}
+
 @Test func sourceModCatalogDuplicateHeadersUseLastWriteAfterFirstPossessIsForced() throws {
     let directory = try catalogTestDirectory(); defer { try? FileManager.default.removeItem(at: directory) }
     let csv = "122\n3\nignored-target\nID, Name,Name,Name,Possess,Possess\n8,unknown,first,last,0,9\n"
@@ -108,6 +128,30 @@ func catalogTestPackage(_ directory: URL, guid: String = "fixture.mod", csvs: [S
     let catalog = try SourceModCatalog(library: library, contract: catalogTestContract())
     #expect(catalog.entries.map(\.distribution) == [9, -5, -1, -1, -1, 7])
     #expect(catalog.entries.map { $0.info("DistributionNo") } == ["9", "-5", "not-int", "2147483648", "", "7"])
+}
+
+@Test func sourceModCatalogParsesListNumbersWithMonoInt32Parse() throws {
+    // #427: the game parses list numbers with Mono's int.Parse / int.TryParse:
+    // the category and distribution (Lists.LoadCSV), each row ID
+    // (UniversalAutoResolver.GenerateResolutionInfo) and the DistributionNo
+    // column (ListInfoBase.GetInfoInt). Its white space is char.IsWhiteSpace,
+    // which includes U+200B but not U+180E or U+FEFF, and a NUL ends the number.
+    // Foundation's Int32(_:) refused every NUL. test_resolver_contract.py holds
+    // the same first list and expectations for the Python oracle, which does not
+    // model GetInfoInt.
+    let directory = try catalogTestDirectory(); defer { try? FileManager.default.removeItem(at: directory) }
+    let csv = "122\u{0}junk,ignored\n0\u{0}\nAssets/list.bytes\nID,Name,Possess\n7\u{200b},a,0\n8\u{0}x,b,0\n"
+    let column = "122\n3\ntarget\nID,Name,DistributionNo\n9,c,\u{200b}6\u{0}x\n"
+    let library = try SourceModLibrary(packages: [catalogTestPackage(directory, csvs: [csv, column])])
+    let catalog = try SourceModCatalog(library: library, contract: catalogTestContract())
+    #expect(catalog.entries.map(\.key.sourceSlot) == [7, 8, 9])
+    #expect(catalog.entries.map(\.key.category) == [122, 122, 122] && catalog.entries.map(\.distribution) == [0, 0, 6])
+    func value(_ text: String) -> Int32? { try? SourceMonoInt32.parse(text).get() }
+    #expect(["\u{200b}5", "12\u{0}x", "-2147483648\u{0}", " +3\u{2029}", "\u{3000}4\u{205f}"].map(value) == [5, 12, .min, 3, 4])
+    for text in ["\u{180e}5", "5\u{feff}", "2147483647\u{0}x", " \u{0}", "\u{200b}", "2147483648"] {
+        #expect(value(text) == nil, "\(text.unicodeScalars.map { String($0.value, radix: 16) })")
+    }
+    #expect((UInt32(0)...0xFFFF).compactMap { Unicode.Scalar($0) }.filter(SourceMonoInt32.isWhiteSpace).count == 26)
 }
 
 @Test func sourceModCatalogResolvesOriginalGUIDCategorySlotPropertyAndFirstDuplicate() throws {

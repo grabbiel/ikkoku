@@ -119,6 +119,10 @@ public struct SourceSceneEdits: Sendable {
     /// are allocated after every source key and inserted roots are appended.
     /// Moves and added or deleted route points are not replayed.
     public var order: [SourceSceneInsertion.Step]?
+    /// #320: the light limit of the CharaStudio the export is for. The
+    /// default, `.charaStudio`, refuses an export that adds or copies a light
+    /// and leaves more than two; `.unlimitedMapLights` writes any number.
+    public var lightLimit: SourceSceneLightLimit = .charaStudio
     public struct Reparent: Sendable, Equatable {
         public var object: Int32, parent: Int32?
         public init(object: Int32, parent: Int32?) { self.object = object; self.parent = parent }
@@ -213,10 +217,15 @@ extension KoikatsuSceneDocument {
     /// follow the final object set (`SourceScenePluginData`). `source` is
     /// the scene before insertions and `copies` maps each copy's key to its
     /// template's.
+    /// The edit's read, writers and read-backs, and the plug-in rewrite's
+    /// card patch read, recurse once per nesting level, so they run on the
+    /// decode stack (`onDecodeStack`, #326).
     func editedData(_ edits: SourceSceneEdits, source: KoikatsuSceneDocument, copies: [Int32: Int32]) throws -> Data {
-        let (result, final) = try editedBody(edits)
-        return try SourceScenePluginData.rewrite(result, final: final, source: source, copies: copies,
-                                                 moved: !edits.reparents.isEmpty)
+        try SourceStudioCharacterBatch.onDecodeStack("Ikkoku scene edit") {
+            let (result, final) = try editedBody(edits)
+            return try SourceScenePluginData.rewrite(result, final: final, source: source, copies: copies,
+                                                     moved: !edits.reparents.isEmpty)
+        }
     }
 
     /// The scene bytes with every edit but the plug-in data, and their

@@ -8,12 +8,12 @@ import Studio
 
 /// The Studio window. Each panel is its own view that reads only the model
 /// state it shows, so an edit re-evaluates the panels that display it rather
-/// than the whole window (R7 phase 2, item 1). A panel that must read the
-/// document to find its values (the workspace tree, toolbar and timeline)
-/// computes them in a small outer view and hands them to an equatable content
-/// view, which SwiftUI skips while the values are unchanged; its controls'
-/// bindings read those values and write through the same model calls as
-/// before.
+/// than the whole window (R7 phase 2, item 1). The workspace tree, toolbar
+/// and timeline read what they show from the document through state the
+/// model publishes when it changes (item 7 follow-ups, C4), and hand it to an
+/// equatable content view, which SwiftUI skips while the values are
+/// unchanged; its controls' bindings read those values and write through the
+/// same model calls as before.
 struct StudioView: View {
     let model: StudioModel
 
@@ -33,7 +33,7 @@ struct StudioView: View {
                 }
             }
             Divider().opacity(interfaceVisible ? 1 : 0)
-            StudioInspectorPanel(model: model).frame(width: 350).studioInterfaceVisibility(interfaceVisible)
+            StudioInspectorPanel(model: model).frame(width: InspectorLayout.width).studioInterfaceVisibility(interfaceVisible)
         }
     }
 }
@@ -63,7 +63,8 @@ struct WorkspaceEntry: Equatable, Identifiable {
     let kind: StudioObjectKind
     let visible: Bool
     let depth: Int
-    let selected: Bool
+    /// The one field a selection change rewrites in place (`StudioWorkspaceState.selecting`).
+    var selected: Bool
     let cameraPlaceholder: Bool
     /// A named source camera's key, "camera 2", drawn under its name.
     var keyDetail: String? = nil
@@ -98,28 +99,16 @@ extension WorkspaceEntry.CameraMarker {
     }
 }
 
-/// Reads the document for the tree rows and the object count.
+/// The tree rows and the object count, which the model publishes when they
+/// change (`workspaceState`, item 7 follow-ups, C4), so a document write that
+/// leaves them as they were does not re-evaluate the panel.
 struct StudioWorkspacePanel: View {
     let model: StudioModel
 
     var body: some View {
         let _ = PerfTrace.body(.studioWorkspace)
-        let selection = model.selection
-        let doc = model.doc
-        let activeCamera = model.activeSourceCameraView
-        let entries = doc.flattened().map { entry in
-            // A source camera placeholder reads "IKKOKU-MIRROR" over
-            // "camera 2", the title the status line and the view indicator use.
-            let label = model.workspaceLabel(of: entry.object, sceneSHA256: doc.sourceSceneSHA256)
-            var marker: WorkspaceEntry.CameraMarker?
-            if let activeCamera, activeCamera.id == entry.object.id {
-                marker = activeCamera.fallbackReason.map { .savedCameraShown(reason: $0) } ?? .viewing
-            }
-            return WorkspaceEntry(id: entry.object.id, name: entry.object.name, kind: entry.object.kind,
-                                  visible: entry.object.visible, depth: entry.depth, selected: selection == entry.object.id,
-                                  cameraPlaceholder: label.sourceCamera, keyDetail: label.keyDetail, cameraMarker: marker)
-        }
-        StudioWorkspaceContent(model: model, entries: entries, objectCount: doc.objects.count).equatable()
+        let state = model.shownWorkspaceState
+        StudioWorkspaceContent(model: model, entries: state.entries, objectCount: state.objectCount).equatable()
     }
 }
 
@@ -217,6 +206,29 @@ struct StudioToolbarState: Equatable {
     var liveAnimation: Bool
     var showTimeline: Bool
     var showGrid: Bool
+
+    /// The toolbar's state now; the document's part is published (C4), the rest are the model's settings.
+    @MainActor init(model: StudioModel) {
+        let shown = model.shownToolbarDocumentState
+        self.init(
+            gizmoMode: model.gizmoMode, localSpace: model.localSpace,
+            selectedIsCharacter: shown.selectedIsCharacter,
+            poseMode: model.poseMode, fkGroup: model.fkGroup,
+            cameraSlotsFilled: shown.cameraSlotsFilled, hasSourceRoutes: shown.hasSourceRoutes,
+            canUndo: !model.undoStack.isEmpty, canRedo: !model.redoStack.isEmpty,
+            showGizmos: model.showGizmos, liveAnimation: model.liveAnimation, showTimeline: model.showTimeline,
+            showGrid: shown.showGrid)
+    }
+
+    init(gizmoMode: GizmoMode, localSpace: Bool, selectedIsCharacter: Bool, poseMode: PoseMode, fkGroup: FKGroup,
+         cameraSlotsFilled: [Bool], hasSourceRoutes: Bool, canUndo: Bool, canRedo: Bool, showGizmos: Bool,
+         liveAnimation: Bool, showTimeline: Bool, showGrid: Bool) {
+        self.gizmoMode = gizmoMode; self.localSpace = localSpace; self.selectedIsCharacter = selectedIsCharacter
+        self.poseMode = poseMode; self.fkGroup = fkGroup; self.cameraSlotsFilled = cameraSlotsFilled
+        self.hasSourceRoutes = hasSourceRoutes; self.canUndo = canUndo; self.canRedo = canRedo
+        self.showGizmos = showGizmos; self.liveAnimation = liveAnimation; self.showTimeline = showTimeline
+        self.showGrid = showGrid
+    }
 }
 
 struct StudioToolbar: View {
@@ -224,19 +236,23 @@ struct StudioToolbar: View {
 
     var body: some View {
         let _ = PerfTrace.body(.studioToolbar)
-        let slots = model.doc.cameraSlots
-        let state = StudioToolbarState(
-            gizmoMode: model.gizmoMode, localSpace: model.localSpace,
-            selectedIsCharacter: model.selectedObject?.kind == .character,
-            poseMode: model.poseMode, fkGroup: model.fkGroup,
-            cameraSlotsFilled: slots.map { $0 != nil }, hasSourceRoutes: model.hasSourceRoutes,
-            canUndo: !model.undoStack.isEmpty, canRedo: !model.redoStack.isEmpty,
-            showGizmos: model.showGizmos, liveAnimation: model.liveAnimation, showTimeline: model.showTimeline,
-            showGrid: model.doc.effects.showGrid)
-        // Overlay content must fit the viewport without widening either side panel.
-        ScrollView(.horizontal) {
-            StudioToolbarControls(model: model, state: state).equatable()
+        let _ = StudioToolbarFitCounts.count(.toolbar)
+        let state = StudioToolbarState(model: model)
+        // Overlay content must fit the viewport without widening either side panel (#425): the full
+        // toolbar where it fits, else the compact one (camera slots 1-5 only in the camera menu), else
+        // the compact one in a horizontal scroll view. ViewThatFits sits outside the scroll view: a
+        // horizontal ScrollView proposes unbounded width, so inside one the full toolbar always "fits".
+        StudioToolbarMeasureCounter {
+            ViewThatFits(in: .horizontal) {
+                StudioToolbarControls(model: model, state: state, compact: false).equatable()
+                StudioToolbarControls(model: model, state: state, compact: true).equatable()
+                ScrollView(.horizontal) {
+                    StudioToolbarControls(model: model, state: state, compact: true).equatable()
+                }
+            }
         }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background { if InspectorUIScenario.toolbarMarkers { StudioToolbarMarker(name: "studio.toolbar.available") } }
         .fixedSize(horizontal: false, vertical: true)
         .controlSize(.small)
         .padding(8)
@@ -246,34 +262,108 @@ struct StudioToolbar: View {
     }
 }
 
+/// #425: counts the toolbar's layout measurements while a PerfTrace recording runs, or with the
+/// capture fit log (`StudioToolbarFitCounts`), one per `sizeThatFits` of its ViewThatFits, so a
+/// report shows whether it measures again on every refresh; otherwise a pass-through for its one
+/// subview.
+struct StudioToolbarMeasureCounter: Layout {
+    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
+        MainActor.assumeIsolated { PerfTrace.event(.studioToolbarMeasured); StudioToolbarFitCounts.count(.measure) }
+        return subviews.first?.sizeThatFits(proposal) ?? .zero
+    }
+
+    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
+        subviews.first?.place(at: bounds.origin, proposal: ProposedViewSize(bounds.size))
+    }
+}
+
+/// #425: the toolbar's work for the capture fit log (`IKKOKU_CAPTURE_UI_FIT_LOG`): how many times
+/// `StudioToolbar` and `StudioToolbarControls` ran their bodies and the toolbar's ViewThatFits
+/// measured (`StudioToolbarMeasureCounter`). Each fit-log line carries the totals and what changed
+/// since the line before, so a capture shows the work per poll, per selection and per pose mode.
+/// With the log off a count is one Bool test.
+@MainActor enum StudioToolbarFitCounts {
+    enum Site { case toolbar, controls, measure }
+    private static var toolbar = 0, controls = 0, measures = 0
+    private static var logged = (toolbar: 0, controls: 0, measures: 0)
+
+    @inline(__always) static func count(_ site: Site) {
+        guard InspectorUIScenario.toolbarMarkers else { return }
+        switch site {
+        case .toolbar: toolbar += 1
+        case .controls: controls += 1
+        case .measure: measures += 1
+        }
+    }
+
+    /// The totals, each with its change since the last call: "toolbar T (+t) controls C (+c) measured M (+m)".
+    static func logText() -> String {
+        defer { logged = (toolbar, controls, measures) }
+        return "toolbar \(toolbar) (+\(toolbar - logged.toolbar)) controls \(controls) (+\(controls - logged.controls))"
+            + " measured \(measures) (+\(measures - logged.measures))"
+    }
+
+    /// Runs `body` without counting: the fit log's off-screen toolbar copies (`toolbarIdealWidths`)
+    /// run bodies the window's toolbar did not.
+    static func uncounted<T>(_ body: () -> T) -> T {
+        let saved = (toolbar, controls, measures)
+        defer { (toolbar, controls, measures) = saved }
+        return body()
+    }
+}
+
+/// #425: an empty AppKit view named for the capture fit log, added only when that log is on
+/// (`InspectorUIScenario.toolbarMarkers`), so `layoutProbe` can read the toolbar's available
+/// width and which variant it shows.
+struct StudioToolbarMarker: NSViewRepresentable {
+    let name: String
+
+    func makeNSView(context: Context) -> NSView {
+        let view = NSView()
+        view.identifier = NSUserInterfaceItemIdentifier(name)
+        return view
+    }
+
+    func updateNSView(_ view: NSView, context: Context) {}
+}
+
 struct StudioToolbarControls: View, Equatable {
     let model: StudioModel
     let state: StudioToolbarState
+    /// #425: camera slots 1-5 only in the camera menu (keys 1-5 and Shift+1-5 still load and save).
+    var compact = false
     @Environment(AppState.self) private var app
 
-    static func == (a: Self, b: Self) -> Bool { a.model === b.model && a.state == b.state }
+    static func == (a: Self, b: Self) -> Bool { a.model === b.model && a.state == b.state && a.compact == b.compact }
 
     var body: some View {
+        let _ = PerfTrace.body(.studioToolbarControls)
+        let _ = StudioToolbarFitCounts.count(.controls)
         let state = state
         HStack(spacing: 8) {
+            // #425: at its own width, as the pose picker (#363), with no empty label.
             Picker("", selection: Binding(get: { state.gizmoMode }, set: { model.gizmoMode = $0 })) {
                 Image(systemName: "arrow.up.and.down.and.arrow.left.and.right").tag(GizmoMode.translate)
                 Image(systemName: "arrow.triangle.2.circlepath").tag(GizmoMode.rotate)
                 Image(systemName: "arrow.up.left.and.arrow.down.right").tag(GizmoMode.scale)
-            }.pickerStyle(.segmented).frame(width: 120).help("Gizmo: T / R / S")
+            }.pickerStyle(.segmented).labelsHidden().fixedSize().help("Gizmo: T / R / S")
             Toggle(isOn: Binding(get: { state.localSpace }, set: { model.localSpace = $0 })) { Text(state.localSpace ? "Local" : "World").frame(width: 42) }.toggleStyle(.button)
             if state.selectedIsCharacter {
                 Divider().frame(height: 18)
-                Picker("", selection: Binding(get: { state.poseMode }, set: { model.poseMode = $0 })) { ForEach(PoseMode.allCases) { Text($0.rawValue).tag($0) } }.pickerStyle(.segmented).frame(width: 150)
+                // At its ideal width (#363): a fixed frame narrower than the control (150 pt for
+                // 165) laid it out compressed on a fresh build and at full width on a rebuild.
+                Picker("", selection: Binding(get: { state.poseMode }, set: { model.poseMode = $0 })) { ForEach(PoseMode.allCases) { Text($0.rawValue).tag($0) } }.pickerStyle(.segmented).labelsHidden().fixedSize()
                 if state.poseMode == .fk {
-                    Picker("", selection: Binding(get: { state.fkGroup }, set: { model.fkGroup = $0 })) { ForEach(FKGroup.allCases) { Text($0.rawValue).tag($0) } }.frame(width: 120)
+                    Picker("", selection: Binding(get: { state.fkGroup }, set: { model.fkGroup = $0 })) { ForEach(FKGroup.allCases) { Text($0.rawValue).tag($0) } }.labelsHidden().frame(width: 120)
                 }
             }
             Divider().frame(height: 18)
-            ForEach(0..<5, id: \.self) { i in
-                Button { model.loadCameraSlot(i) } label: { Text("\(i + 1)").frame(width: 14) }
-                    .foregroundStyle(state.cameraSlotsFilled[i] ? .primary : .secondary)
-                    .help("Camera slot \(i + 1) (Shift+\(i + 1) saves)")
+            if !compact {
+                ForEach(0..<5, id: \.self) { i in
+                    Button { model.loadCameraSlot(i) } label: { Text("\(i + 1)").frame(width: 14) }
+                        .foregroundStyle(state.cameraSlotsFilled[i] ? .primary : .secondary)
+                        .help("Camera slot \(i + 1) (Shift+\(i + 1) saves)")
+                }
             }
             Menu {
                 ForEach(0..<10, id: \.self) { i in Button("Save slot \(i + 1)") { model.saveCameraSlot(i) } }
@@ -283,6 +373,7 @@ struct StudioToolbarControls: View, Equatable {
                 Button("Focus selection (F)") { model.focusSelection() }
                 Button("Reset camera") { model.resetCamera() }
             } label: { Image(systemName: "camera") }.fixedSize()
+                .help(compact ? "Camera slots (1-5 load, Shift+1-5 save)" : "Camera")
             if state.hasSourceRoutes {
                 Menu {
                     Button("Play all routes") { model.playAllSourceRoutes() }
@@ -301,9 +392,12 @@ struct StudioToolbarControls: View, Equatable {
             Toggle(isOn: Binding(get: { state.liveAnimation }, set: { model.liveAnimation = $0 })) { Image(systemName: "wind") }.toggleStyle(.button).help("Idle animation (blink, breathing)")
             Toggle(isOn: Binding(get: { state.showTimeline }, set: { model.showTimeline = $0 })) { Image(systemName: "timeline.selection") }.toggleStyle(.button).help("Timeline")
             Toggle(isOn: Binding(get: { state.showGrid }, set: { model.doc.effects.showGrid = $0 })) { Image(systemName: "grid") }.toggleStyle(.button).help("Grid (G)")
-            Button { app.captureScreenshot() } label: { Label("Capture", systemImage: "camera.viewfinder") }
+            // #425: an icon like its neighbours; the label stays for accessibility.
+            Button { app.captureScreenshot() } label: { Label("Capture", systemImage: "camera.viewfinder").labelStyle(.iconOnly) }
+                .help("Capture")
         }
         .fixedSize(horizontal: true, vertical: true)
+        .background { if InspectorUIScenario.toolbarMarkers { StudioToolbarMarker(name: compact ? "studio.toolbar.compact" : "studio.toolbar.full") } }
     }
 }
 
@@ -327,11 +421,12 @@ struct StudioTimelineBar: View {
 
     var body: some View {
         let _ = PerfTrace.body(.studioTimeline)
-        let timeline = model.doc.timeline
+        // The document's part is published (C4); playback is the model's own.
+        let shown = model.shownTimelineDocumentState
         let state = StudioTimelineState(
-            playing: model.timelinePlaying, time: model.timelineTime, duration: timeline.duration, loop: timeline.loop,
-            keys: model.selectedKeyframes.map { .init(id: $0.id, time: $0.time) }, keyCount: timeline.keyframes.count,
-            hasSelection: model.selectedObject != nil, spaceHidesInterface: model.sourceHideStudioUI != nil)
+            playing: model.timelinePlaying, time: model.timelineTime, duration: shown.duration, loop: shown.loop,
+            keys: shown.keys, keyCount: shown.keyCount,
+            hasSelection: shown.hasSelection, spaceHidesInterface: model.sourceHideStudioUI != nil)
         StudioTimelineControls(model: model, state: state).equatable()
     }
 }
@@ -381,6 +476,21 @@ struct StudioTimelineControls: View, Equatable {
 
 // MARK: Inspector
 
+/// The inspector column's layout. With a legacy scroller the column's visible
+/// width is 333 pt; the Clothes tab's segmented rows use small controls so that
+/// each row's natural width fits within it (#333: the four-state rows at the
+/// regular size asked for 240 pt and widened the tab's content past the column).
+enum InspectorLayout {
+    /// The inspector column's width.
+    static let width: CGFloat = 350
+    /// The padding around the selected tab's content.
+    static let padding: CGFloat = 12
+    /// The label column of the source character's clothes-state and shoes-type rows.
+    static let sourceRowLabel: CGFloat = 90
+    /// The label column of a native character's clothing-state rows.
+    static let nativeRowLabel: CGFloat = 120
+}
+
 /// The inspector column. Its body reads nothing; each part observes its own state.
 struct StudioInspectorPanel: View {
     let model: StudioModel
@@ -392,7 +502,7 @@ struct StudioInspectorPanel: View {
             ScrollView {
                 StudioCompatibilityDetails(model: model)
                 StudioLiveShaderDetails(model: model)
-                StudioInspectorTab(model: model).padding(12)
+                StudioInspectorTab(model: model).padding(InspectorLayout.padding)
             }
             Divider()
             StudioStatusLine(model: model)
@@ -610,14 +720,17 @@ struct ObjectInspector: View {
 
 /// Everything the Object tab shows for one object.
 struct ObjectInspectorState: Equatable {
-    struct Parent: Equatable, Identifiable { let id: UUID; let name: String }
     var id: UUID
     var name: String
     var visible: Bool
     var locked: Bool
     var parent: UUID?
-    var parents: [Parent]
+    /// What the Parent popup shows: "None", or the parent's name. Its
+    /// options are built when it opens (`StudioParentPopUp`).
+    var parentTitle: String
     var transform: StudioTransform
+    /// An object of the imported scene: its Transform rows show the original's numbers (#391).
+    var isSourceObject: Bool
     var kind: StudioObjectKind
     var cardName: String
     var isSourceCharacter: Bool
@@ -640,8 +753,9 @@ struct ObjectInspectorState: Equatable {
     @MainActor init(model: StudioModel, object o: StudioObject) {
         let doc = model.doc
         id = o.id; name = o.name; visible = o.visible; locked = o.locked; parent = o.parent
-        parents = doc.objects.filter { $0.id != o.id && !doc.isDescendant($0.id, of: o.id) }.map { Parent(id: $0.id, name: $0.name) }
+        parentTitle = o.parent.map { doc.object($0)?.name ?? "" } ?? "None"
         transform = o.transform; kind = o.kind
+        isSourceObject = o.sourceObjectKey != nil
         cardName = o.card?.profile.name ?? ""
         isSourceCharacter = o.sourceCharacter != nil
         clothingVisible = o.clothingVisible; accessoriesVisible = o.accessoriesVisible
@@ -701,10 +815,10 @@ struct ObjectInspectorContent: View, Equatable {
                 Toggle("Visible", isOn: Binding(get: { o.visible }, set: { v in update { $0.visible = v } }))
                 Toggle("Locked", isOn: Binding(get: { o.locked }, set: { v in update { $0.locked = v } }))
             }
-            Picker(selection: Binding(get: { o.parent }, set: { parent in if model.selection == id { model.setParent(id, to: parent) } })) {
-                Text("None").tag(UUID?.none)
-                ForEach(o.parents) { p in Text(p.name).tag(UUID?.some(p.id)) }
-            } label: { Text("Parent").inspectorKeptLabel() }
+            HStack {
+                Text("Parent").inspectorKeptLabel()
+                StudioParentPopUp(model: model, id: id, parent: o.parent, title: o.parentTitle)
+            }
             if let sectionsKept {
                 VStack(alignment: .leading, spacing: 0) {
                     transformSection
@@ -720,9 +834,14 @@ struct ObjectInspectorContent: View, Equatable {
     private var transformSection: some View {
         let o = state
         return SectionBox(title: "Transform") {
-            VectorRow(label: "Position", value: Binding(get: { o.transform.position }, set: { v in update { $0.transform.position = v } }), step: 0.05, format: "%.3f")
-            VectorRow(label: "Rotation", value: Binding(get: { o.transform.rotation }, set: { v in update { $0.transform.rotation = v } }), step: 5, format: "%.0f")
-            VectorRow(label: "Scale", value: Binding(get: { o.transform.scale }, set: { v in update { $0.transform.scale = v } }), step: 0.1, format: "%.2f")
+            // Each field writes its own component onto the current object (#390).
+            // A source object shows CharaStudio's numbers (#391): its Z-X-Y Euler
+            // angles, and three decimals in every row.
+            let source = o.isSourceObject
+            VectorRow(label: "Position", value: o.transform.position, step: 0.05, format: "%.3f") { i, v in update { $0.transform.set(.position, i, to: v) } }
+            VectorRow(label: "Rotation", value: source ? o.transform.sourceRotationDegrees : o.transform.rotation, step: 5,
+                      format: source ? "%.3f" : "%.0f") { i, v in update { $0.transform.set(source ? .sourceRotation : .rotation, i, to: v) } }
+            VectorRow(label: "Scale", value: o.transform.scale, step: 0.1, format: source ? "%.3f" : "%.2f") { i, v in update { $0.transform.set(.scale, i, to: v) } }
             Button("Reset transform") { update { $0.transform = StudioTransform() } }
         }
     }
@@ -787,7 +906,8 @@ struct PoseInspector: View {
                                     if t.enabled { Button("Select") { model.selectedIK = chain; model.poseMode = .ik }.controlSize(.small) }
                                 }
                                 if t.enabled {
-                                    VectorRow(label: "Target", value: Binding(get: { t.position }, set: { v in model.setIKTarget(o.id, chain, position: v) }), step: 0.02, format: "%.3f")
+                                    // One component onto the live target (#393), not `t` from this render.
+                                    VectorRow(label: "Target", value: t.position, step: 0.02, format: "%.3f") { component, v in model.setIKTarget(o.id, chain, component: component, to: v) }
                                 }
                             }
                         }
@@ -803,6 +923,7 @@ struct PoseInspector: View {
 
 struct SourcePoseInspector: View {
     @Bindable var model: StudioModel
+    static let guideHiddenText = "IK is off for this guide's group; turn it on to show the guide."
     var body: some View {
         let _ = PerfTrace.body(.sourcePoseInspector)
         if let state = model.selectedSourceIKState {
@@ -820,10 +941,21 @@ struct SourcePoseInspector: View {
                     ForEach(0..<13, id: \.self) { id in Text(SourceStudioIKEditing.labels[id]).tag(Int32(id)) }
                 }.disabled(!model.sourceIKAvailable)
                     .accessibilityIdentifier("studio.source.ik.guide")
+                // #439: the viewport draws only active guides. One Text in both
+                // states, shown by opacity, so the section's structure and height
+                // never change with it (#440).
+                let guideHidden = model.selectedSourceIKGuideHidden
+                Text(Self.guideHiddenText).font(.caption).foregroundStyle(.secondary)
+                    .opacity(guideHidden ? 1 : 0)
+                    .accessibilityLabel(Self.guideHiddenText)
+                    .accessibilityHidden(!guideHidden)
+                    .accessibilityIdentifier("studio.source.ik.guide.hidden")
                 if let target = model.selectedSourceIK, let value = model.selectedSourceIKValue {
-                    VectorRow(label: "Position", value: Binding(get: { value.position }, set: { model.setSourceIKValue(target, edit: .init(position: $0, rotationDegrees: value.rotationDegrees)) }), step: 0.02, format: "%.3f")
+                    // Each field writes one component onto the guide's live value (#393),
+                    // never `value` from this render, and never the other row's vector.
+                    VectorRow(label: "Position", value: value.position, step: 0.02, format: "%.3f") { component, v in model.setSourceIKComponent(target, .position, component, to: v) }
                     if SourceStudioIKEditing.allowsRotation(target) {
-                        VectorRow(label: "Rotate", value: Binding(get: { value.rotationDegrees }, set: { model.setSourceIKValue(target, edit: .init(position: value.position, rotationDegrees: $0)) }), step: 5, format: "%.0f")
+                        VectorRow(label: "Rotate", value: value.rotationDegrees, step: 5, format: "%.0f") { component, v in model.setSourceIKComponent(target, .rotation, component, to: v) }
                     }
                 }
                 Text("Select an FK bone or IK guide in the viewport, then drag its gizmo.").font(.caption).foregroundStyle(.secondary)
@@ -840,6 +972,11 @@ struct SourcePoseInspector: View {
                     Text("Rates follow the viewport camera; the iris shift itself comes in the next slice.").font(.caption).foregroundStyle(.secondary)
                 }
             }
+        } else if let o = model.selectedObject, model.sourceCharacterBuilding(o.id) {
+            // A character hidden at import or after a native reload builds
+            // when selected (`StudioModel.sourceSelectionBuild`).
+            Text("Building this character…").font(.caption).foregroundStyle(.secondary)
+                .accessibilityIdentifier("studio.source.building")
         } else {
             Text("The original character pose is not loaded.").font(.caption).foregroundStyle(.secondary)
         }
@@ -985,6 +1122,10 @@ struct FaceInspector: View {
             .onAppear { model.displayedInspectorView = "FaceInspector.sourceShape" }
             .onDisappear { if model.displayedInspectorView == "FaceInspector.sourceShape" { model.displayedInspectorView = "none" } }
             .accessibilityIdentifier("studio.face.source.shape")
+        } else if let o = model.selectedObject, o.kind == .character, o.sourceCharacter != nil, model.sourceCharacterBuilding(o.id) {
+            Text("Building this character…")
+                .font(.callout).foregroundStyle(.secondary)
+                .accessibilityIdentifier("studio.source.building")
         } else if let o = model.selectedObject, o.kind == .character, o.sourceCharacter != nil {
             Text("Shape editing is not available for this character reference.")
                 .font(.callout).foregroundStyle(.secondary)
@@ -1078,6 +1219,9 @@ struct ClothesInspector: View {
                 if let preview = model.sourceShapePreview(for: o.id) {
                     sourceOutfit(o, preview: preview)
                     sourceClothesState(o, preview: preview)
+                } else if model.sourceCharacterBuilding(o.id) {
+                    Text("Building this character…").font(.callout).foregroundStyle(.secondary)
+                        .accessibilityIdentifier("studio.source.building")
                 }
                 SectionBox(title: "Accessories") {
                     let labels = model.sourceAccessoryLabels(for: o.id)
@@ -1113,10 +1257,10 @@ struct ClothesInspector: View {
                     ForEach(ClothSlot.allCases, id: \.self) { slot in
                         if card.outfit.items[slot]?.itemID != nil {
                             HStack {
-                                Text(slot.label).font(.callout).frame(width: 120, alignment: .leading)
+                                Text(slot.label).font(.callout).frame(width: InspectorLayout.nativeRowLabel, alignment: .leading)
                                 Picker("", selection: Binding(get: { model.doc.objects[i].card?.outfit.states[slot] ?? .on }, set: { v in model.update(o.id) { $0.card?.outfit.states[slot] = v } })) {
                                     ForEach(ClothState.allCases, id: \.self) { Text($0.rawValue.capitalized).tag($0) }
-                                }.pickerStyle(.segmented).labelsHidden()
+                                }.pickerStyle(.segmented).labelsHidden().controlSize(.small)
                             }
                         }
                     }
@@ -1196,7 +1340,7 @@ extension ClothesInspector {
         SectionBox(title: "Clothes state") {
             ForEach(SourceStudioWear.studioKinds, id: \.self) { kind in
                 HStack {
-                    Text(labels[kind]).font(.callout).frame(width: 90, alignment: .leading)
+                    Text(labels[kind]).font(.callout).frame(width: InspectorLayout.sourceRowLabel, alignment: .leading)
                     if let allowed = preview.wearRules.allowed[kind] {
                         Picker(labels[kind], selection: Binding(get: { Int(preview.clothesState[kind]) }, set: { value in
                             do {
@@ -1208,7 +1352,7 @@ extension ClothesInspector {
                                 Text(SourceStudioWear.stateNames[Int(state)].capitalized).tag(Int(state))
                             }
                         }
-                        .pickerStyle(.segmented).labelsHidden()
+                        .pickerStyle(.segmented).labelsHidden().controlSize(.small)
                     } else {
                         Text("No garment").font(.caption).foregroundStyle(.secondary)
                     }
@@ -1226,7 +1370,7 @@ extension ClothesInspector {
             // CharaStudio's State panel shoes buttons (OnClickShoesType ->
             // OCIChar.SetShoesType): which shoe slot the shoes row shows.
             HStack {
-                Text("Shoes type").font(.callout).frame(width: 90, alignment: .leading)
+                Text("Shoes type").font(.callout).frame(width: InspectorLayout.sourceRowLabel, alignment: .leading)
                 Picker("Shoes type", selection: Binding(get: { preview.shoesType }, set: { value in
                     do { try model.setSourceShoesType(o.id, type: value); model.status = value == 0 ? "Indoor shoes" : "Outdoor shoes" }
                     catch { model.status = "Shoes type: \(error)" }
@@ -1234,7 +1378,7 @@ extension ClothesInspector {
                     Text("Indoor").tag(0)
                     Text("Outdoor").tag(1)
                 }
-                .pickerStyle(.segmented).labelsHidden()
+                .pickerStyle(.segmented).labelsHidden().controlSize(.small)
             }
             .accessibilityIdentifier("studio.source.shoesType")
             Text("The shoes row addresses the \(preview.shoesType == 0 ? "indoor" : preview.shoesType == 1 ? "outdoor" : "neither") shoes (shoesType \(preview.shoesType), saved \(preview.savedWear.shoesType)). Export writes an edited state or shoes type into the embedded card; the loaded values write nothing.")

@@ -1,5 +1,6 @@
 import Foundation
 import simd
+import CoreMath
 import Scene
 
 /// The recovered EyeLookCalc.EyeUpdateCalc per-frame eye look solver, in
@@ -231,6 +232,22 @@ public struct SourceStudioEyeLookGeometry: Sendable {
             self.position = position
             self.rotation = rotation
             self.lossyScale = lossyScale
+        }
+
+        /// The node for a Unity-basis world matrix: its translation, its
+        /// basis rotation and its column lengths as the lossyScale. The
+        /// lengths are unsigned: where Unity's lossyScale keeps a negative
+        /// scale's sign cannot be confirmed from the recovered source, so the
+        /// sign handling is unchanged (#404). A collapsed basis reads its
+        /// rotation from the axes that remain
+        /// (`collapseSafeRotationQuaternion`); any other basis gets exactly
+        /// `rotationQuaternion`.
+        public init(unityWorld matrix: float4x4) {
+            let q = matrix.collapseSafeRotationQuaternion
+            let scale = matrix.scaleFactors
+            self.init(position: SIMD3(Double(matrix.translation.x), Double(matrix.translation.y), Double(matrix.translation.z)),
+                      rotation: simd_quatd(ix: Double(q.imag.x), iy: Double(q.imag.y), iz: Double(q.imag.z), r: Double(q.real)),
+                      lossyScale: SIMD3(Double(scale.x), Double(scale.y), Double(scale.z)))
         }
     }
     /// One eye's frame geometry: its world position (the eye's own Transform)
@@ -551,7 +568,7 @@ public struct SourceStudioEyeLookSolver: Sendable {
     }
 
     /// Transform.InverseTransformPoint: inverse-rotate the offset, then
-    /// divide it by the node's lossyScale.
+    /// divide it by the node's lossyScale through InverseSafe.
     static func worldToLocal(_ point: SIMD3<Double>, node: SourceStudioEyeLookGeometry.Node) throws
         -> SIMD3<Double> {
         let origin = try checked(node.position, "world-to-local origin")
@@ -559,7 +576,17 @@ public struct SourceStudioEyeLookSolver: Sendable {
         let inverse = try inverseQuaternion(try checked(node.rotation, "world-to-local rotation"))
         let factors = try lossyScale(node)
         let rotated = try rotate(inverse, offset)
-        return SIMD3<Double>(rotated.x / factors.x, rotated.y / factors.y, rotated.z / factors.z)
+        return SIMD3<Double>(inverseSafeQuotient(rotated.x, factors.x), inverseSafeQuotient(rotated.y, factors.y),
+                             inverseSafeQuotient(rotated.z, factors.z))
+    }
+
+    /// `value / scale`, or 0 when |scale| is at most 1e-5: Unity's native
+    /// Vector3f InverseSafe (Vector3f::epsilon), which its inverse
+    /// transforms divide through, so a collapsed axis (a zero shape scale,
+    /// #404) maps to 0 instead of infinity. That helper is engine code, not
+    /// in the recovered C#. Any other scale divides exactly as before.
+    static func inverseSafeQuotient(_ value: Double, _ scale: Double) -> Double {
+        abs(scale) > 1e-5 ? value / scale : 0
     }
 
     /// Transform.TransformPoint: scale the local offset, rotate it, add the

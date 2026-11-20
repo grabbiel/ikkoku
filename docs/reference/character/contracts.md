@@ -282,14 +282,104 @@ This supports a bounded repeated-selection benefit, not an FPS, RSS or general
 source-fidelity claim. Owner-thread changes are mixed; [#192](https://github.com/grabbiel/ikkoku/issues/192)
 remains open.
 
+#### Import seed (#192, 2026-11-02)
+
+A card import already reads and decodes its assembly's
+`character-shape-contract.json`. Before this change it then reset the shape
+session, so the first return to the imported head after another head's
+selection decoded that contract again (`shapeDecode`, about 23 ms in the
+#192-C head-0 return). The import now decodes those same bytes through
+`SourceMakerShapeReuse.seededDecode`, which stages the contract as the new
+session's only entry:
+
+- **Key.** The key is the same one the head preparation uses: SHA-256 of the
+  bytes the import read, their length and decoder version 1. The return
+  preparation still does its own contained, bounded read and hashes it, so a
+  hit requires byte-identical contract files. A changed contract file, or
+  another head's or sex's assembly, misses.
+- **Replacement, not carry.** `prospectiveReplacement()` names the session
+  being replaced. `commitReplacement` publishes the seed only while that
+  session is still current, at the point where the import used to reset.
+  Nothing carries over from the replaced session, so a reimport of another
+  card drops the previous card's entries. A reset, an earlier replacement, a
+  replay, another owner's replacement or another epoch's candidate is
+  rejected and changes nothing; the import then resets as before
+  (`emptyStaleFallback`). A failed import publishes nothing and keeps the old
+  session. Selections prepared before the import cannot publish into the new
+  session.
+- **Bound.** The seed goes through the same admission ledger: six entries,
+  8 MiB of logical entry charge and four snapshots per Maker, counting the
+  replaced session's entries until it is released. If the ledger cannot admit
+  the seed (capacity), or the contract alone exceeds the byte bound
+  (intrinsic), the contract still decodes and the import publishes an empty
+  session, which is what the reset did. The seeded entry shares its decoded
+  arrays with the preview's contract.
+- **Cost.** The import adds one SHA-256 of the contract bytes and one
+  admission traversal (about 0.55 ms and 0.08 ms in the #297 measurements).
+  It claims no owner-thread time: the saving is the return's worker-side
+  `shapeDecode`.
+- **Scope.** Only card imports with a Maker library seed; other loads decode
+  plainly and reset, as before.
+
+**Acceptance timing** (Release, coordinator quiet window W2, 2026-11-02). The
+seed ran as the third arm of the #192-D overhead pass (#360), against Release
+`e0527080` (control):
+
+- **Units.** Each unit is one fresh process. It imports the sex's head-0 card
+  at startup, then selects heads 200, 0, 200, 0, 200 and 0.
+- **Order and validity.** The order is ABBA per sex, with n = 4 per arm and
+  sex. All 24 units are valid, 11 of them after one rerun.
+- **Display.** 1920×1080 @ 120 Hz.
+
+Medians in ms (min–max), control → seed:
+
+| First return to head 0 (step 2) | Female | Male |
+|---|---|---|
+| Selection API | 105.4 (102.6–106.7) → 82.9 (81.7–84.3) | 103.6 (102.9–105.0) → 81.6 (80.7–85.4) |
+| Preparation | 73.8 → 51.3 | 73.1 → 51.4 |
+| Commit | 30.3 → 30.6 | 29.7 → 29.8 |
+| Longest main-actor gap | 32.8 → 32.5 | 30.8 → 31.3 |
+
+- **The return.** It is about 22 ms (21%) faster, and the ranges are
+  disjoint. All 8 seed units hit the seed on the return (1 hit, 0 misses;
+  control 0 / 1) and decode no shape. The saving is the worker-side
+  `shapeDecode` inside preparation; commit and the main-actor gap are
+  unchanged.
+- **The other steps.** The cold step 1 and steps 3–6 are unchanged: their API
+  medians differ by −1.0 to +1.3 ms, except step 1 female (442.2 → 433.7 ms,
+  overlapping ranges).
+- **The startup import.**
+  - 737.4 → 732.6 ms (female) and 757.3 → 765.9 ms (male), with overlapping
+    ranges: within noise.
+  - The seed's own stages measure 0.9 ms (SHA-256) and 0.0–0.1 ms (admission).
+
+The import's initial-load sample reports `shapeCachePublication`,
+`shapeSeedStages` (the seed's SHA, decode and admission intervals) and
+`stagedShapeReuse`. The four head scenarios assert `shapeCachePublication`
+`seeded` at the startup import and the reimport, a miss on the first other
+head and a hit on the return (`shapeReuse`). Seven synthetic tests in
+`SourceShapeReuseBoundaryTests.swift` cover:
+
+- the hit on the return, with no `shapeDecode`;
+- the head preparation's own read hitting the seed;
+- a reimport of another card missing the previous card's contract, a stale
+  pre-reimport selection being refused, and the replaced entry being released;
+- a changed contract missing;
+- stale, foreign and replayed replacements;
+- capacity and intrinsic bypasses and a malformed contract;
+- two cards on one assembly: they share the entry for their byte-identical
+  contract, and each card's `previewSettings` still yields its own values,
+  so nothing card-specific is cached.
+
 ### Shape evaluation boundary
 
 `SourceShapeChannels.swift` strictly loads the generated schema, reconstructs
 default source state, samples channels, applies masked slider values, and emits
 verified direct destination updates. It validates dimensions, finite numbers,
 indices, duplicate names, slot order, value range, and explicit destination
-coverage. It rejects out-of-range modded slider values; support for extended
-ranges requires a separately verified contract.
+coverage. Any finite rate is accepted: rates outside 0...1 are extended rates,
+drawn as the user's Slider Unlocker draws them (see
+[extended shape rates](#extended-shape-rates-slider-unlocker)).
 
 The initial direct destination metadata contains one body target and eleven face
 targets. Body `cf_a_height` directly sets `cf_n_height` scale XYZ. The face set
@@ -330,3 +420,139 @@ IKKOKU_SHAPE_CONTRACT="$PWD/.local/reverse/rigs/character-shape-contract.json" \
 The initial channel investigation did not render an original image or compare
 character screenshots. Subsequent selected clothed assembly captures and numeric
 body/head proofs are documented separately; complete visual parity remains unverified.
+
+### Extended shape rates (Slider Unlocker)
+
+The user's game and CharaStudio load BepisPlugins' Slider Unlocker
+([IllusionMods/BepisPlugins](https://github.com/IllusionMods/BepisPlugins),
+LGPL-3.0). The installed `KK_BepisPlugins/SliderUnlocker.dll` declares
+`com.bepis.bepinex.sliderunlocker` 21.1.2.1, which is commit `e4c75d6464`
+(2025-11-24, untagged, between r21.1.2 and r21.1.3); `Core_SliderUnlocker` has
+no later commit. Cards made with it carry shape rates outside 0...1. In the
+user's scene corpus that is 363 of 967 characters (249 of them hidden), in 44
+of 201 scenes. Before this, the native build refused all of them.
+
+The engine re-implements the plugin's behaviour from a reading of what it
+does. The plugin's source is the behavioural reference only; no code is
+copied. The vanilla side comes from the recovered C#.
+
+**Setting.** `IKKOKU_SHAPE_RATE_RANGE` (`SourceShapeRateRange.configured`,
+read once per process):
+
+- `extended` (the default, also when unset or unknown) draws as Slider
+  Unlocker does;
+- `vanilla` draws as vanilla KK: every shape rate is drawn clamped to 0...1,
+  as `CheckDataRange` clamps it at load, and the eye highlights lerp clamped.
+
+Neither mode changes a saved rate. The card check, the preview settings, the
+Studio edits and both card writers keep the rate as saved; only drawing
+differs.
+
+| | Vanilla KK (recovered C#) | With Slider Unlocker | Engine |
+|---|---|---|---|
+| (a) Card load range check, `ChaFileControl.CheckDataRange` (ChaFileControl.cs:425; called at :491, :504, :604, so also for every Studio scene character via OICharInfo.cs:251) | Clamps every face and body shape rate, `areolaSize`, `bustSoftness` and `bustWeight` to 0...1, and resets list IDs it does not know | Skipped (its prefix returns before the check runs) | Any finite rate loads: `validateNativeShapeRanges` checks finiteness only, and the card reader already rejects a non-finite float32. `vanilla` clamps the drawn rate (`SourceShapeRateRange.drawn`). Unknown list IDs are a later slice. |
+| (b) `AnimationKeyInfo.GetInfo` (AnimationKeyInfo.cs:204, both overloads) | Clamps the rate to 0...1, then interpolates between the two nearest keys | Outside 0...1 it replaces each requested component. Position and scale lie on the line through the first and last keys, at the real rate. Rotation, per Euler axis, turns by last − first, taken in the direction of the first step (a step of 0 counts as increasing; ±360° when the sign disagrees): from the first key below 0, from the last key above 1. It is not rewrapped afterwards. | `SourceShapeDomain.sample` / `extendedSample`. Channels whose name contains `cf_s_Mune`, `cf_s_Mouth`, `cf_s_LegLow` or `cf_s_MayuTip`, contains both `thigh` and `01`, or starts with `cf_a_bust` and ends with `_size` keep the rotation of the nearest end (`holdsRotationWhenExtended`): 11 of the 119 KK body channels and none of the 89 face channels. |
+| (c) `Mathf.Clamp(v, 0, 100)` | Clamps | Unclamped everywhere | Only UI and H gauges call it in KK; nothing the engine draws. |
+| (d) Eye highlight Y, `ChangeSettingEyeHLUpPosY` / `DownPosY` (ChaControl.cs:3922) | `Mathf.Lerp(0.1, -0.1, t)`, clamped | `Mathf.LerpUnclamped` (in KK only the two Y setters) | `SourceStudioIrisRendering.cardOverrides(range:)`. The pupil fields stay clamped in both modes. |
+| (e) Maker UI | Sliders 0–100% | Slider ranges extended (absolute ±500%), typed values, `ConvertTextFromRate`. It forces hiPoly in `InitShapeBody`, `UpdateShapeBodyValueFromCustomInfo` and `SetShapeBodyValue`, which matters only for low-poly game characters; Studio is hiPoly. The Steam shape limit and the "0.0.3" clamp are absent from our recovered build. | Our Maker and Studio sliders stay 0...1 and take no typed value. A loaded extended rate is shown, never capped, and editing another slot resends it as saved. Extending the sliders to the plugin's range is a follow-up. |
+
+The other vanilla consumers keep their own math and now see extended rates:
+
+- **Animator `height` (body 0).** The 1D blend tree holds at its end
+  thresholds. The engine passes the drawn rate (`SourceStudioAnimationClock`).
+- **Eye tilt (face 33).** `ChangeSettingEyeTilt` (ChaControl.cs:4031) uses
+  `Mathf.Lerp`, which clamps, and Slider Unlocker leaves it alone. The engine
+  clamps in both the bone tilt (`SourceStudioCharacterPreview.eyeTilt`) and
+  the material `_rotation`.
+- **`areolaSize` → `_nipsize`.** `ChangeSettingAreolaSize` (ChaControl.cs:4816)
+  writes the value as is. Vanilla clamps it at load, which the `vanilla` mode
+  reproduces.
+- **Not drawn by the engine yet.** Bust softness and weight (plain products),
+  the bust-normal blend (`InverseLerp`, clamped; ChaControl.cs:625), the
+  nip-stand `Lerp` and the Animator `Breast` parameter. There is nothing to
+  change until they are drawn.
+
+A finite rate so large that a written component overflows a Float is an
+invalid rate, as NaN and ±infinity are. At ±3e38 that is 9 body slots and
+8 face slots.
+
+**Tests.**
+
+- `sourceShapeExtendsRatesAsSliderUnlockerDraws` covers the synthetic
+  contract: the line, the rotation turn both ways, no rewrap, the held names,
+  both modes, and identity inside 0...1.
+- `sourceShapeExtendedSlotsFollowTheRuleOnTheRecoveredContract` checks every
+  slot of the recovered contract at 2.0 and −1.0 against an independent Double
+  reading of the raw JSON.
+- `sourceShapeLoadsLocalRecoveredContractWhenRequested` checks continuity at
+  0 and 1 and the 11 / 0 held channels.
+- `sourceShapeRejectsInvalidInputWithoutMutatingState` covers NaN, ±infinity
+  and overflow.
+- `sourceCardEditingExtendedShapeRatesRoundTripByteForByte`: the Maker
+  load → save writes no shape byte, and a Studio one-slot edit rewrites only
+  that slot's float32 bits.
+- `sourceStudioCardCheckRejectsWhatTheBuildRejectsWhenSupplied`: an extended
+  card builds and passes the card check, and NaN and ±infinity fail both.
+- `irisCardOverridesExtendOnlyTheHighlightsWithSliderUnlocker`.
+- Lanes:
+  - the Studio scenario `extended-shape-rates` (extended rates through Studio
+    export and reimport twice);
+  - the three Maker selection scenarios: an extended body rate 2.0 commits and
+    survives export and reimport, and the forced commit failure is body slot 4
+    at 3e38;
+  - `maker-selection-roundtrip`: its two refused candidate previews also use
+    body slot 4 at 3e38.
+
+**Original-player comparison (2026-11-18).** One VM phase captured three
+corpus characters with extended rates (two male, one female), each twice: with
+Slider Unlocker (`unlocked`) and without it (`vanilla`). The installed DLL is
+FileVersion 21.1.2.1 (`BepisPlugins.KK_SliderUnlocker`), read-only. The engine
+matches every capture under the rule registered in #379 before any engine
+result.
+
+- **(a) Rates.** The 44 body and 52 face rates the engine draws
+  (`SourceShapeRateRange.drawn` of the saved rate) equal the original's parsed
+  rates exactly. The unlocked parse keeps extended rates and the vanilla parse
+  clamps them, as the two modes draw.
+- **(b) Animator `height`.** The engine's input equals the original's float:
+  −0.7 unlocked and 0 vanilla on the female, 0.6 on both males.
+- **(c) Source channels.** All 111 body and 59 face channels, by name:
+  position within 5e-10, rotation within 1.2e-7°, scale exact.
+- **(d) Destination bones.** All 86 body and 59 face destinations: position
+  within 7.5e-9, scale within 7.2e-7, rotation within 3.3e-5°. The tolerances
+  were 1e-4 and 1e-3°.
+
+The (d) base is the captured local pose. The shape setters only assign
+(`SetLocalPositionX/Y/Z`, `SetLocalRotation`, `SetLocalScale`, read from the
+source channels, the correction table and constants), so a destination's
+other components come from the frame. A control run of the vanilla engine
+against the unlocked captures fails in 150–454 items per capture, including
+the female's height and destination bones.
+
+`SourceSliderOracleTests` runs the comparison with `IKKOKU_SLIDER_ORACLE` and
+`IKKOKU_SLIDER_ORACLE_CASES` (the captures and the probe's case table), one
+process per `IKKOKU_SHAPE_RATE_RANGE` mode.
+
+**Not verified.** `LerpUnclamped` of the eye-highlight Y: none of the three
+cards has `hlUpY`/`hlDownY` outside 0...1. The posed `cf_j_` bones (animation
+time, FK/IK, dynamics) are captured but not compared.
+
+`Tools/reverse/original_slider_probe.py run` makes the capture in one
+`prlctl exec`, with the `original_wear_probe.py` transport and a fresh private
+player root. It reads the installed `SliderUnlocker.dll`'s hash and version
+resource, then copies the DLL into the root after a hash check. It runs the
+player twice: with the copy (`unlocked`), then without it (`vanilla`).
+
+`fixtures/OriginalSliderProbe.cs` handles each case, which is an uploaded scene
+record plus an object key:
+
+1. It parses the scene with `SceneInfo.Load` and writes the parsed rates.
+2. It builds that one character through `AddObjectFemale.Load` /
+   `AddObjectMale.Load`, directly after the parse, as `Studio.LoadScene` does
+   (the parse registers the guide objects' change amounts).
+3. At the end of a settled frame it records:
+   - the parsed and loaded rates;
+   - the Animator floats;
+   - both ShapeInfo objects' source channels and destination bones;
+   - every `cf_`/`cm_` bone's local transform;
+   - the two eye-highlight offsets.

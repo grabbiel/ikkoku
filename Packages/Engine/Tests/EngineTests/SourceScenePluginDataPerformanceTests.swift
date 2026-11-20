@@ -48,11 +48,15 @@ private func pluginPerfExport(_ label: String, _ document: KoikatsuSceneDocument
         return
     }
     let stage = try document.inserting(edits.insertions)
-    var rest = edits; rest.insertions = []
-    let (body, final) = try stage.document.editedBody(rest)
+    let rest = { var rest = edits; rest.insertions = []; return rest }()
+    // The edit and the plug-in step read the scene's roots, which recurse
+    // once per level: on the decode stack (#326), as in `editedData`.
+    let (body, final) = try onDecodeStack { try stage.document.editedBody(rest) }
     try pluginPerfMedian("\(label) editedData") { _ = try document.editedData(edits) }
-    try pluginPerfMedian("\(label) plug-in step") {
-        _ = try SourceScenePluginData.rewrite(body, final: final, source: document, copies: stage.copies, moved: !rest.reparents.isEmpty)
+    try onDecodeStack {
+        try pluginPerfMedian("\(label) plug-in step") {
+            _ = try SourceScenePluginData.rewrite(body, final: final, source: document, copies: stage.copies, moved: !rest.reparents.isEmpty)
+        }
     }
 }
 

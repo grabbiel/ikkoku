@@ -14,15 +14,19 @@ vertex OutlineVertexOut outline_vertex(
     device const float2* uvs [[buffer(BufferIndexTexcoords)]],
     device const uchar4* colors [[buffer(BufferIndexVertexColors)]],
     constant FrameUniforms& frame [[buffer(BufferIndexFrameUniforms)]],
-    constant DrawUniforms& draw [[buffer(BufferIndexDrawUniforms)]],
+    uint iid [[instance_id]],
+    constant DrawUniforms* draws [[buffer(BufferIndexDrawUniforms)]],
     constant MaterialUniforms& mat [[buffer(BufferIndexMaterial)]],
     device const uchar* hiddenBuf [[buffer(BufferIndexVertexHidden)]])
 {
+    // DrawUniforms by instance (ST-T04 B0): a per-draw record is bound as a one-element
+    // array at its own offset (instance_id 0); an instanced draw indexes its table.
+    constant DrawUniforms& draw = draws[iid];
     VSInput v = fetchVertex(vid, verts, uvs, colors, (mat.flags & MaterialFlagHasVertexColor) != 0);
     OutlineVertexOut o;
     float4 wp = draw.model * float4(v.position, 1.0);
     float3x3 nm = float3x3(draw.normalMatrix[0].xyz, draw.normalMatrix[1].xyz, draw.normalMatrix[2].xyz);
-    float3 wn = normalize(nm * v.normal);
+    float3 wn = guardedNormal(nm * v.normal);
     float4 clip = frame.viewProjection * wp;
     float4 clipN = frame.viewProjection * float4(wn, 0.0);
     // Screen-space width in pixels, scaled by the material and the per-vertex weight.
@@ -52,7 +56,7 @@ fragment float4 outline_fragment(OutlineVertexOut in [[stage_in]],
     if (in.hidden > 0.5) discard_fragment();
     if (bodyMaskDiscards(bodyMask, in.uv, mat)) discard_fragment();
     if (mat.flags & MaterialFlagAlphaTest) {
-        float a = (mat.flags & MaterialFlagHasBaseTexture) ? baseTex.sample(linearRepeat, in.uv).a : 1.0;
+        float a = (mat.flags & MaterialFlagHasBaseTexture) ? baseTex.sample(forcedAnisoRepeat, in.uv).a : 1.0;
         if (a * mat.baseColor.a < mat.params.w) discard_fragment();
     }
     return float4(in.color, 1.0);

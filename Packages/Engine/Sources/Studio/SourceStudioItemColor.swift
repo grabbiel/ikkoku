@@ -2,6 +2,8 @@ import Foundation
 import simd
 import Assets
 import Character
+import CoreMath
+import Renderer
 
 /// The record color and alpha a converted basic-shape material asks the item
 /// record to supply, decoded once per part from the glTF material `extras`.
@@ -42,5 +44,17 @@ public enum SourceStudioItemColor {
             recordAlpha = min(max(alpha, 0), 1)
         }
         return SourceStudioItemTint(color: RGB(color.x, color.y, color.z), alpha: recordAlpha)
+    }
+
+    /// Puts a record's tint on an item part's material, as the Studio frame
+    /// builder does per record. The exported factor is the serialized `_Color`
+    /// (and, for BLEND, `_alpha`), and `UpdateColor` replaces both, so the
+    /// record values replace the factor rather than multiplying it. Toon.metal
+    /// outputs `baseColor.w × tex.a`, the `_MainTex.a · _alpha` contract.
+    @inlinable
+    public static func apply(_ tint: SourceStudioItemTint, to material: inout MaterialState) {
+        let c = tint.color.linear
+        material.uniforms.baseColor.x = c.x; material.uniforms.baseColor.y = c.y; material.uniforms.baseColor.z = c.z
+        if let alpha = tint.alpha { material.uniforms.baseColor.w = alpha }
     }
 }

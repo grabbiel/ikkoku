@@ -124,7 +124,7 @@ public struct SourceRig: Sendable {
             throw RigError.invalid("Rig evaluation does not contain this mesh binding.")
         }
         try Self.validateMorphWeights(morphWeights, mesh: part.mesh)
-        let matrices = evaluation.palettes[part.skin], model = evaluation.worldMatrices[part.node]
+        let matrices = evaluation.palettes[part.skin], model = evaluation.model(skin: part.skin, meshNode: part.node)
         return try part.mesh.positions.indices.map { index in
             let joint = part.mesh.joints[index], weight = part.mesh.weights[index]
             var p = part.mesh.positions[index]

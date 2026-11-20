@@ -11,6 +11,10 @@ struct ToonVertexOut {
     float4 color;
     float4 shadowCoord;
     float hidden;
+    // Maps slice 5: 1 when the draw receives the map sun's shadow. Per vertex for a
+    // mesh that mixes receivers (no vertex is shared across them, checked at load),
+    // so the provoking vertex speaks for its triangle.
+    float receive [[flat]];
 };
 
 vertex ToonVertexOut toon_vertex(
@@ -21,10 +25,15 @@ vertex ToonVertexOut toon_vertex(
     device const float2* uvs2 [[buffer(BufferIndexTexcoords2)]],
     device const uchar4* colors [[buffer(BufferIndexVertexColors)]],
     constant FrameUniforms& frame [[buffer(BufferIndexFrameUniforms)]],
-    constant DrawUniforms& draw [[buffer(BufferIndexDrawUniforms)]],
+    uint iid [[instance_id]],
+    constant DrawUniforms* draws [[buffer(BufferIndexDrawUniforms)]],
     constant MaterialUniforms& mat [[buffer(BufferIndexMaterial)]],
-    device const uchar* hiddenBuf [[buffer(BufferIndexVertexHidden)]])
+    device const uchar* hiddenBuf [[buffer(BufferIndexVertexHidden)]],
+    device const uchar* receiveBuf [[buffer(BufferIndexVertexReceive)]])
 {
+    // DrawUniforms by instance (ST-T04 B0): a per-draw record is bound as a one-element
+    // array at its own offset (instance_id 0); an instanced draw indexes its table.
+    constant DrawUniforms& draw = draws[iid];
     VSInput v = fetchVertex(vid, verts, uvs, colors, (mat.flags & MaterialFlagHasVertexColor) != 0);
     ToonVertexOut o;
     float4 wp = draw.model * float4(v.position, 1.0);
@@ -32,7 +41,7 @@ vertex ToonVertexOut toon_vertex(
     if (draw.depthBias != 0.0) wp.xyz += normalize(frame.cameraPosition.xyz - wp.xyz) * draw.depthBias;
     o.position = frame.viewProjection * wp;
     float3x3 nm = float3x3(draw.normalMatrix[0].xyz, draw.normalMatrix[1].xyz, draw.normalMatrix[2].xyz);
-    o.worldNormal = normalize(nm * v.normal);
+    o.worldNormal = guardedNormal(nm * v.normal);
     // Tangents are surface directions, not normals: use the model's linear part.
     // A mirrored instance also reverses the tangent basis orientation.
     float3x3 linearModel = float3x3(draw.model[0].xyz, draw.model[1].xyz, draw.model[2].xyz);
@@ -44,6 +53,9 @@ vertex ToonVertexOut toon_vertex(
     o.color = v.color;
     o.shadowCoord = frame.shadowViewProjection * wp;
     o.hidden = hiddenFlag(v.region, draw.flags, hiddenBuf, vid);
+    // A uniform switch: only a mixed map mesh binds its own bytes (the others a shared dummy).
+    o.receive = (mat.flags & MaterialFlagMapReceivePerVertex) ? (receiveBuf[vid] != 0 ? 1.0 : 0.0)
+              : ((mat.flags & MaterialFlagReceiveShadow) ? 1.0 : 0.0);
     return o;
 }
 
@@ -184,6 +196,108 @@ inline float3 shadeToon(Surface s, ToonVertexOut in, constant FrameUniforms& fra
     return color;
 }
 
+// ST-A11 slice 5: an ambient-lit map surface (defined with map_fragment below).
+inline float4 mapAmbientLitSurface(ToonVertexOut in, constant FrameUniforms& frame, constant MaterialUniforms& mat,
+                                   constant MapLightingUniforms& mapLight, texture2d<float> baseTex,
+                                   texture2d<float> emissionTex, depth2d<float> mapShadow);
+
+// The toon surface: toon_fragment's body, shared with toon_map_probe_lit_fragment.
+inline float4 toonSurface(ToonVertexOut in, bool isFront, constant FrameUniforms& frame, constant DrawUniforms& draw,
+                          constant MaterialUniforms& mat, constant LightsUniforms& lights, texture2d<float> baseTex,
+                          texture2d<float> colorMask, texture2d<float> detailTex, texture2d<float> lineTex, texture2d<float> normalTex,
+                          texture2d<float> overlay0, texture2d<float> overlay1, texture2d<float> overlay2, depth2d<float> shadowMap,
+                          texture2d<float> hairGloss, texture2d<float> patternTex, texture2d<float> bodyMask)
+{
+    if (in.hidden > 0.5) discard_fragment();
+    if (bodyMaskDiscards(bodyMask, in.uv, mat)) discard_fragment();
+    float2 uv = in.uv;
+    float4 base = mat.baseColor;
+    if (mat.flags & MaterialFlagHasBaseTexture) {
+        // Iris materials carry the EyeLookMaterialControll _MainTex transform and
+        // the Clamp-imported wrap; other materials keep the repeat pattern path.
+        // The eye-tilt _rotation only ever rotates the base UV (asm L61-L71 never
+        // rotates the _expression/_overtex samples), so it lives in this branch.
+        float2 buv = (mat.flags & MaterialFlagSourceIrisHighlights)
+            ? rotateIrisUV(uv, mat.irisRotation) * mat.irisST0.xy + mat.irisST0.zw : uv;
+        float4 t = (mat.flags & MaterialFlagSourceIrisHighlights)
+            ? baseTex.sample(forcedAnisoClamp, buv) : baseTex.sample(forcedAnisoRepeat, uv);
+        base *= t;
+    }
+    if (mat.flags & MaterialFlagHasVertexColor && mat.kind != MaterialKindHair && mat.kind != MaterialKindCloth) {
+        base.rgb *= in.color.rgb;
+    }
+    // ColorMask tinting (clothes): R/G/B zones get tint1/2/3
+    if (mat.flags & MaterialFlagHasColorMask) {
+        float3 m = colorMask.sample(forcedAnisoRepeat, uv).rgb;
+        float3 tint = float3(1.0);
+        tint = mix(tint, mat.tint1.rgb, m.r);
+        tint = mix(tint, mat.tint2.rgb, m.g);
+        tint = mix(tint, mat.tint3.rgb, m.b);
+        base.rgb *= tint;
+        if (mat.flags & MaterialFlagHasPattern) {
+            float2 puv = uv * mat.uvTransform.xy + mat.uvTransform.zw;
+            float p = patternTex.sample(forcedAnisoRepeat, puv).r;
+            base.rgb = mix(base.rgb, base.rgb * mat.patternColor.rgb, p * mat.patternColor.a * m.r);
+        }
+    }
+    // Overlays (blush, eyeshadow, lipstick, tan lines …): alpha masks × colour
+    if (mat.flags & MaterialFlagSourceIrisHighlights) {
+        // toon_eye_lod0 prelighting composition. UV1/UV2 are authored independently
+        // of base UV0; each carries the EyeLookMaterialControll _overtexN transform
+        // and the Clamp-imported wrap. The source _rotation leaves these samples
+        // untouched (asm L79/L84/L87); source gaze and expression sampling remain
+        // separate.
+        float upperAlpha = (mat.flags & MaterialFlagHasOverlay0) ? overlay0.sample(forcedAnisoClamp, in.uv1 * mat.irisST1.xy + mat.irisST1.zw).a : 0.0;
+        float lowerAlpha = (mat.flags & MaterialFlagHasOverlay1) ? overlay1.sample(forcedAnisoClamp, in.uv2 * mat.irisST2.xy + mat.irisST2.zw).a : 0.0;
+        float4 highlight = max(upperAlpha * mat.overlayColor0, lowerAlpha * mat.overlayColor1);
+        float factor = highlight.a * mat.eye.w;
+        base.rgb = mix(base.rgb, highlight.rgb, factor);
+        base.a = max(base.a, factor);
+    } else {
+        if (mat.flags & MaterialFlagHasOverlay0) { float a = overlay0.sample(forcedAnisoRepeat, uv).a * mat.overlayColor0.a; base.rgb = mix(base.rgb, base.rgb * mat.overlayColor0.rgb, a); }
+        if (mat.flags & MaterialFlagHasOverlay1) { float a = overlay1.sample(forcedAnisoRepeat, uv).a * mat.overlayColor1.a; base.rgb = mix(base.rgb, base.rgb * mat.overlayColor1.rgb, a); }
+    }
+    if (mat.flags & MaterialFlagHasOverlay2) { float a = overlay2.sample(forcedAnisoRepeat, uv).a * mat.overlayColor2.a; base.rgb = mix(base.rgb, base.rgb * mat.overlayColor2.rgb, a); }
+
+    float alpha = base.a;
+    if (mat.flags & MaterialFlagAlphaTest) { if (alpha < mat.params.w) discard_fragment(); }
+    if (!(mat.flags & MaterialFlagAlphaBlend)) alpha = 1.0;
+
+    Surface s;
+    s.albedo = base.rgb;
+    s.alpha = alpha;
+    float3 n = normalize(in.worldNormal);
+    if (!isFront && (mat.flags & MaterialFlagDoubleSided)) n = -n;
+    if (mat.flags & MaterialFlagHasNormal) {
+        float3 tn = normalTex.sample(forcedAnisoRepeat, uv).xyz * 2.0 - 1.0;
+        // Interpolation and skinning can make the tangent nonorthogonal to n.
+        float3 t = in.worldTangent.xyz - n * dot(n, in.worldTangent.xyz);
+        if (dot(t, t) < 1e-10) {
+            float3 axis = abs(n.y) < 0.999 ? float3(0.0, 1.0, 0.0) : float3(1.0, 0.0, 0.0);
+            t = cross(axis, n);
+        }
+        t = normalize(t);
+        float3 b = cross(n, t) * in.worldTangent.w;
+        n = normalize(t * tn.x + b * tn.y + n * tn.z);
+    }
+    s.normal = n;
+    s.view = normalize(frame.cameraPosition.xyz - in.worldPos);
+    s.specMask = 1.0; s.shadeDetail = 1.0; s.lineMask = 0.0;
+    if (mat.flags & MaterialFlagHasDetail) {
+        float3 d = detailTex.sample(forcedAnisoRepeat, uv).rgb;
+        s.specMask = d.r; s.shadeDetail = mix(0.6, 1.0, d.g); s.lineMask = d.b;
+    }
+    if (mat.flags & MaterialFlagHasLine) { s.lineMask = max(s.lineMask, lineTex.sample(forcedAnisoRepeat, uv).r); }
+
+    float3 color;
+    if (mat.kind == MaterialKindUnlit) {
+        color = s.albedo + mat.emissive.rgb * mat.emissive.a;
+    } else {
+        color = shadeToon(s, in, frame, mat, lights, shadowMap, hairGloss);
+    }
+    return float4(color, alpha);
+}
+
 fragment float4 toon_fragment(
     ToonVertexOut in [[stage_in]],
     bool isFront [[front_facing]],
@@ -204,94 +318,39 @@ fragment float4 toon_fragment(
     texture2d<float> patternTex [[texture(TextureIndexPattern)]],
     texture2d<float> bodyMask [[texture(TextureIndexBodyMask)]])
 {
-    if (in.hidden > 0.5) discard_fragment();
-    if (bodyMaskDiscards(bodyMask, in.uv, mat)) discard_fragment();
-    float2 uv = in.uv;
-    float4 base = mat.baseColor;
-    if (mat.flags & MaterialFlagHasBaseTexture) {
-        // Iris materials carry the EyeLookMaterialControll _MainTex transform and
-        // the Clamp-imported wrap; other materials keep the repeat pattern path.
-        // The eye-tilt _rotation only ever rotates the base UV (asm L61-L71 never
-        // rotates the _expression/_overtex samples), so it lives in this branch.
-        float2 buv = (mat.flags & MaterialFlagSourceIrisHighlights)
-            ? rotateIrisUV(uv, mat.irisRotation) * mat.irisST0.xy + mat.irisST0.zw : uv;
-        float4 t = (mat.flags & MaterialFlagSourceIrisHighlights)
-            ? baseTex.sample(linearClamp, buv) : baseTex.sample(linearRepeat, uv);
-        base *= t;
-    }
-    if (mat.flags & MaterialFlagHasVertexColor && mat.kind != MaterialKindHair && mat.kind != MaterialKindCloth) {
-        base.rgb *= in.color.rgb;
-    }
-    // ColorMask tinting (clothes): R/G/B zones get tint1/2/3
-    if (mat.flags & MaterialFlagHasColorMask) {
-        float3 m = colorMask.sample(linearRepeat, uv).rgb;
-        float3 tint = float3(1.0);
-        tint = mix(tint, mat.tint1.rgb, m.r);
-        tint = mix(tint, mat.tint2.rgb, m.g);
-        tint = mix(tint, mat.tint3.rgb, m.b);
-        base.rgb *= tint;
-        if (mat.flags & MaterialFlagHasPattern) {
-            float2 puv = uv * mat.uvTransform.xy + mat.uvTransform.zw;
-            float p = patternTex.sample(linearRepeat, puv).r;
-            base.rgb = mix(base.rgb, base.rgb * mat.patternColor.rgb, p * mat.patternColor.a * m.r);
-        }
-    }
-    // Overlays (blush, eyeshadow, lipstick, tan lines …): alpha masks × colour
-    if (mat.flags & MaterialFlagSourceIrisHighlights) {
-        // toon_eye_lod0 prelighting composition. UV1/UV2 are authored independently
-        // of base UV0; each carries the EyeLookMaterialControll _overtexN transform
-        // and the Clamp-imported wrap. The source _rotation leaves these samples
-        // untouched (asm L79/L84/L87); source gaze and expression sampling remain
-        // separate.
-        float upperAlpha = (mat.flags & MaterialFlagHasOverlay0) ? overlay0.sample(linearClamp, in.uv1 * mat.irisST1.xy + mat.irisST1.zw).a : 0.0;
-        float lowerAlpha = (mat.flags & MaterialFlagHasOverlay1) ? overlay1.sample(linearClamp, in.uv2 * mat.irisST2.xy + mat.irisST2.zw).a : 0.0;
-        float4 highlight = max(upperAlpha * mat.overlayColor0, lowerAlpha * mat.overlayColor1);
-        float factor = highlight.a * mat.eye.w;
-        base.rgb = mix(base.rgb, highlight.rgb, factor);
-        base.a = max(base.a, factor);
-    } else {
-        if (mat.flags & MaterialFlagHasOverlay0) { float a = overlay0.sample(linearRepeat, uv).a * mat.overlayColor0.a; base.rgb = mix(base.rgb, base.rgb * mat.overlayColor0.rgb, a); }
-        if (mat.flags & MaterialFlagHasOverlay1) { float a = overlay1.sample(linearRepeat, uv).a * mat.overlayColor1.a; base.rgb = mix(base.rgb, base.rgb * mat.overlayColor1.rgb, a); }
-    }
-    if (mat.flags & MaterialFlagHasOverlay2) { float a = overlay2.sample(linearRepeat, uv).a * mat.overlayColor2.a; base.rgb = mix(base.rgb, base.rgb * mat.overlayColor2.rgb, a); }
+    return toonSurface(in, isFront, frame, draw, mat, lights, baseTex, colorMask, detailTex, lineTex, normalTex, overlay0, overlay1, overlay2,
+                       shadowMap, hairGloss, patternTex, bodyMask);
+}
 
-    float alpha = base.a;
-    if (mat.flags & MaterialFlagAlphaTest) { if (alpha < mat.params.w) discard_fragment(); }
-    if (!(mat.flags & MaterialFlagAlphaBlend)) alpha = 1.0;
-
-    Surface s;
-    s.albedo = base.rgb;
-    s.alpha = alpha;
-    float3 n = normalize(in.worldNormal);
-    if (!isFront && (mat.flags & MaterialFlagDoubleSided)) n = -n;
-    if (mat.flags & MaterialFlagHasNormal) {
-        float3 tn = normalTex.sample(linearRepeat, uv).xyz * 2.0 - 1.0;
-        // Interpolation and skinning can make the tangent nonorthogonal to n.
-        float3 t = in.worldTangent.xyz - n * dot(n, in.worldTangent.xyz);
-        if (dot(t, t) < 1e-10) {
-            float3 axis = abs(n.y) < 0.999 ? float3(0.0, 1.0, 0.0) : float3(1.0, 0.0, 0.0);
-            t = cross(axis, n);
-        }
-        t = normalize(t);
-        float3 b = cross(n, t) * in.worldTangent.w;
-        n = normalize(t * tn.x + b * tn.y + n * tn.z);
-    }
-    s.normal = n;
-    s.view = normalize(frame.cameraPosition.xyz - in.worldPos);
-    s.specMask = 1.0; s.shadeDetail = 1.0; s.lineMask = 0.0;
-    if (mat.flags & MaterialFlagHasDetail) {
-        float3 d = detailTex.sample(linearRepeat, uv).rgb;
-        s.specMask = d.r; s.shadeDetail = mix(0.6, 1.0, d.g); s.lineMask = d.b;
-    }
-    if (mat.flags & MaterialFlagHasLine) { s.lineMask = max(s.lineMask, lineTex.sample(linearRepeat, uv).r); }
-
-    float3 color;
-    if (mat.kind == MaterialKindUnlit) {
-        color = s.albedo + mat.emissive.rgb * mat.emissive.a;
-    } else {
-        color = shadeToon(s, in, frame, mat, lights, shadowMap, hairGloss);
-    }
-    return float4(color, alpha);
+// ST-A11 slice 5: the ToonMapProbeLit pipelines' fragment. The renderer routes only ambient-lit map surfaces here;
+// the kind test stays a runtime test, so the function keeps the toon item path compiled in: the shape the P4
+// attribution measured (W11 f3; docs/reference/studio/maps.md, "Engine (slice 5)").
+fragment float4 toon_map_probe_lit_fragment(
+    ToonVertexOut in [[stage_in]],
+    bool isFront [[front_facing]],
+    constant FrameUniforms& frame [[buffer(BufferIndexFrameUniforms)]],
+    constant DrawUniforms& draw [[buffer(BufferIndexDrawUniforms)]],
+    constant MaterialUniforms& mat [[buffer(BufferIndexMaterial)]],
+    constant LightsUniforms& lights [[buffer(BufferIndexLights)]],
+    texture2d<float> baseTex [[texture(TextureIndexBase)]],
+    texture2d<float> colorMask [[texture(TextureIndexColorMask)]],
+    texture2d<float> detailTex [[texture(TextureIndexDetail)]],
+    texture2d<float> lineTex [[texture(TextureIndexLine)]],
+    texture2d<float> normalTex [[texture(TextureIndexNormal)]],
+    texture2d<float> overlay0 [[texture(TextureIndexOverlay0)]],
+    texture2d<float> overlay1 [[texture(TextureIndexOverlay1)]],
+    texture2d<float> overlay2 [[texture(TextureIndexOverlay2)]],
+    depth2d<float> shadowMap [[texture(TextureIndexShadowMap)]],
+    texture2d<float> hairGloss [[texture(TextureIndexHairGloss)]],
+    texture2d<float> patternTex [[texture(TextureIndexPattern)]],
+    texture2d<float> bodyMask [[texture(TextureIndexBodyMask)]],
+    constant MapLightingUniforms& mapLight [[buffer(BufferIndexMapLighting)]],
+    texture2d<float> emissionTex [[texture(TextureIndexEmission)]],
+    depth2d<float> mapShadow [[texture(TextureIndexMapShadow)]])
+{
+    if (mat.kind == MaterialKindMap) return mapAmbientLitSurface(in, frame, mat, mapLight, baseTex, emissionTex, mapShadow);
+    return toonSurface(in, isFront, frame, draw, mat, lights, baseTex, colorMask, detailTex, lineTex, normalTex, overlay0, overlay1, overlay2,
+                       shadowMap, hairGloss, patternTex, bodyMask);
 }
 
 // ---- Eyes -------------------------------------------------------------------
@@ -310,20 +369,20 @@ fragment float4 eye_fragment(
     if (in.hidden > 0.5) discard_fragment();
     float2 c = float2(0.5, 0.5) + mat.eye.yz;
     float2 iuv = (in.uv - c) / max(mat.eye.x, 0.05) + 0.5;
-    float4 iris = irisTex.sample(linearClamp, iuv);
+    float4 iris = irisTex.sample(forcedAnisoClamp, iuv);
     float inside = float(all(iuv >= 0.0) && all(iuv <= 1.0));
     float coverage = iris.a * inside * mat.baseColor.a;
     // Source-style eye textures (e.g. a transparent cornea shell) use alpha as coverage.
     if ((mat.flags & MaterialFlagAlphaTest) && coverage < mat.params.w) discard_fragment();
     iris.a *= inside;
-    float4 white = whiteTex.sample(linearClamp, in.uv);
+    float4 white = whiteTex.sample(forcedAnisoClamp, in.uv);
     if (white.a == 0.0) white = float4(1.0, 1.0, 1.0, 1.0);
     float3 irisColor = iris.rgb * mat.baseColor.rgb;   // texture stores near-white where colourised
     float3 col = mix(white.rgb * mat.tint1.rgb, irisColor, iris.a);
     // Highlights (screen-stable by using the same UV but slightly offset toward the light)
     float3 l = normalize(frame.mainLightDirection.xyz);
     float2 huv = iuv + float2(-l.x, l.y) * 0.04;
-    float4 hl = highlightTex.sample(linearClamp, huv);
+    float4 hl = highlightTex.sample(forcedAnisoClamp, huv);
     col = mix(col, float3(1.0), hl.a * mat.eye.w * inside);
     float3 n = normalize(in.worldNormal);
     float ndl = dot(n, l);
@@ -354,9 +413,10 @@ fragment float4 eye_fragment(
 //     diffColor = albedo * oneMinusReflectivity
 //   Emission, UnityStandardInput.cginc L176-L183: tex2D(_EmissionMap).rgb * _EmissionColor.rgb
 // Drawn here: diffColor * gi.diffuse + Emission, with the geometric normal.
-// Occlusion is 1 (no map material has an _OcclusionMap). Not drawn: the
-// realtime light (light.color * diffuseTerm, its shadows) and both specular
-// terms. The light map is sampled as sRGB (m_ColorSpace 1), the direction map
+// Occlusion is 1 (the two map materials with an _OcclusionMap are approximated).
+// Slice 5 adds the realtime sun (light.color * diffuseTerm, with its shadows)
+// and, without a lightmap, the ambient as gi.diffuse (see below). Not drawn:
+// both specular terms. The light map is sampled as sRGB (m_ColorSpace 1), the direction map
 // as linear. Both hold the bundle's raw rows, bottom-up like Unity's texture
 // memory, while TEXCOORD_1 has the glTF top-left origin: sample (u, 1 - v).
 // The direction is baked in Unity's left-handed world; the engine basis
@@ -367,9 +427,8 @@ fragment float4 eye_fragment(
 // anisotropy 9 (the lightmaps' anisoLevel 3 and the particle textures' 1 are
 // raised to it). D3D11 samples an anisotropic texture with linear mips. The map
 // probe's irradiance and particle gates measure it: trilinear without anisotropy
-// fails both (docs/reference/studio/maps.md, "Sampler state").
-constexpr sampler lightmapSampler(mag_filter::linear, min_filter::linear, mip_filter::linear, max_anisotropy(9), address::clamp_to_edge);
-constexpr sampler mapForcedAnisoRepeat(mag_filter::linear, min_filter::linear, mip_filter::linear, max_anisotropy(9), address::repeat);
+// fails both (docs/reference/studio/maps.md, "Sampler state"). The samplers are
+// Common.h's forcedAnisoClamp (light and direction maps) and forcedAnisoRepeat.
 
 inline float3 decodeLightmapRGBM(float4 data, float range, float exponent) {
     return (range * pow(data.a, exponent)) * data.rgb;
@@ -382,32 +441,196 @@ inline float3 decodeDirectionalLightmap(float3 color, float4 dirTex, float3 norm
     return color * halfLambert / max(1e-4, dirTex.w);
 }
 
+// ---- Maps slice 5: the realtime sun and the ambient -------------------------
+// Unity 5.6.2f1 Standard, ForwardBase, Linear (docs/reference/studio/maps.md, "Engine (slice 5)";
+// the CPU mirror is SourceStudioMapLightingMath):
+//   BRDF1_Unity_PBS (UnityStandardBRDF.cginc, UNITY_BRDF_GGX):
+//     diffColor * (gi.diffuse + light.color * diffuseTerm) + specularTerm * light.color * FresnelTerm(specColor, lh)
+//     diffuseTerm = DisneyDiffuse(nv, nl, lh, perceptualRoughness) * nl, perceptualRoughness = 1 - smoothness,
+//     specularTerm = max(0, SmithJointGGXVisibilityTerm(nl, nv, r) * GGXTerm(nh, r) * pi * nl), r = perceptualRoughness^2,
+//     0 under _SPECULARHIGHLIGHTS_OFF or with a black specColor; nv = abs(n.v), h = Unity_SafeNormalize(l + v).
+//     The indirect specular term (reflection probes) is not drawn.
+//   specColor = lerp(0.04, albedo, metallic), metallic = 1 - oneMinusReflectivity / 0.96.
+//   light.color = _LightColor0 * atten; _LightColor0 = GammaToLinearSpace(colour * intensity) (the
+//     player's lightsUseLinearIntensity is off); atten = lerp(1 - strength, 1, visibility).
+//   gi.diffuse without a lightmap: ShadeSH9 of RenderSettings' ambient (no map has light probes),
+//     here evaluated per pixel (Unity sums L2 per vertex and L0/L1 per pixel), max 0.
+//   LightingLambert (Legacy Shaders/Diffuse): albedo * (gi.diffuse + light.color * max(0, n.l)).
+// Custom/StandardDouble reads no face register (no SV_IsFrontFace in its DX11 programs): back faces
+// are lit with the front normal, as here.
+
+inline float3 mapAmbient(constant MapLightingUniforms& light, float3 n) {
+    float4 n1 = float4(n, 1.0);
+    float3 x1 = float3(dot(light.sh[0], n1), dot(light.sh[1], n1), dot(light.sh[2], n1));
+    float4 vB = n.xyzz * n.yzzx;
+    float3 x2 = float3(dot(light.sh[3], vB), dot(light.sh[4], vB), dot(light.sh[5], vB));
+    float vC = n.x * n.x - n.y * n.y;
+    return max(float3(0.0), x1 + x2 + light.sh[6].rgb * vC);
+}
+
+inline float mapPow5(float x) { return x * x * x * x * x; }
+
+inline float mapDisneyDiffuse(float nv, float nl, float lh, float perceptualRoughness) {
+    float fd90 = 0.5 + 2.0 * lh * lh * perceptualRoughness;
+    float lightScatter = 1.0 + (fd90 - 1.0) * mapPow5(1.0 - nl);
+    float viewScatter = 1.0 + (fd90 - 1.0) * mapPow5(1.0 - nv);
+    return lightScatter * viewScatter;
+}
+
+/// The sun's radiance at one pixel for the unit normal n, view v and light l, before
+/// light.color: diffColor * diffuseTerm + specularTerm * FresnelTerm(specColor, lh).
+inline float3 mapSunRadiance(float3 n, float3 v, float3 l, float3 albedo, float oneMinusReflectivity,
+                             float smoothness, bool lambert, bool highlights) {
+    float nl = saturate(dot(n, l));
+    float3 diffColor = albedo * oneMinusReflectivity;
+    if (lambert) return diffColor * nl;
+    float3 hv = l + v;
+    float3 h = hv * rsqrt(max(0.001, dot(hv, hv)));
+    float nv = abs(dot(n, v));
+    float nh = saturate(dot(n, h));
+    float lh = saturate(dot(l, h));
+    float perceptualRoughness = 1.0 - smoothness;
+    float3 color = diffColor * (mapDisneyDiffuse(nv, nl, lh, perceptualRoughness) * nl);
+    float metallic = 1.0 - oneMinusReflectivity / 0.96;
+    float3 specColor = mix(float3(0.04), albedo, metallic);
+    if (highlights && any(specColor != 0.0)) {
+        float a = perceptualRoughness * perceptualRoughness;
+        float lambdaV = nl * (nv * (1.0 - a) + a);
+        float lambdaL = nv * (nl * (1.0 - a) + a);
+        float V = 0.5 / (lambdaV + lambdaL + 1e-5);
+        float a2 = a * a;
+        float d = (nh * a2 - nh) * nh + 1.0;
+        float D = M_1_PI_F * a2 / (d * d + 1e-7);
+        float specularTerm = max(0.0, V * D * M_PI_F * nl);
+        color += specularTerm * (specColor + (1.0 - specColor) * mapPow5(1.0 - lh));
+    }
+    return color;
+}
+
+/// Per-texel weights of a 3-texel-wide triangle filter at `offset` (-0.5...0.5 from the nearest
+/// texel corner): UnityShadowLibrary.cginc's _UnityInternalGetWeightPerTexel_3TexelsWideTriangleFilter.
+inline float4 mapTentWeights3(float offset) {
+    float a = (offset + 0.5) * (offset + 0.5) * 0.5;
+    float lo = min(offset, 0.0), hi = max(offset, 0.0);
+    return float4(a - offset, (1.0 - offset) - lo * lo, (1.0 + offset) - hi * hi, a) * 0.44444;
+}
+
+/// The map shadow map's visibility at worldPos (1 = lit): a 3x3-texel tent of reverse-Z compares
+/// taken as 4 bilinear compares, the arithmetic of UnityShadowLibrary.cginc's
+/// UnitySampleShadowmap_PCF3x3Tent. It is not a claim about Unity's kernel: 2017.2's screen-space
+/// collector filters with PCF7x7 on desktop and 5.6.2f1's is unverified (#392). The tent replaced
+/// 9 point-offset compares because its edge profile measured closer to Unity's (docs/reference/studio/maps.md).
+inline float mapShadowVisibility(float3 worldPos, constant MapLightingUniforms& light, depth2d<float> shadowMap) {
+    float4 sc = light.shadowViewProjection * float4(worldPos, 1.0);
+    float3 p = sc.xyz / sc.w;
+    float2 uv = float2(p.x * 0.5 + 0.5, 0.5 - p.y * 0.5);
+    if (any(uv < 0.0) || any(uv > 1.0)) return 1.0;
+    // Past the depth range nothing casts: clamped, a receiver behind every caster still compares
+    // against the cleared far depth (0) as lit.
+    float ref = clamp(p.z + light.shadowParams.z, 0.0, 1.0);
+    float texel = light.shadowParams.y;
+    float2 tc = uv / texel;
+    float2 center = floor(tc + 0.5);
+    float2 offset = tc - center;
+    float4 wu = mapTentWeights3(offset.x), wv = mapTentWeights3(offset.y);
+    float2 fu = wu.xz + wu.yw, fv = wv.xz + wv.yw;
+    float2 ou = (wu.yw / fu + float2(-1.5, 0.5)) * texel;
+    float2 ov = (wv.yw / fv + float2(-1.5, 0.5)) * texel;
+    float2 o = center * texel;
+    return fu.x * fv.x * shadowMap.sample_compare(shadowSampler, o + float2(ou.x, ov.x), ref)
+         + fu.y * fv.x * shadowMap.sample_compare(shadowSampler, o + float2(ou.y, ov.x), ref)
+         + fu.x * fv.y * shadowMap.sample_compare(shadowSampler, o + float2(ou.x, ov.y), ref)
+         + fu.y * fv.y * shadowMap.sample_compare(shadowSampler, o + float2(ou.y, ov.y), ref);
+}
+
+/// The Standard surface's albedo: baseColor times the base texture, alpha-tested at params.w.
+inline float4 mapStandardAlbedo(ToonVertexOut in, constant MaterialUniforms& mat, texture2d<float> baseTex) {
+    float4 albedo = mat.baseColor;
+    if (mat.flags & MaterialFlagHasBaseTexture) albedo *= baseTex.sample(forcedAnisoRepeat, in.uv);
+    if ((mat.flags & MaterialFlagAlphaTest) && albedo.a < mat.params.w) discard_fragment();
+    return albedo;
+}
+
+/// The Standard surface from its diffuse GI (the lightmap's or the ambient's) at the unit normal n:
+/// diffColor * gi, the realtime sun with its shadow, and the emission.
+inline float4 mapStandardColor(float4 albedo, float3 n, float3 gi, ToonVertexOut in, constant FrameUniforms& frame,
+                               constant MaterialUniforms& mat, constant MapLightingUniforms& mapLight,
+                               texture2d<float> emissionTex, depth2d<float> mapShadow) {
+    float3 color = albedo.rgb * mat.oneMinusReflectivity * gi;
+    // Facing away from the sun (n.l <= 0) every sun term is multiplied by saturate(n.l) = 0 (mapSunRadiance), so
+    // the block adds exactly 0: skipping it (and its shadow compares) leaves every pixel unchanged.
+    if ((mat.flags & MaterialFlagMapSunLit) && mapLight.sunDirection.w > 0.0 && dot(n, mapLight.sunDirection.xyz) > 0.0) {
+        float atten = 1.0;
+        if (in.receive > 0.5 && mapLight.shadowParams.x > 0.0) {
+            atten = mix(1.0, mapShadowVisibility(in.worldPos, mapLight, mapShadow), mapLight.shadowParams.x);
+        }
+        float3 v = normalize(frame.cameraPosition.xyz - in.worldPos);
+        color += mapLight.sunColor.rgb * atten * mapSunRadiance(n, v, mapLight.sunDirection.xyz, albedo.rgb, mat.oneMinusReflectivity,
+            mat.params.x, (mat.flags & MaterialFlagMapLambert) != 0, (mat.flags & MaterialFlagMapSpecularHighlights) != 0);
+    }
+    if (mat.emissive.a > 0.0) color += emissionTex.sample(forcedAnisoRepeat, in.uv).rgb * mat.emissive.rgb * mat.emissive.a;
+    return float4(color, (mat.flags & MaterialFlagAlphaBlend) ? albedo.a : 1.0);
+}
+
+/// An ambient-lit Standard surface (no lightmap): ShadeSH9 of the map's ambient as gi.diffuse. map_fragment's
+/// ambient-lit draws and the ToonMapProbeLit pipelines' toon_fragment both draw through it.
+inline float4 mapAmbientLitSurface(ToonVertexOut in, constant FrameUniforms& frame, constant MaterialUniforms& mat,
+                                   constant MapLightingUniforms& mapLight, texture2d<float> baseTex,
+                                   texture2d<float> emissionTex, depth2d<float> mapShadow) {
+    float4 albedo = mapStandardAlbedo(in, mat, baseTex);
+    float3 n = normalize(in.worldNormal);
+    return mapStandardColor(albedo, n, mapAmbient(mapLight, n), in, frame, mat, mapLight, emissionTex, mapShadow);
+}
+
 fragment float4 map_fragment(
     ToonVertexOut in [[stage_in]],
+    constant FrameUniforms& frame [[buffer(BufferIndexFrameUniforms)]],
     constant MaterialUniforms& mat [[buffer(BufferIndexMaterial)]],
+    constant MapLightingUniforms& mapLight [[buffer(BufferIndexMapLighting)]],
     texture2d<float> baseTex [[texture(TextureIndexBase)]],
     texture2d<float> lightmap [[texture(TextureIndexLightmap)]],
     texture2d<float> lightmapDirection [[texture(TextureIndexLightmapDirection)]],
-    texture2d<float> emissionTex [[texture(TextureIndexEmission)]])
+    texture2d<float> emissionTex [[texture(TextureIndexEmission)]],
+    depth2d<float> mapShadow [[texture(TextureIndexMapShadow)]])
 {
+    if (mat.flags & MaterialFlagMapSilhouette) {
+        // Custom/Silhouette's colour pass (the game's shader; its DX11 fragment is `mov o0, _Color`):
+        // baseColor is the mob colour Studio sets. The renderer draws the depth prepass first.
+        return mat.baseColor;
+    }
+    if (mat.flags & MaterialFlagMapUnlit) {
+        // Unlit/Transparent (Unlit-Alpha.shader v5.6.2f1; the bundle's DX11 fragment is one sample):
+        // col = tex2D(_MainTex, uv), blended; baseColor stays white. No lighting, lightmap or fog.
+        float4 texel = (mat.flags & MaterialFlagHasBaseTexture) ? baseTex.sample(forcedAnisoRepeat, in.uv) : float4(1.0);
+        return texel * mat.baseColor;
+    }
     if (mat.flags & MaterialFlagMapParticle) {
         // Particles/Alpha Blended (Particle Alpha Blend.shader v5.6.2f1): o.color = v.color * _TintColor,
         // col = 2 * i.color * tex2D(_MainTex); no lighting, lightmap or fog term is read. baseColor is
         // _TintColor as a Linear player uploads it; a mesh without colours reads white (fetchVertex).
-        float4 texel = (mat.flags & MaterialFlagHasBaseTexture) ? baseTex.sample(mapForcedAnisoRepeat, in.uv) : float4(1.0);
+        float4 texel = (mat.flags & MaterialFlagHasBaseTexture) ? baseTex.sample(forcedAnisoRepeat, in.uv) : float4(1.0);
+        if (mat.flags & MaterialFlagMapParticleAnim) {
+            // Particles/Anim Alpha Blended (Particle AnimAlphaBlend.shader v5.6.2f1, checked against the
+            // bundle's DX11 program): lerp(tex(uv.xy), tex(uv.zw), blend), uv.zw in TEXCOORD_2 and the
+            // blend in TEXCOORD_1.x as the converter writes them.
+            float4 second = (mat.flags & MaterialFlagHasBaseTexture) ? baseTex.sample(forcedAnisoRepeat, in.uv2) : float4(1.0);
+            texel = mix(texel, second, in.uv1.x);
+        }
         return 2.0 * in.color * mat.baseColor * texel;
     }
-    float4 albedo = mat.baseColor;
-    if (mat.flags & MaterialFlagHasBaseTexture) albedo *= baseTex.sample(mapForcedAnisoRepeat, in.uv);
-    if ((mat.flags & MaterialFlagAlphaTest) && albedo.a < mat.params.w) discard_fragment();
-    float2 luv = float2(in.uv1.x, 1.0 - in.uv1.y);
-    float3 gi = decodeLightmapRGBM(lightmap.sample(lightmapSampler, luv), mat.lightmapRange, mat.lightmapExponent);
-    if (mat.flags & MaterialFlagMapDirectionalLightmap) {
-        gi = decodeDirectionalLightmap(gi, lightmapDirection.sample(lightmapSampler, luv), normalize(in.worldNormal));
+    // The renderer draws ambient-lit surfaces with the ToonMapProbeLit pipelines; this path stays for any
+    // other map_fragment draw of them and is the reference those pipelines are tested against.
+    if (mat.flags & MaterialFlagMapProbeLit) {
+        return mapAmbientLitSurface(in, frame, mat, mapLight, baseTex, emissionTex, mapShadow);
     }
-    float3 color = albedo.rgb * mat.oneMinusReflectivity * gi;
-    if (mat.emissive.a > 0.0) color += emissionTex.sample(mapForcedAnisoRepeat, in.uv).rgb * mat.emissive.rgb * mat.emissive.a;
-    return float4(color, (mat.flags & MaterialFlagAlphaBlend) ? albedo.a : 1.0);
+    float4 albedo = mapStandardAlbedo(in, mat, baseTex);
+    float3 n = normalize(in.worldNormal);
+    float2 luv = float2(in.uv1.x, 1.0 - in.uv1.y);
+    float3 gi = decodeLightmapRGBM(lightmap.sample(forcedAnisoClamp, luv), mat.lightmapRange, mat.lightmapExponent);
+    if (mat.flags & MaterialFlagMapDirectionalLightmap) {
+        gi = decodeDirectionalLightmap(gi, lightmapDirection.sample(forcedAnisoClamp, luv), n);
+    }
+    return mapStandardColor(albedo, n, gi, in, frame, mat, mapLight, emissionTex, mapShadow);
 }
 
 // ---- ST-A11 map sky: Skybox/Cubemap on a mesh ------------------------------

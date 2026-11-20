@@ -1108,7 +1108,8 @@ private final class SeedChargeDecoder: SourceRigDecoding {
                                    reuse: SourceMakerRigReuse, commit: Bool) throws
     -> (sample: SourceMakerRigReuse.Sample?, declined: Bool, timings: SourceMakerPreparationTimings.Sample, prepared: SourceMakerLibrary.Prepared) {
     let token = reuse.prospectiveReplacement()
-    let seeding = reuse.seedingInput(for: token, entries: library.rigFiles(card: card, coordinate: 0, baseURL: base, wear: false).count)
+    let files = library.rigFiles(card: card, coordinate: 0, baseURL: base, wear: false)
+    let seeding = reuse.seedingInput(for: token, fileSizes: SourceMakerRigReuse.fileSizes(files))
     let timings = SourceMakerPreparationTimings()
     let loaded = try SourceMakerImportGeometry.load(baseURL: base, card: card, library: library, coordinate: 0,
                                                     timings: timings, seeding: seeding)
@@ -1119,8 +1120,11 @@ private final class SeedChargeDecoder: SourceRigDecoding {
 
 // CXM1 failure and card cohorts over the real selection fixtures: a gate that
 // fails after a seeded preparation leaves the current cache and epoch as they
-// were; a reimport over a cached session declines its seed (no hashing) and
-// publishes empty; cards with another head, body type or sex seed by bytes.
+// were. A reimport over a cached session carries the rigs whose bytes the
+// session holds (#192-C): the same card decodes nothing, and a card with
+// another head decodes only what it does not share. A card that shares too
+// little to fit beside the old entries is declined unhashed and publishes
+// empty.
 @Test(.enabled(if: SourceFixtureSupport.shouldRun(["IKKOKU_MAKER_SELECTION_FIXTURES"]), "Requires IKKOKU_MAKER_SELECTION_FIXTURES"))
 @MainActor func sourceMakerImportSeedingSurvivesFailedImportsAndDeclinesFullLedgers() throws {
     let (fixtures, directory) = try MakerSelectionCases.load()
@@ -1164,34 +1168,97 @@ private final class SeedChargeDecoder: SourceRigDecoding {
     #expect(!seeded.declined && seeded.sample?.retainedEntries == files && seeded.timings.intervals["rigReuseSHA"]?.calls == files)
     #expect(ledger.counts.entries == files && ledger.counts.snapshots == 1)
     #expect(try !oldRigHits())
-    // 3. Reimporting the same card cannot fit a second seed beside the first.
+    // 3. Reimporting the same card carries every rig: no decode and no new
+    //    permit. The uncarried control is what an unguarded CXM1 seed did.
     let token = reuse.prospectiveReplacement()
     do {
         let control = try library.prepare(card: female.card, coordinate: 0, baseURL: female.base, seeding: token.input)
-        let sample = try #require(control.sample) // Unguarded: the result Codex's app runs saw.
+        let sample = try #require(control.sample)
         #expect(sample.clearOnCommit && sample.retainedEntries == 0 && sample.admitted + sample.capacityBypasses == files)
-        #expect(sample.admitted == ledger.maximumEntries - files)
+        #expect(sample.admitted == ledger.maximumEntries - files && sample.carried == 0)
     }
-    #expect(reuse.seedingInput(for: token, entries: files) == nil)
+    #expect(reuse.seedingInput(for: token, entries: files) == nil) // Without sizes nothing counts as carried.
     let reimported = try importCard(female.card, base: female.base, library: library, reuse: reuse, commit: true)
-    #expect(reimported.declined && reimported.sample == nil && reimported.timings.intervals["rigReuseSHA"] == nil)
-    #expect(reimported.timings.intervals["rigDecode"]?.calls == files)
+    #expect(!reimported.declined && reimported.sample?.carried == files && reimported.sample?.misses == 0)
+    #expect(reimported.sample?.retainedEntries == files && reimported.sample?.clearOnCommit == false)
+    #expect(reimported.timings.intervals["rigDecode"] == nil && reimported.timings.intervals["rigReuseSHA"]?.calls == files)
     try expectSeededPreparationMatches(reimported.prepared, seeded.prepared)
-    #expect(ledger.counts == .init()) // Published empty; the first seed released.
-    // 4. Another head and body type seeds its own bytes; a full ledger then
-    //    declines the other sex, whose geometry is unaffected.
+    #expect(ledger.counts.entries == files && ledger.counts.snapshots == 1)
+    // 4. Another head of the same sex and body type carries every rig but
+    //    the head's, and decodes that one.
+    let otherHead = try fixture(sex: 1, head: 201, bone: 0)
+    let otherHeadFiles = library.rigFiles(card: otherHead.card, coordinate: 0, baseURL: otherHead.base, wear: false).count
+    let otherHeadSeeded = try importCard(otherHead.card, base: otherHead.base, library: library, reuse: reuse, commit: true)
+    let otherHeadSample = try #require(otherHeadSeeded.sample)
+    #expect(!otherHeadSeeded.declined && otherHeadSample.carried == otherHeadFiles - 1 && otherHeadSample.misses == 1)
+    #expect(otherHeadSample.retainedEntries == otherHeadFiles && otherHeadSeeded.timings.intervals["rigDecode"]?.calls == 1)
+    try expectSeededPreparationMatches(otherHeadSeeded.prepared,
+        try library.prepare(card: otherHead.card, coordinate: 0, baseURL: otherHead.base))
+    #expect(ledger.counts.entries == otherHeadFiles && ledger.counts.snapshots == 1)
+    // 5. Another head and body type: the same.
     let variant = try fixture(sex: 1, head: 200, bone: 1)
-    let variantFiles = library.rigFiles(card: variant.card, coordinate: 0, baseURL: variant.base, wear: false).count
+    let variantFiles = library.rigFiles(card: variant.card, coordinate: 0, baseURL: variant.base, wear: false)
     let variantSeeded = try importCard(variant.card, base: variant.base, library: library, reuse: reuse, commit: true)
-    #expect(!variantSeeded.declined && variantSeeded.sample?.retainedEntries == variantFiles)
+    let variantSample = try #require(variantSeeded.sample)
+    #expect(!variantSeeded.declined && variantSample.carried == variantFiles.count - 1 && variantSample.misses == 1)
+    #expect(variantSample.retainedEntries == variantFiles.count)
     try expectSeededPreparationMatches(variantSeeded.prepared,
         try library.prepare(card: variant.card, coordinate: 0, baseURL: variant.base))
+    // 6. A card of the other sex carries the rigs whose bytes it shares with
+    //    the session and decodes the rest; its geometry is unaffected.
     let male = try fixture(sex: 0, head: 201, bone: 1)
-    let maleDeclined = try importCard(male.card, base: male.base, library: library, reuse: reuse, commit: true)
-    #expect(maleDeclined.declined && maleDeclined.timings.intervals["rigReuseSHA"] == nil && ledger.counts == .init())
-    try expectSeededPreparationMatches(maleDeclined.prepared, try library.prepare(card: male.card, coordinate: 0, baseURL: male.base))
-    // 5. With the old holders gone the next import seeds again.
+    let maleFiles = library.rigFiles(card: male.card, coordinate: 0, baseURL: male.base, wear: false)
+    let maleSizes = SourceMakerRigReuse.fileSizes(maleFiles), variantSizes = Set(SourceMakerRigReuse.fileSizes(variantFiles))
+    // The guard's count: the male files whose size no session key has.
+    let maleUncarried = maleSizes.filter { !variantSizes.contains($0) }.count
+    do {
+        // 7. A ledger with room for fewer rigs than the card cannot carry
+        //    declines it unhashed and publishes empty.
+        let small = SourceRigReuseAdmission(maximumEntries: variantFiles.count + maleUncarried - 1)
+        let narrow = SourceMakerRigReuse(admission: small)
+        #expect(try importCard(variant.card, base: variant.base, library: library, reuse: narrow, commit: true).sample?.retainedEntries
+            == variantFiles.count)
+        let declined = try importCard(male.card, base: male.base, library: library, reuse: narrow, commit: true)
+        #expect(declined.declined && declined.timings.intervals["rigReuseSHA"] == nil && small.counts == .init())
+        try expectSeededPreparationMatches(declined.prepared, try library.prepare(card: male.card, coordinate: 0, baseURL: male.base))
+    }
     let maleSeeded = try importCard(male.card, base: male.base, library: library, reuse: reuse, commit: true)
-    #expect(!maleSeeded.declined && (maleSeeded.sample?.retainedEntries ?? 0) > 0)
-    print("sourceMakerImportSeeding files=\(files) variantFiles=\(variantFiles) controlAdmitted=\(ledger.maximumEntries - files)")
+    let maleSample = try #require(maleSeeded.sample)
+    #expect(!maleSeeded.declined && maleSample.carried > 0 && maleSample.misses >= maleUncarried)
+    #expect(maleSample.carried + maleSample.misses == maleFiles.count && maleSample.retainedEntries == maleFiles.count)
+    try expectSeededPreparationMatches(maleSeeded.prepared, try library.prepare(card: male.card, coordinate: 0, baseURL: male.base))
+    // 8. Reimporting it carries everything.
+    let maleReimported = try importCard(male.card, base: male.base, library: library, reuse: reuse, commit: true)
+    #expect(maleReimported.sample?.carried == maleFiles.count && maleReimported.timings.intervals["rigDecode"] == nil)
+    #expect(ledger.counts.entries == maleFiles.count && ledger.counts.snapshots == 1)
+    print("sourceMakerImportSeeding male carried=\(maleSample.carried) misses=\(maleSample.misses) uncarriedBySize=\(maleUncarried)")
+    print("sourceMakerImportSeeding files=\(files) otherHeadFiles=\(otherHeadFiles) variantFiles=\(variantFiles.count)"
+          + " maleFiles=\(maleFiles.count) controlAdmitted=\(ledger.maximumEntries - files)")
+}
+
+/// #332: a pooled read's bytes are freed with its `Data` on a thread that
+/// turns no run loop (a test body, like the main actor during a Maker card
+/// import). The probe is the bytes' address, because a `Data` bridged to
+/// `NSData` is a new wrapper that a weak reference cannot tie to the read's
+/// own object. The bytes count as held while `malloc_size` reports their
+/// block and it still starts with this test's random sentinel (a freed block
+/// may be reused by another test). Control: a plain `read(upToCount:)`
+/// leaves them in the thread's autorelease pool after its `Data` is gone.
+@Test(arguments: [true, false])
+func pooledReadFreesItsBytesWithItsData(pooled: Bool) throws {
+    let url = FileManager.default.temporaryDirectory.appendingPathComponent("pooled-read-\(UUID().uuidString).bin")
+    defer { try? FileManager.default.removeItem(at: url) }
+    let sentinel = (0..<64).map { _ in UInt8.random(in: 0...255) }
+    let size = 3 << 20
+    try Data(sentinel + [UInt8](repeating: 7, count: size - sentinel.count)).write(to: url)
+    let handle = try FileHandle(forReadingFrom: url); defer { try? handle.close() }
+    var address: UnsafeRawPointer?
+    do {
+        let data = try #require(pooled ? handle.pooledRead(upToCount: size + 1) : handle.read(upToCount: size + 1))
+        #expect(data.count == size)
+        address = data.withUnsafeBytes { UnsafeRawPointer($0.baseAddress) }
+    }
+    let bytes = try #require(address)
+    let held = malloc_size(bytes) > 0 && memcmp(bytes, sentinel, sentinel.count) == 0
+    #expect(held == !pooled, "pooled \(pooled): the read's bytes are \(held ? "still held" : "freed")")
 }

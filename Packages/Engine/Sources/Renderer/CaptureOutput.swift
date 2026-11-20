@@ -267,11 +267,47 @@ public struct CaptureOutputBatch: Sendable {
 /// The app polls the window on the main run loop every `pollInterval` seconds
 /// instead of sleeping a fixed delay. A poll is ready when the SwiftUI content
 /// has appeared (`onAppear`), a visible window holds it and its bounds after a
-/// forced layout pass are nonzero. Capture starts once `stableObservations`
-/// consecutive ready polls report the same content size, meaning layout has
-/// converged; a change of size or an unready poll restarts the count. If that
-/// does not happen within `timeout` seconds of arming, the capture fails with
-/// the last unready reason instead of snapshotting whatever is on screen.
+/// forced layout pass are nonzero, and no content the app reports as pending
+/// (`Observation.pendingContent`, for example a readout that only appears after
+/// the first live step, #364) is still missing. Capture starts once
+/// `stableObservations` consecutive ready polls report the same content size
+/// and content state (`Observation.contentState`), meaning layout has
+/// converged; a change of either, or an unready poll, restarts the count. If that does not happen within `timeout` seconds of arming, the
+/// capture fails with the last unready reason instead of snapshotting whatever
+/// is on screen.
+/// #425: `IKKOKU_CAPTURE_UI_WINDOW_W`, the frame width in points a Studio window capture sets
+/// on its window before anything else. Unset, the capture leaves the window as it opened.
+public enum UICaptureWindowWidth {
+    public static let variable = "IKKOKU_CAPTURE_UI_WINDOW_W"
+    /// The app window's minimum width (the content's `minWidth`).
+    public static let minimum = 1180
+
+    public enum ConfigurationError: Error, Equatable, CustomStringConvertible {
+        case invalid(String)
+        case widerThanScreen(Int, visible: Int)
+
+        public var description: String {
+            switch self {
+            case .invalid(let text):
+                return "\(UICaptureWindowWidth.variable) must be a whole number of points from \(UICaptureWindowWidth.minimum), got '\(text)'"
+            case .widerThanScreen(let width, let visible):
+                return "\(UICaptureWindowWidth.variable)=\(width) is wider than the screen's visible width of \(visible) points"
+            }
+        }
+    }
+
+    /// nil when the variable is unset. Otherwise the width, an integer from `minimum` to
+    /// `visibleWidth` (the screen's visible width); any other value is refused, never clamped.
+    public static func fromEnvironment(_ environment: [String: String], visibleWidth: Double) throws -> Int? {
+        guard let text = environment[variable] else { return nil }
+        guard let width = Int(text), width >= minimum else { throw ConfigurationError.invalid(text) }
+        guard Double(width) <= visibleWidth else {
+            throw ConfigurationError.widerThanScreen(width, visible: Int(visibleWidth.rounded(.down)))
+        }
+        return width
+    }
+}
+
 public struct UICaptureReadiness: Sendable, Equatable {
     /// Overrides `timeout`, in seconds.
     public static let timeoutVariable = "IKKOKU_CAPTURE_UI_TIMEOUT"
@@ -323,12 +359,24 @@ public struct UICaptureReadiness: Sendable, Equatable {
         /// The content view's bounds after a forced layout pass, in points.
         public var width: Double
         public var height: Double
+        /// What the shown content still waits for, when the app knows a part
+        /// of it appears later on its own (nil when nothing is pending). The
+        /// poll is not ready while it is set, and a timeout names it.
+        public var pendingContent: String?
+        /// What the shown content depends on, as the app describes it (nil
+        /// when nothing): a change restarts the stable count like a size
+        /// change, so a state that flips during the stability window (the
+        /// Studio live step starting to run, say) is never captured half-way.
+        public var contentState: String?
 
-        public init(contentAppeared: Bool, windowVisible: Bool, width: Double, height: Double) {
+        public init(contentAppeared: Bool, windowVisible: Bool, width: Double, height: Double,
+                    pendingContent: String? = nil, contentState: String? = nil) {
             self.contentAppeared = contentAppeared
             self.windowVisible = windowVisible
             self.width = width
             self.height = height
+            self.pendingContent = pendingContent
+            self.contentState = contentState
         }
 
         /// Why this poll is not ready, or nil when it is.
@@ -338,6 +386,7 @@ public struct UICaptureReadiness: Sendable, Equatable {
             guard width.isFinite, height.isFinite, width > 0, height > 0 else {
                 return "the content view has empty bounds (\(width)x\(height) pt)"
             }
+            if let pendingContent { return pendingContent }
             return nil
         }
     }
@@ -352,10 +401,11 @@ public struct UICaptureReadiness: Sendable, Equatable {
     /// Consumes one observation per poll and decides whether to capture.
     public struct Tracker: Sendable {
         public let policy: UICaptureReadiness
-        /// Consecutive ready polls with the current content size.
+        /// Consecutive ready polls with the current content size and state.
         public private(set) var stableCount = 0
         private var stableWidth = 0.0
         private var stableHeight = 0.0
+        private var stableContentState: String?
 
         public init(policy: UICaptureReadiness) {
             self.policy = policy
@@ -364,12 +414,14 @@ public struct UICaptureReadiness: Sendable, Equatable {
         /// - Parameter elapsed: Seconds since the capture was armed.
         public mutating func observe(_ observation: Observation, elapsed: Double) -> Decision {
             if observation.unreadyReason == nil {
-                if stableCount > 0, observation.width == stableWidth, observation.height == stableHeight {
+                if stableCount > 0, observation.width == stableWidth, observation.height == stableHeight,
+                   observation.contentState == stableContentState {
                     stableCount += 1
                 } else {
                     stableCount = 1
                     stableWidth = observation.width
                     stableHeight = observation.height
+                    stableContentState = observation.contentState
                 }
             } else {
                 stableCount = 0

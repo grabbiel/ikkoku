@@ -37,18 +37,80 @@ public struct MaterialState: Sendable, Equatable {
     public init(uniforms: MaterialUniforms) { self.uniforms = uniforms }
 
     public static func == (a: MaterialState, b: MaterialState) -> Bool {
-        withUnsafeBytes(of: a.uniforms) { ab in withUnsafeBytes(of: b.uniforms) { bb in ab.elementsEqual(bb) } }
-        && a.base == b.base && a.colorMask == b.colorMask && a.detail == b.detail && a.line == b.line && a.normal == b.normal
-        && a.overlay0 == b.overlay0 && a.overlay1 == b.overlay1 && a.overlay2 == b.overlay2 && a.pattern == b.pattern
-        && a.hairGloss == b.hairGloss && a.bodyMask == b.bodyMask && a.lightmap == b.lightmap
-        && a.lightmapDirection == b.lightmapDirection && a.emission == b.emission && a.cubemap == b.cubemap
-        && a.transparent == b.transparent && a.depthBias == b.depthBias
+        // Byte equality of the uniforms, as one memcmp: the render thread compares
+        // neighbouring item records' materials every frame (ST-T04 instanced runs).
+        withUnsafeBytes(of: a.uniforms) { ab in withUnsafeBytes(of: b.uniforms) { bb in memcmp(ab.baseAddress!, bb.baseAddress!, ab.count) == 0 } }
+        && a.sameTexturesAndState(b)
+    }
+
+    /// `==` apart from `uniforms.baseColor`, without copying either material:
+    /// the uniforms' bytes before and after the base colour, and the rest.
+    /// Neighbouring static item records that pass merge into one instanced run
+    /// (`Renderer.mergesWith`, ST-T04).
+    func equalsApartFromBaseColor(_ other: MaterialState) -> Bool {
+        withUnsafePointer(to: self) { a in withUnsafePointer(to: other) { b in Self.equalApartFromBaseColor(a, b) } }
+    }
+
+    /// `equalsApartFromBaseColor` on two materials read where they lie, such
+    /// as inside draw records in their array's buffer (`Renderer.mergesWith`):
+    /// the uniforms' bytes before and after the base colour, compared in
+    /// place, and the rest field by field. The pointers are only read, and
+    /// only for the duration of the call.
+    @inline(__always)
+    static func equalApartFromBaseColor(_ a: UnsafePointer<MaterialState>, _ b: UnsafePointer<MaterialState>) -> Bool {
+        let colour = MemoryLayout<MaterialUniforms>.offset(of: \.baseColor)!, after = colour + MemoryLayout<Float4>.size
+        let count = MemoryLayout<MaterialUniforms>.size, uniforms = MemoryLayout<MaterialState>.offset(of: \.uniforms)!
+        let x = UnsafeRawPointer(a) + uniforms, y = UnsafeRawPointer(b) + uniforms
+        return memcmp(x, y, colour) == 0 && memcmp(x + after, y + after, count - after) == 0 && sameTexturesAndState(a, b)
+    }
+
+    private func sameTexturesAndState(_ other: MaterialState) -> Bool {
+        withUnsafePointer(to: self) { a in withUnsafePointer(to: other) { b in Self.sameTexturesAndState(a, b) } }
+    }
+
+    @inline(__always)
+    private static func sameTexturesAndState(_ a: UnsafePointer<MaterialState>, _ b: UnsafePointer<MaterialState>) -> Bool {
+        a.pointee.base == b.pointee.base && a.pointee.colorMask == b.pointee.colorMask && a.pointee.detail == b.pointee.detail
+            && a.pointee.line == b.pointee.line && a.pointee.normal == b.pointee.normal
+            && a.pointee.overlay0 == b.pointee.overlay0 && a.pointee.overlay1 == b.pointee.overlay1
+            && a.pointee.overlay2 == b.pointee.overlay2 && a.pointee.pattern == b.pointee.pattern
+            && a.pointee.hairGloss == b.pointee.hairGloss && a.pointee.bodyMask == b.pointee.bodyMask
+            && a.pointee.lightmap == b.pointee.lightmap && a.pointee.lightmapDirection == b.pointee.lightmapDirection
+            && a.pointee.emission == b.pointee.emission && a.pointee.cubemap == b.pointee.cubemap
+            && a.pointee.transparent == b.pointee.transparent && a.pointee.depthBias == b.pointee.depthBias
     }
 
     /// All explicit texture references, without fallback textures.
     public var textureHandles: [TextureHandle] {
-        [base, colorMask, detail, line, normal, overlay0, overlay1, overlay2, pattern, hairGloss, bodyMask,
-         lightmap, lightmapDirection, emission, cubemap].compactMap { $0 }
+        var handles: [TextureHandle] = []
+        forEachTextureHandle { handles.append($0) }
+        return handles
+    }
+
+    /// Calls `body` with each explicit texture reference, in `textureHandles`
+    /// order, without building an array (`RenderFrame.retainTextures` visits
+    /// every item's handles each frame).
+    @inline(__always)
+    func forEachTextureHandle(_ body: (TextureHandle) -> Void) {
+        if let base { body(base) }; if let colorMask { body(colorMask) }; if let detail { body(detail) }
+        if let line { body(line) }; if let normal { body(normal) }; if let overlay0 { body(overlay0) }
+        if let overlay1 { body(overlay1) }; if let overlay2 { body(overlay2) }; if let pattern { body(pattern) }
+        if let hairGloss { body(hairGloss) }; if let bodyMask { body(bodyMask) }; if let lightmap { body(lightmap) }
+        if let lightmapDirection { body(lightmapDirection) }; if let emission { body(emission) }; if let cubemap { body(cubemap) }
+    }
+
+    /// What the main pass binds a material's textures from: its kind and its
+    /// handles (`Renderer.bindTextures`). Equal sets bind equal textures in one frame.
+    struct TextureSet: Equatable {
+        var kind: UInt32
+        var base, colorMask, detail, line, normal, overlay0, overlay1, overlay2, pattern, hairGloss, bodyMask: TextureHandle?
+        var lightmap, lightmapDirection, emission, cubemap: TextureHandle?
+    }
+
+    var textureSet: TextureSet {
+        TextureSet(kind: uniforms.kind, base: base, colorMask: colorMask, detail: detail, line: line, normal: normal,
+                   overlay0: overlay0, overlay1: overlay1, overlay2: overlay2, pattern: pattern, hairGloss: hairGloss,
+                   bodyMask: bodyMask, lightmap: lightmap, lightmapDirection: lightmapDirection, emission: emission, cubemap: cubemap)
     }
 
     public var kind: MaterialKind { MaterialKind(rawValue: Int32(uniforms.kind)) }
@@ -88,11 +150,102 @@ public struct RenderItem: Sendable {
     /// pick or hover over its pixels selects nothing. Gizmos still draw on top.
     /// false (the default) leaves an id-0 item out of the pick pass, as before.
     public var pickOccluder: Bool = false
+    /// The model-space point whose camera distance orders this item among the
+    /// transparent draws (ST-A11 slice 4: a map particle renderer's Unity
+    /// `Renderer.bounds` centre, which a mesh baked into map space no longer
+    /// has). nil (the default) uses the mesh's bounds centre, as before.
+    public var sortCenter: Float3? = nil
+    /// Unity's render queue for a transparent draw: transparent draws sort by
+    /// it first (lower first), then back to front. Every item is 3000 (the
+    /// "Transparent" queue) unless set, so the order is unchanged without it;
+    /// map particle materials carry their own (slice 4).
+    public var renderQueue: Int = 3000
+    /// A static Studio prop (ST-T04): the Studio frame builder sets it on the
+    /// parts of `.item` objects and of source item placeholders, and only such
+    /// records may merge into an instanced run (`Renderer.instanceable` still
+    /// checks every condition). false (the default) keeps every other record,
+    /// characters and maps included, on its own draw.
+    public var staticItem: Bool = false
+    /// Maps slice 5: per-vertex receive bytes (1 = receives the map sun's
+    /// shadow) for a map mesh that mixes receivers, read under
+    /// `MaterialFlagMapReceivePerVertex`. nil (the default) for every other
+    /// draw, which binds the shared dummy and reads the material's flag.
+    public var vertexReceive: VertexBytes? = nil
 
     public init(mesh: MeshHandle, material: MaterialState, model: float4x4, objectID: UInt32,
                 deformKey: UInt64? = nil, skinSet: UInt64? = nil, morphWeights: [(index: Int, weight: Float)] = []) {
         self.mesh = mesh; self.material = material; self.model = model; self.objectID = objectID
         self.deformKey = deformKey; self.skinSet = skinSet; self.morphWeights = morphWeights
+    }
+}
+
+/// One byte per vertex of a mesh, owned by whoever built it (ST-A11 maps:
+/// the loaded map asset). A frame that names it keeps the buffer alive.
+public struct VertexBytes: @unchecked Sendable, Equatable {
+    public let buffer: any MTLBuffer
+    public init(buffer: any MTLBuffer) { self.buffer = buffer }
+    public static func == (a: VertexBytes, b: VertexBytes) -> Bool { a.buffer === b.buffer }
+}
+
+/// Maps slice 5: the loaded map's ambient and realtime sun for one frame
+/// (`map_fragment`, `MapLightingUniforms`), and the sun's shadow casters for
+/// the map shadow map. Built by the map's owner once per placement (record's
+/// map transform, sun type and map option); nil draws no map lighting.
+public struct MapLighting: Sendable {
+    /// Unity's seven SH constants (`unity_SHAr` … `unity_SHC`) in the engine
+    /// basis (z reflected). A flat-ambient map holds its colour in the three
+    /// constant terms.
+    public var sh: [Float4]
+    public var sun: Sun?
+    /// The sun's shadow casters (`Renderer.encodeMapShadow`); empty draws no
+    /// map shadow map, and nothing is shadowed.
+    public var casters: [MapShadowCaster] = []
+    /// World bounds of every caster: the map shadow map's depth range.
+    public var casterBounds: AABB = .empty
+    /// Names this placement's casters and sun. The renderer redraws the map
+    /// shadow map when it changes (and when the camera target moves away);
+    /// equal revisions must mean equal casters and sun.
+    public var revision: UInt64 = 0
+
+    public struct Sun: Sendable, Equatable {
+        /// Unit direction to the light, engine world.
+        public var directionToLight: Float3
+        /// `_LightColor0`: GammaToLinearSpace(colour × intensity), linear.
+        public var color: Float3
+        /// The light's shadow strength (1 − `_LightShadowData.r`); 0 when the
+        /// light casts no shadows.
+        public var shadowStrength: Float
+        /// The light's shadow bias and normal bias, in Unity's units (scaled by
+        /// the shadow map's world texel size when drawn).
+        public var shadowBias: Float = 0
+        public var shadowNormalBias: Float = 0
+        public init(directionToLight: Float3, color: Float3, shadowStrength: Float, shadowBias: Float = 0, shadowNormalBias: Float = 0) {
+            self.directionToLight = directionToLight; self.color = color; self.shadowStrength = shadowStrength
+            self.shadowBias = shadowBias; self.shadowNormalBias = shadowNormalBias
+        }
+    }
+
+    public init(sh: [Float4], sun: Sun?) {
+        precondition(sh.count == 7, "MapLighting needs Unity's seven SH constants")
+        self.sh = sh; self.sun = sun
+    }
+}
+
+/// One draw of the map shadow map: index runs of a mesh placed by `model`.
+public struct MapShadowCaster: Sendable {
+    public var mesh: MeshHandle
+    public var model: float4x4
+    /// (first index, index count) runs, in index order.
+    public var runs: [(first: Int, count: Int)]
+    /// Unity's cast mode On culls the faces turned away from the light; Two
+    /// Sided culls nothing.
+    public var twoSided: Bool
+    /// An alpha-tested caster's material (`map_shadow_fragment` clips its
+    /// base alpha × baseColor.a at params.w); nil for an opaque one.
+    public var alphaTest: MaterialState?
+
+    public init(mesh: MeshHandle, model: float4x4, runs: [(first: Int, count: Int)], twoSided: Bool, alphaTest: MaterialState? = nil) {
+        self.mesh = mesh; self.model = model; self.runs = runs; self.twoSided = twoSided; self.alphaTest = alphaTest
     }
 }
 
@@ -195,6 +348,8 @@ public struct RenderFrame: Sendable {
     public var gizmos: [GizmoBatch]
     public var effects: SceneEffects
     public var sceneBounds: AABB          // used to fit the shadow map
+    /// Maps slice 5: the loaded map's ambient and sun (nil: no map lighting).
+    public var mapLighting: MapLighting? = nil
     public var time: Double = 0
     // Metal resources support concurrent reference ownership. The snapshot never
     // mutates texture contents and its dictionary is copied with this frame value.
@@ -212,11 +367,30 @@ public struct RenderFrame: Sendable {
     /// Repeating this after editing items prunes removed references and keeps existing
     /// snapshots; new handles are resolved from the resource store.
     public mutating func retainTextures(from resources: ResourceStore) {
-        let handles = Set(items.flatMap { $0.material.textureHandles })
+        // One pass over the items' handles in place, without an array per item
+        // or a set of them (a 3,506-item frame spent 0.23 ms here). Each handle
+        // is resolved once, as before: a retained one keeps its snapshot, a new
+        // one is looked up in the store, and one the store lacks is skipped.
+        let previous = retainedTextures
         var snapshot: [TextureHandle: RetainedTexture] = [:]
-        for handle in handles {
-            if let retained = retainedTextures[handle] { snapshot[handle] = retained }
+        snapshot.reserveCapacity(previous.count)
+        var unresolved: Set<TextureHandle> = []
+        items.withUnsafeBufferPointer { items in
+            for index in items.indices {
+                items[index].material.forEachTextureHandle { handle in
+                    guard snapshot[handle] == nil, unresolved.isEmpty || !unresolved.contains(handle) else { return }
+                    if let retained = previous[handle] { snapshot[handle] = retained }
+                    else if let texture = resources.texture(handle) { snapshot[handle] = RetainedTexture(texture: texture) }
+                    else { unresolved.insert(handle) }
+                }
+            }
+        }
+        // Maps slice 5: an alpha-tested map shadow caster samples its base texture in the shadow pass.
+        for caster in mapLighting?.casters ?? [] {
+            guard let handle = caster.alphaTest?.base, snapshot[handle] == nil, !unresolved.contains(handle) else { continue }
+            if let retained = previous[handle] { snapshot[handle] = retained }
             else if let texture = resources.texture(handle) { snapshot[handle] = RetainedTexture(texture: texture) }
+            else { unresolved.insert(handle) }
         }
         retainedTextures = snapshot
     }

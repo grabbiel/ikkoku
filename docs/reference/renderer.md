@@ -404,9 +404,9 @@ are in [maps: slice 3](studio/maps.md#map-34-the-sky-and-block-images-slice-3).
   texture`. It is alpha blended in the transparent pass with both faces drawn,
   and reads no lightmap.
 - **Sampler state.** `map_fragment` samples the light map and direction map
-  (`lightmapSampler`) and the base, emission and particle textures
-  (`mapForcedAnisoRepeat`) with linear filtering, linear mips and
-  `max_anisotropy(9)`.
+  (`forcedAnisoClamp`) and the base, emission and particle textures
+  (`forcedAnisoRepeat`) with linear filtering, linear mips and
+  `max_anisotropy(9)`. Both samplers are in `Common.h`.
   - **Why 9.** The original player runs `QualitySettings.anisotropicFiltering`
     ForceEnable, which raises every texture to Unity's forced minimum of 9.
     The phase-map34 trace (`.local/sta11c-map34/phase-map34/map-trace.json`)
@@ -418,11 +418,53 @@ are in [maps: slice 3](studio/maps.md#map-34-the-sky-and-block-images-slice-3).
     differs by +0.005–0.007 ms of GPU per frame at 1996×1824. That is inside
     the offscreen benchmark's run-to-run range
     ([performance: slice 3](performance.md#slice-3-map-34-the-sky-and-block-images)).
-  - **Characters and items** keep `linearRepeat` (no anisotropy).
+  - **Characters and items** sample the same way since 2026-11-01. The
+    character and Studio item textures are mipmapped, Bilinear or Trilinear,
+    with `anisoLevel` 1 (the live store's 64; 1,034 of the 1,105 in
+    `studio/mat/00.unity3d`), so the player forces them to 9 too. The
+    `toon_fragment` base (repeat, and clamp for irises), colour mask, pattern,
+    overlays, iris highlights, normal, detail and line samples, `eye_fragment`'s
+    iris, white and highlight, the body mask, and the outline and shadow-caster
+    alpha tests now use `forcedAnisoRepeat` or `forcedAnisoClamp`. Screen-space
+    passes keep `linearClamp`. Single-level textures are forced like mipmapped ones, as
+    `TranslatedSourceProgram.SamplerConfiguration` forces every non-Point
+    texture with aniso above 0, mipmapped or not. In the live source-shader
+    gate, a mutation check that left them unforced moved 3,871 character
+    pixels, put every family further from the player's frame and failed
+    `toon_eyew_lod0` (p99 5 > 4). That is shown by the frame, not by a direct
+    player probe.
+  - **Limit: the native path forces every texture.** The native toon, eye,
+    outline, shadow-caster and map shaders read every texture through one
+    `constexpr` sampler per call site, and the glTF exports carry no sampler
+    state. So they force anisotropy 9 even on the textures the player leaves
+    unforced: Point-filtered ones, and those with `anisoLevel` 0. Before, those
+    sampled trilinear, which matched the player no better. Counts, from
+    `m_TextureSettings` (2026-11-02):
+    - The 35 transferred character bundles (`chara/*.unity3d`, 2,460
+      Texture2D) have no Point texture. Two ramps, `gt_ramp_05` and
+      `gt_ramp_06` (256×4, single-level), have aniso 0. The native shaders do
+      not sample them.
+    - The live store's 64 character textures: no Point, no aniso 0.
+    - In `studio/mat/00.unity3d` (1,105 Texture2D), 4 water textures are Point
+      with aniso 1 (`t_koi_stu_Water`, `t_koi_stu_WaterDropNormal`,
+      `t_koi_stu_waterCutOut`, `t_koi_stu_waterNormal`), and
+      `Ramp_SmoothFull` is aniso 0. None of them is in the converted item
+      catalog (chair, cube01, cylinder00).
+    - The live source-shader path follows Unity's rule per texture instead.
+      There, Point textures with their own aniso above 1 are an open question
+      ([#348](https://github.com/grabbiel/ikkoku/issues/348)); none of the
+      textures counted here is one.
   - **Test.** `mapTexturesSampleWithThePlayersForcedAnisotropy` draws a
     16:1 texture footprint over a texture whose levels 0–1 are white and the
     rest black. Each map texture reads 1. `max_anisotropy` 1–4 reads 0 on
     Apple GPUs.
+  - **Test (characters and items).** `characterAndItemTexturesSampleWithThePlayersForcedAnisotropy`
+    draws the same footprint through every slot above. Each draw with the
+    level texture must equal the draw with an all-white texture there, and
+    the all-white and all-black draws must differ.
+    `lowAnisotropyReadsTheCoarseLevelsOfTheProbeTexture` is the control: with
+    the forced samplers at anisotropy 1 or 4, the base slot reads the coarse
+    levels.
 - **Block images.** `SourceStudioBlockImages` parses the glTF's
   `ikkokuBlockImages`. `SourceStudioBlockTexture.make` (slice 2's lightmap
   upload, generalised) uploads BC1 and BC3 images (`.bc1_rgba(_srgb)`,
@@ -434,6 +476,235 @@ are in [maps: slice 3](studio/maps.md#map-34-the-sky-and-block-images-slice-3).
   `IKKOKU_SOURCE_MAP_DECODED_TEXTURES=1` loads the PNGs instead; it is a
   measurement switch. Map 34's textures take 59.6 MB of Metal memory as BC
   against 288.2 MB decoded.
+
+### Source map unlit, silhouette and animated particle draws (ST-A11 slice 4, 2026-10-26)
+
+Slice 4 converts the remaining 40 CharaStudio maps. It adds three
+`map_fragment` branches, a two-pass transparent draw for Studio's mob
+silhouettes, RGBA32 lightmaps and a guard that keeps the converter's
+block-only images away from every image decoder. The recovered shaders, the
+probe gates and the numbers are in [maps: slice 4](studio/maps.md#all-maps-slice-4).
+
+- **Unlit.** `MaterialFlagMapUnlit` (bit 22) on `MaterialKindMap` returns
+  `texel × baseColor` (Unity's `Unlit/Transparent` is the texel alone; the
+  converter writes a white factor). It is blended as the glTF alpha mode says,
+  culled as `doubleSided` says, and reads no lightmap.
+- **Animated particles.** `MaterialFlagMapParticleAnim` (bit 23) adds
+  `Particles/Anim Alpha Blended`'s frame blend to the particle branch: the
+  texel is `mix(tex(uv0), tex(uv2), uv1.x)` before `2 × colour × tint`. The
+  loader refuses such a part without TEXCOORD_1 and TEXCOORD_2.
+- **Silhouettes.** `MaterialFlagMapSilhouette` (bit 24) returns `baseColor`
+  (the mob colour; `Custom/Silhouette`'s fragment is `mov o0, _Color`). In
+  the transparent pass each silhouette draw is two draws of the same mesh,
+  Cull Back: `MainPass.mapDepthOnly` (colour write mask empty) with
+  `depthWriteLEqual`, then `mapBlend` with `depthTestLEqual` (no depth write),
+  which is the shader's serialized pass state (ColorMask 0 with ZWrite On,
+  then SrcAlpha/OneMinusSrcAlpha with ZWrite Off, both ZTest LEqual). So each
+  renderer blends once per pixel, at its nearest surface. The loader checks
+  the material's recorded pass state against exactly this and refuses
+  anything else by name. Both the depth-only and the depth+stencil main-pass
+  sets carry `MapDepthOnly` (12 groups).
+- **RGBA32 lightmaps.** A lightmap file whose format is `RGBA8` (Unity's
+  `TextureFormat` 4, maps 1, 24, 38 and 39) uploads as stored with
+  `.rgba8Unorm(_srgb)`, every level, after the same size and SHA-256 check
+  as the BC3 files. Map 1's eight 2048² files take 137 MB of Metal this way.
+- **Block-only images.** For the new maps the converter writes no PNG copy:
+  the glTF image's `uri` is the `.bc1`/`.bc3` file with the mime type
+  `image/x-ikkoku-bc1|bc3`. `GLBLoader` reads such an image's bytes like any
+  other. `SourceStudioMapAsset.load` uploads it only through its block entry
+  (the bytes must be the listed file's). It refuses the image by name when no
+  block entry matches, and refuses the map under
+  `IKKOKU_SOURCE_MAP_DECODED_TEXTURES=1`. Any other image must start with the
+  PNG or JPEG magic before it reaches the decoder, which is now a parameter
+  of the load (`ImageDecoder`, `ResourceStore` by default). An Engine test
+  loads a block-only map with a counting decoder and asserts zero decoder
+  calls for its images. `ResourceStore` is unchanged.
+- **Transparent order.** `RenderItem` carries a `renderQueue` (3000 unless
+  set) and an optional model-space `sortCenter`. `sortedTransparent` orders
+  the transparent draws by render queue (lower first), then by camera
+  distance to the sort centre, back to front, then by order, then by mesh id.
+  An item without a sort centre uses its mesh's bounds centre, as before.
+  That is Unity 5.6's order within one sorting layer: queue, then distance to
+  `Renderer.bounds`' centre, then the renderer's submeshes. Each map particle
+  draw is one renderer's submesh, with that renderer's bounds centre, its
+  material's queue and order 100 + submesh. Every other item keeps queue
+  3000 and no sort centre, so its order is unchanged: the 17-capture set is
+  byte-identical to `main`'s
+  ([captures, slice 4](studio/maps.md#captures-slice-4)). The test is
+  `transparentDrawsSortByQueueThenSortCentreDistance`. The cost is in
+  [performance: slice 4](performance.md#slice-4-all-maps).
+- **Single-sample probe images.** `captureSceneHDR(frame:width:height:pixelCentreSamples:)`
+  can put all four MSAA samples of the main pass at the pixel centre
+  (`MTLRenderPassDescriptor.setSamplePositions`). Each pixel then takes the one
+  surface that covers its centre, shaded there, which is a single-sample render.
+  The original player's oracle renders into a single-sample target. Only the map probe passes
+  `true`. The flag lives on the capture's own `RenderTargets` and sets the
+  positions on that main pass's own descriptor. Interactive frames and every
+  other capture keep the default sample positions, and pay one Bool check per
+  frame. On a GPU without programmable sample positions the call returns nil
+  and the probe stops with that reason. An Engine test checks both behaviours on
+  a slanted edge: partial coverage without the flag (before and after a flagged
+  capture), and none with it.
+
+### Instanced static items (ST-T04 slice 1, part B)
+
+The generated item catalog ([item catalog](studio/item-catalog.md#generated-catalog-st-t04-2026-11-02))
+turns a large CharaStudio scene into thousands of basic-shape records. Most of
+them share a handful of meshes and one material each, so `Renderer.prepare`
+merges adjacent equal records into instanced draws. Each record keeps its own
+transform and pick id; the records of one instanced draw share their whole
+material, tint and alpha included, so every instance shades exactly as its
+record does on its own.
+
+- **Which records merge (B1).** `Renderer.instanceable` accepts only static
+  item records. The Studio frame builder marks them: `RenderItem.staticItem`
+  is set on the parts of `.item` objects and of source item placeholders, and
+  on nothing else. A marked record still does not merge if it has any of these:
+  - a deformation key, skin or morph weights;
+  - hidden regions or a hidden-buffer key;
+  - a live source shader;
+  - the sky material kind;
+  - any material kind but `MaterialKindItem`.
+
+  So characters, eyes and maps keep their per-draw path (they are never
+  marked, even where a character part uses the item material kind), and gizmos
+  are drawn apart. A frame with any live source-shader record draws everything per draw
+  (`Renderer.prepare`). The stencil main pass would work, since its pipelines
+  share the vertex functions; lifting this needs its own exactness check.
+- **Which neighbours merge.** After the existing sorts (opaque: order, material
+  kind, mesh id; transparent: render queue, distance back to front, order, mesh
+  id), `assignRuns` walks each pass. An instanced draw is a stretch of at least
+  two instanceable records that `mergesWith` its first record and whose
+  MaterialUniforms are equal byte for byte. `mergesWith` needs:
+  - the same mesh, hence the same vertex, texcoord, colour and index buffers;
+  - the same material apart from the base colour: pipeline, textures, alpha
+    mode, double-sidedness, depth bias and every other uniform byte;
+  - the same outline choice;
+  - the same winding (a mirrored model reverses front faces, set once per run).
+
+  The byte-equal MaterialUniforms then add the base colour, the record's tint
+  and alpha. A run is a stretch of adjacent instanced draws that merge (the
+  same bindings, different tints): it is bound once. A record with no equal
+  neighbour is drawn on its own, exactly as before, and casts its shadow with
+  the per-draw casters. Any other record between two equal ones ends the draw,
+  so the draw order of every record is unchanged. In the transparent pass that
+  keeps the blend order exactly as one record at a time: within an instanced
+  draw, Metal rasterizes instances in order.
+- **Uniforms.** Each pass's instanced DrawUniforms go into one frame-ring
+  table in record order, written at the Swift stride (144 bytes), which the
+  shaders' `constant DrawUniforms*` shares; an instance's `instance_id`
+  (which includes the draw's base instance) is its element. The pass's draws'
+  materials go into one allocation, one 256-byte aligned element per draw, so
+  the next draw of a run changes only the bound material offset
+  (`setVertexBufferOffset`, `setFragmentBufferOffset`). The records carry an
+  index into two scratch arrays the renderer keeps across frames, not the
+  496 bytes themselves, so sorting them costs what it did before.
+- **Shaders.** An instanced draw goes through the per-draw pipelines
+  themselves. Since B0 (#395) `toon_vertex`, `outline_vertex`,
+  `shadow_vertex` and `pick_vertex` read DrawUniforms as `draws[instance_id]`:
+  a record drawn on its own is bound as a one-element array at its own offset,
+  and an instanced draw's base instance and `instance_id` index the table. Both
+  forms run the same compiled function, so an instance shades exactly as its
+  record does on its own. Only picking has its own pair
+  (`Shaders/InstancedItems.metal`): `pick_vertex_instanced` is `pick_vertex`'s
+  text plus the instance index, and `pick_fragment_instanced` returns that
+  instance's id. Before B0, separate `*_instanced` vertex functions with the
+  per-draw text still differed from the per-draw draws at 14 pixels of the
+  3,506-item corpus scene (up to 25 levels), because Metal's fast math compiles
+  a uniform `constant DrawUniforms&` and an indexed element differently.
+- **Passes.**
+  - Shadow: the instanced draws' casters, as stretches, after the per-draw
+    casters. A depth-only pass keeps the nearest depth whatever the order.
+  - Main opaque: per run, its draws' outlines, then their surfaces.
+  - Transparent: one blended draw per instanced draw.
+  - Pick: each draw's pickable stretches, in record order, so ids at equal
+    depth resolve as before (the first drawn keeps the sample).
+- **The one ordering difference.** One record at a time interleaves outline
+  and surface (outline 1, surface 1, outline 2, …). A run draws every outline
+  first. With the strict `greater` depth test and opaque writes, the nearest
+  fragment wins either way. Only a sample where a later member's outline and an
+  earlier member's surface have exactly equal depth resolves differently. Shapes
+  of one run would have to intersect for that to happen.
+- **Switch.** `Renderer.instancesStaticItems` (default true) draws every
+  record on its own when false. It is the measurement control and the
+  reference of the tests.
+- **Repeated encoder state (B2-v2).** Instanced runs set their state through
+  the same `EncoderState` as records drawn on their own
+  ([Frame preparation without per-item copies](#frame-preparation-without-per-item-copies-2026-11-18),
+  "Repeated encoder state"). A run's next draw moves only the bound material
+  offset, vertex and fragment (`EncoderState.setBufferOffsets`), and the
+  shadow and pick passes bind a run once, at its first caster or pickable
+  record.
+- **Records read in place (B2-v2).** `assignRuns` and `mergesWith` read and
+  update the records in their array's buffer
+  (`withUnsafeMutableBufferPointer`) instead of copying them. Each record holds
+  its whole item, about 750 bytes with references to retain and release. A
+  Time Profiler of the instanced corpus frame (W1 orbit, #372's Release build)
+  put about 16% of the CPU encode time in those copies. The material check
+  compares the uniforms' bytes before and after the base colour in place
+  (`MaterialState.equalApartFromBaseColor`), and the draw check compares the
+  pending MaterialUniforms in their array, so the predicate and every run,
+  draw, table element and allocation are unchanged. The pointers never leave
+  their closures, and nothing else reaches those arrays while the closures
+  run. `InstancedRunAssignmentTests` keeps the by-value versions as the
+  reference:
+  - the predicate agrees on every pair of records that differ in one merge
+    condition or only in the base colour;
+  - on 200 seeded frames (up to 399 records) and on edge frames (no records,
+    one record, all mergeable, none mergeable), the runs, draw order, records,
+    casters, counts, ring allocations and the uniform bytes of every table
+    element and material element are equal.
+- **Statistics.** `RenderFrameStatistics` reports `mainPassRecords` and
+  `mainPassRuns` (the draws: one per record drawn on its own and one per
+  instanced draw, per pipeline), `instancedRecords` and `instancedRuns` (the
+  instanced draws), and `shadowCasters` and `shadowDraws`.
+- **Studio material cache (B4).** `SourceStudioItemMaterialSet` holds the
+  untinted materials of one item asset instance's parts, in part order, built
+  once instead of on every refresh. `MaterialBuilder.itemMaterial` reads only
+  the part's own material data, the asset instance's image cache and the item
+  defaults, with no tint and no emission: no per-object or per-scene state
+  enters it. So the import and the rehydration give every entry of one file
+  the same set, and `refresh()` tints a copy per record
+  (`SourceStudioItemColor.apply`). A set keeps its asset strongly and rebuilds
+  when it sees another instance (a repeated import of the file). Only the
+  Studio's item asset entries hold sets, so a set and its asset go with the
+  entries when an import or a rehydration replaces them. A material whose image
+  did not load is returned but not kept, so the next refresh tries again, as
+  before the cache.
+  - B2-v3 history: the first B4 (in #372 at `e38ad63e`) was a file-keyed
+    dictionary with a weak asset reference, looked up per object per refresh;
+    that lookup and its loop cost about 0.5 µs per item on the main thread and
+    missed the W2 margin. B' moves the set into the entry, so a refresh does no
+    lookup.
+
+Tests (`InstancedItemDrawTests.swift`):
+- B1: equal records merge; a tint is part of the material, so stretches of
+  one tint are instanced draws of one run and a record with no equal
+  neighbour is drawn on its own. Each kind of non-instanceable record (an
+  unmarked record among them), and each binding or state difference, between
+  two equal pairs breaks the draw; the pairs merge again when it is sorted
+  after them. A non-caster in a draw splits its shadow draw.
+- B3: a synthetic 500-shape scene renders byte for byte the same instanced and
+  per draw, in the HDR scene, the LDR image and the pick target, with shadows
+  on. It has opaque, mirrored, alpha-tested and two kinds of transparent
+  shapes, a tint per row (so a run has a draw per row), coincident
+  duplicates, and a column of transparent panes with an opaque record of the
+  same mesh between them in depth. Controls check that the shadow map reaches
+  the image, most shapes are pickable, and a duplicate never takes its
+  original's samples. A second B3 case draws one run of outlined cubes that
+  coincide, share face planes or intersect, in two tints (two draws), with
+  wide outlines and a per-draw twin of the first cube, byte for byte as per
+  draw; its controls check that ties follow the members' order and the
+  outlines reach the image.
+- B4: a set returns exactly what `MaterialBuilder.itemMaterial` builds and
+  builds once per asset instance; over 12 imports of the same file each new
+  instance rebuilds and the set lets the previous one go. Two records that
+  share one set with different colours and alphas each get the freshly built
+  material with their own tint, and the set stays untinted. A part whose image
+  does not load is rebuilt on every lookup and never kept.
+- B2-v2, repeated encoder state: the B3 grid scene, instanced, renders, shades
+  and picks byte for byte with and without the skipping (`EncoderStateTests`
+  covers records drawn on their own).
 
 ### Deformation safety
 
@@ -463,6 +734,212 @@ determinant has magnitude at most `1e-8`, the normal and handedness retain their
 pre-skin values because a unique transformed normal is unavailable. Position and
 usable tangent transforms still apply, allowing intentional zero-scale geometry;
 nonfinite transformed positions retain their pre-skin position.
+
+**Zero and negative scales (#404).** An extended face slider can give a face
+target a zero or negative scale, which Unity's `Transform.SetLocalScale`
+accepts. A basis is singular when the |det| of its upper-left 3×3 is at most
+`Transform.singularDeterminant` (1e-12, the mesh-world bound `Rig.evaluate`
+already used). Each site below keeps its previous formula, bit for bit, above
+that bound. A test compares them over random nonsingular matrices, reflections
+included, and over the fixture rigs.
+
+- `Rig.evaluate` skins a renderer with a singular mesh world in rig space. Its
+  palette is `world · inverseBind`, it draws with the identity model, and it is
+  listed in `RigEvaluation.collapsedSkins`. This is how Unity's
+  SkinnedMeshRenderer works: it skins from the bones and ignores its own
+  transform. The result is also the limit of `model · meshInverse · world ·
+  inverseBind` as det → 0. Hair under a collapsed HairParent therefore draws
+  flattened instead of being refused. Studio reports such renderers once in
+  its diagnostics.
+- `Transform.normalMatrix` uses the cofactor matrix times the determinant's sign
+  for a singular basis, the same construction as the deform kernel, scaled to a
+  largest entry of 1. It falls back to the identity when fewer than two columns
+  are independent. The cofactor maps every normal perpendicular to the
+  collapsed axis to zero. On a zero-scale non-character item those are, for
+  example, the rim of a flattened sphere. The toon, outline and live probe
+  vertex stages (`guardedNormal` in Shaders/Common.h, #407) give such a normal
+  0 instead of `normalize(0)`, which is NaN. Before the guard that NaN reached
+  every fragment of the triangle. On Apple GPUs the interpolator turned it into
+  FLT_MAX, so the pixels were finite but wrongly shaded. Each triangle now takes
+  its side of the collapsed surface from its other vertices. Any normal with
+  |n|² ≥ FLT_MIN is still exactly `normalize(n)`, so nonsingular draws do not
+  change. `SingularNormalShaderTests` checks both, bit for bit under the
+  default fast math the shaders compile with.
+  This differs from Unity for degenerate scales. Unity's world normal,
+  `normalize(mul(n, (float3x3)unity_WorldToObject))` with the InverseSafe
+  matrix below, keeps only the in-plane part. It is zero (NaN on D3D11) for the
+  normals parallel to the collapsed axis, which are the faces that stay visible.
+  The native draws keep #404's cofactor and aim for a finite result, not that
+  NaN. The source shaders keep Unity's math unchanged.
+- The source shaders' `unity_WorldToObject` uses `Transform.inverseSafe`. For a
+  singular basis each column `c` becomes the row `c / |c|²`, and a column no
+  longer than 1e-5 becomes 0, as in Unity's `Vector3f` InverseSafe. A collapsed
+  axis maps to 0.
+- Eye look divides by lossyScale through the same InverseSafe. A collapsed eye
+  node reads its rotation from the axes that remain. lossyScale stays unsigned,
+  because the recovered source does not confirm where Unity's lossyScale keeps
+  a negative sign.
+- DynamicBone simulates a signed local scale on its chain that has a TRS record,
+  and a single collapsed axis without one (#406). The cases it still refuses are
+  listed in [dynamics: signed and zero scales](animation/dynamics.md#signed-and-zero-scales-406).
+  A collapsed renderer that is not on the chain is validated the same way
+  `Rig.evaluate` treats it.
+
+### DrawUniforms by instance (ST-T04 B0, 2026-11-18)
+
+`toon_vertex`, `outline_vertex`, `shadow_vertex` and `pick_vertex` take
+`constant DrawUniforms* draws` and `instance_id`, and read
+`constant DrawUniforms& draw = draws[iid]`. A record drawn on its own is still
+bound at its own frame-ring offset and drawn with one instance, so it reads
+element 0 there; no Swift code changed. The instanced static items of ST-T04
+(part B) draw through these same functions with a table of records.
+
+- **Why.** Metal compiles with fast math, and the same source compiles
+  differently for a uniform `constant DrawUniforms&` and for a dynamically
+  indexed element. Positions and varyings move by a few ULPs, which moves MSAA
+  edge coverage and toon band edges. Separate instanced copies of the vertex
+  functions therefore never matched their per-draw records byte for byte (14
+  pixels of the 3,506-item corpus scene, up to 25 levels). With every draw on
+  the indexed form, an instanced item renders exactly as its record does on
+  its own.
+- **What changes.** The per-draw output itself moves once, by the same kind of
+  ULP shifts, for everything these functions draw. `toon_vertex` is shared by
+  the toon (opaque and blend), eye (and eye blend) and map (map, map blend,
+  map depth-only) pipelines, and by their stencil main-pass copies, so
+  characters, eyes, maps and items all shift; outlines, shadow maps and pick
+  ids go through the other three. See the re-baseline below.
+- **What does not.** `sky_vertex`, the grid, gizmo and gizmo-pick vertex
+  functions, and every fragment function (`pick_fragment` still reads its
+  `draw` as a uniform; it returns an integer id). Runtime-compiled programs do
+  not read DrawUniforms: the native probe (`probe_vertex`), the live probe
+  (`live_probe_vertex`) and the translated source programs bind their own
+  matrices.
+- **Validators.** No test, tolerance or source-fidelity validator changed; the
+  strict Engine suite passes unchanged (1,211 + 21 tests, 14 opt-in skips),
+  including every committed frame and program hash.
+
+**Re-baseline (old main a281573b → B0, 2026-11-18).** No committed golden
+changes; the moved references are lane captures and offscreen captures, which
+are not committed. The PR lists every changed file with its old and new SHA-256.
+
+- Lane captures: app-smoke, Maker and Studio scenario lanes, 101 checks and
+  116 PNGs, the same checks in the same five chunks on both builds. Both pass
+  100 of 101. The one failure, `studio-scenario-inspector-hide-cycles`, is
+  identical on both builds: undo-depth timing, #390.
+  - 49 files are byte-identical.
+  - 6 scene exports differ only in the random object UUIDs of their embedded
+    scene document; their pixels are equal.
+  - 61 change pixels:
+
+  | Assets | Files | Pixels changed | Changed px (min / median / max) | Max channel delta |
+  |---|---:|---:|---|---:|
+  | UI and startup captures | 3 | 2 | 1 / 24 / 24 | 3 |
+  | Maker character cards | 11 | 11 | 0 / 2 / 6 (thumbnail 2–15) | 1 |
+  | Studio scenes with characters | 92 | 45 | 1 / 53 / 72 | 12 |
+  | Studio items | 4 | 2 | 40 / 56 / 56 | 9 |
+  | Studio maps | 6 | 1 | 47 | 5 |
+
+  A Maker card's data is byte for byte the same. Only its embedded 256×256
+  face thumbnail, itself a render, changes, together with that image's 4-byte
+  length.
+- Nondeterminism control: a second old-main run of 22 checks (26 PNGs) is
+  byte-identical to the first except one scene export, which differs only in
+  its object UUIDs.
+- Offscreen captures at 1996×1824, Release (G2). Each scene is captured twice
+  on old main, identically. The end capture of the 600-frame benchmark launch
+  equals the plain capture on both builds.
+
+  | Scene | Changed px | Max delta | old → new |
+  |---|---:|---:|---|
+  | Item corpus scene 4b87a4f49c81 (3,506 items) | 14 | 25 | `d32853ebbd60` → `2bffe2323dfa` |
+  | Showoff scene, 7 characters | 554 | 11 | `f40967047e46` → `4d596be33708` |
+  | map33 | 496 | 1 | `473da126d01a` → `faac8e5bb77a` |
+  | map33-showoff | 554 | 11 | `5e0202bbba56` → `15eccedfef56` |
+  | map34-day | 922 | 25 | `e8017e20387b` → `cf48b8b592ec` |
+  | map41 | 1,358 | 16 | `dd694e2c9d73` → `17b92f7e5108` |
+
+### Frame preparation without per-item copies (2026-11-18)
+
+`Renderer.prepare` turns a frame's items into draw records; each record holds a
+copy of its item. On the 3,506-item corpus scene a Time Profiler of the
+offscreen benchmark (attached by pid, PR #372's Release build, 1,000 frames)
+put 80% of the measured CPU encode time in that preparation, not in Metal
+encoding. The largest owners per frame were:
+
+- sorting the opaque records: 0.58 ms, because the sort moved whole records;
+- `RenderFrame.retainTextures`: 0.23 ms, because it built a handle array per
+  item and a set of all of them;
+- growing the record arrays: 0.13 ms;
+- the skin-set scan: 0.09 ms, because it ran a mesh lookup (the store's lock)
+  for every item.
+
+Each of these now avoids the copy or allocation, with the same result:
+
+- **Sorts.** `sortedOpaque` and `sortedTransparent` sort small keys (the
+  compared fields plus the record's input index) and then copy each record
+  once into its place. The comparison is unchanged. The index is the last
+  tie-break, so records that compare equal keep their input order, which is
+  the order the old stable record sort gave. `FramePreparationOrderTests`
+  checks both sorts against the old record sorts, ties included, at sizes up
+  to 3,506 records.
+
+  Since B2-v2 the records are not copied into a new array either:
+  `sortOpaque` and `sortTransparent` sort the array in place, and
+  `Renderer.permute` moves each record once along the permutation's cycles,
+  with no retain or release (mapping into a new array copied every record and
+  then released the old array's). A record already in its place is not
+  touched. The tests compare the sorts with the old mapped sort, every field
+  of every record included, at 0 to 3,506 records with ties. They also
+  compare `permute` with the permutation it was given (identity, reversed, one
+  cycle, a few swaps among fixed points, and shuffles, up to 3,506 records),
+  and check that no record is leaked.
+- **Texture retention.** `retainTextures` visits each item's handles in place
+  (`MaterialState.forEachTextureHandle`, in `textureHandles` order). A handle
+  it has already seen is skipped. A retained handle keeps its snapshot, a new
+  one is looked up in the store, and one the store lacks is asked once and
+  then left out, as before.
+- **Skin sets.** The skin-set scan reads an item's skin set before its mesh,
+  so only items with a skin set take the store's lock.
+- **Record arrays.** The opaque, transparent and caster arrays reserve the
+  item count up front.
+- **Item loop (B2-v2).** `for item in frame.items` copied every item, the
+  hidden ones included, and the record then copied the visible ones again.
+  The loop now reads the items by index in their buffer and copies a visible
+  item once, into its record (`consume`). It reads what it needs after that
+  (transparent, live, shadow caster) first. The live source-shader check
+  before it reads the buffer too, where `contains` copied every item. The
+  records are the same, so the tests above and the byte-exact captures cover
+  it.
+- **Repeated encoder state.** Each record bound its whole state, about 30
+  encoder calls, even when the record before it had bound the same mesh,
+  pipeline, cull mode and textures. The shadow, main, overlay and pick passes
+  now set their state through an `EncoderState`. It records what the encoder
+  holds: pipeline, depth-stencil state, cull mode, winding, the vertex and
+  fragment buffers by index (object and offset) and the fragment textures.
+  - A set that repeats the recorded state is skipped.
+  - A buffer bound again at another offset only moves its offset
+    (`setVertexBufferOffset` / `setFragmentBufferOffset`), as each record's
+    draw and material uniforms do in the frame ring.
+  - `bindTextures` skips a material whose kind and texture handles
+    (`MaterialState.TextureSet`) equal the last bound set's. Within one frame
+    they resolve to the same textures.
+
+  Objects are compared by identity and held while recorded, so a released
+  object's address cannot pass for a bound one. The live source-shader draws
+  set state on the encoder directly, so the main pass forgets the record after
+  them. `Renderer.skipsRedundantEncoderState` (internal, default true) sets
+  every state for every draw when false: the reference of
+  `EncoderStateTests`. There, records that share a mesh draw one after
+  another, each differing from the one before in one state (the cull mode,
+  the winding of a mirrored model, a texture, the material element in the same
+  frame-ring buffer, the pipeline, and a transparent record's cull mode), and
+  a seeded frame of 48 mixed records with the grid and gizmos. Both render,
+  shade and pick byte for byte as with every state set; the controls show
+  that each change reaches the image, so a dropped one would differ.
+
+Draw order, pixels and the state each draw sees are unchanged. The lanes and the offscreen
+captures of the corpus, showoff and map scenes are byte-identical before and
+after (the PR lists them with its cost A/B).
 
 ### Renderer limits and resource lifetime (R6, first slice)
 
@@ -661,9 +1138,114 @@ retired hidden mask (the region bitmask applies) and skips retired meshes.
 frame lock and render lock order is unchanged; `retire` and completion take
 only the store lock, so `deinit` can retire from any thread.
 
+Textures complete earlier. A texture an owner retires (`retire(textures:)`,
+the ST-A11 map path) is released when a frame created after the
+retirement is submitted (`completeTextureRetirements`, #368). A submitted
+frame holds its own references to the textures it names
+(`RenderFrame.retainTextures`), so the pending frame it replaces, and every
+copy of that frame, still draw them.
+
+- **Order and cost.** `submit` calls it after `retainTextures`, before taking
+  `frameLock`, under the store lock alone. With nothing retiring it costs one
+  lock and one check.
+- **Generation and stamp.** It bumps the resource generation when it releases
+  something, and leaves the newest-completed stamp alone. That stamp orders
+  deformation keys, and moving it would give every frame created before a
+  texture retirement transient deformation buffers.
+- **Why.** An occluded or minimized viewport prepares no frame, so a texture
+  retired while it is hidden waited for the window to show again. Run D of
+  #358, with an appearance texture cache that retires through the same path,
+  showed it: retiring entries grew from 24 to 115, and the footprint reached
+  954 MB at the fifth head, against 695 MB without the cache.
+- **Unsubmitted frames.** A frame that is never submitted resolves its
+  textures when it is prepared: `StudioModel.frame` for picks and captures,
+  the probes, thumbnails. Each is built and drawn on the main actor in one
+  call while its textures are owned. The asynchronous hover pick is
+  the exception, and its result is dropped once a newer frame was built. A
+  texture released before such a frame is prepared draws the fallback: white
+  base, black masks and overlays, the flat normal.
+
+Meshes and keys complete at submit while no viewport draws (#368). A hidden,
+minimized or stopped viewport prepares nothing, so a removal there kept its
+meshes, deformation buffers and masks until the viewport drew again.
+
+- **Who draws.** Each `ViewportRenderThread` tells the renderer whether it
+  draws (`Renderer.setViewport(_:drawing:)`): when it starts, stops and
+  changes visibility, under its own control lock. Visible with its link
+  running counts as drawing. A hidden viewport's link idles at 15 Hz without
+  the keep-alive, and in run D of #358 an occluded or minimized one prepared no frame
+  at all. If a hidden callback does prepare a submitted frame, that prepare
+  completes the retirements, and the queued completion finds nothing left.
+- **While one draws.** Completion stays at the prepare of a submitted frame,
+  which a drawing viewport reaches within a frame. Nothing changes.
+- **While none draws.** `submit` enqueues one completion on a utility serial
+  queue (`com.grabbiel.Ikkoku.retirements`). Submits made before it starts
+  share it. The completion takes `renderLock` with `try`. If a pick, capture
+  or draw holds it, the completion does nothing, and the next submit, or the
+  prepare of a submitted frame, completes the retirements.
+- **What it completes.** Under `renderLock`, it completes what a prepare of
+  the pending frame would: the retirements made before that frame was
+  created. The pending frame is the submit that enqueued the completion or a
+  later one. If a later submit put back a copy of an older frame, the older
+  stamp applies, as at its prepare. Holding `renderLock` keeps every
+  guarantee of a completion at prepare. No frame is being prepared, command
+  buffers hold their own references, and frames created earlier get
+  transient deformation buffers.
+- **Content records.** Either completion drops the content records
+  (item 4 of [threads](#renderer-threads-r7-phase-2-item-2)) of the keys it
+  released, in the same `renderLock` hold. A record holds its buffer, so a
+  released character's buffers go at once instead of at the next tracked
+  draw. A record only ever matches its own buffer (`===`), so a key's later
+  buffer never reuses it.
+- **Cost on the submitting thread.** `completeTextureRetirements` reports
+  whether meshes or keys are retiring under the store lock it already takes,
+  and the decision to enqueue is made under `observerLock`, which `submit`
+  already takes. With nothing retiring, `submit` takes no new lock. With a
+  retirement pending, it adds one `async`, whatever the retirement's size.
+
 The rule for owners is to retire before building their next frame. A frame
 created after the retirement counts as current, so its preparation would
 re-create the deformation keys it still names.
+
+Unregistering first covers a frame prepared after the release, but not one
+already being prepared on a render thread (#344). The deform pass looks up
+an item's mesh and then asks for its buffer, without the store's lock in
+between. `SourceRigPreview.deinit`, or a Maker reimport, can unregister the
+mesh and release its key on the main thread in that gap, and the request
+used to cache a new buffer that nothing released again (one buffer per
+dropped owner). `deformBuffer(for:mesh:vertexCount:frameCreatedAt:)` now
+takes the item's mesh: it caches a new buffer only while that mesh is
+registered and not retiring, and returns a transient one otherwise, which
+the frame's own deform pass fills, as for a stale frame. A retiring mesh is
+included because its retirement may not cover the key. The check runs
+under the store lock that `unregister` and `retire` take, and only when a
+buffer is created. A buffer already cached is returned unchanged, so a
+released key whose mesh stays registered is re-created on its next use as
+before. `ResourceStore.beforeDeformBuffer` (DEBUG builds only) lets a test
+drop an owner inside that gap, on the capture thread. The hook runs inside
+`prepare`, under `renderLock`, so a teardown it runs must not take
+`renderLock`, and it must not request a deformation buffer itself.
+
+Items that share a deformation key in one preparation (one per material
+pass) draw the buffer that the key's first item requested and dispatched.
+Later items do not ask the store again: a transient buffer is a new object
+per request, so a second request would give a later pass a buffer that no
+dispatch writes.
+
+A cached buffer that is too small for a request whose mesh the store no
+longer owns stays cached until the owner's release. The request gets a
+transient buffer of the needed size. While a mesh is retiring, each
+preparation that names its key without a cached buffer allocates a new
+transient buffer, until the next submitted frame completes the retirement.
+That churn is accepted.
+
+So the rule for an owner that releases at once is to unregister its meshes
+before `releaseDeformBuffers`, as `SourceRigPreview.deinit` does: a request
+in the gap then finds the mesh gone. An owner whose meshes are shared, such
+as a library asset's, cannot unregister them, so the check would still find
+the mesh registered and cache a new buffer. Such an owner retires its keys
+with `retire(deformKeys:)` after its last frame was created. Completing the
+retirement drops any buffer a pending frame re-created.
 
 **Owners in the app.**
 
@@ -794,8 +1376,13 @@ handlers, the hover pick, SwiftUI layout.
   expose reusable images in draw order; neither operation waits for the GPU.
   Since item 4, picks and captures also commit before releasing it (see
   below); the wait for the GPU still happens after.
-- `observerLock` guards the submit observers (item 4). It is never held while
-  taking another lock, and `submit` calls the observers after releasing it.
+- `observerLock` guards the submit observers (item 4), and since #368 the set
+  of drawing viewports and the scheduled retirement completion. It is never
+  held while taking another lock, and `submit` calls the observers after
+  releasing it.
+- The retirement queue (#368) takes `renderLock` only with `try`, then
+  `frameLock` to read the pending frame's stamp, then the store lock, as a
+  prepare does. It never waits for `renderLock`.
 - `ResourceStore` and the frame ring's completion state keep their own locks,
   unchanged.
 
@@ -1712,11 +2299,38 @@ keeps nothing (measurement control).
 
 **Batches.** `SourceStudioCharacterBatch` runs the builds of one operation:
 
-- The first halves start at once on GCD worker threads, at most `width` at
-  a time (the active processor count less two, at least two; QoS
-  user-initiated), in request order. GCD threads are used, not the Swift
-  concurrency pool, because the builds block on file reads, on each other's
+- The first halves start at once on worker threads of the batch's own, at
+  most `width` at a time (the active processor count less two, at least
+  two; QoS user-initiated), in request order. They stay off the Swift
+  concurrency pool because the builds block on file reads, on each other's
   rig decodes and on MetalKit's synchronous texture loads.
+- Each worker has a 64 MiB stack (`SourceStudioCharacterBatch.stackSize`,
+  #321, #326), not a GCD worker's 512 KiB or the main thread's 8 MiB. It is
+  address space: a page is committed only when the stack reaches it. A
+  first half decodes the whole scene, and the decode recurses once per
+  nesting level, up to the reader's limit of 1,000 levels
+  (`KoikatsuBinaryReader.maximumLevels`, #326; 65 before). A first half on
+  the deepest scene the reader accepts takes 7.5 MiB of stack through
+  nested folders and 16.7 MiB through nested characters in Debug (2.1 and
+  3.0 MiB in Release; `SourceSceneDeepStackTests`, synthetic scenes).
+- Every other operation that recurses through a decoded scene runs on a
+  stack of the same size (`SourceStudioCharacterBatch.onDecodeStack`,
+  #326): the decode, the legacy upgrade, the insertion stage, the export's
+  edit and the layout import. Called from a smaller stack, each starts one
+  thread of its own (`onDecodeThread`, at the caller's QoS) and waits for
+  it; on a worker it runs in line. The hidden characters' clock reads its
+  scene the same way. The record walks left on the main thread are
+  iterative or take at most 2.5 MiB in Debug on the same scenes.
+- The init starts one worker, which starts the others, so the calling
+  thread pays one thread start. For a 22-wide batch it takes 25–26 µs in
+  Release (26 µs in Debug), against 12–14 µs (18 µs) for the GCD
+  dispatches before #321. Every worker has reported after 225–257 µs
+  (239 µs), against 145–156 µs (152 µs). These are medians of 50 rounds.
+  With 64 MiB stacks (#326) the start takes 28–31 µs and every worker has
+  reported after 262–286 µs in Release, against 25–26 µs and 219–266 µs
+  with 8 MiB in the same alternating runs (base and head, four each). The
+  decode hop (`onDecodeThread`) takes a median of 32–41 µs (32–33 µs).
+  A first half that does real work takes milliseconds.
 - The owner runs the second halves one at a time, in request order, on a
   thread it chooses: `build(_:)` on the calling thread, or
   `run(_:on:main:built:finished:)` on a serial queue. `run` can also
@@ -3501,6 +4115,44 @@ non-Shader-Forge shader, or a builtin the path does not compute
 a documented convention (`[1, 1, 0, 0]`, as in the probe). Each material using it
 lists it, so nothing is substituted silently.
 
+**Sampler state.** Each texture's sampler follows Unity's rule
+(`TranslatedSourceProgram.SamplerConfiguration`): its filter, wrap and aniso,
+under the player's `QualitySettings.anisotropicFiltering`. CharaStudio runs
+ForceEnable. `OriginalCharacterProbe`'s frame report and every
+`OriginalMapProbe` case record it, and no game assembly changes it or the
+global limits. So a non-Point texture with aniso above 0 samples with
+anisotropy 9 and linear mips, and composite inputs do too. The frozen-frame
+probe takes the mode from its frame. Since 2026-11-01 the Studio passes the
+recorded value, `SourceShaderLiveConfiguration.playerAnisotropicFiltering`.
+Before, it passed none, so its live characters sampled Bilinear textures
+(60 of the live store's 64) with nearest mips and no anisotropy. The test
+`studioLiveAssembliesSampleWithThePlayersForcedAnisotropy` pins both. Each
+resolved material records its effective sampler states
+(`SourceShaderLiveMaterial.samplers`). Materials resolved from the native store
+share one sampler state per configuration, through the store's per-resource
+cache that composite inputs use. The validation-only capture provider makes
+its own.
+
+- **Quality level.** Unity keeps `anisotropicFiltering` per quality level.
+  Neither probe records which level the install ran or the level names, so
+  the value is the probed install's at its active level. The next
+  `OriginalCharacterProbe` run records the `QualitySettings` level and names.
+- **Single-level textures.** The rule forces every non-Point texture with
+  aniso above 0, mipmapped or not. A mutation check of the controlled frame
+  gate left single-level textures unforced (capture provider, two runs per
+  rule, each rule deterministic). It moved 3,871 of 98,917 character pixels.
+  Every family ended further from the player's frame: `main_skin` mean
+  0.0544 → 0.1003 and p99 1 → 3, and `toon_eyew_lod0` p99 1 → 5, which fails
+  its gate. So the frame supports forcing them; no direct player probe has
+  checked it.
+- **The Studio report.** The Studio's live report
+  (`IKKOKU_LIVE_SOURCE_REPORT`, and the benchmark's `liveSourceShaders`) lists
+  each character's `samplers`. These are its resolved materials' bound
+  textures, counted by effective state, for example
+  `"aniso 9, mips linear": 3` (`SourceShaderLiveAssembly.samplerSummary`).
+  The `studio-scenario-live-samplers` check asserts those counts in the app.
+  With the Studio call site reverted to no mode, the check fails.
+
 **Per-frame inputs.** `SourceShaderLiveEncoder` converts each live item's vertices
 with a compute kernel, once per vertex source and register layout. The output is
 the program's `SourceInput` registers:
@@ -3515,6 +4167,23 @@ the program's `SourceInput` registers:
   without the set aliases UV0, so the source stream is used instead; without a
   stream the item stays toon.
 - TEXCOORD3 and COLOR: the source stream.
+
+The converted buffers persist per vertex source and layout, like deform buffers.
+A deformed item's source is its deformation key; a static item's is its mesh.
+Since #337 they are evicted on the resource store's release events, never by a
+per-frame scan. Each buffer leaves with the mesh it was converted for, or with
+its deformation key, whichever is released first. The events are
+`unregister(mesh:)`, `releaseDeformBuffers` and completed retirements. That
+covers a dropped `SourceRigPreview` (Studio characters are previews), retired
+map meshes and library assets. A frame already being prepared on a render
+thread can allocate a buffer for a mesh or deformation key that the main thread
+has just released. A newly allocated buffer is therefore checked against the
+store. The cache drops it if its mesh is gone or the store no longer holds its
+deformation key; that frame still uses it. Before #337 nothing
+evicted them, so every Studio character dropped with live source shaders on
+kept its private input buffers until the renderer went away.
+`liveSourceInputBuffersLeaveWithTheirMeshesAndDeformationKeys` builds and drops
+each owner kind repeatedly and checks the encoder returns to its baseline.
 
 Matrices are `unity_ObjectToWorld = B·M·B` and `unity_MatrixVP = P·V·B`, with
 `B = diag(1, 1, −1)`. The clip position therefore equals the native one, and live
@@ -3711,7 +4380,7 @@ The validation capture then draws only the nose, so the character gate fails by
 construction. The asset-backed gaps are closed below; natively composed textures
 remain a separate step.
 
-**Measurement: Studio scene.** `koikatu_cs0002591.png`
+**Measurement: Studio scene.** Source scene `029f0b1d`
 (`IKKOKU_STUDIO_SCENARIO_SCENE`) was captured with `IKKOKU_LIVE_SOURCE_SHADERS=1`
 and the inputs above, without look settings. Six source characters loaded with
 no crash. 6 slots draw live (`cf_O_noseline` per character); the renderer
@@ -3767,7 +4436,7 @@ repeated after each merge of `main`:
 
 Each case was launched with only its own `IKKOKU_*` variables:
 
-- `koikatu_cs0002591.png`: `a0dc50f4…`. From `8d83f01` on it is `caed346e…`
+- Source scene `029f0b1d`: `a0dc50f4…`. From `8d83f01` on it is `caed346e…`
   on both sides, because #125 applies the scene's clothes state.
 - the rig and fixture card: `9d973e21…`;
 - `synthetic-current.png`: `6837cd63…`. Since #133, with a Maker library
@@ -4136,7 +4805,7 @@ launches:
 
 | Case | Capture SHA-256 | CPU encode p50 base / head | GPU p50 base / head |
 | --- | --- | ---: | ---: |
-| `koikatu_cs0002591.png` (`IKKOKU_SOURCE_SCENE`, `IKKOKU_BENCHMARK_OUTPUT`) | `cac034c1…` | 0.7284 / 0.7329 ms | 1.2344 / 1.2411 ms |
+| source scene `029f0b1d` (`IKKOKU_SOURCE_SCENE`, `IKKOKU_BENCHMARK_OUTPUT`) | `cac034c1…` | 0.7284 / 0.7329 ms | 1.2344 / 1.2411 ms |
 | fixture card, Maker app capture (`IKKOKU_BENCHMARK_OUTPUT`) | `26742344…` | 0.1799 / 0.1698 ms | 0.4636 / 0.4614 ms |
 | rig and fixture card (`IKKOKU_CAPTURE_RIG`, no benchmark output) | `9d973e21…` | — | — |
 
@@ -4400,7 +5069,7 @@ launches:
 
 | Case | Capture SHA-256 | CPU encode p50 base / head | GPU p50 base / head |
 | --- | --- | ---: | ---: |
-| `koikatu_cs0002591.png` (`IKKOKU_SOURCE_SCENE`, `IKKOKU_BENCHMARK_OUTPUT`) | `cac034c1…` | 0.7282 / 0.7536 ms | 1.2702 / 1.2719 ms |
+| source scene `029f0b1d` (`IKKOKU_SOURCE_SCENE`, `IKKOKU_BENCHMARK_OUTPUT`) | `cac034c1…` | 0.7282 / 0.7536 ms | 1.2702 / 1.2719 ms |
 | fixture card, Maker app capture (`IKKOKU_BENCHMARK_OUTPUT`) | `26742344…` | 0.1765 / 0.1763 ms | 0.4643 / 0.4567 ms |
 | rig and fixture card (`IKKOKU_CAPTURE_RIG`, no benchmark output) | `9d973e21…` | — | — |
 
@@ -6130,7 +6799,7 @@ a gate.
 **App acceptance.** Release apps: base main `0e6181a` (binary `a659f515…`) and
 the candidate built at `4b99cea` (`e29baf9c…`; later commits are docs only), both
 from the same tracked `Assets` tree. Each default-OFF capture is byte-identical
-between base and candidate: the Studio source scene (`koikatu_cs0002591`), the
+between base and candidate: the Studio source scene (`029f0b1d`), the
 native Studio capture and the Maker synthetic card, each with live opt-in OFF and
 ON (the ON runs add the live inputs, this store and contract). None of those
 reaches a face composite: the source-scene characters fall back first on the

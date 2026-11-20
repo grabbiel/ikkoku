@@ -22,10 +22,22 @@ final class Pipelines: @unchecked Sendable {
     /// ST-A11 source map surfaces (`MaterialKindMap`): the Standard baked-lightmap subset.
     let map: any MTLRenderPipelineState
     let mapBlend: any MTLRenderPipelineState
+    /// ST-A11 slice 5: the ambient-lit map surfaces (`MaterialFlagMapProbeLit`): toon_vertex +
+    /// toon_map_probe_lit_fragment, whose map branch draws them through map_fragment's Standard helpers and
+    /// which otherwise runs toon_fragment's body. The P4 attribution measured the map pipeline object itself
+    /// as the cost of these draws.
+    let toonMapProbeLit: any MTLRenderPipelineState
+    let toonMapProbeLitBlend: any MTLRenderPipelineState
+    /// ST-A11 slice 4: Custom/Silhouette's first pass (ColorMask 0, ZWrite On):
+    /// `map_fragment` with no colour written, so the colour pass that follows
+    /// runs the same functions and lands on the same depths.
+    let mapDepthOnly: any MTLRenderPipelineState
     /// ST-A11 map sky (`MaterialKindSky`): Skybox/Cubemap on a mesh, no blending.
     let sky: any MTLRenderPipelineState
     let outline: any MTLRenderPipelineState
     let shadow: any MTLRenderPipelineState
+    /// Maps slice 5: a caster of the map sun's shadow map (depth only).
+    let mapShadow: any MTLRenderPipelineState
     let background: any MTLRenderPipelineState
     let grid: any MTLRenderPipelineState
     let gizmoHDR: any MTLRenderPipelineState      // depth-tested, in the main pass
@@ -38,10 +50,18 @@ final class Pipelines: @unchecked Sendable {
     let blit: any MTLRenderPipelineState
     let pick: any MTLRenderPipelineState
     let pickGizmo: any MTLRenderPipelineState
+    /// ST-T04 instanced static items pick through `pick_vertex_instanced` /
+    /// `pick_fragment_instanced` (Shaders/InstancedItems.metal), whose id is
+    /// per instance. Every other instanced pass uses the per-draw pipelines,
+    /// whose vertex functions read DrawUniforms by instance (B0).
+    let pickInstanced: any MTLRenderPipelineState
 
     let depthWrite: any MTLDepthStencilState          // greater, write
     let depthTest: any MTLDepthStencilState           // greater, no write
     let depthNone: any MTLDepthStencilState           // always, no write
+    /// ZTest LEqual in reverse Z (Custom/Silhouette's two passes).
+    let depthWriteLEqual: any MTLDepthStencilState    // greaterEqual, write
+    let depthTestLEqual: any MTLDepthStencilState     // greaterEqual, no write
 
     init(gpu: GPUContext, library: any MTLLibrary) throws {
         let device = gpu.device
@@ -56,19 +76,26 @@ final class Pipelines: @unchecked Sendable {
                     blend: Blend = .none, configure: ((MTLRenderPipelineDescriptor) -> Void)? = nil) throws -> any MTLRenderPipelineState {
             try Pipelines.build(device: device, library: library, label, v, f, color: color, depth: depth, samples: samples, blend: blend, configure: configure)
         }
+        let item = Pipelines.itemFunctions, ambientLit = Pipelines.ambientLitMapFunctions
 
         let hdr = Pipelines.hdrFormat, ldr = Pipelines.ldrFormat, dep = Pipelines.depthFormat, ms = Pipelines.sampleCount
 
         deform = try device.makeComputePipelineState(function: fn("deform_vertices"))
-        toonOpaque = try render("ToonOpaque", "toon_vertex", "toon_fragment", color: hdr, depth: dep, samples: ms)
-        toonBlend = try render("ToonBlend", "toon_vertex", "toon_fragment", color: hdr, depth: dep, samples: ms, blend: .alpha)
+        toonOpaque = try render("ToonOpaque", item.vertex, item.fragment, color: hdr, depth: dep, samples: ms)
+        toonBlend = try render("ToonBlend", item.vertex, item.fragment, color: hdr, depth: dep, samples: ms, blend: .alpha)
         eye = try render("Eye", "toon_vertex", "eye_fragment", color: hdr, depth: dep, samples: ms)
         eyeBlend = try render("EyeBlend", "toon_vertex", "eye_fragment", color: hdr, depth: dep, samples: ms, blend: .alpha)
         map = try render("Map", "toon_vertex", "map_fragment", color: hdr, depth: dep, samples: ms)
         mapBlend = try render("MapBlend", "toon_vertex", "map_fragment", color: hdr, depth: dep, samples: ms, blend: .alpha)
+        toonMapProbeLit = try render("ToonMapProbeLit", ambientLit.vertex, ambientLit.fragment, color: hdr, depth: dep, samples: ms)
+        toonMapProbeLitBlend = try render("ToonMapProbeLitBlend", ambientLit.vertex, ambientLit.fragment, color: hdr, depth: dep, samples: ms,
+                                          blend: .alpha)
+        mapDepthOnly = try render("MapDepthOnly", "toon_vertex", "map_fragment", color: hdr, depth: dep, samples: ms,
+                                  configure: Pipelines.noColorWrites)
         sky = try render("Sky", "sky_vertex", "sky_fragment", color: hdr, depth: dep, samples: ms)
         outline = try render("Outline", "outline_vertex", "outline_fragment", color: hdr, depth: dep, samples: ms)
         shadow = try render("Shadow", "shadow_vertex", "shadow_fragment", color: nil, depth: dep, samples: 1)
+        mapShadow = try render("MapShadow", "map_shadow_vertex", "map_shadow_fragment", color: nil, depth: dep, samples: 1)
         background = try render("Background", "fullscreen_vertex", "background_fragment", color: hdr, depth: dep, samples: ms)
         grid = try render("Grid", "grid_vertex", "grid_fragment", color: hdr, depth: dep, samples: ms, blend: .alpha)
         gizmoHDR = try render("GizmoHDR", "gizmo_vertex", "gizmo_fragment", color: hdr, depth: dep, samples: ms, blend: .alpha)
@@ -81,6 +108,8 @@ final class Pipelines: @unchecked Sendable {
         blit = try render("Blit", "fullscreen_vertex", "blit_fragment", color: ldr, depth: nil, samples: 1)
         pick = try render("Pick", "pick_vertex", "pick_fragment", color: Pipelines.pickFormat, depth: dep, samples: 1)
         pickGizmo = try render("PickGizmo", "pick_gizmo_vertex", "pick_gizmo_fragment", color: Pipelines.pickFormat, depth: dep, samples: 1)
+        pickInstanced = try render("PickInstanced", "pick_vertex_instanced", "pick_fragment_instanced", color: Pipelines.pickFormat,
+                                   depth: dep, samples: 1)
 
         func depthState(_ label: String, _ compare: MTLCompareFunction, write: Bool) throws -> any MTLDepthStencilState {
             let d = MTLDepthStencilDescriptor()
@@ -93,7 +122,12 @@ final class Pipelines: @unchecked Sendable {
         depthWrite = try depthState("DepthWrite", .greater, write: true)
         depthTest = try depthState("DepthTest", .greater, write: false)
         depthNone = try depthState("DepthNone", .always, write: false)
+        depthWriteLEqual = try depthState("DepthWriteLEqual", .greaterEqual, write: true)
+        depthTestLEqual = try depthState("DepthTestLEqual", .greaterEqual, write: false)
     }
+
+    /// A pipeline that writes depth only (ColorMask 0).
+    static func noColorWrites(_ d: MTLRenderPipelineDescriptor) { d.colorAttachments[0].writeMask = [] }
 
     enum Blend { case none, alpha, additive }
 
@@ -133,24 +167,33 @@ final class Pipelines: @unchecked Sendable {
         return try device.makeRenderPipelineState(descriptor: d)
     }
 
+    /// The item and character pipelines (ToonOpaque, ToonBlend): toon_fragment as compiled, never
+    /// specialized (it declares no function constants; a test pins both).
+    static let itemFunctions = (vertex: "toon_vertex", fragment: "toon_fragment")
+    /// The ambient-lit map pipelines (ToonMapProbeLit, ToonMapProbeLitBlend).
+    static let ambientLitMapFunctions = (vertex: "toon_vertex", fragment: "toon_map_probe_lit_fragment")
+
     /// The main-pass pipelines. The live source-shader path needs a stencil
     /// buffer (the original hair-front and eye passes test and write stencil
     /// reference 2), so a frame with live draws renders its main pass into a
     /// depth+stencil target with these same shaders recompiled for that
     /// attachment; a frame without live draws keeps the depth-only set.
     struct MainPass {
-        let background, grid, outline, toonOpaque, toonBlend, eye, eyeBlend, map, mapBlend, sky, gizmoHDR: any MTLRenderPipelineState
+        let background, grid, outline, toonOpaque, toonBlend, eye, eyeBlend, map, mapBlend, toonMapProbeLit, toonMapProbeLitBlend,
+            mapDepthOnly, sky, gizmoHDR: any MTLRenderPipelineState
 
         /// Every pipeline's label in field order, so tests can check that the
         /// depth-only and stencil variants carry the same groups.
         var labels: [String] {
-            [background, grid, outline, toonOpaque, toonBlend, eye, eyeBlend, map, mapBlend, sky, gizmoHDR].map { $0.label ?? "" }
+            [background, grid, outline, toonOpaque, toonBlend, eye, eyeBlend, map, mapBlend, toonMapProbeLit, toonMapProbeLitBlend,
+             mapDepthOnly, sky, gizmoHDR].map { $0.label ?? "" }
         }
     }
     static let depthStencilFormat: MTLPixelFormat = .depth32Float_stencil8
     var depthOnlyMainPass: MainPass {
         MainPass(background: background, grid: grid, outline: outline, toonOpaque: toonOpaque, toonBlend: toonBlend,
-                 eye: eye, eyeBlend: eyeBlend, map: map, mapBlend: mapBlend, sky: sky, gizmoHDR: gizmoHDR)
+                 eye: eye, eyeBlend: eyeBlend, map: map, mapBlend: mapBlend, toonMapProbeLit: toonMapProbeLit,
+                 toonMapProbeLitBlend: toonMapProbeLitBlend, mapDepthOnly: mapDepthOnly, sky: sky, gizmoHDR: gizmoHDR)
     }
     private let stencilLock = NSLock()
     private var stencilPass: MainPass?
@@ -159,19 +202,25 @@ final class Pipelines: @unchecked Sendable {
         stencilLock.lock(); defer { stencilLock.unlock() }
         if let stencilPass { return stencilPass }
         let hdr = Pipelines.hdrFormat, ds = Pipelines.depthStencilFormat, ms = Pipelines.sampleCount
-        func render(_ label: String, _ v: String, _ f: String, blend: Blend = .none) throws -> any MTLRenderPipelineState {
-            try Pipelines.build(device: device, library: library, label + "Stencil", v, f, color: hdr, depth: ds, stencil: ds, samples: ms, blend: blend)
+        func render(_ label: String, _ v: String, _ f: String, blend: Blend = .none,
+                    configure: ((MTLRenderPipelineDescriptor) -> Void)? = nil) throws -> any MTLRenderPipelineState {
+            try Pipelines.build(device: device, library: library, label + "Stencil", v, f, color: hdr, depth: ds, stencil: ds, samples: ms,
+                                blend: blend, configure: configure)
         }
+        let item = Pipelines.itemFunctions, ambientLit = Pipelines.ambientLitMapFunctions
         let result = MainPass(
             background: try render("Background", "fullscreen_vertex", "background_fragment"),
             grid: try render("Grid", "grid_vertex", "grid_fragment", blend: .alpha),
             outline: try render("Outline", "outline_vertex", "outline_fragment"),
-            toonOpaque: try render("ToonOpaque", "toon_vertex", "toon_fragment"),
-            toonBlend: try render("ToonBlend", "toon_vertex", "toon_fragment", blend: .alpha),
+            toonOpaque: try render("ToonOpaque", item.vertex, item.fragment),
+            toonBlend: try render("ToonBlend", item.vertex, item.fragment, blend: .alpha),
             eye: try render("Eye", "toon_vertex", "eye_fragment"),
             eyeBlend: try render("EyeBlend", "toon_vertex", "eye_fragment", blend: .alpha),
             map: try render("Map", "toon_vertex", "map_fragment"),
             mapBlend: try render("MapBlend", "toon_vertex", "map_fragment", blend: .alpha),
+            toonMapProbeLit: try render("ToonMapProbeLit", ambientLit.vertex, ambientLit.fragment),
+            toonMapProbeLitBlend: try render("ToonMapProbeLitBlend", ambientLit.vertex, ambientLit.fragment, blend: .alpha),
+            mapDepthOnly: try render("MapDepthOnly", "toon_vertex", "map_fragment", configure: Pipelines.noColorWrites),
             sky: try render("Sky", "sky_vertex", "sky_fragment"),
             gizmoHDR: try render("GizmoHDR", "gizmo_vertex", "gizmo_fragment", blend: .alpha))
         stencilPass = result

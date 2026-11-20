@@ -160,3 +160,108 @@ private func syntheticFullBody(scale: Float3 = .one, iterations: Int = 4) throws
     #expect(initial.guides.map(\.position) == later.guides.map(\.position))
     #expect(initial.guides.map { $0.rotation.vector } == later.guides.map { $0.rotation.vector })
 }
+
+/// Every float of an IK result as a bit pattern, with its guides, target sets
+/// and diagnostics, so two results compare exactly.
+private func fullBodyResultBits(_ result: SourceStudioIK.Result) -> [String] {
+    func bits(_ values: [Float]) -> String { values.map { String($0.bitPattern, radix: 16) }.joined(separator: ",") }
+    let pose = result.pose.localMatrices.map { m in bits((0..<4).flatMap { c in (0..<4).map { m[c][$0] } }) }
+    let guides = result.guides.map { g in
+        "\(g.targetID) \(String(describing: g.sourceKey)) \(g.group) \(g.rotationEnabled) \(g.active) "
+            + bits([g.position.x, g.position.y, g.position.z, g.rotation.vector.x, g.rotation.vector.y, g.rotation.vector.z, g.rotation.vector.w])
+    }
+    return pose + guides + [result.appliedTargetIDs.sorted().description, result.deferredTargetIDs.sorted().description,
+                            bits([result.bodyPullOffset.x, result.bodyPullOffset.y, result.bodyPullOffset.z])] + result.diagnostics
+}
+
+/// #371: a full-body solver evaluates its initialization pose once, in
+/// `init`, and `apply` uses that only for the rig it was built for; another
+/// rig evaluates it again. `baselineEvaluation` stands in for evaluating the
+/// baseline. Every result equals the evaluating path bit for bit, and an
+/// initialization pose that fails to evaluate is not kept: `apply` throws
+/// the evaluation's error where it did before.
+@Test func sourceFullBodyKeepsTheInitializationEvaluationOnlyForItsRig() throws {
+    let (rig, bindings) = try syntheticFullBody()
+    let twin = try RigDefinition(nodes: rig.nodes, skins: rig.skins)
+    #expect(twin.identity !== rig.identity)
+    var animated = rig.restPose
+    let spine = try rig.uniqueNode(named: "spine1")
+    animated.localMatrices[spine] = Transform.trs(Float3(0, 0.3, 0), simd_quatf(angle: 0.2, axis: Float3(0, 0, 1)), .one)
+    let saved: [Int32: KoikatsuBoneRecord] = [0: .init(sourceKey: 7301, transform: .init(position: Float3(0.1, 1.18, 0.08), rotationDegrees: .zero, scale: .one)),
+                                             3: .init(sourceKey: 9312, transform: .init(position: Float3(-0.28, 1.55, 0.12), rotationDegrees: Float3(10, 20, 30), scale: .one))]
+    func world(_ evaluation: [float4x4]?) -> [[UInt32]]? {
+        evaluation?.map { m in (0..<4).flatMap { c in (0..<4).map { m[c][$0].bitPattern } } }
+    }
+    var compared = 0
+    for initialization in [rig.restPose, animated] {
+        let solver = try SourceStudioIK(rig: rig, bindings: bindings, initializationPose: initialization)
+        #expect(solver.checked === rig.identity)
+        #expect(world(solver.initialWorld) == world(try rig.evaluate(initialization).worldMatrices))
+        for (targets, enabled) in [([:], false), (saved, false), ([:], true), (saved, true)] as [([Int32: KoikatsuBoneRecord], Bool)] {
+            for baseline in [rig.restPose, animated] {
+                // The rig it was built for uses the kept evaluation; the twin
+                // evaluates the initialization pose afresh.
+                var results: [[String]] = []
+                for query in [rig, twin] {
+                    let evaluation = try query.evaluate(baseline)
+                    for passed in [nil, evaluation] as [RigEvaluation?] {
+                        results.append(fullBodyResultBits(try solver.apply(rig: query, baseline: baseline, savedTargets: targets, enabled: enabled,
+                            activeGroups: [true, true, true, true, true], characterRoot: 0, baselineEvaluation: passed)))
+                    }
+                }
+                #expect(results.allSatisfy { $0 == results[0] }, "enabled \(enabled), \(targets.count) saved targets")
+                compared += 1
+            }
+        }
+    }
+    #expect(compared == 16)
+
+    // Pinning case (main, 2026-11-18): a rig with the same parents and one
+    // bone's rest offset changed. `apply` with it does not take the kept
+    // evaluation (another identity) and evaluates the stored initialization
+    // pose afresh. That gives the kept world matrices exactly:
+    // RigDefinition.evaluate's world loop (Rig.swift:124-126) reads only the
+    // pose's local matrices, `order` (built from the parents, Rig.swift:77-82)
+    // and the parents, never a node's rest transform, and the pose is the one
+    // stored at init (SourceStudioIK.swift:128). So the kept evaluation would
+    // be right for this rig too; the identity check is a defence.
+    let moved = try RigDefinition(nodes: rig.nodes.enumerated().map { index, n in
+        RigDefinition.Node(name: n.name, sourceID: n.sourceID, parent: n.parent,
+                           translation: index == spine ? n.translation + Float3(0.05, 0.1, -0.02) : n.translation,
+                           rotation: n.rotation, scale: n.scale, authoredMatrix: n.authoredMatrix, active: n.active)
+    }, skins: rig.skins)
+    #expect(moved.restPose.localMatrices[spine] != rig.restPose.localMatrices[spine])
+    for initialization in [rig.restPose, animated] {
+        let solver = try SourceStudioIK(rig: rig, bindings: bindings, initializationPose: initialization)
+        #expect(solver.checked !== moved.identity && solver.bound(to: moved))
+        #expect(world(try moved.evaluate(initialization).worldMatrices) == world(solver.initialWorld))
+        for baseline in [rig.restPose, animated] {
+            let kept = try solver.apply(rig: rig, baseline: baseline, savedTargets: saved, enabled: false,
+                                        activeGroups: [true, true, true, true, true], characterRoot: 0)
+            let afresh = try solver.apply(rig: moved, baseline: baseline, savedTargets: saved, enabled: false,
+                                          activeGroups: [true, true, true, true, true], characterRoot: 0)
+            #expect(fullBodyResultBits(afresh) == fullBodyResultBits(kept))
+        }
+    }
+
+    // An initialization pose that does not evaluate (a non-finite matrix on a
+    // node the full-body solver does not read): `init` succeeds and keeps
+    // nothing, and `apply` throws the evaluation's error for either rig.
+    let accessory = try rig.uniqueNode(named: "mirrored accessory")
+    var broken = rig.restPose
+    broken.localMatrices[accessory][3][0] = .nan
+    let solver = try SourceStudioIK(rig: rig, bindings: bindings, initializationPose: broken)
+    #expect(solver.initialWorld == nil)
+    for query in [rig, twin] {
+        let rest = try query.evaluate(query.restPose)
+        for passed in [nil, rest] as [RigEvaluation?] {
+            do {
+                _ = try solver.apply(rig: query, baseline: query.restPose, savedTargets: [:], enabled: false,
+                                     activeGroups: [true, true, true, true, true], characterRoot: 0, baselineEvaluation: passed)
+                Issue.record("an initialization pose that does not evaluate was accepted")
+            } catch {
+                #expect("\(error)" == "Pose node \(accessory) has an invalid matrix.")
+            }
+        }
+    }
+}

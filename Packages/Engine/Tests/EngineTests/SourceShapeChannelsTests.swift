@@ -1,4 +1,5 @@
 import Foundation
+import simd
 import Testing
 import Character
 
@@ -45,6 +46,73 @@ private func fixtureContract() throws -> SourceShapeContract {
     #expect(try domain.sample(channelName: "controller", rate: 1).rotationDegrees.x == 170)
 }
 
+/// One channel `name` with `rotations` (x per sample; y and z 0) and
+/// positions/scales 0, 1, 2… along x, in a one-slot domain whose slot writes
+/// the axes `mask` selects (all by default) of position, rotation and scale.
+private func extendedDomain(name: String, rotations: [Float], mask: [Bool] = [true, true, true]) throws -> SourceShapeDomain {
+    let samples: [[String: Any]] = rotations.enumerated().map { index, x in
+        ["key": index, "position": [Float(index), 0, 0], "rotationDegrees": [x, 0, 0], "scale": [1 + Float(index), 1, 1]]
+    }
+    let binding: [String: Any] = ["sourceName": name, "sourceIndex": 0, "positionMask": mask,
+                                  "rotationMask": mask, "scaleMask": mask]
+    let domain: [String: Any] = [
+        "id": "extended", "valueCount": 1, "defaultValues": [0.5], "sourceNames": [name], "destinationNames": ["bone"],
+        "slots": [["index": 0, "label": "X", "bindings": [binding]]], "channels": [["name": name, "samples": samples]],
+        "directTargets": [["sourceName": name, "destinationName": "bone", "positionMask": [true, true, true],
+                           "rotationMask": [true, true, true], "scaleMask": [true, true, true]]],
+        "unportedDestinationNames": [],
+    ]
+    return try JSONDecoder().decode(SourceShapeDomain.self, from: JSONSerialization.data(withJSONObject: domain))
+}
+
+/// Slider Unlocker's extended rates (`SourceShapeRateRange.extended`):
+/// position and scale on the first-to-last line, rotation by the
+/// first-to-last turn taken the way the first step turns, held at the end for
+/// the channels it names; `.vanilla` draws the clamped rate. In 0...1 nothing
+/// changes.
+@Test func sourceShapeExtendsRatesAsSliderUnlockerDraws() throws {
+    let domain = try #require(fixtureContract().domain("test"))
+    // First-to-last line, not the last segment: positions 0 → 10 → 20 on x.
+    let above = try domain.sample(channelName: "controller", rate: 1.5)
+    #expect(above.position == SIMD3<Float>(30, 80, 90) && above.scale == SIMD3<Float>(4, 4, 4))
+    let below = try domain.sample(channelName: "controller", rate: -0.5)
+    #expect(below.position == SIMD3<Float>(-10, 0, 10) && below.scale == SIMD3<Float>(0, 0, 0))
+    // x and z: 350 → 10 is a step of -340 (decreasing), the turn 170 - 350 =
+    // -180 agrees; y: the step 0 → 180 increases and the turn is 0.
+    #expect(above.rotationDegrees == SIMD3<Float>(170 - 90, 0, 170 - 90))
+    #expect(below.rotationDegrees == SIMD3<Float>(350 + 90, 0, 350 + 90))
+    // A turn against the first step gains or loses 360°.
+    let rising = try extendedDomain(name: "riser", rotations: [350, 355, 10])      // step +5, turn -340 → +20
+    #expect(try rising.sample(channelName: "riser", rate: 2).rotationDegrees.x == 30)
+    #expect(try rising.sample(channelName: "riser", rate: -1).rotationDegrees.x == 330)
+    let falling = try extendedDomain(name: "faller", rotations: [10, 5, 350])      // step -5, turn +340 → -20
+    #expect(try falling.sample(channelName: "faller", rate: 2).rotationDegrees.x == 330)
+    #expect(try falling.sample(channelName: "faller", rate: -1).rotationDegrees.x == 30)
+    // Not wrapped afterwards.
+    #expect(try rising.sample(channelName: "riser", rate: 20).rotationDegrees.x == 10 + 20 * 19)
+    // The named channels hold their rotation at the nearest end; position and scale still extend.
+    for name in ["cf_a_bust01_size", "cf_a_thigh01_L", "cf_a_sk_thigh01_sx", "cf_s_Mune00", "cf_s_MayuTip_L"] {
+        #expect(SourceShapeDomain.holdsRotationWhenExtended(name), "\(name)")
+        let held = try extendedDomain(name: name, rotations: [350, 355, 10])
+        let high = try held.sample(channelName: name, rate: 2), low = try held.sample(channelName: name, rate: -1)
+        #expect(high.rotationDegrees.x == 10 && low.rotationDegrees.x == 350, "\(name)")
+        #expect(high.position.x == 4 && low.position.x == -2 && high.scale.x == 5, "\(name)")
+    }
+    for name in ["cf_a_bust01_shape1", "cf_a_thigh02_L", "cf_J_MayuTip_s_L", "cf_a_height"] {
+        #expect(!SourceShapeDomain.holdsRotationWhenExtended(name), "\(name)")
+    }
+    // A slot value outside 0...1: extended or drawn clamped, never rejected.
+    let extended = try domain.makeState(values: [1.5, -0.25], range: .extended)
+    #expect(extended["controller"]?.position == SIMD3<Float>(30, 10, 0))
+    #expect(try domain.makeState(values: [1.5, -0.25], range: .vanilla) == domain.makeState(values: [1, 0], range: .extended))
+    // In 0...1 both ranges are the existing interpolation.
+    for rate: Float in [0, 0.25, 0.5, 0.75, 1] {
+        #expect(try domain.makeState(values: [rate, rate], range: .extended) == domain.makeState(values: [rate, rate], range: .vanilla))
+    }
+    #expect(SourceShapeRateRange.extended.drawn(1.5) == 1.5 && SourceShapeRateRange.vanilla.drawn(1.5) == 1)
+    #expect(SourceShapeRateRange.vanilla.drawn(-2) == 0 && SourceShapeRateRange.vanilla.drawn(0.3) == 0.3)
+}
+
 @Test func sourceShapeMasksPreserveOtherSlotsAndUntouchedAxes() throws {
     let domain = try #require(fixtureContract().domain("test"))
     var state = try domain.makeState()
@@ -64,8 +132,9 @@ private func fixtureContract() throws -> SourceShapeContract {
     let domain = try #require(fixtureContract().domain("test"))
     var state = try domain.makeState()
     let before = state
-    for value: Float in [-0.1, 1.1, .nan, .infinity] {
+    for value: Float in [.nan, .infinity, -.infinity] {
         #expect(throws: SourceShapeError.invalidRate) { try domain.apply(slot: 0, value: value, to: &state) }
+        #expect(throws: SourceShapeError.invalidRate) { try domain.sample(channelName: "controller", rate: value) }
         #expect(state == before)
     }
     #expect(throws: SourceShapeError.invalidSlot(-1)) { try domain.apply(slot: -1, value: 0, to: &state) }
@@ -74,6 +143,22 @@ private func fixtureContract() throws -> SourceShapeContract {
     state.removeValue(forKey: "controller")
     #expect(throws: SourceShapeError.incompleteState("controller")) { try domain.apply(slot: 0, value: 0.5, to: &state) }
     #expect(state.isEmpty)
+    // A finite rate so large that the extended shape overflows is invalid
+    // too, but only through the axes the slot writes (x here; y and z are
+    // constant, so they stay finite).
+    let wide = try extendedDomain(name: "riser", rotations: [350, 355, 10])
+    var wideState = try wide.makeState()
+    let wideBefore = wideState
+    #expect(throws: SourceShapeError.invalidRate) { try wide.sample(channelName: "riser", rate: 3e38) }
+    #expect(throws: SourceShapeError.invalidRate) { try wide.apply(slot: 0, value: -3e38, to: &wideState, range: .extended) }
+    #expect(wideState == wideBefore)
+    let narrow = try extendedDomain(name: "riser", rotations: [350, 355, 10], mask: [false, true, true])
+    var narrowState = try narrow.makeState()
+    try narrow.apply(slot: 0, value: 3e38, to: &narrowState, range: .extended)
+    #expect(narrowState == (try narrow.makeState()), "y and z are the same at every rate")
+    // Vanilla draws the clamped rate, so the same value is fine there.
+    try wide.apply(slot: 0, value: 3e38, to: &wideState, range: .vanilla)
+    #expect(wideState == (try wide.makeState(values: [1], range: .extended)))
 }
 
 @Test func sourceShapeContractValidatesDimensionsReferencesAndCoverage() throws {
@@ -237,4 +322,79 @@ func sourceShapeLoadsLocalRecoveredContractWhenRequested() throws {
     let low = try body.sample(channelName: "cf_a_height", rate: 0)
     let high = try body.sample(channelName: "cf_a_height", rate: 1)
     #expect(low.scale.y != high.scale.y)
+    // Extended rates meet the slider's ends: just past 0 or 1 every channel is
+    // within float noise of the end, and the named channels hold rotation.
+    for domain in contract.domains {
+        for channel in domain.channels {
+            for (end, past) in [(Float(0), Float(-1e-4)), (1, 1 + 1e-4)] {
+                let a = try domain.sample(channelName: channel.name, rate: end), b = try domain.sample(channelName: channel.name, rate: past)
+                let worst = [simd_abs(a.position - b.position).max(), simd_abs(a.scale - b.scale).max(),
+                             simd_abs(a.rotationDegrees - b.rotationDegrees).max()].max()!
+                #expect(worst < 0.05, "\(domain.id) \(channel.name) at \(past): \(worst)")
+                if SourceShapeDomain.holdsRotationWhenExtended(channel.name) { #expect(a.rotationDegrees == b.rotationDegrees) }
+            }
+        }
+    }
+    #expect(body.channels.filter { SourceShapeDomain.holdsRotationWhenExtended($0.name) }.count == 11)
+    #expect(!face.channels.contains { SourceShapeDomain.holdsRotationWhenExtended($0.name) })
+    // A tall card (body rate 0 at 1.5) is taller than rate 1, not clamped.
+    #expect(try body.sample(channelName: "cf_a_height", rate: 1.5).scale.y > high.scale.y)
+}
+
+/// What every slot of both recovered domains writes at an extended rate (2.0,
+/// as the Maker scenarios commit, and -1.0) is the Slider Unlocker rule, read
+/// again here independently: from the raw contract JSON, in Double, with the
+/// held-rotation names restated.
+@Test(.enabled(if: SourceFixtureSupport.shouldRun(["IKKOKU_SHAPE_CONTRACT"]),
+               "Requires IKKOKU_SHAPE_CONTRACT"))
+func sourceShapeExtendedSlotsFollowTheRuleOnTheRecoveredContract() throws {
+    let data = try Data(contentsOf: URL(fileURLWithPath: SourceFixtureSupport.require("IKKOKU_SHAPE_CONTRACT")))
+    let contract = try SourceShapeContract.decode(data)
+    let json = try #require(JSONSerialization.jsonObject(with: data) as? [String: Any])
+    typealias Key = (position: [Double], rotation: [Double], scale: [Double])
+    func held(_ name: String) -> Bool {
+        name.contains("cf_s_Mune") || name.contains("cf_s_Mouth") || name.contains("cf_s_LegLow") || name.contains("cf_s_MayuTip")
+            || (name.contains("thigh") && name.contains("01")) || (name.hasPrefix("cf_a_bust") && name.hasSuffix("_size"))
+    }
+    var checked = 0
+    for raw in try #require(json["domains"] as? [[String: Any]]) {
+        let domain = try #require(contract.domain(raw["id"] as! String))
+        var keys: [String: [Key]] = [:]
+        for channel in raw["channels"] as! [[String: Any]] {
+            keys[channel["name"] as! String] = (channel["samples"] as! [[String: Any]]).map {
+                ($0["position"] as! [Double], $0["rotationDegrees"] as! [Double], $0["scale"] as! [Double])
+            }
+        }
+        func rule(_ name: String, _ rate: Double) -> Key {
+            let k = keys[name]!, first = k[0], last = k[k.count - 1], second = k[1]
+            func line(_ a: [Double], _ b: [Double]) -> [Double] { (0..<3).map { a[$0] + (b[$0] - a[$0]) * rate } }
+            let rotation: [Double] = (0..<3).map { axis in
+                if held(name) { return rate < 0 ? first.rotation[axis] : last.rotation[axis] }
+                var turn = last.rotation[axis] - first.rotation[axis]
+                if second.rotation[axis] - first.rotation[axis] >= 0 { if turn < 0 { turn += 360 } } else if turn > 0 { turn -= 360 }
+                return rate < 0 ? first.rotation[axis] + turn * rate : last.rotation[axis] + turn * (rate - 1)
+            }
+            return (line(first.position, last.position), rotation, line(first.scale, last.scale))
+        }
+        func near(_ a: Float, _ b: Double) -> Bool { abs(Double(a) - b) <= 1e-4 * max(1, abs(b)) }
+        for slot in raw["slots"] as! [[String: Any]] {
+            let index = slot["index"] as! Int
+            for rate in [2.0, -1.0] {
+                var state = try domain.makeState(range: .extended)
+                try domain.apply(slot: index, value: Float(rate), to: &state, range: .extended)
+                for binding in slot["bindings"] as! [[String: Any]] {
+                    let name = binding["sourceName"] as! String
+                    let got = try #require(state[name]), want = rule(name, rate)
+                    let masks = (binding["positionMask"] as! [Bool], binding["rotationMask"] as! [Bool], binding["scaleMask"] as! [Bool])
+                    for axis in 0..<3 {
+                        if masks.0[axis] { #expect(near(got.position[axis], want.position[axis]), "\(domain.id)[\(index)] \(name) p\(axis) at \(rate)") }
+                        if masks.1[axis] { #expect(near(got.rotationDegrees[axis], want.rotation[axis]), "\(domain.id)[\(index)] \(name) r\(axis) at \(rate)") }
+                        if masks.2[axis] { #expect(near(got.scale[axis], want.scale[axis]), "\(domain.id)[\(index)] \(name) s\(axis) at \(rate)") }
+                    }
+                }
+                checked += 1
+            }
+        }
+    }
+    #expect(checked == (44 + 52) * 2)
 }

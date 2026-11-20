@@ -9,6 +9,7 @@ import Character
 import Gameplay
 import Studio
 import ShaderTypes
+import Observation
 
 /// JSON-driven Studio scenario: a scripted sequence of checklist moves over the
 /// imported source scene, run headlessly behind `IKKOKU_STUDIO_SCENARIO` so the
@@ -19,17 +20,18 @@ import ShaderTypes
 struct StudioScenario: Decodable {
     struct Step: Decodable {
         /// `"select"`, `"setVisible"`, `"rename"`, `"toggleCamera"`, `"toggleRoute"`,
-        /// `"undo"`, `"redo"`, `"newScene"`, `"saveDocument"`, `"loadDocument"`,
+        /// `"undo"`, `"redo"`, `"newScene"`, `"saveDocument"`, `"loadDocument"`, `"loadDocumentRejected"`, `"importDocument"`,
         /// `"setFace"`, `"setBody"`, `"setColor"`, `"resetShape"`, `"resetColors"`, `"setOutfit"`,
         /// `"setClothesState"`, `"setAccessoryVisible"`, `"setShoesType"`, `"setExpression"`, `"resetExpression"`,
         /// `"setAnimation"`, `"setAnimationSpeed"`, `"setForceLoop"`, `"setFKEnabled"`,
-        /// `"setFK"`, `"setPoseMode"`, `"selectBone"`, `"dragGizmo"`, `"hoverGizmo"`,
+        /// `"setFK"`, `"setPoseMode"`, `"selectBone"`, `"dragGizmo"`, `"dragIKGuide"`, `"hoverGizmo"`,
+        /// `"setSourceIKEnabled"`, `"clickIKGuide"`,
         /// `"captureBone"`, `"captureObject"`, `"captureRender"`, `"advance"`, `"orbit"`,
         /// `"setAutomaticBlink"`, `"addCharacter"`, `"setIKEnabled"`, `"setIKTarget"`,
         /// `"captureIKPose"`, `"editDuringAdvance"`, `"backgroundBuild"`, `"delete"`, `"setParent"`, `"duplicate"`,
         /// `"addFolder"`, `"addCamera"`, `"addLight"`, `"export"`, `"exportRejected"`, `"reimport"`,
-        /// `"focus"`, `"selectRoutePoint"`, `"dragRoutePoint"`, `"editRoute"`, `"captureRoute"`, `"setShowSourceMap"`,
-        /// `"assert"`, `"assertRejected"`.
+        /// `"focus"`, `"selectRoutePoint"`, `"dragRoutePoint"`, `"editRoute"`, `"captureRoute"`, `"setShowSourceMap"`, `"setUnlimitedLights"`,
+        /// `"deselect"`, `"assertWorkspaceRows"`, `"pressDigit"`, `"assert"`, `"assertRejected"`.
         let op: String
         let key: Int32?
         /// ST-T03: with `key`, address the n-th copy (document order) of that
@@ -42,6 +44,9 @@ struct StudioScenario: Decodable {
         /// assert only: the looked-through camera must be a copy of this
         /// source camera (`Studio.Duplicate` hands the view to the copy).
         let activeCopyOf: Int32?
+        /// assert only (#384): how many undo and redo steps the history holds,
+        /// and how many objects the document has.
+        let undoDepth: Int?, redoDepth: Int?, objectCount: Int?
         let visible: Bool?
         let name: String?
         let index: Int?
@@ -77,6 +82,19 @@ struct StudioScenario: Decodable {
         /// must contain, read after any `view` check in the same step, so a
         /// look-through rejection the render camera reported is visible.
         let statusContains: String?
+        /// assert only: a substring the status line must not contain (a
+        /// hidden character's attachments report no false parent error).
+        let statusLacks: String?
+        /// assert only: whether source character `key` has a built preview,
+        /// the data its Face, Clothes and Pose inspectors read. A hidden
+        /// character builds when shown or selected; with `built` true and the
+        /// character selected, its pose and animation state must be readable.
+        let characterBuilt: CharacterBuiltValue?
+        /// assert only: source character `key`'s saved animation state in
+        /// exported scene files (`paths`, read back from disk): with `agree`
+        /// every file saves the same state; with `increasing` each file's
+        /// normalizedTime is above the previous file's (the clock ran).
+        let exportedAnimation: ExportedAnimationValue?
         /// assert only: a substring the view indicator under the status line
         /// (`StudioModel.activeSourceCameraView`) must contain; with no source
         /// camera active the indicator is empty and contains nothing.
@@ -96,7 +114,8 @@ struct StudioScenario: Decodable {
         let no: Int32?
         /// setAnimationSpeed: the inspector speed rate (finite and >= 0).
         let speed: Float?
-        /// setForceLoop / setFKEnabled: the flag to set.
+        /// setForceLoop / setFKEnabled / setUnlimitedLights: the flag to set;
+        /// pressDigit: Shift is held (`index` is the digit 0-9).
         let on: Bool?
         /// setFK / captureBone: the pose-contract catalog bone id whose world
         /// guide the edit or the capture addresses.
@@ -107,11 +126,29 @@ struct StudioScenario: Decodable {
         /// setPoseMode: the mode to select, the lowercase words "object",
         /// "fk" or "ik" (the inspector's mode picker choices).
         let mode: String?
-        /// dragGizmo: the rotate-gizmo axis to grab, "x", "y" or "z".
+        /// dragGizmo: the rotate-gizmo axis to grab, "x", "y" or "z";
+        /// dragIKGuide: the translate arrow's.
         let axis: String?
-        /// dragGizmo: the [dx, dy] pixel offset the mouse drag travels
-        /// (viewport pixels, origin top-left like the view's own events).
+        /// dragGizmo / dragIKGuide: the [dx, dy] pixel offset the mouse drag
+        /// travels (viewport pixels, origin top-left like the view's own events).
         let pixels: [Float]?
+        /// dragGizmo / dragIKGuide (#425): also require the toolbar to hold
+        /// still over the drag. Its controls are `.equatable()` on
+        /// `StudioToolbarState`, so that state must be the same after every
+        /// mouseDragged and the mouseUp as after the mouseDown, which may only
+        /// set canUndo (its undo snapshot); and no drag event may write
+        /// anything the toolbar's body reads, so the body is not invalidated.
+        let toolbarSteady: Bool?
+        /// setSourceIKEnabled (#439): the Pose tab's IK group toggle to set,
+        /// 0-4 in `SourceStudioIKEditing.groupLabels` order; without it, the
+        /// "IK enabled" toggle. `on` is the value either way.
+        let ikGroup: Int?
+        /// clickIKGuide (#439): whether the click must select the guide, which
+        /// it can only while the guide is drawn, that is active.
+        let selects: Bool?
+        /// assert only (#439): a source character's IK guides as the frame
+        /// draws them, and its kinematic flags.
+        let sourceIK: SourceIKValue?
         /// assert only: the live animation state the preview plays for the
         /// named character (the inspector readback); every field is optional
         /// and only the keys present in the JSON are compared — like the
@@ -287,6 +324,16 @@ struct StudioScenario: Decodable {
         /// assert only: the named character's live wear readback (rendered
         /// preview and document); only the fields present are compared.
         let clothes: ClothesValue?
+        /// assert only: the named character's live source-shader assembly
+        /// (`IKKOKU_LIVE_SOURCE_SHADERS=1`), its resolved materials' bound
+        /// textures counted by effective sampler state.
+        let liveSamplers: LiveSamplersValue?
+
+        struct LiveSamplersValue: Decodable {
+            let key: Int32
+            /// `SourceShaderLiveAssembly.samplerSummary`, compared whole.
+            let counts: [String: Int]
+        }
         /// setExpression and assert share a partial face-state object.
         let expression: ExpressionValue?
 
@@ -450,6 +497,18 @@ struct StudioScenario: Decodable {
             let speed: Float?
             let forceLoop: Bool?
         }
+        struct SourceIKValue: Decodable {
+            let key: Int32
+            /// the target IDs (0-12) whose guide handles the frame draws; the
+            /// character must be selected in IK pose mode.
+            let drawn: [Int32]?
+            /// the object's kinematic flags (`sourceKinematics`, else the saved record's).
+            let enableIK: Bool?
+            let activeIK: [Bool]?
+            /// whether the Pose tab says the selected guide is hidden
+            /// (`selectedSourceIKGuideHidden`, the caption under the picker).
+            let selectedHidden: Bool?
+        }
         struct FKValue: Decodable {
             let key: Int32
             let bone: Int32
@@ -475,6 +534,9 @@ struct StudioScenario: Decodable {
             /// world position and forward, read through the same placement
             /// walk `refresh()` uses, and not the saved camera.
             let key: Int32?
+            /// #425: camera slot N (1-10): the view must be exactly the saved
+            /// camera, and that camera must be exactly what slot N holds.
+            let slot: Int?
         }
         struct PositionValue: Decodable {
             let key: Int32
@@ -506,11 +568,34 @@ struct StudioScenario: Decodable {
             let particleDraws: Int?
             let skyDraws: Int?
             let blockImages: Int?
+            /// Unlit/Transparent and silhouette draws, and the placed option draws (slice 4).
+            let unlitDraws: Int?
+            let silhouetteDraws: Int?
+            let optionDraws: Int?
+            /// Draws by the map's ambient, with the realtime sun, receiving its
+            /// shadow, receiving per vertex, and the shadow map's casters (slice 5).
+            let probeLitDraws: Int?
+            let sunLitDraws: Int?
+            let receivingDraws: Int?
+            let perVertexReceiveDraws: Int?
+            let sunCasters: Int?
             let lineContains: String?
             let lineAbsent: String?
             let loading: Bool?
             let pickNothingAt: [[Float]]?
             let pickSomethingAt: [[Float]]?
+        }
+
+        struct CharacterBuiltValue: Decodable {
+            let key: Int32
+            let built: Bool
+        }
+
+        struct ExportedAnimationValue: Decodable {
+            let key: Int32
+            let paths: [String]
+            let agree: Bool?
+            let increasing: Bool?
         }
 
         struct SourceRuntimeValue: Decodable {
@@ -524,12 +609,13 @@ struct StudioScenario: Decodable {
 
         private enum CodingKeys: String, CodingKey {
             case op, key, visible, name, index, value, id, rgba, path, face, body, color,
-                 activeCamera, routePlaying, sourceRuntime, diagnosticContains, statusContains, indicatorContains, treeLabel, view,
+                 activeCamera, routePlaying, sourceRuntime, diagnosticContains, statusContains, statusLacks, characterBuilt, exportedAnimation,
+                 indicatorContains, treeLabel, view,
                  group, category, no, speed, on, bone, rotation, animation, fk, position,
-                 seconds, dx, dy, eyeLook, blink, handPattern, mode, axis, pixels,
+                 seconds, dx, dy, eyeLook, blink, handPattern, mode, axis, pixels, toolbarSteady, ikGroup, selects, sourceIK,
                  render, exportIdenticalToSource, errorContains, outfit, accessoryLabels, pluginMount, state, clothes, expression,
                  sex, character, chain, delta, ik, edit, build, parent, children, absent, copy, added, activeCopyOf,
-                 aid, routeEdit, route, routeLines, sourceMap
+                 undoDepth, redoDepth, objectCount, aid, routeEdit, route, routeLines, sourceMap, liveSamplers
         }
 
         init(from decoder: Decoder) throws {
@@ -563,6 +649,9 @@ struct StudioScenario: Decodable {
             sourceRuntime = try c.decodeIfPresent(SourceRuntimeValue.self, forKey: .sourceRuntime)
             diagnosticContains = try c.decodeIfPresent(String.self, forKey: .diagnosticContains)
             statusContains = try c.decodeIfPresent(String.self, forKey: .statusContains)
+            statusLacks = try c.decodeIfPresent(String.self, forKey: .statusLacks)
+            characterBuilt = try c.decodeIfPresent(CharacterBuiltValue.self, forKey: .characterBuilt)
+            exportedAnimation = try c.decodeIfPresent(ExportedAnimationValue.self, forKey: .exportedAnimation)
             indicatorContains = try c.decodeIfPresent(String.self, forKey: .indicatorContains)
             treeLabel = try c.decodeIfPresent(String.self, forKey: .treeLabel)
             view = try c.decodeIfPresent(ViewValue.self, forKey: .view)
@@ -599,6 +688,7 @@ struct StudioScenario: Decodable {
             pluginMount = try c.decodeIfPresent([PluginMountSummary.Section].self, forKey: .pluginMount)
             state = try c.decodeIfPresent(Int.self, forKey: .state)
             clothes = try c.decodeIfPresent(ClothesValue.self, forKey: .clothes)
+            liveSamplers = try c.decodeIfPresent(LiveSamplersValue.self, forKey: .liveSamplers)
             expression = try c.decodeIfPresent(ExpressionValue.self, forKey: .expression)
             // Native IK parameters: absent keys stay `nil` like every optional
             // above, and the op that needs one reports it missing.
@@ -613,6 +703,10 @@ struct StudioScenario: Decodable {
             mode = try c.decodeIfPresent(String.self, forKey: .mode)
             axis = try c.decodeIfPresent(String.self, forKey: .axis)
             pixels = try c.decodeIfPresent([Float].self, forKey: .pixels)
+            toolbarSteady = try c.decodeIfPresent(Bool.self, forKey: .toolbarSteady)
+            ikGroup = try c.decodeIfPresent(Int.self, forKey: .ikGroup)
+            selects = try c.decodeIfPresent(Bool.self, forKey: .selects)
+            sourceIK = try c.decodeIfPresent(SourceIKValue.self, forKey: .sourceIK)
             // `decodeIfPresent` reads both `null` and an absent key as `nil`;
             // `contains` distinguishes "assert the orbit view" from "no
             // camera check declared", so the camera check is decoded by hand.
@@ -635,6 +729,9 @@ struct StudioScenario: Decodable {
             copy = try c.decodeIfPresent(Int.self, forKey: .copy)
             added = try c.decodeIfPresent(String.self, forKey: .added)
             activeCopyOf = try c.decodeIfPresent(Int32.self, forKey: .activeCopyOf)
+            undoDepth = try c.decodeIfPresent(Int.self, forKey: .undoDepth)
+            redoDepth = try c.decodeIfPresent(Int.self, forKey: .redoDepth)
+            objectCount = try c.decodeIfPresent(Int.self, forKey: .objectCount)
             aid = try c.decodeIfPresent(Bool.self, forKey: .aid)
             routeEdit = try c.decodeIfPresent(RouteEditValue.self, forKey: .routeEdit)
             route = try c.decodeIfPresent(RouteValue.self, forKey: .route)
@@ -675,6 +772,29 @@ struct StudioScenario: Decodable {
 
     /// Numeric compares (shape rates, color components) match within this bound.
     static let tolerance: Float = 1e-5
+
+    /// #354: one turn of the main dispatch queue between steps. `run` holds
+    /// the main thread from startup to exit, so without it nothing queued on
+    /// main runs during the scenario: every live step's completion handler
+    /// (`SourceStudioLiveTickJob.start`) keeps its job, frames, palettes and
+    /// textures alive until the run ends. The turn runs in a private common
+    /// mode: the run loop serves the main queue only in common modes, and the
+    /// studio's 30 Hz timer is scheduled in the default mode alone, so no
+    /// timer step moves the animation clock between steps. A zero timeout runs
+    /// only what is already queued (and what that queues), at most 64 times.
+    private static func mainQueueTurn() {
+        var turns = 0
+        while turns < 64, CFRunLoopRunInMode(stepTurnMode, 0, true) == .handledSource { turns += 1 }
+    }
+
+    /// The turn's mode, made a common mode of the main run loop once per
+    /// process on the first scenario step's turn: an app launch that runs no
+    /// Studio scenario never adds it.
+    private static let stepTurnMode: CFRunLoopMode = {
+        let mode = CFRunLoopMode("IkkokuScenarioStepTurn" as CFString)
+        CFRunLoopAddCommonMode(CFRunLoopGetMain(), mode)
+        return mode
+    }()
 
     /// Runs the steps against the imported scene. A failing step records its
     /// detail and the run continues; a failed `export`/`reimport` or
@@ -890,6 +1010,36 @@ struct StudioScenario: Decodable {
                 return "assert exportIdenticalToSource: exported SHA256 \(exportedSHA) differs from initial source SHA256 \(sourceSHA)"
             }
             details.append("export \(path): \(exported.count) bytes; SHA256 \(exportedSHA) equals initial source")
+            return nil
+        }
+        /// `exportedAnimation`: reads each exported scene back from disk and
+        /// compares character `key`'s saved animation state across them.
+        func assertExportedAnimation(_ check: Step.ExportedAnimationValue, details: inout [String]) -> String? {
+            guard !check.paths.isEmpty, check.agree != nil || check.increasing != nil else {
+                return "assert exportedAnimation: needs paths and agree or increasing"
+            }
+            var states: [SourceStudioAnimationState] = []
+            for path in check.paths {
+                do {
+                    let scene = try KoikatsuSceneReader.decodeDocument(Data(contentsOf: URL(fileURLWithPath: path)))
+                    var stack = scene.snapshot.roots, found: KoikatsuCharacterRecord?
+                    while let object = stack.popLast() {
+                        if object.sourceKey == check.key { found = object.character; break }
+                        stack += object.children
+                        if let character = object.character { stack += character.accessoryChildren.values.flatMap { $0 } }
+                    }
+                    guard let record = found else { return "assert exportedAnimation: \"\(path)\" has no character \(check.key)" }
+                    states.append(SourceStudioAnimationState(record: record))
+                } catch { return "assert exportedAnimation: \"\(path)\" could not be read: \(error)" }
+            }
+            let times = states.map { "\($0.normalizedTime)" }.joined(separator: ", ")
+            if check.agree == true, states.contains(where: { $0 != states[0] }) {
+                return "assert exportedAnimation: character \(check.key)'s saved states differ (normalizedTime \(times))"
+            }
+            if check.increasing == true, zip(states, states.dropFirst()).contains(where: { $0.normalizedTime >= $1.normalizedTime }) {
+                return "assert exportedAnimation: character \(check.key)'s normalizedTime does not increase (\(times))"
+            }
+            details.append("character \(check.key) exported normalizedTime \(times)")
             return nil
         }
         /// The state the inspector shows for a source character: the document
@@ -1119,7 +1269,15 @@ struct StudioScenario: Decodable {
             }
             for (name, actual, expected) in [("particle draws", census.particleDraws, check.particleDraws),
                                              ("sky draws", census.skyDraws, check.skyDraws),
-                                             ("block images", census.blockImages, check.blockImages)] {
+                                             ("block images", census.blockImages, check.blockImages),
+                                             ("unlit draws", census.unlitDraws, check.unlitDraws),
+                                             ("silhouette draws", census.silhouetteDraws, check.silhouetteDraws),
+                                             ("option draws", census.optionDraws, check.optionDraws),
+                                             ("ambient-lit draws", census.probeLitDraws, check.probeLitDraws),
+                                             ("sun-lit draws", census.sunLitDraws, check.sunLitDraws),
+                                             ("shadow-receiving draws", census.receivingDraws, check.receivingDraws),
+                                             ("per-vertex receiving draws", census.perVertexReceiveDraws, check.perVertexReceiveDraws),
+                                             ("sun casters", census.sunCasters, check.sunCasters)] {
                 if let expected, actual != expected { problems.append("assert sourceMap: \(actual) \(name), expected \(expected)") }
             }
             if let expected = check.loading, census.loading != expected {
@@ -1142,7 +1300,7 @@ struct StudioScenario: Decodable {
                     if !nothing, id == 0 { problems.append("assert sourceMap: pick at \(point) found nothing, expected an object") }
                 }
             }
-            details.append("map \(census.map.map(String.init) ?? "none"), \(census.draws) draws (\(census.lightmappedDraws) lightmapped, \(census.particleDraws) particle, \(census.skyDraws) sky), \(census.triangles) triangles, \(census.textureBytes) texture bytes (\(census.lightmapBytes) lightmaps, \(census.cubeBytes) sky cubes, \(census.blockImages) BC images), line \(census.line ?? "none")")
+            details.append("map \(census.map.map(String.init) ?? "none"), \(census.draws) draws (\(census.lightmappedDraws) lightmapped, \(census.particleDraws) particle, \(census.skyDraws) sky, \(census.unlitDraws) unlit, \(census.silhouetteDraws) silhouette, \(census.optionDraws) option; \(census.probeLitDraws) by ambient, \(census.sunLitDraws) sun-lit, \(census.receivingDraws) receiving (\(census.perVertexReceiveDraws) per vertex), \(census.sunCasters) sun casters, shadow strength \(census.sunShadowStrength)), \(census.triangles) triangles, \(census.textureBytes) texture bytes (\(census.lightmapBytes) lightmaps, \(census.cubeBytes) sky cubes, \(census.blockImages) BC images), line \(census.line ?? "none")")
         }
 
         /// An object's world displacement from a `captureObject` position, read
@@ -1263,12 +1421,24 @@ struct StudioScenario: Decodable {
         /// named camera object's world placement.
         func assertView(_ step: Step, details: inout [String]) -> String? {
             guard let check = step.view else { return nil }
-            guard (check.saved == true) != (check.key != nil), check.saved != false else {
-                return "assert view: name exactly one of saved: true or key"
+            guard [check.saved == true, check.key != nil, check.slot != nil].filter({ $0 }).count == 1, check.saved != false else {
+                return "assert view: name exactly one of saved: true, key or slot"
             }
             let view = studio.viewCamera, saved = studio.doc.camera
             let at = "(\(view.position.x), \(view.position.y), \(view.position.z))"
             let looking = "(\(view.forward.x), \(view.forward.y), \(view.forward.z))"
+            if let slot = check.slot {
+                guard (1...studio.doc.cameraSlots.count).contains(slot) else {
+                    return "assert view: slot \(slot) is outside 1-\(studio.doc.cameraSlots.count)"
+                }
+                guard let held = studio.doc.cameraSlots[slot - 1] else { return "assert view: camera slot \(slot) is empty" }
+                guard view == saved, saved == held else {
+                    return "assert view: renders from \(at), expected camera slot \(slot) at (\(held.position.x), \(held.position.y), \(held.position.z))"
+                        + (view == saved ? "" : " through the saved camera")
+                }
+                details.append("view is camera slot \(slot) at \(at) looking \(looking)")
+                return nil
+            }
             if check.saved == true {
                 guard view == saved else {
                     return "assert view: renders from \(at), expected the saved camera at (\(saved.position.x), \(saved.position.y), \(saved.position.z))"
@@ -1530,6 +1700,27 @@ struct StudioScenario: Decodable {
             return problems.isEmpty ? nil : "assert clothes: character \(check.key) " + problems.joined(separator: "; ")
         }
 
+        /// The live source-shader sampler states (#338): pins the anisotropic
+        /// mode the Studio resolves its live assemblies with.
+        func assertLiveSamplers(_ step: Step, details: inout [String]) -> String? {
+            guard let check = step.liveSamplers else { return nil }
+            guard studio.liveSourceShaders else { return "assert liveSamplers: live source shaders are off" }
+            guard let object = studio.doc.objects.first(where: { $0.sourceObjectKey == check.key }) else {
+                return "assert liveSamplers: no object with source key \(check.key)"
+            }
+            guard let entry = studio.liveSourceAssemblies[object.id] else {
+                return "assert liveSamplers: character \(check.key) has no live assembly"
+            }
+            switch entry.result {
+            case .failure(let reason): return "assert liveSamplers: character \(check.key) has no live assembly: \(reason.text)"
+            case .success(let assembly):
+                let summary = assembly.samplerSummary
+                func list(_ counts: [String: Int]) -> String { "{" + counts.sorted { $0.key < $1.key }.map { "\($0.key): \($0.value)" }.joined(separator: ", ") + "}" }
+                details.append("live samplers \(check.key): \(list(summary)) (\(assembly.textureProvider))")
+                return summary == check.counts ? nil : "assert liveSamplers: character \(check.key) samples \(list(summary)), expected \(list(check.counts))"
+            }
+        }
+
         func assertExpression(_ step: Step, details: inout [String]) -> String? {
             guard let check = step.expression else { return nil }
             guard let id = object(step), let preview = studio.sourceShapePreview(for: id), let object = studio.doc.object(id) else {
@@ -1574,17 +1765,27 @@ struct StudioScenario: Decodable {
             guard let anchor = studio.sourceGuidePixel(of: Int(boneID)) else {
                 record(step, false, "\(op): bone \(boneID) does not project into the view camera"); return nil
             }
+            guard let start = scanAxisPixel(step, anchor: anchor, axis: axis, axisName: axisName, of: "bone \(boneID)", shape: "ring") else { return nil }
+            return (id, boneID, axis, axisName, anchor, start)
+        }
+
+        /// The pixel scan `locateGuideAxis` and `dragIKGuide` share: a pixel
+        /// near `anchor` (the guide's projected origin) whose pick id is the
+        /// gizmo `axis`. Records the failure, naming the axes the scan does
+        /// see, and returns nil otherwise.
+        func scanAxisPixel(_ step: Step, anchor: SIMD2<Float>, axis: GizmoAxis, axisName: String, of subject: String, shape: String) -> SIMD2<Float>? {
             let wanted = PickIDs.gizmo(axis)
             func picked(_ p: SIMD2<Float>) -> UInt32 { studio.pickID(at: p) }
             // The rotate ring of a selected guide is about 0.9 * 90
             // world-units-per-pixel (~81 px) in radius and only a few px
-            // wide, so a ±120 px box around the bone's projected origin
-            // covers it: a coarse pass locates the ring, a fine pass
+            // wide, and a translate arrow's cone (#425's IK guides) sits
+            // 72-95 px out, so a ±120 px box around the guide's projected
+            // origin covers either: a coarse pass locates it, a fine pass
             // around that hit lands squarely on it. The pass records the
-            // first pixel of every axis ring — a ring turned nearly
-            // edge-on to the camera projects to a sub-pixel sliver no
-            // pixel picks, and then the failure has to name which rings
-            // the camera does show.
+            // first pixel of every axis — a ring turned nearly edge-on to
+            // the camera projects to a sub-pixel sliver no pixel picks (an
+            // arrow pointing at it, to a dot), and then the failure has to
+            // name which axes the camera does show.
             func scan(_ radius: Float, by: Float, centeredAt center: SIMD2<Float>) -> [GizmoAxis: SIMD2<Float>] {
                 var hits: [GizmoAxis: SIMD2<Float>] = [:]
                 var y = center.y - radius
@@ -1608,17 +1809,94 @@ struct StudioScenario: Decodable {
                 let axisWord: (GizmoAxis) -> String = { $0 == .x ? "x" : $0 == .y ? "y" : "z" }
                 let seen = [GizmoAxis.x, .y, .z].compactMap { a -> String? in
                     guard let p = coarse[a] else { return nil }
-                    return "\(axisWord(a)) ring at (\(p.x), \(p.y))"
+                    return "\(axisWord(a)) \(shape) at (\(p.x), \(p.y))"
                 }
-                record(step, false, "\(op): no pixel within ±120 px of bone \(boneID)'s projection (\(anchor.x), \(anchor.y)) picks axis \(axisName) (id \(wanted)); "
-                    + (seen.isEmpty ? "the scan sees no axis ring at all (anchor pixel picks \(picked(anchor)))"
-                                    : "the scan sees \(seen.joined(separator: " and ")) but not the \(axisName) ring (edge-on to the camera?)"))
+                record(step, false, "\(step.op): no pixel within ±120 px of \(subject)'s projection (\(anchor.x), \(anchor.y)) picks axis \(axisName) (id \(wanted)); "
+                    + (seen.isEmpty ? "the scan sees no axis \(shape) at all (anchor pixel picks \(picked(anchor)))"
+                                    : "the scan sees \(seen.joined(separator: " and ")) but not the \(axisName) \(shape) (edge-on to the camera?)"))
                 return nil
             }
-            return (id, boneID, axis, axisName, anchor, start)
+            return start
         }
 
-        scenarioLoop: for step in scenario.steps {
+        /// #425 (`toolbarSteady`): the toolbar state's fields that differ, as "name old -> new".
+        func toolbarDifference(_ a: StudioToolbarState, _ b: StudioToolbarState) -> String {
+            zip(Mirror(reflecting: a).children, Mirror(reflecting: b).children)
+                .filter { "\($0.value)" != "\($1.value)" }
+                .map { "\($0.label ?? "?") \($0.value) -> \($1.value)" }
+                .joined(separator: ", ")
+        }
+
+        /// One mouseDown at `start`, eight interpolated mouseDragged steps to
+        /// `start + pixels`, one mouseUp: the view's own coordinator path
+        /// (left button, no modifiers), nothing re-implemented. Nil, after
+        /// the mouseUp, when the mouseDown grabbed no guide (pushed no undo
+        /// snapshot). With `toolbarSteady` (#425) it also reads the toolbar's
+        /// state after every event and watches, with observation tracking,
+        /// for a write to anything `StudioToolbar`'s body reads; `failures`
+        /// says where either moved and `detail` what held.
+        func mouseDrag(from start: SIMD2<Float>, by pixels: [Float], toolbarSteady: Bool) -> (end: SIMD2<Float>, failures: [String], detail: String)? {
+            let noModifiers = NSEvent.ModifierFlags()
+            let undoDepth = studio.undoStack.count
+            let before = StudioToolbarState(model: studio)
+            studio.mouseDown(at: start, button: 0, modifiers: noModifiers)
+            guard studio.undoStack.count == undoDepth + 1 else {
+                studio.mouseUp(at: start, button: 0, modifiers: noModifiers)
+                return nil
+            }
+            var failures: [String] = []
+            let grabbed = StudioToolbarState(model: studio)
+            var expected = before
+            expected.canUndo = true
+            if toolbarSteady, grabbed != expected {
+                failures.append("mouseDown changed the toolbar beyond canUndo: " + toolbarDifference(before, grabbed))
+            }
+            // One arming at a time: onChange runs once, at the first write to
+            // anything the arming read, and the next arming follows that event.
+            let observed = StudioToolbarObservation()
+            func arm() {
+                withObservationTracking { _ = StudioToolbarState(model: studio) } onChange: { [observed] in observed.writes.append(observed.event) }
+            }
+            if toolbarSteady { arm() }
+            var changed: [String] = []
+            func check(_ event: String) {
+                guard toolbarSteady else { return }
+                let now = StudioToolbarState(model: studio)
+                if now != grabbed { changed.append(event + ": " + toolbarDifference(grabbed, now)) }
+                if observed.writes.last == event { arm() }
+            }
+            var point = start
+            var previous = start
+            for i in 1...8 {
+                observed.event = "drag step \(i)"
+                point = start + SIMD2<Float>(pixels[0], pixels[1]) * (Float(i) / 8)
+                studio.mouseDragged(to: point, delta: point - previous, button: 0, modifiers: noModifiers)
+                previous = point
+                check(observed.event)
+            }
+            observed.event = "mouseUp"
+            studio.mouseUp(at: point, button: 0, modifiers: noModifiers)
+            check(observed.event)
+            guard toolbarSteady else { return (point, [], "") }
+            if !changed.isEmpty { failures.append("the toolbar state changed at " + changed.joined(separator: "; ")) }
+            // With IKKOKU_PERF_PANEL_STATE=document the toolbar reads the document itself, so every
+            // drag event invalidates it by design; only the published state (the default) must not.
+            let writes = observed.writes.joined(separator: ", ")
+            if StudioPanelStateMode.current.publishes, !observed.writes.isEmpty {
+                failures.append("\(observed.writes.count) of 9 drag events wrote what StudioToolbar reads (\(writes))")
+            }
+            let undo = before.canUndo ? "canUndo stayed on" : "canUndo turned on"
+            let held = changed.isEmpty ? "toolbar state held over 8 drag steps and the mouseUp" : "toolbar state changed at \(changed.count) of 9 drag events"
+            return (point, failures, held + " (\(undo) at mouseDown); "
+                + "\(observed.writes.count) drag events wrote what StudioToolbar reads" + (writes.isEmpty ? "" : " (\(writes))"))
+        }
+
+        // #354: each step drains its own autorelease pool and then gives the
+        // main queue one turn (`mainQueueTurn`), so neither a step's
+        // autoreleased buffers nor its jobs' main-queue completions outlive
+        // it. `continue` ends the step; `break scenarioLoop` stops the run.
+        var stopped = false
+        func runStep(_ step: Step) { scenarioLoop: repeat {
             // Steps run microseconds apart, inside the editor's 0.4 s
             // edit-coalescing window (startup's import opens it too), so an
             // edit could silently share the previous snapshot and `undo` would
@@ -1629,6 +1907,23 @@ struct StudioScenario: Decodable {
                 guard let id = object(step) else { record(step, false, "select: no object with source key \(step.key ?? -1)"); continue }
                 studio.selection = id
                 record(step, true, "selected source key \(step.key!)")
+            case "deselect":
+                studio.selection = nil
+                record(step, true, "selection cleared")
+            case "assertWorkspaceRows":
+                // #387 round 3: the published workspace rows, a selection
+                // change's patched ones included, equal a full rebuild.
+                guard StudioPanelStateMode.current.publishes else { record(step, true, "workspace rows read from the document (IKKOKU_PERF_PANEL_STATE=document)"); continue }
+                let published = studio.workspaceState, fresh = StudioWorkspaceState(model: studio)
+                let selected = published.entries.filter(\.selected).map { row in
+                    studio.doc.object(row.id)?.sourceObjectKey.map { "key \($0)" } ?? row.name
+                }
+                if published == fresh {
+                    record(step, true, "workspace rows equal a rebuild: \(published.entries.count) rows, selected \(selected.isEmpty ? "none" : selected.joined(separator: ", "))")
+                } else {
+                    let differing = zip(published.entries, fresh.entries).filter { $0 != $1 }.count
+                    record(step, false, "assertWorkspaceRows: published rows differ from a rebuild (\(published.entries.count) vs \(fresh.entries.count) rows, \(differing) differ)")
+                }
             case "setVisible":
                 guard let id = object(step) else { record(step, false, "setVisible: no object with source key \(step.key ?? -1)"); continue }
                 guard let visible = step.visible else { record(step, false, "setVisible: missing visible"); continue }
@@ -1678,7 +1973,7 @@ struct StudioScenario: Decodable {
                 // it overwrites its own earlier artifact on a lane rerun.
                 guard let path = step.path, let url = insideLocal(path) else {
                     record(step, false, "saveDocument: path must stay under .local/: \(step.path ?? "<missing>")")
-                    break scenarioLoop
+                    stopped = true; break scenarioLoop
                 }
                 do {
                     try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
@@ -1686,20 +1981,47 @@ struct StudioScenario: Decodable {
                     record(step, true, "saved document to \(path)")
                 } catch {
                     record(step, false, "saveDocument failed, stopping: \(error)")
-                    break scenarioLoop
+                    stopped = true; break scenarioLoop
                 }
             case "loadDocument":
                 guard let path = step.path, let url = insideLocal(path) else {
                     record(step, false, "loadDocument: path must stay under .local/: \(step.path ?? "<missing>")")
-                    break scenarioLoop
+                    stopped = true; break scenarioLoop
                 }
                 do {
                     try studio.loadScene(from: url)
                     record(step, true, "loaded document from \(path): \(studio.doc.objects.count) objects")
                 } catch {
                     record(step, false, "loadDocument failed, stopping: \(error)")
-                    break scenarioLoop
+                    stopped = true; break scenarioLoop
                 }
+            case "loadDocumentRejected":
+                // #384: an Open that fails after reading the file (a file that
+                // is not an Ikkoku scene) must leave the document and both
+                // history stacks exactly as they were.
+                guard let path = step.path, let url = insideLocal(path) else {
+                    record(step, false, "loadDocumentRejected: path must stay under .local/: \(step.path ?? "<missing>")"); continue
+                }
+                let (document, undo, redo) = (studio.doc, studio.undoStack, studio.redoStack)
+                do {
+                    try studio.loadScene(from: url)
+                    record(step, false, "loadDocumentRejected: \(path) loaded, expected a refusal")
+                } catch {
+                    let unchanged = studio.doc == document && studio.undoStack == undo && studio.redoStack == redo
+                    record(step, unchanged, unchanged
+                        ? "refused \(path) (\(error)); document and \(undo.count) undo / \(redo.count) redo steps unchanged"
+                        : "loadDocumentRejected: the refused Open changed the document or the history (undo \(undo.count) -> \(studio.undoStack.count), redo \(redo.count) -> \(studio.redoStack.count))")
+                }
+            case "importDocument":
+                // File ▸ Import Scene of an Ikkoku scene: merges its objects
+                // into the current scene, an ordinary undo step (#384).
+                guard let path = step.path, let url = insideLocal(path) else {
+                    record(step, false, "importDocument: path must stay under .local/: \(step.path ?? "<missing>")"); continue
+                }
+                do {
+                    try studio.importScene(from: url)
+                    record(step, true, "imported \(path): \(studio.doc.objects.count) objects")
+                } catch { record(step, false, "importDocument: \(error)") }
             case "setFace", "setBody":
                 let face = step.op == "setFace"
                 guard let id = object(step) else { record(step, false, "\(step.op): no object with source key \(step.key ?? -1)"); continue }
@@ -1941,31 +2263,118 @@ struct StudioScenario: Decodable {
                 }
                 guard let located = locateGuideAxis(step) else { continue }
                 let (id, boneID, axisName, start) = (located.id, located.boneID, located.axisName, located.start)
-                func picked(_ p: SIMD2<Float>) -> UInt32 { studio.pickID(at: p) }
-                let pickedID = picked(start)
-                // One mouseDown, eight interpolated mouseDragged steps to the
-                // requested offset, one mouseUp — the view's own coordinator
-                // path (left button, no modifiers), nothing re-implemented.
-                let noModifiers = NSEvent.ModifierFlags()
-                let undoDepth = studio.undoStack.count
-                studio.mouseDown(at: start, button: 0, modifiers: noModifiers)
-                guard studio.undoStack.count == undoDepth + 1 else {
-                    studio.mouseUp(at: start, button: 0, modifiers: noModifiers)
+                let pickedID = studio.pickID(at: start)
+                guard let drag = mouseDrag(from: start, by: pixels, toolbarSteady: step.toolbarSteady == true) else {
                     record(step, false, "dragGizmo: mouseDown picked the ring but grabbed no guide (picked id \(pickedID))"); continue
                 }
-                var point = start
-                var previous = start
-                for i in 1...8 {
-                    point = start + SIMD2<Float>(pixels[0], pixels[1]) * (Float(i) / 8)
-                    studio.mouseDragged(to: point, delta: point - previous, button: 0, modifiers: noModifiers)
-                    previous = point
-                }
-                studio.mouseUp(at: point, button: 0, modifiers: noModifiers)
                 let degrees = studio.doc.object(id)?.sourceFKRotations?[Int(boneID)]
                 guard let held = degrees else {
                     record(step, false, "dragGizmo: the drag left no FK rotation on bone \(boneID) — mouseDragged never reached setSourceFKRotation"); continue
                 }
-                record(step, true, "drag bone \(boneID) axis \(axisName) from pixel (\(start.x), \(start.y)), picked id \(pickedID), over \(pixels) px: FK (\(held.x), \(held.y), \(held.z)) degrees")
+                let moved = "drag bone \(boneID) axis \(axisName) from pixel (\(start.x), \(start.y)), picked id \(pickedID), over \(pixels) px: FK (\(held.x), \(held.y), \(held.z)) degrees"
+                record(step, drag.failures.isEmpty, (drag.failures.isEmpty ? "" : drag.failures.joined(separator: "; ") + " | ") + moved + (drag.detail.isEmpty ? "" : "; " + drag.detail))
+            case "dragIKGuide":
+                // #425: dragGizmo's IK counterpart. The Pose tab's IK guide
+                // picker selects the guide and IK mode (after the character,
+                // whose selection clears the guide); then the same mouseDown,
+                // eight mouseDragged and mouseUp over the guide's translate
+                // arrow reach setSourceIKValue as a viewport drag does.
+                guard let id = object(step) else { record(step, false, "dragIKGuide: no object with source key \(step.key ?? -1)"); continue }
+                guard let index = step.index, SourceStudioIKEditing.labels.indices.contains(index), let axisName = step.axis,
+                      let axis = GizmoAxis(rawValue: ["x": 1, "y": 2, "z": 3][axisName] ?? -1),
+                      let pixels = step.pixels, pixels.count == 2, pixels.allSatisfy({ $0.isFinite }) else {
+                    record(step, false, "dragIKGuide: index (the IK guide, 0-12), axis (\"x\", \"y\" or \"z\") and pixels [dx, dy] are required"); continue
+                }
+                guard studio.sourceShapePreview(for: id) != nil else {
+                    record(step, false, "dragIKGuide: object \(step.key!) is not a rendered source character"); continue
+                }
+                let target = Int32(index)
+                studio.selection = id
+                studio.selectedSourceIK = target
+                studio.poseMode = .ik
+                // #439: only active guides are drawn, so an inactive one has no arrow to grab.
+                guard !studio.selectedSourceIKGuideHidden else {
+                    record(step, false, "dragIKGuide: IK guide \(index) (\(SourceStudioIKEditing.labels[index])) is inactive (IK off or its group off), so it is not drawn: switch IK on first (setSourceIKEnabled)"); continue
+                }
+                let view = studio.viewportSize
+                guard let anchor = studio.sourceIKGuidePixel(of: target), anchor.x >= 0, anchor.y >= 0, anchor.x < view.x, anchor.y < view.y else {
+                    let at = studio.sourceIKGuidePixel(of: target).map { " (it projects to (\($0.x), \($0.y)))" } ?? ""
+                    record(step, false, "dragIKGuide: IK guide \(index) (\(SourceStudioIKEditing.labels[index])) is not inside the \(Int(view.x)) x \(Int(view.y)) px view\(at)"); continue
+                }
+                guard let start = scanAxisPixel(step, anchor: anchor, axis: axis, axisName: axisName, of: "IK guide \(index)", shape: "arrow") else { continue }
+                let pickedID = studio.pickID(at: start)
+                let before = studio.doc.object(id)?.sourceIKOverrides?[target]
+                guard let drag = mouseDrag(from: start, by: pixels, toolbarSteady: step.toolbarSteady == true) else {
+                    record(step, false, "dragIKGuide: mouseDown picked the arrow but grabbed no guide (picked id \(pickedID); status \"\(studio.status)\")"); continue
+                }
+                guard let held = studio.doc.object(id)?.sourceIKOverrides?[target], held != before else {
+                    record(step, false, "dragIKGuide: the drag left IK guide \(index) where it was — mouseDragged never reached setSourceIKValue (status \"\(studio.status)\")"); continue
+                }
+                let moved = "drag IK guide \(index) (\(SourceStudioIKEditing.labels[index])) axis \(axisName) from pixel (\(start.x), \(start.y)), picked id \(pickedID), over \(pixels) px: "
+                    + "position (\(held.position.x), \(held.position.y), \(held.position.z))"
+                record(step, drag.failures.isEmpty, (drag.failures.isEmpty ? "" : drag.failures.joined(separator: "; ") + " | ") + moved + (drag.detail.isEmpty ? "" : "; " + drag.detail))
+            case "setSourceIKEnabled":
+                // #439: the Pose tab's "IK enabled" toggle, or with `ikGroup`
+                // one group's toggle. They act on the selection, so the
+                // character is selected first, and they are disabled while
+                // the character has no IK guides.
+                guard let id = object(step) else { record(step, false, "setSourceIKEnabled: no object with source key \(step.key ?? -1)"); continue }
+                guard let on = step.on else { record(step, false, "setSourceIKEnabled: on is required"); continue }
+                guard studio.sourceShapePreview(for: id) != nil else {
+                    record(step, false, "setSourceIKEnabled: object \(step.key!) is not a rendered source character"); continue
+                }
+                studio.selection = id
+                guard studio.sourceIKAvailable else { record(step, false, "setSourceIKEnabled: source key \(step.key!) has no IK guides (the toggles are disabled)"); continue }
+                if let group = step.ikGroup {
+                    guard SourceStudioIKEditing.groupLabels.indices.contains(group) else {
+                        record(step, false, "setSourceIKEnabled: ikGroup \(group) is not 0-\(SourceStudioIKEditing.groupLabels.count - 1)"); continue
+                    }
+                    studio.setSourceIKGroup(group, enabled: on)
+                } else {
+                    studio.setSourceIKEnabled(on)
+                }
+                guard let state = studio.selectedSourceIKState else { record(step, false, "setSourceIKEnabled: no kinematic state after the toggle"); continue }
+                let took = step.ikGroup.map { state.activeIK[$0] == on } ?? (state.enableIK == on)
+                record(step, took, "source key \(step.key!) enableIK \(state.enableIK) activeIK \(state.activeIK)" + (took ? "" : ": the toggle did not take"))
+            case "clickIKGuide":
+                // #439: a real click (mouseDown and mouseUp, left button, no
+                // modifiers) at an IK guide's projected pixel in IK pose mode,
+                // with no guide selected. It must select the guide exactly
+                // when `selects`, and change neither the object's kinematic
+                // flags nor the undo history.
+                guard let id = object(step) else { record(step, false, "clickIKGuide: no object with source key \(step.key ?? -1)"); continue }
+                guard let index = step.index, SourceStudioIKEditing.labels.indices.contains(index), let selects = step.selects else {
+                    record(step, false, "clickIKGuide: index (the IK guide, 0-12) and selects are required"); continue
+                }
+                guard studio.sourceShapePreview(for: id) != nil else {
+                    record(step, false, "clickIKGuide: object \(step.key!) is not a rendered source character"); continue
+                }
+                let target = Int32(index)
+                studio.selection = id
+                studio.selectedSourceIK = nil
+                studio.poseMode = .ik
+                let view = studio.viewportSize
+                guard let pixel = studio.sourceIKGuidePixel(of: target), pixel.x >= 0, pixel.y >= 0, pixel.x < view.x, pixel.y < view.y else {
+                    let at = studio.sourceIKGuidePixel(of: target).map { " (it projects to (\($0.x), \($0.y)))" } ?? ""
+                    record(step, false, "clickIKGuide: IK guide \(index) (\(SourceStudioIKEditing.labels[index])) is not inside the \(Int(view.x)) x \(Int(view.y)) px view\(at)"); continue
+                }
+                let kinematics = studio.doc.object(id)?.sourceKinematics, undoDepth = studio.undoStack.count
+                let picked = studio.pickID(at: pixel)
+                studio.mouseDown(at: pixel, button: 0, modifiers: NSEvent.ModifierFlags())
+                studio.mouseUp(at: pixel, button: 0, modifiers: NSEvent.ModifierFlags())
+                var failures: [String] = []
+                if (studio.selectedSourceIK == target) != selects {
+                    failures.append(selects ? "the click did not select IK guide \(index)" : "the click selected IK guide \(index)")
+                }
+                let after = studio.doc.object(id)?.sourceKinematics
+                if after != kinematics {
+                    failures.append("the click changed the kinematic flags to enableIK \(after.map { "\($0.enableIK)" } ?? "nil") activeIK \(after.map { "\($0.activeIK)" } ?? "nil")")
+                }
+                if studio.undoStack.count != undoDepth { failures.append("the click pushed \(studio.undoStack.count - undoDepth) undo step(s)") }
+                let pickedText = SourceStudioIKEditing.targetID(fromPick: picked).map { "IK guide \($0)" } ?? "no IK guide"
+                record(step, failures.isEmpty, (failures.isEmpty ? "" : failures.joined(separator: "; ") + " | ")
+                       + "click IK guide \(index) (\(SourceStudioIKEditing.labels[index])) at pixel (\(pixel.x), \(pixel.y)): picked id \(picked) (\(pickedText)); "
+                       + "selected IK guide \(studio.selectedSourceIK.map(String.init) ?? "none")")
             case "hoverGizmo":
                 // R7 phase 2, item 5: the REAL `mouseMoved` hover, which picks
                 // asynchronously for the latest position only. Moves go over
@@ -2054,11 +2463,9 @@ struct StudioScenario: Decodable {
                     guard let target = studio.doc.object(id)?.ikTargets[chain], target.enabled else {
                         record(step, false, "setIKTarget: \(chain.label) IK is off; run setIKEnabled first"); continue
                     }
-                    var position = target.position
-                    if let delta = step.delta { position[axis] = position[axis].advanced(by: delta) }
-                    else { position[axis] = step.value! }
+                    let value = step.delta.map { target.position[axis].advanced(by: $0) } ?? step.value!
                     studio.selection = id
-                    studio.setIKTarget(id, chain, position: position)
+                    studio.setIKTarget(id, chain, component: axis, to: value)
                     let now = studio.doc.object(id)?.ikTargets[chain]?.position ?? .zero
                     record(step, true, "\(chain.label) target \(describe(target.position)) → \(describe(now)); status \"\(studio.status)\"")
                 } catch { record(step, false, "setIKTarget: \(error)") }
@@ -2657,7 +3064,7 @@ struct StudioScenario: Decodable {
                     if studio.sourceBuildProgress != nil { problems.append("the progress line stayed after the builds") }
                 } catch {
                     record(step, false, "backgroundBuild (\(build)) failed, stopping: \(error)")
-                    break scenarioLoop
+                    stopped = true; break scenarioLoop
                 }
                 let claim = build == "importThenNewScene"
                     ? "New Scene cancelled the background import and nothing reached the document"
@@ -2678,6 +3085,36 @@ struct StudioScenario: Decodable {
                 }
                 studio.orbitCamera(dx: dx, dy: dy)
                 record(step, true, "orbit dx=\(dx) dy=\(dy): yaw \(studio.doc.camera.yaw), pitch \(studio.doc.camera.pitch)")
+            case "pressDigit":
+                // A digit-row key as the keyboard hands it to the viewport: the
+                // physical ANSI key code, Shift in the flags, and the characters
+                // the current layout gives that key (Shift+1 is "!" on a US
+                // layout), so the run reaches `keyDown` the way typing does.
+                guard let digit = step.index, (0...9).contains(digit) else {
+                    record(step, false, "pressDigit: index (the digit 0-9) is required"); continue
+                }
+                let shift = step.on == true
+                let keyCode = StudioModel.digitRowKeyCodes[digit]
+                let flags: NSEvent.ModifierFlags = shift ? .shift : []
+                guard let bare = NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: [], timestamp: 0,
+                          windowNumber: 0, context: nil, characters: "\(digit)", charactersIgnoringModifiers: "\(digit)",
+                          isARepeat: false, keyCode: keyCode),
+                      let typed = bare.characters(byApplyingModifiers: flags),
+                      let event = NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: flags, timestamp: 0,
+                          windowNumber: 0, context: nil, characters: typed, charactersIgnoringModifiers: typed,
+                          isARepeat: false, keyCode: keyCode) else {
+                    record(step, false, "pressDigit: no key event for \(shift ? "Shift+" : "")\(digit)"); continue
+                }
+                let handled = studio.keyDown(event)
+                let camera = studio.doc.camera.position
+                record(step, handled, "\(shift ? "Shift+" : "")\(digit) (key code \(keyCode), characters \"\(typed)\") "
+                    + (handled ? "handled: saved camera at (\(camera.x), \(camera.y), \(camera.z))\(shift ? ", status \(studio.status)" : "")"
+                       : "not handled by the viewport"))
+            case "setUnlimitedLights":
+                // #320, File ▸ Original Scene Export Keeps Unlimited Lights, for this run only.
+                guard let on = step.on else { record(step, false, "setUnlimitedLights: on is required"); continue }
+                studio.sourceExportUnlimitedLights = on
+                record(step, true, "original scene export keeps unlimited lights \(on)")
             case "setShowSourceMap":
                 // View ▸ Show Source Map (ST-A11): runtime only, the document never changes.
                 guard let on = step.on else { record(step, false, "setShowSourceMap: on is required"); continue }
@@ -2782,11 +3219,11 @@ struct StudioScenario: Decodable {
             case "export":
                 guard let path = step.path, let url = insideLocal(path) else {
                     record(step, false, "export: path must stay under .local/: \(step.path ?? "<missing>")")
-                    break scenarioLoop
+                    stopped = true; break scenarioLoop
                 }
                 guard !isSourcePath(url) else {
                     record(step, false, "export: output must differ from both initial and current source paths")
-                    break scenarioLoop
+                    stopped = true; break scenarioLoop
                 }
                 do {
                     // The lane may name a report directory that does not exist
@@ -2804,12 +3241,12 @@ struct StudioScenario: Decodable {
                     record(step, true, "exported edited original scene to \(path)")
                 } catch {
                     record(step, false, "export failed, stopping: \(error)")
-                    break scenarioLoop
+                    stopped = true; break scenarioLoop
                 }
             case "reimport":
                 guard let path = step.path, let url = insideLocal(path) else {
                     record(step, false, "reimport: path must stay under .local/: \(step.path ?? "<missing>")")
-                    break scenarioLoop
+                    stopped = true; break scenarioLoop
                 }
                 do {
                     // The same inputs the `IKKOKU_SOURCE_SCENE` startup import
@@ -2822,7 +3259,7 @@ struct StudioScenario: Decodable {
                     record(step, true, "reimported \(path): \(studio.doc.objects.count) objects")
                 } catch {
                     record(step, false, "reimport failed, stopping: \(error)")
-                    break scenarioLoop
+                    stopped = true; break scenarioLoop
                 }
             case "focus":
                 // The F key: select the object and frame the view on it;
@@ -3009,6 +3446,15 @@ struct StudioScenario: Decodable {
                         details.append("looking through a copy of camera \(key)")
                     }
                 }
+                if let expected = step.undoDepth, studio.undoStack.count != expected {
+                    problems.append("assert undoDepth: \(studio.undoStack.count) undo steps, expected \(expected)")
+                }
+                if let expected = step.redoDepth, studio.redoStack.count != expected {
+                    problems.append("assert redoDepth: \(studio.redoStack.count) redo steps, expected \(expected)")
+                }
+                if let expected = step.objectCount, studio.doc.objects.count != expected {
+                    problems.append("assert objectCount: \(studio.doc.objects.count) objects, expected \(expected)")
+                }
                 if let expectedKey = step.activeCamera {
                     let active = studio.activeSourceCamera.flatMap { studio.doc.object($0)?.sourceObjectKey }
                     if active != expectedKey {
@@ -3062,6 +3508,34 @@ struct StudioScenario: Decodable {
                         problems.append("assert fk: no object with source key \(edit.key)")
                     }
                 }
+                if let check = step.sourceIK {
+                    // #439: the IK guide handles in the frame the app built, and the kinematic flags.
+                    if let ikID = studio.doc.objects.first(where: { $0.sourceObjectKey == check.key })?.id, let preview = studio.sourceShapePreview(for: ikID),
+                       let object = studio.doc.object(ikID) {
+                        if let expected = check.drawn {
+                            let drawn = Set(studio.frame.gizmos.compactMap { SourceStudioIKEditing.targetID(fromPick: $0.objectID) })
+                            if studio.selection != ikID || studio.poseMode != .ik {
+                                problems.append("assert sourceIK drawn: source key \(check.key) must be selected in IK pose mode")
+                            } else if drawn != Set(expected) {
+                                problems.append("assert sourceIK drawn: the frame draws IK guides \(drawn.sorted()) (\(studio.frame.gizmos.count) gizmo batches), expected \(expected.sorted())")
+                            } else {
+                                details.append("IK guides drawn \(drawn.sorted()), \(studio.frame.gizmos.count) gizmo batches in the frame")
+                            }
+                        }
+                        let state = object.sourceKinematics ?? SourceStudioKinematicState(record: preview.record)
+                        if let expected = check.enableIK, state.enableIK != expected {
+                            problems.append("assert sourceIK: enableIK \(state.enableIK), expected \(expected)")
+                        }
+                        if let expected = check.activeIK, state.activeIK != expected {
+                            problems.append("assert sourceIK: activeIK \(state.activeIK), expected \(expected)")
+                        }
+                        if let expected = check.selectedHidden, studio.selectedSourceIKGuideHidden != expected {
+                            problems.append("assert sourceIK: the selected guide (\(studio.selectedSourceIK.map(String.init) ?? "none")) reads hidden \(!expected), expected \(expected)")
+                        }
+                    } else {
+                        problems.append("assert sourceIK: no rendered source character with source key \(check.key)")
+                    }
+                }
                 // The eye look, blink and hand-pattern checks resolve their
                 // own character by the source key inside the check value,
                 // like `animation`/`fk`.
@@ -3109,6 +3583,7 @@ struct StudioScenario: Decodable {
                 if let problem = assertAccessoryLabels(step, details: &details) { problems.append(problem) }
                 if let problem = assertPluginMount(step, details: &details) { problems.append(problem) }
                 if let problem = assertClothes(step, details: &details) { problems.append(problem) }
+                if let problem = assertLiveSamplers(step, details: &details) { problems.append(problem) }
                 if let problem = assertExpression(step, details: &details) { problems.append(problem) }
                 if let problem = assertIK(step, details: &details) { problems.append(problem) }
                 if let needle = step.diagnosticContains {
@@ -3122,6 +3597,28 @@ struct StudioScenario: Decodable {
                 if let problem = assertView(step, details: &details) { problems.append(problem) }
                 if let needle = step.statusContains, !studio.status.contains(needle) {
                     problems.append("assert statusContains: status \"\(studio.status)\" does not contain \"\(needle)\"")
+                }
+                if let needle = step.statusLacks {
+                    if studio.status.contains(needle) {
+                        problems.append("assert statusLacks: status \"\(studio.status)\" contains \"\(needle)\"")
+                    } else { details.append("status lacks \"\(needle)\"") }
+                }
+                if let check = step.characterBuilt {
+                    let id = studio.doc.objects.first(where: { $0.sourceObjectKey == check.key })?.id
+                    let built = characterPreview(check.key) != nil
+                    if id == nil {
+                        problems.append("assert characterBuilt: no object with source key \(check.key)")
+                    } else if built != check.built {
+                        problems.append("assert characterBuilt: character \(check.key) is \(built ? "built" : "not built"), expected \(check.built ? "built" : "not built")")
+                    } else if built, studio.selection == id,
+                              studio.selectedSourceIKState == nil || studio.selectedSourceAnimationState == nil {
+                        problems.append("assert characterBuilt: selected character \(check.key) is built but its pose or animation state is unreadable")
+                    } else {
+                        details.append("character \(check.key) \(built ? "built" : "not built")\(studio.selection == id ? ", selected" : "")")
+                    }
+                }
+                if let check = step.exportedAnimation {
+                    if let problem = assertExportedAnimation(check, details: &details) { problems.append(problem) }
                 }
                 if let needle = step.indicatorContains {
                     let indicator = studio.activeSourceCameraView?.indicator ?? ""
@@ -3145,8 +3642,24 @@ struct StudioScenario: Decodable {
             default:
                 record(step, false, "unknown op \"\(step.op)\"")
             }
+        } while false }
+        for step in scenario.steps {
+            autoreleasepool {
+                runStep(step)
+                if !stopped { mainQueueTurn() }
+            }
+            if stopped { break }
         }
         let passed = results.filter(\.ok).count
         return Report(steps: results, passed: passed, failed: results.count - passed)
     }
+}
+
+/// #425: what a `toolbarSteady` drag's observation tracking saw: the event
+/// under way and each event during which something `StudioToolbar` reads was
+/// written. Main thread only: `withObservationTracking` runs `onChange`
+/// inside the write.
+nonisolated private final class StudioToolbarObservation: @unchecked Sendable {
+    var event = ""
+    var writes: [String] = []
 }

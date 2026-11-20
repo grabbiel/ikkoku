@@ -120,6 +120,13 @@ public struct GLTFDiagnostic: Sendable, Equatable, CustomStringConvertible {
     public var description: String { "\(code): \(message)" }
 }
 
+/// One accessor's values: every component as a float (float or normalised
+/// integer components), or as an unsigned integer (integer components).
+public enum GLTFAccessorValues: Sendable, Equatable {
+    case floats([Float], components: Int)
+    case integers([UInt32], components: Int)
+}
+
 /// A fully decoded glTF/GLB file.
 public struct GLTFAsset: Sendable {
     public var url: URL?
@@ -132,6 +139,9 @@ public struct GLTFAsset: Sendable {
     public var extras: JSONValue?
     /// Compatibility reports produced while loading; see `GLTFDiagnostic`.
     public var diagnostics: [GLTFDiagnostic] = []
+    /// Accessors the caller asked for by index (`GLBLoader.load(url:packageRoot:accessors:)`),
+    /// decoded; empty unless asked. For data the root `extras` name outside any mesh.
+    public var requestedAccessors: [Int: GLTFAccessorValues] = [:]
 
     public func node(named name: String) -> Int? { nodes.firstIndex { $0.name == name } }
 

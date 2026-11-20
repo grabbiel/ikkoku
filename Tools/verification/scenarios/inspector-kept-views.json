@@ -354,6 +354,60 @@
         "field": "name",
         "fieldText": "Source character 0 K",
         "inspectorView": "ObjectInspector"
+      },
+      {
+        "op": "assert",
+        "key": 0,
+        "axContains": [
+          "AXStaticText: Source character 0 K"
+        ],
+        "axAbsent": [
+          "AXStaticText: Source character 0 K W",
+          "AXButton: Hide"
+        ]
+      },
+      {
+        "op": "focus",
+        "field": "name"
+      },
+      {
+        "op": "type",
+        "text": " W"
+      },
+      {
+        "op": "assert",
+        "key": 0,
+        "name": "Source character 0 K W",
+        "editing": true,
+        "axContains": [
+          "AXStaticText: Source character 0 K W"
+        ]
+      },
+      {
+        "op": "press",
+        "label": "Visible"
+      },
+      {
+        "op": "assert",
+        "key": 0,
+        "axContains": [
+          "AXStaticText: Source character 0 K W",
+          "AXButton: Hide"
+        ]
+      },
+      {
+        "op": "press",
+        "label": "Visible"
+      },
+      {
+        "op": "assert",
+        "key": 0,
+        "axContains": [
+          "AXStaticText: Source character 0 K W"
+        ],
+        "axAbsent": [
+          "AXButton: Hide"
+        ]
       }
     ]
   }

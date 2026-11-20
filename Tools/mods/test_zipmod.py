@@ -165,6 +165,18 @@ class ZipmodTests(unittest.TestCase):
         self.reject(self.archive([("Manifest.xml", MANIFEST)]))
         self.reject(self.archive([("sub/manifest.xml", MANIFEST)], manifest=None))
 
+    def test_manifest_guid_is_trimmed_with_mono_white_chars(self):
+        # Sideloader's Manifest: GUID = ...Value.Trim(), Mono's String.WhiteChars.
+        # (U+001C-U+001F cannot occur: XML 1.0 does not allow them.)
+        for guid, expected in (("\u200b example.mod\ufeff", "example.mod"), ("\u180eexample.mod", "\u180eexample.mod"),
+                               ("\u3000\u0085example.mod\n", "example.mod")):
+            with self.subTest(guid=[hex(ord(c)) for c in guid if not c.isalnum()]):
+                xml = f'<manifest schema-ver="1"><guid>{guid}</guid><name>n</name><version>1</version></manifest>'.encode()
+                result = zipmod.import_archive(self.archive(manifest=xml), self.root / f"trim{self.count}")
+                self.assertEqual(result["source"]["guid"], expected)
+        self.assertEqual(len(set(zipmod.MONO_WHITE_CHARS)), 27)
+        self.reject(self.archive(manifest='<manifest schema-ver="1"><guid>\ufeff\u200b</guid></manifest>'.encode()))
+
     def test_manifest_entities_are_rejected(self):
         self.reject(self.archive(manifest=b'<!DOCTYPE manifest [<!ENTITY e "expanded">]><manifest schema-ver="1"><guid>&e;</guid></manifest>'))
 

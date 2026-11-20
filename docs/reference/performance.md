@@ -104,7 +104,7 @@ the run.
 
 | `IKKOKU_PERF_WORKLOAD` | Fixtures | What it does |
 | --- | --- | --- |
-| `studio-idle` (default) | `IKKOKU_SOURCE_SCENE` | Studio, live animation on, nothing selected; blink, neck/eye look, hair dynamics and route clocks tick at 30 Hz. The scene needs one converted source character; a character riding a route counts (`details.sourceRouteCharacters`), so a route scene such as the route-children fixture measures a playing route |
+| `studio-idle` (default) | `IKKOKU_SOURCE_SCENE` | Studio, live animation on, nothing selected; blink, neck/eye look, hair dynamics and route clocks tick at 30 Hz. The scene needs one converted source character; a character riding a route counts (`details.sourceRouteCharacters`), so a route scene such as the route-children fixture measures a playing route. A scene whose only converted content is source items (`IKKOKU_STUDIO_ITEM_CATALOG`, `details.sourceItems`) also qualifies (ST-T04) |
 | `studio-orbit` | same | `studio-idle` plus a right-button orbit drag: one `mouseDragged` per input tick |
 | `studio-fk-drag` | same | selects source key 65 (or `IKKOKU_PERF_ACTION_KEY`), FK mode, bone 19 (the `fk-mouse-drag` scenario's grab), grabs the z ring found by `pickID` and drags it around a 40 px circle, one turn per 2 s; checks that the grab pushed exactly one undo snapshot |
 | `studio-hover` | same | character selected, mouse moves over the viewport (`mouseMoved`, gizmo hover pick) |
@@ -123,6 +123,9 @@ the run.
 | `studio-export` | as `studio-idle` | File ▸ Export Edited Original Scene (`AppState.exportSourceScene(to:)`), repeated, after a setup through the UI's calls: a cheek edit on the `studio-duplicate` character, Visible off, then Save Scene and Open of that file, so the hidden character has no preview and each export builds its validation baseline. Exports go to a temporary folder, removed at the end |
 | `studio-load` | as `studio-idle` | File ▸ New Scene (unmeasured), then File ▸ Open (`AppState.openScene(at:importing:)`) of the source scene saved as an Ikkoku scene, repeated; each load builds the characters again and rehydrates the route characters (a load over the same scene would keep its runtime and rehydrate nothing) |
 | `studio-select` | as `studio-idle` | the selection a click makes (`StudioModel.selection`, which a workspace row's tap and a viewport click on an object set; a click on empty space clears it) through a fixed list, repeated, live animation on: nothing selected, then each listed object in turn. The list is `IKKOKU_PERF_SELECT_KEYS`, else the first object of each kind the Object tab shows differently (source character, route, source camera, item, light, camera, folder) in workspace order. The inspector shows `IKKOKU_PERF_INSPECTOR_TAB` (default `object`). The actions are named for what they select (`select route`, `select source character from nothing`, `deselect`); each one's main-thread time is the busy period it ran in, which holds SwiftUI's update of the panels ([phase 2, item 7](#phase-2-item-7-selection-and-the-inspector)) |
+| `studio-export-import` | as `studio-idle` | File ▸ Export Edited Original Scene (`AppState.exportSourceScene(to:)`) of the startup scene as imported, unedited, repeated, live animation on. A hidden character the import left unbuilt has no edit, so the export builds no baseline for it; its saved animation time comes from its data-only clock ([lazy hidden characters](#lazy-hidden-characters-at-import)). Each export writes a new file and removes the previous one |
+| `studio-show-hidden` | as `studio-idle` | Visible on (the inspector's toggle, `StudioModel.update`) for each hidden object of the startup scene that holds source characters (its own flag off, its ancestors shown), in workspace order, each followed by Visible off again (unmeasured), repeated, live animation on. An action's first run shows characters the import left unbuilt, so its ready time holds their builds; later runs find them built. Each action is named `show <source key> (<n> characters)` |
+| `studio-clock-first` | as `studio-idle` | the first clock rebase and the first native save after the import, then repeated, live animation on: `rebase` sets the first drawn character with a converted saved clip to its own animation speed (`setSourceAnimationSpeed`, which bakes every character's clock), `save` is File ▸ Save (`saveScene(to:)`) to a scratch file. The first bake's time is the `sourceClockBake` mark pair |
 
 Other options:
 
@@ -167,6 +170,12 @@ Other options:
   drops the inspector's Object tab and its sections as before item 7, `tab`
   keeps the Object tab mounted while nothing is selected, and `on` also
   keeps each kind's section once shown. The app reads it once at launch.
+- `IKKOKU_PERF_PANEL_STATE` (`document` or `published`, the default), a
+  measurement control for the
+  [item 7 follow-ups](#phase-2-item-7-follow-ups): `document` has the
+  workspace tree, the toolbar and the timeline bar read the document in
+  their bodies, as before, and `published` has them read what the model
+  publishes when it changes. The app reads it once at launch.
 - Measurement controls for the
   [item 6 follow-up](#phase-2-item-6-follow-up-route-copies-prefetch-and-kept-donations),
   all defaulting to the shipped behavior:
@@ -197,6 +206,10 @@ locked `PerfDrawLog`. Everything else is recorded on the main thread.
   draw (`frameRing`), excluding unchanged callbacks: skin palettes and
   palette KiB per draw, palette buffers created while recording (0 once the
   ring is warm), and draws that used overflow buffers;
+- per rendered draw (`drawCounts`, ST-T04): the main pass's records and the
+  draws they took, the static item records drawn instanced and their runs,
+  and the shadow casters and their draws
+  ([instanced static items](renderer.md#instanced-static-items-st-t04-slice-1-part-b));
 - when each drawable was really presented (`addPresentedHandler`), giving
   actual presented FPS and raw presented-interval percentiles. Schema 5 also
   reports `activePresentedIntervalMs`: adjacent presentation intervals minus
@@ -254,9 +267,19 @@ locked `PerfDrawLog`. Everything else is recorded on the main thread.
   action (`details.actions`): its call time, the time until its builds were
   installed or its other background work finished
   (`PerfTrace.characterInstalled`, `backgroundWorkFinished`), the main
-  thread's busy time and longest busy period from the call until then, and
-  the status line and any error alert it left. `summarize` prints the
-  medians per action, with the 120 Hz refresh periods the median and the
+  thread's busy time and longest busy period from the call until then
+  (`busyMs`, `longestStallMs`; a busy period lasts until the run loop sleeps,
+  so when an action's SwiftUI update outlasts the gap to the next action, both
+  actions count the shared period), the same busy time clipped at the next
+  action's call (`busyOwnMs`, added for #383: back-to-back actions then add up
+  to the main thread's time instead of counting it twice), and
+  the status line and any error alert it left, and the process
+  `phys_footprint` and Metal allocation when it was ready (`footprintBytes`,
+  `metalAllocatedBytes`; ST-T04), so repeated loads show whether memory
+  accumulates per cycle, and the document's object count then
+  (`documentObjects`), so an edit's and its undo's effect can be checked. `summarize` prints the
+  medians per action (the own busy time in parentheses after the busy time, when
+  the report has it), with the 120 Hz refresh periods the median and the
   longest stall cover (a 100 ms stall drops 12 frames), and warns about an
   action that left an error;
 - the build: Debug/Release, the app's and the Engine package's own assert
@@ -435,7 +458,17 @@ Any task that may change the app's speed measures it this way:
 6. **Renderer cost without the window**: `IKKOKU_AUTOCAPTURE` with
    `IKKOKU_BENCHMARK_OUTPUT`, `IKKOKU_CAPTURE_W`/`_H` and
    `IKKOKU_BENCHMARK_FRAMES` renders the frame offscreen and records CPU
-   encode, GPU and completion times.
+   encode, GPU and completion times. `IKKOKU_BENCHMARK_ORBIT=<turns>` makes it
+   a scripted orbit (ST-T04 B2): the frame camera's yaw turns that many times
+   about its target, evenly over the warmup and measured samples, with the
+   pitch, target, distance and lights unchanged. The report's `orbit` block
+   lists each sample's yaw (`sampleYaws`), so two builds can be checked for
+   the same camera path. The report's `drawCounts` gives the same counters
+   as the perf trace's, over the measured samples.
+   `IKKOKU_BENCHMARK_MAP_SHADOW=every-frame` redraws a map sun's shadow map
+   in every measured frame, which measures the frame where the casters, the
+   sun or the camera target change (`mapShadowEveryFrame` and `mapShadowMap`
+   in the report).
 7. **Speed never changes output silently.** A change that should not alter
    pixels keeps byte-identical captures. A quality trade-off is opt-in and
    reported separately.
@@ -456,7 +489,7 @@ these runs. All app launches ran one at a time under the machine-wide app
 lock.
 
 Scene: the private `IKKOKU_STUDIO_SCENARIO_SCENE` fixture
-(`koikatu_cs0002591.png`, SHA-256 `029f0b1d…a8bea04`, 32 document objects, 6
+(source scene `029f0b1d`, SHA-256 `029f0b1d…a8bea04`, 32 document objects, 6
 source characters). Maker workloads use `IKKOKU_MAKER_SCENARIO_CARD`.
 
 Builds, all arm64. The baseline builds are from `9e02a62`: the harness on top
@@ -646,7 +679,7 @@ No run was made on an M1. These are estimates from the reference numbers
 ### The live source-shader opt-in (#127)
 
 The [live path](renderer.md#live-source-shader-path-r1cmt-04-opt-in-2026-10-22)
-recorded one ON run of `koikatu_cs0002591` with a CPU encode time of 9.59 ms.
+recorded one ON run of source scene `029f0b1d` with a CPU encode time of 9.59 ms.
 That figure is the Debug encode time, and the live path adds almost nothing
 to it (**measured** on the merged-head builds, `.local/app-perf/live-on`).
 `IKKOKU_BENCHMARK_OUTPUT` renders the scene offscreen at 1200×1600, with 60
@@ -2605,7 +2638,7 @@ build. A launch straight into a source scene also creates the Maker only
 when it is first used. Captures, scenarios and reports are byte-identical;
 only time and threads change.
 
-On the reference machine, the showoff scene (`koikatu_cs0002591`) is ready
+On the reference machine, the showoff scene (source scene `029f0b1d`) is ready
 1.41 s after launch instead of 5.65 s, and the first frame shows at 0.43 s
 instead of 5.93 s. The main thread used to stall once for 5.6–6.0 s; it is
 now busy 620–672 ms in total until the scene is ready. Its longest busy
@@ -2641,7 +2674,9 @@ In short:
   - a re-import of the loaded scene;
   - a route character.
 - **Background builds (S1).** `SourceStudioCharacterBatch` runs the first
-  halves on GCD workers, as many as the active processor count less two. It
+  halves on threads of its own with 64 MiB stacks (#321, #326; GCD workers
+  have 512 KiB, too little for a deep scene's decode), as many as the active
+  processor count less two. It
   runs the second halves one at a time, in request order. Interactive and
   performance-trace runs use it in the background:
   - **A scene import** (`beginSourceSceneImport`) prepares on the main
@@ -3383,7 +3418,7 @@ Conditions:
   16:20–16:26). Base, no map and map alternated in each round, every launch
   ran under the app lock, and the load average was 4.0–6.5.
 - **Display.** A 120 Hz display at 2×, with a 1996×1824 drawable.
-- **Scene.** `scene-map33-showoff.png`: `koikatu_cs0002591.png` with Map 33
+- **Scene.** `scene-map33-showoff.png`: source scene `029f0b1d` with Map 33
   added in the original player. It has 32 objects and 7 source characters.
 - **Runs.** `startup` ran three times per configuration. `studio-idle` and
   `studio-orbit-bursts` ran twice, each recording 10 s after a 3 s warmup.
@@ -3530,7 +3565,7 @@ Release captures from `74cee1c` and `ceccafa` (`.local/sta11a-maps/captures/{bas
 
 - **Byte-identical on base and branch,** with the live source-shader opt-in
   OFF and ON:
-  - the no-map scenario scene (`koikatu_cs0002591.png`) with the catalog
+  - the no-map scenario scene (source scene `029f0b1d`) with the catalog
     supplied;
   - the 2-character half-state fixture;
   - the native Studio capture;
@@ -3785,6 +3820,266 @@ Offscreen benchmark at 1996×1824, median (range) of three runs of 60 frames:
   are not attributed.
 - No M1 run.
 
+### Forced anisotropy for characters and items (2026-11-01)
+
+Added with the toon, eye, outline and shadow-caster samplers that use the
+map's forced anisotropy 9
+([renderer](renderer.md#source-map-sky-particles-and-block-images-st-a11-slice-3-2026-10-26)).
+
+**Measurement.** Release builds, in one quiet window the orchestrator
+granted (2026-11-01, 21:58:20–22:02:31):
+
+- base is `334d12c`, the branch point; head is this change;
+- the offscreen benchmark (`IKKOKU_BENCHMARK_OUTPUT`, 1996×1824, 120
+  frames) ran 4 rounds, alternating the build order (base then head, then
+  head then base), one launch at a time under the app lock;
+- the display stayed at 1920×1080 at 120 Hz. Before each launch, a gate
+  waited for `corespotlightd` to stay under 20% for 10 s. All 24 runs
+  were valid; two were rerun after a daemon spike (`corespotlightd` 134%,
+  `launchd` 45%).
+
+There are three units. `showoff-nomap` is the showoff scene's 7 characters
+without the map. `map34-showoff` is the same scene on map 34. `face-yaw90` is
+the Maker frame (`IKKOKU_CAPTURE_PRESET=face`, `IKKOKU_CAPTURE_YAW=90`).
+GPU ms per frame, p50, median (range) of 4:
+
+| Unit | Base | Head | Head − base |
+| --- | --- | --- | --- |
+| showoff-nomap | 1.561 (1.555–1.596) | 1.579 (1.564–1.616) | +0.018 ms (+1.2%), within the run-to-run ranges |
+| map34-showoff | 1.637 (1.626–1.661) | 1.660 (1.647–1.680) | +0.023 ms (+1.4%), within the run-to-run ranges |
+| face-yaw90 | 0.5258 (0.5255–0.5269) | 0.5278 (0.5271–0.5290) | +0.002 ms (+0.4%), outside the ranges |
+
+- **The face's +0.002 ms is a real cost.** Each build's 4 runs spread over
+  about 1–2 µs, and the two ranges do not overlap. That is about 0.02% of
+  an 8.33 ms frame, accepted as the price of matching the player's forced
+  anisotropy.
+- **The showoff and map 34 differences are within the ranges.** They
+  cannot be told from run-to-run variation.
+- **Pixels.** Base and head renders are deterministic (base rounds 1 and 3
+  are byte-identical).
+  - The showoff and map 34 frames each change 27,717 of 3,640,704 pixels
+    (mean 2.46, max 35, over the changed pixels).
+  - 27,715 of those pixels are the same ones in both frames: the characters.
+    So map 34 adds no coverage beyond the characters. Its item-drawn parts
+    are `map_fragment` draws, which slice 3 already forced.
+  - The face frame changes 10,193 pixels (mean 4.23, max 101).
+- **Evidence:** `.local/sta11d-pr-b/aniso-bench/` (`summary.json`, the
+  per-run reports and renders) and `.local/sta11d-pr-b/notes/aniso-bench-run.log`.
+
+**Scaling to a base M1 (estimate),** with the method above (GPU × about
+4.75): the face's cost is about +0.01 ms per frame, and the showoff's
+difference, if real, under about +0.1 ms. As in slice 3, anisotropic
+filtering spends texture bandwidth, and the M1 has about a twelfth of this
+machine's. So this is the least certain estimate.
+
+**Limits.** One window, 4 rounds per unit, offscreen only: no presented,
+orbit or idle runs, no Metal System Trace and no M1 run.
+
+### Slice 4: all maps
+
+Added 2026-11-01 with the fourth maps slice
+([maps: slice 4](studio/maps.md#all-maps-slice-4)). Three changes affect cost:
+
+- the other 40 maps convert and draw, with unlit, silhouette and
+  animated-particle draws;
+- each particle renderer's submesh is its own draw (the split), so the
+  particle maps have more draws;
+- transparent draws sort by render queue, then distance to the sort centre,
+  then order. Every non-map item keeps queue 3000 and no sort centre.
+
+The probe's pixel-centre HDR capture runs only in the probe.
+
+**Measurement.** Release builds, in one quiet window the orchestrator
+granted (2026-11-01, 14:39:16–14:53:56, capped at 20 minutes):
+
+- Every launch ran under the app lock, one at a time, with the other agents
+  paused and no Swift build or test running.
+- **The window was not composited.** The built-in display was off, and the
+  only screen was a virtual 1920×1080 at 60 Hz. So the startup marks are the
+  app's own, from launches that presented no frame, and the benchmarks render
+  offscreen. Every figure in this section is **measured without
+  presentation**.
+- Before each scene and each rerun, a gate waited for 10 s with no indexing
+  daemon (`corespotlightd`, `mds_stores`, `mediaanalysisd`,
+  `spotlightknowledged`) above 20%. The gate never timed out.
+- The load average and the top 5 processes were logged before and after every
+  run. The 1-minute load average was 4.4 at the start and 2.5 at the end.
+- A run was repeated, at most twice, when an outside process was over its
+  limit. 32 of 81 attempts were repeated, most for Firefox's
+  `plugin-container` at 45.1–47.6%. Seven runs were still over after two
+  reruns. They are marked ‡ in the tables, with the process on their last
+  attempt:
+  - bench map 34 day, before the split, round 1: `plugin-container` 45.7%;
+  - bench maps 29, 38 and 41, round 1: `plugin-container` 46.0%, 47.4% and
+    46.6%;
+  - bench map 15, before the split, round 2: `plugin-container` 45.4%;
+  - bench map 1, round 2: `mds_stores` 28.6% and `mds` 23.2%;
+  - startup of the showoff scene with map 33, head, round 2:
+    `plugin-container` 46.0%.
+
+There were two alternating rounds; a third would not have fit in the cap.
+Each figure is the **mean of the 2 rounds**, with their range. `startup` ran
+once per scene and build per round. The offscreen benchmark
+(`IKKOKU_BENCHMARK_OUTPUT`, 1996×1824, 60 measured frames) ran once per case
+per round. The map scenes are the probe's, with no characters. The reports
+are in `.local/sta11d-map-coverage/perf/window/`, and the summary is
+`perf/summary.json`.
+
+| Label | Commit | Export |
+| --- | --- | --- |
+| base | `189e5b8c` (`main`, #292) | slice 3 (the shared fixture) |
+| head | this change merged with it (`b4db76cb`) | slice 3, slice 4, or slice 4 before the split (the 16 particle maps with their merged particle draws, otherwise the same files) |
+
+Startup, seconds since process start, measured without presentation, mean
+(range) of 2 rounds:
+
+| Scene | Build | Export | Scene ready s | Import call ms | First draw s | Map ready s | Main thread until ready: busy of window ms | Longest busy period ms | Peak footprint MB | Peak Metal MB | Map load on the worker ms |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| showoff, no map | base | slice 3 | 0.91 (0.89–0.92) | 7.6 (7.5–7.8) | 0.33 (0.30–0.37) | – | 551 of 958 (532–571) | 347 (335–359) | 865 (864–865) | 258.5 | – |
+| showoff, no map | head | slice 3 | 0.88 (0.88–0.89) | 7.8 (7.6–7.9) | 0.32 (0.32–0.33) | – | 548 of 929 (540–556) | 343 (334–352) | 861 (854–868) | 258.5 | – |
+| showoff with map 33 | base | slice 3 | 0.90 (0.88–0.93) | 9.0 (7.8–10.2) | 0.34 (0.32–0.36) | 0.90 (0.88–0.92) | 545 of 947 (538–551) | 304 (268–339) | 871 (867–875) | 268.9 | 16.4 (12.5–20.3) |
+| showoff with map 33 ‡ | head | slice 4 | 0.89 (0.88–0.90) | 8.5 (8.3–8.8) | 0.32 (0.30–0.35) | 0.89 (0.88–0.89) | 540 of 942 (539–540) | 348 (345–351) | 875 (874–876) | 268.9 | 16.0 (12.2–19.8) |
+| map 21 | head | slice 4 before the split | 0.16 (0.16–0.17) | 6.0 (5.5–6.4) | 0.36 (0.35–0.36) | 0.41 (0.40–0.41) | 333 of 333 (332–334) | 333 (332–334) | 326 (324–327) | 176.3 | 117.4 (114.0–120.8) |
+| map 21 | head | slice 4 | 0.17 (0.16–0.17) | 5.2 (5.2–5.3) | 0.33 (0.33–0.34) | 0.41 (0.41–0.42) | 334 of 334 (329–338) | 334 (329–338) | 330 (329–330) | 178.3 (176.6–180.1) | 115.9 (113.8–118.0) |
+
+- **Import is unchanged.** Without a map, scene ready, the import call, the
+  first draw and the main thread's busy time are within the rounds' ranges,
+  and peak Metal is identical. With map 33, it is ready at 0.89 s against
+  0.90 s, with one shell fewer (7 draws against 8). Peak Metal is identical.
+- **The split costs no startup time.** Map 21 is ready at 0.41 s with or
+  without it. The worker's load is 116 against 117 ms.
+
+Offscreen benchmark at 1996×1824, measured without presentation, mean
+(range) of 2 rounds of 60 frames. The draws are the frame's items, which for a
+map scene are the map's draws:
+
+| Scene | Build | Export | Draws | CPU encode ms | GPU ms p50 | Completion ms | Metal bytes | Map load on the worker ms |
+| --- | --- | --- | ---: | --- | --- | --- | ---: | --- |
+| showoff, no map | base | slice 3 | 141 | 0.438 (0.433–0.443) | 1.558 (1.556–1.560) | 2.400 (2.391–2.409) | 454,131,712 | – |
+| showoff, no map | head | slice 3 | 141 | 0.436 (0.435–0.437) | 1.559 (1.557–1.561) | 2.403 (2.401–2.405) | 454,131,712 | – |
+| map 1 | head | slice 4 before the split | 178 | 0.280 (0.278–0.282) | 0.507 (0.502–0.512) | 1.122 (1.114–1.131) | 560,513,024 | 218.4 (193.3–243.4) |
+| map 1 ‡ | head | slice 4 | 188 | 0.292 (0.289–0.294) | 0.515 (0.470–0.559) | 1.135 (1.109–1.162) | 560,513,024 | 196.9 (192.8–200.9) |
+| map 11 | head | slice 4 before the split | 161 | 0.269 (0.268–0.271) | 0.613 (0.612–0.613) | 1.216 (1.214–1.217) | 439,844,864 | 145.3 (123.7–166.9) |
+| map 11 | head | slice 4 | 187 | 0.302 (0.300–0.303) | 0.716 (0.699–0.733) | 1.348 (1.339–1.356) | 439,910,400 | 127.1 (124.8–129.4) |
+| map 15 ‡ | head | slice 4 before the split | 129 | 0.237 (0.236–0.239) | 0.463 (0.458–0.469) | 1.019 (1.013–1.025) | 433,012,736 | 125.8 (106.2–145.5) |
+| map 15 | head | slice 4 | 155 | 0.284 (0.272–0.295) | 0.473 (0.463–0.483) | 1.071 (1.056–1.085) | 433,078,272 | 113.2 (107.7–118.6) |
+| map 21 | head | slice 4 before the split | 131 | 0.240 (0.240–0.241) | 0.459 (0.459–0.459) | 1.028 (1.023–1.033) | 420,429,824 | 102.4 (102.0–102.8) |
+| map 21 | head | slice 4 | 157 | 0.277 (0.276–0.277) | 0.485 (0.480–0.490) | 1.086 (1.077–1.095) | 420,315,136 | 104.8 (103.2–106.5) |
+| map 22 | head | slice 4 before the split | 112 | 0.204 (0.203–0.204) | 0.555 (0.555–0.555) | 1.091 (1.087–1.094) | 404,324,352 | 109.8 (92.7–127.0) |
+| map 22 | head | slice 4 | 146 | 0.252 (0.251–0.252) | 0.557 (0.553–0.560) | 1.146 (1.133–1.159) | 404,373,504 | 96.2 (94.5–98.0) |
+| map 27 | head | slice 4 before the split | 72 | 0.155 (0.155–0.155) | 0.652 (0.650–0.655) | 1.160 (1.160–1.160) | 382,173,184 | 80.2 (68.0–92.3) |
+| map 27 | head | slice 4 | 107 | 0.200 (0.200–0.201) | 0.655 (0.655–0.656) | 1.192 (1.180–1.203) | 382,287,872 | 72.3 (70.3–74.3) |
+| map 34 day ‡ | head | slice 4 before the split | 53 | 0.134 (0.134–0.135) | 0.487 (0.487–0.488) | 0.951 (0.934–0.967) | 378,978,304 | 58.0 (57.5–58.5) |
+| map 34 day | head | slice 4 | 54 | 0.136 (0.136–0.136) | 0.486 (0.485–0.488) | 0.950 (0.939–0.962) | 378,978,304 | 59.1 (57.4–60.8) |
+| map 19 | head | slice 4 | 52 | 0.130 (0.130–0.130) | 0.454 (0.451–0.458) | 0.910 (0.899–0.921) | 371,064,832 | 50.2 (42.1–58.3) |
+| map 25 | head | slice 4 | 24 | 0.097 (0.097–0.097) | 0.420 (0.404–0.435) | 0.866 (0.846–0.886) | 338,018,304 | 24.1 (20.3–28.0) |
+| map 29 ‡ | head | slice 4 | 50 | 0.125 (0.125–0.126) | 0.449 (0.445–0.452) | 0.904 (0.890–0.918) | 361,758,720 | 37.6 (37.5–37.7) |
+| map 38 ‡ | head | slice 4 | 104 | 0.196 (0.193–0.198) | 0.735 (0.732–0.737) | 1.263 (1.256–1.269) | 406,093,824 | 128.2 (127.6–128.9) |
+| map 40 | head | slice 4 | 21 | 0.096 (0.095–0.096) | 0.433 (0.431–0.435) | 0.873 (0.867–0.878) | 344,113,152 | 31.4 (31.1–31.7) |
+| map 41 ‡ | head | slice 4 | 29 | 0.102 (0.102–0.103) | 0.437 (0.436–0.437) | 0.883 (0.874–0.891) | 336,429,056 | 23.6 (23.4–23.9) |
+
+- **No map: unchanged.** In the showoff scene's 141 items, CPU encode, GPU,
+  completion and Metal bytes are the same within the rounds' ranges, and
+  Metal is identical to the byte. The queue sort costs nothing measurable
+  where every item is at queue 3000.
+- **The split adds 1–35 draws and up to 0.048 ms of CPU encode per frame.**
+  The added draws cost about 1.2–1.8 µs each:
+  - map 1, +10 draws: +0.012 ms;
+  - map 11, +26: +0.033 ms;
+  - map 15, +26: +0.047 ms;
+  - map 21, +26: +0.037 ms;
+  - map 22, +34: +0.048 ms, the largest;
+  - map 27, +35, the most draws added: +0.045 ms (0.155 → 0.200);
+  - map 34, +1: +0.002 ms.
+- **GPU.**
+  - Maps 1, 15, 22, 27 and 34 are flat within their ranges.
+  - Map 21 is 0.026 ms slower, and the ranges do not overlap.
+  - **Map 11 is 0.10 ms slower (0.613 → 0.716),** and the ranges do not
+    overlap. That is not attributed. No Metal System Trace was recorded, and
+    maps 22 and 27, which add more draws, are flat. So the per-draw cost is
+    not the explanation by itself. A composited recheck with a trace is in
+    [what remains](studio/maps.md#what-remains).
+- **Memory.** The split changes Metal bytes by at most 114,688 bytes, down in
+  map 21 and up in map 27, and leaves the textures alone. The worker's load is the
+  same within the ranges.
+- **The other new maps** take 0.42–0.74 ms of GPU and 0.096–0.196 ms of CPU
+  encode per frame. The most expensive is map 38: 104 draws, 70 of them mob
+  silhouettes, and 563,355 triangles.
+
+**Scaling to a base M1 (estimates, scaled and not measured),** with the
+method above (GPU × about 4.75, CPU × 1.25):
+
+- **CPU.** The split adds at most about 0.06 ms of encode per frame (map 22).
+- **GPU.** The new maps take about 2.0–3.5 ms per frame filling the window,
+  with map 38 the highest at about 3.5 ms. If map 11's +0.10 ms is real, it
+  is about +0.5 ms there.
+- **Startup.** As before, the map loads on a worker, and the split does not
+  change the load.
+
+**Limits.**
+
+- Two rounds per case, not three.
+- Nothing was presented, so there are no presentation, pacing or idle
+  metrics. A composited startup recheck is in
+  [what remains](studio/maps.md#what-remains).
+- No Metal System Trace was recorded, so map 11's GPU difference is not
+  attributed.
+- No `studio-idle` or orbit runs, and no M1 run.
+
+### Slice 5: the sun and its shadows (P4)
+
+Added 2026-11-18 with the fifth maps slice
+([maps: performance](studio/maps.md#performance)). P4 is an offscreen A/B in
+one quiet window (2026-11-18, 01:25:19–01:38:18). It runs `main` (`02fec873`)
+against the change (`a4868c68`), and the change with
+`IKKOKU_BENCHMARK_MAP_SHADOW=every-frame`, on 9 map scenes and the showoff
+scene without a map. Each run is 1996×1824 with 3 warm-up and 120 measured
+frames, and there are 4 rounds in alternating order, 116 units, all valid.
+The display ran at 60 Hz with the monitor off.
+
+- **Fails the registered GPU budget:** the steady state adds +0.12 to
+  +0.21 ms of GPU p50 on maps 01, 15, 21, 22, 27, 34 and 40 (budget +0.10),
+  and +0.185 to +0.234 ms of p95 on maps 01, 34 and 40 (budget +0.15).
+  Map 11 is at +0.095 / +0.106 and map 38, without a sun, at +0.012.
+- **Passes:** CPU encode (−0.036 to +0.012 ms), Metal (+16.7 to +17.3 MB per
+  sun map against 24, map 38 −0.2 MB), the change frame (GPU p95 at most
+  +0.260 against 0.50, encode p95 at most +0.020 against 0.30) and the scene
+  without a map (GPU p50 +0.006, encode p50 +0.009, within ±0.03).
+- The full table and the attribution are in
+  [maps: performance](studio/maps.md#performance).
+
+### Slice 5: the fix (P5)
+
+Added 2026-11-18. P5 measures the fix for P4's GPU cost in one quiet window
+(2026-11-18, 21:33:40–21:49:04 UTC).
+
+- **The fix** (`7e5fbf3d`) has three parts:
+  - it skips the sun block where n·l ≤ 0;
+  - it filters the shadow compares with a 3×3 tent in 4 bilinear taps;
+  - it draws the ambient-lit map surfaces with the toon pipelines.
+- **The runs:**
+  - `main` (`02fec873`, P4's base binary) against the fix, and the fix with
+    `IKKOKU_BENCHMARK_MAP_SHADOW=every-frame`;
+  - P4's 10 scenes, runs and bars;
+  - the plan was frozen before the window (SHA-256 `fe282e2f`).
+- **The base-spread rule:** a scene whose first-block base GPU p50 spread
+  exceeded 0.04 ms got one rerun block, and that block decides its verdict.
+  It triggered for maps 11 and 15.
+- **Passes, all 75 rows:**
+  - steady-state GPU p50 −0.047 to +0.036 ms (budget +0.10; P4 +0.095 to
+    +0.205 on the sun maps), and p95 −0.032 to +0.057 ms (budget +0.15);
+  - CPU encode −0.014 to +0.006 ms;
+  - Metal +16.7 to +17.3 MB per sun map, and map 38 −0.2 MB;
+  - the change frame: GPU p95 at most +0.212 ms against 0.50, and encode p95
+    at most +0.029 against 0.30;
+  - the scene without a map: GPU p50 +0.004 and encode p50 +0.014, within
+    ±0.03.
+- **Map 11's rerun block** had a base spread of 0.078, above 0.04 again. As
+  registered, it decides as is: there is no third block and no exclusion.
+- **Validity:** 140 units, all valid in the end. 9 first attempts were rerun
+  once, 8 for an intruder and 1 for an unread display mode.
+- The full table is in [maps: performance](studio/maps.md#performance).
+
 ## ST-T03i: scene plug-in data rewrites
 
 Added 2026-10-26 with the second plug-in data change ([plug-in data](studio/scene-editing.md#plug-in-data-st-t03i)).
@@ -3825,7 +4120,7 @@ and `IKKOKU_PLUGIN_SCENE_LARGEST`. Each case is the median of 60 calls after
   (the lazy hash). The runs went before, after, after, before, one process
   each, and each cell lists the two runs.
 - **Scenes:**
-  - showoff (`koikatu_cs0002591`): 595,127 B, 7 characters, no plug-in data;
+  - showoff (source scene `029f0b1d`): 595,127 B, 7 characters, no plug-in data;
   - the fixtures of the original-player phases A, B and C;
   - the largest KKPE scene of the install: 80,535,331 B, 173 objects, 42
     characters, 36,553 B of plug-in data. It is private, and its SHA-256
@@ -3938,7 +4233,7 @@ warmups.
   runs went before, after, after, before, one process each, and each cell
   lists the two runs.
 - **Scenes:**
-  - showoff (`koikatu_cs0002591`): 595,127 B, 7 characters, version 1.0.4.2;
+  - showoff (source scene `029f0b1d`): 595,127 B, 7 characters, version 1.0.4.2;
   - the largest legacy scene of the install: 1,676,359 B, version 1.0.3,
     2,255 objects (1,894 items, 360 folders, 1 light), no characters. It is
     private, and its SHA-256 begins `bcaca9ff`;
@@ -5163,6 +5458,12 @@ document write):
 
 ### What remains after item 7
 
+The [item 7 follow-ups](#phase-2-item-7-follow-ups) removed the other
+per-frame readers of the document (C4), kept the toolbar's pose-mode
+picker (C3), and found the kept hidden section during an FK drag needs no
+change after C4 (C2). What is still open is listed under
+[What remains after the item 7 follow-ups](#what-remains-after-the-item-7-follow-ups).
+
 - **The 30 ms target is not met.** A select from nothing still takes
   52–71 ms and a redo 68–96 ms. What is left of them:
   - **A section's first build.** A kind's section is built the first time
@@ -5272,6 +5573,352 @@ With the [scaling method](#scaling-to-the-low-end-base-m1-8-gb) (serial CPU
 15), and a redo for about 0.085–0.12 s instead of 0.13–0.17 s (10–14 frames
 instead of 15–20). A deselect costs up to about 0.02 s more. An FK drag's
 per-frame main-thread time does not grow.
+
+## Phase 2, item 7 follow-ups
+
+Follow-ups to [item 7](#phase-2-item-7-selection-and-the-inspector), from
+its [What remains](#what-remains-after-item-7) list (#319). One of them
+changes the app: the workspace tree, the toolbar and the timeline bar read
+state the model publishes (C4), with a measurement control that keeps the
+shipped behaviour by default (`IKKOKU_PERF_PANEL_STATE`). Keeping the
+toolbar's pose-mode pickers mounted (C3) was tried and dropped, because its
+gain stayed within the noise. A kept hidden section during an FK drag (C2)
+needed no change once C4 landed. Hiding a kept view's controls (C1) was
+measured and left for a follow-up, and the rest of a select between two
+characters (C5) was left as it is.
+
+The step-1 profiles ran on base `189e5b8c` (Release) while the only
+display was a virtual 60 Hz screen and the window presented no frame, so
+every number marked "without presentation" leaves out Core Animation
+commits, display-link pacing and the AppKit layout that drawing causes.
+
+### C4: the workspace, toolbar and timeline read published state
+
+During an FK drag every frame writes the document, and the workspace tree
+(`StudioWorkspacePanel`), the toolbar (`StudioToolbar`) and the timeline
+bar (`StudioTimelineBar`) read the document in their bodies, so each was
+evaluated on every frame (120 bodies a second each) and the window was
+laid out again, although nothing they show had changed. The model now
+publishes what each shows (`StudioPanelState.swift`), the way it publishes
+the Object tab's state, and writes each value only when it differs:
+
+- **`workspaceState`**: the rows (name, kind, visibility, depth, selection,
+  the source camera's label and marker) and the object count. The rows are
+  rebuilt only when `StudioWorkspaceKey` changes: per object its id,
+  parent, name, kind, visibility and what its source camera label reads,
+  then the selection, the scene identity and the active source camera's
+  view. Building the key reads the objects in place.
+- **`toolbarDocumentState`**: whether the selection is a character, the
+  filled camera slots, whether there are source routes, and the grid.
+- **`timelineDocumentState`**: the timeline's length and loop, the
+  selection's keys, the key count and whether anything is selected.
+
+The model computes all three after each refresh, with the Object tab's
+state. The Debug check that compares published state with a fresh
+computation after every run-loop turn covers the three new values, so a
+change that reaches a panel without a refresh, or an input missing from
+the workspace key, fails the Studio lanes. `IKKOKU_PERF_PANEL_STATE=document`
+restores the old reads for measurement.
+
+### C3: keeping the toolbar's pose-mode pickers (tried and dropped)
+
+The toolbar builds its pose-mode pickers (the Object / FK / IK segmented
+control, and the FK group picker in FK mode) when a character is selected
+and drops them when the selection becomes another kind or nothing. In the
+step-1 profile (without presentation), building the segmented control took
+about 7 ms and dropping it 2.7–2.8 ms. C3 kept them mounted while the
+selection was not a character, hidden: their size was fixed and framed to
+zero, and they were transparent, took no clicks, were disabled (so they
+left the Tab loop) and were out of the accessibility tree. A measurement
+control built and dropped them as before. The gain did not hold up:
+
+- **One loaded run per mode, without presentation.** A select from nothing
+  took 49.9 (48.6–51.6) ms with the pickers built and 27.0 (26.5–47.9) ms
+  with them kept, 12 warm samples each. That run misled. The two runs
+  were not interleaved, and the outside load differed between them:
+  another agent's Swift build ran at 78% through both, and the Spotlight
+  indexer ran at up to 143% before the built run and after the kept one.
+  Under outside load the main thread runs faster (see the frequency
+  caveat under [Measurements](#measurements-item-7-follow-ups)), so the
+  same select took 27–52 ms there, against 46–80 ms in quiet runs. The
+  kept run's own samples reached the built run's level.
+- **The quiet window without presentation (window 1).** With 4 ABBA runs
+  per mode, every kept run's median (69.7–70.8 ms) was below every built
+  run's (73.1–75.0 ms), so the pickers saved about 4 ms, with the pooled
+  ranges overlapping (table below). A select from a character to a folder
+  was 2 ms slower kept, within the noise.
+- **The composited window (window 2).** Base against a head that still
+  had C3: a select from nothing took 68.1 (44.0–76.9) ms against
+  65.6 (40.5–73.7) ms, 2.5 ms faster, within each other's ranges.
+
+A few milliseconds inside the noise do not pay for a kept hidden control
+and the focus and accessibility guarantees it needs, so the toolbar builds
+and drops the pickers as in base. C3's removal restores base's toolbar, so
+the composited base against head cells, timed with C3 in the head, stand
+for C4 alone within the noise.
+
+### C2: a kept hidden section during an FK drag (no change)
+
+Item 7 left a route's section, kept hidden behind the dragged character,
+adding 12–24 ms/s of invalidation during an FK drag. After C4, on the
+fixture scene with route 20 then character 10 selected and character 10
+dragged (single runs without presentation, on a loaded machine), "other"
+main-thread time is 1.9 ms/s with the sections kept against 1.3 ms/s
+without, and no view body runs in either. In step 1 both had about
+65 ms/s. The hidden section's invalidation came with the panels' document
+reads that C4 removed, so no hide-time snapshot was added.
+
+### C1: hiding costs more than destroying (measured, not changed)
+
+A hidden kept view is disabled, so its controls leave the Tab key-view
+loop and refuse focus. An ablation build, with `.disabled` dropped from
+`inspectorHidden` and everything else as shipped, measured what that costs
+(head `49cd842d`, the same binary for all three columns, single runs
+without presentation on a loaded machine; warm medians in ms):
+
+| action | kept (shipped) | kept, not disabled | `off` |
+| --- | ---: | ---: | ---: |
+| deselect (from a character) | 37.7 (36.6–40.7) | 28.3 (28.1–29.6) | 29.9 |
+| select from nothing | 43.4 (26.4–44.7) | 37.5 (36.8–38.4) | 43.6 |
+| character to character | 16.6 | 16.8 | 16.6 |
+| undo | 70.1 | 64.0 | 59.9 |
+| redo | 73.9 | 66.5 | 113.8 |
+| undo of the redo | 70.3 | 63.1 | 60.7 |
+
+Disabling costs about 9 ms per deselect, 6 ms per select from nothing and
+6–7 ms per undo or redo; without it, kept views deselect as cheaply as
+`off`. The cost lies in AppKit layout and the SwiftUI graph update inside
+it, which may change once the window is composited, and no SwiftUI-level
+replacement keeps hidden controls out of the AppKit key-view loop
+(`.focusable(false)` acts on SwiftUI's focus system, and disabling only
+the text fields leaves buttons and pickers in the loop under Full Keyboard
+Access). So it is left for a follow-up; see
+[What remains](#what-remains-after-the-item-7-follow-ups).
+
+### Measurements (item 7 follow-ups)
+
+**Composited (window 2, the primary result).** 2026-11-01, 16:43–17:06,
+on the external display (M32UC, 1920 × 1080 points at 120 Hz, the main
+display, recorded at the start and the end of the window), with the window
+composited and presenting. Release builds: base `189e5b8c`; head the code
+of `32ad7cd8` (C4, and C3 before it was dropped, before `main` was merged
+in, so the comparison leaves out the renderer changes that merge brought). Each run went under
+the app lock after a 10 s gate with no outside process over 20%; a run
+with an outside process over 20% afterwards was rerun, at most twice (8
+reruns, all for the Spotlight indexer). Firefox's `plugin-container` ran
+steadily at 48–53% through the whole window, in every run of both arms,
+over the 45% at which a run is usually noted; it is balanced background
+across each ABBA round, so those runs were kept, not rerun. Medians
+(min–max). All 20 FK drag runs presented 118.4–119.7 frames a second.
+
+Base against head, `studio-select` (characters 0 and 963), `studio-redo`
+and the showoff FK drag (15 s each), two ABBA rounds, 4 runs per cell,
+warm actions pooled:
+
+| | base | head |
+| --- | ---: | ---: |
+| FK drag main busy (ms/s) | 310.6 (306.6–313.3) | 256.8 (256.5–260.1) |
+| FK drag other (ms/s) | 141.8 (136.5–143.7) | 3.2 (3.1–3.3) |
+| FK drag workspace, toolbar and timeline bodies (/s) | 359.9 | 0 |
+| FK drag `studioRefresh` (ms/s) | 158.9 (157.6–160.3) | 239.7 (239.2–243.1) |
+| FK drag `studioRefresh` per refresh (ms) | 1.31–1.34 | 1.99–2.03 |
+| FK drag presented FPS | 119.6 (119.5–119.7) | 119.4 (119.3–119.6) |
+| FK drag hitches per run | 6.5 (5–7) | 9.0 (6–11) |
+| select from nothing (ms), n=36 | 68.1 (44.0–76.9) | 65.6 (40.5–73.7) |
+| character to character (ms), n=32 | 31.9 (24.8–39.8) | 31.6 (21.5–35.9) |
+| deselect (ms), n=32 | 58.4 (47.5–62.4) | 60.5 (50.8–65.0) |
+| duplicate (ms), n=16 | 47.3 (36.6–50.4) | 48.5 (44.7–51.1) |
+| undo (ms), n=12 | 91.4 (85.5–100.1) | 93.5 (86.1–99.3) |
+| redo (ms), n=12 | 99.0 (90.6–102.7) | 97.2 (94.4–101.5) |
+| undo of the redo (ms), n=12 | 89.6 (81.8–98.1) | 89.7 (84.3–100.5) |
+| `studio-select` main busy (ms/s) | 125.1 (124.1–126.3) | 125.4 (124.7–125.7) |
+| `studio-redo` main busy (ms/s) | 134.9 (131.8–135.7) | 134.2 (133.4–136.2) |
+
+During an FK drag the head takes 54 ms/s (17%) less main-thread time, at
+the display's full rate in both builds. The selects, undo and redo are
+within each other's ranges: the 4 ms a select from nothing gained without
+presentation is 2.5 ms here, and the undo's 7 ms rise without presentation
+(below) is 2 ms with overlapping ranges. The head's FK drag had 2.5 more
+hitches per 15 s run (about 0.2 a second); the same binary's `document`
+and `published` runs below have 5.5 each, so it does not come with C4, and
+with 4 runs it is not attributed. Neither is the undo's 2 ms. The head here
+still had C3, whose removal restores base's toolbar; see
+[C3](#c3-keeping-the-toolbars-pose-mode-pickers-tried-and-dropped).
+
+C4, head, showoff FK drag (10 s), one ABBA round, 2 runs per cell:
+
+| | `document` | `published` |
+| --- | ---: | ---: |
+| main busy (ms/s) | 301.6 (300.6–302.6) | 250.3 (249.9–250.7) |
+| other main-thread time (ms/s) | 138.3 (137.2–139.5) | 3.0 (3.0–3.1) |
+| workspace, toolbar and timeline bodies (/s) | 359.9 | 0 |
+| `studioRefresh` (ms/s) | 153.0 (151.0–155.1) | 233.3 (232.9–233.7) |
+| `studioPanelState` (ms/s) | 0 | 1.9 |
+| `studioRefresh` per refresh (ms) | 1.26–1.29 | 1.94–1.95 |
+| presented FPS | 119.4 (119.4–119.5) | 119.4 (119.4–119.5) |
+| hitches per run | 5.5 (5–6) | 5.5 (5–6) |
+
+The main-load control, head, `published`, showoff FK drag (10 s), alone
+and with 1 ms of busy-wait on the main thread 120 times a second
+(`--main-load-ms 1 --main-load-hz 120`), two ABBA rounds, 4 runs per cell:
+
+| | alone | with 1 ms at 120 Hz |
+| --- | ---: | ---: |
+| main busy (ms/s) | 244.0 (236.0–250.2) | 299.8 (293.0–310.0), 120 of it the load |
+| model time (ms/s) | 241.0 (232.9–247.1) | 176.3 (169.3–186.2) |
+| `studioRefresh` (ms/s) | 227.5 (219.3–233.1) | 166.3 (159.7–175.8) |
+| `studioRefresh` per refresh (ms) | 1.90 (1.83–1.94) | 1.39 (1.33–1.47) |
+| presented FPS | 119.3 (118.4–119.5) | 119.4 (119.3–119.5) |
+
+**Without presentation (window 1).** 2026-11-01, 15:36–16:11, while the
+only display was the virtual 60 Hz screen and the window presented no
+frame (from about 16:01 an external display was attached; the three runs
+that presented frames are left out here). Release builds: base `189e5b8c`,
+head `32ad7cd8` (C4 and C3). Each run went under the app lock after a 10 s gate with no
+outside process over 20%; a run with an outside process over 20% or
+Firefox over 45% afterwards was rerun, at most twice. Medians (min–max).
+
+C4, head, showoff FK drag (10 s), 4 runs per cell:
+
+| | `document` | `published` |
+| --- | ---: | ---: |
+| main busy (ms/s) | 338.9 (328.2–342.3) | 276.7 (258.7–309.0) |
+| other main-thread time (ms/s) | 140.9 (137.1–142.4) | 3.4 (2.7–3.8) |
+| workspace, toolbar and timeline bodies (/s) | 359.9 | 0 |
+| `studioRefresh` (ms/s) | 186.2 (179.9–189.2) | 258.6 (242.6–288.4) |
+| `studioPanelState` (ms/s) | 0 | 1.9 (1.8–2.1) |
+| `studioRefresh` per refresh, p50 (ms) | 1.47–1.63 | 2.03–2.23 |
+
+C3 (dropped), head, `studio-select` over character 0 and folder 622, 4 runs
+per cell, warm actions pooled (ms):
+
+| action | `built` | `kept` |
+| --- | ---: | ---: |
+| select a character from nothing | 74.4 (47.2–80.0), n=48 | 70.3 (46.0–77.4), n=48 |
+| character to folder | 53.0 (43.9–59.7), n=44 | 55.1 (44.2–59.2), n=44 |
+| deselect from a folder | 49.0 (28.4–53.3), n=44 | 50.3 (24.8–55.4), n=44 |
+
+Base against head, `studio-select` (characters 0 and 963), `studio-redo`
+and the showoff FK drag (15 s each), one ABBA round, 2 runs per cell:
+
+| | base | head |
+| --- | ---: | ---: |
+| FK drag main busy (ms/s) | 330.3 (325.9–334.8) | 273.7 (264.9–282.5) |
+| FK drag other (ms/s) | 133.9 | 2.8 |
+| FK drag `studioRefresh` (ms/s) | 185.5 | 257.1 |
+| select from nothing (ms) | 68.5 (47.5–76.3) | 63.8 (46.1–68.8) |
+| character to character (ms) | 31.6 (22.2–37.3) | 34.8 (30.1–39.4) |
+| deselect (ms) | 59.1 (44.8–63.0) | 60.6 (50.5–65.6) |
+| duplicate (ms) | 48.5 (46.4–50.7) | 47.9 (46.3–48.8) |
+| undo (ms) | 84.1 (78.4–91.8) | 91.3 (85.4–93.7) |
+| redo (ms) | 90.6 (82.0–99.1) | 92.2 (78.3–98.5) |
+| undo of the redo (ms) | 83.0 (80.3–87.9) | 86.9 (81.7–88.9) |
+
+**Refresh time follows the main thread's load.** With C4, `studioRefresh`
+takes longer per refresh (1.31–1.34 ms in base against 1.99–2.03 in head
+composited, and the same without presentation) although it computes the
+same frame; the panel state it now publishes costs 1.9 ms/s, about
+0.02 ms per refresh. The main-load control shows the cause in one binary
+and one mode: with 1 ms of busy-wait added to every frame, the same
+refresh takes 1.39 ms instead of 1.90, and model time falls by 65 ms/s for
+the same work. A main thread that idles more often runs its work more
+slowly, because the processor's clock and the core it is scheduled on
+follow the load, so part of a saving in busy time comes back as slower
+refreshes. About 0.1 ms per refresh is left against `document` (1.39
+against 1.28); the load's shape, one 1 ms block per frame, is not that of
+the SwiftUI work it stands in for, so the remainder is not attributed
+further. The main busy totals above already include the effect; times per
+refresh or per action that are compared across modes or builds whose
+main-thread load differs carry this caveat. The effect is not new: an FK
+drag run while another process loaded the machine took 0.90 ms per
+refresh in head.
+
+### Correctness (item 7 follow-ups)
+
+- **Window captures** (`.local/r7l-inspector-followups/captures/final`).
+  Base: `main` `189e5b8c` (Release); head: `2f7fac44` (C4 only, with
+  `main` `29718788` merged). Each capture ran as a pair, base and head
+  under one hold of the app lock, with a clean `IKKOKU_*` environment and
+  `IKKOKU_SOURCE_TREE_FALLBACKS=0`, on the external display at 2× (windows
+  of 3,200 × 1,996 pixels). Item 7's 17 `IKKOKU_CAPTURE_UI` window
+  captures ran twice, base first and then head first. All 34 UI reports
+  match base byte for byte. 13 of 17 window PNGs match in the first pass
+  and 16 of 17 in the second. To tell variants from changes, the two
+  windows that differed in the inspector were captured again, for 6 and 16
+  runs per build. Each difference:
+  - `ui-pose` (first pass): the Pose tab's eye-look readout is shown in
+    base's image only. This timing variant has been known since item 3.
+  - `ui-sel-back` (first pass) and `ui-sel-chars` (second pass): the pose
+    picker's sizing variant (4,700 pixels at x 945–1274, y 142–181). The
+    segmented control is drawn either at its content's width, centred in
+    its frame, or filling the frame, depending on when it was last
+    measured. Both builds produce both sizes; item 7 saw the same.
+  - `ui-sel-clothes` (first pass, head): the Clothes tab's content is laid
+    out wider than the inspector and clipped at its left edge (165,983
+    pixels). This exists in base too: over 6 runs per build, base drew it
+    3 times and head 5 times, and the 12 reports are identical. See
+    [What remains](#what-remains-after-the-item-7-follow-ups).
+  - `ui-sel-chars` (first pass, head): the Object tab's content below the
+    compatibility row sits 3 points higher. It happened once in 16 head
+    runs and in none of 16 base runs, with all 32 reports identical. C4
+    does not change the inspector, and one occurrence cannot be
+    attributed.
+
+  The eight `IKKOKU_AUTOCAPTURE` renders of item 7 (live opt-in OFF and
+  ON) were compared earlier against head `49cd842d` (C4 and C3), and all 11
+  products were byte-identical to base. The renders draw no toolbar, so
+  dropping C3 does not reach them.
+- **Scenarios.** `inspector-kept-views` passes `--strict` on the head Debug
+  build of `2f7fac44` (69 steps, 42 s), with the Debug check of the
+  published state after every run-loop turn. Its new steps check that the
+  workspace row follows a rename typed mid-session and a visibility toggle
+  (C4). On the same build, under the app lock, the strict Studio lane
+  passed 88/88 (0 skipped, 1,413.7 s), after 87/87 on `32ad7cd8` and the
+  strict Maker lane 10/10 (178.3 s). After the merge of `main` at
+  `d9bd8ec3`, on the Debug build of `2d69dbd1`: `inspector-kept-views`
+  passes `--strict` again (69 steps, 42 s), and the strict Studio lane
+  passes 89/89 (0 skipped, 1,418.2 s).
+- **Suites.** On `32ad7cd8`, the strict Engine suite with the shared map
+  (127 `IKKOKU_*` keys): 1,150 tests in 18 suites and 21 more pass, with
+  only the 13 opt-in timing and corpus probes skipped. Python:
+  `Tools/verification` (201 tests), `Tools/reverse` (648, 6 skipped) and
+  `Tools/reverse/analysis` pass; `doctor.py --require public` and the site
+  check pass. On `2f7fac44`, CI's four jobs pass, including the Engine
+  suite and the Python suites.
+
+### What remains after the item 7 follow-ups
+
+- **Hiding without disabling (C1).** Prototype first a container `NSView`
+  per kept section that is set hidden while the section is: hidden views
+  leave the key-view loop and the accessibility tree whatever SwiftUI
+  builds inside them. Fall back to marking the section's controls
+  `refusesFirstResponder` only if the container fails the captures or
+  costs more than it saves. Either way, add a Debug check that after each
+  run-loop turn no key-eligible view and no accessibility element lies in
+  a hidden kept section, run the scenario with Full Keyboard Access on,
+  measure only with a composited window, and keep it off by default behind
+  a control until it is proven.
+- **The Clothes tab drawn wider than the inspector.** After a select of
+  character 0, folder 622 and character 963 on the Clothes tab
+  (`ui-sel-clothes`), the tab's content is sometimes laid out wider than
+  the inspector and clipped at its left edge: in 3 of 6 base runs and 5 of
+  6 head runs. This exists in `main` and is outside these follow-ups
+  ([#333](https://github.com/grabbiel/ikkoku/issues/333)). Its cause is not
+  established.
+- **Two differences left unattributed.** In the composited window the
+  head's FK drag had 9.0 (6–11) hitches per 15 s run against base's
+  6.5 (5–7); the same binary's C4 pair has 5.5 (5–6) in both modes. An
+  undo took 93.5 (86.1–99.3) ms against base's 91.4 (85.5–100.1); without
+  presentation the gap was 91.3 (85.4–93.7) against 84.1 (78.4–91.8). With
+  4 runs per cell neither is attributed, and neither was chased.
+- **The rest of a select between two characters (C5).** It costs
+  28–35 ms composited (item 7). Without presentation it is 17 ms: a 13 ms
+  SwiftUI graph update that sets the shown values (text fields' intrinsic
+  size 2.7 ms, stack sizing 3.4 ms) and 0.4 ms of model refresh. The other
+  11–18 ms appear only with presentation.
+- From item 7's list, still open: the 30 ms target (a select from nothing
+  and a redo are still above it), a section's first build, the redo's
+  rehydration, and section expansion not being remembered.
 
 ## Texture loads without worker threads (2026-10-26)
 
@@ -5985,8 +6632,8 @@ none. The rows below are labelled by how they depend on that:
   SwiftUI appearance; the second is the end of the first rendered draw. Neither
   waits for a presented frame, but both depend on the 1199×946 drawable size.
 - **Measured without presentation (display 1920x1080@60, scale 1):** idle
-  main-thread busy time, `makerTick` p50 and peak footprint. A rerun with
-  presentation waits for the user's usual display.
+  main-thread busy time, `makerTick` p50 and peak footprint. The rerun with
+  presentation is [below](#rerun-with-presentation-2026-11-01).
 
 Median (min–max), n = 4 valid units per cell. Peak footprint covers all
 attempts: female base 7, female head 8, male base 5, male head 8.
@@ -6022,10 +6669,819 @@ Selection rows show API time with rig hits/misses.
   lower.
 - **Saving.** The import saving is mostly the skipped reference-model decode
   (nine files, 32.16 MB). The seed's byte hashing adds about 13 ms back.
-  Reimports over a cached session decline the seed, so they skip both the
-  hashing and the reference decode.
+  Reimports over a cached session declined the seed, so they skipped both the
+  hashing and the reference decode. The
+  [reimport rig carry](character/maker-assets.md#reimport-rig-carry-192-c-2026-11-01)
+  now seeds them from the replaced session's rigs instead.
 
 These numbers come from one machine, two cards and a non-compositing display.
 They show no FPS, live-animation or broad hardware result. Raw reports,
 snapshots, the scripts and the summary stay under
 `.local/cxm1-maker-rig-seed/timing/run1/`.
+
+### Rerun with presentation (2026-11-01)
+
+**Setup.** The same preserved Release binaries (base `644195a7…`, head
+`f191e32d…`), `maker-idle` only, in a coordinator quiet window. ABBA per sex for
+two cycles, n = 4 units per cell; all 16 traces exited 0. Before each unit the
+run waited until corespotlightd had stayed below 20% for 10 s.
+
+**Display.** The main display was 1920×1080 points at 120 Hz with scale 2, at the
+start and the end. The window's drawable was 2398×1892, and each idle trace
+presented 299 frames at a median interval of 8.33 ms.
+
+**Validity.** In all 16 units, plugin-container (the user's Firefox) went
+above the first run's 45% noted limit, peaking at 54.9–62.6%. Three units had
+one snapshot at 3.2–17.8%. The ABBA order puts the load on both builds, so
+every unit is reported here. One unit
+(cycle 1, male head) also had corespotlightd at 113%. Without it the male head
+medians move by 0.5 ms/s of idle busy time or less, and by 0.1 ms or less of
+card import.
+
+Median (min–max), n = 4 per cell.
+
+| Metric | Female base | Female head | Male base | Male head |
+| --- | --- | --- | --- | --- |
+| Card import (ms) | 1,284.7 (1,259.5–1,308.9) | 749.2 (743.6–765.2) | 1,337.0 (1,331.6–1,345.7) | 788.0 (786.3–790.6) |
+| `firstDraw` (s) | 2.605 (2.564–3.525) | 2.090 (2.078–2.612) | 2.662 (2.608–2.680) | 2.084 (2.069–2.166) |
+| Idle main busy (ms/s) | 48.8 (47.4–62.2) | 45.6 (35.3–48.2) | 8.9 (6.4–10.2) | 9.1 (6.4–10.8) |
+| `makerTick` p50 (ms) | 1.41 (1.40–1.60) | 1.32 (1.15–1.35) | 0.005 (0.005–0.005) | 0.006 (0.006–0.006) |
+| Peak footprint (MiB) | 826.9 (824.4–829.0) | 813.4 (794.9–816.6) | 868.0 (864.1–870.8) | 855.5 (854.9–857.1) |
+
+**Reading.**
+
+- **Idle.** With presentation, idle main-thread time still does not regress.
+  The female head median is lower, but the ranges overlap; the male cells are
+  equal.
+- **Memory.** Peak footprint is 13.5 MiB (female) and 12.5 MiB (male) lower in
+  head. Both arms are about 120 MiB above the first run, whose drawable was
+  1199×946 at scale 1.
+- **Import.** The saving holds: 535 ms (41.7%) for the female card and 549 ms
+  (41.1%) for the male. Absolute import times are about 6% longer than in the
+  first run in both arms, with the browser at 54–63% instead of below 45%.
+
+Raw reports and snapshots stay under
+`.local/cxm1-maker-rig-seed/timing/idle-composited-1824/`.
+
+## Maker reimport rig carry (#192-C, 2026-11-01)
+
+[PR #331](https://github.com/grabbiel/ikkoku/pull/331) makes a card reimport
+over a cached Maker session carry that session's decoded rigs. Before, the
+reimport declined the seed and decoded all ten rigs again. The change is
+described in
+[maker-assets.md](character/maker-assets.md#reimport-rig-carry-192-c-2026-11-01).
+
+**Setup.** Release base is main `69a63513` plus the scenario footprint harness
+(binary `824ddc8a…`). Head `9bd9795c` is the same plus the carry (binary
+`aaa32cf6…`). Both arms therefore run the same 1 ms footprint sampler. The run
+took place in a coordinator composited window. Each sex used its head-0
+scenario card, in ABBA order per sex for two cycles. Each unit is two fresh
+processes:
+
+1. A `maker-idle` perf trace.
+2. A reimport scenario: export the card, then reimport it five times (the
+   fourth, R4, with the footprint sampler off). Then select head 200 and
+   head 0, export again and reimport that card (R6).
+
+Around each sampled reimport, the sampler reads `phys_footprint` every 1 ms.
+
+**Validity.** Each process has `vm.loadavg` and top-5 CPU snapshots before and
+after it. A unit is invalid when an outside process is over 20% in the
+snapshots just before or just after the scenario process. These are noted
+instead (ranges in the 16 valid units):
+
+- plugin-container (the user's Firefox): 50.9–62.5% in every unit. ABBA
+  balances it.
+- Claude Helper (the session host): 23.4–54.8% in eight units.
+- WindowServer: 22.9–49.7%, induced by the window's own presented frames.
+- Launch-induced BiomeAgent and syspolicyd, allowed up to 30%: 20.1–23.9%.
+  launchd and runningboardd stayed lower.
+
+Nine of the 16 first attempts were invalid:
+
+| Slot | Cause |
+| --- | --- |
+| cycle 1 female base (slot 4) | BiomeAgent 30.4% |
+| cycle 1 male head (slots 1 and 4) | corespotlightd 102–151% |
+| cycle 2 female base (slot 2) | spotlightknowledged.updater 54%, ecosystemanalyticsd 49%, WD Discovery Helper 44% |
+| cycle 2 female head (slot 4) | mediaanalysisd 90% |
+| cycle 2 male base (slot 1) | mediaanalysisd 99–103% |
+| cycle 2 male head (slots 2 and 3) | mediaanalysisd 88–123% |
+| cycle 2 male base (slot 4) | mediaanalysisd 57–83%, duetexpertd 66% |
+
+Each rerun kept its slot and started only after corespotlightd and
+mediaanalysisd had stayed under 20% for 10 s. The reruns ran about two hours
+after the first pass. Eight were valid on the first attempt. Cycle 2 male head
+slot 2 needed a second attempt: corespotlightd read 327–371% during the first.
+No slot is missing. Load average was 2.8–6.5 in the first pass and 2.5–4.8 in
+the reruns.
+
+**Display.** 1920×1080 at scale 2 and 120 Hz, with the window composited. The
+female idle traces presented 30 frames/s, the male ones 1.8–9.8 frames/s in
+both arms. The scenario rows are wall-clock intervals on the main thread or
+the preparation worker, so they do not depend on presentation.
+
+Median (min–max), n = 4 valid units per cell. Reimport rows are
+`importMilliseconds`.
+
+| Metric | Female base | Female head | Male base | Male head |
+| --- | --- | --- | --- | --- |
+| Same-card reimport R1 (ms) | 669.1 (641.6–692.3) | 138.5 (132.6–139.6) | 666.5 (640.0–683.7) | 103.4 (102.7–106.5) |
+| Reimports R1, R3, R5, R6 (ms) | 665.7 (634.9–692.3) | 138.5 (130.5–141.8) | 670.8 (640.0–691.0) | 104.0 (101.7–107.1) |
+| Reimport R2 (ms) | 680.4 (655.5–694.4) | 139.2 (131.9–147.3) | 682.1 (656.2–704.2) | 105.5 (104.0–107.2) |
+| Reimport R4, sampler off (ms) | 667.9 (642.8–686.4) | 137.6 (131.9–138.5) | 679.3 (645.4–701.3) | 102.7 (102.3–105.3) |
+| Head 200 after the reimports (ms) | 738.3 (723.3–743.2), 0/10 | 432.6 (422.7–443.0), 9/1 | 775.3 (769.0–782.5), 0/10 | 430.6 (427.7–431.5), 9/1 |
+| Then head 0 (ms) | 335.7 (330.4–339.4), 9/1 | 104.7 (104.0–106.7), 10/0 | 336.4 (331.2–336.9), 9/1 | 106.1 (105.3–107.1), 10/0 |
+| Startup import, scenario process (ms) | 722.1 (702.6–750.4) | 745.7 (697.2–750.9) | 802.4 (745.8–830.8) | 750.4 (731.0–756.8) |
+| Transient peak, peak − after (MiB) | 15.2 (1.6–19.9) | 14.0 (1.5–19.0) | 14.8 (0.9–20.6) | 14.9 (2.6–20.9) |
+| Peak − before (MiB) | 61.3 (39.9–79.2) | 61.4 (47.1–77.8) | 61.1 (42.4–82.4) | 63.9 (50.6–76.2) |
+| Held, after − before (MiB) | 43.4 (24.6–75.2) | 43.6 (33.2–69.1) | 44.8 (24.4–73.5) | 43.0 (35.0–70.0) |
+| Footprint after R6 (MiB) | 960.1 (952.4–1,002.1) | 944.1 (941.0–949.8) | 1,016.7 (998.0–1,030.1) | 984.7 (974.6–986.6) |
+| Idle trace: card import (ms) | 733.6 (718.4–743.7) | 740.1 (689.6–750.2) | 773.2 (746.3–804.1) | 744.2 (737.6–764.2) |
+| Idle trace: `firstDraw` (s) | 2.059 (2.023–2.102) | 2.038 (1.899–2.106) | 2.086 (2.011–2.130) | 2.008 (1.942–2.059) |
+| Idle trace: main busy (ms/s) | 44.7 (38.4–64.2) | 45.2 (41.5–71.2) | 7.3 (4.3–13.8) | 8.7 (6.5–11.3) |
+| Idle trace: peak footprint (MiB) | 815.7 (813.1–816.8) | 797.3 (796.0–799.9) | 857.5 (856.1–859.8) | 857.9 (853.3–858.3) |
+
+What each arm does:
+
+- **R1, R3, R5 and R6.** Base declines the seed (`emptyLedgerFull`) and still
+  decodes all ten rigs for the geometry. Head carries all ten (10 / 0).
+- **R2 and R4.** Base seeds 0 / 10, hashing and decoding every rig. Head again
+  carries ten.
+- **Selection rows** show rig hits / misses.
+- **Footprint rows** pool the five sampled reimports per unit.
+
+As a cross-check, the medians over all 16 first attempts (flagged units
+included) are: R1 682.2 → 138.5 ms (female) and 681.3 → 105.8 ms (male), and
+head 200 737.6 → 432.6 ms and 777.5 → 431.3 ms.
+
+**Reading.**
+
+- **Reimport.** A same-card reimport is 531 ms (79.3%) faster for the female
+  card and 563 ms (84.5%) for the male. Every head reimport carries all ten
+  rigs, decodes none and hashes ten.
+- **Selections after the reimports.** Head 200 drops by 306 ms (female) and
+  345 ms (male), because the session still holds nine of its ten rigs. The
+  following head 0 drops by 231 ms in both, reusing all ten.
+- **Sampler control.** In head, R4 with the sampler off reads 137.6 / 102.7 ms,
+  against 138.5 / 104.0 ms for the sampled R1, R3, R5 and R6. That is within the
+  spread. In base, R4 compares with R2, since both seed 0 / 10: 667.9 vs
+  680.4 ms (female) and 679.3 vs 682.1 ms (male). The 0.4–1.8% gap could come
+  from the sampler or from the step's position. Either way it is under 3% of
+  the difference between the arms.
+- **Footprint.** The transient peak (peak − after) is not lower in head. In
+  both arms each reimport holds 43–45 MiB more than before it
+  ([#332](https://github.com/grabbiel/ikkoku/issues/332)), and that dominates
+  the peak − before rise. After R6, head ends 16 MiB (female) and 32 MiB (male)
+  lower. The carried rigs total about 15 MiB of logical charge, small against
+  the import's other allocations.
+- **Startup and idle.** These paths are unchanged: an empty session seeds ten
+  rigs in both arms. The startup-import medians differ in opposite directions,
+  +24 ms (female) and −52 ms (male). In the first pass, the male gap was mostly
+  in `rigDecode` (about 50 ms), which #192-C does not touch. Idle main-thread time and the idle
+  peak footprint also move in mixed directions. None of these differences is
+  attributed to the change.
+- **Reruns.** The reruns ran on a quieter machine. Base reruns read 20–45 ms
+  faster than the first-pass base units, and head reruns about 2 ms faster.
+  The male head cell is all reruns; every other cell mixes both passes. So
+  the valid-only base medians sit 13–15 ms below the all-16 ones, and the head
+  medians move by at most 2.4 ms. This narrows the measured gain slightly.
+
+These numbers come from one machine, two cards and n = 4 per cell, with live
+animation off in the scenario. They show no FPS or live-animation result. Raw
+reports, snapshots, the scripts and the summaries stay under
+`.local/stt03k-maker-reimport/timing/run1/`.
+
+### Footprint follow-up (#332)
+
+The held growth per reimport is tracked in
+[#332](https://github.com/grabbiel/ikkoku/issues/332). Code reading found no
+holder in the resource store or the renderer, and the smoke's own counts show
+one preview's worth after five reimports. Two Engine tests pin that card
+composition and preview replacement free their Metal objects
+([maker-assets.md](character/maker-assets.md)).
+
+To split the rest, the harness records more for each reimport that sets
+`footprint`. Before and after the import it adds:
+
+- the device's `currentAllocatedSize`, with its peak sampled alongside the
+  footprint;
+- the totals of every malloc zone: blocks and bytes in use, the most in use,
+  and bytes allocated;
+- the resource store's counts.
+
+A `pause` step holds the scenario so `vmmap`, `footprint` and `heap` can read
+this one process. It takes `seconds`, from just over 0 up to 30, and `path`, a
+marker under `.local/`. It writes the process's own id to the marker, then
+waits. The wait is an await, so the main run loop can drain its autorelease
+pool there.
+
+With this harness, [#355](https://github.com/grabbiel/ikkoku/pull/355) found
+the CPU holder in the reimport's autoreleased file reads. With each read in its
+own autorelease pool, the malloc held after a back-to-back reimport fell from
++42.7 MB to +2.4 MB.
+
+## Maker head-selection attribution (#192-D)
+
+#192-D step 1 adds two diagnostics to the normal-head selection report and
+changes nothing else. They are described in
+[maker-assets.md](character/maker-assets.md#texture-load-stages-and-main-actor-gap-phases-192-d):
+
+- **Texture-load stages.** The in-line loader's stages are split out under
+  `metalTextureLoad` in `baseAppearanceStages.textureLoads`.
+- **Gap phases.** Each `selectAsset` step reports its three longest
+  main-actor gaps, each with its split over the selection's phases.
+
+The owner numbers (63–66 ms) in
+[reader-local RGBA digest reuse](character/maker-assets.md#reader-local-verified-rgba-digest-reuse-192)
+(#241) predate `8a871c50` (one compositor command queue per device). The
+owner split here supersedes them.
+
+**Functional check** (Debug build, not timing). The strict
+`maker-scenarios` lane passes 10/10 on head `8deff4c2`. Every head selection
+has `phaseUptimes`, and the split of each reported gap adds up to the gap.
+The cold base appearance laps all eight loader stages once per created
+texture (17 textures). A warm base appearance creates none and reports no
+stage. The 11 lane exports and all 210 resource-statistics snapshots in the
+head, selection and async scenarios match a control build of `e0527080`.
+
+### Overhead timing (2026-11-02)
+
+The run was in a coordinator quiet window (W2). It paired Release `e0527080`
+(control) with a Release build of this step (instrumented; the code is
+unchanged since `8deff4c2`). #361's shape seed ran as a third arm in the same
+run; its results are documented with the seed.
+
+- **Units.** Each unit is one fresh process. It imports the sex's head-0 card
+  at startup, then selects heads 200, 0, 200, 0, 200 and 0. Step 1 (head 200)
+  is cold; the later steps are warm.
+- **Order.** Per sex and cycle the order is control, instrumented, seed,
+  seed, instrumented, control, mirrored on the second cycle. Two cycles give
+  n = 4 per arm and sex.
+- **Display.** 1920×1080 @ 120 Hz (UI size on a 3840×2160 panel), the same
+  at the start and the end.
+- **Validity.** A unit is invalid when a process outside the run is above
+  20% CPU in its before or after snapshot. The quiet-window rule counts
+  WindowServer, kernel_task and the Claude app's processes, including the
+  bundled `claude` binary that runs the agents, as background. 13 of 24 units
+  were valid on the first pass. The other 11 were rerun once and all were
+  valid, so 24/24 are valid.
+
+Medians in ms, control / instrumented; every pair's min–max ranges overlap:
+
+| Step, sex | Selection API | Preparation | Commit | Longest main-actor gap |
+|---|---|---|---|---|
+| 1 (cold), female | 442.2 / 433.8 | 369.2 / 360.6 | 69.0 / 69.7 | 140.9 / 136.8 |
+| 1 (cold), male | 434.9 / 438.1 | 362.9 / 365.4 | 70.8 / 71.1 | 128.2 / 125.6 |
+| 2 (warm), female | 105.4 / 104.6 | 73.8 / 73.8 | 30.3 / 29.8 | 32.8 / 31.3 |
+| 2 (warm), male | 103.6 / 105.1 | 73.1 / 75.0 | 29.7 / 29.0 | 30.8 / 30.5 |
+
+- On steps 3–6 the API medians differ by −0.9 to +1.3 ms per sex.
+- The startup import is 737.4 / 739.7 ms (female) and 757.3 / 776.8 ms
+  (male), with overlapping ranges (male control 754.9–805.2, instrumented
+  757.4–789.6).
+- On step 1 the sign of the difference flips between the sexes.
+
+**Verdict:** the instrumentation costs nothing above the noise.
+
+### Owner split (instrumented arm, step 1)
+
+Medians, female / male, n = 4 each.
+
+- **Selection API** 433.8 / 438.1 ms = snapshot 0.3 + preparation
+  360.6 / 365.4 + commit 69.7 / 71.1.
+- **Preparation** runs on the worker. Its intervals are nested or overlap,
+  so they are not additive:
+  - library preparation 311.7 / 314.3, of which rig decode 283.9 / 286.0;
+  - shape decode 23.0 / 23.5;
+  - appearance input preparation 22.3 / 22.7;
+  - rig reuse SHA 14.9 / 15.7 and RGBA SHA 12.3 / 12.4;
+  - rig read 4.9 / 5.0, RGBA read 4.5, verified-file SHA 4.4 / 4.5.
+- **Commit** runs on the owner:
+  - base appearance 39.7 / 42.9;
+  - card appearance 15.6 / 14.8. Of that, compose-encode wait is
+    11.6 / 11.2, body-mask load 1.5 / 1.4, component load 1.1 and pipeline
+    creation 0.65;
+  - preview 11.9 / 11.2;
+  - draft 1.0, pose frame 0.8, commit refresh 0.8.
+- **Base appearance texture loads.** 17 textures are created.
+  `metalTextureLoad` is 36.2 / 39.9 and image creation 0.97 / 0.94. The
+  loader stages inside `metalTextureLoad`:
+
+  | Stage | ms |
+  |---|---|
+  | decode | 23.0 / 26.9 |
+  | completionWait | 7.4 / 7.4 |
+  | conversion | 4.2 / 4.1 |
+  | encodeSubmit | 0.6 / 0.6 |
+  | destinationAllocation | 0.3 / 0.3 |
+  | stagingAllocation | 0.25 / 0.25 |
+  | cleanup | 0.15 / 0.15 |
+  | permitWait | 0 / 0 |
+
+- **Warm steps (2–6).** Base appearance is about 1 ms and creates no texture.
+  Card appearance stays at about 15 ms and preview at about 11 ms.
+
+**Open finding: the main-actor gap during preparation.**
+
+- In all 8 instrumented units, the longest main-actor gap of step 1 falls in
+  preparation: 108.9–144.2 ms.
+- The second longest falls in commit (67.0–75.5 ms) and the third in
+  preparation again (16.7–20.5 ms).
+- The control and seed arms have gaps of the same size (109.1–145.9 ms)
+  without the phase split.
+- No instrumented stage owns this gap. Preparation's stages run on the
+  worker, so something else holds the main actor for longer than the whole
+  commit.
+- In the Debug lane the longest gap falls in commit instead.
+
+**Next.** Decode (23–27 ms), not completionWait (7.4 ms), dominates the
+loader, so an upload group would gain little. In order:
+
+1. A Time Profiler sample, attached by pid during cold head-200 selections,
+   names what holds the main actor during preparation.
+2. A worker pre-decode of the base-appearance pixels follows as its own PR.
+
+## Lazy hidden characters at import
+
+An import builds only the characters it draws
+([scene editing](studio/scene-editing.md#hidden-characters-at-import-lazy-builds)).
+Hidden characters build when shown or selected. Their saved animation time
+comes from a data-only clock. These numbers compare the change with its
+merge base.
+
+### Window and validity (W3, 2026-11-17)
+
+- **Builds and order.** Release builds of both arms: head
+  `claude/stt03k-lazy-hidden` c825850c, base fb3aecd9 (the merge base plus
+  the three new workloads). Runs alternate ABBA.
+- **Scenes.** The 70-character user scene (45 of its characters cannot
+  convert, see below) and a median user scene with hidden characters.
+- **Display: 60 Hz, monitor off.** Every unit read 60.00 Hz, Online, before
+  and after. With the monitor off no frame is presented, so frame pacing and
+  presentation metrics were not measured. Startup runs used `--retries 0`;
+  their marks, main-thread and memory numbers do not need presentation.
+- **Validity.** A process outside our own work above 20% CPU in the
+  snapshot before or after a unit invalidates it. Three of 28 units were
+  invalid, and each was rerun valid:
+  - large startup base: corespotlightd 126%;
+  - median startup head: WD Discovery 21%;
+  - large export-import head: ecosystemd, trustd, plugin-container and
+    ecosystemanalyticsd.
+- **Noted, still valid.** plugin-container 40% (one unit); launchd 27–28.5%
+  (two units).
+
+All numbers are medians (min–max), 60 Hz, monitor off.
+
+### Startup (n = 4 per arm)
+
+| Scene | Metric | Base | Head |
+|---|---|---|---|
+| 70 characters | scene ready | 3.62 s (3.57–3.64) | 1.45 s (1.45–1.46) |
+| | main-thread busy until ready | 762 ms | 646 ms |
+| | longest stall | 396 ms | 390 ms |
+| | stalls over 100 ms | 2 | 2 |
+| | peak footprint | 1542 MiB | 1228 MiB |
+| | import call | 43.0 ms | 42.8 ms |
+| | clock warm-up (utility worker, after ready) | – | 170 ms |
+| median | scene ready | 1.58 s | 1.03 s |
+| | main-thread busy until ready | 617 ms | 576 ms |
+| | longest stall | 349 ms | 341 ms |
+| | peak footprint | 841 MiB | 855 MiB |
+| | maximum resident | about 1200 MiB | about 725 MiB |
+| | peak Metal allocation | 344 MiB | 231 MiB |
+| | clock warm-up | – | 58 ms |
+
+- **Median-scene footprint.** On the median scene the head builds less
+  (resident memory and Metal allocations both fall) while the footprint
+  stays level. Base's extra memory is mostly clean file-backed pages, which
+  the footprint does not count. One head unit read a 391 MiB footprint with
+  the same ready time, main-thread time, warm-up and Metal allocation as the
+  other head units, so it loaded everything. The difference (about
+  465 MiB) is most likely freed memory that run's allocator had already
+  returned. W3b found the same split again (see below). The median above
+  includes that unit.
+
+### Actions on the 70-character scene
+
+| Workload (n units per arm) | Action | Base | Head |
+|---|---|---|---|
+| `studio-clock-first` (2) | first `sourceClockBake` | – | 1.0 ms |
+| | first rebase, main busy | 34.5 ms | 22.0 ms |
+| | later rebases | 26.8 ms | 19.8 ms |
+| | first save, main busy | 37.9 ms | 37.6 ms |
+| | later saves | 36.2 ms | 41.4 ms (24–48) |
+| `studio-show-hidden` (1) | first show of a hidden folder, ready | 11–17 ms (5 characters) | 1.11–1.16 s (14 characters) |
+| | first show, main busy | 14–21 ms | 186–203 ms |
+| | first show, longest stall | 14–21 ms | 19–25 ms |
+| | show again, main busy | 11–14 ms | 16–26 ms |
+| `studio-select` (1) | first select of an unbuilt hidden character, ready | 10–15 ms (built at import) | 434–439 ms |
+| | its main busy / longest stall | 61–97 ms / 61–97 ms | 103–153 ms / 57–110 ms |
+| | later selects, main busy | 60–116 ms | 69–112 ms |
+| `studio-export-import` (2) | export, ready | 41.6 ms | 63.0 ms |
+| | export, main busy | 54.7 ms | 68.8 ms |
+
+- **Clock.** The first bake of the data-only clocks costs 1.0 ms on the main
+  thread, within the 8 ms target. A save costs the same in both arms; its
+  time is the scene's serialization.
+- **First show and first select.** The cost of a hidden character moves from
+  the import to its first show or selection. The builds run on workers, so
+  the longest stall stays 19–25 ms on a first show. A first selection's
+  stall (57–110 ms) is the size of the selection's existing inspector gap
+  (60–115 ms). A follow-up could pre-build a hidden character on hover or at
+  idle.
+- **Export.** In W3 the head exported through the background path whenever
+  a character had no preview: a worker hop for the clock states, a main
+  hop, and the status line's progress row shown and hidden, which costs
+  layout. The trace shows about 13.6 ms of main-thread time between the
+  call and the export, before the live refresh could run. The export now
+  runs in line when the import's warm-up has loaded every clock
+  (`SourceStudioAnimationClock.isLoaded`), as base does. W3b (below) times
+  the final code.
+
+### Final code (W3b, 2026-11-17)
+
+- **Builds.**
+  - Head: the final code, Release (34804c13). It adds the hidden card check
+    and the in-line export.
+  - Base: unchanged (fb3aecd9).
+- **Method.** Same as W3: ABBA, 60 Hz with the monitor off, the same
+  validity rule.
+- **Validity.** 15 units ran, 13 planned plus 2 reruns.
+  - One was invalid: show-hidden head, codex at 39% after the unit. Its
+    rerun was valid.
+  - The window's first launch (70-character startup, base) read the scene
+    from a spun-down external disk. Its import call took 18.6 s, and the
+    scene was ready after 22.2 s.
+    - The unit passed the validity rule. It was left out after its result
+      was seen, which is a post-hoc exclusion. It is accepted only because
+      leaving it out favours base.
+    - It was rerun. The table shows the base row both ways.
+
+| Workload (n per arm) | Metric | Base | Head |
+|---|---|---|---|
+| startup, 70 characters (base 2 without the cold unit, 3 with it; head 2) | scene ready | 3.60 s (3.59–3.61); with it 3.61 s (3.59–22.15) | 1.56 s (1.44–1.68) |
+| | main-thread busy until ready | 738 ms; with it 758 ms (718–19249) | 633 ms |
+| | longest stall | 386 ms; with it 391 ms (382–18908) | 380 ms |
+| | peak footprint | 1524 MiB; with it 1517 MiB | 1248 MiB |
+| | clock warm-up | – | 121 ms |
+| startup, median (2) | scene ready | 1.59 s | 1.02 s |
+| | main-thread busy until ready | 615 ms | 554 ms |
+| | longest stall | 364 ms | 294 ms |
+| | peak footprint | 842 MiB (841–843) | 676 MiB (495–857) |
+| `studio-export-import` (2) | export, ready | 42.4 ms | 58.1 ms |
+| | export, main busy | 55.1 ms | 63.0 ms |
+| `studio-show-hidden` (head only, 1) | first show of a hidden folder, ready | – | 745–766 ms (5 characters) |
+| | first show, main busy / longest stall | – | 113–120 ms / 19–27 ms |
+
+- **Export.**
+  - The head now exports in line: the call takes as long as the export. In
+    W3 the call returned in 0.9 ms and the export finished 63 ms later.
+  - The gap to base narrows from 21 to 16 ms (ready) and from 14 to 8 ms
+    (main-thread busy).
+  - The Q1 profile below finds the clocks' own cost at 0.17–0.29 ms per
+    export. The rest of the gap is attributed to the run environment.
+- **First show.** The card check keeps the hidden characters that cannot
+  convert as placeholders, so a first show now builds 5 characters instead
+  of 14. It is ready in about 0.75 s, with about 115 ms of main-thread time.
+  This changes again once extended shape rates (#379) make those characters
+  convertible; #379's own measurement covers it.
+- **Median-scene footprint.** It is bimodal on the head.
+  - Of the six head units (W3 and W3b), four read 855–861 MiB, about
+    15 MiB above base's 837–847 MiB.
+  - The other two read 391 and 495 MiB, with the same ready and main-thread
+    times.
+  - Resident memory and Metal allocations fall on the head (W3 table).
+
+### Export profile (Q1, 2026-11-18)
+
+W3b measured the head's export 16 ms slower to ready than base's (58.1
+against 42.4 ms). A Time Profiler run looked for where that time goes.
+
+- **Builds.**
+  - Head: 7939fd97 (this branch with main a281573b merged), Release.
+  - Base: main a281573b plus the three perf-workload commits, Release. Both
+    arms include #374.
+- **Method.** One `studio-export-import` unit per arm on the 70-character
+  scene. Each unit is one launch under the app lock, with
+  `perf_trace.py --xctrace "Time Profiler"` attached by process id.
+  - An entry gate ran before queuing for the lock and again inside it. It
+    required no build or test from any agent, no other process above 20%
+    CPU, and indexing daemons at or below 4%.
+  - The display read 60 Hz with the monitor off before and after every unit.
+- **Validity.** Two units were invalid, each with a Spotlight process above
+  20% in a snapshot, and each was rerun once. The valid pair below is the
+  evidence.
+- **Samples.** The main-thread samples inside
+  `StudioModel.exportSourceScene` were cut into the 18 exports and paired in
+  order with the report's export calls. This Mac's E cores are CPUs 0–3 and
+  12–15; its P cores are 4–11 and 16–23.
+
+| | Base | Head |
+|---|---|---|
+| main-thread samples on P cores | 100% | 98% |
+| export samples on P cores | 100% | 99% |
+| exports with at least 80% of their samples on P cores | 18 of 18 | 18 of 18 |
+| export call, median (min–max) | 43.4 ms (38.6–50.0) | 43.5 ms (36.7–60.7) |
+| export call, exports after the first (W3b's measure) | 43.4 ms | 49.2 ms |
+| export main-thread busy, median | 54.8 ms | 47.8 ms |
+| `KoikatsuSceneReader.decodeDocument`, per export | 21.8 ms | 22.2 ms |
+| SHA-256 of the scene file | 7.9 ms | 8.8 ms |
+| `SourceSceneExportValidation.validate` | 2.3 ms | 2.7 ms |
+| `SourceStudioAnimationClock.savedStates` | – | 0.17 ms |
+| main-thread samples in the 10 s window | 4.0 s | 1.8 s |
+| `studioRefresh` p50 | 11.1 ms | 2.1 ms |
+
+- **Placement.** Both arms run the export on P cores, so P/E placement does
+  not explain the gap.
+- **Code.** The export calls the same functions in both arms. The only
+  addition is the data-only clocks of the 20 unbuilt characters: 0.17 ms per
+  export (0.29 ms in the invalid head unit).
+- **The head's slow phase.**
+  - The head's exports 1–9 took about 37 ms. Exports 10–18 took 49–61 ms.
+    All ran on P cores.
+  - In the slow phase the compute-bound callees took longer: decode 18.7 →
+    25.8 ms (+38%), SHA-256 6.2 → 11.4 ms (+84%), validation +29%. The file
+    read stayed at 1.0 ms and the write at 1.3–1.6 ms.
+  - So a P core ran slower (lower clock or contention); it was not more
+    work. The Time Profiler cannot tell the two apart.
+  - The slow phase ran from 02:06:22.0 to 02:06:26.5. Another agent's trace
+    analysis ran outside the lock from about 02:05:26 and finished at
+    02:06:21. That overlaps the fast phase (02:06:17.0–02:06:21.6), not the
+    slow one. What ran during the slow phase is unknown. The snapshot at
+    02:06:29 shows no process above 20%.
+  - The head process is lighter. Its main thread was busy 1.8 s of the 10 s,
+    against base's 4.0 s, and its refresh takes 2.1 ms against 11.1 ms,
+    because base builds every hidden character. A lighter process plausibly
+    runs at a lower clock in this monitor-off environment (see the #374 note
+    on CPU phases about 3.5 times slower).
+- **Result.** W3b's +16 ms stands as measured. In this window the medians
+  are equal (43.5 against 43.4 ms). Over the exports after the first, the
+  head reads 49.2 against 43.4 ms, because its slow phase began at export
+  10. The export's own added cost is the clock, 0.17–0.29 ms. Per export,
+  the head's main thread is busy 7 ms less than base's. The rest of W3b's
+  gap is attributed to the run environment, not to this change's code.
+
+## Rig finite-affine check (#374, 2026-11-17)
+
+`RigDefinition.isFiniteAffine` now checks four lanes at a time: one
+comparison per column against `(inf, inf, inf, 1e-5)`, with the last column
+offset by `(0, 0, 0, 1)`. The old version called `isFinite` on each of the 16
+elements and then made four bottom-row checks. It returns the same Bool for
+every input: `abs(x) < .infinity` is false exactly for NaN and ±infinity.
+`RigFiniteAffineTests` keeps the old loop as its reference.
+
+Why: in step 0 of #371, a Time Profiler run attached to `studio-fk-drag`
+measured `isFiniteAffine` at 28.6 ms/s of the main thread, out of 50.9 ms/s
+for `RigDefinition.evaluate`. On the live-tick workers it was 37 ms/s (see
+[phase 2, item 3](#phase-2-item-3-live-tick-off-the-main-thread), "What remains").
+
+Both measurements below were taken in quiet window W4, at 60 Hz with the
+monitor off. The display mode stayed the same before and after each set.
+
+**Probe.** The probe is opt-in (`IKKOKU_FINITE_AFFINE_PERF=1`) and uses a
+Release test build. It runs on the source avatar rig, whose evaluation checks
+2,333 matrices (774 nodes, 785 palette matrices). It took the median of 400
+alternating rounds, in two separate processes. Both processes gave the same
+results:
+
+| Measure | Old element loop | Four-lane check |
+|---|---:|---:|
+| Check per matrix | 2.98 ns | 1.36 ns |
+| `evaluate` (verbatim copy vs `rig.evaluate`) | 13.2 µs | 9.5 / 9.4 µs |
+
+The four-lane check is 2.2 times faster per matrix, and `evaluate` takes 28%
+less time. In each round, both evaluations agree bit for bit.
+
+**App A/B.** The workload was `studio-fk-drag` for 10 s, with input at
+120 Hz. The run order was ABCCBA, repeated twice, so each arm had 4 runs. Each
+run took the app lock and waited 10 s for a clean `cputop` first. One run
+showed an intruder process and was repeated. The arms were:
+
+- A: `main` `02fec873`
+- B: #371 (the character frame cache)
+- C: this change
+
+The pass criteria were registered before the window:
+
+- C's median `studioRefresh` mean is at most 95% of A's.
+- C's main-thread busy time is no higher than A's.
+
+| Arm | `studioRefresh` mean, median (range) | Main busy, median |
+|---|---:|---:|
+| A, base | 2.261 ms (2.067–2.549) | 290.9 ms/s |
+| C, #374 | 2.145 ms (2.098–2.189), 94.8% of A | 277.8 ms/s |
+
+C passes, but narrowly: its range overlaps A's. With the monitor off, presented
+FPS, hitches and dropped drawables have no meaning, so they were not used.
+
+The same #371 binary took 0.555 ms per refresh in a 5 s smoke run at 21:30,
+when builds kept the machine loaded. In the quiet window it took about 1.9 ms.
+Every CPU phase was about 3.5 times slower there (draw 0.49 → 1.95 ms), while
+GPU time stayed the same (0.74 → 0.75 ms). That pattern points to the app
+being scheduled on slow cores or at a low clock while its window is not
+visible, not to a change in the code's own cost. So these absolute times, and
+possibly the ratios, are specific to this environment. Comparing against a run
+with the monitor on is a follow-up.
+
+## Studio FK drag: reusing unchanged character frames (2026-11-02)
+
+During an FK drag the Studio refreshes once per drag event, about 120
+times a second. Each refresh asks every source character of the scene for
+a frame (`StudioModel.refreshFrame`). Only the dragged character changes,
+but before this change the other six of the scenario scene's seven rebuilt
+everything after their cached pose: the rig evaluation (world matrices,
+skin palettes, `isFiniteAffine` on every matrix), the items and their
+materials, the bounds, the palette copies, the retained textures and the
+iris transforms.
+
+### Step 0: where the drag's main thread goes
+
+A Time Profiler sample attached by pid to `studio-fk-drag`, on a Release
+of `main` `35f43e98`, for 10 s (2026-11-02 02:49, under the app lock; an
+attribution, not a timing). The figures are inclusive main-thread ms per
+second:
+
+| frame | ms/s |
+| --- | ---: |
+| `StudioModel.refresh` | 122.2 |
+| `StudioModel.refreshFrame` | 111.9 |
+| `SourceStudioCharacterPreview.frame` | 83.4 |
+| `RigDefinition.evaluate` (every caller) | 50.9 |
+| `SourceRigPreview.frame` | 47.7 |
+| `editedPose` | 34.6 |
+| `solvedPose` | 34.1 |
+| `isFiniteAffine` | 28.6 |
+| `makePose(binding:)` | 14.5 |
+| IK solve | 14.1 |
+| bounds | 10.8 |
+| renderer submit | 4.6 |
+| `bindPose` | 4.2 |
+| `retainTextures` | 4.2 |
+| iris transforms | 0.8 |
+
+`bindPose` is below the 10 ms/s at which a values-only FK path for the
+dragged character would have been tried, so that part was dropped.
+`isFiniteAffine` is a separate follow-up.
+
+### The change
+
+`SourceStudioCharacterPreview.frame` keeps its last finished frame (after
+world, object ID and iris) with a key. While the key matches, it returns
+that frame with the new camera, main light and effects. Those three are
+plain fields of the frame, and nothing else in a character frame reads
+them. The gaze follows the camera only through the live step, which writes
+the pose and the eye rates, and both are in the key. The key, compared bit
+for bit:
+
+- the pose, as a generation that every write to `evaluatedCache` bumps (a
+  solve, a clear or a checkpoint restore). `editedPose` returns a cached
+  pose without a write, so an unchanged generation after it means the same
+  pose;
+- the rig preview instance (a color edit replaces it) and its
+  `visibilityGeneration` (`doubleTooth`);
+- the expression inputs (a blink or a face edit);
+- wear (hidden parts and body alpha), world and object ID;
+- the eye-look rates and the iris tilt;
+- `ResourceStore.reuseGeneration`: the store's generation (registrations,
+  replacements, unregisters, hidden masks, completed retirements) plus
+  every retirement and release as it is asked for. A reused frame is
+  therefore never older than a retirement it should follow (R6).
+
+The cache lives on the preview, so deleting a character frees it, and a
+color edit drops it with the old rig preview. PerfTrace counts
+`studioCharacterFrameReused` and `studioCharacterFrameBuilt` at the
+Studio's two call sites. Their rates over the refresh rate give the frames
+reused per refresh.
+
+### Correctness
+
+- **The twin test** (`SourceStudioCharacterFrameReuseTests`) runs two sets
+  of the scenario scene's seven characters, each in a store of its own. One
+  set reuses frames; the other builds every frame afresh. Every frame must
+  match its twin bit for bit: items, materials, models, keys, morph
+  weights, texture handles, skin sets, bounds, gizmos, camera, light and
+  effects. The reusing set must report a reuse exactly when nothing
+  changed. The test covers:
+  - 90 live ticks (blink, neck and eye gaze on a circling camera, dynamics,
+    a held then moving FK edit, a seek), each followed by a refresh with
+    the view orbited;
+  - an FK drag, then the FK edit held while the view orbits;
+  - an IK edit, a face slider, the expression, wear, world, object ID, a
+    color edit, the double tooth and a resource retirement, each a fresh
+    frame and then a reuse;
+  - 24 orbit steps with the eyes on the camera (TARGET); the gaze moved on
+    17;
+  - the automatic blink alone for 8 s, with 22 changes, a fresh frame
+    exactly on each.
+  - All 1,550 frames matched (866 reused, 684 built).
+- **The lifetime test** drops the seven characters of each store. The store
+  ends where the store without reuse ends: meshes and deformation buffers
+  back to 0, and the same 19 cached textures. Every texture a cached frame
+  held whose owner released it was freed.
+- **The live-tick digest** over 180 ticks of the seven characters, serial
+  and parallel, is the same on base (`main` `fff1d332`) and head:
+  `2a441a23b9f5…`. The edit-during-a-tick digest is also the same,
+  `eeb9bb141283…`.
+
+### Memory
+
+The seven cached frames hold 476.5 KiB:
+- 124 items, 87.2 KiB;
+- 137 morph weights, 2.1 KiB;
+- 6,195 palette matrices, 387.2 KiB.
+
+### Follow-up changes (2026-11-18)
+
+The first A/B (2026-11-17, n = 4 per arm) reused 6 of 7 frames per input
+but left the refresh at 84.3% of base against the registered ≤ 70%. The
+attribution then found three costs on the dragged character's path:
+- **Change 1, the FK binding.** `bindPose`'s cache was keyed on the whole
+  FK map, so every drag input rebound the character.
+  `KoikatsuCharacterRecord.rebindPose` writes only the changed bones'
+  rotations into the cached binding. It falls back to a full bind when a
+  changed key is not a target, a no-guide target would lose its rotation,
+  or `setRotation` throws. A randomized test (160 seeds × 12 steps)
+  compares every rebind with a fresh bind: targets, flags, transitions,
+  effects, diagnostics and the `makePose` output, bit for bit.
+- **The gizmo handles.** `GizmoBuilder.handle` built the unit octahedron
+  afresh for every handle of every refresh, with about 13 allocations. Its
+  24 vertices now come from a table that the same
+  `octahedron(center: .zero, radius: 1)` call builds once; `handle` only
+  adds the color. A test compares 288 handles (negative, large and zero
+  centers; sizes that are not powers of two; several colors) with the
+  former construction bit for bit.
+- **The clip binding check.** `ResolvedClip.matches` compared every
+  binding's source ID and name with the rig's nodes on every sample. It now
+  skips that walk for the rig identity the resolution was last checked
+  against: rigs with one identity have the same nodes, skins and order
+  (`RigDefinition.Identity`). Any other rig still takes the full walk. A
+  test checks the shortcut against the walk and against a fresh resolution
+  over 60 rig pairs.
+
+A dev A/B of those three (W13, n = 4 per arm, not registered) put the
+refresh at 63.6% of base: a 9.1% margin against the ≤ 70% bar, short of
+the 15% a registration needs. A head profile (e039ee56, 15 s) then showed
+the gizmos down from 30.8% to 14.6% of the refresh and the clip check
+gone. It also found three more costs, changed here in this order, one
+commit each with its own test:
+- **The IK node check.** `SourceStudioIK.apply` mapped the rig's node
+  list twice and compared source IDs and parents on every call (~3.2 ms/s
+  of the refresh). The solver now keeps the identity of the rig it was
+  built for and skips the comparison for that rig. Any other rig gets the
+  full comparison as before: equal source IDs and parents pass and solve
+  bit for bit, and a changed node list fails with the same message.
+- **The rotate gizmo's rings.** `build(.rotate)` rebuilt three rings of
+  576 vertices from sine and cosine on every call. Their positions depend
+  only on the axis: radius, thickness and segment count are constants,
+  the color only fills a field, and origin, orientation and size go into
+  the batch's model. A table built by the same `ring` call holds them. A
+  test compares 384 rotate gizmos with the former construction bit for bit.
+- **Repeated rig evaluations** (21.5 ms/s, of which IK 4.5, the frame 2.2
+  and the bone handles 1.6):
+  - The IK solver evaluated its full-body initialization pose on every call.
+    `init` now evaluates it once (with `try?`, full-body only), and `apply`
+    uses that for the rig the solver was built for. A failed evaluation is
+    not kept: `apply` evaluates and throws where it did before. `init` runs
+    at import and on a body or face shape edit, never during an FK drag.
+  - `applyingActivations` evaluates the pose it returns last, on every path.
+    `evaluatedActivations` keeps that evaluation, `makePose`'s result
+    carries it, and the IK solve takes it in place of evaluating the same
+    pose again.
+  - The character preview keeps its last pose evaluation. It is used again
+    only for the same rig and a pose that shares the kept pose's matrix
+    storage, which therefore holds the same values. The frame build and the
+    Studio's bone handles share it. No checkpoint, undo state or document
+    field holds it.
+  - Tests compare every path with `rig.evaluate`, bit for bit.
+
+### A/B
+
+Registered A/B, 2026-11-19 (W16). The plan was frozen before measuring and
+verified by the coordinator.
+- **Arms:** base `main` `0d7eb327` against head `3b170522` (`0d7eb327` plus
+  this change), both Release.
+- **Run:** `studio-fk-drag` for 10 s, ABBA × 2, so 8 units and n = 4 per
+  arm. Each launch held the app lock on its own, at 60 Hz with the monitor
+  off.
+- **Gates:** the entry and after gates use the strict 20% intruder rule,
+  and the pre-launch snapshot invalidates too.
+- **Reruns:** an invalid unit is rerun at most twice.
+- **Statistic:** the median of the per-run refresh means.
+
+All 8 units were valid. One head unit's first attempt was invalid
+(`corespotlightd` at 362% in its after gate) and was rerun under the plan.
+
+| | base | head |
+|---|---:|---:|
+| refresh, median of run means (ms) | 2.257 (2.200–2.375) | 1.258 (1.198–1.293) |
+| main busy, median (ms/s) | 287.3 | 178.7 |
+| frames built / reused per refresh | — | 1 / 6 in every run |
+
+- **(a)** The refresh is 55.7% of base, against ≤ 70%: pass.
+- **(b)** Main busy is 62.2% of base, against ≤ base: pass.
+- **(c)** Every head run builds 1 frame and reuses 6, inside the bands:
+  pass.
+
+The ranges do not overlap. A dev A/B of the same binaries, run 15 minutes
+earlier, gave 55.5%.

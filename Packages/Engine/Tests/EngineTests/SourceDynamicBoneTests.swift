@@ -188,3 +188,88 @@ func sourceDynamicsLocalOriginalHairRigWhenRequested() throws {
         print("[validated-step] \(test.name): \(successes) steps agree on a pose, \(failures.count) on \(failures.first ?? "-")")
     }
 }
+
+/// #404: a renderer under a zero scale (hair under a collapsed HairParent)
+/// keeps its palette in rig space, so `rig.evaluate` accepts it. The
+/// validated step checks the palette entries the chain moves the same way and
+/// agrees with the whole-rig step; before #404 it inverted the singular mesh
+/// world. #406: a zero axis on the chain itself simulates, recorded or not
+/// (one collapsed axis is rebuilt from the other two); a negative scale
+/// simulates with its signed record and is refused without one, naming #406.
+/// A record that no longer describes its matrix is ignored, and a
+/// matrix-authored chain node is refused with its own message.
+@Test func sourceDynamicsValidatedStepAcceptsACollapsedRendererLikeEvaluate() throws {
+    let rig = try RigDefinition(nodes: try dynamicsRig().nodes + [.init(name: "flat", sourceID: "flat", parent: 0, scale: Float3(0, 1, 1))],
+                                skins: [.init(name: "hair", meshNode: 3, joints: [2], inverseBindMatrices: [matrix_identity_float4x4])])
+    #expect(try rig.evaluate(rig.restPose).collapsedSkins == [0])
+    let config = dynamicsConfig(force: Float3(0.02, 0, 0))
+    var whole = try SourceDynamicBone(rig: rig, definition: config), changed = whole
+    for _ in 0..<20 {
+        let expected = try whole.step(deltaTime: 1 / 60, rig: rig, pose: rig.restPose)
+        let actual = try changed.step(deltaTime: 1 / 60, rig: rig, pose: rig.restPose, validatedInput: true)
+        #expect(expected.localMatrices == actual.localMatrices)
+    }
+    #expect(whole.lastStepCount > 0)
+    var collapsed = rig.restPose
+    collapsed.localMatrices[1] = Transform.scale(Float3(0, 1, 1))
+    var zero = try SourceDynamicBone(rig: rig, pose: collapsed, definition: config)
+    for _ in 0..<20 {
+        let output = try zero.step(deltaTime: 1 / 60, rig: rig, pose: collapsed)
+        #expect(output.localMatrices.allSatisfy { m in (0..<4).allSatisfy { c in (0..<4).allSatisfy { m[c][$0].isFinite } } })
+    }
+    #expect(zero.inverseSafePlacements > 0)
+    let identity = simd_quatf(ix: 0, iy: 0, iz: 0, r: 1)
+    var reflected = rig.restPose
+    reflected.localMatrices[1] = Transform.scale(Float3(-1, 1, 1))
+    do {
+        _ = try SourceDynamicBone(rig: rig, pose: reflected, definition: config)
+        Issue.record("An unrecorded negative scale on the dynamics chain must be refused.")
+    } catch {
+        #expect("\(error)".contains("#406"), "\(error)")
+    }
+    // A writer records through the same Transform.trs it writes the matrix
+    // with (Transform.scale differs from it in the sign of a zero).
+    reflected.localMatrices[1] = Transform.trs(.zero, identity, Float3(-1, 1, 1))
+    reflected.recordTRS(1, translation: .zero, rotation: identity, scale: Float3(-1, 1, 1))
+    var mirrored = try SourceDynamicBone(rig: rig, pose: reflected, definition: config)
+    let output = try mirrored.step(deltaTime: 1 / 60, rig: rig, pose: reflected)
+    #expect(output.validSignedTRS(1)?.scale == Float3(-1, 1, 1) && mirrored.lastStepCount == 1)
+    var stale = reflected
+    stale.localMatrices[1] = Transform.scale(Float3(-1, 1.5, 1))
+    #expect(stale.signedTRS?[1] != nil && stale.validSignedTRS(1) == nil)
+    #expect(throws: RigError.self) { try SourceDynamicBone(rig: rig, pose: stale, definition: config) }
+    // A matrix-authored chain node has no TRS to simulate and says so.
+    let authored = try RigDefinition(nodes: [.init(name: "owner", sourceID: "owner", parent: nil),
+        .init(name: "root", sourceID: "root", parent: 0, authoredMatrix: matrix_identity_float4x4),
+        .init(name: "tip", sourceID: "tip", parent: 1, translation: Float3(0, -1, 0))], skins: [])
+    do {
+        _ = try SourceDynamicBone(rig: authored, definition: config)
+        Issue.record("A matrix-authored node on the dynamics chain must be refused.")
+    } catch {
+        #expect("\(error)".contains("matrix-authored"), "\(error)")
+    }
+}
+
+/// `RigDefinition.isFiniteAffine` became four-lane (2026-11-17). The test above
+/// reaches the validated step's world and palette checks; this one reaches
+/// its local check: a node under the tip that no particle owns keeps its
+/// input local matrix, here a non-finite or projective one. The validated
+/// step and the whole-rig step both reject it with `rig.evaluate`'s message.
+@Test func sourceDynamicsValidatedStepRejectsNonfiniteLocalUnderTheRootParticle() throws {
+    let rig = try RigDefinition(nodes: try dynamicsRig().nodes + [.init(name: "child", sourceID: "child", parent: 2, translation: Float3(0, -0.5, 0))], skins: [])
+    // Typed: CI's Swift 6.3.3 mis-infers untyped numeric literals in tuple arrays.
+    let bad: [(Int, Int, Float)] = [(3, 1, .nan), (0, 0, .infinity), (2, 1, -.infinity), (1, 3, 0.25), (3, 3, 2)]
+    for (column, row, value) in bad {
+        var pose = rig.restPose
+        pose.localMatrices[3][column][row] = value
+        for validated in [false, true] {
+            var state = try SourceDynamicBone(rig: rig, definition: dynamicsConfig(force: Float3(0.02, 0, 0)))
+            do {
+                _ = try state.step(deltaTime: 1 / 60, rig: rig, pose: pose, validatedInput: validated)
+                Issue.record("validated \(validated) [\(column)][\(row)] = \(value) was accepted")
+            } catch {
+                #expect("\(error)" == "Pose node 3 has an invalid matrix.", "validated \(validated) [\(column)][\(row)]")
+            }
+        }
+    }
+}

@@ -116,7 +116,7 @@ public struct SourceMakerLibrary: Sendable {
         let url = try contained(ref)
         let bytes = try SourceMakerPreparationTimings.read(timings, .verifiedFileRead) {
             let input = try FileHandle(forReadingFrom: url); defer { try? input.close() }
-            return try input.read(upToCount: maximumBytes + 1) ?? Data()
+            return try input.pooledRead(upToCount: maximumBytes + 1) ?? Data()
         }
         guard bytes.count <= maximumBytes, SourceMakerPreparationTimings.measure(timings, .verifiedFileSHA, {
             let matches = SHA256.hash(data: bytes).map({ String(format: "%02x", $0) }).joined() == ref.sha256.lowercased()

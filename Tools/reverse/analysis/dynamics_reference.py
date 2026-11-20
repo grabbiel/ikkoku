@@ -5,7 +5,12 @@ This is a method-by-method numerical reference from the recovered managed
 implementation, separate from the Swift solver and the prefab converter. It
 retains the source sphere/endcap/interior branches and skip-update loop. The
 reference verifies particle state and applied world positions, not Unity's
-unavailable native quaternion/Transform implementation or signed-scale paths.
+unavailable native quaternion/Transform implementation. `signed_document`
+(#406) adds signed and zero local scales: it models the Transform semantics the
+source relies on (rotation is the product of local rotations, TransformDirection
+is rotation only, the position setter undoes each ancestor TRS with InverseSafe)
+and Illusion's mirror compensation in ApplyParticlesToTransforms, and records
+the applied world matrices.
 """
 from __future__ import annotations
 
@@ -292,6 +297,210 @@ def synthetic_document():
                 scenarios=scenarios, collisions=cases)
 
 
+# --- #406: signed TRS, applied transforms ---------------------------------
+
+def quat_mul(a, b):
+    ax, ay, az, aw = (float(x) for x in a)
+    bx, by, bz, bw = (float(x) for x in b)
+    return [aw*bx + ax*bw + ay*bz - az*by, aw*by - ax*bz + ay*bw + az*bx,
+            aw*bz + ax*by - ay*bx + az*bw, aw*bw - ax*bx - ay*by - az*bz]
+
+
+def quat_normalized(q):
+    size = float(np.sqrt(sum(float(x) * float(x) for x in q)))
+    return [float(x) / size for x in q]
+
+
+def quat_inverse(q):
+    return [-float(q[0]), -float(q[1]), -float(q[2]), float(q[3])]
+
+
+def from_to(a, b):
+    """Shortest rotation taking a onto b (the source's Quaternion.FromToRotation)."""
+    a = np.asarray(a, dtype=np.float64); b = np.asarray(b, dtype=np.float64)
+    f, t = a / np.linalg.norm(a), b / np.linalg.norm(b)
+    d = float(np.dot(f, t))
+    if d > .999999:
+        return [0., 0., 0., 1.]
+    if d < -.999999:
+        axis = np.cross([1., 0., 0.], f)
+        if np.dot(axis, axis) < 1e-6:
+            axis = np.cross([0., 1., 0.], f)
+        axis /= np.linalg.norm(axis)
+        return [float(axis[0]), float(axis[1]), float(axis[2]), 0.]
+    axis = np.cross(f, t)
+    return quat_normalized([axis[0], axis[1], axis[2], 1 + d])
+
+
+class AppliedTransforms:
+    """Local signed TRS per node, as Unity Transforms keep them."""
+    def __init__(self, nodes):
+        self.nodes = copy.deepcopy(nodes)
+        self.children = [0] * len(nodes)
+        for n in nodes:
+            if n['parent'] is not None:
+                self.children[n['parent']] += 1
+
+    def world(self, i):
+        n = self.nodes[i]
+        local = trs(n).astype(np.float64)
+        return local if n['parent'] is None else self.world(n['parent']) @ local
+
+    def world_rotation(self, i):
+        n = self.nodes[i]
+        q = quat_normalized(n['rotation'])
+        return q if n['parent'] is None else quat_normalized(quat_mul(self.world_rotation(n['parent']), q))
+
+    def set_world_rotation(self, i, q):
+        parent = self.nodes[i]['parent']
+        local = q if parent is None else quat_mul(quat_inverse(self.world_rotation(parent)), q)
+        self.nodes[i]['rotation'] = quat_normalized(local)
+
+    def inverse_point(self, i, p):
+        """Transform.InverseTransformPoint: each ancestor TRS undone from the root, scale through InverseSafe."""
+        chain = []
+        while i is not None:
+            chain.append(i); i = self.nodes[i]['parent']
+        p = np.asarray(p, dtype=np.float64)
+        for j in reversed(chain):
+            n = self.nodes[j]
+            r = rotation(n['rotation']).astype(np.float64)
+            p = r.T @ (p - np.asarray(n['translation'], dtype=np.float64))
+            p = p * np.array([1 / s if abs(s) > 1e-5 else 0. for s in n['scale']])
+        return p
+
+    def set_position(self, i, p):
+        parent = self.nodes[i]['parent']
+        self.nodes[i]['translation'] = [float(x) for x in (np.asarray(p, dtype=np.float64) if parent is None else self.inverse_point(parent, p))]
+
+
+def apply_particles(nodes, definition, indices, node_indices, positions):
+    """ApplyParticlesToTransforms with Illusion's mirror compensation; returns the transforms."""
+    t = AppliedTransforms(nodes)
+    owner = indices[definition['ownerID']]
+    owner_parent = nodes[owner]['parent']
+    axes = []
+    for k in range(3):
+        unit_axis = [0., 0., 0.]; unit_axis[k] = 1.
+        if nodes[owner]['scale'][k] < 0:
+            axes.append(rotation(t.world_rotation(owner)).astype(np.float64) @ unit_axis)
+        elif owner_parent is not None and nodes[owner_parent]['scale'][k] < 0:
+            axes.append(rotation(t.world_rotation(owner_parent)).astype(np.float64) @ unit_axis)
+    for i in range(1, len(definition['particles'])):
+        parent = definition['particles'][i]['parent']
+        ni, pn = node_indices[i], node_indices[parent]
+        if t.children[pn] <= 1:
+            direction = rotation(t.world_rotation(pn)).astype(np.float64) @ np.asarray(t.nodes[ni]['translation'], dtype=np.float64)
+            vector = np.asarray(positions[i], dtype=np.float64) - np.asarray(positions[parent], dtype=np.float64)
+            for axis in axes:
+                vector = vector - axis * (np.dot(vector, axis) * 2)
+            if np.dot(direction, direction) > 1e-12 and np.dot(vector, vector) > 1e-12:
+                t.set_world_rotation(pn, quat_mul(from_to(direction, vector), t.world_rotation(pn)))
+        t.set_position(ni, positions[i])
+    return t
+
+
+def compact(x):
+    """A float32 value in 9 significant digits, which round-trip it (inputs)."""
+    return float('%.9g' % float(F(x)))
+
+
+def expected_value(x):
+    """An expected value rounded to 1e-7, far inside the 1e-5 comparison."""
+    return float('%.7f' % float(F(x))) + 0.
+
+
+def signed_frames(count, owner_motion):
+    dt = [0, 1/120, 1/120, .047, .002, .1, 0, 1/60, .008, .009]
+    frames = []
+    for i in range(count):
+        x = .08 * np.sin(i * .05) if owner_motion else 0.
+        frames.append(dict(deltaTime=compact(dt[i % len(dt)]), overrides=[
+            {'sourceID': 'owner', 'translation': [compact(.05 + x), compact(.2 + np.sin(i * .23) * .04), compact(-.03 + np.cos(i * .07) * .05)]},
+            {'sourceID': 'root', 'rotation': [compact(x) for x in axis_rotation(2, .3 * np.sin(i * .037))]}]))
+    return frames
+
+
+SIGNED_CHECKPOINTS = [0, *range(19, 200, 20)]
+
+
+def make_signed_scenario(name, nodes, definition, frames):
+    solver = ParticleReference(nodes, definition)
+    checkpoints = []
+    for index, frame in enumerate(frames):
+        current = copy.deepcopy(nodes)
+        indices = {n['sourceID']: i for i, n in enumerate(current)}
+        for override in frame['overrides']:
+            current[indices[override['sourceID']]].update(override)
+        expected = solver.advance(current, frame['deltaTime'])
+        if index not in SIGNED_CHECKPOINTS:
+            continue
+        applied = apply_particles(current, definition, indices, solver.node_indices, solver.positions)
+        e = expected_value
+        checkpoints.append(dict(frame=index, positions=[[e(x) for x in p] for p in expected['positions']],
+            previousPositions=[[e(x) for x in p] for p in expected['previousPositions']],
+            remainder=compact(expected['remainder']), lastStepCount=expected['lastStepCount'],
+            applied=[[e(x) for x in applied.world(ni)[:3, :].T.reshape(-1)] for ni in solver.node_indices[1:]]))
+    return dict(name=name, nodes=nodes, definition=definition, checkpoints=checkpoints)
+
+
+def signed_document():
+    """#406 synthetic scenarios: negative and zero local scales on the owner,
+    its parent, a particle bone and a collider. Every non-positive scale is
+    a rest scale, which the rest pose records."""
+    def rig(owner_rotation=(0, 0, 0, 1)):
+        return [node('base', None, (0, .1, 0)), node('owner', 0, (.05, .2, -.03), rotation=owner_rotation),
+                node('root', 1, (.1, .2, -.1)), node('middle', 2, (.1, -.45, .05)), node('tip', 3, (-.08, -.4, .06)),
+                node('branch', 2, (-.3, -.2, -.08)),
+                node('collider', 1, (0, -.25, .1), (1.1, .9, 1.3), axis_rotation(1, .35)),
+                node('outer', 0, (.2, -.6, .1), (1, 1, 1), axis_rotation(0, .2))]
+    particles = [dict(nodeID=n, parent=p, damping=.12+i*.03, elasticity=.15+i*.02, stiffness=.32, inert=.2+i*.1, radius=.04)
+                 for i, (n, p) in enumerate([('root', None), ('middle', 0), ('tip', 1), ('branch', 0)])]
+    inside = collider(2, 1, 1.8); inside.update(nodeID='outer', radius=.9)
+    definition = dict(sourceID='signed', ownerID='owner', updateRate=60, gravity=[0, -.04, 0],
+                      force=[.013, -.004, .009], freezeAxis=0, particles=particles,
+                      colliders=[collider(1, 0, 1.1), inside])
+    turned = axis_rotation(1, .4)
+    cases = []
+    for target in ['owner', 'base', 'middle', 'collider']:
+        for k, axis in enumerate('xyz'):
+            scale = [1.1, .9, 1.2]; scale[k] = -scale[k]
+            cases.append((f'{target}-negative-{axis}', {target: scale}, 0, turned, True))
+    cases += [('base-zero-y', {'base': [1.1, 0, 1.2]}, 0, turned, True),
+              ('middle-zero-z', {'middle': [1.1, .9, 0]}, 0, turned, True),
+              ('collider-zero-x', {'collider': [0, .9, 1.3]}, 0, turned, True),
+              ('owner-two-negative-xy', {'owner': [-1.1, -.9, 1.2]}, 0, turned, True),
+              ('owner-x-and-base-y-negative', {'owner': [-1.1, .9, 1.2], 'base': [1, -1, 1]}, 0, turned, True),
+              ('owner-negative-x-freeze-y', {'owner': [-1.1, .9, 1.2]}, 2, turned, True),
+              # Mirror pairs: an owner or base reflection across world X (the
+              # base reflection mirrors the owner's translation itself), owner
+              # motion in the mirror plane, gravity in the plane, the root
+              # turning about Z and the force mirrored: the source is exactly
+              # symmetric there.
+              ('mirror-pair-positive', {}, 0, (0, 0, 0, 1), False),
+              ('mirror-pair-owner-x', {'owner': [-1, 1, 1]}, 0, (0, 0, 0, 1), False),
+              ('mirror-pair-base-x', {'base': [-1, 1, 1]}, 0, (0, 0, 0, 1), False)]
+    frame_sets = dict(moving=signed_frames(200, True), planar=signed_frames(200, False))
+    scenarios = []
+    for name, scales, freeze, owner_rotation, motion in cases:
+        nodes, config = rig(owner_rotation), copy.deepcopy(definition)
+        for target, scale in scales.items():
+            next(n for n in nodes if n['sourceID'] == target)['scale'] = scale
+        config['freezeAxis'] = freeze
+        if name.startswith('mirror-pair'):
+            # Colliders under the owner only; the mirrored pairs flip the force.
+            config['colliders'] = [collider(1, 0, 1.1)]
+            if name != 'mirror-pair-positive':
+                config['force'] = [-.013, -.004, .009]
+        frames = 'moving' if motion else 'planar'
+        scenario = make_signed_scenario(name, nodes, config, frame_sets[frames])
+        scenario['frames'] = frames
+        scenarios.append(scenario)
+    return dict(schemaVersion=1, reference='independent recovered DynamicBone float32 particle methods with Unity signed-TRS '
+                'transform semantics and Illusion mirror compensation (#406)', checkpoints=SIGNED_CHECKPOINTS,
+                frameSets=frame_sets, scenarios=scenarios)
+
+
 def checkout_evidence(entries):
     """Evidence with absolute paths. Contract entries name `.local/...` files
     relative to this checkout; copying them verbatim made the reference depend
@@ -406,11 +615,19 @@ def main():
     parser.add_argument('--skirt-contract', type=Path)
     parser.add_argument('--maker-library', type=Path)
     parser.add_argument('--bottom', type=int, default=4)
+    parser.add_argument('--signed', action='store_true', help='the #406 signed-scale synthetic document')
     args = parser.parse_args()
     if args.skirt_contract and (not args.original_rigs or not args.maker_library):
         parser.error('--skirt-contract needs --original-rigs and --maker-library')
     if args.original_rigs and not args.output.resolve().is_relative_to((REPO / '.local').resolve()):
         parser.error('Original data must remain under .local')
+    if args.signed:
+        result = signed_document()
+        args.output.parent.mkdir(parents=True, exist_ok=True)
+        args.output.write_text(json.dumps(result, separators=(',', ':'), allow_nan=False) + '\n')
+        print(json.dumps(dict(scenarios=len(result['scenarios']), frames=sum(len(result['frameSets'][s['frames']]) for s in result['scenarios']),
+                              checkpoints=sum(len(s['checkpoints']) for s in result['scenarios']), output=str(args.output))))
+        return
     result = (skirt_document(args.original_rigs, args.skirt_contract, args.maker_library, args.bottom) if args.skirt_contract
               else original_document(args.original_rigs) if args.original_rigs else synthetic_document())
     args.output.parent.mkdir(parents=True, exist_ok=True)

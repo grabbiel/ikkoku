@@ -426,7 +426,9 @@ extension CaptureRequest {
         ScopedOption("IKKOKU_SOURCE_SCENE_EDITS", [.appCapture]),
         ScopedOption("IKKOKU_BENCHMARK_OUTPUT", [.appCapture]),
         ScopedOption("IKKOKU_BENCHMARK_FRAMES", [.appCapture]),
+        ScopedOption("IKKOKU_BENCHMARK_MAP_SHADOW", [.appCapture]),
         ScopedOption("IKKOKU_BENCHMARK_SIMULATION_FRAMES", [.appCapture]),
+        ScopedOption("IKKOKU_BENCHMARK_ORBIT", [.appCapture]),
         ScopedOption("IKKOKU_PERF_WORKLOAD", [.perfTrace]),
         ScopedOption("IKKOKU_PERF_SECONDS", [.perfTrace]),
         ScopedOption("IKKOKU_PERF_WARMUP_SECONDS", [.perfTrace]),
@@ -451,12 +453,21 @@ extension CaptureRequest {
         ScopedOption("IKKOKU_PERF_SELECT_KEYS", [.perfTrace]),
         ScopedOption("IKKOKU_PERF_INSPECTOR_TAB", [.perfTrace]),
         ScopedOption("IKKOKU_PERF_KEEP_MOUNTED", [.perfTrace]),
+        ScopedOption("IKKOKU_PERF_PANEL_STATE", [.perfTrace]),
     ]
 
     /// Options read only by the window capture.
     static let windowOptions: [String] = [
         "IKKOKU_CAPTURE_UI_TAB", "IKKOKU_CAPTURE_UI_MODE", "IKKOKU_CAPTURE_UI_STUDIO_TAB",
         "IKKOKU_CAPTURE_UI_SELECT", "IKKOKU_CAPTURE_UI_REPORT", UICaptureReadiness.timeoutVariable,
+        // #425: the Studio pose mode (Object, FK or IK) set once the selections are made; the
+        // selection must then be a character, or the capture is refused.
+        "IKKOKU_CAPTURE_UI_POSE_MODE",
+        // #425: the Studio window's width for the capture (`UICaptureWindowWidth`); the app checks it
+        // against the screen's visible width once the window is up.
+        UICaptureWindowWidth.variable,
+        // #333's diagnostic: the inspector's width at each readiness poll.
+        "IKKOKU_CAPTURE_UI_FIT_LOG",
     ]
 
     /// Inputs startup loads in any mode that builds the Maker and Studio, including
@@ -500,11 +511,15 @@ extension CaptureRequest {
         Dependency("IKKOKU_SOURCE_SCENE_EDITS", requires: "IKKOKU_SOURCE_SCENE"),
         Dependency("IKKOKU_SOURCE_MAP_PROBE", requires: "IKKOKU_SOURCE_SCENE"),
         Dependency("IKKOKU_BENCHMARK_FRAMES", requires: "IKKOKU_BENCHMARK_OUTPUT"),
+        Dependency("IKKOKU_BENCHMARK_MAP_SHADOW", requires: "IKKOKU_BENCHMARK_OUTPUT"),
         Dependency("IKKOKU_BENCHMARK_SIMULATION_FRAMES", requires: "IKKOKU_BENCHMARK_OUTPUT"),
         Dependency("IKKOKU_BENCHMARK_SIMULATION_FRAMES", requires: "IKKOKU_SOURCE_SCENE"),
+        Dependency("IKKOKU_BENCHMARK_ORBIT", requires: "IKKOKU_BENCHMARK_OUTPUT"),
         Dependency("IKKOKU_SOURCE_PLUGIN_DELTA", requires: "IKKOKU_SOURCE_PLUGIN_STEPS"),
         Dependency("IKKOKU_CAPTURE_UI_STUDIO_TAB", requires: "IKKOKU_CAPTURE_UI_MODE", value: "studio"),
         Dependency("IKKOKU_CAPTURE_UI_SELECT", requires: "IKKOKU_CAPTURE_UI_MODE", value: "studio"),
+        Dependency("IKKOKU_CAPTURE_UI_POSE_MODE", requires: "IKKOKU_CAPTURE_UI_MODE", value: "studio"),
+        Dependency(UICaptureWindowWidth.variable, requires: "IKKOKU_CAPTURE_UI_MODE", value: "studio"),
         Dependency("IKKOKU_ORIGINAL_FRAME_FAMILY_SETS", requires: "IKKOKU_ORIGINAL_FRAME_FAMILIES", value: "1"),
         Dependency("IKKOKU_ORIGINAL_FRAME_TRACE_PIXELS", requires: "IKKOKU_ORIGINAL_FRAME_FAMILIES", value: "1"),
         Dependency("IKKOKU_ORIGINAL_FRAME_DEPTH24", requires: "IKKOKU_ORIGINAL_FRAME_FAMILIES", value: "1", when: "1"),
@@ -545,13 +560,18 @@ extension CaptureRequest {
         ValueRule("IKKOKU_CAPTURE_SEX", .oneOf(["m", "f"])),
         ValueRule("IKKOKU_CAPTURE_UI_MODE", .oneOf(["maker", "studio"])),
         ValueRule("IKKOKU_CAPTURE_UI_SELECT", .integerList(0...Int(Int32.max), maxCount: 16, words: ["none"])),
+        ValueRule("IKKOKU_CAPTURE_UI_POSE_MODE", .oneOf(["object", "fk", "ik"])),
+        ValueRule(UICaptureWindowWidth.variable, .integer(UICaptureWindowWidth.minimum...Int.max)),
         ValueRule("IKKOKU_CAPTURE_TICKS", .integer(0...Int.max)),
         ValueRule("IKKOKU_CAPTURE_OUTFIT", .integer(0...Int.max)),
         ValueRule("IKKOKU_SOURCE_COORDINATE", .integer(0...Int.max)),
         ValueRule("IKKOKU_CAPTURE_TIMELINE", .finiteNumber),
         // The renderer and Studio benchmarks check their own frame ranges.
         ValueRule("IKKOKU_BENCHMARK_FRAMES", .integer(1...Int.max)),
+        // Maps slice 5: redraw the map sun's shadow map in every measured frame.
+        ValueRule("IKKOKU_BENCHMARK_MAP_SHADOW", .oneOf(["every-frame"])),
         ValueRule("IKKOKU_BENCHMARK_SIMULATION_FRAMES", .integer(1...Int.max)),
+        ValueRule("IKKOKU_BENCHMARK_ORBIT", .finiteNumber),
         ValueRule("IKKOKU_CAPTURE_EXPR", .pairs(keys: ["eyes", "mouth", "brows", "head", "gaze"], integerValues: true)),
         ValueRule("IKKOKU_CAPTURE_SLIDERS", .pairs(keys: nil, integerValues: false)),
         ValueRule("IKKOKU_APPLICATION_FOCUS", .focusEvents),
@@ -594,6 +614,10 @@ extension CaptureRequest {
         // Which hidden inspector views stay mounted (item 7): none as before,
         // the Object tab, or the tab and each kind's section (the default).
         ValueRule("IKKOKU_PERF_KEEP_MOUNTED", .oneOf(["off", "tab", "on"])),
+        // Where the workspace, toolbar and timeline read the document's part of
+        // what they show (item 7 follow-ups, C4): each body as before, or the
+        // state the model publishes (the default).
+        ValueRule("IKKOKU_PERF_PANEL_STATE", .oneOf(["document", "published"])),
     ]
 
     /// `IKKOKU_PERF_WORKLOAD` values, in the order `docs/reference/performance.md` lists them.
@@ -602,6 +626,7 @@ extension CaptureRequest {
         "studio-native", "viewport-lifecycle", "startup", "studio-static", "studio-orbit-bursts",
         "studio-duplicate", "studio-undo-delete", "studio-timeline",
         "studio-outfit", "studio-export", "studio-redo", "studio-load", "studio-select",
+        "studio-export-import", "studio-show-hidden", "studio-clock-first",
     ]
 }
 

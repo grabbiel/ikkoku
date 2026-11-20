@@ -201,7 +201,7 @@ private func decode(_ scene: LegacyScene) throws -> KoikatsuSceneDocument { try 
         let upgraded = try document.upgraded()
         #expect(upgraded.preservedData == expected.data, "\(text): the upgrade is not CharaStudio's 1.0.4.2 save")
         #expect(!upgraded.isLegacy && upgraded.trailingData == document.trailingData && upgraded.settings == document.settings)
-        #expect(upgraded.snapshot.roots == document.snapshot.roots.map { $0 }, "\(text): the upgrade reads back as another scene")
+        #expect(try onDecodeStack { upgraded.snapshot.roots == document.snapshot.roots.map { $0 } }, "\(text): the upgrade reads back as another scene")
         // An export of the legacy scene, even an empty one, is that upgrade.
         #expect(try document.editedData(SourceSceneEdits()) == expected.data)
     }
@@ -301,7 +301,8 @@ private func decode(_ scene: LegacyScene) throws -> KoikatsuSceneDocument { try 
     var legacy = LegacyScene("1.0.4.1")
     let points = [LegacyScene.Point(key: 51, aid: 52), .init(key: 53, connection: 0, aid: 54, aidInitialized: false)]
     legacy.roots(1); legacy.out.i(30); legacy.route(30, points: points); legacy.tail()
-    let document = try decode(legacy), patches = try document.upgradePatches()
+    let document = try decode(legacy)
+    let patches = try onDecodeStack { try document.upgradePatches() }
     let links = patches.filter { $0.range.isEmpty && $0.bytes == Data([0]) }
     #expect(links.count == 2)
     let misplaced = patches.map { patch in
@@ -314,11 +315,11 @@ private func decode(_ scene: LegacyScene) throws -> KoikatsuSceneDocument { try 
     let point = try #require(misread.snapshot.roots.first?.route?.points.first)
     #expect(!point.aidInitialized && point.linked)
     // ... but a value differs, so the readback refuses it.
-    do { _ = try document.readBack(data); Issue.record("a misplaced splice read back") } catch {
+    do { _ = try onDecodeStack { try document.readBack(data) }; Issue.record("a misplaced splice read back") } catch {
         #expect(error.localizedDescription.contains("1.0.4.2 upgrade does not read back as the same scene"), "\(error.localizedDescription)")
     }
     // The recorded patches read back.
-    #expect(try document.readBack(document.applying(patches)).preservedData == document.upgraded().preservedData)
+    #expect(try onDecodeStack { try document.readBack(document.applying(patches)).preservedData } == document.upgraded().preservedData)
 }
 
 @Test func legacyRoutePointsWithoutAidsTakeCharaStudioDefaultsAndAreRefused() throws {
@@ -354,7 +355,7 @@ private func decode(_ scene: LegacyScene) throws -> KoikatsuSceneDocument { try 
         scene.route(30, points: [.init(key: 51, discarded: discarded), .init(key: 53, discarded: !discarded)]); scene.tail(); return scene
     }
     let a = try decode(scene("1.0.3", true)), b = try decode(scene("1.0.3", false))
-    #expect(a.snapshot.roots == b.snapshot.roots && a.preservedData != b.preservedData)
+    #expect(try onDecodeStack { a.snapshot.roots == b.snapshot.roots } && a.preservedData != b.preservedData)
     // Negative control: 1.0.3.0 is not 1.0.3, so the same bytes misread.
     var relabeled = scene("1.0.3", true).data
     let range = try #require(relabeled.range(of: OriginalCardFixture.string("1.0.3")))
@@ -386,7 +387,7 @@ private func decode(_ scene: LegacyScene) throws -> KoikatsuSceneDocument { try 
     #expect(try document.upgraded().preservedData == current.data)
     #expect(try document.editedData(SourceSceneEdits()) == current.data)
     let full = try KoikatsuSceneReader.decodeDocument(SceneDocumentBytes.scene().data)
-    #expect(try full.upgraded() == full)
+    #expect(try onDecodeStack { try full.upgraded() == full })
     #expect(try full.editedData(SourceSceneEdits()) == SceneDocumentBytes.scene().data)
 }
 

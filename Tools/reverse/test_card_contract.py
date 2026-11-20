@@ -210,6 +210,25 @@ class CardContractTests(unittest.TestCase):
             with self.subTest(data=data), self.assertRaises(ValueError):
                 card.Cursor(data).dotnet_string()
 
+    def test_strings_keep_a_leading_bom_like_the_game(self):
+        # #418 mirror: Mono's UTF8Encoding (BinaryReader.ReadString; firstpass MessagePack StringEncoding.UTF8)
+        # keeps a leading EF BB BF as U+FEFF. Python's "utf-8" codec does too ("utf-8-sig" would not).
+        for value in ("\ufeff", "\ufeff" + card.MAGIC, "\ufeff" + "x" * 200):
+            data = card.dotnet_string(value)
+            self.assertEqual(data[len(data) - len(value.encode()):][:3], b"\xef\xbb\xbf")
+            cursor = card.Cursor(data)
+            self.assertEqual(cursor.dotnet_string(), value)
+            self.assertEqual(card.dotnet_string(value), data)
+        for value in ("\ufeff", "\ufeffbone", "\ufeff" + "a" * 300):
+            self.assertEqual(card.unpack(pack(value), card.Limits()).value, value)
+        self.assertEqual(list(card.mapping(card.unpack(pack({"\ufeffk": 1, "k": 2}), card.Limits()))), ["\ufeffk", "k"])
+        # Invalid UTF-8 still refuses (#423 tracks the game's repair).
+        for data in (b"\xa2\xc0\x80", b"\xa3\xed\xa0\x80", b"\xa4\xf0\x90\x80A", b"\xa5\xef\xbb\xbf\xc0\x80"):
+            with self.subTest(data=data), self.assertRaises(ValueError):
+                card.unpack(data, card.Limits())
+        with self.assertRaises(ValueError):
+            card.Cursor(b"\x05\xef\xbb\xbf\xc0\x80").dotnet_string()
+
     def test_messagepack_budgets_extensions_and_trailing_bytes(self):
         for data, limits in ((b"\xdd\xff\xff\xff\xff", card.Limits()),
                              (b"\xdb\x7f\xff\xff\xff", card.Limits()),

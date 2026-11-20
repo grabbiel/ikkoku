@@ -121,6 +121,42 @@ private func closeMatrix(_ a: float4x4, _ b: float4x4, tolerance: Float = 2e-5) 
     #expect(throws: RigError.self) { try SourceFaceShapePose.make(rig: missing, state: state) }
 }
 
+/// #404: an extended slider rate can drive a face target's scale to zero or
+/// below. The source writes it with Transform.SetLocalScale, which takes any
+/// finite value, so the target is drawn reflected or collapsed, not refused.
+@Test func sourceFaceAcceptsNegativeAndZeroTargetScalesLikeUnityTransforms() throws {
+    let rig = try faceRig()
+    let chin = try rig.uniqueNode(named: "cf_J_ChinTip_Base"), low = try rig.uniqueNode(named: "cf_J_ChinLow")
+    for (scaleX, lowScale) in [(Float(-0.25), Float3(-0.5, 1.4, -2)), (0, Float3(0, 0, 0))] {
+        var state = faceState()
+        state["cf_J_ChinTip_Base"]!.scale.x = scaleX
+        state["cf_J_ChinLow"]!.scale = lowScale
+        let pose = try SourceFaceShapePose.make(rig: rig, state: state)
+        // cf_J_ChinTip_Base assigns position Y/Z and scale X only: rest rotation, unit Y/Z scale.
+        #expect(closeMatrix(pose.localMatrices[chin], Transform.trs(Float3(10, 3, -4), rig.nodes[chin].rotation, Float3(scaleX, 1, 1))))
+        #expect(closeMatrix(pose.localMatrices[low], Transform.trs(Float3(10, 3, 30), rig.nodes[low].rotation, lowScale)))
+        let world = try rig.evaluate(pose).worldMatrices
+        #expect(world.allSatisfy(RigDefinition.isFiniteAffine))
+        let m = world[chin], det = simd_determinant(float3x3(Float3(m[0].x, m[0].y, m[0].z), Float3(m[1].x, m[1].y, m[1].z), Float3(m[2].x, m[2].y, m[2].z)))
+        #expect(scaleX < 0 ? det < 0 : det == 0)
+    }
+}
+
+/// A computed face-base scale that overflows stays refused: Unity would not
+/// draw a nonfinite transform either.
+@Test func sourceFaceRefusesNonfiniteComputedTargetScale() throws {
+    let rig = try faceRig(parentScale: Float3(0.5, 1, 1))
+    var state = faceState(); state["cf_J_FaceBase"]!.scale.x = 1
+    do {
+        _ = try SourceFaceShapePose.make(rig: rig, state: state, boneType: 1, headCorrection: 3e38)
+        Issue.record("An overflowing face-base scale was accepted.")
+    } catch {
+        #expect(String(describing: error).contains("Face target 'cf_J_FaceBase' has a nonfinite scale."))
+    }
+    state["cf_J_ChinTip_Base"]!.scale.x = .nan
+    #expect(throws: SourceShapeError.self) { try SourceFaceShapePose.make(rig: rig, state: state) }
+}
+
 @Test(.enabled(if: SourceFixtureSupport.shouldRun(["IKKOKU_HEAD_RIG", "IKKOKU_SHAPE_CONTRACT"]),
                "Requires IKKOKU_HEAD_RIG, IKKOKU_SHAPE_CONTRACT"))
 func sourceFaceLoadsLocalRecoveredHeadWhenRequested() throws {

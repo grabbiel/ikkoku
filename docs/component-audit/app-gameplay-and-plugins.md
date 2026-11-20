@@ -162,7 +162,7 @@ Sources: [IkkokuApp.swift](../../Apps/IkkokuCreator/IkkokuApp.swift),
   control).
   **App runs (2026-10-23).** An automated Release run (`f402483`, copied outside
   the checkout, `IKKOKU_SOURCE_TREE_FALLBACKS=0`, explicit variables, because
-  automated runs ignore the selection) saved `koikatu_cs0002591.png` as a
+  automated runs ignore the selection) saved source scene `029f0b1d` as a
   32-object scene. Opened against an APFS clone of the libraries with
   `studio-pose/`, `animation-assets/` and the source scene, it relocated 31/31
   references. Its capture was byte-identical to the original location's (111
@@ -224,7 +224,12 @@ Sources: [IkkokuApp.swift](../../Apps/IkkokuCreator/IkkokuApp.swift),
   readiness/timeout policy. `CaptureOutputTests` cover a missing parent directory,
   a directory at the destination, missing, empty, garbage and truncated files,
   a pixel-size mismatch, PNG/JSON round trips, batch failures and timeout parsing
-  and expiry; CI runs them. Requested autocapture card/scene saves and exports
+  and expiry; CI runs them. Readiness also waits for content the app reports as
+  pending: the Studio Pose tab's "Eye look" readout before the selected source
+  character's first live eye update, which made `ui-pose` captures differ by
+  tick timing (#364). It waits only while the live step is driven (the
+  viewport's window shows), and a change of that restarts the stable count. A
+  readout that never arrives is a named timeout. Requested autocapture card/scene saves and exports
   now also exit nonzero when they fail or leave an empty file. The verification
   runner fails a 0-byte artifact, and `app-smoke` declares the UI PNG, UI report
   and Mute report as artifacts. Acceptance still needs the app run on the Mac:

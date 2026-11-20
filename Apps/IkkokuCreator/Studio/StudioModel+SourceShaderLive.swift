@@ -68,7 +68,8 @@ extension StudioModel {
                 throw SourceShaderLiveReason("the binding set covers the card's saved outfit \(bindings.provenance["coordinate"] ?? "?"), the preview shows outfit \(preview.coordinate)")
             }
             let assembly = SourceShaderLiveAssembly(bindings: bindings, programs: inputs.programs, resources: host.renderer.resources,
-                                                    textures: shared.textures, streams: shared.streams, anisotropicFiltering: nil)
+                                                    textures: shared.textures, streams: shared.streams,
+                                                    anisotropicFiltering: SourceShaderLiveConfiguration.playerAnisotropicFiltering)
             for line in shared.notes + assembly.resolution { print("[ikkoku] live source shaders, character \(preview.reference.objectKey): \(line)") }
             result = .success(assembly)
         } catch let reason as SourceShaderLiveReason { result = .failure(reason) }
@@ -96,6 +97,7 @@ extension StudioModel {
             case .success(let assembly):
                 row["textureProvider"] = assembly.textureProvider
                 row["resolution"] = assembly.resolution
+                row["samplers"] = assembly.samplerSummary
                 if let reason = liveSourceWearChanged[id] { row["toon"] = reason }
                 if let attach = liveSourceLastAttach[id] {
                     row["live"] = attach.live; row["fallbacks"] = attach.fallbacks; row["hidden"] = attach.hidden; row["unmatched"] = attach.unmatched

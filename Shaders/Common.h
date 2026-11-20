@@ -49,15 +49,39 @@ inline float3 linearToSrgb(float3 c) {
 }
 inline float luminance(float3 c) { return dot(c, float3(0.2126, 0.7152, 0.0722)); }
 
+// A vertex stage's world normal (#407): exactly normalize(n), or 0 when n is
+// zero or too short to normalize. A zero-scale axis gives a singular model
+// whose normal matrix (#404's cofactor) maps the normals perpendicular to that
+// axis to 0, and normalize(0) is NaN. With 0 instead, each triangle takes its
+// side of the collapsed surface from its other vertices.
+inline float3 guardedNormal(float3 n) { return dot(n, n) >= FLT_MIN ? normalize(n) : float3(0.0f); }
+
 constexpr sampler linearRepeat(mag_filter::linear, min_filter::linear, mip_filter::linear, address::repeat);
 constexpr sampler linearClamp(mag_filter::linear, min_filter::linear, mip_filter::linear, address::clamp_to_edge);
+// The original player's sampler state for asset textures. CharaStudio runs
+// QualitySettings.anisotropicFiltering ForceEnable, and no game assembly calls
+// Texture.SetGlobalAnisotropicFilteringLimits. So every non-Point texture with
+// anisoLevel above 0, mipmapped or not (the character, item and map textures, and
+// the character composites), is sampled at Unity's forced minimum, anisotropy 9,
+// and D3D11 samples an anisotropic texture with linear mips. For single-level
+// textures that is shown by the controlled frame, not by a direct player probe.
+// Map, toon, eye, outline, shadow-caster and body-mask samples use these;
+// screen-space passes keep linearClamp.
+// Limit: these are constexpr samplers, one for every texture a call site reads,
+// so the native path also forces the textures the player leaves unforced (Point
+// filter, or anisoLevel 0). None of the transferred character textures is Point
+// and 2 ramps are aniso 0 (not sampled here); in studio/mat/00.unity3d 4 of 1,105
+// are Point and 1 is aniso 0, none of them in the converted item catalog
+// (docs/reference/renderer.md, "Sampler state").
+constexpr sampler forcedAnisoRepeat(mag_filter::linear, min_filter::linear, mip_filter::linear, max_anisotropy(9), address::repeat);
+constexpr sampler forcedAnisoClamp(mag_filter::linear, min_filter::linear, mip_filter::linear, max_anisotropy(9), address::clamp_to_edge);
 constexpr sampler shadowSampler(mag_filter::linear, min_filter::linear, compare_func::greater_equal, address::clamp_to_edge);
 
 // Original main_skin uses RG as coverage, with independent clothing-state controls.
 // Generated characters retain the earlier convention: R above 0.5 hides the surface.
 inline bool bodyMaskDiscards(texture2d<float> mask, float2 uv, constant MaterialUniforms& mat) {
     if (!(mat.flags & MaterialFlagHasBodyMask)) return false;
-    float2 value = mask.sample(linearClamp, uv).rg;
+    float2 value = mask.sample(forcedAnisoClamp, uv).rg;
     if (mat.flags & MaterialFlagSourceBodyMask) {
         float coverage = min(max(value.r, 1.0 - mat.sourceAlphaA), max(value.g, 1.0 - mat.sourceAlphaB));
         return coverage < 0.5;

@@ -37,6 +37,12 @@ struct IkkokuApp: App {
                 Button("Import CharaStudio Object Layout…") { app.importKoikatsuLayout() }
                 Button("Preview CharaStudio Scene…") { app.openSourceScenePreview() }
                 Button("Export Edited Original Scene…") { app.exportSourceScene() }.disabled(app.studio?.documentSourceSceneFile == nil)
+                // #320: on for the user's install (KK_Fix_UnlimitedMapLights); off for CharaStudio 1.0.4.2's two lights.
+                Toggle("Original Scene Export Keeps Unlimited Lights", isOn: Binding(
+                    get: { app.studio?.sourceExportUnlimitedLights ?? true },
+                    set: { app.studio?.setSourceExportUnlimitedLights($0) }))
+                    .help("On: the target CharaStudio has KK_Fix_UnlimitedMapLights, so exports may add or copy lights past two. Off: CharaStudio 1.0.4.2's two-light limit.")
+                    .disabled(app.studio == nil)
                 Button("Save Scene…") { app.saveScene() }.keyboardShortcut("s", modifiers: [.command, .option])
                 Divider()
                 Button("Choose Converted Library…") { app.chooseConvertedLibrary() }

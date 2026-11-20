@@ -46,6 +46,12 @@ private func reuseCandidate(_ input: SourceMakerRigReuse.Input, data: Data) thro
     return worker.finish().0
 }
 
+/// The decoded geometry a seeded worker returns, against a plain decode.
+private func reuseSameRig(_ a: SourceRig, _ b: SourceRig) -> Bool {
+    a.sourcePrefab == b.sourcePrefab && a.rig.nodes.map(\.name) == b.rig.nodes.map(\.name) && a.parts.count == b.parts.count
+        && zip(a.parts, b.parts).allSatisfy { $0.mesh.positions == $1.mesh.positions && $0.mesh.indices == $1.mesh.indices }
+}
+
 @MainActor private func reuseIsHit(_ session: SourceMakerRigReuse, data: Data) throws -> Bool {
     let timings = SourceMakerPreparationTimings(), worker = SourceRigReuseWorker(session.input())
     _ = try worker.decode(data, timings: timings)
@@ -151,6 +157,163 @@ private func reuseCandidate(_ input: SourceMakerRigReuse.Input, data: Data) thro
         #expect(ledger.counts.snapshots == 2)
         #expect(session.seedingInput(for: session.prospectiveReplacement(), entries: 0) == nil)
     }
+}
+
+// #192-C: a reimport's seed carries the session it replaces. A rig with the
+// same bytes is re-stamped into the new epoch with the old entry's permit: no
+// decode and no new ledger entry, even with the ledger at its limit. The
+// current session serves until the commit, and old-epoch work cannot
+// overwrite the new one after it.
+@MainActor @Test func sourceRigReplacementCarriesTheReplacedSessionsRigsWithoutNewPermits() throws {
+    let ledger = SourceRigReuseAdmission(maximumEntries: 2), session = SourceMakerRigReuse(admission: ledger)
+    let a = try reuseEncodedRig("a"), b = try reuseEncodedRig("b")
+    do {
+        let worker = SourceRigReuseWorker(session.input())
+        for data in [a, b] { _ = try worker.decode(data, timings: nil) }
+        #expect(session.commit(worker.finish().0))
+    }
+    #expect(ledger.counts.entries == 2 && ledger.counts.snapshots == 1)
+    var delayed: SourceMakerRigReuse.Candidate? = try reuseCandidate(session.input(), data: a)
+    do {
+        let token = session.prospectiveReplacement()
+        #expect(session.seedingInput(for: token, entries: 2) == nil) // Without sizes nothing counts as carried.
+        let input = try #require(session.seedingInput(for: token, fileSizes: [a.count, b.count]))
+        let timings = SourceMakerPreparationTimings(), worker = SourceRigReuseWorker(input)
+        let rigs = try [a, b].map { try worker.decode($0, timings: timings) }
+        let (candidate, sample) = worker.finish()
+        #expect(timings.sample.intervals["rigDecode"] == nil && timings.sample.intervals["rigReuseSHA"]?.calls == 2)
+        #expect(sample.hits == 2 && sample.carried == 2 && sample.misses == 0 && sample.admitted == 0)
+        #expect(!sample.clearOnCommit && sample.retainedEntries == 2)
+        #expect(try zip(rigs, [a, b].map { try SourceRig.decode($0) }).allSatisfy { reuseSameRig($0, $1) })
+        #expect(ledger.counts.entries == 2 && ledger.counts.snapshots == 2) // The staged snapshot shares the permits.
+        #expect(try reuseIsHit(session, data: a))
+        #expect(session.commitReplacement(token, candidate: candidate))
+    }
+    #expect(!session.commit(delayed)) // Old-epoch work cannot replace the newer session.
+    #expect(try reuseIsHit(session, data: a) && reuseIsHit(session, data: b))
+    #expect(ledger.counts.entries == 2 && ledger.counts.snapshots == 2)
+    delayed = nil
+    #expect(ledger.counts.entries == 2 && ledger.counts.snapshots == 1)
+}
+
+// #192-C: the guard counts a file as carried when its size equals a carried
+// key's. Same size, other bytes: the file decodes and needs a permit the
+// guard did not count. With the ledger at its limit the worker clears only
+// the staged snapshot. The current one keeps its permits, epoch and hits
+// until the commit publishes the empty session, and the returned geometry
+// is the plain decode's.
+@MainActor @Test func sourceRigReplacementSizeMatchThatMissesOnHashClearsOnlyTheStagedSnapshot() throws {
+    let ledger = SourceRigReuseAdmission(maximumEntries: 2), session = SourceMakerRigReuse(admission: ledger)
+    let a = try reuseEncodedRig("aaaa"), b = try reuseEncodedRig("bbbb"), c = try reuseEncodedRig("cccc")
+    #expect(c.count == a.count && c != a)
+    do {
+        let worker = SourceRigReuseWorker(session.input())
+        for data in [a, b] { _ = try worker.decode(data, timings: nil) }
+        #expect(session.commit(worker.finish().0))
+    }
+    let before = ledger.counts
+    #expect(before.entries == ledger.maximumEntries)
+    do {
+        let token = session.prospectiveReplacement()
+        #expect(session.seedingInput(for: token, entries: 1) == nil)
+        let input = try #require(session.seedingInput(for: token, fileSizes: [c.count]))
+        let timings = SourceMakerPreparationTimings(), worker = SourceRigReuseWorker(input)
+        let rig = try worker.decode(c, timings: timings)
+        let (candidate, sample) = worker.finish()
+        #expect(timings.sample.intervals["rigDecode"]?.calls == 1)
+        #expect(reuseSameRig(rig, try SourceRig.decode(c)))
+        #expect(sample.misses == 1 && sample.carried == 0 && sample.admitted == 0 && sample.capacityBypasses == 1)
+        #expect(sample.clearOnCommit && sample.retainedEntries == 0)
+        #expect(ledger.counts == before)
+        #expect(try reuseIsHit(session, data: a) && reuseIsHit(session, data: b))
+        #expect(session.commit(SourceRigReuseWorker(session.input()).finish().0)) // The epoch did not rotate.
+        #expect(session.commitReplacement(token, candidate: candidate))
+        #expect(try !reuseIsHit(session, data: a))
+        #expect(ledger.counts.entries == 2 && ledger.counts.snapshots == 0) // The input still holds the carried entries.
+    }
+    #expect(ledger.counts == .init())
+}
+
+// #192-C: only a replacement's seeding input carries, and only from the
+// session the replacement replaces. A token's own input and selection inputs
+// never re-stamp. After a reset, or after a sibling replacement commits, the
+// token carries nothing and cannot publish.
+@MainActor @Test func sourceRigReplacementCarriesOnlyFromTheSessionItReplaces() throws {
+    let ledger = SourceRigReuseAdmission(), session = SourceMakerRigReuse(admission: ledger)
+    let a = try reuseEncodedRig("a")
+    func staged(_ input: SourceMakerRigReuse.Input) throws -> (SourceMakerRigReuse.Candidate, SourceMakerRigReuse.Sample) {
+        let worker = SourceRigReuseWorker(input)
+        _ = try worker.decode(a, timings: nil)
+        return worker.finish()
+    }
+    #expect(session.commit(try reuseCandidate(session.input(), data: a)))
+    let token = session.prospectiveReplacement()
+    #expect(try staged(token.input).1.carried == 0)
+    #expect(try staged(session.input()).1.carried == 0)
+    #expect(try staged(try #require(session.seedingInput(for: token, fileSizes: [a.count]))).1.carried == 1)
+    session.reset()
+    #expect(session.commit(try reuseCandidate(session.input(), data: a)))
+    let stale = try staged(try #require(session.seedingInput(for: token, fileSizes: [a.count])))
+    #expect(stale.1.carried == 0 && stale.1.misses == 1)
+    #expect(!session.commitReplacement(token, candidate: stale.0))
+    let first = session.prospectiveReplacement(), second = session.prospectiveReplacement()
+    let winner = try staged(try #require(session.seedingInput(for: first, fileSizes: [a.count])))
+    #expect(winner.1.carried == 1 && session.commitReplacement(first, candidate: winner.0))
+    let loser = try staged(try #require(session.seedingInput(for: second, fileSizes: [a.count])))
+    #expect(loser.1.carried == 0 && loser.1.misses == 1)
+    #expect(!session.commitReplacement(second, candidate: loser.0))
+    #expect(try reuseIsHit(session, data: a))
+}
+
+// #192-C: a re-stamped entry shares its permit with the entry it came from.
+// The ledger returns it only when the last holder of either is released, in
+// either order.
+@MainActor @Test func sourceRigRestampedEntriesKeepTheirSharedPermitUntilTheLastHolder() throws {
+    let a = try reuseEncodedRig("a")
+    for newSessionGoesFirst in [true, false] {
+        let ledger = SourceRigReuseAdmission(), session = SourceMakerRigReuse(admission: ledger)
+        #expect(session.commit(try reuseCandidate(session.input(), data: a)))
+        var old: SourceMakerRigReuse.Input? = session.input() // An old selection's input.
+        do {
+            let token = session.prospectiveReplacement()
+            let worker = SourceRigReuseWorker(try #require(session.seedingInput(for: token, fileSizes: [a.count])))
+            _ = try worker.decode(a, timings: nil)
+            #expect(session.commitReplacement(token, candidate: worker.finish().0))
+        }
+        #expect(ledger.counts.entries == 1 && ledger.counts.snapshots == 2)
+        if newSessionGoesFirst {
+            session.reset()
+            #expect(ledger.counts.entries == 1 && ledger.counts.snapshots == 1)
+            old = nil
+        } else {
+            old = nil
+            #expect(ledger.counts.entries == 1 && ledger.counts.snapshots == 1)
+            #expect(try reuseIsHit(session, data: a))
+            session.reset()
+        }
+        withExtendedLifetime(old) { #expect(ledger.counts == .init()) }
+    }
+}
+
+// #192-C rollback: a carried seed that fails before its commit leaves the
+// current session's ledger, epoch and hits as they were.
+@MainActor @Test func sourceRigReplacementFailedCarriedSeedLeavesTheCurrentSessionUnchanged() throws {
+    let ledger = SourceRigReuseAdmission(), session = SourceMakerRigReuse(admission: ledger)
+    let a = try reuseEncodedRig("a"), b = try reuseEncodedRig("b")
+    #expect(session.commit(try reuseCandidate(session.input(), data: a)))
+    let before = ledger.counts
+    do {
+        let token = session.prospectiveReplacement()
+        let worker = SourceRigReuseWorker(try #require(session.seedingInput(for: token, fileSizes: [a.count, b.count])))
+        _ = try worker.decode(a, timings: nil)
+        _ = try worker.decode(b, timings: nil)
+        do { _ = try worker.decode(Data("invalid JSON".utf8), timings: nil); Issue.record("Malformed seed was accepted") }
+        catch { #expect(error is DecodingError) }
+        #expect(ledger.counts.entries == before.entries + 1) // b's staged permit; a's is shared.
+    }
+    #expect(ledger.counts == before)
+    #expect(try reuseIsHit(session, data: a) && !reuseIsHit(session, data: b))
+    #expect(session.commit(SourceRigReuseWorker(session.input()).finish().0)) // The epoch did not rotate.
 }
 
 @MainActor @Test func sourceRigReplacementRejectsForeignStaleAndMismatchedResults() throws {

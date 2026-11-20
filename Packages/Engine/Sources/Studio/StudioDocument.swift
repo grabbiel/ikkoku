@@ -13,12 +13,113 @@ public struct StudioTransform: Codable, Sendable, Equatable {
     public var position = Float3.zero
     public var rotation = Float3.zero { didSet { rotationOverride = nil } } // Editable Euler XYZ degrees
     /// Exact imported quaternion; an explicit Euler edit replaces it.
-    public var rotationOverride: Float4?
+    public var rotationOverride: Float4? {
+        // Cheap tidy-up only: `currentSourceEuler` checks the bits itself.
+        didSet { if let sourceEuler, !sourceEuler.describes(rotationOverride) { self.sourceEuler = nil } }
+    }
     public var scale = Float3(repeating: 1)
+    /// The original's own Euler angles for `rotationOverride` (#391); read
+    /// through `currentSourceEuler`.
+    public var sourceEuler: SourceEuler?
     public init() {}
+
+    /// A source scene object's transform: its stored position and scale in
+    /// engine coordinates, its exact quaternion, and the Euler angles the
+    /// original stores and shows for it.
+    public init(source: KoikatsuChangeAmount) {
+        position = UnityCoordinates.position(source.position)
+        scale = source.scale
+        setSourceEuler(source.rotationDegrees)
+    }
+
+    /// CharaStudio's rotation numbers (#391): Z-X-Y Euler degrees in Unity
+    /// coordinates, recorded for one exact `rotationOverride`.
+    public struct SourceEuler: Codable, Sendable, Equatable {
+        public var degrees: Float3
+        /// The override these degrees describe, compared by its bits.
+        public var override: Float4
+        public init(degrees: Float3, override: Float4) { self.degrees = degrees; self.override = override }
+
+        func describes(_ rotation: Float4?) -> Bool {
+            guard let rotation else { return false }
+            return (0..<4).allSatisfy { override[$0].bitPattern == rotation[$0].bitPattern }
+        }
+    }
+
+    /// The original's Euler angles while they still describe this rotation:
+    /// only while `rotationOverride` holds exactly the bits they were recorded
+    /// for. Any other rotation write (the gizmo, reparenting, a plug-in clone,
+    /// IK, an engine-Euler edit) changes or clears the override, which retires
+    /// them whichever path made the write.
+    public var currentSourceEuler: Float3? {
+        guard let sourceEuler, sourceEuler.describes(rotationOverride) else { return nil }
+        return sourceEuler.degrees
+    }
+
+    /// A source object's Rotation row: the original's angles, or else the
+    /// current rotation decomposed the way the original stores rotations.
+    public var sourceRotationDegrees: Float3 {
+        currentSourceEuler ?? UnityCoordinates.sourceEulerDegrees(quaternion)
+    }
+
+    /// Rotates to the original's Euler `degrees` and records them, as the
+    /// original derives its transform from its three stored angles.
+    public mutating func setSourceEuler(_ degrees: Float3) {
+        let rotation = UnityCoordinates.eulerDegrees(degrees)
+        self.rotation = rotation.eulerXYZ.radiansToDegrees
+        rotationOverride = rotation.vector
+        sourceEuler = SourceEuler(degrees: degrees, override: rotation.vector)
+    }
+
+    /// The record an original-format export writes for this transform, or nil
+    /// when it still matches `original`. An unchanged rotation keeps the
+    /// original's bytes; a changed one writes the original's angles while
+    /// they are current (#391: an inspector commit changes only its own
+    /// component), and otherwise a fresh decomposition.
+    public func sourceChangeAmount(original: KoikatsuChangeAmount) -> KoikatsuChangeAmount? {
+        let rotationChanged: Bool
+        if let degrees = currentSourceEuler {
+            rotationChanged = degrees != original.rotationDegrees
+        } else {
+            let originalRotation = UnityCoordinates.eulerDegrees(original.rotationDegrees)
+            rotationChanged = quaternion.vector != originalRotation.vector && quaternion.vector != -originalRotation.vector
+        }
+        guard position != UnityCoordinates.position(original.position) || scale != original.scale || rotationChanged else { return nil }
+        return KoikatsuChangeAmount(
+            position: UnityCoordinates.position(position),
+            rotationDegrees: rotationChanged ? sourceRotationDegrees : original.rotationDegrees,
+            scale: scale)
+    }
     public var matrix: float4x4 { Transform.trs(position, quaternion, scale) }
     public var quaternion: simd_quatf {
         rotationOverride.map { simd_quatf(vector: $0) } ?? simd_quatf(eulerXYZ: rotation.degreesToRadians)
+    }
+
+    /// The inspector's vector rows. A source object's Rotation row edits the
+    /// original's Euler angles (`sourceRotation`, #391).
+    public enum Vector: Sendable { case position, rotation, scale, sourceRotation }
+
+    /// One inspector field's commit (#390): writes only its own component, onto
+    /// the transform as it is now. A field must not write back the whole vector
+    /// it last read, since a second field committed before the view re-renders
+    /// would undo the first one's write.
+    ///
+    /// `sourceRotation` commits as CharaStudio's end-of-edit does (#391): the
+    /// value modulo 360, sign kept, replaces its component only when it
+    /// differs, and the rotation is rebuilt from the three angles, so the
+    /// other two keep their exact values.
+    public mutating func set(_ vector: Vector, _ component: Int, to value: Float) {
+        switch vector {
+        case .position: position[component] = value
+        case .rotation: rotation[component] = value
+        case .scale: scale[component] = value
+        case .sourceRotation:
+            var degrees = sourceRotationDegrees
+            let angle = value.truncatingRemainder(dividingBy: 360)
+            guard angle != degrees[component] else { return }
+            degrees[component] = angle
+            setSourceEuler(degrees)
+        }
     }
 }
 
@@ -145,6 +246,15 @@ public struct StudioObject: Codable, Sendable, Equatable, Identifiable {
         o.transform.rotation = l.rotation
         return o
     }
+
+    /// One field of the Pose tab's IK "Target" row (#393): writes `component`
+    /// onto the chain's target as it is now, so a second field committed
+    /// before the inspector re-renders keeps the first field's write. A chain
+    /// without a target, or a component outside 0...2, is left alone.
+    public mutating func setIKTarget(_ chain: IKChain, component: Int, to value: Float) {
+        guard (0..<3).contains(component) else { return }
+        ikTargets[chain]?.position[component] = value
+    }
 }
 
 /// A studio scene: object tree, camera slots, character light and effects. Saved as a PNG "scene card".
@@ -267,6 +377,142 @@ public struct StudioDocument: Codable, Sendable, Equatable {
             stack.append(contentsOf: (children[object.id] ?? []).reversed().map { ($0, depth + 1) })
         }
         return out
+    }
+
+    /// `flattened()` as indices into `objects` (#387 round 3): the same
+    /// rows in the same order, with the same rule for a repeated id (its
+    /// first row in that order) and for objects in a cycle or under a
+    /// missing parent (left out), without copying any object.
+    public func flattenedIndices() -> [(index: Int, depth: Int)] {
+        var children: [UUID?: [Int]] = [:]
+        for index in objects.indices { children[objects[index].parent, default: []].append(index) }
+        var out: [(index: Int, depth: Int)] = []
+        out.reserveCapacity(objects.count)
+        var stack = (children[nil] ?? []).reversed().map { ($0, 0) }
+        var visited = Set<UUID>(minimumCapacity: objects.count)
+        while let (index, depth) = stack.popLast() {
+            guard visited.insert(objects[index].id).inserted else { continue }
+            out.append((index, depth))
+            stack.append(contentsOf: (children[objects[index].id] ?? []).reversed().map { ($0, depth + 1) })
+        }
+        return out
+    }
+}
+
+extension StudioDocument {
+    /// One object list's answers to `object(_:)`, `index(of:)`, `isVisible(_:)`
+    /// and `isDescendant(_:of:)` by hash instead of a scan of `objects` per
+    /// call, so a walk over every object (the Studio frame rebuild, the
+    /// inspector's parent list) is O(N · depth) instead of O(N² · depth)
+    /// (#383). The answers are the document functions' own, including for a
+    /// repeated id (its first object, as `objects.first` finds it), a missing
+    /// parent and a cycle (the same visited-set walks).
+    ///
+    /// It holds a copy of the list it was built from and is never updated:
+    /// build it where the list is fixed for the walk and drop it after, so
+    /// there is nothing to invalidate when the document changes.
+    public struct Lookup: Sendable {
+        public let objects: [StudioObject]
+        private let indexByID: [UUID: Int]
+
+        public init(_ objects: [StudioObject]) {
+            self.objects = objects
+            var indexByID = [UUID: Int](minimumCapacity: objects.count)
+            // Backwards, so the first object of a repeated id is the one kept.
+            for index in objects.indices.reversed() { indexByID[objects[index].id] = index }
+            self.indexByID = indexByID
+        }
+
+        public func index(of id: UUID) -> Int? { indexByID[id] }
+        public func object(_ id: UUID) -> StudioObject? { indexByID[id].map { objects[$0] } }
+
+        /// Every listed object's first index and its parent's, for a walk
+        /// by index that neither hashes ids nor copies objects (#387 round
+        /// 3). `first[i]` is `index(of: objects[i].id)`; `parent[i]` is
+        /// `index(of:)` of `objects[i]`'s parent id, `noParent` for a root
+        /// and `missingParent` for a parent id the list lacks. Like the
+        /// lookup, it answers for the list it was built from only.
+        public struct Indices: Sendable, Equatable {
+            public static let noParent = -1, missingParent = -2
+            public let first: [Int]
+            public let parent: [Int]
+            public init(first: [Int], parent: [Int]) {
+                self.first = first
+                self.parent = parent
+            }
+        }
+
+        /// `Indices` for this list, in one pass of 2N hash lookups.
+        public func indices() -> Indices {
+            var first: [Int] = [], parent: [Int] = []
+            first.reserveCapacity(objects.count)
+            parent.reserveCapacity(objects.count)
+            for index in objects.indices {
+                first.append(indexByID[objects[index].id] ?? index) // every listed id is there
+                parent.append(objects[index].parent.map { indexByID[$0] ?? Indices.missingParent } ?? Indices.noParent)
+            }
+            return Indices(first: first, parent: parent)
+        }
+
+        /// `StudioDocument.isVisible(_:)`.
+        public func isVisible(_ id: UUID) -> Bool {
+            var cur: UUID? = id
+            var visited = Set<UUID>()
+            while let c = cur {
+                guard visited.insert(c).inserted, let i = indexByID[c], objects[i].visible else { return false }
+                cur = objects[i].parent
+            }
+            return true
+        }
+
+        /// `isVisible(_:)` for every object of the list in one O(N) pass,
+        /// for a walk that tests them all (#387). Entry `i` is
+        /// `isVisible(objects[i].id)`: every object of a repeated id gets
+        /// its first object's answer, and objects in or below a cycle or
+        /// under a missing parent get `false`, as there.
+        public func visibleFlags() -> [Bool] { visibleFlags(indices()) }
+
+        /// `visibleFlags()` from this list's `indices()`, already built for
+        /// the walk that also needs them.
+        public func visibleFlags(_ indices: Indices) -> [Bool] {
+            precondition(indices.first.count == objects.count, "Studio lookup indices built from another object list")
+            // Per first index: 0 not reached, 1 on the current chain,
+            // 2 visible, 3 hidden. Every object on one chain shares its end's
+            // answer: each one walked on was visible itself.
+            var state = [UInt8](repeating: 0, count: objects.count)
+            var chain: [Int] = []
+            for start in objects.indices {
+                let index = indices.first[start]
+                guard state[index] == 0 else { continue }
+                chain.removeAll(keepingCapacity: true)
+                var current = index
+                var answer: UInt8 = 3
+                while true {
+                    if state[current] >= 2 { answer = state[current]; break }
+                    if state[current] == 1 { break } // a cycle
+                    state[current] = 1
+                    chain.append(current)
+                    guard objects[current].visible else { break }
+                    let next = indices.parent[current]
+                    if next == Indices.noParent { answer = 2; break }
+                    if next == Indices.missingParent { break }
+                    current = next
+                }
+                for i in chain { state[i] = answer }
+            }
+            return indices.first.map { state[$0] == 2 }
+        }
+
+        /// `StudioDocument.isDescendant(_:of:)`.
+        public func isDescendant(_ id: UUID, of ancestor: UUID) -> Bool {
+            var cur = indexByID[id].flatMap { objects[$0].parent }
+            var visited = Set<UUID>()
+            while let c = cur, visited.insert(c).inserted {
+                if c == ancestor { return true }
+                cur = indexByID[c].flatMap { objects[$0].parent }
+            }
+            return false
+        }
     }
 }
 

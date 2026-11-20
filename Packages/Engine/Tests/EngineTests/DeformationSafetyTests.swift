@@ -114,6 +114,57 @@ func deformKernelPreservesNormalsReflectionsAndPaletteBounds() throws {
     #expect(length(xyz(singular.normal) - n) < 1e-5)
     #expect(singular.tangent.w == 1)
     #expect(xyz(singular.position) == Float3(0, 2, 3))
+    // #404: a face target the source scales to zero or below (an extended
+    // slider rate) reaches the real kernel through the face stage and the rig
+    // palette. The skinned vertex stays finite: collapsed for zero, mirrored
+    // with its tangent handedness flipped for a negative scale.
+    let faceNames = SourceFaceShapePose.destinationNames
+    let faceRig = try RigDefinition(nodes: [.init(name: "head", sourceID: "head", parent: nil)] + faceNames.enumerated().map {
+        RigDefinition.Node(name: $0.element, sourceID: "face-\($0.offset)", parent: 0, translation: Float3(0, 1, 0))
+    }, skins: [])
+    let chin = try faceRig.uniqueNode(named: "cf_J_ChinTip_Base")
+    for scaleX: Float in [0, -0.25] {
+        var state = Dictionary(uniqueKeysWithValues: faceNames.map {
+            ($0, SourceShapeTransform(position: Float3(0, 1, 0), rotationDegrees: .zero, scale: .one))
+        })
+        state["cf_J_ChinTip_Base"]!.scale.x = scaleX
+        let world = try faceRig.evaluate(SourceFaceShapePose.make(rig: faceRig, state: state)).worldMatrices[chin]
+        let face = try run(matrix: world)
+        for v in [face.position, face.normal, face.tangent] { #expect(v.x.isFinite && v.y.isFinite && v.z.isFinite && v.w.isFinite) }
+        #expect(abs(length(xyz(face.normal)) - 1) < 1e-5)
+        if scaleX == 0 {
+            #expect(face.position.x == 0)
+            #expect(length(xyz(face.normal) - n) < 1e-5)
+            #expect(face.tangent.w == 1)
+        } else {
+            #expect(abs(face.position.x + 0.25) < 1e-6)
+            #expect(face.tangent.w == -1)
+        }
+    }
+    // #404: a zero FaceUp_ty scale collapses the renderer node of hair under
+    // HairParent. Its skin stays in rig space with the identity model, so its
+    // vertices sit at the float64 limit of model · meshInverse · world ·
+    // inverseBind, and the real kernel keeps every normal finite and unit.
+    let hair = try CollapsedHairFixture(faceUpScale: Float3(0, 1, 1))
+    let hairEvaluation = try hair.rig.evaluate(hair.pose)
+    #expect(hairEvaluation.collapsedSkins == [0])
+    let hairModel = hairEvaluation.model(skin: 0, meshNode: hair.mesh), hairPalette = hairEvaluation.palettes[0]
+    #expect(hairModel == matrix_identity_float4x4)
+    let kernelPoints = hair.referencePositions(at: Array(repeating: xyz(base.position), count: hair.vertices.count))
+    for (index, vertex) in hair.vertices.enumerated() {
+        let blended = hairPalette[0] * vertex.weights.x + hairPalette[1] * vertex.weights.y
+        let cpu = hairModel * blended * Float4(vertex.position, 1)
+        let expected = hair.referencePositions()[index]
+        #expect(simd_length(SIMD3<Double>(Double(cpu.x), Double(cpu.y), Double(cpu.z)) - expected) < 2e-6)
+        let skinned = try run(matrix: blended)
+        for v in [skinned.position, skinned.normal, skinned.tangent] { #expect(v.x.isFinite && v.y.isFinite && v.z.isFinite && v.w.isFinite) }
+        let gpu = xyz(skinned.position)
+        #expect(simd_length(SIMD3<Double>(Double(gpu.x), Double(gpu.y), Double(gpu.z)) - kernelPoints[index]) < 2e-6)
+        // The collapsed axis is world x, where every hair point lands on 0;
+        // a singular palette keeps the pre-skin normal.
+        #expect(cpu.x == 0 && gpu.x == 0)
+        #expect(length(xyz(skinned.normal) - n) < 1e-5)
+    }
     // Even a zero-weight out-of-bounds lane must disable the palette reads.
     let invalidJoint = try run(matrix: matrix, joints: SIMD4<UInt16>(300, 0, 0, 301))
     #expect(invalidJoint.position == base.position)

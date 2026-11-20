@@ -48,7 +48,7 @@ public struct SourceRigBounds: Sendable {
                 }
                 cache[index] = PartCache(weights: key, joints: boxes)
             }
-            let boxes = cache[index]!.joints, model = evaluation.worldMatrices[part.node]
+            let boxes = cache[index]!.joints, model = evaluation.model(skin: part.skin, meshNode: part.node)
             for joint in boxes.indices where !boxes[joint].isEmpty {
                 result.expand(boxes[joint].transformed(by: model * evaluation.palettes[part.skin][joint]))
             }

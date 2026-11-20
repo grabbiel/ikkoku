@@ -562,6 +562,11 @@ func liveStateMasked(_ data: Data) throws -> Data {
 
 /// Each character's neck bytes, eye bytes and animator time, by key.
 func liveStateSpans(_ data: Data) throws -> [Int32: [Range<Int>]] {
+    // The root reads recurse once per level: on the decode stack (#326).
+    try onDecodeStack { try liveStateSpansOnDecodeStack(data) }
+}
+
+private func liveStateSpansOnDecodeStack(_ data: Data) throws -> [Int32: [Range<Int>]] {
     var reader = try KoikatsuBinaryReader(data)
     try reader.skipPNG()
     _ = try reader.string()

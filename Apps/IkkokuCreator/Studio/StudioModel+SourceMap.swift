@@ -12,7 +12,7 @@ struct SourceMapLineKey: Equatable {
 }
 
 /// ST-A11: the map an imported CharaStudio scene names, as the preview needs
-/// it: the record's map number, transform and sun type, and what the
+/// it: the record's map number, transform, sun type and map option, and what the
 /// converted catalog (`IKKOKU_STUDIO_MAP_CATALOG`) resolves it to. Runtime
 /// only: the document has no map field and original export writes the
 /// record's map bytes verbatim, so nothing here reaches either. It carries
@@ -23,6 +23,8 @@ struct SourceMapRequest {
     let map: Int32
     let transform: KoikatsuChangeAmount
     let sunLightType: Int32
+    /// `Map.visibleOption` (slice 4): the map's option objects are shown.
+    let mapOption: Bool
     /// nil when no catalog could be read; `catalogProblem` says why.
     let resolution: SourceStudioMapCatalog.Resolution?
     let catalogProblem: String?
@@ -40,7 +42,8 @@ struct SourceMapRequest {
             problem = "no map catalog (IKKOKU_STUDIO_MAP_CATALOG is not set)"
         }
         return SourceMapRequest(sceneSHA256: sceneSHA256, map: settings.map, transform: settings.mapTransform,
-                                sunLightType: settings.sunLightType, resolution: resolution, catalogProblem: problem)
+                                sunLightType: settings.sunLightType, mapOption: settings.mapOption, resolution: resolution,
+                                catalogProblem: problem)
     }
 
     /// The converted file this request draws, if any.
@@ -76,6 +79,7 @@ extension StudioModel {
     func installSourceMap(_ request: SourceMapRequest?, load: SourceStudioMapLoad? = nil) {
         sourceMapRequest = request
         sourceMapItems = nil
+        sourceMapLighting = nil
         sourceMapFailure = nil
         if let load, load !== sourceMapLoad { sourceMapLoad?.cancel(); sourceMapLoad = load }
         guard let target = request?.converted else {
@@ -132,15 +136,20 @@ extension StudioModel {
     }
 
     /// The request's draws from the loaded asset: placed by the record's map
-    /// transform and filtered by its sun type, computed once per request.
+    /// transform and filtered by its sun type and map option, computed once
+    /// per request.
     private func applySourceMapAsset(_ asset: SourceStudioMapAsset) {
         guard let request = sourceMapRequest else { return }
         let start = DispatchTime.now().uptimeNanoseconds
         do {
-            sourceMapItems = try asset.items(transform: request.transform, sunLightType: request.sunLightType)
+            sourceMapItems = try asset.items(transform: request.transform, sunLightType: request.sunLightType,
+                                             mapOption: request.mapOption)
+            sourceMapLighting = try asset.lighting(transform: request.transform, sunLightType: request.sunLightType,
+                                                   mapOption: request.mapOption)
             sourceMapFailure = nil
         } catch {
             sourceMapItems = nil
+            sourceMapLighting = nil
             sourceMapFailure = error
         }
         sourceMapInstallSeconds = Double(DispatchTime.now().uptimeNanoseconds - start) / 1e9
@@ -151,9 +160,13 @@ extension StudioModel {
             // keeps the first mark.
             PerfTrace.mark("sourceMapReady")
             let draws = items.map { SourceStudioMapAsset.Draw($0.material) }
-            print(String(format: "[ikkoku] source map: %d draws (%d lightmapped, %d particle, %d sky), %d triangles, %d texture bytes (%d in %d lightmaps, %d in %d sky cubes; images: %d as BC blocks, %d decoded, source %@); loaded in %.1f ms on a worker, placed in %.2f ms on the main thread",
-                         items.count, draws.filter { $0 == .lightmapped }.count, draws.filter { $0 == .particle }.count,
-                         draws.filter { $0 == .sky }.count, asset.triangles, asset.textureBytes, asset.lightmapBytes, asset.lightmapTextures,
+            print(String(format: "[ikkoku] source map: %d draws (%d lightmapped, %d by the map's ambient, %d sun-lit, %d particle, %d sky, %d unlit, %d silhouette; %d option parts, option %@; %d sun casters), %d triangles, %d texture bytes (%d in %d lightmaps, %d in %d sky cubes; images: %d as BC blocks, %d decoded, source %@); loaded in %.1f ms on a worker, placed in %.2f ms on the main thread",
+                         items.count, draws.filter { $0 == .lightmapped }.count, draws.filter { $0 == .probeLit }.count,
+                         items.filter { $0.material.uniforms.flags & MaterialFlagMapSunLit.rawValue != 0 }.count,
+                         draws.filter { $0 == .particle }.count,
+                         draws.filter { $0 == .sky }.count, draws.filter { $0 == .unlit }.count, draws.filter { $0 == .silhouette }.count,
+                         asset.optionParts, request.mapOption ? "on" : "off", sourceMapLighting?.casters.count ?? 0,
+                         asset.triangles, asset.textureBytes, asset.lightmapBytes, asset.lightmapTextures,
                          asset.cubeBytes, asset.cubeTextures, asset.blockImages, asset.decodedImages, asset.imageSource.rawValue,
                          asset.loadSeconds * 1000, sourceMapInstallSeconds * 1000))
         }
@@ -189,7 +202,7 @@ extension StudioModel {
                 if let error = sourceMapFailure {
                     line = SourceStudioMapStatus.failed(target.entry, error)
                 } else if let asset = sourceMapAsset, asset.url == target.file, sourceMapItems != nil {
-                    line = SourceStudioMapStatus.loaded(target.entry, asset: asset)
+                    line = SourceStudioMapStatus.loaded(target.entry, asset: asset, mapOption: request.mapOption)
                 } else {
                     line = request.pendingLine
                 }
@@ -211,9 +224,19 @@ extension StudioModel {
         /// Particles/Alpha Blended and Skybox/Cubemap draws, the sky cubes'
         /// bytes, and the images uploaded as BC blocks or decoded (slice 3).
         let particleDraws: Int, skyDraws: Int, cubeBytes: Int, blockImages: Int, decodedImages: Int
+        /// Unlit/Transparent and Custom/Silhouette draws, and the placed draws
+        /// under a map option root (slice 4).
+        let unlitDraws: Int, silhouetteDraws: Int, optionDraws: Int
         /// Worker wall time of the asset's load, and main-thread time of the
         /// last install (placing the draws), in milliseconds.
         let loadMilliseconds: Double?, installMilliseconds: Double?
+        /// Slice 5: Standard draws lit by the map's ambient instead of a
+        /// lightmap; draws with the realtime sun's term; those receiving its
+        /// shadow (everywhere or per vertex) and per vertex alone; the shadow
+        /// map's casters (one per draw, cull mode and placement, plus the
+        /// ShadowsOnly groups); the sun's shadow strength (0 without one).
+        let probeLitDraws: Int, sunLitDraws: Int, receivingDraws: Int, perVertexReceiveDraws: Int
+        let sunCasters: Int, sunShadowStrength: Float
     }
     func sourceMapCensus() -> SourceMapCensus {
         let request = sourceMapRequest.flatMap { $0.sceneSHA256 == doc.sourceSceneSHA256 ? $0 : nil }
@@ -225,6 +248,15 @@ extension StudioModel {
             lightmappedDraws: draws.filter { $0 == .lightmapped }.count, lightmapBytes: asset?.lightmapBytes ?? 0,
             particleDraws: draws.filter { $0 == .particle }.count, skyDraws: draws.filter { $0 == .sky }.count,
             cubeBytes: asset?.cubeBytes ?? 0, blockImages: asset?.blockImages ?? 0, decodedImages: asset?.decodedImages ?? 0,
-            loadMilliseconds: asset.map { $0.loadSeconds * 1000 }, installMilliseconds: asset == nil ? nil : sourceMapInstallSeconds * 1000)
+            unlitDraws: draws.filter { $0 == .unlit }.count, silhouetteDraws: draws.filter { $0 == .silhouette }.count,
+            optionDraws: items.isEmpty ? 0 : request.flatMap { r in asset?.optionDraws(sunLightType: r.sunLightType, mapOption: r.mapOption) } ?? 0,
+            loadMilliseconds: asset.map { $0.loadSeconds * 1000 }, installMilliseconds: asset == nil ? nil : sourceMapInstallSeconds * 1000,
+            probeLitDraws: draws.filter { $0 == .probeLit }.count,
+            sunLitDraws: items.filter { $0.material.uniforms.flags & MaterialFlagMapSunLit.rawValue != 0 }.count,
+            receivingDraws: items.filter { $0.material.uniforms.flags & (MaterialFlagReceiveShadow.rawValue | MaterialFlagMapReceivePerVertex.rawValue) != 0
+                && $0.material.uniforms.flags & MaterialFlagMapSunLit.rawValue != 0 }.count,
+            perVertexReceiveDraws: items.filter { $0.material.uniforms.flags & MaterialFlagMapReceivePerVertex.rawValue != 0 }.count,
+            sunCasters: items.isEmpty ? 0 : sourceMapLighting?.casters.count ?? 0,
+            sunShadowStrength: items.isEmpty ? 0 : sourceMapLighting?.sun?.shadowStrength ?? 0)
     }
 }

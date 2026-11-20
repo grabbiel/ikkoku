@@ -57,6 +57,16 @@ public struct SourceStudioIK: Sendable {
     }
     private let ids: [String]
     private let parents: [Int?]
+    /// The rig this solver was built for (#371). `RigDefinition.Identity`
+    /// (Rig.swift) guarantees that a rig with this identity has the same
+    /// nodes, so `apply` skips comparing them for it; any other rig is
+    /// compared node by node as before. Internal, not private, so the #371
+    /// test can check which path a rig takes.
+    let checked: RigDefinition.Identity
+    /// `rig.evaluate(initializationPose)` for the rig in `checked`, when the
+    /// solver is full-body and that evaluation succeeded (#371). Internal,
+    /// not private, so the #371 test can compare it.
+    let initialWorld: [float4x4]?
     private let bindings: Bindings
     private let targetNodes: [Int32: Int]
     private let limbs: [Limb]
@@ -117,21 +127,50 @@ public struct SourceStudioIK: Sendable {
         }
         self.initializationPose = initializationPose ?? rig.restPose
         self.bindings = bindings; targetNodes = targets; self.limbs = loaded
-        ids = rig.nodes.map(\.sourceID); parents = rig.nodes.map(\.parent)
+        ids = rig.nodes.map(\.sourceID); parents = rig.nodes.map(\.parent); checked = rig.identity
+        // #371: `apply` evaluated the initialization pose on every full-body
+        // call. That depends only on this rig and this pose, so it is
+        // evaluated once here, and `apply` uses it for this rig alone. A
+        // failure is not kept: `initialWorld` stays nil, and `apply`
+        // evaluates and throws where it did before.
+        initialWorld = fullBody == nil ? nil : try? rig.evaluate(self.initializationPose).worldMatrices
+    }
+
+    /// Whether `rig` has the hierarchy this solver was bound to: true for
+    /// the rig it was built for, otherwise the node-by-node comparison.
+    func bound(to rig: RigDefinition) -> Bool { rig.identity === checked || walkMatches(rig) }
+
+    /// The comparison `apply` made for every rig before #371. Internal, not
+    /// private, so the #371 test can compare it with `bound(to:)`.
+    func walkMatches(_ rig: RigDefinition) -> Bool {
+        rig.nodes.map(\.sourceID) == ids && rig.nodes.map(\.parent) == parents
     }
 
     /// `savedTargets` and `guideOverrides` contain raw Unity-local ChangeAmount
     /// values. Overrides change the pose without rewriting any saved dictionary ID.
     public func apply(rig: RigDefinition, baseline: RigPose, savedTargets: [Int32: KoikatsuBoneRecord],
                       enabled: Bool, activeGroups: [Bool], characterRoot: Int,
-                      guideOverrides: [Int32: KoikatsuChangeAmount] = [:]) throws -> Result {
-        guard rig.nodes.map(\.sourceID) == ids, rig.nodes.map(\.parent) == parents,
+                      guideOverrides: [Int32: KoikatsuChangeAmount] = [:],
+                      baselineEvaluation: RigEvaluation? = nil) throws -> Result {
+        guard bound(to: rig),
               activeGroups.count == 5, rig.nodes.indices.contains(characterRoot),
               guideOverrides.keys.allSatisfy({ (0...12).contains($0) }) else {
             throw RigError.invalid("Studio IK frame does not match its bound hierarchy or activation state.")
         }
-        let original = try rig.evaluate(baseline).worldMatrices
-        let initial = fullBody != nil ? try rig.evaluate(initializationPose).worldMatrices : original
+        // #371: `baselineEvaluation` is `rig.evaluate(baseline)` when the
+        // caller already has it (makePose's `PoseResult.evaluation`), and
+        // `initialWorld` is the initialization pose's for the rig this solver
+        // was built for. Each is the result of the evaluate it replaces, and
+        // any other case evaluates as before.
+        let original = try (baselineEvaluation ?? rig.evaluate(baseline)).worldMatrices
+        let initial: [float4x4]
+        if fullBody == nil {
+            initial = original
+        } else if rig.identity === checked, let kept = initialWorld {
+            initial = kept
+        } else {
+            initial = try rig.evaluate(initializationPose).worldMatrices
+        }
         let parentWorld = original[characterRoot]
         let parentRotation = try SourceStudioGuide.rotation(node: characterRoot, rig: rig, pose: baseline)
         var guides: [Guide] = [], messages: [String] = []

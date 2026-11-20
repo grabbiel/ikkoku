@@ -1,0 +1,98 @@
+{
+  "steps": [
+    {
+      "op": "addLight",
+      "mode": "point",
+      "name": "L1"
+    },
+    {
+      "op": "addLight",
+      "mode": "spot",
+      "name": "L2"
+    },
+    {
+      "op": "addLight",
+      "mode": "directional",
+      "name": "L3"
+    },
+    {
+      "op": "assert",
+      "children": {
+        "labels": [
+          "622",
+          "65",
+          "962",
+          "626",
+          "1130",
+          "794",
+          "1298",
+          "1540",
+          "native:L1",
+          "native:L2",
+          "native:L3"
+        ]
+      }
+    },
+    {
+      "op": "setUnlimitedLights",
+      "on": false
+    },
+    {
+      "op": "exportRejected",
+      "path": ".local/verification/scenario-exports/light-limit-vanilla.png",
+      "errorContains": "CharaStudio keeps at most two lights (SceneInfo.isLightCheck); the edited scene would have 3."
+    },
+    {
+      "op": "setUnlimitedLights",
+      "on": true
+    },
+    {
+      "op": "export",
+      "path": ".local/verification/scenario-exports/light-limit.png"
+    },
+    {
+      "op": "assert",
+      "statusContains": "3 lights: a CharaStudio without KK_Fix_UnlimitedMapLights loads every root light but drops each nested light loaded after the second"
+    },
+    {
+      "op": "reimport",
+      "path": ".local/verification/scenario-exports/light-limit.png"
+    },
+    {
+      "op": "assertRejected",
+      "children": {
+        "labels": [
+          "622",
+          "65",
+          "962",
+          "626",
+          "1130",
+          "794",
+          "1298",
+          "1540",
+          "113",
+          "114"
+        ]
+      },
+      "errorContains": "assert children"
+    },
+    {
+      "op": "assert",
+      "children": {
+        "labels": [
+          "622",
+          "65",
+          "962",
+          "626",
+          "1130",
+          "794",
+          "1298",
+          "1540",
+          "113",
+          "114",
+          "115"
+        ]
+      }
+    }
+  ]
+}
