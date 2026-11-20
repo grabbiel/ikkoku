@@ -368,4 +368,17 @@ extension StudioUndoHistory where Document == StudioDocument {
             }
         }
     }
+
+    /// Whether a whole-document step holds the object list stored at
+    /// `address` (a list's buffer, `withUnsafeBufferPointer`'s base). Such a
+    /// step shares the list with the document it was taken from until a
+    /// write copies it: that copy is the step's own cost, as before #446.
+    public func holdsObjects(at address: UnsafeRawPointer?) -> Bool {
+        guard let address else { return false }
+        for step in undoSteps.reversed() + redoSteps.reversed() {
+            if case .document(let document) = step,
+               document.objects.withUnsafeBufferPointer({ UnsafeRawPointer($0.baseAddress) }) == address { return true }
+        }
+        return false
+    }
 }

@@ -2032,7 +2032,7 @@ struct StudioScenario: Decodable {
                 }
                 let ids = keys.compactMap { objectID(key: $0, copy: nil) }
                 guard ids.count == keys.count else { record(step, false, "updateObjects: a key is not in the document"); continue }
-                let depth = studio.undoDepth, moved = studio.updateWritesMoved
+                let depth = studio.undoDepth, moved = studio.updateWritesMoved, owedBefore = studio.updateWritesOwed
                 for id in ids {
                     switch field {
                     case "pose": studio.update(id) { $0.poseDelta.rotations["cf_j_neck", default: .zero].x += 0.5 }
@@ -2042,11 +2042,17 @@ struct StudioScenario: Decodable {
                     }
                 }
                 let steps = studio.undoDepth - depth, copies = studio.updateWritesMoved - moved
+                let owed = studio.updateWritesOwed - owedBefore
                 let ok = (steps == 1 || depth == StudioUndoHistory<StudioDocument>.limit) && copies == 0
-                record(step, ok, "\(field) edits on \(ids.count) objects recorded \(steps) undo step(s); \(copies) copied the object list")
+                record(step, ok, "\(field) edits on \(ids.count) objects recorded \(steps) undo step(s); \(copies) copied the object list"
+                       + (owed > 0 ? " (\(owed) copy owed by a whole-document step)" : ""))
             case "rememberDocument":
                 guard let name = step.name else { record(step, false, "rememberDocument: name is required"); continue }
-                rememberedDocuments[name] = studio.doc
+                // A copy of the object list, so the kept document does not
+                // share the list with the Studio and make its next write copy.
+                var kept = studio.doc
+                kept.objects = studio.doc.objects.map { $0 }
+                rememberedDocuments[name] = kept
                 record(step, true, "kept the document as \"\(name)\" (\(studio.doc.objects.count) objects, \(studio.undoDepth) undo / \(studio.redoDepth) redo steps)")
             case "undoBroken":
                 // #446's Release path for a broken step, with the Debug

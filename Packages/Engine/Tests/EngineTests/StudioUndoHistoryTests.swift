@@ -449,6 +449,23 @@ private struct Pair {
     #expect(base(document) == afterUndo)
 }
 
+@Test func aWholeStepHoldsTheListUntilAWriteCopiesIt() {
+    // `holdsObjects(at:)` tells a copy a whole-document step owes (the step
+    // shares the list until the next write) from any other copy.
+    var document = folders(8)
+    var history = StudioUndoHistory<StudioDocument>()
+    func base(_ document: StudioDocument) -> UnsafeRawPointer? { document.objects.withUnsafeBufferPointer { UnsafeRawPointer($0.baseAddress) } }
+    let shared = base(document)
+    history.record(document)
+    #expect(history.holdsObjects(at: shared))
+    document.objects[2].name = "copied"
+    #expect(base(document) != shared)
+    #expect(history.holdsObjects(at: shared) && !history.holdsObjects(at: base(document)))
+    history.record(patch: StudioObjectPatch(document, before: document.objects[3]))
+    document.objects[3].visible = false
+    #expect(!history.holdsObjects(at: base(document)) && !history.holdsObjects(at: nil))
+}
+
 @Test func aBrokenPatchIsReportedNeverRestoredInPart() {
     // A patch that names an object the document lacks is a bug. Release
     // refuses it: no target, the step stays until the caller drops it, and

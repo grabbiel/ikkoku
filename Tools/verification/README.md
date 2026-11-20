@@ -387,7 +387,8 @@ built preview) or `scene`; the step lists the keys a pending check holds),
 `updateObjects` `{keys,field}` (#446: edits each object through
 `StudioModel.update` in one gesture, `field` one of `pose`, `x`, `visible`
 or `name`; the first edit starts an undo step and the others join it, and
-none may copy the document's object list), `rememberDocument` `{name}` (#446:
+none may copy the document's object list, except a copy a whole-document
+step owes because it shares the list, which is reported apart), `rememberDocument` `{name}` (#446:
 keeps the document; assert `documentIs: name` compares every field with it),
 `undoBroken` `{key}` (#446: removes `key`'s object behind the history's back
 and undoes with the Debug assertion off; the undo must be refused, the
