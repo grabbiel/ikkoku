@@ -942,6 +942,7 @@ struct ObjectInspectorContent: View, Equatable {
         let sections = ObjectInspectorKindSections(model: model, state: o)
         VStack(alignment: .leading, spacing: 10) {
             TextField("Name", text: Binding(get: { o.name }, set: { v in update { $0.name = v } }))
+                .frame(height: InspectorTextFieldHeight.name)
             HStack {
                 Toggle("Visible", isOn: Binding(get: { o.visible }, set: { v in update { $0.visible = v } }))
                 Toggle("Locked", isOn: Binding(get: { o.locked }, set: { v in update { $0.locked = v } }))

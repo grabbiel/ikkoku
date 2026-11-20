@@ -747,6 +747,22 @@ class AppOutputArtifactTests(unittest.TestCase):
                                                 capture["env"]["IKKOKU_CAPTURE_UI_FIT_LOG"]])
         self.assertEqual(validate["argv"][3:], ["--selection", "963", "--tab", "Clothes", "--pose-picker", "--toolbar-fits"])
 
+    def test_object_heights_capture_log_is_validated_after_the_capture(self):
+        # #366: ui-sel-chars (the Object tab, characters 0 then 963); the validator
+        # checks the explicit text-field heights against SwiftUI's on this machine.
+        order = [check["id"] for lane, check in self.app_smoke_checks() if lane == "app-smoke.json"]
+        self.assertLess(order.index("studio-inspector-object-heights-capture"),
+                        order.index("studio-inspector-object-heights-validate"))
+        checks = {check["id"]: check for lane, check in self.app_smoke_checks()
+                  if lane == "app-smoke.json"}
+        capture = checks["studio-inspector-object-heights-capture"]
+        validate = checks["studio-inspector-object-heights-validate"]
+        self.assertEqual(capture["env"]["IKKOKU_CAPTURE_UI_STUDIO_TAB"], "object")
+        self.assertEqual(capture["env"]["IKKOKU_CAPTURE_UI_SELECT"], "0,963")
+        self.assertEqual(validate["argv"][:3], ["python3", "Tools/verification/checks/inspector_fit_log.py",
+                                                capture["env"]["IKKOKU_CAPTURE_UI_FIT_LOG"]])
+        self.assertEqual(validate["argv"][3:], ["--selection", "963", "--tab", "Object", "--object-heights", "24", "21"])
+
     def test_ui_capture_does_not_discover_a_maker_library(self):
         # The synthetic scene's minimal card exercises the source-pose inspector,
         # not assembled hair/clothes. A developer's optional library, found through
