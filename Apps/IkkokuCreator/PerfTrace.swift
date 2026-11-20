@@ -210,6 +210,9 @@ final class PerfTrace {
         /// shows, lowercased ("object", the default, "pose", "face",
         /// "clothes" or "scene").
         let inspectorTab: String?
+        /// `IKKOKU_PERF_PARK_FILE` (#440): the growth check's park file; nil
+        /// (the default) never parks (`PerfWorkloadDriver.parkIfRequested`).
+        let parkFile: String?
 
         /// Reads `IKKOKU_PERF_*`; `CaptureRequest.validate` already checked the values.
         static func from(_ env: [String: String]) -> Configuration? {
@@ -238,7 +241,8 @@ final class PerfTrace {
                 installRefresh: env["IKKOKU_PERF_INSTALL_REFRESH"] ?? "step",
                 outfit: env["IKKOKU_PERF_OUTFIT"].flatMap { Int($0) },
                 selectKeys: env["IKKOKU_PERF_SELECT_KEYS"].map { $0.split(separator: ",").compactMap { Int32($0) } },
-                inspectorTab: env["IKKOKU_PERF_INSPECTOR_TAB"])
+                inspectorTab: env["IKKOKU_PERF_INSPECTOR_TAB"],
+                parkFile: env["IKKOKU_PERF_PARK_FILE"])
         }
     }
 
@@ -786,6 +790,7 @@ final class PerfTrace {
                 "selectKeys": configuration.selectKeys.map { $0.map { Int($0) } as Any } ?? NSNull(),
                 "inspectorTab": configuration.inspectorTab.map { $0 as Any } ?? NSNull(),
                 "keepMounted": StudioInspectorMounting.current.rawValue,
+                "parked": configuration.parkFile != nil, "focusProbe": FocusProbe.count,
                 "panelState": StudioPanelStateMode.current.rawValue,
             ] as [String: Any],
             "build": PerfTrace.buildDescription(),

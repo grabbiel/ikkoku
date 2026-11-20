@@ -557,6 +557,9 @@ private struct CaptureRecipe {
         // #410: the small scene of `studio-load` and the workspace slot cap.
         ("IKKOKU_PERF_LOAD_SMALL_OBJECTS", ["200", "1"], ["0", "-1", "two", ""]),
         ("IKKOKU_PERF_WORKSPACE_SLOT_CAP", ["256", "0"], ["-1", "cap", ""]),
+        // #440: the growth check's park file and the focus probe.
+        ("IKKOKU_PERF_PARK_FILE", ["/runs/c1/park"], [""]),
+        ("IKKOKU_PERF_FOCUS_PROBE", ["8", "1", "64"], ["0", "65", "eight", ""]),
     ]
     for control in controls {
         let outside: [[String]] = [[control.variable]]

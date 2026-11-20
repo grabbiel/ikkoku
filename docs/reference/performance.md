@@ -126,6 +126,7 @@ the run.
 | `studio-export-import` | as `studio-idle` | File ▸ Export Edited Original Scene (`AppState.exportSourceScene(to:)`) of the startup scene as imported, unedited, repeated, live animation on. A hidden character the import left unbuilt has no edit, so the export builds no baseline for it; its saved animation time comes from its data-only clock ([lazy hidden characters](#lazy-hidden-characters-at-import)). Each export writes a new file and removes the previous one |
 | `studio-show-hidden` | as `studio-idle` | Visible on (the inspector's toggle, `StudioModel.update`) for each hidden object of the startup scene that holds source characters (its own flag off, its ancestors shown), in workspace order, each followed by Visible off again (unmeasured), repeated, live animation on. An action's first run shows characters the import left unbuilt, so its ready time holds their builds; later runs find them built. Each action is named `show <source key> (<n> characters)` |
 | `studio-clock-first` | as `studio-idle` | the first clock rebase and the first native save after the import, then repeated, live animation on: `rebase` sets the first drawn character with a converted saved clip to its own animation speed (`setSourceAnimationSpeed`, which bakes every character's clock), `save` is File ▸ Save (`saveScene(to:)`) to a scratch file. The first bake's time is the `sourceClockBake` mark pair |
+| `maker-tabs` | `IKKOKU_SOURCE_AVATAR` and the Maker library, no card | #440: the bundled character's Maker (the tabbed panel, not the source rig panel), its tabs selected in turn as the segmented control selects them (`MakerModel.tab`), repeated, live animation on. Each switch builds the tab's panel again, the tag and thumbnail grids included. It fails when a source preview is present |
 
 Other options:
 
@@ -182,6 +183,19 @@ Other options:
   alternates with the source scene, and the workspace slots, the rows the
   list builds ahead of any scroll, in place of `StudioWorkspaceState.slotCap`
   (0 puts every row in the lazy stack). The app reads the cap once at launch.
+- `IKKOKU_PERF_PARK_FILE` (a path) and `IKKOKU_PERF_FOCUS_PROBE` (1–64),
+  #440's measurement controls for the
+  [focus-ring growth check](#per-action-growth-check-440). With a park file,
+  an action workload parks at the start of each cycle after the first when
+  the file reads `park <n>`. It writes `<file>.parked` (the park, the measured
+  actions finished, the next action's index and the cycle's length) and
+  waits until the file reads `resume <n>`; both files are written in place
+  and never deleted, and `details.parks` records each park. The probe adds
+  that many plain buttons with the system focus effect at the top of the
+  Studio inspector's scroll view, hidden with `.inspectorHidden` at every
+  other selection change, and of the Maker panel's, removed at every other
+  tab switch: the growth check's positive control. The app reads both once
+  at launch; unset, neither does anything.
 - Measurement controls for the
   [item 6 follow-up](#phase-2-item-6-follow-up-route-copies-prefetch-and-kept-donations),
   all defaulting to the shipped behavior:
@@ -535,6 +549,38 @@ row per payload type `T`.
 The check needs the private source scene (`perf_trace.py`'s environment
 map), so no lane runs it. Results are in
 [Workspace list per scene (#410)](studio/scene-editing.md#workspace-list-per-scene-410).
+
+### Per-action growth check (#440)
+
+[growth_check.py](../../Tools/verification/growth_check.py) (v3) is the
+same measurement for any `perf_trace.py` workload, per measured action.
+The #410 check stays as that issue's record.
+
+- **Parked snapshots.** The check passes `IKKOKU_PERF_PARK_FILE=<out>/park`
+  and writes `park 1` at 12 s and `park 2` at 56 s after launch. At the start
+  of its next cycle the workload writes `<out>/park.parked` and waits. The
+  check takes the snapshot (up to four attempts, 2 s apart) and writes
+  `resume <n>`. No file is deleted. Both snapshots see the state a full cycle
+  leaves, and the unit is the measured actions between the two parks.
+- **Timed snapshots** (`--timed`), for builds without parking: v2.2's
+  schedule, with the measured actions that started between the snapshots.
+- **Rows:** the four AppKit types, `_FocusRingView` (the view the mechanism
+  adds) and every `AnyHashableBox<T>`. Other classes that grow by at least
+  the bar are FLAGs for review.
+- **Bar**, frozen before the first run: each row grows by at most 1 per
+  action plus 32 (parked: no phase term, so 32 covers incidental
+  allocations) or plus 64 (timed, v2.2's). A run is valid with both
+  snapshots read, both parks at the start of one cycle, and at least 40
+  actions between them.
+- **Slopes** (information only): every row's growth per action. A pass with
+  a slope of at least 0.25 per action on the four types or `_FocusRingView`
+  prints as "pass, slope X": a section that leaks one control per show (0.5
+  per action) passes the 1-per-action bar, so that candidate stays open for a
+  longer run.
+- It writes `growth.json` and exits 0 (pass), 1 (fail) or 2 (invalid).
+  [test_growth_check.py](../../Tools/verification/test_growth_check.py) covers
+  the reader, the bar, the slope note, the flags, the timed count, the
+  parking protocol against a fake app, and the attempts.
 
 ## Measurement setup
 

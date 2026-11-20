@@ -456,6 +456,8 @@ extension CaptureRequest {
         ScopedOption("IKKOKU_PERF_PANEL_STATE", [.perfTrace]),
         ScopedOption("IKKOKU_PERF_LOAD_SMALL_OBJECTS", [.perfTrace]),
         ScopedOption("IKKOKU_PERF_WORKSPACE_SLOT_CAP", [.perfTrace]),
+        ScopedOption("IKKOKU_PERF_PARK_FILE", [.perfTrace]),
+        ScopedOption("IKKOKU_PERF_FOCUS_PROBE", [.perfTrace]),
     ]
 
     /// Options read only by the window capture.
@@ -625,6 +627,9 @@ extension CaptureRequest {
         // shows fewer rows.
         ValueRule("IKKOKU_PERF_LOAD_SMALL_OBJECTS", .integer(1...10_000)),
         ValueRule("IKKOKU_PERF_WORKSPACE_SLOT_CAP", .integer(0...100_000)),
+        // #440: the focus probe's buttons (the growth check's positive
+        // control); `IKKOKU_PERF_PARK_FILE` is any path.
+        ValueRule("IKKOKU_PERF_FOCUS_PROBE", .integer(1...64)),
     ]
 
     /// `IKKOKU_PERF_WORKLOAD` values, in the order `docs/reference/performance.md` lists them.
@@ -633,7 +638,7 @@ extension CaptureRequest {
         "studio-native", "viewport-lifecycle", "startup", "studio-static", "studio-orbit-bursts",
         "studio-duplicate", "studio-undo-delete", "studio-timeline",
         "studio-outfit", "studio-export", "studio-redo", "studio-load", "studio-select",
-        "studio-export-import", "studio-show-hidden", "studio-clock-first",
+        "studio-export-import", "studio-show-hidden", "studio-clock-first", "maker-tabs",
     ]
 }
 

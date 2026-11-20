@@ -23,7 +23,7 @@ branch was tested or every asset matches the original game. Feature status,
 specific comments and pending tasks are in the linked reports. Shared behavior
 may be discussed in more than one report; one primary owner is listed here.
 
-**1145 files indexed; 1145 assigned; 0 unassigned.**
+**1146 files indexed; 1146 assigned; 0 unassigned.**
 
 Counts include the website and clothes-group additions listed below. Runtime and
 test totals include their specialized role descriptions; this is inventory
@@ -31,7 +31,7 @@ bookkeeping, not a new full source audit.
 
 | Primary report | Files |
 | --- | ---: |
-| [App / gameplay / plugins](app-gameplay-and-plugins.md) | 110 |
+| [App / gameplay / plugins](app-gameplay-and-plugins.md) | 111 |
 | [Character / Maker / mods](character-and-mods.md) | 145 |
 | [Studio / IK / animation](studio.md) | 273 |
 | [Renderer / foundation / assets](renderer-and-foundation.md) | 373 |
@@ -45,7 +45,7 @@ bookkeeping, not a new full source audit.
 | Documentation / historical evidence | 65 |
 | Generated asset / catalog / fixture | 205 |
 | Reference host / controlled fixture | 41 |
-| Runtime / shared shader declaration | 246 |
+| Runtime / shared shader declaration | 247 |
 | Test / validation | 251 |
 | Public synthetic body/face input fixture | 1 |
 
@@ -78,6 +78,7 @@ Feature assessment: [app-gameplay-and-plugins.md](app-gameplay-and-plugins.md).
 | [Apps/IkkokuCreator/Assets.xcassets/Contents.json](../../Apps/IkkokuCreator/Assets.xcassets/Contents.json) | App resource metadata / icon |
 | [Apps/IkkokuCreator/ContentView.swift](../../Apps/IkkokuCreator/ContentView.swift) | Runtime / shared shader declaration |
 | [Apps/IkkokuCreator/EngineHost.swift](../../Apps/IkkokuCreator/EngineHost.swift) | Runtime / shared shader declaration |
+| [Apps/IkkokuCreator/FocusProbe.swift](../../Apps/IkkokuCreator/FocusProbe.swift) | Runtime / shared shader declaration |
 | [Apps/IkkokuCreator/HideStudioUIScenario.swift](../../Apps/IkkokuCreator/HideStudioUIScenario.swift) | Runtime / shared shader declaration |
 | [Apps/IkkokuCreator/IkkokuApp.swift](../../Apps/IkkokuCreator/IkkokuApp.swift) | Runtime / app menus and editor-owned plugin commands |
 | [Apps/IkkokuCreator/PerfTrace.swift](../../Apps/IkkokuCreator/PerfTrace.swift) | Runtime / shared shader declaration |
