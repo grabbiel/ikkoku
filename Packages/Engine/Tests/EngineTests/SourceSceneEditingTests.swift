@@ -43,7 +43,7 @@ private func sceneObjects(_ roots: [KoikatsuObjectRecord]) -> [Int32: KoikatsuOb
     let data = try original.editedData(.init(transforms: edits)), result = try KoikatsuSceneReader.decodeDocument(data)
     #expect(data.count == bytes.count && result.settings == original.settings)
     #expect(result.trailingData == original.trailingData)
-    #expect(result.snapshot.roots[1] == original.snapshot.roots[1])
+    #expect(try onDecodeStack { result.snapshot.roots[1] == original.snapshot.roots[1] })
     let character = try #require(result.snapshot.roots[0].character), before = try #require(original.snapshot.roots[0].character)
     #expect(character.cardData == before.cardData && character.bones[1]?.sourceKey == 101 && character.ikTargets[3]?.sourceKey == 103)
     #expect(character.bones[1]?.transform == transform && character.bones[2] == before.bones[2])
@@ -71,7 +71,7 @@ private func sceneObjects(_ roots: [KoikatsuObjectRecord]) -> [Int32: KoikatsuOb
         kinematics: [10: .init(enableFK: false, enableIK: true, activeFK: Array(repeating: false, count: 7), activeIK: Array(repeating: true, count: 5))])
     let bytes = try original.editedData(edits), result = try KoikatsuSceneReader.decodeDocument(bytes)
     #expect(result.settings == original.settings && result.trailingData == original.trailingData)
-    #expect(result.snapshot.roots[1] == original.snapshot.roots[1])
+    #expect(try onDecodeStack { result.snapshot.roots[1] == original.snapshot.roots[1] })
     #expect(result.snapshot.roots[0].transform == editedSceneTransform())
     #expect(result.snapshot.roots[0].character?.accessoryChildren[7]?.first?.transform == editedSceneTransform(2))
     #expect(result.snapshot.roots[0].character?.enableFK == false && result.snapshot.roots[0].character?.enableIK == true)
@@ -99,7 +99,7 @@ private func sceneObjects(_ roots: [KoikatsuObjectRecord]) -> [Int32: KoikatsuOb
     var face = savedFace; face[3] = savedFace[3] == 0.5 ? 0.25 : 0.5
     let edited = try KoikatsuSceneReader.decodeDocument(original.editedData(.init(cards: [10: .init(faceValues: face)])))
     #expect(edited.settings == original.settings && edited.trailingData == original.trailingData)
-    #expect(edited.snapshot.roots[1] == original.snapshot.roots[1])
+    #expect(try onDecodeStack { edited.snapshot.roots[1] == original.snapshot.roots[1] })
     let after = try #require(edited.snapshot.roots[0].character).card()
     #expect(try after.customization().faceValues == face)
     // Only the edited face array moved; every other card byte is untouched.
@@ -113,7 +113,7 @@ private func sceneObjects(_ roots: [KoikatsuObjectRecord]) -> [Int32: KoikatsuOb
     // value-level here; everything outside the edited array keeps its own bytes.
     let reverted = try KoikatsuSceneReader.decodeDocument(edited.editedData(.init(cards: [10: .init(faceValues: savedFace)])))
     #expect(try #require(reverted.snapshot.roots[0].character).card().customization().faceValues == savedFace)
-    #expect(reverted.trailingData == original.trailingData && reverted.snapshot.roots[1] == original.snapshot.roots[1])
+    #expect(try reverted.trailingData == original.trailingData && onDecodeStack { reverted.snapshot.roots[1] == original.snapshot.roots[1] })
 }
 
 /// The default fixture's Custom block owns no Unity Color arrays, so the
@@ -150,7 +150,7 @@ private func eyebrowColor(_ card: SourceCharacterCard) throws -> [Float] {
     let colorEdit = SourceCharacterCard.ColorEdit(record: .face, path: [.key("eyebrowColor")], rgba: editedColor)
     let edited = try KoikatsuSceneReader.decodeDocument(original.editedData(.init(cards: [10: .init(faceValues: face, colors: [colorEdit])])))
     #expect(edited.settings == original.settings && edited.trailingData == original.trailingData)
-    #expect(edited.snapshot.roots[1] == original.snapshot.roots[1])
+    #expect(try onDecodeStack { edited.snapshot.roots[1] == original.snapshot.roots[1] })
     let after = try #require(edited.snapshot.roots[0].character).card()
     #expect(try eyebrowColor(after) == editedColor)
     #expect(try after.customization().faceValues == face)
@@ -266,7 +266,7 @@ private func eyebrowColor(_ card: SourceCharacterCard) throws -> [Float] {
     let result = try KoikatsuSceneReader.decodeDocument(data)
     #expect(result.settings.camera == camera && result.settings.cameraSlots[0] == camera && result.settings.cameraSlots[9] == camera)
     #expect(Array(result.settings.cameraSlots[1..<9]) == Array(original.settings.cameraSlots[1..<9]))
-    #expect(result.snapshot == original.snapshot && result.trailingData == original.trailingData)
+    #expect(try onDecodeStack { result.snapshot == original.snapshot } && result.trailingData == original.trailingData)
     #expect(data.count == original.preservedData.count)
     #expect(try result.editedData(.init(currentCamera: original.settings.camera,
         cameraSlots: [0: original.settings.cameraSlots[0], 9: original.settings.cameraSlots[9]])) == original.preservedData)
@@ -305,7 +305,7 @@ private func eyebrowColor(_ card: SourceCharacterCard) throws -> [Float] {
     #expect(Set(before.keys) == Set(after.keys))
     #expect(after[11]?.visible == false && after[20]?.visible == false)
     #expect(after[10]?.visible == true && after[21]?.visible == true)
-    for key in before.keys where key != 10 && key != 11 && key != 20 { #expect(after[key] == before[key]) }
+    for key in before.keys where key != 10 && key != 11 && key != 20 { #expect(try onDecodeStack { after[key] == before[key] }) }
     let root = try #require(after[10]), originalRoot = try #require(before[10])
     #expect(root.transform == originalRoot.transform && root.treeState == originalRoot.treeState && root.visible)
     #expect(root.character?.cardData == originalRoot.character?.cardData && root.character?.bones == originalRoot.character?.bones)
@@ -341,7 +341,7 @@ private func eyebrowColor(_ card: SourceCharacterCard) throws -> [Float] {
     #expect(after[11]?.name == folderName && after[20]?.name == "")
     #expect(before[11]?.name == "Child" && before[20]?.name == "Route")
     // Record 10 contains child 11, so compare its own fields explicitly.
-    for key in before.keys where key != 10 && key != 11 && key != 20 { #expect(after[key] == before[key]) }
+    for key in before.keys where key != 10 && key != 11 && key != 20 { #expect(try onDecodeStack { after[key] == before[key] }) }
     let root = try #require(after[10]), originalRoot = try #require(before[10])
     #expect(root.transform == originalRoot.transform && root.name == originalRoot.name)
     #expect(root.character?.cardData == originalRoot.character?.cardData && root.character?.bones == originalRoot.character?.bones)
@@ -391,7 +391,7 @@ private func eyebrowColor(_ card: SourceCharacterCard) throws -> [Float] {
     #expect(throws: (any Error).self) { try scene.editedData(.init(names: [13: "renamed"])) }
     let renamed = try scene.editedData(.init(names: [12: "カメラ B"]))
     let result = try KoikatsuSceneReader.decodeDocument(renamed)
-    #expect(result.snapshot.roots[1].name == "カメラ B" && result.snapshot.roots[0] == scene.snapshot.roots[0])
+    #expect(try result.snapshot.roots[1].name == "カメラ B" && onDecodeStack { result.snapshot.roots[0] == scene.snapshot.roots[0] })
     #expect(try result.editedData(.init(names: [12: "Camera A"])) == bytes.data)
 }
 
@@ -419,7 +419,7 @@ private func eyebrowColor(_ card: SourceCharacterCard) throws -> [Float] {
     let result = try KoikatsuSceneReader.decodeDocument(data)
     let after = sceneObjects(result.snapshot.roots)
     #expect(after[20]?.name == "R" && after[20]?.visible == false)
-    for key in before.keys where key != 20 { #expect(after[key] == before[key]) }
+    for key in before.keys where key != 20 { #expect(try onDecodeStack { after[key] == before[key] }) }
     #expect(try result.editedData(.init(visibility: [20: true], names: [20: "Route"])) == bytes)
 }
 
@@ -440,7 +440,7 @@ private func eyebrowColor(_ card: SourceCharacterCard) throws -> [Float] {
     let before = sceneObjects(original.snapshot.roots), after = sceneObjects(result.snapshot.roots)
     #expect(Set(before.keys) == Set(after.keys))
     #expect(after[30]?.cameraActive == false && after[20]?.route?.active == true)
-    for key in before.keys where key != 20 && key != 30 { #expect(after[key] == before[key]) }
+    for key in before.keys where key != 20 && key != 30 { #expect(try onDecodeStack { after[key] == before[key] }) }
     #expect(result.settings == original.settings && result.trailingData == original.trailingData)
     // Reversing restores every source byte; an edit to the stored flags is identity.
     #expect(try result.editedData(.init(cameraActive: [30: true], routeActive: [20: false])) == bytes)
@@ -541,7 +541,7 @@ private func sceneEditingRoundTrips(_ urls: [URL]) throws {
     #expect(try original.editedData(.init(cards: [10: .init(coordinateType: 1)])) == scene)
     let edited = try KoikatsuSceneReader.decodeDocument(original.editedData(.init(cards: [10: .init(coordinateType: 2)])))
     #expect(edited.settings == original.settings && edited.trailingData == original.trailingData)
-    #expect(edited.snapshot.roots[1] == original.snapshot.roots[1])
+    #expect(try onDecodeStack { edited.snapshot.roots[1] == original.snapshot.roots[1] })
     let after = try #require(edited.snapshot.roots[0].character).card()
     #expect(try after.savedCoordinateType() == 2)
     // Only the Status block changed; card plug-ins, records and identity stay.

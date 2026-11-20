@@ -58,7 +58,8 @@ func koikatsuLegacyScenePerformance() throws {
     // The upgrade alone (a second read for its patches, the splice, and the
     // readback's decode and compare), then the readback's record compare.
     let upgraded = try document.upgraded()
-    #expect(upgraded.snapshot.roots == document.readBackRoots())
+    // Record comparisons run on the decode stack (#326), as in the upgrade.
+    #expect(try onDecodeStack { upgraded.snapshot.roots == document.readBackRoots() })
     try legacyPerfMedian("legacy upgraded()") { _ = try document.upgraded() }
-    legacyPerfMedian("legacy readback record compare") { _ = upgraded.snapshot.roots == document.readBackRoots() }
+    try onDecodeStack { legacyPerfMedian("legacy readback record compare") { _ = upgraded.snapshot.roots == document.readBackRoots() } }
 }

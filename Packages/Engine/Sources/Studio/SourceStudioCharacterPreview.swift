@@ -478,23 +478,58 @@ public final class SourceStudioCharacterPreview {
     /// thread. `problems()` waits for the worker once; the worker holds an
     /// unfair lock while it checks, so any other caller waits on that lock
     /// with its priority donated, or checks itself if the worker has not
-    /// started.
+    /// started. The worker's block holds the check until it has run (#432):
+    /// a check nobody asks is freed when its worker finishes, or at once,
+    /// unrun, after `cancel()`.
     public final class CardCheck: @unchecked Sendable {
-        private let records: [KoikatsuCharacterRecord]
+        /// Shallow copies (#326): `validateCard` reads only the card and the
+        /// sex (`cardInputs`), and a record's accessory children are a scene
+        /// subtree. Without them, a worker that drops the last copy releases
+        /// no tree, whatever its depth.
+        let records: [KoikatsuCharacterRecord]
         private let lock = OSAllocatedUnfairLock()
         private var computed: [String?]?
         private let pending = OSAllocatedUnfairLock<DispatchWorkItem?>(uncheckedState: nil)
 
-        public init(records: [KoikatsuCharacterRecord]) {
-            self.records = records
+        public convenience init(records: [KoikatsuCharacterRecord]) {
+            self.init(records: records, queue: .global(qos: .userInitiated))
+        }
+
+        /// `queue` runs the worker (a test passes a serial queue it drains).
+        init(records: [KoikatsuCharacterRecord], queue: DispatchQueue) {
+            self.records = records.map { record in
+                var shallow = record
+                shallow.accessoryChildren = [:]
+                return shallow
+            }
             guard !records.isEmpty else { computed = []; return }
+            // `self.records`: the block captures the check alone, never the
+            // caller's records with their subtrees.
             let item = DispatchWorkItem(qos: .userInitiated) { [self] in
-                lock.lock(); defer { lock.unlock() }
-                if computed == nil { computed = Self.check(records) }
+                do {
+                    lock.lock(); defer { lock.unlock() }
+                    if computed == nil { computed = Self.check(self.records) }
+                }
+                // #432: `pending` holds the item, which holds this check:
+                // dropping it here ends the cycle, asked or not.
+                pending.withLockUnchecked { $0 = nil }
             }
             pending.withLockUnchecked { $0 = item }
-            DispatchQueue.global(qos: .userInitiated).async(execute: item)
+            queue.async(execute: item)
         }
+
+        /// For a check nobody will ask (#432, a cancelled import): a worker
+        /// that has not started never runs, and the check is freed with its
+        /// owner. `problems()` still answers, checking on its caller.
+        public func cancel() {
+            pending.withLockUnchecked { item -> DispatchWorkItem? in
+                defer { item = nil }
+                return item
+            }?.cancel()
+        }
+
+        /// Whether the problems are known (tests only).
+        var hasChecked: Bool { lock.lock(); defer { lock.unlock() }; return computed != nil }
 
         /// Per record, in order: the description of the error `validateCard`
         /// throws for it, or nil when its card passes.
@@ -519,6 +554,23 @@ public final class SourceStudioCharacterPreview {
         }
     }
 
+    /// The character record `key` names in `scene`, as a shallow copy
+    /// (#326): an assembly and its preview read the card, the bones and the
+    /// saved states, never the accessory children, a scene subtree that
+    /// would otherwise die wherever the preview does, the Studio's build
+    /// queue (GCD) included.
+    static func characterRecord(_ key: Int32, in scene: KoikatsuSceneDocument) throws -> KoikatsuCharacterRecord {
+        var stack = scene.snapshot.roots, match: KoikatsuCharacterRecord?
+        while let object = stack.popLast() {
+            if object.sourceKey == key { match = object.character; break }
+            stack += object.children
+            if let character = object.character { stack += character.accessoryChildren.values.flatMap { $0 } }
+        }
+        guard var record = match else { throw RigError.invalid("Source character record is missing.") }
+        record.accessoryChildren = [:]
+        return record
+    }
+
     /// The first half of a build (see `Assembly`). `sharing` is a loaded
     /// preview's `donation`: when it shows the same reference (scene
     /// SHA-256, record key and converted files) and outfit on the same
@@ -534,13 +586,7 @@ public final class SourceStudioCharacterPreview {
             throw RigError.invalid("The referenced source scene changed; import it again to update this preview.")
         }
         let scene = try KoikatsuSceneReader.decodeDocument(data)
-        var stack = scene.snapshot.roots, match: KoikatsuCharacterRecord?
-        while let object = stack.popLast() {
-            if object.sourceKey == reference.objectKey { match = object.character; break }
-            stack += object.children
-            if let character = object.character { stack += character.accessoryChildren.values.flatMap { $0 } }
-        }
-        guard let record = match else { throw RigError.invalid("Source character record is missing.") }
+        let record = try characterRecord(reference.objectKey, in: scene)
         let (card, identity, status, savedCoordinate) = try cardInputs(record)
         let outfitCount = (try? card.coordinateCount()) ?? 0
         if let selectedCoordinate {

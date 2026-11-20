@@ -754,9 +754,23 @@ included, and over the fixture rigs.
 - `Transform.normalMatrix` uses the cofactor matrix times the determinant's sign
   for a singular basis, the same construction as the deform kernel, scaled to a
   largest entry of 1. It falls back to the identity when fewer than two columns
-  are independent. The toon, outline and live vertex shaders are unchanged, so
-  a normal the cofactor maps to zero on a zero-scale non-character item is
-  still left to them (#407).
+  are independent. The cofactor maps every normal perpendicular to the
+  collapsed axis to zero. On a zero-scale non-character item those are, for
+  example, the rim of a flattened sphere. The toon, outline and live probe
+  vertex stages (`guardedNormal` in Shaders/Common.h, #407) give such a normal
+  0 instead of `normalize(0)`, which is NaN. Before the guard that NaN reached
+  every fragment of the triangle. On Apple GPUs the interpolator turned it into
+  FLT_MAX, so the pixels were finite but wrongly shaded. Each triangle now takes
+  its side of the collapsed surface from its other vertices. Any normal with
+  |n|² ≥ FLT_MIN is still exactly `normalize(n)`, so nonsingular draws do not
+  change. `SingularNormalShaderTests` checks both, bit for bit under the
+  default fast math the shaders compile with.
+  This differs from Unity for degenerate scales. Unity's world normal,
+  `normalize(mul(n, (float3x3)unity_WorldToObject))` with the InverseSafe
+  matrix below, keeps only the in-plane part. It is zero (NaN on D3D11) for the
+  normals parallel to the collapsed axis, which are the faces that stay visible.
+  The native draws keep #404's cofactor and aim for a finite result, not that
+  NaN. The source shaders keep Unity's math unchanged.
 - The source shaders' `unity_WorldToObject` uses `Transform.inverseSafe`. For a
   singular basis each column `c` becomes the row `c / |c|²`, and a column no
   longer than 1e-5 becomes 0, as in Unity's `Vector3f` InverseSafe. A collapsed
@@ -765,9 +779,11 @@ included, and over the fixture rigs.
   node reads its rotation from the axes that remain. lossyScale stays unsigned,
   because the recovered source does not confirm where Unity's lossyScale keeps
   a negative sign.
-- DynamicBone still refuses a zero or negative local scale on its chain, and the
-  message names #404; signed TRS is #406. A collapsed renderer that is not on
-  the chain is validated the same way `Rig.evaluate` treats it.
+- DynamicBone simulates a signed local scale on its chain that has a TRS record,
+  and a single collapsed axis without one (#406). The cases it still refuses are
+  listed in [dynamics: signed and zero scales](animation/dynamics.md#signed-and-zero-scales-406).
+  A collapsed renderer that is not on the chain is validated the same way
+  `Rig.evaluate` treats it.
 
 ### DrawUniforms by instance (ST-T04 B0, 2026-11-18)
 
@@ -2288,21 +2304,32 @@ keeps nothing (measurement control).
   two; QoS user-initiated), in request order. They stay off the Swift
   concurrency pool because the builds block on file reads, on each other's
   rig decodes and on MetalKit's synchronous texture loads.
-- Each worker has an 8 MiB stack (`SourceStudioCharacterBatch.stackSize`,
-  #321), not a GCD worker's 512 KiB. A first half decodes the whole scene,
-  and the decode recurses once per nesting level, up to the reader's limit
-  of 200 levels (`KoikatsuBinaryReader.maximumLevels`, #326; 65 before).
-  A first half on the deepest scene the reader accepts takes 1,552 KiB of
-  stack through nested folders and 3,449 KiB through nested characters in
-  Debug (`SourceSceneDeepStackTests`, synthetic scenes). Every other scene
-  decode and record walk in the Studio runs on the main thread, which
-  also has 8 MiB. There the export, insertion and layout import take at
-  most 3,491 KiB on the same scenes.
+- Each worker has a 64 MiB stack (`SourceStudioCharacterBatch.stackSize`,
+  #321, #326), not a GCD worker's 512 KiB or the main thread's 8 MiB. It is
+  address space: a page is committed only when the stack reaches it. A
+  first half decodes the whole scene, and the decode recurses once per
+  nesting level, up to the reader's limit of 1,000 levels
+  (`KoikatsuBinaryReader.maximumLevels`, #326; 65 before). A first half on
+  the deepest scene the reader accepts takes 7.5 MiB of stack through
+  nested folders and 16.7 MiB through nested characters in Debug (2.1 and
+  3.0 MiB in Release; `SourceSceneDeepStackTests`, synthetic scenes).
+- Every other operation that recurses through a decoded scene runs on a
+  stack of the same size (`SourceStudioCharacterBatch.onDecodeStack`,
+  #326): the decode, the legacy upgrade, the insertion stage, the export's
+  edit and the layout import. Called from a smaller stack, each starts one
+  thread of its own (`onDecodeThread`, at the caller's QoS) and waits for
+  it; on a worker it runs in line. The hidden characters' clock reads its
+  scene the same way. The record walks left on the main thread are
+  iterative or take at most 2.5 MiB in Debug on the same scenes.
 - The init starts one worker, which starts the others, so the calling
   thread pays one thread start. For a 22-wide batch it takes 25–26 µs in
   Release (26 µs in Debug), against 12–14 µs (18 µs) for the GCD
   dispatches before #321. Every worker has reported after 225–257 µs
   (239 µs), against 145–156 µs (152 µs). These are medians of 50 rounds.
+  With 64 MiB stacks (#326) the start takes 28–31 µs and every worker has
+  reported after 262–286 µs in Release, against 25–26 µs and 219–266 µs
+  with 8 MiB in the same alternating runs (base and head, four each). The
+  decode hop (`onDecodeThread`) takes a median of 32–41 µs (32–33 µs).
   A first half that does real work takes milliseconds.
 - The owner runs the second halves one at a time, in request order, on a
   thread it chooses: `build(_:)` on the calling thread, or

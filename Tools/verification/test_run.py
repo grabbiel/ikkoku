@@ -642,7 +642,13 @@ SCENARIO_OPS = {"select", "setVisible", "rename", "toggleCamera", "toggleRoute",
                 "focus", "selectRoutePoint", "dragRoutePoint", "captureRoute", "editRoute", "setShowSourceMap",
                 "setUnlimitedLights",
                 # Added for #387 round 3 (the workspace rows a selection change patches).
-                "deselect", "assertWorkspaceRows"}
+                "deselect", "assertWorkspaceRows",
+                # A digit-row key press: camera slot load, and save with Shift.
+                "pressDigit",
+                # #425: a source IK guide's mouse drag (the toolbar-steady check).
+                "dragIKGuide",
+                # #439: the Pose tab's source IK toggles, and a click on an IK guide.
+                "setSourceIKEnabled", "clickIKGuide"}
 
 # R7 phase 2, item 7: the window-run inspector checks (`"inspectorUI": {"steps": [...]}`).
 INSPECTOR_UI_OPS = {"select", "deselect", "focus", "type", "delete", "undo", "redo", "cycle",
@@ -729,7 +735,7 @@ class AppOutputArtifactTests(unittest.TestCase):
         self.assertEqual(capture["env"]["IKKOKU_CAPTURE_UI_SELECT"], "0,622,963")
         self.assertEqual(validate["argv"][:3], ["python3", "Tools/verification/checks/inspector_fit_log.py",
                                                 capture["env"]["IKKOKU_CAPTURE_UI_FIT_LOG"]])
-        self.assertEqual(validate["argv"][3:], ["--selection", "963", "--tab", "Clothes", "--pose-picker"])
+        self.assertEqual(validate["argv"][3:], ["--selection", "963", "--tab", "Clothes", "--pose-picker", "--toolbar-fits"])
 
     def test_ui_capture_does_not_discover_a_maker_library(self):
         # The synthetic scene's minimal card exercises the source-pose inspector,
@@ -950,7 +956,7 @@ class StudioScenarioLaneTests(unittest.TestCase):
                       and not name.startswith(("maker-", "gameplay-")))
 
     def test_lane_validates_and_covers_every_scenario(self):
-        self.assertEqual(len(self.checks), 100)
+        self.assertEqual(len(self.checks), 103)
         referenced = set()
         for check in self.checks:
             scenario = check["env"]["IKKOKU_STUDIO_SCENARIO"]
@@ -1163,6 +1169,39 @@ class StudioScenarioLaneTests(unittest.TestCase):
                     self.assertIn(step["axis"], ("x", "y", "z"))
                     self.assertEqual(len(step["pixels"]), 2)
                     self.assertTrue(all(isinstance(c, (int, float)) for c in step["pixels"]))
+                if op == "dragIKGuide":
+                    # the IK guide 0-12 (SourceStudioIKEditing.labels) and its translate arrow
+                    self.assertIs(type(step["key"]), int)
+                    self.assertIs(type(step["index"]), int)
+                    self.assertIn(step["index"], range(13))
+                    self.assertIn(step["axis"], ("x", "y", "z"))
+                    self.assertEqual(len(step["pixels"]), 2)
+                    self.assertTrue(all(isinstance(c, (int, float)) for c in step["pixels"]))
+                if "toolbarSteady" in step:
+                    self.assertIn(op, ("dragGizmo", "dragIKGuide"))
+                    self.assertIs(type(step["toolbarSteady"]), bool)
+                if op == "setSourceIKEnabled":
+                    # #439: the "IK enabled" toggle, or with ikGroup (0-4) one group's toggle
+                    self.assertIs(type(step["key"]), int)
+                    self.assertIs(type(step["on"]), bool)
+                    if "ikGroup" in step:
+                        self.assertIs(type(step["ikGroup"]), int)
+                        self.assertIn(step["ikGroup"], range(5))
+                if op == "clickIKGuide":
+                    self.assertIs(type(step["key"]), int)
+                    self.assertIs(type(step["index"]), int)
+                    self.assertIn(step["index"], range(13))
+                    self.assertIs(type(step["selects"]), bool)
+                if "sourceIK" in step:
+                    check = step["sourceIK"]
+                    self.assertIn(op, ("assert", "assertRejected"))
+                    self.assertIs(type(check["key"]), int)
+                    self.assertTrue(set(check) <= {"key", "drawn", "enableIK", "activeIK", "selectedHidden"}, check)
+                    for target in check.get("drawn", []):
+                        self.assertIn(target, range(13))
+                    if "activeIK" in check:
+                        self.assertEqual(len(check["activeIK"]), 5)
+                        self.assertTrue(all(type(flag) is bool for flag in check["activeIK"]))
                 if op == "hoverGizmo":
                     self.assertIsInstance(step["key"], int)
                     self.assertIsInstance(step["bone"], int)
@@ -1238,6 +1277,12 @@ class StudioScenarioLaneTests(unittest.TestCase):
                           "loadDocumentRejected", "importDocument"):
                     self.assertTrue(step["path"].startswith(".local/"),
                                     "scene writes must stay under .local/: %s" % step["path"])
+                if op == "pressDigit":
+                    # the digit 0-9 and, for a slot save, Shift
+                    self.assertIn(step["index"], range(10))
+                    self.assertIs(type(step["index"]), int)
+                    if "on" in step:
+                        self.assertIs(type(step["on"]), bool)
                 if op in ("assert", "assertRejected"):
                     declared = [k for k in ("name", "visible", "face", "body", "color",
                                             "activeCamera", "routePlaying",
@@ -1247,7 +1292,7 @@ class StudioScenarioLaneTests(unittest.TestCase):
                                             "characterBuilt", "exportedAnimation", "treeLabel", "view", "render",
                                             "exportIdenticalToSource", "outfit", "clothes", "ik", "expression", "accessoryLabels", "pluginMount",
                                             "children", "absent", "activeCopyOf", "route", "routeLines", "sourceMap",
-                                            "liveSamplers", "undoDepth", "redoDepth", "objectCount") if k in step]
+                                            "liveSamplers", "undoDepth", "redoDepth", "objectCount", "sourceIK") if k in step]
                     self.assertTrue(declared, "assert declares nothing: %s" % path)
                     for name in ("undoDepth", "redoDepth", "objectCount"):
                         if name in step:
@@ -1338,11 +1383,13 @@ class StudioScenarioLaneTests(unittest.TestCase):
                         self.assertIsInstance(step["position"]["key"], int)
                         self.assertTrue(step["position"]["from"])
                     if "view" in step:
-                        # exactly one target: the saved camera or one camera object
+                        # exactly one target: the saved camera, one camera object or one camera slot
                         view = step["view"]
-                        self.assertEqual(len(view), 1, "a view assert names saved or key: %s" % path)
+                        self.assertEqual(len(view), 1, "a view assert names saved, key or slot: %s" % path)
                         if "saved" in view:
                             self.assertIs(view["saved"], True)
+                        elif "slot" in view:
+                            self.assertIn(view["slot"], range(1, 11))
                         else:
                             self.assertIsInstance(view["key"], int)
                     for text in ("statusContains", "indicatorContains", "treeLabel"):

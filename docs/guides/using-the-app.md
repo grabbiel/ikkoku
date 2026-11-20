@@ -67,7 +67,9 @@ integration and sending this source preview directly to Studio remain unfinished
 
 Studio (⌘2) provides an object tree, transforms (T/R/S, Local/World), native FK/IK,
 pose presets, expressions, clothing states, lights, camera slots and screen effects.
-Keys 1–0 load camera slots; ⇧1–0 save them. The timeline supports playback/scrubbing
+Keys 1–0 on the digit row load camera slots, as CharaStudio's do. ⇧1–0 saves the view
+into a slot; that is a port addition, since the original's digit keys only load.
+The timeline supports playback/scrubbing
 and native key storage (K); saved native scenes retain these keys. These prototype
 features do not establish equivalent support on original scene objects.
 
@@ -96,7 +98,10 @@ evaluated time.
 
 With a converted source character selected, the source inspectors expose:
 
-- **Pose:** supported FK/IK guides and converted animation choices.
+- **Pose:** supported FK/IK guides and converted animation choices. As in
+  CharaStudio, IK mode shows a character's IK guides only while its IK is on
+  (IK enabled and the guide's group toggle); turn IK on in the Pose tab to
+  show, click and drag them.
 - **Face:** source expression patterns, openness, blink/look settings, shape
   controls and supported color edits. Diagnostics identify saved settings whose
   visual/runtime behavior is incomplete; an editable field alone is not full

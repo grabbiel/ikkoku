@@ -23,7 +23,7 @@ branch was tested or every asset matches the original game. Feature status,
 specific comments and pending tasks are in the linked reports. Shared behavior
 may be discussed in more than one report; one primary owner is listed here.
 
-**1131 files indexed; 1131 assigned; 0 unassigned.**
+**1141 files indexed; 1141 assigned; 0 unassigned.**
 
 Counts include the website and clothes-group additions listed below. Runtime and
 test totals include their specialized role descriptions; this is inventory
@@ -33,20 +33,20 @@ bookkeeping, not a new full source audit.
 | --- | ---: |
 | [App / gameplay / plugins](app-gameplay-and-plugins.md) | 110 |
 | [Character / Maker / mods](character-and-mods.md) | 145 |
-| [Studio / IK / animation](studio.md) | 271 |
-| [Renderer / foundation / assets](renderer-and-foundation.md) | 372 |
-| [Toolchain / verification / historical docs](toolchain-and-verification.md) | 223 |
+| [Studio / IK / animation](studio.md) | 277 |
+| [Renderer / foundation / assets](renderer-and-foundation.md) | 373 |
+| [Toolchain / verification / historical docs](toolchain-and-verification.md) | 226 |
 
 | File role | Files |
 | --- | ---: |
 | App resource metadata / icon | 16 |
 | Build / repository configuration | 9 |
-| Conversion / recovery / verification tool | 261 |
+| Conversion / recovery / verification tool | 264 |
 | Documentation / historical evidence | 65 |
 | Generated asset / catalog / fixture | 205 |
-| Reference host / controlled fixture | 39 |
+| Reference host / controlled fixture | 41 |
 | Runtime / shared shader declaration | 247 |
-| Test / validation | 248 |
+| Test / validation | 252 |
 | Public synthetic body/face input fixture | 1 |
 
 ## App / gameplay / plugins
@@ -411,6 +411,7 @@ Feature assessment: [studio.md](studio.md).
 | [Packages/Engine/Sources/Studio/StudioStatusText.swift](../../Packages/Engine/Sources/Studio/StudioStatusText.swift) | Runtime / shared shader declaration |
 | [Packages/Engine/Sources/Studio/Timeline.swift](../../Packages/Engine/Sources/Studio/Timeline.swift) | Runtime / shared shader declaration |
 | [Packages/Engine/Tests/EngineTests/Fixtures/camera-object-reference.json](../../Packages/Engine/Tests/EngineTests/Fixtures/camera-object-reference.json) | Reference host / controlled fixture |
+| [Packages/Engine/Tests/EngineTests/Fixtures/dynamics-positive-golden.json](../../Packages/Engine/Tests/EngineTests/Fixtures/dynamics-positive-golden.json) | Reference host / controlled fixture |
 | [Packages/Engine/Tests/EngineTests/Fixtures/eye-look-reference.json](../../Packages/Engine/Tests/EngineTests/Fixtures/eye-look-reference.json) | Reference host / controlled fixture |
 | [Packages/Engine/Tests/EngineTests/Fixtures/neck-look-reference.json](../../Packages/Engine/Tests/EngineTests/Fixtures/neck-look-reference.json) | Reference host / controlled fixture |
 | [Packages/Engine/Tests/EngineTests/Fixtures/neck-target-angle.json](../../Packages/Engine/Tests/EngineTests/Fixtures/neck-target-angle.json) | Reference host / controlled fixture |
@@ -427,6 +428,9 @@ Feature assessment: [studio.md](studio.md).
 | [Packages/Engine/Tests/EngineTests/KoikatsuSceneDocumentTests.swift](../../Packages/Engine/Tests/EngineTests/KoikatsuSceneDocumentTests.swift) | Test / validation |
 | [Packages/Engine/Tests/EngineTests/MapLightingTestBindings.swift](../../Packages/Engine/Tests/EngineTests/MapLightingTestBindings.swift) | Test / validation |
 | [Packages/Engine/Tests/EngineTests/SourceDynamicBoneParityTests.swift](../../Packages/Engine/Tests/EngineTests/SourceDynamicBoneParityTests.swift) | Test / validation |
+| [Packages/Engine/Tests/EngineTests/SourceDynamicBonePositiveGoldenTests.swift](../../Packages/Engine/Tests/EngineTests/SourceDynamicBonePositiveGoldenTests.swift) | Test / validation |
+| [Packages/Engine/Tests/EngineTests/SourceDynamicBoneProbeTests.swift](../../Packages/Engine/Tests/EngineTests/SourceDynamicBoneProbeTests.swift) | Test / validation |
+| [Packages/Engine/Tests/EngineTests/SourceDynamicBoneSignedTests.swift](../../Packages/Engine/Tests/EngineTests/SourceDynamicBoneSignedTests.swift) | Test / validation |
 | [Packages/Engine/Tests/EngineTests/SourceDynamicBoneTests.swift](../../Packages/Engine/Tests/EngineTests/SourceDynamicBoneTests.swift) | Test / validation |
 | [Packages/Engine/Tests/EngineTests/SourceEulerCommitTests.swift](../../Packages/Engine/Tests/EngineTests/SourceEulerCommitTests.swift) | Test / validation |
 | [Packages/Engine/Tests/EngineTests/SourceFullBodyBipedTests.swift](../../Packages/Engine/Tests/EngineTests/SourceFullBodyBipedTests.swift) | Test / validation |
@@ -449,6 +453,7 @@ Feature assessment: [studio.md](studio.md).
 | [Packages/Engine/Tests/EngineTests/SourceStudioCameraObjectsTests.swift](../../Packages/Engine/Tests/EngineTests/SourceStudioCameraObjectsTests.swift) | Test / validation |
 | [Packages/Engine/Tests/EngineTests/SourceStudioCharacterPreviewTests.swift](../../Packages/Engine/Tests/EngineTests/SourceStudioCharacterPreviewTests.swift) | Test / validation |
 | [Packages/Engine/Tests/EngineTests/SourceStudioCharacterBatchTests.swift](../../Packages/Engine/Tests/EngineTests/SourceStudioCharacterBatchTests.swift) | Test / validation |
+| [Packages/Engine/Tests/EngineTests/SourceStudioCardCheckTests.swift](../../Packages/Engine/Tests/EngineTests/SourceStudioCardCheckTests.swift) | Test / validation |
 | [Packages/Engine/Tests/EngineTests/SourceStudioCharacterFrameReuseTests.swift](../../Packages/Engine/Tests/EngineTests/SourceStudioCharacterFrameReuseTests.swift) | Test / validation |
 | [Packages/Engine/Tests/EngineTests/GizmoHandleTests.swift](../../Packages/Engine/Tests/EngineTests/GizmoHandleTests.swift) | Test / validation |
 | [Packages/Engine/Tests/EngineTests/SourceStudioDonationCacheTests.swift](../../Packages/Engine/Tests/EngineTests/SourceStudioDonationCacheTests.swift) | Test / validation |
@@ -555,6 +560,7 @@ Feature assessment: [studio.md](studio.md).
 | [Tools/reverse/fixtures/PluginSceneSurvey.cs](../../Tools/reverse/fixtures/PluginSceneSurvey.cs) | Reference host / controlled fixture |
 | [Tools/reverse/fixtures/camera-object-reference.json](../../Tools/reverse/fixtures/camera-object-reference.json) | Reference host / controlled fixture |
 | [Tools/reverse/fixtures/dynamics-reference.json](../../Tools/reverse/fixtures/dynamics-reference.json) | Reference host / controlled fixture |
+| [Tools/reverse/fixtures/dynamics-signed-reference.json](../../Tools/reverse/fixtures/dynamics-signed-reference.json) | Reference host / controlled fixture |
 | [Tools/reverse/original_animation_probe.py](../../Tools/reverse/original_animation_probe.py) | Conversion / recovery / verification tool |
 | [Tools/reverse/original_camera_object_probe.py](../../Tools/reverse/original_camera_object_probe.py) | Conversion / recovery / verification tool |
 | [Tools/reverse/original_dynamics_probe.py](../../Tools/reverse/original_dynamics_probe.py) | Conversion / recovery / verification tool |
@@ -903,6 +909,7 @@ Feature assessment: [renderer-and-foundation.md](renderer-and-foundation.md).
 | [Packages/Engine/Tests/EngineTests/RigTests.swift](../../Packages/Engine/Tests/EngineTests/RigTests.swift) | Test / validation |
 | [Packages/Engine/Tests/EngineTests/RigFiniteAffineTests.swift](../../Packages/Engine/Tests/EngineTests/RigFiniteAffineTests.swift) | Test / validation |
 | [Packages/Engine/Tests/EngineTests/SingularScaleTests.swift](../../Packages/Engine/Tests/EngineTests/SingularScaleTests.swift) | Test / zero and negative shape scales: singular normal matrix, InverseSafe world-to-object, collapse-safe rotation, collapsed skins drawn in rig space (#404) |
+| [Packages/Engine/Tests/EngineTests/SingularNormalShaderTests.swift](../../Packages/Engine/Tests/EngineTests/SingularNormalShaderTests.swift) | Test / a singular model's vertex normals: finite toon, map, outline and live-probe output, and bit for bit the pre-guard normalize on nonsingular models (#407) |
 | [Packages/Engine/Tests/EngineTests/SourceAvatarTests.swift](../../Packages/Engine/Tests/EngineTests/SourceAvatarTests.swift) | Test / validation |
 | [Packages/Engine/Tests/EngineTests/SourceMaleAvatarTests.swift](../../Packages/Engine/Tests/EngineTests/SourceMaleAvatarTests.swift) | Test / validation |
 | [Packages/Engine/Tests/EngineTests/SourceMorphGPUTests.swift](../../Packages/Engine/Tests/EngineTests/SourceMorphGPUTests.swift) | Test / validation |
@@ -1047,6 +1054,7 @@ Feature assessment: [toolchain-and-verification.md](toolchain-and-verification.m
 | [Tools/verification/scenarios/camera-deactivate.json](../../Tools/verification/scenarios/camera-deactivate.json) | Conversion / recovery / verification tool |
 | [Tools/verification/scenarios/camera-load-winner.json](../../Tools/verification/scenarios/camera-load-winner.json) | Conversion / recovery / verification tool |
 | [Tools/verification/scenarios/camera-rename.json](../../Tools/verification/scenarios/camera-rename.json) | Conversion / recovery / verification tool |
+| [Tools/verification/scenarios/camera-slot-keys.json](../../Tools/verification/scenarios/camera-slot-keys.json) | Conversion / recovery / verification tool |
 | [Tools/verification/scenarios/charastudio-camera-switch.json](../../Tools/verification/scenarios/charastudio-camera-switch.json) | Conversion / recovery / verification tool |
 | [Tools/verification/scenarios/charastudio-fk-edit.json](../../Tools/verification/scenarios/charastudio-fk-edit.json) | Conversion / recovery / verification tool |
 | [Tools/verification/scenarios/charastudio-hide-rename.json](../../Tools/verification/scenarios/charastudio-hide-rename.json) | Conversion / recovery / verification tool |
@@ -1068,6 +1076,7 @@ Feature assessment: [toolchain-and-verification.md](toolchain-and-verification.m
 | [Tools/verification/scenarios/hidden-animation-clock.json](../../Tools/verification/scenarios/hidden-animation-clock.json) | Conversion / recovery / verification tool |
 | [Tools/verification/scenarios/hidden-attachment-status.json](../../Tools/verification/scenarios/hidden-attachment-status.json) | Conversion / recovery / verification tool |
 | [Tools/verification/scenarios/hidden-character-build.json](../../Tools/verification/scenarios/hidden-character-build.json) | Conversion / recovery / verification tool |
+| [Tools/verification/scenarios/ik-guides-hidden.json](../../Tools/verification/scenarios/ik-guides-hidden.json) | Conversion / recovery / verification tool |
 | [Tools/verification/scenarios/inspector-clothes-fit.json](../../Tools/verification/scenarios/inspector-clothes-fit.json) | Conversion / recovery / verification tool |
 | [Tools/verification/scenarios/inspector-clothes-fit-native.json](../../Tools/verification/scenarios/inspector-clothes-fit-native.json) | Conversion / recovery / verification tool |
 | [Tools/verification/scenarios/inspector-edit-deselect.json](../../Tools/verification/scenarios/inspector-edit-deselect.json) | Conversion / recovery / verification tool |
@@ -1123,6 +1132,7 @@ Feature assessment: [toolchain-and-verification.md](toolchain-and-verification.m
 | [Tools/verification/scenarios/source-map.json](../../Tools/verification/scenarios/source-map.json) | Conversion / recovery / verification tool |
 | [Tools/verification/scenarios/source-map34.json](../../Tools/verification/scenarios/source-map34.json) | Conversion / recovery / verification tool |
 | [Tools/verification/scenarios/source-map41.json](../../Tools/verification/scenarios/source-map41.json) | Conversion / recovery / verification tool |
+| [Tools/verification/scenarios/toolbar-drag-steady.json](../../Tools/verification/scenarios/toolbar-drag-steady.json) | Conversion / recovery / verification tool |
 | [Tools/verification/scenarios/undo-camera.json](../../Tools/verification/scenarios/undo-camera.json) | Conversion / recovery / verification tool |
 | [Tools/verification/scenarios/undo-no-catalog.json](../../Tools/verification/scenarios/undo-no-catalog.json) | Conversion / recovery / verification tool |
 | [Tools/verification/scenarios/undo-props.json](../../Tools/verification/scenarios/undo-props.json) | Conversion / recovery / verification tool |
