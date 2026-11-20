@@ -124,11 +124,17 @@ final class AppState {
             studioModel.asyncSourceBuilds = backgroundBuilds
             self.studio = studioModel
             PerfTrace.mark("studioReady")
+            // #459: the Studio execution inputs below bind to the launch scene,
+            // so they wait for the end of its import: at once after a
+            // synchronous import, at the background import's end otherwise.
+            let launchInputs = LaunchInputGate(waitsForImport: env["IKKOKU_SOURCE_SCENE"] != nil)
             if let path = env["IKKOKU_SOURCE_SCENE"] {
                 // The import's end: synchronous here, or the background
                 // import's commit after the first frames.
                 let imported: (Error?) -> Void = { [weak self] error in
                     guard let self else { return }
+                    // After the import's own report, as in the synchronous order.
+                    defer { launchInputs.open() }
                     if let error {
                         self.startupInputFailed("IKKOKU_SOURCE_SCENE", path, "Could not preview source scene", error, automated: automated)
                         return
@@ -198,12 +204,12 @@ final class AppState {
             // report (IKKOKU_NATIVE_PLUGIN_REPORT) and focus events are capture-only:
             // validation accepts them only with IKKOKU_AUTOCAPTURE, so a failure here
             // always exits 1 instead of leaving the app open after a missing report.
+            // #459: an interactive or performance-trace launch's background import
+            // commits later, so the inputs wait for it (`applyStudioExecution`).
             if let studio {
-                do { try AppState.configureStudioExecution(studio) }
-                catch {
-                    if automated { print("[ikkoku] studio execution failed: \(error)"); exit(1) }
-                    self.errorMessage = "Studio execution: \(error)"
-                }
+                let deferred = launchInputs.isWaiting
+                launchInputs.run { [weak self] in self?.applyStudioExecution(studio, automated: automated, deferred: deferred) }
+                if deferred { watchLaunchImport(studio, gate: launchInputs) }
             }
             // The scenario hook is its own headless mode: it runs the JSON
             // checklist scenario over the imported source scene, writes the

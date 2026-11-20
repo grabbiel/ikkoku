@@ -690,7 +690,7 @@ APP_OUTPUT_VARIABLES = ("IKKOKU_AUTOCAPTURE", "IKKOKU_CAPTURE_UI", "IKKOKU_CAPTU
                         "IKKOKU_STUDIO_SCENARIO_REPORT", "IKKOKU_MAKER_SCENARIO_REPORT",
                         "IKKOKU_GAMEPLAY_SCENARIO_REPORT",
                         "IKKOKU_SAVE_CARD", "IKKOKU_SAVE_SCENE", "IKKOKU_EXPORT_SOURCE_CARD",
-                        "IKKOKU_EXPORT_SOURCE_SCENE")
+                        "IKKOKU_EXPORT_SOURCE_SCENE", "IKKOKU_PERF_TRACE")
 
 
 class AppOutputArtifactTests(unittest.TestCase):
@@ -781,6 +781,28 @@ class AppOutputArtifactTests(unittest.TestCase):
         # The scene needs the original avatar: without it an automated run reaches the
         # source-tree fallback, which only the main checkout has (2026-11-19).
         self.assertIn("IKKOKU_SOURCE_AVATAR", fixtures)
+
+    def test_launch_plugin_profile_mounts_after_the_background_import(self):
+        # #459: a performance-trace launch imports in the background, as an interactive
+        # one does; its plug-in profile must mount after the import commits. The trace is
+        # read for its launch record only, never for timings.
+        order = [check["id"] for lane, check in self.app_smoke_checks() if lane == "app-smoke.json"]
+        self.assertLess(order.index("studio-launch-plugins-perf"), order.index("studio-launch-plugins-validate"))
+        checks = {check["id"]: check for lane, check in self.app_smoke_checks()
+                  if lane == "app-smoke.json"}
+        perf, validate = checks["studio-launch-plugins-perf"], checks["studio-launch-plugins-validate"]
+        env = perf["env"]
+        # No capture variable: a capture or a window capture would import synchronously.
+        self.assertEqual(sorted(name for name in env if not name.startswith("IKKOKU_PERF_")), [])
+        self.assertTrue(env["IKKOKU_PERF_TRACE"].endswith(".json"))
+        self.assertEqual(env["IKKOKU_PERF_WORKLOAD"], "studio-idle")
+        fixtures = {item["env"]: item for item in perf["fixtures"]}
+        self.assertEqual(fixtures["IKKOKU_SOURCE_SCENE"]["from"], "IKKOKU_STUDIO_HALF_STATE_SCENE")
+        self.assertIn("IKKOKU_SOURCE_PLUGIN_PROFILE", fixtures)
+        self.assertIn("IKKOKU_SOURCE_AVATAR", fixtures)
+        self.assertFalse(any(item.get("optional", False) for item in perf["fixtures"]))
+        self.assertIn("Not a timing measurement", perf["tolerance"])
+        self.assertEqual(validate["argv"], ["python3", "Tools/verification/checks/studio_launch_plugins.py", env["IKKOKU_PERF_TRACE"]])
 
     def test_release_smoke_renders_with_the_optimized_app(self):
         # R6 (2026-10-23): every Release render crashed while the Debug lanes
