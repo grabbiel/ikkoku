@@ -8,7 +8,7 @@ import CoreMath
 /// makes the same calls the model makes: an object edit snapshots the
 /// document before writing the object back when `edit` says so, Undo moves
 /// the current document to the redo stack and restores the last snapshot,
-/// and Redo does the reverse.
+/// and Redo does the reverse. Both end the coalescing window (#448).
 private struct History {
     var document: StudioDocument
     var steps = StudioUndoSteps()
@@ -30,12 +30,14 @@ private struct History {
         guard let last = undo.popLast() else { return }
         redo.append(document)
         document = last
+        steps.endCoalescing()
     }
 
     mutating func redoStep() {
         guard let next = redo.popLast() else { return }
         undo.append(document)
         document = next
+        steps.endCoalescing()
     }
 }
 
@@ -87,6 +89,44 @@ private func bytes(_ document: StudioDocument) throws -> Data {
     #expect(coalesced.undo.map { $0.objects[1].name } == ["Prop", "B", "C"])
     var forced = StudioUndoSteps()
     #expect(forced.startsStep(at: t0) && forced.startsStep(at: t0 + 0.1, force: true) && !forced.startsStep(at: t0 + 0.2))
+}
+
+/// #448: Undo ends the coalescing window. A real edit 0.2 s after the
+/// undone step's first edit takes its own step, so it clears the redo stack,
+/// and Undo then reverts only that edit. Before, the edit joined the undone
+/// step: no snapshot, the redo stack kept, and Redo dropped the edit.
+@Test func studioUndoAnEditInsideTheWindowAfterUndoIsItsOwnStep() {
+    var history = History(base)
+    let x = base.objects[1].transform.position.x
+    history.update(1, at: t0) { $0.name = "A" }
+    history.undoStep()
+    #expect(history.document.objects[1].name == "Prop")
+    #expect(history.redo.count == 1)
+    history.update(1, at: t0 + 0.2) { $0.transform.position.x = 5 }
+    #expect(history.undo.count == 1)
+    #expect(history.redo.isEmpty)
+    history.undoStep()
+    #expect(history.document.objects[1].name == "Prop")
+    #expect(history.document.objects[1].transform.position.x == x)
+    #expect(history.undo.isEmpty)
+}
+
+/// #448: Redo ends the window too. An edit 0.2 s after the redone step's
+/// first edit is its own step, so Undo reverts only that edit and keeps the
+/// redone rename. Before, it joined the rename's step and Undo reverted both.
+@Test func studioUndoAnEditInsideTheWindowAfterRedoIsItsOwnStep() {
+    var history = History(base)
+    let x = base.objects[1].transform.position.x
+    history.update(1, at: t0) { $0.name = "A" }
+    history.undoStep()
+    history.redoStep()
+    #expect(history.document.objects[1].name == "A")
+    history.update(1, at: t0 + 0.2) { $0.transform.position.x = 5 }
+    #expect(history.undo.count == 2)
+    #expect(history.redo.isEmpty)
+    history.undoStep()
+    #expect(history.document.objects[1].name == "A")
+    #expect(history.document.objects[1].transform.position.x == x)
 }
 
 /// The rename case of #390: the name binding writes "KR" twice, 0.5 s apart.

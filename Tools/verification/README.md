@@ -447,7 +447,12 @@ Scene keep a source scene's props, cameras, routes and light — and that a
 edit-coalescing window (`StudioModel.endUndoCoalescing()`) before every
 step, so each step takes its own undo snapshot however fast the steps run;
 without it, startup's forced import `pushUndo` made the first edit's
-snapshot load-dependent. The `saveDocument`/`loadDocument` pair (added for
+snapshot load-dependent. Undo and Redo close the window too (#448). Before,
+an edit within 0.4 s of the undone or redone step's first edit took no
+snapshot. After an Undo the redo stack survived the edit, and a Redo then
+dropped it; after a Redo the edit joined the redone step, and one Undo
+reverted both. Scenario steps cannot show this order, because the runner
+closes the window before every step; `StudioUndoStepsTests` covers it. The `saveDocument`/`loadDocument` pair (added for
 ST-T01) round-trips through the app's native `saveScene`/`loadScene` — a
 Studio document card under `.local/`, not the exported original-format scene
 `export` writes — and rehydration failures on load surface as a
