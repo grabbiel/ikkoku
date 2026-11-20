@@ -1098,6 +1098,8 @@ class StudioScenarioLaneTests(unittest.TestCase):
                         if field in step:
                             self.assertIs(type(step[field]), int)
                             self.assertGreaterEqual(step[field], 0)
+                    if "inputsFrom" in step:
+                        self.assertIn(step["inputsFrom"], ("cache", "check", "preview", "scene"))
                 if op == "measureAccessoryLabels":
                     self.assertIs(type(step["index"]), int)
                     self.assertIn(step["index"], range(100, 2001))

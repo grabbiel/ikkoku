@@ -2999,9 +2999,8 @@ final class StudioModel: ViewportInputHandler, LivePacedHandler {
         }
         guard sourceInstances.count < sourceCharacters else { return nil }
         let selectionBuild = sourceSelectionBuild
-        for o in doc.objects where o.kind == .character {
-            guard let reference = o.sourceCharacter, !resourceBlockedObjects.contains(o.id),
-                  doc.isVisible(o.id) || o.id == selectionBuild else { continue }
+        for o in doc.objects {
+            guard let reference = o.sourceCharacter, sourceBuildWanted(o, selectionBuild: selectionBuild) else { continue }
             if let cached = sourceInstances[o.id], cached.reference == reference,
                cached.coordinate == (o.sourceOutfit ?? cached.savedCoordinate) { continue }
             if let pending = pendingSourceBuilds[o.id], pending.reference == reference, pending.outfit == o.sourceOutfit { continue }
@@ -3033,13 +3032,23 @@ final class StudioModel: ViewportInputHandler, LivePacedHandler {
     /// edits validate against it. A hidden character no selection needs
     /// stays unbuilt until shown (lazy import, native reload); once built it
     /// keeps its preview, like a character hidden after it was drawn.
-    private var sourceSelectionBuild: UUID? {
+    var sourceSelectionBuild: UUID? {
         var current = selection, steps = 0
         while let id = current, let object = doc.object(id), steps <= doc.objects.count {
             if object.kind == .character, object.sourceCharacter != nil { return id }
             current = object.parent; steps += 1
         }
         return nil
+    }
+
+    /// Whether `startMissingSourceBuilds` wants a preview for `object`: a
+    /// source character the load's resource check passed that is shown or is
+    /// `selectionBuild` (`sourceSelectionBuild`, read once by the caller). A
+    /// native reload's voice check covers the characters this leaves
+    /// unbuilt (#437), as the import's hidden card check does.
+    func sourceBuildWanted(_ object: StudioObject, selectionBuild: UUID?) -> Bool {
+        object.kind == .character && object.sourceCharacter != nil && !resourceBlockedObjects.contains(object.id)
+            && (doc.isVisible(object.id) || object.id == selectionBuild)
     }
 
     /// Whether the inspector's source character `id` is waiting for its

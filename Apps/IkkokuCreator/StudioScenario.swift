@@ -101,6 +101,11 @@ struct StudioScenario: Decodable {
         /// play's inputs on `key` makes, and how many times it settles the
         /// live step (0 when absent: a voice click never settles it).
         let decodes: Int?, settles: Int?
+        /// assertVoice only (#437): where the play's inputs come from, in the
+        /// order `sourceVoiceInputs` looks: `cache`, `check` (a native
+        /// reload's pending card check holds `key`), `preview` (the built
+        /// preview's) or `scene` (one scene read). Not asserted when absent.
+        let inputsFrom: String?
         /// assert only: source character `key`'s saved animation state in
         /// exported scene files (`paths`, read back from disk): with `agree`
         /// every file saves the same state; with `increasing` each file's
@@ -626,7 +631,7 @@ struct StudioScenario: Decodable {
                  seconds, dx, dy, eyeLook, blink, handPattern, mode, axis, pixels, toolbarSteady, ikGroup, selects, sourceIK,
                  render, exportIdenticalToSource, errorContains, outfit, accessoryLabels, pluginMount, state, clothes, expression,
                  sex, character, chain, delta, ik, edit, build, parent, children, absent, copy, added, activeCopyOf,
-                 undoDepth, redoDepth, objectCount, rows, selected, aid, routeEdit, route, routeLines, sourceMap, liveSamplers, decodes, settles
+                 undoDepth, redoDepth, objectCount, rows, selected, aid, routeEdit, route, routeLines, sourceMap, liveSamplers, decodes, settles, inputsFrom
         }
 
         init(from decoder: Decoder) throws {
@@ -752,6 +757,7 @@ struct StudioScenario: Decodable {
             sourceMap = try c.decodeIfPresent(SourceMapValue.self, forKey: .sourceMap)
             decodes = try c.decodeIfPresent(Int.self, forKey: .decodes)
             settles = try c.decodeIfPresent(Int.self, forKey: .settles)
+            inputsFrom = try c.decodeIfPresent(String.self, forKey: .inputsFrom)
         }
     }
 
@@ -1985,6 +1991,17 @@ struct StudioScenario: Decodable {
                 guard let id = object(step), let object = studio.doc.object(id) else {
                     record(step, false, "assertVoice: no object with source key \(step.key ?? -1)"); continue
                 }
+                // Where the inputs come from, read before resolving them; the
+                // reload's pending check is listed so a step shows which
+                // characters it covers.
+                let pending = studio.sourceVoicePendingCheck
+                let from: String = {
+                    guard let reference = object.sourceCharacter else { return "scene" }
+                    if studio.sourceVoiceInputCache.contains(.init(reference)) { return "cache" }
+                    if let pending, pending.sceneSHA256 == reference.sceneSHA256, pending.keys.contains(reference.objectKey) { return "check" }
+                    return studio.sourceVoicePreviewInputs(id, reference: reference) != nil ? "preview" : "scene"
+                }()
+                let pendingNote = pending.map { "; the reload's pending check holds keys \($0.keys.map(String.init).joined(separator: ", "))" } ?? ""
                 // The main-thread time of each call is reported (information,
                 // never checked).
                 let probe = SourceSceneDecodeProbe(), settlesBefore = studio.sourceLiveSettles
@@ -1998,6 +2015,7 @@ struct StudioScenario: Decodable {
                 let repeatMs = Double(DispatchTime.now().uptimeNanoseconds - repeatStart) / 1e6
                 let repeated = studio.doc.object(id)?.sourceVoice?.repeatMode == 1
                 var failures: [String] = []
+                if let expected = step.inputsFrom, expected != from { failures.append("inputs from \(from), expected \(expected)\(pendingNote)") }
                 if case .failure(let error) = resolved { failures.append("inputs did not resolve: \(error)") }
                 if decodes != (step.decodes ?? 0) { failures.append("\(decodes) scene decodes, expected \(step.decodes ?? 0)") }
                 if settles != (step.settles ?? 0) { failures.append("\(settles) live-step settles, expected \(step.settles ?? 0)") }
@@ -2007,7 +2025,7 @@ struct StudioScenario: Decodable {
                     "playlist \(inputs.initial.playlist.count), " + ((try? inputs.character.get()) != nil ? "card voice read" : "card voice error")
                 } ?? "unresolved"
                 record(step, failures.isEmpty, failures.isEmpty
-                    ? "source key \(step.key!): voice inputs resolved with \(decodes) scene decodes and \(settles) live-step settles (\(voice)); the repeat change decoded none"
+                    ? "source key \(step.key!): voice inputs from \(from) resolved with \(decodes) scene decodes and \(settles) live-step settles (\(voice)); the repeat change decoded none\(pendingNote)"
                         + String(format: "; resolve %.4f ms, repeat %.4f ms", resolveMs, repeatMs)
                     : "assertVoice: " + failures.joined(separator: "; "))
             case "setVisible":

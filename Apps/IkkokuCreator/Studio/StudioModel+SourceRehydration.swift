@@ -95,15 +95,18 @@ extension StudioModel {
     }
 
     /// #437: the voice inputs of the document's characters in `source` that
-    /// no cache entry covers, from the records this rehydration decoded, on
-    /// the hidden card check's worker. A voice play or repeat change on a
-    /// character the reload left unbuilt then decodes no scene
+    /// this reload leaves unbuilt (`sourceBuildWanted` is false: the builds
+    /// give the others theirs) and no cache entry covers, from the records
+    /// this rehydration decoded, on the hidden card check's worker. A voice
+    /// play or repeat change on such a character then decodes no scene
     /// (`sourceVoiceInputs` takes them).
     private func startSourceVoiceCheck(source: KoikatsuSceneDocument, hash: String) {
         sourceVoicePendingCheck?.check.cancel()
         sourceVoicePendingCheck = nil
+        let selectionBuild = sourceSelectionBuild
         let keys = Set(doc.objects.compactMap { object -> Int32? in
             guard let reference = object.sourceCharacter, reference.sceneSHA256 == hash,
+                  !sourceBuildWanted(object, selectionBuild: selectionBuild),
                   !sourceVoiceInputCache.contains(.init(reference)) else { return nil }
             return reference.objectKey
         })

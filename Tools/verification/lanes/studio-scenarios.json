@@ -3759,7 +3759,7 @@
         "IKKOKU_STUDIO_SCENARIO_REPORT": ".local/verification/reports/studio-scenario-voice-inputs-load.json"
       },
       "referenceTier": "app-smoke",
-      "tolerance": "#437, D2: loads the document the previous check saved, in a fresh process with NO IKKOKU_SOURCE_SCENE (the first step is loadDocument). The load rehydrates the scene file once; that decode's records feed the reload's card check, so character 0, still unbuilt (folder 622 hidden), resolves its voice inputs with 0 scene decodes and 0 live-step settles, twice, and a repeat change decodes nothing.",
+      "tolerance": "#437, D2: loads the document the previous check saved, in a fresh process with NO IKKOKU_SOURCE_SCENE (the first step is loadDocument). The load rehydrates the scene file once; that decode's records feed the reload's card check, which covers only the characters the reload leaves unbuilt (the build predicate `sourceBuildWanted` is false). Character 65, shown and built, is not in the check and resolves from its preview; character 0, still unbuilt (folder 622 hidden), resolves from the check, then from the cache. Each resolution makes 0 scene decodes and 0 live-step settles, and each repeat change decodes nothing.",
       "artifacts": [
         {
           "path": ".local/verification/reports/studio-scenario-voice-inputs-load.json",

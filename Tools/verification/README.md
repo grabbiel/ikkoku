@@ -375,10 +375,14 @@ toggle's property; its didSet forwards to every rendered preview),
 both call the same `StudioModel` setter as the row), `captureIKPose`
 `{character,chain,name}` (memorizes the rendered chain under a label),
 `setShowSourceMap` `{on}` (View ▸ Show Source Map, ST-A11; runtime only),
-`assertVoice` `{key,decodes?,settles?}` (#437: resolves the inputs a voice
-play on `key` reads, under a task-local scene decode probe, and requires
-`decodes` scene decodes and `settles` live-step settles, both 0 by default;
-a repeat change after it must apply and decode nothing), `dropVoiceInputs`
+`assertVoice` `{key,decodes?,settles?,inputsFrom?}` (#437: resolves the
+inputs a voice play on `key` reads, under a task-local scene decode probe, and
+requires `decodes` scene decodes and `settles` live-step settles, both 0 by
+default; a repeat change after it must apply and decode nothing. `inputsFrom`
+names where the inputs come from, in the order the Studio looks: `cache`,
+`check` (a native reload's pending card check holds `key`), `preview` (the
+built preview) or `scene`; the step lists the keys a pending check holds),
+`dropVoiceInputs`
 (#437: forgets the voice inputs cache and a reload's pending card check). The
 native IK ops address a NATIVE character by its object name, because an added
 character has no source key; `chain` is an `IKChain` raw value such as
