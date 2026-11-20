@@ -8,7 +8,8 @@ import CoreMath
 /// makes the same calls the model makes: an object edit snapshots the
 /// document before writing the object back when `edit` says so, Undo moves
 /// the current document to the redo stack and restores the last snapshot,
-/// and Redo does the reverse. Both end the coalescing window (#448). The
+/// and Redo does the reverse. Undo ends the coalescing window (#448); Redo
+/// needs no end, because the redo stack is non-empty only after an Undo. The
 /// #448 tests below document that call sequence; the app's own calls are
 /// covered by the studio lane's `undo-window-after-undo` scenario.
 private struct History {
@@ -39,7 +40,6 @@ private struct History {
         guard let next = redo.popLast() else { return }
         undo.append(document)
         document = next
-        steps.endCoalescing()
     }
 }
 
@@ -113,9 +113,10 @@ private func bytes(_ document: StudioDocument) throws -> Data {
     #expect(history.undo.isEmpty)
 }
 
-/// #448: Redo ends the window too. An edit 0.2 s after the redone step's
-/// first edit is its own step, so Undo reverts only that edit and keeps the
-/// redone rename. Before, it joined the rename's step and Undo reverted both.
+/// #448: an edit 0.2 s after a Redo is its own step too, so Undo reverts
+/// only that edit and keeps the redone rename. Before, it joined the rename's
+/// step and Undo reverted both. The Undo before the Redo closed the window,
+/// and nothing can start a step in between without clearing redo.
 @Test func studioUndoAnEditInsideTheWindowAfterRedoIsItsOwnStep() {
     var history = History(base)
     let x = base.objects[1].transform.position.x

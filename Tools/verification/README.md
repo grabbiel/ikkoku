@@ -447,11 +447,13 @@ Scene keep a source scene's props, cameras, routes and light — and that a
 edit-coalescing window (`StudioModel.endUndoCoalescing()`) before every
 step, so each step takes its own undo snapshot however fast the steps run;
 without it, startup's forced import `pushUndo` made the first edit's
-snapshot load-dependent. Undo and Redo close the window too (#448). Before,
+snapshot load-dependent. Undo closes the window too (#448). Before,
 an edit within 0.4 s of the undone or redone step's first edit took no
 snapshot. After an Undo the redo stack survived the edit, and a Redo then
 dropped it; after a Redo the edit joined the redone step, and one Undo
-reverted both. A step with `sameGesture: true` skips the runner's window end,
+reverted both. Redo needs no window end of its own: every step start records
+a snapshot and clears the redo stack, so a Redo only ever follows an Undo
+that closed the window. A step with `sameGesture: true` skips the runner's window end,
 so a scenario can show this order (see
 [undo window after Undo and Redo](#undo-window-after-undo-and-redo-448));
 `StudioUndoStepsTests` documents the same call sequence on the Engine type.
@@ -1602,9 +1604,9 @@ scene. Then:
 ### Undo window after Undo and Redo (#448)
 
 `studio-scenario-undo-window-after-undo` (`undo-window-after-undo.json`,
-scene-x through `IKKOKU_CAMERA_OBJECT_PROBE_SCENE`) checks that Undo and Redo
-end the 0.4 s edit-coalescing window, so an edit right after them takes its
-own undo snapshot. It adds one op and one step key:
+scene-x through `IKKOKU_CAMERA_OBJECT_PROBE_SCENE`) checks that an edit right
+after Undo or Redo takes its own undo snapshot: Undo ends the 0.4 s
+edit-coalescing window. It adds one op and one step key:
 
 - `setPosition` `{key, index, value}`: one component of the Object tab's
   Position field (`VectorRow` in `StudioView`), written through
@@ -1626,6 +1628,8 @@ asserts the history startup's import leaves: 1 undo step, 0 redo. Then:
    `assertRejected` control proves a wrong redo depth fails.
 2. A rename, then Undo, Redo and the same x edit as one gesture: 3 undo
    steps and 0 redo. One Undo reverts x and keeps the rename (2 undo, 1 redo).
+   This is the user-visible Redo case; it passes because of the Undo's
+   window end, since Redo has none of its own.
 3. The export and reimport keep the rename and the start position.
 
 ### Camera slot keys (#433)

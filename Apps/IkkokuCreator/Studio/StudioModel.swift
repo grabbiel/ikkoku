@@ -2114,7 +2114,9 @@ final class StudioModel: ViewportInputHandler, LivePacedHandler {
             applyHistoryDocument(candidate, plugins: plugins, resources: resources)
             // #448: Undo is a gesture of its own. Without this an edit right
             // after it joined the step it had just undone: no snapshot, the
-            // redo stack kept, and a Redo then dropped the edit.
+            // redo stack kept, and a Redo then dropped the edit. Redo needs no
+            // window end: every step start records and clears redo, so the
+            // redo stack is non-empty only after an Undo closed the window.
             undoSteps.endCoalescing()
             status = "Undo"
         } catch { status = "Plugin restore: \(error)" }
@@ -2130,8 +2132,6 @@ final class StudioModel: ViewportInputHandler, LivePacedHandler {
             defer { plugins.abort() }
             history.stepForward(leaving: doc)
             applyHistoryDocument(candidate, plugins: plugins, resources: resources)
-            // #448: likewise, an edit right after Redo starts its own step.
-            undoSteps.endCoalescing()
             status = "Redo"
         } catch { status = "Plugin restore: \(error)" }
     }
