@@ -2227,7 +2227,7 @@ Observation, not changed in this slice: `ikkoku-inspect look-data` and `SourceSt
 
 ## Undo across scene replacements (#384)
 
-`StudioModel` keeps its undo and redo steps in `StudioUndoHistory` (Engine, `Packages/Engine/Sources/Studio/StudioUndoHistory.swift`). Each step is a snapshot of the whole document, and the undo side holds at most 60.
+`StudioModel` keeps its undo and redo steps in `StudioUndoHistory` (Engine, `Packages/Engine/Sources/Studio/StudioUndoHistory.swift`). Each step is a snapshot of the whole document or, for an object edit, only the objects it changed ([object edit steps](#object-edit-steps-446)). The undo side holds at most 60.
 
 **The rule.** A path that replaces the whole document records the document it replaces as a marked step. The next replacement drops that marked step and every step before it.
 - Undo after a replacement brings back the scene it replaced, with that scene's own edits, but not the scenes before it.
@@ -2250,7 +2250,7 @@ Observation, not changed in this slice: `ikkoku-inspect look-data` and `SourceSt
 **Known difference from CharaStudio (deliberate).** CharaStudio clears its whole undo and redo history in `Studio.InitScene`, which both New Scene and scene loading run. Its scene import (a merge) keeps the history. CharaStudio also clears the history when an object is added or deleted. Ikkoku keeps one earlier scene across a replacement, and keeps its history across adds and deletes, as before.
 
 **Not changed here.**
-- An edit step still copies the whole objects array. #409 made that copy smaller; see [Undo step size](#undo-step-size-409).
+- An edit step still copied the whole objects array, about 6 MB per step on the corpus scene (#409). #409 made each copy smaller; see [Undo step size](#undo-step-size-409). [Object edit steps (#446)](#object-edit-steps-446) changed this for edits through `update`.
 - A small unbounded per-load growth in KVO and SwiftUI bookkeeping, about 8.6 KB per cycle, was tracked separately and is fixed in [Workspace list per scene (#410)](#workspace-list-per-scene-410).
 
 ### Evidence
@@ -2278,7 +2278,7 @@ Observation, not changed in this slice: `ikkoku-inspect look-data` and `SourceSt
 
 ## Undo step size (#409)
 
-An undo step is a snapshot of the document. Steps share the `objects` array with the current document until an edit writes to it, and then the edited document gets its own copy of the whole array. On the 3,769-object corpus scene that copy was about 6 MB per step, because a `StudioObject` was 1,584 B inline.
+An undo step is a snapshot of the document. Steps share the `objects` array with the current document until an edit writes to it, and then the edited document gets its own copy of the whole array. Since #446 an object edit through `update` records a patch step instead, which holds no reference to the array; see [Object edit steps (#446)](#object-edit-steps-446). Every other step is still a whole document, as described here. On the 3,769-object corpus scene that copy was about 6 MB per step, because a `StudioObject` was 1,584 B inline.
 
 **What changed.** The nine fields that are large inline and seldom edited live in one shared box, `StudioObjectColdFields`:
 
@@ -2313,6 +2313,27 @@ The pose delta stays inline (32 B: four dictionary references). At first it was 
   - decoding with missing, null, unknown and required keys;
   - Undo and Redo of boxed-field edits, byte for byte.
 - `StudioObjectStorageCensusTests.studioObjectLayout` pins the stride at 464 B.
+
+## Object edit steps (#446)
+
+An object edit through `StudioModel.update` (the inspector's fields and toggles, the workspace's rename and visibility) records a patch step (`StudioObjectPatch`). The step holds the objects the edit changed, as they were before it, and the document's other fields. It holds no reference to the document's object list, so the edit's write is in place: before #446 the step was the whole document, and the next write copied the list (about 13.8 KB on a 32-object scene and about 1.6 MB on the 3,769-object corpus scene, per step).
+
+**Behaviour is unchanged.** Undo and Redo restore a patch by putting its objects back by id into the current object list and taking every other field from the step, which gives exactly the document a whole snapshot gives. That holds because the history is linear: a step is undone only from the state right after its change. Every other change keeps today's result:
+- An edit inside the 0.4 s coalescing window (#390) adds its object, as it was before the edit, to the newest undo step and the newest redo step, each when it is a patch that lacks the object.
+- A change no step records and no patch describes turns the newest undo and redo steps into the whole documents they restore first (`materializeNewestUndoPatches`). These are a coalesced `pushUndo`, an animation edit and its clock rebase, a plug-in load, commit or tick, and a capture vector. That costs one copy of the object list per patch it converts, and each patch is converted at most once: a converted step stays a whole document, so the writes after it find nothing to convert (two checks each) until an edit records a new patch.
+- Every other site records a whole document as before: structural edits, scene replacements and merges, and each `pushUndo` site, including drags, whose step is the mouse-down's whole document.
+
+**Where the in-place write does not pay.** While plug-ins run, every tick writes the document with no step, so the first tick after an edit converts that edit's patch. Such a scene keeps today's per-edit copy of the object list, made on that tick instead of at the next edit; #446 helps only where nothing writes the document between edits. The live animation advances the model's clocks, not the document, so it converts nothing on its own; an animation edit converts once. `undoPatchConversions` counts the conversions, and `studio-edit-steps` rows record them per action.
+
+A patch that names an object the document lacks is a bug. Debug builds stop on an assertion. Release refuses that undo or redo, keeps the document, drops the step and says so in the status line and the log.
+
+**Undo and Redo enablement (#454).** `canUndo` and `canRedo` are published after every history write that can change a depth: a whole-document record, a patch record (`update` records its patch directly, not through `appendUndoSnapshot`), Undo's and Redo's step, and a broken step dropped (`refusedBrokenStep`, which also handles the drops `materializeNewestUndoPatches` reports). Turning a patch into a whole document and adding an object to the newest patches change no depth. The values come from the depths, so publishing them turns no patch into a document.
+
+**Checks.**
+- `StudioUndoHistoryTests`: seeded walks compare a patch history with a whole-snapshot history after every action, across edits that start a step or join it (after an undo too), adds, deletes, scene replacements, direct writes, unrecorded field changes, undo and redo. Further tests cover the two coalescing cases, a direct write, a scene replacement in the middle of the history, the in-place write, a broken step, and a run of 100 unrecorded writes after an edit, which converts its patch once (once per side after an undo).
+- A Debug oracle in `StudioModel` keeps a whole-snapshot history beside the patch history. Every undo and redo compares the two documents. Every scenario run ends with an `undo history (#446)` line and exits 1 if an undo or redo differed, or if an `update` write copied the object list. A whole-document step shares the list until the next write, which copies it, as before #446. When that write is an `update`, the copy is the step's and is counted apart (`updateWritesOwed`, found by `StudioUndoHistory.holdsObjects(at:)` only when a write copied). A pending source export keeps the document as it was when chosen, so it can tell that the scene changed. An `update` while it builds copies the list, and that copy is the export's (`updateWritesExportHeld`). It counts only when that export's inputs hold that very list, and at most once per export (`StudioObjectListCopies`). Any other copy, including a second one for the same export, breaks the bar. `studio-scenario-background-build` edits during an export and expects one copy counted as the export's. Scenario runners that keep a document (`rememberDocument`, the inspector scenarios' `snapshot`) keep their own copy of the list.
+- `studio-scenario-undo-patch-roundtrip` mixes patch steps with a delete, a duplicate and a New Scene. After undoing back to the start, the document is equal field for field and the export is byte-identical to the start export. Redo does the same for the edited state. Pose and name edits, which the original-scene export does not write, are then checked by document equality through Undo and Redo. The check ends with a broken step refused.
+- `studio-edit-steps` rows record `updateWrites`, `updateWritesMoved`, `updateWritesOwed` and `updateWritesExportHeld` per action, and `patchConversions`: the patches converted from the action's call to the next action's call (1 per edit while plug-ins tick, 0 where nothing writes between edits). The `undo history (#446)` line also prints the run's conversions.
 
 ## Workspace list per scene (#410)
 

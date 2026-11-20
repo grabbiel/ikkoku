@@ -252,7 +252,7 @@ struct StudioToolbarState: Equatable {
             selectedIsCharacter: shown.selectedIsCharacter,
             poseMode: model.poseMode, fkGroup: model.fkGroup,
             cameraSlotsFilled: shown.cameraSlotsFilled, hasSourceRoutes: shown.hasSourceRoutes,
-            canUndo: !model.undoStack.isEmpty, canRedo: !model.redoStack.isEmpty,
+            canUndo: model.canUndo, canRedo: model.canRedo,
             showGizmos: model.showGizmos, liveAnimation: model.liveAnimation, showTimeline: model.showTimeline,
             showGrid: shown.showGrid)
     }
@@ -942,6 +942,7 @@ struct ObjectInspectorContent: View, Equatable {
         let sections = ObjectInspectorKindSections(model: model, state: o)
         VStack(alignment: .leading, spacing: 10) {
             TextField("Name", text: Binding(get: { o.name }, set: { v in update { $0.name = v } }))
+                .frame(height: InspectorTextFieldHeight.name)
             HStack {
                 Toggle("Visible", isOn: Binding(get: { o.visible }, set: { v in update { $0.visible = v } }))
                 Toggle("Locked", isOn: Binding(get: { o.locked }, set: { v in update { $0.locked = v } }))

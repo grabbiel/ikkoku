@@ -37,9 +37,8 @@ extension StudioModel {
         guard doc.sourceSceneSHA256 != sourceVoiceInputScene else { return }
         sourceVoiceInputScene = doc.sourceSceneSHA256
         var keys = Set<SourceStudioVoiceInputCache.Key>()
-        for document in [doc] + undoStack + redoStack {
-            for object in document.objects { if let reference = object.sourceCharacter { keys.insert(.init(reference)) } }
-        }
+        for object in doc.objects { if let reference = object.sourceCharacter { keys.insert(.init(reference)) } }
+        undoHistory.forEachObject { object in if let reference = object.sourceCharacter { keys.insert(.init(reference)) } }
         sourceVoiceInputCache.retain(keys)
         if let pending = sourceVoicePendingCheck,
            !pending.keys.contains(where: { keys.contains(.init(sceneSHA256: pending.sceneSHA256, objectKey: $0)) }) {

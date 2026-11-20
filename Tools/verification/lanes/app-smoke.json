@@ -100,6 +100,67 @@
       "timeout": 120
     },
     {
+      "id": "studio-inspector-object-heights-capture",
+      "argv": [
+        ".local/build/Build/Products/Debug/Ikkoku.app/Contents/MacOS/Ikkoku"
+      ],
+      "fixtures": [
+        {
+          "env": "IKKOKU_SOURCE_SCENE",
+          "kind": "file",
+          "from": "IKKOKU_STUDIO_SCENARIO_SCENE"
+        },
+        {
+          "env": "IKKOKU_SOURCE_AVATAR",
+          "kind": "file"
+        }
+      ],
+      "env": {
+        "IKKOKU_CAPTURE_UI": ".local/verification/captures/studio-object-heights.png",
+        "IKKOKU_CAPTURE_UI_MODE": "studio",
+        "IKKOKU_CAPTURE_UI_STUDIO_TAB": "object",
+        "IKKOKU_CAPTURE_UI_SELECT": "0,963",
+        "IKKOKU_CAPTURE_UI_REPORT": ".local/verification/captures/studio-object-heights.json",
+        "IKKOKU_CAPTURE_UI_FIT_LOG": ".local/verification/captures/studio-object-heights.fit.txt"
+      },
+      "referenceTier": "app-smoke",
+      "tolerance": "#366 through the UI capture path, #366's ui-sel-chars start: the Debug app starts on the Object tab, selects character 0 then character 963, and captures. The fit log (IKKOKU_CAPTURE_UI_FIT_LOG, one launch per file) is judged by studio-inspector-object-heights-validate; this check only needs the capture, its report and the log to be written.",
+      "artifacts": [
+        {
+          "path": ".local/verification/captures/studio-object-heights.png",
+          "kind": "ui-capture"
+        },
+        {
+          "path": ".local/verification/captures/studio-object-heights.json",
+          "kind": "capture-report"
+        },
+        {
+          "path": ".local/verification/captures/studio-object-heights.fit.txt",
+          "kind": "fit-log"
+        }
+      ],
+      "timeout": 300
+    },
+    {
+      "id": "studio-inspector-object-heights-validate",
+      "argv": [
+        "python3",
+        "Tools/verification/checks/inspector_fit_log.py",
+        ".local/verification/captures/studio-object-heights.fit.txt",
+        "--selection",
+        "963",
+        "--tab",
+        "Object",
+        "--object-heights",
+        "24",
+        "21"
+      ],
+      "env": {},
+      "referenceTier": "app-smoke",
+      "tolerance": "Validates the fit log of studio-inspector-object-heights-capture: one captured line showing character 963 on the Object tab, the inspector fit as for every capture, and with --object-heights 24 21 (#366's R2 on this machine) the explicit text-field heights the inspector lays out with (InspectorTextFieldHeight, measured from an AppKit prototype with SwiftUI's bezel and font) at 24 pt for the Name field and 21 pt for the Transform fields, equal to SwiftUI's own fields: the Name field's intrinsic height 24 pt and every other editable field's 21 pt. Frame heights are not judged: in about 1% of launches the Name field is still laid out 21 pt inside its 24 pt slot (#366's residue, which stays open).",
+      "timeout": 120
+    },
+    {
       "id": "build-release-app",
       "argv": ["xcodebuild", "-project", "Ikkoku.xcodeproj", "-scheme", "IkkokuCreator", "-configuration", "Release", "-derivedDataPath", ".local/build-release", "-destination", "platform=macOS,arch=arm64", "ARCHS=arm64", "build"],
       "env": {},
