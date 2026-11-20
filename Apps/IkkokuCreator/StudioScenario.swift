@@ -31,7 +31,8 @@ struct StudioScenario: Decodable {
         /// `"captureIKPose"`, `"editDuringAdvance"`, `"backgroundBuild"`, `"delete"`, `"setParent"`, `"duplicate"`,
         /// `"addFolder"`, `"addCamera"`, `"addLight"`, `"export"`, `"exportRejected"`, `"reimport"`,
         /// `"focus"`, `"selectRoutePoint"`, `"dragRoutePoint"`, `"editRoute"`, `"captureRoute"`, `"setShowSourceMap"`, `"setUnlimitedLights"`,
-        /// `"deselect"`, `"assertWorkspaceRows"`, `"pressDigit"`, `"assert"`, `"assertRejected"`.
+        /// `"deselect"`, `"assertWorkspaceRows"`, `"pressDigit"`, `"assert"`, `"assertRejected"`,
+        /// `"assertVoice"`, `"dropVoiceInputs"`.
         let op: String
         let key: Int32?
         /// ST-T03: with `key`, address the n-th copy (document order) of that
@@ -90,6 +91,10 @@ struct StudioScenario: Decodable {
         /// character builds when shown or selected; with `built` true and the
         /// character selected, its pose and animation state must be readable.
         let characterBuilt: CharacterBuiltValue?
+        /// assertVoice only (#437): how many scene decodes resolving a voice
+        /// play's inputs on `key` makes, and how many times it settles the
+        /// live step (0 when absent: a voice click never settles it).
+        let decodes: Int?, settles: Int?
         /// assert only: source character `key`'s saved animation state in
         /// exported scene files (`paths`, read back from disk): with `agree`
         /// every file saves the same state; with `increasing` each file's
@@ -615,7 +620,7 @@ struct StudioScenario: Decodable {
                  seconds, dx, dy, eyeLook, blink, handPattern, mode, axis, pixels, toolbarSteady, ikGroup, selects, sourceIK,
                  render, exportIdenticalToSource, errorContains, outfit, accessoryLabels, pluginMount, state, clothes, expression,
                  sex, character, chain, delta, ik, edit, build, parent, children, absent, copy, added, activeCopyOf,
-                 undoDepth, redoDepth, objectCount, aid, routeEdit, route, routeLines, sourceMap, liveSamplers
+                 undoDepth, redoDepth, objectCount, aid, routeEdit, route, routeLines, sourceMap, liveSamplers, decodes, settles
         }
 
         init(from decoder: Decoder) throws {
@@ -737,6 +742,8 @@ struct StudioScenario: Decodable {
             route = try c.decodeIfPresent(RouteValue.self, forKey: .route)
             routeLines = try c.decodeIfPresent(Int.self, forKey: .routeLines)
             sourceMap = try c.decodeIfPresent(SourceMapValue.self, forKey: .sourceMap)
+            decodes = try c.decodeIfPresent(Int.self, forKey: .decodes)
+            settles = try c.decodeIfPresent(Int.self, forKey: .settles)
         }
     }
 
@@ -1924,6 +1931,48 @@ struct StudioScenario: Decodable {
                     let differing = zip(published.entries, fresh.entries).filter { $0 != $1 }.count
                     record(step, false, "assertWorkspaceRows: published rows differ from a rebuild (\(published.entries.count) vs \(fresh.entries.count) rows, \(differing) differ)")
                 }
+            case "dropVoiceInputs":
+                // #437: forget every voice input the Studio holds (the cache and
+                // a reload's pending check), so the next step shows where its
+                // inputs come from.
+                studio.sourceVoicePendingCheck?.check.cancel()
+                studio.sourceVoicePendingCheck = nil
+                studio.sourceVoiceInputCache.removeAll()
+                record(step, true, "voice inputs dropped")
+            case "assertVoice":
+                // #437: resolving the inputs of a voice play on `key` (what the
+                // inspector's Play button reads before the catalog) decodes
+                // exactly `decodes` scenes and never settles the live step; a
+                // repeat change after it decodes none. The probe counts on the
+                // decode entry points, for this step's calls only.
+                guard let id = object(step), let object = studio.doc.object(id) else {
+                    record(step, false, "assertVoice: no object with source key \(step.key ?? -1)"); continue
+                }
+                // The main-thread time of each call is reported (information,
+                // never checked).
+                let probe = SourceSceneDecodeProbe(), settlesBefore = studio.sourceLiveSettles
+                let resolveStart = DispatchTime.now().uptimeNanoseconds
+                let resolved = SourceSceneDecodeProbe.$current.withValue(probe) { Result { try studio.sourceVoiceInputs(object) } }
+                let resolveMs = Double(DispatchTime.now().uptimeNanoseconds - resolveStart) / 1e6
+                let settles = studio.sourceLiveSettles - settlesBefore, decodes = probe.count
+                let repeatProbe = SourceSceneDecodeProbe()
+                let repeatStart = DispatchTime.now().uptimeNanoseconds
+                SourceSceneDecodeProbe.$current.withValue(repeatProbe) { studio.setSourceVoiceRepeat(id, mode: 1) }
+                let repeatMs = Double(DispatchTime.now().uptimeNanoseconds - repeatStart) / 1e6
+                let repeated = studio.doc.object(id)?.sourceVoice?.repeatMode == 1
+                var failures: [String] = []
+                if case .failure(let error) = resolved { failures.append("inputs did not resolve: \(error)") }
+                if decodes != (step.decodes ?? 0) { failures.append("\(decodes) scene decodes, expected \(step.decodes ?? 0)") }
+                if settles != (step.settles ?? 0) { failures.append("\(settles) live-step settles, expected \(step.settles ?? 0)") }
+                if repeatProbe.count != 0 { failures.append("the repeat change decoded \(repeatProbe.count) scenes") }
+                if !repeated { failures.append("the repeat change did not apply: \(studio.status)") }
+                let voice = (try? resolved.get()).map { inputs in
+                    "playlist \(inputs.initial.playlist.count), " + ((try? inputs.character.get()) != nil ? "card voice read" : "card voice error")
+                } ?? "unresolved"
+                record(step, failures.isEmpty, failures.isEmpty
+                    ? "source key \(step.key!): voice inputs resolved with \(decodes) scene decodes and \(settles) live-step settles (\(voice)); the repeat change decoded none"
+                        + String(format: "; resolve %.4f ms, repeat %.4f ms", resolveMs, repeatMs)
+                    : "assertVoice: " + failures.joined(separator: "; "))
             case "setVisible":
                 guard let id = object(step) else { record(step, false, "setVisible: no object with source key \(step.key ?? -1)"); continue }
                 guard let visible = step.visible else { record(step, false, "setVisible: missing visible"); continue }

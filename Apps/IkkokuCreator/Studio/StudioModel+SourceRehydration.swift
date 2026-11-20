@@ -76,6 +76,7 @@ extension StudioModel {
                 throw RigError.invalid("the source scene file changed since it was imported")
             }
             let source = try KoikatsuSceneReader.decodeDocument(bytes)
+            startSourceVoiceCheck(source: source, hash: hash)
             let (rigURL, boneCatalogURL) = try sourceRigInputs()
             let bundle = try buildSourceRuntimeBundle(source: source, sceneURL: sceneURL,
                 hash: hash, rigURL: rigURL, boneCatalogURL: boneCatalogURL, document: doc)
@@ -91,6 +92,26 @@ extension StudioModel {
             doc.sourcePreviewDiagnostics = (doc.sourcePreviewDiagnostics ?? [])
                 + ["Source scene rehydration: \(error); the imported scene's cameras, props, routes and scene light stay unavailable until the scene file is restored or the scene is reimported."]
         }
+    }
+
+    /// #437: the voice inputs of the document's characters in `source` that
+    /// no cache entry covers, from the records this rehydration decoded, on
+    /// the hidden card check's worker. A voice play or repeat change on a
+    /// character the reload left unbuilt then decodes no scene
+    /// (`sourceVoiceInputs` takes them).
+    private func startSourceVoiceCheck(source: KoikatsuSceneDocument, hash: String) {
+        sourceVoicePendingCheck?.check.cancel()
+        sourceVoicePendingCheck = nil
+        let keys = Set(doc.objects.compactMap { object -> Int32? in
+            guard let reference = object.sourceCharacter, reference.sceneSHA256 == hash,
+                  !sourceVoiceInputCache.contains(.init(reference)) else { return nil }
+            return reference.objectKey
+        })
+        guard !keys.isEmpty else { return }
+        let records = SourceStudioCharacterPreview.characterRecords(keys, in: source)
+        let found = records.keys.sorted()
+        guard !found.isEmpty else { return }
+        sourceVoicePendingCheck = (hash, found, SourceStudioCharacterPreview.CardCheck(records: found.compactMap { records[$0] }))
     }
 
     /// The scene file the document's hashes were taken from:

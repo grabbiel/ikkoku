@@ -302,6 +302,16 @@ final class StudioModel: ViewportInputHandler, LivePacedHandler {
         get { settleLiveTick(keepFrames: false); return sourceInstanceStorage }
         set { settleLiveTick(keepFrames: false); sourceInstanceStorage = newValue; sourcePreviewsChecked = false }
     }
+    /// A built character's voice inputs (#437), when its preview shows
+    /// `reference`. Read from the storage, not `sourceInstances`: settling
+    /// the live step there would drop its frames, so the next refresh would
+    /// evaluate every character again, for a voice click. `voiceInputs` is a
+    /// `let` of the preview, so reading it while the step's workers own the
+    /// preview races with nothing.
+    func sourceVoicePreviewInputs(_ id: UUID, reference: SourceStudioCharacterReference) -> SourceStudioVoiceInputs? {
+        guard let preview = sourceInstanceStorage[id], preview.reference == reference else { return nil }
+        return preview.voiceInputs
+    }
     /// False once the document or the previews change, until a refresh has
     /// looked for missing previews (`startMissingSourceBuilds`), so a frame
     /// whose characters are all built does not scan the document again.
@@ -729,6 +739,18 @@ final class StudioModel: ViewportInputHandler, LivePacedHandler {
     /// Stops the audio output if the bus exists; one never made never started.
     func stopSourceAudioOutput() { sourceAudioBusStorage?.stopOutput() }
     @ObservationIgnored var sourceVoicePlayers: [UUID: SourceStudioVoicePlayer] = [:]
+    /// The source characters' voice inputs by scene SHA-256 and object key
+    /// (#437): from built previews, the import's hidden card check and a
+    /// reload's check (`sourceVoicePendingCheck`); a key none of them covered
+    /// costs one scene read (`sourceVoiceInputs`). Pruned to the references
+    /// the document and its history hold when the document's scene changes.
+    @ObservationIgnored var sourceVoiceInputCache = SourceStudioVoiceInputCache()
+    /// A native reload's voice check (#437) for the document's characters,
+    /// from the records the reload decoded, until a voice play or repeat
+    /// change asks for one of them or the document's scene changes.
+    @ObservationIgnored var sourceVoicePendingCheck: (sceneSHA256: String, keys: [Int32], check: SourceStudioCharacterPreview.CardCheck)?
+    /// The document scene the voice cache was last pruned for.
+    @ObservationIgnored var sourceVoiceInputScene: String?
     @ObservationIgnored private var nextInstanceID: UInt64 = 100
     /// A new drag, or none, drops the camera drag's reusable frame.
     @ObservationIgnored private var drag: DragState? { didSet { cameraReuse = nil } }
@@ -1023,6 +1045,9 @@ final class StudioModel: ViewportInputHandler, LivePacedHandler {
 
     /// The step running off the main thread, if any.
     @ObservationIgnored private var liveTick: LiveTick?
+    /// How many times `settleLiveTick` ran (#437): the scenario's voice
+    /// check shows that resolving a voice play's inputs settles nothing.
+    @ObservationIgnored private(set) var sourceLiveSettles = 0
     /// How many frames the last started parallel step was asked for, and how
     /// many of them the last refresh took (the scenario's race check).
     @ObservationIgnored private(set) var lastLiveStepFrameRequests = 0
@@ -1080,6 +1105,7 @@ final class StudioModel: ViewportInputHandler, LivePacedHandler {
     /// Either way that refresh is the step's own: the timer starts no new step
     /// before it.
     private func settleLiveTick(keepFrames: Bool) {
+        sourceLiveSettles &+= 1
         guard let tick = liveTick else {
             if !keepFrames, livePrepared != nil { livePrepared = nil; PerfTrace.event(.studioLiveTickDiscarded) }
             return
@@ -2576,6 +2602,8 @@ final class StudioModel: ViewportInputHandler, LivePacedHandler {
         // failed build is (`validateCard`, checked on a worker since the
         // preparation).
         let hiddenCardProblems = job.hiddenCardProblems()
+        // #437: the unbuilt characters' voice inputs, from the same check.
+        let hiddenVoiceInputs = job.hiddenVoiceInputs()
         var bounds = AABB.empty, stack = source.snapshot.roots.reversed().map { ($0, Optional<UUID>.none, false, Optional<Int32>.none) }
         var routes: [UUID: SourceRouteRuntime] = [:]
         var routeCharacterPreviews: [UUID: SourceStudioCharacterPreview] = [:]
@@ -2619,6 +2647,7 @@ final class StudioModel: ViewportInputHandler, LivePacedHandler {
                         } else {
                             object.kind = .character; object.name = "Source character \(record.sourceKey)"
                             object.sourceCharacter = reference; previews[object.id] = preview
+                            sourceVoiceInputCache.insert(preview.voiceInputs, for: .init(reference))
                             diagnostics += preview.diagnostics.map { "Character \(record.sourceKey): \($0)" }
                         }
                     } catch {
@@ -2636,6 +2665,7 @@ final class StudioModel: ViewportInputHandler, LivePacedHandler {
                     // as after a native reload.
                     object.kind = .character; object.name = "Source character \(record.sourceKey)"
                     object.sourceCharacter = reference
+                    if let voice = hiddenVoiceInputs[index] { sourceVoiceInputCache.insert(voice, for: .init(reference)) }
                     deferredCharacters += 1
                 }
             } else if record.kind == .camera {
