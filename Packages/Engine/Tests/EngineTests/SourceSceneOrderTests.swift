@@ -345,10 +345,14 @@ func sourceSceneOrderReplaysALegacySceneOnItsUpgrade() throws {
     let copy = exported.snapshot.roots[expectedSlot], upgradedTemplate = try #require(upgraded.snapshot.roots.first { $0.sourceKey == 156 })
     #expect(copy.sourceKey == expectedKey && copy.rootDictionaryKey == expectedKey)
     #expect(copy.kind == .item && copy.item == upgradedTemplate.item && copy.transform == upgradedTemplate.transform && copy.name == upgradedTemplate.name)
-    // Every other root is the upgrade's own record.
-    for (index, root) in exported.snapshot.roots.enumerated() where index != expectedSlot {
-        #expect(root == upgraded.snapshot.roots.first { $0.sourceKey == root.sourceKey })
+    // Every other root is the upgrade's own record. Records compare on the
+    // decode stack (#326).
+    let differing = try onDecodeStack { [exported, upgraded] in
+        exported.snapshot.roots.enumerated().filter { index, root in
+            index != expectedSlot && root != upgraded.snapshot.roots.first { $0.sourceKey == root.sourceKey }
+        }.map(\.element.sourceKey)
     }
+    #expect(differing.isEmpty, "roots that are not the upgrade's own record: \(differing)")
     // The status carries the legacy note, and a replayed order adds no reason.
     let replayedStatus = SourceSceneExportValidation.exportStatus(fileName: "legacy-ordered.png", source: legacy, order: .replayed([.delete(153), .insert([0])]))
     #expect(replayedStatus == "Exported edited original scene to legacy-ordered.png, saved as 1.0.4.2 from CharaStudio 0.0.7, as CharaStudio does")

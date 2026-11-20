@@ -135,8 +135,15 @@ public struct SourceSceneStage: Sendable {
     /// (`SourceSceneLightLimit`). Under `.unlimitedMapLights` any number is
     /// written. With `edits.order` (#278) each insertion then takes the key
     /// and root position that order of operations gives it in CharaStudio
-    /// (`replay`).
+    /// (`replay`). The ordered path's writers, root reads and plug-in rewrite
+    /// recurse once per nesting level, so the whole edit runs on the decode
+    /// stack (`onDecodeStack`, #326); the unordered path's nested hop then
+    /// runs in line.
     public func editedData(_ edits: SourceSceneEdits) throws -> Data {
+        try SourceStudioCharacterBatch.onDecodeStack("Ikkoku scene edit") { try editedOnDecodeStack(edits) }
+    }
+
+    private func editedOnDecodeStack(_ edits: SourceSceneEdits) throws -> Data {
         guard edits.insertions.isEmpty else {
             throw SourceSceneTopologyError.unsupported("The staged scene already carries its insertions.")
         }
