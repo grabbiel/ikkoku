@@ -11,11 +11,6 @@
         "label": "folder 11 shown, first selection"
       },
       {
-        "op": "inspectorPixels",
-        "label": "folder 11 shown, first selection",
-        "capture": ".local/verification/scenario-exports/inspector-kept-controls-1-folder.png"
-      },
-      {
         "op": "layers",
         "label": "folder 11 shown, first selection"
       },
@@ -25,11 +20,6 @@
       {
         "op": "keptControls",
         "label": "nothing selected, kept views hidden"
-      },
-      {
-        "op": "inspectorPixels",
-        "label": "nothing selected, kept views hidden",
-        "capture": ".local/verification/scenario-exports/inspector-kept-controls-2-none.png"
       },
       {
         "op": "layers",
@@ -44,22 +34,12 @@
         "label": "character 10 shown, folder 11's section kept hidden"
       },
       {
-        "op": "inspectorPixels",
-        "label": "character 10 shown, folder 11's section kept hidden",
-        "capture": ".local/verification/scenario-exports/inspector-kept-controls-3-character.png"
-      },
-      {
         "op": "select",
         "key": 20
       },
       {
         "op": "keptControls",
         "label": "route 20 shown, the character and folder sections kept hidden"
-      },
-      {
-        "op": "inspectorPixels",
-        "label": "route 20 shown, the character and folder sections kept hidden",
-        "capture": ".local/verification/scenario-exports/inspector-kept-controls-4-route.png"
       },
       {
         "op": "cycle",
@@ -81,11 +61,6 @@
         "label": "nothing selected after three cycles"
       },
       {
-        "op": "inspectorPixels",
-        "label": "nothing selected after three cycles",
-        "capture": ".local/verification/scenario-exports/inspector-kept-controls-5-none-cycled.png"
-      },
-      {
         "op": "layers",
         "label": "nothing selected after three cycles"
       },
@@ -96,11 +71,6 @@
       {
         "op": "keptControls",
         "label": "character 10 shown after the cycles"
-      },
-      {
-        "op": "inspectorPixels",
-        "label": "character 10 shown after the cycles",
-        "capture": ".local/verification/scenario-exports/inspector-kept-controls-6-character-cycled.png"
       },
       {
         "op": "layers",

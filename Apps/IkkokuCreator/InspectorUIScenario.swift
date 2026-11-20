@@ -40,9 +40,8 @@ struct InspectorUIScenario: Decodable {
         /// focus moves; `capture`: see `eyeFocus(_:studio:moves:capture:settle:)`)
         /// and `"workspaceBodies"` (`label`: `select`, `toggle` or `refresh`;
         /// `count` actions from row `index`: see `workspaceBodies(_:action:count:index:settle:)`).
-        /// Added for #440: `"keptControls"` (see `keptControls(_:)`), `"layers"`
-        /// (see `layerCounts(_:)`) and `"inspectorPixels"` (`capture`: see
-        /// `inspectorPixels(_:capture:)`); `label` names the state in the report.
+        /// Added for #440: `"keptControls"` (see `keptControls(_:)`) and
+        /// `"layers"` (see `layerCounts(_:)`); `label` names the state in the report.
         let op: String
         let key: Int32?
         let keys: [Int32]?
@@ -362,9 +361,6 @@ struct InspectorUIScenario: Decodable {
                 record(step.op, result.ok, (step.label.map { "\($0): " } ?? "") + result.detail)
             case "layers":
                 record(step.op, true, (step.label.map { "\($0): " } ?? "") + Self.layerCounts(window))
-            case "inspectorPixels":
-                let result = Self.inspectorPixels(window, capture: step.capture)
-                record(step.op, result.ok, (step.label.map { "\($0): " } ?? "") + result.detail)
             case "assert":
                 var problems: [String] = []
                 let target = object(step.key)
@@ -1598,42 +1594,6 @@ struct InspectorUIScenario: Decodable {
             return "layers \(layers), masked \(masked), masksToBounds \(bounded), views \(views)"
         }
         return "window: \(count(window.contentView)); inspector: \(count(inspectorScrollView(window)))"
-    }
-
-    /// `inspectorPixels`: the inspector's scroll view drawn from its layer
-    /// tree (`CALayer.render(in:)`, in process, no screen recording) at the
-    /// backing scale; `capture` gets the PNG. The detail gives the size, the
-    /// number of distinct colours and a sha of the pixels.
-    @MainActor static func inspectorPixels(_ window: NSWindow, capture: String?) -> (ok: Bool, detail: String) {
-        guard let scroll = inspectorScrollView(window), let layer = scroll.layer else { return (false, "no inspector layer") }
-        let scale = window.backingScaleFactor
-        let width = Int((scroll.bounds.width * scale).rounded()), height = Int((scroll.bounds.height * scale).rounded())
-        guard width > 0, height > 0, let space = CGColorSpace(name: CGColorSpace.sRGB),
-              let context = CGContext(data: nil, width: width, height: height, bitsPerComponent: 8, bytesPerRow: width * 4,
-                                      space: space, bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue) else {
-            return (false, "no bitmap \(width)x\(height)")
-        }
-        if layer.isGeometryFlipped == false && scroll.isFlipped {
-            context.translateBy(x: 0, y: CGFloat(height))
-            context.scaleBy(x: 1, y: -1)
-        }
-        context.scaleBy(x: scale, y: scale)
-        layer.render(in: context)
-        guard let image = context.makeImage(), let pixels = pixels(of: image) else { return (false, "no image") }
-        var colours = Set<UInt32>()
-        for i in stride(from: 0, to: pixels.bytes.count, by: 4) where colours.count < 100_000 {
-            colours.insert(UInt32(pixels.bytes[i]) << 24 | UInt32(pixels.bytes[i + 1]) << 16
-                           | UInt32(pixels.bytes[i + 2]) << 8 | UInt32(pixels.bytes[i + 3]))
-        }
-        let digest = SHA256.hash(data: Data(pixels.bytes)).prefix(8).map { String(format: "%02x", $0) }.joined()
-        var detail = "\(width)x\(height) px, \(colours.count) colours, pixels sha \(digest)"
-        if let capture {
-            do { _ = try CaptureOutput.writePNG(image, to: URL(fileURLWithPath: capture)) } catch {
-                return (false, detail + "; capture: \(error)")
-            }
-            detail += "; png written"
-        }
-        return (true, detail)
     }
 
     static func sha(_ lines: [String]) -> String {

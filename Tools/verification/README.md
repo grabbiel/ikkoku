@@ -1281,14 +1281,14 @@ the state in the step's detail):
   in the tree) with a sha; they are not focused, so no field commits;
 - `layers` counts the layers (masks included), the masked layers, the layers
   that mask to bounds and the views under the window's content view and
-  under the inspector's scroll view;
-- `inspectorPixels` (`capture`) draws the inspector's scroll view from its
-  layer tree (`CALayer.render(in:)`, in process, no screen recording) at the
-  backing scale, writes the PNG and records its size, distinct colours and
-  a pixel sha.
+  under the inspector's scroll view.
+
+There is no pixel op: an in-process render of the inspector
+(`CALayer.render(in:)`), like the `cacheDisplay` captures, draws its
+AppKit controls but none of its SwiftUI content.
 
 `inspector-kept-controls` (`IKKOKU_STUDIO_HALF_STATE_SCENE`: folder 11,
-character 10, route 20) runs the three at six states: folder 11 shown first;
+character 10, route 20) runs them at six states: folder 11 shown first;
 nothing selected; character 10 shown with the folder's section kept hidden;
 route 20 shown with both kept hidden; and nothing selected and character 10
 after three selection cycles.

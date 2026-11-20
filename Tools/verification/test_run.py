@@ -670,7 +670,7 @@ INSPECTOR_UI_OPS = {"select", "deselect", "focus", "type", "delete", "undo", "re
                     "selectRow", "scrollWorkspace", "newScene", "addFolders", "eyeFocus",
                     "workspaceBodies",
                     # Added for #440 (kept inspector views hidden by clipping).
-                    "keptControls", "layers", "inspectorPixels"}
+                    "keptControls", "layers"}
 
 # ST-T11 `editRoute` settings: point edits name the point, route edits do not.
 ROUTE_POINT_SETTINGS = ("delete", "move", "speed", "ease", "connection", "link")
@@ -978,6 +978,12 @@ class StudioScenarioLaneTests(unittest.TestCase):
                          "a scenario file is not run by the lane, or the lane "
                          "names a scenario that is not in Tools/verification/scenarios")
 
+    def test_kept_controls_check_has_no_pixel_captures(self):
+        # #440 B1: neither in-process render of the inspector draws its SwiftUI
+        # content, so the check hashes its scenario report only.
+        check = next(c for c in self.checks if c["id"] == "studio-scenario-inspector-kept-controls")
+        self.assertEqual([a["kind"] for a in check["artifacts"]], ["scenario-report"])
+
     def check_inspector_ui_steps(self, path, steps):
         self.assertTrue(steps)
         for step in steps:
@@ -1009,10 +1015,7 @@ class StudioScenarioLaneTests(unittest.TestCase):
                     if name in step:
                         self.assertIs(type(step[name]), int)
                         self.assertGreaterEqual(step[name], 1 if name == "count" else 0)
-            if op == "inspectorPixels":
-                self.assertTrue(step["capture"].startswith(".local/verification/"))
-                self.assertTrue(step["capture"].endswith(".png"))
-            if op in ("keptControls", "layers", "inspectorPixels") and "label" in step:
+            if op in ("keptControls", "layers") and "label" in step:
                 self.assertTrue(step["label"])
             if op == "eyeFocus":
                 self.assertIs(type(step.get("count", 2)), int)
