@@ -2670,6 +2670,40 @@
       "timeout": 600
     },
     {
+      "id": "studio-scenario-undo-patch-roundtrip",
+      "argv": [
+        ".local/build/Build/Products/Debug/Ikkoku.app/Contents/MacOS/Ikkoku"
+      ],
+      "fixtures": [
+        {
+          "env": "IKKOKU_SOURCE_SCENE",
+          "kind": "file",
+          "from": "IKKOKU_STUDIO_SCENARIO_SCENE"
+        },
+        {
+          "env": "IKKOKU_SOURCE_AVATAR",
+          "kind": "file"
+        },
+        {
+          "env": "IKKOKU_STUDIO_ITEM_CATALOG",
+          "kind": "file"
+        }
+      ],
+      "env": {
+        "IKKOKU_STUDIO_SCENARIO": "Tools/verification/scenarios/undo-patch-roundtrip.json",
+        "IKKOKU_STUDIO_SCENARIO_REPORT": ".local/verification/reports/studio-scenario-undo-patch-roundtrip.json"
+      },
+      "referenceTier": "app-smoke",
+      "tolerance": "#446: object edits through update record patch steps (one object each; edits in one gesture join the step) mixed with a delete, a duplicate and a New Scene. Undo back to the start restores the start document field for field and exports byte-identical to the start export; redo restores the edited document and exports byte-identical to its export. A rename undoes and redoes the same way. A deliberately broken step (its object removed behind the history's back) is refused with the Debug assertion off: the document stays, the step is dropped. Every scenario run also ends with #446's bars: no update write copied the object list, and (Debug) no undo or redo differed from a whole snapshot's.",
+      "artifacts": [
+        {
+          "path": ".local/verification/reports/studio-scenario-undo-patch-roundtrip.json",
+          "kind": "scenario-report"
+        }
+      ],
+      "timeout": 600
+    },
+    {
       "id": "studio-scenario-topology-reparent",
       "argv": [
         ".local/build/Build/Products/Debug/Ikkoku.app/Contents/MacOS/Ikkoku"

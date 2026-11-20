@@ -1054,7 +1054,7 @@ extension PluginLibraryScenario {
             runtimeDocument: try session?.savedDocument(), pending: session?.world.pendingSourceDestruction().map(\.sourceIdentity).sorted() ?? [],
             callbacks: session?.runtime.callbackTrace ?? [], resources: [r.meshes, r.textures, r.deformBuffers,
                 r.hiddenBuffers, r.meshBufferBytes, r.deformBufferBytes, r.hiddenBufferBytes, r.retiring],
-            undo: studio.undoStack, redo: studio.redoStack, status: expectedStatus ?? studio.status, sceneURL: studio.sceneURL,
+            undo: studio.undoHistory.undoSteps, redo: studio.undoHistory.redoSteps, status: expectedStatus ?? studio.status, sceneURL: studio.sceneURL,
             generation: studio.sourcePluginMountGeneration, animationTime: studio.sourceAnimationTime,
             blocked: studio.resourceBlockedObjects, diagnostics: studio.resourceDiagnostics)
         let focus = FocusObservation(adapter: identity(studio.sourceFocus.adapter), enabled: studio.sourceFocus.adapter?.enabled,
@@ -1446,7 +1446,7 @@ extension PluginLibraryScenario {
                     } else if action == "redo" {
                         studio.pushUndo(force: true); studio.doc = target; studio.undo()
                         guard studio.doc.objects == prior.objects && studio.doc.sourcePluginState == prior.sourcePluginState,
-                              studio.redoStack.last == target, studio.sourcePluginSession != nil else {
+                              studio.redoTarget == target, studio.sourcePluginSession != nil else {
                             throw SourcePluginError.runtime("Unable to seed the real redo candidate.")
                         }
                     }
@@ -1467,8 +1467,8 @@ extension PluginLibraryScenario {
                     try seedHistory(action, target: saved)
                     try require("compatible\(action)PriorContext", studio.sourcePluginSession?.library.packages.first?.manifestData == conflict.manifestData
                         && studio.doc.sourceNativePlugins == nil && sameObjects(studio.doc, saved)
-                        && (action != "undo" || studio.undoStack.last == saved)
-                        && (action != "redo" || studio.redoStack.last == saved))
+                        && (action != "undo" || studio.undoTarget == saved)
+                        && (action != "redo" || studio.redoTarget == saved))
                     try persist(snapshot(), "compatible-\(action)-before")
                     if action == "open" { try studio.loadScene(from: scene("compatible")) }
                     else if action == "undo" { studio.undo() } else { studio.redo() }
@@ -1493,8 +1493,8 @@ extension PluginLibraryScenario {
                     try require(name + "Prior", studio.sourcePluginSession?.library.packages.first?.manifestData == compatible.manifestData
                         && studio.doc.sourceNativePlugins == saved.sourceNativePlugins && studio.sourceHideStudioUI?.visible == false
                         && sameObjects(studio.doc, candidate) && !studio.renderedSourceCharacterPreviews.isEmpty
-                        && (action != "undo" || studio.undoStack.last == candidate)
-                        && (action != "redo" || studio.redoStack.last == candidate))
+                        && (action != "undo" || studio.undoTarget == candidate)
+                        && (action != "redo" || studio.redoTarget == candidate))
                     let before = try snapshot(), session = studio.sourcePluginSession, focus = studio.sourceFocus.adapter
                     let previews = studio.renderedSourceCharacterPreviews, tokens = studio.sourceFocusObservers, launch = studio.sourceLaunchObserver
                     try persist(candidate, name + "-candidate"); try persist(before, name + "-before")
@@ -1541,7 +1541,8 @@ extension PluginLibraryScenario {
         let world: StudioDocument?
         let runtimeDocument: StudioDocument?
         let pending: [String], callbacks: [String], resources: [Int]
-        let undo: [StudioDocument], redo: [StudioDocument]
+        /// The history's steps (#446: patch steps compare by their objects).
+        let undo: [StudioUndoStep<StudioDocument>], redo: [StudioUndoStep<StudioDocument>]
         let status: String, sceneURL: URL?
         let generation: UInt64, animationTime: Float
         let blocked: Set<UUID>, diagnostics: [String]
@@ -1566,7 +1567,7 @@ extension PluginLibraryScenario {
                 callbacks: session?.runtime.callbackTrace ?? [],
                 resources: [r.meshes, r.textures, r.deformBuffers, r.hiddenBuffers,
                     r.meshBufferBytes, r.deformBufferBytes, r.hiddenBufferBytes, r.retiring],
-                undo: studio.undoStack, redo: studio.redoStack, status: expectedStatus ?? studio.status, sceneURL: studio.sceneURL,
+                undo: studio.undoHistory.undoSteps, redo: studio.undoHistory.redoSteps, status: expectedStatus ?? studio.status, sceneURL: studio.sceneURL,
                 generation: studio.sourcePluginMountGeneration, animationTime: studio.sourceAnimationTime,
                 blocked: studio.resourceBlockedObjects, diagnostics: studio.resourceDiagnostics)
         }
@@ -1724,7 +1725,7 @@ extension PluginLibraryScenario {
                             // A successful undo records the rejected target as redo.
                             studio.pushUndo(force: true); studio.doc = saved; studio.undo()
                             try require("InstantiateRedoTargetPrepared", studio.doc.objects == before.document.objects
-                                && studio.redoStack.last == saved && studio.sourcePluginSession != nil, studio.status)
+                                && studio.redoTarget == saved && studio.sourcePluginSession != nil, studio.status)
                             try checkHistoryRejection("InstantiateRedo", action: { studio.redo() })
                         }
                         continue
@@ -1814,7 +1815,7 @@ extension PluginLibraryScenario {
                         try checkHistoryRejection(name + "Undo", expectedError: error, action: { studio.undo() })
                         studio.pushUndo(force: true); studio.doc = rejected; studio.undo()
                         try require(name + "RedoTargetPrepared", studio.doc.objects == before.document.objects
-                            && studio.redoStack.last == rejected && studio.sourcePluginSession != nil, studio.status)
+                            && studio.redoTarget == rejected && studio.sourcePluginSession != nil, studio.status)
                         try checkHistoryRejection(name + "Redo", expectedError: error, action: { studio.redo() })
                     }
                 }
@@ -1928,13 +1929,13 @@ extension PluginLibraryScenario {
                 studio.sourcePluginsRunning = false
                 try studio.stepSourcePlugins(deltaTime: 0.06)
                 try check("RetainedSessionPrecondition", studio.sourcePluginSession != nil && studio.sourceFocus.adapter != nil
-                    && !previews().isEmpty && !studio.undoStack.isEmpty)
+                    && !previews().isEmpty && studio.undoDepth > 0)
                 for (name, expected) in [
                     ("changed", "Saved plugin profile or library bindings changed; explicit reinstallation is required.")] {
                     let document = studio.doc, session = studio.sourcePluginSession
                     let runtime = try session?.savedDocument(), adapter = studio.sourceFocus.adapter
                     let frame = studio.host.renderer.currentFrame(), beforeResources = resources(), beforePreviews = previews()
-                    let undo = studio.undoStack, redo = studio.redoStack, status = studio.status, sceneURL = studio.sceneURL
+                    let history = studio.undoHistory, status = studio.status, sceneURL = studio.sceneURL
                     let generation = studio.sourcePluginMountGeneration, time = studio.sourceAnimationTime
                     let gain = studio.sourceAudioBus.masterVolume, observers = studio.sourceFocusObservers.count
                     let launchObserver = studio.sourceLaunchObserver != nil, blocked = studio.resourceBlockedObjects
@@ -1947,7 +1948,7 @@ extension PluginLibraryScenario {
                     let afterRuntime = try studio.sourcePluginSession?.savedDocument()
                     try check(name + "RejectedStateRetained", studio.doc == document && studio.sourcePluginSession === session
                         && afterRuntime == runtime && studio.sourceFocus.adapter === adapter
-                        && studio.undoStack == undo && studio.redoStack == redo && studio.status == status && studio.sceneURL == sceneURL
+                        && studio.undoHistory == history && studio.status == status && studio.sceneURL == sceneURL
                         && studio.sourcePluginMountGeneration == generation && studio.sourceAnimationTime == time
                         && studio.sourceAudioBus.masterVolume == gain && studio.sourceFocusObservers.count == observers
                         && (studio.sourceLaunchObserver != nil) == launchObserver && !studio.sourcePluginsRunning
@@ -2124,7 +2125,7 @@ extension PluginLibraryScenario {
             let url = try write(rejected, "reject-" + name)
             for attempt in 1...2 {
                 let before = studio.doc, session = studio.sourcePluginSession, runtime = try session?.savedDocument()
-                let undo = studio.undoStack, redo = studio.redoStack, beforeCounts = resources(), beforePreviews = previews()
+                let history = studio.undoHistory, beforeCounts = resources(), beforePreviews = previews()
                 let frame = studio.host.renderer.currentFrame(), status = studio.status, clock = studio.sourceAnimationTime
                 let adapter = studio.sourceFocus.adapter, gain = studio.sourceAudioBus.masterVolume
                 var reason = ""
@@ -2135,7 +2136,7 @@ extension PluginLibraryScenario {
                 let afterRuntime = try studio.sourcePluginSession?.savedDocument()
                 let afterFrame = studio.host.renderer.currentFrame()
                 try check(name + "Rollback\(attempt)", reason == expectedError && studio.doc == before
-                    && studio.sourcePluginSession === session && afterRuntime == runtime && studio.undoStack == undo && studio.redoStack == redo
+                    && studio.sourcePluginSession === session && afterRuntime == runtime && studio.undoHistory == history
                     && resources() == beforeCounts && previews() == beforePreviews && studio.sourceAnimationTime == clock
                     && studio.status == status && studio.sourceFocus.adapter === adapter && studio.sourceAudioBus.masterVolume == gain
                     && frame.camera == afterFrame.camera && frame.sceneBounds == afterFrame.sceneBounds && frame.time == afterFrame.time
@@ -2145,10 +2146,10 @@ extension PluginLibraryScenario {
         // Real history failures must leave their target at the top of the stack.
         studio.doc = poison; studio.pushUndo(force: true); studio.doc = old
         let historySession = studio.sourcePluginSession, historyResources = resources(), historyPreviews = previews()
-        let undo = studio.undoStack, redo = studio.redoStack
+        let history = studio.undoHistory
         studio.undo(); studio.undo(); studio.redo()
         try check("FailedHistoryRetainsStacks", studio.doc == old && studio.sourcePluginSession === historySession
-            && studio.undoStack == undo && studio.redoStack == redo && resources() == historyResources && previews() == historyPreviews
+            && studio.undoHistory == history && resources() == historyResources && previews() == historyPreviews
             && studio.status.contains("Unsupported arithmetic operator or Int32 arithmetic."), studio.status)
         // Put the valid target above the retained failing entry. Both directions
         // go through real candidate preparation; the held history clock survives.
@@ -2471,7 +2472,7 @@ extension PluginLibraryScenario {
                 pending: session?.world.pendingSourceDestruction().map(\.sourceIdentity).sorted() ?? [],
                 callbacks: session?.runtime.callbackTrace ?? [], resources: [r.meshes, r.textures, r.deformBuffers,
                     r.hiddenBuffers, r.meshBufferBytes, r.deformBufferBytes, r.hiddenBufferBytes, r.retiring],
-                undo: studio.undoStack, redo: studio.redoStack, status: studio.status, sceneURL: studio.sceneURL,
+                undo: studio.undoHistory.undoSteps, redo: studio.undoHistory.redoSteps, status: studio.status, sceneURL: studio.sceneURL,
                 generation: studio.sourcePluginMountGeneration, animationTime: studio.sourceAnimationTime,
                 blocked: studio.resourceBlockedObjects, diagnostics: studio.resourceDiagnostics)
         }
@@ -2566,7 +2567,7 @@ extension PluginLibraryScenario {
                 && !studio.sourceFocus.awaitingInitialFocus && old.originalVolume == nil
                 && studio.sourceAudioBus.masterVolume == volume && studio.sourceAudioBus.voiceVolume == voice
                 && after.resources == before.resources && after.animationTime == before.animationTime
-                && after.undo == Array((before.undo + [before.document]).suffix(60)) && after.redo.isEmpty
+                && after.undo == Array((before.undo + [.document(before.document)]).suffix(60)) && after.redo.isEmpty
                 && after.blocked == before.blocked && after.diagnostics == before.diagnostics
                 && sameFrame(frame, studio.host.renderer.currentFrame()),
                 "Interactive unload clears only plugin metadata/session, records undo and restores the muted owner's gain")
@@ -2979,7 +2980,7 @@ extension PluginLibraryScenario {
                 callbacks: session?.runtime.callbackTrace ?? [],
                 resources: [r.meshes, r.textures, r.deformBuffers, r.hiddenBuffers,
                     r.meshBufferBytes, r.deformBufferBytes, r.hiddenBufferBytes, r.retiring],
-                undo: studio.undoStack, redo: studio.redoStack, status: studio.status, sceneURL: studio.sceneURL,
+                undo: studio.undoHistory.undoSteps, redo: studio.undoHistory.redoSteps, status: studio.status, sceneURL: studio.sceneURL,
                 generation: studio.sourcePluginMountGeneration, animationTime: studio.sourceAnimationTime,
                 blocked: studio.resourceBlockedObjects, diagnostics: studio.resourceDiagnostics)
         }
@@ -3212,7 +3213,7 @@ extension PluginLibraryScenario {
                 callbacks: session?.runtime.callbackTrace ?? [],
                 resources: [r.meshes, r.textures, r.deformBuffers, r.hiddenBuffers,
                     r.meshBufferBytes, r.deformBufferBytes, r.hiddenBufferBytes, r.retiring],
-                undo: studio.undoStack, redo: studio.redoStack, status: studio.status, sceneURL: studio.sceneURL,
+                undo: studio.undoHistory.undoSteps, redo: studio.undoHistory.redoSteps, status: studio.status, sceneURL: studio.sceneURL,
                 generation: studio.sourcePluginMountGeneration, animationTime: studio.sourceAnimationTime,
                 blocked: studio.resourceBlockedObjects, diagnostics: studio.resourceDiagnostics)
         }
@@ -3468,7 +3469,7 @@ extension PluginLibraryScenario {
                 callbacks: session?.runtime.callbackTrace ?? [],
                 resources: [r.meshes, r.textures, r.deformBuffers, r.hiddenBuffers,
                     r.meshBufferBytes, r.deformBufferBytes, r.hiddenBufferBytes, r.retiring],
-                undo: studio.undoStack, redo: studio.redoStack, status: studio.status, sceneURL: studio.sceneURL,
+                undo: studio.undoHistory.undoSteps, redo: studio.undoHistory.redoSteps, status: studio.status, sceneURL: studio.sceneURL,
                 generation: studio.sourcePluginMountGeneration, animationTime: studio.sourceAnimationTime,
                 blocked: studio.resourceBlockedObjects, diagnostics: studio.resourceDiagnostics)
         }
@@ -3880,13 +3881,13 @@ extension PluginLibraryScenario {
                 // other native restore diagnostics do; never write the stacks.
                 let prior = studio.doc
                 studio.doc = candidate; studio.pushUndo(force: true); studio.doc = prior
-                guard studio.undoStack.last == candidate else {
+                guard studio.undoTarget == candidate else {
                     throw SourcePluginError.runtime("Unable to seed the real undo candidate.")
                 }
                 try rejection("undoAttachment", expected: gate, history: true) { studio.undo() }
                 studio.pushUndo(force: true); studio.doc = candidate; studio.undo()
                 guard studio.doc.objects == prior.objects && studio.doc.sourcePluginState == prior.sourcePluginState,
-                      studio.redoStack.last == candidate, studio.sourcePluginSession != nil,
+                      studio.redoTarget == candidate, studio.sourcePluginSession != nil,
                       studio.sourceFocus.adapter != nil, studio.sourceShapePreview(for: parentID) != nil,
                       !studio.host.renderer.currentFrame().items.isEmpty else {
                     throw SourcePluginError.runtime("Unable to seed the real redo candidate.")
@@ -4217,7 +4218,7 @@ extension PluginLibraryScenario {
                 studio.doc = poison; studio.pushUndo(force: true); studio.doc = retainedDocument
                 try rejection("undoPoison", expected: arithmetic, history: true) { studio.undo() }
                 studio.pushUndo(force: true); studio.doc = poison; studio.undo()
-                guard studio.doc.objects == retainedDocument.objects, studio.redoStack.last == poison else { throw SourcePluginError.runtime("Unable to seed redo poison.") }
+                guard studio.doc.objects == retainedDocument.objects, studio.redoTarget == poison else { throw SourcePluginError.runtime("Unable to seed redo poison.") }
                 try rejection("redoPoison", expected: arithmetic, history: true) { studio.redo() }
                 for name in ["zero", "plain", "attachment"] {
                     let saved = name == "attachment" ? candidate : try read(name, at: original)
@@ -4360,7 +4361,7 @@ extension PluginLibraryScenario {
             } else if action == "redo" {
                 studio.pushUndo(force: true); studio.doc = candidate; studio.undo()
                 guard studio.doc.objects == prior.objects, studio.doc.sourcePluginState == prior.sourcePluginState,
-                      studio.redoStack.last == candidate else { throw SourcePluginError.runtime("Unable to seed real pending-attachment redo.") }
+                      studio.redoTarget == candidate else { throw SourcePluginError.runtime("Unable to seed real pending-attachment redo.") }
             }
         }
         do {
@@ -4529,7 +4530,7 @@ extension PluginLibraryScenario {
                             }
                             try check(prefix + "Prior", (preview != nil) == warm && studio.sourcePluginSession != nil
                                 && studio.sourceFocus.adapter != nil && studio.sourceAccessoryNamesEnabled && !studio.sourcePluginsRunning
-                                && (action != "undo" || studio.undoStack.last == saved) && (action != "redo" || studio.redoStack.last == saved))
+                                && (action != "undo" || studio.undoTarget == saved) && (action != "redo" || studio.redoTarget == saved))
                             let warmBefore = try warmObservation(preview); try persist(warmBefore, prefix + "-warm-before")
                             let before = try capture(prefix + "-before"), oldSession = studio.sourcePluginSession, oldFocus = studio.sourceFocus.adapter
                             var error = "NO REJECTION"
@@ -4622,7 +4623,7 @@ extension PluginLibraryScenario {
             else if action == "redo" {
                 studio.pushUndo(force: true); studio.doc = candidate; studio.undo()
                 guard studio.doc.objects == prior.objects, studio.doc.sourcePluginState == prior.sourcePluginState,
-                      studio.redoStack.last == candidate else { throw SourcePluginError.runtime("Unable to seed pending acceptance redo.") }
+                      studio.redoTarget == candidate else { throw SourcePluginError.runtime("Unable to seed pending acceptance redo.") }
             }
         }
         do {

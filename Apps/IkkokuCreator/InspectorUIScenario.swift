@@ -346,8 +346,13 @@ struct InspectorUIScenario: Decodable {
                 await settle()
                 record(step.op, true, "colour panel closed")
             case "snapshot":
-                snapshot = (studio.doc, studio.undoStack.count, studio.redoStack.count)
-                record(step.op, true, "undo \(studio.undoStack.count), redo \(studio.redoStack.count)")
+                // A copy of the object list (#446), as `rememberDocument`
+                // keeps: a snapshot sharing the list would make the next
+                // object edit copy it.
+                var kept = studio.doc
+                kept.objects = studio.doc.objects.map { $0 }
+                snapshot = (kept, studio.undoDepth, studio.redoDepth)
+                record(step.op, true, "undo \(studio.undoDepth), redo \(studio.redoDepth)")
             case "keyLoop":
                 // Each Tab is its own gesture, as each step is, and the views
                 // re-render before the next one (#390).
@@ -361,7 +366,7 @@ struct InspectorUIScenario: Decodable {
                 let ax = Self.accessibilityStrings(window)
                 var seen: [String] = []
                 if let target { seen.append("name '\(target.name)'"); seen.append("position.x \(target.transform.position.x)") }
-                seen.append("undo \(studio.undoStack.count)"); seen.append("redo \(studio.redoStack.count)")
+                seen.append("undo \(studio.undoDepth)"); seen.append("redo \(studio.redoDepth)")
                 seen.append("editing \(editedField.map { Self.describe($0) } ?? "none")")
                 seen.append("inspector \(studio.displayedInspectorView ?? "nil")")
                 seen.append("ax \(ax.count) strings, sha \(Self.sha(ax.sorted()))")
@@ -372,13 +377,13 @@ struct InspectorUIScenario: Decodable {
                         if abs(actual - x) > StudioScenario.tolerance { problems.append("position.x \(actual), expected \(x)") }
                     } else { problems.append("no object for position.x") }
                 }
-                if let n = step.undoCount, n != studio.undoStack.count { problems.append("undo \(studio.undoStack.count), expected \(n)") }
-                if let n = step.redoCount, n != studio.redoStack.count { problems.append("redo \(studio.redoStack.count), expected \(n)") }
+                if let n = step.undoCount, n != studio.undoDepth { problems.append("undo \(studio.undoDepth), expected \(n)") }
+                if let n = step.redoCount, n != studio.redoDepth { problems.append("redo \(studio.redoDepth), expected \(n)") }
                 if step.unchanged == true {
                     if let snapshot {
                         if snapshot.doc != studio.doc { problems.append("document changed since the snapshot") }
-                        if snapshot.undo != studio.undoStack.count || snapshot.redo != studio.redoStack.count {
-                            problems.append("undo/redo \(studio.undoStack.count)/\(studio.redoStack.count), snapshot \(snapshot.undo)/\(snapshot.redo)")
+                        if snapshot.undo != studio.undoDepth || snapshot.redo != studio.redoDepth {
+                            problems.append("undo/redo \(studio.undoDepth)/\(studio.redoDepth), snapshot \(snapshot.undo)/\(snapshot.redo)")
                         }
                     } else { problems.append("no snapshot") }
                 }

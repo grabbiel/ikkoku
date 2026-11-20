@@ -45,6 +45,7 @@ extension StudioModel {
         let next = try session.savedDocument()
         cancelSourcePluginLibraryMount()
         attachments.commit(document: next)
+        materializeNewestUndoPatches()
         sourcePluginSession = session; doc = next; sourcePluginsRunning = true
         status = "Loaded \(session.library.packages.count) converted plugin packages"
     }
@@ -251,7 +252,7 @@ extension StudioModel {
         if mountNative { commitSourceNativePlugins(prepared.native) }
         sourcePluginSession = prepared.session
         sourcePluginsRunning = running && prepared.session != nil
-        if replaceDocument { doc = prepared.document }
+        if replaceDocument { materializeNewestUndoPatches(); doc = prepared.document }
     }
 
     func unloadSourcePluginLibrary() {
@@ -273,6 +274,10 @@ extension StudioModel {
                 if advanceAnimation { try self.advancePluginAnimation(by: deltaTime) }
             })
             sourcePluginTickInProgress = true
+            // A plug-in tick records no step (#446): see
+            // `materializeNewestUndoPatches`. After the first tick the newest
+            // steps are whole documents and this costs nothing.
+            materializeNewestUndoPatches()
             doc = next
             sourcePluginTickInProgress = false
         } catch {

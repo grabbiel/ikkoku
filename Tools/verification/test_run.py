@@ -653,6 +653,8 @@ SCENARIO_OPS = {"select", "setVisible", "rename", "toggleCamera", "toggleRoute",
                 "assertVoice", "dropVoiceInputs",
                 # #448: one component of the Object tab's Position field.
                 "setPosition",
+                # #446: object edits in one gesture, kept documents, a broken undo step.
+                "updateObjects", "rememberDocument", "undoBroken",
                 # #454: observation of Undo/Redo enablement over recorded steps.
                 "observeUndoState"}
 
@@ -982,7 +984,7 @@ class StudioScenarioLaneTests(unittest.TestCase):
                       and not name.startswith(("maker-", "gameplay-")))
 
     def test_lane_validates_and_covers_every_scenario(self):
-        self.assertEqual(len(self.checks), 110)
+        self.assertEqual(len(self.checks), 111)
         referenced = set()
         for check in self.checks:
             scenario = check["env"]["IKKOKU_STUDIO_SCENARIO"]
@@ -1112,6 +1114,17 @@ class StudioScenarioLaneTests(unittest.TestCase):
                         self.assertIs(type(step["key"]), int)
                     if step["build"] in ("export", "loadRoute"):
                         self.assertTrue(step["path"].startswith(".local/verification/scenario-exports/"))
+                if op == "updateObjects":
+                    self.assertTrue(step["keys"] and all(type(k) is int for k in step["keys"]))
+                    self.assertIn(step["field"], ("pose", "x", "visible", "name"))
+                if op == "rememberDocument":
+                    self.assertIs(type(step["name"]), str)
+                if op == "undoBroken":
+                    self.assertIs(type(step["key"]), int)
+                if "exportIdenticalTo" in step:
+                    pair = step["exportIdenticalTo"]
+                    self.assertTrue(pair["path"].startswith(".local/") and pair["reference"].startswith(".local/"))
+                    self.assertNotEqual(pair["path"], pair["reference"])
                 if op == "assertVoice":
                     self.assertIs(type(step["key"]), int)
                     for field in ("decodes", "settles"):
@@ -1385,7 +1398,8 @@ class StudioScenarioLaneTests(unittest.TestCase):
                                             "characterBuilt", "exportedAnimation", "treeLabel", "view", "render",
                                             "exportIdenticalToSource", "outfit", "clothes", "ik", "expression", "accessoryLabels", "pluginMount",
                                             "children", "absent", "activeCopyOf", "route", "routeLines", "sourceMap",
-                                            "liveSamplers", "undoDepth", "redoDepth", "objectCount", "canUndo", "canRedo", "sourceIK") if k in step]
+                                            "liveSamplers", "undoDepth", "redoDepth", "objectCount", "canUndo", "canRedo", "sourceIK",
+                                            "documentIs", "exportIdenticalTo") if k in step]
                     self.assertTrue(declared, "assert declares nothing: %s" % path)
                     for name in ("undoDepth", "redoDepth", "objectCount"):
                         if name in step:
