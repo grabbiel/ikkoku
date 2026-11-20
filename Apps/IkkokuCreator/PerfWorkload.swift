@@ -401,9 +401,9 @@ final class PerfWorkloadDriver {
         guard let start = Self.findAxis(.z, around: anchor, pick: studio.pickID(at:)) else {
             throw RigError.invalid("no pixel near bone \(boneID) picks its z rotate ring")
         }
-        let undoDepth = studio.undoStack.count
+        let undoDepth = studio.undoDepth
         PerfTrace.input("mouseDown") { studio.mouseDown(at: start, button: 0, modifiers: []) }
-        guard studio.undoStack.count == undoDepth + 1 else {
+        guard studio.undoDepth == undoDepth + 1 else {
             throw RigError.invalid("mouseDown on the z ring grabbed no guide")
         }
         var last = start
@@ -1010,6 +1010,17 @@ final class PerfWorkloadDriver {
         let placement: Placement?
         let serialSteps: Int
         let pendingWork: Int
+        /// #446: the call's `update` writes, and those that copied the
+        /// document's object list (0 when nothing else holds it).
+        let updateWrites: Int
+        let updateWritesMoved: Int
+        /// Copies a whole-document step owed (it shared the list).
+        let updateWritesOwed: Int
+        /// Copies a pending export held (it keeps the document it was chosen for).
+        let updateWritesExportHeld: Int
+        /// #446: the model's `undoPatchConversions` at the call's start; a
+        /// row records the conversions from it to the next action's call.
+        let patchConversionsAtCall: Int
     }
 
     /// Arms the Studio's `livePhaseHook` so the action's call runs at the next
@@ -1041,6 +1052,9 @@ final class PerfWorkloadDriver {
         let studio = countLiveSettles ? app.studio : nil
         let settles = studio?.livePendingSettles ?? 0, waits = studio?.liveUnfinishedWaits ?? 0
         let pendingWork = studio?.pendingSourceActionWork ?? 0
+        let writes = studio?.updateWrites ?? 0, moved = studio?.updateWritesMoved ?? 0, owed = studio?.updateWritesOwed ?? 0
+        let exportHeld = studio?.updateWritesExportHeld ?? 0
+        let conversions = studio?.undoPatchConversions ?? 0
         let bodies = Self.workspaceBodyViews.map(PerfTrace.bodyCount)
         let cpu = clock_gettime_nsec_np(CLOCK_THREAD_CPUTIME_ID)
         let start = CACurrentMediaTime()
@@ -1051,7 +1065,11 @@ final class PerfWorkloadDriver {
             LiveCall(pendingSettles: studio.livePendingSettles &- settles, unfinishedWaits: studio.liveUnfinishedWaits &- waits,
                      placement: placement,
                      serialSteps: placement.map { PerfTrace.eventCount(.studioLiveTickSerial) - $0.serialSteps } ?? 0,
-                     pendingWork: pendingWork)
+                     pendingWork: pendingWork,
+                     updateWrites: studio.updateWrites &- writes, updateWritesMoved: studio.updateWritesMoved &- moved,
+                     updateWritesOwed: studio.updateWritesOwed &- owed,
+                     updateWritesExportHeld: studio.updateWritesExportHeld &- exportHeld,
+                     patchConversionsAtCall: conversions)
         }
         pendingAction = (step.name, step.measured, start, end, bodies, cpuMs, live)
         waitForAction()
@@ -1116,8 +1134,8 @@ final class PerfWorkloadDriver {
         // document's object count (read after the timed span) shows what an
         // edit added or an undo restored.
         let history = countHistoryStorage ? app.studio.map { studio in
-            (studio.undoStack.count, studio.redoStack.count,
-             StudioObjectStorageCensus.count([studio.doc] + studio.undoStack + studio.redoStack))
+            (studio.undoDepth, studio.redoDepth,
+             StudioObjectStorageCensus.count(current: studio.doc, history: studio.undoHistory))
         } : nil
         finishedActions.append((action.name, action.measured, action.start, action.end, ready, app.studio?.status ?? "", error,
                                 PerfTrace.footprint(), trace.device?.currentAllocatedSize ?? 0, app.studio?.doc.objects.count ?? -1,
@@ -1141,6 +1159,7 @@ final class PerfWorkloadDriver {
         // run-loop pass as a long action) counts until now.
         let busy = trace.busyIntervals + (trace.openBusyStart.map { [($0, CACurrentMediaTime())] } ?? [])
         let bodiesNow = Self.workspaceBodyViews.map(PerfTrace.bodyCount)
+        let conversionsNow = app.studio?.undoPatchConversions ?? 0
         trace.details["actions"] = finishedActions.indices.map { index -> [String: Any] in
             let action = finishedActions[index]
             let next = index + 1 < finishedActions.count ? finishedActions[index + 1].start : .infinity
@@ -1171,6 +1190,15 @@ final class PerfWorkloadDriver {
             }
             if let live = action.live {
                 row["livePendingSettles"] = live.pendingSettles; row["liveUnfinishedWaits"] = live.unfinishedWaits
+                row["updateWrites"] = live.updateWrites; row["updateWritesMoved"] = live.updateWritesMoved
+                row["updateWritesOwed"] = live.updateWritesOwed; row["updateWritesExportHeld"] = live.updateWritesExportHeld
+                // #446: patch steps turned into whole documents from this call
+                // to the next action's (or until now), each at most once: 1
+                // per edit where plug-ins or animation write every frame, 0
+                // where nothing writes between edits.
+                let conversionsEnd = index + 1 < finishedActions.count
+                    ? finishedActions[index + 1].live?.patchConversionsAtCall ?? conversionsNow : conversionsNow
+                row["patchConversions"] = conversionsEnd &- live.patchConversionsAtCall
                 if let placement = live.placement {
                     row["livePhase"] = placement.phase.rawValue; row["placed"] = placement.placed
                     row["placementWaitMs"] = PerfTrace.round((action.start - placement.armed) * 1000)

@@ -286,26 +286,63 @@ final class StudioModel: ViewportInputHandler, LivePacedHandler {
     var sceneURL: URL?
     /// The undo and redo steps (#384). A scene replacement (New Scene, Open,
     /// an original scene import) keeps only the scene it replaced, not the
-    /// scenes before it; see `StudioUndoHistory`.
+    /// scenes before it; see `StudioUndoHistory`. An object edit through
+    /// `update` keeps only the objects it changed (#446).
     /// Not observed (#454): a view reads the undo state only through
     /// `canUndo` and `canRedo`, so recording a step does not invalidate it.
     @ObservationIgnored private var history = StudioUndoHistory<StudioDocument>()
-    /// The steps themselves, not observed: for the scenarios, the perf
-    /// workload and the voice prune. A view reads `canUndo` and `canRedo`.
-    var undoStack: [StudioDocument] { history.undoStack }
-    var redoStack: [StudioDocument] { history.redoStack }
+    /// The history as it is: scenarios compare it before and after an
+    /// action, and the storage census counts what it keeps.
+    var undoHistory: StudioUndoHistory<StudioDocument> { history }
+    var undoDepth: Int { history.undoDepth }
+    var redoDepth: Int { history.redoDepth }
     /// Whether Undo and Redo have a step (#454): observed, and written only
     /// when they flip, so recording a step invalidates the toolbar only when
-    /// a button's state changes. Every write to `history` publishes them
-    /// (`publishUndoState`).
+    /// a button's state changes. Every write to `history` that can change a
+    /// depth publishes them (`publishUndoState`).
     private(set) var canUndo = false
     private(set) var canRedo = false
-    /// After every write to `history`: `record`, `stepBack`, `stepForward`.
+    /// After every write to `history` that can change a depth: `record`,
+    /// `record(patch:)` (#446), `popBack`, `popForward`, and a broken step
+    /// dropped (`refusedBrokenStep`, also on `materializeNewestUndoPatches`'s
+    /// drops). Reads the depths, so no step is turned into a document.
     private func publishUndoState() {
-        let undo = !history.undoStack.isEmpty, redo = !history.redoStack.isEmpty
+        let undo = history.undoDepth > 0, redo = history.redoDepth > 0
         if undo != canUndo { canUndo = undo }
         if redo != canRedo { canRedo = redo }
     }
+    /// The documents Undo and Redo would restore now (nil with nothing to
+    /// undo or redo, or a broken step).
+    var undoTarget: StudioDocument? { if case .document(let target)? = history.undoTarget(from: doc) { target } else { nil } }
+    var redoTarget: StudioDocument? { if case .document(let target)? = history.redoTarget(from: doc) { target } else { nil } }
+    /// `update` writes, and those whose write moved the document's object
+    /// list to a new buffer (a copy). An object edit's step holds no
+    /// reference to the list, so `updateWritesMoved` stays 0 (#446). Two
+    /// copies are counted apart (`StudioObjectListCopies`), by what held the
+    /// old list: a whole-document step (`updateWritesOwed`: the step shared
+    /// the list, and this write was the first since; that step's cost, as
+    /// before #446), and a pending export (`updateWritesExportHeld`: it keeps
+    /// the document as it was when chosen, so an edit while it builds copies
+    /// the list, at most once per export).
+    @ObservationIgnored private(set) var updateWrites = 0
+    @ObservationIgnored private var listCopies = StudioObjectListCopies()
+    var updateWritesMoved: Int { listCopies.moved }
+    var updateWritesOwed: Int { listCopies.owed }
+    var updateWritesExportHeld: Int { listCopies.exportHeld }
+    /// The patch steps `materializeNewestUndoPatches` turned into whole
+    /// documents (#446), each at most once. A scene whose plug-ins or
+    /// animation write every frame converts each new patch on its first
+    /// frame, so its edits keep today's copy of the object list.
+    /// `studio-edit-steps` rows record it per action.
+    @ObservationIgnored private(set) var undoPatchConversions = 0
+    #if DEBUG
+    /// #446's Debug oracle: today's history, every step a whole document,
+    /// kept beside the patch history. Each undo and redo compares the
+    /// document it restores with this one's; `undoOracleMismatches` counts
+    /// the differences.
+    @ObservationIgnored private var undoOracle = StudioUndoHistory<StudioUndoOracleDocument>()
+    @ObservationIgnored private(set) var undoOracleMismatches = 0
+    #endif
     @ObservationIgnored private var instances: [UUID: CharacterInstance] = [:]
     @ObservationIgnored private var renderStatus = RenderStatusReporter()
     @ObservationIgnored private var sourceInstanceStorage: [UUID: SourceStudioCharacterPreview] = [:]
@@ -1432,6 +1469,9 @@ final class StudioModel: ViewportInputHandler, LivePacedHandler {
         change(&candidate)
         _ = try preview.editedPose(fkRotations: doc.objects[i].sourceFKRotations ?? [:], faceValues: doc.objects[i].sourceFaceValues, bodyValues: doc.objects[i].sourceBodyValues, ikTargets: doc.objects[i].sourceIKOverrides ?? [:],
             kinematics: doc.objects[i].sourceKinematics, animationState: candidate, animationElapsed: 0)
+        // An animation edit records no step: the clock rebase and the edit
+        // below are reverted by the open step, as by a whole snapshot (#446).
+        materializeNewestUndoPatches()
         try rebaseSourceAnimationClock()
         candidate = doc.objects[i].sourceAnimation ?? SourceStudioAnimationState(record: preview.record)
         change(&candidate)
@@ -2136,14 +2176,51 @@ final class StudioModel: ViewportInputHandler, LivePacedHandler {
     /// the scenes before the one it replaces leave the history (#384). A merge
     /// into the current scene is an ordinary step.
     func pushUndo(force: Bool = false, replacingScene: Bool = false) {
-        guard undoSteps.startsStep(at: Date(), force: force || replacingScene) else { return }
+        guard undoSteps.startsStep(at: Date(), force: force || replacingScene) else {
+            // Coalesced into the open step: whatever the caller writes next
+            // is reverted as by a whole snapshot (#446).
+            materializeNewestUndoPatches()
+            return
+        }
         appendUndoSnapshot(replacingScene: replacingScene)
     }
 
     /// The document as it is now, as the newest undo step.
     private func appendUndoSnapshot(replacingScene: Bool = false) {
         history.record(doc, replacingScene: replacingScene)
+        #if DEBUG
+        undoOracle.record(.init(doc), replacingScene: replacingScene)
+        #endif
         publishUndoState()
+    }
+
+    /// #446: before a write no step records and no object patch can describe
+    /// (a coalesced `pushUndo`, an animation edit, a plug-in tick, a capture
+    /// vector), the newest undo and redo steps become the whole documents
+    /// they restore, so the write is reverted as today. Costs one copy of the
+    /// object list per patch it converts, and each patch is converted at most
+    /// once: a converted step stays a whole document, so a write every frame
+    /// converts the newest patches on its first frame and finds nothing to
+    /// convert after that (two checks) until an edit records a new patch
+    /// (`undoPatchConversions`).
+    func materializeNewestUndoPatches() {
+        let result = history.materializeNewestPatches(from: doc)
+        undoPatchConversions &+= result.converted
+        if result.droppedUndo { refusedBrokenStep(redo: false, dropped: true) }
+        if result.droppedRedo { refusedBrokenStep(redo: true, dropped: true) }
+    }
+
+    /// A step that names an object the document lacks (a bug, #446): it is
+    /// dropped, the document stays as it is, and a diagnostics line says so.
+    private func refusedBrokenStep(redo: Bool, dropped: Bool = false) {
+        if !dropped { if redo { history.dropNewestRedo() } else { history.dropNewestUndo() } }
+        publishUndoState()
+        #if DEBUG
+        if redo { undoOracle.dropNewestRedo() } else { undoOracle.dropNewestUndo() }
+        #endif
+        let line = "\(redo ? "Redo" : "Undo") refused: its step names an object the scene no longer has, so it was dropped (#446)."
+        print("[ikkoku] \(line)")
+        status = line
     }
 
     /// Closes the edit-coalescing window, so the next edit takes its own undo
@@ -2173,7 +2250,8 @@ final class StudioModel: ViewportInputHandler, LivePacedHandler {
     /// caches, so undoing past an import of a different scene still loses
     /// the earlier scene's runtime until it is imported again.
     func undo() {
-        guard let next = undoStack.last else { return }
+        guard let target = history.undoTarget(from: doc) else { return }
+        guard case .document(let next) = target else { refusedBrokenStep(redo: false); return }
         do {
             let resources = historyPluginResources(next)
             let candidate = resources?.document ?? next
@@ -2181,7 +2259,8 @@ final class StudioModel: ViewportInputHandler, LivePacedHandler {
                 .init(blockedObjects: $0.blockedObjects, animationElapsed: sourceAnimationTime)
             })
             defer { plugins.abort() }
-            history.stepBack(leaving: doc)
+            checkUndoOracle(next, redo: false)
+            history.popBack(leaving: doc)
             publishUndoState()
             applyHistoryDocument(candidate, plugins: plugins, resources: resources)
             // #448: Undo is a gesture of its own. Without this an edit right
@@ -2194,7 +2273,8 @@ final class StudioModel: ViewportInputHandler, LivePacedHandler {
         } catch { status = "Plugin restore: \(error)" }
     }
     func redo() {
-        guard let next = redoStack.last else { return }
+        guard let target = history.redoTarget(from: doc) else { return }
+        guard case .document(let next) = target else { refusedBrokenStep(redo: true); return }
         do {
             let resources = historyPluginResources(next)
             let candidate = resources?.document ?? next
@@ -2202,11 +2282,24 @@ final class StudioModel: ViewportInputHandler, LivePacedHandler {
                 .init(blockedObjects: $0.blockedObjects, animationElapsed: sourceAnimationTime)
             })
             defer { plugins.abort() }
-            history.stepForward(leaving: doc)
+            checkUndoOracle(next, redo: true)
+            history.popForward(leaving: doc)
             publishUndoState()
             applyHistoryDocument(candidate, plugins: plugins, resources: resources)
             status = "Redo"
         } catch { status = "Plugin restore: \(error)" }
+    }
+    /// #446's Debug oracle: steps today's history with the patch history and
+    /// counts an undo or redo whose document differs from today's.
+    private func checkUndoOracle(_ next: StudioDocument, redo: Bool) {
+        #if DEBUG
+        let current = StudioUndoOracleDocument(doc)
+        let expected = redo ? undoOracle.stepForward(leaving: current) : undoOracle.stepBack(leaving: current)
+        if expected?.document != next {
+            undoOracleMismatches += 1
+            print("[ikkoku] undo oracle: the \(redo ? "redo" : "undo") document differs from a whole snapshot's (#446)")
+        }
+        #endif
     }
     /// Profile and library callbacks can touch hidden source objects while restoring.
     /// Resolve this target's references before its stacks or live policy change;
@@ -2438,11 +2531,59 @@ final class StudioModel: ViewportInputHandler, LivePacedHandler {
     /// committing the value it shows, or a binding writing the same value
     /// again, so the undo history does not depend on timing. The write
     /// itself still happens, so the views re-read the document as before.
+    ///
+    /// #446: a step records only the object as it was (and the document's
+    /// other fields); an edit coalesced into the open step adds its object to
+    /// the newest steps. Neither holds the document's object list, so the
+    /// write below is in place (`updateWritesMoved`).
     func update(_ id: UUID, _ change: (inout StudioObject) -> Void) {
         guard let i = doc.index(of: id) else { return }
         var object = doc.objects[i]
-        if undoSteps.edit(&object, at: Date(), change) { appendUndoSnapshot() }
+        switch undoSteps.objectEdit(&object, at: Date(), change) {
+        case .startsStep:
+            history.record(patch: StudioObjectPatch(doc, before: doc.objects[i]))
+            publishUndoState()
+            #if DEBUG
+            undoOracle.record(.init(doc))
+            #endif
+        case .coalesced:
+            let before = doc.objects[i]
+            history.updateNewestPatches { $0.add(before) }
+        case .unchanged: break
+        }
+        let buffer = documentObjectsBuffer
         doc.objects[i] = object
+        updateWrites &+= 1
+        // Only a copy pays for the scan: the old list is still held by
+        // whatever made the write copy.
+        if documentObjectsBuffer != buffer {
+            listCopies.record(old: buffer, historyHolds: history.holdsObjects(at: buffer), exports: sourceExportJobs.map { key, job in
+                (key: key, objects: job.inputs.document.objects.withUnsafeBufferPointer { UnsafeRawPointer($0.baseAddress) })
+            })
+        }
+    }
+    /// #446's lane-wide bars, read when a scenario run ends: no `update`
+    /// write copied the object list, and (Debug) no undo or redo restored a
+    /// document other than a whole snapshot's.
+    func undoHistoryBars() -> (ok: Bool, line: String) {
+        #if DEBUG
+        let mismatches = undoOracleMismatches
+        #else
+        let mismatches = 0
+        #endif
+        return (updateWritesMoved == 0 && mismatches == 0,
+                "undo history (#446): \(updateWrites) object edit writes, \(updateWritesMoved) copied the object list (and \(updateWritesOwed) copies a whole-document step owed, \(updateWritesExportHeld) a pending export held); \(mismatches) undo or redo documents differed from a whole snapshot's; \(undoPatchConversions) patch steps turned into whole documents")
+    }
+    /// Prints `undoHistoryBars()`'s line, marked when a bar failed, and
+    /// returns whether both held: a scenario run that breaks one exits 1.
+    func reportUndoHistoryBars() -> Bool {
+        let bars = undoHistoryBars()
+        print("[ikkoku] \(bars.ok ? "" : "FAILED: ")\(bars.line)")
+        return bars.ok
+    }
+    /// The document's object list's storage, read without a copy.
+    private var documentObjectsBuffer: UnsafeRawPointer? {
+        documentStorage.objects.withUnsafeBufferPointer { UnsafeRawPointer($0.baseAddress) }
     }
     func updateSelected(_ change: (inout StudioObject) -> Void) { if let id = selection { update(id, change) } }
 
@@ -3712,6 +3853,7 @@ final class StudioModel: ViewportInputHandler, LivePacedHandler {
                 animations.append((object: candidate.objects[i].id, edit: animation))
             }
         }
+        materializeNewestUndoPatches()
         doc = candidate
         for animation in animations {
             try editSourceAnimation(animation.object) { state in
@@ -5459,6 +5601,21 @@ final class StudioModel: ViewportInputHandler, LivePacedHandler {
             }
         }
         card.expression.gazeMode = mode
+        materializeNewestUndoPatches()
         doc.objects[i].poseDelta = pd
     }
 }
+
+#if DEBUG
+/// A step of #446's Debug oracle: a whole document whose object list is a
+/// copy of its own, so the oracle never shares the live document's list (an
+/// object edit's write stays in place in Debug builds too).
+struct StudioUndoOracleDocument: StudioHistoryDocument, Equatable {
+    let document: StudioDocument
+    init(_ document: StudioDocument) {
+        var copy = document
+        copy.objects = document.objects.map { $0 }
+        self.document = copy
+    }
+}
+#endif

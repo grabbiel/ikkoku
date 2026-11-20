@@ -229,7 +229,7 @@ final class AppState {
                         try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
                         try CaptureOutput.writeJSON(report.json(), to: url)
                         print("[ikkoku] Studio visibility scenario: \(report.passed) passed, \(report.failed) failed")
-                        exit(report.failed == 0 ? 0 : 1)
+                        exit(report.failed == 0 && studio.reportUndoHistoryBars() ? 0 : 1)
                     }
                     if let plugins = scenario.pluginLibrary {
                         guard scenario.steps.isEmpty else { throw RigError.invalid("Plugin library checks cannot ignore ordinary Studio steps.") }
@@ -240,7 +240,7 @@ final class AppState {
                                 try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
                                 try CaptureOutput.writeJSON(report.json(), to: url)
                                 print("[ikkoku] plugin library scenario: \(report.passed) passed, \(report.failed) failed")
-                                exit(report.failed == 0 ? 0 : 1)
+                                exit(report.failed == 0 && studio.reportUndoHistoryBars() ? 0 : 1)
                             } catch { print("[ikkoku] plugin library scenario failed: \(error)"); exit(1) }
                         }
                         return
@@ -260,7 +260,7 @@ final class AppState {
                                 try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
                                 try CaptureOutput.writeJSON(report.json(), to: url)
                                 print("[ikkoku] inspector UI scenario: \(report.passed) passed, \(report.failed) failed")
-                                exit(report.failed == 0 ? 0 : 1)
+                                exit(report.failed == 0 && studio.reportUndoHistoryBars() ? 0 : 1)
                             } catch { print("[ikkoku] inspector UI scenario failed: \(error)"); exit(1) }
                         }
                     } else {
@@ -269,7 +269,7 @@ final class AppState {
                         try FileManager.default.createDirectory(at: reportURL.deletingLastPathComponent(), withIntermediateDirectories: true)
                         try CaptureOutput.writeJSON(report.json(), to: reportURL)
                         print("[ikkoku] studio scenario: \(report.passed) passed, \(report.failed) failed")
-                        exit(report.failed == 0 ? 0 : 1)
+                        exit(report.failed == 0 && studio.reportUndoHistoryBars() ? 0 : 1)
                     }
                 } catch { print("[ikkoku] studio scenario failed: \(error)"); exit(1) }
             }
