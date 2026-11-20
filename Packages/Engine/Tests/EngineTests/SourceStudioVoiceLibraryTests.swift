@@ -60,6 +60,33 @@ private enum VoiceFixture {
         }
         return (sqrt(sum / Float(max(samples.count, 1))), samples)
     }
+
+    /// The RMS of `window` rendered frames counted from `settle` frames after
+    /// the play's first sound. It renders (at most `passes` × 4096 frames)
+    /// until the play has ended, i.e. a whole pass is silent after its sound,
+    /// so the next player renders alone. Two offline-engine effects (#465):
+    /// a player attached while the engine renders starts whole passes later
+    /// than one attached before it starts (up to 4 passes in 300 plays under
+    /// load), so a window fixed from the render's start can catch silence;
+    /// and a player stopped and detached while the engine renders still
+    /// sounds in the next pass (400 of 400 plays cut short), which would
+    /// pass for the next play's onset.
+    @MainActor static func onsetRMS(_ bus: SourceStudioAudioBus, settle: Int = 4096, window: Int = 12_288,
+                                    passes: Int = 48) throws -> Float {
+        let output = try #require(AVAudioPCMBuffer(pcmFormat: bus.engine.manualRenderingFormat, frameCapacity: 4096))
+        var rendered: [Float] = [], onset: Int?, ended = false
+        for _ in 0..<passes where !ended {
+            #expect(try bus.engine.renderOffline(4096, to: output) == .success)
+            let pass = UnsafeBufferPointer(start: output.floatChannelData![0], count: Int(output.frameLength))
+            if let onset, rendered.count >= onset + settle + window { ended = pass.allSatisfy { abs($0) <= 1e-6 } }
+            rendered.append(contentsOf: pass)
+            onset = onset ?? rendered.firstIndex { abs($0) > 1e-6 }
+        }
+        let start = try #require(onset, "the play never sounded in \(passes) render passes") + settle
+        #expect(ended, "the play did not end within \(passes) render passes")
+        try #require(rendered.count >= start + window)
+        return sqrt(rendered[start..<(start + window)].reduce(0) { $0 + $1 * $1 } / Float(window))
+    }
 }
 
 /// Reports collected by escaping main-actor callbacks.
@@ -214,7 +241,10 @@ private struct Handed<T>: @unchecked Sendable { let value: T }
 
 /// The kept clip is keyed by the converted audio's identity, never by its
 /// file: a catalog that names the same file with another identity plays the
-/// file's new audio, not what an earlier play kept.
+/// file's new audio, not what an earlier play kept. The second player
+/// attaches to the running engine, as a play in the Studio does, so each
+/// play is rendered to its end and its RMS counted from its own onset
+/// (`onsetRMS`, #465).
 @MainActor @Test func sourceStudioVoiceKeptClipsFollowTheirIdentityNotTheirFile() throws {
     let directory = try VoiceFixture.directory(); defer { try? FileManager.default.removeItem(at: directory) }
     let quiet = try VoiceFixture.tone("a.wav", in: directory, amplitude: 0.25)
@@ -225,9 +255,10 @@ private struct Handed<T>: @unchecked Sendable { let value: T }
                                                  directory: directory, pitch: 1, volume: 1)
         defer { player.dispose() }
         #expect(try player.play())
-        return try VoiceFixture.renderRMS(bus).rms
+        return try VoiceFixture.onsetRMS(bus)
     }
     let before = try rms(VoiceFixture.catalog(in: directory, files: [("a.wav", OriginalCardFixture.hash(quiet))]))
+    #expect(bus.engine.isRunning)
     // The converter rewrote the file and the catalog row's identity.
     let loud = try VoiceFixture.tone("a.wav", in: directory, amplitude: 0.5)
     let after = try rms(VoiceFixture.catalog(in: directory, files: [("a.wav", OriginalCardFixture.hash(loud))]))
