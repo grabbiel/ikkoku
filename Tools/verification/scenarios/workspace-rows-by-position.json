@@ -1,0 +1,29 @@
+{
+  "steps": [
+    {"op": "addFolder", "name": "Row A"},
+    {"op": "addFolder", "name": "Row B"},
+    {"op": "addFolder", "name": "Row C"},
+    {"op": "deselect"},
+    {"op": "assertWorkspaceRows", "added": "Row A", "index": -3, "name": "Row A", "selected": false},
+    {"op": "assertWorkspaceRows", "added": "Row C", "index": -1, "name": "Row C", "selected": false},
+    {"op": "delete", "added": "Row A"},
+    {"op": "rename", "added": "Row C", "name": "Row C renamed"},
+    {"op": "assertWorkspaceRows", "added": "Row B", "index": -2, "name": "Row B", "selected": false},
+    {"op": "assertWorkspaceRows", "added": "Row C renamed", "index": -1, "name": "Row C renamed", "selected": false},
+    {"op": "select", "added": "Row B"},
+    {"op": "duplicate", "added": "Row B"},
+    {"op": "assertWorkspaceRows", "added": "Row B copy", "index": -1, "name": "Row B copy", "selected": true},
+    {"op": "assertWorkspaceRows", "added": "Row B", "index": -3, "name": "Row B", "selected": false},
+    {"op": "assertWorkspaceRows", "added": "Row C renamed", "index": -2, "name": "Row C renamed", "selected": false},
+    {"op": "undo"},
+    {"op": "undo"},
+    {"op": "undo"},
+    {"op": "deselect"},
+    {"op": "assertWorkspaceRows", "added": "Row A", "index": -3, "name": "Row A", "selected": false},
+    {"op": "assertWorkspaceRows", "added": "Row C", "index": -1, "name": "Row C", "selected": false},
+    {"op": "export", "path": ".local/verification/scenario-exports/workspace-rows-by-position.png"},
+    {"op": "reimport", "path": ".local/verification/scenario-exports/workspace-rows-by-position.png"},
+    {"op": "assertWorkspaceRows"},
+    {"op": "assert", "key": 0, "visible": true}
+  ]
+}

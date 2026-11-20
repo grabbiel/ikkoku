@@ -1,0 +1,15 @@
+{
+  "steps": [],
+  "inspectorUI": {
+    "steps": [
+      {
+        "op": "deselect"
+      },
+      {
+        "op": "eyeFocus",
+        "count": 3,
+        "capture": ".local/verification/scenario-exports/workspace-eye-focus.png"
+      }
+    ]
+  }
+}

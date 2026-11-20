@@ -48,6 +48,12 @@ struct StudioScenario: Decodable {
         /// assert only (#384): how many undo and redo steps the history holds,
         /// and how many objects the document has.
         let undoDepth: Int?, redoDepth: Int?, objectCount: Int?
+        /// assertWorkspaceRows only (#410): how many rows the list has, and
+        /// whether the addressed object's row (`key`, `copy` or `added`, at
+        /// row `index`, negative from the end, showing `name`) is selected;
+        /// `selected: true` also requires it to be the only selected row.
+        let rows: Int?
+        let selected: Bool?
         let visible: Bool?
         let name: String?
         let index: Int?
@@ -620,7 +626,7 @@ struct StudioScenario: Decodable {
                  seconds, dx, dy, eyeLook, blink, handPattern, mode, axis, pixels, toolbarSteady, ikGroup, selects, sourceIK,
                  render, exportIdenticalToSource, errorContains, outfit, accessoryLabels, pluginMount, state, clothes, expression,
                  sex, character, chain, delta, ik, edit, build, parent, children, absent, copy, added, activeCopyOf,
-                 undoDepth, redoDepth, objectCount, aid, routeEdit, route, routeLines, sourceMap, liveSamplers, decodes, settles
+                 undoDepth, redoDepth, objectCount, rows, selected, aid, routeEdit, route, routeLines, sourceMap, liveSamplers, decodes, settles
         }
 
         init(from decoder: Decoder) throws {
@@ -737,6 +743,8 @@ struct StudioScenario: Decodable {
             undoDepth = try c.decodeIfPresent(Int.self, forKey: .undoDepth)
             redoDepth = try c.decodeIfPresent(Int.self, forKey: .redoDepth)
             objectCount = try c.decodeIfPresent(Int.self, forKey: .objectCount)
+            rows = try c.decodeIfPresent(Int.self, forKey: .rows)
+            selected = try c.decodeIfPresent(Bool.self, forKey: .selected)
             aid = try c.decodeIfPresent(Bool.self, forKey: .aid)
             routeEdit = try c.decodeIfPresent(RouteEditValue.self, forKey: .routeEdit)
             route = try c.decodeIfPresent(RouteValue.self, forKey: .route)
@@ -1913,7 +1921,7 @@ struct StudioScenario: Decodable {
             case "select":
                 guard let id = object(step) else { record(step, false, "select: no object with source key \(step.key ?? -1)"); continue }
                 studio.selection = id
-                record(step, true, "selected source key \(step.key!)")
+                record(step, true, "selected \(describe(step))")
             case "deselect":
                 studio.selection = nil
                 record(step, true, "selection cleared")
@@ -1925,12 +1933,41 @@ struct StudioScenario: Decodable {
                 let selected = published.entries.filter(\.selected).map { row in
                     studio.doc.object(row.id)?.sourceObjectKey.map { "key \($0)" } ?? row.name
                 }
-                if published == fresh {
-                    record(step, true, "workspace rows equal a rebuild: \(published.entries.count) rows, selected \(selected.isEmpty ? "none" : selected.joined(separator: ", "))")
-                } else {
+                guard published == fresh else {
                     let differing = zip(published.entries, fresh.entries).filter { $0 != $1 }.count
-                    record(step, false, "assertWorkspaceRows: published rows differ from a rebuild (\(published.entries.count) vs \(fresh.entries.count) rows, \(differing) differ)")
+                    record(step, false, "assertWorkspaceRows: published rows differ from a rebuild (\(published.entries.count) vs \(fresh.entries.count) rows, \(differing) differ)"); continue
                 }
+                // #410: the list keys its rows by position, which is safe only
+                // while a row holds no state of its own: its entry, the list's
+                // eye focus with its slot and ring, and its actions.
+                let rowFields = Mirror(reflecting: WorkspaceRow(entry: published.entries.first ?? WorkspaceEntry(
+                    id: UUID(), name: "", kind: .folder, visible: true, depth: 0, selected: false, cameraPlaceholder: false),
+                    select: {}, toggleVisible: {})).children.map { $0.label ?? "?" }
+                guard rowFields == ["entry", "focus", "slot", "focusShown", "select", "toggleVisible"] else {
+                    record(step, false, "assertWorkspaceRows: WorkspaceRow holds more than its entry, the list's eye focus and its actions (\(rowFields.joined(separator: ", "))), which positional row ids would hand to the wrong object"); continue
+                }
+                if let rows = step.rows, rows != published.entries.count {
+                    record(step, false, "assertWorkspaceRows: \(published.entries.count) rows, expected \(rows)"); continue
+                }
+                if step.key != nil || step.added != nil {
+                    guard let id = object(step), let index = published.entries.firstIndex(where: { $0.id == id }) else {
+                        record(step, false, "assertWorkspaceRows: no row for \(describe(step))"); continue
+                    }
+                    let row = published.entries[index]
+                    var wrong: [String] = []
+                    // A negative index counts from the end (-1 is the last row).
+                    if let expected = step.index, (expected < 0 ? published.entries.count + expected : expected) != index {
+                        wrong.append("at row \(index) of \(published.entries.count), expected \(expected)")
+                    }
+                    if let name = step.name, name != row.name { wrong.append("shows \"\(row.name)\", expected \"\(name)\"") }
+                    if let flag = step.selected, flag != row.selected { wrong.append(row.selected ? "selected" : "not selected") }
+                    if step.selected == true, selected.count != 1 { wrong.append("\(selected.count) rows selected") }
+                    guard wrong.isEmpty else {
+                        record(step, false, "assertWorkspaceRows: \(describe(step)): \(wrong.joined(separator: ", "))"); continue
+                    }
+                }
+                record(step, true, "workspace rows equal a rebuild: \(published.entries.count) rows, selected \(selected.isEmpty ? "none" : selected.joined(separator: ", "))"
+                       + (step.key != nil || step.added != nil ? "; \(describe(step)) as expected" : ""))
             case "dropVoiceInputs":
                 // #437: forget every voice input the Studio holds (the cache and
                 // a reload's pending check), so the next step shows where its
@@ -1982,7 +2019,7 @@ struct StudioScenario: Decodable {
                 guard let id = object(step) else { record(step, false, "rename: no object with source key \(step.key ?? -1)"); continue }
                 guard let name = step.name, !name.isEmpty else { record(step, false, "rename: missing name"); continue }
                 studio.update(id) { $0.name = name }
-                record(step, true, "source key \(step.key!) renamed to \"\(name)\"")
+                record(step, true, "\(describe(step)) renamed to \"\(name)\"")
             case "toggleCamera":
                 guard let id = object(step) else { record(step, false, "toggleCamera: no object with source key \(step.key ?? -1)"); continue }
                 studio.toggleSourceCamera(id)
@@ -3182,8 +3219,8 @@ struct StudioScenario: Decodable {
                 studio.selection = id
                 studio.deleteSelection()
                 let gone = studio.doc.object(id) == nil
-                record(step, gone, gone ? "deleted source key \(step.key!) and its subtree (\(studio.doc.objects.count) objects left)"
-                                        : "delete: source key \(step.key!) is still in the document")
+                record(step, gone, gone ? "deleted \(describe(step)) and its subtree (\(studio.doc.objects.count) objects left)"
+                                        : "delete: \(describe(step)) is still in the document")
             case "setParent":
                 // The inspector's Parent picker (`StudioModel.setParent`).
                 guard let id = object(step) else { record(step, false, "setParent: no object \(describe(step))"); continue }
