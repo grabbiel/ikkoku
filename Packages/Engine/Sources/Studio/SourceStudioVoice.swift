@@ -73,6 +73,86 @@ public struct SourceStudioVoiceCharacter: Sendable {
     }
 }
 
+/// What a Studio voice play reads from a character record (#437): the
+/// card's voice parameters and the saved playlist with its repeat mode.
+/// Nothing else of the record, its accessory children included, so a
+/// preview's shallow record gives the same inputs, and a play needs no scene
+/// decode once a preview, the import or a reload has them.
+public struct SourceStudioVoiceInputs: Sendable {
+    /// The card's personality and pitch, or the error reading them throws.
+    /// A play rethrows it; a repeat change never reads it.
+    public let character: Result<SourceStudioVoiceCharacter, any Error>
+    /// The saved playlist and repeat mode: the voice state until the object
+    /// has its own `sourceVoice`.
+    public let initial: SourceStudioVoiceState
+
+    /// From a card a caller has already decoded (or failed to), so the
+    /// card decodes once (a build's `assemble`, the hidden card check).
+    public init(card: Result<SourceCharacterCard, any Error>, record: KoikatsuCharacterRecord) {
+        character = card.flatMap { card in Result { try SourceStudioVoiceCharacter(card: card) } }
+        initial = SourceStudioVoiceState(record: record)
+    }
+
+    public init(record: KoikatsuCharacterRecord) {
+        self.init(card: Result { try record.card() }, record: record)
+    }
+
+    /// The fallback: reads the scene file, checks it is the one `reference`
+    /// names and decodes it for the record, as every play did before #437.
+    /// The decoded scene is released here, so call it on the main thread
+    /// (#326: a GCD worker's stack cannot release the deepest tree).
+    public static func read(_ reference: SourceStudioCharacterReference) throws -> Self {
+        let handle = try FileHandle(forReadingFrom: URL(fileURLWithPath: reference.sceneFile)); defer { try? handle.close() }
+        let data = try handle.read(upToCount: 256 * 1024 * 1024 + 1) ?? Data()
+        guard data.count <= 256 * 1024 * 1024, SHA256.hash(data: data).map({ String(format: "%02x", $0) }).joined() == reference.sceneSHA256 else {
+            throw RigError.invalid("Original voice scene changed; reimport before playing.")
+        }
+        let scene = try KoikatsuSceneReader.decodeDocument(data)
+        guard let record = try? SourceStudioCharacterPreview.characterRecord(reference.objectKey, in: scene) else {
+            throw RigError.invalid("Original voice character is missing.")
+        }
+        return Self(record: record)
+    }
+}
+
+/// The voice inputs of source characters by scene and object key (#437).
+/// The key holds the scene's SHA-256, so an entry describes exactly the
+/// bytes its reference names and never goes stale; a changed scene file
+/// reaches the Studio only through a reimport, under new keys. The owner
+/// (the Studio model, on the main thread) fills it from what already holds
+/// the inputs: a built preview, the import's hidden card check, a reload's
+/// check. A key none of those covered costs one scene read, once.
+public struct SourceStudioVoiceInputCache: Sendable {
+    public struct Key: Hashable, Sendable {
+        public let sceneSHA256: String, objectKey: Int32
+        public init(_ reference: SourceStudioCharacterReference) {
+            sceneSHA256 = reference.sceneSHA256; objectKey = reference.objectKey
+        }
+        public init(sceneSHA256: String, objectKey: Int32) { self.sceneSHA256 = sceneSHA256; self.objectKey = objectKey }
+    }
+    private var entries: [Key: SourceStudioVoiceInputs] = [:]
+    public init() {}
+    public var count: Int { entries.count }
+    public func contains(_ key: Key) -> Bool { entries[key] != nil }
+    public mutating func insert(_ inputs: SourceStudioVoiceInputs, for key: Key) { entries[key] = inputs }
+
+    /// The inputs `reference` names: its entry; else `built`, a built
+    /// preview's, kept; else one scene read (`SourceStudioVoiceInputs.read`),
+    /// kept when it succeeds. A read that throws (the file changed or went,
+    /// the record is missing) keeps nothing, so a restored file plays.
+    public mutating func inputs(for reference: SourceStudioCharacterReference, built: SourceStudioVoiceInputs?) throws -> SourceStudioVoiceInputs {
+        let key = Key(reference)
+        if let inputs = entries[key] { return inputs }
+        let inputs = try built ?? SourceStudioVoiceInputs.read(reference)
+        entries[key] = inputs
+        return inputs
+    }
+
+    /// Keeps only `keys` (the references a document and its history hold).
+    public mutating func retain(_ keys: Set<Key>) { entries = entries.filter { keys.contains($0.key) } }
+    public mutating func removeAll() { entries.removeAll() }
+}
+
 public struct SourceStudioVoiceCatalog: Decodable, Sendable {
     public struct Personality: Decodable, Sendable { public let no: Int, file: String, volume: Float }
     public struct Entry: Decodable, Sendable {
