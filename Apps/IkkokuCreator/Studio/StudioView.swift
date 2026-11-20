@@ -252,7 +252,7 @@ struct StudioToolbarState: Equatable {
             selectedIsCharacter: shown.selectedIsCharacter,
             poseMode: model.poseMode, fkGroup: model.fkGroup,
             cameraSlotsFilled: shown.cameraSlotsFilled, hasSourceRoutes: shown.hasSourceRoutes,
-            canUndo: !model.undoStack.isEmpty, canRedo: !model.redoStack.isEmpty,
+            canUndo: model.canUndo, canRedo: model.canRedo,
             showGizmos: model.showGizmos, liveAnimation: model.liveAnimation, showTimeline: model.showTimeline,
             showGrid: shown.showGrid)
     }
