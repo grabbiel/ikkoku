@@ -201,11 +201,13 @@ private struct Session {
         if logged { document.recordSourceEdit(.insert([copy.id])) }
         return copy.id
     }
-    func order() throws -> (order: SourceSceneExportValidation.Order, staged: SourceSceneExportValidation.Staged, deletions: Set<Int32>) {
+    /// The order the export takes: the log's (`order`), after the legacy
+    /// check the export's edit runs (`checked`), unless `checked` is false.
+    func order(checked: Bool = true) throws -> (order: SourceSceneExportValidation.Order, staged: SourceSceneExportValidation.Staged, deletions: Set<Int32>) {
         let staged = try SourceSceneExportValidation.stage(document, source: source)
         let topology = try SourceSceneExportValidation.topologyEdits(document, against: staged.stage.document.snapshot, keys: staged.keys)
-        return (SourceSceneExportValidation.order(document, staged: staged, deletions: topology.deletions, reparents: topology.reparents),
-                staged, topology.deletions)
+        let order = SourceSceneExportValidation.order(document, staged: staged, deletions: topology.deletions, reparents: topology.reparents)
+        return (checked ? SourceSceneExportValidation.checked(order, staged: staged) : order, staged, topology.deletions)
     }
 }
 
@@ -317,9 +319,9 @@ func sourceSceneOrderReplaysALegacySceneOnItsUpgrade() throws {
     let expectedKey: Int32 = 153, expectedSlot = roots.firstIndex(of: 153)!
     #expect(expectedKey < firstFreeAtLoad)
     var expectedRoots = roots; expectedRoots[expectedSlot] = expectedKey
-    func session(_ source: KoikatsuSceneDocument, _ build: (inout Session) -> Void) throws
+    func session(_ source: KoikatsuSceneDocument, checked: Bool = true, _ build: (inout Session) -> Void) throws
         -> (order: SourceSceneExportValidation.Order, staged: SourceSceneExportValidation.Staged, deletions: Set<Int32>) {
-        var session = Session(source: source); build(&session); return try session.order()
+        var session = Session(source: source); build(&session); return try session.order(checked: checked)
     }
     var exports: [Data] = []
     for source in [legacy, upgraded] {
@@ -329,6 +331,9 @@ func sourceSceneOrderReplaysALegacySceneOnItsUpgrade() throws {
         guard case .replayed(let steps) = order else { continue }
         var edits = SourceSceneEdits(deletions: deletions); edits.order = steps
         exports.append(try staged.stage.editedData(edits))
+        // The app's export: the legacy check and the edit in one hop.
+        let exported = try SourceSceneExportValidation.editedData(staged, SourceSceneEdits(deletions: deletions), order: order)
+        #expect(exported.order == order && exported.data == exports.last)
         // The set-based keys append the copy as 159: the negative control.
         let setBased = try KoikatsuSceneReader.decodeDocument(staged.stage.editedData(SourceSceneEdits(deletions: deletions)))
         #expect(setBased.snapshot.roots.map(\.sourceKey) == roots.filter { $0 != 153 } + [159])
@@ -364,7 +369,13 @@ func sourceSceneOrderReplaysALegacySceneOnItsUpgrade() throws {
     // this upgrade adds 10 load-time bones at 159–168, so it differs (#318).
     let (second, secondStaged, secondDeletions) = try session(legacy) { $0.delete(153); $0.duplicate(156); $0.duplicate(157) }
     #expect(second == .fallback(.legacyBones))
-    _ = try secondStaged.stage.editedData(SourceSceneEdits(deletions: secondDeletions))   // no refusal
+    let setBasedSecond = try secondStaged.stage.editedData(SourceSceneEdits(deletions: secondDeletions))   // no refusal
+    // The log alone replays; the export's edit runs the legacy check, falls
+    // back and writes the set-based keys.
+    let secondLogged = try session(legacy, checked: false) { $0.delete(153); $0.duplicate(156); $0.duplicate(157) }
+    #expect(secondLogged.order == .replayed([.delete(153), .insert([0]), .insert([1])]))
+    let secondExported = try SourceSceneExportValidation.editedData(secondLogged.staged, SourceSceneEdits(deletions: secondLogged.deletions), order: secondLogged.order)
+    #expect(secondExported.order == .fallback(.legacyBones) && secondExported.data == setBasedSecond)
     #expect(try session(upgraded) { $0.delete(153); $0.duplicate(156); $0.duplicate(157) }.order == .replayed([.delete(153), .insert([0]), .insert([1])]))
     // A copy of the legacy character takes its hidden bones' keys too, even
     // when its own key was freed.

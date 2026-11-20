@@ -211,22 +211,27 @@ public enum SourceSceneTopology {
         var parent: [Int32: Int32?] = [:]
         var point: [Int32: Int32] = [:]
         var lists: [ListID: [Int32]] = [:]
+        /// One explicit stack, in the recursive walk's order (a record, its
+        /// children, then each accessory point's): it runs on the export's
+        /// caller, the main thread, so its stack must not grow with the
+        /// depth (#326).
         init(_ snapshot: KoikatsuSceneSnapshot) {
             lists[ListID(owner: nil, point: nil)] = snapshot.roots.map(\.sourceKey)
-            func visit(_ record: KoikatsuObjectRecord, parent: Int32?, point: Int32?) {
+            var pending: [(record: KoikatsuObjectRecord, parent: Int32?, point: Int32?)] = snapshot.roots.reversed().map { ($0, nil, nil) }
+            while let (record, parent, point) = pending.popLast() {
                 records[record.sourceKey] = record
                 self.parent[record.sourceKey] = .some(parent)
                 if let point { self.point[record.sourceKey] = point }
                 if record.kind == .folder || record.kind == .item || record.kind == .route {
                     lists[ListID(owner: record.sourceKey, point: nil)] = record.children.map(\.sourceKey)
                 }
-                for child in record.children { visit(child, parent: record.sourceKey, point: nil) }
+                var next: [(record: KoikatsuObjectRecord, parent: Int32?, point: Int32?)] = record.children.map { ($0, record.sourceKey, nil) }
                 for (key, children) in record.character?.accessoryChildren ?? [:] {
                     lists[ListID(owner: record.sourceKey, point: key)] = children.map(\.sourceKey)
-                    for child in children { visit(child, parent: record.sourceKey, point: key) }
+                    next += children.map { ($0, record.sourceKey, key) }
                 }
+                pending += next.reversed()
             }
-            for root in snapshot.roots { visit(root, parent: nil, point: nil) }
         }
     }
 

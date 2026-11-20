@@ -18,7 +18,7 @@ public enum SourceSceneExportValidation {
         public let objects: [UUID]
         /// Whether the source is a scene from an older CharaStudio with a
         /// character, whose load-time FK bones hold keys the stage does not
-        /// see (`SourceSceneExportValidation.order`).
+        /// see (`SourceSceneExportValidation.checked`).
         public let legacyCharacters: Bool
     }
 

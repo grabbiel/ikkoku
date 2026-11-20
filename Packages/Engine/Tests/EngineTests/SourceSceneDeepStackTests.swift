@@ -31,6 +31,10 @@ private let mainThreadStack = 8 << 20
 /// Larger than the decode stack: every operation runs in line on it, so
 /// `stackTaken` sees all of it.
 private let measuringStack = 96 << 20
+/// Smaller than the decode stack, so a routed operation (`onDecodeStack`)
+/// hops from it, and larger than any recursion at the cap: `stackTaken` sees
+/// what stays on the caller.
+private let callerMeasuringStack = 48 << 20
 
 private enum DeepChain: String, CaseIterable { case folders, characters }
 
@@ -697,9 +701,12 @@ private final class Handed: Sendable {}
 /// less than `half`, for real on a thread of `half` bytes: a walk that needs
 /// more fails the expectation instead of overflowing the thread. The walk is
 /// iterative, so its stack does not grow with the depth: a recursion at the
-/// cap took 0.6 MiB (Release) to 9.6 MiB (Debug).
-private func onHalfItsStack<T: Sendable>(_ name: String, half: Int, _ walk: @escaping @Sendable () throws -> T) async throws -> T? {
-    let taken = try await onThread(stack: measuringStack) { () -> Int in
+/// cap took 0.6 MiB (Release) to 9.6 MiB (Debug). A `routed` walk wraps a
+/// routed operation: it is measured where that operation hops to the decode
+/// stack, so the measure is what stays on the caller.
+private func onHalfItsStack<T: Sendable>(_ name: String, half: Int, routed: Bool = false,
+                                         _ walk: @escaping @Sendable () throws -> T) async throws -> T? {
+    let taken = try await onThread(stack: routed ? callerMeasuringStack : measuringStack) { () -> Int in
         var result: T?
         let bytes = try stackTaken { result = try walk() }
         withExtendedLifetime(result) {}
@@ -715,8 +722,10 @@ private func onHalfItsStack<T: Sendable>(_ name: String, half: Int, _ walk: @esc
 /// The walks that stay on a caller's stack (#326), iterative, on half the
 /// main thread's 8 MiB at the deepest scenes: the export's insertions (an
 /// added chain of folders, parents first, in document order), the route
-/// stepping (a route at the deepest level) and whether the tree holds a
-/// character (one at the deepest level, and none).
+/// stepping (a route at the deepest level), whether the tree holds a
+/// character (one at the deepest level, and none), and the export's order
+/// (#278: a delete of the deepest chain, then a copy of a second root) with
+/// its edit, whose legacy check replays the steps in the edit's one hop.
 @Test func theCallerWalksHoldTheDeepestScenesOnHalfTheMainThreadsStack() async throws {
     let half = mainThreadStack / 2
     var document = StudioDocument()
@@ -760,6 +769,52 @@ private func onHalfItsStack<T: Sendable>(_ name: String, half: Int, _ walk: @esc
         return [character.containsCharacter, folders.containsCharacter]
     }
     #expect(characters == [true, false])
+
+    // The app's import of a chain and a second root, one object per record;
+    // then the chain deleted and the second root copied, both logged.
+    try await liveTickOffPool {
+        var chain = TopologyNode.folder(deepest, [])
+        for key in stride(from: deepest - 1, through: 0, by: -1) { chain = .folder(key, [chain]) }
+        let second = deepest + 1
+        let source = try KoikatsuSceneReader.decodeDocument(TopologyScene(roots: [chain, .folder(second, [])]).data)
+        var document = StudioDocument()
+        document.sourceSceneFile = "/fixture/deep.png"; document.sourceSceneSHA256 = String(repeating: "a", count: 64)
+        document.sourceStructuralEdits = SourceSceneEditLog()
+        var parent: UUID?
+        for key in Int32(0)...second {
+            var object = StudioObject(name: "Source \(key)", kind: .folder)
+            object.sourceObjectKey = key; object.parent = key == second ? nil : parent
+            document.objects.append(object); parent = object.id
+        }
+        document.removeRecordingSourceEdit(document.objects[0].id)
+        var copy = try #require(document.objects.first { $0.sourceObjectKey == second })
+        copy.id = UUID(); copy.sourceObjectKey = nil; copy.sourceDuplicateOf = second
+        document.objects.append(copy); document.recordSourceEdit(.insert([copy.id]))
+        let staged = try SourceSceneExportValidation.stage(document, source: source)
+        let topology = try SourceSceneExportValidation.topologyEdits(document, against: staged.stage.document.snapshot, keys: staged.keys)
+        kept.keep("source", source); kept.keep("document", document); kept.keep("deletions", topology.deletions)
+        // The legacy check runs on a scene from an older CharaStudio with a
+        // character; forced here, so the edit replays the deepest delete.
+        kept.keep("staged", SourceSceneExportValidation.Staged(stage: staged.stage, keys: staged.keys, objects: staged.objects,
+                                                               legacyCharacters: true))
+    }
+    let order = try await onHalfItsStack("export order", half: half) { () -> SourceSceneExportValidation.Order in
+        let document: StudioDocument = kept["document"], staged: SourceSceneExportValidation.Staged = kept["staged"]
+        return SourceSceneExportValidation.order(document, staged: staged, deletions: kept["deletions"], reparents: [])
+    }
+    #expect(order == .replayed([.delete(0), .insert([0])]))
+    if let order {
+        // Routed: the edit and its check hop to the decode stack; the scene
+        // read back is decoded and dropped there too.
+        let exported = try await onHalfItsStack("export edit with the legacy check", half: half, routed: true) {
+            () -> (SourceSceneExportValidation.Order, [Int32]) in
+            let staged: SourceSceneExportValidation.Staged = kept["staged"]
+            let (data, taken) = try SourceSceneExportValidation.editedData(staged, SourceSceneEdits(deletions: kept["deletions"]), order: order)
+            return (taken, try onDecodeStack { try KoikatsuSceneReader.decode(data).roots.map(\.sourceKey) })
+        }
+        // The copy takes the chain's freed key and root slot: the check held.
+        #expect(exported?.0 == order && exported?.1 == [0, deepest + 1])
+    }
     try await liveTickOffPool { kept.dropAll() }
 }
 

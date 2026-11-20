@@ -3372,9 +3372,9 @@ final class StudioModel: ViewportInputHandler, LivePacedHandler {
         var edits = SourceSceneEdits(deletions: topology.deletions, reparents: topology.reparents)
         edits.lightLimit = sourceExportUnlimitedLights ? .unlimitedMapLights : .charaStudio
         // #278: replayed in the order they were made, deletes and additions
-        // give each added record CharaStudio's key and root position.
+        // give each added record CharaStudio's key and root position. The
+        // edit below sets the steps after its legacy check.
         let order = SourceSceneExportValidation.order(doc, staged: staged, deletions: topology.deletions, reparents: topology.reparents)
-        if case .replayed(let steps) = order { edits.order = steps }
         // #320: every exported record is one document object, so the
         // exported scene's lights are counted here.
         var lights = 0
@@ -3554,10 +3554,12 @@ final class StudioModel: ViewportInputHandler, LivePacedHandler {
             guard let image = host.renderer.capture(frame: thumbnailFrame, width: 640, height: 360) else { throw RigError.invalid("Could not render the edited Studio thumbnail.") }
             edits.thumbnailData = try CaptureOutput.pngData(image)
         }
-        try staged.stage.editedData(edits).write(to: url, options: .atomic)
+        // One hop onto the decode stack for the legacy check and the edit (#326).
+        let exported = try SourceSceneExportValidation.editedData(staged, edits, order: order)
+        try exported.data.write(to: url, options: .atomic)
         // ST-T05a's legacy note, ST-T03i's orphaned plug-in data and #278's
         // fallback reason, in that order.
-        status = SourceSceneExportValidation.exportStatus(fileName: url.lastPathComponent, source: source, order: order)
+        status = SourceSceneExportValidation.exportStatus(fileName: url.lastPathComponent, source: source, order: exported.order)
         // #320: a CharaStudio without KK_Fix_UnlimitedMapLights loads every
         // root light (SceneInfo.Load) but drops each nested light loaded once
         // two are counted (ObjectInfoAssist.LoadChild).

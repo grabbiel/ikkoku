@@ -337,6 +337,10 @@ public extension SourceSceneExportValidation {
     /// set-based keys and appended roots are CharaStudio's, and the export
     /// is unchanged. A document without a log falls back only when it
     /// deletes, since nothing else shows it needed the order.
+    ///
+    /// It runs on the export's caller, the main thread, and walks no deeper
+    /// than its explicit stacks (#326). The legacy check, which replays the
+    /// steps, runs in the export's edit instead (`editedData(_:_:order:)`).
     static func order(_ document: StudioDocument, staged: Staged, deletions: Set<Int32>,
                       reparents: [SourceSceneEdits.Reparent]) -> Order {
         guard !staged.objects.isEmpty else { return .unneeded }
@@ -353,12 +357,12 @@ public extension SourceSceneExportValidation {
             switch edit {
             case .delete(let key?):
                 guard let record = tree.records[key] else { return .fallback(.mismatch) }
-                func collect(_ record: KoikatsuObjectRecord) {
-                    logged.insert(record.sourceKey)
-                    record.children.forEach(collect)
-                    for children in (record.character?.accessoryChildren ?? [:]).values { children.forEach(collect) }
+                var pending = [record]
+                while let next = pending.popLast() {
+                    logged.insert(next.sourceKey)
+                    pending += next.children
+                    for children in (next.character?.accessoryChildren ?? [:]).values { pending += children }
                 }
-                collect(record)
                 steps.append(.delete(key)); freed = true
             case .delete(nil): return .fallback(.addThenDelete)
             case .insert(let ids):
@@ -384,8 +388,30 @@ public extension SourceSceneExportValidation {
         if let unordered { return .fallback(unordered) }
         if !reparents.isEmpty { return .fallback(.move) }
         if staged.stage.layout.lights.contains(true) { return .fallback(.light) }
-        if staged.legacyCharacters, !legacyReplayIsExact(staged, steps) { return .fallback(.legacyBones) }
         return .replayed(steps)
+    }
+
+    /// `order` after the legacy check: a replay on a scene from an older
+    /// CharaStudio with a character stands only where `legacyReplayIsExact`
+    /// holds, and falls back (`legacyBones`) otherwise. The check replays
+    /// the steps, which recurses once per nesting level, so the export runs
+    /// it on the decode stack (`editedData(_:_:order:)`).
+    static func checked(_ order: Order, staged: Staged) -> Order {
+        guard case .replayed(let steps) = order, staged.legacyCharacters, !legacyReplayIsExact(staged, steps) else { return order }
+        return .fallback(.legacyBones)
+    }
+
+    /// The export's edit (#278): `order` after the legacy check (`checked`),
+    /// its steps set on `edits`, and the stage's edit, in one hop onto the
+    /// decode stack (#326; the stage's own hop then runs in line). Returns
+    /// the scene and the order it took, for the status (`exportStatus`).
+    static func editedData(_ staged: Staged, _ edits: SourceSceneEdits, order: Order) throws -> (data: Data, order: Order) {
+        try SourceStudioCharacterBatch.onDecodeStack("Ikkoku scene edit") {
+            let order = checked(order, staged: staged)
+            var edits = edits
+            if case .replayed(let steps) = order { edits.order = steps }
+            return (try staged.stage.editedData(edits), order)
+        }
     }
 
     /// ST-T05a with #278: a legacy character (`Staged.legacyCharacters`)
