@@ -649,6 +649,8 @@ SCENARIO_OPS = {"select", "setVisible", "rename", "toggleCamera", "toggleRoute",
                 "dragIKGuide",
                 # #439: the Pose tab's source IK toggles, and a click on an IK guide.
                 "setSourceIKEnabled", "clickIKGuide",
+                # #437: a voice play's input resolution (scene decodes, live-step settles).
+                "assertVoice", "dropVoiceInputs",
                 # #448: one component of the Object tab's Position field.
                 "setPosition"}
 
@@ -962,7 +964,7 @@ class StudioScenarioLaneTests(unittest.TestCase):
                       and not name.startswith(("maker-", "gameplay-")))
 
     def test_lane_validates_and_covers_every_scenario(self):
-        self.assertEqual(len(self.checks), 108)
+        self.assertEqual(len(self.checks), 110)
         referenced = set()
         for check in self.checks:
             scenario = check["env"]["IKKOKU_STUDIO_SCENARIO"]
@@ -1092,6 +1094,14 @@ class StudioScenarioLaneTests(unittest.TestCase):
                         self.assertIs(type(step["key"]), int)
                     if step["build"] in ("export", "loadRoute"):
                         self.assertTrue(step["path"].startswith(".local/verification/scenario-exports/"))
+                if op == "assertVoice":
+                    self.assertIs(type(step["key"]), int)
+                    for field in ("decodes", "settles"):
+                        if field in step:
+                            self.assertIs(type(step[field]), int)
+                            self.assertGreaterEqual(step[field], 0)
+                    if "inputsFrom" in step:
+                        self.assertIn(step["inputsFrom"], ("cache", "check", "preview", "scene"))
                 if op == "measureAccessoryLabels":
                     self.assertIs(type(step["index"]), int)
                     self.assertIn(step["index"], range(100, 2001))
@@ -1533,12 +1543,15 @@ class StudioScenarioLaneTests(unittest.TestCase):
                 exported, imported = ops.index("export"), ops.index("reimport")
                 self.assertLess(exported, imported)
                 self.assertEqual(steps[exported]["path"], steps[imported]["path"])
-            elif check["id"] in ("studio-scenario-hidden-attachment-status", "studio-scenario-hidden-animation-clock"):
+            elif check["id"] in ("studio-scenario-hidden-attachment-status", "studio-scenario-hidden-animation-clock",
+                                 "studio-scenario-voice-inputs"):
                 # #373 lazy hidden characters: a hidden character must stay
                 # unbuilt (and its data-only clock keep running) across the
                 # original-format export/reimport AND a same-process native
                 # save and load, so these checks run both round trips. They
                 # have no fresh-process partner (each reloads its own save).
+                # #437's voice inputs check follows the same path: an import's
+                # hidden card check, then a native reload's check.
                 self.assertEqual((ops.count("saveDocument"), ops.count("loadDocument")), (1, 1))
                 saved, loaded = ops.index("saveDocument"), ops.index("loadDocument")
                 self.assertLess(saved, loaded)

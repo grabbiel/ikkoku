@@ -166,10 +166,31 @@ public enum KoikatsuReadError: Error, LocalizedError, Sendable, Equatable {
 /// and, through its load branches, the scene versions 0.0.5 through 1.0.4.1
 /// it still loads (KoikatsuLegacyScenes.swift). Records are variable-length;
 /// unknown kinds fail rather than attempting unsafe skipping.
+/// #437: counts the scene decodes (`KoikatsuSceneReader.decode` and
+/// `decodeDocument`) that the task binding it starts, so a test or the
+/// Studio scenario check can show that a voice play decodes no scene. The
+/// binding is task-local, so tests running in parallel count only their own
+/// decodes; the count is taken on the caller, before the decode moves to the
+/// decode stack, where the binding does not follow. Unbound, a decode reads
+/// one task-local and counts nothing.
+public final class SourceSceneDecodeProbe: @unchecked Sendable {
+    @TaskLocal public static var current: SourceSceneDecodeProbe?
+    private let lock = NSLock()
+    private var decodes = 0
+    public init() {}
+    /// The decodes counted so far.
+    public var count: Int { lock.lock(); defer { lock.unlock() }; return decodes }
+    static func record() {
+        guard let probe = current else { return }
+        probe.lock.lock(); probe.decodes += 1; probe.lock.unlock()
+    }
+}
+
 public enum KoikatsuSceneReader {
     /// On the decode stack (`onDecodeStack`, #326), as `decodeDocument`.
     public static func decode(_ data: Data) throws -> KoikatsuSceneSnapshot {
-        try SourceStudioCharacterBatch.onDecodeStack("Ikkoku scene decode") {
+        SourceSceneDecodeProbe.record()
+        return try SourceStudioCharacterBatch.onDecodeStack("Ikkoku scene decode") {
             var reader = try KoikatsuBinaryReader(data)
             return try reader.snapshot()
         }

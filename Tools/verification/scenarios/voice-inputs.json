@@ -1,0 +1,21 @@
+{
+  "steps": [
+    {"op": "assert", "characterBuilt": {"key": 65, "built": true}},
+    {"op": "assertVoice", "key": 65, "decodes": 0},
+    {"op": "dropVoiceInputs"},
+    {"op": "assertVoice", "key": 65, "decodes": 0},
+    {"op": "setVisible", "key": 622, "visible": false},
+    {"op": "export", "path": ".local/verification/scenario-exports/voice-inputs.png"},
+    {"op": "reimport", "path": ".local/verification/scenario-exports/voice-inputs.png"},
+    {"op": "assert", "characterBuilt": {"key": 0, "built": false}},
+    {"op": "assertVoice", "key": 0, "decodes": 0},
+    {"op": "dropVoiceInputs"},
+    {"op": "assertVoice", "key": 0, "decodes": 1},
+    {"op": "assertVoice", "key": 0, "decodes": 0},
+    {"op": "saveDocument", "path": ".local/verification/scenario-exports/voice-inputs-document.png"},
+    {"op": "loadDocument", "path": ".local/verification/scenario-exports/voice-inputs-document.png"},
+    {"op": "assert", "characterBuilt": {"key": 0, "built": false}},
+    {"op": "assertVoice", "key": 0, "decodes": 0},
+    {"op": "assert", "characterBuilt": {"key": 0, "built": false}}
+  ]
+}
