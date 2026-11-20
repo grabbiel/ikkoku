@@ -2131,7 +2131,8 @@ final class StudioModel: ViewportInputHandler, LivePacedHandler {
 
     /// Closes the edit-coalescing window, so the next edit takes its own undo
     /// snapshot. The scenario runner calls it before every step: each step
-    /// stands for a separate user gesture, however fast the steps run.
+    /// stands for a separate user gesture, however fast the steps run,
+    /// unless the step sets `sameGesture` (#448).
     func endUndoCoalescing() { undoSteps.endCoalescing() }
 
     /// Undo/redo keeps the SHA-gated source runtime caches (route runtimes,
@@ -2165,6 +2166,12 @@ final class StudioModel: ViewportInputHandler, LivePacedHandler {
             defer { plugins.abort() }
             history.stepBack(leaving: doc)
             applyHistoryDocument(candidate, plugins: plugins, resources: resources)
+            // #448: Undo is a gesture of its own. Without this an edit right
+            // after it joined the step it had just undone: no snapshot, the
+            // redo stack kept, and a Redo then dropped the edit. Redo needs no
+            // window end: every step start records and clears redo, so the
+            // redo stack is non-empty only after an Undo closed the window.
+            undoSteps.endCoalescing()
             status = "Undo"
         } catch { status = "Plugin restore: \(error)" }
     }
