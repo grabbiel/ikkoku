@@ -3690,6 +3690,85 @@
       "timeout": 600
     },
     {
+      "id": "studio-scenario-voice-inputs",
+      "argv": [
+        ".local/build/Build/Products/Debug/Ikkoku.app/Contents/MacOS/Ikkoku"
+      ],
+      "fixtures": [
+        {
+          "env": "IKKOKU_SOURCE_SCENE",
+          "kind": "file",
+          "from": "IKKOKU_STUDIO_SCENARIO_SCENE"
+        },
+        {
+          "env": "IKKOKU_SOURCE_AVATAR",
+          "kind": "file"
+        },
+        {
+          "env": "IKKOKU_MAKER_LIBRARY",
+          "kind": "file"
+        },
+        {
+          "env": "IKKOKU_STUDIO_ANIMATION_CATALOG",
+          "kind": "file"
+        }
+      ],
+      "env": {
+        "IKKOKU_STUDIO_SCENARIO": "Tools/verification/scenarios/voice-inputs.json",
+        "IKKOKU_STUDIO_SCENARIO_REPORT": ".local/verification/reports/studio-scenario-voice-inputs.json"
+      },
+      "referenceTier": "app-smoke",
+      "tolerance": "#437: a voice play's inputs come from what already holds them, with no scene decode and no live-step settle. The built character (key 65) resolves with 0 decodes from the cache, and again from its preview after the voice inputs are dropped. Folder 622 is hidden, exported and reimported, so character 0 is unbuilt: it resolves with 0 decodes from the import's hidden card check, 1 decode after the inputs are dropped, then 0 (kept). A native save and a same-process load of the same scene keep the inputs: 0 decodes, the character still unbuilt. Every resolution settles the live step 0 times; each repeat change after it decodes nothing. The next check loads the saved document in a fresh process.",
+      "artifacts": [
+        {
+          "path": ".local/verification/reports/studio-scenario-voice-inputs.json",
+          "kind": "scenario-report"
+        },
+        {
+          "path": ".local/verification/scenario-exports/voice-inputs.png",
+          "kind": "exported-scene"
+        },
+        {
+          "path": ".local/verification/scenario-exports/voice-inputs-document.png",
+          "kind": "saved-document"
+        }
+      ],
+      "timeout": 600
+    },
+    {
+      "id": "studio-scenario-voice-inputs-load",
+      "argv": [
+        ".local/build/Build/Products/Debug/Ikkoku.app/Contents/MacOS/Ikkoku"
+      ],
+      "fixtures": [
+        {
+          "env": "IKKOKU_SOURCE_AVATAR",
+          "kind": "file"
+        },
+        {
+          "env": "IKKOKU_MAKER_LIBRARY",
+          "kind": "file"
+        },
+        {
+          "env": "IKKOKU_STUDIO_ANIMATION_CATALOG",
+          "kind": "file"
+        }
+      ],
+      "env": {
+        "IKKOKU_STUDIO_SCENARIO": "Tools/verification/scenarios/voice-inputs-load.json",
+        "IKKOKU_STUDIO_SCENARIO_REPORT": ".local/verification/reports/studio-scenario-voice-inputs-load.json"
+      },
+      "referenceTier": "app-smoke",
+      "tolerance": "#437, D2: loads the document the previous check saved, in a fresh process with NO IKKOKU_SOURCE_SCENE (the first step is loadDocument). The load rehydrates the scene file once; that decode's records feed the reload's card check, which covers only the characters the reload leaves unbuilt (the build predicate `sourceBuildWanted` is false). Character 65, shown and built, is not in the check and resolves from its preview; character 0, still unbuilt (folder 622 hidden), resolves from the check, then from the cache. Each resolution makes 0 scene decodes and 0 live-step settles, and each repeat change decodes nothing.",
+      "artifacts": [
+        {
+          "path": ".local/verification/reports/studio-scenario-voice-inputs-load.json",
+          "kind": "scenario-report"
+        }
+      ],
+      "timeout": 600
+    },
+    {
       "id": "studio-scenario-hidden-attachment-status",
       "argv": [
         ".local/build/Build/Products/Debug/Ikkoku.app/Contents/MacOS/Ikkoku"

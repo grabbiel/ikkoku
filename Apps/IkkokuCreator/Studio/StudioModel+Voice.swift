@@ -1,5 +1,4 @@
 import Foundation
-import CryptoKit
 import Studio
 import Scene
 
@@ -14,11 +13,11 @@ extension StudioModel {
                 throw RigError.invalid("The scene's voice catalog is unresolved; see the source compatibility details.")
             }
             if let previous = sourceVoicePlayers.removeValue(forKey: id) { previous.dispose() }
-            let record = try sourceVoiceRecord(object)
-            let character = try SourceStudioVoiceCharacter(card: record.card())
+            let inputs = try sourceVoiceInputs(object)
+            let character = try inputs.character.get()
             let catalogURL = URL(fileURLWithPath: path), catalog = try SourceStudioVoiceCatalog.load(url: catalogURL)
             sourceAudioBus.voiceVolume = catalog.voiceVolume ?? 1
-            let player = try SourceStudioVoicePlayer(bus: sourceAudioBus, state: object.sourceVoice ?? .init(record: record),
+            let player = try SourceStudioVoicePlayer(bus: sourceAudioBus, state: object.sourceVoice ?? inputs.initial,
                 catalog: catalog, directory: catalogURL.deletingLastPathComponent(), pitch: character.pitch, volume: catalog.volume(personality: character.personality))
             sourceVoicePlayers[id] = player
             if try player.play(index: index) { status = "Playing voice playlist." }
@@ -33,29 +32,48 @@ extension StudioModel {
     func pruneSourceVoices() {
         let ids = Set(doc.objects.filter { $0.sourceCharacter != nil }.map(\.id))
         for id in sourceVoicePlayers.keys.filter({ !ids.contains($0) }) { stopSourceVoice(id) }
+        // #437: once per scene change, never per edit, the voice inputs keep
+        // only the references the document and its history hold.
+        guard doc.sourceSceneSHA256 != sourceVoiceInputScene else { return }
+        sourceVoiceInputScene = doc.sourceSceneSHA256
+        var keys = Set<SourceStudioVoiceInputCache.Key>()
+        for document in [doc] + undoStack + redoStack {
+            for object in document.objects { if let reference = object.sourceCharacter { keys.insert(.init(reference)) } }
+        }
+        sourceVoiceInputCache.retain(keys)
+        if let pending = sourceVoicePendingCheck,
+           !pending.keys.contains(where: { keys.contains(.init(sceneSHA256: pending.sceneSHA256, objectKey: $0)) }) {
+            pending.check.cancel(); sourceVoicePendingCheck = nil
+        }
     }
     func setSourceVoiceRepeat(_ id: UUID, mode: Int32) {
         do {
             guard (0...2).contains(mode), let object = doc.object(id) else { throw RigError.invalid("Invalid voice repeat setting.") }
-            var voice = try object.sourceVoice ?? SourceStudioVoiceState(record: sourceVoiceRecord(object))
+            // The saved state alone: a card the voice cannot read never blocks a repeat change.
+            var voice = try object.sourceVoice ?? sourceVoiceInputs(object).initial
             voice.repeatMode = mode
             update(id) { $0.sourceVoice = voice }
             sourceVoicePlayers[id]?.repeatMode = mode
         } catch { status = "Voice: \(error)" }
     }
-    private func sourceVoiceRecord(_ object: StudioObject) throws -> KoikatsuCharacterRecord {
+    /// What a voice play or repeat change reads for `object` (#437): the
+    /// cache's entry; else the built preview's, read without settling the
+    /// live step (`sourceVoicePreviewInputs`); else a native reload's check;
+    /// else one read of the scene file, under today's SHA guard and errors.
+    /// Each is kept, so a character's scene is decoded at most once. Built
+    /// and cached characters play the content they were imported with, as
+    /// their previews show it; a scene file changed since is not read again.
+    func sourceVoiceInputs(_ object: StudioObject) throws -> SourceStudioVoiceInputs {
         guard let reference = object.sourceCharacter else { throw RigError.invalid("Selected object is not an original character.") }
-        let handle = try FileHandle(forReadingFrom: URL(fileURLWithPath: reference.sceneFile)); defer { try? handle.close() }
-        let data = try handle.read(upToCount: 256 * 1024 * 1024 + 1) ?? Data()
-        guard data.count <= 256 * 1024 * 1024, SHA256.hash(data: data).map({ String(format: "%02x", $0) }).joined() == reference.sceneSHA256 else {
-            throw RigError.invalid("Original voice scene changed; reimport before playing.")
+        let key = SourceStudioVoiceInputCache.Key(reference)
+        if !sourceVoiceInputCache.contains(key), let pending = sourceVoicePendingCheck,
+           pending.sceneSHA256 == key.sceneSHA256, pending.keys.contains(key.objectKey) {
+            // Waits for the check's worker, done long before a click.
+            for (objectKey, inputs) in zip(pending.keys, pending.check.voiceInputs()) {
+                sourceVoiceInputCache.insert(inputs, for: .init(sceneSHA256: pending.sceneSHA256, objectKey: objectKey))
+            }
+            sourceVoicePendingCheck = nil
         }
-        var stack = try KoikatsuSceneReader.decodeDocument(data).snapshot.roots
-        while let record = stack.popLast() {
-            if record.sourceKey == reference.objectKey, let character = record.character { return character }
-            stack += record.children
-            for children in (record.character?.accessoryChildren ?? [:]).values { stack += children }
-        }
-        throw RigError.invalid("Original voice character is missing.")
+        return try sourceVoiceInputCache.inputs(for: reference, built: sourceVoicePreviewInputs(object.id, reference: reference))
     }
 }

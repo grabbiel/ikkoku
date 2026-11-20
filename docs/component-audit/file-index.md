@@ -23,7 +23,7 @@ branch was tested or every asset matches the original game. Feature status,
 specific comments and pending tasks are in the linked reports. Shared behavior
 may be discussed in more than one report; one primary owner is listed here.
 
-**1145 files indexed; 1145 assigned; 0 unassigned.**
+**1148 files indexed; 1148 assigned; 0 unassigned.**
 
 Counts include the website and clothes-group additions listed below. Runtime and
 test totals include their specialized role descriptions; this is inventory
@@ -33,20 +33,20 @@ bookkeeping, not a new full source audit.
 | --- | ---: |
 | [App / gameplay / plugins](app-gameplay-and-plugins.md) | 110 |
 | [Character / Maker / mods](character-and-mods.md) | 145 |
-| [Studio / IK / animation](studio.md) | 275 |
+| [Studio / IK / animation](studio.md) | 276 |
 | [Renderer / foundation / assets](renderer-and-foundation.md) | 373 |
-| [Toolchain / verification / historical docs](toolchain-and-verification.md) | 232 |
+| [Toolchain / verification / historical docs](toolchain-and-verification.md) | 234 |
 
 | File role | Files |
 | --- | ---: |
 | App resource metadata / icon | 16 |
 | Build / repository configuration | 9 |
-| Conversion / recovery / verification tool | 269 |
+| Conversion / recovery / verification tool | 271 |
 | Documentation / historical evidence | 65 |
 | Generated asset / catalog / fixture | 205 |
 | Reference host / controlled fixture | 41 |
 | Runtime / shared shader declaration | 247 |
-| Test / validation | 251 |
+| Test / validation | 252 |
 | Public synthetic body/face input fixture | 1 |
 
 ## App / gameplay / plugins
@@ -487,6 +487,7 @@ Feature assessment: [studio.md](studio.md).
 | [Packages/Engine/Tests/EngineTests/SourceStudioRouteStepperTests.swift](../../Packages/Engine/Tests/EngineTests/SourceStudioRouteStepperTests.swift) | Test / validation |
 | [Packages/Engine/Tests/EngineTests/SourceStudioRouteTests.swift](../../Packages/Engine/Tests/EngineTests/SourceStudioRouteTests.swift) | Test / validation |
 | [Packages/Engine/Tests/EngineTests/SourceStudioSceneLightTests.swift](../../Packages/Engine/Tests/EngineTests/SourceStudioSceneLightTests.swift) | Test / validation |
+| [Packages/Engine/Tests/EngineTests/SourceStudioVoiceInputTests.swift](../../Packages/Engine/Tests/EngineTests/SourceStudioVoiceInputTests.swift) | Test / validation |
 | [Packages/Engine/Tests/EngineTests/SourceStudioVoiceTests.swift](../../Packages/Engine/Tests/EngineTests/SourceStudioVoiceTests.swift) | Test / validation |
 | [Packages/Engine/Tests/EngineTests/SourceStudioWearTests.swift](../../Packages/Engine/Tests/EngineTests/SourceStudioWearTests.swift) | Test / validation |
 | [Packages/Engine/Tests/EngineTests/SourceStudioWorldTransformTests.swift](../../Packages/Engine/Tests/EngineTests/SourceStudioWorldTransformTests.swift) | Test / validation |
@@ -1137,6 +1138,8 @@ Feature assessment: [toolchain-and-verification.md](toolchain-and-verification.m
 | [Tools/verification/scenarios/undo-route.json](../../Tools/verification/scenarios/undo-route.json) | Conversion / recovery / verification tool |
 | [Tools/verification/scenarios/undo-scene-replacements.json](../../Tools/verification/scenarios/undo-scene-replacements.json) | Conversion / recovery / verification tool |
 | [Tools/verification/scenarios/visibility-folder.json](../../Tools/verification/scenarios/visibility-folder.json) | Conversion / recovery / verification tool |
+| [Tools/verification/scenarios/voice-inputs.json](../../Tools/verification/scenarios/voice-inputs.json) | Conversion / recovery / verification tool |
+| [Tools/verification/scenarios/voice-inputs-load.json](../../Tools/verification/scenarios/voice-inputs-load.json) | Conversion / recovery / verification tool |
 | [Tools/verification/scenarios/workspace-bodies.json](../../Tools/verification/scenarios/workspace-bodies.json) | Conversion / recovery / verification tool |
 | [Tools/verification/scenarios/workspace-eye-focus.json](../../Tools/verification/scenarios/workspace-eye-focus.json) | Conversion / recovery / verification tool |
 | [Tools/verification/scenarios/workspace-list-geometry.json](../../Tools/verification/scenarios/workspace-list-geometry.json) | Conversion / recovery / verification tool |
