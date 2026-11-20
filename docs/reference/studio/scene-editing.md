@@ -2251,7 +2251,7 @@ Observation, not changed in this slice: `ikkoku-inspect look-data` and `SourceSt
 
 **Not changed here.**
 - An edit step still copies the whole objects array, about 6 MB per step on the corpus scene (#409).
-- A small unbounded per-load growth in KVO and SwiftUI bookkeeping, about 8.6 KB per cycle, is tracked separately (#410).
+- A small unbounded per-load growth in KVO and SwiftUI bookkeeping, about 8.6 KB per cycle, was tracked separately and is fixed in [Workspace list per scene (#410)](#workspace-list-per-scene-410).
 
 ### Evidence
 
@@ -2275,3 +2275,79 @@ Observation, not changed in this slice: `ikkoku-inspect look-data` and `SourceSt
   - Metal stays at 73.3 MB on both arms.
   - A memory graph at cycle 35 holds 31 `StudioObject` arrays on A (30 held by the undo steps). On B it holds 2: the one undo step and a load in flight.
   - Ready time per load was 481 and 493 ms on A, 481 and 494 ms on B. That is informational only: the runs were not in a quiet slot.
+
+## Workspace list per scene (#410)
+
+The workspace panel lists the scene's objects (`StudioView.swift`, `StudioWorkspaceContent`). New Scene removes every row and Open inserts the new scene's rows.
+
+**The problem.** The rows were a `LazyVStack` in a `ScrollView`, and the panel keeps that scroll view for the whole session. The lazy stack keeps an entry for every row it inserts, and nothing prunes them:
+- SwiftUI's lazy-stack child cache (`_LazyLayoutViewCache.childCacheSeeds`) holds one `AnyHashableBox` of the row's id;
+- AppKit's dependency set on the scroll view's group container (`HostingScrollView.PlatformGroupContainer`, its `NSKeyValueDependencyInfo`) holds one `NSKeyValueDependency`, its context, an `__NSMallocBlock__` and an `__NSExactBlockVariable__` for every focus ring view SwiftUI adds to the container (see "The eye's focus ring" below).
+
+On the 3,769-object corpus scene each load added about 40 of each, one per row the lazy stack built (the rows on screen), which is about 8.6 KB per load with no upper bound. Memory graphs from `studio-load` runs located both owners: `leaks --traceTree` on new instances of each type. The app itself registers no KVO for the list.
+
+**Four fixes that did not hold.**
+- A new scroll view per scene (`.id` on the `ScrollView`, bumped on every scene change) removed the SwiftUI boxes but not the dependency growth, which fell to about 8 to 17 per load. Each new scroll view's AppKit views register dependencies with the window's root views (`NSThemeFrame` and the window's hosting view), and those are never removed either. Rebuilding the scroll view on every load also cost 9 to 31 ms of main-thread time per load in an unregistered smoke run.
+- Rows keyed by position (`ForEach(entries.indices, id: \.self)`) kept the scroll view and changed only the ids. The boxes changed type, from `AnyHashableBox<UUID>` to `AnyHashableBox<Int>`, at the same 40 per load, and the dependencies stayed at 41 per load. The ids were never the cause: New Scene and Open remove and insert every row, and each insertion adds an entry. In a memory graph of that build, 1,860 of the 1,968 new dependency contexts (94.5%) sat on the scroll view's group container, and every sampled box sat in the lazy cache's `childCacheSeeds`.
+- A `List`, keyed by position, with insets that kept the stack's geometry. Its table reuses row views, but on the corpus scene it evaluated about 875 row bodies per load against the stack's 39.5, about 22 per row on screen, and the main thread was busy 2,289 ms per load (median) against 211 ms. Time to ready was unchanged (121.5 against 125.4 ms), so the cost came after the load, in the list's own updates. That growth-check run was invalid: only 17 loads fit between the snapshots, and `heap` could not read the app's AttributeGraph zone at either snapshot, twice each, because the main thread never went idle. It failed the requirement that a load builds only the rows on screen, so it was dropped unmeasured on the bar.
+- Slots that always hold a row, hidden past the scene's rows (zero height, opacity 0, disabled, hidden from accessibility), so that a load changes only what the built rows show. It kept the SwiftUI boxes at 0 but raised the dependency growth from 41 to about 64 per load (58.5 to 64.7 for the four types), one per slot. That build's memory-allocation trace located the dependencies' source, the eyes' focus rings below.
+
+**The fix.** It has two parts: slots, for SwiftUI's child cache, and the eye's own focus ring (below), for AppKit's dependencies. The list's first `slotCap` rows are slots in a plain `VStack`, all built ahead of any scroll. The rows past them, in a scene with more, are a `LazyVStack` below the slots, keyed by position too. A slot past the scene's rows shows nothing (`WorkspaceSlot`): zero height, hidden from accessibility, not focusable and with no tap, so keyboard navigation and the selection skip it. `slotCap` covers the rows a screen can show, so the rows a load builds are slots. New Scene and Open change what the slots show instead of removing and inserting them, and SwiftUI's child cache gains no entry. The rows past the slots are still added and removed, but the lazy stack builds them only when they are scrolled to. Each slot is one `VStack` holding either its row or the empty frame, so what it shows never adds or removes a child. Both stacks' spacing is 0, and the 1 pt gap is the top padding of every row but the first, so an empty slot adds no height and the rows keep the geometry they had. Each slot is `Equatable` on its entry, its index and its focus ring, so a selection change or a toggle evaluates the list once and only the slots whose entry changed.
+
+**The slots are built ahead of any scroll.** `slotCap` is the most rows the tallest screen could show at once (its visible height over a one-line row and its gap, 22 pt) plus 16: 64 on a screen 1,050 pt high. `IKKOKU_PERF_WORKSPACE_SLOT_CAP=<k>` replaces it, read once at launch, for measurement. A first version kept the slots in the lazy stack, as many as it had shown, up to the cap. A lazy stack estimates a child it has not built at a row's height, so the empty slots after a short scene's rows made the document taller than its rows. With no cap, 200 rows in 3,769 slots gave a document of 82,803 pt instead of 4,404, and a scroll to the end showed an empty panel. Under the cap, the geometry check's scroll shows what the estimate leaves: one jump to the end, then three settles of 300 ms with no more scroll input. A probe ran it three times in one launch, each time on a new scene of 56 folders, with 64 slots:
+
+| Round | Document height (pt) | Bottom inset (pt) | Result |
+|---|---|---|---|
+| 1 | 1,414, then 1,239 at the first settle | 3.5 | pass |
+| 2 | 1,262, unchanged | 26.5 | blank tail |
+| 3 | 1,409, unchanged | 173.5 | blank tail |
+
+The blank tail stayed after wheel scrolls of −30 and +60 pt. A user would see it after dragging the scroller to the end or scrolling with a wheel or trackpad. Built ahead of any scroll, an empty slot is laid out at exactly 0 pt and nothing is estimated. In the same three rounds, the document was 1,239 pt, its rows' own height, before the jump and after every settle, with a bottom inset of 3.5 pt. With 72 rows, 8 of them past the slots in the lazy stack, it was 1,591 pt, also exact and unchanged by the jump. Resetting the slots on New Scene or Open would have brought the growth back, since those are what remove and insert the rows. A load now evaluates every slot whose entry changed, the empty ones included. On the corpus scene, in a growth-check run, every load built exactly the 64 slots' rows (64 row bodies on each of 77 loads) and none of the 3,705 rows past them, and every New Scene built 64 empty slots. So a New Scene and a load evaluate about 129 row and empty-slot bodies together, against about 81 with the slots in the lazy stack, which built only the 40 rows on screen.
+
+**The eye's focus ring.** The slots alone removed the SwiftUI boxes but left the four AppKit types at 41 per load. A `MallocStackLogging` trace of the slot builds located where they are allocated:
+- `-[NSKeyValueDependencyInfo addDependencyInContext:onValueForKey:]` adds each dependency, with its context from `reusableDependencyContextForKey`, under `-[NSView _updateDragRegionForHiddenStateChange]`;
+- that runs when SwiftUI's display-list update (`_AppKitAddSubview`, from `NSHostingView.layout()`) adds a `_FocusRingView` to the scroll view's group container;
+- `FocusEffectView.makePlatformView()` makes one for each eye button whose system focus effect is shown, and a load that rebuilds the rows shows it again for each of them.
+
+The eye now has no system focus effect (`.focusEffectDisabled()`) and draws its own ring: a 2 pt rounded rectangle in the system's focus colour (`NSColor.keyboardFocusIndicatorColor`), 1 to 3 pt outside the eye. The ring is always there, transparent unless the eye has keyboard focus, so focus changes no view's structure. The focus is one `@FocusState` of the list (`StudioWorkspaceContent.focusedEye`, the slot whose eye has it), not of the row. A focus move evaluates the list once and the two rows whose ring changes. Like the rows, the focus stays at its position when the row under it changes. The eye is still an accessibility button with its press action, so VoiceOver reaches and toggles it as before.
+
+**Why position is safe here.** Keyed by position, any state a row held would stay with the slot, not the object, after a delete or a duplicate. `WorkspaceRow` holds none. Its only fields are the entry, the list's eye focus (the binding, its slot and whether its ring shows) and its two actions, and its children have no `@State`, hover, drag or drop. Renaming happens in the inspector's Name field, outside the list. The scenario step `assertWorkspaceRows` checks the six fields on every run.
+
+**What changes for the user.** Inserts and removals show as content changes of the rows below them, with no row animation, which the stack never used. The geometry is checked to be the stack's, with and without empty slots and with rows past the slots. Hover and the selection's look are left to the visual pass; the rows draw their own selection, as before.
+
+**Checks.**
+- The scenario `workspace-rows-by-position` adds three folders to the source scene, deletes the first and renames the third, then selects and duplicates the second. After each step it checks every affected row's index, name and selection, and that the copy is the only selected row. Three Undos bring the first back, and the scene exports and reimports.
+- The scenario `workspace-list-geometry` reads the list through accessibility in the window. It checks with nothing selected, with rows 1 and 0 selected, after deleting source key 963 at the end of the list and back at the top, and after undoing the delete. Then it adds 40 more folders, rows past the slots, and checks at the end and back at the top. Then it checks three new scenes of 56 folders in turn, each leaving the slots past its rows empty, and a new scene of one folder after them (one row, so no gap to measure), each at the end and back at the top. Each scroll is one jump, then three settles of 300 ms with no more scroll input, logging the document's height after each. Each fully visible row must be `WorkspaceRow`'s own height for its entry, 1 pt from the next, with 4 pt to the visible area's leading and trailing edges, above the first row at the top and below the last row at the end. These are the values `StudioView.swift` defined for the stack at 47ac6316, lines 131, 151, 540, 541, 545, 548 and 563, within 0.51 pt. Accessibility gives a symbol image its symbol's own bounds, which can be narrower than its frame. So the icon is placed by its centre in its 16 pt frame, and the eye by its centre and its laid-out width. A list shorter than the visible area is measured to its document's end. At the end nothing accessible may lie below the last row.
+- The scenario `workspace-bodies` counts, per action, the workspace bodies a selection change, an eye toggle and an idle refresh evaluate: the panel, the list, its slots, its rows and its empty slots. It runs four of each in the source scene, with 100 more folders (rows past the slots) at the top and again at the end, and in a new scene of one folder. A selection change or a toggle may evaluate the list once, at most two slots and two rows and no empty slot, so the slots never re-evaluate as a whole. An idle refresh may evaluate none of them.
+- `studio-load` with `IKKOKU_PERF_LOAD_SMALL_OBJECTS=<n>` alternates the corpus scene with a scene of `n` folders and scrolls the workspace to its end in the small scene, which is the slots' worst case: many empty slots while a short list shows. `IKKOKU_PERF_WORKSPACE_SLOT_CAP=<k>` replaces the slots, to compare counts (0 puts every row in the lazy stack). Each action in its report records the workspace row and empty-slot bodies it evaluated, and the rows it left.
+- The scenario `workspace-eye-focus` moves keyboard focus onto an eye by the first way that works, and its report says which. With Full Keyboard Access on (System Settings), it sends Tab key events from no first responder. Otherwise it sets the eye's accessibility focus. `-AppleKeyboardUIMode 2` in the app's argument domain does not turn Full Keyboard Access on: AppKit does not read it from there. With real focus, the focused eye must draw its ring against a render of the list with no focus (`cacheDisplay`, as the UI capture draws). Three more moves must each move the ring to the next eye and evaluate the list at most once, at most two rows and no empty slot. When neither way takes focus, as on a machine with Full Keyboard Access off, the first row is drawn alone (`ImageRenderer`) with and without its ring. At least 40 px must change, all within the eye's ring at the row's trailing end. Either way, pressing an eye through accessibility, as VoiceOver does, must hide its object and then show it again. The scenario writes a PNG of the focused eye.
+- The growth check (v2.2) in [Per-load growth check (#410)](../performance.md#per-load-growth-check-410).
+
+### Evidence
+
+- **Growth check v2.2** on Release builds: `studio-load` on the corpus scene 4b87a4f49c81, New Scene then Open repeated, with `heap` snapshots at 12 s and 56 s. The growth is per load, and the bar is 1 per load plus 64:
+
+  | Build | Loads | `NSKeyValueDependency` | Context | `__NSMallocBlock__` | `__NSExactBlockVariable__` | Row id boxes | Row bodies per load | Verdict |
+  |---|---|---|---|---|---|---|---|---|
+  | main 0d7eb327 | 53 | 41.00 | 41.00 | 40.96 | 41.00 | UUID 40.00 | 39.5 | fail |
+  | slots in the lazy stack, system focus effect (03f056de; the positive control) | 53 | 41.00 | 41.00 | 40.96 | 41.00 | Int 0.00 | 40.3 | fail |
+  | no system focus effect (82bde896) | 65 | 1.00 | 1.00 | 0.98 | 1.00 | Int 0.00 | 40.3 | pass |
+  | the eye's own focus ring (b0941aa2) | 53 | 1.00 | 1.00 | 0.85 | 1.00 | Int 0.00 | 40.3 | pass |
+  | slots built ahead of any scroll (6d19740c) | 53 | 1.00 | 1.00 | 0.94 | 1.00 | Int 0.00 | 64.0 | pass |
+
+  - About one dependency (with its context and blocks) per load remains. It is within the bar and not attributed.
+  - The 82bde896 run flagged `_ContiguousArrayStorage<Int>` at 2.00 per load. That is the harness's own record: `studio-load`'s per-action body counts, two small Int arrays per load. It was reviewed and not counted.
+  - A v2.1 run of main 0d7eb327 showed 58 flags that a v2.2 rerun of the same executable did not reproduce (0 flags); they are not attributed.
+- **The workspace checks**, on 6d19740c and again after merging main 977d87c2 and 59550a63: `workspace-rows-by-position` 25 of 25 steps, `workspace-list-geometry` 44 of 44, `workspace-eye-focus` 3 of 3 (the render path; Full Keyboard Access was off) and `workspace-bodies` 18 of 18.
+- **Cost**, registered in the quiet window W23 (plan sha256 39aff772): `studio-load` on the corpus scene, 65 s per unit (76 loads), Release builds of the merged head cca595b4 against main 59550a63, in the order head, base, base, head twice, in one hold of the app lock, with the pre-try quiet wait and the 20% intruder rule. All 8 units were valid; one head try was rerun after `corespotlightd` ran at 187% CPU right after it.
+
+  | Arm | Main-thread busy time per load (median of 4 unit medians) | Time to ready | Row bodies per load |
+  |---|---|---|---|
+  | head cca595b4 | 219.8 ms | 138.2 ms | 64.0 |
+  | main 59550a63 | 202.6 ms | 137.1 ms | 39.5 |
+
+  - The head costs 17.2 ms more main-thread busy time per load (the round pairs: +17.7, +8.3, +16.8 and +18.1 ms) and 1.1 ms more time to ready. Under the rule set before the run (merge at no more than 30 ms busy and +5 ms ready), the result is merge.
+  - Where it goes: a load builds the 64 slots ahead of any scroll instead of the about 40 rows on screen, so 24.5 more row bodies, each in its slot, about 0.7 ms per added row. It was not profiled.
+  - It is a per-load cost. A selection change, an eye toggle or an idle refresh evaluates at most 2 rows (`workspace-bodies`).
+  - A cheaper design would size the slots from the window's current height instead of the tallest screen.
+  - An earlier unregistered smoke run (about 25 ms) was confounded by system load (load1 31.3 and 12.8 at the head runs' starts, against 15.4 and 7.2). The registered result replaces it.
