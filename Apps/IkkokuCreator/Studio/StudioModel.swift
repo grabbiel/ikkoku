@@ -317,13 +317,18 @@ final class StudioModel: ViewportInputHandler, LivePacedHandler {
     var redoTarget: StudioDocument? { if case .document(let target)? = history.redoTarget(from: doc) { target } else { nil } }
     /// `update` writes, and those whose write moved the document's object
     /// list to a new buffer (a copy). An object edit's step holds no
-    /// reference to the list, so `updateWritesMoved` stays 0 (#446). A copy
-    /// that a whole-document step owes (the step shared the list, and this
-    /// write was the first since) is counted apart, in `updateWritesOwed`:
-    /// it is that step's cost, as before #446.
+    /// reference to the list, so `updateWritesMoved` stays 0 (#446). Two
+    /// copies are counted apart (`StudioObjectListCopies`), by what held the
+    /// old list: a whole-document step (`updateWritesOwed`: the step shared
+    /// the list, and this write was the first since; that step's cost, as
+    /// before #446), and a pending export (`updateWritesExportHeld`: it keeps
+    /// the document as it was when chosen, so an edit while it builds copies
+    /// the list, at most once per export).
     @ObservationIgnored private(set) var updateWrites = 0
-    @ObservationIgnored private(set) var updateWritesMoved = 0
-    @ObservationIgnored private(set) var updateWritesOwed = 0
+    @ObservationIgnored private var listCopies = StudioObjectListCopies()
+    var updateWritesMoved: Int { listCopies.moved }
+    var updateWritesOwed: Int { listCopies.owed }
+    var updateWritesExportHeld: Int { listCopies.exportHeld }
     /// The patch steps `materializeNewestUndoPatches` turned into whole
     /// documents (#446), each at most once. A scene whose plug-ins or
     /// animation write every frame converts each new patch on its first
@@ -2552,7 +2557,9 @@ final class StudioModel: ViewportInputHandler, LivePacedHandler {
         // Only a copy pays for the scan: the old list is still held by
         // whatever made the write copy.
         if documentObjectsBuffer != buffer {
-            if history.holdsObjects(at: buffer) { updateWritesOwed &+= 1 } else { updateWritesMoved &+= 1 }
+            listCopies.record(old: buffer, historyHolds: history.holdsObjects(at: buffer), exports: sourceExportJobs.map { key, job in
+                (key: key, objects: job.inputs.document.objects.withUnsafeBufferPointer { UnsafeRawPointer($0.baseAddress) })
+            })
         }
     }
     /// #446's lane-wide bars, read when a scenario run ends: no `update`
@@ -2565,7 +2572,7 @@ final class StudioModel: ViewportInputHandler, LivePacedHandler {
         let mismatches = 0
         #endif
         return (updateWritesMoved == 0 && mismatches == 0,
-                "undo history (#446): \(updateWrites) object edit writes, \(updateWritesMoved) copied the object list (and \(updateWritesOwed) copies a whole-document step owed); \(mismatches) undo or redo documents differed from a whole snapshot's; \(undoPatchConversions) patch steps turned into whole documents")
+                "undo history (#446): \(updateWrites) object edit writes, \(updateWritesMoved) copied the object list (and \(updateWritesOwed) copies a whole-document step owed, \(updateWritesExportHeld) a pending export held); \(mismatches) undo or redo documents differed from a whole snapshot's; \(undoPatchConversions) patch steps turned into whole documents")
     }
     /// Prints `undoHistoryBars()`'s line, marked when a bar failed, and
     /// returns whether both held: a scenario run that breaks one exits 1.

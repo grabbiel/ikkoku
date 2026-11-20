@@ -382,3 +382,47 @@ extension StudioUndoHistory where Document == StudioDocument {
         return false
     }
 }
+
+/// What held the old object list when an object edit's write copied it
+/// (#446). Only `.moved` breaks the bar: an object edit's step holds no
+/// reference to the list.
+public enum StudioObjectListCopy: Equatable, Sendable {
+    /// A whole-document step shares the list until the next write: that
+    /// copy is the step's own cost, as before #446.
+    case owed
+    /// The export with this key holds the list: an export keeps the
+    /// document as it was when chosen, so an edit while it builds copies
+    /// the list, at most once per export.
+    case exportHeld(Int)
+    /// Anything else.
+    case moved
+}
+
+/// Counts the copies of the document's object list that object edits made
+/// (#446), by what held the old list.
+public struct StudioObjectListCopies: Sendable {
+    public private(set) var owed = 0, exportHeld = 0, moved = 0
+    /// The exports that already had their one copy.
+    private var copiedExports: Set<Int> = []
+
+    public init() {}
+
+    /// Classifies and counts a copy of the list stored at `old` (a list's
+    /// buffer, `withUnsafeBufferPointer`'s base). `historyHolds` says
+    /// whether a whole-document step holds it (`holdsObjects(at:)`);
+    /// `exports` are the pending exports' keys and their lists' buffers.
+    /// An export takes the copy only when it holds that very list, and only
+    /// once: a second copy for the same export, or a copy while the exports
+    /// hold other lists, is `.moved`.
+    @discardableResult
+    public mutating func record(old: UnsafeRawPointer?, historyHolds: Bool,
+                                exports: [(key: Int, objects: UnsafeRawPointer?)]) -> StudioObjectListCopy {
+        if historyHolds { owed &+= 1; return .owed }
+        if let old, let export = exports.first(where: { $0.objects == old }), copiedExports.insert(export.key).inserted {
+            exportHeld &+= 1
+            return .exportHeld(export.key)
+        }
+        moved &+= 1
+        return .moved
+    }
+}

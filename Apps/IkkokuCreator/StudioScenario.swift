@@ -3149,7 +3149,15 @@ struct StudioScenario: Decodable {
                         // its file would not be the scene it was chosen for.
                         var changed: [String] = []
                         studio.beginSourceSceneExport(to: changedURL) { changed.append($0.map { "\($0)" } ?? "written") }
+                        let exportHeld = studio.updateWritesExportHeld, moved = studio.updateWritesMoved
                         studio.update(id) { $0.transform.position.x += 0.25 }
+                        // #446: the export keeps the document it was chosen
+                        // for, so this edit copies the object list once, and
+                        // that copy is counted as the export's.
+                        let exportCopies = studio.updateWritesExportHeld - exportHeld, otherCopies = studio.updateWritesMoved - moved
+                        if exportCopies != 1 || otherCopies != 0 {
+                            problems.append("the edit during the export made \(exportCopies) export-held and \(otherCopies) other copies of the object list, expected one export-held copy")
+                        }
                         guard settle() else { record(step, false, "backgroundBuild: the edited export did not finish in 300 s"); continue }
                         _ = RunLoop.main.run(mode: .default, before: Date().addingTimeInterval(0.3))
                         if changed.count != 1 || !(changed.first ?? "").contains("changed") {
@@ -3169,7 +3177,7 @@ struct StudioScenario: Decodable {
                         }
                         if FileManager.default.fileExists(atPath: replacedURL.path) { problems.append("the cancelled export wrote its file") }
                         compare("load during the export", reference, state())
-                        detail = "the background export wrote the synchronous export's \(syncBytes.count) bytes; an edit during it reported: \(changed.first ?? "nothing"); a load during it reported: \(replaced.first ?? "nothing")"
+                        detail = "the background export wrote the synchronous export's \(syncBytes.count) bytes; an edit during it reported: \(changed.first ?? "nothing") (its copy of the object list counted as the export's); a load during it reported: \(replaced.first ?? "nothing")"
                     } else if build == "loadRoute" {
                         // R7 phase 2 item 6, third part: a scene load
                         // rehydrates its route characters in the background,

@@ -466,6 +466,46 @@ private struct Pair {
     #expect(!history.holdsObjects(at: base(document)) && !history.holdsObjects(at: nil))
 }
 
+/// The list's buffer, as `StudioModel.update` reads it.
+private func objectsBase(_ document: StudioDocument) -> UnsafeRawPointer? {
+    document.objects.withUnsafeBufferPointer { UnsafeRawPointer($0.baseAddress) }
+}
+
+@Test func anEditsCopyWithNoExportHoldingTheListBreaksTheBar() {
+    // The same edit as below with no pending export, and with an export
+    // pending that holds another list: both copies are `.moved`, so the bar
+    // fails. A pending export alone never takes a copy.
+    var document = folders(8)
+    let other = folders(3)
+    var copies = StudioObjectListCopies()
+    let held = document
+    let old = objectsBase(document)
+    document.objects[2].name = "copied"
+    #expect(objectsBase(document) != old && objectsBase(held) == old)
+    #expect(copies.record(old: old, historyHolds: false, exports: []) == .moved)
+    #expect(copies.record(old: old, historyHolds: false, exports: [(key: 0, objects: objectsBase(other))]) == .moved)
+    #expect(copies.moved == 2 && copies.exportHeld == 0 && copies.owed == 0)
+}
+
+@Test func anEditsCopyOfTheListAPendingExportHoldsIsExportHeldOnce() {
+    // An export keeps the document as it was when chosen, so an edit while
+    // it builds copies the list. That copy is the export's, once per
+    // export: a second one for the same export is `.moved`. A whole-document
+    // step's copy stays `.owed`.
+    var document = folders(8)
+    var copies = StudioObjectListCopies()
+    let exported = document
+    let old = objectsBase(document)
+    document.objects[2].name = "copied"
+    let exports = [(key: 4, objects: objectsBase(exported)), (key: 5, objects: objectsBase(folders(2)))]
+    #expect(objectsBase(document) != old && exports[0].objects == old)
+    #expect(copies.record(old: old, historyHolds: false, exports: exports) == .exportHeld(4))
+    #expect(copies.record(old: old, historyHolds: false, exports: exports) == .moved)
+    #expect(copies.record(old: old, historyHolds: true, exports: exports) == .owed)
+    #expect(copies.exportHeld == 1 && copies.moved == 1 && copies.owed == 1)
+    #expect(copies.record(old: nil, historyHolds: false, exports: [(key: 6, objects: nil)]) == .moved)
+}
+
 @Test func aBrokenPatchIsReportedNeverRestoredInPart() {
     // A patch that names an object the document lacks is a bug. Release
     // refuses it: no target, the step stays until the caller drops it, and

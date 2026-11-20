@@ -1016,6 +1016,8 @@ final class PerfWorkloadDriver {
         let updateWritesMoved: Int
         /// Copies a whole-document step owed (it shared the list).
         let updateWritesOwed: Int
+        /// Copies a pending export held (it keeps the document it was chosen for).
+        let updateWritesExportHeld: Int
         /// #446: the model's `undoPatchConversions` at the call's start; a
         /// row records the conversions from it to the next action's call.
         let patchConversionsAtCall: Int
@@ -1051,6 +1053,7 @@ final class PerfWorkloadDriver {
         let settles = studio?.livePendingSettles ?? 0, waits = studio?.liveUnfinishedWaits ?? 0
         let pendingWork = studio?.pendingSourceActionWork ?? 0
         let writes = studio?.updateWrites ?? 0, moved = studio?.updateWritesMoved ?? 0, owed = studio?.updateWritesOwed ?? 0
+        let exportHeld = studio?.updateWritesExportHeld ?? 0
         let conversions = studio?.undoPatchConversions ?? 0
         let bodies = Self.workspaceBodyViews.map(PerfTrace.bodyCount)
         let cpu = clock_gettime_nsec_np(CLOCK_THREAD_CPUTIME_ID)
@@ -1065,6 +1068,7 @@ final class PerfWorkloadDriver {
                      pendingWork: pendingWork,
                      updateWrites: studio.updateWrites &- writes, updateWritesMoved: studio.updateWritesMoved &- moved,
                      updateWritesOwed: studio.updateWritesOwed &- owed,
+                     updateWritesExportHeld: studio.updateWritesExportHeld &- exportHeld,
                      patchConversionsAtCall: conversions)
         }
         pendingAction = (step.name, step.measured, start, end, bodies, cpuMs, live)
@@ -1187,7 +1191,7 @@ final class PerfWorkloadDriver {
             if let live = action.live {
                 row["livePendingSettles"] = live.pendingSettles; row["liveUnfinishedWaits"] = live.unfinishedWaits
                 row["updateWrites"] = live.updateWrites; row["updateWritesMoved"] = live.updateWritesMoved
-                row["updateWritesOwed"] = live.updateWritesOwed
+                row["updateWritesOwed"] = live.updateWritesOwed; row["updateWritesExportHeld"] = live.updateWritesExportHeld
                 // #446: patch steps turned into whole documents from this call
                 // to the next action's (or until now), each at most once: 1
                 // per edit where plug-ins or animation write every frame, 0
