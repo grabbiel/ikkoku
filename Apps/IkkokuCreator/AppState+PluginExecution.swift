@@ -1,10 +1,64 @@
 import Foundation
 import AppKit
+import Observation
 import Studio
 import Gameplay
 import Renderer
 
 extension AppState {
+    /// The variables `configureStudioExecution` reads, in its order.
+    static let studioExecutionInputs = ["IKKOKU_STUDIO_ANIMATION_TIME", "IKKOKU_STUDIO_PLUGIN_SELECTION", "IKKOKU_SOURCE_PLUGIN_PROFILE",
+        "IKKOKU_NATIVE_PLUGIN_MANIFEST", "IKKOKU_NATIVE_PLUGIN_MANIFESTS", "IKKOKU_MUTE_BACKGROUND_CONFIG", "IKKOKU_SOURCE_PLUGIN_STEPS",
+        "IKKOKU_APPLICATION_FOCUS", "IKKOKU_NATIVE_PLUGIN_REPORT"]
+
+    /// Startup's Studio execution inputs (#459): run by `LaunchInputGate` at once after a synchronous
+    /// launch import, or from the end of a background one (`deferred`, interactive and performance-trace
+    /// launches). A failure exits 1 in an automated run and otherwise shows the alert naming the input.
+    /// Only the deferred path prints its outcome and records it in a performance trace
+    /// (`details.launchStudioExecution`), so the synchronous paths' output is unchanged.
+    func applyStudioExecution(_ studio: StudioModel, automated: Bool, deferred: Bool) {
+        do { try AppState.configureStudioExecution(studio) }
+        catch {
+            if automated { print("[ikkoku] studio execution failed: \(error)"); exit(1) }
+            if deferred { print("[ikkoku] studio execution failed: \(error)") }
+            errorMessage = "Studio execution: \(error)"
+            return
+        }
+        let env = ProcessInfo.processInfo.environment
+        let inputs = Self.studioExecutionInputs.filter { env[$0] != nil }
+        guard deferred, !inputs.isEmpty else { return }
+        let packages = studio.sourcePluginSession?.library.packages.count ?? 0
+        let native = studio.doc.sourceNativePlugins?.count ?? 0
+        let built = studio.sourcePreviewCharacterOutcome().built
+        print("[ikkoku] launch studio inputs applied after the background scene import: \(inputs.joined(separator: ", ")); "
+              + "\(packages) plugin packages, \(native) native plugins, running \(studio.sourcePluginsRunning); \(built) characters built")
+        if let trace = PerfTrace.active {
+            trace.details["launchStudioExecution"] = ["appliedAfterImport": true, "inputs": inputs, "sourcePluginPackages": packages,
+                "nativePlugins": native, "sourcePluginsRunning": studio.sourcePluginsRunning, "charactersBuilt": built] as [String: Any]
+        }
+    }
+
+    /// While the launch inputs wait (#459), New Scene, Open or another import cancels the launch import, whose end
+    /// then never comes: the inputs are dropped with one line saying so. What such a command changes is the import's
+    /// progress (`sourceBuildProgress`, labelled with the scene while it imports); the check runs on a later
+    /// main-actor turn, so a commit has opened the gate by then. A replacement import of the same file keeps the
+    /// label, and the drop is reported when that import ends.
+    func watchLaunchImport(_ studio: StudioModel, gate: LaunchInputGate) {
+        guard gate.isHolding, let importing = studio.sourceBuildProgress?.label else { return }
+        withObservationTracking { _ = studio.sourceBuildProgress } onChange: {
+            Task { @MainActor in
+                guard gate.isHolding else { return }
+                if studio.sourceBuildProgress?.label == importing { self.watchLaunchImport(studio, gate: gate); return }
+                let env = ProcessInfo.processInfo.environment
+                let inputs = Self.studioExecutionInputs.filter { env[$0] != nil }
+                if gate.drop(), !inputs.isEmpty {
+                    print("[ikkoku] launch studio inputs dropped: the launch scene import (\(importing)) was cancelled before it committed "
+                          + "(New Scene, Open or another import); not applied: \(inputs.joined(separator: ", "))")
+                }
+            }
+        }
+    }
+
     /// Applies the Studio execution inputs. A failed input throws a `CaptureInputError`
     /// naming its variable and value (A06); startup exits 1 on it in an automated run
     /// and shows it as an alert otherwise.
