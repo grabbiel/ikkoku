@@ -5,7 +5,7 @@ import Scene
 import Character
 @testable import Studio
 
-/// #409: `StudioObject`'s ten boxed fields (`StudioObjectColdFields`). A
+/// #409: `StudioObject`'s nine boxed fields (`StudioObjectColdFields`). A
 /// write never reaches another copy of the object, an edit of any other field
 /// keeps the box shared, the box crosses tasks as a value, objects without
 /// boxed fields share one empty box that is never written, `==` compares
@@ -103,7 +103,6 @@ private func checkIsolation<Value: Equatable>(_ path: WritableKeyPath<StudioObje
     checkIsolation(\.sourceAnimation, try sampleAnimation(), try sampleAnimation(speed: 2))
     checkIsolation(\.sourceVoice, sampleVoice, nil)
     checkIsolation(\.sourceRoute, sampleRoute, nil)
-    checkIsolation(\.poseDelta, samplePose, PoseDelta())
     checkIsolation(\.light, sampleLight(), sampleLight(intensity: 0.2))
     checkIsolation(\.savedCamera, sampleCamera(), sampleCamera(distance: 9))
 }
@@ -114,8 +113,8 @@ private func checkIsolation<Value: Equatable>(_ path: WritableKeyPath<StudioObje
     var object = try populated()
     let snapshot = object
     object.poseDelta.rotations["cf_j_neck"] = Float3(45, 0, 0)
-    let owned = ObjectIdentifier(object.cold)
     object.light?.intensity = 0.1
+    let owned = ObjectIdentifier(object.cold)
     object.card?.profile.name = "Renamed"
     object.savedCamera?.distance = 1
     #expect(ObjectIdentifier(object.cold) == owned)
@@ -127,7 +126,7 @@ private func checkIsolation<Value: Equatable>(_ path: WritableKeyPath<StudioObje
 }
 
 /// The edits an undo step follows most (move, rename, show/hide) leave the
-/// box shared with the step, so the step costs only the 432-byte object.
+/// box shared with the step, so the step costs only the 464-byte object.
 @Test func unboxedFieldEditsKeepTheBoxShared() throws {
     var object = try populated()
     let snapshot = object
@@ -140,12 +139,31 @@ private func checkIsolation<Value: Equatable>(_ path: WritableKeyPath<StudioObje
     #expect(object != snapshot)
 }
 
+/// A pose edit, the most frequent object edit, copies no box (#409, W23):
+/// the pose delta is inline, so an edit that writes it leaves the box shared
+/// with the undo step, as `update` makes it (copy, edit, compare, write
+/// back), and an object on the shared empty box stays on it.
+@Test func aPoseEditCopiesNoBox() throws {
+    var document = StudioDocument()
+    document.objects = [try populated()] + importedItems(1)
+    let step = document
+    for index in document.objects.indices {
+        var object = document.objects[index]
+        object.poseDelta.rotations["cf_j_neck", default: .zero].x += 0.5
+        #expect(object != document.objects[index])
+        document.objects[index] = object
+    }
+    #expect(document.objects[0].cold === step.objects[0].cold)
+    #expect(document.objects[1].cold === StudioObjectColdFields.empty)
+    #expect(step.objects[0].poseDelta == samplePose && step.objects[1].poseDelta == PoseDelta())
+    #expect(document.objects[0].poseDelta != samplePose && document.objects[1].poseDelta.rotations["cf_j_neck"] == Float3(0.5, 0, 0))
+}
+
 @Test func aUniquelyHeldBoxIsWrittenInPlace() throws {
     var object = try populated()
     let owned = ObjectIdentifier(object.cold)
     object.card = sampleCard("Boxed B")
     object.sourceCharacter = nil
-    object.poseDelta.rotations.removeAll()
     object.light = nil
     #expect(ObjectIdentifier(object.cold) == owned)
 }
@@ -262,7 +280,7 @@ private func importedItems(_ count: Int) -> [StudioObject] {
                     var object = item
                     switch step % 4 {
                     case 0: object.card = sampleCard("Worker \(worker)")
-                    case 1: object.poseDelta.rotations["cf_j_neck"] = Float3(Float(step), 0, 0)
+                    case 1: object.savedCamera = sampleCamera(distance: Float(step))
                     case 2: object.light = sampleLight(intensity: Float(step))
                     default: object.sourceVoice = sampleVoice
                     }

@@ -127,11 +127,13 @@ public struct StudioTransform: Codable, Sendable, Equatable {
 ///
 /// #409: every undo step keeps its own copy of the `objects` array once an
 /// edit writes to it, so each inline byte of an object is paid again per
-/// step. The ten fields that are large inline and seldom edited (the
+/// step. The nine fields that are large inline and seldom edited (the
 /// character card, the source character reference, its expression,
-/// kinematics, animation, voice and route state, the pose delta, the light
-/// and the saved camera) therefore live in one shared box,
-/// `StudioObjectColdFields`, which takes the stride from 1,584 B to 432 B.
+/// kinematics, animation, voice and route state, the light and the saved
+/// camera) therefore live in one shared box, `StudioObjectColdFields`, which
+/// takes the stride from 1,584 B to 464 B. The pose delta stays inline (32 B,
+/// four dictionary references): a pose edit is the most frequent object edit,
+/// and boxing it made every one copy the whole box (#409's W23 diagnostic).
 /// They read and write like stored properties. A read borrows the field in
 /// the box (`_read`), so reading a member or testing for nil copies nothing.
 /// A write first copies the box unless this value holds the only reference to
@@ -232,10 +234,8 @@ public struct StudioObject: Codable, Sendable, Equatable, Identifiable {
         _read { yield cold.sourceRoute }
         _modify { let box = uniqueCold(); yield &box.sourceRoute }
     }
-    public var poseDelta: PoseDelta {
-        _read { yield cold.poseDelta }
-        _modify { let box = uniqueCold(); yield &box.poseDelta }
-    }
+    /// Inline, not boxed: written by every pose edit (see above).
+    public var poseDelta = PoseDelta()
     public var ikTargets: [IKChain: IKTarget] = [:]
     public var animationPreset: String?
     public var clothingVisible = true
@@ -344,7 +344,6 @@ final class StudioObjectColdFields: @unchecked Sendable {
     var sourceAnimation: SourceStudioAnimationState?
     var sourceVoice: SourceStudioVoiceState?
     var sourceRoute: SourceStudioRouteState?
-    var poseDelta: PoseDelta
     var light: SceneLight?
     var savedCamera: OrbitCamera?
 
@@ -355,22 +354,22 @@ final class StudioObjectColdFields: @unchecked Sendable {
     /// for it.
     static let empty = StudioObjectColdFields(card: nil, sourceCharacter: nil, sourceExpression: nil, sourceKinematics: nil,
                                               sourceAnimation: nil, sourceVoice: nil, sourceRoute: nil,
-                                              poseDelta: PoseDelta(), light: nil, savedCamera: nil)
+                                              light: nil, savedCamera: nil)
 
     private init(card: CharacterCard?, sourceCharacter: SourceStudioCharacterReference?,
                  sourceExpression: SourceStudioExpressionState?, sourceKinematics: SourceStudioKinematicState?,
                  sourceAnimation: SourceStudioAnimationState?, sourceVoice: SourceStudioVoiceState?,
-                 sourceRoute: SourceStudioRouteState?, poseDelta: PoseDelta, light: SceneLight?, savedCamera: OrbitCamera?) {
+                 sourceRoute: SourceStudioRouteState?, light: SceneLight?, savedCamera: OrbitCamera?) {
         self.card = card; self.sourceCharacter = sourceCharacter; self.sourceExpression = sourceExpression
         self.sourceKinematics = sourceKinematics; self.sourceAnimation = sourceAnimation; self.sourceVoice = sourceVoice
-        self.sourceRoute = sourceRoute; self.poseDelta = poseDelta; self.light = light; self.savedCamera = savedCamera
+        self.sourceRoute = sourceRoute; self.light = light; self.savedCamera = savedCamera
     }
 
     /// A new box with `other`'s fields, for the value about to write one.
     convenience init(copying other: StudioObjectColdFields) {
         self.init(card: other.card, sourceCharacter: other.sourceCharacter, sourceExpression: other.sourceExpression,
                   sourceKinematics: other.sourceKinematics, sourceAnimation: other.sourceAnimation,
-                  sourceVoice: other.sourceVoice, sourceRoute: other.sourceRoute, poseDelta: other.poseDelta,
+                  sourceVoice: other.sourceVoice, sourceRoute: other.sourceRoute,
                   light: other.light, savedCamera: other.savedCamera)
     }
 
@@ -379,22 +378,22 @@ final class StudioObjectColdFields: @unchecked Sendable {
     static func holding(card: CharacterCard?, sourceCharacter: SourceStudioCharacterReference?,
                         sourceExpression: SourceStudioExpressionState?, sourceKinematics: SourceStudioKinematicState?,
                         sourceAnimation: SourceStudioAnimationState?, sourceVoice: SourceStudioVoiceState?,
-                        sourceRoute: SourceStudioRouteState?, poseDelta: PoseDelta, light: SceneLight?,
+                        sourceRoute: SourceStudioRouteState?, light: SceneLight?,
                         savedCamera: OrbitCamera?) -> StudioObjectColdFields {
         if card == nil, sourceCharacter == nil, sourceExpression == nil, sourceKinematics == nil, sourceAnimation == nil,
-           sourceVoice == nil, sourceRoute == nil, poseDelta == PoseDelta(), light == nil, savedCamera == nil {
+           sourceVoice == nil, sourceRoute == nil, light == nil, savedCamera == nil {
             return empty
         }
         return StudioObjectColdFields(card: card, sourceCharacter: sourceCharacter, sourceExpression: sourceExpression,
                                       sourceKinematics: sourceKinematics, sourceAnimation: sourceAnimation,
-                                      sourceVoice: sourceVoice, sourceRoute: sourceRoute, poseDelta: poseDelta,
+                                      sourceVoice: sourceVoice, sourceRoute: sourceRoute,
                                       light: light, savedCamera: savedCamera)
     }
 
     /// Whether every field is nil or default, as in `empty`.
     var holdsDefaults: Bool {
         card == nil && sourceCharacter == nil && sourceExpression == nil && sourceKinematics == nil && sourceAnimation == nil
-            && sourceVoice == nil && sourceRoute == nil && poseDelta == PoseDelta() && light == nil && savedCamera == nil
+            && sourceVoice == nil && sourceRoute == nil && light == nil && savedCamera == nil
     }
 }
 
@@ -406,7 +405,7 @@ extension StudioObjectColdFields: Equatable {
         lhs === rhs || (lhs.card == rhs.card && lhs.sourceCharacter == rhs.sourceCharacter
             && lhs.sourceExpression == rhs.sourceExpression && lhs.sourceKinematics == rhs.sourceKinematics
             && lhs.sourceAnimation == rhs.sourceAnimation && lhs.sourceVoice == rhs.sourceVoice
-            && lhs.sourceRoute == rhs.sourceRoute && lhs.poseDelta == rhs.poseDelta && lhs.light == rhs.light
+            && lhs.sourceRoute == rhs.sourceRoute && lhs.light == rhs.light
             && lhs.savedCamera == rhs.savedCamera)
     }
 }
@@ -457,7 +456,7 @@ extension StudioObject {
         let sourceAnimation = try c.decodeIfPresent(SourceStudioAnimationState.self, forKey: .sourceAnimation)
         let sourceVoice = try c.decodeIfPresent(SourceStudioVoiceState.self, forKey: .sourceVoice)
         let sourceRoute = try c.decodeIfPresent(SourceStudioRouteState.self, forKey: .sourceRoute)
-        let poseDelta = try c.decode(PoseDelta.self, forKey: .poseDelta)
+        poseDelta = try c.decode(PoseDelta.self, forKey: .poseDelta)
         ikTargets = try c.decode([IKChain: IKTarget].self, forKey: .ikTargets)
         animationPreset = try c.decodeIfPresent(String.self, forKey: .animationPreset)
         clothingVisible = try c.decode(Bool.self, forKey: .clothingVisible)
@@ -476,7 +475,7 @@ extension StudioObject {
         let savedCamera = try c.decodeIfPresent(OrbitCamera.self, forKey: .savedCamera)
         cold = .holding(card: card, sourceCharacter: sourceCharacter, sourceExpression: sourceExpression,
                         sourceKinematics: sourceKinematics, sourceAnimation: sourceAnimation, sourceVoice: sourceVoice,
-                        sourceRoute: sourceRoute, poseDelta: poseDelta, light: light, savedCamera: savedCamera)
+                        sourceRoute: sourceRoute, light: light, savedCamera: savedCamera)
     }
 
     /// Encodes as the synthesized conformance did: every key in
@@ -510,7 +509,7 @@ extension StudioObject {
         try c.encodeIfPresent(cold.sourceAnimation, forKey: .sourceAnimation)
         try c.encodeIfPresent(cold.sourceVoice, forKey: .sourceVoice)
         try c.encodeIfPresent(cold.sourceRoute, forKey: .sourceRoute)
-        try c.encode(cold.poseDelta, forKey: .poseDelta)
+        try c.encode(poseDelta, forKey: .poseDelta)
         try c.encode(ikTargets, forKey: .ikTargets)
         try c.encodeIfPresent(animationPreset, forKey: .animationPreset)
         try c.encode(clothingVisible, forKey: .clothingVisible)

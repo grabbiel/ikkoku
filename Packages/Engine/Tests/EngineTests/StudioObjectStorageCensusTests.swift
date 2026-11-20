@@ -58,9 +58,11 @@ private func document(objects: Int) -> StudioDocument {
 
 /// Records `StudioObject`'s size, stride and each stored field's offset and
 /// inline size. #409 scoping found stride 1,584 B at df0077c0, `card` the
-/// largest field; the ten large, seldom-edited fields now share one box
-/// (`cold`, one reference), which leaves 432 B. A new stored field changes
-/// the stride: box it with the others if it is large and seldom edited.
+/// largest field; the nine large, seldom-edited fields now share one box
+/// (`cold`, one reference). The pose delta (32 B) is inline again, because
+/// a boxed pose delta made every pose edit copy the box (W23), which leaves
+/// 464 B. A new stored field changes the stride: box it with the others if
+/// it is large and seldom edited.
 @Test func studioObjectLayout() {
     typealias O = StudioObject
     let fields: [(String, PartialKeyPath<O>, Int)] = [
@@ -80,6 +82,7 @@ private func document(objects: Int) -> StudioDocument {
         ("sourceClothesState", \O.sourceClothesState, MemoryLayout<[UInt8]?>.size),
         ("sourceShowAccessory", \O.sourceShowAccessory, MemoryLayout<[Bool]?>.size),
         ("sourceShoesType", \O.sourceShoesType, MemoryLayout<Int?>.size),
+        ("poseDelta", \O.poseDelta, MemoryLayout<PoseDelta>.size),
         ("ikTargets", \O.ikTargets, MemoryLayout<[IKChain: IKTarget]>.size),
         ("animationPreset", \O.animationPreset, MemoryLayout<String?>.size),
         ("clothingVisible", \O.clothingVisible, 1), ("accessoriesVisible", \O.accessoriesVisible, 1),
@@ -101,5 +104,5 @@ private func document(objects: Int) -> StudioDocument {
         #expect(field.2 <= span)
     }
     #expect(stride % MemoryLayout<O>.alignment == 0)
-    #expect(stride == 432)
+    #expect(stride == 464)
 }

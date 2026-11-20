@@ -2280,21 +2280,22 @@ Observation, not changed in this slice: `ikkoku-inspect look-data` and `SourceSt
 
 An undo step is a snapshot of the document. Steps share the `objects` array with the current document until an edit writes to it, and then the edited document gets its own copy of the whole array. On the 3,769-object corpus scene that copy was about 6 MB per step, because a `StudioObject` was 1,584 B inline.
 
-**What changed.** The ten fields that are large inline and seldom edited live in one shared box, `StudioObjectColdFields`:
+**What changed.** The nine fields that are large inline and seldom edited live in one shared box, `StudioObjectColdFields`:
 
 - the character card;
 - the source character reference;
 - the source expression, kinematics, animation, voice and route state;
-- the pose delta;
 - the light;
 - the saved camera.
 
-An object holds one reference to the box, so its stride is 432 B. The fields keep their names and read and write like stored properties.
+An object holds one reference to the box, so its stride is 464 B. The fields keep their names and read and write like stored properties.
+
+The pose delta stays inline (32 B: four dictionary references). At first it was boxed too, for a stride of 432 B. #409's W23 diagnostic then showed every pose edit copying the whole box: one box copy per edit and per same-value write, +3.1k instructions and +0.010 ms per edit. A pose edit is the most frequent object edit, so the pose delta went back inline. Now a pose edit copies no box.
 
 - **Copy on write.** Writing a boxed field first copies the box unless this object value holds the only reference to it (`isKnownUniquelyReferenced`). A snapshot, an undo step or a copy sent to another task therefore never sees a later write. An edit of any other field, such as a move, a rename or show/hide, leaves the box shared with the steps.
-- **Cost of a step.** A step costs 432 B per object, plus one box (about 1.1 KB) for each object whose boxed field the edit wrote.
+- **Cost of a step.** A step costs 464 B per object, plus one box (about 1.1 KB) for each object whose boxed field the edit wrote. A pose edit writes no boxed field.
 - **The shared empty box.** An object whose boxed fields are all nil or default holds `StudioObjectColdFields.empty`, one box shared by all such objects; most of a scene's items and folders are like this. A new object and a decode both pick it, so a load allocates no box for those objects. `uniqueCold()` recognises the empty box by identity and always copies it before a write, so it is never written.
-- **Whole documents.** A loaded document costs 432 B per object, plus one box for each character, light, camera or other object that has a boxed field set.
+- **Whole documents.** A loaded document costs 464 B per object, plus one box for each character, light, camera or other object that has a boxed field set.
 - **Saved format.** Unchanged. `StudioObject`'s hand-written `Codable` writes the keys the synthesized conformance of the unboxed struct wrote: flat, in the same order, with a nil optional writing no key, and with the key-ordered dictionary overloads (#394). It decodes the same inputs the same way: a non-optional field's key is required, and unknown keys and a null optional are ignored.
 - **Equality.** `==` compares every field. For the box it checks identity first, so comparing an object with its own step skips the card.
 
@@ -2303,7 +2304,7 @@ An object holds one reference to the box, so its stride is 432 B. The fields kee
 - `StudioObjectColdFieldsTests.swift` covers:
   - each boxed field's isolation from snapshots;
   - in-place edits inside a boxed field;
-  - a shared box after edits of other fields;
+  - a shared box after edits of other fields, and after a pose edit (`aPoseEditCopiesNoBox`);
   - in-place writes to a box only one value holds;
   - the shared empty box: who gets it, detaching only the written object, and 20,000 writes from four tasks leaving it empty;
   - a snapshot read by an actor and a detached task while the original is edited;
@@ -2311,4 +2312,4 @@ An object holds one reference to the box, so its stride is 432 B. The fields kee
   - the saved keys and their order;
   - decoding with missing, null, unknown and required keys;
   - Undo and Redo of boxed-field edits, byte for byte.
-- `StudioObjectStorageCensusTests.studioObjectLayout` pins the stride at 432 B.
+- `StudioObjectStorageCensusTests.studioObjectLayout` pins the stride at 464 B.
