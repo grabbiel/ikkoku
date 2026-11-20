@@ -194,3 +194,26 @@ extension EnvironmentValues {
         set { self[InspectorSectionHiddenKey.self] = newValue }
     }
 }
+
+/// #366: the inspector's text fields at their own heights. On a selection
+/// change SwiftUI sometimes gave one text field the measured height of another
+/// (the Name field the Transform fields' height, or the reverse), and every row
+/// below it moved. An explicit height keeps each one. Each height is measured
+/// once from an AppKit text field with the same bezel and font as SwiftUI's
+/// field: the automatic style draws the square bezel, `.roundedBorder` the
+/// rounded one.
+@MainActor
+enum InspectorTextFieldHeight {
+    /// The Name field: the automatic style at the body font.
+    static let name = measured(.squareBezel, .body)
+    /// VectorRow's fields: `.roundedBorder` at the caption font.
+    static let vector = measured(.roundedBezel, .caption1)
+
+    private static func measured(_ bezel: NSTextField.BezelStyle, _ style: NSFont.TextStyle) -> CGFloat {
+        let field = NSTextField(string: "")
+        field.isBezeled = true
+        field.bezelStyle = bezel
+        field.font = .preferredFont(forTextStyle: style)
+        return field.intrinsicContentSize.height
+    }
+}

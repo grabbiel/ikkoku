@@ -32,7 +32,7 @@ struct StudioScenario: Decodable {
         /// `"addFolder"`, `"addCamera"`, `"addLight"`, `"export"`, `"exportRejected"`, `"reimport"`,
         /// `"focus"`, `"selectRoutePoint"`, `"dragRoutePoint"`, `"editRoute"`, `"captureRoute"`, `"setShowSourceMap"`, `"setUnlimitedLights"`,
         /// `"deselect"`, `"assertWorkspaceRows"`, `"pressDigit"`, `"assert"`, `"assertRejected"`,
-        /// `"assertVoice"`, `"dropVoiceInputs"`.
+        /// `"assertVoice"`, `"dropVoiceInputs"`, `"observeUndoState"`.
         let op: String
         let key: Int32?
         /// ST-T03: with `key`, address the n-th copy (document order) of that
@@ -48,6 +48,15 @@ struct StudioScenario: Decodable {
         /// assert only (#384): how many undo and redo steps the history holds,
         /// and how many objects the document has.
         let undoDepth: Int?, redoDepth: Int?, objectCount: Int?
+        /// assert only (#454): whether Undo and Redo are enabled, as the model
+        /// publishes it (`canUndo`, `canRedo`), as the toolbar's state reads
+        /// it, and as the stacks hold it; all three must agree.
+        let canUndo: Bool?, canRedo: Bool?
+        /// observeUndoState only (#454): how many renames of the addressed
+        /// object it makes (`name` plus the edit's number), each its own
+        /// gesture and undo step, and at how many of them observation of
+        /// `canUndo`/`canRedo` must fire.
+        let edits: Int?, changes: Int?
         /// #448: the step continues the previous step's gesture. The runner
         /// then does not end the edit-coalescing window before it, so an
         /// edit can join the step before it, as an edit right after an Undo
@@ -648,7 +657,7 @@ struct StudioScenario: Decodable {
                  seconds, dx, dy, eyeLook, blink, handPattern, mode, axis, pixels, toolbarSteady, ikGroup, selects, sourceIK,
                  render, exportIdenticalToSource, errorContains, outfit, accessoryLabels, pluginMount, state, clothes, expression,
                  sex, character, chain, delta, ik, edit, build, parent, children, absent, copy, added, activeCopyOf,
-                 undoDepth, redoDepth, objectCount, rows, selected, aid, routeEdit, route, routeLines, sourceMap, liveSamplers, decodes, settles, inputsFrom,
+                 undoDepth, redoDepth, objectCount, canUndo, canRedo, edits, changes, rows, selected, aid, routeEdit, route, routeLines, sourceMap, liveSamplers, decodes, settles, inputsFrom,
                  sameGesture, keys, field, documentIs, exportIdenticalTo
         }
 
@@ -766,6 +775,10 @@ struct StudioScenario: Decodable {
             undoDepth = try c.decodeIfPresent(Int.self, forKey: .undoDepth)
             sameGesture = try c.decodeIfPresent(Bool.self, forKey: .sameGesture)
             redoDepth = try c.decodeIfPresent(Int.self, forKey: .redoDepth)
+            canUndo = try c.decodeIfPresent(Bool.self, forKey: .canUndo)
+            canRedo = try c.decodeIfPresent(Bool.self, forKey: .canRedo)
+            edits = try c.decodeIfPresent(Int.self, forKey: .edits)
+            changes = try c.decodeIfPresent(Int.self, forKey: .changes)
             objectCount = try c.decodeIfPresent(Int.self, forKey: .objectCount)
             rows = try c.decodeIfPresent(Int.self, forKey: .rows)
             selected = try c.decodeIfPresent(Bool.self, forKey: .selected)
@@ -3417,6 +3430,36 @@ struct StudioScenario: Decodable {
                 let summary = String(format: "median %.2f ms, p90 %.2f ms, max %.2f ms", sorted[sorted.count / 2],
                                      sorted[min(sorted.count - 1, sorted.count * 9 / 10)], sorted.last!)
                 record(step, added > 0, "timeDuplicate \(describe(step)): \(rounds) rounds, \(added) objects per copy; \(summary)")
+            case "observeUndoState":
+                // #454: observation of `canUndo`/`canRedo` fires only when a
+                // value flips, not at every recorded step. Each rename is its
+                // own gesture (the coalescing window ends before it) and runs
+                // under a fresh arming of `withObservationTracking` on the two
+                // values; an arming fires once, at its first write.
+                guard let id = object(step) else { record(step, false, "observeUndoState: no object \(describe(step))"); continue }
+                guard let name = step.name, !name.isEmpty, let edits = step.edits, edits > 0, let expected = step.changes else {
+                    record(step, false, "observeUndoState: name, edits > 0 and changes are required"); continue
+                }
+                let before = (undo: studio.undoDepth, redo: studio.redoDepth, canUndo: studio.canUndo, canRedo: studio.canRedo)
+                let observed = StudioToolbarObservation()
+                for edit in 1...edits {
+                    if edit > 1 { studio.endUndoCoalescing() }
+                    observed.event = "edit \(edit)"
+                    withObservationTracking { _ = studio.canUndo; _ = studio.canRedo } onChange: { [observed] in observed.writes.append(observed.event) }
+                    studio.update(id) { $0.name = "\(name) \(edit)" }
+                }
+                let fired = Array(Set(observed.writes)).sorted()
+                let recorded = studio.undoDepth - before.undo
+                var failures: [String] = []
+                if recorded != edits { failures.append("\(recorded) undo steps recorded for \(edits) renames") }
+                if fired.count != expected {
+                    failures.append("observation fired at \(fired.count) of \(edits) renames (\(fired.joined(separator: ", "))), expected \(expected)")
+                }
+                record(step, failures.isEmpty, failures.isEmpty
+                    ? "\(edits) renames of \(describe(step)) recorded \(recorded) undo steps (undo \(before.undo) to \(studio.undoDepth), "
+                        + "redo \(before.redo) to \(studio.redoDepth)); canUndo \(before.canUndo) to \(studio.canUndo), "
+                        + "canRedo \(before.canRedo) to \(studio.canRedo); observation fired at \(fired.count) of them (\(fired.joined(separator: ", ")))"
+                    : "observeUndoState: " + failures.joined(separator: "; "))
             case "addFolder", "addCamera", "addLight":
                 // The workspace's add menu; `name` renames the new object.
                 let before = studio.doc.objects.count
@@ -3686,6 +3729,21 @@ struct StudioScenario: Decodable {
                 }
                 if let expected = step.redoDepth, studio.redoDepth != expected {
                     problems.append("assert redoDepth: \(studio.redoDepth) redo steps, expected \(expected)")
+                }
+                if step.canUndo != nil || step.canRedo != nil {
+                    // #454: the published value, the toolbar's state and the stack agree.
+                    let toolbar = StudioToolbarState(model: studio)
+                    let enablement: [(String, Bool?, Bool, Bool, Bool)] = [
+                        ("canUndo", step.canUndo, studio.canUndo, toolbar.canUndo, studio.undoDepth > 0),
+                        ("canRedo", step.canRedo, studio.canRedo, toolbar.canRedo, studio.redoDepth > 0)]
+                    for (label, expected, published, shown, held) in enablement {
+                        guard let expected else { continue }
+                        if published != expected || shown != expected || held != expected {
+                            problems.append("assert \(label): published \(published), toolbar \(shown), stack \(held ? "non-empty" : "empty"), expected \(expected)")
+                        } else {
+                            details.append("\(label) \(expected)")
+                        }
+                    }
                 }
                 if let expected = step.objectCount, studio.doc.objects.count != expected {
                     problems.append("assert objectCount: \(studio.doc.objects.count) objects, expected \(expected)")

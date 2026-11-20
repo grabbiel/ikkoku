@@ -739,6 +739,7 @@ struct InspectorUIScenario: Decodable {
         guard let scroll, let document = scroll.documentView else { return line + " | rows: no inspector scroll view" }
         let clip = scroll.contentView, top = rect(clip).maxY
         var rows: [(top: CGFloat, text: String)] = [], name: NSTextField? = nil, popup: NSPopUpButton? = nil
+        var fieldIntrinsics: [CGFloat] = []
         func findControls(_ view: NSView) {
             guard rows.count < 64 else { return }
             if let control = view as? NSControl, !control.isHiddenOrHasHiddenAncestor {
@@ -748,6 +749,7 @@ struct InspectorUIScenario: Decodable {
                 case let field as NSTextField:
                     if field.placeholderString == "Name", name == nil { name = field }
                     kind = field.placeholderString == "Name" ? "name" : field.isEditable ? "field" : "text"
+                    if kind == "field" { fieldIntrinsics.append(field.intrinsicContentSize.height) }
                 case let button as NSPopUpButton:
                     if popup == nil { popup = button }
                     kind = "popup"
@@ -772,6 +774,12 @@ struct InspectorUIScenario: Decodable {
             line += " | no name field"
         }
         if let popup { line += " | popup height \(f(popup.frame.height)) intrinsic \(f(popup.intrinsicContentSize.height))" }
+        // #366 R2: the explicit text-field heights the inspector lays out with,
+        // to compare with the fields' own intrinsic heights (the Name field's
+        // above; here every other editable field's, the Transform rows on the
+        // Object tab).
+        line += " | heights name \(f(InspectorTextFieldHeight.name)) vector \(f(InspectorTextFieldHeight.vector))"
+            + " fields " + (fieldIntrinsics.isEmpty ? "none" : fieldIntrinsics.map(f).joined(separator: ","))
         let responder = window.firstResponder
         var responderText = responder.map { "\(type(of: $0))" } ?? "none"
         if let editor = responder as? NSTextView, editor.isFieldEditor {

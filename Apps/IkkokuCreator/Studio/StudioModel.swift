@@ -288,12 +288,29 @@ final class StudioModel: ViewportInputHandler, LivePacedHandler {
     /// an original scene import) keeps only the scene it replaced, not the
     /// scenes before it; see `StudioUndoHistory`. An object edit through
     /// `update` keeps only the objects it changed (#446).
-    private var history = StudioUndoHistory<StudioDocument>()
+    /// Not observed (#454): a view reads the undo state only through
+    /// `canUndo` and `canRedo`, so recording a step does not invalidate it.
+    @ObservationIgnored private var history = StudioUndoHistory<StudioDocument>()
     /// The history as it is: scenarios compare it before and after an
     /// action, and the storage census counts what it keeps.
     var undoHistory: StudioUndoHistory<StudioDocument> { history }
     var undoDepth: Int { history.undoDepth }
     var redoDepth: Int { history.redoDepth }
+    /// Whether Undo and Redo have a step (#454): observed, and written only
+    /// when they flip, so recording a step invalidates the toolbar only when
+    /// a button's state changes. Every write to `history` that can change a
+    /// depth publishes them (`publishUndoState`).
+    private(set) var canUndo = false
+    private(set) var canRedo = false
+    /// After every write to `history` that can change a depth: `record`,
+    /// `record(patch:)` (#446), `popBack`, `popForward`, and a broken step
+    /// dropped (`refusedBrokenStep`, also on `materializeNewestUndoPatches`'s
+    /// drops). Reads the depths, so no step is turned into a document.
+    private func publishUndoState() {
+        let undo = history.undoDepth > 0, redo = history.redoDepth > 0
+        if undo != canUndo { canUndo = undo }
+        if redo != canRedo { canRedo = redo }
+    }
     /// The documents Undo and Redo would restore now (nil with nothing to
     /// undo or redo, or a broken step).
     var undoTarget: StudioDocument? { if case .document(let target)? = history.undoTarget(from: doc) { target } else { nil } }
@@ -2169,6 +2186,7 @@ final class StudioModel: ViewportInputHandler, LivePacedHandler {
         #if DEBUG
         undoOracle.record(.init(doc), replacingScene: replacingScene)
         #endif
+        publishUndoState()
     }
 
     /// #446: before a write no step records and no object patch can describe
@@ -2191,6 +2209,7 @@ final class StudioModel: ViewportInputHandler, LivePacedHandler {
     /// dropped, the document stays as it is, and a diagnostics line says so.
     private func refusedBrokenStep(redo: Bool, dropped: Bool = false) {
         if !dropped { if redo { history.dropNewestRedo() } else { history.dropNewestUndo() } }
+        publishUndoState()
         #if DEBUG
         if redo { undoOracle.dropNewestRedo() } else { undoOracle.dropNewestUndo() }
         #endif
@@ -2237,6 +2256,7 @@ final class StudioModel: ViewportInputHandler, LivePacedHandler {
             defer { plugins.abort() }
             checkUndoOracle(next, redo: false)
             history.popBack(leaving: doc)
+            publishUndoState()
             applyHistoryDocument(candidate, plugins: plugins, resources: resources)
             // #448: Undo is a gesture of its own. Without this an edit right
             // after it joined the step it had just undone: no snapshot, the
@@ -2259,6 +2279,7 @@ final class StudioModel: ViewportInputHandler, LivePacedHandler {
             defer { plugins.abort() }
             checkUndoOracle(next, redo: true)
             history.popForward(leaving: doc)
+            publishUndoState()
             applyHistoryDocument(candidate, plugins: plugins, resources: resources)
             status = "Redo"
         } catch { status = "Plugin restore: \(error)" }
@@ -2516,6 +2537,7 @@ final class StudioModel: ViewportInputHandler, LivePacedHandler {
         switch undoSteps.objectEdit(&object, at: Date(), change) {
         case .startsStep:
             history.record(patch: StudioObjectPatch(doc, before: doc.objects[i]))
+            publishUndoState()
             #if DEBUG
             undoOracle.record(.init(doc))
             #endif
