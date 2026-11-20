@@ -31,7 +31,8 @@ struct StudioScenario: Decodable {
         /// `"captureIKPose"`, `"editDuringAdvance"`, `"backgroundBuild"`, `"delete"`, `"setParent"`, `"duplicate"`,
         /// `"addFolder"`, `"addCamera"`, `"addLight"`, `"export"`, `"exportRejected"`, `"reimport"`,
         /// `"focus"`, `"selectRoutePoint"`, `"dragRoutePoint"`, `"editRoute"`, `"captureRoute"`, `"setShowSourceMap"`, `"setUnlimitedLights"`,
-        /// `"deselect"`, `"assertWorkspaceRows"`, `"pressDigit"`, `"assert"`, `"assertRejected"`.
+        /// `"deselect"`, `"assertWorkspaceRows"`, `"pressDigit"`, `"assert"`, `"assertRejected"`,
+        /// `"assertVoice"`, `"dropVoiceInputs"`.
         let op: String
         let key: Int32?
         /// ST-T03: with `key`, address the n-th copy (document order) of that
@@ -47,6 +48,12 @@ struct StudioScenario: Decodable {
         /// assert only (#384): how many undo and redo steps the history holds,
         /// and how many objects the document has.
         let undoDepth: Int?, redoDepth: Int?, objectCount: Int?
+        /// assertWorkspaceRows only (#410): how many rows the list has, and
+        /// whether the addressed object's row (`key`, `copy` or `added`, at
+        /// row `index`, negative from the end, showing `name`) is selected;
+        /// `selected: true` also requires it to be the only selected row.
+        let rows: Int?
+        let selected: Bool?
         let visible: Bool?
         let name: String?
         let index: Int?
@@ -90,6 +97,15 @@ struct StudioScenario: Decodable {
         /// character builds when shown or selected; with `built` true and the
         /// character selected, its pose and animation state must be readable.
         let characterBuilt: CharacterBuiltValue?
+        /// assertVoice only (#437): how many scene decodes resolving a voice
+        /// play's inputs on `key` makes, and how many times it settles the
+        /// live step (0 when absent: a voice click never settles it).
+        let decodes: Int?, settles: Int?
+        /// assertVoice only (#437): where the play's inputs come from, in the
+        /// order `sourceVoiceInputs` looks: `cache`, `check` (a native
+        /// reload's pending card check holds `key`), `preview` (the built
+        /// preview's) or `scene` (one scene read). Not asserted when absent.
+        let inputsFrom: String?
         /// assert only: source character `key`'s saved animation state in
         /// exported scene files (`paths`, read back from disk): with `agree`
         /// every file saves the same state; with `increasing` each file's
@@ -615,7 +631,7 @@ struct StudioScenario: Decodable {
                  seconds, dx, dy, eyeLook, blink, handPattern, mode, axis, pixels, toolbarSteady, ikGroup, selects, sourceIK,
                  render, exportIdenticalToSource, errorContains, outfit, accessoryLabels, pluginMount, state, clothes, expression,
                  sex, character, chain, delta, ik, edit, build, parent, children, absent, copy, added, activeCopyOf,
-                 undoDepth, redoDepth, objectCount, aid, routeEdit, route, routeLines, sourceMap, liveSamplers
+                 undoDepth, redoDepth, objectCount, rows, selected, aid, routeEdit, route, routeLines, sourceMap, liveSamplers, decodes, settles, inputsFrom
         }
 
         init(from decoder: Decoder) throws {
@@ -732,11 +748,16 @@ struct StudioScenario: Decodable {
             undoDepth = try c.decodeIfPresent(Int.self, forKey: .undoDepth)
             redoDepth = try c.decodeIfPresent(Int.self, forKey: .redoDepth)
             objectCount = try c.decodeIfPresent(Int.self, forKey: .objectCount)
+            rows = try c.decodeIfPresent(Int.self, forKey: .rows)
+            selected = try c.decodeIfPresent(Bool.self, forKey: .selected)
             aid = try c.decodeIfPresent(Bool.self, forKey: .aid)
             routeEdit = try c.decodeIfPresent(RouteEditValue.self, forKey: .routeEdit)
             route = try c.decodeIfPresent(RouteValue.self, forKey: .route)
             routeLines = try c.decodeIfPresent(Int.self, forKey: .routeLines)
             sourceMap = try c.decodeIfPresent(SourceMapValue.self, forKey: .sourceMap)
+            decodes = try c.decodeIfPresent(Int.self, forKey: .decodes)
+            settles = try c.decodeIfPresent(Int.self, forKey: .settles)
+            inputsFrom = try c.decodeIfPresent(String.self, forKey: .inputsFrom)
         }
     }
 
@@ -1906,7 +1927,7 @@ struct StudioScenario: Decodable {
             case "select":
                 guard let id = object(step) else { record(step, false, "select: no object with source key \(step.key ?? -1)"); continue }
                 studio.selection = id
-                record(step, true, "selected source key \(step.key!)")
+                record(step, true, "selected \(describe(step))")
             case "deselect":
                 studio.selection = nil
                 record(step, true, "selection cleared")
@@ -1918,12 +1939,95 @@ struct StudioScenario: Decodable {
                 let selected = published.entries.filter(\.selected).map { row in
                     studio.doc.object(row.id)?.sourceObjectKey.map { "key \($0)" } ?? row.name
                 }
-                if published == fresh {
-                    record(step, true, "workspace rows equal a rebuild: \(published.entries.count) rows, selected \(selected.isEmpty ? "none" : selected.joined(separator: ", "))")
-                } else {
+                guard published == fresh else {
                     let differing = zip(published.entries, fresh.entries).filter { $0 != $1 }.count
-                    record(step, false, "assertWorkspaceRows: published rows differ from a rebuild (\(published.entries.count) vs \(fresh.entries.count) rows, \(differing) differ)")
+                    record(step, false, "assertWorkspaceRows: published rows differ from a rebuild (\(published.entries.count) vs \(fresh.entries.count) rows, \(differing) differ)"); continue
                 }
+                // #410: the list keys its rows by position, which is safe only
+                // while a row holds no state of its own: its entry, the list's
+                // eye focus with its slot and ring, and its actions.
+                let rowFields = Mirror(reflecting: WorkspaceRow(entry: published.entries.first ?? WorkspaceEntry(
+                    id: UUID(), name: "", kind: .folder, visible: true, depth: 0, selected: false, cameraPlaceholder: false),
+                    select: {}, toggleVisible: {})).children.map { $0.label ?? "?" }
+                guard rowFields == ["entry", "focus", "slot", "focusShown", "select", "toggleVisible"] else {
+                    record(step, false, "assertWorkspaceRows: WorkspaceRow holds more than its entry, the list's eye focus and its actions (\(rowFields.joined(separator: ", "))), which positional row ids would hand to the wrong object"); continue
+                }
+                if let rows = step.rows, rows != published.entries.count {
+                    record(step, false, "assertWorkspaceRows: \(published.entries.count) rows, expected \(rows)"); continue
+                }
+                if step.key != nil || step.added != nil {
+                    guard let id = object(step), let index = published.entries.firstIndex(where: { $0.id == id }) else {
+                        record(step, false, "assertWorkspaceRows: no row for \(describe(step))"); continue
+                    }
+                    let row = published.entries[index]
+                    var wrong: [String] = []
+                    // A negative index counts from the end (-1 is the last row).
+                    if let expected = step.index, (expected < 0 ? published.entries.count + expected : expected) != index {
+                        wrong.append("at row \(index) of \(published.entries.count), expected \(expected)")
+                    }
+                    if let name = step.name, name != row.name { wrong.append("shows \"\(row.name)\", expected \"\(name)\"") }
+                    if let flag = step.selected, flag != row.selected { wrong.append(row.selected ? "selected" : "not selected") }
+                    if step.selected == true, selected.count != 1 { wrong.append("\(selected.count) rows selected") }
+                    guard wrong.isEmpty else {
+                        record(step, false, "assertWorkspaceRows: \(describe(step)): \(wrong.joined(separator: ", "))"); continue
+                    }
+                }
+                record(step, true, "workspace rows equal a rebuild: \(published.entries.count) rows, selected \(selected.isEmpty ? "none" : selected.joined(separator: ", "))"
+                       + (step.key != nil || step.added != nil ? "; \(describe(step)) as expected" : ""))
+            case "dropVoiceInputs":
+                // #437: forget every voice input the Studio holds (the cache and
+                // a reload's pending check), so the next step shows where its
+                // inputs come from.
+                studio.sourceVoicePendingCheck?.check.cancel()
+                studio.sourceVoicePendingCheck = nil
+                studio.sourceVoiceInputCache.removeAll()
+                record(step, true, "voice inputs dropped")
+            case "assertVoice":
+                // #437: resolving the inputs of a voice play on `key` (what the
+                // inspector's Play button reads before the catalog) decodes
+                // exactly `decodes` scenes and never settles the live step; a
+                // repeat change after it decodes none. The probe counts on the
+                // decode entry points, for this step's calls only.
+                guard let id = object(step), let object = studio.doc.object(id) else {
+                    record(step, false, "assertVoice: no object with source key \(step.key ?? -1)"); continue
+                }
+                // Where the inputs come from, read before resolving them; the
+                // reload's pending check is listed so a step shows which
+                // characters it covers.
+                let pending = studio.sourceVoicePendingCheck
+                let from: String = {
+                    guard let reference = object.sourceCharacter else { return "scene" }
+                    if studio.sourceVoiceInputCache.contains(.init(reference)) { return "cache" }
+                    if let pending, pending.sceneSHA256 == reference.sceneSHA256, pending.keys.contains(reference.objectKey) { return "check" }
+                    return studio.sourceVoicePreviewInputs(id, reference: reference) != nil ? "preview" : "scene"
+                }()
+                let pendingNote = pending.map { "; the reload's pending check holds keys \($0.keys.map(String.init).joined(separator: ", "))" } ?? ""
+                // The main-thread time of each call is reported (information,
+                // never checked).
+                let probe = SourceSceneDecodeProbe(), settlesBefore = studio.sourceLiveSettles
+                let resolveStart = DispatchTime.now().uptimeNanoseconds
+                let resolved = SourceSceneDecodeProbe.$current.withValue(probe) { Result { try studio.sourceVoiceInputs(object) } }
+                let resolveMs = Double(DispatchTime.now().uptimeNanoseconds - resolveStart) / 1e6
+                let settles = studio.sourceLiveSettles - settlesBefore, decodes = probe.count
+                let repeatProbe = SourceSceneDecodeProbe()
+                let repeatStart = DispatchTime.now().uptimeNanoseconds
+                SourceSceneDecodeProbe.$current.withValue(repeatProbe) { studio.setSourceVoiceRepeat(id, mode: 1) }
+                let repeatMs = Double(DispatchTime.now().uptimeNanoseconds - repeatStart) / 1e6
+                let repeated = studio.doc.object(id)?.sourceVoice?.repeatMode == 1
+                var failures: [String] = []
+                if let expected = step.inputsFrom, expected != from { failures.append("inputs from \(from), expected \(expected)\(pendingNote)") }
+                if case .failure(let error) = resolved { failures.append("inputs did not resolve: \(error)") }
+                if decodes != (step.decodes ?? 0) { failures.append("\(decodes) scene decodes, expected \(step.decodes ?? 0)") }
+                if settles != (step.settles ?? 0) { failures.append("\(settles) live-step settles, expected \(step.settles ?? 0)") }
+                if repeatProbe.count != 0 { failures.append("the repeat change decoded \(repeatProbe.count) scenes") }
+                if !repeated { failures.append("the repeat change did not apply: \(studio.status)") }
+                let voice = (try? resolved.get()).map { inputs in
+                    "playlist \(inputs.initial.playlist.count), " + ((try? inputs.character.get()) != nil ? "card voice read" : "card voice error")
+                } ?? "unresolved"
+                record(step, failures.isEmpty, failures.isEmpty
+                    ? "source key \(step.key!): voice inputs from \(from) resolved with \(decodes) scene decodes and \(settles) live-step settles (\(voice)); the repeat change decoded none\(pendingNote)"
+                        + String(format: "; resolve %.4f ms, repeat %.4f ms", resolveMs, repeatMs)
+                    : "assertVoice: " + failures.joined(separator: "; "))
             case "setVisible":
                 guard let id = object(step) else { record(step, false, "setVisible: no object with source key \(step.key ?? -1)"); continue }
                 guard let visible = step.visible else { record(step, false, "setVisible: missing visible"); continue }
@@ -1933,7 +2037,7 @@ struct StudioScenario: Decodable {
                 guard let id = object(step) else { record(step, false, "rename: no object with source key \(step.key ?? -1)"); continue }
                 guard let name = step.name, !name.isEmpty else { record(step, false, "rename: missing name"); continue }
                 studio.update(id) { $0.name = name }
-                record(step, true, "source key \(step.key!) renamed to \"\(name)\"")
+                record(step, true, "\(describe(step)) renamed to \"\(name)\"")
             case "toggleCamera":
                 guard let id = object(step) else { record(step, false, "toggleCamera: no object with source key \(step.key ?? -1)"); continue }
                 studio.toggleSourceCamera(id)
@@ -3133,8 +3237,8 @@ struct StudioScenario: Decodable {
                 studio.selection = id
                 studio.deleteSelection()
                 let gone = studio.doc.object(id) == nil
-                record(step, gone, gone ? "deleted source key \(step.key!) and its subtree (\(studio.doc.objects.count) objects left)"
-                                        : "delete: source key \(step.key!) is still in the document")
+                record(step, gone, gone ? "deleted \(describe(step)) and its subtree (\(studio.doc.objects.count) objects left)"
+                                        : "delete: \(describe(step)) is still in the document")
             case "setParent":
                 // The inspector's Parent picker (`StudioModel.setParent`).
                 guard let id = object(step) else { record(step, false, "setParent: no object \(describe(step))"); continue }

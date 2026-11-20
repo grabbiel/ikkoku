@@ -44,6 +44,10 @@ public final class SourceStudioCharacterPreview {
     /// Whether the one-shot collapsed-renderer notice (#404) was reported.
     private var reportedCollapsedRenderers = false
     public let record: KoikatsuCharacterRecord
+    /// What a voice play reads (#437), computed by the build's first half
+    /// from the card it decoded: a play on a built character decodes
+    /// neither the scene nor the card.
+    public let voiceInputs: SourceStudioVoiceInputs
     public let selections: [SourceMakerLibrary.Selection]
     /// The outfit this preview assembled: the `coordinate` init argument when
     /// one was given, the card's saved Status.coordinateType otherwise.
@@ -422,6 +426,8 @@ public final class SourceStudioCharacterPreview {
         let sceneVersion: String
         let record: KoikatsuCharacterRecord
         let card: SourceCharacterCard
+        /// The voice inputs (#437), from the card this half decoded.
+        let voiceInputs: SourceStudioVoiceInputs
         let identity: SourceCharacterCard.Customization
         let status: [String: SourceMessagePackValue]
         let coordinate: Int, savedCoordinate: Int, outfitCount: Int
@@ -448,7 +454,13 @@ public final class SourceStudioCharacterPreview {
     /// index. `assemble` and `validateCard` share them.
     static func cardInputs(_ record: KoikatsuCharacterRecord) throws
         -> (card: SourceCharacterCard, identity: SourceCharacterCard.Customization, status: [String: SourceMessagePackValue], savedCoordinate: Int) {
-        let card = try record.card(), identity = try card.customization()
+        try cardInputs(record, card: record.card())
+    }
+
+    /// `cardInputs` for a card the caller already decoded from `record`.
+    static func cardInputs(_ record: KoikatsuCharacterRecord, card: SourceCharacterCard) throws
+        -> (card: SourceCharacterCard, identity: SourceCharacterCard.Customization, status: [String: SourceMessagePackValue], savedCoordinate: Int) {
+        let identity = try card.customization()
         guard identity.sex == Int(record.sex) else { throw RigError.invalid("Scene character/card sex identities differ.") }
         try SourceMakerLibrary.validateAssemblyIdentity(card: card)
         let status = try card.block(named: "Status").map { try SourceMessagePack.decode($0.data).stringKeyedMap() } ?? [:]
@@ -466,7 +478,12 @@ public final class SourceStudioCharacterPreview {
     /// rig and appearance reads) fails first. A record that passes may
     /// still fail in those steps. No rig, no file read, no GPU.
     public static func validateCard(of record: KoikatsuCharacterRecord) throws {
-        let identity = try cardInputs(record).identity
+        try validateCard(of: record, card: record.card())
+    }
+
+    /// `validateCard` for a card the caller already decoded from `record`.
+    static func validateCard(of record: KoikatsuCharacterRecord, card: SourceCharacterCard) throws {
+        let identity = try cardInputs(record, card: card).identity
         try SourceCharacterCard.validateNativeAssembly(identity)
         try SourceCharacterCard.validateNativeShapeRanges(identity)
     }
@@ -480,7 +497,9 @@ public final class SourceStudioCharacterPreview {
     /// with its priority donated, or checks itself if the worker has not
     /// started. The worker's block holds the check until it has run (#432):
     /// a check nobody asks is freed when its worker finishes, or at once,
-    /// unrun, after `cancel()`.
+    /// unrun, after `cancel()`. The same card decode also gives each
+    /// record's voice inputs (#437, `voiceInputs()`), so a voice play on a
+    /// character the import left unbuilt decodes no scene.
     public final class CardCheck: @unchecked Sendable {
         /// Shallow copies (#326): `validateCard` reads only the card and the
         /// sex (`cardInputs`), and a record's accessory children are a scene
@@ -488,7 +507,7 @@ public final class SourceStudioCharacterPreview {
         /// no tree, whatever its depth.
         let records: [KoikatsuCharacterRecord]
         private let lock = OSAllocatedUnfairLock()
-        private var computed: [String?]?
+        private var computed: [(problem: String?, voice: SourceStudioVoiceInputs)]?
         private let pending = OSAllocatedUnfairLock<DispatchWorkItem?>(uncheckedState: nil)
 
         public convenience init(records: [KoikatsuCharacterRecord]) {
@@ -533,7 +552,13 @@ public final class SourceStudioCharacterPreview {
 
         /// Per record, in order: the description of the error `validateCard`
         /// throws for it, or nil when its card passes.
-        public func problems() -> [String?] {
+        public func problems() -> [String?] { results().map(\.problem) }
+
+        /// Per record, in order: its voice inputs (#437), from the card
+        /// decode `validateCard` made. Waits for the worker as `problems()`.
+        public func voiceInputs() -> [SourceStudioVoiceInputs] { results().map(\.voice) }
+
+        private func results() -> [(problem: String?, voice: SourceStudioVoiceInputs)] {
             pending.withLockUnchecked { item -> DispatchWorkItem? in
                 defer { item = nil }
                 return item
@@ -543,15 +568,37 @@ public final class SourceStudioCharacterPreview {
             return computed ?? []
         }
 
-        private static func check(_ records: [KoikatsuCharacterRecord]) -> [String?] {
-            let results = OSAllocatedUnfairLock(initialState: [String?](repeating: nil, count: records.count))
+        private static func check(_ records: [KoikatsuCharacterRecord]) -> [(problem: String?, voice: SourceStudioVoiceInputs)] {
+            let results = OSAllocatedUnfairLock<[(problem: String?, voice: SourceStudioVoiceInputs)?]>(
+                initialState: Array(repeating: nil, count: records.count))
             DispatchQueue.concurrentPerform(iterations: records.count) { i in
+                // One card decode serves the check and the voice inputs; a
+                // card that does not decode fails both with its error.
+                let card = Result { try records[i].card() }
                 let problem: String?
-                do { try SourceStudioCharacterPreview.validateCard(of: records[i]); problem = nil } catch { problem = "\(error)" }
-                results.withLock { $0[i] = problem }
+                do { try SourceStudioCharacterPreview.validateCard(of: records[i], card: card.get()); problem = nil } catch { problem = "\(error)" }
+                let voice = SourceStudioVoiceInputs(card: card, record: records[i])
+                results.withLock { $0[i] = (problem, voice) }
             }
-            return results.withLock { $0 }
+            return results.withLock { $0.map { $0! } }
         }
+    }
+
+    /// The character records `keys` name in `scene`, as shallow copies
+    /// (`characterRecord`), for a native reload's voice check (#437): one
+    /// walk, whatever the number of keys. A key with no character record is
+    /// left out.
+    public static func characterRecords(_ keys: Set<Int32>, in scene: KoikatsuSceneDocument) -> [Int32: KoikatsuCharacterRecord] {
+        var stack = scene.snapshot.roots, found: [Int32: KoikatsuCharacterRecord] = [:]
+        while found.count < keys.count, let object = stack.popLast() {
+            if keys.contains(object.sourceKey), found[object.sourceKey] == nil, var record = object.character {
+                record.accessoryChildren = [:]
+                found[object.sourceKey] = record
+            }
+            stack += object.children
+            if let character = object.character { stack += character.accessoryChildren.values.flatMap { $0 } }
+        }
+        return found
     }
 
     /// The character record `key` names in `scene`, as a shallow copy
@@ -641,7 +688,7 @@ public final class SourceStudioCharacterPreview {
         }
         let handPatterns = Result { try reference.handPatternsFile.map { try SourceStudioHandPatterns.load(url: URL(fileURLWithPath: $0)) } }
         return Assembly(reference: reference, attachments: attachments, sceneVersion: scene.snapshot.version, record: record,
-            card: card, identity: identity, status: status, coordinate: coordinate, savedCoordinate: savedCoordinate,
+            card: card, voiceInputs: SourceStudioVoiceInputs(card: .success(card), record: record), identity: identity, status: status, coordinate: coordinate, savedCoordinate: savedCoordinate,
             outfitCount: outfitCount, eyesBlink: eyesBlink, blinkDiagnostic: blinkDiagnostic, savedFace: savedFace,
             faceDiagnostics: faceDiagnostics, library: library, rigURL: rigURL, selectedManifest: selectedManifest,
             directory: directory, options: options, prepared: prepared, source: source, contract: contract,
@@ -657,6 +704,7 @@ public final class SourceStudioCharacterPreview {
         attachments = assembly.attachments
         let record = assembly.record, card = assembly.card, identity = assembly.identity, status = assembly.status
         self.record = record
+        voiceInputs = assembly.voiceInputs
         let coordinate = assembly.coordinate, savedCoordinate = assembly.savedCoordinate
         self.coordinate = coordinate
         self.savedCoordinate = savedCoordinate

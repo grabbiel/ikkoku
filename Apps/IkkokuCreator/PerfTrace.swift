@@ -133,6 +133,13 @@ final class PerfTrace {
         case studioToolbarControls
         case objectInspector, objectInspectorContent, objectInspectorSection, poseInspector, sourcePoseInspector, sourceAnimationInspector, faceInspector, clothesInspector, sceneInspector
         case makerWindow, makerRigPanel, makerShapeRow
+        /// #410: an empty workspace slot, past the scene's rows (`WorkspaceSlot`).
+        case studioWorkspacePlaceholder
+        /// #410: the workspace list (`StudioWorkspaceContent`), which a load
+        /// and a move of the eyes' keyboard focus evaluate.
+        case studioWorkspaceList
+        /// #410: one workspace slot (`WorkspaceSlot`), with a row or empty.
+        case studioWorkspaceSlot
 
         var name: String { String(describing: self) }
     }
@@ -213,6 +220,15 @@ final class PerfTrace {
         let pauseAt: Set<Int>
         let pauseSeconds: Double
         let pauseMarker: String?
+        /// `IKKOKU_PERF_EDIT_FIELD`: what each `studio-edit-steps` edit
+        /// writes, `x` (the x position, default) or `pose` (a neck rotation
+        /// in the pose delta).
+        let editField: String
+        /// `IKKOKU_PERF_EDIT_PHASES`: `none` (default) runs each edit half a
+        /// second after the previous action is ready; `alternate` then runs
+        /// it at the next live step's completion, odd edits after the step's
+        /// commit and even edits before it (#409, #446).
+        let editPhases: String
 
         /// Reads `IKKOKU_PERF_*`; `CaptureRequest.validate` already checked the values.
         static func from(_ env: [String: String]) -> Configuration? {
@@ -245,7 +261,9 @@ final class PerfTrace {
                 edits: int("IKKOKU_PERF_EDITS", 90),
                 pauseAt: Set((env["IKKOKU_PERF_PAUSE_AT"] ?? "").split(separator: ",").compactMap { Int($0) }),
                 pauseSeconds: Double(int("IKKOKU_PERF_PAUSE_SECONDS", 10)),
-                pauseMarker: env["IKKOKU_PERF_PAUSE_MARKER"])
+                pauseMarker: env["IKKOKU_PERF_PAUSE_MARKER"],
+                editField: env["IKKOKU_PERF_EDIT_FIELD"] ?? "x",
+                editPhases: env["IKKOKU_PERF_EDIT_PHASES"] ?? "none")
         }
     }
 
@@ -409,13 +427,38 @@ final class PerfTrace {
         trace.hoverPicks.append((applied, latency * 1000, gpuTime * 1000))
     }
 
-    /// Counts one SwiftUI body evaluation while recording; called as
-    /// `let _ = PerfTrace.body(.name)` at the top of the body. Costs one
-    /// optional check when no trace runs.
+    /// Counts one SwiftUI body evaluation while recording, or into
+    /// `scenarioBodyCounts` while a scenario step counts; called as
+    /// `let _ = PerfTrace.body(.name)` at the top of the body. Costs two
+    /// optional checks when neither runs.
     @inline(__always)
     static func body(_ view: ViewBody) {
-        guard let trace = active, trace.recording else { return }
-        trace.bodyCounts[view.rawValue] += 1
+        if let trace = active {
+            if trace.recording { trace.bodyCounts[view.rawValue] += 1 }
+        } else if scenarioBodyCounts != nil {
+            scenarioBodyCounts![view.rawValue] += 1
+        }
+    }
+
+    /// #410: body counts outside a perf trace, indexed by `ViewBody.rawValue`,
+    /// for a scenario step that counts what each keyboard focus move,
+    /// selection change, eye toggle or idle refresh evaluates. nil (not
+    /// counting) unless a scenario step sets it.
+    static var scenarioBodyCounts: [Int]?
+
+    /// How many bodies of `view` this recording has counted so far: 0 when no
+    /// trace records. The workload reads it per action (#410).
+    static func bodyCount(_ view: ViewBody) -> Int {
+        guard let trace = active, trace.recording else { return 0 }
+        return trace.bodyCounts[view.rawValue]
+    }
+
+    /// How many `event`s this recording has counted so far: 0 when no trace
+    /// records. `studio-edit-steps` reads the serial live steps per placed
+    /// edit (#409).
+    static func eventCount(_ event: Event) -> Int {
+        guard let trace = active, trace.recording else { return 0 }
+        return trace.eventCounts[event] ?? 0
     }
 
     // MARK: Recording window

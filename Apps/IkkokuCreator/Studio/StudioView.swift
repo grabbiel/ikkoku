@@ -108,18 +108,30 @@ struct StudioWorkspacePanel: View {
     var body: some View {
         let _ = PerfTrace.body(.studioWorkspace)
         let state = model.shownWorkspaceState
-        StudioWorkspaceContent(model: model, entries: state.entries, objectCount: state.objectCount).equatable()
+        StudioWorkspaceContent(model: model, entries: state.entries, slotCount: StudioWorkspaceState.slotCap,
+                               objectCount: state.objectCount).equatable()
     }
 }
 
 struct StudioWorkspaceContent: View, Equatable {
     let model: StudioModel
     let entries: [WorkspaceEntry]
+    /// The slots built ahead of any scroll (`StudioWorkspaceState.slotCap`).
+    let slotCount: Int
     let objectCount: Int
+    /// #410: the slot whose eye button has keyboard focus. The eye draws its
+    /// own focus ring (`WorkspaceRow.focusShown`) in place of the system's
+    /// focus effect, which it disables. The list holds the focus, not the
+    /// row, so a focus move evaluates this body once and the two rows whose
+    /// ring changes.
+    @FocusState private var focusedEye: Int?
 
-    static func == (a: Self, b: Self) -> Bool { a.model === b.model && a.entries == b.entries && a.objectCount == b.objectCount }
+    static func == (a: Self, b: Self) -> Bool {
+        a.model === b.model && a.entries == b.entries && a.slotCount == b.slotCount && a.objectCount == b.objectCount
+    }
 
     var body: some View {
+        let _ = PerfTrace.body(.studioWorkspaceList)
         VStack(spacing: 0) {
             HStack {
                 Text("Workspace").font(.headline)
@@ -127,15 +139,40 @@ struct StudioWorkspaceContent: View, Equatable {
                 StudioAddMenu(model: model)
             }.padding(8)
             Divider()
+            // #410: the first `slotCount` rows are slots in a plain stack, all
+            // of them built, and a slot past the scene's rows shows nothing;
+            // the rows after them, in a large scene, are a lazy stack. New
+            // Scene and Open used to remove and insert every row, and a lazy
+            // stack keeps, per inserted row it builds and for the whole
+            // session, an entry in SwiftUI's child cache, whatever the row
+            // ids. Now a load changes what the slots show and inserts only
+            // rows past them, which the lazy stack builds only when they are
+            // scrolled to; `slotCount` covers the rows a screen can show, so
+            // the rows a load builds are slots. The slots are built eagerly
+            // because a lazy stack estimates a child it has not built at a
+            // row's height, and an empty slot so estimated left a blank tail
+            // below the last row that scrolling did not always clear; built,
+            // an empty slot is exactly 0 pt. Slots and rows are keyed by
+            // position, which is safe because a row holds no state
+            // (`WorkspaceRow`); inserts and removals show as content changes,
+            // with no row animation. Spacing 0 with the 1 pt gap inside each
+            // row but the first, so an empty slot adds no height. (A List
+            // instead re-evaluated each row about 22 times per load.)
             ScrollView {
-                LazyVStack(spacing: 1) {
-                    ForEach(entries) { entry in
-                        WorkspaceRow(entry: entry) {
-                            model.selection = entry.id
-                        } toggleVisible: {
-                            model.update(entry.id) { $0.visible.toggle() }
+                VStack(spacing: 0) {
+                    VStack(spacing: 0) {
+                        ForEach(0..<slotCount, id: \.self) { index in
+                            WorkspaceSlot(model: model, entry: index < entries.count ? entries[index] : nil, first: index == 0,
+                                          focus: $focusedEye, slot: index, focusShown: focusedEye == index)
+                                .equatable()
                         }
-                        .equatable()
+                    }
+                    LazyVStack(spacing: 0) {
+                        ForEach(slotCount..<max(slotCount, entries.count), id: \.self) { index in
+                            WorkspaceSlot(model: model, entry: entries[index], first: index == 0,
+                                          focus: $focusedEye, slot: index, focusShown: focusedEye == index)
+                                .equatable()
+                        }
                     }
                 }.padding(4)
             }
@@ -609,13 +646,90 @@ struct StudioStatusLine: View {
     }
 }
 
+/// One slot of the workspace list (#410): a row, with the 1 pt gap above it
+/// for every row but the first, or, past the scene's rows, nothing: zero
+/// height, hidden from accessibility, not focusable and with no tap, so
+/// keyboard navigation and the selection skip it. The list wraps either in
+/// one `VStack`, so a slot is always one child of its stack and what it
+/// shows never inserts or removes a child. The rows past the slots, in the
+/// lazy stack, use it too, always with a row.
+struct WorkspaceSlot: View, Equatable {
+    let model: StudioModel
+    let entry: WorkspaceEntry?
+    let first: Bool
+    /// The list's eye focus (`StudioWorkspaceContent.focusedEye`), this
+    /// slot's index in it and whether this slot's eye has it.
+    let focus: FocusState<Int?>.Binding
+    let slot: Int
+    let focusShown: Bool
+
+    /// The row's actions call the model with the row's id, so the entry
+    /// decides equality, with the focus ring; the focus binding is the list's,
+    /// the same for every slot.
+    static func == (a: Self, b: Self) -> Bool {
+        a.model === b.model && a.entry == b.entry && a.first == b.first && a.slot == b.slot && a.focusShown == b.focusShown
+    }
+
+    var body: some View {
+        let _ = PerfTrace.body(.studioWorkspaceSlot)
+        VStack(spacing: 0) {
+            if let entry {
+                WorkspaceRow(entry: entry, focus: focus, slot: slot, focusShown: focusShown) {
+                    model.selection = entry.id
+                } toggleVisible: {
+                    model.update(entry.id) { $0.visible.toggle() }
+                }
+                .equatable()
+                .padding(.top, first ? 0 : 1)
+            } else {
+                let _ = PerfTrace.body(.studioWorkspacePlaceholder)
+                Color.clear.frame(height: 0).accessibilityHidden(true)
+            }
+        }
+    }
+}
+
+/// #410: ties a workspace eye to the list's focus at its slot, or nothing
+/// for a row drawn alone.
+struct WorkspaceEyeFocus: ViewModifier {
+    let focus: FocusState<Int?>.Binding?
+    let slot: Int
+
+    func body(content: Content) -> some View {
+        if let focus { content.focused(focus, equals: slot) } else { content }
+    }
+}
+
+extension WorkspaceRow {
+    /// #410: the height the workspace stack gives `entry`'s row at `width`
+    /// (its fitting height), for the geometry scenario and the slot
+    /// measurement in `studio-load`.
+    @MainActor static func fittingHeight(_ entry: WorkspaceEntry, width: CGFloat) -> CGFloat {
+        NSHostingView(rootView: WorkspaceRow(entry: entry, select: {}, toggleVisible: {}).frame(width: width)).fittingSize.height
+    }
+}
+
+/// One workspace row. It holds no state (no @State, focus, hover or drag):
+/// the stack keys its slots by position (#410), so state here would stay with
+/// the slot, not the object, after a delete or a duplicate. The eye's keyboard
+/// focus is the list's (`StudioWorkspaceContent.focusedEye`), by slot, so it
+/// too stays at its position, as a list's focus does when the row under it
+/// changes. The scenario step `assertWorkspaceRows` checks that it has only
+/// these six fields.
 struct WorkspaceRow: View, Equatable {
     let entry: WorkspaceEntry
+    /// The list's eye focus and this row's slot in it; nil where a row is
+    /// drawn alone (`fittingHeight`).
+    var focus: FocusState<Int?>.Binding? = nil
+    var slot = 0
+    /// Whether the eye has keyboard focus, so it draws its focus ring.
+    var focusShown = false
     let select: () -> Void
     let toggleVisible: () -> Void
 
-    /// The actions call the model with the row's id, so the entry decides equality.
-    static func == (a: Self, b: Self) -> Bool { a.entry == b.entry }
+    /// The actions call the model with the row's id, so the entry decides
+    /// equality, with the slot and the focus ring.
+    static func == (a: Self, b: Self) -> Bool { a.entry == b.entry && a.slot == b.slot && a.focusShown == b.focusShown }
 
     var icon: String {
         if entry.cameraPlaceholder { return "camera.fill" }
@@ -647,7 +761,22 @@ struct WorkspaceRow: View, Equatable {
                 Text(entry.name).lineLimit(1).font(.callout)
             }
             Spacer()
+            // #410: no system focus effect. For each eye button it shows,
+            // SwiftUI adds a `_FocusRingView` to the scroll view's group
+            // container, and AppKit's drag-region update keeps a dependency on
+            // the container for each one it adds, so every load that rebuilt
+            // the rows added about 41 dependencies that were never removed.
+            // The eye draws its own ring instead, in the system's focus colour,
+            // while it has keyboard focus (Full Keyboard Access); the ring is
+            // always there, transparent without focus, so focus changes no
+            // view's structure.
             Button(action: toggleVisible) { Image(systemName: entry.visible ? "eye" : "eye.slash").foregroundStyle(.secondary) }.buttonStyle(.plain)
+                .focusEffectDisabled()
+                .modifier(WorkspaceEyeFocus(focus: focus, slot: slot))
+                .overlay {
+                    RoundedRectangle(cornerRadius: 4).strokeBorder(Color(nsColor: .keyboardFocusIndicatorColor), lineWidth: 2)
+                        .padding(-3).opacity(focusShown ? 1 : 0).allowsHitTesting(false)
+                }
         }
         .padding(.vertical, 3).padding(.horizontal, 6)
         .background(RoundedRectangle(cornerRadius: 5).fill(entry.selected ? Color.accentColor.opacity(0.3) : .clear))

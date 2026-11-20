@@ -648,7 +648,9 @@ SCENARIO_OPS = {"select", "setVisible", "rename", "toggleCamera", "toggleRoute",
                 # #425: a source IK guide's mouse drag (the toolbar-steady check).
                 "dragIKGuide",
                 # #439: the Pose tab's source IK toggles, and a click on an IK guide.
-                "setSourceIKEnabled", "clickIKGuide"}
+                "setSourceIKEnabled", "clickIKGuide",
+                # #437: a voice play's input resolution (scene decodes, live-step settles).
+                "assertVoice", "dropVoiceInputs"}
 
 # R7 phase 2, item 7: the window-run inspector checks (`"inspectorUI": {"steps": [...]}`).
 INSPECTOR_UI_OPS = {"select", "deselect", "focus", "type", "delete", "undo", "redo", "cycle",
@@ -660,7 +662,11 @@ INSPECTOR_UI_OPS = {"select", "deselect", "focus", "type", "delete", "undo", "re
                     # Added for #333 (the Clothes tab laid out wider than the inspector).
                     "tab", "addCharacter",
                     # Added for #383 (the Parent popup that replaced the Picker).
-                    "parentMenu"}
+                    "parentMenu",
+                    # Added for #410 (the workspace list's slots, the eyes' own
+                    # focus ring and what each workspace action evaluates).
+                    "selectRow", "scrollWorkspace", "newScene", "addFolders", "eyeFocus",
+                    "workspaceBodies"}
 
 # ST-T11 `editRoute` settings: point edits name the point, route edits do not.
 ROUTE_POINT_SETTINGS = ("delete", "move", "speed", "ease", "connection", "link")
@@ -956,7 +962,7 @@ class StudioScenarioLaneTests(unittest.TestCase):
                       and not name.startswith(("maker-", "gameplay-")))
 
     def test_lane_validates_and_covers_every_scenario(self):
-        self.assertEqual(len(self.checks), 103)
+        self.assertEqual(len(self.checks), 109)
         referenced = set()
         for check in self.checks:
             scenario = check["env"]["IKKOKU_STUDIO_SCENARIO"]
@@ -985,9 +991,26 @@ class StudioScenarioLaneTests(unittest.TestCase):
                 self.assertIn(step["sex"], ("female", "male"))
             if op == "parentMenu" and "key" in step:
                 self.assertIs(type(step["key"]), int)
-            if op in ("routePoint", "outfit"):
+            if op in ("routePoint", "outfit", "selectRow"):
                 self.assertIs(type(step["index"]), int)
                 self.assertGreaterEqual(step["index"], 0)
+            if op == "scrollWorkspace":
+                self.assertIs(type(step["toEnd"]), bool)
+            if op == "addFolders":
+                self.assertIs(type(step["count"]), int)
+                self.assertGreater(step["count"], 0)
+            if op == "workspaceBodies":
+                self.assertIn(step["label"], ("select", "toggle", "refresh"))
+                for name in ("count", "index"):
+                    if name in step:
+                        self.assertIs(type(step[name]), int)
+                        self.assertGreaterEqual(step[name], 1 if name == "count" else 0)
+            if op == "eyeFocus":
+                self.assertIs(type(step.get("count", 2)), int)
+                self.assertGreater(step.get("count", 2), 0)
+                if "capture" in step:
+                    self.assertTrue(step["capture"].startswith(".local/verification/"),
+                                    "an eyeFocus capture must stay under .local/verification: %s" % path)
             if op == "type":
                 self.assertTrue(step["text"])
             if op == "cycle":
@@ -998,7 +1021,7 @@ class StudioScenarioLaneTests(unittest.TestCase):
             for name in ("undoCount", "redoCount", "keyViews", "hiddenKeyViews", "activeWells"):
                 if name in step:
                     self.assertIs(type(step[name]), int)
-            for name in ("probeHit", "probeFocusable", "editing", "unchanged", "exists", "inspectorFits"):
+            for name in ("probeHit", "probeFocusable", "editing", "unchanged", "exists", "inspectorFits", "workspaceGeometry"):
                 if name in step:
                     self.assertIs(type(step[name]), bool)
             for name in ("axContains", "axAbsent"):
@@ -1069,6 +1092,14 @@ class StudioScenarioLaneTests(unittest.TestCase):
                         self.assertIs(type(step["key"]), int)
                     if step["build"] in ("export", "loadRoute"):
                         self.assertTrue(step["path"].startswith(".local/verification/scenario-exports/"))
+                if op == "assertVoice":
+                    self.assertIs(type(step["key"]), int)
+                    for field in ("decodes", "settles"):
+                        if field in step:
+                            self.assertIs(type(step[field]), int)
+                            self.assertGreaterEqual(step[field], 0)
+                    if "inputsFrom" in step:
+                        self.assertIn(step["inputsFrom"], ("cache", "check", "preview", "scene"))
                 if op == "measureAccessoryLabels":
                     self.assertIs(type(step["index"]), int)
                     self.assertIn(step["index"], range(100, 2001))
@@ -1111,6 +1142,25 @@ class StudioScenarioLaneTests(unittest.TestCase):
                     self.assertIsInstance(step["visible"], bool)
                 if op == "rename":
                     self.assertTrue(step["name"])
+                if op == "assertWorkspaceRows":
+                    # #410: a row check names its object (a source key, with
+                    # `copy` for a copy, or `added`), then its row index
+                    # (negative from the end), name and selection; `rows` is
+                    # the row count.
+                    if "rows" in step:
+                        self.assertIs(type(step["rows"]), int)
+                        self.assertGreaterEqual(step["rows"], 0)
+                    if {"index", "name", "selected"} & set(step):
+                        self.assertTrue(type(step.get("key")) is int or step.get("added"),
+                                        "a row check names its object: %s" % path)
+                        self.assertFalse("key" in step and "added" in step)
+                    if "index" in step:
+                        # negative counts from the end (-1 is the last row)
+                        self.assertIs(type(step["index"]), int)
+                    if "name" in step:
+                        self.assertTrue(step["name"])
+                    if "selected" in step:
+                        self.assertIs(type(step["selected"]), bool)
                 if op in ("setFace", "setBody"):
                     self.assertIsInstance(step["index"], int)
                     self.assertIsInstance(step["value"], float)
@@ -1218,7 +1268,8 @@ class StudioScenarioLaneTests(unittest.TestCase):
                 if op == "addCharacter":
                     self.assertIn(step["sex"], ("female", "male"))
                 if op == "duplicate":
-                    self.assertIsInstance(step["key"], int)
+                    # a source key (with `copy` for a copy), or `added` (#410)
+                    self.assertTrue(isinstance(step.get("key"), int) or step.get("added"))
                 if op == "addLight":
                     self.assertIn(step["mode"], ("directional", "point", "spot"))
                 if op in ("setIKEnabled", "setIKTarget", "captureIKPose"):
@@ -1237,7 +1288,8 @@ class StudioScenarioLaneTests(unittest.TestCase):
                     self.assertTrue(step["name"],
                                     "a captured IK pose needs a label to compare against: %s" % path)
                 if op == "delete":
-                    self.assertIs(type(step["key"]), int)
+                    # a source key, or `added` for an object the scenario added (#410)
+                    self.assertTrue(type(step.get("key")) is int or step.get("added"))
                 if op == "setParent":
                     # parent null is the root; the object (a source key, or
                     # `added` for one the scenario added) must be named either way
@@ -1477,12 +1529,15 @@ class StudioScenarioLaneTests(unittest.TestCase):
                 exported, imported = ops.index("export"), ops.index("reimport")
                 self.assertLess(exported, imported)
                 self.assertEqual(steps[exported]["path"], steps[imported]["path"])
-            elif check["id"] in ("studio-scenario-hidden-attachment-status", "studio-scenario-hidden-animation-clock"):
+            elif check["id"] in ("studio-scenario-hidden-attachment-status", "studio-scenario-hidden-animation-clock",
+                                 "studio-scenario-voice-inputs"):
                 # #373 lazy hidden characters: a hidden character must stay
                 # unbuilt (and its data-only clock keep running) across the
                 # original-format export/reimport AND a same-process native
                 # save and load, so these checks run both round trips. They
                 # have no fresh-process partner (each reloads its own save).
+                # #437's voice inputs check follows the same path: an import's
+                # hidden card check, then a native reload's check.
                 self.assertEqual((ops.count("saveDocument"), ops.count("loadDocument")), (1, 1))
                 saved, loaded = ops.index("saveDocument"), ops.index("loadDocument")
                 self.assertLess(saved, loaded)

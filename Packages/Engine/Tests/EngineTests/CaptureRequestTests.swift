@@ -558,6 +558,12 @@ private struct CaptureRecipe {
 @Test func captureRequestScopesTheInspectorFollowUpControls() throws {
     let controls: [(variable: String, values: [String], rejected: [String])] = [
         ("IKKOKU_PERF_PANEL_STATE", ["document", "published"], ["Published", "on", ""]),
+        // #410: the small scene of `studio-load` and the workspace slot cap.
+        ("IKKOKU_PERF_LOAD_SMALL_OBJECTS", ["200", "1"], ["0", "-1", "two", ""]),
+        ("IKKOKU_PERF_WORKSPACE_SLOT_CAP", ["256", "0"], ["-1", "cap", ""]),
+        // #409, #446: the field `studio-edit-steps` edits and where its edits run.
+        ("IKKOKU_PERF_EDIT_FIELD", ["x", "pose"], ["X", "kinematics", ""]),
+        ("IKKOKU_PERF_EDIT_PHASES", ["none", "alternate"], ["Alternate", "on", ""]),
     ]
     for control in controls {
         let outside: [[String]] = [[control.variable]]

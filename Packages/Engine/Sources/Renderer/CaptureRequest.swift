@@ -454,10 +454,14 @@ extension CaptureRequest {
         ScopedOption("IKKOKU_PERF_INSPECTOR_TAB", [.perfTrace]),
         ScopedOption("IKKOKU_PERF_KEEP_MOUNTED", [.perfTrace]),
         ScopedOption("IKKOKU_PERF_PANEL_STATE", [.perfTrace]),
+        ScopedOption("IKKOKU_PERF_LOAD_SMALL_OBJECTS", [.perfTrace]),
+        ScopedOption("IKKOKU_PERF_WORKSPACE_SLOT_CAP", [.perfTrace]),
         ScopedOption("IKKOKU_PERF_EDITS", [.perfTrace]),
         ScopedOption("IKKOKU_PERF_PAUSE_AT", [.perfTrace]),
         ScopedOption("IKKOKU_PERF_PAUSE_SECONDS", [.perfTrace]),
         ScopedOption("IKKOKU_PERF_PAUSE_MARKER", [.perfTrace]),
+        ScopedOption("IKKOKU_PERF_EDIT_FIELD", [.perfTrace]),
+        ScopedOption("IKKOKU_PERF_EDIT_PHASES", [.perfTrace]),
     ]
 
     /// Options read only by the window capture.
@@ -622,6 +626,11 @@ extension CaptureRequest {
         // what they show (item 7 follow-ups, C4): each body as before, or the
         // state the model publishes (the default).
         ValueRule("IKKOKU_PERF_PANEL_STATE", .oneOf(["document", "published"])),
+        // #410: the folders of the small scene `studio-load` alternates with
+        // the source scene, and the most workspace slots kept while a scene
+        // shows fewer rows.
+        ValueRule("IKKOKU_PERF_LOAD_SMALL_OBJECTS", .integer(1...10_000)),
+        ValueRule("IKKOKU_PERF_WORKSPACE_SLOT_CAP", .integer(0...100_000)),
         // `studio-edit-steps` (#409): how many single-object edits it makes,
         // after which edits it holds for an outside reader, and how long.
         // The marker folder (`IKKOKU_PERF_PAUSE_MARKER`) must lie under a
@@ -629,6 +638,12 @@ extension CaptureRequest {
         ValueRule("IKKOKU_PERF_EDITS", .integer(1...500)),
         ValueRule("IKKOKU_PERF_PAUSE_AT", .integerList(0...500, maxCount: 32)),
         ValueRule("IKKOKU_PERF_PAUSE_SECONDS", .integer(1...30)),
+        // Which field each edit writes (the x position, or a neck rotation
+        // in the pose delta), and whether each edit runs at a fixed point of
+        // a live step's completion, alternating before and after its commit
+        // (#409, #446).
+        ValueRule("IKKOKU_PERF_EDIT_FIELD", .oneOf(["x", "pose"])),
+        ValueRule("IKKOKU_PERF_EDIT_PHASES", .oneOf(["none", "alternate"])),
     ]
 
     /// `IKKOKU_PERF_WORKLOAD` values, in the order `docs/reference/performance.md` lists them.

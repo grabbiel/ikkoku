@@ -120,6 +120,12 @@ final class SourceSceneImportJob {
         return problems
     }
 
+    /// The unbuilt characters' voice inputs by character index (#437), from
+    /// the card decode of the same check. Waits for the check.
+    func hiddenVoiceInputs() -> [Int: SourceStudioVoiceInputs] {
+        Dictionary(uniqueKeysWithValues: zip(hiddenCardIndices, hiddenCardCheck.voiceInputs()))
+    }
+
     /// Built character `index` (the batch's order, `builds`): the build the
     /// queue delivered, or its second half now, on this thread.
     func character(_ index: Int) throws -> SourceStudioCharacterPreview {

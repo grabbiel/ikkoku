@@ -121,12 +121,12 @@ the run.
 | `studio-redo` | as `studio-idle` | as `studio-duplicate`, with Duplicate, Undo, Redo and Undo; the Redo of a route's Duplicate (`IKKOKU_PERF_ACTION_KEY`) rehydrates the scene's route runtime with its route characters |
 | `studio-outfit` | as `studio-idle` | the Clothes tab's outfit picker (`StudioModel.selectSourceOutfit`) on the `studio-duplicate` character: another saved outfit (`IKKOKU_PERF_OUTFIT`, else the first other one), then the shown one back, repeated, live animation on. After the first selection each one borrows the outfit's kept assembly; `IKKOKU_PERF_DONATIONS=off` builds every one from its files |
 | `studio-export` | as `studio-idle` | File ▸ Export Edited Original Scene (`AppState.exportSourceScene(to:)`), repeated, after a setup through the UI's calls: a cheek edit on the `studio-duplicate` character, Visible off, then Save Scene and Open of that file, so the hidden character has no preview and each export builds its validation baseline. Exports go to a temporary folder, removed at the end |
-| `studio-load` | as `studio-idle` | File ▸ New Scene (unmeasured), then File ▸ Open (`AppState.openScene(at:importing:)`) of the source scene saved as an Ikkoku scene, repeated; each load builds the characters again and rehydrates the route characters (a load over the same scene would keep its runtime and rehydrate nothing) |
+| `studio-load` | as `studio-idle` | File ▸ New Scene (unmeasured), then File ▸ Open (`AppState.openScene(at:importing:)`) of the source scene saved as an Ikkoku scene, repeated; each load builds the characters again and rehydrates the route characters (a load over the same scene would keep its runtime and rehydrate nothing). With `IKKOKU_PERF_LOAD_SMALL_OBJECTS=<n>` (#410) it alternates the source scene with a saved scene of `n` folders instead of New Scene, and in the small scene scrolls the workspace to its end (measured) and back; `details.workspaceScrolls` records, before each of the first 16 scrolls, the document and visible heights and how far the view is from the end, so a scroll back shows whether the scroll to the end reached it. It also records `workspaceRowHeight` (a one-line row), `tallestScreenVisibleHeight` and `workspaceMaxVisibleRows`, the most rows any window could show. `IKKOKU_PERF_WORKSPACE_SLOT_CAP=<k>`, read once at launch, replaces the workspace slots, the rows the list builds ahead of any scroll (`StudioWorkspaceState.slotCap`; recorded as `workspaceSlotCap` and `workspaceSlotCapOverride`) |
 | `studio-select` | as `studio-idle` | the selection a click makes (`StudioModel.selection`, which a workspace row's tap and a viewport click on an object set; a click on empty space clears it) through a fixed list, repeated, live animation on: nothing selected, then each listed object in turn. The list is `IKKOKU_PERF_SELECT_KEYS`, else the first object of each kind the Object tab shows differently (source character, route, source camera, item, light, camera, folder) in workspace order. The inspector shows `IKKOKU_PERF_INSPECTOR_TAB` (default `object`). The actions are named for what they select (`select route`, `select source character from nothing`, `deselect`); each one's main-thread time is the busy period it ran in, which holds SwiftUI's update of the panels ([phase 2, item 7](#phase-2-item-7-selection-and-the-inspector)) |
 | `studio-export-import` | as `studio-idle` | File ▸ Export Edited Original Scene (`AppState.exportSourceScene(to:)`) of the startup scene as imported, unedited, repeated, live animation on. A hidden character the import left unbuilt has no edit, so the export builds no baseline for it; its saved animation time comes from its data-only clock ([lazy hidden characters](#lazy-hidden-characters-at-import)). Each export writes a new file and removes the previous one |
 | `studio-show-hidden` | as `studio-idle` | Visible on (the inspector's toggle, `StudioModel.update`) for each hidden object of the startup scene that holds source characters (its own flag off, its ancestors shown), in workspace order, each followed by Visible off again (unmeasured), repeated, live animation on. An action's first run shows characters the import left unbuilt, so its ready time holds their builds; later runs find them built. Each action is named `show <source key> (<n> characters)` |
 | `studio-clock-first` | as `studio-idle` | the first clock rebase and the first native save after the import, then repeated, live animation on: `rebase` sets the first drawn character with a converted saved clip to its own animation speed (`setSourceAnimationSpeed`, which bakes every character's clock), `save` is File ▸ Save (`saveScene(to:)`) to a scratch file. The first bake's time is the `sourceClockBake` mark pair |
-| `studio-edit-steps` | as `studio-idle` | #409's memory count: `IKKOKU_PERF_EDITS` (default 90) single-object edits of the `IKKOKU_PERF_ACTION_KEY` object through the inspector's call (`StudioModel.update`), each its own undo step, its x position moved 0.001; each followed by a same-value write, which takes no undo step (#390), as the control. Each action also records the undo and redo depth and the distinct `objects` buffers the document and both stacks hold, with their malloc bytes (`StudioObjectStorageCensus`). After the edits `IKKOKU_PERF_PAUSE_AT` lists it holds for an outside reader. The actions run once, and the run stops after the last |
+| `studio-edit-steps` | as `studio-idle` | #409's memory count and edit cost: `IKKOKU_PERF_EDITS` (default 90) single-object edits of the `IKKOKU_PERF_ACTION_KEY` object through the inspector's call (`StudioModel.update`), each its own undo step, its x position moved 0.001 (or with `IKKOKU_PERF_EDIT_FIELD=pose` its neck rotation in the pose delta turned 0.5); each followed by a same-value write, which takes no undo step (#390), as the control. Each action also records the undo and redo depth and the distinct `objects` buffers the document and both stacks hold, with their malloc bytes (`StudioObjectStorageCensus`), and the live-step settles in its call. With `IKKOKU_PERF_EDIT_PHASES=alternate` each call runs at a fixed point of a live step ([placed edits](#placed-edits-409-446)). After the edits `IKKOKU_PERF_PAUSE_AT` lists it holds for an outside reader. The actions run once, and the run stops after the last |
 
 Other options:
 
@@ -165,6 +165,10 @@ Other options:
   must lie under a `.local` folder, and holds for `IKKOKU_PERF_PAUSE_SECONDS`
   (1–30, default 10) so `footprint`, `vmmap` and `heap` can read the process
   by that id. The hold is a timer, so the main run loop sleeps.
+- `IKKOKU_PERF_EDIT_FIELD` (`x` or `pose`, default `x`): what each
+  `studio-edit-steps` edit writes, and `IKKOKU_PERF_EDIT_PHASES` (`none` or
+  `alternate`, default `none`): where each edit's call runs
+  ([placed edits](#placed-edits-409-446)).
 - `IKKOKU_PERF_SELECT_KEYS` (1–64 comma-separated source keys): the objects
   `studio-select` selects in turn, and `IKKOKU_PERF_INSPECTOR_TAB`
   (`object`, `pose`, `face`, `clothes` or `scene`): the inspector tab it
@@ -184,6 +188,12 @@ Other options:
   workspace tree, the toolbar and the timeline bar read the document in
   their bodies, as before, and `published` has them read what the model
   publishes when it changes. The app reads it once at launch.
+- `IKKOKU_PERF_LOAD_SMALL_OBJECTS` (1–10,000) and
+  `IKKOKU_PERF_WORKSPACE_SLOT_CAP` (0 or more), measurement controls for
+  #410's workspace slots: the folders of the small scene `studio-load`
+  alternates with the source scene, and the workspace slots, the rows the
+  list builds ahead of any scroll, in place of `StudioWorkspaceState.slotCap`
+  (0 puts every row in the lazy stack). The app reads the cap once at launch.
 - Measurement controls for the
   [item 6 follow-up](#phase-2-item-6-follow-up-route-copies-prefetch-and-kept-donations),
   all defaulting to the shipped behavior:
@@ -285,7 +295,15 @@ locked `PerfDrawLog`. Everything else is recorded on the main thread.
   `phys_footprint` and Metal allocation when it was ready (`footprintBytes`,
   `metalAllocatedBytes`; ST-T04), so repeated loads show whether memory
   accumulates per cycle, and the document's object count then
-  (`documentObjects`), so an edit's and its undo's effect can be checked. `summarize` prints the
+  (`documentObjects`), so an edit's and its undo's effect can be checked.
+  Since #410 each action also records the workspace row and empty-slot
+  bodies evaluated from its call to the next action's (`workspaceBodies`),
+  and the workspace rows it left (`workspaceRows`; the slots are
+  `workspaceSlotCap`, fixed for the run). Since #409 each action also
+  records the main thread's CPU time over its call (`callCpuMs`,
+  `CLOCK_THREAD_CPUTIME_ID` read right before the call starts and right after
+  it ends), and each `studio-edit-steps` action the live-step settles in its
+  call ([placed edits](#placed-edits-409-446)). `summarize` prints the
   medians per action (the own busy time in parentheses after the busy time, when
   the report has it), with the 120 Hz refresh periods the median and the
   longest stall cover (a 100 ms stall drops 12 frames), and warns about an
@@ -484,6 +502,88 @@ Any task that may change the app's speed measures it this way:
 A new workload is added in three places: `PerfWorkload.swift`, the
 `perfWorkloads` values in `CaptureRequest.swift` and `WORKLOADS` in
 `perf_trace.py`.
+
+### Per-load growth check (#410)
+
+[workspace_growth_check.py](../../Tools/verification/workspace_growth_check.py)
+checks that Studio scene loads leave no per-load objects behind in the
+workspace list. It runs `studio-load` through `perf_trace.py run` (65 s by
+default, every launch through `--wrap`). It takes two `heap --forkCorpse -s`
+snapshots of the app by pid, at 12 s and 56 s after launch, and counts the
+loads between the snapshots it read from the report. A snapshot whose `heap`
+fails is tried again 2 s later, up to four attempts in all, and each
+attempt's start and exit are printed. Then it compares the counts of AppKit's
+`NSKeyValueDependency`, `NSKeyValueDependencyContext`, `__NSMallocBlock__`
+and `__NSExactBlockVariable__`, and of every SwiftUI `AnyHashableBox<T>`, one
+row per payload type `T`.
+
+- The bar was frozen before the first run on the fix. Each type may grow by
+  at most 1 per load plus 64. A run is valid only with at least 40 loads
+  between the snapshots.
+- The 64 covers one scene's rows. A snapshot can land while the scene is
+  shown, with its rows built, or in the New Scene gap, with none. So even a
+  list that frees everything reads up to about ±44 between two snapshots.
+  At 40 loads the bar is 104, so a residual leak of 3 per load (120) fails.
+- The snapshot schedule changed once, before any run with it: the first two
+  runs' 8 s snapshot failed (`heap` exit 255), so the early snapshot moved to
+  12 s and gained the retry. The bar did not change.
+- The snapshot procedure changed again in v2.2, before any run with it.
+  Three v2.1 runs of one build were each invalid, because both attempts at
+  one snapshot exited 255. Each snapshot now gets up to four attempts. The
+  loads are still counted between the attempts that were read, so a late
+  attempt only narrows the window. The bar, the rows, the flags and the
+  other validity rules did not change. v2.2 runs are a new registration, not
+  pooled with v2.1 runs. Before its first run on a fix, v2.2 was run on the
+  slots-only build (03f056de) as a positive control, and failed it as
+  required: about 41 per load on the four AppKit rows.
+- The rows changed once (v2.1), and only to make the check stricter. The
+  first version counted only `AnyHashableBox<UUID>`, and a list keyed by
+  position moved the same growth to `AnyHashableBox<Int>`, which it did not
+  count. Every box type is now a row of its own. Any other class that grows
+  by at least the bar is printed as a FLAG for review; a flag does not change
+  the verdict.
+- It writes `workspace-growth.json` with the raw counts, every snapshot
+  attempt and the flags, and exits 0 (pass), 1 (fail) or 2 (invalid).
+- [test_workspace_growth_check.py](../../Tools/verification/test_workspace_growth_check.py)
+  covers the heap reader, the load count, the bar, the attempts, the box
+  rows and the flags with synthetic data.
+
+The check needs the private source scene (`perf_trace.py`'s environment
+map), so no lane runs it. Results are in
+[Workspace list per scene (#410)](studio/scene-editing.md#workspace-list-per-scene-410).
+
+### Placed edits (#409, #446)
+
+An edit's call costs more when it finds a live step pending: its settle
+commits the step and its refresh does the step's refresh work. Run at half a
+second after the previous action, as every action workload runs, how many
+edits land in that state depends on the phase the run happens to lock into,
+and it differs from launch to launch. `IKKOKU_PERF_EDIT_PHASES=alternate`
+sets it by design instead. Each `studio-edit-steps` call runs at a live
+step's completion on the main actor (`StudioModel.liveTickFinished`):
+
+- odd edits (`afterCommit`) run after the step has committed and refreshed,
+  so the call finds no step pending;
+- even edits (`beforeCommit`) run before the step commits, with its workers
+  done, so the call's settle commits the step;
+- each same-value write runs in its edit's phase.
+
+The workload arms a one-shot hook (`StudioModel.livePhaseHook`) when the
+action would have started. The next completion that offers the phase runs
+the call, synchronously, so no step can start in between. A serial step, or
+a step something else already settled, offers neither phase. If no step
+offers it within half a second (about 15 steps), the call runs unplaced
+(`placed: false`).
+
+Each placed action records `livePhase`, `placed`, `placementWaitMs` (from
+arming to the call), `liveSerialSteps` (serial live steps from arming to the
+call's end) and `pendingWorkAtCall`. Every `studio-edit-steps` action also
+records `livePendingSettles` and `liveUnfinishedWaits`: the settles in its
+call that found a step pending, and of those, the ones whose workers were
+still running. An `afterCommit` edit has 0 pending settles. A `beforeCommit`
+edit has 1, with 0 unfinished waits. The counters are `@ObservationIgnored`
+integers on the model, and the hook is nil unless the workload arms it, which
+costs one optional test per step completion.
 
 ## Measurement setup
 
