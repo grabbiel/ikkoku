@@ -98,7 +98,7 @@ public final class SourceStudioCharacterBatch: @unchecked Sendable {
     }
 
     /// Starts `body` on a thread of its own with `stackSize`.
-    private static func startThread(_ name: String, qos: QualityOfService, _ body: @escaping @Sendable () -> Void) {
+    static func startThread(_ name: String, qos: QualityOfService, _ body: @escaping @Sendable () -> Void) {
         let thread = Thread(block: body)
         thread.stackSize = stackSize
         thread.qualityOfService = qos

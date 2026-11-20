@@ -409,9 +409,12 @@ final class PerfTrace {
     /// wall and thread CPU time. The top steps are the calls the export
     /// makes on the main thread (`begin`: File ▸ Export's call, which holds
     /// the whole export when it runs at once; `finish`: its completion after
-    /// background work); the others (`guard`, `source`, `clocks`, `stage`,
-    /// `topology`, `thumbnail`, `writer`, `write`, `orphans`) nest in them.
-    /// The action workloads add them up per action (`exportMainMs`).
+    /// background work); the others (`guard`; `prepare`, a synchronous
+    /// export's `SourceSceneExportPreparation.prepare`; `thumbnail`;
+    /// `writer`; `write`) nest in them. #462's base arm also timed `source`,
+    /// `clocks`, `stage`, `topology` and `orphans`, the steps the
+    /// preparation took off the main thread. The action workloads add them
+    /// up per action (`exportMainMs`).
     static func exportStep<T>(_ name: StaticString, _ body: () throws -> T) rethrows -> T {
         let state = PerfSignpost.signposter.beginInterval("Export", id: PerfSignpost.signposter.makeSignpostID(), "\(name)")
         let start = CACurrentMediaTime(), cpu = clock_gettime_nsec_np(CLOCK_THREAD_CPUTIME_ID)

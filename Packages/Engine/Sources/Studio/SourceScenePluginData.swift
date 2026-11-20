@@ -1047,14 +1047,21 @@ struct SourceSceneKKEx {
     }
 }
 
+extension SourceScenePluginData {
+    /// The entries of a scene's ExtendedSave trailer that no installed
+    /// plug-in reads (`orphanIDs`), sorted; none for an empty trailer or one
+    /// that does not parse. A nil entry is none: CharaStudio's save drops it.
+    static func orphanPluginIDs(trailer: Data) -> [String] {
+        guard !trailer.isEmpty, let parsed = try? SourceSceneKKEx.parse(trailer) else { return [] }
+        return parsed.entries.filter { !$0.isNil && orphanIDs.contains($0.id) }.map(\.id).sorted()
+    }
+}
+
 public extension KoikatsuSceneDocument {
     /// The scene's ExtendedSave entries that no installed plug-in reads
     /// (`SourceScenePluginData.orphanIDs`), sorted. Every original-scene
     /// export carries them verbatim.
-    var orphanPluginIDs: [String] {
-        guard !trailingData.isEmpty, let trailer = try? SourceSceneKKEx.parse(trailingData) else { return [] }
-        return trailer.entries.filter { !$0.isNil && SourceScenePluginData.orphanIDs.contains($0.id) }.map(\.id).sorted()
-    }
+    var orphanPluginIDs: [String] { SourceScenePluginData.orphanPluginIDs(trailer: trailingData) }
 }
 
 // MARK: - MessagePack spans

@@ -409,10 +409,16 @@ final class StudioModel: ViewportInputHandler, LivePacedHandler {
     /// building (`selectSourceOutfit`). Changes only when a selection starts
     /// or ends.
     private(set) var pendingSourceOutfits: [UUID: Int] = [:]
-    /// The exports building their hidden characters' baselines or advancing
-    /// their unbuilt characters' clocks (`beginSourceSceneExport`), by number.
+    /// The exports building their hidden characters' baselines or reading
+    /// the original scene in the background (`beginSourceSceneExport`), by
+    /// number.
     @ObservationIgnored private var sourceExportJobs: [Int: SourceExportJob] = [:]
     @ObservationIgnored private var nextSourceExport = 0
+    /// #462: the exports whose baselines are built, waiting in order for
+    /// their preparation (`SourceSceneExportPreparation.start`), and whether
+    /// one runs: one at a time, so exports decode one original scene at once.
+    @ObservationIgnored private var sourceExportPreparationQueue: [Int] = []
+    @ObservationIgnored private var sourceExportPreparing = false
     struct SourceExportBaseline {
         let reference: SourceStudioCharacterReference, outfit: Int?
         let preview: Result<SourceStudioCharacterPreview, Error>
@@ -427,10 +433,21 @@ final class StudioModel: ViewportInputHandler, LivePacedHandler {
         /// The Studio clock when the export was chosen: every character's
         /// animation is saved at it.
         let elapsed: Float
-        /// The unbuilt characters' animation states at `elapsed`
-        /// (`sourceClockStates`), once the worker thread computed them.
-        var clockStates: [UUID: Result<SourceStudioAnimationState?, Error>]?
+        /// The characters with no preview when the export was chosen
+        /// (`sourceClockRequests`): the preparation computes their states
+        /// at `elapsed`.
+        let clocks: [(id: UUID, request: SourceStudioAnimationClock.Request)]
+        /// The baselines' outcomes in `wanted`'s order, once built.
+        var outcomes: [Result<SourceStudioCharacterPreview, Error>] = []
+        /// Whether the status area shows the export (`updateSourceBuildProgress`):
+        /// at once when it builds baselines, otherwise once it has run for
+        /// `sourceExportProgressDelay`.
+        var showsProgress: Bool
     }
+    /// #462: how long an export with no baseline to build runs before the
+    /// status area shows it. Most finish sooner, and showing and hiding the
+    /// line costs the main thread a layout pass each.
+    private static let sourceExportProgressDelay: TimeInterval = 0.25
     /// The model state an export writes from, apart from the previews: the
     /// document, the camera looked through and the routes' play flags.
     private struct SourceExportInputs: Equatable {
@@ -3055,9 +3072,12 @@ final class StudioModel: ViewportInputHandler, LivePacedHandler {
         sourceSingleBuilds.cancelAll()
         let exports = sourceExportJobs.sorted { $0.key < $1.key }.map(\.value)
         sourceExportJobs.removeAll()
+        // A preparation in flight still ends on the main thread, finds no
+        // job and drops what it read there (#326).
+        sourceExportPreparationQueue.removeAll()
         updateSourceBuildProgress()
         for export in exports {
-            export.completion(RigError.invalid("the scene was replaced before the hidden characters of \(export.url.lastPathComponent) were built; export it again"))
+            export.completion(RigError.invalid("the scene was replaced before \(export.url.lastPathComponent) was exported; export it again"))
         }
     }
 
@@ -3094,7 +3114,7 @@ final class StudioModel: ViewportInputHandler, LivePacedHandler {
         if let job = sourceImportJob {
             progress = .init(label: "Importing \(job.sceneURL.deletingPathExtension().lastPathComponent)",
                              built: job.builtCount, total: job.buildCount)
-        } else if let export = sourceExportJobs.min(by: { $0.key < $1.key })?.value {
+        } else if let export = sourceExportJobs.filter({ $0.value.showsProgress }).min(by: { $0.key < $1.key })?.value {
             progress = .init(label: "Exporting \(export.url.deletingPathExtension().lastPathComponent)", built: 0, total: export.wanted.count)
         } else if pendingSourceCharacterBuilds > 0 {
             let count = pendingSourceCharacterBuilds
@@ -3461,70 +3481,104 @@ final class StudioModel: ViewportInputHandler, LivePacedHandler {
         status = "Saved scene \(url.lastPathComponent)"
     }
 
-    /// File ▸ Export Edited Original Scene (R7 phase 2 item 6, third part).
-    /// A hidden character with face-state edits and no preview needs a
-    /// validation baseline (`exportSourceScene`), and a character with no
-    /// preview saves its animation through its data-only clock
-    /// (`sourceClockRequests`). With `asyncSourceBuilds` the clocks advance
-    /// first on a worker thread, then the baselines build in the background
-    /// and in document order, with a prefetching decode share and no
-    /// donation, as the synchronous export builds them. The export then runs
-    /// on the main actor with them. Meanwhile the scene stays editable and
-    /// the status area shows "Exporting <file>". The file is the scene as it
-    /// was when the export was chosen, as with the synchronous export: every
-    /// character's animation is saved at the clock of that moment, and if the
-    /// document, the camera looked through or a route's play state changed
-    /// before the work landed, `completion` gets an error and nothing is
-    /// written. A scene import or load, or New Scene, cancels it with an
-    /// error too. Without baselines, and with no clock or every clock's
-    /// data already loaded (`SourceStudioAnimationClock.isLoaded`: the
-    /// import's warm-up has run, so its states cost about a millisecond),
-    /// without `asyncSourceBuilds` (captures, scenarios), or while plugins
-    /// run (their steps write the document), it exports at once, as before
-    /// lazy hidden characters: no worker hop, no progress line.
+    /// File ▸ Export Edited Original Scene (R7 phase 2 item 6, third part;
+    /// #462). With `asyncSourceBuilds` every export is a job, so the main
+    /// thread keeps only the work that reads the model: a hidden character
+    /// with face-state edits and no preview first builds its validation
+    /// baseline (`exportSourceScene`) in the background, in document order,
+    /// with a prefetching decode share and no donation, as the synchronous
+    /// export builds them. Then a decode-stack thread reads the original
+    /// scene, checks its SHA-256, decodes, stages and validates it against
+    /// the document and computes the clock states of the characters with no
+    /// preview (`SourceSceneExportPreparation`), one export at a time. The
+    /// export then compares and writes on the main actor. Meanwhile the
+    /// scene stays editable and the status area shows "Exporting <file>"
+    /// (after `sourceExportProgressDelay` when there are no baselines).
+    /// The file is the scene as it was when the export was chosen, as with
+    /// the synchronous export: every character's animation is saved at the
+    /// clock of that moment, and if the document, the camera looked through
+    /// or a route's play state changed before the work landed, `completion`
+    /// gets an error and nothing is written. A scene import or load, or New
+    /// Scene, cancels it with an error too. The checks that read no file (an
+    /// imported scene, a new filename) fail at once. Without
+    /// `asyncSourceBuilds` (captures, scenarios), or while plugins run
+    /// (their steps write the document), it exports at once, as before lazy
+    /// hidden characters: no worker hop, no progress line.
     /// `completion` gets the export's error, or nil once the file is written.
     func beginSourceSceneExport(to url: URL, completion: @escaping @MainActor (Error?) -> Void) {
         PerfTrace.exportStep("begin") { startSourceSceneExport(to: url, completion: completion) }
     }
 
     private func startSourceSceneExport(to url: URL, completion: @escaping @MainActor (Error?) -> Void) {
-        let wanted = sourceExportBaselineRequests()
-        let clocks = sourceClockRequests(doc.objects)
-        let clocksLoaded = clocks.isEmpty || sourceUnbuiltClock.isLoaded(clocks.map(\.request))
-        guard asyncSourceBuilds, !sourcePluginsRunning, !wanted.isEmpty || !clocksLoaded else {
+        guard asyncSourceBuilds, !sourcePluginsRunning else {
             do { try exportSourceScene(to: url); completion(nil) } catch { completion(error) }
             return
         }
+        do { _ = try sourceExportOriginal(for: url) } catch { completion(error); return }
         nextSourceExport += 1
         let key = nextSourceExport
-        let elapsed = sourceAnimationTime
-        sourceExportJobs[key] = SourceExportJob(url: url, wanted: wanted, completion: completion, inputs: sourceExportInputs,
-                                                elapsed: elapsed, clockStates: clocks.isEmpty ? [:] : nil)
-        updateSourceBuildProgress()
-        guard !clocks.isEmpty else { startSourceExportBaselines(key); return }
-        let clock = sourceUnbuiltClock
-        let requests = clocks.map(\.request), ids = clocks.map(\.id)
-        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
-            let states = clock.savedStates(requests, elapsed: elapsed)
-            DispatchQueue.main.async { [weak self] in
+        let wanted = sourceExportBaselineRequests()
+        sourceExportJobs[key] = SourceExportJob(url: url, wanted: wanted, completion: completion,
+                                                inputs: sourceExportInputs, elapsed: sourceAnimationTime,
+                                                clocks: sourceClockRequests(doc.objects), showsProgress: !wanted.isEmpty)
+        if wanted.isEmpty {
+            DispatchQueue.main.asyncAfter(deadline: .now() + Self.sourceExportProgressDelay) { [weak self] in
                 MainActor.assumeIsolated {
                     guard let self, self.sourceExportJobs[key] != nil else { return }
-                    self.sourceExportJobs[key]?.clockStates = Dictionary(uniqueKeysWithValues: zip(ids, states))
-                    self.startSourceExportBaselines(key)
+                    self.sourceExportJobs[key]?.showsProgress = true
+                    self.updateSourceBuildProgress()
                 }
             }
         }
+        updateSourceBuildProgress()
+        startSourceExportBaselines(key)
     }
 
     /// The baselines of export `key`, built in the background; without
-    /// any, the export runs now.
+    /// any, its preparation is next.
     private func startSourceExportBaselines(_ key: Int) {
         guard let job = sourceExportJobs[key] else { return }
-        guard !job.wanted.isEmpty else { finishSourceSceneExport(key, outcomes: []); return }
+        guard !job.wanted.isEmpty else { queueSourceExportPreparation(key, outcomes: []); return }
         let batch = SourceStudioCharacterBatch(requests: job.wanted.map { .init(reference: $0.reference, coordinate: $0.outfit) },
                                                resources: host.renderer.resources, rigs: sourceRigShare())
         sourceSingleBuilds.start(.export(key), batch: batch) { [weak self] outcomes in
-            self?.finishSourceSceneExport(key, outcomes: outcomes)
+            self?.queueSourceExportPreparation(key, outcomes: outcomes)
+        }
+    }
+
+    /// Export `key`'s baselines are built: it waits for its preparation.
+    private func queueSourceExportPreparation(_ key: Int, outcomes: [Result<SourceStudioCharacterPreview, Error>]) {
+        guard sourceExportJobs[key] != nil else { return }
+        sourceExportJobs[key]?.outcomes = outcomes
+        sourceExportPreparationQueue.append(key)
+        startNextSourceExportPreparation()
+    }
+
+    /// Starts the next waiting export's preparation unless one runs. It
+    /// reads the document as it was when the export was chosen, and its
+    /// outcome reaches the main thread, which finishes the export if it is
+    /// still pending and otherwise drops the outcome there (#326).
+    private func startNextSourceExportPreparation() {
+        while !sourceExportPreparing, !sourceExportPreparationQueue.isEmpty {
+            let key = sourceExportPreparationQueue.removeFirst()
+            guard let job = sourceExportJobs[key] else { continue }
+            let document = job.inputs.document
+            guard let file = document.sourceSceneFile, let sha256 = document.sourceSceneSHA256 else {
+                finishSourceSceneExport(key, prepared: .failure(RigError.invalid("Import an original Studio scene first.")))
+                continue
+            }
+            sourceExportPreparing = true
+            SourceSceneExportPreparation.start(document: document, sceneFile: file, sha256: sha256, clock: sourceUnbuiltClock,
+                                               clockRequests: job.clocks, elapsed: job.elapsed) { [weak self] outcome in
+                DispatchQueue.main.async { [weak self] in
+                    MainActor.assumeIsolated {
+                        guard let self else { return }
+                        self.sourceExportPreparing = false
+                        self.finishSourceSceneExport(key, prepared: outcome)
+                        self.startNextSourceExportPreparation()
+                    }
+                }
+            }
         }
     }
 
@@ -3541,22 +3595,22 @@ final class StudioModel: ViewportInputHandler, LivePacedHandler {
         }
     }
 
-    private func finishSourceSceneExport(_ key: Int, outcomes: [Result<SourceStudioCharacterPreview, Error>]) {
-        PerfTrace.exportStep("finish") { completeSourceSceneExport(key, outcomes: outcomes) }
+    private func finishSourceSceneExport(_ key: Int, prepared: Result<SourceSceneExportPreparation.Prepared, Error>) {
+        PerfTrace.exportStep("finish") { completeSourceSceneExport(key, prepared: prepared) }
     }
 
-    private func completeSourceSceneExport(_ key: Int, outcomes: [Result<SourceStudioCharacterPreview, Error>]) {
+    private func completeSourceSceneExport(_ key: Int, prepared: Result<SourceSceneExportPreparation.Prepared, Error>) {
         guard let job = sourceExportJobs.removeValue(forKey: key) else { return }
         var baselines: [UUID: SourceExportBaseline] = [:]
-        for (request, outcome) in zip(job.wanted, outcomes) {
+        for (request, outcome) in zip(job.wanted, job.outcomes) {
             baselines[request.id] = SourceExportBaseline(reference: request.reference, outfit: request.outfit, preview: outcome)
         }
         let failure: Error?
         do {
             guard PerfTrace.exportStep("guard", { sourceExportInputs == job.inputs }) else {
-                throw RigError.invalid("the scene changed while the hidden characters of \(job.url.lastPathComponent) were built; export it again")
+                throw RigError.invalid("the scene changed while \(job.url.lastPathComponent) was exported; export it again")
             }
-            try exportSourceScene(to: job.url, baselines: baselines, clockStates: job.clockStates, animationElapsed: job.elapsed)
+            try exportSourceScene(to: job.url, baselines: baselines, prepared: prepared.get(), animationElapsed: job.elapsed)
             failure = nil
         } catch { failure = error }
         updateSourceBuildProgress()
@@ -3564,50 +3618,41 @@ final class StudioModel: ViewportInputHandler, LivePacedHandler {
         job.completion(failure)
     }
 
+    /// The original scene file and its SHA-256 an export to `url` reads,
+    /// after the checks that read no file: the document has an imported
+    /// original scene, and `url` is a new file other than that scene.
+    private func sourceExportOriginal(for url: URL) throws -> (file: String, sha256: String) {
+        guard let path = doc.sourceSceneFile, let expected = doc.sourceSceneSHA256 else { throw RigError.invalid("Import an original Studio scene first.") }
+        guard url.resolvingSymlinksInPath().path != URL(fileURLWithPath: path).resolvingSymlinksInPath().path,
+              !FileManager.default.fileExists(atPath: url.path) else { throw RigError.invalid("Choose a new filename for the edited original scene.") }
+        return (path, expected)
+    }
+
     /// Export supported edits into a new original-format scene. Native object
     /// UUIDs never replace the original object, bone or plug-in identities.
     /// `baselines` are hidden characters' validation baselines built before
     /// the call (`beginSourceSceneExport`); one is used only while its object
-    /// still has the reference and outfit it was built for. `clockStates`
-    /// are the animation states of the characters with no preview at
-    /// `animationElapsed` (by default the clock now), computed here when nil.
+    /// still has the reference and outfit it was built for. `prepared` is
+    /// what `SourceSceneExportPreparation.prepare` read for the current
+    /// document with the clock at `animationElapsed` (by default the clock
+    /// now), prepared here when nil.
     func exportSourceScene(to url: URL, baselines: [UUID: SourceExportBaseline] = [:],
-                           clockStates: [UUID: Result<SourceStudioAnimationState?, Error>]? = nil, animationElapsed: Float? = nil) throws {
-        guard let path = doc.sourceSceneFile, let expected = doc.sourceSceneSHA256 else { throw RigError.invalid("Import an original Studio scene first.") }
-        guard url.resolvingSymlinksInPath().path != URL(fileURLWithPath: path).resolvingSymlinksInPath().path,
-              !FileManager.default.fileExists(atPath: url.path) else { throw RigError.invalid("Choose a new filename for the edited original scene.") }
-        let source = try PerfTrace.exportStep("source") { () throws -> KoikatsuSceneDocument in
-            let handle = try FileHandle(forReadingFrom: URL(fileURLWithPath: path)); defer { try? handle.close() }
-            let bytes = try handle.read(upToCount: 256 * 1024 * 1024 + 1) ?? Data()
-            guard bytes.count <= 256 * 1024 * 1024, SHA256.hash(data: bytes).map({ String(format: "%02x", $0) }).joined() == expected else {
-                throw RigError.invalid("The original scene changed; reimport before exporting edits.")
-            }
-            return try KoikatsuSceneReader.decodeDocument(bytes)
-        }
+                           prepared: SourceSceneExportPreparation.Prepared? = nil, animationElapsed: Float? = nil) throws {
+        let original = try sourceExportOriginal(for: url)
         let elapsed = animationElapsed ?? sourceAnimationTime
         // Lazy hidden characters: one with no preview saves the time its
-        // data-only clock reached, from the scene decoded here.
-        let clocks: [UUID: Result<SourceStudioAnimationState?, Error>]
-        if let clockStates { clocks = clockStates } else {
-            clocks = PerfTrace.exportStep("clocks") {
-                let requests = sourceClockRequests(doc.objects)
-                let states = requests.isEmpty ? [] : sourceUnbuiltClock.savedStates(requests.map(\.request), elapsed: elapsed, scene: (source, expected))
-                return Dictionary(uniqueKeysWithValues: zip(requests.map(\.id), states))
-            }
-        }
-        // ST-T03 / ST-S09 / ST-D03: copies and new folders, cameras and
-        // lights are written first under the keys CharaStudio would allocate
+        // data-only clock reached, from the scene decoded there. ST-T03 /
+        // ST-S09 / ST-D03: copies and new folders, cameras and lights are
+        // written first under the keys CharaStudio would allocate
         // (`SourceSceneExportValidation.stage`); every edit below addresses
         // the staged scene, where a copy's record is its original's bytes.
-        let staged = try PerfTrace.exportStep("stage") { () throws -> SourceSceneExportValidation.Staged in
-            let staged = try SourceSceneExportValidation.stage(doc, source: source)
-            try SourceSceneExportValidation.validate(doc, against: staged.stage.document.snapshot, keys: staged.keys)
-            return staged
+        let prepared = try prepared ?? PerfTrace.exportStep("prepare") {
+            try SourceSceneExportPreparation.prepare(document: doc, sceneFile: original.file, sha256: original.sha256,
+                                                     clock: sourceUnbuiltClock, clockRequests: sourceClockRequests(doc.objects),
+                                                     elapsed: elapsed)
         }
+        let source = prepared.source, staged = prepared.staged, clocks = prepared.clockStates
         let stage = staged.stage.document
-        guard doc.effects == SceneEffects(), doc.mainLight == MainLight(), doc.timeline.keyframes.isEmpty else {
-            throw RigError.invalid("Original-scene export does not yet serialize native lighting, effects or timeline edits.")
-        }
         var records: [Int32: KoikatsuObjectRecord] = [:]
         func index(_ record: KoikatsuObjectRecord) {
             records[record.sourceKey] = record
@@ -3619,8 +3664,7 @@ final class StudioModel: ViewportInputHandler, LivePacedHandler {
         // subtree and records under another parent (or re-appended after a
         // sibling) are moved; each moved record's re-authored local
         // placement is written by the transform edit below.
-        let topology = try PerfTrace.exportStep("topology") { try SourceSceneExportValidation.topologyEdits(doc, against: stage.snapshot, keys: staged.keys) }
-        var edits = SourceSceneEdits(deletions: topology.deletions, reparents: topology.reparents)
+        var edits = SourceSceneEdits(deletions: prepared.deletions, reparents: prepared.reparents)
         edits.lightLimit = sourceExportUnlimitedLights ? .unlimitedMapLights : .charaStudio
         // #320: every exported record is one document object, so the
         // exported scene's lights are counted here.
@@ -3807,7 +3851,7 @@ final class StudioModel: ViewportInputHandler, LivePacedHandler {
         try PerfTrace.exportStep("write") { try written.write(to: url, options: .atomic) }
         // ST-T03i: entries no installed plug-in reads travel verbatim; that
         // is CharaStudio's behavior only while no installed plug-in owns them.
-        let orphans = PerfTrace.exportStep("orphans") { source.orphanPluginIDs }
+        let orphans = prepared.orphanPluginIDs
         // ST-T05a: a scene from an older CharaStudio is written the way
         // CharaStudio 1.0.4.2 saves it, so even an unedited export changes
         // its bytes.

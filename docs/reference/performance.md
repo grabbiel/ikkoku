@@ -340,8 +340,10 @@ locked `PerfDrawLog`. Everything else is recorded on the main thread.
   the export call; `finish`, the end of a job that waited for background
   work), `exportHopMs` runs from the end of `begin` to the start of
   `finish`, and `exportSteps` gives the milliseconds of each nested step
-  (`guard`; `source`: read, SHA-256 and decode; `clocks`; `stage`: staging
-  and validation; `topology`; `thumbnail`; `writer`; `write`; `orphans`). With `IKKOKU_PERF_EXPORT_HASH=on`, `studio-export`
+  (`guard`; `prepare`, a synchronous export's preparation; `thumbnail`;
+  `writer`; `write`. #462's base arm also timed `source`: read, SHA-256
+  and decode; `clocks`; `stage`: staging and validation; `topology`; and
+  `orphans`, the steps its fix took off the main thread). With `IKKOKU_PERF_EXPORT_HASH=on`, `studio-export`
   and `studio-export-import` run with live animation off and the clock
   pinned at 1.5 s, and record each exported file's SHA-256 and size when
   the action is ready (`exportSha256`, `exportBytes`; null when it
@@ -5047,7 +5049,7 @@ command.
 | Build | While it runs | When it lands | Why that matches |
 | --- | --- | --- | --- |
 | Outfit selection | The character keeps its outfit, is drawn and stays editable. The picker shows the outfit chosen; the status area shows "Building 1 source character". | The new outfit is drawn with the document's edits as they are then, as one undo step. A failure keeps the outfit and shows the synchronous message ("Outfit: …"). | The install and the undo step run on the main actor, only while the character still shows the preview the build was made on. A newer selection supersedes it, choosing the shown outfit cancels it, and an undo or redo, import, load, New Scene or deletion drops it, so nothing half-built reaches the document. A landing while the Maker is shown keeps the Maker's frame. Captures and scenarios call `setSourceOutfit` in the command. |
-| Export baselines | The scene stays editable, and the status area shows "Exporting <file>". | The file is written with the scene as it was when the export was chosen. If the document, camera or route play state changed, it fails with "the scene changed while the hidden characters of <file> were built; export it again". An import, load or New Scene fails it with "the scene was replaced before …". | The export itself runs unchanged on the main actor, from the snapshot it was chosen with, so its bytes match the synchronous export's. A changed or replaced scene writes nothing, and the error goes to the alert the synchronous export used. While plugins run, it exports synchronously, since their steps write the document. |
+| Export baselines and preparation (#462) | The scene stays editable, and the status area shows "Exporting <file>" (an export with no baseline shows it only after a quarter second). | The file is written with the scene as it was when the export was chosen. If the document, camera or route play state changed, it fails with "the scene changed while <file> was exported; export it again". An import, load or New Scene fails it with "the scene was replaced before <file> was exported; export it again". | The preparation (read, SHA-256 check, decode, staging, validation, topology, clock states) reads only the snapshot the export was chosen with, and the comparison and the writer run unchanged on the main actor from that snapshot, so its bytes match the synchronous export's. A changed or replaced scene writes nothing, and the error goes to the alert the synchronous export used. While plugins run, it exports synchronously, since their steps write the document. |
 | Route characters of a rehydration | A route character already shown for the same record keeps its preview until its rebuild lands. One not shown yet (after New Scene, a load, the redo of a route Duplicate) draws nothing, and objects attached to it wait without a message, as for a Duplicate's copy. | Each character installs in walk order on the main actor. A failure leaves the placeholder drawing nothing without a message, as the synchronous rehydration did. | It installs only while the placeholder shows the same record of the same scene. An undo, import, load or New Scene cancels it, and a cancelled character leaves the runtime coverage so the next rehydration builds it. Captures and scenarios build in the walk. |
 
 ### Measurement
@@ -7280,7 +7282,9 @@ All numbers are medians (min–max), 60 Hz, monitor off.
   call and the export, before the live refresh could run. The export now
   runs in line when the import's warm-up has loaded every clock
   (`SourceStudioAnimationClock.isLoaded`), as base does. W3b (below) times
-  the final code.
+  the final code. (#462 later removed `isLoaded`: every background export
+  now prepares off the main thread and shows its progress line only after
+  a quarter second, see [export preparation](#export-preparation-462).)
 
 ### Final code (W3b, 2026-11-17)
 

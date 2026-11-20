@@ -2461,19 +2461,29 @@ checks them there.
   undo or redo, an import, a load, New Scene or the character's deletion
   drops it. An install that lands while the Maker is shown keeps the
   Maker's frame (`holdsRefreshWhileHidden`, as for an import's commit).
-- **Export validation baselines.** A hidden character with face-state
-  edits and no preview needs a validation baseline. `beginSourceSceneExport`
-  builds all of them under `.export(n)`, then runs `exportSourceScene(to:baselines:)`
-  on the main actor. Meanwhile the scene stays editable, and the status
-  area shows "Exporting <file>". The file is the scene as it was when the
-  export was chosen, as with the synchronous export: the job keeps the
-  document, the camera looked through and the routes' play flags, and if
-  any of them changed before the baselines landed, the export fails ("the
-  scene changed while the hidden characters of <file> were built; export
-  it again") and writes nothing. An import, a load or New Scene cancels it
-  with an error ("the scene was replaced before …") and writes nothing.
-  Without baselines to build, or while plugins run (their steps write the
-  document), it exports at once on the main thread, as before.
+- **Export validation baselines and preparation.** A hidden character
+  with face-state edits and no preview needs a validation baseline.
+  `beginSourceSceneExport` builds all of them under `.export(n)`. Then
+  (#462) a thread with the decode stack reads the original scene, checks
+  its SHA-256, decodes, stages and validates it against the document and
+  computes the clock states of the characters with no preview
+  (`SourceSceneExportPreparation`), one export at a time. Only then does
+  `exportSourceScene(to:baselines:prepared:)` compare the document with
+  the records and write, on the main actor. Every export takes this path,
+  with or without baselines. Meanwhile the scene stays editable, and the
+  status area shows "Exporting <file>" (for an export with no baseline,
+  only once it has run for a quarter second). The file is the scene as it
+  was when the export was chosen, as with the synchronous export: the job
+  keeps the document, the camera looked through and the routes' play
+  flags, and if any of them changed before the work landed, the export
+  fails ("the scene changed while <file> was exported; export it again")
+  and writes nothing. An import, a load or New Scene cancels it with an
+  error ("the scene was replaced before <file> was exported; export it
+  again") and writes nothing; a preparation still running ends on the main
+  thread and drops what it read there. An export to the original scene or
+  to an existing file, or with no imported scene, fails at once. While
+  plugins run (their steps write the document), it exports at once on the
+  main thread, as before.
 - **Route characters of a rehydration.** With background builds the
   rehydration's walk lists the route characters instead of building them,
   installs the runtime, then starts their builds in walk order

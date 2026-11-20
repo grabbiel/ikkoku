@@ -260,22 +260,14 @@ func sourceStudioAnimationClockWithoutPreviewMatchesBuiltCharacterWhenSupplied()
     // result; one for a generation `clear()` replaced does not run.
     final class Outcome: @unchecked Sendable { var loaded: [Bool] = [] }
     let outcome = Outcome(), done = DispatchSemaphore(value: 0), warmed = SourceStudioAnimationClock()
-    // `isLoaded` (an export computes its states in line only then): not
-    // before the warm-up, then for what it loaded, not for an edit to a clip
-    // it did not decode, and not after `clear()`.
-    let otherClip = SourceStudioAnimationClock.Request(reference: character, edited: edited(0, 4, 9, speed: 1, forceLoop: false, time: 0.2), bodyValues: nil)
-    #expect(!warmed.isLoaded([request]))
     warmed.beginWarmUp([request], generation: warmed.generation) { outcome.loaded.append($0); done.signal() }
     done.wait()
-    #expect(warmed.isLoaded([request]) && warmed.isLoaded([]))
-    #expect(!warmed.isLoaded([request, otherClip]))
     #expect(try warmed.savedStates([request], elapsed: 7.3)[0].get() == (try built.savedAnimationState(animationElapsed: 7.3)))
     // A second call after the same warm-up (a second export or save) must
     // not wait on its work item again: libdispatch traps on that.
     #expect(try warmed.savedStates([request], elapsed: 7.3)[0].get() == (try built.savedAnimationState(animationElapsed: 7.3)))
     let stale = warmed.generation
     warmed.clear()
-    #expect(!warmed.isLoaded([request]))
     warmed.beginWarmUp([request], generation: stale) { outcome.loaded.append($0); done.signal() }
     done.wait()
     #expect(outcome.loaded == [true, false])

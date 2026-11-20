@@ -254,6 +254,13 @@ private func sideloader(_ items: [Record], _ patterns: [Record] = [], map: Bool 
     let expected = pluginTrailer(entries([Record(4, 4, 1)]), keys: ["TwoLutPlugin": oddKey])
     #expect(try trailer(scene, .init(deletions: [1])) == expected)
     #expect(try KoikatsuSceneReader.decodeDocument(scene.data).orphanPluginIDs == ["KKVMDPlayExtSave"])
+    // #462: the export reads them from the trailer alone. A nil entry is
+    // none (CharaStudio's save drops it); neither is an entry a plug-in reads.
+    let orphans = pluginTrailer([("vnge_sss", .null), ("rendererEditor", plugin(0, .map([("a", .int(1))]))),
+                                 ("KKVMDPlayExtSave", .null), settings, ("vnge_kfa", plugin(1, .map([])))])
+    #expect(SourceScenePluginData.orphanPluginIDs(trailer: orphans) == ["rendererEditor", "vnge_kfa"])
+    #expect(SourceScenePluginData.orphanPluginIDs(trailer: Data()).isEmpty)
+    #expect(SourceScenePluginData.orphanPluginIDs(trailer: Data("not a trailer".utf8)).isEmpty)
     // No trailer, an empty map and a nil map: the edit's bytes as before.
     for value in [nil, pluginTrailer([])] as [Data?] {
         var plain = pluginScene(nil)
