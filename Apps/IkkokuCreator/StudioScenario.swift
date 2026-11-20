@@ -19,7 +19,7 @@ import Observation
 /// UUIDs, so a scenario survives the export/reimport round trip it scripts.
 struct StudioScenario: Decodable {
     struct Step: Decodable {
-        /// `"select"`, `"setVisible"`, `"rename"`, `"toggleCamera"`, `"toggleRoute"`,
+        /// `"select"`, `"setVisible"`, `"rename"`, `"setPosition"`, `"toggleCamera"`, `"toggleRoute"`,
         /// `"undo"`, `"redo"`, `"newScene"`, `"saveDocument"`, `"loadDocument"`, `"loadDocumentRejected"`, `"importDocument"`,
         /// `"setFace"`, `"setBody"`, `"setColor"`, `"resetShape"`, `"resetColors"`, `"setOutfit"`,
         /// `"setClothesState"`, `"setAccessoryVisible"`, `"setShoesType"`, `"setExpression"`, `"resetExpression"`,
@@ -48,6 +48,11 @@ struct StudioScenario: Decodable {
         /// assert only (#384): how many undo and redo steps the history holds,
         /// and how many objects the document has.
         let undoDepth: Int?, redoDepth: Int?, objectCount: Int?
+        /// #448: the step continues the previous step's gesture. The runner
+        /// then does not end the edit-coalescing window before it, so an
+        /// edit can join the step before it, as an edit right after an Undo
+        /// would. Off by default: every step is its own gesture.
+        let sameGesture: Bool?
         /// assertWorkspaceRows only (#410): how many rows the list has, and
         /// whether the addressed object's row (`key`, `copy` or `added`, at
         /// row `index`, negative from the end, showing `name`) is selected;
@@ -631,7 +636,8 @@ struct StudioScenario: Decodable {
                  seconds, dx, dy, eyeLook, blink, handPattern, mode, axis, pixels, toolbarSteady, ikGroup, selects, sourceIK,
                  render, exportIdenticalToSource, errorContains, outfit, accessoryLabels, pluginMount, state, clothes, expression,
                  sex, character, chain, delta, ik, edit, build, parent, children, absent, copy, added, activeCopyOf,
-                 undoDepth, redoDepth, objectCount, rows, selected, aid, routeEdit, route, routeLines, sourceMap, liveSamplers, decodes, settles, inputsFrom
+                 undoDepth, redoDepth, objectCount, rows, selected, aid, routeEdit, route, routeLines, sourceMap, liveSamplers, decodes, settles, inputsFrom,
+                 sameGesture
         }
 
         init(from decoder: Decoder) throws {
@@ -746,6 +752,7 @@ struct StudioScenario: Decodable {
             added = try c.decodeIfPresent(String.self, forKey: .added)
             activeCopyOf = try c.decodeIfPresent(Int32.self, forKey: .activeCopyOf)
             undoDepth = try c.decodeIfPresent(Int.self, forKey: .undoDepth)
+            sameGesture = try c.decodeIfPresent(Bool.self, forKey: .sameGesture)
             redoDepth = try c.decodeIfPresent(Int.self, forKey: .redoDepth)
             objectCount = try c.decodeIfPresent(Int.self, forKey: .objectCount)
             rows = try c.decodeIfPresent(Int.self, forKey: .rows)
@@ -923,6 +930,9 @@ struct StudioScenario: Decodable {
         var capturedIKPoses: [String: IKPoseCapture] = [:]
         /// World positions recorded by `captureObject` steps, keyed by step name.
         var capturedObjectPositions: [String: Float3] = [:]
+        /// #448: when the current gesture began (the last step without
+        /// `sameGesture`), and how far into it the current step started.
+        var gestureStart = Date(), gestureElapsed: TimeInterval = 0
         /// ST-T11: `captureRoute` edit states by label.
         var capturedRoutes: [String: SourceStudioRouteState] = [:]
         /// World rotations recorded by the same `captureObject` steps.
@@ -1921,8 +1931,19 @@ struct StudioScenario: Decodable {
             // Steps run microseconds apart, inside the editor's 0.4 s
             // edit-coalescing window (startup's import opens it too), so an
             // edit could silently share the previous snapshot and `undo` would
-            // restore the wrong document. Every step is its own gesture.
-            studio.endUndoCoalescing()
+            // restore the wrong document. Every step is its own gesture,
+            // unless it sets `sameGesture` (#448). Such a step must start
+            // inside the window its gesture opened; later, its edit could not
+            // join that step on any build, and the check would prove nothing.
+            if step.sameGesture == true {
+                gestureElapsed = Date().timeIntervalSince(gestureStart)
+                guard gestureElapsed < StudioUndoSteps.coalescingWindow else {
+                    record(step, false, "sameGesture: \(step.op) starts \(gestureElapsed) s into its gesture, after the \(StudioUndoSteps.coalescingWindow) s coalescing window closed"); continue
+                }
+            } else {
+                gestureStart = Date(); gestureElapsed = 0
+                studio.endUndoCoalescing()
+            }
             switch step.op {
             case "select":
                 guard let id = object(step) else { record(step, false, "select: no object with source key \(step.key ?? -1)"); continue }
@@ -2038,6 +2059,21 @@ struct StudioScenario: Decodable {
                 guard let name = step.name, !name.isEmpty else { record(step, false, "rename: missing name"); continue }
                 studio.update(id) { $0.name = name }
                 record(step, true, "\(describe(step)) renamed to \"\(name)\"")
+            case "setPosition":
+                // #448: one component of the Object tab's Position field
+                // (`VectorRow` in StudioView), through `inspectorUpdate`, which
+                // writes only while the object is the selection.
+                guard let id = object(step) else { record(step, false, "setPosition: no object \(describe(step))"); continue }
+                guard let index = step.index, (0..<3).contains(index), let value = step.value, value.isFinite else {
+                    record(step, false, "setPosition: index 0-2 and a finite value are required"); continue
+                }
+                guard studio.selection == id else { record(step, false, "setPosition: \(describe(step)) is not the selection"); continue }
+                studio.inspectorUpdate(id) { $0.transform.set(.position, index, to: value) }
+                let now = studio.doc.object(id)?.transform.position[index]
+                guard now == value else {
+                    record(step, false, "setPosition: position[\(index)] reads \(now.map { "\($0)" } ?? "nothing") after the edit, expected \(value)"); continue
+                }
+                record(step, true, "\(describe(step)) position[\(index)] = \(value), \(gestureElapsed) s into its gesture")
             case "toggleCamera":
                 guard let id = object(step) else { record(step, false, "toggleCamera: no object with source key \(step.key ?? -1)"); continue }
                 studio.toggleSourceCamera(id)
