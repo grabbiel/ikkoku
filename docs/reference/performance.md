@@ -197,7 +197,10 @@ Other options:
   list builds ahead of any scroll, in place of `StudioWorkspaceState.slotCap`
   (0 puts every row in the lazy stack). The app reads the cap once at launch.
 - `IKKOKU_PERF_EXPORT_HASH` (`on` or `off`, default `off`), #462's byte
-  check: the export workloads record each exported file's SHA-256 and size
+  check: the export workloads run with live animation off and the Studio
+  clock pinned at 1.5 s (`StudioModel.setSourceAnimationTime`), so every
+  export of a scene saves each character's animation at that time and
+  writes the same bytes, and record each exported file's SHA-256 and size
   ([what the report records](#what-the-report-records)).
 - `IKKOKU_PERF_PARK_FILE` (a path) and `IKKOKU_PERF_FOCUS_PROBE` (1–64),
   #440's measurement controls for the
@@ -339,8 +342,9 @@ locked `PerfDrawLog`. Everything else is recorded on the main thread.
   `finish`, and `exportSteps` gives the milliseconds of each nested step
   (`guard`; `source`: read, SHA-256 and decode; `clocks`; `stage`: staging
   and validation; `topology`; `thumbnail`; `writer`; `write`; `orphans`). With `IKKOKU_PERF_EXPORT_HASH=on`, `studio-export`
-  and `studio-export-import` also record each exported file's SHA-256 and
-  size when the action is ready (`exportSha256`, `exportBytes`; null when it
+  and `studio-export-import` run with live animation off and the clock
+  pinned at 1.5 s, and record each exported file's SHA-256 and size when
+  the action is ready (`exportSha256`, `exportBytes`; null when it
   wrote none), read after the timed span. `summarize` prints the
   medians per action (the own busy time in parentheses after the busy time, when
   the report has it, and the export main time and its CPU time when every

@@ -650,8 +650,8 @@ extension CaptureRequest {
         // #440: the focus probe's buttons (the growth check's positive
         // control); `IKKOKU_PERF_PARK_FILE` is any path.
         ValueRule("IKKOKU_PERF_FOCUS_PROBE", .integer(1...64)),
-        // #462: the export workloads record each exported file's SHA-256
-        // and size before removing it.
+        // #462: the export workloads pin the Studio clock at 1.5 s (live
+        // animation off) and record each exported file's SHA-256 and size.
         ValueRule("IKKOKU_PERF_EXPORT_HASH", .oneOf(["off", "on"])),
     ]
 

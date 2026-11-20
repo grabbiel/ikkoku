@@ -95,9 +95,11 @@ final class PerfWorkloadDriver {
     /// Whether the pending action waited for `actionPending`: it is then
     /// ready when the wait ended.
     private var actionWaited = false
-    /// #462 (`IKKOKU_PERF_EXPORT_HASH=on`): the file the pending export
-    /// action writes, and each finished action's file SHA-256 and size,
-    /// by its index in `finishedActions` (nil when it wrote no file).
+    /// #462 (`IKKOKU_PERF_EXPORT_HASH=on`, which also pins the Studio clock
+    /// at `exportHashClock` with live animation off, so each export of the
+    /// same scene writes the same bytes): the file the pending export action
+    /// writes, and each finished action's file SHA-256 and size, by its
+    /// index in `finishedActions` (nil when it wrote no file).
     private var exportFile: URL?
     private var exportFiles: [Int: (sha256: String, bytes: Int)?] = [:]
 
@@ -657,7 +659,7 @@ final class PerfWorkloadDriver {
     /// file, after which only the visible characters build. Each export
     /// writes a new file and removes the previous one.
     private func prepareStudioExport() throws {
-        let studio = try prepareStudioSource(selectKey: nil)
+        let studio = try prepareStudioSource(selectKey: nil, liveAnimation: !configuration.exportHash)
         let target = try actionTarget(studio)
         guard target.kind == .character, let preview = studio.sourceShapePreview(for: target.id) else {
             throw RigError.invalid("studio-export needs a built source character")
@@ -673,6 +675,7 @@ final class PerfWorkloadDriver {
         guard studio.sourceShapePreview(for: target.id) == nil else {
             throw RigError.invalid("the hidden character was built by the load, so an export would not build its baseline")
         }
+        try pinExportClock(studio)
         var count = 0
         var previous: URL?
         actionSteps = [("export", true, { [weak self] in
@@ -684,7 +687,7 @@ final class PerfWorkloadDriver {
             self?.app.exportSourceScene(to: url)
         })]
         trace.details["actionSourceKey"] = Int(target.sourceObjectKey ?? -1)
-        trace.details["gesture"] = "File ▸ Export Edited Original Scene with source key \(target.sourceObjectKey ?? -1) hidden, a cheek edit and no preview, repeated; live animation on"
+        trace.details["gesture"] = "File ▸ Export Edited Original Scene with source key \(target.sourceObjectKey ?? -1) hidden, a cheek edit and no preview, repeated; \(exportClockLabel)"
     }
 
     /// `studio-export-import` (lazy hidden characters): File ▸ Export Edited
@@ -694,7 +697,7 @@ final class PerfWorkloadDriver {
     /// builds no baseline for it. Each export writes a new file and removes
     /// the previous one.
     private func prepareStudioExportImport() throws {
-        try prepareStudioSource(selectKey: nil)
+        try pinExportClock(prepareStudioSource(selectKey: nil, liveAnimation: !configuration.exportHash))
         let folder = try makeScratchFolder()
         var count = 0
         var previous: URL?
@@ -706,7 +709,26 @@ final class PerfWorkloadDriver {
             self?.exportFile = url
             self?.app.exportSourceScene(to: url)
         })]
-        trace.details["gesture"] = "File ▸ Export Edited Original Scene of the imported startup scene, unedited, repeated; live animation on"
+        trace.details["gesture"] = "File ▸ Export Edited Original Scene of the imported startup scene, unedited, repeated; \(exportClockLabel)"
+    }
+
+    /// #462: the Studio clock the export workloads pin with
+    /// `IKKOKU_PERF_EXPORT_HASH=on`. Not 0, so every export saves each
+    /// character's animation at a time it reached: a built character's
+    /// through its preview, one with no preview through the export's own
+    /// clock states.
+    private static let exportHashClock: Float = 1.5
+
+    /// With `IKKOKU_PERF_EXPORT_HASH=on`, sets the Studio clock to
+    /// `exportHashClock` (live animation is already off); otherwise nothing.
+    private func pinExportClock(_ studio: StudioModel) throws {
+        guard configuration.exportHash else { return }
+        try studio.setSourceAnimationTime(Self.exportHashClock)
+        trace.details["exportClockSeconds"] = Double(Self.exportHashClock)
+    }
+
+    private var exportClockLabel: String {
+        configuration.exportHash ? "live animation off, the clock pinned at \(Self.exportHashClock) s" : "live animation on"
     }
 
     /// `studio-show-hidden` (lazy hidden characters): Visible on (the

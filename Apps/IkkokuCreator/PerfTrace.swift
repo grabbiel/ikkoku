@@ -232,9 +232,11 @@ final class PerfTrace {
         /// `IKKOKU_PERF_PARK_FILE` (#440): the growth check's park file; nil
         /// (the default) never parks (`PerfWorkloadDriver.parkIfRequested`).
         let parkFile: String?
-        /// `IKKOKU_PERF_EXPORT_HASH` (#462): "on" makes `studio-export` and
-        /// `studio-export-import` record each exported file's SHA-256 and
-        /// size when its action is ready; "off" (the default) does not.
+        /// `IKKOKU_PERF_EXPORT_HASH` (#462): "on" runs `studio-export` and
+        /// `studio-export-import` with live animation off and the Studio
+        /// clock pinned at 1.5 s, so every export of a scene writes the same
+        /// bytes, and records each exported file's SHA-256 and size when its
+        /// action is ready; "off" (the default) does neither.
         let exportHash: Bool
 
         /// Reads `IKKOKU_PERF_*`; `CaptureRequest.validate` already checked the values.
