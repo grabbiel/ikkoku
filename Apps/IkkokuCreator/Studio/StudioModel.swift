@@ -842,6 +842,9 @@ final class StudioModel: ViewportInputHandler, LivePacedHandler {
     // NotificationCenter retains block-observer tokens even after their weak
     // owner disappears. Match replacement/unload cleanup for model disposal.
     isolated deinit {
+        // #326: an import in flight keeps running until its batch ends; its
+        // decoded scene goes here, on the main thread.
+        sourceImportJob?.tearDown()
         for token in sourceFocusObservers { NotificationCenter.default.removeObserver(token) }
         if let token = sourceLaunchObserver { NotificationCenter.default.removeObserver(token) }
         #if DEBUG
@@ -2441,7 +2444,7 @@ final class StudioModel: ViewportInputHandler, LivePacedHandler {
         // one would be retained without rendering, and a save would keep the
         // folders and drop every character, so the preview refuses the scene.
         var directory: ObjCBool = false
-        if Self.containsCharacter(source.snapshot.roots),
+        if source.snapshot.containsCharacter,
            !FileManager.default.fileExists(atPath: boneCatalogURL.path, isDirectory: &directory) || directory.boolValue {
             throw RigError.invalid("The \(ResourceCompanion.studioPoseContract.label) is missing at \(boneCatalogURL.path): source scene characters need \(ResourceCompanion.studioPoseContract.conventionalPath) in the converted library, next to the original base's rigs/ folder.")
         }
@@ -2561,7 +2564,10 @@ final class StudioModel: ViewportInputHandler, LivePacedHandler {
         // A failed commit drops the map its preparation started loading.
         var committed = false
         defer { if !committed { job.mapLoad?.cancel() } }
-        let sceneURL = job.sceneURL, hash = job.hash, source = job.source
+        let sceneURL = job.sceneURL, hash = job.hash
+        guard let source = job.source else { throw RigError.invalid("The source scene import was already released.") }
+        // #326: the decoded scene goes here, on the main thread (`tearDown`).
+        defer { job.tearDown() }
         var imported = job.imported, diagnostics = job.diagnostics
         let sceneLightOverride = job.sceneLightOverride, itemResolver = job.itemResolver, itemNames = job.itemNames
         var previews: [UUID: SourceStudioCharacterPreview] = [:]
@@ -2808,6 +2814,7 @@ final class StudioModel: ViewportInputHandler, LivePacedHandler {
     func cancelSourceBuilds() {
         sourceImportJob?.batch.cancel()
         sourceImportJob?.mapLoad?.cancel()
+        sourceImportJob?.tearDown()
         sourceMapLoad?.cancel(); sourceMapLoad = nil
         sourceImportJob = nil
         for build in pendingSourceBuilds.values { build.batch.cancel() }
@@ -3127,13 +3134,6 @@ final class StudioModel: ViewportInputHandler, LivePacedHandler {
             failedSourceBuilds[id] = (pending.reference, pending.outfit, String(describing: error))
         }
         refreshAfterInstall()
-    }
-
-    /// Whether any record of the tree, an accessory child included, is a character.
-    private static func containsCharacter(_ records: [KoikatsuObjectRecord]) -> Bool {
-        records.contains { record in
-            record.character != nil || containsCharacter(record.children)
-        }
     }
 
     /// The source preview's characters (A-T02): how many have a rendered preview
@@ -4772,12 +4772,17 @@ final class StudioModel: ViewportInputHandler, LivePacedHandler {
         return (try sourceWorldMatrix(of: object.id, document: doc, previews: sourceInstances) * parent.matrix,
                 try sourceWorldRotation(of: object.id) * parent.rotation)
     }
+    /// The IK guides of a source character in IK pose mode: only the active
+    /// ones, IK on and the guide's group on (#439). CharaStudio keeps an
+    /// inactive guide's object inactive (OCIChar.ActiveIK), so it is neither
+    /// drawn nor picked; a loaded character's saved targets may lie far from
+    /// its bones while its IK is off.
     private func sourceIKGizmos(_ object: StudioObject, preview: SourceStudioCharacterPreview, world: float4x4) throws -> [GizmoBatch] {
         var result: [GizmoBatch] = []
-        for guide in try sourceGuides(object, preview: preview) {
+        for guide in try sourceGuides(object, preview: preview) where guide.active {
             let origin = world.transformPoint(guide.position), size = viewCamera.worldUnitsPerPixel(at: world.transformPoint(guide.position), viewport: viewportSize)
             let selected = selectedSourceIK == guide.targetID
-            let color = selected ? Float4(1,0.9,0.2,1) : guide.active ? Float4(0.3,1,0.5,1) : Float4(0.7,0.7,0.75,0.85)
+            let color = selected ? Float4(1,0.9,0.2,1) : Float4(0.3,1,0.5,1)
             result.append(GizmoBuilder.handle(at: origin, size: size * (selected ? 10 : 7), color: color, id: SourceStudioIKEditing.pickID(guide.targetID)))
             if selected {
                 let mode: GizmoMode = gizmoMode == .rotate && guide.rotationEnabled ? .rotate : .translate
@@ -4789,6 +4794,19 @@ final class StudioModel: ViewportInputHandler, LivePacedHandler {
     var selectedSourceIKState: SourceStudioKinematicState? {
         guard let object = selectedObject, let preview = sourceInstances[object.id] else { return nil }
         return object.sourceKinematics ?? SourceStudioKinematicState(record: preview.record)
+    }
+    /// Whether the Pose tab's selected IK target has no guide in the viewport
+    /// because it is inactive (#439, `sourceIKGizmos`): the effective IK flag
+    /// and the target's group, the state its guide's `active` comes from. Read
+    /// from the kinematic state rather than the guides, so the Pose tab does
+    /// not follow the animation clock.
+    var selectedSourceIKGuideHidden: Bool {
+        guard let object = selectedObject, let preview = sourceInstances[object.id], let target = selectedSourceIK,
+              let group = try? SourceStudioIKEditing.groupIndex(target: target),
+              let state = try? preview.effectiveKinematics(fkRotations: object.sourceFKRotations ?? [:], ikTargets: object.sourceIKOverrides ?? [:],
+                                                          kinematics: object.sourceKinematics),
+              state.activeIK.indices.contains(group) else { return false }
+        return !(state.enableIK && state.activeIK[group])
     }
     var sourceIKAvailable: Bool { selection.flatMap { sourceInstances[$0] }?.ikGuides.isEmpty == false }
     func setSourceFKEnabled(_ enabled: Bool) {
@@ -5116,7 +5134,9 @@ final class StudioModel: ViewportInputHandler, LivePacedHandler {
             return
         }
         if let target = SourceStudioIKEditing.targetID(fromPick: id), let object = selectedObject, sourceInstances[object.id] != nil {
-            selectedSourceIK = target; if let group = try? SourceStudioIKEditing.groupIndex(target: target) { setSourceIKGroup(group, enabled: true) }
+            // Only active guides are drawn (#439), so a pick only selects; IK is
+            // switched on in the Pose tab, as in CharaStudio.
+            selectedSourceIK = target
             status = SourceStudioIKEditing.labels[Int(target)]; return
         }
         if let ci = PickIDs.ikIndex(from: id), ci < IKChain.allCases.count {

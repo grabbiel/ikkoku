@@ -2112,7 +2112,8 @@ characters in 29 scenes and no route characters.
   [extended shape rates](../character/contracts.md#extended-shape-rates-slider-unlocker)). It reads no
   converted file and runs on a worker from the import's preparation
   (`CardCheck`, which keeps the records without their accessory children, so
-  a worker never releases a scene subtree, #326); the commit collects it. A
+  a worker never releases a scene subtree, #326); the commit collects it,
+  and a cancelled import cancels it, so an unasked check is freed (#432). A
   card that fails it cannot build, and the reason is the build's own error
   unless a converted-file step the build runs before the shape check fails
   first (the head assembly lookup, the rig and appearance reads). A card
@@ -2143,7 +2144,7 @@ characters in 29 scenes and no route characters.
   change; the clocks cost about a millisecond there. Before that (the
   warm-up still running), the background export advances them on a worker
   thread and shows its progress line.
-- The clock reads a scene file on a thread of its own with 8 MiB of stack
+- The clock reads a scene file on a thread of its own with 64 MiB of stack
   (`SourceStudioCharacterBatch.onDecodeThread`, #326), at its caller's QoS,
   and drops the decoded records there. The warm-up and the background export
   run on GCD workers with 512 KiB, which a deep scene's decode overflows

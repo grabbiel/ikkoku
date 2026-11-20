@@ -32,13 +32,11 @@ import Scene
 /// blocking work stays off the cooperative pool (`docs/reference/performance.md`,
 /// the pool rule). Not GCD workers either (#321): `assemble` decodes the whole
 /// scene, and the decode recurses once per nesting level, up to the reader's
-/// `KoikatsuBinaryReader.maximumLevels` (200, #326). In Debug, a first half
-/// on a 200-level scene takes 1,552 KiB of stack through nested folders and
-/// 3,449 KiB through nested characters, several times a GCD worker's
-/// 512 KiB (`SourceSceneDeepStackTests`). The workers
-/// get `stackSize`, the main thread's 8 MiB, where the Studio's other scene
-/// decodes run. The hidden characters' clock decodes its scene on a thread
-/// of the same size (`onDecodeThread`, #326).
+/// `KoikatsuBinaryReader.maximumLevels` (#326). In Debug, a first half
+/// takes 7.6 KiB of stack a level through nested folders and 17 KiB through
+/// nested characters, many times a GCD worker's 512 KiB on the deepest
+/// scenes (`SourceSceneDeepStackTests`). The workers get `stackSize`, the
+/// stack every scene decode runs on (`onDecodeStack`, #326).
 public final class SourceStudioCharacterBatch: @unchecked Sendable {
     public struct Request: Sendable {
         public let reference: SourceStudioCharacterReference
@@ -86,9 +84,13 @@ public final class SourceStudioCharacterBatch: @unchecked Sendable {
         }
     }
 
-    /// Each worker's stack (#321): the main thread's 8 MiB, not a GCD
-    /// worker's 512 KiB.
-    public static let stackSize = 8 << 20
+    /// Each worker's stack, and every scene decode's (#321, #326): 64 MiB,
+    /// against a GCD worker's 512 KiB and the main thread's 8 MiB. It is
+    /// address space: a page is committed only when the stack reaches it.
+    /// The deepest walk it serves, a decode of `maximumLevels` nested
+    /// characters, takes 17 KiB a level in Debug and 3 KiB in Release
+    /// (`SourceSceneDeepStackTests`), so half of it holds 1,000 levels.
+    public static let stackSize = 64 << 20
 
     private static func startWorker(_ index: Int, of count: Int, qos: DispatchQoS.QoSClass,
                                     _ body: @escaping @Sendable () -> Void) {
@@ -105,17 +107,21 @@ public final class SourceStudioCharacterBatch: @unchecked Sendable {
     }
 
     /// #326: runs `body` on a thread of its own with `stackSize`, at the
-    /// calling thread's QoS, and returns its result. It serves a scene
-    /// decode whose caller may be a GCD worker, with 512 KiB of stack: the
-    /// hidden characters' clock (`SourceStudioAnimationClock.readSeeds`)
-    /// reads its scene on its utility warm-up and on an export's worker. One
-    /// thread per call (`theDecodeThreadHandOffNeverRunsAhead` prints the
-    /// cost).
+    /// calling thread's QoS, and returns its result: `onDecodeStack`'s hop,
+    /// and the hidden characters' clock (`SourceStudioAnimationClock.readSeeds`),
+    /// which reads its scene on its utility warm-up and on an export's GCD
+    /// worker and drops the tree there too. One thread per call
+    /// (`theDecodeThreadHandOffNeverRunsAhead` prints the cost).
     ///
     /// The hand-off: the thread takes `gate` and only then signals
     /// `started`. The caller waits on `started` (the thread's start, a few
     /// microseconds), then blocks on `gate` until `body` has returned, so it
-    /// can never take `gate` first and read no result.
+    /// can never take `gate` first and read no result. The result leaves
+    /// the thread before `gate` opens, and the caller takes it out of its
+    /// box: the caller then holds its only reference, so a decoded tree
+    /// dies where the caller drops it, not whenever this thread ends (#326).
+    /// `afterHandOff` (tests only) runs on the thread once the result is
+    /// handed over, while the thread still holds everything it captured.
     ///
     /// Why a lock and not a semaphore: priority inversion. A main-thread save
     /// or clock rebase (`SourceStudioAnimationClock.savedStates`) blocks on
@@ -125,27 +131,52 @@ public final class SourceStudioCharacterBatch: @unchecked Sendable {
     /// main thread's priority reaches the warm-up and, through `gate`, this
     /// decode. A semaphore has no owner: the chain would stop at the warm-up
     /// and the main thread would wait on a utility-QoS decode.
-    static func onDecodeThread<T: Sendable>(_ name: String, _ body: @escaping @Sendable () -> T) -> T {
+    static func onDecodeThread<T: Sendable>(_ name: String, afterHandOff: (@Sendable () -> Void)? = nil,
+                                            _ body: @escaping @Sendable () -> T) -> T {
         let gate = OSAllocatedUnfairLock(), started = DispatchSemaphore(value: 0)
         let result = OSAllocatedUnfairLock<T?>(initialState: nil)
         let qos = DispatchQoS.QoSClass(rawValue: qos_class_self()) ?? .default
         startThread(name, qos: QualityOfService(qos)) {
             gate.lock()
             started.signal()
-            let value = body()
-            result.withLock { $0 = value }
+            do {
+                let value = body()
+                result.withLock { $0 = value }
+            }
             gate.unlock()
+            afterHandOff?()
         }
         started.wait()
         gate.lock(); gate.unlock()
-        return result.withLock { $0 }!
+        return result.withLock { value -> T? in
+            defer { value = nil }
+            return value
+        }!
+    }
+
+    /// #326: runs `body` on a stack of at least `stackSize`: in line on a
+    /// thread that has it (the batch's workers, a decode thread), otherwise
+    /// on a thread of its own (`onDecodeThread`, one hop of 32–41 µs in
+    /// Release). Each operation that walks a decoded scene's tree
+    /// recursively wraps itself in it: the decode (`KoikatsuSceneReader`),
+    /// the legacy upgrade, the insertion stage, the export's edit and the
+    /// layout import. A nested one runs in line.
+    static func onDecodeStack<T: Sendable>(_ name: String, _ body: @escaping @Sendable () throws -> T) throws -> T {
+        if pthread_get_stacksize_np(pthread_self()) >= stackSize {
+            try requireDecodeStack()
+            return try body()
+        }
+        return try onDecodeThread(name) { Result { try requireDecodeStack(); return try body() } }.get()
     }
 
     /// #326, Debug: throws unless the calling thread has at least
-    /// `stackSize` of stack, so a scene decode that would run on a GCD
-    /// worker's 512 KiB fails with this error instead of overflowing it. The
-    /// tests' check that the clock decodes on `onDecodeThread`. Nothing in
-    /// Release.
+    /// `stackSize` of stack, so a scene walk that would run on a smaller
+    /// stack (a GCD worker's 512 KiB, the main thread's 8 MiB) fails with
+    /// this error instead of overflowing it. `onDecodeStack` checks it before
+    /// its body, the clock's read (`SourceStudioAnimationClock.readScene`)
+    /// before its decode, and the reader before each root object
+    /// (`KoikatsuBinaryReader.object`), so a root read outside a routed
+    /// operation fails a Debug test. Nothing in Release.
     static func requireDecodeStack() throws {
         #if DEBUG
         let size = pthread_get_stacksize_np(pthread_self())
@@ -154,6 +185,28 @@ public final class SourceStudioCharacterBatch: @unchecked Sendable {
         }
         #endif
     }
+
+    #if DEBUG
+    /// #326, Debug: `KoikatsuObjectRecord.==` recurses through the whole
+    /// subtree, so it runs on the decode stack too (the legacy upgrade's
+    /// read-back and the insertion stage's check, both in `onDecodeStack`).
+    /// `==` cannot throw: on a smaller stack it stops the process, unless the
+    /// calling thread holds a `ComparisonReport` (tests only), which counts
+    /// the comparison instead.
+    static func checkComparisonStack() {
+        let size = pthread_get_stacksize_np(pthread_self())
+        guard size < stackSize else { return }
+        if let report = Thread.current.threadDictionary[ComparisonReport.key] as? ComparisonReport { report.count += 1; return }
+        preconditionFailure("A scene record comparison ran on a \(size / 1024) KiB stack, not \(stackSize / 1024) KiB (#326).")
+    }
+
+    /// Tests only: installed in a thread's dictionary, it counts the record
+    /// comparisons made on that thread below `stackSize`.
+    final class ComparisonReport: NSObject {
+        static let key = "com.grabbiel.Ikkoku.326.comparisonReport"
+        var count = 0
+    }
+    #endif
 
     /// The worker count: the performance cores less one for the main thread
     /// and the renderer, at least two.

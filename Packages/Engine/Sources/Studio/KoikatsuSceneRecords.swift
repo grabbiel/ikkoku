@@ -16,7 +16,8 @@ public struct KoikatsuCharacterRecord: Sendable, Equatable {
     public let bones: [Int32: KoikatsuBoneRecord]
     public let ikTargets: [Int32: KoikatsuBoneRecord]
     /// `internal(set)` for the upgrade readback (`readBackRoots`) and the
-    /// hidden card check's shallow copies (`SourceStudioCharacterPreview.CardCheck`).
+    /// shallow copies of the hidden card check (`SourceStudioCharacterPreview.CardCheck`)
+    /// and of a preview's assembly (`SourceStudioCharacterPreview.assemble`).
     public internal(set) var accessoryChildren: [Int32: [KoikatsuObjectRecord]]
     public let kinematicMode: Int32
     public let animation: KoikatsuAnimationRecord

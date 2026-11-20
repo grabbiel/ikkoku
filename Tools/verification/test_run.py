@@ -646,7 +646,9 @@ SCENARIO_OPS = {"select", "setVisible", "rename", "toggleCamera", "toggleRoute",
                 # A digit-row key press: camera slot load, and save with Shift.
                 "pressDigit",
                 # #425: a source IK guide's mouse drag (the toolbar-steady check).
-                "dragIKGuide"}
+                "dragIKGuide",
+                # #439: the Pose tab's source IK toggles, and a click on an IK guide.
+                "setSourceIKEnabled", "clickIKGuide"}
 
 # R7 phase 2, item 7: the window-run inspector checks (`"inspectorUI": {"steps": [...]}`).
 INSPECTOR_UI_OPS = {"select", "deselect", "focus", "type", "delete", "undo", "redo", "cycle",
@@ -958,7 +960,7 @@ class StudioScenarioLaneTests(unittest.TestCase):
                       and not name.startswith(("maker-", "gameplay-")))
 
     def test_lane_validates_and_covers_every_scenario(self):
-        self.assertEqual(len(self.checks), 106)
+        self.assertEqual(len(self.checks), 107)
         referenced = set()
         for check in self.checks:
             scenario = check["env"]["IKKOKU_STUDIO_SCENARIO"]
@@ -1218,6 +1220,28 @@ class StudioScenarioLaneTests(unittest.TestCase):
                 if "toolbarSteady" in step:
                     self.assertIn(op, ("dragGizmo", "dragIKGuide"))
                     self.assertIs(type(step["toolbarSteady"]), bool)
+                if op == "setSourceIKEnabled":
+                    # #439: the "IK enabled" toggle, or with ikGroup (0-4) one group's toggle
+                    self.assertIs(type(step["key"]), int)
+                    self.assertIs(type(step["on"]), bool)
+                    if "ikGroup" in step:
+                        self.assertIs(type(step["ikGroup"]), int)
+                        self.assertIn(step["ikGroup"], range(5))
+                if op == "clickIKGuide":
+                    self.assertIs(type(step["key"]), int)
+                    self.assertIs(type(step["index"]), int)
+                    self.assertIn(step["index"], range(13))
+                    self.assertIs(type(step["selects"]), bool)
+                if "sourceIK" in step:
+                    check = step["sourceIK"]
+                    self.assertIn(op, ("assert", "assertRejected"))
+                    self.assertIs(type(check["key"]), int)
+                    self.assertTrue(set(check) <= {"key", "drawn", "enableIK", "activeIK", "selectedHidden"}, check)
+                    for target in check.get("drawn", []):
+                        self.assertIn(target, range(13))
+                    if "activeIK" in check:
+                        self.assertEqual(len(check["activeIK"]), 5)
+                        self.assertTrue(all(type(flag) is bool for flag in check["activeIK"]))
                 if op == "hoverGizmo":
                     self.assertIsInstance(step["key"], int)
                     self.assertIsInstance(step["bone"], int)
@@ -1310,7 +1334,7 @@ class StudioScenarioLaneTests(unittest.TestCase):
                                             "characterBuilt", "exportedAnimation", "treeLabel", "view", "render",
                                             "exportIdenticalToSource", "outfit", "clothes", "ik", "expression", "accessoryLabels", "pluginMount",
                                             "children", "absent", "activeCopyOf", "route", "routeLines", "sourceMap",
-                                            "liveSamplers", "undoDepth", "redoDepth", "objectCount") if k in step]
+                                            "liveSamplers", "undoDepth", "redoDepth", "objectCount", "sourceIK") if k in step]
                     self.assertTrue(declared, "assert declares nothing: %s" % path)
                     for name in ("undoDepth", "redoDepth", "objectCount"):
                         if name in step:

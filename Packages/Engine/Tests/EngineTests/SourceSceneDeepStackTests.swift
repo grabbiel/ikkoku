@@ -8,26 +8,29 @@ import Renderer
 @testable import Studio
 
 // #321 / #326: a scene decode (`KoikatsuSceneReader.decodeDocument`)
-// recurses once per nesting level, and so do the export's topology writer,
-// the insertion writer and the layout import. The reader accepts
-// `KoikatsuBinaryReader.maximumLevels` (200 since #326; 65 before). A Debug
-// decode of the 65-level installed scene needs 448 to 512 KiB of stack, a
-// GCD worker's whole stack, and the Studio's character builds decoded their
-// scene on GCD workers (`SourceStudioCharacterPreview.assemble`). The
-// batch's workers now have the main thread's 8 MiB
-// (`SourceStudioCharacterBatch.stackSize`), where every other scene path
-// runs.
+// recurses once per nesting level, and so do the legacy upgrade, the
+// insertion stage, the export's edit, the layout import and a record
+// comparison. The reader accepts `KoikatsuBinaryReader.maximumLevels`
+// (65 before #326). Each of those operations runs on the decode stack
+// (`SourceStudioCharacterBatch.onDecodeStack`, `stackSize`): in line on a
+// thread that has it (the character batch's workers), otherwise on a thread
+// of its own. The walks left on a caller's stack fit half the main thread's
+// 8 MiB, and no deep tree is released on a GCD worker's 512 KiB.
 //
 // The scenes here are synthetic, written by `TopologyScene`, never a user
 // scene: nested folders, and nested characters each held by the previous
 // one's accessory point (a character level adds `character(depth:)`'s
 // frame, the deepest chain per level). Writing and releasing them recurse
-// too, so the tests do both on a thread of their own with 8 MiB
-// (`liveTickOffPool`), never on the Swift concurrency pool's 512 KiB.
+// too, so the tests do both on threads of 8 MiB or more (`liveTickOffPool`,
+// `onThread`), never on the Swift concurrency pool's 512 KiB.
 
 /// The deepest scene the reader accepts.
 private let deepestLevels = KoikatsuBinaryReader.maximumLevels
 private let gcdWorkerStack = 512 * 1024
+private let mainThreadStack = 8 << 20
+/// Larger than the decode stack: every operation runs in line on it, so
+/// `stackTaken` sees all of it.
+private let measuringStack = 96 << 20
 
 private enum DeepChain: String, CaseIterable { case folders, characters }
 
@@ -42,6 +45,27 @@ private func deepScene(levels: Int, chain: DeepChain) -> Data {
         case .characters:
             let groups: [(point: Int32, children: [TopologyNode])] = [(point: Int32(0), children: node.map { [$0] } ?? [])]
             node = .character(key, groups)
+            scene.lookAt[key] = 1000 + key
+        }
+    }
+    scene.roots = node.map { [$0] } ?? []
+    return scene.data
+}
+
+/// Every kind that holds children, in turn: a folder holds an item, which
+/// holds a route, which holds a character, whose accessory point 0 holds
+/// the next folder, down to object `levels - 1`.
+private func mixedScene(levels: Int) -> Data {
+    var scene = TopologyScene(roots: [])
+    var node: TopologyNode?
+    for key in stride(from: Int32(levels - 1), through: 0, by: -1) {
+        let children = node.map { [$0] } ?? []
+        switch key % 4 {
+        case 0: node = .folder(key, children)
+        case 1: node = .item(key, children)
+        case 2: node = .route(key, children)
+        default:
+            node = .character(key, [(point: Int32(0), children: children)])
             scene.lookAt[key] = 1000 + key
         }
     }
@@ -65,6 +89,67 @@ private func temporaryFolder() throws -> URL {
     let folder = FileManager.default.temporaryDirectory.appendingPathComponent("ikkoku-321-\(UUID().uuidString)", isDirectory: true)
     try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
     return folder
+}
+
+/// A 0.0.7 scene of nested folders: the legacy upgrade reads it twice and
+/// compares its records.
+private func deepLegacyFolders(levels: Int) -> Data {
+    var out = SceneDocumentBytes(data: OriginalCardFixture.png)
+    out.s("0.0.7"); out.i(1); out.i(0)
+    for key in 0..<Int32(levels) { out.header(3, key); out.s("Folder"); out.i(key == Int32(levels - 1) ? 0 : 1) }
+    out.tail()
+    return out.data
+}
+
+/// Runs `body` on a thread of its own with `stack` bytes.
+private func onThread<T: Sendable>(stack: Int, _ body: @escaping @Sendable () throws -> T) async throws -> T {
+    try await withCheckedThrowingContinuation { continuation in
+        let thread = Thread { continuation.resume(with: Result { try body() }) }
+        thread.stackSize = stack
+        thread.qualityOfService = .userInitiated
+        thread.start()
+    }
+}
+
+/// #326: runs `body` on the decode stack, as the Studio's scene operations
+/// do. A record comparison (`KoikatsuObjectRecord.==`) recurses through both
+/// subtrees, and in Debug it stops the process on any smaller stack.
+func onDecodeStack<T: Sendable>(_ body: @escaping @Sendable () throws -> T) throws -> T {
+    try SourceStudioCharacterBatch.onDecodeStack("Ikkoku test", body)
+}
+
+/// What a thread smaller than the deepest release must not drop: it keeps
+/// its inputs and results here, and the test drops them on a thread of
+/// 8 MiB or more.
+private final class Kept: @unchecked Sendable {
+    private let lock = NSLock()
+    private var values: [String: Any] = [:]
+    subscript<T>(_ key: String) -> T {
+        lock.lock(); defer { lock.unlock() }
+        return values[key] as! T
+    }
+    func keep(_ key: String, _ value: Any) { lock.lock(); values[key] = value; lock.unlock() }
+    /// Drops one value on the calling thread.
+    func drop(_ key: String) {
+        lock.lock(); let dropped = values.removeValue(forKey: key); lock.unlock()
+        withExtendedLifetime(dropped) {}
+    }
+    /// Drops every value on the calling thread.
+    func dropAll() {
+        lock.lock(); let dropped = values; values = [:]; lock.unlock()
+        withExtendedLifetime(dropped) {}
+    }
+}
+
+/// Depth first, every record of the tree with its level (roots are 1).
+private func levelCount(_ roots: [KoikatsuObjectRecord]) -> (records: Int, levels: Int) {
+    var stack = roots.map { ($0, 1) }, records = 0, levels = 0
+    while let (record, level) = stack.popLast() {
+        records += 1; levels = max(levels, level)
+        stack += record.children.map { ($0, level + 1) }
+        for children in (record.character?.accessoryChildren ?? [:]).values { stack += children.map { ($0, level + 1) } }
+    }
+    return (records, levels)
 }
 
 /// The stack `body` takes below the caller's frame, in bytes. The thread's
@@ -107,13 +192,52 @@ private final class Observed: @unchecked Sendable {
         do { _ = try KoikatsuSceneReader.decodeDocument(deepScene(levels: deepestLevels + 1, chain: .folders)); return (depth, "decoded") }
         catch { return (depth, String(describing: error)) }
     }
-    #expect(deepest == deepestLevels && deepestLevels == 200)
-    #expect(refusal == #"limitExceeded("objects nested more than 200 levels deep (Ikkoku reads at most 200)")"#)
+    #expect(deepest == deepestLevels)
+    #expect(refusal == #"limitExceeded("objects nested more than \#(deepestLevels) levels deep (Ikkoku reads at most \#(deepestLevels))")"#)
+}
+
+/// The cap on each chain (#326): nested folders, nested characters and the
+/// mixed chain (`mixedScene`). 65 levels (the cap before #326) and the cap
+/// decode, and a no-edit export of the cap writes the same bytes. One level
+/// more is refused with the cap's message, and so is a scene twice as deep,
+/// at the cap: its refusal takes no more stack than the cap's decode.
+@Test func eachChainDecodesToTheCapAndIsRefusedPastIt() async throws {
+    let refused = #"limitExceeded("objects nested more than \#(deepestLevels) levels deep (Ikkoku reads at most \#(deepestLevels))")"#
+    for chain in ["folders", "characters", "mixed"] {
+        @Sendable func scene(_ levels: Int) -> Data {
+            switch chain {
+            case "folders": deepScene(levels: levels, chain: .folders)
+            case "characters": deepScene(levels: levels, chain: .characters)
+            default: mixedScene(levels: levels)
+            }
+        }
+        // Where it all runs in line, so that `stackTaken` sees every frame.
+        let outcome = try await onThread(stack: measuringStack) { () -> (levels: [Int], identical: Bool, refusals: [String], cap: Int, twice: Int) in
+            let levels = try [65, deepestLevels].map { levelCount(try KoikatsuSceneReader.decodeDocument(scene($0)).snapshot.roots).levels }
+            let data = scene(deepestLevels)
+            var document: KoikatsuSceneDocument?
+            let cap = try stackTaken { document = try KoikatsuSceneReader.decodeDocument(data) }
+            let identical = try document?.editedData(SourceSceneEdits()) == data
+            document = nil
+            func refusal(_ data: Data) -> String {
+                do { _ = try KoikatsuSceneReader.decodeDocument(data); return "decoded" } catch { return String(describing: error) }
+            }
+            var refusals = [refusal(scene(deepestLevels + 1))]
+            let twiceAsDeep = scene(2 * deepestLevels)
+            let twice = stackTaken { refusals.append(refusal(twiceAsDeep)) }
+            return (levels, identical, refusals, cap, twice)
+        }
+        print("[#326 deep stack] \(chain): the cap's decode took \(outcome.cap / 1024) KiB, the refusal of \(2 * deepestLevels) levels \(outcome.twice / 1024) KiB")
+        #expect(outcome.levels == [65, deepestLevels], "\(chain)")
+        #expect(outcome.identical, "\(chain): the no-edit export changed the scene")
+        #expect(outcome.refusals == [refused, refused], "\(chain)")
+        #expect(outcome.twice < outcome.cap + 64 * 1024, "\(chain): \(outcome.twice) bytes against \(outcome.cap)")
+    }
 }
 
 /// The negative control: the stack the first half takes on the deepest
-/// scenes the reader accepts, measured on an 8 MiB thread, against a GCD
-/// worker's 512 KiB. Release takes far less, so only Debug is held to it.
+/// scenes the reader accepts, measured where it all runs in line, against a
+/// GCD worker's 512 KiB. Release takes far less, so only Debug is held to it.
 @Test(.enabled(if: MTLCreateSystemDefaultDevice() != nil, "Requires a Metal device for the store"))
 func theDeepestScenesFirstHalfNeedsMoreThanAGCDWorkersStack() async throws {
     let resources = ResourceStore(device: try #require(MTLCreateSystemDefaultDevice()))
@@ -121,7 +245,7 @@ func theDeepestScenesFirstHalfNeedsMoreThanAGCDWorkersStack() async throws {
     defer { try? FileManager.default.removeItem(at: folder) }
     var taken: [DeepChain: (decode: Int, release: Int, firstHalf: Int, outcome: String)] = [:]
     for chain in DeepChain.allCases {
-        taken[chain] = try await liveTickOffPool { () -> (decode: Int, release: Int, firstHalf: Int, outcome: String) in
+        taken[chain] = try await onThread(stack: measuringStack) { () -> (decode: Int, release: Int, firstHalf: Int, outcome: String) in
             let data = deepScene(levels: deepestLevels, chain: chain)
             let reference = try deepReference(data, chain: chain, in: folder)
             // The decode alone (its result is kept), then the release alone.
@@ -141,10 +265,11 @@ func theDeepestScenesFirstHalfNeedsMoreThanAGCDWorkersStack() async throws {
         #expect(measured.outcome == "Source character record is missing.", "\(chain.rawValue)")
         // The batch's workers hold it with half their stack to spare.
         #expect(measured.firstHalf < SourceStudioCharacterBatch.stackSize / 2, "\(chain.rawValue): \(measured.firstHalf) bytes")
-        // Releasing the tree recurses too, but far less: a decoded document or
-        // character record dropped on a GCD queue (the Studio's build queue)
-        // is safe at this depth.
-        #expect(measured.release < gcdWorkerStack / 2, "\(chain.rawValue): \(measured.release) bytes")
+        // Releasing the tree recurses too, but far less: the main thread holds
+        // it. No deep tree dies on a GCD worker: a preview's record is shallow
+        // (`theDeepestPreviewRecordHoldsNoSubtree`), and so is the hidden card
+        // check's (`theHiddenCardCheckHoldsNoSceneSubtree`).
+        #expect(measured.release < mainThreadStack / 2, "\(chain.rawValue): \(measured.release) bytes")
     }
     #if DEBUG
     let deepest = taken.values.map { $0.firstHalf }.max() ?? 0
@@ -175,79 +300,101 @@ func theCharacterBatchDecodesTheDeepestScenesOnItsOwnStack() async throws {
             && observed.stackSizes.allSatisfy { $0 >= SourceStudioCharacterBatch.stackSize }, "\(observed.stackSizes)")
 }
 
-/// The main thread's scene paths on the deepest scenes the reader accepts,
-/// measured on an 8 MiB thread (the main thread's size): the export's
-/// read walk, its topology writer and read-backs (a move of the deepest
-/// object, and a deletion of the deepest folder or the root character), the
-/// insertion writer and read-back (a record at the cap, and a folder's
-/// refusal one level past it), the layout import (folders only; it imports
-/// folders and items), and the record walks of the import and export.
-@Test func theMainThreadPathsHoldTheDeepestScenes() async throws {
+/// Each scene path's stack (`stackTaken`) on the deepest scenes the reader
+/// accepts, what it counted, and a folder's refusal one level past the cap:
+/// the decode, the legacy upgrade (folders), the export (a move of the
+/// deepest object, and a deletion of the deepest folder or the root
+/// character), the insertion stage (a record at the cap), the layout import
+/// (folders; it imports folders and items) and the record walks of the
+/// import and export.
+private func scenePaths(_ chain: DeepChain) throws -> (taken: [String: Int], counts: [String: Int], refusal: String?) {
     let deepest = Int32(deepestLevels - 1)
-    for chain in DeepChain.allCases {
-        // Checks stay in the test's task: the thread returns what they compare.
-        let (taken, counts, refusal) = try await liveTickOffPool { () -> ([String: Int], [String: Int], String?) in
-            let data = deepScene(levels: deepestLevels, chain: chain)
-            let document = try KoikatsuSceneReader.decodeDocument(data)
-            var taken: [String: Int] = [:], counts: [String: Int] = [:]
-            func exported(_ edits: SourceSceneEdits) throws -> Int {
-                let edited = try document.editedData(edits)
-                return SourceSceneInsertionPlan.records(try KoikatsuSceneReader.decodeDocument(edited).snapshot).count
-            }
-            let moved = KoikatsuChangeAmount(position: SIMD3(1, 2, 3), rotationDegrees: .zero, scale: .one)
-            taken["export (move the deepest)"] = try stackTaken {
-                counts["export (move)"] = try exported(.init(transforms: [.init(.object(deepest), transform: moved)]))
-            }
-            // The export refuses to delete a character's accessory child on
-            // its own, so the nested characters go from the root down.
-            let deletion: Int32 = chain == .folders ? deepest : 0
-            taken["export (delete \(chain == .folders ? "the deepest" : "the root"))"] = try stackTaken {
-                counts["export (delete)"] = try exported(.init(deletions: [deletion]))
-            }
-            // The export adds nothing onto a character's accessory point but
-            // a duplicate beside its original, so the nested characters take
-            // a copy of the deepest, and only a folder can pass the cap.
-            let atTheCap: SourceSceneInsertion = chain == .folders
-                ? .init(.folder(name: "New"), parent: .source(deepest - 1))
-                : .init(.duplicate(of: deepest), parent: .source(deepest - 1), attachment: 0)
-            taken["insertion (at the cap)"] = try stackTaken {
-                let stage = try document.inserting([atTheCap])
-                counts["insertion"] = SourceSceneInsertionPlan.records(stage.document.snapshot).count
-            }
-            var refusal: String?
-            if chain == .folders {
-                refusal = "inserted"
-                taken["insertion (a folder past the cap)"] = stackTaken {
-                    do { _ = try document.inserting([.init(.folder(name: "New"), parent: .source(deepest))]) }
-                    catch { refusal = String(describing: error) }
-                }
-            }
-            taken["record walks"] = stackTaken {
-                counts["records"] = SourceSceneInsertionPlan.records(document.snapshot).count
-                _ = SourceSceneInsertionPlan.usedKeys(document.snapshot)
-                _ = SourceStudioCameraObjects.activeAtLoad(document.snapshot)
-                _ = SourceStudioRoutePlayback.samples(in: document.snapshot, elapsed: 0)
-            }
-            if chain == .folders {
-                let catalog = try JSONDecoder().decode(KoikatsuAssetCatalog.self, from: Data(#"{"version": 1, "items": []}"#.utf8))
-                taken["layout import"] = try stackTaken {
-                    let imported = try KoikatsuLayoutImporter.convert(document.snapshot, catalog: catalog,
-                                                                      catalogDirectory: FileManager.default.temporaryDirectory)
-                    counts["layout import"] = imported.objects.count
-                }
-            }
-            return (taken, counts, refusal)
+    let data = deepScene(levels: deepestLevels, chain: chain)
+    var taken: [String: Int] = [:], counts: [String: Int] = [:]
+    var decoded: KoikatsuSceneDocument?
+    taken["decode"] = try stackTaken { decoded = try KoikatsuSceneReader.decodeDocument(data) }
+    let document = decoded!
+    decoded = nil
+    func exported(_ edits: SourceSceneEdits) throws -> Int {
+        let edited = try document.editedData(edits)
+        return SourceSceneInsertionPlan.records(try KoikatsuSceneReader.decodeDocument(edited).snapshot).count
+    }
+    let moved = KoikatsuChangeAmount(position: SIMD3(1, 2, 3), rotationDegrees: .zero, scale: .one)
+    taken["export (move the deepest)"] = try stackTaken {
+        counts["export (move)"] = try exported(.init(transforms: [.init(.object(deepest), transform: moved)]))
+    }
+    // The export refuses to delete a character's accessory child on its own,
+    // so the nested characters go from the root down.
+    let deletion: Int32 = chain == .folders ? deepest : 0
+    taken["export (delete \(chain == .folders ? "the deepest" : "the root"))"] = try stackTaken {
+        counts["export (delete)"] = try exported(.init(deletions: [deletion]))
+    }
+    // The export adds nothing onto a character's accessory point but a
+    // duplicate beside its original, so the nested characters take a copy of
+    // the deepest, and only a folder can pass the cap.
+    let atTheCap: SourceSceneInsertion = chain == .folders
+        ? .init(.folder(name: "New"), parent: .source(deepest - 1))
+        : .init(.duplicate(of: deepest), parent: .source(deepest - 1), attachment: 0)
+    taken["insertion (at the cap)"] = try stackTaken {
+        let stage = try document.inserting([atTheCap])
+        counts["insertion"] = SourceSceneInsertionPlan.records(stage.document.snapshot).count
+    }
+    var refusal: String?
+    if chain == .folders {
+        refusal = "inserted"
+        taken["insertion (a folder past the cap)"] = stackTaken {
+            do { _ = try document.inserting([.init(.folder(name: "New"), parent: .source(deepest))]) }
+            catch { refusal = String(describing: error) }
         }
-        for (path, bytes) in taken.sorted(by: { $0.key < $1.key }) {
-            print("[#326 deep stack] \(deepestLevels) nested \(chain.rawValue), \(path): \(bytes / 1024) KiB of stack")
+        let legacy = try KoikatsuSceneReader.decodeDocument(deepLegacyFolders(levels: deepestLevels))
+        taken["legacy upgrade"] = try stackTaken {
+            let upgraded = try legacy.upgraded()
+            counts["legacy upgrade"] = upgraded.isLegacy ? 0 : levelCount(upgraded.snapshot.roots).levels
+        }
+        let catalog = try JSONDecoder().decode(KoikatsuAssetCatalog.self, from: Data(#"{"version": 1, "items": []}"#.utf8))
+        taken["layout import"] = try stackTaken {
+            let imported = try KoikatsuLayoutImporter.convert(document.snapshot, catalog: catalog,
+                                                              catalogDirectory: FileManager.default.temporaryDirectory)
+            counts["layout import"] = imported.objects.count
+        }
+    }
+    taken["record walks"] = stackTaken {
+        counts["records"] = SourceSceneInsertionPlan.records(document.snapshot).count
+        _ = SourceSceneInsertionPlan.usedKeys(document.snapshot)
+        _ = SourceStudioCameraObjects.activeAtLoad(document.snapshot)
+        _ = SourceStudioRoutePlayback.samples(in: document.snapshot, elapsed: 0)
+        _ = document.snapshot.containsCharacter
+    }
+    return (taken, counts, refusal)
+}
+
+/// The scene paths on the deepest scenes (`scenePaths`), twice. Where
+/// everything runs in line, each takes less than half the decode stack. On a
+/// thread of the main thread's 8 MiB, the routed operations hop
+/// (`onDecodeStack`), and what stays on the caller takes less than half of
+/// it.
+@Test func theScenePathsHoldTheDeepestScenesOnHalfOfEachStack() async throws {
+    for chain in DeepChain.allCases {
+        // Checks stay in the test's task: the threads return what they compare.
+        let inLine = try await onThread(stack: measuringStack) { try scenePaths(chain) }
+        for (path, bytes) in inLine.taken.sorted(by: { $0.key < $1.key }) {
+            print("[#326 deep stack] \(deepestLevels) nested \(chain.rawValue), \(path): \(bytes / 1024) KiB of stack in line")
             #expect(bytes < SourceStudioCharacterBatch.stackSize / 2, "\(chain.rawValue), \(path): \(bytes) bytes")
+        }
+        // A decode stack no larger than the main thread's would run all of it
+        // in line on the 8 MiB thread below, and overflow it.
+        try #require(SourceStudioCharacterBatch.stackSize > mainThreadStack, "\(SourceStudioCharacterBatch.stackSize) bytes")
+        let onMain = try await onThread(stack: mainThreadStack) { try scenePaths(chain) }
+        for (path, bytes) in onMain.taken.sorted(by: { $0.key < $1.key }) {
+            print("[#326 deep stack] \(deepestLevels) nested \(chain.rawValue), \(path): \(bytes / 1024) KiB on the caller's stack")
+            #expect(bytes < mainThreadStack / 2, "\(chain.rawValue), \(path): \(bytes) bytes on the caller")
         }
         var expected = ["export (move)": deepestLevels, "export (delete)": chain == .folders ? deepestLevels - 1 : 0,
                         "insertion": deepestLevels + 1, "records": deepestLevels]
-        if chain == .folders { expected["layout import"] = deepestLevels }
-        #expect(counts == expected, "\(chain.rawValue)")
-        let capRefusal = #"limitExceeded("objects nested more than 200 levels deep (Ikkoku reads at most 200)")"#
-        #expect(refusal == (chain == .folders ? capRefusal : nil), "\(chain.rawValue)")
+        if chain == .folders { expected["layout import"] = deepestLevels; expected["legacy upgrade"] = deepestLevels }
+        #expect(inLine.counts == expected && onMain.counts == expected, "\(chain.rawValue)")
+        let capRefusal = "limitExceeded(\"objects nested more than \(deepestLevels) levels deep (Ikkoku reads at most \(deepestLevels))\")"
+        #expect(inLine.refusal == (chain == .folders ? capRefusal : nil) && onMain.refusal == inLine.refusal, "\(chain.rawValue)")
     }
 }
 
@@ -374,6 +521,26 @@ private struct DecodeThreadState: Sendable, Equatable {
                  rounds, sorted[rounds / 2], sorted[rounds * 95 / 100]))
 }
 
+private final class Handed: Sendable {}
+
+/// The decode thread hands its result over and keeps none of it (#326):
+/// once the caller drops what came back, it is gone while the thread still
+/// exists (it waits in `afterHandOff` until the check is done). A decoded
+/// tree therefore dies where its caller drops it
+/// (`theDeepestPreviewRecordHoldsNoSubtree`).
+@Test func theDecodeThreadKeepsNoReferenceToItsResult() {
+    let checked = DispatchSemaphore(value: 0)
+    defer { checked.signal() }
+    weak var handed: Handed?
+    do {
+        let value = SourceStudioCharacterBatch.onDecodeThread("Ikkoku test", afterHandOff: {
+            _ = checked.wait(timeout: .now() + 10)
+        }) { Handed() }
+        handed = value
+    }
+    #expect(handed == nil, "the decode thread kept its result")
+}
+
 /// The clock's warm-up (#326, P1) runs on a utility GCD worker and reads
 /// its scene there; the read, the decode and the drop of the records run on
 /// the decode thread instead (`readSeeds`). On the deepest character chain
@@ -432,4 +599,190 @@ private struct DecodeThreadState: Sendable, Equatable {
     #expect(hadChild && child == nil)
     #expect(check.records.count == 1 && check.records.allSatisfy { $0.accessoryChildren.isEmpty })
     #expect(check.problems().count == 1)
+}
+
+/// Each operation that walks a decoded tree recursively hops onto the decode
+/// stack from any smaller one (`onDecodeStack`), on the deepest scenes: the
+/// decode, the snapshot decode, the legacy upgrade, the insertion stage, the
+/// export's move and deletion and the layout import, called from a thread
+/// with the main thread's 8 MiB and from one with a GCD worker's 512 KiB.
+/// The 8 MiB caller goes first: there an operation that does not hop fails
+/// the Debug floor (`requireDecodeStack`) instead of overflowing. The
+/// thread only calls them: it keeps every tree it touches, and the test
+/// drops them on an 8 MiB thread (a 512 KiB stack cannot release the
+/// deepest).
+@Test func everyRoutedOperationRunsFromASmallerStack() async throws {
+    let deepest = Int32(deepestLevels - 1)
+    let kept = Kept()
+    // Written and decoded off the pool: both recurse.
+    try await liveTickOffPool {
+        let folders = deepScene(levels: deepestLevels, chain: .folders)
+        kept.keep("folders data", folders)
+        kept.keep("characters data", deepScene(levels: deepestLevels, chain: .characters))
+        kept.keep("folders", try KoikatsuSceneReader.decodeDocument(folders))
+        kept.keep("characters", try KoikatsuSceneReader.decodeDocument(kept["characters data"]))
+        kept.keep("legacy", try KoikatsuSceneReader.decodeDocument(deepLegacyFolders(levels: deepestLevels)))
+    }
+    let catalog = try JSONDecoder().decode(KoikatsuAssetCatalog.self, from: Data(#"{"version": 1, "items": []}"#.utf8))
+    let moved = KoikatsuChangeAmount(position: SIMD3(1, 2, 3), rotationDegrees: .zero, scale: .one)
+    for stack in [mainThreadStack, gcdWorkerStack] {
+        let outcome = try await onThread(stack: stack) { () -> String in
+            let folders: KoikatsuSceneDocument = kept["folders"], characters: KoikatsuSceneDocument = kept["characters"]
+            let legacy: KoikatsuSceneDocument = kept["legacy"]
+            // Keys of their own per caller: a replaced value would be released here.
+            func keep(_ name: String, _ value: Any) { kept.keep("\(stack) \(name)", value) }
+            do {
+                keep("decoded", try KoikatsuSceneReader.decodeDocument(kept["characters data"]))
+                keep("snapshot", try KoikatsuSceneReader.decode(kept["folders data"]))
+                keep("upgraded", try legacy.upgraded())
+                keep("staged", try folders.inserting([.init(.folder(name: "New"), parent: .source(deepest - 1))]))
+                keep("moved", try characters.editedData(.init(transforms: [.init(.object(deepest), transform: moved)])))
+                keep("deleted", try folders.editedData(.init(deletions: [deepest])))
+                keep("imported", try KoikatsuLayoutImporter.convert(folders.snapshot, catalog: catalog,
+                                                                    catalogDirectory: FileManager.default.temporaryDirectory))
+                return "ran"
+            } catch { return String(describing: error) }
+        }
+        #expect(outcome == "ran", "from \(stack / 1024) KiB")
+        guard outcome == "ran" else { break }
+        let levels = try await liveTickOffPool { () -> [String: Int] in
+            func value<T>(_ name: String) -> T { kept["\(stack) \(name)"] }
+            let decoded: KoikatsuSceneDocument = value("decoded"), snapshot: KoikatsuSceneSnapshot = value("snapshot")
+            let upgraded: KoikatsuSceneDocument = value("upgraded"), staged: SourceSceneStage = value("staged")
+            let imported: StudioDocument = value("imported"), moved: Data = value("moved"), deleted: Data = value("deleted")
+            return ["decode": levelCount(decoded.snapshot.roots).levels, "snapshot": levelCount(snapshot.roots).levels,
+                    "upgrade": upgraded.isLegacy ? 0 : levelCount(upgraded.snapshot.roots).levels,
+                    "insertion": levelCount(staged.document.snapshot.roots).records,
+                    "move": levelCount(try KoikatsuSceneReader.decodeDocument(moved).snapshot.roots).levels,
+                    "deletion": levelCount(try KoikatsuSceneReader.decodeDocument(deleted).snapshot.roots).levels,
+                    "layout import": imported.objects.count]
+        }
+        #expect(levels == ["decode": deepestLevels, "snapshot": deepestLevels, "upgrade": deepestLevels,
+                           "insertion": deepestLevels + 1, "move": deepestLevels, "deletion": deepestLevels - 1,
+                           "layout import": deepestLevels], "from \(stack / 1024) KiB")
+    }
+    try await liveTickOffPool { kept.dropAll() }
+}
+
+#if DEBUG
+/// A record comparison recurses through both subtrees, so in Debug it is
+/// caught on any stack smaller than the decode stack, here the main
+/// thread's, and passes on the decode stack. A thread holding a
+/// `ComparisonReport` counts it instead of stopping the process.
+@Test func aRecordComparisonOffTheDecodeStackIsCaught() async throws {
+    let data = deepScene(levels: 3, chain: .folders)
+    let one = try KoikatsuSceneReader.decodeDocument(data), two = try KoikatsuSceneReader.decodeDocument(data)
+    // Distinct objects with the same contents: `==` walks both.
+    #expect(one.snapshot.roots[0] !== two.snapshot.roots[0])
+    @Sendable func counted(_ compare: () -> Bool) -> (equal: Bool, caught: Int) {
+        let report = SourceStudioCharacterBatch.ComparisonReport()
+        Thread.current.threadDictionary[SourceStudioCharacterBatch.ComparisonReport.key] = report
+        defer { Thread.current.threadDictionary.removeObject(forKey: SourceStudioCharacterBatch.ComparisonReport.key) }
+        return (compare(), report.count)
+    }
+    let onMain = await MainActor.run { () -> (main: Bool, equal: Bool, caught: Int) in
+        let result = counted { one.snapshot.roots == two.snapshot.roots }
+        return (pthread_main_np() == 1, result.equal, result.caught)
+    }
+    #expect(onMain.main && onMain.equal && onMain.caught == 3, "\(onMain)")
+    let onTheDecodeStack = try onDecodeStack { () -> [Int] in
+        let result = counted { one.snapshot.roots == two.snapshot.roots }
+        return [result.equal ? 1 : 0, result.caught]
+    }
+    #expect(onTheDecodeStack == [1, 0])
+}
+#endif
+
+/// Runs `walk` where it all runs in line, measured, and then, when it took
+/// less than `half`, for real on a thread of `half` bytes: a walk that needs
+/// more fails the expectation instead of overflowing the thread. The walk is
+/// iterative, so its stack does not grow with the depth: a recursion at the
+/// cap took 0.6 MiB (Release) to 9.6 MiB (Debug).
+private func onHalfItsStack<T: Sendable>(_ name: String, half: Int, _ walk: @escaping @Sendable () throws -> T) async throws -> T? {
+    let taken = try await onThread(stack: measuringStack) { () -> Int in
+        var result: T?
+        let bytes = try stackTaken { result = try walk() }
+        withExtendedLifetime(result) {}
+        return bytes
+    }
+    print("[#326 deep stack] \(deepestLevels) levels, \(name): \(taken / 1024) KiB of stack")
+    #expect(taken < 256 * 1024, "\(name): \(taken) bytes, as a recursion takes")
+    #expect(taken < half, "\(name): \(taken) bytes")
+    guard taken < half else { return nil }
+    return try await onThread(stack: half) { try walk() }
+}
+
+/// The walks that stay on a caller's stack (#326), iterative, on half the
+/// main thread's 8 MiB at the deepest scenes: the export's insertions (an
+/// added chain of folders, parents first, in document order), the route
+/// stepping (a route at the deepest level) and whether the tree holds a
+/// character (one at the deepest level, and none).
+@Test func theCallerWalksHoldTheDeepestScenesOnHalfTheMainThreadsStack() async throws {
+    let half = mainThreadStack / 2
+    var document = StudioDocument()
+    var parent: UUID?, chain: [UUID] = []
+    for index in 0..<deepestLevels {
+        var object = StudioObject(name: "Added \(index)", kind: .folder)
+        object.parent = parent; parent = object.id
+        document.objects.append(object); chain.append(object.id)
+    }
+    let second = StudioObject(name: "Second", kind: .folder)
+    document.objects.append(second)
+    let added = document
+    let insertions = try await onHalfItsStack("export insertions", half: half) { () -> [String] in
+        let (insertions, objects) = try SourceSceneExportValidation.insertions(added)
+        return zip(insertions, objects).map { "\($0.parent) \($1)" }
+    }
+    let expected = (0..<deepestLevels).map { "\($0 == 0 ? SourceSceneInsertion.Parent.root : .inserted($0 - 1)) \(chain[$0])" }
+        + ["\(SourceSceneInsertion.Parent.root) \(second.id)"]
+    #expect(insertions == expected)
+
+    // Nested folders down to a route, or a character, at the deepest level.
+    let deepest = Int32(deepestLevels - 1)
+    let kept = Kept()
+    try await liveTickOffPool {
+        for (name, leaf) in [("route", TopologyNode.route(deepest, [])), ("character", .character(deepest, []))] {
+            var node = leaf
+            for key in stride(from: deepest - 1, through: 0, by: -1) { node = .folder(key, [node]) }
+            var scene = TopologyScene(roots: [node])
+            if name == "character" { scene.lookAt[deepest] = 1000 + deepest }
+            kept.keep(name, try KoikatsuSceneReader.decode(scene.data))
+        }
+        kept.keep("folders", try KoikatsuSceneReader.decode(deepScene(levels: deepestLevels, chain: .folders)))
+    }
+    let routes = try await onHalfItsStack("route stepping", half: half) { () -> [Int32] in
+        let scene: KoikatsuSceneSnapshot = kept["route"]
+        return try SourceStudioRoutePlayback.steppedRoutes(in: scene, deltaTimes: [1 / 30]).map(\.sourceKey)
+    }
+    #expect(routes == [deepest])
+    let characters = try await onHalfItsStack("contains a character", half: half) { () -> [Bool] in
+        let character: KoikatsuSceneSnapshot = kept["character"], folders: KoikatsuSceneSnapshot = kept["folders"]
+        return [character.containsCharacter, folders.containsCharacter]
+    }
+    #expect(characters == [true, false])
+    try await liveTickOffPool { kept.dropAll() }
+}
+
+private final class WeakRecord: @unchecked Sendable { weak var value: KoikatsuObjectRecord? }
+
+/// A preview's record is a shallow copy (#326): its assembly takes the
+/// character record without its accessory children (`characterRecord`).
+/// The deepest chain's first character, copied, holds none of the levels
+/// below it: once the scene is dropped, the next level is gone while the
+/// copy lives, so a preview dropped on the Studio's build queue (GCD)
+/// releases no subtree.
+@Test func theDeepestPreviewRecordHoldsNoSubtree() async throws {
+    let kept = Kept(), child = WeakRecord()
+    let held = try await liveTickOffPool { () -> (source: Int, copy: Int) in
+        let scene = try KoikatsuSceneReader.decodeDocument(deepScene(levels: deepestLevels, chain: .characters))
+        let source = scene.snapshot.roots.first?.character
+        child.value = source?.accessoryChildren[0]?.first
+        let copy = try SourceStudioCharacterPreview.characterRecord(0, in: scene)
+        kept.keep("copy", copy)
+        return (source?.accessoryChildren.count ?? 0, copy.accessoryChildren.count)
+    }
+    // The scene is gone (dropped on that 8 MiB thread); the copy is kept.
+    #expect(held.source == 1 && held.copy == 0, "\(held)")
+    #expect(child.value == nil, "the copy holds the next level")
+    try await liveTickOffPool { kept.dropAll() }
 }

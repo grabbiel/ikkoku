@@ -23,7 +23,7 @@ branch was tested or every asset matches the original game. Feature status,
 specific comments and pending tasks are in the linked reports. Shared behavior
 may be discussed in more than one report; one primary owner is listed here.
 
-**1141 files indexed; 1141 assigned; 0 unassigned.**
+**1143 files indexed; 1143 assigned; 0 unassigned.**
 
 Counts include the website and clothes-group additions listed below. Runtime and
 test totals include their specialized role descriptions; this is inventory
@@ -33,20 +33,20 @@ bookkeeping, not a new full source audit.
 | --- | ---: |
 | [App / gameplay / plugins](app-gameplay-and-plugins.md) | 110 |
 | [Character / Maker / mods](character-and-mods.md) | 145 |
-| [Studio / IK / animation](studio.md) | 272 |
+| [Studio / IK / animation](studio.md) | 273 |
 | [Renderer / foundation / assets](renderer-and-foundation.md) | 373 |
-| [Toolchain / verification / historical docs](toolchain-and-verification.md) | 231 |
+| [Toolchain / verification / historical docs](toolchain-and-verification.md) | 232 |
 
 | File role | Files |
 | --- | ---: |
 | App resource metadata / icon | 16 |
 | Build / repository configuration | 9 |
-| Conversion / recovery / verification tool | 268 |
+| Conversion / recovery / verification tool | 269 |
 | Documentation / historical evidence | 65 |
 | Generated asset / catalog / fixture | 205 |
 | Reference host / controlled fixture | 41 |
 | Runtime / shared shader declaration | 246 |
-| Test / validation | 249 |
+| Test / validation | 250 |
 | Public synthetic body/face input fixture | 1 |
 
 ## App / gameplay / plugins
@@ -452,6 +452,7 @@ Feature assessment: [studio.md](studio.md).
 | [Packages/Engine/Tests/EngineTests/SourceStudioCameraObjectsTests.swift](../../Packages/Engine/Tests/EngineTests/SourceStudioCameraObjectsTests.swift) | Test / validation |
 | [Packages/Engine/Tests/EngineTests/SourceStudioCharacterPreviewTests.swift](../../Packages/Engine/Tests/EngineTests/SourceStudioCharacterPreviewTests.swift) | Test / validation |
 | [Packages/Engine/Tests/EngineTests/SourceStudioCharacterBatchTests.swift](../../Packages/Engine/Tests/EngineTests/SourceStudioCharacterBatchTests.swift) | Test / validation |
+| [Packages/Engine/Tests/EngineTests/SourceStudioCardCheckTests.swift](../../Packages/Engine/Tests/EngineTests/SourceStudioCardCheckTests.swift) | Test / validation |
 | [Packages/Engine/Tests/EngineTests/SourceStudioCharacterFrameReuseTests.swift](../../Packages/Engine/Tests/EngineTests/SourceStudioCharacterFrameReuseTests.swift) | Test / validation |
 | [Packages/Engine/Tests/EngineTests/GizmoHandleTests.swift](../../Packages/Engine/Tests/EngineTests/GizmoHandleTests.swift) | Test / validation |
 | [Packages/Engine/Tests/EngineTests/SourceStudioDonationCacheTests.swift](../../Packages/Engine/Tests/EngineTests/SourceStudioDonationCacheTests.swift) | Test / validation |
@@ -1071,6 +1072,7 @@ Feature assessment: [toolchain-and-verification.md](toolchain-and-verification.m
 | [Tools/verification/scenarios/hidden-animation-clock.json](../../Tools/verification/scenarios/hidden-animation-clock.json) | Conversion / recovery / verification tool |
 | [Tools/verification/scenarios/hidden-attachment-status.json](../../Tools/verification/scenarios/hidden-attachment-status.json) | Conversion / recovery / verification tool |
 | [Tools/verification/scenarios/hidden-character-build.json](../../Tools/verification/scenarios/hidden-character-build.json) | Conversion / recovery / verification tool |
+| [Tools/verification/scenarios/ik-guides-hidden.json](../../Tools/verification/scenarios/ik-guides-hidden.json) | Conversion / recovery / verification tool |
 | [Tools/verification/scenarios/inspector-clothes-fit.json](../../Tools/verification/scenarios/inspector-clothes-fit.json) | Conversion / recovery / verification tool |
 | [Tools/verification/scenarios/inspector-clothes-fit-native.json](../../Tools/verification/scenarios/inspector-clothes-fit-native.json) | Conversion / recovery / verification tool |
 | [Tools/verification/scenarios/inspector-edit-deselect.json](../../Tools/verification/scenarios/inspector-edit-deselect.json) | Conversion / recovery / verification tool |

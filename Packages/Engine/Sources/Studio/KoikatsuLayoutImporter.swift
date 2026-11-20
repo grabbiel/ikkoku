@@ -111,8 +111,17 @@ public struct KoikatsuAssetResolver {
 /// material overrides, animation, physics, cameras and scene settings are not applied.
 /// Unsupported or unmapped records fail before the caller changes its document.
 public enum KoikatsuLayoutImporter {
+    /// The walk recurses once per nesting level, so it runs on the decode
+    /// stack (`onDecodeStack`, #326).
     public static func convert(_ scene: KoikatsuSceneSnapshot, catalog: KoikatsuAssetCatalog,
                                catalogDirectory: URL) throws -> StudioDocument {
+        try SourceStudioCharacterBatch.onDecodeStack("Ikkoku layout import") {
+            try convertOnDecodeStack(scene, catalog: catalog, catalogDirectory: catalogDirectory)
+        }
+    }
+
+    private static func convertOnDecodeStack(_ scene: KoikatsuSceneSnapshot, catalog: KoikatsuAssetCatalog,
+                                             catalogDirectory: URL) throws -> StudioDocument {
         let resolver = try KoikatsuAssetResolver(catalog: catalog, directory: catalogDirectory)
         var document = StudioDocument()
         document.name = "CharaStudio object layout"

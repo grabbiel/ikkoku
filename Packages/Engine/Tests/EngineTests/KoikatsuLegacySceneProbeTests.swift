@@ -235,7 +235,14 @@ private struct Comparable {
             for children in record.character?.accessoryChildren.values.map({ $0 }) ?? [] { children.forEach(index) }
             record.children.forEach(index)
         }
-        for _ in 0..<(try reader.count()) { index(try reader.object(depth: 0, rootKey: try reader.int32())) }
+        // The root reads run on the decode stack (#326).
+        let (read, roots) = try onDecodeStack { [reader] () -> (KoikatsuBinaryReader, [KoikatsuObjectRecord]) in
+            var reader = reader, roots: [KoikatsuObjectRecord] = []
+            for _ in 0..<(try reader.count()) { roots.append(try reader.object(depth: 0, rootKey: try reader.int32())) }
+            return (reader, roots)
+        }
+        reader = read
+        roots.forEach(index)
         let objectEnd = reader.offset
         _ = try reader.sceneSettings(); _ = try reader.string(); end = reader.offset
         settings = data.subdata(in: objectEnd..<end)

@@ -152,8 +152,14 @@ public extension KoikatsuSceneDocument {
     /// Writes `insertions` (parents before children) into a copy of this
     /// scene and decodes it. Every original record keeps its bytes and key;
     /// each changed child list gets its new count. Refuses, with the reason,
-    /// anything it cannot place exactly as CharaStudio would.
+    /// anything it cannot place exactly as CharaStudio would. The plan's read,
+    /// the writers, the staged decode and the check recurse once per nesting
+    /// level, so the stage runs on the decode stack (`onDecodeStack`, #326).
     func inserting(_ insertions: [SourceSceneInsertion]) throws -> SourceSceneStage {
+        try SourceStudioCharacterBatch.onDecodeStack("Ikkoku scene insertion") { try stagedOnDecodeStack(insertions) }
+    }
+
+    private func stagedOnDecodeStack(_ insertions: [SourceSceneInsertion]) throws -> SourceSceneStage {
         // Every export stages first: a legacy scene is upgraded here, once,
         // and every later stage reads the 1.0.4.2 document.
         if isLegacy { return try upgraded().inserting(insertions) }

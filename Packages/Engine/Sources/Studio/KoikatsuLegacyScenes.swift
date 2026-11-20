@@ -179,10 +179,14 @@ public extension KoikatsuSceneDocument {
     /// the plug-in trailer included, is kept. Returns `self` for a 1.0.4.2
     /// scene. Refuses, with the reason, a route point without a saved aid
     /// (CharaStudio allocates its key at load from runtime state) and
-    /// pre-0.0.8 eye data that is not two quaternions.
+    /// pre-0.0.8 eye data that is not two quaternions. The second read and
+    /// the read-back's record comparison recurse once per nesting level, so
+    /// both run on the decode stack (`onDecodeStack`, #326).
     func upgraded() throws -> KoikatsuSceneDocument {
         guard isLegacy else { return self }
-        return try readBack(applying(try upgradePatches()))
+        return try SourceStudioCharacterBatch.onDecodeStack("Ikkoku scene upgrade") {
+            try readBack(applying(try upgradePatches()))
+        }
     }
 }
 
