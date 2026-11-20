@@ -1632,6 +1632,20 @@ merge keeps every step. It adds two ops and three `assert` keys:
   redo stack sizes and the document's object count. `test_run.py` checks
   their types.
 
+#454 adds two `assert` keys and one op:
+
+- `canUndo`, `canRedo`: booleans for whether Undo and Redo are enabled. The
+  step fails unless three readings equal the value: the model's published
+  `canUndo`/`canRedo`, the toolbar's `StudioToolbarState(model:)`, and
+  whether the stack holds a step.
+- `observeUndoState` `{key, name, edits, changes}`: `edits` renames of the
+  object (`name` plus the edit's number), each its own gesture, so each
+  records an undo step. Before each rename the op arms
+  `withObservationTracking` on `canUndo` and `canRedo`. An arming fires at
+  most once, so the op counts the renames at which observation fired. The
+  step fails unless that count is `changes` and the renames recorded `edits`
+  steps.
+
 The scenario renames key 1, saves the document and exports the original
 scene. Then:
 1. New Scene leaves 2 undo steps and 0 objects, and Add Folder makes 3.
@@ -1641,8 +1655,17 @@ scene. Then:
 5. Two undos reach the opened scene and stop at 0 undo and 2 redo steps.
    One `assertRejected` control proves a wrong depth fails.
 6. Two redos return.
+7. Two undos go back to 0 undo and 2 redo steps (Undo off, Redo on). A
+   second New Scene, a scene replacement, leaves 1 undo step and turns both
+   over (Undo on, Redo off); its Undo turns them back.
+8. `observeUndoState` renames key 1 three times: 3 undo steps, and
+   observation fires once, at the first rename, the one that turns Undo on
+   and Redo off. One `assertRejected` control proves a wrong `canUndo`
+   fails.
 
-`test_run.py` pins this check's op counts, order and paths.
+Every depth assert also checks `canUndo` and `canRedo`. `test_run.py` pins
+this check's op counts, order and paths, and the observation's 3 edits and
+1 change.
 
 ### Undo window after Undo and Redo (#448)
 

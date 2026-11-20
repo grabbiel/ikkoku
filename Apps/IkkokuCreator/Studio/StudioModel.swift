@@ -287,9 +287,25 @@ final class StudioModel: ViewportInputHandler, LivePacedHandler {
     /// The undo and redo steps (#384). A scene replacement (New Scene, Open,
     /// an original scene import) keeps only the scene it replaced, not the
     /// scenes before it; see `StudioUndoHistory`.
-    private var history = StudioUndoHistory<StudioDocument>()
+    /// Not observed (#454): a view reads the undo state only through
+    /// `canUndo` and `canRedo`, so recording a step does not invalidate it.
+    @ObservationIgnored private var history = StudioUndoHistory<StudioDocument>()
+    /// The steps themselves, not observed: for the scenarios, the perf
+    /// workload and the voice prune. A view reads `canUndo` and `canRedo`.
     var undoStack: [StudioDocument] { history.undoStack }
     var redoStack: [StudioDocument] { history.redoStack }
+    /// Whether Undo and Redo have a step (#454): observed, and written only
+    /// when they flip, so recording a step invalidates the toolbar only when
+    /// a button's state changes. Every write to `history` publishes them
+    /// (`publishUndoState`).
+    private(set) var canUndo = false
+    private(set) var canRedo = false
+    /// After every write to `history`: `record`, `stepBack`, `stepForward`.
+    private func publishUndoState() {
+        let undo = !history.undoStack.isEmpty, redo = !history.redoStack.isEmpty
+        if undo != canUndo { canUndo = undo }
+        if redo != canRedo { canRedo = redo }
+    }
     @ObservationIgnored private var instances: [UUID: CharacterInstance] = [:]
     @ObservationIgnored private var renderStatus = RenderStatusReporter()
     @ObservationIgnored private var sourceInstanceStorage: [UUID: SourceStudioCharacterPreview] = [:]
@@ -2127,6 +2143,7 @@ final class StudioModel: ViewportInputHandler, LivePacedHandler {
     /// The document as it is now, as the newest undo step.
     private func appendUndoSnapshot(replacingScene: Bool = false) {
         history.record(doc, replacingScene: replacingScene)
+        publishUndoState()
     }
 
     /// Closes the edit-coalescing window, so the next edit takes its own undo
@@ -2165,6 +2182,7 @@ final class StudioModel: ViewportInputHandler, LivePacedHandler {
             })
             defer { plugins.abort() }
             history.stepBack(leaving: doc)
+            publishUndoState()
             applyHistoryDocument(candidate, plugins: plugins, resources: resources)
             // #448: Undo is a gesture of its own. Without this an edit right
             // after it joined the step it had just undone: no snapshot, the
@@ -2185,6 +2203,7 @@ final class StudioModel: ViewportInputHandler, LivePacedHandler {
             })
             defer { plugins.abort() }
             history.stepForward(leaving: doc)
+            publishUndoState()
             applyHistoryDocument(candidate, plugins: plugins, resources: resources)
             status = "Redo"
         } catch { status = "Plugin restore: \(error)" }

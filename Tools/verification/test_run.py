@@ -652,7 +652,9 @@ SCENARIO_OPS = {"select", "setVisible", "rename", "toggleCamera", "toggleRoute",
                 # #437: a voice play's input resolution (scene decodes, live-step settles).
                 "assertVoice", "dropVoiceInputs",
                 # #448: one component of the Object tab's Position field.
-                "setPosition"}
+                "setPosition",
+                # #454: observation of Undo/Redo enablement over recorded steps.
+                "observeUndoState"}
 
 # R7 phase 2, item 7: the window-run inspector checks (`"inspectorUI": {"steps": [...]}`).
 INSPECTOR_UI_OPS = {"select", "deselect", "focus", "type", "delete", "undo", "redo", "cycle",
@@ -1167,6 +1169,15 @@ class StudioScenarioLaneTests(unittest.TestCase):
                     # step, which has no gesture before it.
                     self.assertIs(step["sameGesture"], True, "sameGesture is true or absent: %s" % path)
                     self.assertIsNot(step, steps[0], "the first step has no gesture to continue: %s" % path)
+                if op == "observeUndoState":
+                    # #454: `edits` renames of one object, each its own undo
+                    # step; observation of canUndo/canRedo fires at `changes`.
+                    self.assertIs(type(step["key"]), int)
+                    self.assertTrue(step["name"])
+                    self.assertIs(type(step["edits"]), int)
+                    self.assertIs(type(step["changes"]), int)
+                    self.assertGreater(step["edits"], 0)
+                    self.assertIn(step["changes"], range(step["edits"] + 1))
                 if op == "setPosition":
                     self.assertIs(type(step["key"]), int)
                     self.assertIs(type(step["index"]), int)
@@ -1374,13 +1385,17 @@ class StudioScenarioLaneTests(unittest.TestCase):
                                             "characterBuilt", "exportedAnimation", "treeLabel", "view", "render",
                                             "exportIdenticalToSource", "outfit", "clothes", "ik", "expression", "accessoryLabels", "pluginMount",
                                             "children", "absent", "activeCopyOf", "route", "routeLines", "sourceMap",
-                                            "liveSamplers", "undoDepth", "redoDepth", "objectCount", "sourceIK") if k in step]
+                                            "liveSamplers", "undoDepth", "redoDepth", "objectCount", "canUndo", "canRedo", "sourceIK") if k in step]
                     self.assertTrue(declared, "assert declares nothing: %s" % path)
                     for name in ("undoDepth", "redoDepth", "objectCount"):
                         if name in step:
                             # #384: history depths and the document's object count.
                             self.assertIs(type(step[name]), int)
                             self.assertGreaterEqual(step[name], 0)
+                    for name in ("canUndo", "canRedo"):
+                        if name in step:
+                            # #454: Undo/Redo enablement (model, toolbar state, stack).
+                            self.assertIs(type(step[name]), bool)
                     if "characterBuilt" in step:
                         # #373 lazy hidden characters: one source key and whether its character is built.
                         self.assertEqual(set(step["characterBuilt"]), {"key", "built"})
@@ -1608,7 +1623,9 @@ class StudioScenarioLaneTests(unittest.TestCase):
                 # formats on purpose and has no fresh-process partner.
                 self.assertEqual((ops.count("saveDocument"), ops.count("loadDocument")), (1, 1))
                 self.assertEqual((ops.count("export"), ops.count("reimport")), (1, 1))
-                self.assertEqual((ops.count("loadDocumentRejected"), ops.count("importDocument"), ops.count("newScene")), (1, 1, 1))
+                # A second New Scene after two undos (#454): a scene
+                # replacement that flips both Undo and Redo enablement.
+                self.assertEqual((ops.count("loadDocumentRejected"), ops.count("importDocument"), ops.count("newScene")), (1, 1, 2))
                 saved, loaded = ops.index("saveDocument"), ops.index("loadDocument")
                 exported, imported = ops.index("export"), ops.index("reimport")
                 refused, merged = ops.index("loadDocumentRejected"), ops.index("importDocument")
@@ -1622,6 +1639,15 @@ class StudioScenarioLaneTests(unittest.TestCase):
                 self.assertEqual(steps[saved]["path"], steps[merged]["path"])
                 self.assertEqual(steps[exported]["path"], steps[refused]["path"])
                 self.assertEqual(steps[exported]["path"], steps[imported]["path"])
+                # #454: one observation of 3 recorded steps, after the
+                # replacements, firing once (the flip at the first step).
+                self.assertEqual(ops.count("observeUndoState"), 1)
+                observed = steps[ops.index("observeUndoState")]
+                self.assertLess(imported, ops.index("observeUndoState"))
+                self.assertEqual((observed["edits"], observed["changes"]), (3, 1))
+                self.assertEqual((steps[-2]["op"], steps[-1]["op"]), ("assertRejected", "assert"))
+                self.assertIn("canUndo", steps[-2])
+                self.assertIn("canUndo", steps[-1])
             elif "saveDocument" in ops or "loadDocument" in ops:
                 self.assertNotIn("export", ops,
                                  "a save/load scenario must not mix in the "
