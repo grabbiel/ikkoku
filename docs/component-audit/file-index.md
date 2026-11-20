@@ -23,7 +23,7 @@ branch was tested or every asset matches the original game. Feature status,
 specific comments and pending tasks are in the linked reports. Shared behavior
 may be discussed in more than one report; one primary owner is listed here.
 
-**1137 files indexed; 1137 assigned; 0 unassigned.**
+**1139 files indexed; 1139 assigned; 0 unassigned.**
 
 Counts include the website and clothes-group additions listed below. Runtime and
 test totals include their specialized role descriptions; this is inventory
@@ -35,18 +35,18 @@ bookkeeping, not a new full source audit.
 | [Character / Maker / mods](character-and-mods.md) | 145 |
 | [Studio / IK / animation](studio.md) | 273 |
 | [Renderer / foundation / assets](renderer-and-foundation.md) | 373 |
-| [Toolchain / verification / historical docs](toolchain-and-verification.md) | 226 |
+| [Toolchain / verification / historical docs](toolchain-and-verification.md) | 228 |
 
 | File role | Files |
 | --- | ---: |
 | App resource metadata / icon | 16 |
 | Build / repository configuration | 9 |
-| Conversion / recovery / verification tool | 264 |
+| Conversion / recovery / verification tool | 265 |
 | Documentation / historical evidence | 65 |
 | Generated asset / catalog / fixture | 205 |
 | Reference host / controlled fixture | 41 |
 | Runtime / shared shader declaration | 246 |
-| Test / validation | 249 |
+| Test / validation | 250 |
 | Public synthetic body/face input fixture | 1 |
 
 ## App / gameplay / plugins
@@ -1028,6 +1028,7 @@ Feature assessment: [toolchain-and-verification.md](toolchain-and-verification.m
 | [Tools/verification/doctor-samples.json](../../Tools/verification/doctor-samples.json) | Reference host / controlled fixture |
 | [Tools/verification/doctor.py](../../Tools/verification/doctor.py) | Conversion / recovery / verification tool |
 | [Tools/verification/environment.example.json](../../Tools/verification/environment.example.json) | Conversion / recovery / verification tool |
+| [Tools/verification/growth_check.py](../../Tools/verification/growth_check.py) | Conversion / recovery / verification tool |
 | [Tools/verification/inspect_app_bundle.py](../../Tools/verification/inspect_app_bundle.py) | Conversion / recovery / verification tool |
 | [Tools/verification/lanes/app-smoke.json](../../Tools/verification/lanes/app-smoke.json) | Conversion / recovery / verification tool |
 | [Tools/verification/lanes/gameplay-scenarios.json](../../Tools/verification/lanes/gameplay-scenarios.json) | Conversion / recovery / verification tool |
@@ -1136,6 +1137,7 @@ Feature assessment: [toolchain-and-verification.md](toolchain-and-verification.m
 | [Tools/verification/scenarios/undo-scene-replacements.json](../../Tools/verification/scenarios/undo-scene-replacements.json) | Conversion / recovery / verification tool |
 | [Tools/verification/scenarios/visibility-folder.json](../../Tools/verification/scenarios/visibility-folder.json) | Conversion / recovery / verification tool |
 | [Tools/verification/test_doctor.py](../../Tools/verification/test_doctor.py) | Test / validation |
+| [Tools/verification/test_growth_check.py](../../Tools/verification/test_growth_check.py) | Test / validation |
 | [Tools/verification/test_inspect_app_bundle.py](../../Tools/verification/test_inspect_app_bundle.py) | Test / validation |
 | [Tools/verification/test_perf_trace.py](../../Tools/verification/test_perf_trace.py) | Test / validation |
 | [Tools/verification/test_run.py](../../Tools/verification/test_run.py) | Test / validation |
