@@ -1285,11 +1285,18 @@ the state in the step's detail):
   first responder;
 - `layers` counts the layers (masks included), the masked layers, the layers
   that mask to bounds and the views under the window's content view and
-  under the inspector's scroll view.
+  under the inspector's scroll view;
+- `axGeometry` lists every accessibility element in the inspector's scroll
+  area, depth first, with its role, label (else title), value and frame in
+  window points rounded to 0.5 pt, with a sha. The scroll area is the
+  `AXScrollArea` element at the scroll view's frame; with none, the
+  elements whose centre lies in that frame, and the step says so.
 
 There is no pixel op: an in-process render of the inspector
 (`CALayer.render(in:)`), like the `cacheDisplay` captures, draws its
-AppKit controls but none of its SwiftUI content.
+AppKit controls but none of its SwiftUI content. `axGeometry` stands in
+for it; SwiftUI drawing with no accessibility element (backgrounds,
+separators) is compared by neither.
 
 `inspector-kept-controls` (`IKKOKU_STUDIO_HALF_STATE_SCENE`: folder 11,
 character 10, route 20) runs them at six states: folder 11 shown first;

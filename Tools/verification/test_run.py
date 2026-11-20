@@ -670,7 +670,7 @@ INSPECTOR_UI_OPS = {"select", "deselect", "focus", "type", "delete", "undo", "re
                     "selectRow", "scrollWorkspace", "newScene", "addFolders", "eyeFocus",
                     "workspaceBodies",
                     # Added for #440 (kept inspector views hidden by clipping).
-                    "keptControls", "layers"}
+                    "keptControls", "layers", "axGeometry"}
 
 # ST-T11 `editRoute` settings: point edits name the point, route edits do not.
 ROUTE_POINT_SETTINGS = ("delete", "move", "speed", "ease", "connection", "link")
@@ -984,6 +984,16 @@ class StudioScenarioLaneTests(unittest.TestCase):
         check = next(c for c in self.checks if c["id"] == "studio-scenario-inspector-kept-controls")
         self.assertEqual([a["kind"] for a in check["artifacts"]], ["scenario-report"])
 
+    def test_kept_controls_scenario_records_ax_geometry_at_every_state(self):
+        # #440 B1 (rules v6): axGeometry follows every keptControls step.
+        path = os.path.join(run.REPO_ROOT, "Tools/verification/scenarios/inspector-kept-controls.json")
+        with open(path) as handle:
+            steps = json.load(handle)["inspectorUI"]["steps"]
+        kept = [i for i, step in enumerate(steps) if step["op"] == "keptControls"]
+        self.assertEqual(len(kept), 6)
+        for i in kept:
+            self.assertEqual(steps[i + 1], {"op": "axGeometry", "label": steps[i]["label"]})
+
     def check_inspector_ui_steps(self, path, steps):
         self.assertTrue(steps)
         for step in steps:
@@ -1015,7 +1025,7 @@ class StudioScenarioLaneTests(unittest.TestCase):
                     if name in step:
                         self.assertIs(type(step[name]), int)
                         self.assertGreaterEqual(step[name], 1 if name == "count" else 0)
-            if op in ("keptControls", "layers") and "label" in step:
+            if op in ("keptControls", "layers", "axGeometry") and "label" in step:
                 self.assertTrue(step["label"])
             if op == "eyeFocus":
                 self.assertIs(type(step.get("count", 2)), int)

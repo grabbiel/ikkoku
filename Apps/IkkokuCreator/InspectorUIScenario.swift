@@ -40,8 +40,9 @@ struct InspectorUIScenario: Decodable {
         /// focus moves; `capture`: see `eyeFocus(_:studio:moves:capture:settle:)`)
         /// and `"workspaceBodies"` (`label`: `select`, `toggle` or `refresh`;
         /// `count` actions from row `index`: see `workspaceBodies(_:action:count:index:settle:)`).
-        /// Added for #440: `"keptControls"` (see `keptControls(_:)`) and
-        /// `"layers"` (see `layerCounts(_:)`); `label` names the state in the report.
+        /// Added for #440: `"keptControls"` (see `keptControls(_:)`), `"layers"`
+        /// (see `layerCounts(_:)`) and `"axGeometry"` (see `axGeometry(_:)`);
+        /// `label` names the state in the report.
         let op: String
         let key: Int32?
         let keys: [Int32]?
@@ -362,6 +363,9 @@ struct InspectorUIScenario: Decodable {
                 record(step.op, result.ok, (step.label.map { "\($0): " } ?? "") + result.detail)
             case "layers":
                 record(step.op, true, (step.label.map { "\($0): " } ?? "") + Self.layerCounts(window))
+            case "axGeometry":
+                let result = Self.axGeometry(window)
+                record(step.op, result.ok, (step.label.map { "\($0): " } ?? "") + result.detail)
             case "assert":
                 var problems: [String] = []
                 let target = object(step.key)
@@ -1621,6 +1625,74 @@ struct InspectorUIScenario: Decodable {
             return "layers \(layers), masked \(masked), masksToBounds \(bounded), views \(views)"
         }
         return "window: \(count(window.contentView)); inspector: \(count(keptScrollView(window).scroll))"
+    }
+
+    /// `axGeometry`: every accessibility element in the inspector's scroll
+    /// area, depth first, as "role | label | value | x,y,w,h" with the frame in
+    /// window points rounded to 0.5 pt (a non-finite coordinate, as a null
+    /// frame has, written as such); the label is the element's label, else
+    /// its title. The scroll area is the `AXScrollArea` element whose frame is
+    /// the scroll view's (`keptScrollView(_:)`, within 1 pt); with none, the
+    /// elements whose frame's centre lies in the scroll view's frame, and the
+    /// detail says so. The record and its sha must match across builds (#440
+    /// rules v6): the shown content's elements unchanged, the hidden content's
+    /// absent, since they are absent on main.
+    @MainActor static func axGeometry(_ window: NSWindow) -> (ok: Bool, detail: String) {
+        guard let scroll = keptScrollView(window).scroll else { return (false, "no inspector scroll view") }
+        let scrollFrame = scroll.convert(scroll.bounds, to: nil)
+        func get(_ object: NSObject, _ name: String) -> Any? {
+            let selector = NSSelectorFromString(name)
+            guard object.responds(to: selector) else { return nil }
+            return object.perform(selector)?.takeUnretainedValue()
+        }
+        func frame(_ object: NSObject) -> CGRect? {
+            guard object.responds(to: NSSelectorFromString("accessibilityFrame")),
+                  let value = object.value(forKey: "accessibilityFrame") as? NSValue else { return nil }
+            return window.convertFromScreen(value.rectValue)
+        }
+        func text(_ value: Any?) -> String {
+            guard let value else { return "" }
+            if let string = value as? String { return string }
+            if let attributed = value as? NSAttributedString { return attributed.string }
+            if let number = value as? NSNumber { return number.stringValue }
+            return "<\(type(of: value))>"
+        }
+        func half(_ v: CGFloat) -> String {
+            guard v.isFinite else { return v.isNaN ? "nan" : v < 0 ? "-inf" : "inf" }
+            guard abs(v) < 1e9 else { return String(format: "%.3g", Double(v)) }
+            let x = (v * 2).rounded() / 2
+            return x == x.rounded() ? "\(Int(x))" : String(format: "%.1f", Double(x))
+        }
+        func near(_ a: CGRect, _ b: CGRect) -> Bool {
+            abs(a.minX - b.minX) <= 1 && abs(a.minY - b.minY) <= 1 && abs(a.maxX - b.maxX) <= 1 && abs(a.maxY - b.maxY) <= 1
+        }
+        var inArea: [String] = [], byCentre: [String] = [], roles: [String: Int] = [:], centreRoles: [String: Int] = [:]
+        var visited = 0, areas = 0
+        func visit(_ element: Any, depth: Int, inside: Bool) {
+            guard depth < 80, visited < 20_000, let object = element as? NSObject else { return }
+            visited += 1
+            let role = get(object, "accessibilityRole") as? String ?? ""
+            let rect = frame(object)
+            var within = inside
+            if !inside, role == "AXScrollArea", let rect, near(rect, scrollFrame) { within = true; areas += 1 }
+            let label = [text(get(object, "accessibilityLabel")), text(get(object, "accessibilityTitle"))].first { !$0.isEmpty } ?? ""
+            let where_ = rect.map { "\(half($0.minX)),\(half($0.minY)),\(half($0.width)),\(half($0.height))" } ?? "no frame"
+            let line = "\(role) | \(label) | \(text(get(object, "accessibilityValue"))) | \(where_)"
+            if within {
+                inArea.append(line)
+                roles[role, default: 0] += 1
+            } else if let rect, scrollFrame.insetBy(dx: -1, dy: -1).contains(CGPoint(x: rect.midX, y: rect.midY)) {
+                byCentre.append(line)
+                centreRoles[role, default: 0] += 1
+            }
+            for child in get(object, "accessibilityChildren") as? [Any] ?? [] { visit(child, depth: depth + 1, inside: within) }
+        }
+        visit(window, depth: 0, inside: false)
+        let lines = areas > 0 ? inArea : byCentre
+        let counts = (areas > 0 ? roles : centreRoles).keys.sorted().map { "\($0) \((areas > 0 ? roles : centreRoles)[$0]!)" }
+        let source = areas > 0 ? "\(areas) scroll area\(areas == 1 ? "" : "s") at the scroll view's frame" : "no scroll area at the scroll view's frame, by centre"
+        return (true, "\(lines.count) elements (\(source)), sha \(sha(lines)); roles: " + counts.joined(separator: ", ")
+                + "; elements: " + lines.joined(separator: " ; "))
     }
 
     static func sha(_ lines: [String]) -> String {
