@@ -576,18 +576,32 @@ inline float3 mapShadingNormal(ToonVertexOut in, constant MaterialUniforms& mat,
     return n;
 }
 
+/// #380: the sun's shadow visibility for a normal-mapped draw, taken before its shading normal. Under a normal map the
+/// facing test (n.l > 0) waits on the normal sample, and the shadow compares wait on that test. The visibility reads only
+/// worldPos, so it is fetched first, beside the normal sample; mapStandardColor uses it only where the test passes, as
+/// before, so every pixel is unchanged. Draws without a normal map keep the fetch inside the test. -1: not fetched here.
+inline float mapEarlySunShadow(ToonVertexOut in, constant MaterialUniforms& mat, constant MapLightingUniforms& mapLight,
+                               depth2d<float> mapShadow) {
+    if ((mat.flags & MaterialFlagMapNormal) && (mat.flags & MaterialFlagMapSunLit) && mapLight.sunDirection.w > 0.0
+        && in.receive > 0.5 && mapLight.shadowParams.x > 0.0) {
+        return mapShadowVisibility(in.worldPos, mapLight, mapShadow);
+    }
+    return -1.0;
+}
+
 /// The Standard surface from its diffuse GI (the lightmap's or the ambient's) at the unit normal n:
-/// diffColor * gi, the realtime sun with its shadow, and the emission.
+/// diffColor * gi, the realtime sun with its shadow, and the emission. `earlyShadow` is mapEarlySunShadow's value.
 inline float4 mapStandardColor(float4 albedo, float3 n, float3 gi, ToonVertexOut in, constant FrameUniforms& frame,
                                constant MaterialUniforms& mat, constant MapLightingUniforms& mapLight,
-                               texture2d<float> emissionTex, depth2d<float> mapShadow) {
+                               texture2d<float> emissionTex, depth2d<float> mapShadow, float earlyShadow) {
     float3 color = albedo.rgb * mat.oneMinusReflectivity * gi;
     // Facing away from the sun (n.l <= 0) every sun term is multiplied by saturate(n.l) = 0 (mapSunRadiance), so
     // the block adds exactly 0: skipping it (and its shadow compares) leaves every pixel unchanged.
     if ((mat.flags & MaterialFlagMapSunLit) && mapLight.sunDirection.w > 0.0 && dot(n, mapLight.sunDirection.xyz) > 0.0) {
         float atten = 1.0;
         if (in.receive > 0.5 && mapLight.shadowParams.x > 0.0) {
-            atten = mix(1.0, mapShadowVisibility(in.worldPos, mapLight, mapShadow), mapLight.shadowParams.x);
+            float visibility = earlyShadow >= 0.0 ? earlyShadow : mapShadowVisibility(in.worldPos, mapLight, mapShadow);
+            atten = mix(1.0, visibility, mapLight.shadowParams.x);
         }
         float3 v = normalize(frame.cameraPosition.xyz - in.worldPos);
         color += mapLight.sunColor.rgb * atten * mapSunRadiance(n, v, mapLight.sunDirection.xyz, albedo.rgb, mat.oneMinusReflectivity,
@@ -603,8 +617,9 @@ inline float4 mapAmbientLitSurface(ToonVertexOut in, constant FrameUniforms& fra
                                    constant MapLightingUniforms& mapLight, texture2d<float> baseTex, texture2d<float> normalTex,
                                    texture2d<float> emissionTex, depth2d<float> mapShadow) {
     float4 albedo = mapStandardAlbedo(in, mat, baseTex);
+    float earlyShadow = mapEarlySunShadow(in, mat, mapLight, mapShadow);
     float3 n = mapShadingNormal(in, mat, normalTex);
-    return mapStandardColor(albedo, n, mapAmbient(mapLight, n), in, frame, mat, mapLight, emissionTex, mapShadow);
+    return mapStandardColor(albedo, n, mapAmbient(mapLight, n), in, frame, mat, mapLight, emissionTex, mapShadow, earlyShadow);
 }
 
 fragment float4 map_fragment(
@@ -650,13 +665,14 @@ fragment float4 map_fragment(
         return mapAmbientLitSurface(in, frame, mat, mapLight, baseTex, normalTex, emissionTex, mapShadow);
     }
     float4 albedo = mapStandardAlbedo(in, mat, baseTex);
+    float earlyShadow = mapEarlySunShadow(in, mat, mapLight, mapShadow);
     float3 n = mapShadingNormal(in, mat, normalTex);
     float2 luv = float2(in.uv1.x, 1.0 - in.uv1.y);
     float3 gi = decodeLightmapRGBM(lightmap.sample(forcedAnisoClamp, luv), mat.lightmapRange, mat.lightmapExponent);
     if (mat.flags & MaterialFlagMapDirectionalLightmap) {
         gi = decodeDirectionalLightmap(gi, lightmapDirection.sample(forcedAnisoClamp, luv), n);
     }
-    return mapStandardColor(albedo, n, gi, in, frame, mat, mapLight, emissionTex, mapShadow);
+    return mapStandardColor(albedo, n, gi, in, frame, mat, mapLight, emissionTex, mapShadow, earlyShadow);
 }
 
 // ---- ST-A11 map sky: Skybox/Cubemap on a mesh ------------------------------
