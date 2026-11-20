@@ -564,6 +564,9 @@ private struct CaptureRecipe {
         // #409, #446: the field `studio-edit-steps` edits and where its edits run.
         ("IKKOKU_PERF_EDIT_FIELD", ["x", "pose"], ["X", "kinematics", ""]),
         ("IKKOKU_PERF_EDIT_PHASES", ["none", "alternate"], ["Alternate", "on", ""]),
+        // #440: the growth check's park file and the focus probe.
+        ("IKKOKU_PERF_PARK_FILE", ["/runs/c1/park"], [""]),
+        ("IKKOKU_PERF_FOCUS_PROBE", ["8", "1", "64"], ["0", "65", "eight", ""]),
     ]
     for control in controls {
         let outside: [[String]] = [[control.variable]]
