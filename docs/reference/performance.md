@@ -127,6 +127,7 @@ the run.
 | `studio-show-hidden` | as `studio-idle` | Visible on (the inspector's toggle, `StudioModel.update`) for each hidden object of the startup scene that holds source characters (its own flag off, its ancestors shown), in workspace order, each followed by Visible off again (unmeasured), repeated, live animation on. An action's first run shows characters the import left unbuilt, so its ready time holds their builds; later runs find them built. Each action is named `show <source key> (<n> characters)` |
 | `studio-clock-first` | as `studio-idle` | the first clock rebase and the first native save after the import, then repeated, live animation on: `rebase` sets the first drawn character with a converted saved clip to its own animation speed (`setSourceAnimationSpeed`, which bakes every character's clock), `save` is File ▸ Save (`saveScene(to:)`) to a scratch file. The first bake's time is the `sourceClockBake` mark pair |
 | `studio-edit-steps` | as `studio-idle` | #409's memory count and edit cost: `IKKOKU_PERF_EDITS` (default 90) single-object edits of the `IKKOKU_PERF_ACTION_KEY` object through the inspector's call (`StudioModel.update`), each its own undo step, its x position moved 0.001 (or with `IKKOKU_PERF_EDIT_FIELD=pose` its neck rotation in the pose delta turned 0.5); each followed by a same-value write, which takes no undo step (#390), as the control. Each action also records the undo and redo depth and the distinct `objects` buffers the document and both stacks hold, with their malloc bytes (`StudioObjectStorageCensus`), and the live-step settles in its call. With `IKKOKU_PERF_EDIT_PHASES=alternate` each call runs at a fixed point of a live step ([placed edits](#placed-edits-409-446)). After the edits `IKKOKU_PERF_PAUSE_AT` lists it holds for an outside reader. The actions run once, and the run stops after the last |
+| `studio-voice-play` | as `studio-idle`, plus `IKKOKU_STUDIO_VOICE_CATALOG` with at least 3 rows of converted audio | #445, information only: the inspector's Play playlist call (`StudioModel.playSourceVoice`) on the `studio-duplicate` character, whose playlist is first set (`update`) to the catalog's first 3 rows with converted audio. A cycle: Stop all (`stopSourceVoices`, the call New Scene and Open make; unmeasured), then playlist index 0, 0 again, 1, 2 and 1 again, repeated, live animation off. The voice bus renders offline (manual rendering), so nothing reaches the output device and no clip ends or advances. An action is ready when its voice started or failed (the status no longer reads "Loading voice"); `callMs`/`callCpuMs` are the click's own main-thread time and `busyMs` the main thread's busy time until then ([results](#studio-voice-play-445-2026-11-20)) |
 | `maker-tabs` | `IKKOKU_SOURCE_AVATAR` and the Maker library, no card | #440: the bundled character's Maker (the tabbed panel, not the source rig panel), its tabs selected in turn as the segmented control selects them (`MakerModel.tab`), repeated, live animation on. Each switch builds the tab's panel again, the tag and thumbnail grids included. When the original base opens, the workload first uses the source rig panel's "Use bundled prototype" (`closeSourceRig()`); it fails if the tabbed panel still does not show |
 
 Other options:
@@ -293,6 +294,15 @@ locked `PerfDrawLog`. Everything else is recorded on the main thread.
   counted whole, with the launch before the run loop first waits as one
   period. The block holds their total, the longest, and how many exceeded 50
   and 100 ms. `summarize` prints it as a startup line;
+- with launch-time plug-in inputs (`IKKOKU_SOURCE_PLUGIN_PROFILE`,
+  `IKKOKU_STUDIO_PLUGIN_SELECTION`, `IKKOKU_SOURCE_PLUGIN_STEPS` …; #459), the record
+  of their application (`details.launchStudioExecution`). A trace imports its scene in
+  the background, so the inputs wait for the import's commit and apply right after the
+  `sourceSceneReady` mark, before the workload's warmup starts. The record holds the
+  inputs applied, the plug-in packages mounted, whether plug-ins run, the native
+  plug-ins and the characters built
+  ([plugin execution](mods/plugin-execution.md#launch-inputs-wait-for-the-scene-import-459)).
+  Before #459 such a trace never mounted its profile;
 - for the action workloads (`studio-duplicate`, `studio-undo-delete`,
   `studio-redo`, `studio-outfit`, `studio-export`, `studio-load`,
   `studio-select`), each
@@ -7659,3 +7669,130 @@ All 8 units were valid. One head unit's first attempt was invalid
 
 The ranges do not overlap. A dev A/B of the same binaries, run 15 minutes
 earlier, gave 55.5%.
+
+## Studio voice play (#445, 2026-11-20)
+
+The inspector's Play playlist button (`ObjectInspectorSections.swift`)
+calls `StudioModel.playSourceVoice`. Before this change every click did
+all of its work on the main thread:
+
+- read and parsed the whole voice catalog (`SourceStudioVoiceCatalog.load`,
+  up to 16 MiB of JSON; the converter's metadata catalog is 0.9 MiB with
+  6,210 rows);
+- scanned the rows for the selection;
+- read the clip's file and hashed it (SHA-256) against the row's identity;
+- opened it with `AVAudioFile` and decoded all of it.
+
+### What the SHA-256 protects
+
+The converter (`Tools/reverse/studio_voice.py`) names every clip
+`<sha256>.wav` and writes that hash into its catalog row. A play refuses a
+file whose bytes do not hash to the row's identity, so a clip changed or
+swapped on disk after the conversion never plays. The change keeps that:
+only bytes that hashed to the row's identity are ever decoded, and a decoded
+clip is kept under that identity only, never under its file name.
+
+### The change
+
+- **The catalog is parsed once per file** and kept in
+  `SourceStudioVoiceLibrary`, which the audio bus owns. Each play makes one
+  `stat` of the catalog and parses it again when its device, inode, size or
+  modification time changed. `load` also builds a row index, so a play looks
+  its row up instead of scanning.
+- **Decoded clips are kept by identity** (the row's `sha256`), at most
+  32 MiB of PCM, the least recently played dropped first. A clip larger than
+  that is decoded for its play and not kept. A kept identity plays without a
+  file read. A file changed on disk is not read while its identity is kept;
+  after the entry is dropped, the next play reads, hashes and refuses it.
+- **A miss loads off the main thread**, on one serial queue. The status
+  shows "Loading voice…", and the voice starts on the main thread when the
+  clip is ready. Two plays of one identity share one read.
+- **Stale loads are dropped.** A load that a newer play, a Stop or a scene
+  change overtook never starts its voice and never reports, so an error from
+  a stale load cannot overwrite a newer play's status. The player checks its
+  play generation (each play and stop bumps it); the Studio checks a request
+  token per object for the catalog step and that the object's current player
+  is the one reporting.
+- **Releases.** New Scene, Open and an import's commit
+  (`stopSourceVoices`) drop the catalog and every clip, so a scene that
+  never plays a voice holds nothing. The Studio's existing memory-pressure
+  source (`keepSourceDonations`) drops them as well; it exists only while
+  outfit donations are kept, so otherwise the 32 MiB cap is the bound. A
+  load started before a release completes its play but keeps nothing.
+- **The reopen window.** `AVAudioFile` opens the path again after the hash.
+  The file's stat is taken before the read and after the decode, and any
+  change refuses the clip ("Studio voice file changed while it was read;
+  play it again."). This narrows the window between the hash and the
+  decode; it does not close it.
+
+### Correctness
+
+`SourceStudioVoiceLibraryTests` (generated tones and catalogs only):
+
+- the catalog is read once while unchanged and again after a change; a
+  release keeps nothing;
+- a decoded clip equals an independent `AVAudioFile` decode sample for
+  sample; a file changed after its identity was kept is refused on the next
+  read, and the failed load keeps nothing; a file outside the catalog's
+  folder is refused;
+- the clip cache keeps the most recently played within its bytes, never
+  keeps a clip larger than the cache, and keeps nothing from a load that a
+  release overtook;
+- request tokens end on a newer play, a stop and a release;
+- the background play renders the same samples as the immediate play
+  (offline rendering), a kept clip replays with no file read, and of two
+  quick plays only the later one plays and reports;
+- a catalog that names the same file with a new identity plays the file's
+  new audio, not a clip kept for the old identity.
+
+Three mutants each fail a test:
+
+| mutant | failing tests |
+| --- | --- |
+| decode a miss without the hash check | `…ClipsAreDecodedOnlyFromBytesOfTheirIdentity` (3 expectations) |
+| key kept clips by file instead of identity | `…KeptClipsFollowTheirIdentityNotTheirFile`, `…BackgroundPlayRendersTheImmediatePlaysSamples` (4) |
+| drop the player's generation check on a finished load | `…BackgroundPlayRendersTheImmediatePlaysSamples` (1) |
+
+### A/B (information only, 2026-11-20)
+
+`studio-voice-play`, Release builds: base `82c2f34c` (the workload commit)
+against `953d78ed`. ABBA twice under one app-lock hold (08:30–08:34),
+20 s recorded per unit. Every unit ran at 1920×1080 at 60 Hz with the
+monitor off (`Online: Yes` before and after every unit). Indexer processes
+stayed at or below 0.4% CPU; load1 was 1.4–3.1. This is information, not a
+registration.
+
+The catalog is a copy of the converter's metadata catalog (0.9 MiB,
+6,210 rows) in which the first three rows name generated 48 kHz 16-bit
+WAVs: 2 s mono, 6 s mono and 30 s stereo. Real clip sizes need a VM
+conversion; the VM is parked.
+
+A cycle releases everything first (Stop all), so play 0 first, play 1 and
+play 2 are misses and play 0 again and play 1 again are hits. Medians in
+ms over 4 units per arm (28 actions per row, 24 for play 1 again):
+
+| action | base call | head call | head ready | base busy | head busy | base longest stall | head longest stall |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| play 0 first (catalog and clip miss) | 29.8 | 0.3 | 32.4 | 30.3 | 11.1 | 30.3 | 7.1 |
+| play 0 again (hit) | 31.2 | 4.2 | 4.2 | 31.2 | 4.3 | 31.2 | 4.3 |
+| play 1 (clip miss) | 31.2 | 3.1 | 12.8 | 31.2 | 13.3 | 31.2 | 12.4 |
+| play 2 (30 s stereo, miss) | 38.2 | 3.2 | 19.9 | 38.3 | 14.0 | 38.3 | 9.0 |
+| play 1 again (hit) | 31.6 | 4.2 | 4.2 | 31.7 | 4.3 | 31.7 | 4.3 |
+
+- The base's ready time equals its call: all of the work was in the call.
+  `callCpuMs` is within 0.1 ms of `callMs` in both arms.
+- The head's call falls to 1–13% of the base's. On a miss the voice
+  starts later than the base's did (up to 1.09× for the first play, which
+  also parses the catalog in the background), and the main thread stays
+  free meanwhile.
+- `busyMs` counts every main-thread busy period that overlaps the action
+  in full. On a miss that includes the voice's start when the load ends
+  and the status update.
+- The about 4 ms left on a hit is the player's setup: the click disposes
+  the object's previous player, then attaches, connects and schedules a
+  new one. The base pays it too. It was not profiled; reusing the player
+  is a possible follow-up.
+- No action left an error; every action ended "Playing voice playlist.".
+- Memory: after play 1 again, the head's footprint median is 14 MiB above
+  the base's (716.5 against 702.4 MiB). That is the three kept clips
+  (12.5 MiB of PCM) plus the parsed catalog. Stop all releases them.

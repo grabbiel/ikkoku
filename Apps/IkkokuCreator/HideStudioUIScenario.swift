@@ -155,9 +155,9 @@ struct HideStudioUIScenario: Decodable {
                 guard let grabbed = candidates.first(where: { PickIDs.axis(from: studio.pickID(at: $0)) != nil }) else {
                     throw SourcePluginError.runtime("No real guide pixel found for hidden-drag regression.")
                 }
-                let undoDepth = studio.undoStack.count
+                let undoDepth = studio.undoDepth
                 studio.mouseDown(at: grabbed, button: 0, modifiers: [])
-                try check("guideGestureStarted", studio.undoStack.count == undoDepth + 1)
+                try check("guideGestureStarted", studio.undoDepth == undoDepth + 1)
                 let beforeDrag = studio.doc
                 _ = try space()
                 studio.mouseDragged(to: grabbed + SIMD2(30, 20), delta: SIMD2(30, 20), button: 0, modifiers: [])

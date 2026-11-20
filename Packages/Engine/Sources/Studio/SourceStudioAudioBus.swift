@@ -7,6 +7,8 @@ import Scene
 @MainActor public final class SourceStudioAudioBus {
     public let engine: AVAudioEngine
     public let voiceMixer: AVAudioMixerNode
+    /// The voices' parsed catalog and decoded clips, kept between plays (#445).
+    public let voices = SourceStudioVoiceLibrary()
     public var voiceVolume: Float {
         get { voiceMixer.outputVolume }
         set { if newValue.isFinite { voiceMixer.outputVolume = min(max(newValue, 0), 1) } }
@@ -56,18 +58,65 @@ import Scene
         bus.engine.attach(node); bus.engine.attach(rate); bus.engine.attach(mixer)
         rate.rate = pitch; mixer.outputVolume = volume
     }
+    /// Plays playlist entry `index` now: a clip the bus's `voices` hold plays
+    /// at once, another is read, verified and decoded on the caller's thread
+    /// first (offline renders and checks; the Studio uses `start`).
     @discardableResult public func play(index: Int = 0) throws -> Bool {
         guard control.state.playlist.indices.contains(index) else { return control.play(index, available: false) }
         stop()
-        let url: URL
-        do { url = try catalog.asset(control.state.playlist[index], directory: directory) }
-        catch { _ = control.play(index, available: false); diagnostic = String(describing: error); throw error }
-        let file = try AVAudioFile(forReading: url)
-        guard file.length > 0, file.length <= 48_000 * 60 * 20, file.processingFormat.channelCount <= 2,
-              let buffer = AVAudioPCMBuffer(pcmFormat: file.processingFormat, frameCapacity: AVAudioFrameCount(file.length)) else {
-            throw RigError.invalid("Converted Studio voice exceeds its duration/channel bounds.")
+        let clip = try resolve(index)
+        if let buffer = bus.voices.clip(clip.sha256) { try schedule(buffer, index: index); return true }
+        let buffer: AVAudioPCMBuffer
+        do { buffer = try SourceStudioVoiceLibrary.decode(clip, directory: directory) }
+        catch { unavailable(index, error); throw error }
+        bus.voices.insert(buffer, for: clip.sha256)
+        try schedule(buffer, index: index)
+        return true
+    }
+
+    /// How `start` began a play.
+    public enum Start: Sendable, Equatable {
+        /// The clip was cached: it plays now.
+        case playing
+        /// The clip loads off the main thread; `loaded` reports the play.
+        case loading
+        /// The playlist is empty or `index` is outside it.
+        case unavailable
+    }
+
+    /// #445: the Studio's play of playlist entry `index`. A cached clip plays
+    /// at once; another is read, verified and decoded off the main thread
+    /// (`SourceStudioVoiceLibrary.loadClip`), and plays when it is ready
+    /// unless the player stopped or started another play since, which
+    /// discards it without a report. `loaded` reports the play that a load
+    /// started or failed, on the main thread.
+    @discardableResult public func start(index: Int = 0, loaded: @escaping @MainActor (Result<Void, any Error>) -> Void) throws -> Start {
+        guard control.state.playlist.indices.contains(index) else { _ = control.play(index, available: false); return .unavailable }
+        stop()
+        let clip = try resolve(index)
+        if let buffer = bus.voices.clip(clip.sha256) { try schedule(buffer, index: index); return .playing }
+        let expected = generation
+        bus.voices.loadClip(clip, directory: directory) { [weak self] result in
+            guard let self, self.generation == expected else { return }
+            do { try self.schedule(result.get(), index: index); loaded(.success(())) }
+            catch { self.unavailable(index, error); loaded(.failure(error)) }
         }
-        try file.read(into: buffer)
+        return .loading
+    }
+
+    /// The playlist entry's converted clip, or the error a missing row gives.
+    private func resolve(_ index: Int) throws -> SourceStudioVoiceCatalog.Clip {
+        do { return try catalog.clip(control.state.playlist[index]) }
+        catch { unavailable(index, error); throw error }
+    }
+
+    private func unavailable(_ index: Int, _ error: any Error) {
+        _ = control.play(index, available: false); diagnostic = String(describing: error)
+    }
+
+    /// Connects the graph for `buffer` and plays it; at its end the playlist
+    /// advances through `start`, as a click would.
+    private func schedule(_ buffer: AVAudioPCMBuffer, index: Int) throws {
         if connected { bus.engine.disconnectNodeOutput(node); bus.engine.disconnectNodeOutput(rate); bus.engine.disconnectNodeOutput(mixer) }
         bus.engine.connect(node, to: rate, format: buffer.format)
         bus.engine.connect(rate, to: mixer, format: buffer.format)
@@ -79,11 +128,14 @@ import Scene
         node.scheduleBuffer(buffer, completionCallbackType: .dataPlayedBack) { [weak self] _ in
             Task { @MainActor [weak self] in
                 guard let self, self.generation == expected, let next = self.control.completed() else { return }
-                do { _ = try self.play(index: next) } catch { self.diagnostic = String(describing: error) }
+                do {
+                    _ = try self.start(index: next) { [weak self] result in
+                        if case .failure(let error) = result { self?.diagnostic = String(describing: error) }
+                    }
+                } catch { self.diagnostic = String(describing: error) }
             }
         }
         node.play()
-        return true
     }
     public func stop() { generation &+= 1; node.stop(); control.stop() }
     public func dispose() {

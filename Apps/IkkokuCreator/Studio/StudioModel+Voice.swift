@@ -3,6 +3,12 @@ import Studio
 import Scene
 
 extension StudioModel {
+    /// The inspector's Play playlist (#445: off the main thread where it can
+    /// be). The catalog and decoded clips are kept between plays
+    /// (`SourceStudioVoiceLibrary`); a catalog or clip not kept yet loads in
+    /// the background with "Loading voice…" shown, and plays when ready
+    /// unless a newer play, a stop or a scene change came first. A stale
+    /// load never reports.
     func playSourceVoice(_ id: UUID, index: Int = 0) {
         do {
             guard let object = doc.object(id), let path = doc.sourceVoiceCatalogFile ?? ProcessInfo.processInfo.environment["IKKOKU_STUDIO_VOICE_CATALOG"] else {
@@ -15,20 +21,60 @@ extension StudioModel {
             if let previous = sourceVoicePlayers.removeValue(forKey: id) { previous.dispose() }
             let inputs = try sourceVoiceInputs(object)
             let character = try inputs.character.get()
-            let catalogURL = URL(fileURLWithPath: path), catalog = try SourceStudioVoiceCatalog.load(url: catalogURL)
-            sourceAudioBus.voiceVolume = catalog.voiceVolume ?? 1
-            let player = try SourceStudioVoicePlayer(bus: sourceAudioBus, state: object.sourceVoice ?? inputs.initial,
-                catalog: catalog, directory: catalogURL.deletingLastPathComponent(), pitch: character.pitch, volume: catalog.volume(personality: character.personality))
-            sourceVoicePlayers[id] = player
-            if try player.play(index: index) { status = "Playing voice playlist." }
-            else { status = "The voice playlist is empty or the selected index is unavailable." }
+            let voices = sourceAudioBus.voices, request = voices.request(id)
+            if let catalog = voices.cachedCatalog(at: path) {
+                try startSourceVoice(id, index: index, initial: inputs.initial, character: character, catalog: catalog, path: path)
+                return
+            }
+            status = Self.sourceVoiceLoadingStatus
+            voices.loadCatalog(at: path) { [weak self] result in
+                guard let self, voices.isCurrent(id, request) else { return }
+                do { try self.startSourceVoice(id, index: index, initial: inputs.initial, character: character, catalog: result.get(), path: path) }
+                catch { self.status = "Voice: \(error)" }
+            }
         } catch { status = "Voice: \(error)" }
     }
-    func stopSourceVoice(_ id: UUID) { sourceVoicePlayers.removeValue(forKey: id)?.dispose() }
+    /// Plays `id`'s playlist with `catalog`: a new player at the object's
+    /// current voice state, its clip now when kept, else when loaded.
+    private func startSourceVoice(_ id: UUID, index: Int, initial: SourceStudioVoiceState, character: SourceStudioVoiceCharacter,
+                                  catalog: SourceStudioVoiceCatalog, path: String) throws {
+        let bus = sourceAudioBus
+        bus.voiceVolume = catalog.voiceVolume ?? 1
+        let player = try SourceStudioVoicePlayer(bus: bus, state: doc.object(id)?.sourceVoice ?? initial,
+            catalog: catalog, directory: URL(fileURLWithPath: path).deletingLastPathComponent(), pitch: character.pitch,
+            volume: catalog.volume(personality: character.personality))
+        sourceVoicePlayers[id] = player
+        let started = try player.start(index: index) { [weak self, weak player] result in
+            // Only the object's current player reports (`start` already
+            // dropped a load its own stop or replay overtook).
+            guard let self, let player, self.sourceVoicePlayers[id] === player else { return }
+            switch result {
+            case .success: self.status = "Playing voice playlist."
+            case .failure(let error): self.status = "Voice: \(error)"
+            }
+        }
+        switch started {
+        case .playing: status = "Playing voice playlist."
+        case .loading: status = Self.sourceVoiceLoadingStatus
+        case .unavailable: status = "The voice playlist is empty or the selected index is unavailable."
+        }
+    }
+    func stopSourceVoice(_ id: UUID) {
+        sourceVoiceLibrary?.cancelRequest(id)
+        sourceVoicePlayers.removeValue(forKey: id)?.dispose()
+        if status == Self.sourceVoiceLoadingStatus { status = "Voice stopped." }
+    }
+    /// Stops every voice and releases what the voices kept (#445): New
+    /// Scene, Open and an import's commit come here, so a scene that never
+    /// plays a voice holds no catalog or clip.
     func stopSourceVoices() {
         for player in sourceVoicePlayers.values { player.dispose() }
-        sourceVoicePlayers.removeAll(); stopSourceAudioOutput()
+        sourceVoicePlayers.removeAll(); sourceVoiceLibrary?.releaseAll(); stopSourceAudioOutput()
+        if status == Self.sourceVoiceLoadingStatus { status = "Voice stopped." }
     }
+    /// The status while a play waits for its catalog or clip; a stop that
+    /// ends the wait replaces it.
+    static let sourceVoiceLoadingStatus = "Loading voice…"
     func pruneSourceVoices() {
         let ids = Set(doc.objects.filter { $0.sourceCharacter != nil }.map(\.id))
         for id in sourceVoicePlayers.keys.filter({ !ids.contains($0) }) { stopSourceVoice(id) }
@@ -37,9 +83,8 @@ extension StudioModel {
         guard doc.sourceSceneSHA256 != sourceVoiceInputScene else { return }
         sourceVoiceInputScene = doc.sourceSceneSHA256
         var keys = Set<SourceStudioVoiceInputCache.Key>()
-        for document in [doc] + undoStack + redoStack {
-            for object in document.objects { if let reference = object.sourceCharacter { keys.insert(.init(reference)) } }
-        }
+        for object in doc.objects { if let reference = object.sourceCharacter { keys.insert(.init(reference)) } }
+        undoHistory.forEachObject { object in if let reference = object.sourceCharacter { keys.insert(.init(reference)) } }
         sourceVoiceInputCache.retain(keys)
         if let pending = sourceVoicePendingCheck,
            !pending.keys.contains(where: { keys.contains(.init(sceneSHA256: pending.sceneSHA256, objectKey: $0)) }) {

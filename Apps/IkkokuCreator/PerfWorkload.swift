@@ -88,6 +88,13 @@ final class PerfWorkloadDriver {
     /// The temporary folder `studio-export` and `studio-load` write scene
     /// files to, removed when the run stops.
     private var scratchFolder: URL?
+    /// #445 (`studio-voice-play`): true while the action's own background
+    /// work runs, so its `readyMs` and busy time reach the end of that work.
+    /// Nil for every other workload.
+    private var actionPending: (() -> Bool)?
+    /// Whether the pending action waited for `actionPending`: it is then
+    /// ready when the wait ended.
+    private var actionWaited = false
 
     private init(app: AppState, trace: PerfTrace) {
         self.app = app
@@ -277,6 +284,7 @@ final class PerfWorkloadDriver {
         case "studio-show-hidden": try prepareStudioShowHidden()
         case "studio-clock-first": try prepareStudioClockFirst()
         case "studio-edit-steps": try prepareStudioEditSteps()
+        case "studio-voice-play": try prepareStudioVoicePlay()
         default: throw RigError.invalid("unknown workload \(workload)")
         }
     }
@@ -401,9 +409,9 @@ final class PerfWorkloadDriver {
         guard let start = Self.findAxis(.z, around: anchor, pick: studio.pickID(at:)) else {
             throw RigError.invalid("no pixel near bone \(boneID) picks its z rotate ring")
         }
-        let undoDepth = studio.undoStack.count
+        let undoDepth = studio.undoDepth
         PerfTrace.input("mouseDown") { studio.mouseDown(at: start, button: 0, modifiers: []) }
-        guard studio.undoStack.count == undoDepth + 1 else {
+        guard studio.undoDepth == undoDepth + 1 else {
             throw RigError.invalid("mouseDown on the z ring grabbed no guide")
         }
         var last = start
@@ -824,6 +832,52 @@ final class PerfWorkloadDriver {
         InspectorUIScenario.scrollWorkspace(scroll, toEnd: toEnd)
     }
 
+    /// `studio-voice-play` (#445, information only): the inspector's Play
+    /// playlist call (`StudioModel.playSourceVoice`) on `actionTarget`'s
+    /// character. Its playlist is first set, through the UI's write
+    /// (`update`), to the first three rows of the scene's voice catalog
+    /// (`IKKOKU_STUDIO_VOICE_CATALOG`) that have converted audio. A cycle:
+    /// Stop all (`stopSourceVoices`, the call New Scene and Open make;
+    /// unmeasured), then playlist index 0 (the cycle's first play), 0 again,
+    /// 1, 2 and 1 again, repeated, live animation off. The voice bus renders
+    /// offline (manual rendering): nothing reaches the output device and
+    /// nothing pulls the graph, so a clip never ends or advances. An action is
+    /// ready when its voice started or failed: the status no longer reads
+    /// "Loading voice".
+    private func prepareStudioVoicePlay() throws {
+        let studio = try prepareStudioSource(selectKey: nil, liveAnimation: false)
+        let target = try actionTarget(studio)
+        guard target.kind == .character, target.sourceCharacter != nil else {
+            throw RigError.invalid("studio-voice-play needs a source character")
+        }
+        guard let path = studio.doc.sourceVoiceCatalogFile ?? ProcessInfo.processInfo.environment["IKKOKU_STUDIO_VOICE_CATALOG"] else {
+            throw RigError.invalid("studio-voice-play needs IKKOKU_STUDIO_VOICE_CATALOG")
+        }
+        let url = URL(fileURLWithPath: path), catalog = try SourceStudioVoiceCatalog.load(url: url)
+        let rows = Array(catalog.entries.filter { $0.file != nil && $0.sha256 != nil }.prefix(3))
+        guard rows.count == 3 else { throw RigError.invalid("studio-voice-play needs 3 catalog rows with converted audio") }
+        let id = target.id
+        studio.update(id) { $0.sourceVoice = SourceStudioVoiceState(playlist: rows.map(\.selection), repeatMode: 0) }
+        try studio.sourceAudioBus.enableOfflineRendering()
+        actionPending = { [weak studio] in studio?.status.hasPrefix("Loading voice") == true }
+        actionSteps = [("stop all", false, { studio.stopSourceVoices() }),
+                       ("play 0 first", true, { studio.playSourceVoice(id, index: 0) }),
+                       ("play 0 again", true, { studio.playSourceVoice(id, index: 0) }),
+                       ("play 1", true, { studio.playSourceVoice(id, index: 1) }),
+                       ("play 2", true, { studio.playSourceVoice(id, index: 2) }),
+                       ("play 1 again", true, { studio.playSourceVoice(id, index: 1) })]
+        let directory = url.deletingLastPathComponent()
+        trace.details["actionSourceKey"] = Int(target.sourceObjectKey ?? -1)
+        trace.details["voiceCatalog"] = ["file": url.lastPathComponent, "bytes": (try? Data(contentsOf: url).count) ?? -1,
+                                         "rows": catalog.entries.count] as [String: Any]
+        trace.details["voiceClips"] = rows.enumerated().map { index, row -> [String: Any] in
+            let bytes = (try? directory.appendingPathComponent(row.file ?? "").resourceValues(forKeys: [.fileSizeKey]).fileSize) ?? -1
+            return ["index": index, "sha256": String((row.sha256 ?? "").prefix(12)), "bytes": bytes]
+        }
+        trace.details["voiceOutput"] = "offline manual rendering"
+        trace.details["gesture"] = "stop all, play 0, 0, 1, 2, 1 on source key \(target.sourceObjectKey ?? -1), repeated; live animation off"
+    }
+
     /// `studio-edit-steps` (#409): `IKKOKU_PERF_EDITS` single-object edits
     /// of `actionTarget`'s object through the inspector's call
     /// (`StudioModel.update`), each its own undo step (`endUndoCoalescing`
@@ -1010,6 +1064,17 @@ final class PerfWorkloadDriver {
         let placement: Placement?
         let serialSteps: Int
         let pendingWork: Int
+        /// #446: the call's `update` writes, and those that copied the
+        /// document's object list (0 when nothing else holds it).
+        let updateWrites: Int
+        let updateWritesMoved: Int
+        /// Copies a whole-document step owed (it shared the list).
+        let updateWritesOwed: Int
+        /// Copies a pending export held (it keeps the document it was chosen for).
+        let updateWritesExportHeld: Int
+        /// #446: the model's `undoPatchConversions` at the call's start; a
+        /// row records the conversions from it to the next action's call.
+        let patchConversionsAtCall: Int
     }
 
     /// Arms the Studio's `livePhaseHook` so the action's call runs at the next
@@ -1041,6 +1106,9 @@ final class PerfWorkloadDriver {
         let studio = countLiveSettles ? app.studio : nil
         let settles = studio?.livePendingSettles ?? 0, waits = studio?.liveUnfinishedWaits ?? 0
         let pendingWork = studio?.pendingSourceActionWork ?? 0
+        let writes = studio?.updateWrites ?? 0, moved = studio?.updateWritesMoved ?? 0, owed = studio?.updateWritesOwed ?? 0
+        let exportHeld = studio?.updateWritesExportHeld ?? 0
+        let conversions = studio?.undoPatchConversions ?? 0
         let bodies = Self.workspaceBodyViews.map(PerfTrace.bodyCount)
         let cpu = clock_gettime_nsec_np(CLOCK_THREAD_CPUTIME_ID)
         let start = CACurrentMediaTime()
@@ -1051,7 +1119,11 @@ final class PerfWorkloadDriver {
             LiveCall(pendingSettles: studio.livePendingSettles &- settles, unfinishedWaits: studio.liveUnfinishedWaits &- waits,
                      placement: placement,
                      serialSteps: placement.map { PerfTrace.eventCount(.studioLiveTickSerial) - $0.serialSteps } ?? 0,
-                     pendingWork: pendingWork)
+                     pendingWork: pendingWork,
+                     updateWrites: studio.updateWrites &- writes, updateWritesMoved: studio.updateWritesMoved &- moved,
+                     updateWritesOwed: studio.updateWritesOwed &- owed,
+                     updateWritesExportHeld: studio.updateWritesExportHeld &- exportHeld,
+                     patchConversionsAtCall: conversions)
         }
         pendingAction = (step.name, step.measured, start, end, bodies, cpuMs, live)
         waitForAction()
@@ -1107,8 +1179,15 @@ final class PerfWorkloadDriver {
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.001) { self.waitForAction() }
             return
         }
+        // #445: a workload's own background work (a voice still loading).
+        if actionPending?() == true {
+            actionWaited = true
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.001) { self.waitForAction() }
+            return
+        }
         let installed = PerfTrace.lastCharacterInstall
-        let ready = installed >= action.start ? max(action.end, installed) : action.end
+        var ready = installed >= action.start ? max(action.end, installed) : action.end
+        if actionWaited { ready = max(ready, CACurrentMediaTime()); actionWaited = false }
         let error = app.errorMessage
         app.errorMessage = nil
         // The process footprint and Metal allocation when the action is ready:
@@ -1116,8 +1195,8 @@ final class PerfWorkloadDriver {
         // document's object count (read after the timed span) shows what an
         // edit added or an undo restored.
         let history = countHistoryStorage ? app.studio.map { studio in
-            (studio.undoStack.count, studio.redoStack.count,
-             StudioObjectStorageCensus.count([studio.doc] + studio.undoStack + studio.redoStack))
+            (studio.undoDepth, studio.redoDepth,
+             StudioObjectStorageCensus.count(current: studio.doc, history: studio.undoHistory))
         } : nil
         finishedActions.append((action.name, action.measured, action.start, action.end, ready, app.studio?.status ?? "", error,
                                 PerfTrace.footprint(), trace.device?.currentAllocatedSize ?? 0, app.studio?.doc.objects.count ?? -1,
@@ -1141,6 +1220,7 @@ final class PerfWorkloadDriver {
         // run-loop pass as a long action) counts until now.
         let busy = trace.busyIntervals + (trace.openBusyStart.map { [($0, CACurrentMediaTime())] } ?? [])
         let bodiesNow = Self.workspaceBodyViews.map(PerfTrace.bodyCount)
+        let conversionsNow = app.studio?.undoPatchConversions ?? 0
         trace.details["actions"] = finishedActions.indices.map { index -> [String: Any] in
             let action = finishedActions[index]
             let next = index + 1 < finishedActions.count ? finishedActions[index + 1].start : .infinity
@@ -1171,6 +1251,15 @@ final class PerfWorkloadDriver {
             }
             if let live = action.live {
                 row["livePendingSettles"] = live.pendingSettles; row["liveUnfinishedWaits"] = live.unfinishedWaits
+                row["updateWrites"] = live.updateWrites; row["updateWritesMoved"] = live.updateWritesMoved
+                row["updateWritesOwed"] = live.updateWritesOwed; row["updateWritesExportHeld"] = live.updateWritesExportHeld
+                // #446: patch steps turned into whole documents from this call
+                // to the next action's (or until now), each at most once: 1
+                // per edit where plug-ins or animation write every frame, 0
+                // where nothing writes between edits.
+                let conversionsEnd = index + 1 < finishedActions.count
+                    ? finishedActions[index + 1].live?.patchConversionsAtCall ?? conversionsNow : conversionsNow
+                row["patchConversions"] = conversionsEnd &- live.patchConversionsAtCall
                 if let placement = live.placement {
                     row["livePhase"] = placement.phase.rawValue; row["placed"] = placement.placed
                     row["placementWaitMs"] = PerfTrace.round((action.start - placement.armed) * 1000)

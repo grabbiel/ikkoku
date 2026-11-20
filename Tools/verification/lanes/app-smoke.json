@@ -38,6 +38,35 @@
       "timeout": 300
     },
     {
+      "id": "studio-launch-plugins-perf",
+      "argv": [".local/build/Build/Products/Debug/Ikkoku.app/Contents/MacOS/Ikkoku"],
+      "fixtures": [
+        {"env": "IKKOKU_SOURCE_SCENE", "from": "IKKOKU_STUDIO_HALF_STATE_SCENE", "kind": "file"},
+        {"env": "IKKOKU_SOURCE_PLUGIN_PROFILE", "kind": "file"},
+        {"env": "IKKOKU_SOURCE_AVATAR", "kind": "file"}
+      ],
+      "env": {
+        "IKKOKU_PERF_TRACE": ".local/verification/captures/launch-plugins-trace.json",
+        "IKKOKU_PERF_WORKLOAD": "studio-idle",
+        "IKKOKU_PERF_SECONDS": "2",
+        "IKKOKU_PERF_WARMUP_SECONDS": "1"
+      },
+      "referenceTier": "app-smoke",
+      "tolerance": "#459: a performance-trace launch imports its scene in the background, like an interactive one, and the launch-time plug-in profile must mount once that import commits (before #459 it bound to the empty document and the commit dropped it). Not a timing measurement: the trace only carries the launch record (details.launchStudioExecution) that studio-launch-plugins-validate reads; its frame timings are not compared, so it needs no quiet window. The scene and profile are startup-mute-capture's, without that capture's adapter manifest, focus events and report, which only a capture accepts.",
+      "artifacts": [
+        {"path": ".local/verification/captures/launch-plugins-trace.json", "kind": "capture-report"}
+      ],
+      "timeout": 300
+    },
+    {
+      "id": "studio-launch-plugins-validate",
+      "argv": ["python3", "Tools/verification/checks/studio_launch_plugins.py", ".local/verification/captures/launch-plugins-trace.json"],
+      "env": {},
+      "referenceTier": "app-smoke",
+      "tolerance": "Validates studio-launch-plugins-perf's trace (#459): the launch inputs ran after the background import (appliedAfterImport), IKKOKU_SOURCE_PLUGIN_PROFILE among them, at least one plug-in package mounted and one character built, and the startup scene ready. Main 5289f4bc, before the fix, fails it.",
+      "timeout": 120
+    },
+    {
       "id": "studio-inspector-capture",
       "argv": [".local/build/Build/Products/Debug/Ikkoku.app/Contents/MacOS/Ikkoku"],
       "fixtures": [
@@ -97,6 +126,67 @@
       "env": {},
       "referenceTier": "app-smoke",
       "tolerance": "Validates the fit log of studio-inspector-clothes-fit-capture: exactly one captured line, showing character 963 on the Clothes tab, with the inspector's document view no wider than its clip view and the accessibility fit check after the capture passing (InspectorFitRule). A log without the inspector's scroll view, the state of #333's bad captures, fails. With --pose-picker (#363), the toolbar's pose-mode picker must also be laid out at its intrinsic width at the capture (the fit log's layout probe): under a fixed frame narrower than the control it was laid out compressed on a fresh build and at full width on a rebuild, as here after the folder selection. With --toolbar-fits (#425), the toolbar must fit this window without its scroll view in Object, FK and IK mode (full or compact variant, by the ideal widths the app logs after the capture), and show the first variant that fits the state shown.",
+      "timeout": 120
+    },
+    {
+      "id": "studio-inspector-object-heights-capture",
+      "argv": [
+        ".local/build/Build/Products/Debug/Ikkoku.app/Contents/MacOS/Ikkoku"
+      ],
+      "fixtures": [
+        {
+          "env": "IKKOKU_SOURCE_SCENE",
+          "kind": "file",
+          "from": "IKKOKU_STUDIO_SCENARIO_SCENE"
+        },
+        {
+          "env": "IKKOKU_SOURCE_AVATAR",
+          "kind": "file"
+        }
+      ],
+      "env": {
+        "IKKOKU_CAPTURE_UI": ".local/verification/captures/studio-object-heights.png",
+        "IKKOKU_CAPTURE_UI_MODE": "studio",
+        "IKKOKU_CAPTURE_UI_STUDIO_TAB": "object",
+        "IKKOKU_CAPTURE_UI_SELECT": "0,963",
+        "IKKOKU_CAPTURE_UI_REPORT": ".local/verification/captures/studio-object-heights.json",
+        "IKKOKU_CAPTURE_UI_FIT_LOG": ".local/verification/captures/studio-object-heights.fit.txt"
+      },
+      "referenceTier": "app-smoke",
+      "tolerance": "#366 through the UI capture path, #366's ui-sel-chars start: the Debug app starts on the Object tab, selects character 0 then character 963, and captures. The fit log (IKKOKU_CAPTURE_UI_FIT_LOG, one launch per file) is judged by studio-inspector-object-heights-validate; this check only needs the capture, its report and the log to be written.",
+      "artifacts": [
+        {
+          "path": ".local/verification/captures/studio-object-heights.png",
+          "kind": "ui-capture"
+        },
+        {
+          "path": ".local/verification/captures/studio-object-heights.json",
+          "kind": "capture-report"
+        },
+        {
+          "path": ".local/verification/captures/studio-object-heights.fit.txt",
+          "kind": "fit-log"
+        }
+      ],
+      "timeout": 300
+    },
+    {
+      "id": "studio-inspector-object-heights-validate",
+      "argv": [
+        "python3",
+        "Tools/verification/checks/inspector_fit_log.py",
+        ".local/verification/captures/studio-object-heights.fit.txt",
+        "--selection",
+        "963",
+        "--tab",
+        "Object",
+        "--object-heights",
+        "24",
+        "21"
+      ],
+      "env": {},
+      "referenceTier": "app-smoke",
+      "tolerance": "Validates the fit log of studio-inspector-object-heights-capture: one captured line showing character 963 on the Object tab, the inspector fit as for every capture, and with --object-heights 24 21 (#366's R2 on this machine) the explicit text-field heights the inspector lays out with (InspectorTextFieldHeight, measured from an AppKit prototype with SwiftUI's bezel and font) at 24 pt for the Name field and 21 pt for the Transform fields, equal to SwiftUI's own fields: the Name field's intrinsic height 24 pt and every other editable field's 21 pt. Frame heights are not judged: in about 1% of launches the Name field is still laid out 21 pt inside its 24 pt slot (#366's residue, which stays open).",
       "timeout": 120
     },
     {

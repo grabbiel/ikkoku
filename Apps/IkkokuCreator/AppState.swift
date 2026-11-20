@@ -124,11 +124,17 @@ final class AppState {
             studioModel.asyncSourceBuilds = backgroundBuilds
             self.studio = studioModel
             PerfTrace.mark("studioReady")
+            // #459: the Studio execution inputs below bind to the launch scene,
+            // so they wait for the end of its import: at once after a
+            // synchronous import, at the background import's end otherwise.
+            let launchInputs = LaunchInputGate(waitsForImport: env["IKKOKU_SOURCE_SCENE"] != nil)
             if let path = env["IKKOKU_SOURCE_SCENE"] {
                 // The import's end: synchronous here, or the background
                 // import's commit after the first frames.
                 let imported: (Error?) -> Void = { [weak self] error in
                     guard let self else { return }
+                    // After the import's own report, as in the synchronous order.
+                    defer { launchInputs.open() }
                     if let error {
                         self.startupInputFailed("IKKOKU_SOURCE_SCENE", path, "Could not preview source scene", error, automated: automated)
                         return
@@ -198,12 +204,12 @@ final class AppState {
             // report (IKKOKU_NATIVE_PLUGIN_REPORT) and focus events are capture-only:
             // validation accepts them only with IKKOKU_AUTOCAPTURE, so a failure here
             // always exits 1 instead of leaving the app open after a missing report.
+            // #459: an interactive or performance-trace launch's background import
+            // commits later, so the inputs wait for it (`applyStudioExecution`).
             if let studio {
-                do { try AppState.configureStudioExecution(studio) }
-                catch {
-                    if automated { print("[ikkoku] studio execution failed: \(error)"); exit(1) }
-                    self.errorMessage = "Studio execution: \(error)"
-                }
+                let deferred = launchInputs.isWaiting
+                launchInputs.run { [weak self] in self?.applyStudioExecution(studio, automated: automated, deferred: deferred) }
+                if deferred { watchLaunchImport(studio, gate: launchInputs) }
             }
             // The scenario hook is its own headless mode: it runs the JSON
             // checklist scenario over the imported source scene, writes the
@@ -223,7 +229,7 @@ final class AppState {
                         try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
                         try CaptureOutput.writeJSON(report.json(), to: url)
                         print("[ikkoku] Studio visibility scenario: \(report.passed) passed, \(report.failed) failed")
-                        exit(report.failed == 0 ? 0 : 1)
+                        exit(report.failed == 0 && studio.reportUndoHistoryBars() ? 0 : 1)
                     }
                     if let plugins = scenario.pluginLibrary {
                         guard scenario.steps.isEmpty else { throw RigError.invalid("Plugin library checks cannot ignore ordinary Studio steps.") }
@@ -234,7 +240,7 @@ final class AppState {
                                 try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
                                 try CaptureOutput.writeJSON(report.json(), to: url)
                                 print("[ikkoku] plugin library scenario: \(report.passed) passed, \(report.failed) failed")
-                                exit(report.failed == 0 ? 0 : 1)
+                                exit(report.failed == 0 && studio.reportUndoHistoryBars() ? 0 : 1)
                             } catch { print("[ikkoku] plugin library scenario failed: \(error)"); exit(1) }
                         }
                         return
@@ -254,7 +260,7 @@ final class AppState {
                                 try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
                                 try CaptureOutput.writeJSON(report.json(), to: url)
                                 print("[ikkoku] inspector UI scenario: \(report.passed) passed, \(report.failed) failed")
-                                exit(report.failed == 0 ? 0 : 1)
+                                exit(report.failed == 0 && studio.reportUndoHistoryBars() ? 0 : 1)
                             } catch { print("[ikkoku] inspector UI scenario failed: \(error)"); exit(1) }
                         }
                     } else {
@@ -263,7 +269,7 @@ final class AppState {
                         try FileManager.default.createDirectory(at: reportURL.deletingLastPathComponent(), withIntermediateDirectories: true)
                         try CaptureOutput.writeJSON(report.json(), to: reportURL)
                         print("[ikkoku] studio scenario: \(report.passed) passed, \(report.failed) failed")
-                        exit(report.failed == 0 ? 0 : 1)
+                        exit(report.failed == 0 && studio.reportUndoHistoryBars() ? 0 : 1)
                     }
                 } catch { print("[ikkoku] studio scenario failed: \(error)"); exit(1) }
             }

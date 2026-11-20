@@ -2618,7 +2618,7 @@
         "IKKOKU_STUDIO_SCENARIO_REPORT": ".local/verification/reports/studio-scenario-undo-scene-replacements.json"
       },
       "referenceTier": "app-smoke",
-      "tolerance": "#384 undo history across scene replacements, on scene-x: a rename, then New Scene, Add Folder, Open of the saved scene, an Open refused after reading the file (an original-format scene), Import Scene of the saved scene (a merge) and a reimport of the exported original scene (an original scene import). Each replacement keeps only the scene it replaced: after New Scene and after the Open the history holds 2 steps; the refused Open changes neither the document nor the history; the merge adds a step and drops none; after the reimport two undos reach the opened scene and stop (0 undo, 2 redo), and two redos return. One assertRejected negative control proves the depth check fails on a wrong value. CharaStudio clears its whole history in InitScene; keeping one earlier scene is a deliberate difference (docs/reference/studio/scene-editing.md).",
+      "tolerance": "#384 undo history across scene replacements, on scene-x: a rename, then New Scene, Add Folder, Open of the saved scene, an Open refused after reading the file (an original-format scene), Import Scene of the saved scene (a merge) and a reimport of the exported original scene (an original scene import). Each replacement keeps only the scene it replaced: after New Scene and after the Open the history holds 2 steps; the refused Open changes neither the document nor the history; the merge adds a step and drops none; after the reimport two undos reach the opened scene and stop (0 undo, 2 redo), and two redos return. One assertRejected negative control proves the depth check fails on a wrong value. #454: every depth assert also checks Undo and Redo enablement (the published canUndo/canRedo, the toolbar state and the stack agree); two undos, a second New Scene and its Undo turn both over; then observeUndoState renames key 1 three times (3 undo steps) and observation of canUndo/canRedo fires once, at the flip, with a second assertRejected control on canUndo. CharaStudio clears its whole history in InitScene; keeping one earlier scene is a deliberate difference (docs/reference/studio/scene-editing.md).",
       "artifacts": [
         {
           "path": ".local/verification/reports/studio-scenario-undo-scene-replacements.json",
@@ -2665,6 +2665,40 @@
         {
           "path": ".local/verification/scenario-exports/undo-window-after-undo.png",
           "kind": "exported-scene"
+        }
+      ],
+      "timeout": 600
+    },
+    {
+      "id": "studio-scenario-undo-patch-roundtrip",
+      "argv": [
+        ".local/build/Build/Products/Debug/Ikkoku.app/Contents/MacOS/Ikkoku"
+      ],
+      "fixtures": [
+        {
+          "env": "IKKOKU_SOURCE_SCENE",
+          "kind": "file",
+          "from": "IKKOKU_STUDIO_SCENARIO_SCENE"
+        },
+        {
+          "env": "IKKOKU_SOURCE_AVATAR",
+          "kind": "file"
+        },
+        {
+          "env": "IKKOKU_STUDIO_ITEM_CATALOG",
+          "kind": "file"
+        }
+      ],
+      "env": {
+        "IKKOKU_STUDIO_SCENARIO": "Tools/verification/scenarios/undo-patch-roundtrip.json",
+        "IKKOKU_STUDIO_SCENARIO_REPORT": ".local/verification/reports/studio-scenario-undo-patch-roundtrip.json"
+      },
+      "referenceTier": "app-smoke",
+      "tolerance": "#446: object edits through update record patch steps (one object each; edits in one gesture join the step) mixed with a delete, a duplicate and a New Scene. Undo back to the start restores the start document field for field and exports byte-identical to the start export; redo restores the edited document and exports byte-identical to its export. A rename undoes and redoes the same way. A deliberately broken step (its object removed behind the history's back) is refused with the Debug assertion off: the document stays, the step is dropped. Every scenario run also ends with #446's bars: no update write copied the object list, and (Debug) no undo or redo differed from a whole snapshot's.",
+      "artifacts": [
+        {
+          "path": ".local/verification/reports/studio-scenario-undo-patch-roundtrip.json",
+          "kind": "scenario-report"
         }
       ],
       "timeout": 600

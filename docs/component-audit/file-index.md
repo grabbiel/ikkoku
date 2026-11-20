@@ -23,7 +23,7 @@ branch was tested or every asset matches the original game. Feature status,
 specific comments and pending tasks are in the linked reports. Shared behavior
 may be discussed in more than one report; one primary owner is listed here.
 
-**1153 files indexed; 1153 assigned; 0 unassigned.**
+**1160 files indexed; 1160 assigned; 0 unassigned.**
 
 Counts include the website and clothes-group additions listed below. Runtime and
 test totals include their specialized role descriptions; this is inventory
@@ -31,22 +31,22 @@ bookkeeping, not a new full source audit.
 
 | Primary report | Files |
 | --- | ---: |
-| [App / gameplay / plugins](app-gameplay-and-plugins.md) | 111 |
+| [App / gameplay / plugins](app-gameplay-and-plugins.md) | 113 |
 | [Character / Maker / mods](character-and-mods.md) | 145 |
-| [Studio / IK / animation](studio.md) | 276 |
+| [Studio / IK / animation](studio.md) | 278 |
 | [Renderer / foundation / assets](renderer-and-foundation.md) | 373 |
-| [Toolchain / verification / historical docs](toolchain-and-verification.md) | 238 |
+| [Toolchain / verification / historical docs](toolchain-and-verification.md) | 241 |
 
 | File role | Files |
 | --- | ---: |
 | App resource metadata / icon | 16 |
 | Build / repository configuration | 9 |
-| Conversion / recovery / verification tool | 274 |
+| Conversion / recovery / verification tool | 276 |
 | Documentation / historical evidence | 65 |
 | Generated asset / catalog / fixture | 205 |
 | Reference host / controlled fixture | 41 |
-| Runtime / shared shader declaration | 248 |
-| Test / validation | 253 |
+| Runtime / shared shader declaration | 250 |
+| Test / validation | 256 |
 | Public synthetic body/face input fixture | 1 |
 
 ## App / gameplay / plugins
@@ -109,9 +109,11 @@ Feature assessment: [app-gameplay-and-plugins.md](app-gameplay-and-plugins.md).
 | [Packages/Engine/Sources/Gameplay/SourceTranslatedBehaviour.swift](../../Packages/Engine/Sources/Gameplay/SourceTranslatedBehaviour.swift) | Runtime / shared shader declaration |
 | [Packages/Engine/Sources/Renderer/CaptureOutput.swift](../../Packages/Engine/Sources/Renderer/CaptureOutput.swift) | Runtime / shared shader declaration |
 | [Packages/Engine/Sources/Renderer/CaptureRequest.swift](../../Packages/Engine/Sources/Renderer/CaptureRequest.swift) | Runtime / shared shader declaration |
+| [Packages/Engine/Sources/Renderer/LaunchInputGate.swift](../../Packages/Engine/Sources/Renderer/LaunchInputGate.swift) | Runtime / shared shader declaration |
 | [Packages/Engine/Sources/Studio/StudioResourceReferences.swift](../../Packages/Engine/Sources/Studio/StudioResourceReferences.swift) | Runtime / shared shader declaration |
 | [Packages/Engine/Tests/EngineTests/CaptureOutputTests.swift](../../Packages/Engine/Tests/EngineTests/CaptureOutputTests.swift) | Test / validation |
 | [Packages/Engine/Tests/EngineTests/CaptureRequestTests.swift](../../Packages/Engine/Tests/EngineTests/CaptureRequestTests.swift) | Test / validation |
+| [Packages/Engine/Tests/EngineTests/LaunchInputGateTests.swift](../../Packages/Engine/Tests/EngineTests/LaunchInputGateTests.swift) | Test / validation |
 | [Packages/Engine/Tests/EngineTests/ResourceRelocationTests.swift](../../Packages/Engine/Tests/EngineTests/ResourceRelocationTests.swift) | Test / validation |
 | [Packages/Engine/Tests/EngineTests/SourceADVCharacterBindingTests.swift](../../Packages/Engine/Tests/EngineTests/SourceADVCharacterBindingTests.swift) | Test / validation |
 | [Packages/Engine/Tests/EngineTests/SourceADVHostRequestTests.swift](../../Packages/Engine/Tests/EngineTests/SourceADVHostRequestTests.swift) | Test / validation |
@@ -402,6 +404,7 @@ Feature assessment: [studio.md](studio.md).
 | [Packages/Engine/Sources/Studio/SourceStudioRouteStepper.swift](../../Packages/Engine/Sources/Studio/SourceStudioRouteStepper.swift) | Runtime / shared shader declaration |
 | [Packages/Engine/Sources/Studio/SourceStudioSceneLight.swift](../../Packages/Engine/Sources/Studio/SourceStudioSceneLight.swift) | Runtime / shared shader declaration |
 | [Packages/Engine/Sources/Studio/SourceStudioVoice.swift](../../Packages/Engine/Sources/Studio/SourceStudioVoice.swift) | Runtime / shared shader declaration |
+| [Packages/Engine/Sources/Studio/SourceStudioVoiceLibrary.swift](../../Packages/Engine/Sources/Studio/SourceStudioVoiceLibrary.swift) | Runtime / shared shader declaration |
 | [Packages/Engine/Sources/Studio/SourceStudioWear.swift](../../Packages/Engine/Sources/Studio/SourceStudioWear.swift) | Runtime / shared shader declaration |
 | [Packages/Engine/Sources/Studio/SourceStudioWorldTransform.swift](../../Packages/Engine/Sources/Studio/SourceStudioWorldTransform.swift) | Runtime / shared shader declaration |
 | [Packages/Engine/Sources/Studio/StudioDocument.swift](../../Packages/Engine/Sources/Studio/StudioDocument.swift) | Runtime / shared shader declaration |
@@ -489,6 +492,7 @@ Feature assessment: [studio.md](studio.md).
 | [Packages/Engine/Tests/EngineTests/SourceStudioRouteTests.swift](../../Packages/Engine/Tests/EngineTests/SourceStudioRouteTests.swift) | Test / validation |
 | [Packages/Engine/Tests/EngineTests/SourceStudioSceneLightTests.swift](../../Packages/Engine/Tests/EngineTests/SourceStudioSceneLightTests.swift) | Test / validation |
 | [Packages/Engine/Tests/EngineTests/SourceStudioVoiceInputTests.swift](../../Packages/Engine/Tests/EngineTests/SourceStudioVoiceInputTests.swift) | Test / validation |
+| [Packages/Engine/Tests/EngineTests/SourceStudioVoiceLibraryTests.swift](../../Packages/Engine/Tests/EngineTests/SourceStudioVoiceLibraryTests.swift) | Test / validation |
 | [Packages/Engine/Tests/EngineTests/SourceStudioVoiceTests.swift](../../Packages/Engine/Tests/EngineTests/SourceStudioVoiceTests.swift) | Test / validation |
 | [Packages/Engine/Tests/EngineTests/SourceStudioWearTests.swift](../../Packages/Engine/Tests/EngineTests/SourceStudioWearTests.swift) | Test / validation |
 | [Packages/Engine/Tests/EngineTests/SourceStudioWorldTransformTests.swift](../../Packages/Engine/Tests/EngineTests/SourceStudioWorldTransformTests.swift) | Test / validation |
@@ -1027,8 +1031,10 @@ Feature assessment: [toolchain-and-verification.md](toolchain-and-verification.m
 | [Tools/verification/app-bundle-rules.json](../../Tools/verification/app-bundle-rules.json) | Build / repository configuration |
 | [Tools/verification/checks/inspector_fit_log.py](../../Tools/verification/checks/inspector_fit_log.py) | Conversion / recovery / verification tool |
 | [Tools/verification/checks/studio_inspector_report.py](../../Tools/verification/checks/studio_inspector_report.py) | Conversion / recovery / verification tool |
+| [Tools/verification/checks/studio_launch_plugins.py](../../Tools/verification/checks/studio_launch_plugins.py) | Conversion / recovery / verification tool |
 | [Tools/verification/checks/test_inspector_fit_log.py](../../Tools/verification/checks/test_inspector_fit_log.py) | Test / validation |
 | [Tools/verification/checks/test_studio_inspector_report.py](../../Tools/verification/checks/test_studio_inspector_report.py) | Test / validation |
+| [Tools/verification/checks/test_studio_launch_plugins.py](../../Tools/verification/checks/test_studio_launch_plugins.py) | Test / validation |
 | [Tools/verification/doctor-samples.json](../../Tools/verification/doctor-samples.json) | Reference host / controlled fixture |
 | [Tools/verification/doctor.py](../../Tools/verification/doctor.py) | Conversion / recovery / verification tool |
 | [Tools/verification/environment.example.json](../../Tools/verification/environment.example.json) | Conversion / recovery / verification tool |
@@ -1137,6 +1143,7 @@ Feature assessment: [toolchain-and-verification.md](toolchain-and-verification.m
 | [Tools/verification/scenarios/toolbar-drag-steady.json](../../Tools/verification/scenarios/toolbar-drag-steady.json) | Conversion / recovery / verification tool |
 | [Tools/verification/scenarios/undo-camera.json](../../Tools/verification/scenarios/undo-camera.json) | Conversion / recovery / verification tool |
 | [Tools/verification/scenarios/undo-no-catalog.json](../../Tools/verification/scenarios/undo-no-catalog.json) | Conversion / recovery / verification tool |
+| [Tools/verification/scenarios/undo-patch-roundtrip.json](../../Tools/verification/scenarios/undo-patch-roundtrip.json) | Conversion / recovery / verification tool |
 | [Tools/verification/scenarios/undo-props.json](../../Tools/verification/scenarios/undo-props.json) | Conversion / recovery / verification tool |
 | [Tools/verification/scenarios/undo-route.json](../../Tools/verification/scenarios/undo-route.json) | Conversion / recovery / verification tool |
 | [Tools/verification/scenarios/undo-scene-replacements.json](../../Tools/verification/scenarios/undo-scene-replacements.json) | Conversion / recovery / verification tool |
