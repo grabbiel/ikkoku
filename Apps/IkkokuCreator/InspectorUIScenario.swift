@@ -1509,8 +1509,33 @@ struct InspectorUIScenario: Decodable {
         return members
     }
 
+    /// The inspector's scroll view for the #440 ops: the scroll view that
+    /// encloses most of the window's `InspectorAnchorView`s (the kept views'
+    /// anchors live in its content), else `inspectorScrollView(_:)`. `how`
+    /// says which, whether the trailing-edge lookup found one, whether the
+    /// scroll view is hidden and its distance from the trailing edge.
+    @MainActor static func keptScrollView(_ window: NSWindow) -> (scroll: NSScrollView?, how: String) {
+        guard let content = window.contentView else { return (nil, "no content view") }
+        var counts: [ObjectIdentifier: (scroll: NSScrollView, anchors: Int)] = [:]
+        func visit(_ view: NSView) {
+            if view is InspectorAnchorView, let scroll = view.enclosingScrollView {
+                counts[ObjectIdentifier(scroll), default: (scroll, 0)].anchors += 1
+            }
+            view.subviews.forEach(visit)
+        }
+        visit(content)
+        let edgeScroll = inspectorScrollView(window)
+        let byAnchors = counts.values.max { ($0.anchors, $0.scroll.bounds.height) < ($1.anchors, $1.scroll.bounds.height) }?.scroll
+        guard let scroll = byAnchors ?? edgeScroll else { return (nil, "no anchors, edge lookup none") }
+        let edge = content.convert(content.bounds, to: nil).maxX
+        let offset = Int((edge - scroll.convert(scroll.bounds, to: nil).maxX).rounded())
+        let how = "\(byAnchors != nil ? "anchors" : "edge"), edge lookup \(edgeScroll == nil ? "none" : edgeScroll === scroll ? "same" : "other"), "
+            + "hidden \(scroll.isHiddenOrHasHiddenAncestor ? "yes" : "no"), \(offset) pt from the trailing edge"
+        return (scroll, how)
+    }
+
     /// `keptControls`: the AppKit controls (`NSControl`) of the inspector's
-    /// scroll view, by class. A control inside a kept view that is hidden (an
+    /// scroll view (`keptScrollView(_:)`), by class. A control inside a kept view that is hidden (an
     /// `InspectorAnchorView` with `keptHidden` whose area holds it) must be
     /// disabled, refuse to become the first responder, lie outside the
     /// key-view loop, miss a hit test at its centre and be absent from the
@@ -1520,8 +1545,9 @@ struct InspectorUIScenario: Decodable {
     /// not focused, so no field begins or ends editing. Focus attempts on
     /// hidden controls end with no first responder.
     @MainActor static func keptControls(_ window: NSWindow) -> (ok: Bool, detail: String) {
-        guard let content = window.contentView, let scroll = inspectorScrollView(window) else {
-            return (false, "no inspector scroll view")
+        let found = keptScrollView(window)
+        guard let content = window.contentView, let scroll = found.scroll else {
+            return (false, "no inspector scroll view (\(found.how))")
         }
         var anchors: [InspectorAnchorView] = [], controls: [NSControl] = []
         func visit(_ view: NSView) {
@@ -1572,11 +1598,12 @@ struct InspectorUIScenario: Decodable {
         let detail = "anchors \(anchors.count) (\(hiddenAnchors.count) hidden); shown sha \(sha(shownLines)): "
             + shownLines.joined(separator: "; ") + " | hidden \(hidden.values.reduce(0) { $0 + $1.count }): "
             + hiddenLines.joined(separator: "; ") + (leaks.isEmpty ? "" : " | LEAKS: " + leaks.joined(separator: "; "))
+            + " | scroll view: \(found.how)"
         return (leaks.isEmpty, detail)
     }
 
     /// `layers`: the layer tree under the window's content view and under the
-    /// inspector's scroll view: layers (masks included), layers with a mask,
+    /// inspector's scroll view (`keptScrollView(_:)`): layers (masks included), layers with a mask,
     /// layers that mask to bounds, and views.
     @MainActor static func layerCounts(_ window: NSWindow) -> String {
         func count(_ root: NSView?) -> String {
@@ -1593,7 +1620,7 @@ struct InspectorUIScenario: Decodable {
             visitView(root)
             return "layers \(layers), masked \(masked), masksToBounds \(bounded), views \(views)"
         }
-        return "window: \(count(window.contentView)); inspector: \(count(inspectorScrollView(window)))"
+        return "window: \(count(window.contentView)); inspector: \(count(keptScrollView(window).scroll))"
     }
 
     static func sha(_ lines: [String]) -> String {
