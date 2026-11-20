@@ -314,7 +314,7 @@
         "IKKOKU_STUDIO_SCENARIO_REPORT": ".local/verification/reports/studio-scenario-toolbar-drag-steady.json"
       },
       "referenceTier": "app-smoke",
-      "tolerance": "#425: the Studio toolbar holds still over a gizmo drag, so its .equatable() controls (StudioToolbarControls, on StudioToolbarState) skip every drag frame and nothing invalidates StudioToolbar's body. Two drags of the REAL mouse handlers (mouseDown / eight mouseDragged / mouseUp, left button, no modifiers) over the GPU pick pass on source character 65: first, after focusing the view on it (the F key; the scene's own view shows none of its IK guides), its Left hand IK guide (index 3), selected and put in IK mode as the Pose tab's IK guide picker does, grabbed on the x translate arrow found by a \u00b1120 px pick scan around the guide's projected origin and dragged 30,0 px, which must leave a new IK override on that guide (setSourceIKValue); then bone 19's z rotate ring as in fk-mouse-drag, dragged 60,40 px, which must leave a non-zero FK rotation. With toolbarSteady each drag reads StudioToolbarState after the mouseDown, every mouseDragged and the mouseUp: the mouseDown may change only canUndo (its undo snapshot), and every later state must equal the mouseDown's. Observation tracking of that state, re-armed after each write, must see no write during the nine later events (the published toolbar state, C4; with IKKOKU_PERF_PANEL_STATE=document the toolbar reads the document and the writes are only reported). A build whose StudioToolbarState carries a field the drag changes on every step fails both drag steps. After the drags the left-hand guide (bone 21) is captured; export and reimport must put it back within 0.02.",
+      "tolerance": "#425: the Studio toolbar holds still over a gizmo drag, so its .equatable() controls (StudioToolbarControls, on StudioToolbarState) skip every drag frame and nothing invalidates StudioToolbar's body. Two drags of the REAL mouse handlers (mouseDown / eight mouseDragged / mouseUp, left button, no modifiers) over the GPU pick pass on source character 65: first, after focusing the view on it (the F key; the scene's own view shows none of its IK guides) and switching its IK on with the Pose tab's IK enabled toggle (#439: only active guides are drawn, and character 65 is saved with IK off; on, it has the effective kinematic state the drag's IK override gave it before), its Left hand IK guide (index 3), selected and put in IK mode as the Pose tab's IK guide picker does, grabbed on the x translate arrow found by a \u00b1120 px pick scan around the guide's projected origin and dragged 30,0 px, which must leave a new IK override on that guide (setSourceIKValue); then bone 19's z rotate ring as in fk-mouse-drag, dragged 60,40 px, which must leave a non-zero FK rotation. With toolbarSteady each drag reads StudioToolbarState after the mouseDown, every mouseDragged and the mouseUp: the mouseDown may change only canUndo (its undo snapshot), and every later state must equal the mouseDown's. Observation tracking of that state, re-armed after each write, must see no write during the nine later events (the published toolbar state, C4; with IKKOKU_PERF_PANEL_STATE=document the toolbar reads the document and the writes are only reported). A build whose StudioToolbarState carries a field the drag changes on every step fails both drag steps. After the drags the left-hand guide (bone 21) is captured; export and reimport must put it back within 0.02.",
       "artifacts": [
         {
           "path": ".local/verification/reports/studio-scenario-toolbar-drag-steady.json",
@@ -322,6 +322,44 @@
         },
         {
           "path": ".local/verification/scenario-exports/toolbar-drag-steady.png",
+          "kind": "exported-scene"
+        }
+      ],
+      "timeout": 600
+    },
+    {
+      "id": "studio-scenario-ik-guides-hidden",
+      "argv": [
+        ".local/build/Build/Products/Debug/Ikkoku.app/Contents/MacOS/Ikkoku"
+      ],
+      "fixtures": [
+        {
+          "env": "IKKOKU_SOURCE_SCENE",
+          "kind": "file",
+          "from": "IKKOKU_STUDIO_SCENARIO_SCENE"
+        },
+        {
+          "env": "IKKOKU_SOURCE_AVATAR",
+          "kind": "file"
+        },
+        {
+          "env": "IKKOKU_STUDIO_ANIMATION_CATALOG",
+          "kind": "file"
+        }
+      ],
+      "env": {
+        "IKKOKU_STUDIO_SCENARIO": "Tools/verification/scenarios/ik-guides-hidden.json",
+        "IKKOKU_STUDIO_SCENARIO_REPORT": ".local/verification/reports/studio-scenario-ik-guides-hidden.json"
+      },
+      "referenceTier": "app-smoke",
+      "tolerance": "#439: a source character's IK guides are drawn and picked only while active (IK enabled and the guide's group on), as CharaStudio keeps an inactive guide's object inactive; while its IK is off a loaded character's saved targets may lie far from its bones. On source character 65 (saved with IK off, all five groups on), focused and in IK pose mode, the frame the app built draws no IK guide handle, and a REAL click (mouseDown and mouseUp, left button) at the Left hand guide's projected pixel selects nothing and changes neither the kinematic flags nor the undo history (before #439 it was drawn grey, and the click switched the Left arm's IK on). With IK switched on by the Pose tab's toggle all 13 guides are drawn, and the same click selects the guide, still without an undo step (it used to push an empty one). With the Left arm group off (ikGroup 4) guides 1, 2 and 3 are not drawn and the Pose tab reads the selected guide as hidden (its caption); undo restores the group. The flags survive export and reimport. A build that draws inactive guides fails the first assert, and its first click selects the hidden guide; one whose pick still switches the group on fails the second click (an empty undo step), since its first click cannot reach an undrawn guide.",
+      "artifacts": [
+        {
+          "path": ".local/verification/reports/studio-scenario-ik-guides-hidden.json",
+          "kind": "scenario-report"
+        },
+        {
+          "path": ".local/verification/scenario-exports/ik-guides-hidden.png",
           "kind": "exported-scene"
         }
       ],
@@ -3074,7 +3112,7 @@
         "IKKOKU_STUDIO_SCENARIO_REPORT": ".local/verification/reports/studio-scenario-source-map34.json"
       },
       "referenceTier": "app-smoke",
-      "tolerance": "ST-A11 slice 3 on scene-map34-day.png (Map 34 空き教室 alone, moved, day sun, saved by the original player): the converted map is drawn before the first step (53 draws: 29 lightmapped, the particles, the day sky; 54 images as BC blocks, none decoded) with the exact approximation label in the status line; two map-only points pick nothing; View > Show Source Map off draws 0 map parts and says so, on restores 53 with the sky; the original-format export is byte-identical to the source with the map hidden and shown; reimport, New Scene (no map, no line) and undo restore the map. Lighting, sky and colour are not checked here (see docs/reference/studio/maps.md, the map probe gates).",
+      "tolerance": "ST-A11 slice 3 on scene-map34-day.png (Map 34 \u7a7a\u304d\u6559\u5ba4 alone, moved, day sun, saved by the original player): the converted map is drawn before the first step (53 draws: 29 lightmapped, the particles, the day sky; 54 images as BC blocks, none decoded) with the exact approximation label in the status line; two map-only points pick nothing; View > Show Source Map off draws 0 map parts and says so, on restores 53 with the sky; the original-format export is byte-identical to the source with the map hidden and shown; reimport, New Scene (no map, no line) and undo restore the map. Lighting, sky and colour are not checked here (see docs/reference/studio/maps.md, the map probe gates).",
       "artifacts": [
         {
           "path": ".local/verification/reports/studio-scenario-source-map34.json",
@@ -3116,7 +3154,7 @@
         "IKKOKU_STUDIO_SCENARIO_REPORT": ".local/verification/reports/studio-scenario-source-map41.json"
       },
       "referenceTier": "app-smoke",
-      "tolerance": "ST-A11 slice 4 on scene-map41.png (Map 41 備品倉庫 alone, moved, day sun, map option on, saved by the original player; the map the user's scenes name most): the converted map is drawn before the first step (29 draws: 27 lightmapped, no sky, particle, unlit, silhouette or option draws; 28 images as BC blocks with no PNG copies) with the exact approximation label in the status line; two map-only points pick nothing; View > Show Source Map off draws 0 map parts and says so, on restores 29; the original-format export is byte-identical to the source with the map hidden and shown; reimport, New Scene (no map, no line) and undo restore the map. Lighting and colour are not checked here (see docs/reference/studio/maps.md, the map probe gates).",
+      "tolerance": "ST-A11 slice 4 on scene-map41.png (Map 41 \u5099\u54c1\u5009\u5eab alone, moved, day sun, map option on, saved by the original player; the map the user's scenes name most): the converted map is drawn before the first step (29 draws: 27 lightmapped, no sky, particle, unlit, silhouette or option draws; 28 images as BC blocks with no PNG copies) with the exact approximation label in the status line; two map-only points pick nothing; View > Show Source Map off draws 0 map parts and says so, on restores 29; the original-format export is byte-identical to the source with the map hidden and shown; reimport, New Scene (no map, no line) and undo restore the map. Lighting and colour are not checked here (see docs/reference/studio/maps.md, the map probe gates).",
       "artifacts": [
         {
           "path": ".local/verification/reports/studio-scenario-source-map41.json",

@@ -1,0 +1,22 @@
+{
+  "steps": [
+    {"op": "focus", "key": 65},
+    {"op": "setPoseMode", "mode": "ik"},
+    {"op": "assert", "sourceIK": {"key": 65, "drawn": [], "enableIK": false, "activeIK": [true, true, true, true, true]}},
+    {"op": "clickIKGuide", "key": 65, "index": 3, "selects": false},
+    {"op": "assert", "sourceIK": {"key": 65, "enableIK": false}},
+    {"op": "setSourceIKEnabled", "key": 65, "on": true},
+    {"op": "assert", "sourceIK": {"key": 65, "drawn": [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12], "enableIK": true}},
+    {"op": "clickIKGuide", "key": 65, "index": 3, "selects": true},
+    {"op": "assert", "sourceIK": {"key": 65, "selectedHidden": false}},
+    {"op": "setSourceIKEnabled", "key": 65, "ikGroup": 4, "on": false},
+    {"op": "assert", "sourceIK": {"key": 65, "drawn": [0, 4, 5, 6, 7, 8, 9, 10, 11, 12], "enableIK": true,
+                                  "activeIK": [true, true, true, true, false], "selectedHidden": true}},
+    {"op": "undo"},
+    {"op": "assert", "sourceIK": {"key": 65, "enableIK": true, "activeIK": [true, true, true, true, true]}},
+    {"op": "setSourceIKEnabled", "key": 65, "ikGroup": 4, "on": false},
+    {"op": "export", "path": ".local/verification/scenario-exports/ik-guides-hidden.png"},
+    {"op": "reimport", "path": ".local/verification/scenario-exports/ik-guides-hidden.png"},
+    {"op": "assert", "sourceIK": {"key": 65, "enableIK": true, "activeIK": [true, true, true, true, false]}}
+  ]
+}

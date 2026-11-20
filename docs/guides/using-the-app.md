@@ -98,7 +98,10 @@ evaluated time.
 
 With a converted source character selected, the source inspectors expose:
 
-- **Pose:** supported FK/IK guides and converted animation choices.
+- **Pose:** supported FK/IK guides and converted animation choices. As in
+  CharaStudio, IK mode shows a character's IK guides only while its IK is on
+  (IK enabled and the guide's group toggle); turn IK on in the Pose tab to
+  show, click and drag them.
 - **Face:** source expression patterns, openness, blink/look settings, shape
   controls and supported color edits. Diagnostics identify saved settings whose
   visual/runtime behavior is incomplete; an editable field alone is not full
