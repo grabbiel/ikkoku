@@ -88,6 +88,13 @@ final class PerfWorkloadDriver {
     /// The temporary folder `studio-export` and `studio-load` write scene
     /// files to, removed when the run stops.
     private var scratchFolder: URL?
+    /// #445 (`studio-voice-play`): true while the action's own background
+    /// work runs, so its `readyMs` and busy time reach the end of that work.
+    /// Nil for every other workload.
+    private var actionPending: (() -> Bool)?
+    /// Whether the pending action waited for `actionPending`: it is then
+    /// ready when the wait ended.
+    private var actionWaited = false
 
     private init(app: AppState, trace: PerfTrace) {
         self.app = app
@@ -277,6 +284,7 @@ final class PerfWorkloadDriver {
         case "studio-show-hidden": try prepareStudioShowHidden()
         case "studio-clock-first": try prepareStudioClockFirst()
         case "studio-edit-steps": try prepareStudioEditSteps()
+        case "studio-voice-play": try prepareStudioVoicePlay()
         default: throw RigError.invalid("unknown workload \(workload)")
         }
     }
@@ -824,6 +832,52 @@ final class PerfWorkloadDriver {
         InspectorUIScenario.scrollWorkspace(scroll, toEnd: toEnd)
     }
 
+    /// `studio-voice-play` (#445, information only): the inspector's Play
+    /// playlist call (`StudioModel.playSourceVoice`) on `actionTarget`'s
+    /// character. Its playlist is first set, through the UI's write
+    /// (`update`), to the first three rows of the scene's voice catalog
+    /// (`IKKOKU_STUDIO_VOICE_CATALOG`) that have converted audio. A cycle:
+    /// Stop all (`stopSourceVoices`, the call New Scene and Open make;
+    /// unmeasured), then playlist index 0 (the cycle's first play), 0 again,
+    /// 1, 2 and 1 again, repeated, live animation off. The voice bus renders
+    /// offline (manual rendering): nothing reaches the output device and
+    /// nothing pulls the graph, so a clip never ends or advances. An action is
+    /// ready when its voice started or failed: the status no longer reads
+    /// "Loading voice".
+    private func prepareStudioVoicePlay() throws {
+        let studio = try prepareStudioSource(selectKey: nil, liveAnimation: false)
+        let target = try actionTarget(studio)
+        guard target.kind == .character, target.sourceCharacter != nil else {
+            throw RigError.invalid("studio-voice-play needs a source character")
+        }
+        guard let path = studio.doc.sourceVoiceCatalogFile ?? ProcessInfo.processInfo.environment["IKKOKU_STUDIO_VOICE_CATALOG"] else {
+            throw RigError.invalid("studio-voice-play needs IKKOKU_STUDIO_VOICE_CATALOG")
+        }
+        let url = URL(fileURLWithPath: path), catalog = try SourceStudioVoiceCatalog.load(url: url)
+        let rows = Array(catalog.entries.filter { $0.file != nil && $0.sha256 != nil }.prefix(3))
+        guard rows.count == 3 else { throw RigError.invalid("studio-voice-play needs 3 catalog rows with converted audio") }
+        let id = target.id
+        studio.update(id) { $0.sourceVoice = SourceStudioVoiceState(playlist: rows.map(\.selection), repeatMode: 0) }
+        try studio.sourceAudioBus.enableOfflineRendering()
+        actionPending = { [weak studio] in studio?.status.hasPrefix("Loading voice") == true }
+        actionSteps = [("stop all", false, { studio.stopSourceVoices() }),
+                       ("play 0 first", true, { studio.playSourceVoice(id, index: 0) }),
+                       ("play 0 again", true, { studio.playSourceVoice(id, index: 0) }),
+                       ("play 1", true, { studio.playSourceVoice(id, index: 1) }),
+                       ("play 2", true, { studio.playSourceVoice(id, index: 2) }),
+                       ("play 1 again", true, { studio.playSourceVoice(id, index: 1) })]
+        let directory = url.deletingLastPathComponent()
+        trace.details["actionSourceKey"] = Int(target.sourceObjectKey ?? -1)
+        trace.details["voiceCatalog"] = ["file": url.lastPathComponent, "bytes": (try? Data(contentsOf: url).count) ?? -1,
+                                         "rows": catalog.entries.count] as [String: Any]
+        trace.details["voiceClips"] = rows.enumerated().map { index, row -> [String: Any] in
+            let bytes = (try? directory.appendingPathComponent(row.file ?? "").resourceValues(forKeys: [.fileSizeKey]).fileSize) ?? -1
+            return ["index": index, "sha256": String((row.sha256 ?? "").prefix(12)), "bytes": bytes]
+        }
+        trace.details["voiceOutput"] = "offline manual rendering"
+        trace.details["gesture"] = "stop all, play 0, 0, 1, 2, 1 on source key \(target.sourceObjectKey ?? -1), repeated; live animation off"
+    }
+
     /// `studio-edit-steps` (#409): `IKKOKU_PERF_EDITS` single-object edits
     /// of `actionTarget`'s object through the inspector's call
     /// (`StudioModel.update`), each its own undo step (`endUndoCoalescing`
@@ -1125,8 +1179,15 @@ final class PerfWorkloadDriver {
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.001) { self.waitForAction() }
             return
         }
+        // #445: a workload's own background work (a voice still loading).
+        if actionPending?() == true {
+            actionWaited = true
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.001) { self.waitForAction() }
+            return
+        }
         let installed = PerfTrace.lastCharacterInstall
-        let ready = installed >= action.start ? max(action.end, installed) : action.end
+        var ready = installed >= action.start ? max(action.end, installed) : action.end
+        if actionWaited { ready = max(ready, CACurrentMediaTime()); actionWaited = false }
         let error = app.errorMessage
         app.errorMessage = nil
         // The process footprint and Metal allocation when the action is ready:

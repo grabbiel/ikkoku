@@ -163,28 +163,64 @@ public struct SourceStudioVoiceCatalog: Decodable, Sendable {
     }
     public let schemaVersion: Int, kind: String, entries: [Entry]
     public let personalities: [Personality]?, voiceVolume: Float?
+    /// Each selection's row in `entries`, built by `load` (#445): a play
+    /// looks its row up instead of scanning up to 100,000 rows.
+    private var rows: [SourceStudioVoiceState.Selection: Int] = [:]
+    private enum CodingKeys: String, CodingKey { case schemaVersion, kind, entries, personalities, voiceVolume }
     public func volume(personality: Int) -> Float { personalities?.first(where: { $0.no == personality })?.volume ?? 0 }
     public static func load(url: URL) throws -> Self {
-        let result = try JSONDecoder().decode(Self.self, from: read(url, maximum: 16 * 1024 * 1024))
+        var result = try JSONDecoder().decode(Self.self, from: read(url, maximum: 16 * 1024 * 1024))
+        result.rows = Dictionary(result.entries.enumerated().map { ($0.element.selection, $0.offset) }, uniquingKeysWith: { first, _ in first })
         guard result.schemaVersion == 1, result.kind == "ikkoku-studio-voice-catalog", result.entries.count <= 100_000,
-              Set(result.entries.map(\.selection)).count == result.entries.count else { throw RigError.invalid("Invalid or ambiguous Studio voice catalog.") }
+              result.rows.count == result.entries.count else { throw RigError.invalid("Invalid or ambiguous Studio voice catalog.") }
         guard result.voiceVolume.map({ $0.isFinite && (0...1).contains($0) }) ?? true,
               result.personalities?.allSatisfy({ $0.volume.isFinite && (0...1).contains($0.volume) }) ?? true,
               Set(result.personalities?.map(\.no) ?? []).count == (result.personalities?.count ?? 0) else { throw RigError.invalid("Invalid personality voice volumes.") }
         return result
     }
-    public func asset(_ selection: SourceStudioVoiceState.Selection, directory: URL) throws -> URL {
-        guard let entry = entries.first(where: { $0.selection == selection }), let file = entry.file, let hash = entry.sha256,
+
+    /// A selection's converted audio: its file, relative to the catalog's
+    /// folder, and the SHA-256 identity the converter named it by
+    /// (`studio_voice.py` writes `<sha256>.wav`).
+    public struct Clip: Sendable, Equatable {
+        public let file: String, sha256: String
+        public init(file: String, sha256: String) { self.file = file; self.sha256 = sha256 }
+    }
+
+    /// The selection's row and converted audio (#445). Reads no file.
+    public func clip(_ selection: SourceStudioVoiceState.Selection) throws -> Clip {
+        let row = rows.isEmpty ? entries.firstIndex(where: { $0.selection == selection }) : rows[selection]
+        guard let row, let file = entries[row].file, let hash = entries[row].sha256,
               !file.hasPrefix("/"), !file.split(separator: "/").contains("..") else {
             throw RigError.invalid("Selected Studio voice \(selection.group)/\(selection.category)/\(selection.no) has no converted audio.")
         }
-        let root = directory.resolvingSymlinksInPath(), url = root.appendingPathComponent(file).resolvingSymlinksInPath()
+        return Clip(file: file, sha256: hash)
+    }
+
+    /// `clip`'s file inside `directory`, symbolic links resolved; a file
+    /// that resolves outside the catalog's folder is refused.
+    public static func contained(_ clip: Clip, directory: URL) throws -> URL {
+        let root = directory.resolvingSymlinksInPath(), url = root.appendingPathComponent(clip.file).resolvingSymlinksInPath()
         guard url.path.hasPrefix(root.path + "/") else { throw RigError.invalid("Studio voice file escapes its catalog.") }
-        let bytes = try Self.read(url, maximum: 128 * 1024 * 1024)
-        guard SHA256.hash(data: bytes).map({ String(format: "%02x", $0) }).joined() == hash else { throw RigError.invalid("Studio voice file hash does not match its identity.") }
         return url
     }
-    private static func read(_ url: URL, maximum: Int) throws -> Data {
+
+    /// The bytes of the verified file: `url`'s bytes, read once, refused
+    /// unless they hash to `sha256`.
+    public static func verified(_ url: URL, sha256: String) throws -> Data {
+        let bytes = try read(url, maximum: 128 * 1024 * 1024)
+        guard SHA256.hash(data: bytes).map({ String(format: "%02x", $0) }).joined() == sha256 else {
+            throw RigError.invalid("Studio voice file hash does not match its identity.")
+        }
+        return bytes
+    }
+
+    public func asset(_ selection: SourceStudioVoiceState.Selection, directory: URL) throws -> URL {
+        let clip = try clip(selection), url = try Self.contained(clip, directory: directory)
+        _ = try Self.verified(url, sha256: clip.sha256)
+        return url
+    }
+    static func read(_ url: URL, maximum: Int) throws -> Data {
         let v = try url.resourceValues(forKeys: [.isRegularFileKey, .fileSizeKey])
         guard v.isRegularFile == true, let size = v.fileSize, size > 0, size <= maximum else { throw RigError.invalid("Studio voice input must be a bounded regular file.") }
         let handle = try FileHandle(forReadingFrom: url); defer { try? handle.close() }
