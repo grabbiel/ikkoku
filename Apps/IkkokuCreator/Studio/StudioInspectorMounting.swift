@@ -204,7 +204,11 @@ extension EnvironmentValues {
 /// rounded one.
 @MainActor
 enum InspectorTextFieldHeight {
-    /// The Name field: the automatic style at the body font.
+    /// SwiftUI's automatic style at the body font. The Name field no longer
+    /// lays out with it: it is `InspectorNameField`, which sizes itself. The
+    /// fit log reports this height so the object-heights check can compare it
+    /// with the Name field's own height: the AppKit field must stay as tall as
+    /// the SwiftUI field it replaced.
     static let name = measured(.squareBezel, .body)
     /// VectorRow's fields: `.roundedBorder` at the caption font.
     static let vector = measured(.roundedBezel, .caption1)
@@ -215,5 +219,56 @@ enum InspectorTextFieldHeight {
         field.bezelStyle = bezel
         field.font = .preferredFont(forTextStyle: style)
         return field.intrinsicContentSize.height
+    }
+}
+
+/// #366: the Object tab's Name field as an AppKit text field that SwiftUI
+/// sizes by asking it. With SwiftUI's `TextField`, a selection change
+/// sometimes laid the field out at the Transform fields' measured height
+/// (21 pt inside its 24 pt slot), even with an explicit frame. Here
+/// `sizeThatFits` returns the field's own intrinsic height for any proposal,
+/// so no other field's height can reach it. The field matches SwiftUI's
+/// automatic style: square bezel, body font, one line, placeholder "Name"
+/// (the fit log and the inspector-UI scenario ops find the field by it).
+/// Every keystroke writes the binding, as `TextField` does, so the undo
+/// coalescing (#390) sees the same writes.
+struct InspectorNameField: NSViewRepresentable {
+    @Binding var text: String
+
+    func makeCoordinator() -> Coordinator { Coordinator(self) }
+
+    func makeNSView(context: Context) -> NSTextField {
+        let field = NSTextField(string: text)
+        field.placeholderString = "Name"
+        field.isBezeled = true
+        field.bezelStyle = .squareBezel
+        field.font = .preferredFont(forTextStyle: .body)
+        field.cell?.isScrollable = true
+        field.cell?.wraps = false
+        field.usesSingleLineMode = true
+        field.delegate = context.coordinator
+        return field
+    }
+
+    func updateNSView(_ field: NSTextField, context: Context) {
+        // The binding names the shown object; a kept view must not write to an earlier one.
+        context.coordinator.parent = self
+        if field.stringValue != text { field.stringValue = text }
+    }
+
+    func sizeThatFits(_ proposal: ProposedViewSize, nsView field: NSTextField, context: Context) -> CGSize? {
+        let intrinsic = field.intrinsicContentSize
+        return CGSize(width: proposal.width ?? max(intrinsic.width, 0), height: intrinsic.height)
+    }
+
+    @MainActor
+    final class Coordinator: NSObject, NSTextFieldDelegate {
+        var parent: InspectorNameField
+        init(_ parent: InspectorNameField) { self.parent = parent }
+
+        func controlTextDidChange(_ notification: Notification) {
+            guard let field = notification.object as? NSTextField else { return }
+            parent.text = field.stringValue
+        }
     }
 }

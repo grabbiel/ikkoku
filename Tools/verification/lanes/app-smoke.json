@@ -186,7 +186,7 @@
       ],
       "env": {},
       "referenceTier": "app-smoke",
-      "tolerance": "Validates the fit log of studio-inspector-object-heights-capture: one captured line showing character 963 on the Object tab, the inspector fit as for every capture, and with --object-heights 24 21 (#366's R2 on this machine) the explicit text-field heights the inspector lays out with (InspectorTextFieldHeight, measured from an AppKit prototype with SwiftUI's bezel and font) at 24 pt for the Name field and 21 pt for the Transform fields, equal to SwiftUI's own fields: the Name field's intrinsic height 24 pt and every other editable field's 21 pt. Frame heights are not judged: in about 1% of launches the Name field is still laid out 21 pt inside its 24 pt slot (#366's residue, which stays open).",
+      "tolerance": "Validates the fit log of studio-inspector-object-heights-capture: one captured line showing character 963 on the Object tab, the inspector fit as for every capture, and with --object-heights 24 21 (#366's R2 on this machine) the heights measured from an AppKit prototype with SwiftUI's bezel and font (InspectorTextFieldHeight): 24 pt for SwiftUI's automatic style and 21 pt for the Transform fields, which lay out with it. The Name field is an AppKit field (InspectorNameField) sized by its own intrinsic height, which must be 24 pt, as tall as SwiftUI's field; every other editable field's intrinsic height must be 21 pt. Frame heights are not judged: one capture cannot show a rate.",
       "timeout": 120
     },
     {
