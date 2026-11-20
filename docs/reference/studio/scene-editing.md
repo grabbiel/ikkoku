@@ -2338,5 +2338,16 @@ The eye now has no system focus effect (`.focusEffectDisabled()`) and draws its 
   - About one dependency (with its context and blocks) per load remains. It is within the bar and not attributed.
   - The 82bde896 run flagged `_ContiguousArrayStorage<Int>` at 2.00 per load. That is the harness's own record: `studio-load`'s per-action body counts, two small Int arrays per load. It was reviewed and not counted.
   - A v2.1 run of main 0d7eb327 showed 58 flags that a v2.2 rerun of the same executable did not reproduce (0 flags); they are not attributed.
-- **The workspace checks**, on 6d19740c and again after merging main 977d87c2: `workspace-rows-by-position` 25 of 25 steps, `workspace-list-geometry` 44 of 44, `workspace-eye-focus` 3 of 3 (the render path; Full Keyboard Access was off) and `workspace-bodies` 18 of 18.
-- **Cost** (an unregistered smoke run, not timing): the gc22 workload on Release builds, 6d19740c against main 0d7eb327, in the order head, base, base, head, in one hold of the app lock. The main thread's own busy time per load (median) was 219.9 and 217.8 ms on the head against 189.5 and 198.1 ms on main, about 25 ms more. The time until a load was ready was unchanged: 117.5 and 116.6 ms against 115.9 and 114.6 ms. The cost matches the 64 rows a load builds instead of 40, about 1 ms per added row; it was not profiled. The head runs had the higher system load (load1 31.3 and 12.8 at their starts, against 15.4 and 7.2).
+- **The workspace checks**, on 6d19740c and again after merging main 977d87c2 and 59550a63: `workspace-rows-by-position` 25 of 25 steps, `workspace-list-geometry` 44 of 44, `workspace-eye-focus` 3 of 3 (the render path; Full Keyboard Access was off) and `workspace-bodies` 18 of 18.
+- **Cost**, registered in the quiet window W23 (plan sha256 39aff772): `studio-load` on the corpus scene, 65 s per unit (76 loads), Release builds of the merged head cca595b4 against main 59550a63, in the order head, base, base, head twice, in one hold of the app lock, with the pre-try quiet wait and the 20% intruder rule. All 8 units were valid; one head try was rerun after `corespotlightd` ran at 187% CPU right after it.
+
+  | Arm | Main-thread busy time per load (median of 4 unit medians) | Time to ready | Row bodies per load |
+  |---|---|---|---|
+  | head cca595b4 | 219.8 ms | 138.2 ms | 64.0 |
+  | main 59550a63 | 202.6 ms | 137.1 ms | 39.5 |
+
+  - The head costs 17.2 ms more main-thread busy time per load (the round pairs: +17.7, +8.3, +16.8 and +18.1 ms) and 1.1 ms more time to ready. Under the rule set before the run (merge at no more than 30 ms busy and +5 ms ready), the result is merge.
+  - Where it goes: a load builds the 64 slots ahead of any scroll instead of the about 40 rows on screen, so 24.5 more row bodies, each in its slot, about 0.7 ms per added row. It was not profiled.
+  - It is a per-load cost. A selection change, an eye toggle or an idle refresh evaluates at most 2 rows (`workspace-bodies`).
+  - A cheaper design would size the slots from the window's current height instead of the tallest screen.
+  - An earlier unregistered smoke run (about 25 ms) was confounded by system load (load1 31.3 and 12.8 at the head runs' starts, against 15.4 and 7.2). The registered result replaces it.
