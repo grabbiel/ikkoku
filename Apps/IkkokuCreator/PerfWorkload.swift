@@ -52,13 +52,36 @@ final class PerfWorkloadDriver {
     /// status line and any error alert they left.
     private var actionSteps: [(name: String, measured: Bool, run: () -> Void)] = []
     private var actionIndex = 0
-    private var pendingAction: (name: String, measured: Bool, start: CFTimeInterval, end: CFTimeInterval, bodies: [Int])?
+    private var pendingAction: (name: String, measured: Bool, start: CFTimeInterval, end: CFTimeInterval, bodies: [Int],
+                                cpuMs: Double, live: LiveCall?)?
     private var finishedActions: [(name: String, measured: Bool, start: CFTimeInterval, end: CFTimeInterval, ready: CFTimeInterval,
                                    status: String, error: String?, footprint: UInt64, metal: Int, objects: Int,
-                                   bodies: [Int], workspaceRows: Int)] = []
+                                   bodies: [Int], workspaceRows: Int,
+                                   history: (undo: Int, redo: Int, storage: StudioObjectStorageCensus.Count)?,
+                                   cpuMs: Double, live: LiveCall?)] = []
     /// #410: the workspace bodies counted per action, from its call to the
     /// next action's (`workspaceBodies`), in this order.
     private static let workspaceBodyViews: [PerfTrace.ViewBody] = [.studioWorkspaceRow, .studioWorkspacePlaceholder]
+    /// `studio-edit-steps` (#409): the actions run once, not repeated, and
+    /// the run stops after the last; each finished action records the undo
+    /// and redo depth and the `objects` buffers they and the document hold.
+    private var stopAfterActions = false
+    private var countHistoryStorage = false
+    /// A pause step's hold: no action starts before this media time (0: none).
+    private var holdUntil: CFTimeInterval = 0
+    /// `IKKOKU_PERF_EDIT_PHASES=alternate` (#409, #446): per action, by its
+    /// index in `actionSteps`, the live-step phase its call is placed at, or
+    /// nil (the call runs when the action starts). Empty for every other run.
+    private var actionPhases: [StudioModel.LivePhase?] = []
+    /// Whether each call records the live-step settles in it (`LiveCall`).
+    private var countLiveSettles = false
+    /// The placed call waiting for its phase (`place`): its number, the
+    /// action, the phase, when the hook was armed and the serial live steps
+    /// counted by then.
+    private var placements = 0
+    private var waitingPlacement: (token: Int, step: (name: String, measured: Bool, run: () -> Void),
+                                   phase: StudioModel.LivePhase, armed: CFTimeInterval, serialSteps: Int)?
+    private var stopped = false
     /// #440: the last park handled and each park's record (`details.parks`).
     private var lastPark = 0
     private var parks: [[String: Any]] = []
@@ -202,6 +225,9 @@ final class PerfWorkloadDriver {
     }
 
     private func stop() {
+        guard !stopped else { return }
+        stopped = true
+        if waitingPlacement != nil { app.studio?.livePhaseHook = nil; waitingPlacement = nil }
         inputTimer?.invalidate(); inputTimer = nil
         loadTimer?.invalidate(); loadTimer = nil
         if !lifecycle.isEmpty { finishLifecycle() }
@@ -250,6 +276,7 @@ final class PerfWorkloadDriver {
         case "studio-export-import": try prepareStudioExportImport()
         case "studio-show-hidden": try prepareStudioShowHidden()
         case "studio-clock-first": try prepareStudioClockFirst()
+        case "studio-edit-steps": try prepareStudioEditSteps()
         default: throw RigError.invalid("unknown workload \(workload)")
         }
     }
@@ -797,6 +824,94 @@ final class PerfWorkloadDriver {
         InspectorUIScenario.scrollWorkspace(scroll, toEnd: toEnd)
     }
 
+    /// `studio-edit-steps` (#409): `IKKOKU_PERF_EDITS` single-object edits
+    /// of `actionTarget`'s object through the inspector's call
+    /// (`StudioModel.update`), each its own undo step (`endUndoCoalescing`
+    /// first, as the scenario runner does per step): its x position moves
+    /// 0.001, or with `IKKOKU_PERF_EDIT_FIELD=pose` its neck rotation in the
+    /// pose delta turns 0.5 degrees. Each edit is followed by a same-value
+    /// write, `update` with the value it has, which takes no undo step (#390):
+    /// the control on the same path. Every action records the undo and redo
+    /// depth and the distinct `objects` buffers the document and both stacks
+    /// hold (`StudioObjectStorageCensus`), and the live-step settles in its
+    /// call (`LiveCall`). With `IKKOKU_PERF_EDIT_PHASES=alternate` each call
+    /// runs at the next live step's completion: odd edits after the step's
+    /// commit (no step pending), even edits before it (the edit commits the
+    /// finished step), each write in its edit's phase (`place`). After the
+    /// edits `IKKOKU_PERF_PAUSE_AT` lists (0: before the first) a pause step
+    /// holds the run for an outside reader (`pause(after:)`). The actions run
+    /// once, and the run stops after the last.
+    private func prepareStudioEditSteps() throws {
+        let studio = try prepareStudioSource(selectKey: nil)
+        let target = try actionTarget(studio)
+        let id = target.id
+        if !configuration.pauseAt.isEmpty {
+            guard let marker = configuration.pauseMarker, marker.split(separator: "/").contains(".local") else {
+                throw RigError.invalid("IKKOKU_PERF_PAUSE_AT needs IKKOKU_PERF_PAUSE_MARKER, a folder under a .local folder")
+            }
+            try FileManager.default.createDirectory(at: URL(fileURLWithPath: marker), withIntermediateDirectories: true)
+        }
+        let edit: (inout StudioObject) -> Void, control: (inout StudioObject) -> Void
+        if configuration.editField == "pose" {
+            edit = { $0.poseDelta.rotations["cf_j_neck", default: .zero].x += 0.5 }
+            control = { $0.poseDelta = $0.poseDelta }
+        } else {
+            edit = { $0.transform.position.x += 0.001 }
+            control = { $0.transform.position.x = $0.transform.position.x }
+        }
+        let alternate = configuration.editPhases == "alternate"
+        var steps: [(name: String, measured: Bool, run: () -> Void)] = []
+        var phases: [StudioModel.LivePhase?] = []
+        func pauseStep(_ edits: Int) {
+            guard configuration.pauseAt.contains(edits) else { return }
+            steps.append(("pause \(edits)", false, { [weak self] in self?.pause(after: edits) }))
+            phases.append(nil)
+        }
+        pauseStep(0)
+        for n in 1...configuration.edits {
+            let phase: StudioModel.LivePhase? = alternate ? (n % 2 == 1 ? .afterCommit : .beforeCommit) : nil
+            steps.append(("edit \(n)", true, {
+                studio.endUndoCoalescing()
+                studio.update(id, edit)
+            }))
+            steps.append(("same-value write \(n)", true, {
+                studio.endUndoCoalescing()
+                studio.update(id, control)
+            }))
+            phases += [phase, phase]
+            pauseStep(n)
+        }
+        actionSteps = steps
+        actionPhases = alternate ? phases : []
+        stopAfterActions = true
+        countHistoryStorage = true
+        countLiveSettles = true
+        trace.details["actionSourceKey"] = Int(target.sourceObjectKey ?? -1)
+        trace.details["actionObjectKind"] = "\(target.kind)"
+        trace.details["edits"] = configuration.edits
+        trace.details["pauseAt"] = configuration.pauseAt.sorted()
+        trace.details["studioObjectStride"] = MemoryLayout<StudioObject>.stride
+        trace.details["undoLimit"] = StudioUndoHistory<StudioDocument>.limit
+        trace.details["editField"] = configuration.editField
+        trace.details["editPhases"] = configuration.editPhases
+        let change = configuration.editField == "pose" ? "neck rotation + 0.5 in the pose delta" : "x + 0.001"
+        let placed = alternate ? ", each at a live step's completion, odd edits after its commit and even edits before" : ""
+        trace.details["gesture"] = "\(configuration.edits) single-object edits (\(change), each its own undo step) on source key "
+            + "\(target.sourceObjectKey ?? -1), each followed by a same-value write\(placed); live animation on; run once"
+    }
+
+    /// Writes this process's id to `pause-<n>.pid` in `IKKOKU_PERF_PAUSE_MARKER`
+    /// and holds the next action for `IKKOKU_PERF_PAUSE_SECONDS`. The hold is a
+    /// timer, not a block, so the main run loop sleeps while an outside tool
+    /// (footprint, vmmap, heap) reads this process by that id.
+    private func pause(after edits: Int) {
+        guard let marker = configuration.pauseMarker else { return }
+        let file = URL(fileURLWithPath: marker).appendingPathComponent("pause-\(edits).pid")
+        do { try Data("\(ProcessInfo.processInfo.processIdentifier)\n".utf8).write(to: file, options: .atomic) }
+        catch { print("[ikkoku] perf pause \(edits): marker not written: \(error)") }
+        holdUntil = CACurrentMediaTime() + configuration.pauseSeconds
+    }
+
     /// `studio-select` (R7 phase 2, item 7): the selection a click makes
     /// (`selection = id`, the call of a workspace row's tap and of a viewport
     /// click on an object; a click on empty space sets nil) through a fixed
@@ -859,13 +974,86 @@ final class PerfWorkloadDriver {
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.01) { self.runNextAction() }
             return
         }
+        if holdUntil > 0 {
+            let wait = holdUntil - CACurrentMediaTime()
+            if wait > 0 { DispatchQueue.main.asyncAfter(deadline: .now() + wait) { self.runNextAction() }; return }
+            holdUntil = 0
+        }
+        if stopAfterActions, actionIndex >= actionSteps.count { stop(); return }
         if parkIfRequested() { return }
-        let step = actionSteps[actionIndex % actionSteps.count]
+        let index = actionIndex % actionSteps.count
         actionIndex += 1
+        if index < actionPhases.count, let phase = actionPhases[index], let studio = app.studio {
+            place(actionSteps[index], at: phase, in: studio)
+            return
+        }
+        call(actionSteps[index], placement: nil)
+    }
+
+    /// Where a placed call ran: its phase, whether a live step offered it in
+    /// time, when the hook was armed, and the serial steps counted by then.
+    private struct Placement {
+        let phase: StudioModel.LivePhase
+        let placed: Bool
+        let armed: CFTimeInterval
+        let serialSteps: Int
+    }
+
+    /// What a `studio-edit-steps` call found of the live step (#409): the
+    /// settles in it that found a step pending, and of those the ones that
+    /// waited for running workers. A placed call adds its `Placement`, the
+    /// serial live steps from arming to the call's end, and the build work
+    /// pending at the call.
+    private struct LiveCall {
+        let pendingSettles: Int
+        let unfinishedWaits: Int
+        let placement: Placement?
+        let serialSteps: Int
+        let pendingWork: Int
+    }
+
+    /// Arms the Studio's `livePhaseHook` so the action's call runs at the next
+    /// live step's completion that offers `phase`. Half a second without one
+    /// (about 15 steps) runs the call unplaced, recorded as such.
+    private func place(_ step: (name: String, measured: Bool, run: () -> Void), at phase: StudioModel.LivePhase,
+                       in studio: StudioModel) {
+        placements += 1
+        let token = placements
+        waitingPlacement = (token, step, phase, CACurrentMediaTime(), PerfTrace.eventCount(.studioLiveTickSerial))
+        studio.livePhaseHook = (phase, { [weak self] in self?.placedCall(token, placed: true) })
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { [weak self] in self?.placedCall(token, placed: false) }
+    }
+
+    /// The waiting call `token`, at its phase (`placed`) or after the timeout.
+    private func placedCall(_ token: Int, placed: Bool) {
+        guard let waiting = waitingPlacement, waiting.token == token else { return }
+        waitingPlacement = nil
+        if !placed { app.studio?.livePhaseHook = nil }
+        guard trace.recording else { return }
+        call(waiting.step, placement: Placement(phase: waiting.phase, placed: placed, armed: waiting.armed,
+                                                serialSteps: waiting.serialSteps))
+    }
+
+    /// Runs one action's call, timed by the media clock (`callMs`) and by the
+    /// main thread's CPU time (`callCpuMs`, read right before the start and
+    /// right after the end), then waits for its builds.
+    private func call(_ step: (name: String, measured: Bool, run: () -> Void), placement: Placement?) {
+        let studio = countLiveSettles ? app.studio : nil
+        let settles = studio?.livePendingSettles ?? 0, waits = studio?.liveUnfinishedWaits ?? 0
+        let pendingWork = studio?.pendingSourceActionWork ?? 0
         let bodies = Self.workspaceBodyViews.map(PerfTrace.bodyCount)
+        let cpu = clock_gettime_nsec_np(CLOCK_THREAD_CPUTIME_ID)
         let start = CACurrentMediaTime()
         step.run()
-        pendingAction = (step.name, step.measured, start, CACurrentMediaTime(), bodies)
+        let end = CACurrentMediaTime()
+        let cpuMs = Double(clock_gettime_nsec_np(CLOCK_THREAD_CPUTIME_ID) &- cpu) / 1e6
+        let live = studio.map { studio in
+            LiveCall(pendingSettles: studio.livePendingSettles &- settles, unfinishedWaits: studio.liveUnfinishedWaits &- waits,
+                     placement: placement,
+                     serialSteps: placement.map { PerfTrace.eventCount(.studioLiveTickSerial) - $0.serialSteps } ?? 0,
+                     pendingWork: pendingWork)
+        }
+        pendingAction = (step.name, step.measured, start, end, bodies, cpuMs, live)
         waitForAction()
     }
 
@@ -927,9 +1115,14 @@ final class PerfWorkloadDriver {
         // flat across repeated loads means nothing accumulates per cycle. The
         // document's object count (read after the timed span) shows what an
         // edit added or an undo restored.
+        let history = countHistoryStorage ? app.studio.map { studio in
+            (studio.undoStack.count, studio.redoStack.count,
+             StudioObjectStorageCensus.count([studio.doc] + studio.undoStack + studio.redoStack))
+        } : nil
         finishedActions.append((action.name, action.measured, action.start, action.end, ready, app.studio?.status ?? "", error,
                                 PerfTrace.footprint(), trace.device?.currentAllocatedSize ?? 0, app.studio?.doc.objects.count ?? -1,
-                                action.bodies, app.studio?.shownWorkspaceState.entries.count ?? -1))
+                                action.bodies, app.studio?.shownWorkspaceState.entries.count ?? -1, history,
+                                action.cpuMs, action.live))
         pendingAction = nil
         DispatchQueue.main.asyncAfter(deadline: .now() + (action.measured ? 0.5 : 0.2)) { self.runNextAction() }
     }
@@ -959,7 +1152,7 @@ final class PerfWorkloadDriver {
             let overlapping = busy.filter { $0.end > action.start && $0.start <= action.ready }
             let lengths = overlapping.map { ($0.end - max($0.start, action.start)) * 1000 }
             let own = overlapping.map { max(0, min($0.end, next) - max($0.start, action.start)) * 1000 }
-            return ["name": action.name, "measured": action.measured,
+            var row: [String: Any] = ["name": action.name, "measured": action.measured,
                     "startSeconds": PerfTrace.round(action.start - recordingStart),
                     "callMs": PerfTrace.round((action.end - action.start) * 1000),
                     "readyMs": PerfTrace.round((action.ready - action.start) * 1000),
@@ -970,6 +1163,21 @@ final class PerfWorkloadDriver {
                     "footprintBytes": action.footprint, "metalAllocatedBytes": action.metal,
                     "documentObjects": action.objects,
                     "workspaceBodies": bodies, "workspaceRows": action.workspaceRows]
+            row["callCpuMs"] = PerfTrace.round(action.cpuMs)
+            if let history = action.history {
+                row["undoSteps"] = history.undo; row["redoSteps"] = history.redo
+                row["objectBuffers"] = history.storage.buffers; row["objectBufferCapacity"] = history.storage.capacity
+                row["objectBufferBytes"] = history.storage.bytes
+            }
+            if let live = action.live {
+                row["livePendingSettles"] = live.pendingSettles; row["liveUnfinishedWaits"] = live.unfinishedWaits
+                if let placement = live.placement {
+                    row["livePhase"] = placement.phase.rawValue; row["placed"] = placement.placed
+                    row["placementWaitMs"] = PerfTrace.round((action.start - placement.armed) * 1000)
+                    row["liveSerialSteps"] = live.serialSteps; row["pendingWorkAtCall"] = live.pendingWork
+                }
+            }
+            return row
         }
     }
 

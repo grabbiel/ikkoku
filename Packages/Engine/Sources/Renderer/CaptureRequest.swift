@@ -456,6 +456,12 @@ extension CaptureRequest {
         ScopedOption("IKKOKU_PERF_PANEL_STATE", [.perfTrace]),
         ScopedOption("IKKOKU_PERF_LOAD_SMALL_OBJECTS", [.perfTrace]),
         ScopedOption("IKKOKU_PERF_WORKSPACE_SLOT_CAP", [.perfTrace]),
+        ScopedOption("IKKOKU_PERF_EDITS", [.perfTrace]),
+        ScopedOption("IKKOKU_PERF_PAUSE_AT", [.perfTrace]),
+        ScopedOption("IKKOKU_PERF_PAUSE_SECONDS", [.perfTrace]),
+        ScopedOption("IKKOKU_PERF_PAUSE_MARKER", [.perfTrace]),
+        ScopedOption("IKKOKU_PERF_EDIT_FIELD", [.perfTrace]),
+        ScopedOption("IKKOKU_PERF_EDIT_PHASES", [.perfTrace]),
         ScopedOption("IKKOKU_PERF_PARK_FILE", [.perfTrace]),
         ScopedOption("IKKOKU_PERF_FOCUS_PROBE", [.perfTrace]),
     ]
@@ -627,6 +633,19 @@ extension CaptureRequest {
         // shows fewer rows.
         ValueRule("IKKOKU_PERF_LOAD_SMALL_OBJECTS", .integer(1...10_000)),
         ValueRule("IKKOKU_PERF_WORKSPACE_SLOT_CAP", .integer(0...100_000)),
+        // `studio-edit-steps` (#409): how many single-object edits it makes,
+        // after which edits it holds for an outside reader, and how long.
+        // The marker folder (`IKKOKU_PERF_PAUSE_MARKER`) must lie under a
+        // `.local` folder; the workload checks it.
+        ValueRule("IKKOKU_PERF_EDITS", .integer(1...500)),
+        ValueRule("IKKOKU_PERF_PAUSE_AT", .integerList(0...500, maxCount: 32)),
+        ValueRule("IKKOKU_PERF_PAUSE_SECONDS", .integer(1...30)),
+        // Which field each edit writes (the x position, or a neck rotation
+        // in the pose delta), and whether each edit runs at a fixed point of
+        // a live step's completion, alternating before and after its commit
+        // (#409, #446).
+        ValueRule("IKKOKU_PERF_EDIT_FIELD", .oneOf(["x", "pose"])),
+        ValueRule("IKKOKU_PERF_EDIT_PHASES", .oneOf(["none", "alternate"])),
         // #440: the focus probe's buttons (the growth check's positive
         // control); `IKKOKU_PERF_PARK_FILE` is any path.
         ValueRule("IKKOKU_PERF_FOCUS_PROBE", .integer(1...64)),
@@ -638,7 +657,7 @@ extension CaptureRequest {
         "studio-native", "viewport-lifecycle", "startup", "studio-static", "studio-orbit-bursts",
         "studio-duplicate", "studio-undo-delete", "studio-timeline",
         "studio-outfit", "studio-export", "studio-redo", "studio-load", "studio-select",
-        "studio-export-import", "studio-show-hidden", "studio-clock-first", "maker-tabs",
+        "studio-export-import", "studio-show-hidden", "studio-clock-first", "studio-edit-steps", "maker-tabs",
     ]
 }
 

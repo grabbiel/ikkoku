@@ -210,6 +210,25 @@ final class PerfTrace {
         /// shows, lowercased ("object", the default, "pose", "face",
         /// "clothes" or "scene").
         let inspectorTab: String?
+        /// `IKKOKU_PERF_EDITS`: how many single-object edits
+        /// `studio-edit-steps` makes (#409, default 90).
+        let edits: Int
+        /// `IKKOKU_PERF_PAUSE_AT`: after how many of those edits it holds
+        /// (0 is before the first) so an outside tool can read the process,
+        /// for `IKKOKU_PERF_PAUSE_SECONDS` (default 10), after writing its
+        /// process id to `pause-<n>.pid` in `IKKOKU_PERF_PAUSE_MARKER`.
+        let pauseAt: Set<Int>
+        let pauseSeconds: Double
+        let pauseMarker: String?
+        /// `IKKOKU_PERF_EDIT_FIELD`: what each `studio-edit-steps` edit
+        /// writes, `x` (the x position, default) or `pose` (a neck rotation
+        /// in the pose delta).
+        let editField: String
+        /// `IKKOKU_PERF_EDIT_PHASES`: `none` (default) runs each edit half a
+        /// second after the previous action is ready; `alternate` then runs
+        /// it at the next live step's completion, odd edits after the step's
+        /// commit and even edits before it (#409, #446).
+        let editPhases: String
         /// `IKKOKU_PERF_PARK_FILE` (#440): the growth check's park file; nil
         /// (the default) never parks (`PerfWorkloadDriver.parkIfRequested`).
         let parkFile: String?
@@ -242,6 +261,12 @@ final class PerfTrace {
                 outfit: env["IKKOKU_PERF_OUTFIT"].flatMap { Int($0) },
                 selectKeys: env["IKKOKU_PERF_SELECT_KEYS"].map { $0.split(separator: ",").compactMap { Int32($0) } },
                 inspectorTab: env["IKKOKU_PERF_INSPECTOR_TAB"],
+                edits: int("IKKOKU_PERF_EDITS", 90),
+                pauseAt: Set((env["IKKOKU_PERF_PAUSE_AT"] ?? "").split(separator: ",").compactMap { Int($0) }),
+                pauseSeconds: Double(int("IKKOKU_PERF_PAUSE_SECONDS", 10)),
+                pauseMarker: env["IKKOKU_PERF_PAUSE_MARKER"],
+                editField: env["IKKOKU_PERF_EDIT_FIELD"] ?? "x",
+                editPhases: env["IKKOKU_PERF_EDIT_PHASES"] ?? "none",
                 parkFile: env["IKKOKU_PERF_PARK_FILE"])
         }
     }
@@ -430,6 +455,14 @@ final class PerfTrace {
     static func bodyCount(_ view: ViewBody) -> Int {
         guard let trace = active, trace.recording else { return 0 }
         return trace.bodyCounts[view.rawValue]
+    }
+
+    /// How many `event`s this recording has counted so far: 0 when no trace
+    /// records. `studio-edit-steps` reads the serial live steps per placed
+    /// edit (#409).
+    static func eventCount(_ event: Event) -> Int {
+        guard let trace = active, trace.recording else { return 0 }
+        return trace.eventCounts[event] ?? 0
     }
 
     // MARK: Recording window

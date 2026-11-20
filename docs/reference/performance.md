@@ -126,6 +126,7 @@ the run.
 | `studio-export-import` | as `studio-idle` | File ▸ Export Edited Original Scene (`AppState.exportSourceScene(to:)`) of the startup scene as imported, unedited, repeated, live animation on. A hidden character the import left unbuilt has no edit, so the export builds no baseline for it; its saved animation time comes from its data-only clock ([lazy hidden characters](#lazy-hidden-characters-at-import)). Each export writes a new file and removes the previous one |
 | `studio-show-hidden` | as `studio-idle` | Visible on (the inspector's toggle, `StudioModel.update`) for each hidden object of the startup scene that holds source characters (its own flag off, its ancestors shown), in workspace order, each followed by Visible off again (unmeasured), repeated, live animation on. An action's first run shows characters the import left unbuilt, so its ready time holds their builds; later runs find them built. Each action is named `show <source key> (<n> characters)` |
 | `studio-clock-first` | as `studio-idle` | the first clock rebase and the first native save after the import, then repeated, live animation on: `rebase` sets the first drawn character with a converted saved clip to its own animation speed (`setSourceAnimationSpeed`, which bakes every character's clock), `save` is File ▸ Save (`saveScene(to:)`) to a scratch file. The first bake's time is the `sourceClockBake` mark pair |
+| `studio-edit-steps` | as `studio-idle` | #409's memory count and edit cost: `IKKOKU_PERF_EDITS` (default 90) single-object edits of the `IKKOKU_PERF_ACTION_KEY` object through the inspector's call (`StudioModel.update`), each its own undo step, its x position moved 0.001 (or with `IKKOKU_PERF_EDIT_FIELD=pose` its neck rotation in the pose delta turned 0.5); each followed by a same-value write, which takes no undo step (#390), as the control. Each action also records the undo and redo depth and the distinct `objects` buffers the document and both stacks hold, with their malloc bytes (`StudioObjectStorageCensus`), and the live-step settles in its call. With `IKKOKU_PERF_EDIT_PHASES=alternate` each call runs at a fixed point of a live step ([placed edits](#placed-edits-409-446)). After the edits `IKKOKU_PERF_PAUSE_AT` lists it holds for an outside reader. The actions run once, and the run stops after the last |
 | `maker-tabs` | `IKKOKU_SOURCE_AVATAR` and the Maker library, no card | #440: the bundled character's Maker (the tabbed panel, not the source rig panel), its tabs selected in turn as the segmented control selects them (`MakerModel.tab`), repeated, live animation on. Each switch builds the tab's panel again, the tag and thumbnail grids included. When the original base opens, the workload first uses the source rig panel's "Use bundled prototype" (`closeSourceRig()`); it fails if the tabbed panel still does not show |
 
 Other options:
@@ -158,6 +159,17 @@ Other options:
   use source key 963 or the first source character. `studio-fk-drag` drags
   bone 19 of the character it names instead of source key 65.
 - `IKKOKU_PERF_OUTFIT` (0–6): the saved outfit `studio-outfit` selects.
+- `IKKOKU_PERF_EDITS` (1–500, default 90): the edits `studio-edit-steps`
+  makes. `IKKOKU_PERF_PAUSE_AT` (up to 32 comma-separated edit counts,
+  0–500; 0 is before the first edit): after those edits it writes its
+  process id to `pause-<n>.pid` in `IKKOKU_PERF_PAUSE_MARKER`, a folder that
+  must lie under a `.local` folder, and holds for `IKKOKU_PERF_PAUSE_SECONDS`
+  (1–30, default 10) so `footprint`, `vmmap` and `heap` can read the process
+  by that id. The hold is a timer, so the main run loop sleeps.
+- `IKKOKU_PERF_EDIT_FIELD` (`x` or `pose`, default `x`): what each
+  `studio-edit-steps` edit writes, and `IKKOKU_PERF_EDIT_PHASES` (`none` or
+  `alternate`, default `none`): where each edit's call runs
+  ([placed edits](#placed-edits-409-446)).
 - `IKKOKU_PERF_SELECT_KEYS` (1–64 comma-separated source keys): the objects
   `studio-select` selects in turn, and `IKKOKU_PERF_INSPECTOR_TAB`
   (`object`, `pose`, `face`, `clothes` or `scene`): the inspector tab it
@@ -301,7 +313,11 @@ locked `PerfDrawLog`. Everything else is recorded on the main thread.
   Since #410 each action also records the workspace row and empty-slot
   bodies evaluated from its call to the next action's (`workspaceBodies`),
   and the workspace rows it left (`workspaceRows`; the slots are
-  `workspaceSlotCap`, fixed for the run). `summarize` prints the
+  `workspaceSlotCap`, fixed for the run). Since #409 each action also
+  records the main thread's CPU time over its call (`callCpuMs`,
+  `CLOCK_THREAD_CPUTIME_ID` read right before the call starts and right after
+  it ends), and each `studio-edit-steps` action the live-step settles in its
+  call ([placed edits](#placed-edits-409-446)). `summarize` prints the
   medians per action (the own busy time in parentheses after the busy time, when
   the report has it), with the 120 Hz refresh periods the median and the
   longest stall cover (a 100 ms stall drops 12 frames), and warns about an
@@ -549,6 +565,39 @@ row per payload type `T`.
 The check needs the private source scene (`perf_trace.py`'s environment
 map), so no lane runs it. Results are in
 [Workspace list per scene (#410)](studio/scene-editing.md#workspace-list-per-scene-410).
+
+### Placed edits (#409, #446)
+
+An edit's call costs more when it finds a live step pending: its settle
+commits the step and its refresh does the step's refresh work. Run at half a
+second after the previous action, as every action workload runs, how many
+edits land in that state depends on the phase the run happens to lock into,
+and it differs from launch to launch. `IKKOKU_PERF_EDIT_PHASES=alternate`
+sets it by design instead. Each `studio-edit-steps` call runs at a live
+step's completion on the main actor (`StudioModel.liveTickFinished`):
+
+- odd edits (`afterCommit`) run after the step has committed and refreshed,
+  so the call finds no step pending;
+- even edits (`beforeCommit`) run before the step commits, with its workers
+  done, so the call's settle commits the step;
+- each same-value write runs in its edit's phase.
+
+The workload arms a one-shot hook (`StudioModel.livePhaseHook`) when the
+action would have started. The next completion that offers the phase runs
+the call, synchronously, so no step can start in between. A serial step, or
+a step something else already settled, offers neither phase. If no step
+offers it within half a second (about 15 steps), the call runs unplaced
+(`placed: false`).
+
+Each placed action records `livePhase`, `placed`, `placementWaitMs` (from
+arming to the call), `liveSerialSteps` (serial live steps from arming to the
+call's end) and `pendingWorkAtCall`. Every `studio-edit-steps` action also
+records `livePendingSettles` and `liveUnfinishedWaits`: the settles in its
+call that found a step pending, and of those, the ones whose workers were
+still running. An `afterCommit` edit has 0 pending settles. A `beforeCommit`
+edit has 1, with 0 unfinished waits. The counters are `@ObservationIgnored`
+integers on the model, and the hook is nil unless the workload arms it, which
+costs one optional test per step completion.
 
 ### Per-action growth check (#440)
 

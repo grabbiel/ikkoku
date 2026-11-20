@@ -1,0 +1,12 @@
+{
+  "steps": [
+    {"op": "loadDocument", "path": ".local/verification/scenario-exports/voice-inputs-document.png"},
+    {"op": "assert", "sourceRuntime": {"rehydrations": 1}},
+    {"op": "assert", "characterBuilt": {"key": 0, "built": false}},
+    {"op": "assert", "characterBuilt": {"key": 65, "built": true}},
+    {"op": "assertVoice", "key": 65, "inputsFrom": "preview", "decodes": 0},
+    {"op": "assertVoice", "key": 0, "inputsFrom": "check", "decodes": 0},
+    {"op": "assertVoice", "key": 0, "inputsFrom": "cache", "decodes": 0},
+    {"op": "assert", "characterBuilt": {"key": 0, "built": false}}
+  ]
+}

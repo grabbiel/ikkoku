@@ -250,7 +250,8 @@ public extension KoikatsuSceneReader {
     /// instantiate runtime objects. The read recurses once per nesting
     /// level, so it runs on the decode stack (`onDecodeStack`, #326).
     static func decodeDocument(_ data: Data) throws -> KoikatsuSceneDocument {
-        try SourceStudioCharacterBatch.onDecodeStack("Ikkoku scene decode") {
+        SourceSceneDecodeProbe.record()
+        return try SourceStudioCharacterBatch.onDecodeStack("Ikkoku scene decode") {
             var reader = try KoikatsuBinaryReader(data)
             let snapshot = try reader.snapshot()
             let settings = try reader.sceneSettings()
