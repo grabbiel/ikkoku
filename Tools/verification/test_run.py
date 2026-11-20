@@ -650,7 +650,9 @@ SCENARIO_OPS = {"select", "setVisible", "rename", "toggleCamera", "toggleRoute",
                 # #439: the Pose tab's source IK toggles, and a click on an IK guide.
                 "setSourceIKEnabled", "clickIKGuide",
                 # #437: a voice play's input resolution (scene decodes, live-step settles).
-                "assertVoice", "dropVoiceInputs"}
+                "assertVoice", "dropVoiceInputs",
+                # #446: object edits in one gesture, kept documents, a broken undo step.
+                "updateObjects", "rememberDocument", "undoBroken"}
 
 # R7 phase 2, item 7: the window-run inspector checks (`"inspectorUI": {"steps": [...]}`).
 INSPECTOR_UI_OPS = {"select", "deselect", "focus", "type", "delete", "undo", "redo", "cycle",
@@ -962,7 +964,7 @@ class StudioScenarioLaneTests(unittest.TestCase):
                       and not name.startswith(("maker-", "gameplay-")))
 
     def test_lane_validates_and_covers_every_scenario(self):
-        self.assertEqual(len(self.checks), 109)
+        self.assertEqual(len(self.checks), 110)
         referenced = set()
         for check in self.checks:
             scenario = check["env"]["IKKOKU_STUDIO_SCENARIO"]
@@ -1092,6 +1094,17 @@ class StudioScenarioLaneTests(unittest.TestCase):
                         self.assertIs(type(step["key"]), int)
                     if step["build"] in ("export", "loadRoute"):
                         self.assertTrue(step["path"].startswith(".local/verification/scenario-exports/"))
+                if op == "updateObjects":
+                    self.assertTrue(step["keys"] and all(type(k) is int for k in step["keys"]))
+                    self.assertIn(step["field"], ("pose", "x", "visible", "name"))
+                if op == "rememberDocument":
+                    self.assertIs(type(step["name"]), str)
+                if op == "undoBroken":
+                    self.assertIs(type(step["key"]), int)
+                if "exportIdenticalTo" in step:
+                    pair = step["exportIdenticalTo"]
+                    self.assertTrue(pair["path"].startswith(".local/") and pair["reference"].startswith(".local/"))
+                    self.assertNotEqual(pair["path"], pair["reference"])
                 if op == "assertVoice":
                     self.assertIs(type(step["key"]), int)
                     for field in ("decodes", "settles"):
@@ -1344,7 +1357,8 @@ class StudioScenarioLaneTests(unittest.TestCase):
                                             "characterBuilt", "exportedAnimation", "treeLabel", "view", "render",
                                             "exportIdenticalToSource", "outfit", "clothes", "ik", "expression", "accessoryLabels", "pluginMount",
                                             "children", "absent", "activeCopyOf", "route", "routeLines", "sourceMap",
-                                            "liveSamplers", "undoDepth", "redoDepth", "objectCount", "sourceIK") if k in step]
+                                            "liveSamplers", "undoDepth", "redoDepth", "objectCount", "sourceIK",
+                                            "documentIs", "exportIdenticalTo") if k in step]
                     self.assertTrue(declared, "assert declares nothing: %s" % path)
                     for name in ("undoDepth", "redoDepth", "objectCount"):
                         if name in step:

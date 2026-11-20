@@ -1,5 +1,61 @@
 import Foundation
 
+/// A document the history can keep as patch steps (#446). `Patch` is what a
+/// step holds instead of the whole document; with `Never`, the default, every
+/// step is a whole document.
+public protocol StudioHistoryDocument {
+    associatedtype Patch = Never
+    /// The document that `patch`'s step restores, from `self` as the state
+    /// right after that step's change. Nil when `self` lacks something the
+    /// patch names (a broken history).
+    func restoring(_ patch: Patch) -> Self?
+    /// The patch leading from `restoring(patch)` back to `self`. Called only
+    /// once `restoring(patch)` gave a document.
+    func inverse(of patch: Patch) -> Patch
+}
+
+extension StudioHistoryDocument where Patch == Never {
+    public func restoring(_ patch: Never) -> Self? { switch patch {} }
+    public func inverse(of patch: Never) -> Never { switch patch {} }
+}
+
+/// One undo or redo step: the whole document before the change, or a patch.
+public enum StudioUndoStep<Document: StudioHistoryDocument> {
+    case document(Document)
+    case patch(Document.Patch)
+}
+
+extension StudioUndoStep: Equatable where Document: Equatable, Document.Patch: Equatable {}
+extension StudioUndoStep: Codable where Document: Codable, Document.Patch: Codable {}
+extension StudioUndoStep: Sendable where Document: Sendable, Document.Patch: Sendable {}
+
+/// What an undo or redo would restore.
+public enum StudioUndoTarget<Document> {
+    case document(Document)
+    /// The step names something the current document lacks (a bug: the
+    /// caller refuses the undo or redo and drops the step).
+    case broken
+}
+
+extension StudioUndoTarget: Equatable where Document: Equatable {}
+
+public enum StudioUndoDiagnostics {
+    /// Whether a broken step stops a Debug build with an assertion. Tests of
+    /// the Release path turn it off for their task.
+    @TaskLocal public static var assertsOnBrokenSteps = true
+}
+
+/// What `StudioUndoHistory.materializeNewestPatches(from:)` did: the patches
+/// it turned into whole documents (0, 1 or 2) and the broken ones it dropped.
+public struct StudioUndoMaterialization: Equatable, Sendable {
+    public var converted = 0
+    public var droppedUndo = false
+    public var droppedRedo = false
+    public init(converted: Int = 0, droppedUndo: Bool = false, droppedRedo: Bool = false) {
+        self.converted = converted; self.droppedUndo = droppedUndo; self.droppedRedo = droppedRedo
+    }
+}
+
 /// The Studio editor's undo and redo steps (#384). Each step is a snapshot of
 /// the document or a patch of it (#446), the newest last, and the undo side
 /// keeps at most `limit`.
@@ -37,50 +93,6 @@ import Foundation
 /// carries it to the redo step it makes, and Redo carries it back, so a
 /// replacement that is undone and redone is still the one the next
 /// replacement trims. There is at most one mark in both stacks together.
-/// A document the history can keep as patch steps (#446). `Patch` is what a
-/// step holds instead of the whole document; with `Never`, the default, every
-/// step is a whole document.
-public protocol StudioHistoryDocument {
-    associatedtype Patch = Never
-    /// The document that `patch`'s step restores, from `self` as the state
-    /// right after that step's change. Nil when `self` lacks something the
-    /// patch names (a broken history).
-    func restoring(_ patch: Patch) -> Self?
-    /// The patch leading from `restoring(patch)` back to `self`. Called only
-    /// once `restoring(patch)` gave a document.
-    func inverse(of patch: Patch) -> Patch
-}
-
-extension StudioHistoryDocument where Patch == Never {
-    public func restoring(_ patch: Never) -> Self? { switch patch {} }
-    public func inverse(of patch: Never) -> Never { switch patch {} }
-}
-
-/// One undo or redo step: the whole document before the change, or a patch.
-public enum StudioUndoStep<Document: StudioHistoryDocument> {
-    case document(Document)
-    case patch(Document.Patch)
-}
-
-extension StudioUndoStep: Equatable where Document: Equatable, Document.Patch: Equatable {}
-extension StudioUndoStep: Sendable where Document: Sendable, Document.Patch: Sendable {}
-
-/// What an undo or redo would restore.
-public enum StudioUndoTarget<Document> {
-    case document(Document)
-    /// The step names something the current document lacks (a bug: the
-    /// caller refuses the undo or redo and drops the step).
-    case broken
-}
-
-extension StudioUndoTarget: Equatable where Document: Equatable {}
-
-public enum StudioUndoDiagnostics {
-    /// Whether a broken step stops a Debug build with an assertion. Tests of
-    /// the Release path turn it off for their task.
-    @TaskLocal public static var assertsOnBrokenSteps = true
-}
-
 public struct StudioUndoHistory<Document: StudioHistoryDocument> {
     public typealias Step = StudioUndoStep<Document>
     public static var limit: Int { 60 }
@@ -231,23 +243,30 @@ public struct StudioUndoHistory<Document: StudioHistoryDocument> {
     /// coalesced whole-document step, a direct write): turns the newest undo
     /// step and the newest redo step, when they are patches, into the whole
     /// documents they restore from `current`, so the change is reverted as
-    /// by a snapshot. A broken one is dropped. Returns how many were.
+    /// by a snapshot. A broken one is dropped; the result says which were.
+    ///
+    /// Each patch is converted at most once. A converted step is a whole
+    /// document from then on (Undo and Redo carry a whole document as a whole
+    /// document), so a run of such changes (a plug-in tick or an animation
+    /// write every frame) converts the newest patches on its first call and
+    /// finds nothing to convert after that, until an edit records a new
+    /// patch. A call that finds no patch costs two checks.
     @discardableResult
-    public mutating func materializeNewestPatches(from current: Document) -> Int {
-        var dropped = 0
+    public mutating func materializeNewestPatches(from current: Document) -> StudioUndoMaterialization {
+        var result = StudioUndoMaterialization()
         if case .patch? = undoSteps.last {
             switch Self.target(of: undoSteps[undoSteps.count - 1], from: current) {
-            case .document(let document): undoSteps[undoSteps.count - 1] = .document(document)
-            case .broken: dropNewestUndo(); dropped += 1
+            case .document(let document): undoSteps[undoSteps.count - 1] = .document(document); result.converted += 1
+            case .broken: dropNewestUndo(); result.droppedUndo = true
             }
         }
         if case .patch? = redoSteps.last {
             switch Self.target(of: redoSteps[redoSteps.count - 1], from: current) {
-            case .document(let document): redoSteps[redoSteps.count - 1] = .document(document)
-            case .broken: dropNewestRedo(); dropped += 1
+            case .document(let document): redoSteps[redoSteps.count - 1] = .document(document); result.converted += 1
+            case .broken: dropNewestRedo(); result.droppedRedo = true
             }
         }
-        return dropped
+        return result
     }
 
     /// Which undo steps lead into a scene replacement (oldest first). Tests
@@ -269,6 +288,9 @@ extension StudioUndoHistory where Document.Patch == Never {
 }
 
 extension StudioUndoHistory: Sendable where Document: Sendable, Document.Patch: Sendable {}
+/// Two histories are equal when they hold the same steps and marks: tests
+/// compare a history before and after an action that must not touch it.
+extension StudioUndoHistory: Equatable where Document: Equatable, Document.Patch: Equatable {}
 
 /// A Studio object edit's undo step (#446): the objects it changed, as they
 /// were before it, and the document's other fields. Restoring it puts those
@@ -276,7 +298,7 @@ extension StudioUndoHistory: Sendable where Document: Sendable, Document.Patch: 
 /// field from the step, as a whole snapshot would. The step holds no
 /// reference to the document's object list, so the edit after it writes the
 /// list in place.
-public struct StudioObjectPatch: Sendable, Equatable {
+public struct StudioObjectPatch: Sendable, Equatable, Codable {
     /// The document's fields other than its objects, as the step holds
     /// them. Its object list is empty.
     public private(set) var rest: StudioDocument

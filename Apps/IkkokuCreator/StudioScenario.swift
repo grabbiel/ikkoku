@@ -106,6 +106,14 @@ struct StudioScenario: Decodable {
         /// reload's pending card check holds `key`), `preview` (the built
         /// preview's) or `scene` (one scene read). Not asserted when absent.
         let inputsFrom: String?
+        /// #446: `updateObjects` edits each of `keys` through
+        /// `StudioModel.update` with `field` (`pose`, `x`, `visible` or
+        /// `name`) in one gesture, so the first edit starts an undo step and
+        /// the others join it. `rememberDocument` keeps the document under
+        /// `name`; assert `documentIs` compares the document with a kept one.
+        let keys: [Int32]?, field: String?, documentIs: String?
+        /// assert only (#446): two exported files must hold the same bytes.
+        let exportIdenticalTo: ExportPairValue?
         /// assert only: source character `key`'s saved animation state in
         /// exported scene files (`paths`, read back from disk): with `agree`
         /// every file saves the same state; with `increasing` each file's
@@ -602,6 +610,10 @@ struct StudioScenario: Decodable {
             let pickSomethingAt: [[Float]]?
         }
 
+        struct ExportPairValue: Decodable {
+            let path: String
+            let reference: String
+        }
         struct CharacterBuiltValue: Decodable {
             let key: Int32
             let built: Bool
@@ -631,7 +643,8 @@ struct StudioScenario: Decodable {
                  seconds, dx, dy, eyeLook, blink, handPattern, mode, axis, pixels, toolbarSteady, ikGroup, selects, sourceIK,
                  render, exportIdenticalToSource, errorContains, outfit, accessoryLabels, pluginMount, state, clothes, expression,
                  sex, character, chain, delta, ik, edit, build, parent, children, absent, copy, added, activeCopyOf,
-                 undoDepth, redoDepth, objectCount, rows, selected, aid, routeEdit, route, routeLines, sourceMap, liveSamplers, decodes, settles, inputsFrom
+                 undoDepth, redoDepth, objectCount, rows, selected, aid, routeEdit, route, routeLines, sourceMap, liveSamplers, decodes, settles, inputsFrom,
+                 keys, field, documentIs, exportIdenticalTo
         }
 
         init(from decoder: Decoder) throws {
@@ -758,6 +771,10 @@ struct StudioScenario: Decodable {
             decodes = try c.decodeIfPresent(Int.self, forKey: .decodes)
             settles = try c.decodeIfPresent(Int.self, forKey: .settles)
             inputsFrom = try c.decodeIfPresent(String.self, forKey: .inputsFrom)
+            keys = try c.decodeIfPresent([Int32].self, forKey: .keys)
+            field = try c.decodeIfPresent(String.self, forKey: .field)
+            documentIs = try c.decodeIfPresent(String.self, forKey: .documentIs)
+            exportIdenticalTo = try c.decodeIfPresent(ExportPairValue.self, forKey: .exportIdenticalTo)
         }
     }
 
@@ -1007,6 +1024,37 @@ struct StudioScenario: Decodable {
             if let bound = check.maxChannelDeltaAtMost, difference.maximum > bound {
                 return "assert render: maxChannelDelta \(difference.maximum) exceeds \(bound) against \"\(check.from)\""
             }
+            return nil
+        }
+        /// #446: documents kept by `rememberDocument`, by name.
+        var rememberedDocuments: [String: StudioDocument] = [:]
+        /// assert `documentIs`: the document equals a kept one, every field.
+        func assertDocumentIs(_ step: Step, details: inout [String]) -> String? {
+            guard let name = step.documentIs else { return nil }
+            guard let kept = rememberedDocuments[name] else { return "assert documentIs: no document kept as \"\(name)\"" }
+            guard studio.doc != kept else {
+                details.append("document equals \"\(name)\" (\(kept.objects.count) objects)"); return nil
+            }
+            let ids = Set(kept.objects.map(\.id)).symmetricDifference(studio.doc.objects.map(\.id))
+            let changed = studio.doc.objects.filter { object in kept.object(object.id).map { $0 != object } ?? false }
+            var rest = studio.doc; rest.objects = []; var keptRest = kept; keptRest.objects = []
+            return "assert documentIs: the document differs from \"\(name)\": \(ids.count) objects added or removed, "
+                + "\(changed.count) changed (\(changed.prefix(3).map(\.name).joined(separator: ", "))), other fields \(rest == keptRest ? "equal" : "differ")"
+        }
+        /// assert `exportIdenticalTo`: two exports under `.local/` hold the
+        /// same bytes (an export after undo or redo against one taken before).
+        func assertExportIdenticalTo(_ step: Step, details: inout [String]) -> String? {
+            guard let pair = step.exportIdenticalTo else { return nil }
+            guard let url = insideLocal(pair.path), let reference = insideLocal(pair.reference) else {
+                return "assert exportIdenticalTo: paths must stay under .local/"
+            }
+            guard let bytes = try? Data(contentsOf: url), let expected = try? Data(contentsOf: reference) else {
+                return "assert exportIdenticalTo: \"\(pair.path)\" or \"\(pair.reference)\" could not be read"
+            }
+            guard bytes == expected else {
+                return "assert exportIdenticalTo: \(pair.path) (\(bytes.count) bytes) differs from \(pair.reference) (\(expected.count) bytes)"
+            }
+            details.append("export \(pair.path) equals \(pair.reference): \(bytes.count) bytes")
             return nil
         }
         /// Byte identity between an exported file and the imported original
@@ -1858,10 +1906,10 @@ struct StudioScenario: Decodable {
         /// says where either moved and `detail` what held.
         func mouseDrag(from start: SIMD2<Float>, by pixels: [Float], toolbarSteady: Bool) -> (end: SIMD2<Float>, failures: [String], detail: String)? {
             let noModifiers = NSEvent.ModifierFlags()
-            let undoDepth = studio.undoStack.count
+            let undoDepth = studio.undoDepth
             let before = StudioToolbarState(model: studio)
             studio.mouseDown(at: start, button: 0, modifiers: noModifiers)
-            guard studio.undoStack.count == undoDepth + 1 else {
+            guard studio.undoDepth == undoDepth + 1 else {
                 studio.mouseUp(at: start, button: 0, modifiers: noModifiers)
                 return nil
             }
@@ -1974,6 +2022,48 @@ struct StudioScenario: Decodable {
                 }
                 record(step, true, "workspace rows equal a rebuild: \(published.entries.count) rows, selected \(selected.isEmpty ? "none" : selected.joined(separator: ", "))"
                        + (step.key != nil || step.added != nil ? "; \(describe(step)) as expected" : ""))
+            case "updateObjects":
+                // #446: one gesture's object edits through `update`: the
+                // first starts a step that keeps only that object, the others
+                // join it. None copies the document's object list.
+                guard let keys = step.keys, !keys.isEmpty, let field = step.field,
+                      ["pose", "x", "visible", "name"].contains(field) else {
+                    record(step, false, "updateObjects: keys and a field (pose, x, visible or name) are required"); continue
+                }
+                let ids = keys.compactMap { objectID(key: $0, copy: nil) }
+                guard ids.count == keys.count else { record(step, false, "updateObjects: a key is not in the document"); continue }
+                let depth = studio.undoDepth, moved = studio.updateWritesMoved
+                for id in ids {
+                    switch field {
+                    case "pose": studio.update(id) { $0.poseDelta.rotations["cf_j_neck", default: .zero].x += 0.5 }
+                    case "x": studio.update(id) { $0.transform.position.x += 0.25 }
+                    case "visible": studio.update(id) { $0.visible.toggle() }
+                    default: studio.update(id) { $0.name += "+" }
+                    }
+                }
+                let steps = studio.undoDepth - depth, copies = studio.updateWritesMoved - moved
+                let ok = (steps == 1 || depth == StudioUndoHistory<StudioDocument>.limit) && copies == 0
+                record(step, ok, "\(field) edits on \(ids.count) objects recorded \(steps) undo step(s); \(copies) copied the object list")
+            case "rememberDocument":
+                guard let name = step.name else { record(step, false, "rememberDocument: name is required"); continue }
+                rememberedDocuments[name] = studio.doc
+                record(step, true, "kept the document as \"\(name)\" (\(studio.doc.objects.count) objects, \(studio.undoDepth) undo / \(studio.redoDepth) redo steps)")
+            case "undoBroken":
+                // #446's Release path for a broken step, with the Debug
+                // assertion off: `key`'s object leaves the document behind the
+                // history's back (a write no step covers, which the audit
+                // forbids), so the newest step names an object the document
+                // lacks. Undo must refuse it, keep the document and drop it.
+                guard let id = object(step) else { record(step, false, "undoBroken: no object \(describe(step))"); continue }
+                var broken = studio.doc
+                broken.objects.removeAll { $0.id == id }
+                studio.doc = broken
+                let document = studio.doc, depth = studio.undoDepth, redo = studio.redoDepth
+                StudioUndoDiagnostics.$assertsOnBrokenSteps.withValue(false) { studio.undo() }
+                let ok = studio.doc == document && studio.undoDepth == depth - 1 && studio.redoDepth == redo
+                    && studio.status.contains("refused")
+                record(step, ok, ok ? "undo refused (\(studio.status)); document unchanged, the step dropped (\(depth) -> \(studio.undoDepth) undo steps)"
+                                    : "undoBroken: document \(studio.doc == document ? "unchanged" : "changed"), undo \(depth) -> \(studio.undoDepth), redo \(redo) -> \(studio.redoDepth), status \"\(studio.status)\"")
             case "dropVoiceInputs":
                 // #437: forget every voice input the Studio holds (the cache and
                 // a reload's pending check), so the next step shows where its
@@ -2047,11 +2137,11 @@ struct StudioScenario: Decodable {
                 studio.toggleSourceRoute(id)
                 record(step, true, studio.status)
             case "undo":
-                guard !studio.undoStack.isEmpty else { record(step, false, "undo: undo stack is empty"); continue }
+                guard studio.undoDepth > 0 else { record(step, false, "undo: undo stack is empty"); continue }
                 studio.undo()
                 record(step, true, studio.status)
             case "redo":
-                guard !studio.redoStack.isEmpty else { record(step, false, "redo: redo stack is empty"); continue }
+                guard studio.redoDepth > 0 else { record(step, false, "redo: redo stack is empty"); continue }
                 studio.redo()
                 record(step, true, studio.status)
             case "newScene":
@@ -2106,15 +2196,15 @@ struct StudioScenario: Decodable {
                 guard let path = step.path, let url = insideLocal(path) else {
                     record(step, false, "loadDocumentRejected: path must stay under .local/: \(step.path ?? "<missing>")"); continue
                 }
-                let (document, undo, redo) = (studio.doc, studio.undoStack, studio.redoStack)
+                let (document, history) = (studio.doc, studio.undoHistory)
                 do {
                     try studio.loadScene(from: url)
                     record(step, false, "loadDocumentRejected: \(path) loaded, expected a refusal")
                 } catch {
-                    let unchanged = studio.doc == document && studio.undoStack == undo && studio.redoStack == redo
+                    let unchanged = studio.doc == document && studio.undoHistory == history
                     record(step, unchanged, unchanged
-                        ? "refused \(path) (\(error)); document and \(undo.count) undo / \(redo.count) redo steps unchanged"
-                        : "loadDocumentRejected: the refused Open changed the document or the history (undo \(undo.count) -> \(studio.undoStack.count), redo \(redo.count) -> \(studio.redoStack.count))")
+                        ? "refused \(path) (\(error)); document and \(history.undoDepth) undo / \(history.redoDepth) redo steps unchanged"
+                        : "loadDocumentRejected: the refused Open changed the document or the history (undo \(history.undoDepth) -> \(studio.undoDepth), redo \(history.redoDepth) -> \(studio.redoDepth))")
                 }
             case "importDocument":
                 // File ▸ Import Scene of an Ikkoku scene: merges its objects
@@ -2241,7 +2331,7 @@ struct StudioScenario: Decodable {
                     record(step, false, "setExpression: expression fields are required"); continue
                 }
                 let before = (studio.doc.object(id)?.sourceExpression, preview.expressionState,
-                              ObjectIdentifier(preview), studio.undoStack.count)
+                              ObjectIdentifier(preview), studio.undoDepth)
                 do {
                     let next = step.op == "resetExpression" ? nil : step.expression!.applying(to: preview.expressionState)
                     try studio.setSourceExpression(id, next)
@@ -2254,7 +2344,7 @@ struct StudioScenario: Decodable {
                     guard let expected = step.errorContains else { record(step, false, "expression: \(error)"); continue }
                     let after = studio.sourceShapePreview(for: id)
                     let unchanged = studio.doc.object(id)?.sourceExpression == before.0 && after?.expressionState == before.1
-                        && after.map(ObjectIdentifier.init) == before.2 && studio.undoStack.count == before.3
+                        && after.map(ObjectIdentifier.init) == before.2 && studio.undoDepth == before.3
                     let matched = String(describing: error).contains(expected)
                     record(step, matched && unchanged, "expression refusal: \(error); document, preview and undo unchanged=\(unchanged)")
                 }
@@ -2462,7 +2552,7 @@ struct StudioScenario: Decodable {
                     let at = studio.sourceIKGuidePixel(of: target).map { " (it projects to (\($0.x), \($0.y)))" } ?? ""
                     record(step, false, "clickIKGuide: IK guide \(index) (\(SourceStudioIKEditing.labels[index])) is not inside the \(Int(view.x)) x \(Int(view.y)) px view\(at)"); continue
                 }
-                let kinematics = studio.doc.object(id)?.sourceKinematics, undoDepth = studio.undoStack.count
+                let kinematics = studio.doc.object(id)?.sourceKinematics, undoDepth = studio.undoDepth
                 let picked = studio.pickID(at: pixel)
                 studio.mouseDown(at: pixel, button: 0, modifiers: NSEvent.ModifierFlags())
                 studio.mouseUp(at: pixel, button: 0, modifiers: NSEvent.ModifierFlags())
@@ -2474,7 +2564,7 @@ struct StudioScenario: Decodable {
                 if after != kinematics {
                     failures.append("the click changed the kinematic flags to enableIK \(after.map { "\($0.enableIK)" } ?? "nil") activeIK \(after.map { "\($0.activeIK)" } ?? "nil")")
                 }
-                if studio.undoStack.count != undoDepth { failures.append("the click pushed \(studio.undoStack.count - undoDepth) undo step(s)") }
+                if studio.undoDepth != undoDepth { failures.append("the click pushed \(studio.undoDepth - undoDepth) undo step(s)") }
                 let pickedText = SourceStudioIKEditing.targetID(fromPick: picked).map { "IK guide \($0)" } ?? "no IK guide"
                 record(step, failures.isEmpty, (failures.isEmpty ? "" : failures.joined(separator: "; ") + " | ")
                        + "click IK guide \(index) (\(SourceStudioIKEditing.labels[index])) at pixel (\(pixel.x), \(pixel.y)): picked id \(picked) (\(pickedText)); "
@@ -2662,7 +2752,7 @@ struct StudioScenario: Decodable {
                 case "none":
                     break
                 case "undo", "redo":
-                    guard !(edit == "undo" ? studio.undoStack : studio.redoStack).isEmpty else {
+                    guard (edit == "undo" ? studio.undoDepth : studio.redoDepth) > 0 else {
                         record(step, false, "editDuringAdvance: the \(edit) stack is empty"); continue
                     }
                 case "move", "setFK":
@@ -2903,7 +2993,7 @@ struct StudioScenario: Decodable {
                             return true
                         }
                         // A selection that lands.
-                        var depth = studio.undoStack.count
+                        var depth = studio.undoDepth
                         let shownID = studio.sourceShapePreview(for: id).map(ObjectIdentifier.init)
                         let storedOutfit = studio.doc.object(id)?.sourceOutfit
                         studio.selectSourceOutfit(id, coordinate: first)
@@ -2913,26 +3003,26 @@ struct StudioScenario: Decodable {
                             problems.append("the selection changed the character before its build landed")
                         }
                         guard landed("selection", syncOutfit) else { record(step, false, "backgroundBuild: the outfit build did not finish in 300 s"); continue }
-                        if studio.undoStack.count != depth + 1 { problems.append("the selection recorded \(studio.undoStack.count - depth) undo steps") }
+                        if studio.undoDepth != depth + 1 { problems.append("the selection recorded \(studio.undoDepth - depth) undo steps") }
                         studio.undo()
                         guard landed("undo", syncUndo) else { record(step, false, "backgroundBuild: the undo did not settle in 300 s"); continue }
                         // A newer selection supersedes the older ones: one install, one undo step.
-                        depth = studio.undoStack.count
+                        depth = studio.undoDepth
                         studio.selectSourceOutfit(id, coordinate: first)
                         studio.selectSourceOutfit(id, coordinate: second)
                         studio.selectSourceOutfit(id, coordinate: first)
                         let superseding = studio.pendingSourceCharacterBuilds
                         guard landed("superseded selection", syncOutfit) else { record(step, false, "backgroundBuild: the superseding build did not finish in 300 s"); continue }
-                        if studio.undoStack.count != depth + 1 { problems.append("the superseded selections recorded \(studio.undoStack.count - depth) undo steps") }
+                        if studio.undoDepth != depth + 1 { problems.append("the superseded selections recorded \(studio.undoDepth - depth) undo steps") }
                         studio.undo()
                         guard landed("undo of the superseded selection", syncUndo) else { record(step, false, "backgroundBuild: the undo did not settle in 300 s"); continue }
                         // The shown outfit chosen again drops the build.
-                        depth = studio.undoStack.count
+                        depth = studio.undoDepth
                         studio.selectSourceOutfit(id, coordinate: second)
                         studio.selectSourceOutfit(id, coordinate: original)
                         let dropped = studio.pendingSourceCharacterBuilds
                         guard landed("shown outfit chosen again", syncShown) else { record(step, false, "backgroundBuild: the dropped build did not settle in 300 s"); continue }
-                        if studio.undoStack.count != depth { problems.append("the dropped selection recorded an undo step") }
+                        if studio.undoDepth != depth { problems.append("the dropped selection recorded an undo step") }
                         // An Undo while a selection builds drops it.
                         studio.selectSourceOutfit(id, coordinate: first)
                         guard landed("selection before the undo", syncOutfit) else { record(step, false, "backgroundBuild: the outfit build did not finish in 300 s"); continue }
@@ -3408,9 +3498,9 @@ struct StudioScenario: Decodable {
                     record(step, false, "dragRoutePoint: none of \(candidates.count) pixels on the \(axisName) guide picks it"); continue
                 }
                 let noModifiers = NSEvent.ModifierFlags()
-                let undoDepth = studio.undoStack.count
+                let undoDepth = studio.undoDepth
                 studio.mouseDown(at: start, button: 0, modifiers: noModifiers)
-                guard studio.undoStack.count == undoDepth + 1 else {
+                guard studio.undoDepth == undoDepth + 1 else {
                     studio.mouseUp(at: start, button: 0, modifiers: noModifiers)
                     record(step, false, "dragRoutePoint: mouseDown on the \(axisName) guide grabbed nothing"); continue
                 }
@@ -3550,11 +3640,11 @@ struct StudioScenario: Decodable {
                         details.append("looking through a copy of camera \(key)")
                     }
                 }
-                if let expected = step.undoDepth, studio.undoStack.count != expected {
-                    problems.append("assert undoDepth: \(studio.undoStack.count) undo steps, expected \(expected)")
+                if let expected = step.undoDepth, studio.undoDepth != expected {
+                    problems.append("assert undoDepth: \(studio.undoDepth) undo steps, expected \(expected)")
                 }
-                if let expected = step.redoDepth, studio.redoStack.count != expected {
-                    problems.append("assert redoDepth: \(studio.redoStack.count) redo steps, expected \(expected)")
+                if let expected = step.redoDepth, studio.redoDepth != expected {
+                    problems.append("assert redoDepth: \(studio.redoDepth) redo steps, expected \(expected)")
                 }
                 if let expected = step.objectCount, studio.doc.objects.count != expected {
                     problems.append("assert objectCount: \(studio.doc.objects.count) objects, expected \(expected)")
@@ -3683,6 +3773,8 @@ struct StudioScenario: Decodable {
                 // value, like `animation`/`fk`.
                 if let problem = assertRender(step, details: &details) { problems.append(problem) }
                 if let problem = assertExportIdenticalToSource(step, details: &details) { problems.append(problem) }
+                if let problem = assertExportIdenticalTo(step, details: &details) { problems.append(problem) }
+                if let problem = assertDocumentIs(step, details: &details) { problems.append(problem) }
                 if let problem = assertOutfit(step, details: &details) { problems.append(problem) }
                 if let problem = assertAccessoryLabels(step, details: &details) { problems.append(problem) }
                 if let problem = assertPluginMount(step, details: &details) { problems.append(problem) }

@@ -27,16 +27,34 @@ public struct StudioUndoSteps: Sendable {
         return true
     }
 
+    /// What an object edit is to the undo history (#446).
+    public enum ObjectEdit: Sendable, Equatable {
+        /// The edit left the object as it was: no step (#390).
+        case unchanged
+        /// It changed the object inside the open step's window.
+        case coalesced
+        /// It changed the object and starts a new step.
+        case startsStep
+    }
+
+    /// Applies `change` to `object` and says what the edit is to the
+    /// history. The caller then records the object as it was (a new step) or
+    /// adds it to the open step (coalesced), before writing `object` back.
+    public mutating func objectEdit(_ object: inout StudioObject, at now: Date, _ change: (inout StudioObject) -> Void) -> ObjectEdit {
+        var edited = object
+        change(&edited)
+        let changed = edited != object
+        object = edited
+        guard changed else { return .unchanged }
+        return startsStep(at: now) ? .startsStep : .coalesced
+    }
+
     /// Applies `change` to `object`. Returns true when the edit changed the
     /// object and starts a new undo step. The caller then snapshots the
     /// document, which still holds the object as it was, before writing
     /// `object` back.
     public mutating func edit(_ object: inout StudioObject, at now: Date, _ change: (inout StudioObject) -> Void) -> Bool {
-        var edited = object
-        change(&edited)
-        let changed = edited != object
-        object = edited
-        return changed && startsStep(at: now)
+        objectEdit(&object, at: now, change) == .startsStep
     }
 
     /// Ends the coalescing window: the next real edit starts its own step.

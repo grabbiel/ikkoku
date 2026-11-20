@@ -217,9 +217,11 @@ private struct Pair {
 
     /// A coalesced whole-document change or a direct write inside the open
     /// step: no new step.
-    mutating func directWrite(_ change: (inout StudioDocument) -> Void) {
-        history.materializeNewestPatches(from: document)
+    @discardableResult
+    mutating func directWrite(_ change: (inout StudioDocument) -> Void) -> StudioUndoMaterialization {
+        let result = history.materializeNewestPatches(from: document)
         change(&document); change(&shadow)
+        return result
     }
 
     /// A change to a field other than the objects with no step (a load-time
@@ -359,6 +361,45 @@ private struct Pair {
     #expect(pair.same && pair.agrees)
 }
 
+@Test func aPatchIsConvertedOnceHoweverManyUnrecordedWritesFollow() {
+    // A plug-in tick or an animation write can run every frame. Only the
+    // first write after an edit converts the edit's patch; the writes after
+    // it find a whole document, so 100 writes cost one conversion, and Undo
+    // still reverts all of them as a snapshot would.
+    var pair = Pair(folders(4))
+    pair.editObject(1, startsStep: true) { $0.name = "edited" }
+    var conversions = 0
+    for frame in 0..<100 { conversions += pair.directWrite { $0.objects[2].transform.position.x = Float(frame) }.converted }
+    #expect(conversions == 1)
+    #expect(pair.same && pair.agrees)
+    // The next edit records a new patch, and the next run of writes converts
+    // that one once.
+    pair.editObject(3, startsStep: true) { $0.visible = false }
+    conversions = 0
+    for frame in 0..<100 { conversions += pair.directWrite { $0.objects[0].transform.position.y = Float(frame) }.converted }
+    #expect(conversions == 1)
+    pair.undo(); #expect(pair.same && pair.agrees)
+    pair.undo(); #expect(pair.same && pair.agrees)
+    pair.redo(); pair.redo(); #expect(pair.same && pair.agrees)
+
+    // An undo between two patch edits leaves a patch on each side: the
+    // writes after it convert each of them once.
+    var two = Pair(folders(4))
+    two.editObject(0, startsStep: true) { $0.name = "first" }
+    two.editObject(1, startsStep: true) { $0.name = "second" }
+    two.undo()
+    conversions = 0
+    for frame in 0..<100 { conversions += two.directWrite { $0.objects[2].transform.position.z = Float(frame) }.converted }
+    #expect(conversions == 2)
+    #expect(two.same && two.agrees)
+    two.redo(); #expect(two.same && two.agrees)
+    two.undo(); two.undo(); #expect(two.same && two.agrees)
+    // A history with no patch converts nothing.
+    var whole = Pair(folders(2))
+    whole.documentStep { $0.objects[0].name = "whole" }
+    #expect(whole.directWrite { $0.objects[1].visible = false } == StudioUndoMaterialization())
+}
+
 @Test func aSceneReplacementInTheMiddleOfTheHistory() {
     // [P1: a patch on scene A, D2: scene A before New Scene, marked], with the
     // empty scene current. Undo D2 gives scene A after P1, Undo P1 the scene
@@ -425,7 +466,7 @@ private struct Pair {
         #expect(history.undoDepth == 0 && history.undoTarget(from: document) == nil)
         history.record(patch: StudioObjectPatch(document, before: document.objects[1]))
         document.objects.remove(at: 1)
-        #expect(history.materializeNewestPatches(from: document) == 1)
+        #expect(history.materializeNewestPatches(from: document) == StudioUndoMaterialization(droppedUndo: true))
         #expect(history.undoDepth == 0 && history.undoReplacements.isEmpty)
     }
 }
