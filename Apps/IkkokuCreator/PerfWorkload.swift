@@ -82,6 +82,9 @@ final class PerfWorkloadDriver {
     private var waitingPlacement: (token: Int, step: (name: String, measured: Bool, run: () -> Void),
                                    phase: StudioModel.LivePhase, armed: CFTimeInterval, serialSteps: Int)?
     private var stopped = false
+    /// #440: the last park handled and each park's record (`details.parks`).
+    private var lastPark = 0
+    private var parks: [[String: Any]] = []
     /// The temporary folder `studio-export` and `studio-load` write scene
     /// files to, removed when the run stops.
     private var scratchFolder: URL?
@@ -258,6 +261,7 @@ final class PerfWorkloadDriver {
         case "studio-hover": try prepareStudioHover()
         case "maker-slider": try prepareMakerSlider()
         case "maker-idle": try prepareMaker()
+        case "maker-tabs": try prepareMakerTabs()
         case "studio-native": try prepareStudioNative()
         case "studio-timeline": try prepareStudioTimeline()
         case "studio-static": try prepareStudioSource(selectKey: nil, liveAnimation: false)
@@ -462,6 +466,21 @@ final class PerfWorkloadDriver {
             PerfTrace.input("bodySlider") { maker[shapeSlot: .init(face: false, index: index)] = value }
         }
         trace.details["gesture"] = "body slider '\(slot.label)' (slot \(index)) swept around \(base)"
+    }
+
+    /// `maker-tabs` (#440): the bundled character's Maker, the tabbed panel
+    /// (not the source rig panel), its tabs selected in turn as the segmented
+    /// control selects them (`MakerModel.tab`), repeated. Each switch builds
+    /// the tab's panel again, the tag and thumbnail grids included. The Maker
+    /// opens the original base when it finds one, so the workload first uses
+    /// the source rig panel's "Use bundled prototype" (`closeSourceRig()`).
+    private func prepareMakerTabs() throws {
+        let maker = try prepareMaker()
+        trace.details["usedBundledPrototype"] = maker.sourceRigPreview != nil
+        if maker.sourceRigPreview != nil { maker.closeSourceRig() }
+        guard maker.sourceRigPreview == nil else { throw RigError.invalid("maker-tabs: the tabbed Maker panel did not show") }
+        actionSteps = MakerTab.allCases.map { tab in ("tab \(tab.rawValue.lowercased())", true, { maker.tab = tab }) }
+        trace.details["gesture"] = "the Maker's tabs selected in turn (\(MakerTab.allCases.map(\.rawValue).joined(separator: ", "))), repeated; live animation on"
     }
 
     /// `IKKOKU_PERF_CHARACTERS` bundled characters (alternating female/male)
@@ -961,6 +980,7 @@ final class PerfWorkloadDriver {
             holdUntil = 0
         }
         if stopAfterActions, actionIndex >= actionSteps.count { stop(); return }
+        if parkIfRequested() { return }
         let index = actionIndex % actionSteps.count
         actionIndex += 1
         if index < actionPhases.count, let phase = actionPhases[index], let studio = app.studio {
@@ -1049,6 +1069,47 @@ final class PerfWorkloadDriver {
         }
         pendingAction = (step.name, step.measured, start, end, bodies, cpuMs, live)
         waitForAction()
+    }
+
+    /// #440 (`IKKOKU_PERF_PARK_FILE`, measurement only): at the start of every
+    /// action cycle but the first, a park file that reads `park <n>`, with `n`
+    /// newer than the last park, stops the actions. The driver writes
+    /// `<file>.parked` (`parked <n> <measured actions finished> <next action's
+    /// index> <cycle length>`) and waits until the file reads `resume <n>`, so
+    /// both of the growth check's heap snapshots see the state a full cycle
+    /// leaves. Both files are written in place; nothing is deleted. Returns
+    /// true when it parked: the wait starts the next action.
+    private func parkIfRequested() -> Bool {
+        guard let file = configuration.parkFile, actionIndex > 0, actionIndex % actionSteps.count == 0,
+              let request = Self.parkFileNumber(file, after: "park"), request > lastPark else { return false }
+        let measured = finishedActions.reduce(0) { $0 + ($1.measured ? 1 : 0) }
+        do {
+            try "parked \(request) \(measured) \(actionIndex) \(actionSteps.count)\n"
+                .write(toFile: file + ".parked", atomically: false, encoding: .utf8)
+        } catch { fail("IKKOKU_PERF_PARK_FILE: \(error)") }
+        parks.append(["park": request, "measured": measured, "index": actionIndex,
+                      "startSeconds": PerfTrace.round(CACurrentMediaTime() - recordingStart)])
+        trace.details["parks"] = parks
+        waitForResume(file, request)
+        return true
+    }
+
+    private func waitForResume(_ file: String, _ request: Int) {
+        guard trace.recording else { return }
+        if Self.parkFileNumber(file, after: "resume") == request {
+            lastPark = request
+            runNextAction()
+        } else {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) { self.waitForResume(file, request) }
+        }
+    }
+
+    /// The number after `word` when the park file reads `<word> <n>`, else nil.
+    private static func parkFileNumber(_ file: String, after word: String) -> Int? {
+        guard let text = try? String(contentsOfFile: file, encoding: .utf8) else { return nil }
+        let parts = text.split(whereSeparator: \.isWhitespace)
+        guard parts.count == 2, parts[0] == word else { return nil }
+        return Int(parts[1])
     }
 
     /// Polls every millisecond until the pending action's builds are installed,

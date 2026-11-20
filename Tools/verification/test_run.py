@@ -651,6 +651,8 @@ SCENARIO_OPS = {"select", "setVisible", "rename", "toggleCamera", "toggleRoute",
                 "setSourceIKEnabled", "clickIKGuide",
                 # #437: a voice play's input resolution (scene decodes, live-step settles).
                 "assertVoice", "dropVoiceInputs",
+                # #448: one component of the Object tab's Position field.
+                "setPosition",
                 # #446: object edits in one gesture, kept documents, a broken undo step.
                 "updateObjects", "rememberDocument", "undoBroken"}
 
@@ -964,7 +966,7 @@ class StudioScenarioLaneTests(unittest.TestCase):
                       and not name.startswith(("maker-", "gameplay-")))
 
     def test_lane_validates_and_covers_every_scenario(self):
-        self.assertEqual(len(self.checks), 110)
+        self.assertEqual(len(self.checks), 111)
         referenced = set()
         for check in self.checks:
             scenario = check["env"]["IKKOKU_STUDIO_SCENARIO"]
@@ -1155,6 +1157,18 @@ class StudioScenarioLaneTests(unittest.TestCase):
                     self.assertIsInstance(step["visible"], bool)
                 if op == "rename":
                     self.assertTrue(step["name"])
+                if "sameGesture" in step:
+                    # #448: the step continues the previous step's gesture (the
+                    # runner skips its coalescing-window end). Off is the
+                    # default, so only true is written, and never on the first
+                    # step, which has no gesture before it.
+                    self.assertIs(step["sameGesture"], True, "sameGesture is true or absent: %s" % path)
+                    self.assertIsNot(step, steps[0], "the first step has no gesture to continue: %s" % path)
+                if op == "setPosition":
+                    self.assertIs(type(step["key"]), int)
+                    self.assertIs(type(step["index"]), int)
+                    self.assertIn(step["index"], range(3))
+                    self.assertIsInstance(step["value"], float)
                 if op == "assertWorkspaceRows":
                     # #410: a row check names its object (a source key, with
                     # `copy` for a copy, or `added`), then its row index

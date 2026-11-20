@@ -4,7 +4,7 @@ import Foundation
 /// snapshot of the document per undo step, taken before the step's first
 /// edit. Real edits closer than `coalescingWindow` to the step before them
 /// join it (a slider drag, typing), unless the step is forced or the window
-/// was ended (`endCoalescing`: a new gesture).
+/// was ended (`endCoalescing`: a new gesture, and every Undo, #448).
 ///
 /// An object edit that leaves the object as it was starts no step and does
 /// not restart the window. That covers a field committing the value it

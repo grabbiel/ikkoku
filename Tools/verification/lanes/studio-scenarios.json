@@ -2636,6 +2636,40 @@
       "timeout": 600
     },
     {
+      "id": "studio-scenario-undo-window-after-undo",
+      "argv": [
+        ".local/build/Build/Products/Debug/Ikkoku.app/Contents/MacOS/Ikkoku"
+      ],
+      "fixtures": [
+        {
+          "env": "IKKOKU_SOURCE_SCENE",
+          "kind": "file",
+          "from": "IKKOKU_CAMERA_OBJECT_PROBE_SCENE"
+        },
+        {
+          "env": "IKKOKU_SOURCE_AVATAR",
+          "kind": "file"
+        }
+      ],
+      "env": {
+        "IKKOKU_STUDIO_SCENARIO": "Tools/verification/scenarios/undo-window-after-undo.json",
+        "IKKOKU_STUDIO_SCENARIO_REPORT": ".local/verification/reports/studio-scenario-undo-window-after-undo.json"
+      },
+      "referenceTier": "app-smoke",
+      "tolerance": "#448 an edit right after Undo or Redo is its own undo step, on scene-x, from the 1 undo step and 0 redo steps startup's import leaves. Key 1 (IKKOKU-F) is renamed, then Undo and an x edit through the Object tab's Position field (inspectorUpdate) run as one gesture (sameGesture: the runner does not end the 0.4 s coalescing window before them, and each must start inside the window its gesture opened). The edit must record its own step and clear the redo stack (2 undo, 0 redo, moved, the rename still undone); one Undo then reverts only x (1 undo, 1 redo, back within 1e-5 of the start). The same for a rename, Undo, Redo and an x edit (3 undo, 0 redo; an Undo reverts x and keeps the rename: 2 undo, 1 redo); it passes because of the Undo's window end, since Redo has none of its own. One assertRejected negative control proves the redo depth check fails on a wrong value. The export and reimport keep the rename and the start position. On a build without the endCoalescing call in StudioModel.undo() the first edit joins the undone step and the first depth check fails.",
+      "artifacts": [
+        {
+          "path": ".local/verification/reports/studio-scenario-undo-window-after-undo.json",
+          "kind": "scenario-report"
+        },
+        {
+          "path": ".local/verification/scenario-exports/undo-window-after-undo.png",
+          "kind": "exported-scene"
+        }
+      ],
+      "timeout": 600
+    },
+    {
       "id": "studio-scenario-undo-patch-roundtrip",
       "argv": [
         ".local/build/Build/Products/Debug/Ikkoku.app/Contents/MacOS/Ikkoku"
