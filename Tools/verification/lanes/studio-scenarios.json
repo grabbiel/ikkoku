@@ -3491,6 +3491,60 @@
       "timeout": 600
     },
     {
+      "id": "studio-scenario-inspector-kept-controls",
+      "argv": [
+        ".local/build/Build/Products/Debug/Ikkoku.app/Contents/MacOS/Ikkoku"
+      ],
+      "fixtures": [
+        {
+          "env": "IKKOKU_SOURCE_SCENE",
+          "kind": "file",
+          "from": "IKKOKU_STUDIO_HALF_STATE_SCENE"
+        },
+        {
+          "env": "IKKOKU_SOURCE_AVATAR",
+          "kind": "file"
+        }
+      ],
+      "env": {
+        "IKKOKU_STUDIO_SCENARIO": "Tools/verification/scenarios/inspector-kept-controls.json",
+        "IKKOKU_STUDIO_SCENARIO_REPORT": ".local/verification/reports/studio-scenario-inspector-kept-controls.json"
+      },
+      "referenceTier": "app-smoke",
+      "tolerance": "#440: the kept inspector views' AppKit controls by class, at six states of IKKOKU_STUDIO_HALF_STATE_SCENE (folder 11 shown first; nothing selected; character 10 shown with folder 11's section kept hidden; route 20 shown with both kept hidden; nothing selected and character 10 after three selection cycles). A control inside a hidden kept view must be disabled, refuse focus, stay out of the key-view loop, miss a hit test at its centre and be absent from the accessibility tree (keptControls). The shown controls' per-class record and its sha, the inspector drawn from its layer tree (inspectorPixels, CALayer.render, no screen recording; the PNGs) and the layer counts (layers) are compared across builds.",
+      "artifacts": [
+        {
+          "path": ".local/verification/reports/studio-scenario-inspector-kept-controls.json",
+          "kind": "scenario-report"
+        },
+        {
+          "path": ".local/verification/scenario-exports/inspector-kept-controls-1-folder.png",
+          "kind": "render-capture"
+        },
+        {
+          "path": ".local/verification/scenario-exports/inspector-kept-controls-2-none.png",
+          "kind": "render-capture"
+        },
+        {
+          "path": ".local/verification/scenario-exports/inspector-kept-controls-3-character.png",
+          "kind": "render-capture"
+        },
+        {
+          "path": ".local/verification/scenario-exports/inspector-kept-controls-4-route.png",
+          "kind": "render-capture"
+        },
+        {
+          "path": ".local/verification/scenario-exports/inspector-kept-controls-5-none-cycled.png",
+          "kind": "render-capture"
+        },
+        {
+          "path": ".local/verification/scenario-exports/inspector-kept-controls-6-character-cycled.png",
+          "kind": "render-capture"
+        }
+      ],
+      "timeout": 600
+    },
+    {
       "id": "studio-scenario-live-samplers",
       "argv": [
         ".local/build/Build/Products/Debug/Ikkoku.app/Contents/MacOS/Ikkoku"

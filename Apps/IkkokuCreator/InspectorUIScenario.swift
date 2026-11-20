@@ -40,6 +40,9 @@ struct InspectorUIScenario: Decodable {
         /// focus moves; `capture`: see `eyeFocus(_:studio:moves:capture:settle:)`)
         /// and `"workspaceBodies"` (`label`: `select`, `toggle` or `refresh`;
         /// `count` actions from row `index`: see `workspaceBodies(_:action:count:index:settle:)`).
+        /// Added for #440: `"keptControls"` (see `keptControls(_:)`), `"layers"`
+        /// (see `layerCounts(_:)`) and `"inspectorPixels"` (`capture`: see
+        /// `inspectorPixels(_:capture:)`); `label` names the state in the report.
         let op: String
         let key: Int32?
         let keys: [Int32]?
@@ -354,6 +357,14 @@ struct InspectorUIScenario: Decodable {
                 let loop = await Self.keyLoop(window, beforeEachMove: { studio.endUndoCoalescing() }, afterEachMove: { await settle() })
                 let ok = (step.hiddenKeyViews.map { loop.hidden <= $0 } ?? true) && (step.keyViews.map { loop.views.count == $0 } ?? true)
                 record(step.op, ok, "\(loop.views.count) key views, \(loop.hidden) outside the visible window, sha \(loop.sha): " + loop.views.joined(separator: " > "))
+            case "keptControls":
+                let result = Self.keptControls(window)
+                record(step.op, result.ok, (step.label.map { "\($0): " } ?? "") + result.detail)
+            case "layers":
+                record(step.op, true, (step.label.map { "\($0): " } ?? "") + Self.layerCounts(window))
+            case "inspectorPixels":
+                let result = Self.inspectorPixels(window, capture: step.capture)
+                record(step.op, result.ok, (step.label.map { "\($0): " } ?? "") + result.detail)
             case "assert":
                 var problems: [String] = []
                 let target = object(step.key)
@@ -1469,6 +1480,160 @@ struct InspectorUIScenario: Decodable {
             let lead = Int((f.minX - visible.minX).rounded()), trail = Int((visible.maxX - f.maxX).rounded())
             return "\(label) \(natural)/\(width) \(lead)+\(trail)"
         }
+    }
+
+    // MARK: #440 B1 checks (kept inspector views stay in the window, clipped)
+
+    /// The window's accessibility tree as object identities, walked as
+    /// `accessibilityStrings(_:)` walks it.
+    @MainActor static func accessibilityObjects(_ window: NSWindow) -> Set<ObjectIdentifier> {
+        var seen = Set<ObjectIdentifier>()
+        func get(_ object: NSObject, _ name: String) -> Any? {
+            let selector = NSSelectorFromString(name)
+            guard object.responds(to: selector) else { return nil }
+            return object.perform(selector)?.takeUnretainedValue()
+        }
+        func visit(_ element: Any, depth: Int) {
+            guard depth < 80, seen.count < 20_000, let object = element as? NSObject else { return }
+            guard seen.insert(ObjectIdentifier(object)).inserted else { return }
+            for child in get(object, "accessibilityChildren") as? [Any] ?? [] { visit(child, depth: depth + 1) }
+        }
+        visit(window, depth: 0)
+        return seen
+    }
+
+    /// The views of the window's key-view loop (`nextValidKeyView` from the
+    /// content view), without moving the first responder.
+    @MainActor static func keyLoopMembers(_ window: NSWindow) -> Set<ObjectIdentifier> {
+        var members = Set<ObjectIdentifier>()
+        var view = window.contentView?.nextValidKeyView
+        while let current = view, members.count < 400, members.insert(ObjectIdentifier(current)).inserted {
+            view = current.nextValidKeyView
+        }
+        return members
+    }
+
+    /// `keptControls`: the AppKit controls (`NSControl`) of the inspector's
+    /// scroll view, by class. A control inside a kept view that is hidden (an
+    /// `InspectorAnchorView` with `keptHidden` whose area holds it) must be
+    /// disabled, refuse to become the first responder, lie outside the
+    /// key-view loop, miss a hit test at its centre and be absent from the
+    /// accessibility tree; any that does not fails the step. The others are
+    /// recorded per class (count, enabled, can become key view, in the loop,
+    /// hit, in the tree) with a sha, which must match across builds: they are
+    /// not focused, so no field begins or ends editing. Focus attempts on
+    /// hidden controls end with no first responder.
+    @MainActor static func keptControls(_ window: NSWindow) -> (ok: Bool, detail: String) {
+        guard let content = window.contentView, let scroll = inspectorScrollView(window) else {
+            return (false, "no inspector scroll view")
+        }
+        var anchors: [InspectorAnchorView] = [], controls: [NSControl] = []
+        func visit(_ view: NSView) {
+            if let anchor = view as? InspectorAnchorView { anchors.append(anchor) }
+            if let control = view as? NSControl { controls.append(control) }
+            view.subviews.forEach(visit)
+        }
+        visit(scroll)
+        let hiddenAnchors = anchors.filter(\.keptHidden)
+        let tree = accessibilityObjects(window), loop = keyLoopMembers(window)
+        window.makeFirstResponder(nil)
+        struct Facts { var count = 0, enabled = 0, focusable = 0, inLoop = 0, hit = 0, inTree = 0 }
+        var shown: [String: Facts] = [:], hidden: [String: Facts] = [:]
+        for control in controls {
+            let kind = "\(type(of: control))"
+            let isHidden = hiddenAnchors.contains { $0.holds(control) }
+            let centre = control.convert(CGPoint(x: control.bounds.midX, y: control.bounds.midY), to: nil)
+            let hitView = content.hitTest(content.superview?.convert(centre, from: nil) ?? centre)
+            var facts = (isHidden ? hidden : shown)[kind] ?? Facts()
+            facts.count += 1
+            if control.isEnabled { facts.enabled += 1 }
+            if isHidden {
+                if window.makeFirstResponder(control), window.firstResponder !== window {
+                    facts.focusable += 1
+                    window.makeFirstResponder(nil)
+                }
+            } else if control.canBecomeKeyView {
+                facts.focusable += 1
+            }
+            if loop.contains(ObjectIdentifier(control)) { facts.inLoop += 1 }
+            if hitView.map({ $0 === control || $0.isDescendant(of: control) }) ?? false { facts.hit += 1 }
+            if tree.contains(ObjectIdentifier(control)) || control.cell.map({ tree.contains(ObjectIdentifier($0)) }) ?? false {
+                facts.inTree += 1
+            }
+            if isHidden { hidden[kind] = facts } else { shown[kind] = facts }
+        }
+        func line(_ kind: String, _ f: Facts) -> String {
+            "\(kind) \(f.count): enabled \(f.enabled), focusable \(f.focusable), loop \(f.inLoop), hit \(f.hit), tree \(f.inTree)"
+        }
+        let shownLines = shown.keys.sorted().map { line($0, shown[$0]!) }
+        let hiddenLines = hidden.keys.sorted().map { line($0, hidden[$0]!) }
+        let leaks = hidden.keys.sorted().compactMap { kind -> String? in
+            let f = hidden[kind]!
+            let bad = [("enabled", f.enabled), ("focusable", f.focusable), ("loop", f.inLoop), ("hit", f.hit), ("tree", f.inTree)]
+                .filter { $0.1 > 0 }.map { "\($0.0) \($0.1)" }
+            return bad.isEmpty ? nil : "\(kind): " + bad.joined(separator: ", ")
+        }
+        let detail = "anchors \(anchors.count) (\(hiddenAnchors.count) hidden); shown sha \(sha(shownLines)): "
+            + shownLines.joined(separator: "; ") + " | hidden \(hidden.values.reduce(0) { $0 + $1.count }): "
+            + hiddenLines.joined(separator: "; ") + (leaks.isEmpty ? "" : " | LEAKS: " + leaks.joined(separator: "; "))
+        return (leaks.isEmpty, detail)
+    }
+
+    /// `layers`: the layer tree under the window's content view and under the
+    /// inspector's scroll view: layers (masks included), layers with a mask,
+    /// layers that mask to bounds, and views.
+    @MainActor static func layerCounts(_ window: NSWindow) -> String {
+        func count(_ root: NSView?) -> String {
+            guard let root else { return "none" }
+            var layers = 0, masked = 0, bounded = 0, views = 0
+            func visitLayer(_ layer: CALayer) {
+                layers += 1
+                if layer.masksToBounds { bounded += 1 }
+                if let mask = layer.mask { masked += 1; visitLayer(mask) }
+                layer.sublayers?.forEach(visitLayer)
+            }
+            func visitView(_ view: NSView) { views += 1; view.subviews.forEach(visitView) }
+            if let layer = root.layer { visitLayer(layer) }
+            visitView(root)
+            return "layers \(layers), masked \(masked), masksToBounds \(bounded), views \(views)"
+        }
+        return "window: \(count(window.contentView)); inspector: \(count(inspectorScrollView(window)))"
+    }
+
+    /// `inspectorPixels`: the inspector's scroll view drawn from its layer
+    /// tree (`CALayer.render(in:)`, in process, no screen recording) at the
+    /// backing scale; `capture` gets the PNG. The detail gives the size, the
+    /// number of distinct colours and a sha of the pixels.
+    @MainActor static func inspectorPixels(_ window: NSWindow, capture: String?) -> (ok: Bool, detail: String) {
+        guard let scroll = inspectorScrollView(window), let layer = scroll.layer else { return (false, "no inspector layer") }
+        let scale = window.backingScaleFactor
+        let width = Int((scroll.bounds.width * scale).rounded()), height = Int((scroll.bounds.height * scale).rounded())
+        guard width > 0, height > 0, let space = CGColorSpace(name: CGColorSpace.sRGB),
+              let context = CGContext(data: nil, width: width, height: height, bitsPerComponent: 8, bytesPerRow: width * 4,
+                                      space: space, bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue) else {
+            return (false, "no bitmap \(width)x\(height)")
+        }
+        if layer.isGeometryFlipped == false && scroll.isFlipped {
+            context.translateBy(x: 0, y: CGFloat(height))
+            context.scaleBy(x: 1, y: -1)
+        }
+        context.scaleBy(x: scale, y: scale)
+        layer.render(in: context)
+        guard let image = context.makeImage(), let pixels = pixels(of: image) else { return (false, "no image") }
+        var colours = Set<UInt32>()
+        for i in stride(from: 0, to: pixels.bytes.count, by: 4) where colours.count < 100_000 {
+            colours.insert(UInt32(pixels.bytes[i]) << 24 | UInt32(pixels.bytes[i + 1]) << 16
+                           | UInt32(pixels.bytes[i + 2]) << 8 | UInt32(pixels.bytes[i + 3]))
+        }
+        let digest = SHA256.hash(data: Data(pixels.bytes)).prefix(8).map { String(format: "%02x", $0) }.joined()
+        var detail = "\(width)x\(height) px, \(colours.count) colours, pixels sha \(digest)"
+        if let capture {
+            do { _ = try CaptureOutput.writePNG(image, to: URL(fileURLWithPath: capture)) } catch {
+                return (false, detail + "; capture: \(error)")
+            }
+            detail += "; png written"
+        }
+        return (true, detail)
     }
 
     static func sha(_ lines: [String]) -> String {

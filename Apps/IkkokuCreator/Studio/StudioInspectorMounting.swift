@@ -97,6 +97,11 @@ private struct InspectorKeptLabel: ViewModifier {
 /// An empty view behind kept inspector views; its frame is theirs, so it
 /// finds the AppKit controls they hold.
 final class InspectorAnchorView: NSView {
+    /// Whether the kept views in front of it are hidden (`inspectorKeptHidden`
+    /// or `inspectorSectionHidden`, as `StudioParentPopUp` reads them). Read
+    /// only by the inspector UI scenario's `keptControls` (#440).
+    var keptHidden = false
+
     override var acceptsFirstResponder: Bool { false }
     override func isAccessibilityElement() -> Bool { false }
     override func hitTest(_ point: NSPoint) -> NSView? { nil }
@@ -104,7 +109,7 @@ final class InspectorAnchorView: NSView {
     /// The anchor's frame in window coordinates, a point wider on each side.
     private var area: CGRect { convert(bounds, to: nil).insetBy(dx: -1, dy: -1) }
 
-    private func holds(_ view: NSView) -> Bool {
+    func holds(_ view: NSView) -> Bool {
         view.window === window && view.enclosingScrollView === enclosingScrollView
             && area.contains(view.convert(view.bounds, to: nil))
     }
@@ -135,7 +140,9 @@ struct InspectorAnchor: NSViewRepresentable {
         kept.anchor = view
         return view
     }
-    func updateNSView(_ nsView: InspectorAnchorView, context: Context) {}
+    func updateNSView(_ nsView: InspectorAnchorView, context: Context) {
+        nsView.keptHidden = context.environment.inspectorKeptHidden || context.environment.inspectorSectionHidden
+    }
 }
 
 /// Sections (`SectionBox`) the user collapsed in kept inspector views. A

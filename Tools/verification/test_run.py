@@ -668,7 +668,9 @@ INSPECTOR_UI_OPS = {"select", "deselect", "focus", "type", "delete", "undo", "re
                     # Added for #410 (the workspace list's slots, the eyes' own
                     # focus ring and what each workspace action evaluates).
                     "selectRow", "scrollWorkspace", "newScene", "addFolders", "eyeFocus",
-                    "workspaceBodies"}
+                    "workspaceBodies",
+                    # Added for #440 (kept inspector views hidden by clipping).
+                    "keptControls", "layers", "inspectorPixels"}
 
 # ST-T11 `editRoute` settings: point edits name the point, route edits do not.
 ROUTE_POINT_SETTINGS = ("delete", "move", "speed", "ease", "connection", "link")
@@ -964,7 +966,7 @@ class StudioScenarioLaneTests(unittest.TestCase):
                       and not name.startswith(("maker-", "gameplay-")))
 
     def test_lane_validates_and_covers_every_scenario(self):
-        self.assertEqual(len(self.checks), 110)
+        self.assertEqual(len(self.checks), 111)
         referenced = set()
         for check in self.checks:
             scenario = check["env"]["IKKOKU_STUDIO_SCENARIO"]
@@ -1007,6 +1009,11 @@ class StudioScenarioLaneTests(unittest.TestCase):
                     if name in step:
                         self.assertIs(type(step[name]), int)
                         self.assertGreaterEqual(step[name], 1 if name == "count" else 0)
+            if op == "inspectorPixels":
+                self.assertTrue(step["capture"].startswith(".local/verification/"))
+                self.assertTrue(step["capture"].endswith(".png"))
+            if op in ("keptControls", "layers", "inspectorPixels") and "label" in step:
+                self.assertTrue(step["label"])
             if op == "eyeFocus":
                 self.assertIs(type(step.get("count", 2)), int)
                 self.assertGreater(step.get("count", 2), 0)
