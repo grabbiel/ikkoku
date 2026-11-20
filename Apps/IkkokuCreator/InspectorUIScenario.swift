@@ -357,7 +357,8 @@ struct InspectorUIScenario: Decodable {
                 let ok = (step.hiddenKeyViews.map { loop.hidden <= $0 } ?? true) && (step.keyViews.map { loop.views.count == $0 } ?? true)
                 record(step.op, ok, "\(loop.views.count) key views, \(loop.hidden) outside the visible window, sha \(loop.sha): " + loop.views.joined(separator: " > "))
             case "keptControls":
-                let result = Self.keptControls(window)
+                let result = await Self.keptControls(window, beforeEachMove: { studio.endUndoCoalescing() },
+                                                     afterEachMove: { await settle() })
                 record(step.op, result.ok, (step.label.map { "\($0): " } ?? "") + result.detail)
             case "layers":
                 record(step.op, true, (step.label.map { "\($0): " } ?? "") + Self.layerCounts(window))
@@ -569,11 +570,13 @@ struct InspectorUIScenario: Decodable {
     /// and let the views re-render before the next one (#390), as separate Tab
     /// presses would. A view is named as it is right after the move.
     @MainActor static func keyLoop(_ window: NSWindow, beforeEachMove: () -> Void = {},
-                                   afterEachMove: () async -> Void = {}) async -> (views: [String], hidden: Int, sha: String) {
+                                   afterEachMove: () async -> Void = {}) async -> (views: [String], hidden: Int, sha: String,
+                                                                                     members: Set<ObjectIdentifier>) {
         beforeEachMove()
         window.makeFirstResponder(nil)
         await afterEachMove()
         var views: [String] = [], hidden = 0
+        var members = Set<ObjectIdentifier>()
         var first: NSView?
         for _ in 0..<80 {
             beforeEachMove()
@@ -596,11 +599,12 @@ struct InspectorUIScenario: Decodable {
             if first == nil { first = view }
             if named.hidden { hidden += 1 }
             views.append(named.name)
+            members.insert(ObjectIdentifier(view))
         }
         beforeEachMove()
         window.makeFirstResponder(nil)
         await afterEachMove()
-        return (views, hidden, sha(views))
+        return (views, hidden, sha(views), members)
     }
 
     /// #425: whether the Studio toolbar adds its empty marker views (`StudioToolbarMarker`) and counts
@@ -1498,17 +1502,6 @@ struct InspectorUIScenario: Decodable {
         return seen
     }
 
-    /// The views of the window's key-view loop (`nextValidKeyView` from the
-    /// content view), without moving the first responder.
-    @MainActor static func keyLoopMembers(_ window: NSWindow) -> Set<ObjectIdentifier> {
-        var members = Set<ObjectIdentifier>()
-        var view = window.contentView?.nextValidKeyView
-        while let current = view, members.count < 400, members.insert(ObjectIdentifier(current)).inserted {
-            view = current.nextValidKeyView
-        }
-        return members
-    }
-
     /// The inspector's scroll view for the #440 ops: the scroll view that
     /// encloses most of the window's `InspectorAnchorView`s (the kept views'
     /// anchors live in its content), else `inspectorScrollView(_:)`. `how`
@@ -1541,10 +1534,13 @@ struct InspectorUIScenario: Decodable {
     /// key-view loop, miss a hit test at its centre and be absent from the
     /// accessibility tree; any that does not fails the step. The others are
     /// recorded per class (count, enabled, can become key view, in the loop,
-    /// hit, in the tree) with a sha, which must match across builds: they are
-    /// not focused, so no field begins or ends editing. Focus attempts on
-    /// hidden controls end with no first responder.
-    @MainActor static func keptControls(_ window: NSWindow) -> (ok: Bool, detail: String) {
+    /// hit, in the tree) with a sha, which must match across builds. The loop
+    /// is the one Tab walks (`keyLoop(_:beforeEachMove:afterEachMove:)`, as
+    /// the `keyLoop` op walks it, a text field counted when it is edited); the
+    /// walk and the focus attempts on hidden controls end with no first
+    /// responder.
+    @MainActor static func keptControls(_ window: NSWindow, beforeEachMove: () -> Void,
+                                        afterEachMove: () async -> Void) async -> (ok: Bool, detail: String) {
         let found = keptScrollView(window)
         guard let content = window.contentView, let scroll = found.scroll else {
             return (false, "no inspector scroll view (\(found.how))")
@@ -1557,7 +1553,8 @@ struct InspectorUIScenario: Decodable {
         }
         visit(scroll)
         let hiddenAnchors = anchors.filter(\.keptHidden)
-        let tree = accessibilityObjects(window), loop = keyLoopMembers(window)
+        let tree = accessibilityObjects(window)
+        let loop = await keyLoop(window, beforeEachMove: beforeEachMove, afterEachMove: afterEachMove).members
         window.makeFirstResponder(nil)
         struct Facts { var count = 0, enabled = 0, focusable = 0, inLoop = 0, hit = 0, inTree = 0 }
         var shown: [String: Facts] = [:], hidden: [String: Facts] = [:]

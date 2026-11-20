@@ -1278,7 +1278,9 @@ the state in the step's detail):
   outside the key-view loop, miss a hit test at its centre and be absent
   from the accessibility tree, or the step fails. Shown controls are
   recorded per class (count, enabled, can become key view, in the loop, hit,
-  in the tree) with a sha; they are not focused, so no field commits;
+  in the tree) with a sha. The loop is the one Tab walks, as `keyLoop`
+  walks it (a text field counts when it is edited), and it ends with no
+  first responder;
 - `layers` counts the layers (masks included), the masked layers, the layers
   that mask to bounds and the views under the window's content view and
   under the inspector's scroll view.
