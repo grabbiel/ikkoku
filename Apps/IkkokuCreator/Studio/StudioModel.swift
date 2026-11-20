@@ -791,6 +791,8 @@ final class StudioModel: ViewportInputHandler, LivePacedHandler {
     @ObservationIgnored private var sourceAudioBusStorage: SourceStudioAudioBus?
     /// Stops the audio output if the bus exists; one never made never started.
     func stopSourceAudioOutput() { sourceAudioBusStorage?.stopOutput() }
+    /// The voices' kept catalog and clips (#445), if the bus exists; nil never makes one.
+    var sourceVoiceLibrary: SourceStudioVoiceLibrary? { sourceAudioBusStorage?.voices }
     @ObservationIgnored var sourceVoicePlayers: [UUID: SourceStudioVoicePlayer] = [:]
     /// The source characters' voice inputs by scene SHA-256 and object key
     /// (#437): from built previews, the import's hidden card check and a
@@ -3129,7 +3131,8 @@ final class StudioModel: ViewportInputHandler, LivePacedHandler {
         guard sourceDonationPressure == nil, sourceDonationCache.count > 0 else { return }
         let source = DispatchSource.makeMemoryPressureSource(eventMask: [.warning, .critical], queue: .main)
         source.setEventHandler { [weak self] in
-            MainActor.assumeIsolated { self?.sourceDonationCache.removeAll() }
+            // #445: the voices' kept catalog and clips go with them.
+            MainActor.assumeIsolated { self?.sourceDonationCache.removeAll(); self?.sourceVoiceLibrary?.releaseCaches() }
         }
         source.activate()
         sourceDonationPressure = source
