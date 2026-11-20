@@ -2211,7 +2211,50 @@ characters in 29 scenes and no route characters.
 
 ### Evidence
 
-EVIDENCE_PLACEHOLDER
+Recorded in [#373](https://github.com/grabbiel/ikkoku/pull/373) (merged
+2026-11-18). Timings are Release builds at 60 Hz with the monitor off,
+against base fb3aecd9 (the merge base plus the three new workloads); the
+full tables are in
+[performance.md](../performance.md#lazy-hidden-characters-at-import).
+
+- **Import** ([W3](../performance.md#startup-n--4-per-arm), head
+  c825850c, n=4 per arm). The 70-character scene is ready in 1.45 s
+  against 3.62 s, with a peak footprint of 1228 against 1542 MiB and
+  646 against 762 ms of main-thread time until ready. The median scene is
+  ready in 1.03 s against 1.58 s. [W3b](../performance.md#final-code-w3b-2026-11-17)
+  timed the final code (34804c13): 1.56 s against 3.60 s, and 1.02 s
+  against 1.59 s.
+- **First show and first select.** A first show of a hidden folder
+  (5 characters after the card check, W3b) is ready in 745–766 ms with a
+  longest stall of 19–27 ms. A first selection of an unbuilt hidden
+  character is ready in 434–439 ms (W3), against 10–15 ms on base, which
+  built it at import.
+- **Clocks.** The first clock rebase costs 22.0 ms of main-thread time
+  against 34.5 ms (W3), and the first `sourceClockBake` 1.0 ms.
+- **Export.** In W3b an export of the imported scene is ready in 58.1 ms
+  against 42.4 ms, with 63.0 against 55.1 ms of main-thread time. The
+  [export profile](../performance.md#export-profile-q1-2026-11-18) found
+  the same callees in both arms plus the data-only clocks, 0.17–0.29 ms
+  per export, and attributes the rest of the gap to the run environment.
+- **Scenarios.** Three `studio-scenarios` checks cover the import
+  ([lane notes](../../../Tools/verification/README.md#lazy-hidden-characters-cxs1-gap-list-item-7)):
+  `hidden-character-build`, `hidden-attachment-status` and
+  `hidden-animation-clock`. The head lane passed 95 of 97; the 2 failures
+  were #390's timing-dependent undo depth, and both passed once #396 fixed
+  it. The base lane passed 94 of 94, and the base version of
+  `hidden-animation-clock` fails at the export after the native save and
+  load ("Animation edits require a loaded source character.").
+- **Break proofs.** Reading the world matrix before the visibility check
+  fails `hidden-attachment-status` at exactly its four `statusLacks`
+  asserts; an export that ignores the data-only clock states fails
+  `hidden-animation-clock` at 2 of 14 steps. `hidden-character-build`
+  passes under both.
+- **Bytes.** Head against base, 92 lane artifacts are byte-identical and
+  14 differ. All 14 are saved native documents, equal once their random
+  UUIDs are matched in order (one also differs in a dictionary order Swift
+  changes per process).
+- **Engine.** The strict suite on 470f7831: 1225 tests, 1211 passed,
+  14 skipped, 0 failed.
 
 ## CharaStudio reload acceptance
 
