@@ -1032,6 +1032,23 @@ final class StudioModel: ViewportInputHandler, LivePacedHandler {
     /// The settled step whose frame no refresh has submitted yet.
     @ObservationIgnored private var liveRefreshPending: SourceStudioLiveTickJob?
 
+    /// Where in a live step's completion on the main actor (`liveTickFinished`)
+    /// `livePhaseHook` runs: before the step commits, so the call finds the
+    /// step pending with its workers done and commits it itself, or after the
+    /// step has committed and refreshed, so the call finds nothing pending.
+    enum LivePhase: String { case beforeCommit, afterCommit }
+    /// A one-shot call the `studio-edit-steps` workload places at a live
+    /// step's completion (#409, `IKKOKU_PERF_EDIT_PHASES`). nil, and never
+    /// read past one optional test per completion, unless the workload arms
+    /// it; cleared before it runs. A step that is not parallel, or that
+    /// something else already settled, offers no phase; the hook then waits.
+    @ObservationIgnored var livePhaseHook: (phase: LivePhase, run: () -> Void)?
+    /// Settles that found a live step pending, and of those the ones whose
+    /// workers had not finished (the wait blocked). The workload reads both
+    /// around each edit to check its phase class.
+    @ObservationIgnored private(set) var livePendingSettles = 0
+    @ObservationIgnored private(set) var liveUnfinishedWaits = 0
+
     /// The scenario's handle on the timer's path: starts one live step as the
     /// timer does and returns whether it runs off the main thread (in flight
     /// until something settles it). A serial step has already refreshed.
@@ -1059,10 +1076,19 @@ final class StudioModel: ViewportInputHandler, LivePacedHandler {
     }
 
     /// The workers of `job` finished: commit and refresh it, unless something
-    /// already did.
+    /// already did. An armed `livePhaseHook` runs before the commit, while
+    /// the step is still pending, or after the commit's refresh.
     private func liveTickFinished(_ job: SourceStudioLiveTickJob) {
         guard liveTick?.job === job || liveRefreshPending === job else { return }
+        if let hook = livePhaseHook, hook.phase == .beforeCommit, liveTick?.job === job {
+            livePhaseHook = nil
+            hook.run()
+        }
         completeLiveTick()
+        if let hook = livePhaseHook, hook.phase == .afterCommit, liveTick == nil, liveRefreshPending == nil {
+            livePhaseHook = nil
+            hook.run()
+        }
     }
 
     /// Completes the live step in flight, if any: waits for its workers,
@@ -1086,6 +1112,8 @@ final class StudioModel: ViewportInputHandler, LivePacedHandler {
         }
         liveTick = nil
         let finished = tick.job.isFinished, waitStart = CACurrentMediaTime()
+        livePendingSettles &+= 1
+        if !finished { liveUnfinishedWaits &+= 1 }
         let result = tick.job.wait()
         if let trace = PerfTrace.active {
             if !finished { trace.record(.studioLiveWait, start: waitStart, end: CACurrentMediaTime()) }

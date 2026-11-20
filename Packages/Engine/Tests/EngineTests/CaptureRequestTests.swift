@@ -500,6 +500,8 @@ private struct CaptureRecipe {
                                    "IKKOKU_PERF_ACTION_KEY": "0", "IKKOKU_PERF_RIG_PREFETCH": "off", "IKKOKU_PERF_DONATIONS": "off", "IKKOKU_PERF_INSTALL_REFRESH": "each",
                                    "IKKOKU_PERF_OUTFIT": "2", "IKKOKU_PERF_SELECT_KEYS": "963,0,12", "IKKOKU_PERF_INSPECTOR_TAB": "pose",
                                    "IKKOKU_PERF_KEEP_MOUNTED": "tab",
+                                   "IKKOKU_PERF_EDITS": "90", "IKKOKU_PERF_PAUSE_AT": "0,1,60,90", "IKKOKU_PERF_PAUSE_SECONDS": "10",
+                                   "IKKOKU_PERF_PAUSE_MARKER": "/repo/.local/sta409/markers",
                                    "IKKOKU_SOURCE_SCENE": "/scenes/scene.png", "IKKOKU_SOURCE_AVATAR": "/rigs/source-avatar.json"]
     let request = try CaptureRequest.validate(trace)
     #expect(request.mode == .perfTrace)
@@ -541,7 +543,9 @@ private struct CaptureRecipe {
                               ("IKKOKU_PERF_SELECT_KEYS", ""), ("IKKOKU_PERF_SELECT_KEYS", "963,"), ("IKKOKU_PERF_SELECT_KEYS", "-1"),
                               ("IKKOKU_PERF_SELECT_KEYS", "route"), ("IKKOKU_PERF_SELECT_KEYS", tooManyKeys),
                               ("IKKOKU_PERF_INSPECTOR_TAB", "Object"), ("IKKOKU_PERF_INSPECTOR_TAB", "timeline"),
-                              ("IKKOKU_PERF_KEEP_MOUNTED", "On"), ("IKKOKU_PERF_KEEP_MOUNTED", "1"), ("IKKOKU_PERF_KEEP_MOUNTED", "")] {
+                              ("IKKOKU_PERF_KEEP_MOUNTED", "On"), ("IKKOKU_PERF_KEEP_MOUNTED", "1"), ("IKKOKU_PERF_KEEP_MOUNTED", ""),
+                              ("IKKOKU_PERF_EDITS", "0"), ("IKKOKU_PERF_EDITS", "501"), ("IKKOKU_PERF_PAUSE_AT", "1,x"),
+                              ("IKKOKU_PERF_PAUSE_AT", "-1"), ("IKKOKU_PERF_PAUSE_SECONDS", "0"), ("IKKOKU_PERF_PAUSE_SECONDS", "31")] {
         var environment: [String: String] = ["IKKOKU_PERF_TRACE": "/p.json"]
         environment[variable] = value
         let expected: [[String]] = [[variable]]
@@ -557,6 +561,9 @@ private struct CaptureRecipe {
         // #410: the small scene of `studio-load` and the workspace slot cap.
         ("IKKOKU_PERF_LOAD_SMALL_OBJECTS", ["200", "1"], ["0", "-1", "two", ""]),
         ("IKKOKU_PERF_WORKSPACE_SLOT_CAP", ["256", "0"], ["-1", "cap", ""]),
+        // #409, #446: the field `studio-edit-steps` edits and where its edits run.
+        ("IKKOKU_PERF_EDIT_FIELD", ["x", "pose"], ["X", "kinematics", ""]),
+        ("IKKOKU_PERF_EDIT_PHASES", ["none", "alternate"], ["Alternate", "on", ""]),
     ]
     for control in controls {
         let outside: [[String]] = [[control.variable]]
