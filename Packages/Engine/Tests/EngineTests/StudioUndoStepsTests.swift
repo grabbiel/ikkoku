@@ -8,7 +8,9 @@ import CoreMath
 /// makes the same calls the model makes: an object edit snapshots the
 /// document before writing the object back when `edit` says so, Undo moves
 /// the current document to the redo stack and restores the last snapshot,
-/// and Redo does the reverse. Both end the coalescing window (#448).
+/// and Redo does the reverse. Both end the coalescing window (#448). The
+/// #448 tests below document that call sequence; the app's own calls are
+/// covered by the studio lane's `undo-window-after-undo` scenario.
 private struct History {
     var document: StudioDocument
     var steps = StudioUndoSteps()

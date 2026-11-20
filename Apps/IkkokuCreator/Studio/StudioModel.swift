@@ -2077,7 +2077,8 @@ final class StudioModel: ViewportInputHandler, LivePacedHandler {
 
     /// Closes the edit-coalescing window, so the next edit takes its own undo
     /// snapshot. The scenario runner calls it before every step: each step
-    /// stands for a separate user gesture, however fast the steps run.
+    /// stands for a separate user gesture, however fast the steps run,
+    /// unless the step sets `sameGesture` (#448).
     func endUndoCoalescing() { undoSteps.endCoalescing() }
 
     /// Undo/redo keeps the SHA-gated source runtime caches (route runtimes,

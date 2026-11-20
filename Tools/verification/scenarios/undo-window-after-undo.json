@@ -1,0 +1,24 @@
+{
+  "steps": [
+    {"op": "select", "key": 1},
+    {"op": "captureObject", "key": 1, "name": "start"},
+    {"op": "assert", "undoDepth": 1, "redoDepth": 0, "key": 1, "name": "IKKOKU-F"},
+    {"op": "rename", "key": 1, "name": "IKKOKU-U448 A"},
+    {"op": "undo", "sameGesture": true},
+    {"op": "setPosition", "key": 1, "index": 0, "value": 3.25, "sameGesture": true},
+    {"op": "assert", "undoDepth": 2, "redoDepth": 0, "key": 1, "name": "IKKOKU-F", "position": {"key": 1, "from": "start"}},
+    {"op": "undo"},
+    {"op": "assert", "undoDepth": 1, "redoDepth": 1, "key": 1, "name": "IKKOKU-F", "position": {"key": 1, "from": "start", "within": 0.00001}},
+    {"op": "assertRejected", "redoDepth": 0, "errorContains": "1 redo steps, expected 0"},
+    {"op": "rename", "key": 1, "name": "IKKOKU-U448 B"},
+    {"op": "undo", "sameGesture": true},
+    {"op": "redo", "sameGesture": true},
+    {"op": "setPosition", "key": 1, "index": 0, "value": 3.25, "sameGesture": true},
+    {"op": "assert", "undoDepth": 3, "redoDepth": 0, "key": 1, "name": "IKKOKU-U448 B", "position": {"key": 1, "from": "start"}},
+    {"op": "undo"},
+    {"op": "assert", "undoDepth": 2, "redoDepth": 1, "key": 1, "name": "IKKOKU-U448 B", "position": {"key": 1, "from": "start", "within": 0.00001}},
+    {"op": "export", "path": ".local/verification/scenario-exports/undo-window-after-undo.png"},
+    {"op": "reimport", "path": ".local/verification/scenario-exports/undo-window-after-undo.png"},
+    {"op": "assert", "key": 1, "name": "IKKOKU-U448 B", "position": {"key": 1, "from": "start", "within": 0.0001}}
+  ]
+}
