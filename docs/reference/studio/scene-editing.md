@@ -56,6 +56,60 @@ source-scene identity remain local; no scene file was saved or changed. This
 closes the layout regression only; the full ST-T01 guide/undo/save acceptance
 remains separate.
 
+### Inspector text-field heights (#366)
+
+On a selection change, SwiftUI sometimes laid out one inspector text field at
+another field's measured height. Usually the Name field (24 pt, square bezel,
+body font) got the Transform fields' 21 pt, and every row below it moved. Two
+changes hold the Object tab:
+
+- The Transform fields (`VectorRow`) have an explicit height,
+  `InspectorTextFieldHeight.vector`. It is measured once from an AppKit text
+  field with the same bezel and font.
+- The Name field is `InspectorNameField`, an `NSTextField` in an
+  `NSViewRepresentable`. SwiftUI sizes it by asking it: `sizeThatFits` returns
+  the field's own intrinsic height for any proposed height. An explicit frame
+  on SwiftUI's Name field held the rows. In about 1% of loaded launches,
+  though, the field inside that frame was still laid out at 21 pt.
+
+**Behaviour.**
+- The field matches SwiftUI's automatic style: square bezel, body font, one
+  line and the placeholder "Name".
+- Every keystroke writes the binding, as `TextField` does, so typing coalesces
+  into one undo step (#390).
+- `updateNSView` points the field's delegate at the current binding, so after a
+  selection change the field edits only the object now shown. It replaces the
+  shown text only when it differs. That covers undo, redo and a selection
+  change while editing.
+- The window's field editor edits it, as before. Return, Escape, Tab, Shift-Tab
+  and Cmd-Z, which runs the Studio menu's Undo, were compared step by step with
+  the SwiftUI field in the inspector scenarios. The accessibility tree was
+  compared too.
+- Not tested: Cmd-A, Cmd-C, Cmd-V and Cmd-X in the field, the focus ring while
+  the field is focused, and VoiceOver speech and rotor order.
+
+**Performance.** No timing was measured for this change. On each update the
+field compares one string and sets it only when it differs. Sizing reads the
+field's intrinsic size. The field is a plain `NSTextField`. #453's observer
+growth was traced to SwiftUI's own text-field class joining the window, so it
+does not reach this field. That conclusion comes from the code; the observer
+count was not measured.
+
+**Evidence.** Two local A/B experiments ran under a fixed synthetic CPU load,
+with frozen rules and 500 launches per arm in ABBA order. Each selected
+character 0 and then character 963 on the Object tab.
+
+| Experiment | Build | Rows moved | Name field short |
+| --- | --- | --- | --- |
+| A | without the fix | 8 / 500 | 8 / 500 |
+| A | explicit heights on both fields | 0 / 500 | 5 / 500 |
+| B | without the fix | 11 / 500 | 11 / 500 |
+| B | Transform height and `InspectorNameField` | 0 / 500 | 0 / 500 |
+
+0 in 500 bounds the rate at about 0.6% (95% upper bound). It does not prove
+the rate is zero. Captures without the defect were pixel-identical between the
+arms.
+
 ## App boundary and remaining work
 
 The app exports supported existing transforms, per-object visibility, folder/camera/route renames, camera active flags (only after the user switches the looked-through camera, then for every camera record), route play-state `active` flags, FK/IK and activation flags, animation, voice and cameras to a **new file** after checking the source SHA. It renders an explicit edited thumbnail. The app populates `edits.cards` with source face/body shape values and edited card colors that differ from the embedded card's saved values (ST-T06); shape and color edits on one character merge into a single `Edits`, and a value edited back to the saved rate or rgba writes nothing and the file stays byte-identical. Only colors that actually bound a material on the assembled character are exported; an edited color whose ID binds nothing still renders as saved. Its inspector diagnostic says it remains in the native document but is skipped by original-scene export. A selected outfit other than the card's saved one is merged into the same `Edits` as `coordinateType` (ST-C03); choosing the saved outfit again writes nothing. Clothes states, accessory flags and the shoes type that differ from the card's saved `Status` are merged the same way; a state edited back to the saved bytes writes nothing. Thumbnail and other card destinations remain unpopulated, and a native `object.card` override is rejected. Deleted objects and objects moved between the root and folders are exported as [topology edits](#topology-edits-deletion-and-reparenting-st-t03-st-s09), and copies of source records and new folders, cameras and lights as [inserted records](#duplicates-and-added-records-st-t03-st-s09-st-d03). Route point and setting edits, and route copies, are exported as [route edits](#route-points-and-settings-st-t11-st-t03).

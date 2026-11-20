@@ -1416,17 +1416,20 @@ get wrong:
   `app-smoke.json` (#366). The same scene started on the Object tab with
   `IKKOKU_CAPTURE_UI_SELECT=0,963`, #366's `ui-sel-chars` start. On it,
   SwiftUI sometimes gave the Name field the Transform fields' measured
-  height, 21 pt instead of 24, and every row below moved. The inspector now
-  gives the Name field and `VectorRow`'s fields explicit heights
-  (`InspectorTextFieldHeight`), measured once from an AppKit text field with
-  SwiftUI's bezel and font. The fit log's `heights` part shows those two
-  heights and every editable field's intrinsic height besides the Name
-  field's. With `--object-heights 24 21` the checker needs the explicit
-  heights at 24 and 21 pt, the Name field's intrinsic height at 24 pt and
-  every other field's at 21 pt: the prototype must match SwiftUI's own fields
-  on this machine. Frame heights are not judged. In about 1% of launches
-  the Name field is still laid out 21 pt tall inside its 24 pt slot. The
-  rows no longer move, but #366 stays open for that residue.
+  height, 21 pt instead of 24, and every row below moved. `VectorRow`'s
+  fields get an explicit height (`InspectorTextFieldHeight.vector`), measured
+  once from an AppKit text field with SwiftUI's bezel and font. The Name
+  field is an AppKit text field (`InspectorNameField`) that SwiftUI sizes by
+  asking it, so it keeps its own intrinsic height. An explicit frame on
+  SwiftUI's Name field held the rows, but in about 1% of launches the field
+  inside it was still laid out at 21 pt. The fit log's `heights` part shows
+  SwiftUI's automatic-style height (`InspectorTextFieldHeight.name`), the
+  Transform height, and every editable field's intrinsic height besides the
+  Name field's. With `--object-heights 24 21` the checker needs those two
+  heights at 24 and 21 pt, the Name field's intrinsic height at 24 pt (the
+  AppKit field stays as tall as SwiftUI's) and every other field's at 21 pt.
+  Frame heights are not judged here. One capture cannot show a rate, and
+  0 of 500 loaded launches bounds the rate without proving it zero.
 
 The Tab walk of `keyLoop` focuses each field in turn, and focusing a
 Transform field commits the value it shows (as `inspector-edit-deselect`
