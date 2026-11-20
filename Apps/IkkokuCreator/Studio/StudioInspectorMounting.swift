@@ -30,11 +30,11 @@ extension View {
     /// otherwise widen the stack and move what is shown.
     ///
     /// On macOS 15 and later it stays drawn at full opacity, clipped to that
-    /// zero-height frame (#440): at zero opacity SwiftUI took a hidden view's
-    /// AppKit controls out of the window and added them again on every show,
-    /// and each show left AppKit observers and dependencies that were never
-    /// freed. Clipped,
-    /// they stay in the window and nothing of them is drawn. Shown, the clip
+    /// zero-height frame (#440): at zero opacity SwiftUI added a hidden view's
+    /// AppKit controls to their superview again on every show (they stayed in
+    /// the view tree while hidden), and each re-add left AppKit observers and
+    /// dependencies that were never freed. Clipped, they are not added again
+    /// and nothing of them is drawn. Shown, the clip
     /// is the frame grown by `InspectorKeptClip.outset` on every side, so
     /// focus rings and shadows drawn outside the frame are not cut.
     /// Accessibility is hidden explicitly while hidden and left untouched

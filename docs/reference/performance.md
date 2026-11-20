@@ -632,8 +632,9 @@ The #410 check stays as that issue's record.
   parking protocol against a fake app, and the attempts.
 
 **The inspector's fix: kept views hidden by clipping.** At zero opacity
-SwiftUI took a hidden kept view's AppKit controls out of the window and
-added them again on every show. Each re-add left NSKeyValueDependency
+SwiftUI added a hidden kept view's AppKit controls to their superview again
+on every show; while hidden they stayed in the view tree (the B1
+kept-controls scenario counts them on `main`). Each re-add left NSKeyValueDependency
 objects (`-[NSView addSubview:]`, and glass-context properties computed in
 `updateGraph()`) and, for every text field, notification observers
 (`AppKitTextField.viewWillMove(toWindow:)`, #453), and none were freed.
