@@ -779,9 +779,11 @@ included, and over the fixture rigs.
   node reads its rotation from the axes that remain. lossyScale stays unsigned,
   because the recovered source does not confirm where Unity's lossyScale keeps
   a negative sign.
-- DynamicBone still refuses a zero or negative local scale on its chain, and the
-  message names #404; signed TRS is #406. A collapsed renderer that is not on
-  the chain is validated the same way `Rig.evaluate` treats it.
+- DynamicBone simulates a signed local scale on its chain that has a TRS record,
+  and a single collapsed axis without one (#406). The cases it still refuses are
+  listed in [dynamics: signed and zero scales](animation/dynamics.md#signed-and-zero-scales-406).
+  A collapsed renderer that is not on the chain is validated the same way
+  `Rig.evaluate` treats it.
 
 ### DrawUniforms by instance (ST-T04 B0, 2026-11-18)
 
