@@ -415,6 +415,11 @@ private struct CaptureRecipe {
     let frames: [[String]] = [["IKKOKU_BENCHMARK_FRAMES"]]
     #expect(problems("IKKOKU_BENCHMARK_FRAMES", "0", in: benchmark) == frames)
     #expect(problems("IKKOKU_BENCHMARK_FRAMES", "20", in: benchmark).isEmpty)
+    // ST-T04 B2: the orbit benchmark turns a number of times, and needs the benchmark.
+    let orbit: [[String]] = [["IKKOKU_BENCHMARK_ORBIT"]]
+    #expect(problems("IKKOKU_BENCHMARK_ORBIT", "1", in: benchmark).isEmpty)
+    #expect(problems("IKKOKU_BENCHMARK_ORBIT", "once", in: benchmark) == orbit)
+    #expect(problems("IKKOKU_BENCHMARK_ORBIT", "1") == orbit)
     #expect(problems("IKKOKU_BENCHMARK_MAP_SHADOW", "always", in: benchmark) == [["IKKOKU_BENCHMARK_MAP_SHADOW"]])
     #expect(problems("IKKOKU_BENCHMARK_MAP_SHADOW", "every-frame", in: benchmark).isEmpty)
 
@@ -495,6 +500,8 @@ private struct CaptureRecipe {
                                    "IKKOKU_PERF_ACTION_KEY": "0", "IKKOKU_PERF_RIG_PREFETCH": "off", "IKKOKU_PERF_DONATIONS": "off", "IKKOKU_PERF_INSTALL_REFRESH": "each",
                                    "IKKOKU_PERF_OUTFIT": "2", "IKKOKU_PERF_SELECT_KEYS": "963,0,12", "IKKOKU_PERF_INSPECTOR_TAB": "pose",
                                    "IKKOKU_PERF_KEEP_MOUNTED": "tab",
+                                   "IKKOKU_PERF_EDITS": "90", "IKKOKU_PERF_PAUSE_AT": "0,1,60,90", "IKKOKU_PERF_PAUSE_SECONDS": "10",
+                                   "IKKOKU_PERF_PAUSE_MARKER": "/repo/.local/sta409/markers",
                                    "IKKOKU_SOURCE_SCENE": "/scenes/scene.png", "IKKOKU_SOURCE_AVATAR": "/rigs/source-avatar.json"]
     let request = try CaptureRequest.validate(trace)
     #expect(request.mode == .perfTrace)
@@ -536,7 +543,9 @@ private struct CaptureRecipe {
                               ("IKKOKU_PERF_SELECT_KEYS", ""), ("IKKOKU_PERF_SELECT_KEYS", "963,"), ("IKKOKU_PERF_SELECT_KEYS", "-1"),
                               ("IKKOKU_PERF_SELECT_KEYS", "route"), ("IKKOKU_PERF_SELECT_KEYS", tooManyKeys),
                               ("IKKOKU_PERF_INSPECTOR_TAB", "Object"), ("IKKOKU_PERF_INSPECTOR_TAB", "timeline"),
-                              ("IKKOKU_PERF_KEEP_MOUNTED", "On"), ("IKKOKU_PERF_KEEP_MOUNTED", "1"), ("IKKOKU_PERF_KEEP_MOUNTED", "")] {
+                              ("IKKOKU_PERF_KEEP_MOUNTED", "On"), ("IKKOKU_PERF_KEEP_MOUNTED", "1"), ("IKKOKU_PERF_KEEP_MOUNTED", ""),
+                              ("IKKOKU_PERF_EDITS", "0"), ("IKKOKU_PERF_EDITS", "501"), ("IKKOKU_PERF_PAUSE_AT", "1,x"),
+                              ("IKKOKU_PERF_PAUSE_AT", "-1"), ("IKKOKU_PERF_PAUSE_SECONDS", "0"), ("IKKOKU_PERF_PAUSE_SECONDS", "31")] {
         var environment: [String: String] = ["IKKOKU_PERF_TRACE": "/p.json"]
         environment[variable] = value
         let expected: [[String]] = [[variable]]
@@ -549,6 +558,15 @@ private struct CaptureRecipe {
 @Test func captureRequestScopesTheInspectorFollowUpControls() throws {
     let controls: [(variable: String, values: [String], rejected: [String])] = [
         ("IKKOKU_PERF_PANEL_STATE", ["document", "published"], ["Published", "on", ""]),
+        // #410: the small scene of `studio-load` and the workspace slot cap.
+        ("IKKOKU_PERF_LOAD_SMALL_OBJECTS", ["200", "1"], ["0", "-1", "two", ""]),
+        ("IKKOKU_PERF_WORKSPACE_SLOT_CAP", ["256", "0"], ["-1", "cap", ""]),
+        // #409, #446: the field `studio-edit-steps` edits and where its edits run.
+        ("IKKOKU_PERF_EDIT_FIELD", ["x", "pose"], ["X", "kinematics", ""]),
+        ("IKKOKU_PERF_EDIT_PHASES", ["none", "alternate"], ["Alternate", "on", ""]),
+        // #440: the growth check's park file and the focus probe.
+        ("IKKOKU_PERF_PARK_FILE", ["/runs/c1/park"], [""]),
+        ("IKKOKU_PERF_FOCUS_PROBE", ["8", "1", "64"], ["0", "65", "eight", ""]),
     ]
     for control in controls {
         let outside: [[String]] = [[control.variable]]
@@ -587,4 +605,70 @@ private struct CaptureRecipe {
     #expect(captureRequestProblems(maker) == rejected)
     #expect(captureRequestMessage(maker).contains("IKKOKU_CAPTURE_UI_MODE=studio"))
     #expect(captureRequestProblems(["IKKOKU_CAPTURE_UI_SELECT": "0"]) == rejected)
+}
+
+// #425: a Studio window capture can set the pose mode (Object, FK or IK) after its selections.
+@Test func captureRequestAcceptsAStudioWindowPoseMode() {
+    let studio: [String: String] = ["IKKOKU_SOURCE_SCENE": "/scenes/scene.png", "IKKOKU_SOURCE_AVATAR": "/rigs/source-avatar.json",
+                                    "IKKOKU_CAPTURE_UI": "/ui.png", "IKKOKU_CAPTURE_UI_MODE": "studio",
+                                    "IKKOKU_CAPTURE_UI_SELECT": "0,963"]
+    for value in ["object", "fk", "ik"] {
+        var environment = studio
+        environment["IKKOKU_CAPTURE_UI_POSE_MODE"] = value
+        #expect(captureRequestProblems(environment).isEmpty, Comment(rawValue: value))
+        environment["IKKOKU_CAPTURE_UI_SELECT"] = nil
+        #expect(captureRequestProblems(environment).isEmpty, Comment(rawValue: value + " without selections"))
+    }
+    let rejected: [[String]] = [["IKKOKU_CAPTURE_UI_POSE_MODE"]]
+    for value in ["", "FK", "Object", "pose", "fk,ik", "1"] {
+        var environment = studio
+        environment["IKKOKU_CAPTURE_UI_POSE_MODE"] = value
+        #expect(captureRequestProblems(environment) == rejected, Comment(rawValue: value))
+    }
+    var maker = studio
+    maker["IKKOKU_CAPTURE_UI_MODE"] = "maker"
+    maker["IKKOKU_CAPTURE_UI_SELECT"] = nil
+    maker["IKKOKU_CAPTURE_UI_POSE_MODE"] = "fk"
+    #expect(captureRequestProblems(maker) == rejected)
+    #expect(captureRequestMessage(maker).contains("IKKOKU_CAPTURE_UI_MODE=studio"))
+    #expect(captureRequestProblems(["IKKOKU_CAPTURE_UI_POSE_MODE": "fk"]) == rejected)
+    #expect(captureRequestMessage(["IKKOKU_CAPTURE_UI_POSE_MODE": "fk"]).contains("IKKOKU_CAPTURE_UI is not set"))
+}
+
+// #425: a Studio window capture can set its window's width; unset, the window is left alone.
+@Test func captureRequestAcceptsAStudioWindowWidth() throws {
+    let studio: [String: String] = ["IKKOKU_SOURCE_SCENE": "/scenes/scene.png", "IKKOKU_SOURCE_AVATAR": "/rigs/source-avatar.json",
+                                    "IKKOKU_CAPTURE_UI": "/ui.png", "IKKOKU_CAPTURE_UI_MODE": "studio"]
+    #expect(try UICaptureWindowWidth.fromEnvironment(studio, visibleWidth: 1920) == nil)
+    #expect(try UICaptureWindowWidth.fromEnvironment([:], visibleWidth: 0) == nil)
+    for (value, width) in [("1180", 1180), ("1700", 1700), ("1920", 1920)] {
+        var environment = studio
+        environment["IKKOKU_CAPTURE_UI_WINDOW_W"] = value
+        #expect(captureRequestProblems(environment).isEmpty, Comment(rawValue: value))
+        #expect(try UICaptureWindowWidth.fromEnvironment(environment, visibleWidth: 1920) == width)
+    }
+    let rejected: [[String]] = [["IKKOKU_CAPTURE_UI_WINDOW_W"]]
+    for value in ["", "1179", "0", "-1500", "1500.5", "wide", "1500pt"] {
+        var environment = studio
+        environment["IKKOKU_CAPTURE_UI_WINDOW_W"] = value
+        #expect(captureRequestProblems(environment) == rejected, Comment(rawValue: value))
+        if !value.isEmpty {
+            #expect(throws: UICaptureWindowWidth.ConfigurationError.invalid(value)) {
+                try UICaptureWindowWidth.fromEnvironment(environment, visibleWidth: 1920)
+            }
+        }
+    }
+    var wide = studio
+    wide["IKKOKU_CAPTURE_UI_WINDOW_W"] = "1921"
+    #expect(throws: UICaptureWindowWidth.ConfigurationError.widerThanScreen(1921, visible: 1920)) {
+        try UICaptureWindowWidth.fromEnvironment(wide, visibleWidth: 1920.5)
+    }
+    #expect(UICaptureWindowWidth.ConfigurationError.widerThanScreen(1921, visible: 1920).description
+        == "IKKOKU_CAPTURE_UI_WINDOW_W=1921 is wider than the screen's visible width of 1920 points")
+    var maker = studio
+    maker["IKKOKU_CAPTURE_UI_MODE"] = "maker"
+    maker["IKKOKU_CAPTURE_UI_WINDOW_W"] = "1700"
+    #expect(captureRequestProblems(maker) == rejected)
+    #expect(captureRequestMessage(maker).contains("IKKOKU_CAPTURE_UI_MODE=studio"))
+    #expect(captureRequestMessage(["IKKOKU_CAPTURE_UI_WINDOW_W": "1700"]).contains("IKKOKU_CAPTURE_UI is not set"))
 }

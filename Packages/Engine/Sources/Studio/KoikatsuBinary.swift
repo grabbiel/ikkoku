@@ -1,5 +1,6 @@
 import Foundation
 import Character
+import Assets
 
 /// Raw Unity values recovered from CharaStudio's `Studio.ChangeAmount` stream.
 /// Convert the coordinate basis and Unity Euler order before rendering these values.
@@ -89,8 +90,13 @@ public final class KoikatsuObjectRecord: Sendable, Equatable {
         self.character = character; self.route = route
     }
 
+    /// Recurses through both subtrees, so it runs on the decode stack
+    /// (#326; checked in Debug, `checkComparisonStack`).
     public static func == (lhs: KoikatsuObjectRecord, rhs: KoikatsuObjectRecord) -> Bool {
-        lhs === rhs || (lhs.kind == rhs.kind && lhs.rootDictionaryKey == rhs.rootDictionaryKey
+        #if DEBUG
+        SourceStudioCharacterBatch.checkComparisonStack()
+        #endif
+        return lhs === rhs || (lhs.kind == rhs.kind && lhs.rootDictionaryKey == rhs.rootDictionaryKey
             && lhs.sourceKey == rhs.sourceKey && lhs.transform == rhs.transform && lhs.treeState == rhs.treeState
             && lhs.visible == rhs.visible && lhs.name == rhs.name && lhs.cameraActive == rhs.cameraActive
             && lhs.item == rhs.item && lhs.light == rhs.light && lhs.children == rhs.children
@@ -104,6 +110,21 @@ public struct KoikatsuSceneSnapshot: Sendable, Equatable {
     public let version: String
     public let roots: [KoikatsuObjectRecord]
     public let objectSectionEndOffset: Int
+}
+
+public extension KoikatsuSceneSnapshot {
+    /// Whether any record of the tree is a character (an accessory child's
+    /// owner is one, so the walk needs no accessory list). One explicit
+    /// stack (#326): the Studio's import asks it on the main thread, where
+    /// the recursion took 4.1 KiB a level in Debug.
+    var containsCharacter: Bool {
+        var stack = roots
+        while let record = stack.popLast() {
+            if record.character != nil { return true }
+            stack += record.children
+        }
+        return false
+    }
 }
 
 public struct KoikatsuCameraRecord: Sendable, Equatable {
@@ -145,10 +166,34 @@ public enum KoikatsuReadError: Error, LocalizedError, Sendable, Equatable {
 /// and, through its load branches, the scene versions 0.0.5 through 1.0.4.1
 /// it still loads (KoikatsuLegacyScenes.swift). Records are variable-length;
 /// unknown kinds fail rather than attempting unsafe skipping.
+/// #437: counts the scene decodes (`KoikatsuSceneReader.decode` and
+/// `decodeDocument`) that the task binding it starts, so a test or the
+/// Studio scenario check can show that a voice play decodes no scene. The
+/// binding is task-local, so tests running in parallel count only their own
+/// decodes; the count is taken on the caller, before the decode moves to the
+/// decode stack, where the binding does not follow. Unbound, a decode reads
+/// one task-local and counts nothing.
+public final class SourceSceneDecodeProbe: @unchecked Sendable {
+    @TaskLocal public static var current: SourceSceneDecodeProbe?
+    private let lock = NSLock()
+    private var decodes = 0
+    public init() {}
+    /// The decodes counted so far.
+    public var count: Int { lock.lock(); defer { lock.unlock() }; return decodes }
+    static func record() {
+        guard let probe = current else { return }
+        probe.lock.lock(); probe.decodes += 1; probe.lock.unlock()
+    }
+}
+
 public enum KoikatsuSceneReader {
+    /// On the decode stack (`onDecodeStack`, #326), as `decodeDocument`.
     public static func decode(_ data: Data) throws -> KoikatsuSceneSnapshot {
-        var reader = try KoikatsuBinaryReader(data)
-        return try reader.snapshot()
+        SourceSceneDecodeProbe.record()
+        return try SourceStudioCharacterBatch.onDecodeStack("Ikkoku scene decode") {
+            var reader = try KoikatsuBinaryReader(data)
+            return try reader.snapshot()
+        }
     }
 
     /// Decode an isolated 36-byte ChangeAmount. Input must contain exactly this record.
@@ -186,13 +231,13 @@ struct KoikatsuBinaryReader {
     /// the topology and insertion writers, and the Python contract
     /// (Tools/reverse/analysis/studio_scene_contract.py). CharaStudio's load
     /// sets none: `ObjectInfoAssist.LoadChild` counts no depth, so its only
-    /// bound is its main thread's stack. Ours is the decode's: every scene
-    /// decode runs on an 8 MiB stack (the main thread, or the character
-    /// batch's workers, #321), and a decode of 200 levels takes 3.4 MiB in
-    /// Debug through nested characters, the deepest chain per level
-    /// (`SourceSceneDeepStackTests`). The installed scenes go 65 levels deep
-    /// at most. Before #326 the reader stopped at 65.
-    static let maximumLevels = 200
+    /// bound is its main thread's stack. Ours is the deepest walk's: every
+    /// operation that recurses through a decoded tree runs on the decode
+    /// stack (`SourceStudioCharacterBatch.onDecodeStack`, 64 MiB), and at
+    /// this depth each walk takes less than half the stack it runs on, in
+    /// Debug and Release (`SourceSceneDeepStackTests`). The installed scenes
+    /// go 65 levels deep at most. Before #326 the reader stopped at 65.
+    static let maximumLevels = 1000
 
     /// Refuses an object `depth` levels below a root (roots are depth 0)
     /// once the scene would pass `maximumLevels`.
@@ -274,6 +319,7 @@ struct KoikatsuBinaryReader {
     }
     mutating func string() throws -> String {
         // BinaryWriter.Write(string): seven-bit encoded UTF-8 byte length, not character count.
+        // Decoded as BinaryReader.ReadString does: a leading U+FEFF is kept (SourceMonoUTF8).
         var length: UInt32 = 0
         for index in 0..<5 {
             let value = try byte()
@@ -281,7 +327,7 @@ struct KoikatsuBinaryReader {
             length |= UInt32(value & 0x7f) << (index * 7)
             if value & 0x80 == 0 {
                 guard length <= Self.maximumStringBytes else { throw KoikatsuReadError.limitExceeded("string exceeds 1 MiB") }
-                guard let string = String(data: try take(Int(length)), encoding: .utf8) else { throw invalid("invalid UTF-8") }
+                guard let string = SourceMonoUTF8.string(try take(Int(length))) else { throw invalid("invalid UTF-8") }
                 return string
             }
         }
@@ -455,6 +501,10 @@ struct KoikatsuBinaryReader {
     }
 
     mutating func object(depth: Int, rootKey: Int32?) throws -> KoikatsuObjectRecord {
+        #if DEBUG
+        // #326: every root read runs on the decode stack (`onDecodeStack`).
+        if depth == 0 { try SourceStudioCharacterBatch.requireDecodeStack() }
+        #endif
         try Self.checkDepth(depth)
         objectCount += 1
         guard objectCount <= Self.maximumCount else { throw KoikatsuReadError.limitExceeded("scene exceeds \(Self.maximumCount) objects") }

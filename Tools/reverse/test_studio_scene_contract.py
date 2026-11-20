@@ -1,5 +1,10 @@
+from pathlib import Path
+import re
+import sys
 import unittest
 from analysis.studio_scene_contract import MAX_LEVELS, Reader, Writer, scene_fixture, inspect_scene
+
+SWIFT_READER = Path(__file__).resolve().parents[2] / "Packages/Engine/Sources/Studio/KoikatsuBinary.swift"
 
 
 def nested_folders(levels):
@@ -43,14 +48,30 @@ class StudioSceneContractTests(unittest.TestCase):
         self.assertTrue(result["roots"]["10"]["enableFK"] and result["roots"]["10"]["enableIK"])
 
 
+    def test_strings_keep_a_leading_bom_and_round_trip(self):
+        # #418 mirror: BinaryReader.ReadString keeps a leading EF BB BF as U+FEFF; writing it back is byte-identical.
+        for value in ("\ufeff", "\ufeffFolder", "\ufeff" + "y" * 200):
+            writer = Writer(); writer.s(value)
+            reader = Reader(bytes(writer.data))
+            read = reader.s()
+            self.assertEqual((read, reader.pos), (value, len(writer.data)))
+            again = Writer(); again.s(read)
+            self.assertEqual(again.data, writer.data)
+        with self.assertRaises(ValueError):
+            Reader(b"\x05\xef\xbb\xbf\xc0\x80").s()
+
     def test_the_depth_cap_matches_the_swift_reader(self):
         # #326: KoikatsuBinaryReader.maximumLevels, roots at depth 0.
-        self.assertEqual(MAX_LEVELS, 200)
+        swift = re.search(r"static let maximumLevels = (\d+)", SWIFT_READER.read_text(encoding="utf-8"))
+        self.assertEqual((MAX_LEVELS, int(swift.group(1))), (1000, 1000))
+        limit = sys.getrecursionlimit()
         level, depth = Reader(nested_folders(MAX_LEVELS)).obj(), 1
         while level["children"]: level, depth = level["children"][0], depth + 1
         self.assertEqual(depth, MAX_LEVELS)
-        with self.assertRaisesRegex(ValueError, "objects nested more than 200 levels deep"):
+        # The same refusal as the Swift reader's, up to its "(Ikkoku reads at most ...)".
+        with self.assertRaisesRegex(ValueError, "objects nested more than 1000 levels deep"):
             Reader(nested_folders(MAX_LEVELS + 1)).obj()
+        self.assertEqual(sys.getrecursionlimit(), limit)
 
 
 if __name__ == "__main__": unittest.main()

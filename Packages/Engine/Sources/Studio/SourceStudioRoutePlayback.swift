@@ -364,7 +364,11 @@ public enum SourceStudioRoutePlayback {
             throw RigError.invalid("Route stepping playDeltaTime \(playDeltaTime) must be finite and non-negative.")
         }
         var routes: [SteppedRoute] = []
-        func visit(_ record: KoikatsuObjectRecord, parentWorld: float4x4) {
+        // Depth first in record order, with one explicit stack (#326): the
+        // recursion took 9.6 KiB a level in Debug, more than a caller's
+        // 8 MiB on the deepest scenes.
+        var stack = snapshot.roots.reversed().map { (record: $0, parentWorld: matrix_identity_float4x4) }
+        while let (record, parentWorld) = stack.popLast() {
             let world = parentWorld * localMatrix(record.transform)
             if let route = record.route {
                 let locals = pointLocals(from: route)
@@ -436,9 +440,8 @@ public enum SourceStudioRoutePlayback {
                                            orientation: route.orientation, pointCount: route.points.count,
                                            diagnostics: diagnostics, frames: frames))
             }
-            for child in record.children { visit(child, parentWorld: world) }
+            for child in record.children.reversed() { stack.append((child, world)) }
         }
-        for root in snapshot.roots { visit(root, parentWorld: matrix_identity_float4x4) }
         return routes
     }
 

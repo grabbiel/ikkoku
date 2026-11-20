@@ -92,15 +92,32 @@ public struct SourceAnimationLibrary: Decodable, Sendable {
     /// rotation and scale. A sample then needs neither the source-ID dictionary
     /// over every rig node nor nested per-node channel dictionaries; the per-node
     /// arithmetic is the same.
-    fileprivate struct ResolvedClip: Sendable {
+    // Internal, not fileprivate, so the #371 test can compare `matches` with the walk.
+    struct ResolvedClip: Sendable {
         struct Channel: Sendable { let node: Int; var translation: Int?, rotation: Int?, scale: Int? }
         let nodes: [Int?]
         let channels: [Channel]
+        /// The rig `nodes` was last checked against. It is held strongly, so no
+        /// other rig can be given the same identity while this is cached.
+        let checked: RigDefinition.Identity
 
-        /// Whether every binding still names the same node of `rig`. Source IDs
+        /// Whether every binding still names the same node of `rig`.
+        ///
+        /// A rig with the identity this was checked against needs no walk
+        /// (#371). `RigDefinition.Identity` (Rig.swift) guarantees that every
+        /// stored property of a rig is a `let` set once by `init`, so two rigs
+        /// with the same identity have the same nodes, skins and order. The clip
+        /// side cannot differ either: `resolved` is only given this library's
+        /// clip for an ID, and clip IDs are unique (`validate`). Any other rig
+        /// takes the full walk.
+        func matches(_ clip: Clip, rig: RigDefinition) -> Bool {
+            rig.identity === checked || walkMatches(clip, rig: rig)
+        }
+
+        /// The full walk: every binding names the node it resolved to. Source IDs
         /// are unique in a rig (`RigDefinition.init`), so a node carrying the
         /// binding's source ID is exactly the one the dictionary lookup returns.
-        func matches(_ clip: Clip, rig: RigDefinition) -> Bool {
+        func walkMatches(_ clip: Clip, rig: RigDefinition) -> Bool {
             guard nodes.count == clip.bindings.count else { return false }
             for (binding, node) in zip(clip.bindings, nodes) {
                 guard let node else {
@@ -122,10 +139,18 @@ public struct SourceAnimationLibrary: Decodable, Sendable {
     }
 
     /// The resolution of `clip` for `rig`, cached per clip and revalidated on
-    /// every use; nil when a binding does not resolve, so the caller takes the
-    /// dictionary path that reports the error.
-    private func resolved(_ clip: Clip, rig: RigDefinition) -> ResolvedClip? {
-        if let cached = resolutions.get(clip.id), cached.matches(clip, rig: rig) { return cached }
+    /// every use (by identity for the rig it was last checked against); nil
+    /// when a binding does not resolve, so the caller takes the dictionary path
+    /// that reports the error.
+    // Internal, not private, so the #371 test can get a resolution.
+    func resolved(_ clip: Clip, rig: RigDefinition) -> ResolvedClip? {
+        if let cached = resolutions.get(clip.id), cached.matches(clip, rig: rig) {
+            guard cached.checked !== rig.identity else { return cached }
+            // The walk passed for another rig: later uses with this rig skip it.
+            let value = ResolvedClip(nodes: cached.nodes, channels: cached.channels, checked: rig.identity)
+            resolutions.set(clip.id, value)
+            return value
+        }
         let nodeIndices = Dictionary(uniqueKeysWithValues: rig.nodes.enumerated().map { ($0.element.sourceID, $0.offset) })
         var nodes: [Int?] = [], channels: [ResolvedClip.Channel] = [], slots: [Int: Int] = [:]
         for binding in clip.bindings {
@@ -142,7 +167,7 @@ public struct SourceAnimationLibrary: Decodable, Sendable {
             default: channels[slot].scale = binding.curveOffset
             }
         }
-        let value = ResolvedClip(nodes: nodes, channels: channels)
+        let value = ResolvedClip(nodes: nodes, channels: channels, checked: rig.identity)
         resolutions.set(clip.id, value)
         return value
     }

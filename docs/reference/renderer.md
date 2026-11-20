@@ -546,6 +546,166 @@ probe gates and the numbers are in [maps: slice 4](studio/maps.md#all-maps-slice
   a slanted edge: partial coverage without the flag (before and after a flagged
   capture), and none with it.
 
+### Instanced static items (ST-T04 slice 1, part B)
+
+The generated item catalog ([item catalog](studio/item-catalog.md#generated-catalog-st-t04-2026-11-02))
+turns a large CharaStudio scene into thousands of basic-shape records. Most of
+them share a handful of meshes and one material each, so `Renderer.prepare`
+merges adjacent equal records into instanced draws. Each record keeps its own
+transform and pick id; the records of one instanced draw share their whole
+material, tint and alpha included, so every instance shades exactly as its
+record does on its own.
+
+- **Which records merge (B1).** `Renderer.instanceable` accepts only static
+  item records. The Studio frame builder marks them: `RenderItem.staticItem`
+  is set on the parts of `.item` objects and of source item placeholders, and
+  on nothing else. A marked record still does not merge if it has any of these:
+  - a deformation key, skin or morph weights;
+  - hidden regions or a hidden-buffer key;
+  - a live source shader;
+  - the sky material kind;
+  - any material kind but `MaterialKindItem`.
+
+  So characters, eyes and maps keep their per-draw path (they are never
+  marked, even where a character part uses the item material kind), and gizmos
+  are drawn apart. A frame with any live source-shader record draws everything per draw
+  (`Renderer.prepare`). The stencil main pass would work, since its pipelines
+  share the vertex functions; lifting this needs its own exactness check.
+- **Which neighbours merge.** After the existing sorts (opaque: order, material
+  kind, mesh id; transparent: render queue, distance back to front, order, mesh
+  id), `assignRuns` walks each pass. An instanced draw is a stretch of at least
+  two instanceable records that `mergesWith` its first record and whose
+  MaterialUniforms are equal byte for byte. `mergesWith` needs:
+  - the same mesh, hence the same vertex, texcoord, colour and index buffers;
+  - the same material apart from the base colour: pipeline, textures, alpha
+    mode, double-sidedness, depth bias and every other uniform byte;
+  - the same outline choice;
+  - the same winding (a mirrored model reverses front faces, set once per run).
+
+  The byte-equal MaterialUniforms then add the base colour, the record's tint
+  and alpha. A run is a stretch of adjacent instanced draws that merge (the
+  same bindings, different tints): it is bound once. A record with no equal
+  neighbour is drawn on its own, exactly as before, and casts its shadow with
+  the per-draw casters. Any other record between two equal ones ends the draw,
+  so the draw order of every record is unchanged. In the transparent pass that
+  keeps the blend order exactly as one record at a time: within an instanced
+  draw, Metal rasterizes instances in order.
+- **Uniforms.** Each pass's instanced DrawUniforms go into one frame-ring
+  table in record order, written at the Swift stride (144 bytes), which the
+  shaders' `constant DrawUniforms*` shares; an instance's `instance_id`
+  (which includes the draw's base instance) is its element. The pass's draws'
+  materials go into one allocation, one 256-byte aligned element per draw, so
+  the next draw of a run changes only the bound material offset
+  (`setVertexBufferOffset`, `setFragmentBufferOffset`). The records carry an
+  index into two scratch arrays the renderer keeps across frames, not the
+  496 bytes themselves, so sorting them costs what it did before.
+- **Shaders.** An instanced draw goes through the per-draw pipelines
+  themselves. Since B0 (#395) `toon_vertex`, `outline_vertex`,
+  `shadow_vertex` and `pick_vertex` read DrawUniforms as `draws[instance_id]`:
+  a record drawn on its own is bound as a one-element array at its own offset,
+  and an instanced draw's base instance and `instance_id` index the table. Both
+  forms run the same compiled function, so an instance shades exactly as its
+  record does on its own. Only picking has its own pair
+  (`Shaders/InstancedItems.metal`): `pick_vertex_instanced` is `pick_vertex`'s
+  text plus the instance index, and `pick_fragment_instanced` returns that
+  instance's id. Before B0, separate `*_instanced` vertex functions with the
+  per-draw text still differed from the per-draw draws at 14 pixels of the
+  3,506-item corpus scene (up to 25 levels), because Metal's fast math compiles
+  a uniform `constant DrawUniforms&` and an indexed element differently.
+- **Passes.**
+  - Shadow: the instanced draws' casters, as stretches, after the per-draw
+    casters. A depth-only pass keeps the nearest depth whatever the order.
+  - Main opaque: per run, its draws' outlines, then their surfaces.
+  - Transparent: one blended draw per instanced draw.
+  - Pick: each draw's pickable stretches, in record order, so ids at equal
+    depth resolve as before (the first drawn keeps the sample).
+- **The one ordering difference.** One record at a time interleaves outline
+  and surface (outline 1, surface 1, outline 2, …). A run draws every outline
+  first. With the strict `greater` depth test and opaque writes, the nearest
+  fragment wins either way. Only a sample where a later member's outline and an
+  earlier member's surface have exactly equal depth resolves differently. Shapes
+  of one run would have to intersect for that to happen.
+- **Switch.** `Renderer.instancesStaticItems` (default true) draws every
+  record on its own when false. It is the measurement control and the
+  reference of the tests.
+- **Repeated encoder state (B2-v2).** Instanced runs set their state through
+  the same `EncoderState` as records drawn on their own
+  ([Frame preparation without per-item copies](#frame-preparation-without-per-item-copies-2026-11-18),
+  "Repeated encoder state"). A run's next draw moves only the bound material
+  offset, vertex and fragment (`EncoderState.setBufferOffsets`), and the
+  shadow and pick passes bind a run once, at its first caster or pickable
+  record.
+- **Records read in place (B2-v2).** `assignRuns` and `mergesWith` read and
+  update the records in their array's buffer
+  (`withUnsafeMutableBufferPointer`) instead of copying them. Each record holds
+  its whole item, about 750 bytes with references to retain and release. A
+  Time Profiler of the instanced corpus frame (W1 orbit, #372's Release build)
+  put about 16% of the CPU encode time in those copies. The material check
+  compares the uniforms' bytes before and after the base colour in place
+  (`MaterialState.equalApartFromBaseColor`), and the draw check compares the
+  pending MaterialUniforms in their array, so the predicate and every run,
+  draw, table element and allocation are unchanged. The pointers never leave
+  their closures, and nothing else reaches those arrays while the closures
+  run. `InstancedRunAssignmentTests` keeps the by-value versions as the
+  reference:
+  - the predicate agrees on every pair of records that differ in one merge
+    condition or only in the base colour;
+  - on 200 seeded frames (up to 399 records) and on edge frames (no records,
+    one record, all mergeable, none mergeable), the runs, draw order, records,
+    casters, counts, ring allocations and the uniform bytes of every table
+    element and material element are equal.
+- **Statistics.** `RenderFrameStatistics` reports `mainPassRecords` and
+  `mainPassRuns` (the draws: one per record drawn on its own and one per
+  instanced draw, per pipeline), `instancedRecords` and `instancedRuns` (the
+  instanced draws), and `shadowCasters` and `shadowDraws`.
+- **Studio material cache (B4).** `SourceStudioItemMaterialSet` holds the
+  untinted materials of one item asset instance's parts, in part order, built
+  once instead of on every refresh. `MaterialBuilder.itemMaterial` reads only
+  the part's own material data, the asset instance's image cache and the item
+  defaults, with no tint and no emission: no per-object or per-scene state
+  enters it. So the import and the rehydration give every entry of one file
+  the same set, and `refresh()` tints a copy per record
+  (`SourceStudioItemColor.apply`). A set keeps its asset strongly and rebuilds
+  when it sees another instance (a repeated import of the file). Only the
+  Studio's item asset entries hold sets, so a set and its asset go with the
+  entries when an import or a rehydration replaces them. A material whose image
+  did not load is returned but not kept, so the next refresh tries again, as
+  before the cache.
+  - B2-v3 history: the first B4 (in #372 at `e38ad63e`) was a file-keyed
+    dictionary with a weak asset reference, looked up per object per refresh;
+    that lookup and its loop cost about 0.5 µs per item on the main thread and
+    missed the W2 margin. B' moves the set into the entry, so a refresh does no
+    lookup.
+
+Tests (`InstancedItemDrawTests.swift`):
+- B1: equal records merge; a tint is part of the material, so stretches of
+  one tint are instanced draws of one run and a record with no equal
+  neighbour is drawn on its own. Each kind of non-instanceable record (an
+  unmarked record among them), and each binding or state difference, between
+  two equal pairs breaks the draw; the pairs merge again when it is sorted
+  after them. A non-caster in a draw splits its shadow draw.
+- B3: a synthetic 500-shape scene renders byte for byte the same instanced and
+  per draw, in the HDR scene, the LDR image and the pick target, with shadows
+  on. It has opaque, mirrored, alpha-tested and two kinds of transparent
+  shapes, a tint per row (so a run has a draw per row), coincident
+  duplicates, and a column of transparent panes with an opaque record of the
+  same mesh between them in depth. Controls check that the shadow map reaches
+  the image, most shapes are pickable, and a duplicate never takes its
+  original's samples. A second B3 case draws one run of outlined cubes that
+  coincide, share face planes or intersect, in two tints (two draws), with
+  wide outlines and a per-draw twin of the first cube, byte for byte as per
+  draw; its controls check that ties follow the members' order and the
+  outlines reach the image.
+- B4: a set returns exactly what `MaterialBuilder.itemMaterial` builds and
+  builds once per asset instance; over 12 imports of the same file each new
+  instance rebuilds and the set lets the previous one go. Two records that
+  share one set with different colours and alphas each get the freshly built
+  material with their own tint, and the set stays untinted. A part whose image
+  does not load is rebuilt on every lookup and never kept.
+- B2-v2, repeated encoder state: the B3 grid scene, instanced, renders, shades
+  and picks byte for byte with and without the skipping (`EncoderStateTests`
+  covers records drawn on their own).
+
 ### Deformation safety
 
 The renderer writes complete skin palettes into the frame ring's palette
@@ -594,9 +754,23 @@ included, and over the fixture rigs.
 - `Transform.normalMatrix` uses the cofactor matrix times the determinant's sign
   for a singular basis, the same construction as the deform kernel, scaled to a
   largest entry of 1. It falls back to the identity when fewer than two columns
-  are independent. The toon, outline and live vertex shaders are unchanged, so
-  a normal the cofactor maps to zero on a zero-scale non-character item is
-  still left to them (#407).
+  are independent. The cofactor maps every normal perpendicular to the
+  collapsed axis to zero. On a zero-scale non-character item those are, for
+  example, the rim of a flattened sphere. The toon, outline and live probe
+  vertex stages (`guardedNormal` in Shaders/Common.h, #407) give such a normal
+  0 instead of `normalize(0)`, which is NaN. Before the guard that NaN reached
+  every fragment of the triangle. On Apple GPUs the interpolator turned it into
+  FLT_MAX, so the pixels were finite but wrongly shaded. Each triangle now takes
+  its side of the collapsed surface from its other vertices. Any normal with
+  |n|² ≥ FLT_MIN is still exactly `normalize(n)`, so nonsingular draws do not
+  change. `SingularNormalShaderTests` checks both, bit for bit under the
+  default fast math the shaders compile with.
+  This differs from Unity for degenerate scales. Unity's world normal,
+  `normalize(mul(n, (float3x3)unity_WorldToObject))` with the InverseSafe
+  matrix below, keeps only the in-plane part. It is zero (NaN on D3D11) for the
+  normals parallel to the collapsed axis, which are the faces that stay visible.
+  The native draws keep #404's cofactor and aim for a finite result, not that
+  NaN. The source shaders keep Unity's math unchanged.
 - The source shaders' `unity_WorldToObject` uses `Transform.inverseSafe`. For a
   singular basis each column `c` becomes the row `c / |c|²`, and a column no
   longer than 1e-5 becomes 0, as in Unity's `Vector3f` InverseSafe. A collapsed
@@ -605,9 +779,11 @@ included, and over the fixture rigs.
   node reads its rotation from the axes that remain. lossyScale stays unsigned,
   because the recovered source does not confirm where Unity's lossyScale keeps
   a negative sign.
-- DynamicBone still refuses a zero or negative local scale on its chain, and the
-  message names #404; signed TRS is #406. A collapsed renderer that is not on
-  the chain is validated the same way `Rig.evaluate` treats it.
+- DynamicBone simulates a signed local scale on its chain that has a TRS record,
+  and a single collapsed axis without one (#406). The cases it still refuses are
+  listed in [dynamics: signed and zero scales](animation/dynamics.md#signed-and-zero-scales-406).
+  A collapsed renderer that is not on the chain is validated the same way
+  `Rig.evaluate` treats it.
 
 ### DrawUniforms by instance (ST-T04 B0, 2026-11-18)
 
@@ -706,6 +882,17 @@ Each of these now avoids the copy or allocation, with the same result:
   the order the old stable record sort gave. `FramePreparationOrderTests`
   checks both sorts against the old record sorts, ties included, at sizes up
   to 3,506 records.
+
+  Since B2-v2 the records are not copied into a new array either:
+  `sortOpaque` and `sortTransparent` sort the array in place, and
+  `Renderer.permute` moves each record once along the permutation's cycles,
+  with no retain or release (mapping into a new array copied every record and
+  then released the old array's). A record already in its place is not
+  touched. The tests compare the sorts with the old mapped sort, every field
+  of every record included, at 0 to 3,506 records with ties. They also
+  compare `permute` with the permutation it was given (identity, reversed, one
+  cycle, a few swaps among fixed points, and shuffles, up to 3,506 records),
+  and check that no record is leaked.
 - **Texture retention.** `retainTextures` visits each item's handles in place
   (`MaterialState.forEachTextureHandle`, in `textureHandles` order). A handle
   it has already seen is skipped. A retained handle keeps its snapshot, a new
@@ -715,6 +902,14 @@ Each of these now avoids the copy or allocation, with the same result:
   so only items with a skin set take the store's lock.
 - **Record arrays.** The opaque, transparent and caster arrays reserve the
   item count up front.
+- **Item loop (B2-v2).** `for item in frame.items` copied every item, the
+  hidden ones included, and the record then copied the visible ones again.
+  The loop now reads the items by index in their buffer and copies a visible
+  item once, into its record (`consume`). It reads what it needs after that
+  (transparent, live, shadow caster) first. The live source-shader check
+  before it reads the buffer too, where `contains` copied every item. The
+  records are the same, so the tests above and the byte-exact captures cover
+  it.
 - **Repeated encoder state.** Each record bound its whole state, about 30
   encoder calls, even when the record before it had bound the same mesh,
   pipeline, cull mode and textures. The shadow, main, overlay and pick passes
@@ -2109,21 +2304,32 @@ keeps nothing (measurement control).
   two; QoS user-initiated), in request order. They stay off the Swift
   concurrency pool because the builds block on file reads, on each other's
   rig decodes and on MetalKit's synchronous texture loads.
-- Each worker has an 8 MiB stack (`SourceStudioCharacterBatch.stackSize`,
-  #321), not a GCD worker's 512 KiB. A first half decodes the whole scene,
-  and the decode recurses once per nesting level, up to the reader's limit
-  of 200 levels (`KoikatsuBinaryReader.maximumLevels`, #326; 65 before).
-  A first half on the deepest scene the reader accepts takes 1,552 KiB of
-  stack through nested folders and 3,449 KiB through nested characters in
-  Debug (`SourceSceneDeepStackTests`, synthetic scenes). Every other scene
-  decode and record walk in the Studio runs on the main thread, which
-  also has 8 MiB. There the export, insertion and layout import take at
-  most 3,491 KiB on the same scenes.
+- Each worker has a 64 MiB stack (`SourceStudioCharacterBatch.stackSize`,
+  #321, #326), not a GCD worker's 512 KiB or the main thread's 8 MiB. It is
+  address space: a page is committed only when the stack reaches it. A
+  first half decodes the whole scene, and the decode recurses once per
+  nesting level, up to the reader's limit of 1,000 levels
+  (`KoikatsuBinaryReader.maximumLevels`, #326; 65 before). A first half on
+  the deepest scene the reader accepts takes 7.5 MiB of stack through
+  nested folders and 16.7 MiB through nested characters in Debug (2.1 and
+  3.0 MiB in Release; `SourceSceneDeepStackTests`, synthetic scenes).
+- Every other operation that recurses through a decoded scene runs on a
+  stack of the same size (`SourceStudioCharacterBatch.onDecodeStack`,
+  #326): the decode, the legacy upgrade, the insertion stage, the export's
+  edit and the layout import. Called from a smaller stack, each starts one
+  thread of its own (`onDecodeThread`, at the caller's QoS) and waits for
+  it; on a worker it runs in line. The hidden characters' clock reads its
+  scene the same way. The record walks left on the main thread are
+  iterative or take at most 2.5 MiB in Debug on the same scenes.
 - The init starts one worker, which starts the others, so the calling
   thread pays one thread start. For a 22-wide batch it takes 25–26 µs in
   Release (26 µs in Debug), against 12–14 µs (18 µs) for the GCD
   dispatches before #321. Every worker has reported after 225–257 µs
   (239 µs), against 145–156 µs (152 µs). These are medians of 50 rounds.
+  With 64 MiB stacks (#326) the start takes 28–31 µs and every worker has
+  reported after 262–286 µs in Release, against 25–26 µs and 219–266 µs
+  with 8 MiB in the same alternating runs (base and head, four each). The
+  decode hop (`onDecodeThread`) takes a median of 32–41 µs (32–33 µs).
   A first half that does real work takes milliseconds.
 - The owner runs the second halves one at a time, in request order, on a
   thread it chooses: `build(_:)` on the calling thread, or

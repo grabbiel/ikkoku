@@ -30,6 +30,9 @@ public final class SourceRigPreview {
     /// Nil preserves the authored rig for cardless previews. This changes only
     /// cached visibility, never meshes, textures, poses or saved card bytes.
     public var doubleTooth: Bool? { didSet { updateCanineVisibility() } }
+    /// Bumped whenever the parts this preview draws are set again
+    /// (`doubleTooth`), so a cached frame built from them can tell.
+    public private(set) var visibilityGeneration: UInt64 = 0
     private var liveBounds: SourceRigBounds
     /// The last expression input with its weights (R7 phase 2, item 3, C5).
     /// `expressionWeights` is a pure function of the input for this preview's
@@ -94,6 +97,7 @@ public final class SourceRigPreview {
     }
 
     private func updateCanineVisibility() {
+        visibilityGeneration &+= 1
         for part in canineParts {
             activeParts[part.index] = doubleTooth.map { $0 && part.enabled }
                 ?? source.rig.activeNodes[source.parts[part.index].node]
@@ -222,12 +226,17 @@ public final class SourceRigPreview {
                       heightScale: Float? = nil, bodyValues: [Float]? = nil, faceValues: [Float]? = nil,
                       expression: SourceExpressionInputs? = nil,
                       boneModifiers: SourceBoneModifiers? = nil, coordinate: Int = 0,
-                      showBones: Bool = false, poseOverride: RigPose? = nil,
+                      showBones: Bool = false, poseOverride: RigPose? = nil, poseEvaluation: RigEvaluation? = nil,
                       hiddenParts: Set<Int> = [], sourceBodyAlpha: SIMD2<Float>? = nil) throws -> RenderFrame {
         guard poseOverride == nil || (heightScale == nil && bodyValues == nil && faceValues == nil && boneModifiers == nil) else {
             throw RigError.invalid("A final source pose cannot also request shape or modifier evaluation.")
         }
-        let evaluation = try poseOverride.map { try source.rig.evaluate($0) }
+        // `poseEvaluation` is `source.rig.evaluate(poseOverride)` when the
+        // caller already has it (#371: the Studio character's edited pose).
+        guard poseEvaluation == nil || poseOverride != nil else {
+            throw RigError.invalid("A source pose evaluation needs the final source pose it was made from.")
+        }
+        let evaluation = try poseOverride.map { try poseEvaluation ?? source.rig.evaluate($0) }
             ?? evaluation(heightScale: heightScale, bodyValues: bodyValues, faceValues: faceValues, boneModifiers: boneModifiers, coordinate: coordinate)
         let morphWeights = try expressionWeights(expression)
         collapsedSkins = evaluation.collapsedSkins

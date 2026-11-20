@@ -226,7 +226,7 @@ struct VectorRow: View {
                 HStack(spacing: 2) {
                     Text(["X", "Y", "Z"][i]).font(.caption2).foregroundStyle(.secondary)
                     TextField("", value: component, format: .number.precision(.fractionLength(format == "%.0f" ? 0 : (format == "%.2f" ? 2 : 3))))
-                        .textFieldStyle(.roundedBorder).font(.caption).frame(width: 54)
+                        .textFieldStyle(.roundedBorder).font(.caption).frame(width: 54, height: InspectorTextFieldHeight.vector)
                     Stepper("", value: component, step: step).labelsHidden()
                 }
             }

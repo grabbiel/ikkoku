@@ -55,9 +55,10 @@ public enum GizmoBuilder {
                 batches.append(GizmoBatch(primitive: .triangles, vertices: q, model: m, depthTest: false, objectID: PickIDs.gizmo(axis)))
             }
         case .rotate:
-            for (axis, dir, col) in axes {
+            for (index, (axis, _, col)) in axes.enumerated() {
                 let c = highlight == axis ? colHi : col
-                batches.append(GizmoBatch(primitive: .triangles, vertices: ring(axis: dir, radius: 0.9, thickness: 0.025, color: c), model: m, depthTest: false, objectID: PickIDs.gizmo(axis)))
+                batches.append(GizmoBatch(primitive: .triangles, vertices: rotateRings[index].map { GizmoVertex(position: $0, color: c) },
+                                          model: m, depthTest: false, objectID: PickIDs.gizmo(axis)))
             }
         case .scale:
             for (axis, dir, col) in axes {
@@ -73,8 +74,29 @@ public enum GizmoBuilder {
     }
 
     /// Small octahedron handle (bones / IK targets).
+    ///
+    /// The vertices are the unit octahedron's, so they come from a table
+    /// with this color (#371): one array, where a fresh `octahedron` call
+    /// makes about 13 allocations, for every handle of every refresh. The
+    /// handle's position and size go into `model` as before; no vertex
+    /// arithmetic happens here.
     public static func handle(at p: Float3, size: Float, color: Float4, id: UInt32) -> GizmoBatch {
-        GizmoBatch(primitive: .triangles, vertices: octahedron(center: .zero, radius: 1, color: color), model: Transform.trs(p, .identity, Float3(repeating: size)), depthTest: false, objectID: id)
+        GizmoBatch(primitive: .triangles, vertices: unitOctahedron.map { GizmoVertex(position: $0, color: color) },
+                   model: Transform.trs(p, .identity, Float3(repeating: size)), depthTest: false, objectID: id)
+    }
+
+    /// The positions `octahedron(center: .zero, radius: 1, color:)` returns,
+    /// built once by that call, so they are its bits exactly.
+    static let unitOctahedron: [Float3] = octahedron(center: .zero, radius: 1, color: .zero).map(\.position)
+
+    /// The rotate gizmo's rings around X, Y and Z, in `build`'s axis order
+    /// (#371). `build(.rotate)` made each one with `ring(axis:radius: 0.9,
+    /// thickness: 0.025, color:)` and the default 48 segments on every call.
+    /// Those inputs are constants and the color only fills a field; origin,
+    /// orientation and size go into the batch's `model`. So the positions
+    /// are built once, by that same call, and are its bits exactly.
+    static let rotateRings: [[Float3]] = [Float3(1, 0, 0), Float3(0, 1, 0), Float3(0, 0, 1)].map {
+        ring(axis: $0, radius: 0.9, thickness: 0.025, color: .zero).map(\.position)
     }
 
     public static func lines(_ segments: [(Float3, Float3)], color: Float4, depthTest: Bool = false) -> GizmoBatch {

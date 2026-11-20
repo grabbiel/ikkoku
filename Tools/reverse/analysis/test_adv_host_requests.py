@@ -27,8 +27,10 @@ class MonoParseTests(unittest.TestCase):
         for text in ["", " ", "+", "-", "+-1", "1 2", "2147483648", "-2147483649", "mobNo", "１", "1.5", "0x10", "2147483647\0x"]:
             with self.assertRaises(host.SourceException, msg=text):
                 host.int32(text)
-        with self.assertRaises(host.Unmodelled):
-            host.int32("​5")
+        self.assertEqual(host.int32("\u200b5"), 5)  # U+200B is a space separator in Mono's CategoryData (#427).
+        for text in ["\u180e5", "5\ufeff"]:
+            with self.assertRaises(host.SourceException, msg=text):
+                host.int32(text)
 
     def test_single_is_invariant_and_conservative(self):
         self.assertEqual(host.single(".8"), host.float32(0.8))

@@ -121,11 +121,13 @@ the run.
 | `studio-redo` | as `studio-idle` | as `studio-duplicate`, with Duplicate, Undo, Redo and Undo; the Redo of a route's Duplicate (`IKKOKU_PERF_ACTION_KEY`) rehydrates the scene's route runtime with its route characters |
 | `studio-outfit` | as `studio-idle` | the Clothes tab's outfit picker (`StudioModel.selectSourceOutfit`) on the `studio-duplicate` character: another saved outfit (`IKKOKU_PERF_OUTFIT`, else the first other one), then the shown one back, repeated, live animation on. After the first selection each one borrows the outfit's kept assembly; `IKKOKU_PERF_DONATIONS=off` builds every one from its files |
 | `studio-export` | as `studio-idle` | File ▸ Export Edited Original Scene (`AppState.exportSourceScene(to:)`), repeated, after a setup through the UI's calls: a cheek edit on the `studio-duplicate` character, Visible off, then Save Scene and Open of that file, so the hidden character has no preview and each export builds its validation baseline. Exports go to a temporary folder, removed at the end |
-| `studio-load` | as `studio-idle` | File ▸ New Scene (unmeasured), then File ▸ Open (`AppState.openScene(at:importing:)`) of the source scene saved as an Ikkoku scene, repeated; each load builds the characters again and rehydrates the route characters (a load over the same scene would keep its runtime and rehydrate nothing) |
+| `studio-load` | as `studio-idle` | File ▸ New Scene (unmeasured), then File ▸ Open (`AppState.openScene(at:importing:)`) of the source scene saved as an Ikkoku scene, repeated; each load builds the characters again and rehydrates the route characters (a load over the same scene would keep its runtime and rehydrate nothing). With `IKKOKU_PERF_LOAD_SMALL_OBJECTS=<n>` (#410) it alternates the source scene with a saved scene of `n` folders instead of New Scene, and in the small scene scrolls the workspace to its end (measured) and back; `details.workspaceScrolls` records, before each of the first 16 scrolls, the document and visible heights and how far the view is from the end, so a scroll back shows whether the scroll to the end reached it. It also records `workspaceRowHeight` (a one-line row), `tallestScreenVisibleHeight` and `workspaceMaxVisibleRows`, the most rows any window could show. `IKKOKU_PERF_WORKSPACE_SLOT_CAP=<k>`, read once at launch, replaces the workspace slots, the rows the list builds ahead of any scroll (`StudioWorkspaceState.slotCap`; recorded as `workspaceSlotCap` and `workspaceSlotCapOverride`) |
 | `studio-select` | as `studio-idle` | the selection a click makes (`StudioModel.selection`, which a workspace row's tap and a viewport click on an object set; a click on empty space clears it) through a fixed list, repeated, live animation on: nothing selected, then each listed object in turn. The list is `IKKOKU_PERF_SELECT_KEYS`, else the first object of each kind the Object tab shows differently (source character, route, source camera, item, light, camera, folder) in workspace order. The inspector shows `IKKOKU_PERF_INSPECTOR_TAB` (default `object`). The actions are named for what they select (`select route`, `select source character from nothing`, `deselect`); each one's main-thread time is the busy period it ran in, which holds SwiftUI's update of the panels ([phase 2, item 7](#phase-2-item-7-selection-and-the-inspector)) |
 | `studio-export-import` | as `studio-idle` | File ▸ Export Edited Original Scene (`AppState.exportSourceScene(to:)`) of the startup scene as imported, unedited, repeated, live animation on. A hidden character the import left unbuilt has no edit, so the export builds no baseline for it; its saved animation time comes from its data-only clock ([lazy hidden characters](#lazy-hidden-characters-at-import)). Each export writes a new file and removes the previous one |
 | `studio-show-hidden` | as `studio-idle` | Visible on (the inspector's toggle, `StudioModel.update`) for each hidden object of the startup scene that holds source characters (its own flag off, its ancestors shown), in workspace order, each followed by Visible off again (unmeasured), repeated, live animation on. An action's first run shows characters the import left unbuilt, so its ready time holds their builds; later runs find them built. Each action is named `show <source key> (<n> characters)` |
 | `studio-clock-first` | as `studio-idle` | the first clock rebase and the first native save after the import, then repeated, live animation on: `rebase` sets the first drawn character with a converted saved clip to its own animation speed (`setSourceAnimationSpeed`, which bakes every character's clock), `save` is File ▸ Save (`saveScene(to:)`) to a scratch file. The first bake's time is the `sourceClockBake` mark pair |
+| `studio-edit-steps` | as `studio-idle` | #409's memory count and edit cost: `IKKOKU_PERF_EDITS` (default 90) single-object edits of the `IKKOKU_PERF_ACTION_KEY` object through the inspector's call (`StudioModel.update`), each its own undo step, its x position moved 0.001 (or with `IKKOKU_PERF_EDIT_FIELD=pose` its neck rotation in the pose delta turned 0.5); each followed by a same-value write, which takes no undo step (#390), as the control. Each action also records the undo and redo depth and the distinct `objects` buffers the document and both stacks hold, with their malloc bytes (`StudioObjectStorageCensus`), and the live-step settles in its call. With `IKKOKU_PERF_EDIT_PHASES=alternate` each call runs at a fixed point of a live step ([placed edits](#placed-edits-409-446)). After the edits `IKKOKU_PERF_PAUSE_AT` lists it holds for an outside reader. The actions run once, and the run stops after the last |
+| `maker-tabs` | `IKKOKU_SOURCE_AVATAR` and the Maker library, no card | #440: the bundled character's Maker (the tabbed panel, not the source rig panel), its tabs selected in turn as the segmented control selects them (`MakerModel.tab`), repeated, live animation on. Each switch builds the tab's panel again, the tag and thumbnail grids included. When the original base opens, the workload first uses the source rig panel's "Use bundled prototype" (`closeSourceRig()`); it fails if the tabbed panel still does not show |
 
 Other options:
 
@@ -157,6 +159,17 @@ Other options:
   use source key 963 or the first source character. `studio-fk-drag` drags
   bone 19 of the character it names instead of source key 65.
 - `IKKOKU_PERF_OUTFIT` (0–6): the saved outfit `studio-outfit` selects.
+- `IKKOKU_PERF_EDITS` (1–500, default 90): the edits `studio-edit-steps`
+  makes. `IKKOKU_PERF_PAUSE_AT` (up to 32 comma-separated edit counts,
+  0–500; 0 is before the first edit): after those edits it writes its
+  process id to `pause-<n>.pid` in `IKKOKU_PERF_PAUSE_MARKER`, a folder that
+  must lie under a `.local` folder, and holds for `IKKOKU_PERF_PAUSE_SECONDS`
+  (1–30, default 10) so `footprint`, `vmmap` and `heap` can read the process
+  by that id. The hold is a timer, so the main run loop sleeps.
+- `IKKOKU_PERF_EDIT_FIELD` (`x` or `pose`, default `x`): what each
+  `studio-edit-steps` edit writes, and `IKKOKU_PERF_EDIT_PHASES` (`none` or
+  `alternate`, default `none`): where each edit's call runs
+  ([placed edits](#placed-edits-409-446)).
 - `IKKOKU_PERF_SELECT_KEYS` (1–64 comma-separated source keys): the objects
   `studio-select` selects in turn, and `IKKOKU_PERF_INSPECTOR_TAB`
   (`object`, `pose`, `face`, `clothes` or `scene`): the inspector tab it
@@ -176,6 +189,25 @@ Other options:
   workspace tree, the toolbar and the timeline bar read the document in
   their bodies, as before, and `published` has them read what the model
   publishes when it changes. The app reads it once at launch.
+- `IKKOKU_PERF_LOAD_SMALL_OBJECTS` (1–10,000) and
+  `IKKOKU_PERF_WORKSPACE_SLOT_CAP` (0 or more), measurement controls for
+  #410's workspace slots: the folders of the small scene `studio-load`
+  alternates with the source scene, and the workspace slots, the rows the
+  list builds ahead of any scroll, in place of `StudioWorkspaceState.slotCap`
+  (0 puts every row in the lazy stack). The app reads the cap once at launch.
+- `IKKOKU_PERF_PARK_FILE` (a path) and `IKKOKU_PERF_FOCUS_PROBE` (1–64),
+  #440's measurement controls for the
+  [focus-ring growth check](#per-action-growth-check-440). With a park file,
+  an action workload parks at the start of each cycle after the first when
+  the file reads `park <n>`. It writes `<file>.parked` (the park, the measured
+  actions finished, the next action's index and the cycle's length) and
+  waits until the file reads `resume <n>`; both files are written in place
+  and never deleted, and `details.parks` records each park. The probe adds
+  that many plain buttons with the system focus effect at the top of the
+  Studio inspector's scroll view, hidden with `.inspectorHidden` at every
+  other selection change, and of the Maker panel's, removed at every other
+  tab switch: the growth check's positive control. The app reads both once
+  at launch; unset, neither does anything.
 - Measurement controls for the
   [item 6 follow-up](#phase-2-item-6-follow-up-route-copies-prefetch-and-kept-donations),
   all defaulting to the shipped behavior:
@@ -206,6 +238,10 @@ locked `PerfDrawLog`. Everything else is recorded on the main thread.
   draw (`frameRing`), excluding unchanged callbacks: skin palettes and
   palette KiB per draw, palette buffers created while recording (0 once the
   ring is warm), and draws that used overflow buffers;
+- per rendered draw (`drawCounts`, ST-T04): the main pass's records and the
+  draws they took, the static item records drawn instanced and their runs,
+  and the shadow casters and their draws
+  ([instanced static items](renderer.md#instanced-static-items-st-t04-slice-1-part-b));
 - when each drawable was really presented (`addPresentedHandler`), giving
   actual presented FPS and raw presented-interval percentiles. Schema 5 also
   reports `activePresentedIntervalMs`: adjacent presentation intervals minus
@@ -273,7 +309,15 @@ locked `PerfDrawLog`. Everything else is recorded on the main thread.
   `phys_footprint` and Metal allocation when it was ready (`footprintBytes`,
   `metalAllocatedBytes`; ST-T04), so repeated loads show whether memory
   accumulates per cycle, and the document's object count then
-  (`documentObjects`), so an edit's and its undo's effect can be checked. `summarize` prints the
+  (`documentObjects`), so an edit's and its undo's effect can be checked.
+  Since #410 each action also records the workspace row and empty-slot
+  bodies evaluated from its call to the next action's (`workspaceBodies`),
+  and the workspace rows it left (`workspaceRows`; the slots are
+  `workspaceSlotCap`, fixed for the run). Since #409 each action also
+  records the main thread's CPU time over its call (`callCpuMs`,
+  `CLOCK_THREAD_CPUTIME_ID` read right before the call starts and right after
+  it ends), and each `studio-edit-steps` action the live-step settles in its
+  call ([placed edits](#placed-edits-409-446)). `summarize` prints the
   medians per action (the own busy time in parentheses after the busy time, when
   the report has it), with the 120 Hz refresh periods the median and the
   longest stall cover (a 100 ms stall drops 12 frames), and warns about an
@@ -454,10 +498,17 @@ Any task that may change the app's speed measures it this way:
 6. **Renderer cost without the window**: `IKKOKU_AUTOCAPTURE` with
    `IKKOKU_BENCHMARK_OUTPUT`, `IKKOKU_CAPTURE_W`/`_H` and
    `IKKOKU_BENCHMARK_FRAMES` renders the frame offscreen and records CPU
-   encode, GPU and completion times. `IKKOKU_BENCHMARK_MAP_SHADOW=every-frame`
-   redraws a map sun's shadow map in every measured frame, which measures
-   the frame where the casters, the sun or the camera target change
-   (`mapShadowEveryFrame` and `mapShadowMap` in the report).
+   encode, GPU and completion times. `IKKOKU_BENCHMARK_ORBIT=<turns>` makes it
+   a scripted orbit (ST-T04 B2): the frame camera's yaw turns that many times
+   about its target, evenly over the warmup and measured samples, with the
+   pitch, target, distance and lights unchanged. The report's `orbit` block
+   lists each sample's yaw (`sampleYaws`), so two builds can be checked for
+   the same camera path. The report's `drawCounts` gives the same counters
+   as the perf trace's, over the measured samples.
+   `IKKOKU_BENCHMARK_MAP_SHADOW=every-frame` redraws a map sun's shadow map
+   in every measured frame, which measures the frame where the casters, the
+   sun or the camera target change (`mapShadowEveryFrame` and `mapShadowMap`
+   in the report).
 7. **Speed never changes output silently.** A change that should not alter
    pixels keeps byte-identical captures. A quality trade-off is opt-in and
    reported separately.
@@ -465,6 +516,120 @@ Any task that may change the app's speed measures it this way:
 A new workload is added in three places: `PerfWorkload.swift`, the
 `perfWorkloads` values in `CaptureRequest.swift` and `WORKLOADS` in
 `perf_trace.py`.
+
+### Per-load growth check (#410)
+
+[workspace_growth_check.py](../../Tools/verification/workspace_growth_check.py)
+checks that Studio scene loads leave no per-load objects behind in the
+workspace list. It runs `studio-load` through `perf_trace.py run` (65 s by
+default, every launch through `--wrap`). It takes two `heap --forkCorpse -s`
+snapshots of the app by pid, at 12 s and 56 s after launch, and counts the
+loads between the snapshots it read from the report. A snapshot whose `heap`
+fails is tried again 2 s later, up to four attempts in all, and each
+attempt's start and exit are printed. Then it compares the counts of AppKit's
+`NSKeyValueDependency`, `NSKeyValueDependencyContext`, `__NSMallocBlock__`
+and `__NSExactBlockVariable__`, and of every SwiftUI `AnyHashableBox<T>`, one
+row per payload type `T`.
+
+- The bar was frozen before the first run on the fix. Each type may grow by
+  at most 1 per load plus 64. A run is valid only with at least 40 loads
+  between the snapshots.
+- The 64 covers one scene's rows. A snapshot can land while the scene is
+  shown, with its rows built, or in the New Scene gap, with none. So even a
+  list that frees everything reads up to about ±44 between two snapshots.
+  At 40 loads the bar is 104, so a residual leak of 3 per load (120) fails.
+- The snapshot schedule changed once, before any run with it: the first two
+  runs' 8 s snapshot failed (`heap` exit 255), so the early snapshot moved to
+  12 s and gained the retry. The bar did not change.
+- The snapshot procedure changed again in v2.2, before any run with it.
+  Three v2.1 runs of one build were each invalid, because both attempts at
+  one snapshot exited 255. Each snapshot now gets up to four attempts. The
+  loads are still counted between the attempts that were read, so a late
+  attempt only narrows the window. The bar, the rows, the flags and the
+  other validity rules did not change. v2.2 runs are a new registration, not
+  pooled with v2.1 runs. Before its first run on a fix, v2.2 was run on the
+  slots-only build (03f056de) as a positive control, and failed it as
+  required: about 41 per load on the four AppKit rows.
+- The rows changed once (v2.1), and only to make the check stricter. The
+  first version counted only `AnyHashableBox<UUID>`, and a list keyed by
+  position moved the same growth to `AnyHashableBox<Int>`, which it did not
+  count. Every box type is now a row of its own. Any other class that grows
+  by at least the bar is printed as a FLAG for review; a flag does not change
+  the verdict.
+- It writes `workspace-growth.json` with the raw counts, every snapshot
+  attempt and the flags, and exits 0 (pass), 1 (fail) or 2 (invalid).
+- [test_workspace_growth_check.py](../../Tools/verification/test_workspace_growth_check.py)
+  covers the heap reader, the load count, the bar, the attempts, the box
+  rows and the flags with synthetic data.
+
+The check needs the private source scene (`perf_trace.py`'s environment
+map), so no lane runs it. Results are in
+[Workspace list per scene (#410)](studio/scene-editing.md#workspace-list-per-scene-410).
+
+### Placed edits (#409, #446)
+
+An edit's call costs more when it finds a live step pending: its settle
+commits the step and its refresh does the step's refresh work. Run at half a
+second after the previous action, as every action workload runs, how many
+edits land in that state depends on the phase the run happens to lock into,
+and it differs from launch to launch. `IKKOKU_PERF_EDIT_PHASES=alternate`
+sets it by design instead. Each `studio-edit-steps` call runs at a live
+step's completion on the main actor (`StudioModel.liveTickFinished`):
+
+- odd edits (`afterCommit`) run after the step has committed and refreshed,
+  so the call finds no step pending;
+- even edits (`beforeCommit`) run before the step commits, with its workers
+  done, so the call's settle commits the step;
+- each same-value write runs in its edit's phase.
+
+The workload arms a one-shot hook (`StudioModel.livePhaseHook`) when the
+action would have started. The next completion that offers the phase runs
+the call, synchronously, so no step can start in between. A serial step, or
+a step something else already settled, offers neither phase. If no step
+offers it within half a second (about 15 steps), the call runs unplaced
+(`placed: false`).
+
+Each placed action records `livePhase`, `placed`, `placementWaitMs` (from
+arming to the call), `liveSerialSteps` (serial live steps from arming to the
+call's end) and `pendingWorkAtCall`. Every `studio-edit-steps` action also
+records `livePendingSettles` and `liveUnfinishedWaits`: the settles in its
+call that found a step pending, and of those, the ones whose workers were
+still running. An `afterCommit` edit has 0 pending settles. A `beforeCommit`
+edit has 1, with 0 unfinished waits. The counters are `@ObservationIgnored`
+integers on the model, and the hook is nil unless the workload arms it, which
+costs one optional test per step completion.
+
+### Per-action growth check (#440)
+
+[growth_check.py](../../Tools/verification/growth_check.py) (v3) is the
+same measurement for any `perf_trace.py` workload, per measured action.
+The #410 check stays as that issue's record.
+
+- **Parked snapshots.** The check passes `IKKOKU_PERF_PARK_FILE=<out>/park`
+  and writes `park 1` at 12 s and `park 2` at 56 s after launch. At the start
+  of its next cycle the workload writes `<out>/park.parked` and waits. The
+  check takes the snapshot (up to four attempts, 2 s apart) and writes
+  `resume <n>`. No file is deleted. Both snapshots see the state a full cycle
+  leaves, and the unit is the measured actions between the two parks.
+- **Timed snapshots** (`--timed`), for builds without parking: v2.2's
+  schedule, with the measured actions that started between the snapshots.
+- **Rows:** the four AppKit types, `_FocusRingView` (the view the mechanism
+  adds) and every `AnyHashableBox<T>`. Other classes that grow by at least
+  the bar are FLAGs for review.
+- **Bar**, frozen before the first run: each row grows by at most 1 per
+  action plus 32 (parked: no phase term, so 32 covers incidental
+  allocations) or plus 64 (timed, v2.2's). A run is valid with both
+  snapshots read, both parks at the start of one cycle, and at least 40
+  actions between them.
+- **Slopes** (information only): every row's growth per action. A pass with
+  a slope of at least 0.25 per action on the four types or `_FocusRingView`
+  prints as "pass, slope X": a section that leaks one control per show (0.5
+  per action) passes the 1-per-action bar, so that candidate stays open for a
+  longer run.
+- It writes `growth.json` and exits 0 (pass), 1 (fail) or 2 (invalid).
+  [test_growth_check.py](../../Tools/verification/test_growth_check.py) covers
+  the reader, the bar, the slope note, the flags, the timed count, the
+  parking protocol against a fake app, and the attempts.
 
 ## Measurement setup
 
@@ -2663,8 +2828,8 @@ In short:
   - a re-import of the loaded scene;
   - a route character.
 - **Background builds (S1).** `SourceStudioCharacterBatch` runs the first
-  halves on threads of its own with 8 MiB stacks (#321; GCD workers have
-  512 KiB, too little for a deep scene's decode), as many as the active
+  halves on threads of its own with 64 MiB stacks (#321, #326; GCD workers
+  have 512 KiB, too little for a deep scene's decode), as many as the active
   processor count less two. It
   runs the second halves one at a time, in request order. Interactive and
   performance-trace runs use it in the background:
@@ -7272,3 +7437,205 @@ being scheduled on slow cores or at a low clock while its window is not
 visible, not to a change in the code's own cost. So these absolute times, and
 possibly the ratios, are specific to this environment. Comparing against a run
 with the monitor on is a follow-up.
+
+## Studio FK drag: reusing unchanged character frames (2026-11-02)
+
+During an FK drag the Studio refreshes once per drag event, about 120
+times a second. Each refresh asks every source character of the scene for
+a frame (`StudioModel.refreshFrame`). Only the dragged character changes,
+but before this change the other six of the scenario scene's seven rebuilt
+everything after their cached pose: the rig evaluation (world matrices,
+skin palettes, `isFiniteAffine` on every matrix), the items and their
+materials, the bounds, the palette copies, the retained textures and the
+iris transforms.
+
+### Step 0: where the drag's main thread goes
+
+A Time Profiler sample attached by pid to `studio-fk-drag`, on a Release
+of `main` `35f43e98`, for 10 s (2026-11-02 02:49, under the app lock; an
+attribution, not a timing). The figures are inclusive main-thread ms per
+second:
+
+| frame | ms/s |
+| --- | ---: |
+| `StudioModel.refresh` | 122.2 |
+| `StudioModel.refreshFrame` | 111.9 |
+| `SourceStudioCharacterPreview.frame` | 83.4 |
+| `RigDefinition.evaluate` (every caller) | 50.9 |
+| `SourceRigPreview.frame` | 47.7 |
+| `editedPose` | 34.6 |
+| `solvedPose` | 34.1 |
+| `isFiniteAffine` | 28.6 |
+| `makePose(binding:)` | 14.5 |
+| IK solve | 14.1 |
+| bounds | 10.8 |
+| renderer submit | 4.6 |
+| `bindPose` | 4.2 |
+| `retainTextures` | 4.2 |
+| iris transforms | 0.8 |
+
+`bindPose` is below the 10 ms/s at which a values-only FK path for the
+dragged character would have been tried, so that part was dropped.
+`isFiniteAffine` is a separate follow-up.
+
+### The change
+
+`SourceStudioCharacterPreview.frame` keeps its last finished frame (after
+world, object ID and iris) with a key. While the key matches, it returns
+that frame with the new camera, main light and effects. Those three are
+plain fields of the frame, and nothing else in a character frame reads
+them. The gaze follows the camera only through the live step, which writes
+the pose and the eye rates, and both are in the key. The key, compared bit
+for bit:
+
+- the pose, as a generation that every write to `evaluatedCache` bumps (a
+  solve, a clear or a checkpoint restore). `editedPose` returns a cached
+  pose without a write, so an unchanged generation after it means the same
+  pose;
+- the rig preview instance (a color edit replaces it) and its
+  `visibilityGeneration` (`doubleTooth`);
+- the expression inputs (a blink or a face edit);
+- wear (hidden parts and body alpha), world and object ID;
+- the eye-look rates and the iris tilt;
+- `ResourceStore.reuseGeneration`: the store's generation (registrations,
+  replacements, unregisters, hidden masks, completed retirements) plus
+  every retirement and release as it is asked for. A reused frame is
+  therefore never older than a retirement it should follow (R6).
+
+The cache lives on the preview, so deleting a character frees it, and a
+color edit drops it with the old rig preview. PerfTrace counts
+`studioCharacterFrameReused` and `studioCharacterFrameBuilt` at the
+Studio's two call sites. Their rates over the refresh rate give the frames
+reused per refresh.
+
+### Correctness
+
+- **The twin test** (`SourceStudioCharacterFrameReuseTests`) runs two sets
+  of the scenario scene's seven characters, each in a store of its own. One
+  set reuses frames; the other builds every frame afresh. Every frame must
+  match its twin bit for bit: items, materials, models, keys, morph
+  weights, texture handles, skin sets, bounds, gizmos, camera, light and
+  effects. The reusing set must report a reuse exactly when nothing
+  changed. The test covers:
+  - 90 live ticks (blink, neck and eye gaze on a circling camera, dynamics,
+    a held then moving FK edit, a seek), each followed by a refresh with
+    the view orbited;
+  - an FK drag, then the FK edit held while the view orbits;
+  - an IK edit, a face slider, the expression, wear, world, object ID, a
+    color edit, the double tooth and a resource retirement, each a fresh
+    frame and then a reuse;
+  - 24 orbit steps with the eyes on the camera (TARGET); the gaze moved on
+    17;
+  - the automatic blink alone for 8 s, with 22 changes, a fresh frame
+    exactly on each.
+  - All 1,550 frames matched (866 reused, 684 built).
+- **The lifetime test** drops the seven characters of each store. The store
+  ends where the store without reuse ends: meshes and deformation buffers
+  back to 0, and the same 19 cached textures. Every texture a cached frame
+  held whose owner released it was freed.
+- **The live-tick digest** over 180 ticks of the seven characters, serial
+  and parallel, is the same on base (`main` `fff1d332`) and head:
+  `2a441a23b9f5…`. The edit-during-a-tick digest is also the same,
+  `eeb9bb141283…`.
+
+### Memory
+
+The seven cached frames hold 476.5 KiB:
+- 124 items, 87.2 KiB;
+- 137 morph weights, 2.1 KiB;
+- 6,195 palette matrices, 387.2 KiB.
+
+### Follow-up changes (2026-11-18)
+
+The first A/B (2026-11-17, n = 4 per arm) reused 6 of 7 frames per input
+but left the refresh at 84.3% of base against the registered ≤ 70%. The
+attribution then found three costs on the dragged character's path:
+- **Change 1, the FK binding.** `bindPose`'s cache was keyed on the whole
+  FK map, so every drag input rebound the character.
+  `KoikatsuCharacterRecord.rebindPose` writes only the changed bones'
+  rotations into the cached binding. It falls back to a full bind when a
+  changed key is not a target, a no-guide target would lose its rotation,
+  or `setRotation` throws. A randomized test (160 seeds × 12 steps)
+  compares every rebind with a fresh bind: targets, flags, transitions,
+  effects, diagnostics and the `makePose` output, bit for bit.
+- **The gizmo handles.** `GizmoBuilder.handle` built the unit octahedron
+  afresh for every handle of every refresh, with about 13 allocations. Its
+  24 vertices now come from a table that the same
+  `octahedron(center: .zero, radius: 1)` call builds once; `handle` only
+  adds the color. A test compares 288 handles (negative, large and zero
+  centers; sizes that are not powers of two; several colors) with the
+  former construction bit for bit.
+- **The clip binding check.** `ResolvedClip.matches` compared every
+  binding's source ID and name with the rig's nodes on every sample. It now
+  skips that walk for the rig identity the resolution was last checked
+  against: rigs with one identity have the same nodes, skins and order
+  (`RigDefinition.Identity`). Any other rig still takes the full walk. A
+  test checks the shortcut against the walk and against a fresh resolution
+  over 60 rig pairs.
+
+A dev A/B of those three (W13, n = 4 per arm, not registered) put the
+refresh at 63.6% of base: a 9.1% margin against the ≤ 70% bar, short of
+the 15% a registration needs. A head profile (e039ee56, 15 s) then showed
+the gizmos down from 30.8% to 14.6% of the refresh and the clip check
+gone. It also found three more costs, changed here in this order, one
+commit each with its own test:
+- **The IK node check.** `SourceStudioIK.apply` mapped the rig's node
+  list twice and compared source IDs and parents on every call (~3.2 ms/s
+  of the refresh). The solver now keeps the identity of the rig it was
+  built for and skips the comparison for that rig. Any other rig gets the
+  full comparison as before: equal source IDs and parents pass and solve
+  bit for bit, and a changed node list fails with the same message.
+- **The rotate gizmo's rings.** `build(.rotate)` rebuilt three rings of
+  576 vertices from sine and cosine on every call. Their positions depend
+  only on the axis: radius, thickness and segment count are constants,
+  the color only fills a field, and origin, orientation and size go into
+  the batch's model. A table built by the same `ring` call holds them. A
+  test compares 384 rotate gizmos with the former construction bit for bit.
+- **Repeated rig evaluations** (21.5 ms/s, of which IK 4.5, the frame 2.2
+  and the bone handles 1.6):
+  - The IK solver evaluated its full-body initialization pose on every call.
+    `init` now evaluates it once (with `try?`, full-body only), and `apply`
+    uses that for the rig the solver was built for. A failed evaluation is
+    not kept: `apply` evaluates and throws where it did before. `init` runs
+    at import and on a body or face shape edit, never during an FK drag.
+  - `applyingActivations` evaluates the pose it returns last, on every path.
+    `evaluatedActivations` keeps that evaluation, `makePose`'s result
+    carries it, and the IK solve takes it in place of evaluating the same
+    pose again.
+  - The character preview keeps its last pose evaluation. It is used again
+    only for the same rig and a pose that shares the kept pose's matrix
+    storage, which therefore holds the same values. The frame build and the
+    Studio's bone handles share it. No checkpoint, undo state or document
+    field holds it.
+  - Tests compare every path with `rig.evaluate`, bit for bit.
+
+### A/B
+
+Registered A/B, 2026-11-19 (W16). The plan was frozen before measuring and
+verified by the coordinator.
+- **Arms:** base `main` `0d7eb327` against head `3b170522` (`0d7eb327` plus
+  this change), both Release.
+- **Run:** `studio-fk-drag` for 10 s, ABBA × 2, so 8 units and n = 4 per
+  arm. Each launch held the app lock on its own, at 60 Hz with the monitor
+  off.
+- **Gates:** the entry and after gates use the strict 20% intruder rule,
+  and the pre-launch snapshot invalidates too.
+- **Reruns:** an invalid unit is rerun at most twice.
+- **Statistic:** the median of the per-run refresh means.
+
+All 8 units were valid. One head unit's first attempt was invalid
+(`corespotlightd` at 362% in its after gate) and was rerun under the plan.
+
+| | base | head |
+|---|---:|---:|
+| refresh, median of run means (ms) | 2.257 (2.200–2.375) | 1.258 (1.198–1.293) |
+| main busy, median (ms/s) | 287.3 | 178.7 |
+| frames built / reused per refresh | — | 1 / 6 in every run |
+
+- **(a)** The refresh is 55.7% of base, against ≤ 70%: pass.
+- **(b)** Main busy is 62.2% of base, against ≤ base: pass.
+- **(c)** Every head run builds 1 frame and reuses 6, inside the bands:
+  pass.
+
+The ranges do not overlap. A dev A/B of the same binaries, run 15 minutes
+earlier, gave 55.5%.

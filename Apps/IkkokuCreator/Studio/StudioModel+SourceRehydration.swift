@@ -6,6 +6,13 @@ import Scene
 import Assets
 import Character
 
+/// One converted source item's runtime entry: the scene it was resolved for,
+/// its CharaStudio key and asset file, the record colours and alpha the frame
+/// builder tints the parts with, and its file's untinted materials (ST-T04 B4,
+/// shared by every entry of that file in one import or rehydration).
+typealias SourceItemAssetEntry = (sceneSHA256: String, key: String, path: String, colors: [SIMD4<Float>], alpha: Float,
+                                  materials: SourceStudioItemMaterialSet)
+
 /// The runtime-only half of a source scene import, rebuilt from the original
 /// scene file for a document that already contains the placeholder objects:
 /// route runtimes and route character previews, camera objects, converted item
@@ -24,8 +31,7 @@ struct StudioSourceRuntimeBundle {
     /// their rebuilds land.
     var routeCharacterBuilds: [(id: UUID, reference: SourceStudioCharacterReference)] = []
     var cameras: [UUID: (sceneSHA256: String, objectKey: Int32, name: String)] = [:]
-    var itemAssets: [UUID: (sceneSHA256: String, key: String, path: String,
-        colors: [SIMD4<Float>], alpha: Float)] = [:]
+    var itemAssets: [UUID: SourceItemAssetEntry] = [:]
     var sceneLight: MainLight?
     var activeCameraAtLoad: UUID?
     /// ST-A11: the scene's map request (nil: no map, or a failed rehydration).
@@ -70,6 +76,7 @@ extension StudioModel {
                 throw RigError.invalid("the source scene file changed since it was imported")
             }
             let source = try KoikatsuSceneReader.decodeDocument(bytes)
+            startSourceVoiceCheck(source: source, hash: hash)
             let (rigURL, boneCatalogURL) = try sourceRigInputs()
             let bundle = try buildSourceRuntimeBundle(source: source, sceneURL: sceneURL,
                 hash: hash, rigURL: rigURL, boneCatalogURL: boneCatalogURL, document: doc)
@@ -85,6 +92,29 @@ extension StudioModel {
             doc.sourcePreviewDiagnostics = (doc.sourcePreviewDiagnostics ?? [])
                 + ["Source scene rehydration: \(error); the imported scene's cameras, props, routes and scene light stay unavailable until the scene file is restored or the scene is reimported."]
         }
+    }
+
+    /// #437: the voice inputs of the document's characters in `source` that
+    /// this reload leaves unbuilt (`sourceBuildWanted` is false: the builds
+    /// give the others theirs) and no cache entry covers, from the records
+    /// this rehydration decoded, on the hidden card check's worker. A voice
+    /// play or repeat change on such a character then decodes no scene
+    /// (`sourceVoiceInputs` takes them).
+    private func startSourceVoiceCheck(source: KoikatsuSceneDocument, hash: String) {
+        sourceVoicePendingCheck?.check.cancel()
+        sourceVoicePendingCheck = nil
+        let selectionBuild = sourceSelectionBuild
+        let keys = Set(doc.objects.compactMap { object -> Int32? in
+            guard let reference = object.sourceCharacter, reference.sceneSHA256 == hash,
+                  !sourceBuildWanted(object, selectionBuild: selectionBuild),
+                  !sourceVoiceInputCache.contains(.init(reference)) else { return nil }
+            return reference.objectKey
+        })
+        guard !keys.isEmpty else { return }
+        let records = SourceStudioCharacterPreview.characterRecords(keys, in: source)
+        let found = records.keys.sorted()
+        guard !found.isEmpty else { return }
+        sourceVoicePendingCheck = (hash, found, SourceStudioCharacterPreview.CardCheck(records: found.compactMap { records[$0] }))
     }
 
     /// The scene file the document's hashes were taken from:
@@ -153,7 +183,7 @@ extension StudioModel {
                 itemResolver = try? KoikatsuAssetResolver(catalog: itemCatalog, directory: itemCatalogURL.deletingLastPathComponent())
             }
         }
-        var loadedItemAssets: [String: LoadedAsset] = [:]
+        var loadedItemAssets: [String: LoadedAsset] = [:], itemMaterialSets: [String: SourceStudioItemMaterialSet] = [:]
         // The route characters' preview reference, as the import gives it.
         func routeCharacterReference(_ record: KoikatsuObjectRecord, _ character: KoikatsuCharacterRecord) throws -> SourceStudioCharacterReference {
             let selectedRig = character.sex == 0
@@ -233,8 +263,10 @@ extension StudioModel {
                             loadedItemAssets[asset.url.path] = try library.importStaticAsset(url: asset.url,
                                 packageRoot: KoikatsuAssetResolver.packageRoot(of: asset.url))
                         }
+                        let materials = itemMaterialSets[asset.url.path, default: SourceStudioItemMaterialSet()]
+                        itemMaterialSets[asset.url.path] = materials
                         bundle.itemAssets[id] = (sceneSHA256: hash, key: itemKey, path: asset.url.path,
-                            colors: item.colors, alpha: item.alpha)
+                            colors: item.colors, alpha: item.alpha, materials: materials)
                     } catch {
                         // Unmapped or unreadable item: the placeholder renders
                         // nothing, exactly as the import's retained node.

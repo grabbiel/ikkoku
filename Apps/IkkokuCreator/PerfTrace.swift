@@ -111,6 +111,15 @@ final class PerfTrace {
         /// A Studio character build installed and left its frame to the next
         /// live step's refresh (R7 phase 2 item 6 follow-up).
         case studioInstallRefreshDeferred
+        /// A source character's refresh frame given back from its cache: its
+        /// inputs other than camera, light and effects were unchanged (R7
+        /// item 3, FK drag; `SourceStudioCharacterPreview.frame`).
+        case studioCharacterFrameReused
+        /// A source character's refresh frame built afresh on the main thread
+        /// (not one the live step prepared).
+        case studioCharacterFrameBuilt
+        /// One layout measurement of the Studio toolbar's ViewThatFits (#425).
+        case studioToolbarMeasured
     }
 
     /// SwiftUI bodies counted per recording. A count is one evaluation of that
@@ -120,8 +129,17 @@ final class PerfTrace {
     enum ViewBody: Int, CaseIterable {
         case appCommands, contentView
         case studioWindow, studioWorkspace, studioWorkspaceRow, studioToolbar, studioTimeline, studioInspector, studioStatus
+        /// #425: each toolbar variant's controls (full, compact, compact in the scroll view).
+        case studioToolbarControls
         case objectInspector, objectInspectorContent, objectInspectorSection, poseInspector, sourcePoseInspector, sourceAnimationInspector, faceInspector, clothesInspector, sceneInspector
         case makerWindow, makerRigPanel, makerShapeRow
+        /// #410: an empty workspace slot, past the scene's rows (`WorkspaceSlot`).
+        case studioWorkspacePlaceholder
+        /// #410: the workspace list (`StudioWorkspaceContent`), which a load
+        /// and a move of the eyes' keyboard focus evaluate.
+        case studioWorkspaceList
+        /// #410: one workspace slot (`WorkspaceSlot`), with a row or empty.
+        case studioWorkspaceSlot
 
         var name: String { String(describing: self) }
     }
@@ -192,6 +210,28 @@ final class PerfTrace {
         /// shows, lowercased ("object", the default, "pose", "face",
         /// "clothes" or "scene").
         let inspectorTab: String?
+        /// `IKKOKU_PERF_EDITS`: how many single-object edits
+        /// `studio-edit-steps` makes (#409, default 90).
+        let edits: Int
+        /// `IKKOKU_PERF_PAUSE_AT`: after how many of those edits it holds
+        /// (0 is before the first) so an outside tool can read the process,
+        /// for `IKKOKU_PERF_PAUSE_SECONDS` (default 10), after writing its
+        /// process id to `pause-<n>.pid` in `IKKOKU_PERF_PAUSE_MARKER`.
+        let pauseAt: Set<Int>
+        let pauseSeconds: Double
+        let pauseMarker: String?
+        /// `IKKOKU_PERF_EDIT_FIELD`: what each `studio-edit-steps` edit
+        /// writes, `x` (the x position, default) or `pose` (a neck rotation
+        /// in the pose delta).
+        let editField: String
+        /// `IKKOKU_PERF_EDIT_PHASES`: `none` (default) runs each edit half a
+        /// second after the previous action is ready; `alternate` then runs
+        /// it at the next live step's completion, odd edits after the step's
+        /// commit and even edits before it (#409, #446).
+        let editPhases: String
+        /// `IKKOKU_PERF_PARK_FILE` (#440): the growth check's park file; nil
+        /// (the default) never parks (`PerfWorkloadDriver.parkIfRequested`).
+        let parkFile: String?
 
         /// Reads `IKKOKU_PERF_*`; `CaptureRequest.validate` already checked the values.
         static func from(_ env: [String: String]) -> Configuration? {
@@ -220,7 +260,14 @@ final class PerfTrace {
                 installRefresh: env["IKKOKU_PERF_INSTALL_REFRESH"] ?? "step",
                 outfit: env["IKKOKU_PERF_OUTFIT"].flatMap { Int($0) },
                 selectKeys: env["IKKOKU_PERF_SELECT_KEYS"].map { $0.split(separator: ",").compactMap { Int32($0) } },
-                inspectorTab: env["IKKOKU_PERF_INSPECTOR_TAB"])
+                inspectorTab: env["IKKOKU_PERF_INSPECTOR_TAB"],
+                edits: int("IKKOKU_PERF_EDITS", 90),
+                pauseAt: Set((env["IKKOKU_PERF_PAUSE_AT"] ?? "").split(separator: ",").compactMap { Int($0) }),
+                pauseSeconds: Double(int("IKKOKU_PERF_PAUSE_SECONDS", 10)),
+                pauseMarker: env["IKKOKU_PERF_PAUSE_MARKER"],
+                editField: env["IKKOKU_PERF_EDIT_FIELD"] ?? "x",
+                editPhases: env["IKKOKU_PERF_EDIT_PHASES"] ?? "none",
+                parkFile: env["IKKOKU_PERF_PARK_FILE"])
         }
     }
 
@@ -384,13 +431,38 @@ final class PerfTrace {
         trace.hoverPicks.append((applied, latency * 1000, gpuTime * 1000))
     }
 
-    /// Counts one SwiftUI body evaluation while recording; called as
-    /// `let _ = PerfTrace.body(.name)` at the top of the body. Costs one
-    /// optional check when no trace runs.
+    /// Counts one SwiftUI body evaluation while recording, or into
+    /// `scenarioBodyCounts` while a scenario step counts; called as
+    /// `let _ = PerfTrace.body(.name)` at the top of the body. Costs two
+    /// optional checks when neither runs.
     @inline(__always)
     static func body(_ view: ViewBody) {
-        guard let trace = active, trace.recording else { return }
-        trace.bodyCounts[view.rawValue] += 1
+        if let trace = active {
+            if trace.recording { trace.bodyCounts[view.rawValue] += 1 }
+        } else if scenarioBodyCounts != nil {
+            scenarioBodyCounts![view.rawValue] += 1
+        }
+    }
+
+    /// #410: body counts outside a perf trace, indexed by `ViewBody.rawValue`,
+    /// for a scenario step that counts what each keyboard focus move,
+    /// selection change, eye toggle or idle refresh evaluates. nil (not
+    /// counting) unless a scenario step sets it.
+    static var scenarioBodyCounts: [Int]?
+
+    /// How many bodies of `view` this recording has counted so far: 0 when no
+    /// trace records. The workload reads it per action (#410).
+    static func bodyCount(_ view: ViewBody) -> Int {
+        guard let trace = active, trace.recording else { return 0 }
+        return trace.bodyCounts[view.rawValue]
+    }
+
+    /// How many `event`s this recording has counted so far: 0 when no trace
+    /// records. `studio-edit-steps` reads the serial live steps per placed
+    /// edit (#409).
+    static func eventCount(_ event: Event) -> Int {
+        guard let trace = active, trace.recording else { return 0 }
+        return trace.eventCounts[event] ?? 0
     }
 
     // MARK: Recording window
@@ -661,6 +733,17 @@ final class PerfTrace {
                 "paletteBuffersCreated": rendered.reduce(0) { $0 + $1.ring.paletteBuffersCreated },
                 "drawsWithOverflow": rendered.filter { $0.ring.overflowBuffers > 0 }.count,
             ] as [String: Any],
+            // ST-T04: per rendered draw, the main pass's records and the draws
+            // they took, the instanced item records and runs, and the shadow
+            // casters and draws.
+            "drawCounts": [
+                "mainPassRecords": PerfTrace.statistics(rendered.map { Double($0.mainPassRecords) }),
+                "mainPassRuns": PerfTrace.statistics(rendered.map { Double($0.mainPassRuns) }),
+                "instancedRecords": PerfTrace.statistics(rendered.map { Double($0.instancedRecords) }),
+                "instancedRuns": PerfTrace.statistics(rendered.map { Double($0.instancedRuns) }),
+                "shadowCasters": PerfTrace.statistics(rendered.map { Double($0.shadowCasters) }),
+                "shadowDraws": PerfTrace.statistics(rendered.map { Double($0.shadowDraws) }),
+            ] as [String: Any],
             "processCPUCores": (cpuAtEnd.process - cpuAtStart.process) / window,
             "inputCalls": inputNames,
             "events": Dictionary(uniqueKeysWithValues: Event.allCases.compactMap { event -> (String, Any)? in
@@ -740,6 +823,7 @@ final class PerfTrace {
                 "selectKeys": configuration.selectKeys.map { $0.map { Int($0) } as Any } ?? NSNull(),
                 "inspectorTab": configuration.inspectorTab.map { $0 as Any } ?? NSNull(),
                 "keepMounted": StudioInspectorMounting.current.rawValue,
+                "parked": configuration.parkFile != nil, "focusProbe": FocusProbe.count,
                 "panelState": StudioPanelStateMode.current.rawValue,
             ] as [String: Any],
             "build": PerfTrace.buildDescription(),
@@ -997,6 +1081,11 @@ nonisolated final class PerfDrawLog: Sendable {
         /// The update's `targetTimestamp`: when the system expects the frame's
         /// work to be finished (R7 phase 2, live pacing).
         var deadline: CFTimeInterval = 0
+        /// The main pass's records and the draws they took, instanced static
+        /// item records and their runs, and shadow casters and their draws
+        /// (ST-T04, `RenderFrameStatistics`).
+        var mainPassRecords = 0, mainPassRuns = 0, instancedRecords = 0, instancedRuns = 0
+        var shadowCasters = 0, shadowDraws = 0
         /// `Renderer.draw` plus the recorder's own bookkeeping, in ms.
         var drawMilliseconds: Double { (end - callback) * 1000 }
     }
@@ -1044,7 +1133,10 @@ nonisolated final class PerfDrawLog: Sendable {
                             onMainThread: pthread_main_np() != 0, ring: statistics.uniforms,
                             skinPalettes: statistics.skinPalettes, deformDispatches: statistics.deformDispatches,
                             deformReuses: statistics.deformReuses, deformUntracked: statistics.deformUntracked,
-                            linkHz: linkHz, deadline: deadline)
+                            linkHz: linkHz, deadline: deadline,
+                            mainPassRecords: statistics.mainPassRecords, mainPassRuns: statistics.mainPassRuns,
+                            instancedRecords: statistics.instancedRecords, instancedRuns: statistics.instancedRuns,
+                            shadowCasters: statistics.shadowCasters, shadowDraws: statistics.shadowDraws)
         return state.withLock { state in
             let first = result.outcome == .rendered && state.snapshot.firstDraw == nil
             if first { state.snapshot.firstDraw = end }

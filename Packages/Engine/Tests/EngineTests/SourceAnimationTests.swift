@@ -125,6 +125,78 @@ private func animationLibrary(_ document: [String: Any] = animationDocument()) t
     }
 }
 
+/// Every element's bit pattern, node by node and column by column.
+private func poseBits(_ pose: RigPose) -> [UInt32] {
+    pose.localMatrices.flatMap { m in (0..<4).flatMap { c in (0..<4).map { m[c][$0].bitPattern } } }
+}
+
+// #371: a cached resolution skips the binding walk only for the rig identity it
+// was checked against. Any other rig, even one with identical nodes, takes the
+// walk and gets the answer the walk alone gives.
+@Test func sourceAnimationResolutionSkipsTheWalkOnlyForItsCheckedRig() throws {
+    let clip = try animationLibrary().clip(id: "clip")
+    let joint = RigDefinition.Node(name: "joint", sourceID: "source:joint", parent: nil)
+    let other = RigDefinition.Node(name: "other", sourceID: "other", parent: nil)
+    let extra = RigDefinition.Node(name: "extra", sourceID: "extra", parent: nil, translation: Float3(1, 2, 3))
+    let renamed = RigDefinition.Node(name: "renamed", sourceID: "source:joint", parent: nil)
+    let pool: [[RigDefinition.Node]] = [[joint], [other], [renamed], [joint, other], [other, joint], [renamed, other],
+                                        [other, renamed], [other, extra, joint], [joint, extra], [extra, other, joint]]
+
+    // The named cases.
+    let library = try animationLibrary(), first = try RigDefinition(nodes: [joint, other], skins: [])
+    let resolution = try #require(library.resolved(clip, rig: first))
+    #expect(resolution.checked === first.identity)
+    let copy = first  // a copy of the rig value shares its identity
+    for rig in [first, copy] {
+        #expect(resolution.matches(clip, rig: rig) && resolution.walkMatches(clip, rig: rig))
+    }
+    for nodes in [[other, joint], [other], [renamed, other], [other, extra, joint]] {
+        let rig = try RigDefinition(nodes: nodes, skins: [])
+        #expect(!resolution.walkMatches(clip, rig: rig))
+        #expect(!resolution.matches(clip, rig: rig), "a different rig with different nodes must not match")
+    }
+    let twin = try RigDefinition(nodes: [joint, other], skins: [])
+    #expect(twin.identity !== first.identity)
+    #expect(resolution.matches(clip, rig: twin) && resolution.walkMatches(clip, rig: twin))
+    // After a passing walk the cache is checked against the new rig.
+    #expect(try #require(library.resolved(clip, rig: twin)).checked === twin.identity)
+
+    // Every pair from the pool: the identity it was checked against matches;
+    // any other rig answers exactly as the walk does, and the walk agrees with
+    // a fresh resolution for that rig (same nodes, or none).
+    var compared = 0
+    for checkedNodes in pool {
+        let checkedRig = try RigDefinition(nodes: checkedNodes, skins: [])
+        guard let cached = try animationLibrary().resolved(clip, rig: checkedRig) else { continue }
+        #expect(cached.matches(clip, rig: checkedRig))
+        for queryNodes in pool {
+            let query = try RigDefinition(nodes: queryNodes, skins: [])
+            let fresh = try animationLibrary().resolved(clip, rig: query)
+            #expect(cached.walkMatches(clip, rig: query) == (fresh?.nodes == cached.nodes))
+            #expect(cached.matches(clip, rig: query) == cached.walkMatches(clip, rig: query))
+            compared += 1
+        }
+    }
+    #expect(compared == 60)  // the 6 pool rigs that resolve the joint, against all 10
+
+    // Poses through one long-lived library equal a fresh library's, bit for bit,
+    // as the rigs alternate, including twins and repeats of one identity.
+    let shared = try animationLibrary()
+    let rigs = try pool.map { try RigDefinition(nodes: $0, skins: []) }, twinOfThird = try RigDefinition(nodes: pool[3], skins: [])
+    for rig in rigs + rigs.reversed() + [rigs[3], rigs[3], twinOfThird, rigs[4], rigs[3]] {
+        let expected = Result { try animationLibrary().applying(clipID: "clip", time: 0.5, to: rig) }
+        let actual = Result { try shared.applying(clipID: "clip", time: 0.5, to: rig) }
+        switch (actual, expected) {
+        case let (.success(a), .success(e)):
+            #expect(poseBits(a) == poseBits(e))
+        case let (.failure(a), .failure(e)):
+            #expect(String(describing: a) == String(describing: e))
+        default:
+            Issue.record("the shared library and a fresh one disagree on whether \(rig.nodes.map(\.name)) animates")
+        }
+    }
+}
+
 @Test func sourceAnimationProjectsStateSpeedAndOneDimensionalWeights() throws {
     var document = animationDocument(), states = document["states"] as! [[String: Any]]
     states[0]["blendParameter"] = "Speed"

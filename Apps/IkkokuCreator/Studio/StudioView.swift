@@ -108,18 +108,30 @@ struct StudioWorkspacePanel: View {
     var body: some View {
         let _ = PerfTrace.body(.studioWorkspace)
         let state = model.shownWorkspaceState
-        StudioWorkspaceContent(model: model, entries: state.entries, objectCount: state.objectCount).equatable()
+        StudioWorkspaceContent(model: model, entries: state.entries, slotCount: StudioWorkspaceState.slotCap,
+                               objectCount: state.objectCount).equatable()
     }
 }
 
 struct StudioWorkspaceContent: View, Equatable {
     let model: StudioModel
     let entries: [WorkspaceEntry]
+    /// The slots built ahead of any scroll (`StudioWorkspaceState.slotCap`).
+    let slotCount: Int
     let objectCount: Int
+    /// #410: the slot whose eye button has keyboard focus. The eye draws its
+    /// own focus ring (`WorkspaceRow.focusShown`) in place of the system's
+    /// focus effect, which it disables. The list holds the focus, not the
+    /// row, so a focus move evaluates this body once and the two rows whose
+    /// ring changes.
+    @FocusState private var focusedEye: Int?
 
-    static func == (a: Self, b: Self) -> Bool { a.model === b.model && a.entries == b.entries && a.objectCount == b.objectCount }
+    static func == (a: Self, b: Self) -> Bool {
+        a.model === b.model && a.entries == b.entries && a.slotCount == b.slotCount && a.objectCount == b.objectCount
+    }
 
     var body: some View {
+        let _ = PerfTrace.body(.studioWorkspaceList)
         VStack(spacing: 0) {
             HStack {
                 Text("Workspace").font(.headline)
@@ -127,15 +139,40 @@ struct StudioWorkspaceContent: View, Equatable {
                 StudioAddMenu(model: model)
             }.padding(8)
             Divider()
+            // #410: the first `slotCount` rows are slots in a plain stack, all
+            // of them built, and a slot past the scene's rows shows nothing;
+            // the rows after them, in a large scene, are a lazy stack. New
+            // Scene and Open used to remove and insert every row, and a lazy
+            // stack keeps, per inserted row it builds and for the whole
+            // session, an entry in SwiftUI's child cache, whatever the row
+            // ids. Now a load changes what the slots show and inserts only
+            // rows past them, which the lazy stack builds only when they are
+            // scrolled to; `slotCount` covers the rows a screen can show, so
+            // the rows a load builds are slots. The slots are built eagerly
+            // because a lazy stack estimates a child it has not built at a
+            // row's height, and an empty slot so estimated left a blank tail
+            // below the last row that scrolling did not always clear; built,
+            // an empty slot is exactly 0 pt. Slots and rows are keyed by
+            // position, which is safe because a row holds no state
+            // (`WorkspaceRow`); inserts and removals show as content changes,
+            // with no row animation. Spacing 0 with the 1 pt gap inside each
+            // row but the first, so an empty slot adds no height. (A List
+            // instead re-evaluated each row about 22 times per load.)
             ScrollView {
-                LazyVStack(spacing: 1) {
-                    ForEach(entries) { entry in
-                        WorkspaceRow(entry: entry) {
-                            model.selection = entry.id
-                        } toggleVisible: {
-                            model.update(entry.id) { $0.visible.toggle() }
+                VStack(spacing: 0) {
+                    VStack(spacing: 0) {
+                        ForEach(0..<slotCount, id: \.self) { index in
+                            WorkspaceSlot(model: model, entry: index < entries.count ? entries[index] : nil, first: index == 0,
+                                          focus: $focusedEye, slot: index, focusShown: focusedEye == index)
+                                .equatable()
                         }
-                        .equatable()
+                    }
+                    LazyVStack(spacing: 0) {
+                        ForEach(slotCount..<max(slotCount, entries.count), id: \.self) { index in
+                            WorkspaceSlot(model: model, entry: entries[index], first: index == 0,
+                                          focus: $focusedEye, slot: index, focusShown: focusedEye == index)
+                                .equatable()
+                        }
                     }
                 }.padding(4)
             }
@@ -206,6 +243,29 @@ struct StudioToolbarState: Equatable {
     var liveAnimation: Bool
     var showTimeline: Bool
     var showGrid: Bool
+
+    /// The toolbar's state now; the document's part is published (C4), the rest are the model's settings.
+    @MainActor init(model: StudioModel) {
+        let shown = model.shownToolbarDocumentState
+        self.init(
+            gizmoMode: model.gizmoMode, localSpace: model.localSpace,
+            selectedIsCharacter: shown.selectedIsCharacter,
+            poseMode: model.poseMode, fkGroup: model.fkGroup,
+            cameraSlotsFilled: shown.cameraSlotsFilled, hasSourceRoutes: shown.hasSourceRoutes,
+            canUndo: model.canUndo, canRedo: model.canRedo,
+            showGizmos: model.showGizmos, liveAnimation: model.liveAnimation, showTimeline: model.showTimeline,
+            showGrid: shown.showGrid)
+    }
+
+    init(gizmoMode: GizmoMode, localSpace: Bool, selectedIsCharacter: Bool, poseMode: PoseMode, fkGroup: FKGroup,
+         cameraSlotsFilled: [Bool], hasSourceRoutes: Bool, canUndo: Bool, canRedo: Bool, showGizmos: Bool,
+         liveAnimation: Bool, showTimeline: Bool, showGrid: Bool) {
+        self.gizmoMode = gizmoMode; self.localSpace = localSpace; self.selectedIsCharacter = selectedIsCharacter
+        self.poseMode = poseMode; self.fkGroup = fkGroup; self.cameraSlotsFilled = cameraSlotsFilled
+        self.hasSourceRoutes = hasSourceRoutes; self.canUndo = canUndo; self.canRedo = canRedo
+        self.showGizmos = showGizmos; self.liveAnimation = liveAnimation; self.showTimeline = showTimeline
+        self.showGrid = showGrid
+    }
 }
 
 struct StudioToolbar: View {
@@ -213,20 +273,23 @@ struct StudioToolbar: View {
 
     var body: some View {
         let _ = PerfTrace.body(.studioToolbar)
-        // The document's part is published (C4); the rest are the model's settings.
-        let shown = model.shownToolbarDocumentState
-        let state = StudioToolbarState(
-            gizmoMode: model.gizmoMode, localSpace: model.localSpace,
-            selectedIsCharacter: shown.selectedIsCharacter,
-            poseMode: model.poseMode, fkGroup: model.fkGroup,
-            cameraSlotsFilled: shown.cameraSlotsFilled, hasSourceRoutes: shown.hasSourceRoutes,
-            canUndo: !model.undoStack.isEmpty, canRedo: !model.redoStack.isEmpty,
-            showGizmos: model.showGizmos, liveAnimation: model.liveAnimation, showTimeline: model.showTimeline,
-            showGrid: shown.showGrid)
-        // Overlay content must fit the viewport without widening either side panel.
-        ScrollView(.horizontal) {
-            StudioToolbarControls(model: model, state: state).equatable()
+        let _ = StudioToolbarFitCounts.count(.toolbar)
+        let state = StudioToolbarState(model: model)
+        // Overlay content must fit the viewport without widening either side panel (#425): the full
+        // toolbar where it fits, else the compact one (camera slots 1-5 only in the camera menu), else
+        // the compact one in a horizontal scroll view. ViewThatFits sits outside the scroll view: a
+        // horizontal ScrollView proposes unbounded width, so inside one the full toolbar always "fits".
+        StudioToolbarMeasureCounter {
+            ViewThatFits(in: .horizontal) {
+                StudioToolbarControls(model: model, state: state, compact: false).equatable()
+                StudioToolbarControls(model: model, state: state, compact: true).equatable()
+                ScrollView(.horizontal) {
+                    StudioToolbarControls(model: model, state: state, compact: true).equatable()
+                }
+            }
         }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background { if InspectorUIScenario.toolbarMarkers { StudioToolbarMarker(name: "studio.toolbar.available") } }
         .fixedSize(horizontal: false, vertical: true)
         .controlSize(.small)
         .padding(8)
@@ -236,34 +299,108 @@ struct StudioToolbar: View {
     }
 }
 
+/// #425: counts the toolbar's layout measurements while a PerfTrace recording runs, or with the
+/// capture fit log (`StudioToolbarFitCounts`), one per `sizeThatFits` of its ViewThatFits, so a
+/// report shows whether it measures again on every refresh; otherwise a pass-through for its one
+/// subview.
+struct StudioToolbarMeasureCounter: Layout {
+    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
+        MainActor.assumeIsolated { PerfTrace.event(.studioToolbarMeasured); StudioToolbarFitCounts.count(.measure) }
+        return subviews.first?.sizeThatFits(proposal) ?? .zero
+    }
+
+    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
+        subviews.first?.place(at: bounds.origin, proposal: ProposedViewSize(bounds.size))
+    }
+}
+
+/// #425: the toolbar's work for the capture fit log (`IKKOKU_CAPTURE_UI_FIT_LOG`): how many times
+/// `StudioToolbar` and `StudioToolbarControls` ran their bodies and the toolbar's ViewThatFits
+/// measured (`StudioToolbarMeasureCounter`). Each fit-log line carries the totals and what changed
+/// since the line before, so a capture shows the work per poll, per selection and per pose mode.
+/// With the log off a count is one Bool test.
+@MainActor enum StudioToolbarFitCounts {
+    enum Site { case toolbar, controls, measure }
+    private static var toolbar = 0, controls = 0, measures = 0
+    private static var logged = (toolbar: 0, controls: 0, measures: 0)
+
+    @inline(__always) static func count(_ site: Site) {
+        guard InspectorUIScenario.toolbarMarkers else { return }
+        switch site {
+        case .toolbar: toolbar += 1
+        case .controls: controls += 1
+        case .measure: measures += 1
+        }
+    }
+
+    /// The totals, each with its change since the last call: "toolbar T (+t) controls C (+c) measured M (+m)".
+    static func logText() -> String {
+        defer { logged = (toolbar, controls, measures) }
+        return "toolbar \(toolbar) (+\(toolbar - logged.toolbar)) controls \(controls) (+\(controls - logged.controls))"
+            + " measured \(measures) (+\(measures - logged.measures))"
+    }
+
+    /// Runs `body` without counting: the fit log's off-screen toolbar copies (`toolbarIdealWidths`)
+    /// run bodies the window's toolbar did not.
+    static func uncounted<T>(_ body: () -> T) -> T {
+        let saved = (toolbar, controls, measures)
+        defer { (toolbar, controls, measures) = saved }
+        return body()
+    }
+}
+
+/// #425: an empty AppKit view named for the capture fit log, added only when that log is on
+/// (`InspectorUIScenario.toolbarMarkers`), so `layoutProbe` can read the toolbar's available
+/// width and which variant it shows.
+struct StudioToolbarMarker: NSViewRepresentable {
+    let name: String
+
+    func makeNSView(context: Context) -> NSView {
+        let view = NSView()
+        view.identifier = NSUserInterfaceItemIdentifier(name)
+        return view
+    }
+
+    func updateNSView(_ view: NSView, context: Context) {}
+}
+
 struct StudioToolbarControls: View, Equatable {
     let model: StudioModel
     let state: StudioToolbarState
+    /// #425: camera slots 1-5 only in the camera menu (keys 1-5 and Shift+1-5 still load and save).
+    var compact = false
     @Environment(AppState.self) private var app
 
-    static func == (a: Self, b: Self) -> Bool { a.model === b.model && a.state == b.state }
+    static func == (a: Self, b: Self) -> Bool { a.model === b.model && a.state == b.state && a.compact == b.compact }
 
     var body: some View {
+        let _ = PerfTrace.body(.studioToolbarControls)
+        let _ = StudioToolbarFitCounts.count(.controls)
         let state = state
         HStack(spacing: 8) {
+            // #425: at its own width, as the pose picker (#363), with no empty label.
             Picker("", selection: Binding(get: { state.gizmoMode }, set: { model.gizmoMode = $0 })) {
                 Image(systemName: "arrow.up.and.down.and.arrow.left.and.right").tag(GizmoMode.translate)
                 Image(systemName: "arrow.triangle.2.circlepath").tag(GizmoMode.rotate)
                 Image(systemName: "arrow.up.left.and.arrow.down.right").tag(GizmoMode.scale)
-            }.pickerStyle(.segmented).frame(width: 120).help("Gizmo: T / R / S")
+            }.pickerStyle(.segmented).labelsHidden().fixedSize().help("Gizmo: T / R / S")
             Toggle(isOn: Binding(get: { state.localSpace }, set: { model.localSpace = $0 })) { Text(state.localSpace ? "Local" : "World").frame(width: 42) }.toggleStyle(.button)
             if state.selectedIsCharacter {
                 Divider().frame(height: 18)
-                Picker("", selection: Binding(get: { state.poseMode }, set: { model.poseMode = $0 })) { ForEach(PoseMode.allCases) { Text($0.rawValue).tag($0) } }.pickerStyle(.segmented).frame(width: 150)
+                // At its ideal width (#363): a fixed frame narrower than the control (150 pt for
+                // 165) laid it out compressed on a fresh build and at full width on a rebuild.
+                Picker("", selection: Binding(get: { state.poseMode }, set: { model.poseMode = $0 })) { ForEach(PoseMode.allCases) { Text($0.rawValue).tag($0) } }.pickerStyle(.segmented).labelsHidden().fixedSize()
                 if state.poseMode == .fk {
-                    Picker("", selection: Binding(get: { state.fkGroup }, set: { model.fkGroup = $0 })) { ForEach(FKGroup.allCases) { Text($0.rawValue).tag($0) } }.frame(width: 120)
+                    Picker("", selection: Binding(get: { state.fkGroup }, set: { model.fkGroup = $0 })) { ForEach(FKGroup.allCases) { Text($0.rawValue).tag($0) } }.labelsHidden().frame(width: 120)
                 }
             }
             Divider().frame(height: 18)
-            ForEach(0..<5, id: \.self) { i in
-                Button { model.loadCameraSlot(i) } label: { Text("\(i + 1)").frame(width: 14) }
-                    .foregroundStyle(state.cameraSlotsFilled[i] ? .primary : .secondary)
-                    .help("Camera slot \(i + 1) (Shift+\(i + 1) saves)")
+            if !compact {
+                ForEach(0..<5, id: \.self) { i in
+                    Button { model.loadCameraSlot(i) } label: { Text("\(i + 1)").frame(width: 14) }
+                        .foregroundStyle(state.cameraSlotsFilled[i] ? .primary : .secondary)
+                        .help("Camera slot \(i + 1) (Shift+\(i + 1) saves)")
+                }
             }
             Menu {
                 ForEach(0..<10, id: \.self) { i in Button("Save slot \(i + 1)") { model.saveCameraSlot(i) } }
@@ -273,6 +410,7 @@ struct StudioToolbarControls: View, Equatable {
                 Button("Focus selection (F)") { model.focusSelection() }
                 Button("Reset camera") { model.resetCamera() }
             } label: { Image(systemName: "camera") }.fixedSize()
+                .help(compact ? "Camera slots (1-5 load, Shift+1-5 save)" : "Camera")
             if state.hasSourceRoutes {
                 Menu {
                     Button("Play all routes") { model.playAllSourceRoutes() }
@@ -291,9 +429,12 @@ struct StudioToolbarControls: View, Equatable {
             Toggle(isOn: Binding(get: { state.liveAnimation }, set: { model.liveAnimation = $0 })) { Image(systemName: "wind") }.toggleStyle(.button).help("Idle animation (blink, breathing)")
             Toggle(isOn: Binding(get: { state.showTimeline }, set: { model.showTimeline = $0 })) { Image(systemName: "timeline.selection") }.toggleStyle(.button).help("Timeline")
             Toggle(isOn: Binding(get: { state.showGrid }, set: { model.doc.effects.showGrid = $0 })) { Image(systemName: "grid") }.toggleStyle(.button).help("Grid (G)")
-            Button { app.captureScreenshot() } label: { Label("Capture", systemImage: "camera.viewfinder") }
+            // #425: an icon like its neighbours; the label stays for accessibility.
+            Button { app.captureScreenshot() } label: { Label("Capture", systemImage: "camera.viewfinder").labelStyle(.iconOnly) }
+                .help("Capture")
         }
         .fixedSize(horizontal: true, vertical: true)
+        .background { if InspectorUIScenario.toolbarMarkers { StudioToolbarMarker(name: compact ? "studio.toolbar.compact" : "studio.toolbar.full") } }
     }
 }
 
@@ -396,6 +537,8 @@ struct StudioInspectorPanel: View {
         VStack(spacing: 0) {
             StudioInspectorTabPicker(model: model)
             ScrollView {
+                // #440 measurement control (`IKKOKU_PERF_FOCUS_PROBE`); nothing when unset.
+                if FocusProbe.count > 0 { InspectorFocusProbe(model: model) }
                 StudioCompatibilityDetails(model: model)
                 StudioLiveShaderDetails(model: model)
                 StudioInspectorTab(model: model).padding(InspectorLayout.padding)
@@ -505,13 +648,90 @@ struct StudioStatusLine: View {
     }
 }
 
+/// One slot of the workspace list (#410): a row, with the 1 pt gap above it
+/// for every row but the first, or, past the scene's rows, nothing: zero
+/// height, hidden from accessibility, not focusable and with no tap, so
+/// keyboard navigation and the selection skip it. The list wraps either in
+/// one `VStack`, so a slot is always one child of its stack and what it
+/// shows never inserts or removes a child. The rows past the slots, in the
+/// lazy stack, use it too, always with a row.
+struct WorkspaceSlot: View, Equatable {
+    let model: StudioModel
+    let entry: WorkspaceEntry?
+    let first: Bool
+    /// The list's eye focus (`StudioWorkspaceContent.focusedEye`), this
+    /// slot's index in it and whether this slot's eye has it.
+    let focus: FocusState<Int?>.Binding
+    let slot: Int
+    let focusShown: Bool
+
+    /// The row's actions call the model with the row's id, so the entry
+    /// decides equality, with the focus ring; the focus binding is the list's,
+    /// the same for every slot.
+    static func == (a: Self, b: Self) -> Bool {
+        a.model === b.model && a.entry == b.entry && a.first == b.first && a.slot == b.slot && a.focusShown == b.focusShown
+    }
+
+    var body: some View {
+        let _ = PerfTrace.body(.studioWorkspaceSlot)
+        VStack(spacing: 0) {
+            if let entry {
+                WorkspaceRow(entry: entry, focus: focus, slot: slot, focusShown: focusShown) {
+                    model.selection = entry.id
+                } toggleVisible: {
+                    model.update(entry.id) { $0.visible.toggle() }
+                }
+                .equatable()
+                .padding(.top, first ? 0 : 1)
+            } else {
+                let _ = PerfTrace.body(.studioWorkspacePlaceholder)
+                Color.clear.frame(height: 0).accessibilityHidden(true)
+            }
+        }
+    }
+}
+
+/// #410: ties a workspace eye to the list's focus at its slot, or nothing
+/// for a row drawn alone.
+struct WorkspaceEyeFocus: ViewModifier {
+    let focus: FocusState<Int?>.Binding?
+    let slot: Int
+
+    func body(content: Content) -> some View {
+        if let focus { content.focused(focus, equals: slot) } else { content }
+    }
+}
+
+extension WorkspaceRow {
+    /// #410: the height the workspace stack gives `entry`'s row at `width`
+    /// (its fitting height), for the geometry scenario and the slot
+    /// measurement in `studio-load`.
+    @MainActor static func fittingHeight(_ entry: WorkspaceEntry, width: CGFloat) -> CGFloat {
+        NSHostingView(rootView: WorkspaceRow(entry: entry, select: {}, toggleVisible: {}).frame(width: width)).fittingSize.height
+    }
+}
+
+/// One workspace row. It holds no state (no @State, focus, hover or drag):
+/// the stack keys its slots by position (#410), so state here would stay with
+/// the slot, not the object, after a delete or a duplicate. The eye's keyboard
+/// focus is the list's (`StudioWorkspaceContent.focusedEye`), by slot, so it
+/// too stays at its position, as a list's focus does when the row under it
+/// changes. The scenario step `assertWorkspaceRows` checks that it has only
+/// these six fields.
 struct WorkspaceRow: View, Equatable {
     let entry: WorkspaceEntry
+    /// The list's eye focus and this row's slot in it; nil where a row is
+    /// drawn alone (`fittingHeight`).
+    var focus: FocusState<Int?>.Binding? = nil
+    var slot = 0
+    /// Whether the eye has keyboard focus, so it draws its focus ring.
+    var focusShown = false
     let select: () -> Void
     let toggleVisible: () -> Void
 
-    /// The actions call the model with the row's id, so the entry decides equality.
-    static func == (a: Self, b: Self) -> Bool { a.entry == b.entry }
+    /// The actions call the model with the row's id, so the entry decides
+    /// equality, with the slot and the focus ring.
+    static func == (a: Self, b: Self) -> Bool { a.entry == b.entry && a.slot == b.slot && a.focusShown == b.focusShown }
 
     var icon: String {
         if entry.cameraPlaceholder { return "camera.fill" }
@@ -543,7 +763,22 @@ struct WorkspaceRow: View, Equatable {
                 Text(entry.name).lineLimit(1).font(.callout)
             }
             Spacer()
+            // #410: no system focus effect. For each eye button it shows,
+            // SwiftUI adds a `_FocusRingView` to the scroll view's group
+            // container, and AppKit's drag-region update keeps a dependency on
+            // the container for each one it adds, so every load that rebuilt
+            // the rows added about 41 dependencies that were never removed.
+            // The eye draws its own ring instead, in the system's focus colour,
+            // while it has keyboard focus (Full Keyboard Access); the ring is
+            // always there, transparent without focus, so focus changes no
+            // view's structure.
             Button(action: toggleVisible) { Image(systemName: entry.visible ? "eye" : "eye.slash").foregroundStyle(.secondary) }.buttonStyle(.plain)
+                .focusEffectDisabled()
+                .modifier(WorkspaceEyeFocus(focus: focus, slot: slot))
+                .overlay {
+                    RoundedRectangle(cornerRadius: 4).strokeBorder(Color(nsColor: .keyboardFocusIndicatorColor), lineWidth: 2)
+                        .padding(-3).opacity(focusShown ? 1 : 0).allowsHitTesting(false)
+                }
         }
         .padding(.vertical, 3).padding(.horizontal, 6)
         .background(RoundedRectangle(cornerRadius: 5).fill(entry.selected ? Color.accentColor.opacity(0.3) : .clear))
@@ -707,6 +942,7 @@ struct ObjectInspectorContent: View, Equatable {
         let sections = ObjectInspectorKindSections(model: model, state: o)
         VStack(alignment: .leading, spacing: 10) {
             TextField("Name", text: Binding(get: { o.name }, set: { v in update { $0.name = v } }))
+                .frame(height: InspectorTextFieldHeight.name)
             HStack {
                 Toggle("Visible", isOn: Binding(get: { o.visible }, set: { v in update { $0.visible = v } }))
                 Toggle("Locked", isOn: Binding(get: { o.locked }, set: { v in update { $0.locked = v } }))
@@ -819,6 +1055,7 @@ struct PoseInspector: View {
 
 struct SourcePoseInspector: View {
     @Bindable var model: StudioModel
+    static let guideHiddenText = "IK is off for this guide's group; turn it on to show the guide."
     var body: some View {
         let _ = PerfTrace.body(.sourcePoseInspector)
         if let state = model.selectedSourceIKState {
@@ -836,6 +1073,15 @@ struct SourcePoseInspector: View {
                     ForEach(0..<13, id: \.self) { id in Text(SourceStudioIKEditing.labels[id]).tag(Int32(id)) }
                 }.disabled(!model.sourceIKAvailable)
                     .accessibilityIdentifier("studio.source.ik.guide")
+                // #439: the viewport draws only active guides. One Text in both
+                // states, shown by opacity, so the section's structure and height
+                // never change with it (#440).
+                let guideHidden = model.selectedSourceIKGuideHidden
+                Text(Self.guideHiddenText).font(.caption).foregroundStyle(.secondary)
+                    .opacity(guideHidden ? 1 : 0)
+                    .accessibilityLabel(Self.guideHiddenText)
+                    .accessibilityHidden(!guideHidden)
+                    .accessibilityIdentifier("studio.source.ik.guide.hidden")
                 if let target = model.selectedSourceIK, let value = model.selectedSourceIKValue {
                     // Each field writes one component onto the guide's live value (#393),
                     // never `value` from this render, and never the other row's vector.

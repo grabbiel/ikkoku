@@ -52,9 +52,39 @@ final class PerfWorkloadDriver {
     /// status line and any error alert they left.
     private var actionSteps: [(name: String, measured: Bool, run: () -> Void)] = []
     private var actionIndex = 0
-    private var pendingAction: (name: String, measured: Bool, start: CFTimeInterval, end: CFTimeInterval)?
+    private var pendingAction: (name: String, measured: Bool, start: CFTimeInterval, end: CFTimeInterval, bodies: [Int],
+                                cpuMs: Double, live: LiveCall?)?
     private var finishedActions: [(name: String, measured: Bool, start: CFTimeInterval, end: CFTimeInterval, ready: CFTimeInterval,
-                                   status: String, error: String?, footprint: UInt64, metal: Int, objects: Int)] = []
+                                   status: String, error: String?, footprint: UInt64, metal: Int, objects: Int,
+                                   bodies: [Int], workspaceRows: Int,
+                                   history: (undo: Int, redo: Int, storage: StudioObjectStorageCensus.Count)?,
+                                   cpuMs: Double, live: LiveCall?)] = []
+    /// #410: the workspace bodies counted per action, from its call to the
+    /// next action's (`workspaceBodies`), in this order.
+    private static let workspaceBodyViews: [PerfTrace.ViewBody] = [.studioWorkspaceRow, .studioWorkspacePlaceholder]
+    /// `studio-edit-steps` (#409): the actions run once, not repeated, and
+    /// the run stops after the last; each finished action records the undo
+    /// and redo depth and the `objects` buffers they and the document hold.
+    private var stopAfterActions = false
+    private var countHistoryStorage = false
+    /// A pause step's hold: no action starts before this media time (0: none).
+    private var holdUntil: CFTimeInterval = 0
+    /// `IKKOKU_PERF_EDIT_PHASES=alternate` (#409, #446): per action, by its
+    /// index in `actionSteps`, the live-step phase its call is placed at, or
+    /// nil (the call runs when the action starts). Empty for every other run.
+    private var actionPhases: [StudioModel.LivePhase?] = []
+    /// Whether each call records the live-step settles in it (`LiveCall`).
+    private var countLiveSettles = false
+    /// The placed call waiting for its phase (`place`): its number, the
+    /// action, the phase, when the hook was armed and the serial live steps
+    /// counted by then.
+    private var placements = 0
+    private var waitingPlacement: (token: Int, step: (name: String, measured: Bool, run: () -> Void),
+                                   phase: StudioModel.LivePhase, armed: CFTimeInterval, serialSteps: Int)?
+    private var stopped = false
+    /// #440: the last park handled and each park's record (`details.parks`).
+    private var lastPark = 0
+    private var parks: [[String: Any]] = []
     /// The temporary folder `studio-export` and `studio-load` write scene
     /// files to, removed when the run stops.
     private var scratchFolder: URL?
@@ -195,6 +225,9 @@ final class PerfWorkloadDriver {
     }
 
     private func stop() {
+        guard !stopped else { return }
+        stopped = true
+        if waitingPlacement != nil { app.studio?.livePhaseHook = nil; waitingPlacement = nil }
         inputTimer?.invalidate(); inputTimer = nil
         loadTimer?.invalidate(); loadTimer = nil
         if !lifecycle.isEmpty { finishLifecycle() }
@@ -228,6 +261,7 @@ final class PerfWorkloadDriver {
         case "studio-hover": try prepareStudioHover()
         case "maker-slider": try prepareMakerSlider()
         case "maker-idle": try prepareMaker()
+        case "maker-tabs": try prepareMakerTabs()
         case "studio-native": try prepareStudioNative()
         case "studio-timeline": try prepareStudioTimeline()
         case "studio-static": try prepareStudioSource(selectKey: nil, liveAnimation: false)
@@ -242,6 +276,7 @@ final class PerfWorkloadDriver {
         case "studio-export-import": try prepareStudioExportImport()
         case "studio-show-hidden": try prepareStudioShowHidden()
         case "studio-clock-first": try prepareStudioClockFirst()
+        case "studio-edit-steps": try prepareStudioEditSteps()
         default: throw RigError.invalid("unknown workload \(workload)")
         }
     }
@@ -431,6 +466,21 @@ final class PerfWorkloadDriver {
             PerfTrace.input("bodySlider") { maker[shapeSlot: .init(face: false, index: index)] = value }
         }
         trace.details["gesture"] = "body slider '\(slot.label)' (slot \(index)) swept around \(base)"
+    }
+
+    /// `maker-tabs` (#440): the bundled character's Maker, the tabbed panel
+    /// (not the source rig panel), its tabs selected in turn as the segmented
+    /// control selects them (`MakerModel.tab`), repeated. Each switch builds
+    /// the tab's panel again, the tag and thumbnail grids included. The Maker
+    /// opens the original base when it finds one, so the workload first uses
+    /// the source rig panel's "Use bundled prototype" (`closeSourceRig()`).
+    private func prepareMakerTabs() throws {
+        let maker = try prepareMaker()
+        trace.details["usedBundledPrototype"] = maker.sourceRigPreview != nil
+        if maker.sourceRigPreview != nil { maker.closeSourceRig() }
+        guard maker.sourceRigPreview == nil else { throw RigError.invalid("maker-tabs: the tabbed Maker panel did not show") }
+        actionSteps = MakerTab.allCases.map { tab in ("tab \(tab.rawValue.lowercased())", true, { maker.tab = tab }) }
+        trace.details["gesture"] = "the Maker's tabs selected in turn (\(MakerTab.allCases.map(\.rawValue).joined(separator: ", "))), repeated; live animation on"
     }
 
     /// `IKKOKU_PERF_CHARACTERS` bundled characters (alternating female/male)
@@ -702,13 +752,164 @@ final class PerfWorkloadDriver {
     /// characters is rehydrated from the scene file. (A load over the same
     /// scene keeps the runtime its ids already have, and rehydrates nothing.)
     /// Live animation stays on.
+    ///
+    /// #410: with `IKKOKU_PERF_LOAD_SMALL_OBJECTS=<n>` it alternates the source
+    /// scene with a small scene of `n` folders instead of New Scene, so the
+    /// workspace keeps the big scene's rows as slots while the small one shows,
+    /// and scrolls the workspace to its end and back in the small scene:
+    /// "load" (the source scene), "load small", "scroll workspace to end"
+    /// (measured) and "scroll workspace to top" (not measured), repeated.
+    /// `details.workspaceScrolls` records the first scrolls' document heights.
     private func prepareStudioLoad() throws {
         let studio = try prepareStudioSource(selectKey: nil)
-        let scene = try makeScratchFolder().appendingPathComponent("scene.png")
+        let folder = try makeScratchFolder()
+        let scene = folder.appendingPathComponent("scene.png")
         try studio.saveScene(to: scene)
+        if let text = ProcessInfo.processInfo.environment["IKKOKU_PERF_LOAD_SMALL_OBJECTS"] {
+            guard let count = Int(text), count > 0 else { throw RigError.invalid("IKKOKU_PERF_LOAD_SMALL_OBJECTS: \(text)") }
+            studio.newScene()
+            // Unselected, so each folder lands at the root (`add` nests a new
+            // object in a selected folder): a flat list of `count` rows.
+            for index in 0..<count { studio.add(StudioObject(name: "Folder \(index + 1)", kind: .folder), select: false) }
+            let small = folder.appendingPathComponent("small.png")
+            try studio.saveScene(to: small)
+            actionSteps = [("load", true, { [weak self] in self?.app.openScene(at: scene, importing: false) }),
+                           ("load small", true, { [weak self] in self?.app.openScene(at: small, importing: false) }),
+                           ("scroll workspace to end", true, { [weak self] in self?.scrollWorkspace(toEnd: true) }),
+                           ("scroll workspace to top", false, { [weak self] in self?.scrollWorkspace(toEnd: false) })]
+            trace.details["smallSceneObjects"] = count
+            trace.details["workspaceSlotCap"] = StudioWorkspaceState.slotCap
+            trace.details["workspaceSlotCapOverride"] = StudioWorkspaceState.slotCapOverride.map { $0 as Any } ?? NSNull()
+            // The most rows any window could show at once: the tallest
+            // screen's visible height over a one-line row and its 1 pt gap.
+            // The slots (`workspaceSlotCap`) must stay above it.
+            if let entry = studio.shownWorkspaceState.entries.first {
+                let rowHeight = Double(WorkspaceRow.fittingHeight(entry, width: 242))
+                let screen = Double(NSScreen.screens.map(\.visibleFrame.height).max() ?? 0)
+                trace.details["workspaceRowHeight"] = PerfTrace.round(rowHeight)
+                trace.details["tallestScreenVisibleHeight"] = screen
+                trace.details["workspaceMaxVisibleRows"] = rowHeight > 0 ? Int((screen / (rowHeight + 1)).rounded(.up)) : -1
+            }
+            trace.details["gesture"] = "File ▸ Open of the source scene saved as an Ikkoku scene, then of a scene of \(count) folders, "
+                + "then the workspace scrolled to its end and back, repeated; live animation on"
+            return
+        }
         actionSteps = [("new scene", false, { studio.newScene() }),
                        ("load", true, { [weak self] in self?.app.openScene(at: scene, importing: false) })]
         trace.details["gesture"] = "File ▸ New Scene, then File ▸ Open of the source scene saved as an Ikkoku scene, repeated; live animation on"
+    }
+
+    /// #410: scrolls the workspace's scroll view to the end of its document or
+    /// back to the top, as dragging the scroller would. The first 16 scrolls
+    /// record, before scrolling, the document and visible heights and how far
+    /// the view is from the document's end, so a scroll to the top shows
+    /// whether the scroll before it reached the end once the stack had laid
+    /// out the rows there; and the rows and slots shown
+    /// (`details.workspaceScrolls`).
+    private func scrollWorkspace(toEnd: Bool) {
+        guard let window = NSApp.windows.first(where: { $0.isVisible && $0.contentView != nil }),
+              let scroll = InspectorUIScenario.workspaceScrollView(window), let document = scroll.documentView else {
+            app.errorMessage = "no workspace scroll view"
+            return
+        }
+        var scrolls = trace.details["workspaceScrolls"] as? [[String: Any]] ?? []
+        if scrolls.count < 16 {
+            let state = app.studio?.shownWorkspaceState
+            scrolls.append(["toEnd": toEnd, "documentHeight": Double(document.frame.height),
+                            "visibleHeight": Double(scroll.contentView.bounds.height),
+                            "endGapBefore": PerfTrace.round(Double(InspectorUIScenario.workspaceEndGap(scroll))),
+                            "flipped": document.isFlipped, "rows": state?.entries.count ?? -1])
+            trace.details["workspaceScrolls"] = scrolls
+        }
+        InspectorUIScenario.scrollWorkspace(scroll, toEnd: toEnd)
+    }
+
+    /// `studio-edit-steps` (#409): `IKKOKU_PERF_EDITS` single-object edits
+    /// of `actionTarget`'s object through the inspector's call
+    /// (`StudioModel.update`), each its own undo step (`endUndoCoalescing`
+    /// first, as the scenario runner does per step): its x position moves
+    /// 0.001, or with `IKKOKU_PERF_EDIT_FIELD=pose` its neck rotation in the
+    /// pose delta turns 0.5 degrees. Each edit is followed by a same-value
+    /// write, `update` with the value it has, which takes no undo step (#390):
+    /// the control on the same path. Every action records the undo and redo
+    /// depth and the distinct `objects` buffers the document and both stacks
+    /// hold (`StudioObjectStorageCensus`), and the live-step settles in its
+    /// call (`LiveCall`). With `IKKOKU_PERF_EDIT_PHASES=alternate` each call
+    /// runs at the next live step's completion: odd edits after the step's
+    /// commit (no step pending), even edits before it (the edit commits the
+    /// finished step), each write in its edit's phase (`place`). After the
+    /// edits `IKKOKU_PERF_PAUSE_AT` lists (0: before the first) a pause step
+    /// holds the run for an outside reader (`pause(after:)`). The actions run
+    /// once, and the run stops after the last.
+    private func prepareStudioEditSteps() throws {
+        let studio = try prepareStudioSource(selectKey: nil)
+        let target = try actionTarget(studio)
+        let id = target.id
+        if !configuration.pauseAt.isEmpty {
+            guard let marker = configuration.pauseMarker, marker.split(separator: "/").contains(".local") else {
+                throw RigError.invalid("IKKOKU_PERF_PAUSE_AT needs IKKOKU_PERF_PAUSE_MARKER, a folder under a .local folder")
+            }
+            try FileManager.default.createDirectory(at: URL(fileURLWithPath: marker), withIntermediateDirectories: true)
+        }
+        let edit: (inout StudioObject) -> Void, control: (inout StudioObject) -> Void
+        if configuration.editField == "pose" {
+            edit = { $0.poseDelta.rotations["cf_j_neck", default: .zero].x += 0.5 }
+            control = { $0.poseDelta = $0.poseDelta }
+        } else {
+            edit = { $0.transform.position.x += 0.001 }
+            control = { $0.transform.position.x = $0.transform.position.x }
+        }
+        let alternate = configuration.editPhases == "alternate"
+        var steps: [(name: String, measured: Bool, run: () -> Void)] = []
+        var phases: [StudioModel.LivePhase?] = []
+        func pauseStep(_ edits: Int) {
+            guard configuration.pauseAt.contains(edits) else { return }
+            steps.append(("pause \(edits)", false, { [weak self] in self?.pause(after: edits) }))
+            phases.append(nil)
+        }
+        pauseStep(0)
+        for n in 1...configuration.edits {
+            let phase: StudioModel.LivePhase? = alternate ? (n % 2 == 1 ? .afterCommit : .beforeCommit) : nil
+            steps.append(("edit \(n)", true, {
+                studio.endUndoCoalescing()
+                studio.update(id, edit)
+            }))
+            steps.append(("same-value write \(n)", true, {
+                studio.endUndoCoalescing()
+                studio.update(id, control)
+            }))
+            phases += [phase, phase]
+            pauseStep(n)
+        }
+        actionSteps = steps
+        actionPhases = alternate ? phases : []
+        stopAfterActions = true
+        countHistoryStorage = true
+        countLiveSettles = true
+        trace.details["actionSourceKey"] = Int(target.sourceObjectKey ?? -1)
+        trace.details["actionObjectKind"] = "\(target.kind)"
+        trace.details["edits"] = configuration.edits
+        trace.details["pauseAt"] = configuration.pauseAt.sorted()
+        trace.details["studioObjectStride"] = MemoryLayout<StudioObject>.stride
+        trace.details["undoLimit"] = StudioUndoHistory<StudioDocument>.limit
+        trace.details["editField"] = configuration.editField
+        trace.details["editPhases"] = configuration.editPhases
+        let change = configuration.editField == "pose" ? "neck rotation + 0.5 in the pose delta" : "x + 0.001"
+        let placed = alternate ? ", each at a live step's completion, odd edits after its commit and even edits before" : ""
+        trace.details["gesture"] = "\(configuration.edits) single-object edits (\(change), each its own undo step) on source key "
+            + "\(target.sourceObjectKey ?? -1), each followed by a same-value write\(placed); live animation on; run once"
+    }
+
+    /// Writes this process's id to `pause-<n>.pid` in `IKKOKU_PERF_PAUSE_MARKER`
+    /// and holds the next action for `IKKOKU_PERF_PAUSE_SECONDS`. The hold is a
+    /// timer, not a block, so the main run loop sleeps while an outside tool
+    /// (footprint, vmmap, heap) reads this process by that id.
+    private func pause(after edits: Int) {
+        guard let marker = configuration.pauseMarker else { return }
+        let file = URL(fileURLWithPath: marker).appendingPathComponent("pause-\(edits).pid")
+        do { try Data("\(ProcessInfo.processInfo.processIdentifier)\n".utf8).write(to: file, options: .atomic) }
+        catch { print("[ikkoku] perf pause \(edits): marker not written: \(error)") }
+        holdUntil = CACurrentMediaTime() + configuration.pauseSeconds
     }
 
     /// `studio-select` (R7 phase 2, item 7): the selection a click makes
@@ -773,12 +974,128 @@ final class PerfWorkloadDriver {
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.01) { self.runNextAction() }
             return
         }
-        let step = actionSteps[actionIndex % actionSteps.count]
+        if holdUntil > 0 {
+            let wait = holdUntil - CACurrentMediaTime()
+            if wait > 0 { DispatchQueue.main.asyncAfter(deadline: .now() + wait) { self.runNextAction() }; return }
+            holdUntil = 0
+        }
+        if stopAfterActions, actionIndex >= actionSteps.count { stop(); return }
+        if parkIfRequested() { return }
+        let index = actionIndex % actionSteps.count
         actionIndex += 1
+        if index < actionPhases.count, let phase = actionPhases[index], let studio = app.studio {
+            place(actionSteps[index], at: phase, in: studio)
+            return
+        }
+        call(actionSteps[index], placement: nil)
+    }
+
+    /// Where a placed call ran: its phase, whether a live step offered it in
+    /// time, when the hook was armed, and the serial steps counted by then.
+    private struct Placement {
+        let phase: StudioModel.LivePhase
+        let placed: Bool
+        let armed: CFTimeInterval
+        let serialSteps: Int
+    }
+
+    /// What a `studio-edit-steps` call found of the live step (#409): the
+    /// settles in it that found a step pending, and of those the ones that
+    /// waited for running workers. A placed call adds its `Placement`, the
+    /// serial live steps from arming to the call's end, and the build work
+    /// pending at the call.
+    private struct LiveCall {
+        let pendingSettles: Int
+        let unfinishedWaits: Int
+        let placement: Placement?
+        let serialSteps: Int
+        let pendingWork: Int
+    }
+
+    /// Arms the Studio's `livePhaseHook` so the action's call runs at the next
+    /// live step's completion that offers `phase`. Half a second without one
+    /// (about 15 steps) runs the call unplaced, recorded as such.
+    private func place(_ step: (name: String, measured: Bool, run: () -> Void), at phase: StudioModel.LivePhase,
+                       in studio: StudioModel) {
+        placements += 1
+        let token = placements
+        waitingPlacement = (token, step, phase, CACurrentMediaTime(), PerfTrace.eventCount(.studioLiveTickSerial))
+        studio.livePhaseHook = (phase, { [weak self] in self?.placedCall(token, placed: true) })
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { [weak self] in self?.placedCall(token, placed: false) }
+    }
+
+    /// The waiting call `token`, at its phase (`placed`) or after the timeout.
+    private func placedCall(_ token: Int, placed: Bool) {
+        guard let waiting = waitingPlacement, waiting.token == token else { return }
+        waitingPlacement = nil
+        if !placed { app.studio?.livePhaseHook = nil }
+        guard trace.recording else { return }
+        call(waiting.step, placement: Placement(phase: waiting.phase, placed: placed, armed: waiting.armed,
+                                                serialSteps: waiting.serialSteps))
+    }
+
+    /// Runs one action's call, timed by the media clock (`callMs`) and by the
+    /// main thread's CPU time (`callCpuMs`, read right before the start and
+    /// right after the end), then waits for its builds.
+    private func call(_ step: (name: String, measured: Bool, run: () -> Void), placement: Placement?) {
+        let studio = countLiveSettles ? app.studio : nil
+        let settles = studio?.livePendingSettles ?? 0, waits = studio?.liveUnfinishedWaits ?? 0
+        let pendingWork = studio?.pendingSourceActionWork ?? 0
+        let bodies = Self.workspaceBodyViews.map(PerfTrace.bodyCount)
+        let cpu = clock_gettime_nsec_np(CLOCK_THREAD_CPUTIME_ID)
         let start = CACurrentMediaTime()
         step.run()
-        pendingAction = (step.name, step.measured, start, CACurrentMediaTime())
+        let end = CACurrentMediaTime()
+        let cpuMs = Double(clock_gettime_nsec_np(CLOCK_THREAD_CPUTIME_ID) &- cpu) / 1e6
+        let live = studio.map { studio in
+            LiveCall(pendingSettles: studio.livePendingSettles &- settles, unfinishedWaits: studio.liveUnfinishedWaits &- waits,
+                     placement: placement,
+                     serialSteps: placement.map { PerfTrace.eventCount(.studioLiveTickSerial) - $0.serialSteps } ?? 0,
+                     pendingWork: pendingWork)
+        }
+        pendingAction = (step.name, step.measured, start, end, bodies, cpuMs, live)
         waitForAction()
+    }
+
+    /// #440 (`IKKOKU_PERF_PARK_FILE`, measurement only): at the start of every
+    /// action cycle but the first, a park file that reads `park <n>`, with `n`
+    /// newer than the last park, stops the actions. The driver writes
+    /// `<file>.parked` (`parked <n> <measured actions finished> <next action's
+    /// index> <cycle length>`) and waits until the file reads `resume <n>`, so
+    /// both of the growth check's heap snapshots see the state a full cycle
+    /// leaves. Both files are written in place; nothing is deleted. Returns
+    /// true when it parked: the wait starts the next action.
+    private func parkIfRequested() -> Bool {
+        guard let file = configuration.parkFile, actionIndex > 0, actionIndex % actionSteps.count == 0,
+              let request = Self.parkFileNumber(file, after: "park"), request > lastPark else { return false }
+        let measured = finishedActions.reduce(0) { $0 + ($1.measured ? 1 : 0) }
+        do {
+            try "parked \(request) \(measured) \(actionIndex) \(actionSteps.count)\n"
+                .write(toFile: file + ".parked", atomically: false, encoding: .utf8)
+        } catch { fail("IKKOKU_PERF_PARK_FILE: \(error)") }
+        parks.append(["park": request, "measured": measured, "index": actionIndex,
+                      "startSeconds": PerfTrace.round(CACurrentMediaTime() - recordingStart)])
+        trace.details["parks"] = parks
+        waitForResume(file, request)
+        return true
+    }
+
+    private func waitForResume(_ file: String, _ request: Int) {
+        guard trace.recording else { return }
+        if Self.parkFileNumber(file, after: "resume") == request {
+            lastPark = request
+            runNextAction()
+        } else {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) { self.waitForResume(file, request) }
+        }
+    }
+
+    /// The number after `word` when the park file reads `<word> <n>`, else nil.
+    private static func parkFileNumber(_ file: String, after word: String) -> Int? {
+        guard let text = try? String(contentsOfFile: file, encoding: .utf8) else { return nil }
+        let parts = text.split(whereSeparator: \.isWhitespace)
+        guard parts.count == 2, parts[0] == word else { return nil }
+        return Int(parts[1])
     }
 
     /// Polls every millisecond until the pending action's builds are installed,
@@ -798,8 +1115,14 @@ final class PerfWorkloadDriver {
         // flat across repeated loads means nothing accumulates per cycle. The
         // document's object count (read after the timed span) shows what an
         // edit added or an undo restored.
+        let history = countHistoryStorage ? app.studio.map { studio in
+            (studio.undoStack.count, studio.redoStack.count,
+             StudioObjectStorageCensus.count([studio.doc] + studio.undoStack + studio.redoStack))
+        } : nil
         finishedActions.append((action.name, action.measured, action.start, action.end, ready, app.studio?.status ?? "", error,
-                                PerfTrace.footprint(), trace.device?.currentAllocatedSize ?? 0, app.studio?.doc.objects.count ?? -1))
+                                PerfTrace.footprint(), trace.device?.currentAllocatedSize ?? 0, app.studio?.doc.objects.count ?? -1,
+                                action.bodies, app.studio?.shownWorkspaceState.entries.count ?? -1, history,
+                                action.cpuMs, action.live))
         pendingAction = nil
         DispatchQueue.main.asyncAfter(deadline: .now() + (action.measured ? 0.5 : 0.2)) { self.runNextAction() }
     }
@@ -817,13 +1140,19 @@ final class PerfWorkloadDriver {
         // The period still running (the stop timer may fire in the same
         // run-loop pass as a long action) counts until now.
         let busy = trace.busyIntervals + (trace.openBusyStart.map { [($0, CACurrentMediaTime())] } ?? [])
+        let bodiesNow = Self.workspaceBodyViews.map(PerfTrace.bodyCount)
         trace.details["actions"] = finishedActions.indices.map { index -> [String: Any] in
             let action = finishedActions[index]
             let next = index + 1 < finishedActions.count ? finishedActions[index + 1].start : .infinity
+            // #410: bodies from this call to the next action's call (or until now).
+            let bodiesEnd = index + 1 < finishedActions.count ? finishedActions[index + 1].bodies : bodiesNow
+            let bodies = Dictionary(uniqueKeysWithValues: Self.workspaceBodyViews.indices.map {
+                (Self.workspaceBodyViews[$0].name, bodiesEnd[$0] - action.bodies[$0])
+            })
             let overlapping = busy.filter { $0.end > action.start && $0.start <= action.ready }
             let lengths = overlapping.map { ($0.end - max($0.start, action.start)) * 1000 }
             let own = overlapping.map { max(0, min($0.end, next) - max($0.start, action.start)) * 1000 }
-            return ["name": action.name, "measured": action.measured,
+            var row: [String: Any] = ["name": action.name, "measured": action.measured,
                     "startSeconds": PerfTrace.round(action.start - recordingStart),
                     "callMs": PerfTrace.round((action.end - action.start) * 1000),
                     "readyMs": PerfTrace.round((action.ready - action.start) * 1000),
@@ -832,7 +1161,23 @@ final class PerfWorkloadDriver {
                     "longestStallMs": PerfTrace.round(lengths.max() ?? 0),
                     "status": action.status, "error": action.error.map { $0 as Any } ?? NSNull(),
                     "footprintBytes": action.footprint, "metalAllocatedBytes": action.metal,
-                    "documentObjects": action.objects]
+                    "documentObjects": action.objects,
+                    "workspaceBodies": bodies, "workspaceRows": action.workspaceRows]
+            row["callCpuMs"] = PerfTrace.round(action.cpuMs)
+            if let history = action.history {
+                row["undoSteps"] = history.undo; row["redoSteps"] = history.redo
+                row["objectBuffers"] = history.storage.buffers; row["objectBufferCapacity"] = history.storage.capacity
+                row["objectBufferBytes"] = history.storage.bytes
+            }
+            if let live = action.live {
+                row["livePendingSettles"] = live.pendingSettles; row["liveUnfinishedWaits"] = live.unfinishedWaits
+                if let placement = live.placement {
+                    row["livePhase"] = placement.phase.rawValue; row["placed"] = placement.placed
+                    row["placementWaitMs"] = PerfTrace.round((action.start - placement.armed) * 1000)
+                    row["liveSerialSteps"] = live.serialSteps; row["pendingWorkAtCall"] = live.pendingWork
+                }
+            }
+            return row
         }
     }
 

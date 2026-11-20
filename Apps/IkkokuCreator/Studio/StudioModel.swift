@@ -287,9 +287,25 @@ final class StudioModel: ViewportInputHandler, LivePacedHandler {
     /// The undo and redo steps (#384). A scene replacement (New Scene, Open,
     /// an original scene import) keeps only the scene it replaced, not the
     /// scenes before it; see `StudioUndoHistory`.
-    private var history = StudioUndoHistory<StudioDocument>()
+    /// Not observed (#454): a view reads the undo state only through
+    /// `canUndo` and `canRedo`, so recording a step does not invalidate it.
+    @ObservationIgnored private var history = StudioUndoHistory<StudioDocument>()
+    /// The steps themselves, not observed: for the scenarios, the perf
+    /// workload and the voice prune. A view reads `canUndo` and `canRedo`.
     var undoStack: [StudioDocument] { history.undoStack }
     var redoStack: [StudioDocument] { history.redoStack }
+    /// Whether Undo and Redo have a step (#454): observed, and written only
+    /// when they flip, so recording a step invalidates the toolbar only when
+    /// a button's state changes. Every write to `history` publishes them
+    /// (`publishUndoState`).
+    private(set) var canUndo = false
+    private(set) var canRedo = false
+    /// After every write to `history`: `record`, `stepBack`, `stepForward`.
+    private func publishUndoState() {
+        let undo = !history.undoStack.isEmpty, redo = !history.redoStack.isEmpty
+        if undo != canUndo { canUndo = undo }
+        if redo != canRedo { canRedo = redo }
+    }
     @ObservationIgnored private var instances: [UUID: CharacterInstance] = [:]
     @ObservationIgnored private var renderStatus = RenderStatusReporter()
     @ObservationIgnored private var sourceInstanceStorage: [UUID: SourceStudioCharacterPreview] = [:]
@@ -301,6 +317,16 @@ final class StudioModel: ViewportInputHandler, LivePacedHandler {
     private var sourceInstances: [UUID: SourceStudioCharacterPreview] {
         get { settleLiveTick(keepFrames: false); return sourceInstanceStorage }
         set { settleLiveTick(keepFrames: false); sourceInstanceStorage = newValue; sourcePreviewsChecked = false }
+    }
+    /// A built character's voice inputs (#437), when its preview shows
+    /// `reference`. Read from the storage, not `sourceInstances`: settling
+    /// the live step there would drop its frames, so the next refresh would
+    /// evaluate every character again, for a voice click. `voiceInputs` is a
+    /// `let` of the preview, so reading it while the step's workers own the
+    /// preview races with nothing.
+    func sourceVoicePreviewInputs(_ id: UUID, reference: SourceStudioCharacterReference) -> SourceStudioVoiceInputs? {
+        guard let preview = sourceInstanceStorage[id], preview.reference == reference else { return nil }
+        return preview.voiceInputs
     }
     /// False once the document or the previews change, until a refresh has
     /// looked for missing previews (`startMissingSourceBuilds`), so a frame
@@ -530,8 +556,12 @@ final class StudioModel: ViewportInputHandler, LivePacedHandler {
     /// undo/redo and New Scene (see `undo()`). The saved record colors and
     /// alpha ride along so the frame builder can tint the parts without
     /// re-reading the scene file.
-    @ObservationIgnored private var sourceItemAssets: [UUID: (sceneSHA256: String, key: String, path: String,
-        colors: [SIMD4<Float>], alpha: Float)] = [:]
+    /// ST-T04 (B4): `materials` holds the untinted materials of the entry's
+    /// asset, built once per asset instance instead of on every refresh. The
+    /// entries of one file share one set (the import and the rehydration make
+    /// one per file), and only these entries hold it, so it goes with them
+    /// whenever an import or a rehydration replaces `sourceItemAssets`.
+    @ObservationIgnored private var sourceItemAssets: [UUID: SourceItemAssetEntry] = [:]
     /// A-T02: objects of opened scenes whose resource check (`resolvingResources`)
     /// left a reference missing, changed or outside its library, so their files
     /// are never read: `refresh()` skips them and rehydration and plugin
@@ -725,6 +755,18 @@ final class StudioModel: ViewportInputHandler, LivePacedHandler {
     /// Stops the audio output if the bus exists; one never made never started.
     func stopSourceAudioOutput() { sourceAudioBusStorage?.stopOutput() }
     @ObservationIgnored var sourceVoicePlayers: [UUID: SourceStudioVoicePlayer] = [:]
+    /// The source characters' voice inputs by scene SHA-256 and object key
+    /// (#437): from built previews, the import's hidden card check and a
+    /// reload's check (`sourceVoicePendingCheck`); a key none of them covered
+    /// costs one scene read (`sourceVoiceInputs`). Pruned to the references
+    /// the document and its history hold when the document's scene changes.
+    @ObservationIgnored var sourceVoiceInputCache = SourceStudioVoiceInputCache()
+    /// A native reload's voice check (#437) for the document's characters,
+    /// from the records the reload decoded, until a voice play or repeat
+    /// change asks for one of them or the document's scene changes.
+    @ObservationIgnored var sourceVoicePendingCheck: (sceneSHA256: String, keys: [Int32], check: SourceStudioCharacterPreview.CardCheck)?
+    /// The document scene the voice cache was last pruned for.
+    @ObservationIgnored var sourceVoiceInputScene: String?
     @ObservationIgnored private var nextInstanceID: UInt64 = 100
     /// A new drag, or none, drops the camera drag's reusable frame.
     @ObservationIgnored private var drag: DragState? { didSet { cameraReuse = nil } }
@@ -838,6 +880,9 @@ final class StudioModel: ViewportInputHandler, LivePacedHandler {
     // NotificationCenter retains block-observer tokens even after their weak
     // owner disappears. Match replacement/unload cleanup for model disposal.
     isolated deinit {
+        // #326: an import in flight keeps running until its batch ends; its
+        // decoded scene goes here, on the main thread.
+        sourceImportJob?.tearDown()
         for token in sourceFocusObservers { NotificationCenter.default.removeObserver(token) }
         if let token = sourceLaunchObserver { NotificationCenter.default.removeObserver(token) }
         #if DEBUG
@@ -1016,6 +1061,9 @@ final class StudioModel: ViewportInputHandler, LivePacedHandler {
 
     /// The step running off the main thread, if any.
     @ObservationIgnored private var liveTick: LiveTick?
+    /// How many times `settleLiveTick` ran (#437): the scenario's voice
+    /// check shows that resolving a voice play's inputs settles nothing.
+    @ObservationIgnored private(set) var sourceLiveSettles = 0
     /// How many frames the last started parallel step was asked for, and how
     /// many of them the last refresh took (the scenario's race check).
     @ObservationIgnored private(set) var lastLiveStepFrameRequests = 0
@@ -1024,6 +1072,23 @@ final class StudioModel: ViewportInputHandler, LivePacedHandler {
     @ObservationIgnored private var livePrepared: LivePrepared?
     /// The settled step whose frame no refresh has submitted yet.
     @ObservationIgnored private var liveRefreshPending: SourceStudioLiveTickJob?
+
+    /// Where in a live step's completion on the main actor (`liveTickFinished`)
+    /// `livePhaseHook` runs: before the step commits, so the call finds the
+    /// step pending with its workers done and commits it itself, or after the
+    /// step has committed and refreshed, so the call finds nothing pending.
+    enum LivePhase: String { case beforeCommit, afterCommit }
+    /// A one-shot call the `studio-edit-steps` workload places at a live
+    /// step's completion (#409, `IKKOKU_PERF_EDIT_PHASES`). nil, and never
+    /// read past one optional test per completion, unless the workload arms
+    /// it; cleared before it runs. A step that is not parallel, or that
+    /// something else already settled, offers no phase; the hook then waits.
+    @ObservationIgnored var livePhaseHook: (phase: LivePhase, run: () -> Void)?
+    /// Settles that found a live step pending, and of those the ones whose
+    /// workers had not finished (the wait blocked). The workload reads both
+    /// around each edit to check its phase class.
+    @ObservationIgnored private(set) var livePendingSettles = 0
+    @ObservationIgnored private(set) var liveUnfinishedWaits = 0
 
     /// The scenario's handle on the timer's path: starts one live step as the
     /// timer does and returns whether it runs off the main thread (in flight
@@ -1052,10 +1117,19 @@ final class StudioModel: ViewportInputHandler, LivePacedHandler {
     }
 
     /// The workers of `job` finished: commit and refresh it, unless something
-    /// already did.
+    /// already did. An armed `livePhaseHook` runs before the commit, while
+    /// the step is still pending, or after the commit's refresh.
     private func liveTickFinished(_ job: SourceStudioLiveTickJob) {
         guard liveTick?.job === job || liveRefreshPending === job else { return }
+        if let hook = livePhaseHook, hook.phase == .beforeCommit, liveTick?.job === job {
+            livePhaseHook = nil
+            hook.run()
+        }
         completeLiveTick()
+        if let hook = livePhaseHook, hook.phase == .afterCommit, liveTick == nil, liveRefreshPending == nil {
+            livePhaseHook = nil
+            hook.run()
+        }
     }
 
     /// Completes the live step in flight, if any: waits for its workers,
@@ -1073,12 +1147,15 @@ final class StudioModel: ViewportInputHandler, LivePacedHandler {
     /// Either way that refresh is the step's own: the timer starts no new step
     /// before it.
     private func settleLiveTick(keepFrames: Bool) {
+        sourceLiveSettles &+= 1
         guard let tick = liveTick else {
             if !keepFrames, livePrepared != nil { livePrepared = nil; PerfTrace.event(.studioLiveTickDiscarded) }
             return
         }
         liveTick = nil
         let finished = tick.job.isFinished, waitStart = CACurrentMediaTime()
+        livePendingSettles &+= 1
+        if !finished { liveUnfinishedWaits &+= 1 }
         let result = tick.job.wait()
         if let trace = PerfTrace.active {
             if !finished { trace.record(.studioLiveWait, start: waitStart, end: CACurrentMediaTime()) }
@@ -2066,11 +2143,13 @@ final class StudioModel: ViewportInputHandler, LivePacedHandler {
     /// The document as it is now, as the newest undo step.
     private func appendUndoSnapshot(replacingScene: Bool = false) {
         history.record(doc, replacingScene: replacingScene)
+        publishUndoState()
     }
 
     /// Closes the edit-coalescing window, so the next edit takes its own undo
     /// snapshot. The scenario runner calls it before every step: each step
-    /// stands for a separate user gesture, however fast the steps run.
+    /// stands for a separate user gesture, however fast the steps run,
+    /// unless the step sets `sameGesture` (#448).
     func endUndoCoalescing() { undoSteps.endCoalescing() }
 
     /// Undo/redo keeps the SHA-gated source runtime caches (route runtimes,
@@ -2103,7 +2182,14 @@ final class StudioModel: ViewportInputHandler, LivePacedHandler {
             })
             defer { plugins.abort() }
             history.stepBack(leaving: doc)
+            publishUndoState()
             applyHistoryDocument(candidate, plugins: plugins, resources: resources)
+            // #448: Undo is a gesture of its own. Without this an edit right
+            // after it joined the step it had just undone: no snapshot, the
+            // redo stack kept, and a Redo then dropped the edit. Redo needs no
+            // window end: every step start records and clears redo, so the
+            // redo stack is non-empty only after an Undo closed the window.
+            undoSteps.endCoalescing()
             status = "Undo"
         } catch { status = "Plugin restore: \(error)" }
     }
@@ -2117,6 +2203,7 @@ final class StudioModel: ViewportInputHandler, LivePacedHandler {
             })
             defer { plugins.abort() }
             history.stepForward(leaving: doc)
+            publishUndoState()
             applyHistoryDocument(candidate, plugins: plugins, resources: resources)
             status = "Redo"
         } catch { status = "Plugin restore: \(error)" }
@@ -2437,7 +2524,7 @@ final class StudioModel: ViewportInputHandler, LivePacedHandler {
         // one would be retained without rendering, and a save would keep the
         // folders and drop every character, so the preview refuses the scene.
         var directory: ObjCBool = false
-        if Self.containsCharacter(source.snapshot.roots),
+        if source.snapshot.containsCharacter,
            !FileManager.default.fileExists(atPath: boneCatalogURL.path, isDirectory: &directory) || directory.boolValue {
             throw RigError.invalid("The \(ResourceCompanion.studioPoseContract.label) is missing at \(boneCatalogURL.path): source scene characters need \(ResourceCompanion.studioPoseContract.conventionalPath) in the converted library, next to the original base's rigs/ folder.")
         }
@@ -2557,7 +2644,10 @@ final class StudioModel: ViewportInputHandler, LivePacedHandler {
         // A failed commit drops the map its preparation started loading.
         var committed = false
         defer { if !committed { job.mapLoad?.cancel() } }
-        let sceneURL = job.sceneURL, hash = job.hash, source = job.source
+        let sceneURL = job.sceneURL, hash = job.hash
+        guard let source = job.source else { throw RigError.invalid("The source scene import was already released.") }
+        // #326: the decoded scene goes here, on the main thread (`tearDown`).
+        defer { job.tearDown() }
         var imported = job.imported, diagnostics = job.diagnostics
         let sceneLightOverride = job.sceneLightOverride, itemResolver = job.itemResolver, itemNames = job.itemNames
         var previews: [UUID: SourceStudioCharacterPreview] = [:]
@@ -2566,11 +2656,13 @@ final class StudioModel: ViewportInputHandler, LivePacedHandler {
         // failed build is (`validateCard`, checked on a worker since the
         // preparation).
         let hiddenCardProblems = job.hiddenCardProblems()
+        // #437: the unbuilt characters' voice inputs, from the same check.
+        let hiddenVoiceInputs = job.hiddenVoiceInputs()
         var bounds = AABB.empty, stack = source.snapshot.roots.reversed().map { ($0, Optional<UUID>.none, false, Optional<Int32>.none) }
         var routes: [UUID: SourceRouteRuntime] = [:]
         var routeCharacterPreviews: [UUID: SourceStudioCharacterPreview] = [:]
         var cameras: [UUID: (sceneSHA256: String, objectKey: Int32, name: String)] = [:]
-        var itemAssets: [UUID: (sceneSHA256: String, key: String, path: String, colors: [SIMD4<Float>], alpha: Float)] = [:]
+        var itemAssets: [UUID: SourceItemAssetEntry] = [:], itemMaterialSets: [String: SourceStudioItemMaterialSet] = [:]
         var unmappedItemKeys: [String: Int] = [:]
         // ST-T04: why a key is unmapped, when the catalog lists what it could not convert.
         var notConvertedReasons: [String: String] = [:], notInCatalogKeys: Set<String> = []
@@ -2609,6 +2701,7 @@ final class StudioModel: ViewportInputHandler, LivePacedHandler {
                         } else {
                             object.kind = .character; object.name = "Source character \(record.sourceKey)"
                             object.sourceCharacter = reference; previews[object.id] = preview
+                            sourceVoiceInputCache.insert(preview.voiceInputs, for: .init(reference))
                             diagnostics += preview.diagnostics.map { "Character \(record.sourceKey): \($0)" }
                         }
                     } catch {
@@ -2626,6 +2719,7 @@ final class StudioModel: ViewportInputHandler, LivePacedHandler {
                     // as after a native reload.
                     object.kind = .character; object.name = "Source character \(record.sourceKey)"
                     object.sourceCharacter = reference
+                    if let voice = hiddenVoiceInputs[index] { sourceVoiceInputCache.insert(voice, for: .init(reference)) }
                     deferredCharacters += 1
                 }
             } else if record.kind == .camera {
@@ -2646,8 +2740,10 @@ final class StudioModel: ViewportInputHandler, LivePacedHandler {
                 do {
                     let asset = try job.item(index, library: library)
                     object.name = "\(asset.name) (source item \(record.sourceKey))"
+                    let materials = itemMaterialSets[asset.url.path, default: SourceStudioItemMaterialSet()]
+                    itemMaterialSets[asset.url.path] = materials
                     itemAssets[object.id] = (sceneSHA256: hash, key: itemKey, path: asset.url.path,
-                        colors: item.colors, alpha: item.alpha)
+                        colors: item.colors, alpha: item.alpha, materials: materials)
                 } catch {
                     // The catalog's name where it maps the key, with an
                     // explicit unrendered marker; otherwise the placeholder.
@@ -2802,6 +2898,7 @@ final class StudioModel: ViewportInputHandler, LivePacedHandler {
     func cancelSourceBuilds() {
         sourceImportJob?.batch.cancel()
         sourceImportJob?.mapLoad?.cancel()
+        sourceImportJob?.tearDown()
         sourceMapLoad?.cancel(); sourceMapLoad = nil
         sourceImportJob = nil
         for build in pendingSourceBuilds.values { build.batch.cancel() }
@@ -2956,9 +3053,8 @@ final class StudioModel: ViewportInputHandler, LivePacedHandler {
         }
         guard sourceInstances.count < sourceCharacters else { return nil }
         let selectionBuild = sourceSelectionBuild
-        for o in doc.objects where o.kind == .character {
-            guard let reference = o.sourceCharacter, !resourceBlockedObjects.contains(o.id),
-                  doc.isVisible(o.id) || o.id == selectionBuild else { continue }
+        for o in doc.objects {
+            guard let reference = o.sourceCharacter, sourceBuildWanted(o, selectionBuild: selectionBuild) else { continue }
             if let cached = sourceInstances[o.id], cached.reference == reference,
                cached.coordinate == (o.sourceOutfit ?? cached.savedCoordinate) { continue }
             if let pending = pendingSourceBuilds[o.id], pending.reference == reference, pending.outfit == o.sourceOutfit { continue }
@@ -2990,13 +3086,23 @@ final class StudioModel: ViewportInputHandler, LivePacedHandler {
     /// edits validate against it. A hidden character no selection needs
     /// stays unbuilt until shown (lazy import, native reload); once built it
     /// keeps its preview, like a character hidden after it was drawn.
-    private var sourceSelectionBuild: UUID? {
+    var sourceSelectionBuild: UUID? {
         var current = selection, steps = 0
         while let id = current, let object = doc.object(id), steps <= doc.objects.count {
             if object.kind == .character, object.sourceCharacter != nil { return id }
             current = object.parent; steps += 1
         }
         return nil
+    }
+
+    /// Whether `startMissingSourceBuilds` wants a preview for `object`: a
+    /// source character the load's resource check passed that is shown or is
+    /// `selectionBuild` (`sourceSelectionBuild`, read once by the caller). A
+    /// native reload's voice check covers the characters this leaves
+    /// unbuilt (#437), as the import's hidden card check does.
+    func sourceBuildWanted(_ object: StudioObject, selectionBuild: UUID?) -> Bool {
+        object.kind == .character && object.sourceCharacter != nil && !resourceBlockedObjects.contains(object.id)
+            && (doc.isVisible(object.id) || object.id == selectionBuild)
     }
 
     /// Whether the inspector's source character `id` is waiting for its
@@ -3121,13 +3227,6 @@ final class StudioModel: ViewportInputHandler, LivePacedHandler {
             failedSourceBuilds[id] = (pending.reference, pending.outfit, String(describing: error))
         }
         refreshAfterInstall()
-    }
-
-    /// Whether any record of the tree, an accessory child included, is a character.
-    private static func containsCharacter(_ records: [KoikatsuObjectRecord]) -> Bool {
-        records.contains { record in
-            record.character != nil || containsCharacter(record.children)
-        }
     }
 
     /// The source preview's characters (A-T02): how many have a rendered preview
@@ -3980,6 +4079,8 @@ final class StudioModel: ViewportInputHandler, LivePacedHandler {
             return fresh
         }
         let selectionBuild = sourceSelectionBuild
+        // Read once: the item and camera entries below compare it per object.
+        let sceneSHA256 = doc.sourceSceneSHA256
         for (index, o) in animatedDoc.objects.enumerated() {
             // This iteration may install or step `o`'s preview (see
             // `SourceWorldWalk`): later queries re-evaluate the matrices that
@@ -4047,6 +4148,7 @@ final class StudioModel: ViewportInputHandler, LivePacedHandler {
                             catch { status = "Source character \(o.sourceObjectKey ?? 0) face state: \(error)" }
                             rendered = try preview.frame(camera: viewCamera, mainLight: effectiveMainLight, effects: doc.effects,
                                 world: world, objectID: objectID, fkRotations: o.sourceFKRotations ?? [:], faceValues: o.sourceFaceValues, bodyValues: o.sourceBodyValues, ikTargets: o.sourceIKOverrides ?? [:], kinematics: o.sourceKinematics, animationState: o.sourceAnimation, animationElapsed: sourceAnimationTime)
+                            PerfTrace.event(preview.lastFrameReused ? .studioCharacterFrameReused : .studioCharacterFrameBuilt)
                         }
                         if liveSourceShaders { applyLiveSourceShaders(&rendered, id: o.id, preview: preview, lines: &liveLines) }
                         if effectiveShowGizmos, selection == o.id {
@@ -4099,6 +4201,7 @@ final class StudioModel: ViewportInputHandler, LivePacedHandler {
                     let model = world * part.worldMatrix
                     var ri = RenderItem(mesh: part.mesh, material: mat, model: model, objectID: objectID)
                     ri.order = 35
+                    ri.staticItem = true   // ST-T04: may draw instanced
                     items.append(ri)
                     bounds.expand(part.bounds.transformed(by: model))
                 }
@@ -4144,26 +4247,23 @@ final class StudioModel: ViewportInputHandler, LivePacedHandler {
                 // serialized `_Color`/`_alpha` with the record's saved color
                 // and alpha, as `UpdateColor` does at runtime; patterns,
                 // animation, FK and dynamics are not applied.
-                if let entry = sourceItemAssets[o.id], entry.sceneSHA256 == doc.sourceSceneSHA256,
+                if let entry = sourceItemAssets[o.id], entry.sceneSHA256 == sceneSHA256,
                    let a = library.asset(entry.path) {
-                    for part in a.parts {
-                        let tint = SourceStudioItemColor.tint(colors: entry.colors, alpha: entry.alpha,
-                            extras: part.material.extras)
-                        var mat = MaterialBuilder.itemMaterial(for: part, asset: a, tint: nil, emissive: 0)
-                        if let tint {
-                            // The exported factor is the serialized `_Color`
-                            // (and, for BLEND, `_alpha`); UpdateColor replaces
-                            // both, so the record values replace the factor
-                            // rather than multiplying it. Toon.metal outputs
-                            // `baseColor.w × tex.a`, the `_MainTex.a · _alpha`
-                            // contract.
-                            let c = tint.color.linear
-                            mat.uniforms.baseColor.x = c.x; mat.uniforms.baseColor.y = c.y; mat.uniforms.baseColor.z = c.z
-                            if let alpha = tint.alpha { mat.uniforms.baseColor.w = alpha }
+                    // B4: the parts' untinted materials, built once per asset
+                    // instance and shared by the file's entries; the record's
+                    // tint goes on a copy (`SourceStudioItemColor.apply`).
+                    let materials = entry.materials.materials(for: a)
+                    for i in a.parts.indices {
+                        let part = a.parts[i]
+                        var mat = materials[i]
+                        if let tint = SourceStudioItemColor.tint(colors: entry.colors, alpha: entry.alpha,
+                                                                 extras: part.material.extras) {
+                            SourceStudioItemColor.apply(tint, to: &mat)
                         }
                         let model = world * part.worldMatrix
                         var ri = RenderItem(mesh: part.mesh, material: mat, model: model, objectID: objectID)
                         ri.order = 35
+                        ri.staticItem = true   // ST-T04: may draw instanced
                         items.append(ri)
                         bounds.expand(part.bounds.transformed(by: model))
                     }
@@ -4177,6 +4277,7 @@ final class StudioModel: ViewportInputHandler, LivePacedHandler {
                     do {
                         var rendered = try preview.frame(camera: viewCamera, mainLight: effectiveMainLight, effects: doc.effects,
                             world: world, objectID: objectID, animationElapsed: sourceAnimationTime)
+                        PerfTrace.event(preview.lastFrameReused ? .studioCharacterFrameReused : .studioCharacterFrameBuilt)
                         if liveSourceShaders { applyLiveSourceShaders(&rendered, id: o.id, preview: preview, lines: &liveLines) }
                         items += rendered.items; skinSets.merge(rendered.skinSets) { _, new in new }
                         bounds.expand(rendered.sceneBounds)
@@ -4186,7 +4287,7 @@ final class StudioModel: ViewportInputHandler, LivePacedHandler {
                 // active one hides its icon, the others keep it. The view
                 // direction is the object's world rotation looking along
                 // native (0, 0, -1) — scale is ignored, like `LateUpdate`.
-                if let entry = sourceCameras[o.id], entry.sceneSHA256 == doc.sourceSceneSHA256,
+                if let entry = sourceCameras[o.id], entry.sceneSHA256 == sceneSHA256,
                    activeSourceCamera != o.id {
                     let p = world.translation
                     let f = world.rotationQuaternion.act(Float3(0, 0, -1))
@@ -4740,7 +4841,7 @@ final class StudioModel: ViewportInputHandler, LivePacedHandler {
         guard poseMode == .fk else { return [] }
         let rig = preview.preview.source.rig
         let pose = try preview.editedPose(fkRotations: object.sourceFKRotations ?? [:], faceValues: object.sourceFaceValues, bodyValues: object.sourceBodyValues, ikTargets: object.sourceIKOverrides ?? [:], kinematics: object.sourceKinematics, animationState: object.sourceAnimation, animationElapsed: sourceAnimationTime)
-        let evaluated = try rig.evaluate(pose)
+        let evaluated = try preview.evaluation(of: pose)  // the frame build's, for the same pose (#371)
         var result: [GizmoBatch] = []
         for target in preview.controller.targets where target.hasGuide {
             let matrix = world * evaluated.worldMatrices[target.node]
@@ -4764,12 +4865,17 @@ final class StudioModel: ViewportInputHandler, LivePacedHandler {
         return (try sourceWorldMatrix(of: object.id, document: doc, previews: sourceInstances) * parent.matrix,
                 try sourceWorldRotation(of: object.id) * parent.rotation)
     }
+    /// The IK guides of a source character in IK pose mode: only the active
+    /// ones, IK on and the guide's group on (#439). CharaStudio keeps an
+    /// inactive guide's object inactive (OCIChar.ActiveIK), so it is neither
+    /// drawn nor picked; a loaded character's saved targets may lie far from
+    /// its bones while its IK is off.
     private func sourceIKGizmos(_ object: StudioObject, preview: SourceStudioCharacterPreview, world: float4x4) throws -> [GizmoBatch] {
         var result: [GizmoBatch] = []
-        for guide in try sourceGuides(object, preview: preview) {
+        for guide in try sourceGuides(object, preview: preview) where guide.active {
             let origin = world.transformPoint(guide.position), size = viewCamera.worldUnitsPerPixel(at: world.transformPoint(guide.position), viewport: viewportSize)
             let selected = selectedSourceIK == guide.targetID
-            let color = selected ? Float4(1,0.9,0.2,1) : guide.active ? Float4(0.3,1,0.5,1) : Float4(0.7,0.7,0.75,0.85)
+            let color = selected ? Float4(1,0.9,0.2,1) : Float4(0.3,1,0.5,1)
             result.append(GizmoBuilder.handle(at: origin, size: size * (selected ? 10 : 7), color: color, id: SourceStudioIKEditing.pickID(guide.targetID)))
             if selected {
                 let mode: GizmoMode = gizmoMode == .rotate && guide.rotationEnabled ? .rotate : .translate
@@ -4781,6 +4887,19 @@ final class StudioModel: ViewportInputHandler, LivePacedHandler {
     var selectedSourceIKState: SourceStudioKinematicState? {
         guard let object = selectedObject, let preview = sourceInstances[object.id] else { return nil }
         return object.sourceKinematics ?? SourceStudioKinematicState(record: preview.record)
+    }
+    /// Whether the Pose tab's selected IK target has no guide in the viewport
+    /// because it is inactive (#439, `sourceIKGizmos`): the effective IK flag
+    /// and the target's group, the state its guide's `active` comes from. Read
+    /// from the kinematic state rather than the guides, so the Pose tab does
+    /// not follow the animation clock.
+    var selectedSourceIKGuideHidden: Bool {
+        guard let object = selectedObject, let preview = sourceInstances[object.id], let target = selectedSourceIK,
+              let group = try? SourceStudioIKEditing.groupIndex(target: target),
+              let state = try? preview.effectiveKinematics(fkRotations: object.sourceFKRotations ?? [:], ikTargets: object.sourceIKOverrides ?? [:],
+                                                          kinematics: object.sourceKinematics),
+              state.activeIK.indices.contains(group) else { return false }
+        return !(state.enableIK && state.activeIK[group])
     }
     var sourceIKAvailable: Bool { selection.flatMap { sourceInstances[$0] }?.ikGuides.isEmpty == false }
     func setSourceFKEnabled(_ enabled: Bool) {
@@ -5008,6 +5127,20 @@ final class StudioModel: ViewportInputHandler, LivePacedHandler {
         } catch { return nil }
     }
 
+    /// #425: the viewport pixel of the selected source character's IK guide
+    /// `target` (0-12), projected with the view camera from the world point
+    /// `sourceIKGizmos` centers that guide's gizmo on and `mouseDown` grabs,
+    /// so the scenario's `dragIKGuide` op can scan around the arrows it is
+    /// about to click. Nil when nothing resolves.
+    func sourceIKGuidePixel(of target: Int32) -> SIMD2<Float>? {
+        guard let sel = selectedObject, let preview = sourceInstances[sel.id] else { return nil }
+        do {
+            guard let guide = try sourceGuides(sel, preview: preview).first(where: { $0.targetID == target }) else { return nil }
+            let world = try sourceWorldMatrix(of: sel.id, document: doc, previews: sourceInstances)
+            return viewCamera.project(world.transformPoint(guide.position), viewport: viewportSize)
+        } catch { return nil }
+    }
+
     func mouseDown(at p: SIMD2<Float>, button: Int, modifiers: NSEvent.ModifierFlags) {
         // The highlight answers the last mouse move before a click or a drag
         // starts, as the synchronous hover pick guaranteed; a result arriving
@@ -5094,7 +5227,9 @@ final class StudioModel: ViewportInputHandler, LivePacedHandler {
             return
         }
         if let target = SourceStudioIKEditing.targetID(fromPick: id), let object = selectedObject, sourceInstances[object.id] != nil {
-            selectedSourceIK = target; if let group = try? SourceStudioIKEditing.groupIndex(target: target) { setSourceIKGroup(group, enabled: true) }
+            // Only active guides are drawn (#439), so a pick only selects; IK is
+            // switched on in the Pose tab, as in CharaStudio.
+            selectedSourceIK = target
             status = SourceStudioIKEditing.labels[Int(target)]; return
         }
         if let ci = PickIDs.ikIndex(from: id), ci < IKChain.allCases.count {
@@ -5224,6 +5359,12 @@ final class StudioModel: ViewportInputHandler, LivePacedHandler {
         documentCamera.dolly(amount * 10)
     }
 
+    /// The digit row's physical keys, kVK_ANSI_0 through kVK_ANSI_9, as CharaStudio's
+    /// Studio.ShortcutKeyCtrl binds its camera keys (Alpha1-Alpha0, not the keypad). By key, not
+    /// by character: Shift (this port's slot save; the original's keys only load) turns the
+    /// characters into "!", "@" and so on, and some layouts need Shift for the digits.
+    static let digitRowKeyCodes: [UInt16] = [29, 18, 19, 20, 21, 23, 22, 26, 28, 25]
+
     func keyDown(_ event: NSEvent) -> Bool {
         let chars = event.charactersIgnoringModifiers ?? ""
         let mods = event.modifierFlags
@@ -5236,7 +5377,7 @@ final class StudioModel: ViewportInputHandler, LivePacedHandler {
         case .toggleVisibility: toggleSourceInterface(); return true
         case .continueViewport: break
         }
-        if let n = Int(chars), chars.count == 1, !mods.contains(.command) {
+        if !mods.contains(.command), let n = Self.digitRowKeyCodes.firstIndex(of: event.keyCode) {
             let slot = n == 0 ? 9 : n - 1
             if mods.contains(.shift) { saveCameraSlot(slot) } else { loadCameraSlot(slot) }
             return true

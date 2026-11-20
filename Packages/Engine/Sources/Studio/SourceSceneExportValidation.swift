@@ -32,7 +32,12 @@ public enum SourceSceneExportValidation {
         for object in added { if let parent = object.parent, addedIDs.contains(parent) { children[parent, default: []].append(object) } }
         let byID = Dictionary(uniqueKeysWithValues: document.objects.map { ($0.id, $0) })
         var insertions: [SourceSceneInsertion] = [], objects: [UUID] = [], index: [UUID: Int] = [:]
-        func visit(_ object: StudioObject) throws {
+        // Parents before children, each parent's in document order: depth
+        // first with one explicit stack (#326; the recursion took 9.3 KiB a
+        // level in Debug, more than half the main thread's stack on the
+        // deepest scenes).
+        var stack: [StudioObject] = added.filter { !($0.parent.map(addedIDs.contains) ?? false) }.reversed()
+        while let object = stack.popLast() {
             let parent: SourceSceneInsertion.Parent
             if let id = object.parent {
                 if let owner = index[id] { parent = .inserted(owner) }
@@ -63,9 +68,8 @@ public enum SourceSceneExportValidation {
             index[object.id] = insertions.count
             insertions.append(.init(record, parent: parent, attachment: object.sourceDuplicateOf == nil ? nil : object.sourceAttachmentPoint))
             objects.append(object.id)
-            for child in children[object.id] ?? [] { try visit(child) }
+            stack.append(contentsOf: (children[object.id] ?? []).reversed())
         }
-        for object in added where !(object.parent.map(addedIDs.contains) ?? false) { try visit(object) }
         return (insertions, objects)
     }
 

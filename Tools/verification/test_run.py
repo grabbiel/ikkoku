@@ -642,7 +642,19 @@ SCENARIO_OPS = {"select", "setVisible", "rename", "toggleCamera", "toggleRoute",
                 "focus", "selectRoutePoint", "dragRoutePoint", "captureRoute", "editRoute", "setShowSourceMap",
                 "setUnlimitedLights",
                 # Added for #387 round 3 (the workspace rows a selection change patches).
-                "deselect", "assertWorkspaceRows"}
+                "deselect", "assertWorkspaceRows",
+                # A digit-row key press: camera slot load, and save with Shift.
+                "pressDigit",
+                # #425: a source IK guide's mouse drag (the toolbar-steady check).
+                "dragIKGuide",
+                # #439: the Pose tab's source IK toggles, and a click on an IK guide.
+                "setSourceIKEnabled", "clickIKGuide",
+                # #437: a voice play's input resolution (scene decodes, live-step settles).
+                "assertVoice", "dropVoiceInputs",
+                # #448: one component of the Object tab's Position field.
+                "setPosition",
+                # #454: observation of Undo/Redo enablement over recorded steps.
+                "observeUndoState"}
 
 # R7 phase 2, item 7: the window-run inspector checks (`"inspectorUI": {"steps": [...]}`).
 INSPECTOR_UI_OPS = {"select", "deselect", "focus", "type", "delete", "undo", "redo", "cycle",
@@ -654,7 +666,11 @@ INSPECTOR_UI_OPS = {"select", "deselect", "focus", "type", "delete", "undo", "re
                     # Added for #333 (the Clothes tab laid out wider than the inspector).
                     "tab", "addCharacter",
                     # Added for #383 (the Parent popup that replaced the Picker).
-                    "parentMenu"}
+                    "parentMenu",
+                    # Added for #410 (the workspace list's slots, the eyes' own
+                    # focus ring and what each workspace action evaluates).
+                    "selectRow", "scrollWorkspace", "newScene", "addFolders", "eyeFocus",
+                    "workspaceBodies"}
 
 # ST-T11 `editRoute` settings: point edits name the point, route edits do not.
 ROUTE_POINT_SETTINGS = ("delete", "move", "speed", "ease", "connection", "link")
@@ -729,7 +745,23 @@ class AppOutputArtifactTests(unittest.TestCase):
         self.assertEqual(capture["env"]["IKKOKU_CAPTURE_UI_SELECT"], "0,622,963")
         self.assertEqual(validate["argv"][:3], ["python3", "Tools/verification/checks/inspector_fit_log.py",
                                                 capture["env"]["IKKOKU_CAPTURE_UI_FIT_LOG"]])
-        self.assertEqual(validate["argv"][3:], ["--selection", "963", "--tab", "Clothes"])
+        self.assertEqual(validate["argv"][3:], ["--selection", "963", "--tab", "Clothes", "--pose-picker", "--toolbar-fits"])
+
+    def test_object_heights_capture_log_is_validated_after_the_capture(self):
+        # #366: ui-sel-chars (the Object tab, characters 0 then 963); the validator
+        # checks the explicit text-field heights against SwiftUI's on this machine.
+        order = [check["id"] for lane, check in self.app_smoke_checks() if lane == "app-smoke.json"]
+        self.assertLess(order.index("studio-inspector-object-heights-capture"),
+                        order.index("studio-inspector-object-heights-validate"))
+        checks = {check["id"]: check for lane, check in self.app_smoke_checks()
+                  if lane == "app-smoke.json"}
+        capture = checks["studio-inspector-object-heights-capture"]
+        validate = checks["studio-inspector-object-heights-validate"]
+        self.assertEqual(capture["env"]["IKKOKU_CAPTURE_UI_STUDIO_TAB"], "object")
+        self.assertEqual(capture["env"]["IKKOKU_CAPTURE_UI_SELECT"], "0,963")
+        self.assertEqual(validate["argv"][:3], ["python3", "Tools/verification/checks/inspector_fit_log.py",
+                                                capture["env"]["IKKOKU_CAPTURE_UI_FIT_LOG"]])
+        self.assertEqual(validate["argv"][3:], ["--selection", "963", "--tab", "Object", "--object-heights", "24", "21"])
 
     def test_ui_capture_does_not_discover_a_maker_library(self):
         # The synthetic scene's minimal card exercises the source-pose inspector,
@@ -746,6 +778,9 @@ class AppOutputArtifactTests(unittest.TestCase):
         self.assertEqual(fixtures["IKKOKU_SOURCE_SCENE"]["from"], "IKKOKU_STUDIO_HALF_STATE_SCENE")
         self.assertFalse(fixtures["IKKOKU_SOURCE_SCENE"].get("optional", False))
         self.assertIn("IKKOKU_SOURCE_PLUGIN_PROFILE", fixtures)
+        # The scene needs the original avatar: without it an automated run reaches the
+        # source-tree fallback, which only the main checkout has (2026-11-19).
+        self.assertIn("IKKOKU_SOURCE_AVATAR", fixtures)
 
     def test_release_smoke_renders_with_the_optimized_app(self):
         # R6 (2026-10-23): every Release render crashed while the Debug lanes
@@ -947,7 +982,7 @@ class StudioScenarioLaneTests(unittest.TestCase):
                       and not name.startswith(("maker-", "gameplay-")))
 
     def test_lane_validates_and_covers_every_scenario(self):
-        self.assertEqual(len(self.checks), 100)
+        self.assertEqual(len(self.checks), 110)
         referenced = set()
         for check in self.checks:
             scenario = check["env"]["IKKOKU_STUDIO_SCENARIO"]
@@ -976,9 +1011,26 @@ class StudioScenarioLaneTests(unittest.TestCase):
                 self.assertIn(step["sex"], ("female", "male"))
             if op == "parentMenu" and "key" in step:
                 self.assertIs(type(step["key"]), int)
-            if op in ("routePoint", "outfit"):
+            if op in ("routePoint", "outfit", "selectRow"):
                 self.assertIs(type(step["index"]), int)
                 self.assertGreaterEqual(step["index"], 0)
+            if op == "scrollWorkspace":
+                self.assertIs(type(step["toEnd"]), bool)
+            if op == "addFolders":
+                self.assertIs(type(step["count"]), int)
+                self.assertGreater(step["count"], 0)
+            if op == "workspaceBodies":
+                self.assertIn(step["label"], ("select", "toggle", "refresh"))
+                for name in ("count", "index"):
+                    if name in step:
+                        self.assertIs(type(step[name]), int)
+                        self.assertGreaterEqual(step[name], 1 if name == "count" else 0)
+            if op == "eyeFocus":
+                self.assertIs(type(step.get("count", 2)), int)
+                self.assertGreater(step.get("count", 2), 0)
+                if "capture" in step:
+                    self.assertTrue(step["capture"].startswith(".local/verification/"),
+                                    "an eyeFocus capture must stay under .local/verification: %s" % path)
             if op == "type":
                 self.assertTrue(step["text"])
             if op == "cycle":
@@ -989,7 +1041,7 @@ class StudioScenarioLaneTests(unittest.TestCase):
             for name in ("undoCount", "redoCount", "keyViews", "hiddenKeyViews", "activeWells"):
                 if name in step:
                     self.assertIs(type(step[name]), int)
-            for name in ("probeHit", "probeFocusable", "editing", "unchanged", "exists", "inspectorFits"):
+            for name in ("probeHit", "probeFocusable", "editing", "unchanged", "exists", "inspectorFits", "workspaceGeometry"):
                 if name in step:
                     self.assertIs(type(step[name]), bool)
             for name in ("axContains", "axAbsent"):
@@ -1060,6 +1112,14 @@ class StudioScenarioLaneTests(unittest.TestCase):
                         self.assertIs(type(step["key"]), int)
                     if step["build"] in ("export", "loadRoute"):
                         self.assertTrue(step["path"].startswith(".local/verification/scenario-exports/"))
+                if op == "assertVoice":
+                    self.assertIs(type(step["key"]), int)
+                    for field in ("decodes", "settles"):
+                        if field in step:
+                            self.assertIs(type(step[field]), int)
+                            self.assertGreaterEqual(step[field], 0)
+                    if "inputsFrom" in step:
+                        self.assertIn(step["inputsFrom"], ("cache", "check", "preview", "scene"))
                 if op == "measureAccessoryLabels":
                     self.assertIs(type(step["index"]), int)
                     self.assertIn(step["index"], range(100, 2001))
@@ -1102,6 +1162,46 @@ class StudioScenarioLaneTests(unittest.TestCase):
                     self.assertIsInstance(step["visible"], bool)
                 if op == "rename":
                     self.assertTrue(step["name"])
+                if "sameGesture" in step:
+                    # #448: the step continues the previous step's gesture (the
+                    # runner skips its coalescing-window end). Off is the
+                    # default, so only true is written, and never on the first
+                    # step, which has no gesture before it.
+                    self.assertIs(step["sameGesture"], True, "sameGesture is true or absent: %s" % path)
+                    self.assertIsNot(step, steps[0], "the first step has no gesture to continue: %s" % path)
+                if op == "observeUndoState":
+                    # #454: `edits` renames of one object, each its own undo
+                    # step; observation of canUndo/canRedo fires at `changes`.
+                    self.assertIs(type(step["key"]), int)
+                    self.assertTrue(step["name"])
+                    self.assertIs(type(step["edits"]), int)
+                    self.assertIs(type(step["changes"]), int)
+                    self.assertGreater(step["edits"], 0)
+                    self.assertIn(step["changes"], range(step["edits"] + 1))
+                if op == "setPosition":
+                    self.assertIs(type(step["key"]), int)
+                    self.assertIs(type(step["index"]), int)
+                    self.assertIn(step["index"], range(3))
+                    self.assertIsInstance(step["value"], float)
+                if op == "assertWorkspaceRows":
+                    # #410: a row check names its object (a source key, with
+                    # `copy` for a copy, or `added`), then its row index
+                    # (negative from the end), name and selection; `rows` is
+                    # the row count.
+                    if "rows" in step:
+                        self.assertIs(type(step["rows"]), int)
+                        self.assertGreaterEqual(step["rows"], 0)
+                    if {"index", "name", "selected"} & set(step):
+                        self.assertTrue(type(step.get("key")) is int or step.get("added"),
+                                        "a row check names its object: %s" % path)
+                        self.assertFalse("key" in step and "added" in step)
+                    if "index" in step:
+                        # negative counts from the end (-1 is the last row)
+                        self.assertIs(type(step["index"]), int)
+                    if "name" in step:
+                        self.assertTrue(step["name"])
+                    if "selected" in step:
+                        self.assertIs(type(step["selected"]), bool)
                 if op in ("setFace", "setBody"):
                     self.assertIsInstance(step["index"], int)
                     self.assertIsInstance(step["value"], float)
@@ -1160,6 +1260,39 @@ class StudioScenarioLaneTests(unittest.TestCase):
                     self.assertIn(step["axis"], ("x", "y", "z"))
                     self.assertEqual(len(step["pixels"]), 2)
                     self.assertTrue(all(isinstance(c, (int, float)) for c in step["pixels"]))
+                if op == "dragIKGuide":
+                    # the IK guide 0-12 (SourceStudioIKEditing.labels) and its translate arrow
+                    self.assertIs(type(step["key"]), int)
+                    self.assertIs(type(step["index"]), int)
+                    self.assertIn(step["index"], range(13))
+                    self.assertIn(step["axis"], ("x", "y", "z"))
+                    self.assertEqual(len(step["pixels"]), 2)
+                    self.assertTrue(all(isinstance(c, (int, float)) for c in step["pixels"]))
+                if "toolbarSteady" in step:
+                    self.assertIn(op, ("dragGizmo", "dragIKGuide"))
+                    self.assertIs(type(step["toolbarSteady"]), bool)
+                if op == "setSourceIKEnabled":
+                    # #439: the "IK enabled" toggle, or with ikGroup (0-4) one group's toggle
+                    self.assertIs(type(step["key"]), int)
+                    self.assertIs(type(step["on"]), bool)
+                    if "ikGroup" in step:
+                        self.assertIs(type(step["ikGroup"]), int)
+                        self.assertIn(step["ikGroup"], range(5))
+                if op == "clickIKGuide":
+                    self.assertIs(type(step["key"]), int)
+                    self.assertIs(type(step["index"]), int)
+                    self.assertIn(step["index"], range(13))
+                    self.assertIs(type(step["selects"]), bool)
+                if "sourceIK" in step:
+                    check = step["sourceIK"]
+                    self.assertIn(op, ("assert", "assertRejected"))
+                    self.assertIs(type(check["key"]), int)
+                    self.assertTrue(set(check) <= {"key", "drawn", "enableIK", "activeIK", "selectedHidden"}, check)
+                    for target in check.get("drawn", []):
+                        self.assertIn(target, range(13))
+                    if "activeIK" in check:
+                        self.assertEqual(len(check["activeIK"]), 5)
+                        self.assertTrue(all(type(flag) is bool for flag in check["activeIK"]))
                 if op == "hoverGizmo":
                     self.assertIsInstance(step["key"], int)
                     self.assertIsInstance(step["bone"], int)
@@ -1176,7 +1309,8 @@ class StudioScenarioLaneTests(unittest.TestCase):
                 if op == "addCharacter":
                     self.assertIn(step["sex"], ("female", "male"))
                 if op == "duplicate":
-                    self.assertIsInstance(step["key"], int)
+                    # a source key (with `copy` for a copy), or `added` (#410)
+                    self.assertTrue(isinstance(step.get("key"), int) or step.get("added"))
                 if op == "addLight":
                     self.assertIn(step["mode"], ("directional", "point", "spot"))
                 if op in ("setIKEnabled", "setIKTarget", "captureIKPose"):
@@ -1195,7 +1329,8 @@ class StudioScenarioLaneTests(unittest.TestCase):
                     self.assertTrue(step["name"],
                                     "a captured IK pose needs a label to compare against: %s" % path)
                 if op == "delete":
-                    self.assertIs(type(step["key"]), int)
+                    # a source key, or `added` for an object the scenario added (#410)
+                    self.assertTrue(type(step.get("key")) is int or step.get("added"))
                 if op == "setParent":
                     # parent null is the root; the object (a source key, or
                     # `added` for one the scenario added) must be named either way
@@ -1235,6 +1370,12 @@ class StudioScenarioLaneTests(unittest.TestCase):
                           "loadDocumentRejected", "importDocument"):
                     self.assertTrue(step["path"].startswith(".local/"),
                                     "scene writes must stay under .local/: %s" % step["path"])
+                if op == "pressDigit":
+                    # the digit 0-9 and, for a slot save, Shift
+                    self.assertIn(step["index"], range(10))
+                    self.assertIs(type(step["index"]), int)
+                    if "on" in step:
+                        self.assertIs(type(step["on"]), bool)
                 if op in ("assert", "assertRejected"):
                     declared = [k for k in ("name", "visible", "face", "body", "color",
                                             "activeCamera", "routePlaying",
@@ -1244,13 +1385,17 @@ class StudioScenarioLaneTests(unittest.TestCase):
                                             "characterBuilt", "exportedAnimation", "treeLabel", "view", "render",
                                             "exportIdenticalToSource", "outfit", "clothes", "ik", "expression", "accessoryLabels", "pluginMount",
                                             "children", "absent", "activeCopyOf", "route", "routeLines", "sourceMap",
-                                            "liveSamplers", "undoDepth", "redoDepth", "objectCount") if k in step]
+                                            "liveSamplers", "undoDepth", "redoDepth", "objectCount", "canUndo", "canRedo", "sourceIK") if k in step]
                     self.assertTrue(declared, "assert declares nothing: %s" % path)
                     for name in ("undoDepth", "redoDepth", "objectCount"):
                         if name in step:
                             # #384: history depths and the document's object count.
                             self.assertIs(type(step[name]), int)
                             self.assertGreaterEqual(step[name], 0)
+                    for name in ("canUndo", "canRedo"):
+                        if name in step:
+                            # #454: Undo/Redo enablement (model, toolbar state, stack).
+                            self.assertIs(type(step[name]), bool)
                     if "characterBuilt" in step:
                         # #373 lazy hidden characters: one source key and whether its character is built.
                         self.assertEqual(set(step["characterBuilt"]), {"key", "built"})
@@ -1337,11 +1482,13 @@ class StudioScenarioLaneTests(unittest.TestCase):
                         self.assertIsInstance(step["position"]["key"], int)
                         self.assertTrue(step["position"]["from"])
                     if "view" in step:
-                        # exactly one target: the saved camera or one camera object
+                        # exactly one target: the saved camera, one camera object or one camera slot
                         view = step["view"]
-                        self.assertEqual(len(view), 1, "a view assert names saved or key: %s" % path)
+                        self.assertEqual(len(view), 1, "a view assert names saved, key or slot: %s" % path)
                         if "saved" in view:
                             self.assertIs(view["saved"], True)
+                        elif "slot" in view:
+                            self.assertIn(view["slot"], range(1, 11))
                         else:
                             self.assertIsInstance(view["key"], int)
                     for text in ("statusContains", "indicatorContains", "treeLabel"):
@@ -1429,12 +1576,15 @@ class StudioScenarioLaneTests(unittest.TestCase):
                 exported, imported = ops.index("export"), ops.index("reimport")
                 self.assertLess(exported, imported)
                 self.assertEqual(steps[exported]["path"], steps[imported]["path"])
-            elif check["id"] in ("studio-scenario-hidden-attachment-status", "studio-scenario-hidden-animation-clock"):
+            elif check["id"] in ("studio-scenario-hidden-attachment-status", "studio-scenario-hidden-animation-clock",
+                                 "studio-scenario-voice-inputs"):
                 # #373 lazy hidden characters: a hidden character must stay
                 # unbuilt (and its data-only clock keep running) across the
                 # original-format export/reimport AND a same-process native
                 # save and load, so these checks run both round trips. They
                 # have no fresh-process partner (each reloads its own save).
+                # #437's voice inputs check follows the same path: an import's
+                # hidden card check, then a native reload's check.
                 self.assertEqual((ops.count("saveDocument"), ops.count("loadDocument")), (1, 1))
                 saved, loaded = ops.index("saveDocument"), ops.index("loadDocument")
                 self.assertLess(saved, loaded)
@@ -1475,7 +1625,9 @@ class StudioScenarioLaneTests(unittest.TestCase):
                 # formats on purpose and has no fresh-process partner.
                 self.assertEqual((ops.count("saveDocument"), ops.count("loadDocument")), (1, 1))
                 self.assertEqual((ops.count("export"), ops.count("reimport")), (1, 1))
-                self.assertEqual((ops.count("loadDocumentRejected"), ops.count("importDocument"), ops.count("newScene")), (1, 1, 1))
+                # A second New Scene after two undos (#454): a scene
+                # replacement that flips both Undo and Redo enablement.
+                self.assertEqual((ops.count("loadDocumentRejected"), ops.count("importDocument"), ops.count("newScene")), (1, 1, 2))
                 saved, loaded = ops.index("saveDocument"), ops.index("loadDocument")
                 exported, imported = ops.index("export"), ops.index("reimport")
                 refused, merged = ops.index("loadDocumentRejected"), ops.index("importDocument")
@@ -1489,6 +1641,15 @@ class StudioScenarioLaneTests(unittest.TestCase):
                 self.assertEqual(steps[saved]["path"], steps[merged]["path"])
                 self.assertEqual(steps[exported]["path"], steps[refused]["path"])
                 self.assertEqual(steps[exported]["path"], steps[imported]["path"])
+                # #454: one observation of 3 recorded steps, after the
+                # replacements, firing once (the flip at the first step).
+                self.assertEqual(ops.count("observeUndoState"), 1)
+                observed = steps[ops.index("observeUndoState")]
+                self.assertLess(imported, ops.index("observeUndoState"))
+                self.assertEqual((observed["edits"], observed["changes"]), (3, 1))
+                self.assertEqual((steps[-2]["op"], steps[-1]["op"]), ("assertRejected", "assert"))
+                self.assertIn("canUndo", steps[-2])
+                self.assertIn("canUndo", steps[-1])
             elif "saveDocument" in ops or "loadDocument" in ops:
                 self.assertNotIn("export", ops,
                                  "a save/load scenario must not mix in the "
