@@ -28,7 +28,11 @@ import Studio
 /// nothing reaches the model before the commit.
 final class SourceSceneImportJob {
     let sceneURL: URL, rigURL: URL, boneCatalogURL: URL, hash: String
-    let source: KoikatsuSceneDocument
+    /// The decoded scene, until the commit or a cancel drops it on the main
+    /// thread (`tearDown`). The batch's callbacks hold this job, and its
+    /// block on the build queue can drop them last (a cancel always does):
+    /// a GCD worker's 512 KiB cannot release the deepest tree (#326).
+    private(set) var source: KoikatsuSceneDocument?
     /// The imported document and its diagnostics as far as the walk.
     let imported: StudioDocument
     let diagnostics: [String]
@@ -86,6 +90,21 @@ final class SourceSceneImportJob {
 
     /// Characters whose build finished (successfully or not).
     var builtCount: Int { characters.lazy.filter { $0 != nil }.count }
+
+    /// Drops the decoded scene on the main thread (#326) and stops the hidden
+    /// card check nobody will ask (#432): after the commit, whatever its
+    /// outcome, when the import is cancelled or replaced, and when the model
+    /// goes.
+    func tearDown() {
+        source = nil
+        hiddenCardCheck.cancel()
+    }
+
+    deinit {
+        // #326: the last reference may drop on the build queue; by then the
+        // tree is gone (`tearDown`).
+        assert(source == nil || Thread.isMainThread, "#326: an import job released its decoded scene off the main thread")
+    }
 
     /// Records a character the build queue finished.
     func deliver(_ delivery: SourceStudioCharacterBatch.Delivery) {

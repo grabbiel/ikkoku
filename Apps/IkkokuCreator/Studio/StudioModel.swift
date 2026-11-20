@@ -842,6 +842,9 @@ final class StudioModel: ViewportInputHandler, LivePacedHandler {
     // NotificationCenter retains block-observer tokens even after their weak
     // owner disappears. Match replacement/unload cleanup for model disposal.
     isolated deinit {
+        // #326: an import in flight keeps running until its batch ends; its
+        // decoded scene goes here, on the main thread.
+        sourceImportJob?.tearDown()
         for token in sourceFocusObservers { NotificationCenter.default.removeObserver(token) }
         if let token = sourceLaunchObserver { NotificationCenter.default.removeObserver(token) }
         #if DEBUG
@@ -2441,7 +2444,7 @@ final class StudioModel: ViewportInputHandler, LivePacedHandler {
         // one would be retained without rendering, and a save would keep the
         // folders and drop every character, so the preview refuses the scene.
         var directory: ObjCBool = false
-        if Self.containsCharacter(source.snapshot.roots),
+        if source.snapshot.containsCharacter,
            !FileManager.default.fileExists(atPath: boneCatalogURL.path, isDirectory: &directory) || directory.boolValue {
             throw RigError.invalid("The \(ResourceCompanion.studioPoseContract.label) is missing at \(boneCatalogURL.path): source scene characters need \(ResourceCompanion.studioPoseContract.conventionalPath) in the converted library, next to the original base's rigs/ folder.")
         }
@@ -2561,7 +2564,10 @@ final class StudioModel: ViewportInputHandler, LivePacedHandler {
         // A failed commit drops the map its preparation started loading.
         var committed = false
         defer { if !committed { job.mapLoad?.cancel() } }
-        let sceneURL = job.sceneURL, hash = job.hash, source = job.source
+        let sceneURL = job.sceneURL, hash = job.hash
+        guard let source = job.source else { throw RigError.invalid("The source scene import was already released.") }
+        // #326: the decoded scene goes here, on the main thread (`tearDown`).
+        defer { job.tearDown() }
         var imported = job.imported, diagnostics = job.diagnostics
         let sceneLightOverride = job.sceneLightOverride, itemResolver = job.itemResolver, itemNames = job.itemNames
         var previews: [UUID: SourceStudioCharacterPreview] = [:]
@@ -2808,6 +2814,7 @@ final class StudioModel: ViewportInputHandler, LivePacedHandler {
     func cancelSourceBuilds() {
         sourceImportJob?.batch.cancel()
         sourceImportJob?.mapLoad?.cancel()
+        sourceImportJob?.tearDown()
         sourceMapLoad?.cancel(); sourceMapLoad = nil
         sourceImportJob = nil
         for build in pendingSourceBuilds.values { build.batch.cancel() }
@@ -3127,13 +3134,6 @@ final class StudioModel: ViewportInputHandler, LivePacedHandler {
             failedSourceBuilds[id] = (pending.reference, pending.outfit, String(describing: error))
         }
         refreshAfterInstall()
-    }
-
-    /// Whether any record of the tree, an accessory child included, is a character.
-    private static func containsCharacter(_ records: [KoikatsuObjectRecord]) -> Bool {
-        records.contains { record in
-            record.character != nil || containsCharacter(record.children)
-        }
     }
 
     /// The source preview's characters (A-T02): how many have a rendered preview
