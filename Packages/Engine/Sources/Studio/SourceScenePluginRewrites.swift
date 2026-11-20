@@ -392,7 +392,7 @@ struct KKPEPlan {
             }
         }
         // Copies: each gets its template's data under a fresh ID, in key order.
-        if edit.deleted, itemCopied {
+        if edit.deleted, itemCopied, !edit.ordered {
             throw failure("writes each item's key and matches pose data to items by position, and this edit both deletes objects and copies items, so the copies' keys can differ from CharaStudio's")
         }
         var patches: [Int32: [Int: [UInt8]]] = [:], cardPatches: [CardPatch] = [], ids: [Int32: Int32] = [:]
@@ -651,7 +651,7 @@ struct MaterialEditorPlan {
         for record in edit.finalRecords where record.kind == .item {
             if let origin = edit.origins[record.sourceKey], origin != record.sourceKey { copies.append((record.sourceKey, origin)) }
         }
-        copies.sort { $0.key < $1.key }
+        copies.sort { edit.copyOrder($0.key, $1.key) }
         var named = Set<Int32>()
         for records in lists.values { for record in records { named.insert(record.id) } }
         // Records naming no item load nowhere (ExtractGameObject binds items
@@ -665,7 +665,7 @@ struct MaterialEditorPlan {
         guard entry.version == 1 else {
             throw failure("has version \(entry.version ?? -1) data, which CharaStudio's save rewrites in its version 1 form; this writer rewrites version 1 only")
         }
-        if edit.deleted, !copied.isEmpty {
+        if edit.deleted, !copied.isEmpty, !edit.ordered {
             throw failure("keys its material edits by item, and this edit both deletes objects and copies items with material edits, so the copies' keys can differ from CharaStudio's")
         }
         // Each list: the records of items still in the scene, then each
@@ -920,7 +920,7 @@ struct NodesConstraintsPlan {
         let kept = constraints.filter { constraint in
             !(constraint.parent.map(edit.deletedKeys.contains) ?? false) && !edit.deletedKeys.contains(constraint.child)
         }
-        if edit.deleted, edit.copied, !kept.isEmpty {
+        if edit.deleted, edit.copied, !kept.isEmpty, !edit.ordered {
             throw failure("addresses objects by their position in key order, and this edit both deletes and copies objects, so the copies' keys, and the positions after them, can differ from CharaStudio's")
         }
         let renumbered = kept.count != constraints.count || kept.enumerated().contains { Int32($0.offset) != $0.element.load }

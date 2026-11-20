@@ -1,4 +1,5 @@
 import Foundation
+import CryptoKit
 import Testing
 import Assets
 import Character
@@ -26,9 +27,200 @@ private let phaseBVariable = "IKKOKU_PLUGIN_SCENE_PROBE_B"
 private let rewriteEdits = ["delete", "delete-folder", "delete-character", "delete-parent", "duplicate",
                             "duplicate-subtree", "duplicate-character", "delete-duplicate"]
 private let colliderEdits = ["lc-delete-character", "lc-delete-collider", "lc-duplicate-collider", "lc-duplicate-character"]
-/// Edits our writer refuses: a delete with an item copy (#278), and a copy of
-/// a controller a lone collider names (DynamicBonesEditor.cs:1799).
-private let refusedEdits = ["delete-duplicate": "KKPE", "lc-duplicate-character": "KKPE"]
+/// Edits our writer refuses: a copy of a controller a lone collider names
+/// (DynamicBonesEditor.cs:1799). The delete with an item copy is written in
+/// the order CharaStudio made it (#278).
+private let refusedEdits = ["lc-duplicate-character": "KKPE"]
+
+/// #278: the original player's own operation orders (phase OA of
+/// Tools/reverse/original_plugin_scene_probe.py; `OrderedCases` in
+/// fixtures/OriginalPluginRewriteProbe.cs), each saved from its fixture's
+/// load-then-save. Our export of the same steps, in the same order, must be
+/// CharaStudio's file: phase A's rows byte for byte, phase C's apart from the
+/// masked bytes the row lists (the characters' live state and, for a copy of
+/// an object with KKPE data, KKPE's instance IDs; `orderedMasks`).
+private let orderedOracleVariable = "IKKOKU_ORDERED_ORACLE"
+/// An optional path: the row report (keys, roots, masked offsets, leaked keys).
+private let orderedReportVariable = "IKKOKU_ORDERED_ORACLE_REPORT"
+private let orderedCases: [(label: String, fixture: String, steps: [(operation: String, target: String)])] = [
+    ("delete-duplicate", "a", [("delete", "V1"), ("duplicate", "M3")]),
+    ("duplicate-delete", "a", [("duplicate", "M3"), ("delete", "V1")]),
+    ("delete-delete-duplicate", "a", [("delete", "V1"), ("delete", "R"), ("duplicate", "M3")]),
+    ("child-delete-duplicate", "a", [("delete", "M4"), ("duplicate", "M3")]),
+    ("route-delete-duplicate-folder", "a", [("delete", "R"), ("duplicate", "F")]),
+    ("delete-duplicate-duplicate", "a", [("delete", "V1"), ("duplicate", "M3"), ("duplicate", "M1")]),
+    ("delete-add-folder", "a", [("delete", "V1"), ("add-folder", "")]),
+    ("character-delete-duplicate", "c", [("delete", "W"), ("duplicate", "M3")]),
+    ("delete-duplicate-character", "c", [("delete", "V1"), ("duplicate", "W")]),
+]
+
+// Opt-in, like the timing probes, until the shared fixture map names an OA
+// folder: the oracle is a private original-player run.
+@Test(.enabled(if: !(ProcessInfo.processInfo.environment[orderedOracleVariable] ?? "").isEmpty,
+               "Opt-in: set IKKOKU_ORDERED_ORACLE to the probe's phase OA output folder"))
+func sourceSceneOrderedExportsMatchCharaStudio() throws {
+    let root = URL(fileURLWithPath: try SourceFixtureSupport.require(orderedOracleVariable))
+    func load(_ name: String) throws -> Data { try Data(contentsOf: root.appendingPathComponent(name)) }
+    func hash(_ data: Data) -> String { SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined() }
+    func json(_ name: String) throws -> [String: Any] {
+        try #require(try JSONSerialization.jsonObject(with: load(name)) as? [String: Any], "\(name) is not an object")
+    }
+    let status = try json("status.json"), trace = try json("plugin-scene-trace.json")
+    try #require(status["error"] is NSNull, "Do not compare a partial original-player run")
+    let cases = try #require(trace["cases"] as? [String: [String: Any]])
+    let names = try #require(trace["keys"] as? [String: Int]).mapValues { Int32($0) }
+    // The fixtures: CharaStudio's load-then-save of each input, and the
+    // control session's save of phase A's input. Phase A is a raw fixed
+    // point, phase C one under the live-state mask, and the control equals
+    // the baseline apart from Sideloader's LocalSlot values, which depend on
+    // the session's mods (`pluginProbeComparable`, acrossSessions).
+    let baselines = ["a": try load("fixture.png"), "c": try load("fixture-c.png")]
+    try #require(baselines["a"] == (try load("resave-fixture.png")), "phase A's baseline is not a fixed point")
+    try #require(try liveStateMasked(baselines["c"]!) == liveStateMasked(load("resave-fixture-c.png")), "phase C's baseline is not a fixed point under the live-state mask")
+    let control = try load("control-fixture.png")
+    try #require(control == (try load("control-resave-fixture.png")), "the control is not a fixed point")
+    let (controlMasked, controlSlots) = localSlotMasked(control), (baselineMasked, baselineSlots) = localSlotMasked(baselines["a"]!)
+    #expect(controlSlots == baselineSlots && !baselineSlots.isEmpty, "the control's LocalSlot values are not where the baseline's are")
+    #expect(controlMasked == baselineMasked, "the control differs from the baseline outside Sideloader's LocalSlot values")
+    var inside = baselines["a"]!, after = baselines["a"]!
+    inside[baselineSlots[0].lowerBound] ^= 0x01; after[baselineSlots[0].upperBound] ^= 0x01
+    #expect(localSlotMasked(inside).0 == baselineMasked, "the LocalSlot mask misses its own value")
+    #expect(localSlotMasked(after).0 != baselineMasked, "the LocalSlot mask hides the byte after it")
+    var rows: [[String: Any]] = []
+    for row in orderedCases {
+        let observed = try #require(cases[row.label], "no trace for \(row.label)")
+        let actions = try #require(observed["actions"] as? [[String: Any]])
+        try #require(actions.map { $0["operation"] as? String } == row.steps.map(\.operation), "\(row.label): other operations than OrderedCases")
+        try #require(actions.map { $0["name"] as? String } == row.steps.map(\.target))
+        let saved = try load("edit-\(row.label).png"), resaved = try load("resave-edit-\(row.label).png")
+        try #require(observed["savedSHA256"] as? String == hash(saved) && observed["resavedSHA256"] as? String == hash(resaved))
+        let fixed = row.fixture == "a" ? saved == resaved : try liveStateMasked(saved) == liveStateMasked(resaved)
+        #expect(fixed, "\(row.label): CharaStudio's edit is not a fixed point\(row.fixture == "a" ? "" : " under the live-state mask")")
+        let theirs = try KoikatsuSceneReader.decodeDocument(saved)
+        let rootRows = try #require((observed["afterSave"] as? [String: Any])?["rootEnumeration"] as? [[String: Int]])
+        try #require(rootRows.compactMap { $0["key"] } == theirs.snapshot.roots.map { Int($0.sourceKey) }, "\(row.label): the trace's root order is not the saved file's")
+        let source = try KoikatsuSceneReader.decodeDocument(baselines[row.fixture]!)
+        var edits = try orderedProbeEdits(row.steps, keys: names, source: source)
+        edits.thumbnailData = try leadingPNG(saved)
+        let ours = try source.editedData(edits)
+        let decoded = try KoikatsuSceneReader.decodeDocument(ours)
+        var report: [String: Any] = [
+            "label": row.label, "fixture": row.fixture, "steps": row.steps.map { "\($0.operation):\($0.target)" },
+            "copies": actions.compactMap { $0["copies"] ?? $0["added"] }, "expectedRoots": theirs.snapshot.roots.map { Int($0.sourceKey) },
+            "actualRoots": decoded.snapshot.roots.map { Int($0.sourceKey) }, "expectedSHA256": hash(saved), "actualSHA256": hash(ours),
+            "fixedPoint": fixed, "leakedAtReload": observed["leakedAtReload"] ?? NSNull()]
+        // The set-based export of the same edit, under the row's comparator:
+        // it differs whenever CharaStudio reused a freed key or root slot.
+        func matches(_ data: Data) throws -> Bool {
+            if row.fixture == "a" { return data == saved }
+            let masks = try orderedMasks(data, saved)
+            return masks.sameLength && masks.unmasked.isEmpty
+        }
+        var unordered = edits; unordered.order = nil
+        report["setBasedMatches"] = try (try? source.editedData(unordered)).map(matches) ?? false
+        if row.fixture == "a" {
+            #expect(ours == saved, "\(row.label): the export is not CharaStudio's file")
+            report["parity"] = ours == saved; report["masked"] = [Any]()
+        } else {
+            let masks = try orderedMasks(ours, saved)
+            report["masked"] = masks.masked.map { ["offset": $0.range.lowerBound, "length": $0.range.count, "mask": $0.mask] }
+            report["unmasked"] = masks.unmasked.map { ["offset": $0.lowerBound, "length": $0.count] }
+            report["parity"] = masks.unmasked.isEmpty && masks.sameLength
+            #expect(masks.sameLength, "\(row.label): our export is \(ours.count) B, CharaStudio's \(saved.count) B")
+            #expect(masks.unmasked.isEmpty, "\(row.label): bytes differ outside the masks at \(masks.unmasked.prefix(8).map(\.lowerBound))")
+            #expect(try pluginProbeComparable(ours) == pluginProbeComparable(saved), "\(row.label): the instance IDs do not follow the same pattern")
+        }
+        rows.append(report)
+    }
+    if let path = ProcessInfo.processInfo.environment[orderedReportVariable], !path.isEmpty {
+        let data = try JSONSerialization.data(withJSONObject: ["schemaVersion": 1, "oracle": root.path, "rows": rows], options: [.sortedKeys, .prettyPrinted])
+        try data.write(to: URL(fileURLWithPath: path), options: .atomic)
+    }
+    print("ordered oracle:\n" + rows.map { "\($0["label"]!): parity \($0["parity"]!), roots \($0["actualRoots"]!), masked \(($0["masked"] as? [Any])?.count ?? 0)" }.joined(separator: "\n"))
+}
+
+/// The probe's ordered steps as our export's, with `order` set. A duplicate
+/// copies the target's subtree, each record under its parent's copy.
+private func orderedProbeEdits(_ steps: [(operation: String, target: String)], keys: [String: Int32],
+                               source: KoikatsuSceneDocument) throws -> SourceSceneEdits {
+    var edits = SourceSceneEdits(), order: [SourceSceneInsertion.Step] = []
+    func copy(_ record: KoikatsuObjectRecord, parent: SourceSceneInsertion.Parent, attachment: Int32?) {
+        let index = edits.insertions.count
+        edits.insertions.append(.init(.duplicate(of: record.sourceKey), parent: parent, attachment: attachment))
+        for (point, children) in (record.character?.accessoryChildren ?? [:]).sorted(by: { $0.key < $1.key }) {
+            for child in children { copy(child, parent: .inserted(index), attachment: point) }
+        }
+        for child in record.children { copy(child, parent: .inserted(index), attachment: nil) }
+    }
+    for step in steps {
+        let first = edits.insertions.count
+        switch step.operation {
+        case "delete":
+            let key = try #require(keys[step.target]); edits.deletions.insert(key); order.append(.delete(key))
+        case "duplicate":
+            let key = try #require(keys[step.target])
+            copy(try #require(record(source, key)), parent: .root, attachment: nil)
+            order.append(.insert(Array(first..<edits.insertions.count)))
+        case "add-folder":
+            // AddObjectFolder.Add: "フォルダー", the ObjectInfo defaults.
+            edits.insertions.append(.init(.folder(name: "フォルダー"))); order.append(.insert([first]))
+        default: throw SourceFixtureError.missing("ordered operation \(step.operation)")
+        }
+    }
+    edits.order = order
+    return edits
+}
+
+/// The bytes where our export and CharaStudio's differ, each inside one of
+/// the masks phase C's comparison already uses, and the ones that are not.
+/// `live` is a character's neck, eye or animator-time bytes
+/// (`liveStateSpans`); `kkpe` is a `uniqueId` or `poseControllerId` value,
+/// which `pluginProbeComparable` renames (#287). A changed length is
+/// reported, never aligned.
+func orderedMasks(_ ours: Data, _ theirs: Data) throws -> (masked: [(range: Range<Int>, mask: String)], unmasked: [Range<Int>], sameLength: Bool) {
+    guard ours.count == theirs.count else { return ([], [0..<max(ours.count, theirs.count)], false) }
+    var masks: [(Range<Int>, String)] = []
+    for (key, spans) in try liveStateSpans(theirs) {
+        for (span, name) in zip(spans, ["neck", "eyes", "time"]) { masks.append((span, "live \(name) of character \(key)")) }
+    }
+    let a = [UInt8](ours), b = [UInt8](theirs)
+    for attribute in ["uniqueId", "poseControllerId"] {
+        let head = Array("\(attribute)=\"".utf8)
+        for start in occurrences(of: head, in: b) {
+            var end = start.upperBound
+            while end < b.count, b[end] == UInt8(ascii: "-") || (UInt8(ascii: "0")...UInt8(ascii: "9")).contains(b[end]) { end += 1 }
+            // The same attribute must open the same value range in ours.
+            if Array(a[start]) == head, end < b.count, b[end] == UInt8(ascii: "\""), a[end] == UInt8(ascii: "\"") {
+                masks.append((start.upperBound..<end, "kkpe \(attribute)"))
+            }
+        }
+    }
+    var masked: [(range: Range<Int>, mask: String)] = [], unmasked: [Range<Int>] = []
+    var offset = 0
+    while offset < a.count {
+        guard a[offset] != b[offset] else { offset += 1; continue }
+        var end = offset
+        while end < a.count, a[end] != b[end] { end += 1 }
+        let run = offset..<end
+        if let mask = masks.first(where: { $0.0.contains(run.lowerBound) && $0.0.upperBound >= run.upperBound }) {
+            if let last = masked.last, last.mask == mask.1, last.range.upperBound == run.lowerBound { masked[masked.count - 1].range = last.range.lowerBound..<run.upperBound }
+            else { masked.append((run, mask.1)) }
+        } else {
+            unmasked.append(run)
+        }
+        offset = end
+    }
+    return (masked, unmasked, true)
+}
+
+/// The data with every Sideloader `LocalSlot` uint32 zeroed, and their ranges.
+private func localSlotMasked(_ data: Data) -> (Data, [Range<Int>]) {
+    var bytes = [UInt8](data)
+    let head: [UInt8] = [0xa9] + Array("LocalSlot".utf8) + [0xce]
+    let ranges = occurrences(of: head, in: bytes).map { $0.upperBound..<($0.upperBound + 4) }.filter { $0.upperBound <= bytes.count }
+    for range in ranges { for offset in range { bytes[offset] = 0 } }
+    return (Data(bytes), ranges)
+}
 
 @Test(.enabled(if: SourceFixtureSupport.shouldRun([phaseCVariable]), "Requires IKKOKU_PLUGIN_SCENE_PROBE_C (the probe's phase-c folder)"))
 func sourceScenePluginRewritesMatchCharaStudioEdits() throws {
@@ -239,7 +431,11 @@ private func rewriteProbeEdits(_ label: String, keys: [String: Int32], source: K
         return .init(insertions: [.init(.duplicate(of: 0)), .init(.duplicate(of: 3), parent: .inserted(0)),
                                   .init(.duplicate(of: 4), parent: .inserted(0))])
     case "duplicate-character", "lc-duplicate-character": return .init(insertions: [.init(.duplicate(of: w))])
-    case "delete-duplicate": return .init(deletions: [1], insertions: [.init(.duplicate(of: 5))])
+    case "delete-duplicate":
+        // OriginalPluginRewriteProbe.cs: Delete(V1), then Duplicate(M3).
+        var edits = SourceSceneEdits(deletions: [1], insertions: [.init(.duplicate(of: 5))])
+        edits.order = [.delete(1), .insert([0])]
+        return edits
     case "lc-delete-collider": return .init(deletions: [try #require(keys["LC"])])
     case "lc-duplicate-collider": return .init(insertions: [.init(.duplicate(of: try #require(keys["LC"])))])
     default: throw SourceFixtureError.missing("probe edit \(label)")

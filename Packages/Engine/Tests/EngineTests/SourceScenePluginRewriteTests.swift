@@ -517,6 +517,45 @@ private func materialSource(shaders: PluginMP = .null, version: Int64 = 1, extra
     }
 }
 
+/// The export with `order` (#278): `insertions` staged, then `deletions`
+/// and the replayed order.
+private func rwOrdered(_ scene: TopologyScene, _ insertions: [SourceSceneInsertion], deletions: Set<Int32>,
+                       _ order: [SourceSceneInsertion.Step]) throws -> KoikatsuSceneDocument {
+    let stage = try KoikatsuSceneReader.decodeDocument(scene.data).inserting(insertions)
+    var edits = SourceSceneEdits(deletions: deletions); edits.order = order
+    return try KoikatsuSceneReader.decodeDocument(stage.editedData(edits))
+}
+
+@Test func sourceScenePluginRewritesOrderedDeletesWithCopies() throws {
+    // #278: with the recorded order a copy carries CharaStudio's key, so the
+    // MaterialEditor and KKPE rules write a delete with an item copy that
+    // they refuse without it (sourceScenePluginRewrites...RefusesWhatItsRuleDoesNotCover).
+    let scene = rwScene([materialSource(), rwSettings])
+    func expected(_ entry: (String, PluginMP)) -> Data { rwTrailer([entry, rwSettings]) }
+    // Item 3 deleted (freeing key 3), then item 4 copied: the copy is 3, and
+    // its records are item 4's under key 3 after the kept items' records.
+    let reused = try rwOrdered(scene, [.init(.duplicate(of: 4))], deletions: [3], [.delete(3), .insert([0])])
+    #expect(reused.snapshot.roots.map(\.sourceKey) == [0, 4, 5, 6, 11, 12, 3])
+    #expect(reused.trailingData == expected(materialEntry(floats: [materialFloat(1), materialFloat(4), materialFloat(3, 4)],
+        colors: [materialColor(4), materialColor(3, 4)],
+        textures: [materialTexture(4, 1, frames: [3]), materialTexture(3, 1, frames: [3])], dictionary: [1, 3])))
+    // Item 4 copied (13), item 1 deleted (freeing 1 and 2), item 4 copied
+    // again (1): OnObjectsCopied runs per Duplicate, so the second copy's
+    // records follow the first's although its key is smaller.
+    let twice = try rwOrdered(scene, [.init(.duplicate(of: 4)), .init(.duplicate(of: 4))], deletions: [1],
+                              [.insert([0]), .delete(1), .insert([1])])
+    #expect(twice.snapshot.roots.map(\.sourceKey) == [0, 4, 5, 6, 11, 12, 13, 1])
+    #expect(twice.trailingData == expected(materialEntry(floats: [materialFloat(4), materialFloat(13, 4), materialFloat(1, 4)],
+        colors: [materialColor(4), materialColor(13, 4), materialColor(1, 4)],
+        textures: [materialTexture(3, 2), materialTexture(4, 1, frames: [3]), materialTexture(13, 1, frames: [3]),
+                   materialTexture(1, 1, frames: [3])], dictionary: [1, 2, 3])))
+    // KKPE: one element per item in key order, the copy under key 3 with a fresh ID.
+    let kkpe = rwScene([kkpeEntry(kkpePlain)], card: kkpeCard(-50000))
+    #expect(rwOutcome(kkpe, .init(deletions: [3], insertions: [.init(.duplicate(of: 4))])).contains("both deletes objects and copies items"))
+    #expect(try rwOrdered(kkpe, [.init(.duplicate(of: 4))], deletions: [3], [.delete(3), .insert([0])]).trailingData
+            == rwTrailer([kkpeEntry(kkpeRoot([kkpeItem1, kkpeItem2, kkpeItem(3, -41287), kkpeItem4]))]))
+}
+
 // MARK: - NodesConstraints
 
 /// `OnSceneSave`: per constraint its objects' indices in the key-sorted
@@ -573,6 +612,13 @@ private let constraintsSource = constraintsEntry([constraint(1, 4, 0, "a"), cons
     expectRefused(scene, .init(deletions: [5], insertions: [.init(.duplicate(of: 4))]),
                   "addresses objects by their position in key order, and this edit both deletes and copies objects")
     #expect(try rwTrailerAfter(scene, .init(deletions: [0, 11, 12], insertions: [.init(.duplicate(of: 4))])) == rwTrailer([constraintsEntry([])]))
+    // With the recorded order (#278) the copy of item 4 is 1, in the key
+    // order CharaStudio numbers objects by: item 1's constraint goes, the
+    // others take their objects' new positions.
+    let stage = try KoikatsuSceneReader.decodeDocument(scene.data).inserting([.init(.duplicate(of: 4))])
+    var ordered = SourceSceneEdits(deletions: [1]); ordered.order = [.delete(1), .insert([0])]
+    #expect(try KoikatsuSceneReader.decodeDocument(stage.editedData(ordered)).trailingData
+            == rwTrailer([constraintsEntry([constraint(-2, 7, 0, "b"), constraint(2, 6, 1, "c")])]))
     // Timeline may animate constraints by number.
     let timeline = ("timeline", rwPlugin(0, .map([("sceneInfo", .str(#"<root><interpolable owner="NodesConstraints" id="constraint" /></root>"#))])))
     let animated = rwScene([constraintsSource, timeline])

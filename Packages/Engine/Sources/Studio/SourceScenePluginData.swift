@@ -91,13 +91,19 @@ enum SourceScenePluginData {
     /// The final scene: `data` (decoded as `final`) with its plug-in trailer
     /// following the edit, or refused with the reason. `source` is the scene
     /// before insertions; `copies` maps each copy's key to its template's.
+    /// `ordered`: each copy's step among the recorded operations, whose
+    /// replay gave the copies CharaStudio's keys and root positions (#278,
+    /// `SourceSceneStage.replay`). Rules that refuse a delete with a copy
+    /// only because the keys could differ then accept it, and copies are
+    /// taken in operation order. Nil: copies are in key order, which is
+    /// their operation order when no key was freed before one was taken.
     static func rewrite(_ data: Data, final: KoikatsuSceneDocument, source: KoikatsuSceneDocument,
-                        copies: [Int32: Int32], moved: Bool) throws -> Data {
+                        copies: [Int32: Int32], moved: Bool, ordered: [Int32: Int]? = nil) throws -> Data {
         // No plug-in data: only the card fallback can refuse, and only for a
         // card that names KKAnimationController data. Every written card is
         // in `data` verbatim, so one search keeps such scenes at no cost.
         if final.trailingData.isEmpty, data.range(of: cardMarker) == nil { return data }
-        let edit = Edit(source: source.snapshot, final: final.snapshot, copies: copies, moved: moved)
+        let edit = Edit(source: source.snapshot, final: final.snapshot, copies: copies, moved: moved, ordered: ordered)
         guard edit.structural else { return data }
         guard !final.trailingData.isEmpty else {
             // No plug-in data, but NodesConstraints still reads the cards.
@@ -141,7 +147,9 @@ enum SourceScenePluginData {
     ///   the constraint to the copied object, and the copy's card still
     ///   links the original.
     /// - A delete and a copy in one export: the copies' keys differ from
-    ///   CharaStudio's (#278), and links name keys.
+    ///   CharaStudio's (#278), and links name keys. This stays refused for
+    ///   an ordered export too: no original-player run has reloaded a linked
+    ///   card after one.
     ///
     /// A copied character alone keeps the original targets either way, a
     /// copied target alone gets no constraint (both ends must be copied),
@@ -255,9 +263,14 @@ enum SourceScenePluginData {
         /// with a copy in the final scene.
         let deletedKeys: Set<Int32>, copiedKeys: Set<Int32>
         let added: Bool, routePoints: Bool, moved: Bool
+        /// The copies carry CharaStudio's keys for the recorded operation
+        /// order (`rewrite`'s `ordered`), each with its step.
+        let ordered: Bool, copySteps: [Int32: Int]
 
-        init(source: KoikatsuSceneSnapshot, final: KoikatsuSceneSnapshot, copies: [Int32: Int32], moved: Bool) {
+        init(source: KoikatsuSceneSnapshot, final: KoikatsuSceneSnapshot, copies: [Int32: Int32], moved: Bool,
+             ordered steps: [Int32: Int]? = nil) {
             self.source = source; self.final = final; self.moved = moved
+            ordered = steps != nil; copySteps = steps ?? [:]
             var sourceRecords: [Int32: KoikatsuObjectRecord] = [:]
             for record in SourceSceneInsertionPlan.records(source) { sourceRecords[record.sourceKey] = record }
             self.sourceRecords = sourceRecords
@@ -285,6 +298,10 @@ enum SourceScenePluginData {
         /// Objects or route points come or go. Entries without a rule
         /// refuse it; moves keep them as before.
         var keysChange: Bool { deleted || copied || added || routePoints }
+        /// The order plug-ins see copies made in (KKAPI's `OnObjectsCopied`
+        /// per Duplicate): by step, then by key within a step, whose keys
+        /// `GetNewIndex` hands out in increasing order.
+        func copyOrder(_ a: Int32, _ b: Int32) -> Bool { (copySteps[a] ?? 0, a) < (copySteps[b] ?? 0, b) }
         /// What data keyed by object key sees: an object deleted or copied.
         /// A new record carries no plug-in data, and route points are not
         /// objects plug-ins can name (they are not in `dicObjectCtrl`).
@@ -301,7 +318,16 @@ enum SourceScenePluginData {
             return keys.sorted()
         }
         func unchanged(_ kinds: Set<KoikatsuObjectKind>?) -> Bool {
-            keys(Array(sourceRecords.values), kinds) == keys(finalRecords, kinds)
+            keys(Array(sourceRecords.values), kinds) == keys(finalRecords, kinds) && ownKeys(kinds)
+        }
+        /// No copy or new record of `kinds` holds a source record's key. Only
+        /// an ordered export (#278) gives one a key a deleted record freed;
+        /// set-based keys are never a source key.
+        func ownKeys(_ kinds: Set<KoikatsuObjectKind>?) -> Bool {
+            finalRecords.allSatisfy { record in
+                !(kinds?.contains(record.kind) ?? true) || sourceRecords[record.sourceKey] == nil
+                    || origins[record.sourceKey] == record.sourceKey
+            }
         }
         /// Data addressing objects by their index in the key-sorted
         /// `dicObjectCtrl` still names the same objects: every source object
@@ -309,7 +335,7 @@ enum SourceScenePluginData {
         /// nothing removed, every new key above them) and nothing is copied
         /// (the plug-ins' `Studio.Duplicate` patches add data for copies).
         var positionsKept: Bool {
-            !copied && keys(finalRecords, nil).starts(with: keys(Array(sourceRecords.values), nil))
+            !copied && keys(finalRecords, nil).starts(with: keys(Array(sourceRecords.values), nil)) && ownKeys(nil)
         }
         /// Whether the edit deletes, or with `copies` copies, a key in `keys`.
         func touches(_ keys: Set<Int32>, copies: Bool) -> Bool {

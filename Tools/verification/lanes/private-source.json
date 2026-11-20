@@ -431,6 +431,11 @@
           "optional": true
         },
         {
+          "env": "IKKOKU_ORDERED_ORACLE",
+          "kind": "directory",
+          "optional": true
+        },
+        {
           "env": "IKKOKU_LEGACY_SCENE_PROBE",
           "kind": "directory",
           "optional": true
