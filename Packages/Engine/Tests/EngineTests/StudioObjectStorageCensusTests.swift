@@ -38,7 +38,7 @@ private func document(objects: Int) -> StudioDocument {
 @Test func storageCensusFollowsTheUndoHistory() {
     var history = StudioUndoHistory<StudioDocument>()
     var current = document(objects: 4)
-    func live() -> StudioObjectStorageCensus.Count { census([current] + history.undoStack + history.redoStack) }
+    func live() -> StudioObjectStorageCensus.Count { StudioObjectStorageCensus.count(current: current, history: history) }
     history.record(current)
     #expect(live().buffers == 1)
     current.objects[1].visible = false
@@ -50,6 +50,21 @@ private func document(objects: Int) -> StudioDocument {
     #expect(live().buffers == 2)
     if let step = history.stepForward(leaving: current) { current = step }
     #expect(live().buffers == 2)
+}
+
+@Test func storageCensusCountsPatchStepsByTheirObjects() {
+    // #446: an object edit's step keeps the edited object only, and the edit
+    // writes the current list in place, so the current list stays the one
+    // whole buffer.
+    var history = StudioUndoHistory<StudioDocument>()
+    var current = document(objects: 10)
+    for index in 0..<4 {
+        history.record(patch: StudioObjectPatch(current, before: current.objects[index]))
+        current.objects[index].visible = false
+    }
+    let count = StudioObjectStorageCensus.count(current: current, history: history)
+    #expect(count.buffers == 5)
+    #expect(count.capacity == current.objects.capacity + 4)
 }
 
 @Test func storageCensusSkipsEmptyObjects() {
