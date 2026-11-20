@@ -906,6 +906,32 @@ translated state. Native saves preserve it completely.
 `IKKOKU_CAPTURE_GRID=0` and `IKKOKU_CAPTURE_GIZMOS=0` remove comparison-only
 viewport overlays.
 
+### Launch inputs wait for the scene import (#459)
+
+The launch-time execution inputs bind to the launch scene (`IKKOKU_SOURCE_SCENE`):
+`IKKOKU_STUDIO_ANIMATION_TIME`, `IKKOKU_STUDIO_PLUGIN_SELECTION`,
+`IKKOKU_SOURCE_PLUGIN_PROFILE`, the adapter manifests, `IKKOKU_MUTE_BACKGROUND_CONFIG`
+and `IKKOKU_SOURCE_PLUGIN_STEPS`. `AppState.configureStudioExecution` applies them once
+that scene's import has ended, through a `LaunchInputGate` (Renderer):
+
+- Captures, scenarios and headless runs import synchronously. The import has ended
+  when startup reaches the inputs, so they apply there, as before #459.
+- Interactive launches without a window capture, and performance traces
+  (`IKKOKU_PERF_TRACE`), import in the background. The gate holds the inputs until
+  the import's completion, which runs right after the commit replaced the document.
+  Before #459 the inputs bound to the empty document, and the commit dropped
+  whatever they had mounted.
+- A failed input names its variable and value. An automated run (a performance
+  trace) exits 1 with `studio execution failed: …`. An interactive launch shows the
+  alert. A failed import reports itself first, and an automated run exits on it.
+- The inputs run once, whatever the order of the import's end and startup. If New
+  Scene, Open or another import cancels the launch import before it commits, the
+  inputs are dropped and the log says so (`launch studio inputs dropped: …`).
+- Only this deferred path logs `launch studio inputs applied after the background scene
+  import: …`. In a performance trace it also records `details.launchStudioExecution`,
+  which the `app-smoke` checks `studio-launch-plugins-perf` and
+  `studio-launch-plugins-validate` read.
+
 The retained 2026-09-25 logs record seven native runtime/package tests and ten
 frontend/translation tests. This documentation revision did not rerun them.
 The native tests cover coordinate and attachment semantics, malformed IR, rollback, identity/dependency handling, changed files and escaping

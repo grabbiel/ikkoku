@@ -294,6 +294,15 @@ locked `PerfDrawLog`. Everything else is recorded on the main thread.
   counted whole, with the launch before the run loop first waits as one
   period. The block holds their total, the longest, and how many exceeded 50
   and 100 ms. `summarize` prints it as a startup line;
+- with launch-time plug-in inputs (`IKKOKU_SOURCE_PLUGIN_PROFILE`,
+  `IKKOKU_STUDIO_PLUGIN_SELECTION`, `IKKOKU_SOURCE_PLUGIN_STEPS` …; #459), the record
+  of their application (`details.launchStudioExecution`). A trace imports its scene in
+  the background, so the inputs wait for the import's commit and apply right after the
+  `sourceSceneReady` mark, before the workload's warmup starts. The record holds the
+  inputs applied, the plug-in packages mounted, whether plug-ins run, the native
+  plug-ins and the characters built
+  ([plugin execution](mods/plugin-execution.md#launch-inputs-wait-for-the-scene-import-459)).
+  Before #459 such a trace never mounted its profile;
 - for the action workloads (`studio-duplicate`, `studio-undo-delete`,
   `studio-redo`, `studio-outfit`, `studio-export`, `studio-load`,
   `studio-select`), each
