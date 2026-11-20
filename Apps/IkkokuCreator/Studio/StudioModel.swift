@@ -4304,7 +4304,8 @@ final class StudioModel: ViewportInputHandler, LivePacedHandler {
                 }
                 reusable = false
                 let inst = instance(for: o)
-                if let card = o.card, inst.card != card { inst.card = card }
+                // Compared through the borrowed field (#409); copied only when it changed.
+                if o.card != nil, inst.card != o.card { inst.card = o.card! }
                 inst.poseDelta = combinedPoseDelta(o)
                 if liveAnimation {
                     inst.poseDelta.merge(LiveAnimation.breathing(time: animTime, seed: inst.instanceID, strength: 0.8))
@@ -5092,21 +5093,30 @@ final class StudioModel: ViewportInputHandler, LivePacedHandler {
     func setSourceFKRotation(_ id: UUID, boneID: Int, degrees: Float3, pushHistory: Bool = true) {
         guard let i = doc.index(of: id) else { return }
         if pushHistory { pushUndo(force: true) }
-        var object = doc.objects[i]
-        var edits = object.sourceFKRotations ?? [:]
-        edits[boneID] = degrees
-        object.sourceFKRotations = edits
-        if let preview = sourceInstances[id] {
-            var state = object.sourceKinematics ?? SourceStudioKinematicState(record: preview.record)
-            state.enableFK = true; state.enableIK = false
-            if let target = preview.controller.targets.first(where: { $0.bone.id == boneID }) {
-                for (j, group) in SourceStudioPose.Group.fkParts.enumerated() where !group.intersection(target.bone.fkGroup).isEmpty { state.activeFK[j] = true }
-            }
-            object.sourceKinematics = state
+        let preview = sourceInstances[id]
+        let parts = preview?.controller.targets.first(where: { $0.bone.id == boneID }).map { target in
+            SourceStudioPose.Group.fkParts.indices.filter { !SourceStudioPose.Group.fkParts[$0].intersection(target.bone.fkGroup).isEmpty }
+        } ?? []
+        // One document write, so each drag event rebuilds the frame once. It
+        // edits the object in place (#409): a copy of it would share its boxed
+        // fields, so every kinematic write would copy the whole box. In place,
+        // the drag's first write copies the box the undo snapshot shares and
+        // the rest write it in place; the kinematic flags are written only
+        // when they change.
+        Self.editInPlace(&doc.objects[i]) { object in
+            if object.sourceFKRotations == nil { object.sourceFKRotations = [:] }
+            object.sourceFKRotations![boneID] = degrees
+            guard let preview else { return }
+            if object.sourceKinematics == nil { object.sourceKinematics = SourceStudioKinematicState(record: preview.record) }
+            if !object.sourceKinematics!.enableFK { object.sourceKinematics!.enableFK = true }
+            if object.sourceKinematics!.enableIK { object.sourceKinematics!.enableIK = false }
+            for j in parts where !object.sourceKinematics!.activeFK[j] { object.sourceKinematics!.activeFK[j] = true }
         }
-        // One document write, so each drag event rebuilds the frame once.
-        doc.objects[i] = object
     }
+
+    /// One in-place edit of a document object: `body` gets the array element
+    /// itself, so the object's boxed fields stay uniquely held (#409).
+    private static func editInPlace(_ object: inout StudioObject, _ body: (inout StudioObject) -> Void) { body(&object) }
 
     func setSourceIKValue(_ target: Int32, edit: SourceStudioIKEdit, pushHistory: Bool = true) {
         guard let id = selection, let i = doc.index(of: id), var state = selectedSourceIKState else { return }
@@ -5115,11 +5125,18 @@ final class StudioModel: ViewportInputHandler, LivePacedHandler {
             let group = try SourceStudioIKEditing.groupIndex(target: target)
             if pushHistory { pushUndo(force: true) }
             state.enableIK = true; state.enableFK = false; state.activeIK[group] = true
-            var object = doc.objects[i]
-            var changes = object.sourceIKOverrides ?? [:]; changes[target] = edit
-            object.sourceIKOverrides = changes; object.sourceKinematics = state
-            // One document write, so each drag event rebuilds the frame once.
-            doc.objects[i] = object
+            // One document write, so each drag event rebuilds the frame once,
+            // in place like `setSourceFKRotation` (#409). `state` is the
+            // object's own state with these flags set, so only flags that
+            // differ are written.
+            Self.editInPlace(&doc.objects[i]) { object in
+                if object.sourceIKOverrides == nil { object.sourceIKOverrides = [:] }
+                object.sourceIKOverrides![target] = edit
+                guard object.sourceKinematics != nil else { object.sourceKinematics = state; return }
+                if !object.sourceKinematics!.enableIK { object.sourceKinematics!.enableIK = true }
+                if object.sourceKinematics!.enableFK { object.sourceKinematics!.enableFK = false }
+                if !object.sourceKinematics!.activeIK[group] { object.sourceKinematics!.activeIK[group] = true }
+            }
         } catch { status = "Source IK guide: \(error)" }
     }
     func resetSourcePoseEdits() {

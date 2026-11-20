@@ -23,7 +23,7 @@ branch was tested or every asset matches the original game. Feature status,
 specific comments and pending tasks are in the linked reports. Shared behavior
 may be discussed in more than one report; one primary owner is listed here.
 
-**1153 files indexed; 1153 assigned; 0 unassigned.**
+**1155 files indexed; 1155 assigned; 0 unassigned.**
 
 Counts include the website and clothes-group additions listed below. Runtime and
 test totals include their specialized role descriptions; this is inventory
@@ -33,7 +33,7 @@ bookkeeping, not a new full source audit.
 | --- | ---: |
 | [App / gameplay / plugins](app-gameplay-and-plugins.md) | 111 |
 | [Character / Maker / mods](character-and-mods.md) | 145 |
-| [Studio / IK / animation](studio.md) | 276 |
+| [Studio / IK / animation](studio.md) | 278 |
 | [Renderer / foundation / assets](renderer-and-foundation.md) | 373 |
 | [Toolchain / verification / historical docs](toolchain-and-verification.md) | 238 |
 
@@ -46,7 +46,7 @@ bookkeeping, not a new full source audit.
 | Generated asset / catalog / fixture | 205 |
 | Reference host / controlled fixture | 41 |
 | Runtime / shared shader declaration | 248 |
-| Test / validation | 253 |
+| Test / validation | 255 |
 | Public synthetic body/face input fixture | 1 |
 
 ## App / gameplay / plugins
@@ -494,6 +494,8 @@ Feature assessment: [studio.md](studio.md).
 | [Packages/Engine/Tests/EngineTests/SourceStudioWorldTransformTests.swift](../../Packages/Engine/Tests/EngineTests/SourceStudioWorldTransformTests.swift) | Test / validation |
 | [Packages/Engine/Tests/EngineTests/SourceTrigonometricIKTests.swift](../../Packages/Engine/Tests/EngineTests/SourceTrigonometricIKTests.swift) | Test / validation |
 | [Packages/Engine/Tests/EngineTests/StudioHierarchyTests.swift](../../Packages/Engine/Tests/EngineTests/StudioHierarchyTests.swift) | Test / validation |
+| [Packages/Engine/Tests/EngineTests/StudioObjectColdFieldsTests.swift](../../Packages/Engine/Tests/EngineTests/StudioObjectColdFieldsTests.swift) | Test / validation |
+| [Packages/Engine/Tests/EngineTests/StudioObjectLegacyCodingTests.swift](../../Packages/Engine/Tests/EngineTests/StudioObjectLegacyCodingTests.swift) | Test / validation |
 | [Packages/Engine/Tests/EngineTests/StudioObjectStorageCensusTests.swift](../../Packages/Engine/Tests/EngineTests/StudioObjectStorageCensusTests.swift) | Test / validation |
 | [Packages/Engine/Tests/EngineTests/StudioUndoHistoryTests.swift](../../Packages/Engine/Tests/EngineTests/StudioUndoHistoryTests.swift) | Test / validation |
 | [Packages/Engine/Tests/EngineTests/StudioUndoStepsTests.swift](../../Packages/Engine/Tests/EngineTests/StudioUndoStepsTests.swift) | Test / validation |

@@ -2250,7 +2250,7 @@ Observation, not changed in this slice: `ikkoku-inspect look-data` and `SourceSt
 **Known difference from CharaStudio (deliberate).** CharaStudio clears its whole undo and redo history in `Studio.InitScene`, which both New Scene and scene loading run. Its scene import (a merge) keeps the history. CharaStudio also clears the history when an object is added or deleted. Ikkoku keeps one earlier scene across a replacement, and keeps its history across adds and deletes, as before.
 
 **Not changed here.**
-- An edit step still copied the whole objects array, about 6 MB per step on the corpus scene (#409). [Object edit steps (#446)](#object-edit-steps-446) changed this for edits through `update`.
+- An edit step still copied the whole objects array, about 6 MB per step on the corpus scene (#409). #409 made each copy smaller; see [Undo step size](#undo-step-size-409). [Object edit steps (#446)](#object-edit-steps-446) changed this for edits through `update`.
 - A small unbounded per-load growth in KVO and SwiftUI bookkeeping, about 8.6 KB per cycle, was tracked separately and is fixed in [Workspace list per scene (#410)](#workspace-list-per-scene-410).
 
 ### Evidence
@@ -2275,6 +2275,44 @@ Observation, not changed in this slice: `ikkoku-inspect look-data` and `SourceSt
   - Metal stays at 73.3 MB on both arms.
   - A memory graph at cycle 35 holds 31 `StudioObject` arrays on A (30 held by the undo steps). On B it holds 2: the one undo step and a load in flight.
   - Ready time per load was 481 and 493 ms on A, 481 and 494 ms on B. That is informational only: the runs were not in a quiet slot.
+
+## Undo step size (#409)
+
+An undo step is a snapshot of the document. Steps share the `objects` array with the current document until an edit writes to it, and then the edited document gets its own copy of the whole array. Since #446 an object edit through `update` records a patch step instead, which holds no reference to the array; see [Object edit steps (#446)](#object-edit-steps-446). Every other step is still a whole document, as described here. On the 3,769-object corpus scene that copy was about 6 MB per step, because a `StudioObject` was 1,584 B inline.
+
+**What changed.** The nine fields that are large inline and seldom edited live in one shared box, `StudioObjectColdFields`:
+
+- the character card;
+- the source character reference;
+- the source expression, kinematics, animation, voice and route state;
+- the light;
+- the saved camera.
+
+An object holds one reference to the box, so its stride is 464 B. The fields keep their names and read and write like stored properties.
+
+The pose delta stays inline (32 B: four dictionary references). At first it was boxed too, for a stride of 432 B. #409's W23 diagnostic then showed every pose edit copying the whole box: one box copy per edit and per same-value write, +3.1k instructions and +0.010 ms per edit. A pose edit is the most frequent object edit, so the pose delta went back inline. Now a pose edit copies no box.
+
+- **Copy on write.** Writing a boxed field first copies the box unless this object value holds the only reference to it (`isKnownUniquelyReferenced`). A snapshot, an undo step or a copy sent to another task therefore never sees a later write. An edit of any other field, such as a move, a rename or show/hide, leaves the box shared with the steps.
+- **Cost of a step.** A step costs 464 B per object, plus one box (about 1.1 KB) for each object whose boxed field the edit wrote. A pose edit writes no boxed field.
+- **The shared empty box.** An object whose boxed fields are all nil or default holds `StudioObjectColdFields.empty`, one box shared by all such objects; most of a scene's items and folders are like this. A new object and a decode both pick it, so a load allocates no box for those objects. `uniqueCold()` recognises the empty box by identity and always copies it before a write, so it is never written.
+- **Whole documents.** A loaded document costs 464 B per object, plus one box for each character, light, camera or other object that has a boxed field set.
+- **Saved format.** Unchanged. `StudioObject`'s hand-written `Codable` writes the keys the synthesized conformance of the unboxed struct wrote: flat, in the same order, with a nil optional writing no key, and with the key-ordered dictionary overloads (#394). It decodes the same inputs the same way: a non-optional field's key is required, and unknown keys and a null optional are ignored.
+- **Equality.** `==` compares every field. For the box it checks identity first, so comparing an object with its own step skips the card.
+
+**Tests.**
+
+- `StudioObjectColdFieldsTests.swift` covers:
+  - each boxed field's isolation from snapshots;
+  - in-place edits inside a boxed field;
+  - a shared box after edits of other fields, and after a pose edit (`aPoseEditCopiesNoBox`);
+  - in-place writes to a box only one value holds;
+  - the shared empty box: who gets it, detaching only the written object, and 20,000 writes from four tasks leaving it empty;
+  - a snapshot read by an actor and a detached task while the original is edited;
+  - equality;
+  - the saved keys and their order;
+  - decoding with missing, null, unknown and required keys;
+  - Undo and Redo of boxed-field edits, byte for byte.
+- `StudioObjectStorageCensusTests.studioObjectLayout` pins the stride at 464 B.
 
 ## Object edit steps (#446)
 
