@@ -441,16 +441,17 @@ final class PerfWorkloadDriver {
         trace.details["gesture"] = "body slider '\(slot.label)' (slot \(index)) swept around \(base)"
     }
 
-    /// `maker-tabs` (#440): the bundled character's Maker (no source card, so
-    /// the tabbed panel shows, not the source rig panel), its tabs selected in
-    /// turn as the segmented control selects them (`MakerModel.tab`),
-    /// repeated. Each switch builds the tab's panel again, the tag and
-    /// thumbnail grids included.
+    /// `maker-tabs` (#440): the bundled character's Maker, the tabbed panel
+    /// (not the source rig panel), its tabs selected in turn as the segmented
+    /// control selects them (`MakerModel.tab`), repeated. Each switch builds
+    /// the tab's panel again, the tag and thumbnail grids included. The Maker
+    /// opens the original base when it finds one, so the workload first uses
+    /// the source rig panel's "Use bundled prototype" (`closeSourceRig()`).
     private func prepareMakerTabs() throws {
         let maker = try prepareMaker()
-        guard maker.sourceRigPreview == nil else {
-            throw RigError.invalid("maker-tabs needs the bundled character's Maker, without IKKOKU_SOURCE_CARD")
-        }
+        trace.details["usedBundledPrototype"] = maker.sourceRigPreview != nil
+        if maker.sourceRigPreview != nil { maker.closeSourceRig() }
+        guard maker.sourceRigPreview == nil else { throw RigError.invalid("maker-tabs: the tabbed Maker panel did not show") }
         actionSteps = MakerTab.allCases.map { tab in ("tab \(tab.rawValue.lowercased())", true, { maker.tab = tab }) }
         trace.details["gesture"] = "the Maker's tabs selected in turn (\(MakerTab.allCases.map(\.rawValue).joined(separator: ", "))), repeated; live animation on"
     }
