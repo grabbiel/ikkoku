@@ -346,7 +346,12 @@ struct InspectorUIScenario: Decodable {
                 await settle()
                 record(step.op, true, "colour panel closed")
             case "snapshot":
-                snapshot = (studio.doc, studio.undoDepth, studio.redoDepth)
+                // A copy of the object list (#446), as `rememberDocument`
+                // keeps: a snapshot sharing the list would make the next
+                // object edit copy it.
+                var kept = studio.doc
+                kept.objects = studio.doc.objects.map { $0 }
+                snapshot = (kept, studio.undoDepth, studio.redoDepth)
                 record(step.op, true, "undo \(studio.undoDepth), redo \(studio.redoDepth)")
             case "keyLoop":
                 // Each Tab is its own gesture, as each step is, and the views
