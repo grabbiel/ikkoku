@@ -1274,9 +1274,11 @@ the state in the step's detail):
 
 - `keptControls` lists the AppKit controls in the inspector's scroll view by
   class. A control inside a hidden kept view (its `InspectorAnchorView` has
-  `keptHidden`) must be disabled, refuse to become the first responder, lie
-  outside the key-view loop, miss a hit test at its centre and be absent
-  from the accessibility tree, or the step fails. Shown controls are
+  `keptHidden`) must be disabled, lie outside the key-view loop, miss a hit
+  test at its centre and be absent from the accessibility tree, or the step
+  fails. Whether it accepts `makeFirstResponder` is recorded but compared
+  across builds instead: on `main`, hidden steppers, popups and colour wells
+  accept it. Shown controls are
   recorded per class (count, enabled, can become key view, in the loop, hit,
   in the tree) with a sha. The loop is the one Tab walks, as `keyLoop`
   walks it (a text field counts when it is edited), and it ends with no

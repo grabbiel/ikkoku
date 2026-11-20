@@ -3511,7 +3511,7 @@
         "IKKOKU_STUDIO_SCENARIO_REPORT": ".local/verification/reports/studio-scenario-inspector-kept-controls.json"
       },
       "referenceTier": "app-smoke",
-      "tolerance": "#440: the kept inspector views' AppKit controls by class, at six states of IKKOKU_STUDIO_HALF_STATE_SCENE (folder 11 shown first; nothing selected; character 10 shown with folder 11's section kept hidden; route 20 shown with both kept hidden; nothing selected and character 10 after three selection cycles). A control inside a hidden kept view must be disabled, refuse focus, stay out of the key-view loop, miss a hit test at its centre and be absent from the accessibility tree (keptControls). The shown controls' per-class record and its sha and the layer counts (layers) are compared across builds.",
+      "tolerance": "#440: the kept inspector views' AppKit controls by class, at six states of IKKOKU_STUDIO_HALF_STATE_SCENE (folder 11 shown first; nothing selected; character 10 shown with folder 11's section kept hidden; route 20 shown with both kept hidden; nothing selected and character 10 after three selection cycles). A control inside a hidden kept view must be disabled, stay out of the key-view loop (the Tab walk), miss a hit test at its centre and be absent from the accessibility tree (keptControls); whether it accepts makeFirstResponder is recorded and compared across builds, since on main hidden steppers, popups and colour wells accept it. The shown controls' per-class record and its sha and the layer counts (layers) are compared across builds.",
       "artifacts": [
         {
           "path": ".local/verification/reports/studio-scenario-inspector-kept-controls.json",

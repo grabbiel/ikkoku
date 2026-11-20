@@ -1528,11 +1528,14 @@ struct InspectorUIScenario: Decodable {
     }
 
     /// `keptControls`: the AppKit controls (`NSControl`) of the inspector's
-    /// scroll view (`keptScrollView(_:)`), by class. A control inside a kept view that is hidden (an
-    /// `InspectorAnchorView` with `keptHidden` whose area holds it) must be
-    /// disabled, refuse to become the first responder, lie outside the
-    /// key-view loop, miss a hit test at its centre and be absent from the
-    /// accessibility tree; any that does not fails the step. The others are
+    /// scroll view (`keptScrollView(_:)`), by class. A control inside a kept
+    /// view that is hidden (an `InspectorAnchorView` with `keptHidden` whose
+    /// area holds it) must be disabled, lie outside the key-view loop, miss a
+    /// hit test at its centre and be absent from the accessibility tree; any
+    /// that does not fails the step. Whether it accepts
+    /// `makeFirstResponder` is recorded (`focusable`) but does not fail the
+    /// step: on main, hidden steppers, popups and colour wells accept it, so
+    /// builds compare it (#440 rules v6). The others are
     /// recorded per class (count, enabled, can become key view, in the loop,
     /// hit, in the tree) with a sha, which must match across builds. The loop
     /// is the one Tab walks (`keyLoop(_:beforeEachMove:afterEachMove:)`, as
@@ -1588,7 +1591,7 @@ struct InspectorUIScenario: Decodable {
         let hiddenLines = hidden.keys.sorted().map { line($0, hidden[$0]!) }
         let leaks = hidden.keys.sorted().compactMap { kind -> String? in
             let f = hidden[kind]!
-            let bad = [("enabled", f.enabled), ("focusable", f.focusable), ("loop", f.inLoop), ("hit", f.hit), ("tree", f.inTree)]
+            let bad = [("enabled", f.enabled), ("loop", f.inLoop), ("hit", f.hit), ("tree", f.inTree)]
                 .filter { $0.1 > 0 }.map { "\($0.0) \($0.1)" }
             return bad.isEmpty ? nil : "\(kind): " + bad.joined(separator: ", ")
         }
