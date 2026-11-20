@@ -23,7 +23,7 @@ branch was tested or every asset matches the original game. Feature status,
 specific comments and pending tasks are in the linked reports. Shared behavior
 may be discussed in more than one report; one primary owner is listed here.
 
-**1149 files indexed; 1149 assigned; 0 unassigned.**
+**1152 files indexed; 1152 assigned; 0 unassigned.**
 
 Counts include the website and clothes-group additions listed below. Runtime and
 test totals include their specialized role descriptions; this is inventory
@@ -31,22 +31,22 @@ bookkeeping, not a new full source audit.
 
 | Primary report | Files |
 | --- | ---: |
-| [App / gameplay / plugins](app-gameplay-and-plugins.md) | 110 |
+| [App / gameplay / plugins](app-gameplay-and-plugins.md) | 111 |
 | [Character / Maker / mods](character-and-mods.md) | 145 |
 | [Studio / IK / animation](studio.md) | 276 |
 | [Renderer / foundation / assets](renderer-and-foundation.md) | 373 |
-| [Toolchain / verification / historical docs](toolchain-and-verification.md) | 235 |
+| [Toolchain / verification / historical docs](toolchain-and-verification.md) | 237 |
 
 | File role | Files |
 | --- | ---: |
 | App resource metadata / icon | 16 |
 | Build / repository configuration | 9 |
-| Conversion / recovery / verification tool | 272 |
+| Conversion / recovery / verification tool | 273 |
 | Documentation / historical evidence | 65 |
 | Generated asset / catalog / fixture | 205 |
 | Reference host / controlled fixture | 41 |
-| Runtime / shared shader declaration | 247 |
-| Test / validation | 252 |
+| Runtime / shared shader declaration | 248 |
+| Test / validation | 253 |
 | Public synthetic body/face input fixture | 1 |
 
 ## App / gameplay / plugins
@@ -78,6 +78,7 @@ Feature assessment: [app-gameplay-and-plugins.md](app-gameplay-and-plugins.md).
 | [Apps/IkkokuCreator/Assets.xcassets/Contents.json](../../Apps/IkkokuCreator/Assets.xcassets/Contents.json) | App resource metadata / icon |
 | [Apps/IkkokuCreator/ContentView.swift](../../Apps/IkkokuCreator/ContentView.swift) | Runtime / shared shader declaration |
 | [Apps/IkkokuCreator/EngineHost.swift](../../Apps/IkkokuCreator/EngineHost.swift) | Runtime / shared shader declaration |
+| [Apps/IkkokuCreator/FocusProbe.swift](../../Apps/IkkokuCreator/FocusProbe.swift) | Runtime / shared shader declaration |
 | [Apps/IkkokuCreator/HideStudioUIScenario.swift](../../Apps/IkkokuCreator/HideStudioUIScenario.swift) | Runtime / shared shader declaration |
 | [Apps/IkkokuCreator/IkkokuApp.swift](../../Apps/IkkokuCreator/IkkokuApp.swift) | Runtime / app menus and editor-owned plugin commands |
 | [Apps/IkkokuCreator/PerfTrace.swift](../../Apps/IkkokuCreator/PerfTrace.swift) | Runtime / shared shader declaration |
@@ -1031,6 +1032,7 @@ Feature assessment: [toolchain-and-verification.md](toolchain-and-verification.m
 | [Tools/verification/doctor-samples.json](../../Tools/verification/doctor-samples.json) | Reference host / controlled fixture |
 | [Tools/verification/doctor.py](../../Tools/verification/doctor.py) | Conversion / recovery / verification tool |
 | [Tools/verification/environment.example.json](../../Tools/verification/environment.example.json) | Conversion / recovery / verification tool |
+| [Tools/verification/growth_check.py](../../Tools/verification/growth_check.py) | Conversion / recovery / verification tool |
 | [Tools/verification/inspect_app_bundle.py](../../Tools/verification/inspect_app_bundle.py) | Conversion / recovery / verification tool |
 | [Tools/verification/lanes/app-smoke.json](../../Tools/verification/lanes/app-smoke.json) | Conversion / recovery / verification tool |
 | [Tools/verification/lanes/gameplay-scenarios.json](../../Tools/verification/lanes/gameplay-scenarios.json) | Conversion / recovery / verification tool |
@@ -1146,6 +1148,7 @@ Feature assessment: [toolchain-and-verification.md](toolchain-and-verification.m
 | [Tools/verification/scenarios/workspace-list-geometry.json](../../Tools/verification/scenarios/workspace-list-geometry.json) | Conversion / recovery / verification tool |
 | [Tools/verification/scenarios/workspace-rows-by-position.json](../../Tools/verification/scenarios/workspace-rows-by-position.json) | Conversion / recovery / verification tool |
 | [Tools/verification/test_doctor.py](../../Tools/verification/test_doctor.py) | Test / validation |
+| [Tools/verification/test_growth_check.py](../../Tools/verification/test_growth_check.py) | Test / validation |
 | [Tools/verification/test_inspect_app_bundle.py](../../Tools/verification/test_inspect_app_bundle.py) | Test / validation |
 | [Tools/verification/test_perf_trace.py](../../Tools/verification/test_perf_trace.py) | Test / validation |
 | [Tools/verification/test_run.py](../../Tools/verification/test_run.py) | Test / validation |

@@ -133,10 +133,11 @@ class PerfTraceTests(unittest.TestCase):
                          "IKKOKU_STUDIO_LOOK_SETTINGS", "IKKOKU_STUDIO_HAND_PATTERNS", "IKKOKU_STUDIO_ITEM_CATALOG"):
                 paths[name] = os.path.join(folder, name)
                 open(paths[name], "w").close()
-            with mock.patch.dict(os.environ, {"IKKOKU_AUTOCAPTURE": "/stale.png"}):
+            with mock.patch.dict(os.environ, {"IKKOKU_AUTOCAPTURE": "/stale.png", "IKKOKU_SOURCE_CARD": "/stale-card.png"}):
                 studio = perf_trace.launch_environment("studio-orbit", paths, "/out.json", 10, 3, {"IKKOKU_PERF_INPUT_HZ": "60"})
                 maker = perf_trace.launch_environment("maker-slider", paths, "/out.json", 10, 3, {})
                 native = perf_trace.launch_environment("studio-native", paths, "/out.json", 10, 3, {})
+                tabs = perf_trace.launch_environment("maker-tabs", paths, "/out.json", 10, 3, {})
             self.assertNotIn("IKKOKU_AUTOCAPTURE", studio)
             self.assertEqual(studio["IKKOKU_SOURCE_SCENE"], paths["IKKOKU_STUDIO_SCENARIO_SCENE"])
             self.assertEqual((studio["IKKOKU_PERF_WORKLOAD"], studio["IKKOKU_PERF_SECONDS"], studio["IKKOKU_PERF_WARMUP_SECONDS"],
@@ -145,6 +146,10 @@ class PerfTraceTests(unittest.TestCase):
             self.assertNotIn("IKKOKU_SOURCE_SCENE", maker)
             self.assertNotIn("IKKOKU_SOURCE_SCENE", native)
             self.assertNotIn("IKKOKU_SOURCE_CARD", native)
+            # #440: the tabbed Maker, with no card (its own environment drops the shell's).
+            self.assertNotIn("IKKOKU_SOURCE_CARD", tabs)
+            self.assertEqual((tabs["IKKOKU_SOURCE_AVATAR"], tabs["IKKOKU_MAKER_LIBRARY"]),
+                             (paths["IKKOKU_SOURCE_AVATAR"], paths["IKKOKU_MAKER_LIBRARY"]))
             del paths["IKKOKU_STUDIO_SCENARIO_SCENE"]
             with self.assertRaises(SystemExit):
                 perf_trace.launch_environment("studio-idle", paths, "/out.json", 10, 3, {})
@@ -462,7 +467,7 @@ class PerfTraceTests(unittest.TestCase):
         data["workload"] = "studio-idle"
         self.assertIsNone(perf_trace.action_problem(data))
         for workload in ("studio-outfit", "studio-export", "studio-redo", "studio-load", "studio-select",
-                         "studio-export-import", "studio-show-hidden", "studio-clock-first", "studio-edit-steps"):
+                         "studio-export-import", "studio-show-hidden", "studio-clock-first", "studio-edit-steps", "maker-tabs"):
             self.assertIn(workload, perf_trace.WORKLOADS)
             self.assertIn(workload, perf_trace.INPUTLESS_WORKLOADS)
             self.assertIn(workload, perf_trace.PRESENTATION_EXEMPT)

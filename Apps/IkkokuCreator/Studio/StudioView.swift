@@ -537,6 +537,8 @@ struct StudioInspectorPanel: View {
         VStack(spacing: 0) {
             StudioInspectorTabPicker(model: model)
             ScrollView {
+                // #440 measurement control (`IKKOKU_PERF_FOCUS_PROBE`); nothing when unset.
+                if FocusProbe.count > 0 { InspectorFocusProbe(model: model) }
                 StudioCompatibilityDetails(model: model)
                 StudioLiveShaderDetails(model: model)
                 StudioInspectorTab(model: model).padding(InspectorLayout.padding)

@@ -462,6 +462,8 @@ extension CaptureRequest {
         ScopedOption("IKKOKU_PERF_PAUSE_MARKER", [.perfTrace]),
         ScopedOption("IKKOKU_PERF_EDIT_FIELD", [.perfTrace]),
         ScopedOption("IKKOKU_PERF_EDIT_PHASES", [.perfTrace]),
+        ScopedOption("IKKOKU_PERF_PARK_FILE", [.perfTrace]),
+        ScopedOption("IKKOKU_PERF_FOCUS_PROBE", [.perfTrace]),
     ]
 
     /// Options read only by the window capture.
@@ -644,6 +646,9 @@ extension CaptureRequest {
         // (#409, #446).
         ValueRule("IKKOKU_PERF_EDIT_FIELD", .oneOf(["x", "pose"])),
         ValueRule("IKKOKU_PERF_EDIT_PHASES", .oneOf(["none", "alternate"])),
+        // #440: the focus probe's buttons (the growth check's positive
+        // control); `IKKOKU_PERF_PARK_FILE` is any path.
+        ValueRule("IKKOKU_PERF_FOCUS_PROBE", .integer(1...64)),
     ]
 
     /// `IKKOKU_PERF_WORKLOAD` values, in the order `docs/reference/performance.md` lists them.
@@ -652,7 +657,7 @@ extension CaptureRequest {
         "studio-native", "viewport-lifecycle", "startup", "studio-static", "studio-orbit-bursts",
         "studio-duplicate", "studio-undo-delete", "studio-timeline",
         "studio-outfit", "studio-export", "studio-redo", "studio-load", "studio-select",
-        "studio-export-import", "studio-show-hidden", "studio-clock-first", "studio-edit-steps",
+        "studio-export-import", "studio-show-hidden", "studio-clock-first", "studio-edit-steps", "maker-tabs",
     ]
 }
 
