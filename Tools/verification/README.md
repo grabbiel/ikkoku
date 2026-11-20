@@ -1444,6 +1444,25 @@ as before the item 7 follow-ups, so every document write (each FK drag
 frame) re-evaluates them; the Debug check above then skips those three
 values.
 
+`IKKOKU_PERF_EDIT_FIELD` (`x` or `pose`, default `x`) and
+`IKKOKU_PERF_EDIT_PHASES` (`none` or `alternate`, default `none`) are
+measurement controls of the same kind for `studio-edit-steps` (#409, #446;
+sta11d3, 2026-11-19): what each edit writes, and whether each edit's call
+runs at a fixed point of a live step's completion, alternating after and
+before the step's commit
+([placed edits](../../docs/reference/performance.md#placed-edits-409-446)).
+`CaptureRequest` accepts them only with `IKKOKU_PERF_TRACE`, and no lane sets
+them. Unset, the model's one-shot hook stays nil and the runner is
+unchanged; the two settle counters it reads are `@ObservationIgnored`
+integers. Smoke on the Debug build of this change (main `49d8bb98`), under
+the app lock, with 20 edits on source key 65 of the scenario scene: every
+row held the expected counters. With `pose` and `alternate`, each
+after-commit edit settled no step and each before-commit edit settled the
+finished step once. No edit waited on an unfinished step, ran a serial
+step or met pending work, and the undo depth grew by one step per edit and
+write pair. Unset, no row carried a placement field, and every settle count
+was 0 or 1 (13 of 20 edits found a step pending, information).
+
 ### Plug-in data rewrites (ST-T03i)
 
 Two checks export deletes and copies of objects that carry KKPE,
