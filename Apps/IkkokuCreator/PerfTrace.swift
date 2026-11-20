@@ -232,6 +232,10 @@ final class PerfTrace {
         /// `IKKOKU_PERF_PARK_FILE` (#440): the growth check's park file; nil
         /// (the default) never parks (`PerfWorkloadDriver.parkIfRequested`).
         let parkFile: String?
+        /// `IKKOKU_PERF_EXPORT_HASH` (#462): "on" makes `studio-export` and
+        /// `studio-export-import` record each exported file's SHA-256 and
+        /// size when its action is ready; "off" (the default) does not.
+        let exportHash: Bool
 
         /// Reads `IKKOKU_PERF_*`; `CaptureRequest.validate` already checked the values.
         static func from(_ env: [String: String]) -> Configuration? {
@@ -267,7 +271,8 @@ final class PerfTrace {
                 pauseMarker: env["IKKOKU_PERF_PAUSE_MARKER"],
                 editField: env["IKKOKU_PERF_EDIT_FIELD"] ?? "x",
                 editPhases: env["IKKOKU_PERF_EDIT_PHASES"] ?? "none",
-                parkFile: env["IKKOKU_PERF_PARK_FILE"])
+                parkFile: env["IKKOKU_PERF_PARK_FILE"],
+                exportHash: env["IKKOKU_PERF_EXPORT_HASH"] == "on")
         }
     }
 
@@ -326,6 +331,9 @@ final class PerfTrace {
     var device: (any MTLDevice)?
     /// Free-form facts the workload driver adds (inputs, selections, hashes).
     var details: [String: Any] = [:]
+    /// #462: the export steps recorded so far (`exportStep`): name, main
+    /// thread start and end, thread CPU ms.
+    private(set) var exportSteps: [(name: String, start: CFTimeInterval, end: CFTimeInterval, cpuMs: Double)] = []
 
     private init(configuration: Configuration) {
         self.configuration = configuration
@@ -392,6 +400,27 @@ final class PerfTrace {
         guard recording else { return }
         intervals[phase, default: []].append((start, end))
         if let name { inputNames[name, default: 0] += 1 }
+    }
+
+    /// #462: one main-thread step of an original-scene export, as an
+    /// "Export" signpost interval and, while recording, a sample with its
+    /// wall and thread CPU time. The top steps are the calls the export
+    /// makes on the main thread (`begin`: File ▸ Export's call, which holds
+    /// the whole export when it runs at once; `finish`: its completion after
+    /// background work); the others (`guard`, `source`, `clocks`, `stage`,
+    /// `topology`, `thumbnail`, `writer`, `write`, `orphans`) nest in them.
+    /// The action workloads add them up per action (`exportMainMs`).
+    static func exportStep<T>(_ name: StaticString, _ body: () throws -> T) rethrows -> T {
+        let state = PerfSignpost.signposter.beginInterval("Export", id: PerfSignpost.signposter.makeSignpostID(), "\(name)")
+        let start = CACurrentMediaTime(), cpu = clock_gettime_nsec_np(CLOCK_THREAD_CPUTIME_ID)
+        defer {
+            PerfSignpost.signposter.endInterval("Export", state)
+            if let trace = active, trace.recording {
+                trace.exportSteps.append(("\(name)", start, CACurrentMediaTime(),
+                                          Double(clock_gettime_nsec_np(CLOCK_THREAD_CPUTIME_ID) &- cpu) / 1e6))
+            }
+        }
+        return try body()
     }
 
     /// Wraps a model phase in a signpost and, while recording, a sample.

@@ -196,6 +196,9 @@ Other options:
   alternates with the source scene, and the workspace slots, the rows the
   list builds ahead of any scroll, in place of `StudioWorkspaceState.slotCap`
   (0 puts every row in the lazy stack). The app reads the cap once at launch.
+- `IKKOKU_PERF_EXPORT_HASH` (`on` or `off`, default `off`), #462's byte
+  check: the export workloads record each exported file's SHA-256 and size
+  ([what the report records](#what-the-report-records)).
 - `IKKOKU_PERF_PARK_FILE` (a path) and `IKKOKU_PERF_FOCUS_PROBE` (1–64),
   #440's measurement controls for the
   [focus-ring growth check](#per-action-growth-check-440). With a park file,
@@ -327,9 +330,21 @@ locked `PerfDrawLog`. Everything else is recorded on the main thread.
   records the main thread's CPU time over its call (`callCpuMs`,
   `CLOCK_THREAD_CPUTIME_ID` read right before the call starts and right after
   it ends), and each `studio-edit-steps` action the live-step settles in its
-  call ([placed edits](#placed-edits-409-446)). `summarize` prints the
+  call ([placed edits](#placed-edits-409-446)). Since #462 an action with
+  export steps (`PerfTrace.exportStep`, also `Export` signpost intervals)
+  records the main thread's own export work from its call to the next
+  action's: `exportMainMs` and `exportMainCpuMs` sum the top steps (`begin`,
+  the export call; `finish`, the end of a job that waited for background
+  work), `exportHopMs` runs from the end of `begin` to the start of
+  `finish`, and `exportSteps` gives the milliseconds of each nested step
+  (`guard`; `source`: read, SHA-256 and decode; `clocks`; `stage`: staging
+  and validation; `topology`; `thumbnail`; `writer`; `write`; `orphans`). With `IKKOKU_PERF_EXPORT_HASH=on`, `studio-export`
+  and `studio-export-import` also record each exported file's SHA-256 and
+  size when the action is ready (`exportSha256`, `exportBytes`; null when it
+  wrote none), read after the timed span. `summarize` prints the
   medians per action (the own busy time in parentheses after the busy time, when
-  the report has it), with the 120 Hz refresh periods the median and the
+  the report has it, and the export main time and its CPU time when every
+  action has them), with the 120 Hz refresh periods the median and the
   longest stall cover (a 100 ms stall drops 12 frames), and warns about an
   action that left an error;
 - the build: Debug/Release, the app's and the Engine package's own assert

@@ -456,6 +456,28 @@ class PerfTraceTests(unittest.TestCase):
         self.assertIn("duplicate x2 call 10.0, ready 20.0, main busy 1550.0 (own 1050.0), longest stall 5.0", text)
         self.assertIn("undo x2 call 10.0, ready 20.0, main busy 510.0, longest stall 5.0", text)
 
+    def test_action_stats_add_the_export_main_medians_when_every_action_has_them(self):
+        def action(name, main=None, cpu=None):
+            row = {"name": name, "measured": True, "startSeconds": 1, "callMs": 10, "readyMs": 20, "busyMs": 30,
+                   "longestStallMs": 5}
+            if main is not None:
+                row["exportMainMs"], row["exportMainCpuMs"] = main, cpu
+            return row
+        data = report()
+        data["details"] = {"actions": [action("export", 40, 38), action("export", 44, 41), action("export", 60, 50),
+                                       action("undo"), action("undo", 3, 2)]}
+        stats = perf_trace.action_stats(data)
+        # #462: additive, like busyOwnMs; a group with a row that lacks them has neither.
+        self.assertEqual(stats["export"]["exportMainMs"], 44)
+        self.assertEqual(stats["export"]["exportMainCpuMs"], 41)
+        self.assertNotIn("exportMainMs", stats["undo"])
+        self.assertNotIn("exportMainCpuMs", stats["undo"])
+        text = perf_trace.actions_line("exp", data)
+        self.assertIn("export x3 call 10.0, ready 20.0, main busy 30.0, longest stall 5.0 (max 5.0), "
+                      "120 Hz frames dropped 0 (max 0), export main 44.0 (CPU 41.0)", text)
+        self.assertTrue(text.endswith("undo x2 call 10.0, ready 20.0, main busy 30.0, longest stall 5.0 (max 5.0), "
+                                      "120 Hz frames dropped 0 (max 0)"), text)
+
     def test_action_problem_flags_an_action_that_left_an_error(self):
         data = report()
         data["workload"] = "studio-export"

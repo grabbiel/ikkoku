@@ -95,6 +95,11 @@ final class PerfWorkloadDriver {
     /// Whether the pending action waited for `actionPending`: it is then
     /// ready when the wait ended.
     private var actionWaited = false
+    /// #462 (`IKKOKU_PERF_EXPORT_HASH=on`): the file the pending export
+    /// action writes, and each finished action's file SHA-256 and size,
+    /// by its index in `finishedActions` (nil when it wrote no file).
+    private var exportFile: URL?
+    private var exportFiles: [Int: (sha256: String, bytes: Int)?] = [:]
 
     private init(app: AppState, trace: PerfTrace) {
         self.app = app
@@ -223,6 +228,29 @@ final class PerfWorkloadDriver {
         }
         if !actionSteps.isEmpty { DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { self.runNextAction() } }
         DispatchQueue.main.asyncAfter(deadline: .now() + configuration.seconds) { self.stop() }
+    }
+
+    /// #462: the export steps (`PerfTrace.exportStep`) that began from this
+    /// action's call to the next action's. `exportMainMs` and
+    /// `exportMainCpuMs` sum the top steps (`begin`, `finish`): the main
+    /// thread's own export work. `exportHopMs` runs from the end of `begin`
+    /// to the start of `finish` (absent when the export ran in one call).
+    /// `exportSteps` gives each nested step's milliseconds. Nothing is added
+    /// to an action without export steps.
+    private func exportRow(_ row: inout [String: Any], from start: CFTimeInterval, until next: CFTimeInterval) {
+        let steps = trace.exportSteps.filter { $0.start >= start && $0.start < next }
+        guard !steps.isEmpty else { return }
+        let top = steps.filter { $0.name == "begin" || $0.name == "finish" }
+        row["exportMainMs"] = PerfTrace.round(top.map { ($0.end - $0.start) * 1000 }.reduce(0, +))
+        row["exportMainCpuMs"] = PerfTrace.round(top.map(\.cpuMs).reduce(0, +))
+        if let begin = top.first(where: { $0.name == "begin" }), let finish = top.first(where: { $0.name == "finish" }) {
+            row["exportHopMs"] = PerfTrace.round((finish.start - begin.end) * 1000)
+        }
+        var nested: [String: Double] = [:]
+        for step in steps where step.name != "begin" && step.name != "finish" {
+            nested[step.name, default: 0] += (step.end - step.start) * 1000
+        }
+        row["exportSteps"] = nested.mapValues(PerfTrace.round)
     }
 
     /// Spins (rather than sleeps) so the load is CPU work on the main thread.
@@ -652,6 +680,7 @@ final class PerfWorkloadDriver {
             count += 1
             let url = folder.appendingPathComponent("export-\(count).png")
             previous = url
+            self?.exportFile = url
             self?.app.exportSourceScene(to: url)
         })]
         trace.details["actionSourceKey"] = Int(target.sourceObjectKey ?? -1)
@@ -674,6 +703,7 @@ final class PerfWorkloadDriver {
             count += 1
             let url = folder.appendingPathComponent("export-\(count).png")
             previous = url
+            self?.exportFile = url
             self?.app.exportSourceScene(to: url)
         })]
         trace.details["gesture"] = "File ▸ Export Edited Original Scene of the imported startup scene, unedited, repeated; live animation on"
@@ -1202,6 +1232,13 @@ final class PerfWorkloadDriver {
                                 PerfTrace.footprint(), trace.device?.currentAllocatedSize ?? 0, app.studio?.doc.objects.count ?? -1,
                                 action.bodies, app.studio?.shownWorkspaceState.entries.count ?? -1, history,
                                 action.cpuMs, action.live))
+        if configuration.exportHash, let file = exportFile {
+            // After the timed span: the file the export wrote, if any.
+            exportFiles[finishedActions.count - 1] = (try? Data(contentsOf: file)).map {
+                (SHA256.hash(data: $0).map { String(format: "%02x", $0) }.joined(), $0.count)
+            }
+            exportFile = nil
+        }
         pendingAction = nil
         DispatchQueue.main.asyncAfter(deadline: .now() + (action.measured ? 0.5 : 0.2)) { self.runNextAction() }
     }
@@ -1244,6 +1281,11 @@ final class PerfWorkloadDriver {
                     "documentObjects": action.objects,
                     "workspaceBodies": bodies, "workspaceRows": action.workspaceRows]
             row["callCpuMs"] = PerfTrace.round(action.cpuMs)
+            exportRow(&row, from: action.start, until: next)
+            if let file = exportFiles[index] {
+                row["exportSha256"] = file.map { $0.sha256 as Any } ?? NSNull()
+                row["exportBytes"] = file.map { $0.bytes as Any } ?? NSNull()
+            }
             if let history = action.history {
                 row["undoSteps"] = history.undo; row["redoSteps"] = history.redo
                 row["objectBuffers"] = history.storage.buffers; row["objectBufferCapacity"] = history.storage.capacity

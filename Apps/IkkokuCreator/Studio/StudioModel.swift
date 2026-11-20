@@ -3484,6 +3484,10 @@ final class StudioModel: ViewportInputHandler, LivePacedHandler {
     /// lazy hidden characters: no worker hop, no progress line.
     /// `completion` gets the export's error, or nil once the file is written.
     func beginSourceSceneExport(to url: URL, completion: @escaping @MainActor (Error?) -> Void) {
+        PerfTrace.exportStep("begin") { startSourceSceneExport(to: url, completion: completion) }
+    }
+
+    private func startSourceSceneExport(to url: URL, completion: @escaping @MainActor (Error?) -> Void) {
         let wanted = sourceExportBaselineRequests()
         let clocks = sourceClockRequests(doc.objects)
         let clocksLoaded = clocks.isEmpty || sourceUnbuiltClock.isLoaded(clocks.map(\.request))
@@ -3538,6 +3542,10 @@ final class StudioModel: ViewportInputHandler, LivePacedHandler {
     }
 
     private func finishSourceSceneExport(_ key: Int, outcomes: [Result<SourceStudioCharacterPreview, Error>]) {
+        PerfTrace.exportStep("finish") { completeSourceSceneExport(key, outcomes: outcomes) }
+    }
+
+    private func completeSourceSceneExport(_ key: Int, outcomes: [Result<SourceStudioCharacterPreview, Error>]) {
         guard let job = sourceExportJobs.removeValue(forKey: key) else { return }
         var baselines: [UUID: SourceExportBaseline] = [:]
         for (request, outcome) in zip(job.wanted, outcomes) {
@@ -3545,7 +3553,7 @@ final class StudioModel: ViewportInputHandler, LivePacedHandler {
         }
         let failure: Error?
         do {
-            guard sourceExportInputs == job.inputs else {
+            guard PerfTrace.exportStep("guard", { sourceExportInputs == job.inputs }) else {
                 throw RigError.invalid("the scene changed while the hidden characters of \(job.url.lastPathComponent) were built; export it again")
             }
             try exportSourceScene(to: job.url, baselines: baselines, clockStates: job.clockStates, animationElapsed: job.elapsed)
@@ -3568,28 +3576,35 @@ final class StudioModel: ViewportInputHandler, LivePacedHandler {
         guard let path = doc.sourceSceneFile, let expected = doc.sourceSceneSHA256 else { throw RigError.invalid("Import an original Studio scene first.") }
         guard url.resolvingSymlinksInPath().path != URL(fileURLWithPath: path).resolvingSymlinksInPath().path,
               !FileManager.default.fileExists(atPath: url.path) else { throw RigError.invalid("Choose a new filename for the edited original scene.") }
-        let handle = try FileHandle(forReadingFrom: URL(fileURLWithPath: path)); defer { try? handle.close() }
-        let bytes = try handle.read(upToCount: 256 * 1024 * 1024 + 1) ?? Data()
-        guard bytes.count <= 256 * 1024 * 1024, SHA256.hash(data: bytes).map({ String(format: "%02x", $0) }).joined() == expected else {
-            throw RigError.invalid("The original scene changed; reimport before exporting edits.")
+        let source = try PerfTrace.exportStep("source") { () throws -> KoikatsuSceneDocument in
+            let handle = try FileHandle(forReadingFrom: URL(fileURLWithPath: path)); defer { try? handle.close() }
+            let bytes = try handle.read(upToCount: 256 * 1024 * 1024 + 1) ?? Data()
+            guard bytes.count <= 256 * 1024 * 1024, SHA256.hash(data: bytes).map({ String(format: "%02x", $0) }).joined() == expected else {
+                throw RigError.invalid("The original scene changed; reimport before exporting edits.")
+            }
+            return try KoikatsuSceneReader.decodeDocument(bytes)
         }
-        let source = try KoikatsuSceneReader.decodeDocument(bytes)
         let elapsed = animationElapsed ?? sourceAnimationTime
         // Lazy hidden characters: one with no preview saves the time its
         // data-only clock reached, from the scene decoded here.
         let clocks: [UUID: Result<SourceStudioAnimationState?, Error>]
         if let clockStates { clocks = clockStates } else {
-            let requests = sourceClockRequests(doc.objects)
-            let states = requests.isEmpty ? [] : sourceUnbuiltClock.savedStates(requests.map(\.request), elapsed: elapsed, scene: (source, expected))
-            clocks = Dictionary(uniqueKeysWithValues: zip(requests.map(\.id), states))
+            clocks = PerfTrace.exportStep("clocks") {
+                let requests = sourceClockRequests(doc.objects)
+                let states = requests.isEmpty ? [] : sourceUnbuiltClock.savedStates(requests.map(\.request), elapsed: elapsed, scene: (source, expected))
+                return Dictionary(uniqueKeysWithValues: zip(requests.map(\.id), states))
+            }
         }
         // ST-T03 / ST-S09 / ST-D03: copies and new folders, cameras and
         // lights are written first under the keys CharaStudio would allocate
         // (`SourceSceneExportValidation.stage`); every edit below addresses
         // the staged scene, where a copy's record is its original's bytes.
-        let staged = try SourceSceneExportValidation.stage(doc, source: source)
+        let staged = try PerfTrace.exportStep("stage") { () throws -> SourceSceneExportValidation.Staged in
+            let staged = try SourceSceneExportValidation.stage(doc, source: source)
+            try SourceSceneExportValidation.validate(doc, against: staged.stage.document.snapshot, keys: staged.keys)
+            return staged
+        }
         let stage = staged.stage.document
-        try SourceSceneExportValidation.validate(doc, against: stage.snapshot, keys: staged.keys)
         guard doc.effects == SceneEffects(), doc.mainLight == MainLight(), doc.timeline.keyframes.isEmpty else {
             throw RigError.invalid("Original-scene export does not yet serialize native lighting, effects or timeline edits.")
         }
@@ -3604,7 +3619,7 @@ final class StudioModel: ViewportInputHandler, LivePacedHandler {
         // subtree and records under another parent (or re-appended after a
         // sibling) are moved; each moved record's re-authored local
         // placement is written by the transform edit below.
-        let topology = try SourceSceneExportValidation.topologyEdits(doc, against: stage.snapshot, keys: staged.keys)
+        let topology = try PerfTrace.exportStep("topology") { try SourceSceneExportValidation.topologyEdits(doc, against: stage.snapshot, keys: staged.keys) }
         var edits = SourceSceneEdits(deletions: topology.deletions, reparents: topology.reparents)
         edits.lightLimit = sourceExportUnlimitedLights ? .unlimitedMapLights : .charaStudio
         // #320: every exported record is one document object, so the
@@ -3782,14 +3797,17 @@ final class StudioModel: ViewportInputHandler, LivePacedHandler {
             if camera != (try source.settings.cameraSlots[i].nativeCamera()) { edits.cameraSlots[i] = camera.sourceCameraRecord() }
         }
         if !edits.transforms.isEmpty || !edits.kinematics.isEmpty || !edits.animations.isEmpty || !edits.voices.isEmpty || !edits.cards.isEmpty || !edits.mouth.isEmpty || edits.currentCamera != nil || !edits.cameraSlots.isEmpty || !edits.deletions.isEmpty || !staged.stage.keys.isEmpty || !edits.routes.isEmpty {
-            var thumbnailFrame = frame; thumbnailFrame.gizmos = []; thumbnailFrame.effects.showGrid = false
-            guard let image = host.renderer.capture(frame: thumbnailFrame, width: 640, height: 360) else { throw RigError.invalid("Could not render the edited Studio thumbnail.") }
-            edits.thumbnailData = try CaptureOutput.pngData(image)
+            edits.thumbnailData = try PerfTrace.exportStep("thumbnail") { () throws -> Data in
+                var thumbnailFrame = frame; thumbnailFrame.gizmos = []; thumbnailFrame.effects.showGrid = false
+                guard let image = host.renderer.capture(frame: thumbnailFrame, width: 640, height: 360) else { throw RigError.invalid("Could not render the edited Studio thumbnail.") }
+                return try CaptureOutput.pngData(image)
+            }
         }
-        try staged.stage.editedData(edits).write(to: url, options: .atomic)
+        let written = try PerfTrace.exportStep("writer") { try staged.stage.editedData(edits) }
+        try PerfTrace.exportStep("write") { try written.write(to: url, options: .atomic) }
         // ST-T03i: entries no installed plug-in reads travel verbatim; that
         // is CharaStudio's behavior only while no installed plug-in owns them.
-        let orphans = source.orphanPluginIDs
+        let orphans = PerfTrace.exportStep("orphans") { source.orphanPluginIDs }
         // ST-T05a: a scene from an older CharaStudio is written the way
         // CharaStudio 1.0.4.2 saves it, so even an unedited export changes
         // its bytes.
