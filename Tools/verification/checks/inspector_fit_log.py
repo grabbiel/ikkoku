@@ -26,13 +26,14 @@ must fit without its scroll view in Object, FK and IK mode (its full or its
 compact variant, by the ideal widths the app logs after the capture), and the
 variant shown must be the first that fits the state shown (ViewThatFits' order:
 full, compact, then compact in a scroll view).
-With --object-heights NAME VECTOR (#366), at the capture the inspector's
-explicit text-field heights (`InspectorTextFieldHeight`, measured from an AppKit
-prototype) must be NAME and VECTOR pt, the Name field's intrinsic height NAME,
-and every other editable field's (the Transform rows on the Object tab) VECTOR.
-That checks the prototype against SwiftUI's own fields on this machine. Frame
-heights are not checked: in about 1% of launches the Name field is still laid
-out 3 pt short inside its fixed slot (#366's residue).
+With --object-heights NAME VECTOR (#366), at the capture the heights measured
+from an AppKit prototype (`InspectorTextFieldHeight`: SwiftUI's automatic style
+and the Transform fields' `.roundedBorder`) must be NAME and VECTOR pt, the Name
+field's intrinsic height NAME, and every other editable field's (the Transform
+rows on the Object tab) VECTOR. That checks the prototype against SwiftUI's own
+fields on this machine, and the AppKit Name field (`InspectorNameField`) against
+SwiftUI's automatic style. Frame heights are not checked: one capture cannot
+show a rate.
 """
 import re
 import sys
