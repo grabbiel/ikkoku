@@ -26,16 +26,31 @@ struct FocusProbeButtons: View {
     }
 }
 
-/// The inspector's probe: kept mounted and hidden with `.inspectorHidden`, as
-/// the kept sections are, flipping between shown and hidden at every
-/// selection change.
+/// The inspector's probe: kept mounted, flipping between shown and hidden at
+/// every selection change. It hides the way kept inspector views hid before
+/// #440's fix (`probeHidden`, zero opacity), which takes its AppKit views out
+/// of the window and adds them again on every show, so it stays a control
+/// that grows on every show: the growth check's positive control.
 struct InspectorFocusProbe: View {
     let model: StudioModel
     @State private var flips = 0
 
     var body: some View {
         FocusProbeButtons()
-            .inspectorHidden(flips % 2 == 1)
+            .probeHidden(flips % 2 == 1)
             .onChange(of: model.selection) { flips += 1 }
+    }
+}
+
+private extension View {
+    /// `inspectorHidden` as it was before #440's fix: zero opacity in place of
+    /// the clip.
+    func probeHidden(_ hidden: Bool) -> some View {
+        fixedSize(horizontal: false, vertical: true)
+            .frame(height: hidden ? 0 : nil, alignment: .top)
+            .frame(minWidth: hidden ? 0 : nil, alignment: .topLeading)
+            .opacity(hidden ? 0 : 1)
+            .allowsHitTesting(!hidden)
+            .disabled(hidden)
     }
 }

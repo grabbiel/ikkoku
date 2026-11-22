@@ -672,7 +672,9 @@ INSPECTOR_UI_OPS = {"select", "deselect", "focus", "type", "delete", "undo", "re
                     # Added for #410 (the workspace list's slots, the eyes' own
                     # focus ring and what each workspace action evaluates).
                     "selectRow", "scrollWorkspace", "newScene", "addFolders", "eyeFocus",
-                    "workspaceBodies"}
+                    "workspaceBodies",
+                    # Added for #440 (kept inspector views hidden by clipping).
+                    "keptControls", "layers", "axGeometry"}
 
 # ST-T11 `editRoute` settings: point edits name the point, route edits do not.
 ROUTE_POINT_SETTINGS = ("delete", "move", "speed", "ease", "connection", "link")
@@ -1006,7 +1008,7 @@ class StudioScenarioLaneTests(unittest.TestCase):
                       and not name.startswith(("maker-", "gameplay-")))
 
     def test_lane_validates_and_covers_every_scenario(self):
-        self.assertEqual(len(self.checks), 111)
+        self.assertEqual(len(self.checks), 112)
         referenced = set()
         for check in self.checks:
             scenario = check["env"]["IKKOKU_STUDIO_SCENARIO"]
@@ -1017,6 +1019,22 @@ class StudioScenarioLaneTests(unittest.TestCase):
                          self.scenario_files(),
                          "a scenario file is not run by the lane, or the lane "
                          "names a scenario that is not in Tools/verification/scenarios")
+
+    def test_kept_controls_check_has_no_pixel_captures(self):
+        # #440 B1: neither in-process render of the inspector draws its SwiftUI
+        # content, so the check hashes its scenario report only.
+        check = next(c for c in self.checks if c["id"] == "studio-scenario-inspector-kept-controls")
+        self.assertEqual([a["kind"] for a in check["artifacts"]], ["scenario-report"])
+
+    def test_kept_controls_scenario_records_ax_geometry_at_every_state(self):
+        # #440 B1 (rules v6): axGeometry follows every keptControls step.
+        path = os.path.join(run.REPO_ROOT, "Tools/verification/scenarios/inspector-kept-controls.json")
+        with open(path) as handle:
+            steps = json.load(handle)["inspectorUI"]["steps"]
+        kept = [i for i, step in enumerate(steps) if step["op"] == "keptControls"]
+        self.assertEqual(len(kept), 6)
+        for i in kept:
+            self.assertEqual(steps[i + 1], {"op": "axGeometry", "label": steps[i]["label"]})
 
     def check_inspector_ui_steps(self, path, steps):
         self.assertTrue(steps)
@@ -1049,6 +1067,8 @@ class StudioScenarioLaneTests(unittest.TestCase):
                     if name in step:
                         self.assertIs(type(step[name]), int)
                         self.assertGreaterEqual(step[name], 1 if name == "count" else 0)
+            if op in ("keptControls", "layers", "axGeometry") and "label" in step:
+                self.assertTrue(step["label"])
             if op == "eyeFocus":
                 self.assertIs(type(step.get("count", 2)), int)
                 self.assertGreater(step.get("count", 2), 0)

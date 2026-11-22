@@ -641,6 +641,24 @@ The #410 check stays as that issue's record.
   the reader, the bar, the slope note, the flags, the timed count, the
   parking protocol against a fake app, and the attempts.
 
+**The inspector's fix: kept views hidden by clipping.** At zero opacity
+SwiftUI added a hidden kept view's AppKit controls to their superview again
+on every show; while hidden they stayed in the view tree (the B1
+kept-controls scenario counts them on `main`). Each re-add left NSKeyValueDependency
+objects (`-[NSView addSubview:]`, and glass-context properties computed in
+`updateGraph()`) and, for every text field, notification observers
+(`AppKitTextField.viewWillMove(toWindow:)`, #453), and none were freed.
+On macOS 15 and later, `inspectorHidden` keeps the hidden view at full opacity, clipped to its
+zero-height frame (`InspectorKeptClip`: the frame itself while hidden, the
+frame grown by 256 pt while shown, so focus rings are not cut), with
+accessibility hidden only while hidden (`accessibilityHidden(true,
+isEnabled:)`). One modifier chain serves both states, so hiding never
+changes the view's identity. `accessibilityHidden(_:isEnabled:)` needs
+macOS 15 and the app targets 14.6, so macOS 14 keeps the zero-opacity chain
+and the growth (an `if #available` branch, constant for the process; macOS
+14 is not tested here). The focus probe keeps the zero-opacity hiding
+(`probeHidden`), so it still grows on every show as the positive control.
+
 ## Measurement setup
 
 Reference machine: Mac Studio `Mac14,14`, Apple M2 Ultra (24 CPU cores
@@ -5431,13 +5449,15 @@ Each change is a separate commit, measured against the build before it.
   placeholder and the tab sit in a `ZStack(alignment: .top)`; the hidden one
   keeps its layout but takes no space. A hidden view is framed to zero
   height under `fixedSize`, reports at most the width proposed to it, is
-  drawn at zero opacity, takes no hits and is disabled. Without the width
+  drawn at zero opacity (since #440: clipped to that frame at full opacity,
+  see [the growth check](#per-action-growth-check-440)), takes no hits and
+  is disabled. Without the width
   clamp, a hidden view wider than the inspector (a kept route section)
   widened the stack and moved what was shown; the window captures found
   that ([correctness](#correctness-item-7)). Disabled is needed: without
   it the hidden fields stay in the Tab key-view loop and can take focus
   (tested). A hidden `Picker`'s label hides itself from accessibility
-  (`inspectorKeptLabel()`), because SwiftUI keeps it in the tree at zero
+  (`inspectorKeptLabel()`), because SwiftUI kept it in the tree at zero
   opacity. While hidden, the tab keeps the last state it showed, so it
   does not update.
   - The first version used a custom `Layout`. `InspectorSwapLayout.sizeThatFits`

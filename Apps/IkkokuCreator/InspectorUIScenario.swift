@@ -40,6 +40,9 @@ struct InspectorUIScenario: Decodable {
         /// focus moves; `capture`: see `eyeFocus(_:studio:moves:capture:settle:)`)
         /// and `"workspaceBodies"` (`label`: `select`, `toggle` or `refresh`;
         /// `count` actions from row `index`: see `workspaceBodies(_:action:count:index:settle:)`).
+        /// Added for #440: `"keptControls"` (see `keptControls(_:)`), `"layers"`
+        /// (see `layerCounts(_:)`) and `"axGeometry"` (see `axGeometry(_:)`);
+        /// `label` names the state in the report.
         let op: String
         let key: Int32?
         let keys: [Int32]?
@@ -359,6 +362,15 @@ struct InspectorUIScenario: Decodable {
                 let loop = await Self.keyLoop(window, beforeEachMove: { studio.endUndoCoalescing() }, afterEachMove: { await settle() })
                 let ok = (step.hiddenKeyViews.map { loop.hidden <= $0 } ?? true) && (step.keyViews.map { loop.views.count == $0 } ?? true)
                 record(step.op, ok, "\(loop.views.count) key views, \(loop.hidden) outside the visible window, sha \(loop.sha): " + loop.views.joined(separator: " > "))
+            case "keptControls":
+                let result = await Self.keptControls(window, beforeEachMove: { studio.endUndoCoalescing() },
+                                                     afterEachMove: { await settle() })
+                record(step.op, result.ok, (step.label.map { "\($0): " } ?? "") + result.detail)
+            case "layers":
+                record(step.op, true, (step.label.map { "\($0): " } ?? "") + Self.layerCounts(window))
+            case "axGeometry":
+                let result = Self.axGeometry(window)
+                record(step.op, result.ok, (step.label.map { "\($0): " } ?? "") + result.detail)
             case "assert":
                 var problems: [String] = []
                 let target = object(step.key)
@@ -567,11 +579,13 @@ struct InspectorUIScenario: Decodable {
     /// and let the views re-render before the next one (#390), as separate Tab
     /// presses would. A view is named as it is right after the move.
     @MainActor static func keyLoop(_ window: NSWindow, beforeEachMove: () -> Void = {},
-                                   afterEachMove: () async -> Void = {}) async -> (views: [String], hidden: Int, sha: String) {
+                                   afterEachMove: () async -> Void = {}) async -> (views: [String], hidden: Int, sha: String,
+                                                                                     members: Set<ObjectIdentifier>) {
         beforeEachMove()
         window.makeFirstResponder(nil)
         await afterEachMove()
         var views: [String] = [], hidden = 0
+        var members = Set<ObjectIdentifier>()
         var first: NSView?
         for _ in 0..<80 {
             beforeEachMove()
@@ -594,11 +608,12 @@ struct InspectorUIScenario: Decodable {
             if first == nil { first = view }
             if named.hidden { hidden += 1 }
             views.append(named.name)
+            members.insert(ObjectIdentifier(view))
         }
         beforeEachMove()
         window.makeFirstResponder(nil)
         await afterEachMove()
-        return (views, hidden, sha(views))
+        return (views, hidden, sha(views), members)
     }
 
     /// #425: whether the Studio toolbar adds its empty marker views (`StudioToolbarMarker`) and counts
@@ -1482,6 +1497,215 @@ struct InspectorUIScenario: Decodable {
             let lead = Int((f.minX - visible.minX).rounded()), trail = Int((visible.maxX - f.maxX).rounded())
             return "\(label) \(natural)/\(width) \(lead)+\(trail)"
         }
+    }
+
+    // MARK: #440 B1 checks (kept inspector views stay in the window, clipped)
+
+    /// The window's accessibility tree as object identities, walked as
+    /// `accessibilityStrings(_:)` walks it.
+    @MainActor static func accessibilityObjects(_ window: NSWindow) -> Set<ObjectIdentifier> {
+        var seen = Set<ObjectIdentifier>()
+        func get(_ object: NSObject, _ name: String) -> Any? {
+            let selector = NSSelectorFromString(name)
+            guard object.responds(to: selector) else { return nil }
+            return object.perform(selector)?.takeUnretainedValue()
+        }
+        func visit(_ element: Any, depth: Int) {
+            guard depth < 80, seen.count < 20_000, let object = element as? NSObject else { return }
+            guard seen.insert(ObjectIdentifier(object)).inserted else { return }
+            for child in get(object, "accessibilityChildren") as? [Any] ?? [] { visit(child, depth: depth + 1) }
+        }
+        visit(window, depth: 0)
+        return seen
+    }
+
+    /// The inspector's scroll view for the #440 ops: the scroll view that
+    /// encloses most of the window's `InspectorAnchorView`s (the kept views'
+    /// anchors live in its content), else `inspectorScrollView(_:)`. `how`
+    /// says which, whether the trailing-edge lookup found one, whether the
+    /// scroll view is hidden and its distance from the trailing edge.
+    @MainActor static func keptScrollView(_ window: NSWindow) -> (scroll: NSScrollView?, how: String) {
+        guard let content = window.contentView else { return (nil, "no content view") }
+        var counts: [ObjectIdentifier: (scroll: NSScrollView, anchors: Int)] = [:]
+        func visit(_ view: NSView) {
+            if view is InspectorAnchorView, let scroll = view.enclosingScrollView {
+                counts[ObjectIdentifier(scroll), default: (scroll, 0)].anchors += 1
+            }
+            view.subviews.forEach(visit)
+        }
+        visit(content)
+        let edgeScroll = inspectorScrollView(window)
+        let byAnchors = counts.values.max { ($0.anchors, $0.scroll.bounds.height) < ($1.anchors, $1.scroll.bounds.height) }?.scroll
+        guard let scroll = byAnchors ?? edgeScroll else { return (nil, "no anchors, edge lookup none") }
+        let edge = content.convert(content.bounds, to: nil).maxX
+        let offset = Int((edge - scroll.convert(scroll.bounds, to: nil).maxX).rounded())
+        let how = "\(byAnchors != nil ? "anchors" : "edge"), edge lookup \(edgeScroll == nil ? "none" : edgeScroll === scroll ? "same" : "other"), "
+            + "hidden \(scroll.isHiddenOrHasHiddenAncestor ? "yes" : "no"), \(offset) pt from the trailing edge"
+        return (scroll, how)
+    }
+
+    /// `keptControls`: the AppKit controls (`NSControl`) of the inspector's
+    /// scroll view (`keptScrollView(_:)`), by class. A control inside a kept
+    /// view that is hidden (an `InspectorAnchorView` with `keptHidden` whose
+    /// area holds it) must be disabled, lie outside the key-view loop, miss a
+    /// hit test at its centre and be absent from the accessibility tree; any
+    /// that does not fails the step. Whether it accepts
+    /// `makeFirstResponder` is recorded (`focusable`) but does not fail the
+    /// step: on main, hidden steppers, popups and colour wells accept it, so
+    /// builds compare it (#440 rules v6). The others are
+    /// recorded per class (count, enabled, can become key view, in the loop,
+    /// hit, in the tree) with a sha, which must match across builds. The loop
+    /// is the one Tab walks (`keyLoop(_:beforeEachMove:afterEachMove:)`, as
+    /// the `keyLoop` op walks it, a text field counted when it is edited); the
+    /// walk and the focus attempts on hidden controls end with no first
+    /// responder.
+    @MainActor static func keptControls(_ window: NSWindow, beforeEachMove: () -> Void,
+                                        afterEachMove: () async -> Void) async -> (ok: Bool, detail: String) {
+        let found = keptScrollView(window)
+        guard let content = window.contentView, let scroll = found.scroll else {
+            return (false, "no inspector scroll view (\(found.how))")
+        }
+        var anchors: [InspectorAnchorView] = [], controls: [NSControl] = []
+        func visit(_ view: NSView) {
+            if let anchor = view as? InspectorAnchorView { anchors.append(anchor) }
+            if let control = view as? NSControl { controls.append(control) }
+            view.subviews.forEach(visit)
+        }
+        visit(scroll)
+        let hiddenAnchors = anchors.filter(\.keptHidden)
+        let tree = accessibilityObjects(window)
+        let loop = await keyLoop(window, beforeEachMove: beforeEachMove, afterEachMove: afterEachMove).members
+        window.makeFirstResponder(nil)
+        struct Facts { var count = 0, enabled = 0, focusable = 0, inLoop = 0, hit = 0, inTree = 0 }
+        var shown: [String: Facts] = [:], hidden: [String: Facts] = [:]
+        for control in controls {
+            let kind = "\(type(of: control))"
+            let isHidden = hiddenAnchors.contains { $0.holds(control) }
+            let centre = control.convert(CGPoint(x: control.bounds.midX, y: control.bounds.midY), to: nil)
+            let hitView = content.hitTest(content.superview?.convert(centre, from: nil) ?? centre)
+            var facts = (isHidden ? hidden : shown)[kind] ?? Facts()
+            facts.count += 1
+            if control.isEnabled { facts.enabled += 1 }
+            if isHidden {
+                if window.makeFirstResponder(control), window.firstResponder !== window {
+                    facts.focusable += 1
+                    window.makeFirstResponder(nil)
+                }
+            } else if control.canBecomeKeyView {
+                facts.focusable += 1
+            }
+            if loop.contains(ObjectIdentifier(control)) { facts.inLoop += 1 }
+            if hitView.map({ $0 === control || $0.isDescendant(of: control) }) ?? false { facts.hit += 1 }
+            if tree.contains(ObjectIdentifier(control)) || control.cell.map({ tree.contains(ObjectIdentifier($0)) }) ?? false {
+                facts.inTree += 1
+            }
+            if isHidden { hidden[kind] = facts } else { shown[kind] = facts }
+        }
+        func line(_ kind: String, _ f: Facts) -> String {
+            "\(kind) \(f.count): enabled \(f.enabled), focusable \(f.focusable), loop \(f.inLoop), hit \(f.hit), tree \(f.inTree)"
+        }
+        let shownLines = shown.keys.sorted().map { line($0, shown[$0]!) }
+        let hiddenLines = hidden.keys.sorted().map { line($0, hidden[$0]!) }
+        let leaks = hidden.keys.sorted().compactMap { kind -> String? in
+            let f = hidden[kind]!
+            let bad = [("enabled", f.enabled), ("loop", f.inLoop), ("hit", f.hit), ("tree", f.inTree)]
+                .filter { $0.1 > 0 }.map { "\($0.0) \($0.1)" }
+            return bad.isEmpty ? nil : "\(kind): " + bad.joined(separator: ", ")
+        }
+        let detail = "anchors \(anchors.count) (\(hiddenAnchors.count) hidden); shown sha \(sha(shownLines)): "
+            + shownLines.joined(separator: "; ") + " | hidden \(hidden.values.reduce(0) { $0 + $1.count }): "
+            + hiddenLines.joined(separator: "; ") + (leaks.isEmpty ? "" : " | LEAKS: " + leaks.joined(separator: "; "))
+            + " | scroll view: \(found.how)"
+        return (leaks.isEmpty, detail)
+    }
+
+    /// `layers`: the layer tree under the window's content view and under the
+    /// inspector's scroll view (`keptScrollView(_:)`): layers (masks included), layers with a mask,
+    /// layers that mask to bounds, and views.
+    @MainActor static func layerCounts(_ window: NSWindow) -> String {
+        func count(_ root: NSView?) -> String {
+            guard let root else { return "none" }
+            var layers = 0, masked = 0, bounded = 0, views = 0
+            func visitLayer(_ layer: CALayer) {
+                layers += 1
+                if layer.masksToBounds { bounded += 1 }
+                if let mask = layer.mask { masked += 1; visitLayer(mask) }
+                layer.sublayers?.forEach(visitLayer)
+            }
+            func visitView(_ view: NSView) { views += 1; view.subviews.forEach(visitView) }
+            if let layer = root.layer { visitLayer(layer) }
+            visitView(root)
+            return "layers \(layers), masked \(masked), masksToBounds \(bounded), views \(views)"
+        }
+        return "window: \(count(window.contentView)); inspector: \(count(keptScrollView(window).scroll))"
+    }
+
+    /// `axGeometry`: every accessibility element in the inspector's scroll
+    /// area, depth first, as "role | label | value | x,y,w,h" with the frame in
+    /// window points rounded to 0.5 pt (a non-finite coordinate, as a null
+    /// frame has, written as such); the label is the element's label, else
+    /// its title. The scroll area is the `AXScrollArea` element whose frame is
+    /// the scroll view's (`keptScrollView(_:)`, within 1 pt); with none, the
+    /// elements whose frame's centre lies in the scroll view's frame, and the
+    /// detail says so. The record and its sha must match across builds (#440
+    /// rules v6): the shown content's elements unchanged, the hidden content's
+    /// absent, since they are absent on main.
+    @MainActor static func axGeometry(_ window: NSWindow) -> (ok: Bool, detail: String) {
+        guard let scroll = keptScrollView(window).scroll else { return (false, "no inspector scroll view") }
+        let scrollFrame = scroll.convert(scroll.bounds, to: nil)
+        func get(_ object: NSObject, _ name: String) -> Any? {
+            let selector = NSSelectorFromString(name)
+            guard object.responds(to: selector) else { return nil }
+            return object.perform(selector)?.takeUnretainedValue()
+        }
+        func frame(_ object: NSObject) -> CGRect? {
+            guard object.responds(to: NSSelectorFromString("accessibilityFrame")),
+                  let value = object.value(forKey: "accessibilityFrame") as? NSValue else { return nil }
+            return window.convertFromScreen(value.rectValue)
+        }
+        func text(_ value: Any?) -> String {
+            guard let value else { return "" }
+            if let string = value as? String { return string }
+            if let attributed = value as? NSAttributedString { return attributed.string }
+            if let number = value as? NSNumber { return number.stringValue }
+            return "<\(type(of: value))>"
+        }
+        func half(_ v: CGFloat) -> String {
+            guard v.isFinite else { return v.isNaN ? "nan" : v < 0 ? "-inf" : "inf" }
+            guard abs(v) < 1e9 else { return String(format: "%.3g", Double(v)) }
+            let x = (v * 2).rounded() / 2
+            return x == x.rounded() ? "\(Int(x))" : String(format: "%.1f", Double(x))
+        }
+        func near(_ a: CGRect, _ b: CGRect) -> Bool {
+            abs(a.minX - b.minX) <= 1 && abs(a.minY - b.minY) <= 1 && abs(a.maxX - b.maxX) <= 1 && abs(a.maxY - b.maxY) <= 1
+        }
+        var inArea: [String] = [], byCentre: [String] = [], roles: [String: Int] = [:], centreRoles: [String: Int] = [:]
+        var visited = 0, areas = 0
+        func visit(_ element: Any, depth: Int, inside: Bool) {
+            guard depth < 80, visited < 20_000, let object = element as? NSObject else { return }
+            visited += 1
+            let role = get(object, "accessibilityRole") as? String ?? ""
+            let rect = frame(object)
+            var within = inside
+            if !inside, role == "AXScrollArea", let rect, near(rect, scrollFrame) { within = true; areas += 1 }
+            let label = [text(get(object, "accessibilityLabel")), text(get(object, "accessibilityTitle"))].first { !$0.isEmpty } ?? ""
+            let where_ = rect.map { "\(half($0.minX)),\(half($0.minY)),\(half($0.width)),\(half($0.height))" } ?? "no frame"
+            let line = "\(role) | \(label) | \(text(get(object, "accessibilityValue"))) | \(where_)"
+            if within {
+                inArea.append(line)
+                roles[role, default: 0] += 1
+            } else if let rect, scrollFrame.insetBy(dx: -1, dy: -1).contains(CGPoint(x: rect.midX, y: rect.midY)) {
+                byCentre.append(line)
+                centreRoles[role, default: 0] += 1
+            }
+            for child in get(object, "accessibilityChildren") as? [Any] ?? [] { visit(child, depth: depth + 1, inside: within) }
+        }
+        visit(window, depth: 0, inside: false)
+        let lines = areas > 0 ? inArea : byCentre
+        let counts = (areas > 0 ? roles : centreRoles).keys.sorted().map { "\($0) \((areas > 0 ? roles : centreRoles)[$0]!)" }
+        let source = areas > 0 ? "\(areas) scroll area\(areas == 1 ? "" : "s") at the scroll view's frame" : "no scroll area at the scroll view's frame, by centre"
+        return (true, "\(lines.count) elements (\(source)), sha \(sha(lines)); roles: " + counts.joined(separator: ", ")
+                + "; elements: " + lines.joined(separator: " ; "))
     }
 
     static func sha(_ lines: [String]) -> String {

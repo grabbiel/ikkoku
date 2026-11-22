@@ -27,28 +27,66 @@ extension View {
     /// to zero while hidden, so it keeps its layout but takes no space. Its
     /// width is reported as at most the width proposed to it while hidden: a
     /// hidden view wider than the inspector (a route section, say) would
-    /// otherwise widen the stack and move what is shown. At zero opacity
-    /// SwiftUI does not draw it and leaves it out of the accessibility tree;
-    /// disabled, its controls leave the Tab key-view loop and refuse focus.
-    /// (`accessibilityHidden(false)` is not used for the shown state: it
-    /// exposes elements a view hides itself, such as the placeholder's
-    /// image.) Picker labels need `inspectorKeptLabel()` too.
-    func inspectorHidden(_ hidden: Bool) -> some View {
-        fixedSize(horizontal: false, vertical: true)
-            .frame(height: hidden ? 0 : nil, alignment: .top)
-            // A minimum alone makes the frame min(child, proposal) wide, with
-            // the child laid out at the proposal as before; with no minimum
-            // the frame takes the child's size.
-            .frame(minWidth: hidden ? 0 : nil, alignment: .topLeading)
-            .opacity(hidden ? 0 : 1)
-            .allowsHitTesting(!hidden)
-            .disabled(hidden)
+    /// otherwise widen the stack and move what is shown.
+    ///
+    /// On macOS 15 and later it stays drawn at full opacity, clipped to that
+    /// zero-height frame (#440): at zero opacity SwiftUI added a hidden view's
+    /// AppKit controls to their superview again on every show (they stayed in
+    /// the view tree while hidden), and each re-add left AppKit observers and
+    /// dependencies that were never freed. Clipped, they are not added again
+    /// and nothing of them is drawn. Shown, the clip
+    /// is the frame grown by `InspectorKeptClip.outset` on every side, so
+    /// focus rings and shadows drawn outside the frame are not cut.
+    /// Accessibility is hidden explicitly while hidden and left untouched
+    /// while shown (`accessibilityHidden(false)` would expose elements a view
+    /// hides itself, such as the placeholder's image). Disabled, its controls
+    /// leave the Tab key-view loop and refuse focus. Picker labels need
+    /// `inspectorKeptLabel()` too. One modifier chain for both states: only
+    /// values change, so hiding never changes the view's identity. macOS 14
+    /// keeps the zero-opacity chain, and with it #440's growth.
+    @ViewBuilder func inspectorHidden(_ hidden: Bool) -> some View {
+        // `accessibilityHidden(_:isEnabled:)` needs macOS 15, and the app's
+        // deployment target is 14.6. The branch is constant for the process,
+        // so a view never moves from one chain to the other and nothing
+        // remounts; macOS 14 keeps the chain it had before #440's fix.
+        if #available(macOS 15, *) {
+            fixedSize(horizontal: false, vertical: true)
+                .frame(height: hidden ? 0 : nil, alignment: .top)
+                // A minimum alone makes the frame min(child, proposal) wide, with
+                // the child laid out at the proposal as before; with no minimum
+                // the frame takes the child's size.
+                .frame(minWidth: hidden ? 0 : nil, alignment: .topLeading)
+                .clipShape(InspectorKeptClip(hidden: hidden), style: FillStyle(antialiased: false))
+                .accessibilityHidden(true, isEnabled: hidden)
+                .allowsHitTesting(!hidden)
+                .disabled(hidden)
+        } else {
+            fixedSize(horizontal: false, vertical: true)
+                .frame(height: hidden ? 0 : nil, alignment: .top)
+                .frame(minWidth: hidden ? 0 : nil, alignment: .topLeading)
+                .opacity(hidden ? 0 : 1)
+                .allowsHitTesting(!hidden)
+                .disabled(hidden)
+        }
     }
 
-    /// A Picker's label in kept inspector views. SwiftUI keeps a Picker's
-    /// label in the accessibility tree at zero opacity, so the label hides
-    /// itself while its views are hidden.
+    /// A Picker's label in kept inspector views: the label hides itself while
+    /// its views are hidden (SwiftUI kept it in the accessibility tree when
+    /// hidden views were drawn at zero opacity).
     func inspectorKeptLabel() -> some View { modifier(InspectorKeptLabel()) }
+}
+
+/// The clip of a kept inspector view (`inspectorHidden`). Hidden, it is the
+/// zero-height frame itself, the rectangle `.clipped()` clips to; shown, the
+/// frame grown by `outset` on every side, past anything a shown view draws
+/// outside its frame. Both are rectangles, never an empty path.
+struct InspectorKeptClip: Shape {
+    var hidden: Bool
+    static let outset: CGFloat = 256
+
+    func path(in rect: CGRect) -> Path {
+        Path(hidden ? rect : rect.insetBy(dx: -Self.outset, dy: -Self.outset))
+    }
 }
 
 private struct InspectorKeptLabel: ViewModifier {
@@ -97,6 +135,11 @@ private struct InspectorKeptLabel: ViewModifier {
 /// An empty view behind kept inspector views; its frame is theirs, so it
 /// finds the AppKit controls they hold.
 final class InspectorAnchorView: NSView {
+    /// Whether the kept views in front of it are hidden (`inspectorKeptHidden`
+    /// or `inspectorSectionHidden`, as `StudioParentPopUp` reads them). Read
+    /// only by the inspector UI scenario's `keptControls` (#440).
+    var keptHidden = false
+
     override var acceptsFirstResponder: Bool { false }
     override func isAccessibilityElement() -> Bool { false }
     override func hitTest(_ point: NSPoint) -> NSView? { nil }
@@ -104,7 +147,7 @@ final class InspectorAnchorView: NSView {
     /// The anchor's frame in window coordinates, a point wider on each side.
     private var area: CGRect { convert(bounds, to: nil).insetBy(dx: -1, dy: -1) }
 
-    private func holds(_ view: NSView) -> Bool {
+    func holds(_ view: NSView) -> Bool {
         view.window === window && view.enclosingScrollView === enclosingScrollView
             && area.contains(view.convert(view.bounds, to: nil))
     }
@@ -135,7 +178,9 @@ struct InspectorAnchor: NSViewRepresentable {
         kept.anchor = view
         return view
     }
-    func updateNSView(_ nsView: InspectorAnchorView, context: Context) {}
+    func updateNSView(_ nsView: InspectorAnchorView, context: Context) {
+        nsView.keptHidden = context.environment.inspectorKeptHidden || context.environment.inspectorSectionHidden
+    }
 }
 
 /// Sections (`SectionBox`) the user collapsed in kept inspector views. A
