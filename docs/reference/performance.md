@@ -7743,7 +7743,14 @@ clip is kept under that identity only, never under its file name.
   (offline rendering), a kept clip replays with no file read, and of two
   quick plays only the later one plays and reports;
 - a catalog that names the same file with a new identity plays the file's
-  new audio, not a clip kept for the old identity.
+  new audio, not a clip kept for the old identity. Its second player
+  attaches to the engine while it renders, as a Studio play does. Two
+  offline-engine effects shape the measurement (#465). Such a player starts
+  whole render passes late under load: up to 4 passes of 4,096 frames in 300
+  local plays. And a player stopped and detached while the engine renders
+  still sounds in the next pass: 400 of 400 plays cut short. So each play is
+  rendered to its end, and its RMS window starts at that play's own first
+  sound, not at the render's start.
 
 Three mutants each fail a test:
 

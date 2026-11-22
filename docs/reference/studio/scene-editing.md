@@ -56,6 +56,60 @@ source-scene identity remain local; no scene file was saved or changed. This
 closes the layout regression only; the full ST-T01 guide/undo/save acceptance
 remains separate.
 
+### Inspector text-field heights (#366)
+
+On a selection change, SwiftUI sometimes laid out one inspector text field at
+another field's measured height. Usually the Name field (24 pt, square bezel,
+body font) got the Transform fields' 21 pt, and every row below it moved. Two
+changes hold the Object tab:
+
+- The Transform fields (`VectorRow`) have an explicit height,
+  `InspectorTextFieldHeight.vector`. It is measured once from an AppKit text
+  field with the same bezel and font.
+- The Name field is `InspectorNameField`, an `NSTextField` in an
+  `NSViewRepresentable`. SwiftUI sizes it by asking it: `sizeThatFits` returns
+  the field's own intrinsic height for any proposed height. An explicit frame
+  on SwiftUI's Name field held the rows. In about 1% of loaded launches,
+  though, the field inside that frame was still laid out at 21 pt.
+
+**Behaviour.**
+- The field matches SwiftUI's automatic style: square bezel, body font, one
+  line and the placeholder "Name".
+- Every keystroke writes the binding, as `TextField` does, so typing coalesces
+  into one undo step (#390).
+- `updateNSView` points the field's delegate at the current binding, so after a
+  selection change the field edits only the object now shown. It replaces the
+  shown text only when it differs. That covers undo, redo and a selection
+  change while editing.
+- The window's field editor edits it, as before. Return, Escape, Tab, Shift-Tab
+  and Cmd-Z, which runs the Studio menu's Undo, were compared step by step with
+  the SwiftUI field in the inspector scenarios. The accessibility tree was
+  compared too.
+- Not tested: Cmd-A, Cmd-C, Cmd-V and Cmd-X in the field, the focus ring while
+  the field is focused, and VoiceOver speech and rotor order.
+
+**Performance.** No timing was measured for this change. On each update the
+field compares one string and sets it only when it differs. Sizing reads the
+field's intrinsic size. The field is a plain `NSTextField`. #453's observer
+growth was traced to SwiftUI's own text-field class joining the window, so it
+does not reach this field. That conclusion comes from the code; the observer
+count was not measured.
+
+**Evidence.** Two local A/B experiments ran under a fixed synthetic CPU load,
+with frozen rules and 500 launches per arm in ABBA order. Each selected
+character 0 and then character 963 on the Object tab.
+
+| Experiment | Build | Rows moved | Name field short |
+| --- | --- | --- | --- |
+| A | without the fix | 8 / 500 | 8 / 500 |
+| A | explicit heights on both fields | 0 / 500 | 5 / 500 |
+| B | without the fix | 11 / 500 | 11 / 500 |
+| B | Transform height and `InspectorNameField` | 0 / 500 | 0 / 500 |
+
+0 in 500 bounds the rate at about 0.6% (95% upper bound). It does not prove
+the rate is zero. Captures without the defect were pixel-identical between the
+arms.
+
 ## App boundary and remaining work
 
 The app exports supported existing transforms, per-object visibility, folder/camera/route renames, camera active flags (only after the user switches the looked-through camera, then for every camera record), route play-state `active` flags, FK/IK and activation flags, animation, voice and cameras to a **new file** after checking the source SHA. It renders an explicit edited thumbnail. The app populates `edits.cards` with source face/body shape values and edited card colors that differ from the embedded card's saved values (ST-T06); shape and color edits on one character merge into a single `Edits`, and a value edited back to the saved rate or rgba writes nothing and the file stays byte-identical. Only colors that actually bound a material on the assembled character are exported; an edited color whose ID binds nothing still renders as saved. Its inspector diagnostic says it remains in the native document but is skipped by original-scene export. A selected outfit other than the card's saved one is merged into the same `Edits` as `coordinateType` (ST-C03); choosing the saved outfit again writes nothing. Clothes states, accessory flags and the shoes type that differ from the card's saved `Status` are merged the same way; a state edited back to the saved bytes writes nothing. Thumbnail and other card destinations remain unpopulated, and a native `object.card` override is rejected. Deleted objects and objects moved between the root and folders are exported as [topology edits](#topology-edits-deletion-and-reparenting-st-t03-st-s09), and copies of source records and new folders, cameras and lights as [inserted records](#duplicates-and-added-records-st-t03-st-s09-st-d03). Route point and setting edits, and route copies, are exported as [route edits](#route-points-and-settings-st-t11-st-t03).
@@ -2157,7 +2211,50 @@ characters in 29 scenes and no route characters.
 
 ### Evidence
 
-EVIDENCE_PLACEHOLDER
+Recorded in [#373](https://github.com/grabbiel/ikkoku/pull/373) (merged
+2026-11-18). Timings are Release builds at 60 Hz with the monitor off,
+against base fb3aecd9 (the merge base plus the three new workloads); the
+full tables are in
+[performance.md](../performance.md#lazy-hidden-characters-at-import).
+
+- **Import** ([W3](../performance.md#startup-n--4-per-arm), head
+  c825850c, n=4 per arm). The 70-character scene is ready in 1.45 s
+  against 3.62 s, with a peak footprint of 1228 against 1542 MiB and
+  646 against 762 ms of main-thread time until ready. The median scene is
+  ready in 1.03 s against 1.58 s. [W3b](../performance.md#final-code-w3b-2026-11-17)
+  timed the final code (34804c13): 1.56 s against 3.60 s, and 1.02 s
+  against 1.59 s.
+- **First show and first select.** A first show of a hidden folder
+  (5 characters after the card check, W3b) is ready in 745–766 ms with a
+  longest stall of 19–27 ms. A first selection of an unbuilt hidden
+  character is ready in 434–439 ms (W3), against 10–15 ms on base, which
+  built it at import.
+- **Clocks.** The first clock rebase costs 22.0 ms of main-thread time
+  against 34.5 ms (W3), and the first `sourceClockBake` 1.0 ms.
+- **Export.** In W3b an export of the imported scene is ready in 58.1 ms
+  against 42.4 ms, with 63.0 against 55.1 ms of main-thread time. The
+  [export profile](../performance.md#export-profile-q1-2026-11-18) found
+  the same callees in both arms plus the data-only clocks, 0.17–0.29 ms
+  per export, and attributes the rest of the gap to the run environment.
+- **Scenarios.** Three `studio-scenarios` checks cover the import
+  ([lane notes](../../../Tools/verification/README.md#lazy-hidden-characters-cxs1-gap-list-item-7)):
+  `hidden-character-build`, `hidden-attachment-status` and
+  `hidden-animation-clock`. The head lane passed 95 of 97; the 2 failures
+  were #390's timing-dependent undo depth, and both passed once #396 fixed
+  it. The base lane passed 94 of 94, and the base version of
+  `hidden-animation-clock` fails at the export after the native save and
+  load ("Animation edits require a loaded source character.").
+- **Break proofs.** Reading the world matrix before the visibility check
+  fails `hidden-attachment-status` at exactly its four `statusLacks`
+  asserts; an export that ignores the data-only clock states fails
+  `hidden-animation-clock` at 2 of 14 steps. `hidden-character-build`
+  passes under both.
+- **Bytes.** Head against base, 92 lane artifacts are byte-identical and
+  14 differ. All 14 are saved native documents, equal once their random
+  UUIDs are matched in order (one also differs in a dictionary order Swift
+  changes per process).
+- **Engine.** The strict suite on 470f7831: 1225 tests, 1211 passed,
+  14 skipped, 0 failed.
 
 ## CharaStudio reload acceptance
 
