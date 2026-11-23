@@ -1386,6 +1386,17 @@ get wrong:
   item 623, then None, reparents it through `StudioModel.setParent`. Each
   Undo restores the parent, and the closed popup shows it again. Character
   0's options are checked the same way.
+- `inspector-eye-look-readout` (`IKKOKU_STUDIO_SCENARIO_SCENE`; #382). The
+  Pose tab's "Eye look" readout as the window shows it. `stopLiveSteps`
+  stops the timer and the display link, so only the scenario's `advance`
+  steps the app's own live step. Character 65 (TARGET eye look) is
+  selected on the Pose tab and stepped 0.4 s; then the view is orbited
+  (`orbit`, dy +0.45 and then -0.6) and stepped 0.2 s each time. After
+  each, an accessibility element must show exactly the model's readout
+  (`selectedSourceEyeLookReadout`), and after each orbit the readout must
+  have changed. Selecting folder 622 must leave no "Eye look:" line.
+  Before the fix the tab drew the readout once and never again, so the
+  shown text stayed stale; the model publishes it at every refresh now.
 - `studio-inspector-clothes-fit-capture` and `-validate`, in
   `app-smoke.json`. The same scene started through the UI capture path, as #319's `ui-sel-clothes` capture
   starts it (`IKKOKU_CAPTURE_UI_STUDIO_TAB=clothes`,

@@ -1052,6 +1052,17 @@ struct PoseInspector: View {
     }
 }
 
+/// #382: the Pose tab's eye-look readout line. Its own view, so a change of
+/// the published text (`eyeLookReadoutText`: the rates follow the viewport
+/// camera and the animation) re-evaluates this Text only, not the tab.
+struct EyeLookReadoutText: View {
+    let model: StudioModel
+    var body: some View {
+        Text(model.eyeLookReadoutText ?? "").font(.caption).foregroundStyle(.secondary)
+            .accessibilityIdentifier("studio.source.eyelook.readout")
+    }
+}
+
 struct SourcePoseInspector: View {
     @Bindable var model: StudioModel
     static let guideHiddenText = "IK is off for this guide's group; turn it on to show the guide."
@@ -1096,10 +1107,11 @@ struct SourcePoseInspector: View {
                 Toggle("Automatic blinking", isOn: $model.sourceAutomaticBlink)
                 Text("Each character follows its saved card blink flag; this applies the Maker-style idle clock on top. Needs the idle animation button.").font(.caption).foregroundStyle(.secondary)
             }
-            if let eyeLook = model.selectedSourceEyeLookReadout {
+            // #382: the published readout, so the live step's eye updates reach
+            // the tab: the section when it appears, its text when the rates change.
+            if model.eyeLookSectionShown {
                 SectionBox(title: "Eye look") {
-                    Text(eyeLook).font(.caption).foregroundStyle(.secondary)
-                        .accessibilityIdentifier("studio.source.eyelook.readout")
+                    EyeLookReadoutText(model: model)
                     Text("Rates follow the viewport camera; the iris shift itself comes in the next slice.").font(.caption).foregroundStyle(.secondary)
                 }
             }

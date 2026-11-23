@@ -123,6 +123,20 @@ final class StudioModel: ViewportInputHandler, LivePacedHandler {
     @ObservationIgnored private var inspectorDiagnosticsStorage: [String] = []
     var inspectorDiagnostics: [String] { access(keyPath: \.inspectorDiagnostics); return inspectorDiagnosticsStorage }
 
+    /// #382: the Pose tab's "Eye look" readout for the selection
+    /// (`selectedSourceEyeLookReadout`), published the same way. The readout
+    /// comes from the selected character's preview, which nothing observes:
+    /// the live step's first eye update, and every later change of its rates
+    /// (the viewport camera, the animation), reach the tab only through this
+    /// publication at the end of each refresh. Two values, so the tab's body
+    /// re-evaluates only when the section appears or disappears
+    /// (`eyeLookSectionShown`), and a change of the rates re-evaluates only
+    /// the readout's own text (`eyeLookReadoutText`, read by `EyeLookReadoutText`).
+    @ObservationIgnored private var eyeLookSectionShownStorage = false
+    var eyeLookSectionShown: Bool { access(keyPath: \.eyeLookSectionShown); return eyeLookSectionShownStorage }
+    @ObservationIgnored private var eyeLookReadoutTextStorage: String?
+    var eyeLookReadoutText: String? { access(keyPath: \.eyeLookReadoutText); return eyeLookReadoutTextStorage }
+
     /// What the workspace tree, the toolbar and the timeline bar show from
     /// the document, published the same way (item 7 follow-ups, C4;
     /// `StudioPanelState.swift`), so an FK drag frame, which writes the
@@ -152,6 +166,13 @@ final class StudioModel: ViewportInputHandler, LivePacedHandler {
             if state != objectInspectorStateStorage { withMutation(keyPath: \.objectInspectorState) { objectInspectorStateStorage = state } }
             let diagnostics = compatibilityDiagnostics
             if diagnostics != inspectorDiagnosticsStorage { withMutation(keyPath: \.inspectorDiagnostics) { inspectorDiagnosticsStorage = diagnostics } }
+            if liveTick == nil {
+                let readout = publishableEyeLookReadout
+                if (readout != nil) != eyeLookSectionShownStorage {
+                    withMutation(keyPath: \.eyeLookSectionShown) { eyeLookSectionShownStorage = readout != nil }
+                }
+                if readout != eyeLookReadoutTextStorage { withMutation(keyPath: \.eyeLookReadoutText) { eyeLookReadoutTextStorage = readout } }
+            }
         }
         if StudioPanelStateMode.current.publishes { refreshPanelState() }
     }
@@ -204,6 +225,13 @@ final class StudioModel: ViewportInputHandler, LivePacedHandler {
         let diagnostics = compatibilityDiagnostics
         assert(diagnostics == inspectorDiagnosticsStorage,
                "inspectorDiagnostics is stale: published \(inspectorDiagnosticsStorage), now \(diagnostics)")
+        // #382: between a live step's settle and its refresh the readout may
+        // already be the next frame's; that refresh publishes it.
+        if liveTick == nil, liveRefreshPending == nil {
+            let readout = publishableEyeLookReadout
+            assert(readout == eyeLookReadoutTextStorage && (readout != nil) == eyeLookSectionShownStorage,
+                   "the eye-look readout is stale: published \(String(describing: eyeLookReadoutTextStorage)), now \(String(describing: readout))")
+        }
         guard StudioPanelStateMode.current.publishes else { return }
         // C4: also checks that the workspace key covers every input of the
         // rows, since the rows are rebuilt only when the key changes.
@@ -1388,6 +1416,23 @@ final class StudioModel: ViewportInputHandler, LivePacedHandler {
     var selectedSourceEyeLookReadout: String? {
         guard let object = selectedObject, let preview = sourceInstances[object.id],
               object.kind == .character, object.sourceCharacter != nil else { return nil }
+        return Self.eyeLookReadout(preview)
+    }
+
+    /// The readout `refreshInspectorState` publishes (#382), as
+    /// `selectedSourceEyeLookReadout` but read from the storage, not
+    /// `sourceInstances`, so publishing never settles a running live step and
+    /// drops its frames. Read only while no live step runs (`liveTick == nil`):
+    /// its workers own the previews then, and the refresh after it publishes.
+    private var publishableEyeLookReadout: String? {
+        guard let object = selectedObject, object.kind == .character, object.sourceCharacter != nil,
+              let preview = sourceInstanceStorage[object.id] else { return nil }
+        return Self.eyeLookReadout(preview)
+    }
+
+    /// The readout text for one preview: the live look type with this
+    /// frame's iris-shift rates, or why the animated eyes were kept, or nil.
+    private static func eyeLookReadout(_ preview: SourceStudioCharacterPreview) -> String? {
         if let rates = preview.eyeLookRates, rates.horizontal.count == 2 {
             func shift(_ value: Double) -> String { String(format: "%+.2f", value) }
             return "Eye look: \(rates.lookType.rawValue) · H L/R \(shift(rates.horizontal[0]))/\(shift(rates.horizontal[1])) · V \(shift(rates.vertical))"
@@ -1415,11 +1460,14 @@ final class StudioModel: ViewportInputHandler, LivePacedHandler {
     /// `hasLiveEyeLook`), the same helpers those paths call. Otherwise the
     /// section is already as it will stay. The readout is per preview (keyed
     /// by the selection), so another character's update never ends the wait.
+    /// It waits for the published readout (`eyeLookSectionShown`, #382), the
+    /// one the tab shows, not the preview's: the preview's is set by the
+    /// step, and only the refresh after it publishes it to the tab.
     var uiCaptureEyeLookPending: String? {
         guard inspectorTab == .pose, liveStepsStart, liveStepsDriven, stepLiveTakesSourceBranch,
               let id = selection, Self.liveGazeObject(id, in: doc) != nil,
               let preview = sourceInstances[id], preview.hasLiveEyeLook,
-              selectedSourceEyeLookReadout == nil else { return nil }
+              !eyeLookSectionShownStorage else { return nil }
         return "the selected source character's eye look has not had its first live update (the Pose tab's \"Eye look\" readout)"
     }
 
