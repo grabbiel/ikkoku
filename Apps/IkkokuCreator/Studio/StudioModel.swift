@@ -325,12 +325,13 @@ final class StudioModel: ViewportInputHandler, LivePacedHandler {
     @ObservationIgnored var liveSourceWearChanged: [UUID: String] = [:]
     /// A tab change runs no refresh, so it publishes the "Eye look" readout
     /// itself (#382), before the new tab's first body: cleared on leaving
-    /// the Pose tab, read on arriving. A live step in flight is waited for
-    /// first, its frames kept for its own refresh, as `completeLiveTick` does.
+    /// the Pose tab, read on arriving. A click never waits on a live step:
+    /// with one in flight, arriving on the Pose tab publishes nothing new
+    /// (no preview is read), and the step's own refresh publishes the
+    /// readout within a frame.
     var inspectorTab: InspectorTab = .object {
         didSet {
             guard inspectorTab != oldValue else { return }
-            if inspectorTab == .pose, liveTick != nil { settleLiveTick(keepFrames: true) }
             publishEyeLookReadout()
         }
     }

@@ -1397,8 +1397,15 @@ get wrong:
   have changed. Then the Object tab is shown, the view is orbited (dy
   +0.45) and stepped 0.2 s, and on the Pose tab again the new readout must
   show at once: the model publishes it only while the Pose tab is shown,
-  and the tab's setter publishes it before the tab's first body. Selecting
-  folder 622 must leave no "Eye look:" line. Before the fix the tab drew
+  and the tab's setter publishes it before the tab's first body. The same
+  again (Object tab, dy -0.45, 0.2 s), but back to the Pose tab with
+  `tabDuringStep`: it starts one live step the way the timer does
+  (`startLiveFrameAsTimer`; it fails if the step ran serially), switches
+  the tab while the step is in flight, and fails if the switch published
+  anything new (a click never waits on a live step or reads its previews).
+  It then completes the step as its completion handler does
+  (`completeLiveFrame`), and the readout that step's refresh published
+  must show. Selecting folder 622 must leave no "Eye look:" line. Before the fix the tab drew
   the readout once and never again, so the shown text stayed stale; the
   model publishes it at every refresh on the Pose tab now.
 - `studio-inspector-clothes-fit-capture` and `-validate`, in

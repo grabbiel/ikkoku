@@ -332,6 +332,27 @@ struct InspectorUIScenario: Decodable {
                 studio.inspectorTab = tab
                 await settle()
                 record(step.op, true, "inspector tab \(tab.rawValue)")
+            case "tabDuringStep":
+                // #382: a click on a tab while a timer step is in flight. The
+                // switch must not wait on the step or read its previews: the
+                // published readout stays as it was, and the step's own
+                // refresh (completed here as its completion handler does)
+                // publishes it.
+                guard let label = step.label?.lowercased(),
+                      let tab = StudioModel.InspectorTab.allCases.first(where: { $0.rawValue.lowercased() == label }) else {
+                    record(step.op, false, "no inspector tab '\(step.label ?? "")'"); continue
+                }
+                guard studio.startLiveFrameAsTimer() else {
+                    record(step.op, false, "tabDuringStep: the live step ran on the main thread, so the switch could not land during it"); continue
+                }
+                let before = studio.eyeLookReadoutText
+                studio.inspectorTab = tab
+                let atSwitch = studio.eyeLookReadoutText
+                studio.completeLiveFrame()
+                await settle()
+                let unchanged = tab != .pose || atSwitch == before
+                record(step.op, unchanged, "inspector tab \(tab.rawValue) during a live step: "
+                       + (unchanged ? "published nothing new at the switch" : "published \(atSwitch ?? "none") at the switch, before the step's refresh"))
             case "addCharacter":
                 guard let sex = ["female": Sex.female, "male": Sex.male][step.sex ?? ""] else {
                     record(step.op, false, "addCharacter: sex must be \"female\" or \"male\""); continue
