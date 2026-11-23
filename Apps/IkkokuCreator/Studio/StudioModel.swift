@@ -132,10 +132,20 @@ final class StudioModel: ViewportInputHandler, LivePacedHandler {
     /// re-evaluates only when the section appears or disappears
     /// (`eyeLookSectionShown`), and a change of the rates re-evaluates only
     /// the readout's own text (`eyeLookReadoutText`, read by `EyeLookReadoutText`).
+    /// Published only while the Pose tab is shown (`publishEyeLookReadout`):
+    /// on any other tab both are cleared, so no refresh formats a readout
+    /// nobody sees (+0.07 ms p50 per refresh in `studio-hover` before the
+    /// gate), and `inspectorTab`'s setter publishes before the Pose tab's
+    /// first body.
     @ObservationIgnored private var eyeLookSectionShownStorage = false
     var eyeLookSectionShown: Bool { access(keyPath: \.eyeLookSectionShown); return eyeLookSectionShownStorage }
     @ObservationIgnored private var eyeLookReadoutTextStorage: String?
     var eyeLookReadoutText: String? { access(keyPath: \.eyeLookReadoutText); return eyeLookReadoutTextStorage }
+    /// The last published readout's inputs and text (#382): its
+    /// `String(format:)` calls run only when an input changes, compared
+    /// exactly (the rates bit for bit), so the cache never serves a text a
+    /// fresh format would print differently.
+    @ObservationIgnored private var eyeLookReadoutCache: (input: EyeLookReadoutInput, text: String)?
 
     /// What the workspace tree, the toolbar and the timeline bar show from
     /// the document, published the same way (item 7 follow-ups, C4;
@@ -166,15 +176,29 @@ final class StudioModel: ViewportInputHandler, LivePacedHandler {
             if state != objectInspectorStateStorage { withMutation(keyPath: \.objectInspectorState) { objectInspectorStateStorage = state } }
             let diagnostics = compatibilityDiagnostics
             if diagnostics != inspectorDiagnosticsStorage { withMutation(keyPath: \.inspectorDiagnostics) { inspectorDiagnosticsStorage = diagnostics } }
-            if liveTick == nil {
-                let readout = publishableEyeLookReadout
-                if (readout != nil) != eyeLookSectionShownStorage {
-                    withMutation(keyPath: \.eyeLookSectionShown) { eyeLookSectionShownStorage = readout != nil }
-                }
-                if readout != eyeLookReadoutTextStorage { withMutation(keyPath: \.eyeLookReadoutText) { eyeLookReadoutTextStorage = readout } }
-            }
+            publishEyeLookReadout()
         }
         if StudioPanelStateMode.current.publishes { refreshPanelState() }
+    }
+
+    /// Publishes the Pose tab's "Eye look" readout (#382), each value only
+    /// when it differs. On any tab but Pose both are cleared, without
+    /// reading a preview. On the Pose tab the readout is read only while no
+    /// live step runs (`liveTick == nil`): its workers own the previews
+    /// then, and the refresh after it publishes.
+    private func publishEyeLookReadout() {
+        let readout: String?
+        if inspectorTab != .pose {
+            readout = nil
+        } else if liveTick == nil {
+            readout = publishableEyeLookReadout()
+        } else {
+            return
+        }
+        if (readout != nil) != eyeLookSectionShownStorage {
+            withMutation(keyPath: \.eyeLookSectionShown) { eyeLookSectionShownStorage = readout != nil }
+        }
+        if readout != eyeLookReadoutTextStorage { withMutation(keyPath: \.eyeLookReadoutText) { eyeLookReadoutTextStorage = readout } }
     }
 
     /// Publishes the workspace, toolbar and timeline states (C4), each only
@@ -226,9 +250,11 @@ final class StudioModel: ViewportInputHandler, LivePacedHandler {
         assert(diagnostics == inspectorDiagnosticsStorage,
                "inspectorDiagnostics is stale: published \(inspectorDiagnosticsStorage), now \(diagnostics)")
         // #382: between a live step's settle and its refresh the readout may
-        // already be the next frame's; that refresh publishes it.
+        // already be the next frame's; that refresh publishes it. Formatted
+        // afresh, not through the cache, behind the same tab gate as
+        // `publishEyeLookReadout`.
         if liveTick == nil, liveRefreshPending == nil {
-            let readout = publishableEyeLookReadout
+            let readout = inspectorTab == .pose ? selectedEyeLookPreview.flatMap { Self.eyeLookReadout($0) } : nil
             assert(readout == eyeLookReadoutTextStorage && (readout != nil) == eyeLookSectionShownStorage,
                    "the eye-look readout is stale: published \(String(describing: eyeLookReadoutTextStorage)), now \(String(describing: readout))")
         }
@@ -297,7 +323,17 @@ final class StudioModel: ViewportInputHandler, LivePacedHandler {
     @ObservationIgnored var liveSourceLastAttach: [UUID: SourceShaderLiveAssembly.AttachReport] = [:]
     /// Characters kept toon this frame because the document changed their wear.
     @ObservationIgnored var liveSourceWearChanged: [UUID: String] = [:]
-    var inspectorTab: InspectorTab = .object
+    /// A tab change runs no refresh, so it publishes the "Eye look" readout
+    /// itself (#382), before the new tab's first body: cleared on leaving
+    /// the Pose tab, read on arriving. A live step in flight is waited for
+    /// first, its frames kept for its own refresh, as `completeLiveTick` does.
+    var inspectorTab: InspectorTab = .object {
+        didSet {
+            guard inspectorTab != oldValue else { return }
+            if inspectorTab == .pose, liveTick != nil { settleLiveTick(keepFrames: true) }
+            publishEyeLookReadout()
+        }
+    }
     var viewportSize = SIMD2<Float>(1600, 1200)
     var status = "Ready" { didSet { statusWrites &+= 1 } }
     /// Counts `status` writes, so a frame rebuild can tell whether it reported anything.
@@ -1419,26 +1455,59 @@ final class StudioModel: ViewportInputHandler, LivePacedHandler {
         return Self.eyeLookReadout(preview)
     }
 
-    /// The readout `refreshInspectorState` publishes (#382), as
-    /// `selectedSourceEyeLookReadout` but read from the storage, not
-    /// `sourceInstances`, so publishing never settles a running live step and
-    /// drops its frames. Read only while no live step runs (`liveTick == nil`):
-    /// its workers own the previews then, and the refresh after it publishes.
-    private var publishableEyeLookReadout: String? {
-        guard let object = selectedObject, object.kind == .character, object.sourceCharacter != nil,
-              let preview = sourceInstanceStorage[object.id] else { return nil }
-        return Self.eyeLookReadout(preview)
+    /// The selected source character's preview as `publishEyeLookReadout`
+    /// reads it (#382): from the storage, not `sourceInstances`, so
+    /// publishing never settles a running live step and drops its frames.
+    /// Read only while no live step runs (`liveTick == nil`): its workers own
+    /// the previews then, and the refresh after it publishes.
+    private var selectedEyeLookPreview: SourceStudioCharacterPreview? {
+        guard let object = selectedObject, object.kind == .character, object.sourceCharacter != nil else { return nil }
+        return sourceInstanceStorage[object.id]
     }
 
-    /// The readout text for one preview: the live look type with this
-    /// frame's iris-shift rates, or why the animated eyes were kept, or nil.
-    private static func eyeLookReadout(_ preview: SourceStudioCharacterPreview) -> String? {
+    /// The readout `publishEyeLookReadout` publishes: `eyeLookReadout` of
+    /// `selectedEyeLookPreview`, formatted again only when an input changed
+    /// (`eyeLookReadoutCache`).
+    private func publishableEyeLookReadout() -> String? {
+        guard let preview = selectedEyeLookPreview, let input = Self.eyeLookReadoutInput(preview) else { return nil }
+        if let cache = eyeLookReadoutCache, cache.input == input { return cache.text }
+        let text = Self.eyeLookReadoutText(input)
+        eyeLookReadoutCache = (input, text)
+        return text
+    }
+
+    /// Everything one readout's text is made of: the live look type with
+    /// this frame's iris-shift rates (their bit patterns, so equal inputs
+    /// always print the same), or why the animated eyes were kept.
+    private enum EyeLookReadoutInput: Equatable {
+        case rates(lookType: SourceStudioEyeLookType, left: UInt64, right: UInt64, vertical: UInt64)
+        case kept(reason: String)
+    }
+
+    /// One preview's readout inputs, or nil when it has no resolved eye look.
+    private static func eyeLookReadoutInput(_ preview: SourceStudioCharacterPreview) -> EyeLookReadoutInput? {
         if let rates = preview.eyeLookRates, rates.horizontal.count == 2 {
-            func shift(_ value: Double) -> String { String(format: "%+.2f", value) }
-            return "Eye look: \(rates.lookType.rawValue) · H L/R \(shift(rates.horizontal[0]))/\(shift(rates.horizontal[1])) · V \(shift(rates.vertical))"
+            return .rates(lookType: rates.lookType, left: rates.horizontal[0].bitPattern,
+                          right: rates.horizontal[1].bitPattern, vertical: rates.vertical.bitPattern)
         }
-        if let reason = preview.eyeLookKeptReason { return "Eye look: animated (\(reason))" }
-        return nil
+        return preview.eyeLookKeptReason.map { .kept(reason: $0) }
+    }
+
+    private static func eyeLookReadoutText(_ input: EyeLookReadoutInput) -> String {
+        switch input {
+        case let .rates(lookType, left, right, vertical):
+            func shift(_ bits: UInt64) -> String { String(format: "%+.2f", Double(bitPattern: bits)) }
+            return "Eye look: \(lookType.rawValue) · H L/R \(shift(left))/\(shift(right)) · V \(shift(vertical))"
+        case let .kept(reason):
+            return "Eye look: animated (\(reason))"
+        }
+    }
+
+    /// The readout text for one preview, formatted afresh: the live look
+    /// type with this frame's iris-shift rates, or why the animated eyes
+    /// were kept, or nil.
+    private static func eyeLookReadout(_ preview: SourceStudioCharacterPreview) -> String? {
+        eyeLookReadoutInput(preview).map { eyeLookReadoutText($0) }
     }
 
     /// `IKKOKU_CAPTURE_UI` readiness (#364): whether something drives the

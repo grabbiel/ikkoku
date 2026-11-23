@@ -1394,9 +1394,13 @@ get wrong:
   (`orbit`, dy +0.45 and then -0.6) and stepped 0.2 s each time. After
   each, an accessibility element must show exactly the model's readout
   (`selectedSourceEyeLookReadout`), and after each orbit the readout must
-  have changed. Selecting folder 622 must leave no "Eye look:" line.
-  Before the fix the tab drew the readout once and never again, so the
-  shown text stayed stale; the model publishes it at every refresh now.
+  have changed. Then the Object tab is shown, the view is orbited (dy
+  +0.45) and stepped 0.2 s, and on the Pose tab again the new readout must
+  show at once: the model publishes it only while the Pose tab is shown,
+  and the tab's setter publishes it before the tab's first body. Selecting
+  folder 622 must leave no "Eye look:" line. Before the fix the tab drew
+  the readout once and never again, so the shown text stayed stale; the
+  model publishes it at every refresh on the Pose tab now.
 - `studio-inspector-clothes-fit-capture` and `-validate`, in
   `app-smoke.json`. The same scene started through the UI capture path, as #319's `ui-sel-clothes` capture
   starts it (`IKKOKU_CAPTURE_UI_STUDIO_TAB=clothes`,

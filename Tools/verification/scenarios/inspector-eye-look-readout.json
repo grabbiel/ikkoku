@@ -50,6 +50,28 @@
         "eyeLookChanged": true
       },
       {
+        "op": "tab",
+        "label": "object"
+      },
+      {
+        "op": "orbit",
+        "dx": 0,
+        "dy": 0.45
+      },
+      {
+        "op": "advance",
+        "seconds": 0.2
+      },
+      {
+        "op": "tab",
+        "label": "pose"
+      },
+      {
+        "op": "assert",
+        "eyeLookShown": true,
+        "eyeLookChanged": true
+      },
+      {
         "op": "select",
         "key": 622
       },
