@@ -40,6 +40,10 @@ struct InspectorUIScenario: Decodable {
         /// focus moves; `capture`: see `eyeFocus(_:studio:moves:capture:settle:)`)
         /// and `"workspaceBodies"` (`label`: `select`, `toggle` or `refresh`;
         /// `count` actions from row `index`: see `workspaceBodies(_:action:count:index:settle:)`).
+        /// Added for #382: `"stopLiveSteps"` (neither the timer nor the display link
+        /// steps from then on, as `stopBenchmarkTimer` does), `"advance"` (`seconds`
+        /// of the app's own live step at its 1/30 s cadence, as the checklist's
+        /// advance) and `"orbit"` (`dx`, `dy`: the view's orbit drag).
         let op: String
         let key: Int32?
         let keys: [Int32]?
@@ -95,6 +99,19 @@ struct InspectorUIScenario: Decodable {
         /// `eyeFocus`: where to write a PNG of the workspace with the first
         /// eye that took keyboard focus.
         let capture: String?
+        // Added for #382 (the Pose tab's "Eye look" readout).
+        /// `advance`: seconds of live steps.
+        let seconds: Double?
+        /// `orbit`: the drag deltas in radians.
+        let dx: Float?
+        let dy: Float?
+        /// assert: the window shows the selected character's eye-look readout
+        /// exactly as the model has it now (`selectedSourceEyeLookReadout`), or
+        /// (false) shows no "Eye look:" line and the model has none.
+        let eyeLookShown: Bool?
+        /// assert: the model's readout differs (true) or not (false) from the
+        /// one the previous `eyeLookShown` assert saw.
+        let eyeLookChanged: Bool?
     }
 
     let steps: [Step]
@@ -138,6 +155,8 @@ struct InspectorUIScenario: Decodable {
         }
         var snapshot: (doc: StudioDocument, undo: Int, redo: Int)?
         var probe: (field: NSTextField, center: CGPoint)?
+        /// The model's readout at the last `eyeLookShown` assert (#382).
+        var lastEyeLook: String?
 
         for step in steps {
             studio.endUndoCoalescing()
@@ -281,6 +300,30 @@ struct InspectorUIScenario: Decodable {
                 repeat { await settle() } while studio.pendingSourceOutfits[id] != nil && Date() < deadline
                 let after = studio.sourceShapePreview(for: id)?.coordinate
                 record(step.op, after == index, "outfit \(before) to \(index): shows \(after.map { "\($0)" } ?? "none")")
+            case "stopLiveSteps":
+                studio.stopBenchmarkTimer()
+                await settle()
+                record(step.op, true, "live steps stopped")
+            case "advance":
+                guard let seconds = step.seconds, seconds.isFinite, seconds > 0, seconds <= 60 else {
+                    record(step.op, false, "advance: seconds must be a finite duration in (0, 60]"); continue
+                }
+                var remaining = seconds, frames = 0
+                while remaining > 0 {
+                    let delta = min(1 / 30, remaining)
+                    studio.advanceLiveFrame(deltaTime: Float(delta))
+                    remaining -= delta
+                    frames += 1
+                }
+                await settle()
+                record(step.op, true, "\(frames) live steps")
+            case "orbit":
+                guard let dx = step.dx, let dy = step.dy, dx.isFinite, dy.isFinite else {
+                    record(step.op, false, "orbit: dx and dy are required"); continue
+                }
+                studio.orbitCamera(dx: dx, dy: dy)
+                await settle()
+                record(step.op, true, "orbit dx=\(dx) dy=\(dy)")
             case "tab":
                 guard let label = step.label?.lowercased(),
                       let tab = StudioModel.InspectorTab.allCases.first(where: { $0.rawValue.lowercased() == label }) else {
@@ -289,6 +332,27 @@ struct InspectorUIScenario: Decodable {
                 studio.inspectorTab = tab
                 await settle()
                 record(step.op, true, "inspector tab \(tab.rawValue)")
+            case "tabDuringStep":
+                // #382: a click on a tab while a timer step is in flight. The
+                // switch must not wait on the step or read its previews: the
+                // published readout stays as it was, and the step's own
+                // refresh (completed here as its completion handler does)
+                // publishes it.
+                guard let label = step.label?.lowercased(),
+                      let tab = StudioModel.InspectorTab.allCases.first(where: { $0.rawValue.lowercased() == label }) else {
+                    record(step.op, false, "no inspector tab '\(step.label ?? "")'"); continue
+                }
+                guard studio.startLiveFrameAsTimer() else {
+                    record(step.op, false, "tabDuringStep: the live step ran on the main thread, so the switch could not land during it"); continue
+                }
+                let before = studio.eyeLookReadoutText
+                studio.inspectorTab = tab
+                let atSwitch = studio.eyeLookReadoutText
+                studio.completeLiveFrame()
+                await settle()
+                let unchanged = tab != .pose || atSwitch == before
+                record(step.op, unchanged, "inspector tab \(tab.rawValue) during a live step: "
+                       + (unchanged ? "published nothing new at the switch" : "published \(atSwitch ?? "none") at the switch, before the step's refresh"))
             case "addCharacter":
                 guard let sex = ["female": Sex.female, "male": Sex.male][step.sex ?? ""] else {
                     record(step.op, false, "addCharacter: sex must be \"female\" or \"male\""); continue
@@ -391,6 +455,23 @@ struct InspectorUIScenario: Decodable {
                 if let view = step.inspectorView, view != studio.displayedInspectorView { problems.append("inspector \(studio.displayedInspectorView ?? "nil"), expected \(view)") }
                 for text in step.axContains ?? [] where !ax.contains(where: { $0.contains(text) }) { problems.append("no accessibility element shows '\(text)'") }
                 for text in step.axAbsent ?? [] where ax.contains(where: { $0.contains(text) }) { problems.append("an accessibility element shows '\(text)'") }
+                if let shown = step.eyeLookShown {
+                    // #382: the readout as the window shows it (an element whose label,
+                    // title or value is exactly the model's text) against the model's.
+                    let readout = studio.selectedSourceEyeLookReadout
+                    let lines = ax.filter { $0.contains("Eye look:") }
+                    seen.append("model readout \(readout ?? "none")")
+                    seen.append("shown " + (lines.isEmpty ? "none" : lines.joined(separator: " | ")))
+                    if shown {
+                        if let readout {
+                            if !ax.contains(where: { $0.hasSuffix(": " + readout) }) { problems.append("the window does not show the model's eye-look readout") }
+                        } else { problems.append("the model has no eye-look readout") }
+                    } else if readout != nil || !lines.isEmpty { problems.append("an eye-look readout exists, expected none") }
+                    if let changed = step.eyeLookChanged, changed != (readout != lastEyeLook) {
+                        problems.append("readout changed \(readout != lastEyeLook) (was \(lastEyeLook ?? "none")), expected \(changed)")
+                    }
+                    lastEyeLook = readout
+                }
                 if let expected = step.fieldText {
                     if let fieldName = step.field, let field = Self.textField(fieldName, in: window) {
                         // Reading a field being edited would validate it, so read its field editor.

@@ -1,0 +1,106 @@
+{
+  "steps": [],
+  "inspectorUI": {
+    "steps": [
+      {
+        "op": "stopLiveSteps"
+      },
+      {
+        "op": "select",
+        "key": 65
+      },
+      {
+        "op": "tab",
+        "label": "pose"
+      },
+      {
+        "op": "advance",
+        "seconds": 0.4
+      },
+      {
+        "op": "assert",
+        "eyeLookShown": true
+      },
+      {
+        "op": "orbit",
+        "dx": 0,
+        "dy": 0.45
+      },
+      {
+        "op": "advance",
+        "seconds": 0.2
+      },
+      {
+        "op": "assert",
+        "eyeLookShown": true,
+        "eyeLookChanged": true
+      },
+      {
+        "op": "orbit",
+        "dx": 0,
+        "dy": -0.6
+      },
+      {
+        "op": "advance",
+        "seconds": 0.2
+      },
+      {
+        "op": "assert",
+        "eyeLookShown": true,
+        "eyeLookChanged": true
+      },
+      {
+        "op": "tab",
+        "label": "object"
+      },
+      {
+        "op": "orbit",
+        "dx": 0,
+        "dy": 0.45
+      },
+      {
+        "op": "advance",
+        "seconds": 0.2
+      },
+      {
+        "op": "tab",
+        "label": "pose"
+      },
+      {
+        "op": "assert",
+        "eyeLookShown": true,
+        "eyeLookChanged": true
+      },
+      {
+        "op": "tab",
+        "label": "object"
+      },
+      {
+        "op": "orbit",
+        "dx": 0,
+        "dy": -0.45
+      },
+      {
+        "op": "advance",
+        "seconds": 0.2
+      },
+      {
+        "op": "tabDuringStep",
+        "label": "pose"
+      },
+      {
+        "op": "assert",
+        "eyeLookShown": true,
+        "eyeLookChanged": true
+      },
+      {
+        "op": "select",
+        "key": 622
+      },
+      {
+        "op": "assert",
+        "eyeLookShown": false
+      }
+    ]
+  }
+}

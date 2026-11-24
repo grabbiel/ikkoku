@@ -3495,6 +3495,40 @@
       "timeout": 600
     },
     {
+      "id": "studio-scenario-inspector-eye-look-readout",
+      "argv": [
+        ".local/build/Build/Products/Debug/Ikkoku.app/Contents/MacOS/Ikkoku"
+      ],
+      "fixtures": [
+        {
+          "env": "IKKOKU_SOURCE_SCENE",
+          "kind": "file",
+          "from": "IKKOKU_STUDIO_SCENARIO_SCENE"
+        },
+        {
+          "env": "IKKOKU_SOURCE_AVATAR",
+          "kind": "file"
+        },
+        {
+          "env": "IKKOKU_STUDIO_LOOK_SETTINGS",
+          "kind": "file"
+        }
+      ],
+      "env": {
+        "IKKOKU_STUDIO_SCENARIO": "Tools/verification/scenarios/inspector-eye-look-readout.json",
+        "IKKOKU_STUDIO_SCENARIO_REPORT": ".local/verification/reports/studio-scenario-inspector-eye-look-readout.json"
+      },
+      "referenceTier": "app-smoke",
+      "tolerance": "#382, in the window: with the timer and display link stopped, character 65 (TARGET eye look) selected on the Pose tab, the app's own live step advanced 0.4 s, the inspector shows the model's exact eye-look readout (selectedSourceEyeLookReadout) as an accessibility element; after each orbit (dy +0.45, then -0.6) and 0.2 s of steps the model's readout changes and the window shows the new one, not the one from before the orbit; selecting folder 622 leaves no \"Eye look:\" line. Before #382's fix the Pose tab rendered the readout once and never again, so the shown text stayed stale.",
+      "artifacts": [
+        {
+          "path": ".local/verification/reports/studio-scenario-inspector-eye-look-readout.json",
+          "kind": "scenario-report"
+        }
+      ],
+      "timeout": 600
+    },
+    {
       "id": "studio-scenario-inspector-kept-route",
       "argv": [
         ".local/build/Build/Products/Debug/Ikkoku.app/Contents/MacOS/Ikkoku"

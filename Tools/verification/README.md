@@ -1386,6 +1386,28 @@ get wrong:
   item 623, then None, reparents it through `StudioModel.setParent`. Each
   Undo restores the parent, and the closed popup shows it again. Character
   0's options are checked the same way.
+- `inspector-eye-look-readout` (`IKKOKU_STUDIO_SCENARIO_SCENE`; #382). The
+  Pose tab's "Eye look" readout as the window shows it. `stopLiveSteps`
+  stops the timer and the display link, so only the scenario's `advance`
+  steps the app's own live step. Character 65 (TARGET eye look) is
+  selected on the Pose tab and stepped 0.4 s; then the view is orbited
+  (`orbit`, dy +0.45 and then -0.6) and stepped 0.2 s each time. After
+  each, an accessibility element must show exactly the model's readout
+  (`selectedSourceEyeLookReadout`), and after each orbit the readout must
+  have changed. Then the Object tab is shown, the view is orbited (dy
+  +0.45) and stepped 0.2 s, and on the Pose tab again the new readout must
+  show at once: the model publishes it only while the Pose tab is shown,
+  and the tab's setter publishes it before the tab's first body. The same
+  again (Object tab, dy -0.45, 0.2 s), but back to the Pose tab with
+  `tabDuringStep`: it starts one live step the way the timer does
+  (`startLiveFrameAsTimer`; it fails if the step ran serially), switches
+  the tab while the step is in flight, and fails if the switch published
+  anything new (a click never waits on a live step or reads its previews).
+  It then completes the step as its completion handler does
+  (`completeLiveFrame`), and the readout that step's refresh published
+  must show. Selecting folder 622 must leave no "Eye look:" line. Before the fix the tab drew
+  the readout once and never again, so the shown text stayed stale; the
+  model publishes it at every refresh on the Pose tab now.
 - `studio-inspector-clothes-fit-capture` and `-validate`, in
   `app-smoke.json`. The same scene started through the UI capture path, as #319's `ui-sel-clothes` capture
   starts it (`IKKOKU_CAPTURE_UI_STUDIO_TAB=clothes`,
