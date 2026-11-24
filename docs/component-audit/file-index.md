@@ -14,7 +14,7 @@ the ST-T07 eye look reference and solver-port files, the ST-T07s eye look
 Studio preview runtime files, the ST-T07u iris rendering files and the ST-T04
 studio item shader contract and record color files and the ST-T08 first-slice
 original motion capture/replay files. The 2026-10-23 ST-T08e skirt slice updates runtime, exporter, fixture, test and reference files and adds its paired
-Studio save/load scenarios; it does not represent a new code audit. The 2026-10-25 ST-T03i plug-in data slice adds its rule, test, rule-parity, survey and original-player probe files. The 2026-10-26 texture-loading slice (the parallel-test pool deadlock) adds the in-line texture loader, its identity, corpus and upload tests, and 19 synthetic decoder fixtures. The 2026-10-26 ST-T05a legacy-scene slice adds its reader, test, timing, original-player probe and scenario files. The 2026-11-01 #321 slice adds the deep-scene stack test. The 2026-11-02 ST-T04 catalog slice adds the item catalog generator and its synthetic test. The 2026-11-18 #394 slice adds the stable dictionary encoding and its test. The 2026-11-18 #391 slice adds the source Euler commit test. The 2026-11-18 frame-preparation slice adds the encoder state record, the draw-order test and the encoder state test. The 2026-11-18 #384 slice adds the Studio undo history, its test and the undo scene-replacement scenario. The 2026-11-18 extended shape rate slice adds its original-player probe, driver and test, and the engine comparison with the probe's capture. The 2026-11-18 ST-T04 instancing slice adds the Studio item material cache, the instanced item shaders and the instanced item draw tests. The 2026-11-19 #427 slice adds the shared Mono `int.Parse` parser in Swift and Python. The 2026-11-19 #410 slice adds the workspace growth check, its test and four workspace scenarios. It lists every present Git-visible
+Studio save/load scenarios; it does not represent a new code audit. The 2026-10-25 ST-T03i plug-in data slice adds its rule, test, rule-parity, survey and original-player probe files. The 2026-10-26 texture-loading slice (the parallel-test pool deadlock) adds the in-line texture loader, its identity, corpus and upload tests, and 19 synthetic decoder fixtures. The 2026-10-26 ST-T05a legacy-scene slice adds its reader, test, timing, original-player probe and scenario files. The 2026-11-01 #321 slice adds the deep-scene stack test. The 2026-11-02 ST-T04 catalog slice adds the item catalog generator and its synthetic test. The 2026-11-18 #394 slice adds the stable dictionary encoding and its test. The 2026-11-18 #391 slice adds the source Euler commit test. The 2026-11-18 frame-preparation slice adds the encoder state record, the draw-order test and the encoder state test. The 2026-11-18 #384 slice adds the Studio undo history, its test and the undo scene-replacement scenario. The 2026-11-18 extended shape rate slice adds its original-player probe, driver and test, and the engine comparison with the probe's capture. The 2026-11-18 ST-T04 instancing slice adds the Studio item material cache, the instanced item shaders and the instanced item draw tests. The 2026-11-19 #427 slice adds the shared Mono `int.Parse` parser in Swift and Python. The 2026-11-19 #410 slice adds the workspace growth check, its test and four workspace scenarios. The 2026-11-20 #462 slice adds the original-scene export preparation. It lists every present Git-visible
 tracked/untracked non-ignored repository file outside
 `docs/component-audit/`. It excludes private `.local/`, dependency/build caches
 and ignored intermediate assets. Binary assets are inventoried, not reviewed as
@@ -23,7 +23,7 @@ branch was tested or every asset matches the original game. Feature status,
 specific comments and pending tasks are in the linked reports. Shared behavior
 may be discussed in more than one report; one primary owner is listed here.
 
-**1159 files indexed; 1159 assigned; 0 unassigned.**
+**1160 files indexed; 1160 assigned; 0 unassigned.**
 
 Counts include the website and clothes-group additions listed below. Runtime and
 test totals include their specialized role descriptions; this is inventory
@@ -33,7 +33,7 @@ bookkeeping, not a new full source audit.
 | --- | ---: |
 | [App / gameplay / plugins](app-gameplay-and-plugins.md) | 113 |
 | [Character / Maker / mods](character-and-mods.md) | 145 |
-| [Studio / IK / animation](studio.md) | 278 |
+| [Studio / IK / animation](studio.md) | 279 |
 | [Renderer / foundation / assets](renderer-and-foundation.md) | 373 |
 | [Toolchain / verification / historical docs](toolchain-and-verification.md) | 240 |
 
@@ -45,7 +45,7 @@ bookkeeping, not a new full source audit.
 | Documentation / historical evidence | 65 |
 | Generated asset / catalog / fixture | 205 |
 | Reference host / controlled fixture | 41 |
-| Runtime / shared shader declaration | 250 |
+| Runtime / shared shader declaration | 251 |
 | Test / validation | 256 |
 | Public synthetic body/face input fixture | 1 |
 
@@ -357,6 +357,7 @@ Feature assessment: [studio.md](studio.md).
 | [Packages/Engine/Sources/Studio/Poses.swift](../../Packages/Engine/Sources/Studio/Poses.swift) | Runtime / shared shader declaration |
 | [Packages/Engine/Sources/Studio/SourceFullBodyBiped.swift](../../Packages/Engine/Sources/Studio/SourceFullBodyBiped.swift) | Runtime / shared shader declaration |
 | [Packages/Engine/Sources/Studio/SourceSceneEditing.swift](../../Packages/Engine/Sources/Studio/SourceSceneEditing.swift) | Runtime / shared shader declaration |
+| [Packages/Engine/Sources/Studio/SourceSceneExportPreparation.swift](../../Packages/Engine/Sources/Studio/SourceSceneExportPreparation.swift) | Runtime / shared shader declaration |
 | [Packages/Engine/Sources/Studio/SourceSceneExportValidation.swift](../../Packages/Engine/Sources/Studio/SourceSceneExportValidation.swift) | Runtime / shared shader declaration |
 | [Packages/Engine/Sources/Studio/SourceSceneInsertion.swift](../../Packages/Engine/Sources/Studio/SourceSceneInsertion.swift) | Runtime / shared shader declaration |
 | [Packages/Engine/Sources/Studio/SourceScenePluginData.swift](../../Packages/Engine/Sources/Studio/SourceScenePluginData.swift) | Runtime / shared shader declaration |

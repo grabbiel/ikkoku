@@ -3100,7 +3100,10 @@ struct StudioScenario: Decodable {
                         // start in the background, leave the document and
                         // the render as they were, and write byte-identical
                         // bytes; an edit, or a load, while its baselines build
-                        // must fail it with an error and write nothing. Every
+                        // must fail it with an error and write nothing. #462:
+                        // before the load, while `key` still has its preview,
+                        // an export with no baseline to build runs the same
+                        // checks, without its progress line at first. Every
                         // file the op writes is removed at the end.
                         guard let id = object(step) else { record(step, false, "backgroundBuild: no object \(describe(step))"); continue }
                         guard let path = step.path, let target = insideLocal(path) else {
@@ -3111,12 +3114,65 @@ struct StudioScenario: Decodable {
                         let syncURL = folder.appendingPathComponent("\(stem)-sync.png")
                         let replacedURL = folder.appendingPathComponent("\(stem)-replaced.png")
                         let changedURL = folder.appendingPathComponent("\(stem)-changed.png")
-                        let written = [document, syncURL, target, replacedURL, changedURL]
+                        let plainSyncURL = folder.appendingPathComponent("\(stem)-plain-sync.png")
+                        let plainURL = folder.appendingPathComponent("\(stem)-plain.png")
+                        let plainChangedURL = folder.appendingPathComponent("\(stem)-plain-changed.png")
+                        let plainReplacedURL = folder.appendingPathComponent("\(stem)-plain-replaced.png")
+                        let written = [document, syncURL, target, replacedURL, changedURL, plainSyncURL, plainURL, plainChangedURL, plainReplacedURL]
                         try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
                         for url in written where FileManager.default.fileExists(atPath: url.path) { try FileManager.default.removeItem(at: url) }
                         defer { for url in written { try? FileManager.default.removeItem(at: url) } }
                         try studio.saveScene(to: document)
+                        // #462: the plain export. Each export, the background
+                        // one included, reads, checks and decodes the original
+                        // scene on a thread of its own, then writes on the
+                        // main actor.
+                        let plainReference = state()
+                        var plainSync: String?
+                        studio.beginSourceSceneExport(to: plainSyncURL) { plainSync = $0.map { "failed: \($0)" } ?? "written" }
+                        guard plainSync == "written" else { record(step, false, "backgroundBuild: the synchronous plain export \(plainSync ?? "did not finish")"); continue }
+                        studio.asyncSourceBuilds = true
+                        var plain: [String] = []
+                        studio.beginSourceSceneExport(to: plainURL) { plain.append($0.map { "failed: \($0)" } ?? "written") }
+                        if studio.pendingSourceActionWork == 0 || !plain.isEmpty || FileManager.default.fileExists(atPath: plainURL.path) {
+                            problems.append("the plain export did not run in the background")
+                        }
+                        if studio.sourceBuildProgress != nil { problems.append("the plain export showed its progress line at once") }
+                        guard settle() else { record(step, false, "backgroundBuild: the plain export did not finish in 300 s"); continue }
+                        _ = RunLoop.main.run(mode: .default, before: Date().addingTimeInterval(0.3))
+                        if plain != ["written"] { problems.append("plain export completions \(plain), expected [\"written\"]") }
+                        compare("plain export", plainReference, state(), status: false)
+                        if studio.status != "Exported edited original scene to \(plainURL.lastPathComponent)" {
+                            problems.append("the plain export left the status \"\(studio.status)\"")
+                        }
+                        let plainSyncBytes = try Data(contentsOf: plainSyncURL)
+                        let plainBytes = FileManager.default.fileExists(atPath: plainURL.path) ? try Data(contentsOf: plainURL) : Data()
+                        if plainSyncBytes != plainBytes {
+                            problems.append("the background plain export wrote \(plainBytes.count) bytes that differ from the synchronous export's \(plainSyncBytes.count)")
+                        }
+                        // An edit before it lands fails it (`SourceExportInputs`).
+                        var plainChanged: [String] = []
+                        studio.beginSourceSceneExport(to: plainChangedURL) { plainChanged.append($0.map { "\($0)" } ?? "written") }
+                        studio.update(id) { $0.transform.position.x += 0.25 }
+                        guard settle() else { record(step, false, "backgroundBuild: the edited plain export did not finish in 300 s"); continue }
+                        _ = RunLoop.main.run(mode: .default, before: Date().addingTimeInterval(0.3))
+                        if plainChanged.count != 1 || !(plainChanged.first ?? "").contains("changed") {
+                            problems.append("the plain export edited before it landed completed \(plainChanged), expected one scene-changed error")
+                        }
+                        if FileManager.default.fileExists(atPath: plainChangedURL.path) { problems.append("the plain export edited before it landed wrote its file") }
+                        studio.undo()
+                        guard settle() else { record(step, false, "backgroundBuild: the undo did not settle in 300 s"); continue }
+                        // The op's load, synchronous as before, cancels it.
+                        var plainReplaced: [String] = []
+                        studio.beginSourceSceneExport(to: plainReplacedURL) { plainReplaced.append($0.map { "\($0)" } ?? "written") }
+                        studio.asyncSourceBuilds = false
                         try studio.loadScene(from: document)
+                        guard settle() else { record(step, false, "backgroundBuild: the load did not finish in 300 s"); continue }
+                        _ = RunLoop.main.run(mode: .default, before: Date().addingTimeInterval(0.3))
+                        if plainReplaced.count != 1 || !(plainReplaced.first ?? "").contains("replaced") {
+                            problems.append("the plain export cancelled by a load completed \(plainReplaced), expected one replacement error")
+                        }
+                        if FileManager.default.fileExists(atPath: plainReplacedURL.path) { problems.append("the cancelled plain export wrote its file") }
                         if studio.doc.isVisible(id) || studio.sourceShapePreview(for: id) != nil || studio.doc.object(id)?.sourceExpression == nil {
                             problems.append("\(describe(step)) must be hidden, with a face edit and no preview, after the load")
                         }
@@ -3178,6 +3234,7 @@ struct StudioScenario: Decodable {
                         if FileManager.default.fileExists(atPath: replacedURL.path) { problems.append("the cancelled export wrote its file") }
                         compare("load during the export", reference, state())
                         detail = "the background export wrote the synchronous export's \(syncBytes.count) bytes; an edit during it reported: \(changed.first ?? "nothing") (its copy of the object list counted as the export's); a load during it reported: \(replaced.first ?? "nothing")"
+                            + "; the plain export wrote the synchronous export's \(plainSyncBytes.count) bytes; an edit before it landed reported: \(plainChanged.first ?? "nothing"); a load: \(plainReplaced.first ?? "nothing")"
                     } else if build == "loadRoute" {
                         // R7 phase 2 item 6, third part: a scene load
                         // rehydrates its route characters in the background,

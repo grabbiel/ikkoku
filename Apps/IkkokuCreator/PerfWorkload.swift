@@ -95,6 +95,13 @@ final class PerfWorkloadDriver {
     /// Whether the pending action waited for `actionPending`: it is then
     /// ready when the wait ended.
     private var actionWaited = false
+    /// #462 (`IKKOKU_PERF_EXPORT_HASH=on`, which also pins the Studio clock
+    /// at `exportHashClock` with live animation off, so each export of the
+    /// same scene writes the same bytes): the file the pending export action
+    /// writes, and each finished action's file SHA-256 and size, by its
+    /// index in `finishedActions` (nil when it wrote no file).
+    private var exportFile: URL?
+    private var exportFiles: [Int: (sha256: String, bytes: Int)?] = [:]
 
     private init(app: AppState, trace: PerfTrace) {
         self.app = app
@@ -223,6 +230,29 @@ final class PerfWorkloadDriver {
         }
         if !actionSteps.isEmpty { DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { self.runNextAction() } }
         DispatchQueue.main.asyncAfter(deadline: .now() + configuration.seconds) { self.stop() }
+    }
+
+    /// #462: the export steps (`PerfTrace.exportStep`) that began from this
+    /// action's call to the next action's. `exportMainMs` and
+    /// `exportMainCpuMs` sum the top steps (`begin`, `finish`): the main
+    /// thread's own export work. `exportHopMs` runs from the end of `begin`
+    /// to the start of `finish` (absent when the export ran in one call).
+    /// `exportSteps` gives each nested step's milliseconds. Nothing is added
+    /// to an action without export steps.
+    private func exportRow(_ row: inout [String: Any], from start: CFTimeInterval, until next: CFTimeInterval) {
+        let steps = trace.exportSteps.filter { $0.start >= start && $0.start < next }
+        guard !steps.isEmpty else { return }
+        let top = steps.filter { $0.name == "begin" || $0.name == "finish" }
+        row["exportMainMs"] = PerfTrace.round(top.map { ($0.end - $0.start) * 1000 }.reduce(0, +))
+        row["exportMainCpuMs"] = PerfTrace.round(top.map(\.cpuMs).reduce(0, +))
+        if let begin = top.first(where: { $0.name == "begin" }), let finish = top.first(where: { $0.name == "finish" }) {
+            row["exportHopMs"] = PerfTrace.round((finish.start - begin.end) * 1000)
+        }
+        var nested: [String: Double] = [:]
+        for step in steps where step.name != "begin" && step.name != "finish" {
+            nested[step.name, default: 0] += (step.end - step.start) * 1000
+        }
+        row["exportSteps"] = nested.mapValues(PerfTrace.round)
     }
 
     /// Spins (rather than sleeps) so the load is CPU work on the main thread.
@@ -629,7 +659,7 @@ final class PerfWorkloadDriver {
     /// file, after which only the visible characters build. Each export
     /// writes a new file and removes the previous one.
     private func prepareStudioExport() throws {
-        let studio = try prepareStudioSource(selectKey: nil)
+        let studio = try prepareStudioSource(selectKey: nil, liveAnimation: !configuration.exportHash)
         let target = try actionTarget(studio)
         guard target.kind == .character, let preview = studio.sourceShapePreview(for: target.id) else {
             throw RigError.invalid("studio-export needs a built source character")
@@ -645,6 +675,7 @@ final class PerfWorkloadDriver {
         guard studio.sourceShapePreview(for: target.id) == nil else {
             throw RigError.invalid("the hidden character was built by the load, so an export would not build its baseline")
         }
+        try pinExportClock(studio)
         var count = 0
         var previous: URL?
         actionSteps = [("export", true, { [weak self] in
@@ -652,10 +683,11 @@ final class PerfWorkloadDriver {
             count += 1
             let url = folder.appendingPathComponent("export-\(count).png")
             previous = url
+            self?.exportFile = url
             self?.app.exportSourceScene(to: url)
         })]
         trace.details["actionSourceKey"] = Int(target.sourceObjectKey ?? -1)
-        trace.details["gesture"] = "File ▸ Export Edited Original Scene with source key \(target.sourceObjectKey ?? -1) hidden, a cheek edit and no preview, repeated; live animation on"
+        trace.details["gesture"] = "File ▸ Export Edited Original Scene with source key \(target.sourceObjectKey ?? -1) hidden, a cheek edit and no preview, repeated; \(exportClockLabel)"
     }
 
     /// `studio-export-import` (lazy hidden characters): File ▸ Export Edited
@@ -665,7 +697,7 @@ final class PerfWorkloadDriver {
     /// builds no baseline for it. Each export writes a new file and removes
     /// the previous one.
     private func prepareStudioExportImport() throws {
-        try prepareStudioSource(selectKey: nil)
+        try pinExportClock(prepareStudioSource(selectKey: nil, liveAnimation: !configuration.exportHash))
         let folder = try makeScratchFolder()
         var count = 0
         var previous: URL?
@@ -674,9 +706,29 @@ final class PerfWorkloadDriver {
             count += 1
             let url = folder.appendingPathComponent("export-\(count).png")
             previous = url
+            self?.exportFile = url
             self?.app.exportSourceScene(to: url)
         })]
-        trace.details["gesture"] = "File ▸ Export Edited Original Scene of the imported startup scene, unedited, repeated; live animation on"
+        trace.details["gesture"] = "File ▸ Export Edited Original Scene of the imported startup scene, unedited, repeated; \(exportClockLabel)"
+    }
+
+    /// #462: the Studio clock the export workloads pin with
+    /// `IKKOKU_PERF_EXPORT_HASH=on`. Not 0, so every export saves each
+    /// character's animation at a time it reached: a built character's
+    /// through its preview, one with no preview through the export's own
+    /// clock states.
+    private static let exportHashClock: Float = 1.5
+
+    /// With `IKKOKU_PERF_EXPORT_HASH=on`, sets the Studio clock to
+    /// `exportHashClock` (live animation is already off); otherwise nothing.
+    private func pinExportClock(_ studio: StudioModel) throws {
+        guard configuration.exportHash else { return }
+        try studio.setSourceAnimationTime(Self.exportHashClock)
+        trace.details["exportClockSeconds"] = Double(Self.exportHashClock)
+    }
+
+    private var exportClockLabel: String {
+        configuration.exportHash ? "live animation off, the clock pinned at \(Self.exportHashClock) s" : "live animation on"
     }
 
     /// `studio-show-hidden` (lazy hidden characters): Visible on (the
@@ -1202,6 +1254,13 @@ final class PerfWorkloadDriver {
                                 PerfTrace.footprint(), trace.device?.currentAllocatedSize ?? 0, app.studio?.doc.objects.count ?? -1,
                                 action.bodies, app.studio?.shownWorkspaceState.entries.count ?? -1, history,
                                 action.cpuMs, action.live))
+        if configuration.exportHash, let file = exportFile {
+            // After the timed span: the file the export wrote, if any.
+            exportFiles[finishedActions.count - 1] = (try? Data(contentsOf: file)).map {
+                (SHA256.hash(data: $0).map { String(format: "%02x", $0) }.joined(), $0.count)
+            }
+            exportFile = nil
+        }
         pendingAction = nil
         DispatchQueue.main.asyncAfter(deadline: .now() + (action.measured ? 0.5 : 0.2)) { self.runNextAction() }
     }
@@ -1244,6 +1303,11 @@ final class PerfWorkloadDriver {
                     "documentObjects": action.objects,
                     "workspaceBodies": bodies, "workspaceRows": action.workspaceRows]
             row["callCpuMs"] = PerfTrace.round(action.cpuMs)
+            exportRow(&row, from: action.start, until: next)
+            if let file = exportFiles[index] {
+                row["exportSha256"] = file.map { $0.sha256 as Any } ?? NSNull()
+                row["exportBytes"] = file.map { $0.bytes as Any } ?? NSNull()
+            }
             if let history = action.history {
                 row["undoSteps"] = history.undo; row["redoSteps"] = history.redo
                 row["objectBuffers"] = history.storage.buffers; row["objectBufferCapacity"] = history.storage.capacity

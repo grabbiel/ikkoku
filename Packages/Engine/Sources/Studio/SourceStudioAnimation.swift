@@ -292,30 +292,6 @@ public final class SourceStudioAnimationClock: @unchecked Sendable {
         return true
     }
 
-    /// Whether `savedStates(requests)` would read nothing from disk now: the
-    /// caches belong to the current generation and hold every request's seed,
-    /// catalog and clip. False while a warm-up holds them, and before one has
-    /// loaded them. Never waits, so the main thread may ask; an export
-    /// that finds the clock loaded computes its states in line (about a
-    /// millisecond) instead of on a worker.
-    public func isLoaded(_ requests: [Request]) -> Bool {
-        guard lock.lockIfAvailable() else { return false }
-        defer { lock.unlock() }
-        guard cachedGeneration == generation else { return false }
-        for request in requests {
-            let reference = request.reference
-            guard let seed = seeds[Self.seedKey(reference)] else { return false }
-            // A seed or catalog that failed to load is cached as a failure:
-            // `savedStates` reads nothing more for it.
-            guard let saved = try? seed.get().saved, let file = reference.animationCatalogFile else { continue }
-            guard let catalog = catalogs[file] else { return false }
-            guard (try? catalog.get()) != nil else { continue }
-            let state = request.edited ?? saved
-            guard clips[file]?["\(state.group)/\(state.category)/\(state.no)"] != nil else { return false }
-        }
-        return true
-    }
-
     /// Empties the caches when `clear()` started a new generation since
     /// they were filled. Call under `lock`.
     private func syncGeneration() {

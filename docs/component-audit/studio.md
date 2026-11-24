@@ -30,7 +30,7 @@ Code: `StudioDocument.swift`, `Gizmo.swift`, `Poses.swift`, `Timeline.swift`; `S
 
 ### Original binary scene import and edited original export
 
-Code: `KoikatsuBinary.swift`, `KoikatsuSceneRecordReader.swift`, `KoikatsuSceneRecords.swift`, `KoikatsuLayoutImporter.swift`, `SourceSceneEditing.swift`, `SourceSceneExportValidation.swift`; `StudioModel.swift` import/export methods.
+Code: `KoikatsuBinary.swift`, `KoikatsuSceneRecordReader.swift`, `KoikatsuSceneRecords.swift`, `KoikatsuLayoutImporter.swift`, `SourceSceneEditing.swift`, `SourceSceneExportValidation.swift`, `SourceSceneExportPreparation.swift`; `StudioModel.swift` import/export methods.
 
 | ID | Feature | Status | Specific assessment and evidence | Next task |
 | --- | --- | --- | --- | --- |

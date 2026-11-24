@@ -1,4 +1,5 @@
 import Foundation
+import CryptoKit
 import Testing
 import Studio
 import Scene
@@ -345,4 +346,85 @@ private func exportValidationDocument(_ source: KoikatsuSceneDocument, rendered:
     let kept = try SourceSceneExportValidation.stage(onlyNew, source: plugins)
     #expect(kept.stage.document.trailingData == plugins.trailingData && kept.stage.keys == [0])
     #expect(throws: SourceSceneTopologyError.self) { try kept.stage.editedData(.init()) }
+}
+
+// #462, #350: the export's preparation, which File ▸ Export runs on a
+// decode-stack thread, refuses a scene whose SHA-256 does not match before
+// it decodes anything, and gives what the export's own steps give.
+@Test func sourceSceneExportPreparationChecksTheHashFirstAndMatchesItsSteps() throws {
+    let bytes = SceneDocumentBytes.scene().data
+    let source = try KoikatsuSceneReader.decodeDocument(bytes)
+    let document = exportValidationDocument(source)
+    let folder = FileManager.default.temporaryDirectory.appendingPathComponent("ikkoku-export-preparation-\(UUID().uuidString)", isDirectory: true)
+    try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: folder) }
+    let file = folder.appendingPathComponent("original.png")
+    try bytes.write(to: file)
+    func hash(_ data: Data) -> String { SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined() }
+    let clock = SourceStudioAnimationClock()
+    let character = try #require(document.objects.first { $0.sourceCharacter != nil })
+    let requests = [(id: character.id, request: SourceStudioAnimationClock.Request(reference: character.sourceCharacter!, edited: nil, bodyValues: nil))]
+    func prepare(_ sha256: String) throws -> SourceSceneExportPreparation.Prepared {
+        try SourceSceneExportPreparation.prepare(document: document, sceneFile: file.path, sha256: sha256, clock: clock,
+                                                 clockRequests: requests, elapsed: 0)
+    }
+    let prepared = try prepare(hash(bytes))
+    let staged = try SourceSceneExportValidation.stage(document, source: source)
+    let topology = try SourceSceneExportValidation.topologyEdits(document, against: staged.stage.document.snapshot, keys: staged.keys)
+    #expect(prepared.staged.keys == staged.keys)
+    #expect(try prepared.staged.stage.editedData(.init()) == staged.stage.editedData(.init()))
+    #expect(prepared.deletions == topology.deletions && prepared.reparents == topology.reparents)
+    #expect(prepared.orphanPluginIDs == source.orphanPluginIDs)
+    #expect(Array(prepared.clockStates.keys) == [character.id])
+    let changed = "The original scene changed; reimport before exporting edits."
+    func failure(_ sha256: String) -> String {
+        do { _ = try prepare(sha256); return "prepared" } catch { return "\(error)" }
+    }
+    // A hash that does not match, and a file changed since the import.
+    #expect(failure(String(repeating: "0", count: 64)) == changed)
+    try (bytes + Data([0])).write(to: file)
+    #expect(failure(hash(bytes)) == changed)
+    // Bytes that do not decode, with their own hash, fail in the decode:
+    // the hash check is what refused them above.
+    let garbage = Data("not a scene".utf8)
+    try garbage.write(to: file)
+    #expect(failure(hash(garbage)) != changed && failure(hash(garbage)) != "prepared")
+}
+
+// #462: `start` prepares on a thread with the decode stack (#326) and
+// delivers what `prepare` gives, an error included.
+@Test func sourceSceneExportPreparationStartsOnADecodeStackThread() throws {
+    let bytes = SceneDocumentBytes.scene().data
+    let document = exportValidationDocument(try KoikatsuSceneReader.decodeDocument(bytes))
+    let folder = FileManager.default.temporaryDirectory.appendingPathComponent("ikkoku-export-start-\(UUID().uuidString)", isDirectory: true)
+    try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: folder) }
+    let file = folder.appendingPathComponent("original.png")
+    try bytes.write(to: file)
+    let sha256 = SHA256.hash(data: bytes).map { String(format: "%02x", $0) }.joined()
+    final class Delivered: @unchecked Sendable {
+        let done = DispatchSemaphore(value: 0)
+        var stack = 0, mainThread = true, keys: [UUID: Int32]?, error: String?
+    }
+    for expected in [sha256, String(repeating: "0", count: 64)] {
+        let delivered = Delivered()
+        SourceSceneExportPreparation.start(document: document, sceneFile: file.path, sha256: expected, clock: SourceStudioAnimationClock(),
+                                           clockRequests: [], elapsed: 0) { outcome in
+            delivered.stack = pthread_get_stacksize_np(pthread_self()); delivered.mainThread = Thread.isMainThread
+            switch outcome {
+            case .success(let prepared): delivered.keys = prepared.staged.keys
+            case .failure(let error): delivered.error = "\(error)"
+            }
+            delivered.done.signal()
+        }
+        #expect(delivered.done.wait(timeout: .now() + 60) == .success)
+        #expect(delivered.stack >= SourceStudioCharacterBatch.stackSize && !delivered.mainThread)
+        if expected == sha256 {
+            let direct = try SourceSceneExportPreparation.prepare(document: document, sceneFile: file.path, sha256: sha256,
+                                                                  clock: SourceStudioAnimationClock(), clockRequests: [], elapsed: 0)
+            #expect(delivered.keys == direct.staged.keys)
+        } else {
+            #expect(delivered.error == "The original scene changed; reimport before exporting edits.")
+        }
+    }
 }

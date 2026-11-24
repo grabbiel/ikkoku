@@ -639,7 +639,7 @@ def action_stats(report):
     """The action workloads (R7 phase 2, item 6): per measured action name, the medians of its call, ready, busy and longest
     stall times in ms, with the sample count, and the 120 Hz frames the median and the longest stall drop; {} for other
     reports. `busyOwnMs` (the busy time clipped at the next action's call) is there when every action has it: reports
-    from before it have none."""
+    from before it have none. So are `exportMainMs` and `exportMainCpuMs` (#462: the main thread's own export work)."""
     actions = [a for a in report.get("details", {}).get("actions") or [] if a.get("measured")]
     result = {}
     for name in sorted({a["name"] for a in actions}):
@@ -652,8 +652,9 @@ def action_stats(report):
         result[name] = {"count": len(rows), "callMs": median("callMs"), "readyMs": median("readyMs"),
                         "busyMs": median("busyMs"), "longestStallMs": median("longestStallMs"),
                         "maxStallMs": max(a["longestStallMs"] for a in rows)}
-        if all("busyOwnMs" in a for a in rows):
-            result[name]["busyOwnMs"] = median("busyOwnMs")
+        for field in ("busyOwnMs", "exportMainMs", "exportMainCpuMs"):
+            if all(field in a for a in rows):
+                result[name][field] = median(field)
         result[name]["frames120"] = frames_at_120(result[name]["longestStallMs"])
         result[name]["maxFrames120"] = frames_at_120(result[name]["maxStallMs"])
     return result
@@ -663,10 +664,12 @@ def actions_line(label, report):
     stats = action_stats(report)
     if not stats:
         return None
-    parts = ["%s x%d call %.1f, ready %.1f, main busy %.1f%s, longest stall %.1f (max %.1f), 120 Hz frames dropped %d (max %d)" % (
+    parts = ["%s x%d call %.1f, ready %.1f, main busy %.1f%s, longest stall %.1f (max %.1f), 120 Hz frames dropped %d (max %d)%s" % (
         name, entry["count"], entry["callMs"], entry["readyMs"], entry["busyMs"],
         " (own %.1f)" % entry["busyOwnMs"] if "busyOwnMs" in entry else "", entry["longestStallMs"], entry["maxStallMs"],
-        entry["frames120"], entry["maxFrames120"])
+        entry["frames120"], entry["maxFrames120"],
+        ", export main %.1f (CPU %.1f)" % (entry["exportMainMs"], entry["exportMainCpuMs"])
+        if "exportMainMs" in entry and "exportMainCpuMs" in entry else "")
         for name, entry in stats.items()]
     return "[perf] %s: actions, medians in ms: %s" % (label, "; ".join(parts))
 

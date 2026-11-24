@@ -567,6 +567,8 @@ private struct CaptureRecipe {
         // #440: the growth check's park file and the focus probe.
         ("IKKOKU_PERF_PARK_FILE", ["/runs/c1/park"], [""]),
         ("IKKOKU_PERF_FOCUS_PROBE", ["8", "1", "64"], ["0", "65", "eight", ""]),
+        // #462: the export workloads' file hashes.
+        ("IKKOKU_PERF_EXPORT_HASH", ["on", "off"], ["On", "1", ""]),
     ]
     for control in controls {
         let outside: [[String]] = [[control.variable]]

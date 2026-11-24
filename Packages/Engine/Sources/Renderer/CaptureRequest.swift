@@ -464,6 +464,7 @@ extension CaptureRequest {
         ScopedOption("IKKOKU_PERF_EDIT_PHASES", [.perfTrace]),
         ScopedOption("IKKOKU_PERF_PARK_FILE", [.perfTrace]),
         ScopedOption("IKKOKU_PERF_FOCUS_PROBE", [.perfTrace]),
+        ScopedOption("IKKOKU_PERF_EXPORT_HASH", [.perfTrace]),
     ]
 
     /// Options read only by the window capture.
@@ -649,6 +650,9 @@ extension CaptureRequest {
         // #440: the focus probe's buttons (the growth check's positive
         // control); `IKKOKU_PERF_PARK_FILE` is any path.
         ValueRule("IKKOKU_PERF_FOCUS_PROBE", .integer(1...64)),
+        // #462: the export workloads pin the Studio clock at 1.5 s (live
+        // animation off) and record each exported file's SHA-256 and size.
+        ValueRule("IKKOKU_PERF_EXPORT_HASH", .oneOf(["off", "on"])),
     ]
 
     /// `IKKOKU_PERF_WORKLOAD` values, in the order `docs/reference/performance.md` lists them.

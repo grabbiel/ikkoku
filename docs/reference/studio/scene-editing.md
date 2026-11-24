@@ -2191,17 +2191,14 @@ characters in 29 scenes and no route characters.
   `SourceStudioAnimation.savedState`, the time advance a built character's
   `savedAnimationState` calls. A native save, a clock rebase (an animation
   edit) and an export all use it. Every character's animation is saved at
-  the Studio clock of the moment the export was chosen. When the import's
-  warm-up has loaded what the clocks read
-  (`SourceStudioAnimationClock.isLoaded`, which never waits), an export with
-  no baseline to build runs at once on the main thread, as before this
-  change; the clocks cost about a millisecond there. Before that (the
-  warm-up still running), the background export advances them on a worker
-  thread and shows its progress line.
+  the Studio clock of the moment the export was chosen. Since #462 every
+  background export advances them in its preparation, on a thread with the
+  decode stack, from the scene it has just decoded
+  (`SourceSceneExportPreparation`).
 - The clock reads a scene file on a thread of its own with 64 MiB of stack
   (`SourceStudioCharacterBatch.onDecodeThread`, #326), at its caller's QoS,
-  and drops the decoded records there. The warm-up and the background export
-  run on GCD workers with 512 KiB, which a deep scene's decode overflows
+  and drops the decoded records there. The warm-up runs on a GCD worker
+  with 512 KiB, which a deep scene's decode overflows
   (`SourceSceneDeepStackTests`). The caller waits on a lock the thread holds,
   so a main-thread save waiting for the warm-up raises the decode's priority.
 - This also fixes the native reload path. Before, a character hidden when a
