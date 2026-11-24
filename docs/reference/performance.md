@@ -7409,6 +7409,115 @@ against 42.4 ms). A Time Profiler run looked for where that time goes.
   the head's main thread is busy 7 ms less than base's. The rest of W3b's
   gap is attributed to the run environment, not to this change's code.
 
+## Export preparation (#462)
+
+Added 2026-11-22. Every original-scene export used to read the source scene again, hash it and decode it on the main thread. On the 70-character scene that was about 31 ms of a 43 ms export ([export profile](#export-profile-q1-2026-11-18)). #350's orphan plug-in parse also ran there, once per export.
+
+### The change
+
+- **Interactive exports are jobs.** This covers every File ▸ Export Edited Original Scene with background builds. After the hidden characters' baselines are built (if there are any), a thread with the decode stack runs `SourceSceneExportPreparation.prepare`, one export at a time. It:
+  - reads the original scene and checks its SHA-256 before anything decodes it;
+  - decodes it and finds the orphan plug-in entries (#350, `SourceScenePluginData.orphanPluginIDs(trailer:)`);
+  - stages and validates the document, and refuses native lighting, effects and timeline edits;
+  - derives the topology edits and the unbuilt characters' clock states from the decoded scene.
+- **The main thread finishes.**
+  - It checks that the document, the camera and the routes' play flags are as they were when the export was chosen.
+  - It compares the document with the records, renders the thumbnail, writes the file and sets the status.
+  - A cancelled export's outcome still reaches the main thread, which drops it there (#326).
+- **Checks that read no file fail at once:** an imported scene, a new filename.
+- **Synchronous exports prepare in line, otherwise unchanged:** captures, scenarios, and exports while plug-ins run.
+- **User-visible changes:**
+  - An export with no baseline shows "Exporting <file>" only after a quarter second, so a short export doesn't flash the progress row.
+  - The two errors now read "the scene changed while <file> was exported; export it again" and "the scene was replaced before <file> was exported; export it again".
+- **Removed:** `SourceStudioAnimationClock.isLoaded`; no export asks for it any more.
+- **Instrumentation (both arms):**
+  - `PerfTrace.exportStep` times the export's main-thread steps per action ([what the report records](#what-the-report-records)).
+  - `IKKOKU_PERF_EXPORT_HASH=on` runs the export workloads with live animation off and the Studio clock pinned at 1.5 s, and records each exported file's SHA-256 and size.
+
+### Correctness
+
+- **Bytes and status.** Both arms' pinned Release binaries ran with `IKKOKU_PERF_EXPORT_HASH=on`, 60 Hz, monitor off, not composited. The set was 23 scenes: 16 environment fixtures and 7 user-corpus scenes, including the 70-character scene and the largest corpus scene (76.8 MiB).
+  - **Capture path** (the export run synchronously): 22 scenes give equal SHA-256 in both arms, and 1 is refused by both.
+  - **Interactive path** (`studio-export-import`): 15 scenes give one hash per arm, with A = B and equal statuses. That includes the orphan note on the 6 user scenes with orphan entries.
+  - **Capture path only:** 7 scenes, 6 fixtures and user scene 47c2df53, have no converted source characters or items. `studio-export-import` needs those and refuses these scenes in both arms, so only the capture path covers them.
+  - **Erratum against the first registration's text** (`d342576e`): that text says 16 scenes give one interactive hash per arm, and the evidence gives 15. The 23 scenes split 15 / 7 / 1: 15 interactive with A = B, 7 the workload refuses, and 1 both captures refuse. Every accepted scene is A = B. The count touches no runner, evaluator, plan, bar or judged measure, so the registration was not re-frozen.
+- **Guard mutant.** The inputs guard `{ sourceExportInputs == job.inputs }` was replaced by `{ true }`. The `backgroundBuild` scenario DETECTED it: "expected one scene-changed error", for both the plain and the baseline export.
+- **Tests.**
+  - New coverage: the `backgroundBuild` export scenario gains a plain export (no baseline). It checks the synchronous export's bytes, no progress line at once, that an edit before it lands fails it, and that a load cancels it.
+  - New Engine tests: the hash check runs before the decode, the decode-stack thread, and nil orphan entries.
+  - On the head: the strict Engine suite passes (1399 + 21) and the studio lane passes 111/111 strict (Debug).
+- **One-off corpus check (not committed).** It covers all 175 distinct user-corpus scenes (182 files, 7 duplicates).
+  - The preparation gives the staged document the old in-line steps gave on all 175, with 0 mismatches.
+  - The trailer orphan reader gives what the old property gave; 52 scenes have orphan entries.
+
+### Registration (462c, W25)
+
+- **Frozen** before the window: pin file SHA-256 `67d15fce`, registration 462c.
+- **Two earlier registrations ended INCOMPLETE:** `6e283e52` (W23, 2026-11-22) and 462b (`dc4e19f9`, W24, 2026-11-23). In each, one judged unit had no valid attempt, and in `6e283e52` round 4 also did not start before the deadline. Neither gave a decision, and neither is pooled with 462c. Each repeat was a new registration with the same arms, cells, bars, guards, evaluator and completeness rule, frozen before its data.
+- **What changed from 462b to 462c** (timing and strictness only, declared before any 462c data): the quiet wait needs 6 clean samples instead of 3; reruns wait for the end of the whole run instead of the end of each round; no attempt starts within 120 s of the end of the same unit's previous attempt; the deadline is 172 min.
+- **Arms:** base e4c5b545 (b19a11d7 plus the two instrumentation-only commits) and head 0288c172, both Release on b19a11d7.
+- **Workloads:** `studio-export-import` with live animation on, `--seconds 6 --warmup 3`, on three cells:
+  - c70: the 70-character scene;
+  - scenario: the scenario scene;
+  - c77: the 76.8 MiB scene, the large-scene cell.
+- **Design:** one hold. 1 unjudged warmup unit per arm per cell, then 4 ABBA rounds, 24 judged units.
+- **Validity:**
+  - a pre-try quiet wait (load1 ≤ 2.0, 6 clean 5 s samples, 10 min cap);
+  - the 20 % intruder rule;
+  - the display in the registered mode;
+  - at most 2 reruns per unit, after the last round and at least 120 s after the unit's previous attempt; INCOMPLETE otherwise.
+- **Display state:** "120 Hz, monitor on, composited", backing 2x. Every valid judged report must share it, or the result is NO VERDICT.
+- **Primary bars,** `exportMainMs` B/A, the main-thread time of the export's steps: c70 ≤ 0.20, scenario ≤ 0.40, c77 ≤ 0.25.
+- **Guards on every cell:**
+  - `readyMs` B/A ≤ 1.10;
+  - `busyMs` B/A ≤ 1.00;
+  - at least 8, 9 and 8 measured export actions per unit, with the arms' median counts within 1;
+  - the bytes and the guard mutant above.
+
+### Dev runs (information, 2026-11-22, 120 Hz, monitor on, composited)
+
+Medians of unit medians. A → B in ms, with B/A in parentheses.
+
+| cell | `exportMainMs` | `readyMs` | `busyMs` | hop (B) | presented fps, A / B |
+| --- | --- | --- | --- | --- | --- |
+| c70 | 61.0 → 5.7 (0.094) | 62.6 → 63.1 (1.007) | 66.3 → 13.9 (0.209) | 56.3 | 28.9 / 30.0 |
+| scenario | 11.1 → 3.2 (0.291) | 12.1 → 12.2 (1.011) | 16.1 → 9.9 (0.618) | 7.8 | 30.0 / 30.0 |
+| c77 | 101.4 → 15.9 (0.157) | 121.0 → 110.5 (0.913) | 123.3 → 28.2 (0.229) | 88.5 | 27.1 / 30.0 |
+
+- The scenario dev pass was INCOMPLETE. Base's round-1 unit had no valid attempt, so its row uses base rounds 2–4.
+- On c77, each of the 4 judged head units was faster to ready (105.4–113.9 ms) than each of the 4 judged base units (116.4–121.4 ms).
+- An earlier single pair at 60 Hz in hash mode had read the other way (86.9 vs 115.3 ms); it was noise.
+- Base's main-thread export drops presented frames on the large scenes, and the head's does not.
+- **60 Hz, monitor off (dev, 2026-11-20) against the 120 Hz runs:**
+  - The c70 ratios barely move: `exportMainMs` 0.099 → 0.094, `readyMs` 1.007 → 1.007.
+  - On scenario, the head's times are 7–15 % higher at 120 Hz: `exportMainMs` 0.269 → 0.291, `readyMs` 0.980 → 1.011.
+  - The two states also differ in backing scale and presentation, so this shows a dependence on display state, not on the refresh rate alone.
+
+### Judged result (registration 462c, W25, 2026-11-23): PASS
+
+Run once, 21:20:54–22:42:47 (81.9 min; deadline 172 min). Every bar and every guard held, and every valid judged report is in one display state: 120 Hz, monitor on, composited (backing 2x).
+
+Medians of the 4 round values. A → B in ms, with B/A in parentheses.
+
+| cell | `exportMainMs` (bar) | `readyMs` (guard ≤ 1.10) | `busyMs` (guard ≤ 1.00) | actions per unit, A / B | hop (B) | presented fps, A / B |
+| --- | --- | --- | --- | --- | --- | --- |
+| c70 | 59.47 → 5.34 (0.090; ≤ 0.20) | 60.48 → 59.24 (0.980) | 64.25 → 12.78 (0.199) | 10 / 10 | 53.06 | 29.06 / 30.0 |
+| scenario | 10.31 → 3.29 (0.319; ≤ 0.40) | 11.35 → 11.97 (1.055) | 15.37 → 9.48 (0.617) | 11 / 11 | 7.64 | 30.0 / 30.0 |
+| c77 | 98.43 → 14.17 (0.144; ≤ 0.25) | 117.64 → 108.02 (0.918) | 120.66 → 24.11 (0.200) | 9 / 9 | 90.57 | 26.69 / 29.98 |
+
+- **Main-thread CPU in the export steps** (`exportMainCpuMs`, information): c70 28.56 → 3.51 (0.123), scenario 4.17 → 2.26 (0.542), c77 72.86 → 10.82 (0.148).
+- **Validity.** 39 attempts, 13 invalid: 4 of the 6 warmup attempts and 9 judged attempts.
+  - Intruders per invalid attempt: duetexpertd 6 (2 of them together with launchd), launchd 5, plugin-container 3, corespotlightd 1.
+  - 7 judged units needed a rerun, 2 of them twice. All 24 judged units have a valid attempt.
+  - No quiet wait hit its cap (median 61 s, max 488 s).
+- Base's main-thread export drops presented frames on the large scenes (c77 26.7 fps, c70 29.1 fps), and the head's does not (30.0).
+
+### Costs and follow-ups
+
+- **The atomic write stays on the main thread:** 16 ms on the 76.8 MiB scene, 3.6–3.8 ms on 15–17 MB scenes. Whether it moves is a separate issue, not part of #462.
+- **Readiness barely moves on the smaller scenes.** Judged `readyMs` B/A: c70 0.980, scenario 1.055 (+0.62 ms, inside the 1.10 guard), c77 0.918. On c70 the off-main hop (53.1 ms) plus the main-thread steps (5.3 ms) add up to about base's whole main-thread export (59.5 ms).
+- **On the head's main thread** the guard step is 0.00–0.01 ms and the writer 0.04–2.6 ms (≤ 1 ms on the user scenes). The thumbnail stays on main where a scene has one (3.7–4.8 ms on the fixtures that render it).
+
 ## Rig finite-affine check (#374, 2026-11-17)
 
 `RigDefinition.isFiniteAffine` now checks four lanes at a time: one
